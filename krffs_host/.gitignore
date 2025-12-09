@@ -1,0 +1,18 @@
+# Compiler Files
+
+*.o
+*.d
+
+# Executables
+
+krffs
+mkfs.krffs
+edfs.krffs
+fsviz.krffs
+fsck.krffs
+defrag.krffs
+
+# File Systems
+
+*.krffs
+!defrag-from-inst.krffs
