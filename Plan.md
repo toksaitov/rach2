@@ -714,8 +714,51 @@ Before implementing new functionality:
   - Verified: With `-initrd /path/to/file`, shows "Module 0: 0x10F000 - 0x10F035 (53 bytes)"
   - Verified: Without modules, shows "Module: No modules loaded"
   - **Key Learning**: Multiboot module info must be parsed BEFORE paging is enabled. When paging maps only up to `mem_reserved_ptr + 1MB`, the module descriptor memory may return garbage if accessed after paging. Parsing early (right after serial_init) ensures direct physical memory access.
-- **Current Phase**: Phase 10 complete
-- **Next Step**: Phase 11 (KRFFS Integration - Read-Only)
+### Session 7 - Phase 11 Complete
+- **Completed Phase 11: KRFFS Integration (Read-Only)**
+  - Created `sys/fs/krffs.h` with kernel-compatible types:
+    - KRFFS magic (0x4B52), node types (ROOT, FREE, RESERVED)
+    - `krffs_node_t` structure matching original KRFFS layout
+    - `krffs_file_system_t` for global file system state
+    - Function prototypes for all file operations
+  - Created `sys/fs/krffs.c` with read-only implementation:
+    - `krffs_calculate_djb_hash()` - DJB hash for filename lookup
+    - `krffs_wrap_node_position()` - Handle circular linked list wrapping
+    - `krffs_get_next_node()`, `krffs_get_previous_node()` - Node traversal
+    - `krffs_find_reserved_node_by_name()` - File lookup by name hash
+    - `krffs_open()` - Check file existence (returns 0/-1)
+    - `krffs_read()` - Read file contents with offset support
+    - `krffs_get_file_size()` - Get file size in bytes
+    - `krffs_count_files()`, `krffs_list_files()` - Enumerate files
+    - `init_krffs()` - Initialize from RAM disk, validate magic/root
+  - Updated `Makefile` to include `sys/fs/krffs.c`
+  - Updated `kernel.c`:
+    - Include `sys/fs/krffs.h`
+    - Adjust `mem_reserved_ptr` to skip past modules before init_mm()
+    - Initialize KRFFS from ramdisk module
+    - Test reading hello.txt at boot
+    - Added `ls` shell command (list files)
+    - Added `cat <filename>` shell command (display file contents)
+  - Fixed memory allocation overlapping modules:
+    - Modified `sys/mm/heap.c` to preserve larger `mem_reserved_ptr` values
+    - Modules loaded at 0x10F000 were being overwritten by page tables
+    - Now adjusts allocation start to skip past module end
+  - Fixed memory isolation test (unrelated regression):
+    - `clone_page_directory()` copies kernel page table *pointers*
+    - User pages in cloned directories shared same physical pages
+    - Modified `alloc_user_page()` in `paging.c` to detect shared kernel page tables
+    - Creates private page table copies for non-kernel directories
+    - Changed isolation test address from 0x800000 to 0xD00000 (above identity-mapped region)
+  - Updated `rach2/Readme.md` with File System (KRFFS) section
+  - Verified: KRFFS mounts successfully, hello.txt read correctly
+  - Verified: All 8 self-tests pass including memory isolation
+  - Test output:
+    ```
+    File system... OK (KRFFS, 1 files)
+        hello.txt: "hello, world"
+    ```
+- **Current Phase**: Phase 11 complete
+- **Next Step**: Phase 12 (KRFFS Write and Directory Operations)
 
 ---
 

@@ -12,6 +12,7 @@
 #include "sys/mm/paging.h"
 #include "sys/proc/process.h"
 #include "sys/proc/sched.h"
+#include "sys/fs/krffs.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
 #include "sys/display/display.h"
@@ -101,6 +102,16 @@ static bool str_equal(const char *a, const char *b)
         ++b;
     }
     return *a == *b;
+}
+
+static bool str_starts_with(const char *str, const char *prefix)
+{
+    while (*prefix) {
+        if (*str != *prefix) return false;
+        ++str;
+        ++prefix;
+    }
+    return true;
 }
 
 static bool test_memory(void)
@@ -510,8 +521,12 @@ static void test_preempt(void)
  * Memory isolation test - uses cooperative context switching (no scheduler)
  * to verify that two processes with different page directories can write
  * to the same virtual address without interfering with each other.
+ *
+ * Note: The test address must be ABOVE the identity-mapped region to ensure
+ * each process gets its own page table. When modules are loaded, identity
+ * mapping extends past the module end (~12MB), so we use 0xD00000 (13MB).
  */
-#define ISOLATION_TEST_ADDR 0x800000  /* User address for isolation test */
+#define ISOLATION_TEST_ADDR 0xD00000  /* User address for isolation test */
 static volatile uint32_t isolation_result_a = 0;
 static volatile uint32_t isolation_result_b = 0;
 static process_t *isolation_proc_a = NULL;
@@ -807,17 +822,19 @@ static void process_command(const char *cmd)
 {
     if (str_equal(cmd, "help")) {
         k_puts("Available commands:");
-        k_puts("  help     - Show this help message");
-        k_puts("  info     - Display system information");
-        k_puts("  modules  - List loaded multiboot modules");
-        k_puts("  test     - Run self-tests again");
-        k_puts("  clear    - Clear the screen");
-        k_puts("  switch   - Test manual context switching");
-        k_puts("  preempt  - Test preemptive round-robin scheduling");
-        k_puts("  isolate  - Test memory isolation between processes");
-        k_puts("  usermode - Test ring 3 execution");
-        k_puts("  fault    - Trigger a page fault (panic)");
-        k_puts("  halt     - Halt the CPU");
+        k_puts("  help        - Show this help message");
+        k_puts("  info        - Display system information");
+        k_puts("  modules     - List loaded multiboot modules");
+        k_puts("  ls          - List files on RAM disk");
+        k_puts("  cat <file>  - Display file contents");
+        k_puts("  test        - Run self-tests again");
+        k_puts("  clear       - Clear the screen");
+        k_puts("  switch      - Test manual context switching");
+        k_puts("  preempt     - Test preemptive round-robin scheduling");
+        k_puts("  isolate     - Test memory isolation between processes");
+        k_puts("  usermode    - Test ring 3 execution");
+        k_puts("  fault       - Trigger a page fault (panic)");
+        k_puts("  halt        - Halt the CPU");
     } else if (str_equal(cmd, "info")) {
         k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         k_printf("Timer ticks:     %d\n", ticks);
@@ -833,6 +850,59 @@ static void process_command(const char *cmd)
                 module_info_t *m = get_module(i);
                 k_printf("  [%d] 0x%X - 0x%X (%d bytes)\n",
                          i, m->start, m->end, m->size);
+            }
+        }
+    } else if (str_equal(cmd, "ls")) {
+        /* List files on KRFFS RAM disk */
+        if (!krffs_fs) {
+            k_puts("No file system mounted.");
+        } else {
+            krffs_node_t *node;
+            uint32_t count = 0;
+
+            k_puts("Files on RAM disk:");
+            node = krffs_fs->node;
+            do {
+                if (node->type == KRFFS_RESERVED_NODE) {
+                    k_printf("  %s  (%d bytes)\n",
+                             node->name, (uint32_t)node->data_size);
+                    count++;
+                }
+            } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
+
+            if (count == 0) {
+                k_puts("  (no files)");
+            }
+        }
+    } else if (str_starts_with(cmd, "cat ")) {
+        /* Display file contents: cat <filename> */
+        const char *filename = cmd + 4;  /* Skip "cat " */
+        char buffer[512];
+        int bytes_read;
+        uint32_t offset = 0;
+
+        if (!krffs_fs) {
+            k_puts("No file system mounted.");
+        } else if (filename[0] == '\0') {
+            k_puts("Usage: cat <filename>");
+        } else {
+            /* Open and read the file */
+            if (krffs_open(filename) != 0) {
+                k_printf("File not found: %s\n", filename);
+            } else {
+                uint32_t file_size = krffs_get_file_size(filename);
+                k_printf("--- %s (%d bytes) ---\n", filename, file_size);
+
+                while ((bytes_read = krffs_read(filename, buffer, 511, offset)) > 0) {
+                    buffer[bytes_read] = '\0';
+                    k_printf("%s", buffer);
+                    offset += (uint32_t)bytes_read;
+                }
+
+                if (file_size > 0 && buffer[bytes_read > 0 ? bytes_read - 1 : 0] != '\n') {
+                    k_puts("");  /* Ensure newline after content */
+                }
+                k_puts("--- EOF ---");
             }
         }
     } else if (str_equal(cmd, "test")) {
@@ -906,6 +976,21 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * We need direct physical memory access to read module info.
      */
     num_modules = init_modules(magic, info);
+
+    /*
+     * If modules are loaded, ensure mem_reserved_ptr skips past them.
+     * This prevents the memory allocator from overwriting module data
+     * when allocating page tables and other structures.
+     */
+    if (num_modules > 0) {
+        module_info_t *last_module = get_module(num_modules - 1);
+        if (last_module && last_module->end > mem_reserved_ptr) {
+            /* Align to page boundary and add some slack */
+            mem_reserved_ptr = (last_module->end + 0xFFF) & ~0xFFF;
+            serial_printf("Memory: Adjusted mem_reserved_ptr to 0x%X (past modules)\n",
+                         mem_reserved_ptr);
+        }
+    }
 
     k_cls();
 
@@ -1041,6 +1126,39 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         serial_printf(" None\n");
         set_fore_color(light_grey);
     }
+
+    /* Initialize KRFFS file system if ramdisk is present */
+    k_printf("  File system...");
+    serial_printf("  File system...");
+    if (num_modules > 0) {
+        module_info_t *ramdisk = get_ramdisk();
+        if (ramdisk && init_krffs((void *)ramdisk->start, ramdisk->size) == 0) {
+            set_fore_color(light_green);
+            k_printf(" OK (KRFFS, %d files)\n", krffs_count_files());
+            serial_printf(" OK (KRFFS, %d files)\n", krffs_count_files());
+            set_fore_color(light_grey);
+
+            /* Test reading hello.txt */
+            if (krffs_open("hello.txt") == 0) {
+                char buf[64];
+                int n = krffs_read("hello.txt", buf, 63, 0);
+                if (n > 0) {
+                    buf[n] = '\0';
+                    k_printf("    hello.txt: \"%s\"\n", buf);
+                    serial_printf("    hello.txt: \"%s\"\n", buf);
+                }
+            }
+        } else {
+            set_fore_color(light_red);
+            k_puts(" FAIL (invalid KRFFS)");
+            serial_printf(" FAIL (invalid KRFFS)\n");
+        }
+    } else {
+        set_fore_color(light_brown);
+        k_puts(" None (no ramdisk)");
+        serial_printf(" None (no ramdisk)\n");
+    }
+    set_fore_color(light_grey);
 
     k_puts("");
     k_puts("Initialization complete.");

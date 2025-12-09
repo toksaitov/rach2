@@ -24,8 +24,9 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Preemptive round-robin scheduler (timer-driven)
 * Per-process page directories with CR3 switching for memory isolation
 * Multiboot module loading (RAM disk support via `-initrd`)
+* KRFFS file system (read-only) loaded from RAM disk module
 * Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation)
-* Interactive shell with commands: help, info, modules, test, clear, switch, preempt, isolate, usermode, fault, halt
+* Interactive shell with commands: help, info, modules, ls, cat, test, clear, switch, preempt, isolate, usermode, fault, halt
 
 ## Memory Layout
 
@@ -39,7 +40,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 
 ## Limitations
 
-* No filesystem or disk drivers
+* Read-only filesystem (no write support yet), no disk drivers
 * No dynamic memory allocation (only bump allocator)
 * 16 MB hard memory limit
 * PS/2 keyboard only (no USB)
@@ -79,6 +80,8 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   │   ├── process.c/h    # Process control block, process table
 │   │   ├── sched.c/h      # Round-robin preemptive scheduler
 │   │   └── switch.s       # Context switch assembly routine
+│   ├── fs/
+│   │   └── krffs.c/h      # KRFFS file system (read-only)
 │   └── lib/
 │       ├── kdef.h         # NULL, bool, size_t definitions
 │       ├── kint.h         # Fixed-width integer types
@@ -396,6 +399,62 @@ The kernel will display the module at boot:
   * `init_modules(magic, info)` - Parse multiboot module info
   * `get_module(index)` - Get module by index
   * `get_ramdisk()` - Convenience function to get first module
+
+## File System (KRFFS)
+
+The kernel includes read-only support for KRFFS (K&R First-Fit File System), a simple flat file system with no directory hierarchy. KRFFS is loaded from a RAM disk module passed via multiboot.
+
+### KRFFS Overview
+
+KRFFS uses a circular linked list of nodes, where each node represents either:
+* **Root node** - File system header (magic 0x4B52)
+* **Free node** - Available space for allocation
+* **Reserved node** - A file (name, size, data)
+
+File lookup uses DJB hash of the filename for fast identification. The file system is designed for simplicity rather than performance.
+
+### Initialization
+
+At boot, if a multiboot module is present, `init_krffs()` is called with the module's base address and size:
+1. Validates the KRFFS magic number (0x4B52)
+2. Verifies the first node is a root node
+3. Sets up the global file system pointer
+4. Lists all files to serial output for debugging
+
+### Read Operations
+
+The kernel provides these read-only file operations:
+* `krffs_open(path)` - Check if a file exists (returns 0 on success)
+* `krffs_read(path, buffer, size, offset)` - Read file contents into buffer
+* `krffs_get_file_size(path)` - Get file size in bytes
+* `krffs_count_files()` - Count number of files in the file system
+* `krffs_list_files()` - Print all files to serial output
+
+### Shell Commands
+
+* `ls` - List all files on the RAM disk with sizes
+* `cat <filename>` - Display contents of a file
+
+### Loading a KRFFS Image
+
+To boot with a KRFFS RAM disk:
+
+    qemu-system-i386 -kernel kernel -initrd /path/to/file_system.krffs -serial stdio
+
+The kernel will display:
+
+    File system... OK (KRFFS, 1 files)
+        hello.txt: "hello, world"
+
+### Files
+
+* `sys/fs/krffs.h` - KRFFS structures, node types, function prototypes
+* `sys/fs/krffs.c` - File system implementation
+  * `init_krffs(base, size)` - Initialize KRFFS from RAM disk
+  * `krffs_open()`, `krffs_read()`, `krffs_get_file_size()` - File operations
+  * `krffs_find_reserved_node_by_name()` - File lookup by DJB hash
+  * `krffs_get_next_node()`, `krffs_get_previous_node()` - Node traversal
+  * `krffs_calculate_djb_hash()` - DJB hash for filename lookup
 
 ## Scripts
 

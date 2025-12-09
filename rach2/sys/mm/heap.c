@@ -4,7 +4,15 @@ uintptr_t mem_reserved_ptr;
 
 void init_mm(void)
 {
-    mem_reserved_ptr = (uintptr_t) &k_phys_mem_end;
+    uintptr_t kernel_end = (uintptr_t) &k_phys_mem_end;
+
+    /*
+     * Set mem_reserved_ptr to the kernel end, unless it's already
+     * been set to a higher value (e.g., to skip past modules).
+     */
+    if (mem_reserved_ptr < kernel_end) {
+        mem_reserved_ptr = kernel_end;
+    }
 }
 
 uintptr_t mem_reserve(size_t size, bool align)

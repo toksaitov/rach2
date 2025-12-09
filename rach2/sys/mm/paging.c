@@ -203,7 +203,31 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 
     /* Get or create page table */
     table = dir->logical_page_tables[table_index];
-    if (!table) {
+
+    /*
+     * If the page table exists but is shared with the kernel directory
+     * (inherited from clone_page_directory), we need to create a private
+     * copy for this process to ensure memory isolation.
+     */
+    if (table && dir != _kernel_dir &&
+        table == _kernel_dir->logical_page_tables[table_index]) {
+        /* Create a copy of the page table for this directory */
+        uintptr_t table_addr = mem_reserve(sizeof(page_table_t), true);
+        page_table_t *new_table = (page_table_t *)table_addr;
+
+        /* Copy existing entries */
+        {
+            uint32_t i;
+            for (i = 0; i < 1024; i++) {
+                new_table->pages[i] = table->pages[i];
+            }
+        }
+
+        /* Update directory to use the new table */
+        dir->phys_page_tables[table_index] = table_addr | 0x7;  /* P + RW + U/S */
+        dir->logical_page_tables[table_index] = new_table;
+        table = new_table;
+    } else if (!table) {
         /* Allocate new page table */
         uintptr_t table_addr = mem_reserve(sizeof(page_table_t), true);
         table = (page_table_t *)table_addr;
