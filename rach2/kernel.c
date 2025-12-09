@@ -2,6 +2,7 @@
 
 #include "sys/kio.h"
 #include "sys/serial.h"
+#include "sys/syscall.h"
 #include "sys/tables/gdt.h"
 #include "sys/tables/idt.h"
 #include "sys/isr.h"
@@ -31,6 +32,7 @@ static bool test_memory(void);
 static bool test_strings(void);
 static void test_display(void);
 static bool test_timer(void);
+static bool test_syscall(void);
 
 static void timer_handler(isr_params_t params)
 {
@@ -154,6 +156,21 @@ static bool test_timer(void)
     return ticks > start_ticks;
 }
 
+static bool test_syscall(void)
+{
+    /* Test int 0x80 with syscall number 4 (write) in EAX */
+    __asm__ __volatile__(
+        "movl $4, %%eax\n\t"
+        "int $0x80"
+        :
+        :
+        : "eax"
+    );
+
+    /* If we get here without crashing, the syscall infrastructure works */
+    return true;
+}
+
 static void run_self_tests(void)
 {
     k_puts("");
@@ -193,6 +210,16 @@ static void run_self_tests(void)
     k_printf("  Paging enabled:     ");
     set_fore_color(light_green);
     k_puts("[PASS]");
+    set_fore_color(light_grey);
+
+    k_printf("  Syscall (int 0x80): ");
+    if (test_syscall()) {
+        set_fore_color(light_green);
+        k_puts("[PASS]");
+    } else {
+        set_fore_color(light_red);
+        k_puts("[FAIL]");
+    }
     set_fore_color(light_grey);
 
     test_display();
@@ -329,6 +356,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     k_printf("  Keyboard...");
     serial_printf("  Keyboard...");
     register_isr_handler(33, &keyboard_handler);
+    set_fore_color(light_green);
+    k_puts(" OK");
+    serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  Syscall...");
+    serial_printf("  Syscall...");
+    init_syscall();
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");

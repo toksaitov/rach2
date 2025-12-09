@@ -75,6 +75,9 @@ void init_idt(void)
     _idt_set_desciptor(46, (uintptr_t) &irq14, 0x08, 0x8E);
     _idt_set_desciptor(47, (uintptr_t) &irq15, 0x08, 0x8E);
 
+    /* Syscall interrupt - 0xEE sets DPL=3 so user mode can invoke int 0x80 */
+    _idt_set_desciptor(128, (uintptr_t) &isr128, 0x08, 0xEE);
+
     _load_idt(&idt_address);
 }
 

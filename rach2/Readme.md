@@ -17,7 +17,8 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Simple bump allocator for physical memory
 * Basic paging with identity mapping (16 MB limit)
 * Kernel panic screen automatically triggered on page faults
-* Built-in self-tests (memory, strings, timer, paging)
+* System call infrastructure (int 0x80)
+* Built-in self-tests (memory, strings, timer, paging, syscall)
 * Interactive shell with commands: help, info, test, clear, fault, halt
 
 ## Memory Layout
@@ -50,6 +51,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 ├── sys/
 │   ├── kio.c/h            # Console I/O, printf, port I/O
 │   ├── serial.c/h         # Serial port (COM1) debug output
+│   ├── syscall.c/h        # System call entry point (int 0x80)
 │   ├── isr.c/h            # Interrupt service routine management
 │   ├── isr_handler.s      # ISR/IRQ stubs and common handlers
 │   ├── pic.c/h            # 8259 PIC initialization
@@ -95,6 +97,19 @@ Serial output is initialized first in `k_main()` before any other subsystem, ens
 ## Generalized Printf
 
 The kernel provides `k_vprintf()` in `kio.c` which accepts a function pointer for character output, enabling formatted printing to any output channel. Both `k_printf()` (VGA) and `serial_printf()` (COM1) use this shared implementation, avoiding code duplication while reusing `k_itoa()` from `kstd.c` for number formatting.
+
+## System Calls
+
+The kernel includes system call infrastructure using the standard x86 software interrupt `int 0x80`. This follows the Linux 32-bit calling convention where:
+* EAX contains the syscall number
+* Arguments are passed in EBX, ECX, EDX, ESI, EDI, EBP
+* Return value is placed in EAX
+
+The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode code to invoke syscalls. Currently, the handler prints the syscall number to serial for debugging. Future phases will implement actual system call dispatch.
+
+Files in `syscall.c`:
+* `init_syscall()` - Register the syscall handler for vector 128
+* `_syscall_handler()` - Internal handler that receives `isr_params_t` with all register values
 
 ## Scripts
 

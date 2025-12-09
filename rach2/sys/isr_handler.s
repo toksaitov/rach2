@@ -59,6 +59,9 @@ ISR_WITHOUT_ERROR_CODE 29
 ISR_WITHOUT_ERROR_CODE 30
 ISR_WITHOUT_ERROR_CODE 31
 
+# Syscall interrupt (int 0x80 = vector 128)
+ISR_WITHOUT_ERROR_CODE 128
+
 # Common ISR handler
 .globl isr_common_handler
 isr_common_handler:

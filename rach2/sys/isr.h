@@ -85,6 +85,11 @@ extern void irq14(void);
 extern void irq15(void);
 
 /*
+ * Syscall interrupt handler (int 0x80)
+ */
+extern void isr128(void);
+
+/*
  * Initializes interrupt handling structures.
  */
 void init_isr(void);

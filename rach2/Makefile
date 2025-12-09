@@ -18,6 +18,7 @@ ASM_SRC = $(LOADER).s          \
 C_SRC   = $(KERNEL).c \
 	  sys/kio.c       \
 	  sys/serial.c    \
+	  sys/syscall.c   \
 	  sys/isr.c       \
 	  sys/pic.c       \
 	  sys/pit.c       \

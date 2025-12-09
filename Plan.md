@@ -563,8 +563,20 @@ Before implementing new functionality:
   - `serial_printf()` now uses shared `k_vprintf()` with `k_itoa()` from kstd.c
   - Added Code Reuse Guidelines section to Plan.md
   - Updated Readme.md with Generalized Printf section
-- **Current Phase**: Phase 1 (not started)
-- **Next Step**: Implement int 0x80 syscall entry point
+### Session 2 - Phase 1 Complete
+- **Completed Phase 1: System Call Entry Point**
+  - Added ISR stub for vector 128 (0x80) in `sys/isr_handler.s`
+  - Declared `isr128` extern in `sys/isr.h`
+  - Registered vector 0x80 in IDT with DPL=3 (0xEE flags) in `sys/tables/idt.c`
+  - Created `sys/syscall.h` and `sys/syscall.c` with handler infrastructure
+  - Handler extracts syscall number from EAX and prints to serial
+  - Added `init_syscall()` call in `kernel.c`
+  - Added syscall self-test using inline `int $0x80` with EAX=4
+  - Updated `Makefile` to include `sys/syscall.c`
+  - Updated `rach2/Readme.md` with System Calls section
+  - Verified: "Syscall: 4" printed to serial during boot self-test
+- **Current Phase**: Phase 2 (not started)
+- **Next Step**: Implement basic write() syscall with dispatch table
 
 ---
 
