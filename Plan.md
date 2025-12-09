@@ -632,8 +632,30 @@ Before implementing new functionality:
   - Updated `Makefile` to include `sys/proc/process.c`
   - Updated `rach2/Readme.md` with Process Management section
   - Verified: "Process 0 created (pid=0)" printed during boot
-- **Current Phase**: Phase 5 complete
-- **Next Step**: Phase 6 (Context Switch)
+### Session 4 - Phase 6 Complete
+- **Completed Phase 6: Context Switch**
+  - Created `sys/proc/switch.s` with `switch_context(old, new)` assembly routine:
+    - Saves callee-saved registers (EBP, EBX, ESI, EDI) on current stack
+    - Saves ESP to old->regs.esp
+    - Updates TSS ESP0 to new->kernel_stack via `tss_set_kernel_stack()`
+    - Loads ESP from new->regs.esp
+    - Restores callee-saved registers from new stack
+    - Returns to wherever new process was (or entry point for new processes)
+  - Added `setup_process_stack(proc, entry_point)` in `process.c`:
+    - Initializes kernel stack with entry point as return address
+    - Pushes zero values for callee-saved registers
+    - Sets proc->regs.esp to prepared stack position
+  - Added `switch_context` and `setup_process_stack` declarations to `process.h`
+  - Updated `Makefile` to include `sys/proc/switch.s`
+  - Added context switch self-test in `run_self_tests()`:
+    - Creates process B, sets up stack, switches A->B->A
+    - Prints [PASS] on success
+  - Added `switch` shell command with full A/B interleaving test
+  - Updated `rach2/Readme.md` with Context Switching section
+  - Verified: "Context switch: [PASS]" printed during boot self-tests
+  - Test: `switch` command prints "ABABABABAB" demonstrating interleaved execution
+- **Current Phase**: Phase 6 complete
+- **Next Step**: Phase 7 (Round-Robin Scheduler)
 
 ---
 

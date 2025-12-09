@@ -13,7 +13,8 @@ ISO_IMAGE = $(BIN_DIR)/boot.iso
 ASM_SRC = $(LOADER).s          \
 	  sys/isr_handler.s        \
 	  sys/tables/gdt_handler.s \
-	  sys/tables/idt_handler.s
+	  sys/tables/idt_handler.s \
+	  sys/proc/switch.s
 
 C_SRC   = $(KERNEL).c \
 	  sys/kio.c       \

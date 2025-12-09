@@ -46,6 +46,7 @@ static void test_display(void);
 static bool test_timer(void);
 static bool test_syscall(void);
 static bool test_usermode(void);
+static void test_switch(void);
 
 static void timer_handler(isr_params_t params)
 {
@@ -270,6 +271,86 @@ static bool test_usermode(void)
     return false;
 }
 
+/*
+ * Context switch test variables
+ */
+static process_t *switch_proc_a = NULL;
+static process_t *switch_proc_b = NULL;
+static volatile int switch_count = 0;
+
+/*
+ * Process B entry point - prints 'B' and switches back to A
+ */
+static void proc_b_entry(void)
+{
+    while (switch_count < 10) {
+        k_putc('B');
+        serial_printf("B");
+        ++switch_count;
+        switch_context(switch_proc_b, switch_proc_a);
+    }
+
+    /* Done - return to A one last time */
+    switch_context(switch_proc_b, switch_proc_a);
+
+    /* Should never reach here */
+    for (;;) {
+        __asm__ __volatile__("hlt");
+    }
+}
+
+static void test_switch(void)
+{
+    uintptr_t stack_b;
+
+    k_puts("Testing context switch between two processes...");
+    k_puts("Expected output: ABABABABAB done");
+    k_printf("Result:          ");
+
+    /* Process A is the current process (process 0) */
+    switch_proc_a = current_proc;
+
+    /* Allocate process B */
+    switch_proc_b = alloc_process();
+    if (!switch_proc_b) {
+        k_puts("Failed to allocate process B");
+        return;
+    }
+
+    /* Allocate kernel stack for process B */
+    stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
+    switch_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
+    switch_proc_b->cr3 = 0;  /* Uses same page directory */
+    switch_proc_b->parent_pid = switch_proc_a->pid;
+
+    /* Set up process B's stack for first context switch */
+    setup_process_stack(switch_proc_b, proc_b_entry);
+
+    serial_printf("Process B created: pid=%d stack=0x%X\n",
+                  switch_proc_b->pid, switch_proc_b->kernel_stack);
+
+    /* Reset counter */
+    switch_count = 0;
+
+    /* Process A prints 'A' and switches to B */
+    while (switch_count < 10) {
+        k_putc('A');
+        serial_printf("A");
+        ++switch_count;
+        switch_context(switch_proc_a, switch_proc_b);
+    }
+
+    k_puts("");
+
+    /* Clean up process B */
+    free_process(switch_proc_b);
+    switch_proc_b = NULL;
+
+    set_fore_color(light_green);
+    k_puts("Context switch test passed!");
+    set_fore_color(light_grey);
+}
+
 static void run_self_tests(void)
 {
     k_puts("");
@@ -321,6 +402,37 @@ static void run_self_tests(void)
     }
     set_fore_color(light_grey);
 
+    k_printf("  Context switch:     ");
+    {
+        /* Quick inline test of context switching */
+        process_t *test_a = current_proc;
+        process_t *test_b = alloc_process();
+        if (test_b) {
+            uintptr_t test_stack = mem_reserve(KERNEL_STACK_SIZE, true);
+            test_b->kernel_stack = test_stack + KERNEL_STACK_SIZE;
+            test_b->cr3 = 0;
+
+            /* Set up a simple test: B immediately switches back to A */
+            switch_proc_a = test_a;
+            switch_proc_b = test_b;
+            switch_count = 0;
+            setup_process_stack(test_b, proc_b_entry);
+
+            /* Switch to B, B switches back to A */
+            switch_count = 10;  /* Skip the loop in proc_b_entry */
+            switch_context(test_a, test_b);
+
+            free_process(test_b);
+            set_fore_color(light_green);
+            k_puts("[PASS]");
+            serial_printf("Context switch: [PASS]\n");
+        } else {
+            set_fore_color(light_red);
+            k_puts("[FAIL]");
+        }
+    }
+    set_fore_color(light_grey);
+
     test_display();
 
     k_puts("");
@@ -335,6 +447,7 @@ static void process_command(const char *cmd)
         k_puts("  info     - Display system information");
         k_puts("  test     - Run self-tests again");
         k_puts("  clear    - Clear the screen");
+        k_puts("  switch   - Test context switching between processes");
         k_puts("  usermode - Test ring 3 execution");
         k_puts("  fault    - Trigger a page fault (panic)");
         k_puts("  halt     - Halt the CPU");
@@ -346,6 +459,8 @@ static void process_command(const char *cmd)
         run_self_tests();
     } else if (str_equal(cmd, "clear")) {
         k_cls();
+    } else if (str_equal(cmd, "switch")) {
+        test_switch();
     } else if (str_equal(cmd, "fault")) {
         volatile uint32_t *bad_ptr = (volatile uint32_t *) 0xA0000000;
         k_puts("Triggering page fault at 0xA0000000...");

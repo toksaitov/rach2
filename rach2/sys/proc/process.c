@@ -70,3 +70,38 @@ process_t *get_process(uint32_t pid)
 
     return NULL;
 }
+
+void setup_process_stack(process_t *proc, void (*entry_point)(void))
+{
+    uint32_t *sp;
+
+    /*
+     * Set up the kernel stack for first context switch.
+     * switch_context expects the stack to have saved callee registers:
+     *
+     *   [entry_point]  <- return address (where to start)
+     *   [ebp]          <- saved EBP (0 for new process)
+     *   [ebx]          <- saved EBX (0)
+     *   [esi]          <- saved ESI (0)
+     *   [edi]          <- saved EDI (0) <- ESP points here
+     */
+
+    sp = (uint32_t *)proc->kernel_stack;
+
+    /* Push return address (entry point) */
+    --sp;
+    *sp = (uint32_t)entry_point;
+
+    /* Push saved callee registers (all zero for new process) */
+    --sp;
+    *sp = 0;  /* EBP */
+    --sp;
+    *sp = 0;  /* EBX */
+    --sp;
+    *sp = 0;  /* ESI */
+    --sp;
+    *sp = 0;  /* EDI */
+
+    /* Save stack pointer in process regs */
+    proc->regs.esp = (uint32_t)sp;
+}

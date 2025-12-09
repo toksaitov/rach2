@@ -87,4 +87,17 @@ void free_process(process_t *proc);
  */
 process_t *get_process(uint32_t pid);
 
+/*
+ * Context switch between two processes
+ * Saves current state to old, restores from new
+ */
+extern void switch_context(process_t *old, process_t *new_proc);
+
+/*
+ * Set up a process's kernel stack for first context switch
+ * entry_point: function to start executing
+ * Returns: nothing, modifies proc->regs.esp
+ */
+void setup_process_stack(process_t *proc, void (*entry_point)(void));
+
 #endif

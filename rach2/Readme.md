@@ -20,8 +20,9 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * System call infrastructure (int 0x80)
 * User mode (ring 3) execution with privilege transitions
 * Process control blocks (PCB) with process table (16 max)
-* Built-in self-tests (memory, strings, timer, paging, syscall)
-* Interactive shell with commands: help, info, test, clear, usermode, fault, halt
+* Context switching between processes with TSS stack management
+* Built-in self-tests (memory, strings, timer, paging, syscall, context switch)
+* Interactive shell with commands: help, info, test, clear, switch, usermode, fault, halt
 
 ## Memory Layout
 
@@ -37,7 +38,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 
 * No filesystem or disk drivers
 * No dynamic memory allocation (only bump allocator)
-* No scheduler or context switching (single-tasking)
+* No preemptive scheduler (manual context switching only)
 * 16 MB hard memory limit
 * PS/2 keyboard only (no USB)
 
@@ -72,7 +73,8 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   │   ├── heap.c/h       # Simple bump allocator
 │   │   └── paging.c/h     # Page directory/table, identity mapping
 │   ├── proc/
-│   │   └── process.c/h    # Process control block, process table
+│   │   ├── process.c/h    # Process control block, process table
+│   │   └── switch.s       # Context switch assembly routine
 │   └── lib/
 │       ├── kdef.h         # NULL, bool, size_t definitions
 │       ├── kint.h         # Fixed-width integer types
@@ -217,7 +219,39 @@ The kernel maintains a fixed-size process table (`MAX_PROCS = 16`). At boot, pro
 
 ### Files in `sys/proc/`
 * `process.h` - PCB structure, state definitions, function prototypes
-* `process.c` - Process table, `init_proc()`, `alloc_process()`, `free_process()`, `get_process()`
+* `process.c` - Process table, `init_proc()`, `alloc_process()`, `free_process()`, `get_process()`, `setup_process_stack()`
+* `switch.s` - Context switch assembly routine
+
+## Context Switching
+
+The kernel supports cooperative context switching between processes using `switch_context(old, new)`.
+
+### How Context Switch Works
+
+1. **Save current state**: Push callee-saved registers (EBP, EBX, ESI, EDI) onto the current stack
+2. **Save stack pointer**: Store ESP in `old->regs.esp`
+3. **Update TSS**: Set TSS ESP0 to `new->kernel_stack` (for ring transitions)
+4. **Load new stack**: Load ESP from `new->regs.esp`
+5. **Restore state**: Pop callee-saved registers from the new stack
+6. **Return**: The `ret` instruction jumps to wherever the new process was
+
+### Setting Up a New Process
+
+For a newly created process, `setup_process_stack()` initializes its kernel stack with:
+* Entry point address (as the return address)
+* Zero values for callee-saved registers
+
+When switching to this process for the first time, it will "return" to its entry point function.
+
+### Testing Context Switch
+
+The shell command `switch` demonstrates context switching:
+1. Creates process B with a simple print function
+2. Process A prints "A" and switches to B
+3. Process B prints "B" and switches back to A
+4. Repeats, producing interleaved output: "ABABABABAB"
+
+The self-tests also include an automated context switch test that verifies the mechanism works correctly.
 
 ## Scripts
 
@@ -293,6 +327,7 @@ Remove compiled files:
         > info     # Display memory pointer and timer ticks
         > test     # Run self-tests again
         > clear    # Clear the screen
+        > switch   # Test context switching (prints ABABABABAB)
         > usermode # Test ring 3 execution (prints message then loops)
         > fault    # Trigger a page fault (demonstrates panic)
         > halt     # Stop the CPU
