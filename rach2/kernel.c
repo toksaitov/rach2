@@ -52,6 +52,7 @@ static bool test_usermode(void);
 static void test_switch(void);
 static void test_preempt(void);
 static bool test_isolation(void);
+static bool test_krffs_write(void);
 
 static void timer_handler(isr_params_t params)
 {
@@ -644,6 +645,78 @@ static bool test_isolation(void)
     return (isolation_result_a == 0xAAAAAAAA && isolation_result_b == 0xBBBBBBBB);
 }
 
+/*
+ * Test KRFFS write operations (Phase 12)
+ * Tests: create, write, read, rename, unlink
+ */
+static bool test_krffs_write(void)
+{
+    const char *test_filename = "krffs_test.tmp";
+    const char *renamed_filename = "krffs_renamed.tmp";
+    const char *test_data = "Test data for KRFFS write";
+    char read_buffer[64];
+    int bytes_read;
+    int bytes_written;
+
+    if (!krffs_fs) {
+        /* No filesystem mounted, skip test */
+        return true;
+    }
+
+    /* Step 1: Create a new file */
+    if (krffs_create(test_filename) != 0) {
+        serial_printf("KRFFS write test: create failed\n");
+        return false;
+    }
+
+    /* Step 2: Write data to the file */
+    bytes_written = krffs_write(test_filename, test_data, k_strlen(test_data), 0);
+    if (bytes_written != (int)k_strlen(test_data)) {
+        serial_printf("KRFFS write test: write failed (%d)\n", bytes_written);
+        krffs_unlink(test_filename);
+        return false;
+    }
+
+    /* Step 3: Read data back and verify */
+    bytes_read = krffs_read(test_filename, read_buffer, 63, 0);
+    read_buffer[bytes_read > 0 ? bytes_read : 0] = '\0';
+    if (bytes_read != (int)k_strlen(test_data) || !str_equal(read_buffer, test_data)) {
+        serial_printf("KRFFS write test: read verify failed\n");
+        krffs_unlink(test_filename);
+        return false;
+    }
+
+    /* Step 4: Rename the file */
+    if (krffs_rename(test_filename, renamed_filename) != 0) {
+        serial_printf("KRFFS write test: rename failed\n");
+        krffs_unlink(test_filename);
+        return false;
+    }
+
+    /* Step 5: Verify renamed file has same content */
+    bytes_read = krffs_read(renamed_filename, read_buffer, 63, 0);
+    read_buffer[bytes_read > 0 ? bytes_read : 0] = '\0';
+    if (!str_equal(read_buffer, test_data)) {
+        serial_printf("KRFFS write test: rename verify failed\n");
+        krffs_unlink(renamed_filename);
+        return false;
+    }
+
+    /* Step 6: Delete the renamed file */
+    if (krffs_unlink(renamed_filename) != 0) {
+        serial_printf("KRFFS write test: unlink failed\n");
+        return false;
+    }
+
+    /* Step 7: Verify file no longer exists */
+    if (krffs_open(renamed_filename) == 0) {
+        serial_printf("KRFFS write test: file still exists after unlink\n");
+        return false;
+    }
+
+    return true;
+}
+
 static void run_self_tests(void)
 {
     k_puts("");
@@ -811,6 +884,22 @@ static void run_self_tests(void)
     }
     set_fore_color(light_grey);
 
+    /* Only run KRFFS write test if filesystem is mounted */
+    if (krffs_fs) {
+        k_printf("  KRFFS write ops:    ");
+        serial_printf("  KRFFS write ops:    ");
+        if (test_krffs_write()) {
+            set_fore_color(light_green);
+            k_puts("[PASS]");
+            serial_printf("[PASS]\n");
+        } else {
+            set_fore_color(light_red);
+            k_puts("[FAIL]");
+            serial_printf("[FAIL]\n");
+        }
+        set_fore_color(light_grey);
+    }
+
     test_display();
 
     k_puts("");
@@ -822,19 +911,23 @@ static void process_command(const char *cmd)
 {
     if (str_equal(cmd, "help")) {
         k_puts("Available commands:");
-        k_puts("  help        - Show this help message");
-        k_puts("  info        - Display system information");
-        k_puts("  modules     - List loaded multiboot modules");
-        k_puts("  ls          - List files on RAM disk");
-        k_puts("  cat <file>  - Display file contents");
-        k_puts("  test        - Run self-tests again");
-        k_puts("  clear       - Clear the screen");
-        k_puts("  switch      - Test manual context switching");
-        k_puts("  preempt     - Test preemptive round-robin scheduling");
-        k_puts("  isolate     - Test memory isolation between processes");
-        k_puts("  usermode    - Test ring 3 execution");
-        k_puts("  fault       - Trigger a page fault (panic)");
-        k_puts("  halt        - Halt the CPU");
+        k_puts("  help             - Show this help message");
+        k_puts("  info             - Display system information");
+        k_puts("  modules          - List loaded multiboot modules");
+        k_puts("  ls               - List files on RAM disk");
+        k_puts("  cat <file>       - Display file contents");
+        k_puts("  touch <file>     - Create an empty file");
+        k_puts("  rm <file>        - Delete a file");
+        k_puts("  mv <old> <new>   - Rename a file");
+        k_puts("  write <file> <data> - Write data to file");
+        k_puts("  test             - Run self-tests again");
+        k_puts("  clear            - Clear the screen");
+        k_puts("  switch           - Test manual context switching");
+        k_puts("  preempt          - Test preemptive scheduling");
+        k_puts("  isolate          - Test memory isolation");
+        k_puts("  usermode         - Test ring 3 execution");
+        k_puts("  fault            - Trigger a page fault (panic)");
+        k_puts("  halt             - Halt the CPU");
     } else if (str_equal(cmd, "info")) {
         k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         k_printf("Timer ticks:     %d\n", ticks);
@@ -903,6 +996,103 @@ static void process_command(const char *cmd)
                     k_puts("");  /* Ensure newline after content */
                 }
                 k_puts("--- EOF ---");
+            }
+        }
+    } else if (str_starts_with(cmd, "touch ")) {
+        /* Create a new file: touch <filename> */
+        const char *filename = cmd + 6;  /* Skip "touch " */
+
+        if (!krffs_fs) {
+            k_puts("No file system mounted.");
+        } else if (filename[0] == '\0') {
+            k_puts("Usage: touch <filename>");
+        } else {
+            if (krffs_create(filename) == 0) {
+                k_printf("Created file: %s\n", filename);
+            } else {
+                k_printf("Failed to create file: %s\n", filename);
+            }
+        }
+    } else if (str_starts_with(cmd, "rm ")) {
+        /* Delete a file: rm <filename> */
+        const char *filename = cmd + 3;  /* Skip "rm " */
+
+        if (!krffs_fs) {
+            k_puts("No file system mounted.");
+        } else if (filename[0] == '\0') {
+            k_puts("Usage: rm <filename>");
+        } else {
+            if (krffs_unlink(filename) == 0) {
+                k_printf("Deleted file: %s\n", filename);
+            } else {
+                k_printf("Failed to delete file: %s\n", filename);
+            }
+        }
+    } else if (str_starts_with(cmd, "mv ")) {
+        /* Rename a file: mv <old> <new> */
+        const char *args = cmd + 3;  /* Skip "mv " */
+        const char *new_name = NULL;
+        char old_buf[64];
+        size_t i;
+
+        /* Find the space between old and new names */
+        for (i = 0; args[i] != '\0' && args[i] != ' '; i++) {
+            if (i < 63) old_buf[i] = args[i];
+        }
+        old_buf[i < 63 ? i : 63] = '\0';
+
+        if (args[i] == ' ') {
+            new_name = args + i + 1;
+        }
+
+        if (!krffs_fs) {
+            k_puts("No file system mounted.");
+        } else if (old_buf[0] == '\0' || !new_name || new_name[0] == '\0') {
+            k_puts("Usage: mv <oldname> <newname>");
+        } else {
+            if (krffs_rename(old_buf, new_name) == 0) {
+                k_printf("Renamed '%s' to '%s'\n", old_buf, new_name);
+            } else {
+                k_printf("Failed to rename file\n");
+            }
+        }
+    } else if (str_starts_with(cmd, "write ")) {
+        /* Write data to a file: write <filename> <data> */
+        const char *args = cmd + 6;  /* Skip "write " */
+        const char *data = NULL;
+        char file_buf[64];
+        size_t i;
+
+        /* Find the space between filename and data */
+        for (i = 0; args[i] != '\0' && args[i] != ' '; i++) {
+            if (i < 63) file_buf[i] = args[i];
+        }
+        file_buf[i < 63 ? i : 63] = '\0';
+
+        if (args[i] == ' ') {
+            data = args + i + 1;
+        }
+
+        if (!krffs_fs) {
+            k_puts("No file system mounted.");
+        } else if (file_buf[0] == '\0' || !data) {
+            k_puts("Usage: write <filename> <data>");
+        } else {
+            /* Create file if it doesn't exist */
+            if (krffs_open(file_buf) != 0) {
+                krffs_create(file_buf);
+            }
+            /* Truncate to 0 first to overwrite */
+            krffs_truncate(file_buf, 0);
+            /* Write the data */
+            {
+                uint32_t len = k_strlen(data);
+                int written = krffs_write(file_buf, data, len, 0);
+                if (written > 0) {
+                    k_printf("Wrote %d bytes to %s\n", written, file_buf);
+                } else {
+                    k_printf("Failed to write to %s\n", file_buf);
+                }
             }
         }
     } else if (str_equal(cmd, "test")) {
@@ -1137,17 +1327,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             k_printf(" OK (KRFFS, %d files)\n", krffs_count_files());
             serial_printf(" OK (KRFFS, %d files)\n", krffs_count_files());
             set_fore_color(light_grey);
-
-            /* Test reading hello.txt */
-            if (krffs_open("hello.txt") == 0) {
-                char buf[64];
-                int n = krffs_read("hello.txt", buf, 63, 0);
-                if (n > 0) {
-                    buf[n] = '\0';
-                    k_printf("    hello.txt: \"%s\"\n", buf);
-                    serial_printf("    hello.txt: \"%s\"\n", buf);
-                }
-            }
         } else {
             set_fore_color(light_red);
             k_puts(" FAIL (invalid KRFFS)");

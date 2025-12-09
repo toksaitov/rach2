@@ -757,8 +757,40 @@ Before implementing new functionality:
     File system... OK (KRFFS, 1 files)
         hello.txt: "hello, world"
     ```
-- **Current Phase**: Phase 11 complete
-- **Next Step**: Phase 12 (KRFFS Write and Directory Operations)
+### Session 8 - Phase 12 Complete
+- **Completed Phase 12: KRFFS Write Operations**
+  - Ported K&R first-fit allocator from original KRFFS:
+    - `krffs_initialize_free_node()` - Initialize free node header
+    - `krffs_set_reserved_node_name()` - Set name and compute DJB hash
+    - `krffs_allocate_reserved_node()` - First-fit allocation with splitting
+    - `krffs_resize_reserved_node()` - In-place resize or relocate
+    - `krffs_remove_reserved_node()` - Mark free and coalesce
+  - Implemented file operations:
+    - `krffs_create(path)` - Create new empty file
+    - `krffs_write(path, buffer, size, offset)` - Write with auto-resize
+    - `krffs_truncate(path, new_size)` - Resize with zero-fill
+    - `krffs_unlink(path)` - Delete file
+    - `krffs_rename(old, new)` - Rename file
+  - Added shell commands: `touch`, `rm`, `mv`, `write`
+  - Added automated self-test `test_krffs_write()`:
+    - Tests create, write, read-verify, rename, verify, unlink, verify-deleted
+    - Only runs when KRFFS is mounted (conditional on `krffs_fs`)
+  - Updated `rach2/Readme.md`:
+    - Changed "read-only" to "read/write support"
+    - Added Write Operations section with all new functions
+    - Updated Shell Commands with touch, rm, mv, write
+    - Updated Limitations (removed "no write support")
+    - Updated Files section with all new functions
+  - All 9 self-tests pass (added KRFFS write test)
+  - Test output:
+    ```
+    KRFFS write ops:    KRFFS: Created file 'krffs_test.tmp'
+    KRFFS: Renamed 'krffs_test.tmp' to 'krffs_renamed.tmp'
+    KRFFS: Deleted file 'krffs_renamed.tmp'
+    [PASS]
+    ```
+- **Current Phase**: Phase 12 complete
+- **Next Step**: Phase 13 (pending user direction)
 
 ---
 

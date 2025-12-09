@@ -24,9 +24,9 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Preemptive round-robin scheduler (timer-driven)
 * Per-process page directories with CR3 switching for memory isolation
 * Multiboot module loading (RAM disk support via `-initrd`)
-* KRFFS file system (read-only) loaded from RAM disk module
-* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation)
-* Interactive shell with commands: help, info, modules, ls, cat, test, clear, switch, preempt, isolate, usermode, fault, halt
+* KRFFS file system with read/write support loaded from RAM disk module
+* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write)
+* Interactive shell with commands: help, info, modules, ls, cat, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
 
 ## Memory Layout
 
@@ -40,7 +40,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 
 ## Limitations
 
-* Read-only filesystem (no write support yet), no disk drivers
+* RAM disk only (no persistent disk drivers)
 * No dynamic memory allocation (only bump allocator)
 * 16 MB hard memory limit
 * PS/2 keyboard only (no USB)
@@ -402,7 +402,7 @@ The kernel will display the module at boot:
 
 ## File System (KRFFS)
 
-The kernel includes read-only support for KRFFS (K&R First-Fit File System), a simple flat file system with no directory hierarchy. KRFFS is loaded from a RAM disk module passed via multiboot.
+The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a simple flat file system with no directory hierarchy. KRFFS is loaded from a RAM disk module passed via multiboot.
 
 ### KRFFS Overview
 
@@ -423,17 +423,30 @@ At boot, if a multiboot module is present, `init_krffs()` is called with the mod
 
 ### Read Operations
 
-The kernel provides these read-only file operations:
 * `krffs_open(path)` - Check if a file exists (returns 0 on success)
 * `krffs_read(path, buffer, size, offset)` - Read file contents into buffer
 * `krffs_get_file_size(path)` - Get file size in bytes
 * `krffs_count_files()` - Count number of files in the file system
 * `krffs_list_files()` - Print all files to serial output
 
+### Write Operations
+
+* `krffs_create(path)` - Create a new empty file
+* `krffs_write(path, buffer, size, offset)` - Write data to a file (auto-resizes)
+* `krffs_truncate(path, new_size)` - Resize a file (zero-fills if extending)
+* `krffs_unlink(path)` - Delete a file
+* `krffs_rename(old_path, new_path)` - Rename a file
+
+The write operations use the K&R first-fit allocator to manage free space. When a file is written or resized, the allocator finds a suitable free node and splits it if necessary. When a file is deleted, the allocator coalesces adjacent free blocks.
+
 ### Shell Commands
 
 * `ls` - List all files on the RAM disk with sizes
 * `cat <filename>` - Display contents of a file
+* `touch <filename>` - Create a new empty file
+* `rm <filename>` - Delete a file
+* `mv <old> <new>` - Rename a file
+* `write <filename> <data>` - Write text data to a file
 
 ### Loading a KRFFS Image
 
@@ -451,7 +464,12 @@ The kernel will display:
 * `sys/fs/krffs.h` - KRFFS structures, node types, function prototypes
 * `sys/fs/krffs.c` - File system implementation
   * `init_krffs(base, size)` - Initialize KRFFS from RAM disk
-  * `krffs_open()`, `krffs_read()`, `krffs_get_file_size()` - File operations
+  * `krffs_open()`, `krffs_read()`, `krffs_get_file_size()` - Read operations
+  * `krffs_create()`, `krffs_write()`, `krffs_truncate()` - Write operations
+  * `krffs_unlink()`, `krffs_rename()` - File management
+  * `krffs_allocate_reserved_node()` - K&R first-fit allocator
+  * `krffs_resize_reserved_node()` - Node resizing (in-place or relocate)
+  * `krffs_remove_reserved_node()` - Mark free and coalesce
   * `krffs_find_reserved_node_by_name()` - File lookup by DJB hash
   * `krffs_get_next_node()`, `krffs_get_previous_node()` - Node traversal
   * `krffs_calculate_djb_hash()` - DJB hash for filename lookup

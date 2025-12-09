@@ -4,7 +4,8 @@
 /*
  * KRFFS - K&R First-Fit File System
  * Ported from the educational FUSE file system project for use in Rach2 kernel.
- * This is the read-only version for Phase 11.
+ * Phase 11: Read-only operations
+ * Phase 12: Write operations (create, write, truncate, unlink, rename)
  */
 
 #include "../lib/kint.h"
@@ -103,11 +104,33 @@ krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const ch
 krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, const char *name);
 
 /*
- * File system operations (read-only for Phase 11)
+ * File system operations - read
  */
 int krffs_open(const char *path);
 int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset);
 uint32_t krffs_get_file_size(const char *path);
+
+/*
+ * File system operations - write (Phase 12)
+ */
+int krffs_create(const char *path);
+int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t offset);
+int krffs_truncate(const char *path, uint32_t new_size);
+int krffs_unlink(const char *path);
+int krffs_rename(const char *old_path, const char *new_path);
+
+/*
+ * Node manipulation functions (internal, but exposed for testing)
+ */
+krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size, uint64_t previous_node_size);
+void krffs_set_reserved_node_name(krffs_node_t *node, const char *name);
+
+/*
+ * K&R allocator functions
+ */
+krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size, krffs_node_t *original);
+krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node, uint64_t size);
+void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node);
 
 /*
  * Utility functions
