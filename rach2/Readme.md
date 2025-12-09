@@ -19,6 +19,7 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Kernel panic screen automatically triggered on page faults
 * System call infrastructure (int 0x80)
 * User mode (ring 3) execution with privilege transitions
+* Process control blocks (PCB) with process table (16 max)
 * Built-in self-tests (memory, strings, timer, paging, syscall)
 * Interactive shell with commands: help, info, test, clear, usermode, fault, halt
 
@@ -36,7 +37,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 
 * No filesystem or disk drivers
 * No dynamic memory allocation (only bump allocator)
-* Single-tasking (no process/thread management)
+* No scheduler or context switching (single-tasking)
 * 16 MB hard memory limit
 * PS/2 keyboard only (no USB)
 
@@ -70,6 +71,8 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   ├── mm/
 │   │   ├── heap.c/h       # Simple bump allocator
 │   │   └── paging.c/h     # Page directory/table, identity mapping
+│   ├── proc/
+│   │   └── process.c/h    # Process control block, process table
 │   └── lib/
 │       ├── kdef.h         # NULL, bool, size_t definitions
 │       ├── kint.h         # Fixed-width integer types
@@ -182,6 +185,39 @@ The shell command `usermode` tests ring 3 execution:
 5. After the syscall, the program loops forever (no scheduler yet)
 
 When returning from the syscall, the TSS provides the kernel stack (ESP0/SS0), and after the syscall handler completes, the CPU returns to ring 3 using the saved user state.
+
+## Process Management
+
+The kernel includes a basic process management subsystem for tracking process state.
+
+### Process Control Block (PCB)
+
+Each process is represented by a `process_t` structure containing:
+* `pid` - Process ID (unique identifier)
+* `state` - Current state (UNUSED, READY, RUNNING, BLOCKED, ZOMBIE)
+* `regs` - Saved CPU registers for context switching
+* `cr3` - Page directory physical address
+* `kernel_stack` - Top of kernel stack for this process
+* `parent_pid` - Parent process ID
+* `exit_code` - Exit status (for zombie processes)
+
+### Process States
+
+| State | Description |
+|-------|-------------|
+| UNUSED | Slot is free in process table |
+| READY | Process is ready to run |
+| RUNNING | Process is currently executing |
+| BLOCKED | Process is waiting for I/O or event |
+| ZOMBIE | Process has exited, waiting for parent |
+
+### Process Table
+
+The kernel maintains a fixed-size process table (`MAX_PROCS = 16`). At boot, process 0 (the idle/kernel process) is created and set as the current process.
+
+### Files in `sys/proc/`
+* `process.h` - PCB structure, state definitions, function prototypes
+* `process.c` - Process table, `init_proc()`, `alloc_process()`, `free_process()`, `get_process()`
 
 ## Scripts
 

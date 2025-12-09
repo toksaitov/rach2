@@ -30,6 +30,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/tables/idt.c      \
 	  sys/mm/heap.c         \
 	  sys/mm/paging.c       \
+	  sys/proc/process.c    \
 	  sys/lib/kctypes.c     \
 	  sys/lib/kstd.c        \
 	  sys/lib/kstring.c

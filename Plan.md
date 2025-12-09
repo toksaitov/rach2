@@ -614,8 +614,26 @@ Before implementing new functionality:
   - Updated `rach2/Readme.md` with User Mode (Ring 3) section
   - Verified: Kernel boots successfully, all tests pass
   - Test: `usermode` command prints "Hello from ring 3!" via syscall from ring 3
-- **Current Phase**: Phase 4 complete
-- **Next Step**: Phase 5 (Process Control Block)
+### Session 3 - Phase 5 Complete
+- **Completed Phase 5: Process Control Block**
+  - Created `sys/proc/process.h` with:
+    - Process states: PROC_UNUSED, PROC_READY, PROC_RUNNING, PROC_BLOCKED, PROC_ZOMBIE
+    - `cpu_regs_t` structure for saved registers (matches pushal/popal layout)
+    - `process_t` (PCB) structure: pid, state, regs, cr3, kernel_stack, parent_pid, exit_code
+    - MAX_PROCS = 16
+  - Created `sys/proc/process.c` with:
+    - Process table `proc_table[MAX_PROCS]`
+    - `current_proc` pointer to running process
+    - `init_proc()` - initializes all slots to UNUSED
+    - `alloc_process()` - finds free slot, assigns PID
+    - `free_process()` - marks slot as UNUSED
+    - `get_process()` - lookup by PID
+  - Updated `kernel.c` to create process 0 (idle/kernel process) at boot
+  - Updated `Makefile` to include `sys/proc/process.c`
+  - Updated `rach2/Readme.md` with Process Management section
+  - Verified: "Process 0 created (pid=0)" printed during boot
+- **Current Phase**: Phase 5 complete
+- **Next Step**: Phase 6 (Context Switch)
 
 ---
 

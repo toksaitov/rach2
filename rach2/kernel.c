@@ -9,6 +9,7 @@
 #include "sys/isr.h"
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
+#include "sys/proc/process.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
 #include "sys/display/display.h"
@@ -476,6 +477,26 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     k_printf("  Syscall...");
     serial_printf("  Syscall...");
     init_syscall();
+    set_fore_color(light_green);
+    k_puts(" OK");
+    serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  Process...");
+    serial_printf("  Process...");
+    init_proc();
+    {
+        /* Create process 0 (idle/kernel process) */
+        process_t *proc0 = alloc_process();
+        if (proc0) {
+            proc0->state = PROC_RUNNING;
+            proc0->cr3 = 0;  /* Uses kernel page directory */
+            proc0->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
+            proc0->parent_pid = 0;
+            current_proc = proc0;
+            serial_printf("Process 0 created (pid=%d)\n", proc0->pid);
+        }
+    }
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");
