@@ -25,8 +25,9 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Per-process page directories with CR3 switching for memory isolation
 * Multiboot module loading (RAM disk support via `-initrd`)
 * KRFFS file system with read/write support loaded from RAM disk module
-* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write)
-* Interactive shell with commands: help, info, modules, ls, cat, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
+* ELF32 header parsing for executable validation and loading
+* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF parse)
+* Interactive shell with commands: help, info, modules, ls, cat, elf, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
 
 ## Memory Layout
 
@@ -79,6 +80,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   ├── proc/
 │   │   ├── process.c/h    # Process control block, process table
 │   │   ├── sched.c/h      # Round-robin preemptive scheduler
+│   │   ├── elf.c/h        # ELF32 header parsing
 │   │   └── switch.s       # Context switch assembly routine
 │   ├── fs/
 │   │   └── krffs.c/h      # KRFFS file system (read-only)
@@ -473,6 +475,62 @@ The kernel will display:
   * `krffs_find_reserved_node_by_name()` - File lookup by DJB hash
   * `krffs_get_next_node()`, `krffs_get_previous_node()` - Node traversal
   * `krffs_calculate_djb_hash()` - DJB hash for filename lookup
+
+## ELF Loader
+
+The kernel includes an ELF32 header parser for validating and loading executable files. This is used to load user programs from the file system.
+
+### ELF32 Format
+
+ELF (Executable and Linkable Format) is the standard executable format for Unix-like systems. The kernel supports 32-bit ELF executables for the i386 architecture.
+
+#### ELF Header (52 bytes)
+
+| Field | Size | Description |
+|-------|------|-------------|
+| e_ident | 16 | Magic number (0x7F 'E' 'L' 'F'), class, encoding, version |
+| e_type | 2 | Object file type (ET_EXEC = 2 for executables) |
+| e_machine | 2 | Machine type (EM_386 = 3 for i386) |
+| e_entry | 4 | Entry point virtual address |
+| e_phoff | 4 | Program header table offset |
+| e_phnum | 2 | Number of program headers |
+
+#### Program Header (32 bytes)
+
+| Field | Size | Description |
+|-------|------|-------------|
+| p_type | 4 | Segment type (PT_LOAD = 1 for loadable segments) |
+| p_offset | 4 | Offset in file |
+| p_vaddr | 4 | Virtual address in memory |
+| p_filesz | 4 | Size in file |
+| p_memsz | 4 | Size in memory (may be larger for BSS) |
+| p_flags | 4 | Permissions (PF_R=4, PF_W=2, PF_X=1) |
+
+### Validation Checks
+
+`elf_check()` validates an ELF file by checking:
+1. Size is sufficient for ELF header (52 bytes minimum)
+2. Magic number is correct (0x7F 'E' 'L' 'F')
+3. Class is 32-bit (ELFCLASS32)
+4. Data encoding is little-endian (ELFDATA2LSB)
+5. ELF version is current (EV_CURRENT)
+6. File type is executable (ET_EXEC)
+7. Machine type is i386 (EM_386)
+8. Program header table is present and within bounds
+9. Entry point is non-zero
+
+### Shell Commands
+
+* `elf <filename>` - Display ELF header information including entry point, program headers, and LOAD segments with their addresses and permissions
+
+### Files
+
+* `sys/proc/elf.h` - ELF32 structure definitions, constants, function prototypes
+* `sys/proc/elf.c` - ELF validation and parsing implementation
+  * `elf_check(data, size)` - Validate ELF header
+  * `elf_entry_point(data)` - Get entry point address
+  * `elf_program_headers(data)` - Get pointer to program header table
+  * `elf_program_header_count(data)` - Get number of program headers
 
 ## Scripts
 

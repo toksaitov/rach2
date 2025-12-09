@@ -12,6 +12,7 @@
 #include "sys/mm/paging.h"
 #include "sys/proc/process.h"
 #include "sys/proc/sched.h"
+#include "sys/proc/elf.h"
 #include "sys/fs/krffs.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
@@ -53,6 +54,7 @@ static void test_switch(void);
 static void test_preempt(void);
 static bool test_isolation(void);
 static bool test_krffs_write(void);
+static bool test_elf(void);
 
 static void timer_handler(isr_params_t params)
 {
@@ -717,6 +719,69 @@ static bool test_krffs_write(void)
     return true;
 }
 
+/*
+ * Test ELF header parsing (Phase 13)
+ * Loads an ELF file from KRFFS and validates/parses its header
+ */
+static bool test_elf(void)
+{
+    const char *elf_filename = "hello";
+    char elf_buffer[8192];  /* Buffer to hold ELF file */
+    int bytes_read;
+    uint32_t file_size;
+    uint32_t entry_point;
+    uint16_t phdr_count;
+    Elf32_Phdr *phdrs;
+    uint16_t i;
+
+    if (!krffs_fs) {
+        /* No filesystem mounted, skip test */
+        return true;
+    }
+
+    /* Check if file exists */
+    if (krffs_open(elf_filename) != 0) {
+        serial_printf("ELF test: '%s' not found, skipping\n", elf_filename);
+        return true;  /* Not a failure, just skip */
+    }
+
+    /* Read the ELF file */
+    file_size = krffs_get_file_size(elf_filename);
+    if (file_size > sizeof(elf_buffer)) {
+        serial_printf("ELF test: file too large (%d bytes)\n", file_size);
+        return false;
+    }
+
+    bytes_read = krffs_read(elf_filename, elf_buffer, file_size, 0);
+    if (bytes_read != (int)file_size) {
+        serial_printf("ELF test: read failed (%d/%d)\n", bytes_read, file_size);
+        return false;
+    }
+
+    /* Validate ELF header */
+    if (!elf_check(elf_buffer, file_size)) {
+        serial_printf("ELF test: invalid ELF header\n");
+        return false;
+    }
+
+    /* Get entry point */
+    entry_point = elf_entry_point(elf_buffer);
+    serial_printf("ELF test: entry=0x%X ", entry_point);
+
+    /* Get and display program headers */
+    phdrs = elf_program_headers(elf_buffer);
+    phdr_count = elf_program_header_count(elf_buffer);
+    serial_printf("phdr=%d ", phdr_count);
+
+    for (i = 0; i < phdr_count; i++) {
+        if (phdrs[i].p_type == PT_LOAD) {
+            serial_printf("LOAD@0x%X ", phdrs[i].p_vaddr);
+        }
+    }
+
+    return true;
+}
+
 static void run_self_tests(void)
 {
     k_puts("");
@@ -898,6 +963,19 @@ static void run_self_tests(void)
             serial_printf("[FAIL]\n");
         }
         set_fore_color(light_grey);
+
+        k_printf("  ELF header parse:   ");
+        serial_printf("  ELF header parse:   ");
+        if (test_elf()) {
+            set_fore_color(light_green);
+            k_puts("[PASS]");
+            serial_printf("[PASS]\n");
+        } else {
+            set_fore_color(light_red);
+            k_puts("[FAIL]");
+            serial_printf("[FAIL]\n");
+        }
+        set_fore_color(light_grey);
     }
 
     test_display();
@@ -916,6 +994,7 @@ static void process_command(const char *cmd)
         k_puts("  modules          - List loaded multiboot modules");
         k_puts("  ls               - List files on RAM disk");
         k_puts("  cat <file>       - Display file contents");
+        k_puts("  elf <file>       - Display ELF header info");
         k_puts("  touch <file>     - Create an empty file");
         k_puts("  rm <file>        - Delete a file");
         k_puts("  mv <old> <new>   - Rename a file");
@@ -996,6 +1075,56 @@ static void process_command(const char *cmd)
                     k_puts("");  /* Ensure newline after content */
                 }
                 k_puts("--- EOF ---");
+            }
+        }
+    } else if (str_starts_with(cmd, "elf ")) {
+        /* Display ELF header info: elf <filename> */
+        const char *filename = cmd + 4;  /* Skip "elf " */
+        char buffer[8192];
+        int bytes_read;
+        uint32_t file_size;
+        uint32_t entry_point;
+        uint16_t phdr_count;
+        Elf32_Phdr *phdrs;
+        uint16_t i;
+
+        if (!krffs_fs) {
+            k_puts("No file system mounted.");
+        } else if (filename[0] == '\0') {
+            k_puts("Usage: elf <filename>");
+        } else if (krffs_open(filename) != 0) {
+            k_printf("File not found: %s\n", filename);
+        } else {
+            file_size = krffs_get_file_size(filename);
+            if (file_size > sizeof(buffer)) {
+                k_printf("File too large: %d bytes\n", file_size);
+            } else {
+                bytes_read = krffs_read(filename, buffer, file_size, 0);
+                if (bytes_read != (int)file_size) {
+                    k_printf("Read error: %d/%d bytes\n", bytes_read, file_size);
+                } else if (!elf_check(buffer, file_size)) {
+                    k_printf("Not a valid ELF32 executable\n");
+                } else {
+                    entry_point = elf_entry_point(buffer);
+                    phdrs = elf_program_headers(buffer);
+                    phdr_count = elf_program_header_count(buffer);
+
+                    k_printf("ELF Header:\n");
+                    k_printf("  Entry point:       0x%X\n", entry_point);
+                    k_printf("  Program headers:   %d\n", phdr_count);
+                    for (i = 0; i < phdr_count; i++) {
+                        if (phdrs[i].p_type == PT_LOAD) {
+                            k_printf("  LOAD segment:\n");
+                            k_printf("    Virtual addr:  0x%X\n", phdrs[i].p_vaddr);
+                            k_printf("    File size:     %d bytes\n", phdrs[i].p_filesz);
+                            k_printf("    Memory size:   %d bytes\n", phdrs[i].p_memsz);
+                            k_printf("    Flags:         %s%s%s\n",
+                                     (phdrs[i].p_flags & PF_R) ? "R" : "-",
+                                     (phdrs[i].p_flags & PF_W) ? "W" : "-",
+                                     (phdrs[i].p_flags & PF_X) ? "X" : "-");
+                        }
+                    }
+                }
             }
         }
     } else if (str_starts_with(cmd, "touch ")) {

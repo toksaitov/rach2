@@ -789,8 +789,35 @@ Before implementing new functionality:
     KRFFS: Deleted file 'krffs_renamed.tmp'
     [PASS]
     ```
-- **Current Phase**: Phase 12 complete
-- **Next Step**: Phase 13 (pending user direction)
+### Session 9 - Phase 13 Complete
+- **Completed Phase 13: ELF Header Parsing**
+  - Created `sys/proc/elf.h` with ELF32 structure definitions:
+    - `Elf32_Ehdr` (52 bytes) - ELF header with magic, class, type, machine, entry point
+    - `Elf32_Phdr` (32 bytes) - Program header with segment type, offsets, addresses, flags
+    - All ELF constants: magic bytes, class types, data encodings, segment types, flags
+  - Created `sys/proc/elf.c` with parsing functions:
+    - `elf_check(data, size)` - Validates ELF magic, 32-bit, little-endian, executable, i386
+    - `elf_entry_point(data)` - Returns entry point virtual address
+    - `elf_program_headers(data)` - Returns pointer to program header table
+    - `elf_program_header_count(data)` - Returns number of program headers
+  - Added `test_elf()` self-test in `kernel.c`:
+    - Loads "hello" ELF from KRFFS
+    - Validates header, prints entry point and PT_LOAD segment info
+    - Skips gracefully if file not found
+  - Added `elf <filename>` shell command:
+    - Displays detailed ELF header info including segment permissions (R/W/X)
+  - Updated `Makefile` to include `sys/proc/elf.c`
+  - Updated `rach2/Readme.md`:
+    - Added "ELF32 header parsing" to Features
+    - Added elf.c/h to Structure
+    - Added ELF Loader section with format details and validation checks
+  - All 10 self-tests pass (added ELF header parse test)
+  - Test output:
+    ```
+    ELF header parse:   ELF test: entry=0x8048089 phdr=1 LOAD@0x8047000 [PASS]
+    ```
+- **Current Phase**: Phase 13 complete
+- **Next Step**: Phase 14 (ELF Loading and Execution)
 
 ---
 
