@@ -29,8 +29,6 @@ void init_proc(void)
 
     next_pid = 0;
     current_proc = NULL;
-
-    serial_printf("Process subsystem initialized\n");
 }
 
 process_t *alloc_process(void)

@@ -654,8 +654,32 @@ Before implementing new functionality:
   - Updated `rach2/Readme.md` with Context Switching section
   - Verified: "Context switch: [PASS]" printed during boot self-tests
   - Test: `switch` command prints "ABABABABAB" demonstrating interleaved execution
-- **Current Phase**: Phase 6 complete
-- **Next Step**: Phase 7 (Round-Robin Scheduler)
+### Session 4 - Phase 7 Complete
+- **Completed Phase 7: Round-Robin Scheduler**
+  - Created `sys/proc/sched.h` with scheduler declarations:
+    - `init_sched()`, `sched_enable()`, `sched_disable()`, `sched_is_enabled()`
+    - `schedule()`, `sched_yield()`
+  - Created `sys/proc/sched.c` with round-robin scheduler:
+    - Enabled/disabled flag for critical sections
+    - Tracks last scheduled index for fair rotation
+    - Searches proc_table for READY processes
+    - Marks old as READY, new as RUNNING, performs context switch
+  - Updated `Makefile` to include `sys/proc/sched.c`
+  - Modified `timer_handler()` in `kernel.c` to call `schedule()` on every tick
+  - Added `init_sched()` call during boot initialization
+  - Created preemptive test processes (`preempt_proc_a` and `preempt_proc_b`):
+    - Each process enables interrupts with `sti` (required since first scheduled mid-interrupt)
+    - Each prints its character (A or B) in a loop with delay
+    - Test counts prints and stops after 20 total
+  - Added preemptive scheduling self-test in `run_self_tests()`:
+    - Creates two processes, enables scheduler, waits for completion
+    - Verifies both processes ran (A>0 and B>0), prints [PASS]
+  - Added `preempt` shell command for manual testing
+  - Updated `rach2/Readme.md` with Scheduler section
+  - Verified: "Round-robin sched: [PASS] A=10 B=10" printed during boot self-tests
+  - Test: Interleaved "ABABAB..." output demonstrates timer-driven preemption
+- **Current Phase**: Phase 7 complete
+- **Next Step**: Phase 8 (Per-Process Page Directories)
 
 ---
 

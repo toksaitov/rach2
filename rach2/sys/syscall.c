@@ -44,8 +44,6 @@ static void _syscall_handler(isr_params_t params)
 {
     uint32_t syscall_num = params.eax;
 
-    serial_printf("Syscall: %d\n", syscall_num);
-
     if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
         _syscall_table[syscall_num](&params);
     }

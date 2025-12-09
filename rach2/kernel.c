@@ -10,6 +10,7 @@
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
 #include "sys/proc/process.h"
+#include "sys/proc/sched.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
 #include "sys/display/display.h"
@@ -47,12 +48,16 @@ static bool test_timer(void);
 static bool test_syscall(void);
 static bool test_usermode(void);
 static void test_switch(void);
+static void test_preempt(void);
 
 static void timer_handler(isr_params_t params)
 {
     (void) params;
 
     ++ticks;
+
+    /* Call the scheduler on every timer tick */
+    schedule();
 }
 
 static void keyboard_handler(isr_params_t params)
@@ -351,58 +356,222 @@ static void test_switch(void)
     set_fore_color(light_grey);
 }
 
+/*
+ * Preemptive scheduling test variables
+ */
+static volatile int preempt_done = 0;
+static volatile int preempt_count_a = 0;
+static volatile int preempt_count_b = 0;
+
+/*
+ * Preemptive test process A - prints 'A' in a loop
+ */
+static void preempt_proc_a(void)
+{
+    /* Enable interrupts - we started mid-interrupt */
+    __asm__ __volatile__("sti");
+
+    while (!preempt_done) {
+        k_putc('A');
+        serial_printf("A");
+        ++preempt_count_a;
+
+        /* Delay loop - needs to be long enough for timer to fire (10ms at 100Hz) */
+        {
+            volatile int i;
+            for (i = 0; i < 5000000; i++) {
+                __asm__ __volatile__("nop");
+            }
+        }
+
+        /* Check if we've printed enough */
+        if (preempt_count_a + preempt_count_b >= 20) {
+            preempt_done = 1;
+        }
+    }
+
+    /* When done, just loop (will be cleaned up) */
+    for (;;) {
+        __asm__ __volatile__("hlt");
+    }
+}
+
+/*
+ * Preemptive test process B - prints 'B' in a loop
+ */
+static void preempt_proc_b(void)
+{
+    /* Enable interrupts - we started mid-interrupt */
+    __asm__ __volatile__("sti");
+
+    while (!preempt_done) {
+        k_putc('B');
+        serial_printf("B");
+        ++preempt_count_b;
+
+        /* Delay loop - needs to be long enough for timer to fire (10ms at 100Hz) */
+        {
+            volatile int i;
+            for (i = 0; i < 5000000; i++) {
+                __asm__ __volatile__("nop");
+            }
+        }
+
+        /* Check if we've printed enough */
+        if (preempt_count_a + preempt_count_b >= 20) {
+            preempt_done = 1;
+        }
+    }
+
+    /* When done, just loop (will be cleaned up) */
+    for (;;) {
+        __asm__ __volatile__("hlt");
+    }
+}
+
+static void test_preempt(void)
+{
+    process_t *proc_a;
+    process_t *proc_b;
+    uintptr_t stack_a, stack_b;
+
+    k_puts("Testing preemptive round-robin scheduling...");
+    k_puts("Two processes will print A and B, preempted by timer.");
+    k_puts("Expected: interleaved As and Bs (e.g., AABBABAB...)");
+    k_printf("Result:   ");
+    serial_printf("Result:   ");
+
+    /* Reset counters */
+    preempt_done = 0;
+    preempt_count_a = 0;
+    preempt_count_b = 0;
+
+    /* Allocate process A */
+    proc_a = alloc_process();
+    if (!proc_a) {
+        k_puts("Failed to allocate process A");
+        return;
+    }
+    stack_a = mem_reserve(KERNEL_STACK_SIZE, true);
+    proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
+    proc_a->cr3 = 0;
+    proc_a->parent_pid = current_proc->pid;
+    setup_process_stack(proc_a, preempt_proc_a);
+
+    /* Allocate process B */
+    proc_b = alloc_process();
+    if (!proc_b) {
+        free_process(proc_a);
+        k_puts("Failed to allocate process B");
+        return;
+    }
+    stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
+    proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
+    proc_b->cr3 = 0;
+    proc_b->parent_pid = current_proc->pid;
+    setup_process_stack(proc_b, preempt_proc_b);
+
+    /* Enable the scheduler - this will start preemptive switching */
+    sched_enable();
+
+    /* Wait for the test to complete */
+    while (!preempt_done) {
+        __asm__ __volatile__("hlt");
+    }
+
+    /* Disable scheduler before cleanup */
+    sched_disable();
+
+    k_puts("");
+    serial_printf("\n");
+    k_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
+    serial_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
+
+    /* Clean up */
+    free_process(proc_a);
+    free_process(proc_b);
+
+    /* Verify both processes got CPU time */
+    if (preempt_count_a > 0 && preempt_count_b > 0) {
+        set_fore_color(light_green);
+        k_puts("Preemptive scheduling test passed!");
+        serial_printf("Preemptive scheduling test passed!\n");
+    } else {
+        set_fore_color(light_red);
+        k_puts("Preemptive scheduling test FAILED - one process didn't run!");
+        serial_printf("Preemptive scheduling test FAILED!\n");
+    }
+    set_fore_color(light_grey);
+}
+
 static void run_self_tests(void)
 {
     k_puts("");
     k_puts("======= System Self-Test =======");
+    serial_printf("\n======= System Self-Test =======\n");
     k_puts("");
 
     k_printf("  Memory allocation:  ");
+    serial_printf("  Memory allocation:  ");
     if (test_memory()) {
         set_fore_color(light_green);
         k_puts("[PASS]");
+        serial_printf("[PASS]\n");
     } else {
         set_fore_color(light_red);
         k_puts("[FAIL]");
+        serial_printf("[FAIL]\n");
     }
     set_fore_color(light_grey);
 
     k_printf("  String functions:   ");
+    serial_printf("  String functions:   ");
     if (test_strings()) {
         set_fore_color(light_green);
         k_puts("[PASS]");
+        serial_printf("[PASS]\n");
     } else {
         set_fore_color(light_red);
         k_puts("[FAIL]");
+        serial_printf("[FAIL]\n");
     }
     set_fore_color(light_grey);
 
     k_printf("  Timer interrupts:   ");
+    serial_printf("  Timer interrupts:   ");
     if (test_timer()) {
         set_fore_color(light_green);
         k_puts("[PASS]");
+        serial_printf("[PASS]\n");
     } else {
         set_fore_color(light_red);
         k_puts("[FAIL]");
+        serial_printf("[FAIL]\n");
     }
     set_fore_color(light_grey);
 
     k_printf("  Paging enabled:     ");
+    serial_printf("  Paging enabled:     ");
     set_fore_color(light_green);
     k_puts("[PASS]");
+    serial_printf("[PASS]\n");
     set_fore_color(light_grey);
 
     k_printf("  Syscall (int 0x80): ");
+    serial_printf("  Syscall (int 0x80): ");
     if (test_syscall()) {
         set_fore_color(light_green);
         k_puts("[PASS]");
+        serial_printf("[PASS]\n");
     } else {
         set_fore_color(light_red);
         k_puts("[FAIL]");
+        serial_printf("[FAIL]\n");
     }
     set_fore_color(light_grey);
 
     k_printf("  Context switch:     ");
+    serial_printf("  Context switch:     ");
     {
         /* Quick inline test of context switching */
         process_t *test_a = current_proc;
@@ -425,7 +594,63 @@ static void run_self_tests(void)
             free_process(test_b);
             set_fore_color(light_green);
             k_puts("[PASS]");
-            serial_printf("Context switch: [PASS]\n");
+            serial_printf("[PASS]\n");
+        } else {
+            set_fore_color(light_red);
+            k_puts("[FAIL]");
+            serial_printf("[FAIL]\n");
+        }
+    }
+    set_fore_color(light_grey);
+
+    k_printf("  Round-robin sched:  ");
+    serial_printf("  Round-robin sched:  ");
+    {
+        /* Test preemptive scheduling with two processes */
+        process_t *pa, *pb;
+        uintptr_t sa, sb;
+
+        preempt_done = 0;
+        preempt_count_a = 0;
+        preempt_count_b = 0;
+
+        pa = alloc_process();
+        pb = alloc_process();
+        if (pa && pb) {
+            sa = mem_reserve(KERNEL_STACK_SIZE, true);
+            sb = mem_reserve(KERNEL_STACK_SIZE, true);
+            pa->kernel_stack = sa + KERNEL_STACK_SIZE;
+            pb->kernel_stack = sb + KERNEL_STACK_SIZE;
+            pa->cr3 = 0;
+            pb->cr3 = 0;
+            pa->parent_pid = current_proc->pid;
+            pb->parent_pid = current_proc->pid;
+            setup_process_stack(pa, preempt_proc_a);
+            setup_process_stack(pb, preempt_proc_b);
+
+            sched_enable();
+
+            /* Wait for test to complete (20 chars printed) */
+            while (!preempt_done) {
+                __asm__ __volatile__("hlt");
+            }
+
+            sched_disable();
+            free_process(pa);
+            free_process(pb);
+
+            /* Verify both processes ran */
+            if (preempt_count_a > 0 && preempt_count_b > 0) {
+                set_fore_color(light_green);
+                k_printf(" [PASS] (A=%d B=%d)\n", preempt_count_a, preempt_count_b);
+                serial_printf(" [PASS] (A=%d B=%d)\n",
+                              preempt_count_a, preempt_count_b);
+            } else {
+                set_fore_color(light_red);
+                k_printf(" [FAIL] (A=%d B=%d)\n", preempt_count_a, preempt_count_b);
+                serial_printf(" [FAIL] (A=%d B=%d)\n",
+                              preempt_count_a, preempt_count_b);
+            }
         } else {
             set_fore_color(light_red);
             k_puts("[FAIL]");
@@ -437,6 +662,7 @@ static void run_self_tests(void)
 
     k_puts("");
     k_puts("================================");
+    serial_printf("================================\n");
 }
 
 static void process_command(const char *cmd)
@@ -447,7 +673,8 @@ static void process_command(const char *cmd)
         k_puts("  info     - Display system information");
         k_puts("  test     - Run self-tests again");
         k_puts("  clear    - Clear the screen");
-        k_puts("  switch   - Test context switching between processes");
+        k_puts("  switch   - Test manual context switching");
+        k_puts("  preempt  - Test preemptive round-robin scheduling");
         k_puts("  usermode - Test ring 3 execution");
         k_puts("  fault    - Trigger a page fault (panic)");
         k_puts("  halt     - Halt the CPU");
@@ -461,6 +688,8 @@ static void process_command(const char *cmd)
         k_cls();
     } else if (str_equal(cmd, "switch")) {
         test_switch();
+    } else if (str_equal(cmd, "preempt")) {
+        test_preempt();
     } else if (str_equal(cmd, "fault")) {
         volatile uint32_t *bad_ptr = (volatile uint32_t *) 0xA0000000;
         k_puts("Triggering page fault at 0xA0000000...");
@@ -609,9 +838,16 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             proc0->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
             proc0->parent_pid = 0;
             current_proc = proc0;
-            serial_printf("Process 0 created (pid=%d)\n", proc0->pid);
         }
     }
+    set_fore_color(light_green);
+    k_puts(" OK");
+    serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  Scheduler...");
+    serial_printf("  Scheduler...");
+    init_sched();
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");

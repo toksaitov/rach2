@@ -32,6 +32,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/mm/heap.c         \
 	  sys/mm/paging.c       \
 	  sys/proc/process.c    \
+	  sys/proc/sched.c      \
 	  sys/lib/kctypes.c     \
 	  sys/lib/kstd.c        \
 	  sys/lib/kstring.c

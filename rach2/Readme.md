@@ -21,8 +21,9 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * User mode (ring 3) execution with privilege transitions
 * Process control blocks (PCB) with process table (16 max)
 * Context switching between processes with TSS stack management
-* Built-in self-tests (memory, strings, timer, paging, syscall, context switch)
-* Interactive shell with commands: help, info, test, clear, switch, usermode, fault, halt
+* Preemptive round-robin scheduler (timer-driven)
+* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler)
+* Interactive shell with commands: help, info, test, clear, switch, preempt, usermode, fault, halt
 
 ## Memory Layout
 
@@ -38,7 +39,6 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 
 * No filesystem or disk drivers
 * No dynamic memory allocation (only bump allocator)
-* No preemptive scheduler (manual context switching only)
 * 16 MB hard memory limit
 * PS/2 keyboard only (no USB)
 
@@ -74,6 +74,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   │   └── paging.c/h     # Page directory/table, identity mapping
 │   ├── proc/
 │   │   ├── process.c/h    # Process control block, process table
+│   │   ├── sched.c/h      # Round-robin preemptive scheduler
 │   │   └── switch.s       # Context switch assembly routine
 │   └── lib/
 │       ├── kdef.h         # NULL, bool, size_t definitions
@@ -253,6 +254,55 @@ The shell command `switch` demonstrates context switching:
 
 The self-tests also include an automated context switch test that verifies the mechanism works correctly.
 
+## Scheduler
+
+The kernel includes a preemptive round-robin scheduler that automatically switches between READY processes on every timer tick.
+
+### Scheduler Interface
+
+* `init_sched()` - Initialize scheduler state (starts disabled)
+* `sched_enable()` - Enable preemptive scheduling
+* `sched_disable()` - Disable scheduling (for critical sections)
+* `sched_is_enabled()` - Check if scheduler is active
+* `schedule()` - Find next READY process and switch if found
+* `sched_yield()` - Voluntarily yield CPU to another process
+
+### How Scheduling Works
+
+1. **Timer interrupt fires** (100 Hz)
+2. **schedule() is called** from timer handler
+3. **Find next READY process** using round-robin:
+   - Start searching from the index after the last scheduled process
+   - Wrap around the process table
+   - First READY process found becomes the next candidate
+4. **If a different process is found**:
+   - Mark current process as READY (unless blocked/zombie)
+   - Mark new process as RUNNING
+   - Update `current_proc` pointer
+   - Call `switch_context()` to perform the switch
+5. **If no switch needed**: Return and continue current process
+
+### Important Notes
+
+* New processes first scheduled mid-interrupt must call `sti` to enable interrupts
+* Scheduler can be disabled for critical sections where preemption is unsafe
+* The scheduler maintains fairness via round-robin rotation index
+
+### Testing Preemptive Scheduling
+
+The shell command `preempt` demonstrates timer-driven scheduling:
+1. Creates two processes (A and B) that print their respective letters
+2. Enables the scheduler
+3. Both processes run concurrently, preempted by timer interrupts
+4. Output shows interleaved pattern: "ABABABABAB..."
+
+The self-tests include an automated scheduler test that verifies both processes get CPU time.
+
+### Files in `sys/proc/sched.c`
+* `_sched_enabled` - Flag to enable/disable preemptive scheduling
+* `_last_sched_idx` - Index of last scheduled process (for round-robin fairness)
+* `schedule()` - Main scheduling function called from timer interrupt
+
 ## Scripts
 
 * `run.sh`: quick test using QEMU's direct kernel loading with serial output to terminal
@@ -327,7 +377,8 @@ Remove compiled files:
         > info     # Display memory pointer and timer ticks
         > test     # Run self-tests again
         > clear    # Clear the screen
-        > switch   # Test context switching (prints ABABABABAB)
+        > switch   # Test cooperative context switching (prints ABABABABAB)
+        > preempt  # Test preemptive scheduling (timer-driven ABABAB...)
         > usermode # Test ring 3 execution (prints message then loops)
         > fault    # Trigger a page fault (demonstrates panic)
         > halt     # Stop the CPU
