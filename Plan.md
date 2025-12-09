@@ -59,6 +59,18 @@ After completing each phase:
 
 This ensures context can be rebuilt after compaction by reading the updated Readme.
 
+### Code Reuse Guidelines
+Before implementing new functionality:
+1. **Review existing library code** in `sys/lib/` (kstd.c, kstring.c, kctypes.c)
+2. **Avoid duplicating functions** - use existing implementations (e.g., use `k_itoa()` instead of creating new itoa)
+3. **Generalize where sensible** - create shared helpers with function pointers (e.g., `k_vprintf()` for any output channel)
+4. **Match project coding style**:
+   - Function names: `k_` prefix for kernel functions, `_` prefix for static/internal
+   - Variables: snake_case
+   - Comments: `/* ... */` style
+   - Compact style where appropriate
+5. **Hardware-specific code stays isolated** - e.g., serial.c only has COM1 hardware code, uses shared k_vprintf for formatting
+
 ---
 
 ## Execution Plan
@@ -532,12 +544,27 @@ This ensures context can be rebuilt after compaction by reading the updated Read
 
 ## Progress Log
 
-### Session 1 - [Date: TBD]
+### Session 1 - Phase 0 Complete
 - Read all Readme.md files and key source files
 - Created initial plan document
 - Revised plan into 28 smaller phases
-- **Current Phase**: Phase 0 (not started)
-- **Next Step**: Implement serial port output
+- **Completed Phase 0: Debug Infrastructure**
+  - Created `sys/serial.h` and `sys/serial.c` with COM1 driver
+  - Functions: `serial_init()`, `serial_putc()`, `serial_puts()`, `serial_printf()`
+  - Updated `kernel.c` to initialize serial first and output boot messages
+  - Updated `run.sh` with `-serial stdio` flag
+  - Updated `Makefile` to include `sys/serial.c`
+  - Updated `rach2/Readme.md` with Serial Output section
+  - Kernel builds successfully
+- **Refactored Phase 0 to avoid code duplication**:
+  - Added `k_vprintf(putc_fn, format, args)` to `kio.h/kio.c` - generalized printf with function pointer
+  - Refactored `k_printf()` to use `k_vprintf()` internally
+  - Simplified `serial.c` to ~60 lines - only hardware-specific code
+  - `serial_printf()` now uses shared `k_vprintf()` with `k_itoa()` from kstd.c
+  - Added Code Reuse Guidelines section to Plan.md
+  - Updated Readme.md with Generalized Printf section
+- **Current Phase**: Phase 1 (not started)
+- **Next Step**: Implement int 0x80 syscall entry point
 
 ---
 

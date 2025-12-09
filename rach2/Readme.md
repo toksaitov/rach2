@@ -13,6 +13,7 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Programmable Interval Timer (100 Hz tick)
 * PS/2 keyboard driver with US layout
 * VGA text mode display (80x25, 16 colors)
+* Serial port output (COM1) for debug logging
 * Simple bump allocator for physical memory
 * Basic paging with identity mapping (16 MB limit)
 * Kernel panic screen automatically triggered on page faults
@@ -48,6 +49,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 ├── Makefile               # Build rules for the environment and ISO
 ├── sys/
 │   ├── kio.c/h            # Console I/O, printf, port I/O
+│   ├── serial.c/h         # Serial port (COM1) debug output
 │   ├── isr.c/h            # Interrupt service routine management
 │   ├── isr_handler.s      # ISR/IRQ stubs and common handlers
 │   ├── pic.c/h            # 8259 PIC initialization
@@ -78,9 +80,25 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 └── .gdbinit               # GDB initialization script
 ```
 
+## Serial Output
+
+The kernel outputs debug messages to serial port COM1 (0x3F8) at 115200 baud, 8N1. This provides a reliable debug channel that appears in the terminal when running QEMU with `-serial stdio`.
+
+Functions available in `serial.c`:
+* `serial_init()` - Initialize COM1 for output
+* `serial_putc(char c)` - Write single character (raw, no CR/LF translation)
+* `serial_puts(const char *str)` - Write null-terminated string
+* `serial_printf(const char *format, ...)` - Formatted output (%d, %x, %s, %c, %%)
+
+Serial output is initialized first in `k_main()` before any other subsystem, ensuring debug messages are available even if VGA initialization fails.
+
+## Generalized Printf
+
+The kernel provides `k_vprintf()` in `kio.c` which accepts a function pointer for character output, enabling formatted printing to any output channel. Both `k_printf()` (VGA) and `serial_printf()` (COM1) use this shared implementation, avoiding code duplication while reusing `k_itoa()` from `kstd.c` for number formatting.
+
 ## Scripts
 
-* `run.sh`: quick test using QEMU's direct kernel loading
+* `run.sh`: quick test using QEMU's direct kernel loading with serial output to terminal
 * `run_from_iso.sh`: boot from ISO image with real GRUB bootloader
 * `debug.sh`: start QEMU with GDB server and connect debugger
 

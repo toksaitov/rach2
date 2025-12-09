@@ -63,12 +63,10 @@ void k_puts(const char *str)
     while (*str) { k_putc(*str++); } k_putc(CHAR_LF);
 }
 
-void k_printf(const char *format, ...)
+void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
 {
-    char c, buffer[128];
-    char **args = (char **) &format; ++args;
-
-    const char *str = format;
+    char c, buffer[_K_PRINTF_BUFFER_SIZE_];
+    const char *str;
 
     if (format == NULL) return;
 
@@ -96,7 +94,11 @@ void k_printf(const char *format, ...)
                     if (!str) str = "(null)";
 
                 string:
-                    while (*str) k_putc(*str++);
+                    while (*str) putc_fn(*str++);
+                    break;
+
+                case 'c':
+                    putc_fn((char) *((int *) args++));
                     break;
 
                 case 0:
@@ -104,12 +106,18 @@ void k_printf(const char *format, ...)
 
                 case '%':
                 default:
-                    k_putc(c);
+                    putc_fn(c);
                     break;
             }
         }
-        else k_putc(c);
+        else putc_fn(c);
     }
+}
+
+void k_printf(const char *format, ...)
+{
+    char **args = (char **) &format; ++args;
+    k_vprintf(k_putc, format, args);
 }
 
 void outb(uint16_t port, uint8_t val)

@@ -61,6 +61,17 @@ void k_puts(const char *str);
 #define _K_PRINTF_BUFFER_SIZE_ 128
 
 /*
+ * Type definition for character output functions.
+ */
+typedef void (*putc_fn_t)(char);
+
+/*
+ * Generalized printf that outputs via the provided 'putc_fn'.
+ * The 'args' parameter points to the variadic arguments on the stack.
+ */
+void k_vprintf(putc_fn_t putc_fn, const char *format, char **args);
+
+/*
  * Prints output according to a format string.
  */
 void k_printf(const char *format, ...);

@@ -1,6 +1,7 @@
 #include "vendor/multiboot.h"
 
 #include "sys/kio.h"
+#include "sys/serial.h"
 #include "sys/tables/gdt.h"
 #include "sys/tables/idt.h"
 #include "sys/isr.h"
@@ -254,6 +255,13 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     (void)magic;
     (void)info;
 
+    /* Initialize serial port first for debug output */
+    serial_init();
+    serial_printf("\n");
+    serial_printf("========================================\n");
+    serial_printf("Serial: Rach2 booting...\n");
+    serial_printf("========================================\n");
+
     k_cls();
 
     set_fore_color(light_cyan);
@@ -265,54 +273,70 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_puts("Initializing system components...");
     k_puts("");
+    serial_printf("Initializing system components...\n");
 
     k_printf("  GDT...");
+    serial_printf("  GDT...");
     init_gdt();
     set_fore_color(light_green);
     k_puts(" OK");
+    serial_printf(" OK\n");
     set_fore_color(light_grey);
 
     k_printf("  IDT...");
+    serial_printf("  IDT...");
     init_idt();
     set_fore_color(light_green);
     k_puts(" OK");
+    serial_printf(" OK\n");
     set_fore_color(light_grey);
 
     k_printf("  ISR...");
+    serial_printf("  ISR...");
     init_isr();
     set_fore_color(light_green);
     k_puts(" OK");
+    serial_printf(" OK\n");
     set_fore_color(light_grey);
 
     k_printf("  Memory manager...");
+    serial_printf("  Memory manager...");
     init_mm();
     set_fore_color(light_green);
     k_puts(" OK");
+    serial_printf(" OK\n");
     set_fore_color(light_grey);
 
     k_printf("  Paging...");
+    serial_printf("  Paging...");
     init_paging();
     set_fore_color(light_green);
     k_puts(" OK");
+    serial_printf(" OK\n");
     set_fore_color(light_grey);
 
     k_printf("  Timer (100 Hz)...");
+    serial_printf("  Timer (100 Hz)...");
     __asm__ __volatile__("cli"); /* Disable interrupts during timer setup */
     init_pit(100);
     register_isr_handler(32, &timer_handler); /* Override with silent handler */
     __asm__ __volatile__("sti"); /* Re-enable interrupts */
     set_fore_color(light_green);
     k_puts(" OK");
+    serial_printf(" OK\n");
     set_fore_color(light_grey);
 
     k_printf("  Keyboard...");
+    serial_printf("  Keyboard...");
     register_isr_handler(33, &keyboard_handler);
     set_fore_color(light_green);
     k_puts(" OK");
+    serial_printf(" OK\n");
     set_fore_color(light_grey);
 
     k_puts("");
     k_puts("Initialization complete.");
+    serial_printf("Initialization complete.\n");
 
     run_self_tests();
 
