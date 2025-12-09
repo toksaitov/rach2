@@ -692,8 +692,54 @@ Before implementing new functionality:
   - Cleaned up all debug output (removed timer_debug_count, sched debug prints)
   - Updated `rach2/Readme.md` with Per-Process Page Directories section
   - Verified: "Memory isolation: [PASS]" printed during boot self-tests
-- **Current Phase**: Phases 8 & 9 complete
-- **Next Step**: Phase 10 (Multiboot Module Loading)
+### Session 6 - Phase 10 Complete
+- **Completed Phase 10: Multiboot Module Loading**
+  - Created `sys/module.h` with:
+    - `module_info_t` structure: start, end, size, cmdline
+    - `MAX_MODULES = 8` for module table
+    - Function prototypes for `init_modules()`, `get_module()`, `get_ramdisk()`
+  - Created `sys/module.c` with:
+    - Module table and count globals
+    - `init_modules(magic, info)` - validates multiboot magic, parses module array
+    - `get_module(index)` - lookup module by index
+    - `get_ramdisk()` - convenience wrapper for first module
+  - Updated `kernel.c`:
+    - Parse modules BEFORE paging is enabled (direct physical memory access required)
+    - Display module status during init: "Modules... OK (N found)" or "Modules... None"
+    - Added `modules` shell command to list all loaded modules
+    - Added module count to `info` shell command
+  - Updated `Makefile` to include `sys/module.c`
+  - Updated `run.sh` with comment about `-initrd` flag for module loading
+  - Updated `rach2/Readme.md` with Multiboot Modules section
+  - Verified: With `-initrd /path/to/file`, shows "Module 0: 0x10F000 - 0x10F035 (53 bytes)"
+  - Verified: Without modules, shows "Module: No modules loaded"
+  - **Key Learning**: Multiboot module info must be parsed BEFORE paging is enabled. When paging maps only up to `mem_reserved_ptr + 1MB`, the module descriptor memory may return garbage if accessed after paging. Parsing early (right after serial_init) ensures direct physical memory access.
+- **Current Phase**: Phase 10 complete
+- **Next Step**: Phase 11 (KRFFS Integration - Read-Only)
+
+---
+
+## Running QEMU for LLM Serial Output
+
+On macOS, the standard timeout approaches (`perl alarm()`, shell timeouts) don't work reliably with QEMU. Use this pattern to capture serial output for automated testing:
+
+```sh
+# Write serial to file, run QEMU in background, wait, kill, read file
+(qemu-system-i386 -kernel kernel -serial file:/tmp/qemu_serial.txt -display none &) && sleep 4 && pkill -f "qemu-system-i386.*kernel"; sleep 1; cat /tmp/qemu_serial.txt | head -60
+```
+
+With a multiboot module:
+```sh
+(qemu-system-i386 -kernel kernel -initrd /path/to/module.bin -serial file:/tmp/qemu_serial.txt -display none &) && sleep 4 && pkill -f "qemu-system-i386.*kernel"; sleep 1; cat /tmp/qemu_serial.txt | head -60
+```
+
+Key points:
+- Use `-serial file:/tmp/qemu_serial.txt` instead of `-serial stdio` (file is overwritten automatically)
+- Use `-display none` for headless operation
+- Run QEMU with `&` in a subshell `(...)`
+- Use `pkill -f "qemu-system-i386.*kernel"` to kill (pattern matches the specific command)
+- Add small sleep after kill to ensure file is flushed
+- No need to delete the file first - QEMU's `-serial file:` overwrites it
 
 ---
 

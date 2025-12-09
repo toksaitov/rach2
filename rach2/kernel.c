@@ -3,6 +3,7 @@
 #include "sys/kio.h"
 #include "sys/serial.h"
 #include "sys/syscall.h"
+#include "sys/module.h"
 #include "sys/tables/gdt.h"
 #include "sys/tables/tss.h"
 #include "sys/tables/idt.h"
@@ -808,6 +809,7 @@ static void process_command(const char *cmd)
         k_puts("Available commands:");
         k_puts("  help     - Show this help message");
         k_puts("  info     - Display system information");
+        k_puts("  modules  - List loaded multiboot modules");
         k_puts("  test     - Run self-tests again");
         k_puts("  clear    - Clear the screen");
         k_puts("  switch   - Test manual context switching");
@@ -820,6 +822,19 @@ static void process_command(const char *cmd)
         k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         k_printf("Timer ticks:     %d\n", ticks);
         k_printf("Kernel end:      0x%X\n", (uintptr_t) &k_phys_mem_end);
+        k_printf("Modules loaded:  %d\n", module_count);
+    } else if (str_equal(cmd, "modules")) {
+        uint32_t i;
+        if (module_count == 0) {
+            k_puts("No modules loaded.");
+        } else {
+            k_printf("Loaded modules: %d\n", module_count);
+            for (i = 0; i < module_count; i++) {
+                module_info_t *m = get_module(i);
+                k_printf("  [%d] 0x%X - 0x%X (%d bytes)\n",
+                         i, m->start, m->end, m->size);
+            }
+        }
     } else if (str_equal(cmd, "test")) {
         run_self_tests();
     } else if (str_equal(cmd, "clear")) {
@@ -877,8 +892,7 @@ static void shell_loop(void)
 
 void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 {
-    (void)magic;
-    (void)info;
+    uint32_t num_modules;
 
     /* Initialize serial port first for debug output */
     serial_init();
@@ -886,6 +900,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     serial_printf("========================================\n");
     serial_printf("Serial: Rach2 booting...\n");
     serial_printf("========================================\n");
+
+    /*
+     * Parse multiboot modules BEFORE paging is enabled.
+     * We need direct physical memory access to read module info.
+     */
+    num_modules = init_modules(magic, info);
 
     k_cls();
 
@@ -1001,6 +1021,26 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     k_puts(" OK");
     serial_printf(" OK\n");
     set_fore_color(light_grey);
+
+    /* Modules were already parsed early (before paging) - just display status */
+    k_printf("  Modules...");
+    serial_printf("  Modules...");
+    if (num_modules > 0) {
+        module_info_t *ramdisk = get_ramdisk();
+        set_fore_color(light_green);
+        k_printf(" OK (%d found)\n", num_modules);
+        serial_printf(" OK (%d found)\n", num_modules);
+        set_fore_color(light_grey);
+        if (ramdisk) {
+            k_printf("    RAM disk: 0x%X, size: %d bytes\n",
+                     ramdisk->start, ramdisk->size);
+        }
+    } else {
+        set_fore_color(light_brown);
+        k_puts(" None");
+        serial_printf(" None\n");
+        set_fore_color(light_grey);
+    }
 
     k_puts("");
     k_puts("Initialization complete.");

@@ -23,8 +23,9 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Context switching between processes with TSS stack management
 * Preemptive round-robin scheduler (timer-driven)
 * Per-process page directories with CR3 switching for memory isolation
+* Multiboot module loading (RAM disk support via `-initrd`)
 * Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation)
-* Interactive shell with commands: help, info, test, clear, switch, preempt, isolate, usermode, fault, halt
+* Interactive shell with commands: help, info, modules, test, clear, switch, preempt, isolate, usermode, fault, halt
 
 ## Memory Layout
 
@@ -55,6 +56,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   ├── kio.c/h            # Console I/O, printf, port I/O
 │   ├── serial.c/h         # Serial port (COM1) debug output
 │   ├── syscall.c/h        # System call entry point (int 0x80)
+│   ├── module.c/h         # Multiboot module parsing and access
 │   ├── isr.c/h            # Interrupt service routine management
 │   ├── isr_handler.s      # ISR/IRQ stubs and common handlers
 │   ├── pic.c/h            # 8259 PIC initialization
@@ -355,6 +357,46 @@ The self-tests include an automated isolation test that verifies per-process mem
 * `sys/proc/switch.s` - Added CR3 comparison and switching logic
 * `sys/proc/process.h` - Added `cr3` field to `process_t` structure
 
+## Multiboot Modules
+
+The kernel can receive modules (such as a RAM disk) from the bootloader via the Multiboot specification. Modules are passed by GRUB or QEMU's `-initrd` option and are accessible to the kernel at boot time.
+
+### Module Parsing
+
+Multiboot modules are parsed very early in boot (before paging is enabled) to ensure direct physical memory access to the module info structures. The kernel stores module information in a global table for later use.
+
+### Module Information
+
+Each module provides:
+* `start` - Physical start address of the module data
+* `end` - Physical end address (exclusive)
+* `size` - Size in bytes (end - start)
+* `cmdline` - Module command line (typically the filename)
+
+### Loading Modules in QEMU
+
+To load a RAM disk as a multiboot module:
+
+    qemu-system-i386 -kernel kernel -initrd /path/to/ramdisk.bin -serial stdio
+
+The kernel will display the module at boot:
+
+    Modules... OK (1 found)
+        RAM disk: 0x10F000, size: 1024 bytes
+
+### Shell Commands
+
+* `modules` - List all loaded multiboot modules with addresses and sizes
+* `info` - Shows module count among other system information
+
+### Files
+
+* `sys/module.h` - Module info structure and function prototypes
+* `sys/module.c` - Module parsing and lookup functions
+  * `init_modules(magic, info)` - Parse multiboot module info
+  * `get_module(index)` - Get module by index
+  * `get_ramdisk()` - Convenience function to get first module
+
 ## Scripts
 
 * `run.sh`: quick test using QEMU's direct kernel loading with serial output to terminal
@@ -426,7 +468,8 @@ Remove compiled files:
 4. Once the environment boots, you'll see initialization messages followed by self-tests. The interactive shell accepts these commands:
 
         > help     # Show available commands
-        > info     # Display memory pointer and timer ticks
+        > info     # Display memory pointer, timer ticks, module count
+        > modules  # List loaded multiboot modules
         > test     # Run self-tests again
         > clear    # Clear the screen
         > switch   # Test cooperative context switching (prints ABABABABAB)

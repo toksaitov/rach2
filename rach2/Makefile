@@ -20,6 +20,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/kio.c       \
 	  sys/serial.c    \
 	  sys/syscall.c   \
+	  sys/module.c    \
 	  sys/isr.c       \
 	  sys/pic.c       \
 	  sys/pit.c       \
