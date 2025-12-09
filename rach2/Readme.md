@@ -105,11 +105,26 @@ The kernel includes system call infrastructure using the standard x86 software i
 * Arguments are passed in EBX, ECX, EDX, ESI, EDI, EBP
 * Return value is placed in EAX
 
-The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode code to invoke syscalls. Currently, the handler prints the syscall number to serial for debugging. Future phases will implement actual system call dispatch.
+The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode code to invoke syscalls. The handler dispatches to registered syscall functions via a dispatch table.
 
-Files in `syscall.c`:
-* `init_syscall()` - Register the syscall handler for vector 128
-* `_syscall_handler()` - Internal handler that receives `isr_params_t` with all register values
+### Implemented Syscalls
+
+| Number | Name | Arguments | Description |
+|--------|------|-----------|-------------|
+| 4 | write | fd, buf, count | Write to file descriptor |
+
+### write (syscall 4)
+
+Writes `count` bytes from `buf` to the file descriptor `fd`. Currently supported file descriptors:
+* fd 1 (stdout): Writes to VGA display and serial port
+* fd 2 (stderr): Writes to VGA display and serial port
+
+Returns the number of bytes written, or -1 on error.
+
+### Files in `syscall.c`
+* `init_syscall()` - Initialize dispatch table and register syscall handler
+* `_syscall_table[]` - Dispatch table mapping syscall numbers to handler functions
+* `sys_write()` - Implementation of write syscall
 
 ## Scripts
 

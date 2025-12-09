@@ -158,13 +158,15 @@ static bool test_timer(void)
 
 static bool test_syscall(void)
 {
-    /* Test int 0x80 with syscall number 4 (write) in EAX */
+    /* Test write syscall: EAX=4, EBX=1 (stdout), ECX=buf, EDX=len */
+    const char *msg = "Hello from syscall!\n";
+    uint32_t len = 20;
+
     __asm__ __volatile__(
-        "movl $4, %%eax\n\t"
         "int $0x80"
         :
-        :
-        : "eax"
+        : "a"(4), "b"(1), "c"(msg), "d"(len)
+        : "memory"
     );
 
     /* If we get here without crashing, the syscall infrastructure works */

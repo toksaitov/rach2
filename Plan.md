@@ -575,8 +575,17 @@ Before implementing new functionality:
   - Updated `Makefile` to include `sys/syscall.c`
   - Updated `rach2/Readme.md` with System Calls section
   - Verified: "Syscall: 4" printed to serial during boot self-test
-- **Current Phase**: Phase 2 (not started)
-- **Next Step**: Implement basic write() syscall with dispatch table
+### Session 2 - Phase 2 Complete
+- **Completed Phase 2: Basic write() Syscall**
+  - Added syscall number defines to `sys/syscall.h` (SYS_EXIT through SYS_CHDIR)
+  - Created syscall dispatch table `_syscall_table[]` in `sys/syscall.c`
+  - Implemented `sys_write(fd, buf, count)` - writes to VGA and serial for fd 1/2
+  - Updated `_syscall_handler()` to dispatch via table lookup
+  - Updated `test_syscall()` in `kernel.c` to test write with proper args
+  - Updated `rach2/Readme.md` with implemented syscalls table and write documentation
+  - Verified: "Hello from syscall!" printed via int 0x80 during self-test
+- **Current Phase**: Phase 3 (not started)
+- **Next Step**: Set up Task State Segment (TSS) for ring transitions
 
 ---
 
