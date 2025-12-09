@@ -55,6 +55,10 @@ static void test_preempt(void);
 static bool test_isolation(void);
 static bool test_krffs_write(void);
 static bool test_elf(void);
+static void exec_program(const char *path);
+
+/* User stack base address (stack grows down from here) */
+#define USER_STACK_BASE 0xBFFFF000
 
 static void timer_handler(isr_params_t params)
 {
@@ -779,7 +783,154 @@ static bool test_elf(void)
         }
     }
 
+    /*
+     * Phase 14: Test ELF loading into user pages
+     * This verifies elf_load() works without actually executing
+     */
+    {
+        page_dir_t *test_dir;
+        uintptr_t stack_phys;
+
+        test_dir = clone_page_directory();
+        if (!test_dir) {
+            serial_printf("ELF load test: clone failed ");
+            return false;
+        }
+
+        if (elf_load(elf_buffer, file_size, test_dir) != 0) {
+            serial_printf("ELF load test: load failed ");
+            return false;
+        }
+
+        /* Allocate user stack */
+        stack_phys = alloc_user_page(test_dir, USER_STACK_BASE);
+        if (stack_phys == 0) {
+            serial_printf("ELF load test: stack alloc failed ");
+            return false;
+        }
+
+        serial_printf("loaded ");
+        /* Note: we don't free the directory - bump allocator doesn't support free */
+    }
+
     return true;
+}
+
+/*
+ * Execute an ELF program from the file system
+ *
+ * 1. Load ELF file from KRFFS
+ * 2. Validate ELF header
+ * 3. Clone page directory
+ * 4. Create process with new page directory
+ * 5. Load ELF segments into user pages
+ * 6. Allocate user stack
+ * 7. Transition to user mode at ELF entry point
+ */
+static void exec_program(const char *path)
+{
+    char elf_buffer[16384];  /* Buffer for ELF file (16KB max) */
+    uint32_t file_size;
+    int bytes_read;
+    uint32_t entry_point;
+    page_dir_t *user_dir;
+    process_t *user_proc;
+    uintptr_t user_stack_phys;
+    uint32_t user_stack_vaddr;
+
+    serial_printf("exec_program: Loading '%s'\n", path);
+
+    /* Check file system is mounted */
+    if (!krffs_fs) {
+        k_puts("exec: No file system mounted");
+        return;
+    }
+
+    /* Check file exists */
+    if (krffs_open(path) != 0) {
+        k_printf("exec: File not found: %s\n", path);
+        return;
+    }
+
+    /* Read ELF file */
+    file_size = krffs_get_file_size(path);
+    if (file_size > sizeof(elf_buffer)) {
+        k_printf("exec: File too large: %d bytes (max %d)\n",
+                 file_size, (int)sizeof(elf_buffer));
+        return;
+    }
+
+    bytes_read = krffs_read(path, elf_buffer, file_size, 0);
+    if (bytes_read != (int)file_size) {
+        k_printf("exec: Read error: %d/%d bytes\n", bytes_read, file_size);
+        return;
+    }
+
+    /* Validate ELF */
+    if (!elf_check(elf_buffer, file_size)) {
+        k_puts("exec: Not a valid ELF32 executable");
+        return;
+    }
+
+    entry_point = elf_entry_point(elf_buffer);
+    serial_printf("exec_program: ELF valid, entry=0x%X\n", entry_point);
+    k_printf("exec: Loading %s (entry=0x%X)\n", path, entry_point);
+
+    /* Clone page directory for new process */
+    user_dir = clone_page_directory();
+    if (!user_dir) {
+        k_puts("exec: Failed to clone page directory");
+        return;
+    }
+    serial_printf("exec_program: Cloned page directory\n");
+
+    /* Load ELF segments into user pages */
+    if (elf_load(elf_buffer, file_size, user_dir) != 0) {
+        k_puts("exec: Failed to load ELF segments");
+        return;
+    }
+
+    /* Allocate user stack */
+    user_stack_vaddr = USER_STACK_BASE;
+    user_stack_phys = alloc_user_page(user_dir, user_stack_vaddr);
+    if (user_stack_phys == 0) {
+        k_puts("exec: Failed to allocate user stack");
+        return;
+    }
+    serial_printf("exec_program: User stack at virt=0x%X phys=0x%X\n",
+                  user_stack_vaddr, user_stack_phys);
+
+    /* Zero the stack page */
+    k_memset((void *)user_stack_phys, 0, PAGE_SIZE);
+
+    /* Create process structure */
+    user_proc = alloc_process();
+    if (!user_proc) {
+        k_puts("exec: Failed to allocate process");
+        return;
+    }
+
+    user_proc->state = PROC_RUNNING;
+    user_proc->cr3 = get_page_dir_phys(user_dir);
+    user_proc->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
+    user_proc->parent_pid = current_proc ? current_proc->pid : 0;
+    current_proc = user_proc;
+
+    serial_printf("exec_program: Process %d created, CR3=0x%X\n",
+                  user_proc->pid, user_proc->cr3);
+
+    /* Switch to user page directory */
+    switch_page_directory(user_dir);
+    serial_printf("exec_program: Switched to user page directory\n");
+
+    k_printf("exec: Entering user mode...\n");
+
+    /* Enter user mode at ELF entry point */
+    /* Stack pointer starts at top of user stack page */
+    enter_usermode(entry_point, user_stack_vaddr + PAGE_SIZE);
+
+    /* Should never return */
+    k_puts("exec: ERROR - returned from user mode!");
 }
 
 static void run_self_tests(void)
@@ -964,8 +1115,8 @@ static void run_self_tests(void)
         }
         set_fore_color(light_grey);
 
-        k_printf("  ELF header parse:   ");
-        serial_printf("  ELF header parse:   ");
+        k_printf("  ELF parse + load:   ");
+        serial_printf("  ELF parse + load:   ");
         if (test_elf()) {
             set_fore_color(light_green);
             k_puts("[PASS]");
@@ -995,6 +1146,7 @@ static void process_command(const char *cmd)
         k_puts("  ls               - List files on RAM disk");
         k_puts("  cat <file>       - Display file contents");
         k_puts("  elf <file>       - Display ELF header info");
+        k_puts("  exec <file>      - Execute ELF program");
         k_puts("  touch <file>     - Create an empty file");
         k_puts("  rm <file>        - Delete a file");
         k_puts("  mv <old> <new>   - Rename a file");
@@ -1126,6 +1278,15 @@ static void process_command(const char *cmd)
                     }
                 }
             }
+        }
+    } else if (str_starts_with(cmd, "exec ")) {
+        /* Execute ELF program: exec <filename> */
+        const char *filename = cmd + 5;  /* Skip "exec " */
+
+        if (filename[0] == '\0') {
+            k_puts("Usage: exec <filename>");
+        } else {
+            exec_program(filename);
         }
     } else if (str_starts_with(cmd, "touch ")) {
         /* Create a new file: touch <filename> */

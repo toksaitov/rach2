@@ -155,4 +155,26 @@ Elf32_Phdr *elf_program_headers(const void *data);
  */
 uint16_t elf_program_header_count(const void *data);
 
+/*
+ * Forward declaration for page_dir_t
+ */
+struct page_dir;
+typedef struct page_dir page_dir_t;
+
+/*
+ * Load ELF segments into user memory
+ *
+ * Iterates over PT_LOAD segments and copies them to user pages in the
+ * specified page directory. The physical addresses are within the
+ * identity-mapped region, so data is copied via physical address.
+ *
+ * Parameters:
+ *   data - pointer to ELF file in memory (must be validated with elf_check())
+ *   size - size of ELF file in bytes
+ *   dir  - page directory to allocate user pages in
+ *
+ * Returns: 0 on success, -1 on error
+ */
+int elf_load(const void *data, uint32_t size, page_dir_t *dir);
+
 #endif /* _ELF_H_ */

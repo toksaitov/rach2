@@ -28,8 +28,14 @@ void init_paging(void)
     k_memset(_kernel_dir, 0, sizeof(page_dir_t));
     _curr_dir = _kernel_dir;
 
+    /*
+     * Identity map all physical memory up to HARD_MEMORY_LIMIT.
+     * This allows kernel code to access any physical address directly.
+     * Only frames below mem_reserved_ptr are marked as "in use" in the bitmap;
+     * frames above remain free for user page allocation.
+     */
     phys_address = frame = 0;
-    while (phys_address < mem_reserved_ptr + 0x100000) { /* Extra 1MB for post-init allocations */
+    while (phys_address < HARD_MEMORY_LIMIT) {
         tmp = phys_address / PAGE_SIZE;
 
         table_index = tmp / 1024;
@@ -48,11 +54,11 @@ void init_paging(void)
             _curr_dir->logical_page_tables[table_index] = table;
         }
 
-        if (frame == _frames_number) {
-            k_panic("Failed to allocate a page frame. No more free frames.");
-        } else {
-            _frames[frame++] = 1;
+        /* Mark frames below mem_reserved_ptr as used (kernel, heap, modules) */
+        if (phys_address < mem_reserved_ptr) {
+            _frames[frame] = 1;
         }
+        frame++;
 
         /*
          * This page is writable only by a supervisor.

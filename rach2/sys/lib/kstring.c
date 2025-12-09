@@ -24,3 +24,11 @@ void* k_memset(void *ptr, char c, size_t n)
 {
     char *str = (char *) ptr; while (n--) { *str++ = c; }; return ptr;
 }
+
+void* k_memcpy(void *dest, const void *src, size_t n)
+{
+    char *d = (char *) dest;
+    const char *s = (const char *) src;
+    while (n--) { *d++ = *s++; }
+    return dest;
+}

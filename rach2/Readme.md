@@ -26,8 +26,8 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Multiboot module loading (RAM disk support via `-initrd`)
 * KRFFS file system with read/write support loaded from RAM disk module
 * ELF32 header parsing for executable validation and loading
-* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF parse)
-* Interactive shell with commands: help, info, modules, ls, cat, elf, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
+* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF load)
+* Interactive shell with commands: help, info, modules, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
 
 ## Memory Layout
 
@@ -150,7 +150,12 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 
 | Number | Name  | Arguments      | Description              |
 |--------|-------|----------------|--------------------------|
+| 1      | exit  | status         | Terminate current process|
 | 4      | write | fd, buf, count | Write to file descriptor |
+
+### exit (syscall 1)
+
+Terminates the current process with the given exit status. Marks the process as ZOMBIE and halts the CPU. Future implementation will clean up resources and reschedule.
 
 ### write (syscall 4)
 
@@ -478,7 +483,7 @@ The kernel will display:
 
 ## ELF Loader
 
-The kernel includes an ELF32 header parser for validating and loading executable files. This is used to load user programs from the file system.
+The kernel includes an ELF32 loader for validating, loading, and executing programs from the file system. It parses ELF headers, maps PT_LOAD segments into user memory, and transfers control to user mode.
 
 ### ELF32 Format
 
@@ -522,15 +527,38 @@ ELF (Executable and Linkable Format) is the standard executable format for Unix-
 ### Shell Commands
 
 * `elf <filename>` - Display ELF header information including entry point, program headers, and LOAD segments with their addresses and permissions
+* `exec <filename>` - Load and execute an ELF program in user mode (program should call exit syscall when done)
+
+### ELF Loading Process
+
+The `elf_load()` function loads an ELF executable into a process's address space:
+
+1. **Validate ELF header** - Check magic number, 32-bit class, executable type
+2. **Iterate PT_LOAD segments** - For each loadable segment:
+   - Allocate user pages at the segment's virtual address
+   - Copy segment data from file to physical memory
+   - Zero-fill any BSS region (memsz > filesz)
+3. **Return success** - Process is ready for execution
+
+The `exec_program()` function orchestrates the complete loading:
+
+1. Open file from KRFFS file system
+2. Read file contents into kernel buffer
+3. Validate ELF header with `elf_check()`
+4. Clone kernel page directory for new process
+5. Load ELF segments with `elf_load()`
+6. Allocate user stack at USER_STACK_BASE (0xBFFFF000)
+7. Transfer to user mode via `enter_usermode(entry_point, stack_top)`
 
 ### Files
 
 * `sys/proc/elf.h` - ELF32 structure definitions, constants, function prototypes
-* `sys/proc/elf.c` - ELF validation and parsing implementation
+* `sys/proc/elf.c` - ELF validation, parsing, and loading implementation
   * `elf_check(data, size)` - Validate ELF header
   * `elf_entry_point(data)` - Get entry point address
   * `elf_program_headers(data)` - Get pointer to program header table
   * `elf_program_header_count(data)` - Get number of program headers
+  * `elf_load(data, size, dir)` - Load PT_LOAD segments into page directory
 
 ## Scripts
 

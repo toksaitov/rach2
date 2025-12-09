@@ -24,4 +24,10 @@ void k_strtoupper(char *str);
  */
 void* k_memset(void *ptr, char c, size_t n);
 
+/*
+ * Copies 'n' bytes from memory area 'src' to memory area 'dest'.
+ * The memory areas must not overlap.
+ */
+void* k_memcpy(void *dest, const void *src, size_t n);
+
 #endif

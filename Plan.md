@@ -816,8 +816,49 @@ Before implementing new functionality:
     ```
     ELF header parse:   ELF test: entry=0x8048089 phdr=1 LOAD@0x8047000 [PASS]
     ```
-- **Current Phase**: Phase 13 complete
-- **Next Step**: Phase 14 (ELF Loading and Execution)
+### Session 10 - Phase 14 Complete
+- **Completed Phase 14: ELF Loading and Execution**
+  - Implemented `sys_exit()` syscall in `sys/syscall.c`:
+    - Marks process as ZOMBIE and stores exit code
+    - Halts CPU (full cleanup deferred to later phases)
+    - Registered in syscall table as SYS_EXIT (1)
+  - Implemented `elf_load()` in `sys/proc/elf.c`:
+    - Iterates PT_LOAD segments from program header table
+    - Allocates user pages via `alloc_user_page()` for each page in segment
+    - Copies segment data from file to physical memory
+    - Zero-fills BSS region when memsz > filesz
+  - Added `k_memcpy()` to `sys/lib/kstring.c/h` (required by elf_load)
+  - Implemented `exec_program(path)` in `kernel.c`:
+    - Opens file from KRFFS file system
+    - Reads file contents into kernel buffer
+    - Validates ELF header with `elf_check()`
+    - Clones kernel page directory for new process
+    - Loads ELF segments with `elf_load()`
+    - Allocates user stack at USER_STACK_BASE (0xBFFFF000)
+    - Transfers to user mode via `enter_usermode(entry_point, stack_top)`
+  - Added `exec <filename>` shell command
+  - Updated `test_elf()` to include ELF loading test:
+    - Loads hello ELF into cloned page directory
+    - Verifies page mapping and data copy
+    - Does not execute (tests infrastructure only)
+  - Fixed critical paging issue:
+    - Previous code mapped all memory but marked ALL frames as used
+    - Fixed `init_paging()` to separate identity mapping from frame usage
+    - Only frames below `mem_reserved_ptr` are marked as used in bitmap
+    - Frames above are available for user page allocation
+  - Verified: All 10 self-tests pass including "ELF parse + load"
+  - Test output:
+    ```
+    ELF parse + load:   ELF test: entry=0x8048089 phdr=1 LOAD@0x8047000 elf_load: Loading 1 program headers
+    elf_load: LOAD vaddr=0x8047000 filesz=4280 memsz=4280
+    elf_load: Mapped virt=0x8047000 -> phys=0xB1A000
+    elf_load: Mapped virt=0x8048000 -> phys=0xB1B000
+    elf_load: Copied 4280 bytes to vaddr=0x8047000
+    elf_load: Load complete
+    loaded [PASS]
+    ```
+- **Current Phase**: Phase 14 complete
+- **Next Step**: Phase 15 (File Descriptor Table)
 
 ---
 

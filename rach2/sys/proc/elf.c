@@ -5,6 +5,9 @@
  */
 
 #include "elf.h"
+#include "../mm/paging.h"
+#include "../serial.h"
+#include "../lib/kstring.h"
 
 /*
  * Validate ELF header
@@ -114,4 +117,128 @@ uint16_t elf_program_header_count(const void *data)
 {
     const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)data;
     return ehdr->e_phnum;
+}
+
+/*
+ * Load ELF segments into user memory
+ *
+ * For each PT_LOAD segment:
+ * 1. Allocate user pages covering vaddr to vaddr + memsz
+ * 2. Copy filesz bytes from file offset to virtual address
+ * 3. Zero-fill remaining bytes if memsz > filesz (BSS)
+ *
+ * Since alloc_user_page() returns a physical address within the
+ * identity-mapped region, we can write directly to it.
+ */
+int elf_load(const void *data, uint32_t size, page_dir_t *dir)
+{
+    Elf32_Phdr *phdrs;
+    uint16_t phdr_count;
+    uint16_t i;
+    const uint8_t *file_data = (const uint8_t *)data;
+
+    if (!dir) {
+        serial_printf("elf_load: NULL page directory\n");
+        return -1;
+    }
+
+    phdrs = elf_program_headers(data);
+    phdr_count = elf_program_header_count(data);
+
+    if (!phdrs || phdr_count == 0) {
+        serial_printf("elf_load: No program headers\n");
+        return -1;
+    }
+
+    serial_printf("elf_load: Loading %d program headers\n", phdr_count);
+
+    for (i = 0; i < phdr_count; i++) {
+        Elf32_Phdr *phdr = &phdrs[i];
+        uint32_t vaddr, vaddr_end, page_addr;
+        uint32_t bytes_copied, bytes_to_copy;
+        uint32_t file_offset;
+
+        /* Only process PT_LOAD segments */
+        if (phdr->p_type != PT_LOAD) {
+            continue;
+        }
+
+        /* Validate segment fits in file */
+        if (phdr->p_offset + phdr->p_filesz > size) {
+            serial_printf("elf_load: Segment %d exceeds file size\n", i);
+            return -1;
+        }
+
+        serial_printf("elf_load: LOAD vaddr=0x%X filesz=%d memsz=%d\n",
+                      phdr->p_vaddr, phdr->p_filesz, phdr->p_memsz);
+
+        /* Calculate virtual address range */
+        vaddr = phdr->p_vaddr;
+        vaddr_end = vaddr + phdr->p_memsz;
+
+        /* Allocate pages for the entire segment */
+        for (page_addr = (vaddr & ~(PAGE_SIZE - 1));
+             page_addr < vaddr_end;
+             page_addr += PAGE_SIZE) {
+
+            uintptr_t phys_addr = alloc_user_page(dir, page_addr);
+            if (phys_addr == 0) {
+                serial_printf("elf_load: Failed to allocate page at 0x%X\n",
+                              page_addr);
+                return -1;
+            }
+
+            serial_printf("elf_load: Mapped virt=0x%X -> phys=0x%X\n",
+                          page_addr, phys_addr);
+
+            /* Zero the entire page first (for BSS and alignment) */
+            k_memset((void *)phys_addr, 0, PAGE_SIZE);
+        }
+
+        /* Copy file content to memory */
+        file_offset = phdr->p_offset;
+        bytes_copied = 0;
+        bytes_to_copy = phdr->p_filesz;
+
+        while (bytes_copied < bytes_to_copy) {
+            uint32_t curr_vaddr = vaddr + bytes_copied;
+            uint32_t page_base = curr_vaddr & ~(PAGE_SIZE - 1);
+            uint32_t page_offset = curr_vaddr & (PAGE_SIZE - 1);
+            uint32_t chunk_size;
+            uintptr_t phys_base;
+            uint32_t pde_idx, pte_idx;
+            page_table_t *pt;
+
+            /* Calculate how many bytes to copy in this page */
+            chunk_size = PAGE_SIZE - page_offset;
+            if (chunk_size > bytes_to_copy - bytes_copied) {
+                chunk_size = bytes_to_copy - bytes_copied;
+            }
+
+            /* Find physical address for this virtual page */
+            pde_idx = page_base / PAGE_SIZE / 1024;
+            pte_idx = (page_base / PAGE_SIZE) % 1024;
+            pt = dir->logical_page_tables[pde_idx];
+
+            if (!pt) {
+                serial_printf("elf_load: No page table at idx %d\n", pde_idx);
+                return -1;
+            }
+
+            phys_base = pt->pages[pte_idx] & ~0xFFF;
+
+            /* Copy data to physical address */
+            k_memcpy((void *)(phys_base + page_offset),
+                     file_data + file_offset + bytes_copied,
+                     chunk_size);
+
+            bytes_copied += chunk_size;
+        }
+
+        serial_printf("elf_load: Copied %d bytes to vaddr=0x%X\n",
+                      bytes_copied, vaddr);
+    }
+
+    serial_printf("elf_load: Load complete\n");
+    return 0;
 }
