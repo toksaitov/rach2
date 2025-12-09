@@ -26,6 +26,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/panic.c     \
 	  sys/display/display.c \
 	  sys/tables/gdt.c      \
+	  sys/tables/tss.c      \
 	  sys/tables/idt.c      \
 	  sys/mm/heap.c         \
 	  sys/mm/paging.c       \

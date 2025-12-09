@@ -7,7 +7,7 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 ## Features
 
 * Multiboot1 compliant: boots with GRUB or QEMU's `-kernel` flag
-* Protected mode with flat memory model (GDT setup)
+* Protected mode with flat memory model (GDT with TSS for ring transitions)
 * Interrupt handling: IDT with 32 CPU exceptions and 16 IRQs
 * 8259 PIC initialization and EOI handling
 * Programmable Interval Timer (100 Hz tick)
@@ -63,7 +63,8 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   │   └── 80x25.h        # Screen dimensions, video buffer address
 │   ├── tables/
 │   │   ├── gdt.c/h        # Global Descriptor Table setup
-│   │   ├── gdt_handler.s  # GDT loading routine
+│   │   ├── gdt_handler.s  # GDT and TSS loading routines
+│   │   ├── tss.c/h        # Task State Segment for ring transitions
 │   │   ├── idt.c/h        # Interrupt Descriptor Table setup
 │   │   └── idt_handler.s  # IDT loading routine
 │   ├── mm/
@@ -81,6 +82,30 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   └── boot/grub/grub.cfg # GRUB2 configuration for ISO boot
 └── .gdbinit               # GDB initialization script
 ```
+
+## Global Descriptor Table (GDT)
+
+The GDT contains 6 segment descriptors:
+
+| Index | Selector | Description |
+|-------|----------|-------------|
+| 0 | 0x00 | Null descriptor |
+| 1 | 0x08 | Kernel code (DPL 0) |
+| 2 | 0x10 | Kernel data (DPL 0) |
+| 3 | 0x18 | User code (DPL 3) |
+| 4 | 0x20 | User data (DPL 3) |
+| 5 | 0x28 | TSS descriptor |
+
+## Task State Segment (TSS)
+
+The TSS is a 104-byte structure required by x86 for privilege level transitions. When an interrupt or syscall occurs in user mode (ring 3), the CPU automatically loads ESP0 and SS0 from the TSS to switch to the kernel stack.
+
+Key fields:
+* `esp0` - Kernel stack pointer (set to top of kernel stack)
+* `ss0` - Kernel stack segment (0x10, kernel data)
+* `iomap_base` - I/O permission bitmap offset (set to TSS size, no bitmap)
+
+The TSS descriptor in the GDT has access byte 0x89 (present, DPL 0, 32-bit TSS available). After GDT is loaded, the task register is loaded via the `ltr` instruction with selector 0x28.
 
 ## Serial Output
 

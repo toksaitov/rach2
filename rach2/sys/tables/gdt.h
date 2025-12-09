@@ -35,9 +35,14 @@ struct gdt_ptr {
 typedef struct gdt_ptr gdt_ptr_t;
 
 /*
+ * Number of GDT entries (null, kernel code/data, user code/data, TSS)
+ */
+#define GDT_ENTRY_COUNT 6
+
+/*
  * The Global Descriptor Table.
  */
-extern gdt_descriptor_t gdt_descriptors[5];
+extern gdt_descriptor_t gdt_descriptors[GDT_ENTRY_COUNT];
 
 /*
  * The GDT location and size

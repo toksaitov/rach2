@@ -35,5 +35,6 @@ k_stop:
 
 .bss
 .align 4
+.globl stack
 stack:
     .skip KERNEL_STACK_SIZE

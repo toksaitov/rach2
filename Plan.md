@@ -584,8 +584,20 @@ Before implementing new functionality:
   - Updated `test_syscall()` in `kernel.c` to test write with proper args
   - Updated `rach2/Readme.md` with implemented syscalls table and write documentation
   - Verified: "Hello from syscall!" printed via int 0x80 during self-test
-- **Current Phase**: Phase 3 (not started)
-- **Next Step**: Set up Task State Segment (TSS) for ring transitions
+### Session 2 - Phase 3 Complete
+- **Completed Phase 3: Task State Segment (TSS)**
+  - Created `sys/tables/tss.h` with 104-byte TSS structure definition
+  - Created `sys/tables/tss.c` with `init_tss()` and `tss_set_kernel_stack()`
+  - Expanded GDT to 6 entries in `gdt.c` and `gdt.h`
+  - Added TSS descriptor at index 5 (selector 0x28) with access 0x89
+  - Added `_load_tss` assembly routine in `gdt_handler.s` using `ltr` instruction
+  - Exported `stack` symbol from `loader.s` for kernel stack reference
+  - Updated `kernel.c` to call `init_tss()` with kernel stack top
+  - Updated `Makefile` to include `sys/tables/tss.c`
+  - Updated `rach2/Readme.md` with GDT and TSS sections
+  - Verified: "TSS... OK" printed during boot, no crash
+- **Current Phase**: Phase 4 (not started)
+- **Next Step**: User mode transition with ring 3 execution
 
 ---
 

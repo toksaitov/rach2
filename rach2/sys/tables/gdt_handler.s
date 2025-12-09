@@ -15,3 +15,10 @@ _load_gdt:
 
 .set_cs:
     ret
+
+# Load Task Register with TSS selector
+.globl _load_tss
+_load_tss:
+    movw 4(%esp), %ax
+    ltr %ax
+    ret

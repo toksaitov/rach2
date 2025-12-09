@@ -4,6 +4,7 @@
 #include "sys/serial.h"
 #include "sys/syscall.h"
 #include "sys/tables/gdt.h"
+#include "sys/tables/tss.h"
 #include "sys/tables/idt.h"
 #include "sys/isr.h"
 #include "sys/mm/heap.h"
@@ -13,6 +14,10 @@
 #include "sys/display/display.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
+
+/* Kernel stack from loader.s */
+extern char stack[];
+#define KERNEL_STACK_SIZE 0x4000
 
 #define CMD_BUFFER_SIZE 64
 static char cmd_buffer[CMD_BUFFER_SIZE];
@@ -307,6 +312,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     k_printf("  GDT...");
     serial_printf("  GDT...");
     init_gdt();
+    set_fore_color(light_green);
+    k_puts(" OK");
+    serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  TSS...");
+    serial_printf("  TSS...");
+    init_tss((uint32_t)stack + KERNEL_STACK_SIZE);
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");
