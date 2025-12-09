@@ -49,6 +49,7 @@ static bool test_syscall(void);
 static bool test_usermode(void);
 static void test_switch(void);
 static void test_preempt(void);
+static bool test_isolation(void);
 
 static void timer_handler(isr_params_t params)
 {
@@ -504,6 +505,129 @@ static void test_preempt(void)
     set_fore_color(light_grey);
 }
 
+/*
+ * Memory isolation test - uses cooperative context switching (no scheduler)
+ * to verify that two processes with different page directories can write
+ * to the same virtual address without interfering with each other.
+ */
+#define ISOLATION_TEST_ADDR 0x800000  /* User address for isolation test */
+static volatile uint32_t isolation_result_a = 0;
+static volatile uint32_t isolation_result_b = 0;
+static process_t *isolation_proc_a = NULL;
+static process_t *isolation_proc_b = NULL;
+static process_t *isolation_proc_main = NULL;
+
+/*
+ * Isolation test process A - writes 0xAAAAAAAA then switches to B
+ */
+static void isolation_proc_a_entry(void)
+{
+    volatile uint32_t *ptr = (volatile uint32_t *)ISOLATION_TEST_ADDR;
+
+    /* Write our value */
+    *ptr = 0xAAAAAAAA;
+
+    /* Switch to B so it can write its value */
+    switch_context(isolation_proc_a, isolation_proc_b);
+
+    /* B has written and switched back - now verify our value is intact */
+    isolation_result_a = *ptr;
+
+    /* Return to main */
+    switch_context(isolation_proc_a, isolation_proc_main);
+
+    /* Should never reach here */
+    for (;;) {
+        __asm__ __volatile__("hlt");
+    }
+}
+
+/*
+ * Isolation test process B - writes 0xBBBBBBBB then switches back to A
+ */
+static void isolation_proc_b_entry(void)
+{
+    volatile uint32_t *ptr = (volatile uint32_t *)ISOLATION_TEST_ADDR;
+
+    /* Write our value - should go to different physical page */
+    *ptr = 0xBBBBBBBB;
+
+    /* Verify we read our value */
+    isolation_result_b = *ptr;
+
+    /* Switch back to A */
+    switch_context(isolation_proc_b, isolation_proc_a);
+
+    /* Should never reach here */
+    for (;;) {
+        __asm__ __volatile__("hlt");
+    }
+}
+
+static bool test_isolation(void)
+{
+    page_dir_t *dir_a, *dir_b;
+    uintptr_t stack_a, stack_b;
+    uintptr_t phys_a, phys_b;
+
+    /* Reset results */
+    isolation_result_a = 0;
+    isolation_result_b = 0;
+
+    /* Save reference to main process */
+    isolation_proc_main = current_proc;
+
+    /* Create page directories for A and B */
+    dir_a = clone_page_directory();
+    dir_b = clone_page_directory();
+    if (!dir_a || !dir_b) {
+        return false;
+    }
+
+    /* Allocate user pages at same virtual address in each directory */
+    phys_a = alloc_user_page(dir_a, ISOLATION_TEST_ADDR);
+    phys_b = alloc_user_page(dir_b, ISOLATION_TEST_ADDR);
+    if (!phys_a || !phys_b || phys_a == phys_b) {
+        return false;
+    }
+
+    /* Allocate process A */
+    isolation_proc_a = alloc_process();
+    if (!isolation_proc_a) {
+        return false;
+    }
+    stack_a = mem_reserve(KERNEL_STACK_SIZE, true);
+    isolation_proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
+    isolation_proc_a->cr3 = get_page_dir_phys(dir_a);
+    isolation_proc_a->parent_pid = isolation_proc_main->pid;
+    setup_process_stack(isolation_proc_a, isolation_proc_a_entry);
+
+    /* Allocate process B */
+    isolation_proc_b = alloc_process();
+    if (!isolation_proc_b) {
+        free_process(isolation_proc_a);
+        return false;
+    }
+    stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
+    isolation_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
+    isolation_proc_b->cr3 = get_page_dir_phys(dir_b);
+    isolation_proc_b->parent_pid = isolation_proc_main->pid;
+    setup_process_stack(isolation_proc_b, isolation_proc_b_entry);
+
+    /* Start the test: switch to A */
+    /* A writes -> switches to B -> B writes -> B switches back to A -> A reads -> A returns here */
+    switch_context(isolation_proc_main, isolation_proc_a);
+
+    /* Clean up */
+    free_process(isolation_proc_a);
+    free_process(isolation_proc_b);
+    isolation_proc_a = NULL;
+    isolation_proc_b = NULL;
+
+    /* Check results */
+    return (isolation_result_a == 0xAAAAAAAA && isolation_result_b == 0xBBBBBBBB);
+}
+
 static void run_self_tests(void)
 {
     k_puts("");
@@ -658,6 +782,19 @@ static void run_self_tests(void)
     }
     set_fore_color(light_grey);
 
+    k_printf("  Memory isolation:   ");
+    serial_printf("  Memory isolation:   ");
+    if (test_isolation()) {
+        set_fore_color(light_green);
+        k_puts("[PASS]");
+        serial_printf("[PASS]\n");
+    } else {
+        set_fore_color(light_red);
+        k_puts("[FAIL]");
+        serial_printf("[FAIL]\n");
+    }
+    set_fore_color(light_grey);
+
     test_display();
 
     k_puts("");
@@ -675,6 +812,7 @@ static void process_command(const char *cmd)
         k_puts("  clear    - Clear the screen");
         k_puts("  switch   - Test manual context switching");
         k_puts("  preempt  - Test preemptive round-robin scheduling");
+        k_puts("  isolate  - Test memory isolation between processes");
         k_puts("  usermode - Test ring 3 execution");
         k_puts("  fault    - Trigger a page fault (panic)");
         k_puts("  halt     - Halt the CPU");
@@ -690,6 +828,17 @@ static void process_command(const char *cmd)
         test_switch();
     } else if (str_equal(cmd, "preempt")) {
         test_preempt();
+    } else if (str_equal(cmd, "isolate")) {
+        k_puts("Testing memory isolation between processes...");
+        k_puts("Two processes will write different values to same virtual address.");
+        if (test_isolation()) {
+            set_fore_color(light_green);
+            k_puts("Memory isolation test passed!");
+        } else {
+            set_fore_color(light_red);
+            k_puts("Memory isolation test FAILED!");
+        }
+        set_fore_color(light_grey);
     } else if (str_equal(cmd, "fault")) {
         volatile uint32_t *bad_ptr = (volatile uint32_t *) 0xA0000000;
         k_puts("Triggering page fault at 0xA0000000...");

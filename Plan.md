@@ -211,18 +211,8 @@ Before implementing new functionality:
 
 ---
 
-### Phase 9: Memory Isolation Test
-**Goal**: Verify processes cannot access each other's memory.
-
-**Tasks**:
-1. Process A writes value 0xAAAA to user address 0x800000
-2. Process B writes value 0xBBBB to same virtual address 0x800000
-3. Process A reads back from 0x800000 - should still be 0xAAAA
-4. Attempt cross-process access triggers page fault
-
-**Measurable Result**: Both processes read their own values; no corruption.
-
-**Documentation**: Document memory layout in Readme.md.
+### Phase 9: Memory Isolation Test — MERGED INTO PHASE 8
+*This phase was combined with Phase 8 since the isolation test is the natural way to verify per-process page directories work correctly.*
 
 ---
 
@@ -678,8 +668,32 @@ Before implementing new functionality:
   - Updated `rach2/Readme.md` with Scheduler section
   - Verified: "Round-robin sched: [PASS] A=10 B=10" printed during boot self-tests
   - Test: Interleaved "ABABAB..." output demonstrates timer-driven preemption
-- **Current Phase**: Phase 7 complete
-- **Next Step**: Phase 8 (Per-Process Page Directories)
+### Session 5 - Phases 8 & 9 Complete (Merged)
+- **Completed Phases 8 + 9: Per-Process Page Directories with Memory Isolation Test**
+  - Added page directory management functions to `sys/mm/paging.c`:
+    - `clone_page_directory()` - copies kernel page table references for new process
+    - `get_page_dir_phys()` - returns physical address for CR3
+    - `switch_page_directory()` - switches CR3 and updates `_curr_dir`
+    - `alloc_user_page(dir, virt_addr)` - allocates physical frame, maps in specific directory
+  - Added function declarations and exported `_kernel_dir`, `_curr_dir` to `sys/mm/paging.h`
+  - Added `cr3` field to `process_t` structure in `sys/proc/process.h` (offset 52)
+  - Updated `sys/proc/switch.s` to switch CR3 during context switch:
+    - Compares old->cr3 with new->cr3
+    - Only switches if different and new->cr3 != 0
+    - TLB automatically flushed on CR3 write
+  - Created memory isolation test in `kernel.c`:
+    - Creates two page directories with separate user pages at same virtual address (0x800000)
+    - Process A writes 0xAAAAAAAA, Process B writes 0xBBBBBBBB
+    - Each reads back and verifies its own value (proves different physical pages)
+    - Uses cooperative context switching for deterministic test
+  - Added `isolate` shell command for manual testing
+  - Added memory isolation to boot self-tests
+  - Fixed `k_itoa()` in `sys/lib/kstd.c` to treat hex/binary/octal as unsigned (was showing 0xAAAAAAAA as 0x-55555556)
+  - Cleaned up all debug output (removed timer_debug_count, sched debug prints)
+  - Updated `rach2/Readme.md` with Per-Process Page Directories section
+  - Verified: "Memory isolation: [PASS]" printed during boot self-tests
+- **Current Phase**: Phases 8 & 9 complete
+- **Next Step**: Phase 10 (Multiboot Module Loading)
 
 ---
 

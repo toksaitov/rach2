@@ -3,6 +3,8 @@
 size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force_sign)
 {
     bool switch_case = false;
+    bool is_signed = false;
+    unsigned int uinput;
     int initial_input = input;
     char digit, *tmp_str = buffer;
     size_t num_of_chars = 1;
@@ -18,6 +20,7 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
 
         case 'd':
             radix = 10;
+            is_signed = true;
             break;
 
         case 'X':
@@ -30,23 +33,34 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
 
     if (radix < 2 || radix > 36) return 0;
 
-    do { ++num_of_chars; } while (input /= radix);
-    input = initial_input;
+    /* For signed decimal, handle negative; for others, treat as unsigned */
+    if (is_signed && input < 0) {
+        uinput = (unsigned int)(-input);
+        ++num_of_chars;
+    } else if (is_signed) {
+        uinput = (unsigned int)input;
+        if (input > 0 && force_sign) { ++num_of_chars; }
+    } else {
+        uinput = (unsigned int)input;
+    }
 
-    if (input < 0) { input *= -1; ++num_of_chars; }
-    else if (input > 0 && force_sign) { ++num_of_chars; }
+    /* Count digits */
+    {
+        unsigned int tmp = uinput;
+        do { ++num_of_chars; } while (tmp /= radix);
+    }
 
     if (buffer_size < num_of_chars) {
         num_of_chars = 0;
     } else if (buffer != NULL) {
         do {
-            digit = input%radix;
+            digit = uinput % radix;
 
             if (digit <= 9) { *tmp_str++ = digit + '0'; }
             else { *tmp_str++ = digit - 10 + 'a'; }
-        } while (input /= radix);
+        } while (uinput /= radix);
 
-        if (initial_input < 0) { *tmp_str++ = '-'; }
+        if (is_signed && initial_input < 0) { *tmp_str++ = '-'; }
         *tmp_str = 0;
 
         k_strreverse(buffer);

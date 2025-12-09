@@ -1,5 +1,4 @@
 #include "sched.h"
-#include "../serial.h"
 
 /*
  * Scheduler enabled flag

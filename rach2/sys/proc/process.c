@@ -1,6 +1,5 @@
 #include "process.h"
 #include "../lib/kstring.h"
-#include "../serial.h"
 
 /*
  * Process table - all process slots

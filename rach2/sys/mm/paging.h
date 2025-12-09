@@ -72,4 +72,40 @@ void paging_set_user(uintptr_t addr, bool user);
  */
 void paging_flush_tlb(uintptr_t addr);
 
+/*
+ * Clone the kernel page directory for a new process.
+ * Copies kernel page table references (shared), ready for per-process user pages.
+ * Returns pointer to new page directory, or NULL on failure.
+ */
+page_dir_t *clone_page_directory(void);
+
+/*
+ * Get physical address of page directory for CR3.
+ * Returns the address suitable for loading into CR3.
+ */
+uintptr_t get_page_dir_phys(page_dir_t *dir);
+
+/*
+ * Switch to a different page directory (loads CR3).
+ */
+void switch_page_directory(page_dir_t *dir);
+
+/*
+ * Allocate a user page in a specific page directory.
+ * virt_addr: virtual address to map (will be page-aligned)
+ * dir: page directory to map in
+ * Returns physical address of allocated frame, or 0 on failure.
+ */
+uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr);
+
+/*
+ * Kernel page directory (shared by all processes for kernel mappings)
+ */
+extern page_dir_t *_kernel_dir;
+
+/*
+ * Current page directory
+ */
+extern page_dir_t *_curr_dir;
+
 #endif

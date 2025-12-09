@@ -118,3 +118,112 @@ void paging_flush_tlb(uintptr_t addr)
 {
     __asm__ __volatile__("invlpg (%0)" :: "r"(addr) : "memory");
 }
+
+page_dir_t *clone_page_directory(void)
+{
+    page_dir_t *new_dir;
+    uint32_t i;
+
+    /* Allocate a new page directory */
+    new_dir = (page_dir_t *) mem_reserve(sizeof(page_dir_t), true);
+    if (!new_dir) {
+        return NULL;
+    }
+
+    k_memset(new_dir, 0, sizeof(page_dir_t));
+
+    /*
+     * Copy kernel page table references.
+     * Kernel page tables are shared between all processes - we only copy
+     * the pointers, not the actual tables. This ensures kernel memory
+     * is always accessible from any process.
+     */
+    for (i = 0; i < 1024; i++) {
+        new_dir->phys_page_tables[i] = _kernel_dir->phys_page_tables[i];
+        new_dir->logical_page_tables[i] = _kernel_dir->logical_page_tables[i];
+    }
+
+    return new_dir;
+}
+
+uintptr_t get_page_dir_phys(page_dir_t *dir)
+{
+    /*
+     * The phys_page_tables array is at the start of the page_dir structure
+     * and is what CR3 should point to.
+     */
+    return (uintptr_t)&dir->phys_page_tables;
+}
+
+void switch_page_directory(page_dir_t *dir)
+{
+    if (dir == _curr_dir) {
+        return;
+    }
+
+    _curr_dir = dir;
+    __asm__ __volatile__("mov %0, %%cr3" :: "r"(get_page_dir_phys(dir)) : "memory");
+}
+
+uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
+{
+    uintptr_t phys_addr;
+    uintptr_t page_num;
+    uintptr_t table_index;
+    uintptr_t page_index;
+    uintptr_t frame;
+    page_table_t *table;
+
+    /* Align to page boundary */
+    virt_addr &= ~(PAGE_SIZE - 1);
+
+    /* Calculate table and page indices */
+    page_num = virt_addr / PAGE_SIZE;
+    table_index = page_num / 1024;
+    page_index = page_num % 1024;
+
+    if (table_index >= 1024) {
+        return 0;
+    }
+
+    /* Find a free physical frame */
+    for (frame = 0; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0) {
+            break;
+        }
+    }
+
+    if (frame >= _frames_number) {
+        return 0;  /* No free frames */
+    }
+
+    /* Mark frame as used */
+    _frames[frame] = 1;
+    phys_addr = frame * PAGE_SIZE;
+
+    /* Get or create page table */
+    table = dir->logical_page_tables[table_index];
+    if (!table) {
+        /* Allocate new page table */
+        uintptr_t table_addr = mem_reserve(sizeof(page_table_t), true);
+        table = (page_table_t *)table_addr;
+        k_memset(table, 0, sizeof(page_table_t));
+
+        /* Add to directory with present, rw, and user bits set */
+        dir->phys_page_tables[table_index] = table_addr | 0x7;  /* P + RW + U/S */
+        dir->logical_page_tables[table_index] = table;
+    } else if (!(dir->phys_page_tables[table_index] & 0x4)) {
+        /* Page table exists but not user-accessible, set U/S bit */
+        dir->phys_page_tables[table_index] |= 0x4;
+    }
+
+    /* Map the page with present, rw, and user bits */
+    table->pages[page_index] = phys_addr | 0x7;  /* P + RW + U/S */
+
+    /* Flush TLB for this address if we're in the current directory */
+    if (dir == _curr_dir) {
+        paging_flush_tlb(virt_addr);
+    }
+
+    return phys_addr;
+}

@@ -22,8 +22,9 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Process control blocks (PCB) with process table (16 max)
 * Context switching between processes with TSS stack management
 * Preemptive round-robin scheduler (timer-driven)
-* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler)
-* Interactive shell with commands: help, info, test, clear, switch, preempt, usermode, fault, halt
+* Per-process page directories with CR3 switching for memory isolation
+* Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation)
+* Interactive shell with commands: help, info, test, clear, switch, preempt, isolate, usermode, fault, halt
 
 ## Memory Layout
 
@@ -93,14 +94,14 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 
 The GDT contains 6 segment descriptors:
 
-| Index | Selector | Description |
-|-------|----------|-------------|
-| 0 | 0x00 | Null descriptor |
-| 1 | 0x08 | Kernel code (DPL 0) |
-| 2 | 0x10 | Kernel data (DPL 0) |
-| 3 | 0x18 | User code (DPL 3) |
-| 4 | 0x20 | User data (DPL 3) |
-| 5 | 0x28 | TSS descriptor |
+| Index | Selector | Description         |
+|-------|----------|---------------------|
+| 0     | 0x00     | Null descriptor     |
+| 1     | 0x08     | Kernel code (DPL 0) |
+| 2     | 0x10     | Kernel data (DPL 0) |
+| 3     | 0x18     | User code (DPL 3)   |
+| 4     | 0x20     | User data (DPL 3)   |
+| 5     | 0x28     | TSS descriptor      |
 
 ## Task State Segment (TSS)
 
@@ -140,9 +141,9 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 
 ### Implemented Syscalls
 
-| Number | Name | Arguments | Description |
-|--------|------|-----------|-------------|
-| 4 | write | fd, buf, count | Write to file descriptor |
+| Number | Name  | Arguments      | Description              |
+|--------|-------|----------------|--------------------------|
+| 4      | write | fd, buf, count | Write to file descriptor |
 
 ### write (syscall 4)
 
@@ -303,6 +304,57 @@ The self-tests include an automated scheduler test that verifies both processes 
 * `_last_sched_idx` - Index of last scheduled process (for round-robin fairness)
 * `schedule()` - Main scheduling function called from timer interrupt
 
+## Per-Process Page Directories
+
+Each process can have its own page directory, providing memory isolation between processes. Two processes can map the same virtual address to different physical pages, preventing one from reading or modifying another's memory.
+
+### Page Directory Cloning
+
+When creating a new process, `clone_page_directory()` creates a copy of the kernel's page directory:
+1. Allocates a new `page_dir_t` structure
+2. Copies all 1024 page table pointers from the kernel directory
+3. Returns the new directory (kernel mappings are shared, not copied)
+
+This ensures all processes can access kernel memory while having separate user-space mappings.
+
+### CR3 Switching
+
+The CR3 register holds the physical address of the current page directory. During context switch, `switch_context()` in `switch.s`:
+1. Compares `old->cr3` with `new->cr3`
+2. If different and `new->cr3 != 0`, loads the new value into CR3
+3. The TLB is automatically flushed on CR3 write
+
+A `cr3` value of 0 indicates the process uses the kernel's page directory (no switch needed).
+
+### User Page Allocation
+
+`alloc_user_page(dir, virt_addr)` allocates a physical frame and maps it in a specific page directory:
+1. Finds a free physical frame in the frame bitmap
+2. Creates a page table if needed (with user-accessible flags)
+3. Maps the virtual address to the physical frame with P+RW+U/S bits
+4. Returns the physical address of the allocated frame
+
+### Process CR3 Field
+
+The `process_t` structure includes a `cr3` field (offset 52) storing the physical address of the process's page directory. This is loaded into CR3 during context switch.
+
+### Memory Isolation Test
+
+The shell command `isolate` demonstrates memory isolation:
+1. Creates two page directories (A and B)
+2. Allocates user pages at the same virtual address (0x800000) in each directory
+3. Verifies different physical frames were allocated
+4. Process A writes 0xAAAAAAAA, process B writes 0xBBBBBBBB
+5. Each process reads back and verifies its own value is intact
+
+The self-tests include an automated isolation test that verifies per-process memory separation.
+
+### Files Modified for Per-Process Page Directories
+* `sys/mm/paging.c` - Added `clone_page_directory()`, `get_page_dir_phys()`, `switch_page_directory()`, `alloc_user_page()`
+* `sys/mm/paging.h` - Function prototypes and exported `_kernel_dir`, `_curr_dir`
+* `sys/proc/switch.s` - Added CR3 comparison and switching logic
+* `sys/proc/process.h` - Added `cr3` field to `process_t` structure
+
 ## Scripts
 
 * `run.sh`: quick test using QEMU's direct kernel loading with serial output to terminal
@@ -379,6 +431,7 @@ Remove compiled files:
         > clear    # Clear the screen
         > switch   # Test cooperative context switching (prints ABABABABAB)
         > preempt  # Test preemptive scheduling (timer-driven ABABAB...)
+        > isolate  # Test memory isolation between processes
         > usermode # Test ring 3 execution (prints message then loops)
         > fault    # Trigger a page fault (demonstrates panic)
         > halt     # Stop the CPU
