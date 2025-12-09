@@ -6,6 +6,7 @@
 #include "../panic.h"
 #include "../isr.h"
 
+#include "../lib/kdef.h"
 #include "../lib/kint.h"
 #include "../lib/kstd.h"
 
@@ -58,5 +59,17 @@ struct page_dir {
 typedef struct page_dir page_dir_t;
 
 void init_paging(void);
+
+/*
+ * Mark a page as user-accessible or supervisor-only.
+ * addr: virtual address within the page
+ * user: true for user-accessible, false for supervisor-only
+ */
+void paging_set_user(uintptr_t addr, bool user);
+
+/*
+ * Flush TLB entry for a specific address
+ */
+void paging_flush_tlb(uintptr_t addr);
 
 #endif

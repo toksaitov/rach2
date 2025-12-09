@@ -596,8 +596,26 @@ Before implementing new functionality:
   - Updated `Makefile` to include `sys/tables/tss.c`
   - Updated `rach2/Readme.md` with GDT and TSS sections
   - Verified: "TSS... OK" printed during boot, no crash
-- **Current Phase**: Phase 4 (not started)
-- **Next Step**: User mode transition with ring 3 execution
+### Session 3 - Phase 4 Complete
+- **Completed Phase 4: User Mode Transition**
+  - Added `paging_set_user(addr, user)` function in `paging.c` to mark pages user-accessible
+  - Added `paging_flush_tlb(addr)` function for TLB invalidation
+  - Created `enter_usermode(eip, esp)` assembly routine in `loader.s`:
+    - Sets DS/ES/FS/GS to user data segment (0x23)
+    - Builds iret stack frame: SS, ESP, EFLAGS (with IF), CS, EIP
+    - Executes `iret` to transition to ring 3
+  - Created `user_test_entry()` function in `kernel.c` that runs in ring 3
+  - Created `test_usermode()` function that:
+    - Marks function code pages as user-accessible
+    - Marks message data page as user-accessible
+    - Allocates and marks user stack pages as user-accessible
+    - Calls `enter_usermode()` to transition to ring 3
+  - Added `usermode` shell command to trigger the test
+  - Updated `rach2/Readme.md` with User Mode (Ring 3) section
+  - Verified: Kernel boots successfully, all tests pass
+  - Test: `usermode` command prints "Hello from ring 3!" via syscall from ring 3
+- **Current Phase**: Phase 4 complete
+- **Next Step**: Phase 5 (Process Control Block)
 
 ---
 

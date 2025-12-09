@@ -19,6 +19,12 @@
 extern char stack[];
 #define KERNEL_STACK_SIZE 0x4000
 
+/* User mode entry point from loader.s */
+extern void enter_usermode(uint32_t eip, uint32_t esp);
+
+/* User stack size (4KB) */
+#define USER_STACK_SIZE 0x1000
+
 #define CMD_BUFFER_SIZE 64
 static char cmd_buffer[CMD_BUFFER_SIZE];
 static volatile size_t cmd_pos = 0;
@@ -38,6 +44,7 @@ static bool test_strings(void);
 static void test_display(void);
 static bool test_timer(void);
 static bool test_syscall(void);
+static bool test_usermode(void);
 
 static void timer_handler(isr_params_t params)
 {
@@ -164,7 +171,7 @@ static bool test_timer(void)
 static bool test_syscall(void)
 {
     /* Test write syscall: EAX=4, EBX=1 (stdout), ECX=buf, EDX=len */
-    const char *msg = "Hello from syscall!\n";
+    const char *msg = "Hello from syscall! ";
     uint32_t len = 20;
 
     __asm__ __volatile__(
@@ -176,6 +183,90 @@ static bool test_syscall(void)
 
     /* If we get here without crashing, the syscall infrastructure works */
     return true;
+}
+
+/*
+ * Message for user mode test - needs to be in user-accessible memory
+ */
+static const char user_msg[] = "Hello from ring 3!\n";
+
+/*
+ * User mode test entry point - runs in ring 3
+ * Calls write syscall then halts via infinite loop
+ */
+static void user_test_entry(void)
+{
+    /* Write syscall: EAX=4, EBX=1 (stdout), ECX=buf, EDX=len */
+    __asm__ __volatile__(
+        "movl $4, %%eax\n\t"     /* syscall number: write */
+        "movl $1, %%ebx\n\t"     /* fd: stdout */
+        "movl %0, %%ecx\n\t"     /* buf */
+        "movl $19, %%edx\n\t"    /* count */
+        "int $0x80\n\t"
+        :
+        : "r"(user_msg)
+        : "eax", "ebx", "ecx", "edx", "memory"
+    );
+
+    /* Infinite loop after syscall - user mode can't halt directly */
+    for (;;) {
+        __asm__ __volatile__("nop");
+    }
+}
+
+static bool test_usermode(void)
+{
+    uintptr_t func_addr = (uintptr_t)user_test_entry;
+    uintptr_t msg_addr = (uintptr_t)user_msg;
+    uintptr_t user_stack_addr;
+    uintptr_t page;
+    uint32_t i;
+
+    serial_printf("  Usermode test: func=0x%X msg=0x%X\n", func_addr, msg_addr);
+
+    /* Allocate user stack */
+    user_stack_addr = mem_reserve(USER_STACK_SIZE, true);
+    serial_printf("  Usermode test: stack=0x%X\n", user_stack_addr);
+
+    /* Mark pages as user-accessible:
+     * - Function code page(s)
+     * - Message data page
+     * - User stack page
+     */
+
+    /* Mark function pages as user-accessible (may span 2 pages) */
+    for (page = func_addr & ~0xFFF; page <= ((func_addr + 256) & ~0xFFF); page += PAGE_SIZE) {
+        paging_set_user(page, true);
+    }
+
+    /* Mark message page as user-accessible */
+    paging_set_user(msg_addr, true);
+
+    /* Mark stack pages as user-accessible */
+    for (page = user_stack_addr; page < user_stack_addr + USER_STACK_SIZE; page += PAGE_SIZE) {
+        paging_set_user(page, true);
+    }
+
+    serial_printf("  Usermode test: pages marked user-accessible\n");
+
+    /* Wait a bit for any pending interrupts */
+    for (i = 0; i < 3; i++) {
+        __asm__ __volatile__("hlt");
+    }
+
+    serial_printf("  Usermode test: entering ring 3...\n");
+
+    /*
+     * Enter user mode - this won't return!
+     * The user code calls int 0x80 (write syscall), which transitions to ring 0.
+     * After syscall returns, user code loops forever.
+     * The message "Hello from ring 3!" will be printed, proving ring 3 works.
+     */
+
+    enter_usermode(func_addr, user_stack_addr + USER_STACK_SIZE);
+
+    /* We should never reach here - enter_usermode doesn't return */
+    return false;
 }
 
 static void run_self_tests(void)
@@ -239,12 +330,13 @@ static void process_command(const char *cmd)
 {
     if (str_equal(cmd, "help")) {
         k_puts("Available commands:");
-        k_puts("  help  - Show this help message");
-        k_puts("  info  - Display system information");
-        k_puts("  test  - Run self-tests again");
-        k_puts("  clear - Clear the screen");
-        k_puts("  fault - Trigger a page fault (panic)");
-        k_puts("  halt  - Halt the CPU");
+        k_puts("  help     - Show this help message");
+        k_puts("  info     - Display system information");
+        k_puts("  test     - Run self-tests again");
+        k_puts("  clear    - Clear the screen");
+        k_puts("  usermode - Test ring 3 execution");
+        k_puts("  fault    - Trigger a page fault (panic)");
+        k_puts("  halt     - Halt the CPU");
     } else if (str_equal(cmd, "info")) {
         k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         k_printf("Timer ticks:     %d\n", ticks);
@@ -260,6 +352,11 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "halt")) {
         k_puts("Halting system. Goodbye!");
         __asm__ __volatile__("cli; hlt");
+    } else if (str_equal(cmd, "usermode")) {
+        k_puts("Testing user mode (ring 3) transition...");
+        k_puts("Expected: 'Hello from ring 3!' followed by infinite loop.");
+        test_usermode();
+        /* This line is never reached */
     } else if (cmd[0] != '\0') {
         k_printf("Unknown command: '%s'\n", cmd);
         k_puts("Type 'help' for available commands.");

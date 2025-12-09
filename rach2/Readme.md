@@ -18,8 +18,9 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Basic paging with identity mapping (16 MB limit)
 * Kernel panic screen automatically triggered on page faults
 * System call infrastructure (int 0x80)
+* User mode (ring 3) execution with privilege transitions
 * Built-in self-tests (memory, strings, timer, paging, syscall)
-* Interactive shell with commands: help, info, test, clear, fault, halt
+* Interactive shell with commands: help, info, test, clear, usermode, fault, halt
 
 ## Memory Layout
 
@@ -33,7 +34,6 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 
 ## Limitations
 
-* No user mode (ring 3) support
 * No filesystem or disk drivers
 * No dynamic memory allocation (only bump allocator)
 * Single-tasking (no process/thread management)
@@ -151,6 +151,38 @@ Returns the number of bytes written, or -1 on error.
 * `_syscall_table[]` - Dispatch table mapping syscall numbers to handler functions
 * `sys_write()` - Implementation of write syscall
 
+## User Mode (Ring 3)
+
+The kernel supports transitioning to user mode (ring 3) and executing code with reduced privileges. This is a prerequisite for running user processes.
+
+### Ring Transition Mechanism
+
+The `enter_usermode(eip, esp)` function in `loader.s` performs the transition from ring 0 to ring 3 using the `iret` instruction. It:
+
+1. Sets data segment registers (DS, ES, FS, GS) to user data segment (0x23)
+2. Builds an iret stack frame with:
+   - User stack segment (SS = 0x23)
+   - User stack pointer (ESP)
+   - EFLAGS with interrupts enabled
+   - User code segment (CS = 0x1B)
+   - Entry point address (EIP)
+3. Executes `iret` to switch to ring 3
+
+### Page Access Permissions
+
+Pages must be marked user-accessible (U/S bit set in page table entries) for ring 3 code to access them. The `paging_set_user(addr, user)` function in `paging.c` modifies the U/S bit for a given page.
+
+### Testing User Mode
+
+The shell command `usermode` tests ring 3 execution:
+1. Marks the test function and its data pages as user-accessible
+2. Allocates a user stack and marks it user-accessible
+3. Transitions to ring 3 and executes a simple program
+4. The program calls `int $0x80` (write syscall) to print "Hello from ring 3!"
+5. After the syscall, the program loops forever (no scheduler yet)
+
+When returning from the syscall, the TSS provides the kernel stack (ESP0/SS0), and after the syscall handler completes, the CPU returns to ring 3 using the saved user state.
+
 ## Scripts
 
 * `run.sh`: quick test using QEMU's direct kernel loading with serial output to terminal
@@ -221,9 +253,10 @@ Remove compiled files:
 
 4. Once the environment boots, you'll see initialization messages followed by self-tests. The interactive shell accepts these commands:
 
-        > help  # Show available commands
-        > info  # Display memory pointer and timer ticks
-        > test  # Run self-tests again
-        > clear # Clear the screen
-        > fault # Trigger a page fault (demonstrates panic)
-        > halt  # Stop the CPU
+        > help     # Show available commands
+        > info     # Display memory pointer and timer ticks
+        > test     # Run self-tests again
+        > clear    # Clear the screen
+        > usermode # Test ring 3 execution (prints message then loops)
+        > fault    # Trigger a page fault (demonstrates panic)
+        > halt     # Stop the CPU

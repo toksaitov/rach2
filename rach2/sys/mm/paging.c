@@ -89,3 +89,32 @@ static void _page_fault_handler(isr_params_t params)
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
+
+void paging_set_user(uintptr_t addr, bool user)
+{
+    uintptr_t page_num = addr / PAGE_SIZE;
+    uintptr_t table_index = page_num / 1024;
+    uintptr_t page_index = page_num % 1024;
+    page_table_t *table;
+
+    if (table_index >= 1024) return;
+
+    table = _curr_dir->logical_page_tables[table_index];
+    if (!table) return;
+
+    if (user) {
+        /* Set U/S bit (bit 2) in both page table entry and directory entry */
+        table->pages[page_index] |= 0x4;
+        _curr_dir->phys_page_tables[table_index] |= 0x4;
+    } else {
+        /* Clear U/S bit */
+        table->pages[page_index] &= ~0x4;
+    }
+
+    paging_flush_tlb(addr);
+}
+
+void paging_flush_tlb(uintptr_t addr)
+{
+    __asm__ __volatile__("invlpg (%0)" :: "r"(addr) : "memory");
+}
