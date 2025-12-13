@@ -149,18 +149,48 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 
 ### Implemented Syscalls
 
-| Number | Name  | Arguments        | Description               |
-|--------|-------|------------------|---------------------------|
-| 1      | exit  | status           | Terminate current process |
-| 3      | read  | fd, buf, count   | Read from file descriptor |
-| 4      | write | fd, buf, count   | Write to file descriptor  |
-| 5      | open  | path, flags      | Open a file               |
-| 6      | close | fd               | Close a file descriptor   |
-| 63     | dup2  | oldfd, newfd     | Duplicate file descriptor |
+| Number | Name    | Arguments             | Description                     |
+|--------|---------|-----------------------|---------------------------------|
+| 1      | exit    | status                | Terminate current process       |
+| 2      | fork    | -                     | Create child process            |
+| 3      | read    | fd, buf, count        | Read from file descriptor       |
+| 4      | write   | fd, buf, count        | Write to file descriptor        |
+| 5      | open    | path, flags           | Open a file                     |
+| 6      | close   | fd                    | Close a file descriptor         |
+| 7      | waitpid | pid, status, options  | Wait for child process to exit  |
+| 63     | dup2    | oldfd, newfd          | Duplicate file descriptor       |
 
 ### exit (syscall 1)
 
-Terminates the current process with the given exit status. Marks the process as ZOMBIE and halts the CPU. Future implementation will clean up resources and reschedule.
+Terminates the current process with the given exit status. Marks the process as ZOMBIE, stores the exit code, wakes the parent process if it's blocked (waiting), and reschedules to another process.
+
+### fork (syscall 2)
+
+Creates a new child process as a copy of the current process. The child receives:
+* A new PID and process table entry
+* A cloned page directory with copies of all user pages (memory isolation)
+* A copy of the parent's file descriptor table
+* A separate kernel stack set up to return from fork
+
+Returns:
+* To parent: child's PID (positive integer)
+* To child: 0
+* On error: -1
+
+The child process is marked READY and will be scheduled by the round-robin scheduler. Both parent and child continue execution from the point after the fork syscall.
+
+### waitpid (syscall 7)
+
+Waits for a child process to exit and collects its exit status.
+
+Arguments:
+* `pid` - PID of child to wait for (-1 for any child)
+* `status` - Pointer to store exit status (can be NULL)
+* `options` - Currently unused
+
+Returns the PID of the exited child, or -1 if no matching child exists.
+
+If the child is already a ZOMBIE, collects the status immediately and frees the process slot. If the child is still running, blocks the parent until the child exits (the child wakes the parent via exit syscall).
 
 ### read (syscall 3)
 
@@ -202,12 +232,15 @@ Returns `newfd` on success, or -1 on error.
 ### Files in `syscall.c`
 * `init_syscall()` - Initialize dispatch table and register syscall handler
 * `_syscall_table[]` - Dispatch table mapping syscall numbers to handler functions
-* `sys_exit()` - Terminate process
+* `sys_exit()` - Terminate process, wake parent, reschedule
+* `sys_fork()` - Clone process (PCB, page directory, user pages, fd table)
 * `sys_read()` - Read from fd (file or console)
 * `sys_write()` - Write to fd (file or console)
 * `sys_open()` - Open file from KRFFS
 * `sys_close()` - Close file descriptor
+* `sys_waitpid()` - Wait for child process, collect exit status
 * `sys_dup2()` - Duplicate file descriptor
+* `copy_user_pages()` - Helper to copy all user pages from parent to child
 
 ## User Mode (Ring 3)
 

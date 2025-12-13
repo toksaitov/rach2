@@ -937,6 +937,66 @@ Before implementing new functionality:
 - **Current Phase**: Phase 16 complete
 - **Next Step**: Phase 17 (Process Lifecycle Syscalls: fork, exit, waitpid)
 
+### Session 13 - Phase 17 Complete
+- **Completed Phase 17: Process Lifecycle Syscalls (fork, exit, waitpid)**
+  - Created `utils/forktest.c` test program:
+    - Parent forks child, child exits with status 42, parent waits and verifies
+    - Tests sys_fork, sys_waitpid, sys_exit syscalls
+    - Prints step-by-step progress for debugging
+  - Added `isr_return` label to `sys/isr_handler.s`:
+    - Entry point for forked child processes after context switch
+    - Restores segments (DS/ES/FS/GS), pops registers via `popal`, executes `iret`
+    - Child "returns" from fork with EAX=0 via this path
+  - Implemented `sys_fork()` in `sys/syscall.c`:
+    - Allocates child process via `alloc_process()`
+    - Clones page directory via `clone_page_directory()`
+    - Copies all user pages via new `copy_user_pages()` helper
+    - Allocates kernel stack for child (16KB via `mem_reserve()`)
+    - Copies file descriptor table from parent
+    - Sets up child's kernel stack with ISR frame (eax=0), return address (isr_return), and saved registers
+    - Sets child state to READY, returns child PID to parent
+  - Implemented `copy_user_pages()` helper:
+    - Iterates parent's page directory for user-accessible pages (virt_addr >= 16MB)
+    - Allocates new physical frame for each page in child's directory
+    - Copies page contents using `k_memcpy()`
+    - Fixed critical bug: parent->cr3 stores `&page_dir->phys_page_tables`, not the page_dir_t* itself
+    - Must subtract 4096 bytes (sizeof logical_page_tables) to get correct pointer
+  - Improved `sys_exit()` in `sys/syscall.c`:
+    - Marks process as ZOMBIE and stores exit code
+    - Wakes parent process if blocked (sets parent state to READY)
+    - Calls `schedule()` to switch to another process
+  - Implemented `sys_waitpid()` in `sys/syscall.c`:
+    - Searches process table for matching child (by PID or any if pid=-1)
+    - If child is ZOMBIE: collects exit status, frees process slot, returns child PID
+    - If child is running: blocks parent (PROC_BLOCKED), calls `schedule()`
+    - Re-checks after waking up (child wakes parent via exit)
+  - Added `sched_enable()` call in `exec_program()`:
+    - Scheduler was disabled after self-tests
+    - Must enable before entering user mode for fork/waitpid to work
+  - Registered syscalls in `init_syscall()`: SYS_FORK (2), SYS_WAITPID (7)
+- Updated `rach2/Readme.md`:
+  - Added fork (2) and waitpid (7) to Implemented Syscalls table
+  - Updated exit documentation (now wakes parent and reschedules)
+  - Added detailed fork and waitpid syscall documentation
+  - Added sys_fork, sys_waitpid, copy_user_pages to Files in syscall.c
+- Updated `utils/Readme.md`:
+  - Added forktest.c to Rach2 Test Programs list
+  - Added forktest example output in Running in Rach2 section
+  - Added forktest to Syscalls Used table
+- Verified: All 10 self-tests pass, `exec forktest` works correctly
+- Test output:
+  ```
+  Fork test starting...
+  Calling fork()... OK (parent, child PID=7)
+  Parent: Calling waitpid()... OK (child)
+  Child: PID is 0 (as expected), exiting with status 42
+  OK
+  Parent: waitpid returned PID=7, status=42
+  All fork/waitpid syscalls passed!
+  ```
+- **Current Phase**: Phase 17 complete
+- **Next Step**: Phase 18 (exec Syscall)
+
 ---
 
 ## Running QEMU for LLM Serial Output

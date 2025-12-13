@@ -80,6 +80,10 @@ isr_common_handler:
     call _isr_router
     addl $4, %esp       # Clean up pushed pointer
 
+# Fork child return point - child processes jump here after switch_context
+# Stack must contain: isr_params_t (ds, pushal regs, vector, error, iret frame)
+.globl isr_return
+isr_return:
     popl %eax
     movw %ax, %ds
     movw %ax, %es

@@ -911,6 +911,9 @@ static void exec_program(const char *path)
 
     k_printf("exec: Entering user mode...\n");
 
+    /* Enable scheduler for fork/waitpid to work */
+    sched_enable();
+
     /* Enter user mode at ELF entry point */
     /* Stack pointer starts at top of user stack page */
     enter_usermode(entry_point, user_stack_vaddr + PAGE_SIZE);
