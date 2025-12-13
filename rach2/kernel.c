@@ -40,8 +40,8 @@ static volatile uint32_t ticks = 0;
 static void run_self_tests(void);
 static void shell_loop(void);
 static void process_command(const char *cmd);
-static void timer_handler(isr_params_t params);
-static void keyboard_handler(isr_params_t params);
+static void timer_handler(isr_params_t *params);
+static void keyboard_handler(isr_params_t *params);
 static bool str_equal(const char *a, const char *b);
 
 static bool test_memory(void);
@@ -60,7 +60,7 @@ static void exec_program(const char *path);
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
 
-static void timer_handler(isr_params_t params)
+static void timer_handler(isr_params_t *params)
 {
     (void) params;
 
@@ -70,7 +70,7 @@ static void timer_handler(isr_params_t params)
     schedule();
 }
 
-static void keyboard_handler(isr_params_t params)
+static void keyboard_handler(isr_params_t *params)
 {
     uint8_t scancode;
     char c;

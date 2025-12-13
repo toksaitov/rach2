@@ -22,6 +22,8 @@
 #define SYS_UNLINK  10
 #define SYS_EXECVE  11
 #define SYS_CHDIR   12
+#define SYS_RENAME  38
+#define SYS_DUP2    63
 
 /*
  * Size of the syscall dispatch table

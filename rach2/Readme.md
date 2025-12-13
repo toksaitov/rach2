@@ -149,27 +149,65 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 
 ### Implemented Syscalls
 
-| Number | Name  | Arguments      | Description              |
-|--------|-------|----------------|--------------------------|
-| 1      | exit  | status         | Terminate current process|
-| 4      | write | fd, buf, count | Write to file descriptor |
+| Number | Name  | Arguments        | Description               |
+|--------|-------|------------------|---------------------------|
+| 1      | exit  | status           | Terminate current process |
+| 3      | read  | fd, buf, count   | Read from file descriptor |
+| 4      | write | fd, buf, count   | Write to file descriptor  |
+| 5      | open  | path, flags      | Open a file               |
+| 6      | close | fd               | Close a file descriptor   |
+| 63     | dup2  | oldfd, newfd     | Duplicate file descriptor |
 
 ### exit (syscall 1)
 
 Terminates the current process with the given exit status. Marks the process as ZOMBIE and halts the CPU. Future implementation will clean up resources and reschedule.
 
+### read (syscall 3)
+
+Reads up to `count` bytes from file descriptor `fd` into `buf`. For console fds (stdin), returns 0 (stdin reading not yet implemented). For file fds, reads from KRFFS file at current offset and advances the offset.
+
+Returns number of bytes read, 0 at EOF, or -1 on error.
+
 ### write (syscall 4)
 
-Writes `count` bytes from `buf` to the file descriptor `fd`. Currently supported file descriptors:
-* fd 1 (stdout): Writes to VGA display and serial port
-* fd 2 (stderr): Writes to VGA display and serial port
+Writes `count` bytes from `buf` to the file descriptor `fd`. Uses per-process fd table to determine output destination:
+* Console fds (stdout, stderr): Writes to VGA display and serial port
+* File fds: Writes to KRFFS file at current offset and advances the offset
 
 Returns the number of bytes written, or -1 on error.
+
+### open (syscall 5)
+
+Opens a file at `path` with the given `flags`:
+* 0 (O_RDONLY): Read-only access
+* 1 (O_WRONLY): Write-only access
+* 2 (O_RDWR): Read-write access
+
+Returns a new file descriptor number (≥3) on success, or -1 on error. Leading '/' in path is stripped (KRFFS has no directory hierarchy).
+
+### close (syscall 6)
+
+Closes the file descriptor `fd`, freeing it for reuse. Standard fds (0, 1, 2) cannot be closed.
+
+Returns 0 on success, or -1 on error.
+
+### dup2 (syscall 63)
+
+Duplicates `oldfd` to `newfd`. If `newfd` is already open, it is closed first. Both fds then refer to the same file/console with shared offset.
+
+Used for I/O redirection (e.g., redirecting stdout to a file before exec).
+
+Returns `newfd` on success, or -1 on error.
 
 ### Files in `syscall.c`
 * `init_syscall()` - Initialize dispatch table and register syscall handler
 * `_syscall_table[]` - Dispatch table mapping syscall numbers to handler functions
-* `sys_write()` - Implementation of write syscall
+* `sys_exit()` - Terminate process
+* `sys_read()` - Read from fd (file or console)
+* `sys_write()` - Write to fd (file or console)
+* `sys_open()` - Open file from KRFFS
+* `sys_close()` - Close file descriptor
+* `sys_dup2()` - Duplicate file descriptor
 
 ## User Mode (Ring 3)
 

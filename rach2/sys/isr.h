@@ -25,8 +25,9 @@ typedef struct isr_params isr_params_t;
 
 /*
  * The type of the function prototype of the interrupt handler
+ * Takes pointer to allow modifying saved registers (e.g., syscall return values)
  */
-typedef void (*isr_handler_t)(isr_params_t);
+typedef void (*isr_handler_t)(isr_params_t *);
 
 /*
  * First 32 interrupt handlers

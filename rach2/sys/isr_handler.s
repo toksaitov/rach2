@@ -76,7 +76,9 @@ isr_common_handler:
     movw %ax, %fs
     movw %ax, %gs
 
+    pushl %esp          # Push pointer to isr_params_t structure
     call _isr_router
+    addl $4, %esp       # Clean up pushed pointer
 
     popl %eax
     movw %ax, %ds
@@ -132,7 +134,9 @@ irq_common_handler:
     movw %ax, %fs
     movw %ax, %gs
 
+    pushl %esp          # Push pointer to isr_params_t structure
     call _irq_router
+    addl $4, %esp       # Clean up pushed pointer
 
     popl %eax
     movw %ax, %ds

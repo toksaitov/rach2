@@ -4,6 +4,8 @@ Minimal implementations of core Unix utilities in C for 32-bit x86 Linux. Each u
 
 ## Structure
 
+### Linux Utilities
+
 * `true.c`: Returns exit code 0
 * `false.c`: Returns exit code 1
 * `echo.c`: Prints arguments separated by spaces, followed by newline
@@ -16,6 +18,13 @@ Minimal implementations of core Unix utilities in C for 32-bit x86 Linux. Each u
 * `mv.c`: Moves/renames files
 * `cp.c`: Copies file contents
 * `ls.c`: Lists directory entries with type and owner permissions
+
+### Rach2 Test Programs
+
+These programs are compiled as freestanding ELF32 executables for the Rach2 kernel:
+
+* `hello.c`: Prints "Hello from ELF!" using write syscall, then exits
+* `filetest.c`: Tests file syscalls (open, read, write, close) by reading `hello.txt`
 
 ## Required Syscalls
 
@@ -68,3 +77,48 @@ make
 ./ls
 ./ls /tmp
 ```
+
+## Rach2 Test Programs
+
+The `hello.c` and `filetest.c` programs are designed for the Rach2 kernel, not Linux. They use the same `int $0x80` syscall interface but are compiled as freestanding ELF32 executables.
+
+### Building for Rach2
+
+Requires a cross-compiler (e.g., `i686-elf-gcc` or `x86_64-elf-gcc -m32`):
+
+```sh
+# Build hello (hello world test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o hello hello.c
+
+# Build filetest (file syscall test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o filetest filetest.c
+```
+
+### Running in Rach2
+
+1. Add the compiled binaries to a KRFFS file system image
+2. Boot Rach2 with the KRFFS image as a module:
+   ```sh
+   qemu-system-i386 -kernel rach2/kernel -initrd krffs/file_system.krffs -serial stdio
+   ```
+3. Execute from the Rach2 shell:
+   ```
+   > exec hello
+   Hello from ELF!
+   Process exited with status 0
+
+   > exec filetest
+   Opening hello.txt... OK
+   Reading file... OK
+   Content: hello, world
+   Closing file... OK
+   All file syscalls passed!
+   Process exited with status 0
+   ```
+
+### Syscalls Used
+
+| Program   | Syscalls Used              |
+|-----------|----------------------------|
+| hello     | write (4), exit (1)        |
+| filetest  | open (5), read (3), write (4), close (6), exit (1) |

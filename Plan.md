@@ -885,6 +885,58 @@ Before implementing new functionality:
 - **Current Phase**: Phase 15 complete
 - **Next Step**: Phase 16 (File Syscalls: open, close, read, write)
 
+### Session 12 - Phase 16 Complete
+- **Completed Phase 16: File Syscalls**
+  - Implemented `sys_open()` in `sys/syscall.c`:
+    - Looks up file in KRFFS by name (strips leading '/')
+    - Allocates fd from per-process fd table
+    - Sets fd type to FD_TYPE_FILE with KRFFS node pointer
+    - Converts Linux flags (O_RDONLY=0, O_WRONLY=1, O_RDWR=2) to internal flags
+    - Returns fd number (≥3) or -1 on error
+  - Implemented `sys_close()` in `sys/syscall.c`:
+    - Validates fd (rejects stdin/stdout/stderr)
+    - Calls `fd_free()` to release the fd slot
+  - Implemented `sys_read()` in `sys/syscall.c`:
+    - For console fds: returns 0 (stdin not yet implemented)
+    - For file fds: calls `krffs_read()` at current offset, advances offset
+    - Returns bytes read, 0 at EOF, or -1 on error
+  - Updated `sys_write()` in `sys/syscall.c`:
+    - Now uses per-process fd table instead of hardcoded fd checks
+    - For console fds: writes to VGA and serial (as before)
+    - For file fds: calls `krffs_write()` at current offset, advances offset
+  - Implemented `sys_dup2()` in `sys/syscall.c`:
+    - Validates oldfd exists and newfd is in range
+    - Closes newfd if already open
+    - Copies fd entry (type, node, offset, flags)
+    - Returns newfd on success
+  - Added syscall numbers to `sys/syscall.h`: SYS_RENAME (38), SYS_DUP2 (63)
+  - Registered syscalls in `init_syscall()`: SYS_READ, SYS_OPEN, SYS_CLOSE, SYS_DUP2
+- **Fixed ISR Return Value Mechanism**:
+  - Problem: Syscall return values weren't reaching userspace (handlers received params by value)
+  - Solution: Changed ISR infrastructure to pass pointer to saved registers
+  - Modified `sys/isr_handler.s`:
+    - Both `isr_common_handler` and `irq_common_handler` now push ESP before calling router
+    - Routers receive pointer to actual saved registers on stack
+  - Modified `sys/isr.h`:
+    - Changed `isr_handler_t` typedef from `(isr_params_t)` to `(isr_params_t *)`
+  - Modified `sys/isr.c`:
+    - `_isr_router()` and `_irq_router()` now take pointer parameters
+  - Modified `sys/syscall.c`:
+    - `_syscall_handler()` now sets `params->eax = return_value`
+    - Return value is restored by `popal` in ISR epilogue
+  - Updated `kernel.c`: `timer_handler` and `keyboard_handler` take `isr_params_t *`
+- **Created Test Program**: `utils/filetest.c`
+  - Opens `hello.txt`, reads content, prints to stdout, closes file
+  - Tests sys_open, sys_read, sys_write, sys_close syscalls
+  - Expected output: "Opening hello.txt... OK / Reading file... OK / Content: hello, world / Closing file... OK / All file syscalls passed!"
+- Updated `rach2/Readme.md`:
+  - Added all new syscalls to Implemented Syscalls table (read, open, close, dup2)
+  - Added detailed documentation for each syscall
+  - Updated Files in syscall.c section
+- Verified: All 10 self-tests pass, `exec filetest` works correctly
+- **Current Phase**: Phase 16 complete
+- **Next Step**: Phase 17 (Process Lifecycle Syscalls: fork, exit, waitpid)
+
 ---
 
 ## Running QEMU for LLM Serial Output
