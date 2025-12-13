@@ -857,8 +857,33 @@ Before implementing new functionality:
     elf_load: Load complete
     loaded [PASS]
     ```
-- **Current Phase**: Phase 14 complete
-- **Next Step**: Phase 15 (File Descriptor Table)
+### Session 11 - Phase 15 Complete
+- **Completed Phase 15: File Descriptor Table**
+  - Created `sys/fs/fd.h` with:
+    - `fd_type_t` enum: FD_TYPE_NONE, FD_TYPE_CONSOLE, FD_TYPE_FILE
+    - `fd_entry_t` structure: type, krffs_node pointer, offset, flags
+    - `fd_table_t` structure: array of MAX_FDS (16) entries
+    - Flag constants: FD_FLAG_READ, FD_FLAG_WRITE, FD_FLAG_APPEND
+    - Standard fd constants: FD_STDIN (0), FD_STDOUT (1), FD_STDERR (2)
+  - Created `sys/fs/fd.c` with:
+    - `fd_table_init()` - Clear all entries to FD_TYPE_NONE
+    - `fd_init_stdio()` - Initialize fd 0/1/2 as console
+    - `fd_alloc()` - Find first free slot, return fd number
+    - `fd_free()` - Mark entry as NONE
+    - `fd_get()` - Get entry by fd number
+    - `fd_is_valid()` - Check if fd is allocated
+  - Added `fd_table_t fds` field to `process_t` in `sys/proc/process.h`
+  - Modified `alloc_process()` in `sys/proc/process.c` to initialize fd table:
+    - Calls `fd_table_init()` and `fd_init_stdio()` for every new process
+  - Updated `Makefile` to include `sys/fs/fd.c`
+  - Updated `rach2/Readme.md`:
+    - Added "and file descriptors" to PCB feature
+    - Added `fds` field to PCB documentation
+    - Added File Descriptors section with fd table, entry, and function docs
+    - Updated fs/ directory structure to include fd.c/h
+  - Verified: All 10 self-tests still pass
+- **Current Phase**: Phase 15 complete
+- **Next Step**: Phase 16 (File Syscalls: open, close, read, write)
 
 ---
 

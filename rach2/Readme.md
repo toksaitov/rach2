@@ -19,7 +19,7 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Kernel panic screen automatically triggered on page faults
 * System call infrastructure (int 0x80)
 * User mode (ring 3) execution with privilege transitions
-* Process control blocks (PCB) with process table (16 max)
+* Process control blocks (PCB) with process table (16 max) and file descriptors
 * Context switching between processes with TSS stack management
 * Preemptive round-robin scheduler (timer-driven)
 * Per-process page directories with CR3 switching for memory isolation
@@ -83,7 +83,8 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   │   ├── elf.c/h        # ELF32 header parsing
 │   │   └── switch.s       # Context switch assembly routine
 │   ├── fs/
-│   │   └── krffs.c/h      # KRFFS file system (read-only)
+│   │   ├── krffs.c/h      # KRFFS file system (read/write)
+│   │   └── fd.c/h         # Per-process file descriptor table
 │   └── lib/
 │       ├── kdef.h         # NULL, bool, size_t definitions
 │       ├── kint.h         # Fixed-width integer types
@@ -216,6 +217,7 @@ Each process is represented by a `process_t` structure containing:
 * `kernel_stack` - Top of kernel stack for this process
 * `parent_pid` - Parent process ID
 * `exit_code` - Exit status (for zombie processes)
+* `fds` - File descriptor table (16 entries)
 
 ### Process States
 
@@ -235,6 +237,41 @@ The kernel maintains a fixed-size process table (`MAX_PROCS = 16`). At boot, pro
 * `process.h` - PCB structure, state definitions, function prototypes
 * `process.c` - Process table, `init_proc()`, `alloc_process()`, `free_process()`, `get_process()`, `setup_process_stack()`
 * `switch.s` - Context switch assembly routine
+
+## File Descriptors
+
+Each process has a file descriptor table with 16 entries. File descriptors are small integers (0-15) that refer to open files or I/O streams.
+
+### Standard File Descriptors
+
+When a process is created, three file descriptors are automatically initialized:
+
+| FD | Name   | Type    | Description |
+|----|--------|---------|-------------|
+| 0  | stdin  | CONSOLE | Standard input (keyboard) |
+| 1  | stdout | CONSOLE | Standard output (VGA + serial) |
+| 2  | stderr | CONSOLE | Standard error (VGA + serial) |
+
+### File Descriptor Entry
+
+Each entry in the fd table contains:
+* `type` - Type of descriptor (NONE, CONSOLE, FILE)
+* `node` - Pointer to KRFFS node (for FILE type)
+* `offset` - Current read/write position
+* `flags` - Open flags (READ, WRITE, APPEND)
+
+### File Descriptor Functions
+
+* `fd_table_init(table)` - Initialize all entries to NONE
+* `fd_init_stdio(table)` - Set up fd 0/1/2 as console
+* `fd_alloc(table)` - Allocate a new fd, returns fd number or -1
+* `fd_free(table, fd)` - Free a file descriptor
+* `fd_get(table, fd)` - Get fd entry, returns NULL if invalid
+* `fd_is_valid(table, fd)` - Check if fd is allocated
+
+### Files in `sys/fs/`
+* `fd.h` - File descriptor types, constants, function prototypes
+* `fd.c` - File descriptor table management
 
 ## Context Switching
 

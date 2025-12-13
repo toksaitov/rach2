@@ -3,6 +3,7 @@
 
 #include "../lib/kdef.h"
 #include "../lib/kint.h"
+#include "../fs/fd.h"
 
 /*
  * Maximum number of processes
@@ -51,6 +52,7 @@ struct process {
     uint32_t kernel_stack;  /* Top of kernel stack for this process */
     uint32_t parent_pid;    /* Parent process ID */
     int32_t exit_code;      /* Exit status (for zombie) */
+    fd_table_t fds;         /* File descriptor table */
 };
 
 typedef struct process process_t;

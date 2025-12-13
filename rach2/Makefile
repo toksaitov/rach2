@@ -36,6 +36,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/proc/sched.c      \
 	  sys/proc/elf.c        \
 	  sys/fs/krffs.c        \
+	  sys/fs/fd.c           \
 	  sys/lib/kctypes.c     \
 	  sys/lib/kstd.c        \
 	  sys/lib/kstring.c

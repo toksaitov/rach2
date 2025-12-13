@@ -6,7 +6,6 @@
 
 #include "elf.h"
 #include "../mm/paging.h"
-#include "../serial.h"
 #include "../lib/kstring.h"
 
 /*
@@ -138,7 +137,6 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
     const uint8_t *file_data = (const uint8_t *)data;
 
     if (!dir) {
-        serial_printf("elf_load: NULL page directory\n");
         return -1;
     }
 
@@ -146,11 +144,8 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
     phdr_count = elf_program_header_count(data);
 
     if (!phdrs || phdr_count == 0) {
-        serial_printf("elf_load: No program headers\n");
         return -1;
     }
-
-    serial_printf("elf_load: Loading %d program headers\n", phdr_count);
 
     for (i = 0; i < phdr_count; i++) {
         Elf32_Phdr *phdr = &phdrs[i];
@@ -165,12 +160,8 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
 
         /* Validate segment fits in file */
         if (phdr->p_offset + phdr->p_filesz > size) {
-            serial_printf("elf_load: Segment %d exceeds file size\n", i);
             return -1;
         }
-
-        serial_printf("elf_load: LOAD vaddr=0x%X filesz=%d memsz=%d\n",
-                      phdr->p_vaddr, phdr->p_filesz, phdr->p_memsz);
 
         /* Calculate virtual address range */
         vaddr = phdr->p_vaddr;
@@ -183,13 +174,8 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
 
             uintptr_t phys_addr = alloc_user_page(dir, page_addr);
             if (phys_addr == 0) {
-                serial_printf("elf_load: Failed to allocate page at 0x%X\n",
-                              page_addr);
                 return -1;
             }
-
-            serial_printf("elf_load: Mapped virt=0x%X -> phys=0x%X\n",
-                          page_addr, phys_addr);
 
             /* Zero the entire page first (for BSS and alignment) */
             k_memset((void *)phys_addr, 0, PAGE_SIZE);
@@ -221,7 +207,6 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
             pt = dir->logical_page_tables[pde_idx];
 
             if (!pt) {
-                serial_printf("elf_load: No page table at idx %d\n", pde_idx);
                 return -1;
             }
 
@@ -234,11 +219,7 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
 
             bytes_copied += chunk_size;
         }
-
-        serial_printf("elf_load: Copied %d bytes to vaddr=0x%X\n",
-                      bytes_copied, vaddr);
     }
 
-    serial_printf("elf_load: Load complete\n");
     return 0;
 }

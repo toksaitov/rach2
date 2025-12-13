@@ -736,7 +736,6 @@ static bool test_elf(void)
     uint32_t entry_point;
     uint16_t phdr_count;
     Elf32_Phdr *phdrs;
-    uint16_t i;
 
     if (!krffs_fs) {
         /* No filesystem mounted, skip test */
@@ -745,42 +744,33 @@ static bool test_elf(void)
 
     /* Check if file exists */
     if (krffs_open(elf_filename) != 0) {
-        serial_printf("ELF test: '%s' not found, skipping\n", elf_filename);
-        return true;  /* Not a failure, just skip */
+        /* File not found, skip test (not a failure) */
+        return true;
     }
 
     /* Read the ELF file */
     file_size = krffs_get_file_size(elf_filename);
     if (file_size > sizeof(elf_buffer)) {
-        serial_printf("ELF test: file too large (%d bytes)\n", file_size);
         return false;
     }
 
     bytes_read = krffs_read(elf_filename, elf_buffer, file_size, 0);
     if (bytes_read != (int)file_size) {
-        serial_printf("ELF test: read failed (%d/%d)\n", bytes_read, file_size);
         return false;
     }
 
     /* Validate ELF header */
     if (!elf_check(elf_buffer, file_size)) {
-        serial_printf("ELF test: invalid ELF header\n");
         return false;
     }
 
-    /* Get entry point */
+    /* Get entry point and program headers */
     entry_point = elf_entry_point(elf_buffer);
-    serial_printf("ELF test: entry=0x%X ", entry_point);
-
-    /* Get and display program headers */
     phdrs = elf_program_headers(elf_buffer);
     phdr_count = elf_program_header_count(elf_buffer);
-    serial_printf("phdr=%d ", phdr_count);
 
-    for (i = 0; i < phdr_count; i++) {
-        if (phdrs[i].p_type == PT_LOAD) {
-            serial_printf("LOAD@0x%X ", phdrs[i].p_vaddr);
-        }
+    if (!phdrs || phdr_count == 0 || entry_point == 0) {
+        return false;
     }
 
     /*
@@ -793,23 +783,19 @@ static bool test_elf(void)
 
         test_dir = clone_page_directory();
         if (!test_dir) {
-            serial_printf("ELF load test: clone failed ");
             return false;
         }
 
         if (elf_load(elf_buffer, file_size, test_dir) != 0) {
-            serial_printf("ELF load test: load failed ");
             return false;
         }
 
         /* Allocate user stack */
         stack_phys = alloc_user_page(test_dir, USER_STACK_BASE);
         if (stack_phys == 0) {
-            serial_printf("ELF load test: stack alloc failed ");
             return false;
         }
 
-        serial_printf("loaded ");
         /* Note: we don't free the directory - bump allocator doesn't support free */
     }
 
@@ -1140,25 +1126,25 @@ static void process_command(const char *cmd)
 {
     if (str_equal(cmd, "help")) {
         k_puts("Available commands:");
-        k_puts("  help             - Show this help message");
-        k_puts("  info             - Display system information");
-        k_puts("  modules          - List loaded multiboot modules");
-        k_puts("  ls               - List files on RAM disk");
-        k_puts("  cat <file>       - Display file contents");
-        k_puts("  elf <file>       - Display ELF header info");
-        k_puts("  exec <file>      - Execute ELF program");
-        k_puts("  touch <file>     - Create an empty file");
-        k_puts("  rm <file>        - Delete a file");
-        k_puts("  mv <old> <new>   - Rename a file");
+        k_puts("  help                - Show this help message");
+        k_puts("  info                - Display system information");
+        k_puts("  modules             - List loaded multiboot modules");
+        k_puts("  ls                  - List files on RAM disk");
+        k_puts("  cat <file>          - Display file contents");
+        k_puts("  elf <file>          - Display ELF header info");
+        k_puts("  exec <file>         - Execute ELF program");
+        k_puts("  touch <file>        - Create an empty file");
+        k_puts("  rm <file>           - Delete a file");
+        k_puts("  mv <old> <new>      - Rename a file");
         k_puts("  write <file> <data> - Write data to file");
-        k_puts("  test             - Run self-tests again");
-        k_puts("  clear            - Clear the screen");
-        k_puts("  switch           - Test manual context switching");
-        k_puts("  preempt          - Test preemptive scheduling");
-        k_puts("  isolate          - Test memory isolation");
-        k_puts("  usermode         - Test ring 3 execution");
-        k_puts("  fault            - Trigger a page fault (panic)");
-        k_puts("  halt             - Halt the CPU");
+        k_puts("  test                - Run self-tests again");
+        k_puts("  clear               - Clear the screen");
+        k_puts("  switch              - Test context switching");
+        k_puts("  preempt             - Test preemptive scheduling");
+        k_puts("  isolate             - Test memory isolation");
+        k_puts("  usermode            - Test ring 3 execution");
+        k_puts("  fault               - Trigger page fault (panic)");
+        k_puts("  halt                - Halt the CPU");
     } else if (str_equal(cmd, "info")) {
         k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         k_printf("Timer ticks:     %d\n", ticks);

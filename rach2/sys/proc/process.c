@@ -1,5 +1,6 @@
 #include "process.h"
 #include "../lib/kstring.h"
+#include "../fs/fd.h"
 
 /*
  * Process table - all process slots
@@ -40,6 +41,11 @@ process_t *alloc_process(void)
             k_memset(&proc_table[i], 0, sizeof(process_t));
             proc_table[i].pid = next_pid++;
             proc_table[i].state = PROC_READY;
+
+            /* Initialize file descriptor table with stdin/stdout/stderr */
+            fd_table_init(&proc_table[i].fds);
+            fd_init_stdio(&proc_table[i].fds);
+
             return &proc_table[i];
         }
     }
