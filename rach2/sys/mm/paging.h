@@ -99,6 +99,13 @@ void switch_page_directory(page_dir_t *dir);
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr);
 
 /*
+ * Free all user pages in a page directory.
+ * Frees physical frames and clears page table entries for user-accessible
+ * pages above the kernel region. Used by exec to replace process image.
+ */
+void free_user_pages(page_dir_t *dir);
+
+/*
  * Kernel page directory (shared by all processes for kernel mappings)
  */
 extern page_dir_t *_kernel_dir;

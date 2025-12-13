@@ -1,4 +1,5 @@
 #include "paging.h"
+#include "../serial.h"
 
 page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;
@@ -256,4 +257,94 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     }
 
     return phys_addr;
+}
+
+/*
+ * Free all user pages in a page directory.
+ *
+ * Iterates through all page directory entries and frees user-accessible
+ * pages that are above the kernel region (HARD_MEMORY_LIMIT).
+ * Also clears private page table entries.
+ */
+void free_user_pages(page_dir_t *dir)
+{
+    uint32_t dir_idx, page_idx;
+    page_table_t *table;
+    uint32_t freed_count = 0;
+
+    serial_printf("free_user_pages: dir=0x%X\n", (uint32_t)dir);
+
+    if (!dir) {
+        return;
+    }
+
+    for (dir_idx = 0; dir_idx < 1024; dir_idx++) {
+        table = dir->logical_page_tables[dir_idx];
+        if (!table) {
+            continue;
+        }
+
+        /* Skip shared kernel page tables */
+        if (table == _kernel_dir->logical_page_tables[dir_idx]) {
+            continue;
+        }
+
+        serial_printf("free_user_pages: private table at dir_idx=%d table=0x%X\n",
+                      dir_idx, (uint32_t)table);
+
+        /* This is a private page table - check each page */
+        for (page_idx = 0; page_idx < 1024; page_idx++) {
+            uint32_t pte = table->pages[page_idx];
+            uint32_t virt_addr;
+            uint32_t phys_addr;
+            uint32_t frame;
+
+            /* Check if page is present and user-accessible */
+            if (!(pte & 0x1) || !(pte & 0x4)) {
+                continue;
+            }
+
+            virt_addr = (dir_idx << 22) | (page_idx << 12);
+            phys_addr = pte & ~0xFFF;
+
+            /* Skip identity-mapped kernel region (first 16MB) */
+            if (virt_addr < HARD_MEMORY_LIMIT) {
+                continue;
+            }
+
+            /*
+             * Sanity check: physical address must be valid.
+             * Skip entries that are clearly garbage:
+             * - phys_addr == 0 (NULL pointer)
+             * - phys_addr points to the page table itself (corruption)
+             */
+            if (phys_addr == 0 || phys_addr == (uint32_t)table) {
+                serial_printf("free_user_pages: SKIP invalid virt=0x%X phys=0x%X\n",
+                              virt_addr, phys_addr);
+                /* Clear the garbage entry but don't try to free frame */
+                table->pages[page_idx] = 0;
+                continue;
+            }
+
+            serial_printf("free_user_pages: freeing virt=0x%X phys=0x%X\n",
+                          virt_addr, phys_addr);
+
+            /* Mark frame as free */
+            frame = phys_addr / PAGE_SIZE;
+            if (frame < _frames_number) {
+                _frames[frame] = 0;
+            }
+
+            /* Clear page table entry */
+            table->pages[page_idx] = 0;
+            freed_count++;
+
+            /* Flush TLB if this is the current directory */
+            if (dir == _curr_dir) {
+                paging_flush_tlb(virt_addr);
+            }
+        }
+    }
+
+    serial_printf("free_user_pages: freed %d pages\n", freed_count);
 }

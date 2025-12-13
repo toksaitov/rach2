@@ -997,6 +997,65 @@ Before implementing new functionality:
 - **Current Phase**: Phase 17 complete
 - **Next Step**: Phase 18 (exec Syscall)
 
+### Session 14 - Phase 18 Complete
+- **Completed Phase 18: exec Syscall**
+  - Created `utils/shelltest.c` test program:
+    - Tests the fork+exec+waitpid chain that shells use
+    - Parent forks, child calls execve("hello"), parent waits for child
+    - Verifies child exits with status 0 (hello program's exit code)
+  - Added `free_user_pages()` to `sys/mm/paging.c`:
+    - Iterates all page directory entries, skipping shared kernel page tables
+    - For private page tables, frees user-accessible pages above kernel region
+    - Marks physical frames as free in bitmap, clears page table entries
+    - Includes sanity checks for garbage entries (phys_addr == 0 or pointing to table itself)
+  - Implemented `sys_execve()` in `sys/syscall.c`:
+    - Copies path and argv from user space to static kernel buffers
+    - Uses static buffers to avoid stack overflow (kernel stack is only 16KB):
+      - `_exec_elf_buffer[16384]` for ELF file data
+      - `_exec_path_buf[64]` for path string
+      - `_exec_argv_storage[512]` for argument strings
+      - `_exec_argv_bufs[16]` for argv pointer array
+    - Reads ELF file from KRFFS into static buffer
+    - Validates ELF header with `elf_check()`
+    - Gets process's page directory from CR3 (requires offset adjustment)
+    - Calls `free_user_pages()` to release old process memory
+    - Calls `elf_load()` to load new ELF segments
+    - Allocates user stack at USER_STACK_BASE (0xBFFFF000)
+    - Sets up stack with argc, argv pointers, NULL, and argument strings
+    - Modifies `params->eip` and `params->user_esp` to "return" to new program via iret
+  - Registered syscall: `_syscall_table[SYS_EXECVE] = sys_execve`
+- **Critical Bug Fixes**:
+  - **Stack overflow**: Initial implementation had 16KB+ of local buffers on 16KB kernel stack
+    - Symptom: `free_user_pages()` looped infinitely, corrupted loop counter
+    - Fix: Moved large buffers (elf_buffer, path_buf, argv storage) to static storage
+  - **Garbage page table entries**: Some PTEs had present+user bits but invalid physical addresses
+    - Symptom: Infinite loop freeing "virt=0xBFEB4000 phys=0x0" repeatedly
+    - Fix: Added sanity checks to skip entries where phys_addr == 0 or phys_addr == table
+  - **CR3 to page_dir_t conversion**: `proc->cr3` stores `&page_dir->phys_page_tables`, not page_dir_t*
+    - Conversion: `proc_dir = (page_dir_t *)(cr3 - 1024 * sizeof(page_table_t *))`
+- Updated `rach2/Readme.md`:
+  - Added execve (11) to Implemented Syscalls table
+  - Added detailed execve syscall documentation
+  - Added sys_execve() to Files in syscall.c section
+  - Added free_user_pages() to paging.c files list
+- Updated `utils/Readme.md`:
+  - Added shelltest.c to Rach2 Test Programs list
+  - Added shelltest example output in Running in Rach2 section
+  - Added shelltest to Syscalls Used table
+- Verified: `exec shelltest` works correctly
+- Test output:
+  ```
+  Shell test (fork+exec+waitpid) starting...
+  Forking... OK (parent, child PID=7)
+  Parent: Waiting for child... OK (child)
+  Child: Calling execve("hello")...
+  Hello from ELF!
+  Parent: Child PID=7 exited with status=0
+  All exec syscalls passed!
+  ```
+- **Current Phase**: Phase 18 complete
+- **Next Step**: Phase 19 (Directory and Path Syscalls: chdir, getcwd, stat)
+
 ---
 
 ## Running QEMU for LLM Serial Output

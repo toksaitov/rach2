@@ -158,6 +158,7 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 | 5      | open    | path, flags           | Open a file                     |
 | 6      | close   | fd                    | Close a file descriptor         |
 | 7      | waitpid | pid, status, options  | Wait for child process to exit  |
+| 11     | execve  | path, argv, envp      | Replace process with new program|
 | 63     | dup2    | oldfd, newfd          | Duplicate file descriptor       |
 
 ### exit (syscall 1)
@@ -191,6 +192,29 @@ Arguments:
 Returns the PID of the exited child, or -1 if no matching child exists.
 
 If the child is already a ZOMBIE, collects the status immediately and frees the process slot. If the child is still running, blocks the parent until the child exits (the child wakes the parent via exit syscall).
+
+### execve (syscall 11)
+
+Replaces the current process image with a new program loaded from the file system.
+
+Arguments:
+* `path` - Path to the ELF executable (leading '/' is stripped)
+* `argv` - Null-terminated array of argument strings
+* `envp` - Null-terminated array of environment strings (currently ignored)
+
+The syscall:
+1. Copies path and argv from user space to static kernel buffers
+2. Reads the ELF file from KRFFS into a static 16KB buffer
+3. Validates the ELF header (32-bit, executable, i386)
+4. Frees all existing user pages in the process's page directory
+5. Loads ELF segments into freshly allocated user pages
+6. Allocates a new user stack at USER_STACK_BASE (0xBFFFF000)
+7. Sets up the stack with argc, argv pointers, and argument strings
+8. Modifies the saved ISR frame (EIP and ESP) to "return" to the new program
+
+On success, does not return - execution continues at the new program's entry point. On failure, returns -1 (though this may leave the process in an inconsistent state).
+
+Note: Uses static buffers for ELF data (16KB) and argv storage (512 bytes) to avoid kernel stack overflow, since the kernel stack is only 16KB.
 
 ### read (syscall 3)
 
@@ -239,6 +263,7 @@ Returns `newfd` on success, or -1 on error.
 * `sys_open()` - Open file from KRFFS
 * `sys_close()` - Close file descriptor
 * `sys_waitpid()` - Wait for child process, collect exit status
+* `sys_execve()` - Replace process image with new ELF program
 * `sys_dup2()` - Duplicate file descriptor
 * `copy_user_pages()` - Helper to copy all user pages from parent to child
 
@@ -470,7 +495,7 @@ The shell command `isolate` demonstrates memory isolation:
 The self-tests include an automated isolation test that verifies per-process memory separation.
 
 ### Files Modified for Per-Process Page Directories
-* `sys/mm/paging.c` - Added `clone_page_directory()`, `get_page_dir_phys()`, `switch_page_directory()`, `alloc_user_page()`
+* `sys/mm/paging.c` - Added `clone_page_directory()`, `get_page_dir_phys()`, `switch_page_directory()`, `alloc_user_page()`, `free_user_pages()`
 * `sys/mm/paging.h` - Function prototypes and exported `_kernel_dir`, `_curr_dir`
 * `sys/proc/switch.s` - Added CR3 comparison and switching logic
 * `sys/proc/process.h` - Added `cr3` field to `process_t` structure

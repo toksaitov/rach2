@@ -3,11 +3,15 @@
 #include "kio.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/elf.h"
 #include "fs/fd.h"
 #include "fs/krffs.h"
 #include "mm/paging.h"
 #include "mm/heap.h"
 #include "lib/kstring.h"
+
+/* User stack base address (stack grows down from here) */
+#define USER_STACK_BASE 0xBFFFF000
 
 /* Kernel stack size (16KB) */
 #define KERNEL_STACK_SIZE 0x4000
@@ -368,6 +372,232 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
 }
 
 /*
+ * sys_execve - replace current process image with a new program
+ * Args: EBX = path, ECX = argv[], EDX = envp[]
+ * Returns: does not return on success, -1 on error
+ *
+ * 1. Copy path and argv from user space
+ * 2. Read ELF file from KRFFS
+ * 3. Free old user pages
+ * 4. Load new ELF segments
+ * 5. Set up user stack with argc/argv
+ * 6. Return to new entry point via modified iret frame
+ */
+/*
+ * Static buffer for ELF loading - must not be on stack!
+ * Kernel stack is only 16KB, so large buffers cause stack overflow.
+ */
+static char _exec_elf_buffer[16384];
+static char _exec_path_buf[64];
+static char _exec_argv_storage[512];
+static char *_exec_argv_bufs[16];
+
+static int32_t sys_execve(isr_params_t *params)
+{
+    const char *user_path = (const char *)params->ebx;
+    char *const *user_argv = (char *const *)params->ecx;
+    /* char *const *user_envp = (char *const *)params->edx; */  /* Unused for now */
+
+    int argc = 0;
+    uint32_t argv_offset = 0;
+
+    uint32_t file_size;
+    int bytes_read;
+    uint32_t entry_point;
+    page_dir_t *proc_dir;
+    uintptr_t stack_phys;
+    uint32_t *sp;
+    uint32_t strings_start;
+    uint32_t argv_ptrs_start;
+    const char *name;
+    int i;
+
+    if (!current_proc) {
+        return -1;
+    }
+
+    serial_printf("sys_execve: PID %d exec'ing\n", current_proc->pid);
+
+    /* Copy path from user space */
+    if (!user_path) {
+        serial_printf("sys_execve: NULL path\n");
+        return -1;
+    }
+    for (i = 0; i < 63 && user_path[i]; i++) {
+        _exec_path_buf[i] = user_path[i];
+    }
+    _exec_path_buf[i] = '\0';
+
+    serial_printf("sys_execve: path='%s'\n", _exec_path_buf);
+
+    /* Copy argv from user space */
+    if (user_argv) {
+        for (argc = 0; argc < 15 && user_argv[argc]; argc++) {
+            const char *arg = user_argv[argc];
+            int len = 0;
+
+            /* Copy string to static argv storage */
+            _exec_argv_bufs[argc] = &_exec_argv_storage[argv_offset];
+            while (arg[len] && argv_offset + len < 511) {
+                _exec_argv_storage[argv_offset + len] = arg[len];
+                len++;
+            }
+            _exec_argv_storage[argv_offset + len] = '\0';
+            argv_offset += len + 1;
+        }
+    }
+    _exec_argv_bufs[argc] = NULL;
+
+    serial_printf("sys_execve: argc=%d\n", argc);
+
+    /* Skip leading '/' if present */
+    name = _exec_path_buf;
+    if (name[0] == '/') {
+        name++;
+    }
+
+    /* Check file system is mounted */
+    if (!krffs_fs) {
+        serial_printf("sys_execve: No file system\n");
+        return -1;
+    }
+
+    /* Check file exists */
+    if (krffs_open(name) != 0) {
+        serial_printf("sys_execve: File not found: %s\n", name);
+        return -1;
+    }
+
+    /* Read ELF file */
+    file_size = krffs_get_file_size(name);
+    if (file_size > sizeof(_exec_elf_buffer)) {
+        serial_printf("sys_execve: File too large: %d\n", file_size);
+        return -1;
+    }
+
+    bytes_read = krffs_read(name, _exec_elf_buffer, file_size, 0);
+    if (bytes_read != (int)file_size) {
+        serial_printf("sys_execve: Read error\n");
+        return -1;
+    }
+
+    /* Validate ELF */
+    if (!elf_check(_exec_elf_buffer, file_size)) {
+        serial_printf("sys_execve: Invalid ELF\n");
+        return -1;
+    }
+
+    entry_point = elf_entry_point(_exec_elf_buffer);
+    serial_printf("sys_execve: ELF valid, entry=0x%X\n", entry_point);
+
+    /* Get current process's page directory */
+    if (current_proc->cr3 == 0) {
+        proc_dir = _kernel_dir;
+    } else {
+        proc_dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
+    }
+
+    /* Free old user pages */
+    free_user_pages(proc_dir);
+    serial_printf("sys_execve: Freed old user pages\n");
+
+    /* Load new ELF segments */
+    if (elf_load(_exec_elf_buffer, file_size, proc_dir) != 0) {
+        serial_printf("sys_execve: ELF load failed\n");
+        /* Can't recover - process is in broken state */
+        current_proc->state = PROC_ZOMBIE;
+        current_proc->exit_code = -1;
+        schedule();
+        return -1;
+    }
+    serial_printf("sys_execve: ELF loaded\n");
+
+    /* Allocate user stack */
+    stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
+    if (stack_phys == 0) {
+        serial_printf("sys_execve: Stack alloc failed\n");
+        current_proc->state = PROC_ZOMBIE;
+        current_proc->exit_code = -1;
+        schedule();
+        return -1;
+    }
+
+    /* Zero the stack page */
+    k_memset((void *)stack_phys, 0, PAGE_SIZE);
+
+    /*
+     * Set up user stack with argc, argv pointers, and strings.
+     * Stack layout (growing down from USER_STACK_BASE + PAGE_SIZE):
+     *
+     *   [arg strings]   - null-terminated strings
+     *   [NULL]          - envp terminator
+     *   [NULL]          - argv terminator
+     *   [argv[argc-1]]  - pointers to arg strings
+     *   ...
+     *   [argv[0]]
+     *   [argc]          <- ESP points here
+     */
+
+    /* Calculate where to put strings (near top of stack page) */
+    strings_start = USER_STACK_BASE + PAGE_SIZE - 256;  /* Reserve 256 bytes for strings */
+
+    /* Copy arg strings to stack (using physical address for now) */
+    {
+        uint32_t phys_strings = stack_phys + PAGE_SIZE - 256;
+        uint32_t str_offset = 0;
+
+        for (i = 0; i < argc; i++) {
+            int len = k_strlen(_exec_argv_bufs[i]) + 1;
+            k_memcpy((void *)(phys_strings + str_offset), _exec_argv_bufs[i], len);
+            /* Save virtual address for argv pointer */
+            _exec_argv_bufs[i] = (char *)(strings_start + str_offset);
+            str_offset += len;
+        }
+    }
+
+    /* Calculate where to put argv pointers and argc */
+    argv_ptrs_start = strings_start - 4;  /* NULL terminator for envp */
+    argv_ptrs_start -= 4;                  /* NULL terminator for argv */
+    argv_ptrs_start -= argc * 4;           /* argv pointers */
+    argv_ptrs_start -= 4;                  /* argc */
+
+    /* Align to 16 bytes (required for some ABIs) */
+    argv_ptrs_start &= ~0xF;
+
+    /* Set up the stack using physical address */
+    sp = (uint32_t *)(stack_phys + (argv_ptrs_start - USER_STACK_BASE));
+
+    /* Push argc */
+    *sp++ = argc;
+
+    /* Push argv pointers */
+    for (i = 0; i < argc; i++) {
+        *sp++ = (uint32_t)_exec_argv_bufs[i];
+    }
+    *sp++ = 0;  /* NULL terminator for argv */
+
+    *sp++ = 0;  /* NULL terminator for envp */
+
+    serial_printf("sys_execve: Stack setup complete, esp=0x%X\n", argv_ptrs_start);
+
+    /*
+     * Modify the ISR return frame to jump to new code.
+     * When the syscall returns via iret, it will:
+     * - Pop EIP = entry_point
+     * - Pop ESP = new user stack
+     * - Continue in the new program
+     */
+    params->eip = entry_point;
+    params->user_esp = argv_ptrs_start;
+
+    serial_printf("sys_execve: Returning to entry=0x%X esp=0x%X\n",
+                  params->eip, params->user_esp);
+
+    /* Return value doesn't matter - we won't use it */
+    return 0;
+}
+
+/*
  * sys_fork - create a child process
  * Returns: 0 to child, child's PID to parent, -1 on error
  *
@@ -597,6 +827,7 @@ void init_syscall(void)
     _syscall_table[SYS_OPEN] = sys_open;
     _syscall_table[SYS_CLOSE] = sys_close;
     _syscall_table[SYS_WAITPID] = sys_waitpid;
+    _syscall_table[SYS_EXECVE] = sys_execve;
     _syscall_table[SYS_DUP2] = sys_dup2;
 
     /* Register the interrupt handler */

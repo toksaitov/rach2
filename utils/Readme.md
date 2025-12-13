@@ -26,6 +26,7 @@ These programs are compiled as freestanding ELF32 executables for the Rach2 kern
 * `hello.c`: Prints "Hello from ELF!" using write syscall, then exits
 * `filetest.c`: Tests file syscalls (open, read, write, close) by reading `hello.txt`
 * `forktest.c`: Tests process syscalls (fork, waitpid, exit) - parent forks child, child exits with status 42, parent waits and verifies
+* `shelltest.c`: Tests the fork+exec+waitpid chain - parent forks, child exec's "hello", parent waits and verifies exit status
 
 ## Required Syscalls
 
@@ -125,6 +126,16 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o file
    Parent: waitpid returned PID=7, status=42
    All fork/waitpid syscalls passed!
    Process exited with status 0
+
+   > exec shelltest
+   Shell test (fork+exec+waitpid) starting...
+   Forking... OK (parent, child PID=7)
+   Parent: Waiting for child... OK (child)
+   Child: Calling execve("hello")...
+   Hello from ELF!
+   Parent: Child PID=7 exited with status=0
+   All exec syscalls passed!
+   Process exited with status 0
    ```
 
 ### Syscalls Used
@@ -134,3 +145,4 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o file
 | hello     | write (4), exit (1)        |
 | filetest  | open (5), read (3), write (4), close (6), exit (1) |
 | forktest  | fork (2), waitpid (7), write (4), exit (1) |
+| shelltest | fork (2), execve (11), waitpid (7), write (4), exit (1) |
