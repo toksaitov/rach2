@@ -166,6 +166,7 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 | 63     | dup2      | oldfd, newfd                 | Duplicate file descriptor       |
 | 183    | getcwd    | buf, size                    | Get current working directory   |
 | 195    | stat64    | path, statbuf                | Get file status                 |
+| 220    | getdents64| fd, dirp, count              | Read directory entries          |
 | 320    | utimensat | dirfd, path, times, flags    | Update file timestamps          |
 
 ### exit (syscall 1)
@@ -358,6 +359,35 @@ Time tracking uses the kernel's tick counter (PIT at 100 Hz). Each tick represen
 
 Returns 0 on success, -1 on error (file not found).
 
+### getdents64 (syscall 220)
+
+Reads directory entries from an open directory file descriptor into a buffer.
+
+Arguments:
+* `fd` - File descriptor for an open directory (opened with "/" path)
+* `dirp` - Buffer to receive directory entries
+* `count` - Size of the buffer in bytes
+
+The syscall fills the buffer with `linux_dirent64` structures:
+```c
+struct linux_dirent64 {
+    uint64_t  d_ino;     /* inode number (DJB hash for KRFFS) */
+    int64_t   d_off;     /* offset to next entry */
+    uint16_t  d_reclen;  /* size of this entry (8-byte aligned) */
+    uint8_t   d_type;    /* file type (DT_REG=8 for files) */
+    char      d_name[];  /* null-terminated filename */
+};
+```
+
+Opening "/" returns a directory fd (FD_TYPE_DIR). The fd's offset tracks position in the directory listing. Each getdents64 call returns entries starting from the current position and advances it.
+
+Returns:
+* Number of bytes read on success
+* 0 when end of directory is reached
+* -1 on error (invalid fd, not a directory fd, buffer too small)
+
+Since KRFFS is a flat file system, "/" contains all files directly.
+
 ### Files in `syscall.c`
 * `init_syscall()` - Initialize dispatch table and register syscall handler
 * `_syscall_table[]` - Dispatch table mapping syscall numbers to handler functions
@@ -376,6 +406,7 @@ Returns 0 on success, -1 on error (file not found).
 * `sys_getcwd()` - Get current working directory
 * `sys_rename()` - Rename file
 * `sys_stat64()` - Get file status (Linux stat64 compatible)
+* `sys_getdents64()` - Read directory entries
 * `sys_utimensat()` - Update file timestamps
 * `get_current_time()` - Helper to get current time from kernel tick counter
 * `copy_user_pages()` - Helper to copy all user pages from parent to child

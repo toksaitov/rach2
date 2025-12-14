@@ -27,7 +27,8 @@
 typedef enum {
     FD_TYPE_NONE,      /* Slot is free */
     FD_TYPE_CONSOLE,   /* Console (stdin/stdout/stderr) */
-    FD_TYPE_FILE       /* Regular file from KRFFS */
+    FD_TYPE_FILE,      /* Regular file from KRFFS */
+    FD_TYPE_DIR        /* Directory (for getdents64) */
 } fd_type_t;
 
 /*

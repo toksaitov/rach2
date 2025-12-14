@@ -129,9 +129,11 @@ static int32_t sys_write(isr_params_t *params)
 }
 
 /*
- * sys_open - open a file
+ * sys_open - open a file or directory
  * Args: EBX = path, ECX = flags (O_RDONLY=0, O_WRONLY=1, O_RDWR=2)
  * Returns: fd number on success, -1 on error
+ *
+ * Special case: opening "/" opens the root directory for getdents64.
  */
 static int32_t sys_open(isr_params_t *params)
 {
@@ -150,6 +152,23 @@ static int32_t sys_open(isr_params_t *params)
     name = path;
     if (name[0] == '/') {
         name++;
+    }
+
+    /* Check if opening root directory "/" */
+    if (name[0] == '\0') {
+        /* Opening root directory - allocate fd as directory type */
+        fd = fd_alloc(&current_proc->fds);
+        if (fd < 0) {
+            return -1;
+        }
+
+        entry = &current_proc->fds.entries[fd];
+        entry->type = FD_TYPE_DIR;
+        entry->node = NULL;  /* NULL indicates root directory */
+        entry->offset = 0;   /* Position in directory listing */
+        entry->flags = FD_FLAG_READ;
+
+        return fd;
     }
 
     /* Find the file in KRFFS */
@@ -1224,6 +1243,114 @@ static int32_t sys_utimensat(isr_params_t *params)
 }
 
 /*
+ * Linux dirent64 structure for getdents64 syscall
+ */
+struct linux_dirent64 {
+    uint64_t       d_ino;     /* 64-bit inode number */
+    int64_t        d_off;     /* offset to next entry */
+    uint16_t       d_reclen;  /* Size of this dirent */
+    uint8_t        d_type;    /* File type */
+    char           d_name[1]; /* Filename (variable length, null-terminated) */
+};
+
+/* Directory entry types */
+#define DT_REG  8   /* Regular file */
+#define DT_DIR  4   /* Directory */
+
+/*
+ * sys_getdents64 - read directory entries
+ * Args: EBX = fd, ECX = dirp (buffer), EDX = count (buffer size)
+ * Returns: bytes read on success, 0 at end, -1 on error
+ *
+ * Fills the buffer with linux_dirent64 structures for each file.
+ * Uses fd->offset to track position in directory (file index).
+ */
+static int32_t sys_getdents64(isr_params_t *params)
+{
+    int fd_num = (int)params->ebx;
+    char *buf = (char *)params->ecx;
+    uint32_t count = params->edx;
+    fd_entry_t *entry;
+    krffs_node_t *node;
+    uint32_t bytes_written = 0;
+    uint32_t file_index = 0;
+    uint32_t target_index;
+    uint32_t name_len;
+    uint32_t rec_len;
+    struct linux_dirent64 *dirent;
+
+    if (!current_proc || !buf || count == 0) {
+        return -1;
+    }
+
+    /* Get and validate fd */
+    entry = fd_get(&current_proc->fds, fd_num);
+    if (!entry) {
+        return -1;
+    }
+
+    /* Must be a directory fd */
+    if (entry->type != FD_TYPE_DIR) {
+        return -1;
+    }
+
+    /* Check file system is mounted */
+    if (!krffs_fs) {
+        return -1;
+    }
+
+    /* entry->offset tracks which file index we're at */
+    target_index = entry->offset;
+
+    /* Iterate through KRFFS nodes */
+    node = krffs_fs->node;
+    do {
+        if (node->type == KRFFS_RESERVED_NODE) {
+            /* Found a file - check if we've reached our target position */
+            if (file_index >= target_index) {
+                /* Calculate dirent size with proper alignment */
+                name_len = k_strlen((const char *)node->name);
+                /* Size = fixed fields (19 bytes) + name + null + padding to 8-byte alignment */
+                rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) + name_len + 1;
+                /* Align to 8 bytes */
+                rec_len = (rec_len + 7) & ~7;
+
+                /* Check if entry fits in remaining buffer */
+                if (bytes_written + rec_len > count) {
+                    /* No more room - return what we have */
+                    if (bytes_written == 0) {
+                        /* Buffer too small for even one entry */
+                        return -1;
+                    }
+                    break;
+                }
+
+                /* Fill in the dirent structure */
+                dirent = (struct linux_dirent64 *)(buf + bytes_written);
+                dirent->d_ino = node->id;                      /* Use DJB hash as inode */
+                dirent->d_off = (int64_t)(file_index + 1);     /* Next position */
+                dirent->d_reclen = (uint16_t)rec_len;
+                dirent->d_type = DT_REG;                       /* Regular file */
+
+                /* Copy filename */
+                k_memcpy(dirent->d_name, node->name, name_len + 1);
+
+                bytes_written += rec_len;
+                entry->offset = file_index + 1;  /* Update position for next call */
+            }
+            file_index++;
+        }
+    } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
+
+    /* If we wrote nothing and went through all files, we're at end */
+    if (bytes_written == 0 && file_index > 0 && target_index >= file_index) {
+        return 0;  /* End of directory */
+    }
+
+    return (int32_t)bytes_written;
+}
+
+/*
  * Syscall handler - dispatches to appropriate syscall function
  * Stores return value in params->eax so it's returned to userspace
  */
@@ -1265,6 +1392,7 @@ void init_syscall(void)
     _syscall_table[SYS_DUP2] = sys_dup2;
     _syscall_table[SYS_GETCWD] = sys_getcwd;
     _syscall_table[SYS_STAT64] = sys_stat64;
+    _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
 
     /* Register the interrupt handler */

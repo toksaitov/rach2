@@ -1191,6 +1191,36 @@ Before implementing new functionality:
 - **Current Phase**: Phase 20 complete
 - **Next Step**: Phase 21 (Directory Listing Syscall: getdents64)
 
+### Session 17 - Phase 21 Complete
+- **Completed Phase 21: Directory Listing Syscall (getdents64)**
+  - Created test program `utils/lstest.c`:
+    - Tests getdents64 (220) syscall with 6 test cases
+    - Opens "/" directory, reads entries, parses linux_dirent64 structures
+    - Tests end-of-directory detection and invalid fd error handling
+  - Added `FD_TYPE_DIR` to `sys/fs/fd.h`:
+    - New fd type for directory file descriptors
+  - Added `SYS_GETDENTS64` (220) to `sys/syscall.h`
+  - Modified `sys_open()` in `sys/syscall.c`:
+    - Opening "/" now returns FD_TYPE_DIR fd instead of failing
+    - Sets fd->offset = 0 to track position in directory listing
+  - Implemented `sys_getdents64()` in `sys/syscall.c`:
+    - Fills buffer with `linux_dirent64` structures
+    - Each entry: d_ino (DJB hash), d_off (next position), d_reclen (8-byte aligned), d_type (DT_REG=8), d_name
+    - Uses fd->offset to track position across multiple calls
+    - Returns bytes written, 0 at end of directory, -1 on error
+  - Registered `SYS_GETDENTS64` in `init_syscall()`
+- Updated `rach2/Readme.md`:
+  - Added getdents64 (220) to Implemented Syscalls table
+  - Added detailed getdents64 syscall documentation with linux_dirent64 structure
+  - Added sys_getdents64() to Files in syscall.c section
+- Updated `utils/Readme.md`:
+  - Added lstest.c to Rach2 Test Programs list
+  - Added build command and example output
+  - Added lstest to Syscalls Used table
+- Verified: `exec lstest` passes all 6 tests
+- **Current Phase**: Phase 21 complete
+- **Next Step**: Phase 22 (Port User Programs)
+
 ---
 
 ## Running QEMU for LLM Serial Output

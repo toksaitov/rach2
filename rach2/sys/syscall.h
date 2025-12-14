@@ -26,6 +26,7 @@
 #define SYS_DUP2      63
 #define SYS_GETCWD   183
 #define SYS_STAT64   195
+#define SYS_GETDENTS64 220
 #define SYS_UTIMENSAT 320
 
 /*

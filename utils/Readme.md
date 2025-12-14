@@ -32,6 +32,7 @@ These programs are compiled as freestanding ELF32 executables for the Rach2 kern
 * `touchtest.c`: Tests creat and utimensat syscalls - creates files, updates timestamps
 * `rmtest.c`: Tests unlink syscall - deletes files, verifies deletion, tests error cases
 * `mvtest.c`: Tests rename syscall - renames files, verifies old name gone, tests error cases
+* `lstest.c`: Tests getdents64 syscall - opens "/" directory, reads and parses directory entries
 
 ## Required Syscalls
 
@@ -114,6 +115,9 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o rmte
 
 # Build mvtest (rename syscall test)
 i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o mvtest mvtest.c
+
+# Build lstest (getdents64 syscall test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o lstest lstest.c
 ```
 
 ### Running in Rach2
@@ -236,6 +240,24 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o mvte
    Results: 7 passed, 0 failed
    All rename syscalls passed!
    Process exited with status 0
+
+   > exec lstest
+   getdents64 syscall test starting...
+
+   Test 1: open("/")... OK (fd=3)
+   Test 2: getdents64(fd, buf, 512)... OK (read N bytes)
+   Test 3: parsing entries...
+     - hello.txt (ino=1, type=8)
+     - hello (ino=2, type=8)
+     - filetest (ino=3, type=8)
+     ...
+   Test 4: verify got entries... OK
+   Test 5: read again until EOF... OK (got 0 = end of dir)
+   Test 6: close(fd)... OK
+
+   Results: 6 passed, 0 failed
+   All getdents64 syscalls passed!
+   Process exited with status 0
    ```
 
 ### Syscalls Used
@@ -251,3 +273,4 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o mvte
 | touchtest | creat (8), close (6), open (5), utimensat (320), unlink (10), write (4), exit (1) |
 | rmtest    | creat (8), close (6), open (5), unlink (10), write (4), exit (1) |
 | mvtest    | creat (8), close (6), open (5), rename (38), unlink (10), write (4), exit (1) |
+| lstest    | open (5), getdents64 (220), close (6), write (4), exit (1) |
