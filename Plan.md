@@ -1056,6 +1056,71 @@ Before implementing new functionality:
 - **Current Phase**: Phase 18 complete
 - **Next Step**: Phase 19 (Directory and Path Syscalls: chdir, getcwd, stat)
 
+### Session 15 - Phase 19 Complete
+- **Completed Phase 19: Directory and Path Syscalls (chdir, getcwd, stat64)**
+  - Created `utils/dirtest.c` test program:
+    - Tests chdir and getcwd syscalls
+    - 7 tests: getcwd initial, chdir ".", chdir "/", chdir "..", getcwd after, chdir nonexistent, chdir file
+    - Verifies KRFFS flat filesystem semantics (only root directory exists)
+  - Created `utils/stattest.c` test program:
+    - Tests stat64 syscall
+    - 4 tests: stat hello.txt, stat "/", stat nonexistent, stat /hello.txt
+    - Prints file metadata (size, mode, nlink, ino)
+  - Added `cwd[CWD_MAX]` field to `process_t` in `sys/proc/process.h`:
+    - CWD_MAX = 64 bytes for path storage
+    - Stores current working directory (always "/" for KRFFS)
+  - Updated `alloc_process()` in `sys/proc/process.c`:
+    - Initializes cwd to "/" for every new process
+  - Added syscall numbers to `sys/syscall.h`:
+    - SYS_CHDIR (12), SYS_GETCWD (183), SYS_STAT64 (195)
+    - Increased SYSCALL_TABLE_SIZE from 64 to 196
+  - Implemented `sys_chdir()` in `sys/syscall.c`:
+    - Accepts "/", ".", ".." (all stay in root for flat KRFFS)
+    - Rejects files (ENOTDIR) and nonexistent paths (ENOENT)
+  - Implemented `sys_getcwd()` in `sys/syscall.c`:
+    - Copies current->cwd to user buffer
+    - Returns buffer pointer on success, NULL on error
+  - Implemented `sys_stat64()` in `sys/syscall.c`:
+    - Fills Linux-compatible stat64 structure (96 bytes)
+    - Root "/" gets st_ino=0, S_IFDIR mode
+    - Files get st_ino from node->id (DJB hash), S_IFREG mode
+    - Fills st_size, st_mode, st_nlink, st_uid, st_gid, st_blksize, st_blocks
+  - Registered syscalls in `init_syscall()`: SYS_CHDIR, SYS_GETCWD, SYS_STAT64
+- Updated `utils/Readme.md`:
+  - Added dirtest.c and stattest.c to Rach2 Test Programs list
+  - Added example output in Running in Rach2 section
+  - Added to Syscalls Used table
+- Verified: `exec dirtest` and `exec stattest` both pass all tests
+- Test output:
+  ```
+  > exec dirtest
+  Directory syscall test starting...
+  Test 1: getcwd()... OK (cwd="/")
+  Test 2: chdir(".")... OK
+  Test 3: chdir("/")... OK
+  Test 4: chdir("..")... OK
+  Test 5: getcwd() after chdir... OK (still "/")
+  Test 6: chdir("nonexistent")... OK (failed as expected)
+  Test 7: chdir("hello.txt")... OK (failed as expected - file, not dir)
+  Results: 7 passed, 0 failed
+  All directory syscalls passed!
+
+  > exec stattest
+  Stat syscall test starting...
+  Test 1: stat("hello.txt")... OK
+         size=12 bytes, mode=0100644, nlink=1, ino=<hash>
+         type: regular file (OK)
+  Test 2: stat("/")... OK
+         mode=040755, nlink=1, ino=0
+         type: directory (OK)
+  Test 3: stat("nonexistent")... OK (failed as expected)
+  Test 4: stat("/hello.txt")... OK
+  Results: 4 passed, 0 failed
+  All stat syscalls passed!
+  ```
+- **Current Phase**: Phase 19 complete
+- **Next Step**: Phase 20 (Filesystem Modification Syscalls: creat, unlink, rename)
+
 ---
 
 ## Running QEMU for LLM Serial Output

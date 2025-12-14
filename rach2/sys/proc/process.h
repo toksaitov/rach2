@@ -42,6 +42,11 @@ struct cpu_regs {
 typedef struct cpu_regs cpu_regs_t;
 
 /*
+ * Maximum length of current working directory path
+ */
+#define CWD_MAX 64
+
+/*
  * Process Control Block (PCB)
  */
 struct process {
@@ -53,6 +58,7 @@ struct process {
     uint32_t parent_pid;    /* Parent process ID */
     int32_t exit_code;      /* Exit status (for zombie) */
     fd_table_t fds;         /* File descriptor table */
+    char cwd[CWD_MAX];      /* Current working directory (always "/" for KRFFS) */
 };
 
 typedef struct process process_t;

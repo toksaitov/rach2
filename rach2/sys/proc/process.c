@@ -46,6 +46,10 @@ process_t *alloc_process(void)
             fd_table_init(&proc_table[i].fds);
             fd_init_stdio(&proc_table[i].fds);
 
+            /* Initialize current working directory to root */
+            proc_table[i].cwd[0] = '/';
+            proc_table[i].cwd[1] = '\0';
+
             return &proc_table[i];
         }
     }

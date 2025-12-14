@@ -306,6 +306,175 @@ static int32_t sys_dup2(isr_params_t *params)
 }
 
 /*
+ * sys_chdir - change current working directory
+ * Args: EBX = path
+ * Returns: 0 on success, -1 on error
+ *
+ * Since KRFFS has no directory hierarchy (only root "/"):
+ * - "/" and "." and ".." succeed (stay in root)
+ * - File names fail with -ENOTDIR
+ * - Nonexistent paths fail with -ENOENT
+ */
+static int32_t sys_chdir(isr_params_t *params)
+{
+    const char *path = (const char *)params->ebx;
+
+    if (!current_proc || !path) {
+        return -1;
+    }
+
+    /* Handle root directory */
+    if (path[0] == '/' && path[1] == '\0') {
+        return 0;  /* Already in root */
+    }
+
+    /* Handle "." - stay in current directory */
+    if (path[0] == '.' && path[1] == '\0') {
+        return 0;
+    }
+
+    /* Handle ".." - parent of root is root */
+    if (path[0] == '.' && path[1] == '.' && path[2] == '\0') {
+        return 0;
+    }
+
+    /* Skip leading '/' if present */
+    if (path[0] == '/') {
+        path++;
+    }
+
+    /* Empty path after stripping '/' means root */
+    if (path[0] == '\0') {
+        return 0;
+    }
+
+    /* Check if path is a file (ENOTDIR) or doesn't exist (ENOENT) */
+    if (krffs_fs && krffs_open(path) == 0) {
+        /* File exists - it's a file, not a directory */
+        return -1;  /* ENOTDIR */
+    }
+
+    /* Path doesn't exist */
+    return -1;  /* ENOENT */
+}
+
+/*
+ * sys_getcwd - get current working directory
+ * Args: EBX = buf, ECX = size
+ * Returns: buf pointer on success, NULL (0) on error
+ */
+static int32_t sys_getcwd(isr_params_t *params)
+{
+    char *buf = (char *)params->ebx;
+    uint32_t size = params->ecx;
+    uint32_t cwd_len;
+
+    if (!current_proc || !buf || size == 0) {
+        return 0;  /* NULL */
+    }
+
+    cwd_len = k_strlen(current_proc->cwd);
+    if (cwd_len + 1 > size) {
+        return 0;  /* Buffer too small */
+    }
+
+    /* Copy cwd to user buffer */
+    k_memcpy(buf, current_proc->cwd, cwd_len + 1);
+
+    return (int32_t)buf;
+}
+
+/*
+ * Linux stat64 structure for 32-bit systems
+ */
+struct linux_stat64 {
+    unsigned long long st_dev;
+    unsigned char      __pad0[4];
+    unsigned long      __st_ino;
+    unsigned int       st_mode;
+    unsigned int       st_nlink;
+    unsigned long      st_uid;
+    unsigned long      st_gid;
+    unsigned long long st_rdev;
+    unsigned char      __pad3[4];
+    long long          st_size;
+    unsigned long      st_blksize;
+    unsigned long long st_blocks;
+    unsigned long      st_atime;
+    unsigned long      st_atime_nsec;
+    unsigned long      st_mtime;
+    unsigned long      st_mtime_nsec;
+    unsigned long      st_ctime;
+    unsigned long      st_ctime_nsec;
+    unsigned long long st_ino;
+};
+
+/* File type bits for st_mode */
+#define S_IFMT   0170000
+#define S_IFREG  0100000
+#define S_IFDIR  0040000
+
+/*
+ * sys_stat64 - get file status
+ * Args: EBX = path, ECX = stat64 buffer
+ * Returns: 0 on success, -1 on error
+ */
+static int32_t sys_stat64(isr_params_t *params)
+{
+    const char *path = (const char *)params->ebx;
+    struct linux_stat64 *st = (struct linux_stat64 *)params->ecx;
+    const char *name;
+    krffs_node_t *node;
+
+    if (!current_proc || !path || !st) {
+        return -1;
+    }
+
+    /* Clear the stat structure */
+    k_memset(st, 0, sizeof(struct linux_stat64));
+
+    /* Handle root directory "/" */
+    if ((path[0] == '/' && path[1] == '\0') || path[0] == '\0') {
+        st->st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
+        st->st_nlink = 1;
+        st->st_ino = 0;  /* Root inode is 0 */
+        st->st_blksize = 4096;
+        return 0;
+    }
+
+    /* Skip leading '/' if present */
+    name = path;
+    if (name[0] == '/') {
+        name++;
+    }
+
+    /* Find the file in KRFFS */
+    if (!krffs_fs) {
+        return -1;
+    }
+
+    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    if (!node) {
+        return -1;  /* File not found */
+    }
+
+    /* Fill stat structure */
+    st->st_mode = S_IFREG | (node->mode & 0777);  /* Regular file + permissions */
+    st->st_nlink = 1;                              /* Always 1 for KRFFS */
+    st->st_uid = node->uid;
+    st->st_gid = node->gid;
+    st->st_size = (long long)node->data_size;
+    st->st_blksize = 4096;
+    st->st_blocks = (node->data_size + 511) / 512;
+
+    /* Use node's DJB hash as inode number */
+    st->st_ino = node->id;
+    st->__st_ino = (unsigned long)node->id;
+
+    return 0;
+}
+
+/*
  * copy_user_pages - copy all user pages from parent to child
  * Iterates through parent's page directory and copies user-accessible pages.
  * Returns 0 on success, -1 on failure.
@@ -828,7 +997,10 @@ void init_syscall(void)
     _syscall_table[SYS_CLOSE] = sys_close;
     _syscall_table[SYS_WAITPID] = sys_waitpid;
     _syscall_table[SYS_EXECVE] = sys_execve;
+    _syscall_table[SYS_CHDIR] = sys_chdir;
     _syscall_table[SYS_DUP2] = sys_dup2;
+    _syscall_table[SYS_GETCWD] = sys_getcwd;
+    _syscall_table[SYS_STAT64] = sys_stat64;
 
     /* Register the interrupt handler */
     register_isr_handler(SYSCALL_VECTOR, _syscall_handler);

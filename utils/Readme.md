@@ -27,6 +27,8 @@ These programs are compiled as freestanding ELF32 executables for the Rach2 kern
 * `filetest.c`: Tests file syscalls (open, read, write, close) by reading `hello.txt`
 * `forktest.c`: Tests process syscalls (fork, waitpid, exit) - parent forks child, child exits with status 42, parent waits and verifies
 * `shelltest.c`: Tests the fork+exec+waitpid chain - parent forks, child exec's "hello", parent waits and verifies exit status
+* `dirtest.c`: Tests directory syscalls (chdir, getcwd) - verifies "/" and "." work, other paths fail
+* `stattest.c`: Tests stat64 syscall - gets file metadata (size, mode) for existing and nonexistent files
 
 ## Required Syscalls
 
@@ -94,6 +96,12 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o hell
 
 # Build filetest (file syscall test)
 i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o filetest filetest.c
+
+# Build dirtest (directory syscall test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o dirtest dirtest.c
+
+# Build stattest (stat syscall test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o stattest stattest.c
 ```
 
 ### Running in Rach2
@@ -136,6 +144,38 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o file
    Parent: Child PID=7 exited with status=0
    All exec syscalls passed!
    Process exited with status 0
+
+   > exec dirtest
+   Directory syscall test starting...
+
+   Test 1: getcwd()... OK (cwd="/")
+   Test 2: chdir(".")... OK
+   Test 3: chdir("/")... OK
+   Test 4: chdir("..")... OK
+   Test 5: getcwd() after chdir... OK (still "/")
+   Test 6: chdir("nonexistent")... OK (failed as expected)
+   Test 7: chdir("hello.txt")... OK (failed as expected - file, not dir)
+
+   Results: 7 passed, 0 failed
+   All directory syscalls passed!
+   Process exited with status 0
+
+   > exec stattest
+   Stat syscall test starting...
+
+   Test 1: stat("hello.txt")... OK
+          size=12 bytes, mode=0100644, nlink=1, ino=1
+          type: regular file (OK)
+   Test 2: stat("/")... OK
+          mode=040755, nlink=1, ino=0
+          type: directory (OK)
+   Test 3: stat("nonexistent")... OK (failed as expected)
+   Test 4: stat("/hello.txt")... OK
+          size=12 bytes, nlink=1, ino=1
+
+   Results: 4 passed, 0 failed
+   All stat syscalls passed!
+   Process exited with status 0
    ```
 
 ### Syscalls Used
@@ -146,3 +186,5 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o file
 | filetest  | open (5), read (3), write (4), close (6), exit (1) |
 | forktest  | fork (2), waitpid (7), write (4), exit (1) |
 | shelltest | fork (2), execve (11), waitpid (7), write (4), exit (1) |
+| dirtest   | chdir (12), getcwd (183), write (4), exit (1) |
+| stattest  | stat64 (195), write (4), exit (1) |

@@ -159,7 +159,10 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 | 6      | close   | fd                    | Close a file descriptor         |
 | 7      | waitpid | pid, status, options  | Wait for child process to exit  |
 | 11     | execve  | path, argv, envp      | Replace process with new program|
+| 12     | chdir   | path                  | Change current working directory|
 | 63     | dup2    | oldfd, newfd          | Duplicate file descriptor       |
+| 183    | getcwd  | buf, size             | Get current working directory   |
+| 195    | stat64  | path, statbuf         | Get file status                 |
 
 ### exit (syscall 1)
 
@@ -253,6 +256,55 @@ Used for I/O redirection (e.g., redirecting stdout to a file before exec).
 
 Returns `newfd` on success, or -1 on error.
 
+### chdir (syscall 12)
+
+Changes the current working directory of the calling process. Since KRFFS is a flat file system with no directory hierarchy, only the following paths are valid:
+* `/` - Root directory (always succeeds)
+* `.` - Current directory (always succeeds, stays in root)
+* `..` - Parent directory (always succeeds, parent of root is root)
+
+Any other path fails:
+* If the path refers to a file, returns -1 (ENOTDIR)
+* If the path doesn't exist, returns -1 (ENOENT)
+
+Returns 0 on success, -1 on error.
+
+### getcwd (syscall 183)
+
+Gets the current working directory of the calling process. Copies the path to the provided buffer.
+
+Arguments:
+* `buf` - User buffer to receive the path
+* `size` - Size of the buffer
+
+Returns the buffer pointer on success, or NULL (0) if the buffer is too small or invalid.
+
+For KRFFS, getcwd always returns "/" since there is only the root directory.
+
+### stat64 (syscall 195)
+
+Gets file status information. Fills a Linux-compatible `stat64` structure with file metadata.
+
+Arguments:
+* `path` - Path to the file (leading '/' is stripped)
+* `statbuf` - Pointer to stat64 structure to fill
+
+For the root directory "/":
+* `st_mode` = S_IFDIR | 0755 (directory, rwxr-xr-x)
+* `st_ino` = 0
+* `st_nlink` = 1
+
+For regular files:
+* `st_mode` = S_IFREG | (file permissions)
+* `st_ino` = DJB hash of filename (from KRFFS node ID)
+* `st_size` = file size in bytes
+* `st_nlink` = 1
+* `st_uid`, `st_gid` = from KRFFS node
+* `st_blksize` = 4096
+* `st_blocks` = (size + 511) / 512
+
+Returns 0 on success, -1 if file not found.
+
 ### Files in `syscall.c`
 * `init_syscall()` - Initialize dispatch table and register syscall handler
 * `_syscall_table[]` - Dispatch table mapping syscall numbers to handler functions
@@ -265,6 +317,9 @@ Returns `newfd` on success, or -1 on error.
 * `sys_waitpid()` - Wait for child process, collect exit status
 * `sys_execve()` - Replace process image with new ELF program
 * `sys_dup2()` - Duplicate file descriptor
+* `sys_chdir()` - Change current working directory
+* `sys_getcwd()` - Get current working directory
+* `sys_stat64()` - Get file status (Linux stat64 compatible)
 * `copy_user_pages()` - Helper to copy all user pages from parent to child
 
 ## User Mode (Ring 3)
@@ -314,6 +369,7 @@ Each process is represented by a `process_t` structure containing:
 * `parent_pid` - Parent process ID
 * `exit_code` - Exit status (for zombie processes)
 * `fds` - File descriptor table (16 entries)
+* `cwd` - Current working directory path (64 bytes max, always "/" for KRFFS)
 
 ### Process States
 

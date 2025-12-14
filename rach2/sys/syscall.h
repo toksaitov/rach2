@@ -24,11 +24,14 @@
 #define SYS_CHDIR   12
 #define SYS_RENAME  38
 #define SYS_DUP2    63
+#define SYS_GETCWD  183
+#define SYS_STAT64  195
 
 /*
  * Size of the syscall dispatch table
+ * Must be large enough to hold highest syscall number + 1
  */
-#define SYSCALL_TABLE_SIZE 64
+#define SYSCALL_TABLE_SIZE 196
 
 /*
  * Initialize syscall handling by registering the syscall handler.
