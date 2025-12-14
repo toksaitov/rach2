@@ -1121,6 +1121,76 @@ Before implementing new functionality:
 - **Current Phase**: Phase 19 complete
 - **Next Step**: Phase 20 (Filesystem Modification Syscalls: creat, unlink, rename)
 
+### Session 16 - Phase 20 Complete
+- **Completed Phase 20: Filesystem Modification Syscalls (creat, unlink, rename, utimensat)**
+  - Created test programs in `utils/`:
+    - `touchtest.c` - Tests creat (8) and utimensat (320) syscalls with 10 test cases
+    - `rmtest.c` - Tests unlink (10) syscall with 7 test cases
+    - `mvtest.c` - Tests rename (38) syscall with 7 test cases
+  - Added syscall numbers to `sys/syscall.h`:
+    - SYS_CREAT (8), SYS_UNLINK (10), SYS_RENAME (38), SYS_UTIMENSAT (320)
+    - Increased SYSCALL_TABLE_SIZE from 196 to 321
+  - Implemented time tracking infrastructure:
+    - Exported `kernel_ticks` counter from `kernel.c` (PIT at 100 Hz)
+    - Created `get_current_time()` helper in `syscall.c`:
+      - Converts tick count to seconds and nanoseconds
+      - Each tick = 10ms = 10,000,000 ns
+  - Implemented `sys_creat()` in `sys/syscall.c`:
+    - Creates new file via `krffs_create()`
+    - Opens file and returns fd for writing
+  - Implemented `sys_unlink()` in `sys/syscall.c`:
+    - Deletes file via `krffs_unlink()`
+    - Rejects root directory "/"
+  - Implemented `sys_rename()` in `sys/syscall.c`:
+    - Renames file via `krffs_rename()`
+    - Strips leading '/' from paths
+  - Implemented `sys_utimensat()` in `sys/syscall.c`:
+    - Updates file access and modification times
+    - Handles UTIME_NOW (use current time), UTIME_OMIT (leave unchanged)
+    - NULL times pointer sets both to current time
+    - Uses tick-based time from kernel_ticks counter
+  - Registered syscalls in `init_syscall()`: SYS_CREAT, SYS_UNLINK, SYS_RENAME, SYS_UTIMENSAT
+- Updated `rach2/Readme.md`:
+  - Added creat (8), unlink (10), rename (38), utimensat (320) to syscall table
+  - Added detailed documentation for each syscall
+  - Updated Files in syscall.c section with new functions
+- Updated `utils/Readme.md`:
+  - Added touchtest, rmtest, mvtest to Rach2 Test Programs list
+  - Added example output in Running in Rach2 section
+  - Added to Syscalls Used table
+- Verified: `exec touchtest`, `exec rmtest`, `exec mvtest` all pass tests
+- Test output:
+  ```
+  > exec touchtest
+  Touch/Create syscall test starting...
+  Test 1: creat("touchtest.tmp")... OK (fd=3)
+  Test 2: close(fd)... OK
+  Test 3: open to verify exists... OK
+  ...
+  Results: 10 passed, 0 failed
+  All touch/create syscalls passed!
+
+  > exec rmtest
+  Unlink/Remove syscall test starting...
+  Test 1: creat("rmtest.tmp")... OK
+  Test 2: verify file exists... OK
+  Test 3: unlink("rmtest.tmp")... OK
+  ...
+  Results: 7 passed, 0 failed
+  All unlink syscalls passed!
+
+  > exec mvtest
+  Rename syscall test starting...
+  Test 1: creat("mvtest_old.tmp")... OK
+  Test 2: open to verify... OK
+  Test 3: rename("mvtest_old.tmp", "mvtest_new.tmp")... OK
+  ...
+  Results: 7 passed, 0 failed
+  All rename syscalls passed!
+  ```
+- **Current Phase**: Phase 20 complete
+- **Next Step**: Phase 21 (Directory Listing Syscall: getdents64)
+
 ---
 
 ## Running QEMU for LLM Serial Output

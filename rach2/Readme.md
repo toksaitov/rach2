@@ -149,20 +149,24 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 
 ### Implemented Syscalls
 
-| Number | Name    | Arguments             | Description                     |
-|--------|---------|-----------------------|---------------------------------|
-| 1      | exit    | status                | Terminate current process       |
-| 2      | fork    | -                     | Create child process            |
-| 3      | read    | fd, buf, count        | Read from file descriptor       |
-| 4      | write   | fd, buf, count        | Write to file descriptor        |
-| 5      | open    | path, flags           | Open a file                     |
-| 6      | close   | fd                    | Close a file descriptor         |
-| 7      | waitpid | pid, status, options  | Wait for child process to exit  |
-| 11     | execve  | path, argv, envp      | Replace process with new program|
-| 12     | chdir   | path                  | Change current working directory|
-| 63     | dup2    | oldfd, newfd          | Duplicate file descriptor       |
-| 183    | getcwd  | buf, size             | Get current working directory   |
-| 195    | stat64  | path, statbuf         | Get file status                 |
+| Number | Name      | Arguments                    | Description                     |
+|--------|-----------|------------------------------|---------------------------------|
+| 1      | exit      | status                       | Terminate current process       |
+| 2      | fork      | -                            | Create child process            |
+| 3      | read      | fd, buf, count               | Read from file descriptor       |
+| 4      | write     | fd, buf, count               | Write to file descriptor        |
+| 5      | open      | path, flags                  | Open a file                     |
+| 6      | close     | fd                           | Close a file descriptor         |
+| 7      | waitpid   | pid, status, options         | Wait for child process to exit  |
+| 8      | creat     | path, mode                   | Create a new file               |
+| 10     | unlink    | path                         | Delete a file                   |
+| 11     | execve    | path, argv, envp             | Replace process with new program|
+| 12     | chdir     | path                         | Change current working directory|
+| 38     | rename    | oldpath, newpath             | Rename a file                   |
+| 63     | dup2      | oldfd, newfd                 | Duplicate file descriptor       |
+| 183    | getcwd    | buf, size                    | Get current working directory   |
+| 195    | stat64    | path, statbuf                | Get file status                 |
+| 320    | utimensat | dirfd, path, times, flags    | Update file timestamps          |
 
 ### exit (syscall 1)
 
@@ -305,6 +309,55 @@ For regular files:
 
 Returns 0 on success, -1 if file not found.
 
+### creat (syscall 8)
+
+Creates a new file at `path` with the given `mode` (permissions). If the file already exists, it is truncated to zero length.
+
+Arguments:
+* `path` - Path to the file to create (leading '/' is stripped)
+* `mode` - File permissions (currently ignored, uses default 0644)
+
+Returns a file descriptor for the newly created file (≥3), or -1 on error. The file is opened for writing.
+
+### unlink (syscall 10)
+
+Deletes the file at `path` from the file system.
+
+Arguments:
+* `path` - Path to the file to delete (leading '/' is stripped)
+
+Cannot delete the root directory "/". Returns 0 on success, -1 on error (file not found or is root).
+
+### rename (syscall 38)
+
+Renames a file from `oldpath` to `newpath`. If `newpath` exists, it is replaced.
+
+Arguments:
+* `oldpath` - Current path of the file (leading '/' is stripped)
+* `newpath` - New path for the file (leading '/' is stripped)
+
+Returns 0 on success, -1 on error (source not found).
+
+### utimensat (syscall 320)
+
+Updates the access and modification timestamps of a file.
+
+Arguments:
+* `dirfd` - Directory file descriptor (ignored, always uses root)
+* `path` - Path to the file (leading '/' is stripped)
+* `times` - Pointer to array of two `timespec` structures [atime, mtime], or NULL
+* `flags` - Flags (currently ignored)
+
+Special values for `tv_nsec`:
+* `UTIME_NOW` ((1<<30)-1) - Set to current time
+* `UTIME_OMIT` ((1<<30)-2) - Leave timestamp unchanged
+
+If `times` is NULL, both timestamps are set to current time.
+
+Time tracking uses the kernel's tick counter (PIT at 100 Hz). Each tick represents 10 milliseconds.
+
+Returns 0 on success, -1 on error (file not found).
+
 ### Files in `syscall.c`
 * `init_syscall()` - Initialize dispatch table and register syscall handler
 * `_syscall_table[]` - Dispatch table mapping syscall numbers to handler functions
@@ -315,11 +368,16 @@ Returns 0 on success, -1 if file not found.
 * `sys_open()` - Open file from KRFFS
 * `sys_close()` - Close file descriptor
 * `sys_waitpid()` - Wait for child process, collect exit status
+* `sys_creat()` - Create new file and return fd
+* `sys_unlink()` - Delete file from file system
 * `sys_execve()` - Replace process image with new ELF program
 * `sys_dup2()` - Duplicate file descriptor
 * `sys_chdir()` - Change current working directory
 * `sys_getcwd()` - Get current working directory
+* `sys_rename()` - Rename file
 * `sys_stat64()` - Get file status (Linux stat64 compatible)
+* `sys_utimensat()` - Update file timestamps
+* `get_current_time()` - Helper to get current time from kernel tick counter
 * `copy_user_pages()` - Helper to copy all user pages from parent to child
 
 ## User Mode (Ring 3)

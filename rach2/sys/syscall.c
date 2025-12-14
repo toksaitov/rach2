@@ -963,6 +963,267 @@ static int32_t sys_waitpid(isr_params_t *params)
 }
 
 /*
+ * sys_creat - create a new file
+ * Args: EBX = path, ECX = mode
+ * Returns: fd on success, -1 on error
+ *
+ * Creates a new file and returns an open file descriptor.
+ * If file already exists, opens it for writing (truncates).
+ */
+static int32_t sys_creat(isr_params_t *params)
+{
+    const char *path = (const char *)params->ebx;
+    uint32_t mode = params->ecx;
+    fd_entry_t *entry;
+    krffs_node_t *node;
+    const char *name;
+    int fd;
+
+    if (!current_proc || !path) {
+        return -1;
+    }
+
+    /* Skip leading '/' if present */
+    name = path;
+    if (name[0] == '/') {
+        name++;
+    }
+
+    /* Empty filename is invalid */
+    if (name[0] == '\0') {
+        return -1;
+    }
+
+    /* Check if file system is mounted */
+    if (!krffs_fs) {
+        return -1;
+    }
+
+    /* Create the file (or open if exists) */
+    if (krffs_create(name) != 0) {
+        return -1;
+    }
+
+    /* Find the node to set mode */
+    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    if (!node) {
+        return -1;
+    }
+
+    /* Set file mode */
+    node->mode = (uint16_t)(mode & 0777);
+
+    /* Allocate a file descriptor */
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        return -1;
+    }
+
+    /* Set up the fd entry for writing */
+    entry = &current_proc->fds.entries[fd];
+    entry->type = FD_TYPE_FILE;
+    entry->node = node;
+    entry->offset = 0;
+    entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+
+    return fd;
+}
+
+/*
+ * sys_unlink - delete a file
+ * Args: EBX = path
+ * Returns: 0 on success, -1 on error
+ */
+static int32_t sys_unlink(isr_params_t *params)
+{
+    const char *path = (const char *)params->ebx;
+    const char *name;
+
+    if (!current_proc || !path) {
+        return -1;
+    }
+
+    /* Can't unlink root directory */
+    if (path[0] == '/' && path[1] == '\0') {
+        return -1;
+    }
+
+    /* Skip leading '/' if present */
+    name = path;
+    if (name[0] == '/') {
+        name++;
+    }
+
+    /* Empty filename is invalid */
+    if (name[0] == '\0') {
+        return -1;
+    }
+
+    /* Check if file system is mounted */
+    if (!krffs_fs) {
+        return -1;
+    }
+
+    return krffs_unlink(name);
+}
+
+/*
+ * sys_rename - rename a file
+ * Args: EBX = old path, ECX = new path
+ * Returns: 0 on success, -1 on error
+ */
+static int32_t sys_rename(isr_params_t *params)
+{
+    const char *old_path = (const char *)params->ebx;
+    const char *new_path = (const char *)params->ecx;
+    const char *old_name;
+    const char *new_name;
+
+    if (!current_proc || !old_path || !new_path) {
+        return -1;
+    }
+
+    /* Skip leading '/' if present */
+    old_name = old_path;
+    if (old_name[0] == '/') {
+        old_name++;
+    }
+    new_name = new_path;
+    if (new_name[0] == '/') {
+        new_name++;
+    }
+
+    /* Empty filenames are invalid */
+    if (old_name[0] == '\0' || new_name[0] == '\0') {
+        return -1;
+    }
+
+    /* Check if file system is mounted */
+    if (!krffs_fs) {
+        return -1;
+    }
+
+    return krffs_rename(old_name, new_name);
+}
+
+/*
+ * Timespec structure for utimensat
+ */
+struct kernel_timespec {
+    int32_t tv_sec;
+    int32_t tv_nsec;
+};
+
+/* Special nsec values */
+#define UTIME_NOW  ((1L << 30) - 1L)
+#define UTIME_OMIT ((1L << 30) - 2L)
+
+/* PIT frequency - timer ticks at 100 Hz */
+#define PIT_FREQUENCY 100
+
+/* Global tick counter from kernel.c - incremented at 100 Hz */
+extern volatile uint32_t kernel_ticks;
+
+/*
+ * get_current_time - convert kernel ticks to seconds/nanoseconds
+ * Ticks are at 100 Hz, so each tick is 10ms = 10,000,000 ns
+ */
+static void get_current_time(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t ticks = kernel_ticks;
+    *seconds = ticks / PIT_FREQUENCY;
+    *nanoseconds = (ticks % PIT_FREQUENCY) * 10000000LL;  /* 10ms per tick */
+}
+
+/*
+ * sys_utimensat - update file timestamps
+ * Args: EBX = dirfd (ignored, always use cwd), ECX = path, EDX = times, ESI = flags
+ * Returns: 0 on success, -1 on error
+ *
+ * times is array of 2 timespec: [atime, mtime]
+ * If times is NULL, set both to current time
+ * If tv_nsec is UTIME_NOW, set to current time
+ * If tv_nsec is UTIME_OMIT, leave unchanged
+ */
+static int32_t sys_utimensat(isr_params_t *params)
+{
+    /* int dirfd = (int)params->ebx; */  /* Ignored - always use cwd */
+    const char *path = (const char *)params->ecx;
+    struct kernel_timespec *times = (struct kernel_timespec *)params->edx;
+    /* int flags = (int)params->esi; */  /* Ignored for now */
+    const char *name;
+    krffs_node_t *node;
+    int64_t now_sec, now_nsec;
+
+    if (!current_proc || !path) {
+        return -1;
+    }
+
+    /* Skip leading '/' if present */
+    name = path;
+    if (name[0] == '/') {
+        name++;
+    }
+
+    /* Empty filename - check if it's root "/" */
+    if (name[0] == '\0') {
+        /* Can't modify root timestamps, but return success */
+        return 0;
+    }
+
+    /* Check if file system is mounted */
+    if (!krffs_fs) {
+        return -1;
+    }
+
+    /* Find the file */
+    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    if (!node) {
+        return -1;  /* File not found */
+    }
+
+    /* Get current time (ticks since boot converted to seconds) */
+    get_current_time(&now_sec, &now_nsec);
+
+    /* Update timestamps */
+    if (times == NULL) {
+        /* NULL means set both to current time */
+        node->access_time.seconds = now_sec;
+        node->access_time.nanoseconds = now_nsec;
+        node->modification_time.seconds = now_sec;
+        node->modification_time.nanoseconds = now_nsec;
+    } else {
+        /* Update access time */
+        if (times[0].tv_nsec == UTIME_OMIT) {
+            /* Leave unchanged */
+        } else if (times[0].tv_nsec == UTIME_NOW) {
+            node->access_time.seconds = now_sec;
+            node->access_time.nanoseconds = now_nsec;
+        } else {
+            node->access_time.seconds = times[0].tv_sec;
+            node->access_time.nanoseconds = times[0].tv_nsec;
+        }
+
+        /* Update modification time */
+        if (times[1].tv_nsec == UTIME_OMIT) {
+            /* Leave unchanged */
+        } else if (times[1].tv_nsec == UTIME_NOW) {
+            node->modification_time.seconds = now_sec;
+            node->modification_time.nanoseconds = now_nsec;
+        } else {
+            node->modification_time.seconds = times[1].tv_sec;
+            node->modification_time.nanoseconds = times[1].tv_nsec;
+        }
+    }
+
+    /* Update attribute change time (ctime is always updated on metadata change) */
+    node->attribute_change_time.seconds = now_sec;
+    node->attribute_change_time.nanoseconds = now_nsec;
+
+    return 0;
+}
+
+/*
  * Syscall handler - dispatches to appropriate syscall function
  * Stores return value in params->eax so it's returned to userspace
  */
@@ -996,11 +1257,15 @@ void init_syscall(void)
     _syscall_table[SYS_OPEN] = sys_open;
     _syscall_table[SYS_CLOSE] = sys_close;
     _syscall_table[SYS_WAITPID] = sys_waitpid;
+    _syscall_table[SYS_CREAT] = sys_creat;
+    _syscall_table[SYS_UNLINK] = sys_unlink;
     _syscall_table[SYS_EXECVE] = sys_execve;
     _syscall_table[SYS_CHDIR] = sys_chdir;
+    _syscall_table[SYS_RENAME] = sys_rename;
     _syscall_table[SYS_DUP2] = sys_dup2;
     _syscall_table[SYS_GETCWD] = sys_getcwd;
     _syscall_table[SYS_STAT64] = sys_stat64;
+    _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
 
     /* Register the interrupt handler */
     register_isr_handler(SYSCALL_VECTOR, _syscall_handler);

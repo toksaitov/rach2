@@ -29,6 +29,9 @@ These programs are compiled as freestanding ELF32 executables for the Rach2 kern
 * `shelltest.c`: Tests the fork+exec+waitpid chain - parent forks, child exec's "hello", parent waits and verifies exit status
 * `dirtest.c`: Tests directory syscalls (chdir, getcwd) - verifies "/" and "." work, other paths fail
 * `stattest.c`: Tests stat64 syscall - gets file metadata (size, mode) for existing and nonexistent files
+* `touchtest.c`: Tests creat and utimensat syscalls - creates files, updates timestamps
+* `rmtest.c`: Tests unlink syscall - deletes files, verifies deletion, tests error cases
+* `mvtest.c`: Tests rename syscall - renames files, verifies old name gone, tests error cases
 
 ## Required Syscalls
 
@@ -102,6 +105,15 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o dirt
 
 # Build stattest (stat syscall test)
 i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o stattest stattest.c
+
+# Build touchtest (creat/utimensat syscall test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o touchtest touchtest.c
+
+# Build rmtest (unlink syscall test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o rmtest rmtest.c
+
+# Build mvtest (rename syscall test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o mvtest mvtest.c
 ```
 
 ### Running in Rach2
@@ -176,6 +188,54 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o stat
    Results: 4 passed, 0 failed
    All stat syscalls passed!
    Process exited with status 0
+
+   > exec touchtest
+   Touch/Create syscall test starting...
+
+   Test 1: creat("touchtest.tmp")... OK (fd=3)
+   Test 2: close(fd)... OK
+   Test 3: open to verify exists... OK
+   Test 4: creat same file again... OK (fd=3)
+   Test 5: utimensat(NULL times)... OK
+   Test 6: utimensat(specific times)... OK
+   Test 7: utimensat(UTIME_NOW)... OK
+   Test 8: utimensat(UTIME_OMIT)... OK
+   Test 9: utimensat nonexistent... OK (failed as expected)
+   Test 10: cleanup (unlink)... OK
+
+   Results: 10 passed, 0 failed
+   All touch/create syscalls passed!
+   Process exited with status 0
+
+   > exec rmtest
+   Unlink/Remove syscall test starting...
+
+   Test 1: creat("rmtest.tmp")... OK
+   Test 2: verify file exists... OK
+   Test 3: unlink("rmtest.tmp")... OK
+   Test 4: verify file gone... OK (open failed as expected)
+   Test 5: unlink nonexistent... OK (failed as expected)
+   Test 6: unlink "/"... OK (failed as expected)
+   Test 7: cleanup... OK
+
+   Results: 7 passed, 0 failed
+   All unlink syscalls passed!
+   Process exited with status 0
+
+   > exec mvtest
+   Rename syscall test starting...
+
+   Test 1: creat("mvtest_old.tmp")... OK
+   Test 2: open("mvtest_old.tmp") to verify... OK (file exists)
+   Test 3: rename("mvtest_old.tmp", "mvtest_new.tmp")... OK
+   Test 4: open("mvtest_old.tmp") should fail... OK (old name gone)
+   Test 5: open("mvtest_new.tmp")... OK (new name exists)
+   Test 6: rename("nonexistent", "other")... OK (failed as expected)
+   Test 7: create "mvtest_dest.tmp"... OK, rename to overwrite... OK
+
+   Results: 7 passed, 0 failed
+   All rename syscalls passed!
+   Process exited with status 0
    ```
 
 ### Syscalls Used
@@ -188,3 +248,6 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o stat
 | shelltest | fork (2), execve (11), waitpid (7), write (4), exit (1) |
 | dirtest   | chdir (12), getcwd (183), write (4), exit (1) |
 | stattest  | stat64 (195), write (4), exit (1) |
+| touchtest | creat (8), close (6), open (5), utimensat (320), unlink (10), write (4), exit (1) |
+| rmtest    | creat (8), close (6), open (5), unlink (10), write (4), exit (1) |
+| mvtest    | creat (8), close (6), open (5), rename (38), unlink (10), write (4), exit (1) |

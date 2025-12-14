@@ -22,16 +22,17 @@
 #define SYS_UNLINK  10
 #define SYS_EXECVE  11
 #define SYS_CHDIR   12
-#define SYS_RENAME  38
-#define SYS_DUP2    63
-#define SYS_GETCWD  183
-#define SYS_STAT64  195
+#define SYS_RENAME    38
+#define SYS_DUP2      63
+#define SYS_GETCWD   183
+#define SYS_STAT64   195
+#define SYS_UTIMENSAT 320
 
 /*
  * Size of the syscall dispatch table
  * Must be large enough to hold highest syscall number + 1
  */
-#define SYSCALL_TABLE_SIZE 196
+#define SYSCALL_TABLE_SIZE 321
 
 /*
  * Initialize syscall handling by registering the syscall handler.

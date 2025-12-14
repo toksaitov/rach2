@@ -35,7 +35,8 @@ static char cmd_buffer[CMD_BUFFER_SIZE];
 static volatile size_t cmd_pos = 0;
 static volatile bool cmd_ready = false;
 
-static volatile uint32_t ticks = 0;
+/* Global tick counter - incremented at 100 Hz by timer IRQ */
+volatile uint32_t kernel_ticks = 0;
 
 static void run_self_tests(void);
 static void shell_loop(void);
@@ -64,7 +65,7 @@ static void timer_handler(isr_params_t *params)
 {
     (void) params;
 
-    ++ticks;
+    ++kernel_ticks;
 
     /* Call the scheduler on every timer tick */
     schedule();
@@ -185,14 +186,14 @@ static bool test_timer(void)
     uint32_t start_ticks;
     uint32_t i;
 
-    start_ticks = ticks;
+    start_ticks = kernel_ticks;
 
     /* Wait for a few timer interrupts using hlt */
     for (i = 0; i < 5; ++i) {
         __asm__ __volatile__("hlt");
     }
 
-    return ticks > start_ticks;
+    return kernel_ticks > start_ticks;
 }
 
 static bool test_syscall(void)
@@ -1150,7 +1151,7 @@ static void process_command(const char *cmd)
         k_puts("  halt                - Halt the CPU");
     } else if (str_equal(cmd, "info")) {
         k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
-        k_printf("Timer ticks:     %d\n", ticks);
+        k_printf("Timer ticks:     %d\n", kernel_ticks);
         k_printf("Kernel end:      0x%X\n", (uintptr_t) &k_phys_mem_end);
         k_printf("Modules loaded:  %d\n", module_count);
     } else if (str_equal(cmd, "modules")) {
