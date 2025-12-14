@@ -396,7 +396,65 @@ Before implementing new functionality:
 
 ---
 
-### Phase 22: Port User Programs
+### Phase 22: Console Input and Syscall Readiness
+**Goal**: Implement stdin reading and ensure all syscalls needed for shell/utils are ready.
+
+**Background**: Analysis of ish shell and utils shows:
+- ISH uses `stat` (106), not `stat64` (195) - need to implement
+- ISH main loop is `while (read(0, input, ...) > 0)` - stdin must return data
+- dup2 is already implemented and ready for I/O redirection
+- mkdir/rmdir cannot work (KRFFS is flat), but all other syscalls are ready
+
+**Tasks**:
+1. Create kernel input buffer filled by keyboard interrupt
+2. Implement blocking `sys_read()` for fd 0 (stdin):
+   - When buffer empty and reading stdin, block process until input available
+   - Unblock process when Enter is pressed (line buffering)
+   - Echo characters as they're typed
+3. Implement `sys_stat()` (syscall 106) for ISH compatibility:
+   - Uses 32-bit stat structure (different from stat64)
+   - ISH uses stat to check if executables exist in PATH
+4. Update `stattest.c` to test both stat (106) and stat64 (195):
+   - Add tests for 32-bit stat structure
+   - Verify both syscalls return correct file metadata
+5. Create test programs:
+   - `stdintest.c`: Tests reading from stdin, verifies blocking and line buffering
+   - `dup2test.c`: Tests I/O redirection (redirect stdout to file, verify content)
+6. Verify dup2 works correctly for I/O redirection (already implemented)
+
+**Syscall Readiness Checklist**:
+| Syscall | # | ISH | Utils | Status |
+|---------|---|-----|-------|--------|
+| exit | 1 | ✓ | ✓ | Ready |
+| fork | 2 | ✓ | | Ready |
+| read | 3 | ✓ | ✓ | Need stdin |
+| write | 4 | ✓ | ✓ | Ready |
+| open | 5 | ✓ | ✓ | Ready |
+| close | 6 | ✓ | ✓ | Ready |
+| waitpid | 7 | ✓ | | Ready |
+| creat | 8 | ✓ | | Ready |
+| unlink | 10 | | ✓ | Ready |
+| execve | 11 | ✓ | | Ready |
+| chdir | 12 | ✓ | | Ready |
+| rename | 38 | | ✓ | Ready |
+| dup2 | 63 | ✓ | | Ready |
+| stat | 106 | ✓ | | Need impl |
+| getcwd | 183 | | ✓ | Ready |
+| stat64 | 195 | | ✓ | Ready |
+| getdents64 | 220 | | ✓ | Ready |
+| utimensat | 320 | | ✓ | Ready |
+
+**Measurable Result**:
+- `exec stdintest` reads line from keyboard, echoes it back
+- `exec dup2test` redirects output to file and verifies
+- `exec stattest` passes tests for both stat (106) and stat64 (195)
+- All syscalls needed for ish and utils are implemented
+
+**Documentation**: Document console input mechanism and stat syscall in Readme.md.
+
+---
+
+### Phase 23: Port User Programs
 **Goal**: Prepare shell and utilities for the OS.
 
 **Tasks**:
@@ -409,21 +467,6 @@ Before implementing new functionality:
 **Measurable Result**: User programs compile to standalone ELF binaries.
 
 **Documentation**: Add User Programs section to Readme.md.
-
----
-
-### Phase 23: Console Input for Shell
-**Goal**: Shell can read keyboard input.
-
-**Tasks**:
-1. Create kernel input buffer filled by keyboard interrupt
-2. Implement blocking `sys_read()` for fd 0 (stdin)
-3. When buffer empty and reading stdin, block process until input available
-4. Unblock process when Enter is pressed (line buffering)
-
-**Measurable Result**: Shell prompt appears, typing echoes, Enter submits.
-
-**Documentation**: Document console input mechanism in Readme.md.
 
 ---
 
@@ -1219,7 +1262,90 @@ Before implementing new functionality:
   - Added lstest to Syscalls Used table
 - Verified: `exec lstest` passes all 6 tests
 - **Current Phase**: Phase 21 complete
-- **Next Step**: Phase 22 (Port User Programs)
+- **Next Step**: Phase 22 (Console Input and Syscall Readiness)
+
+### Session 18 - Phase 22 Complete
+- **Completed Phase 22: Console Input and Syscall Readiness**
+  - Created test programs in `utils/`:
+    - `stdintest.c` - Tests read() syscall for stdin with 3 test cases:
+      - Test 1: read() blocks until Enter is pressed
+      - Test 2: Verifies characters are echoed as typed
+      - Test 3: Verifies line includes newline character
+    - `dup2test.c` - Tests dup2 syscall for I/O redirection with 4 test cases:
+      - Creates file, redirects stdout to file, writes, restores stdout, verifies content
+  - Implemented `sys_stat()` (syscall 106) in `sys/syscall.c`:
+    - Uses 32-bit stat structure (different from stat64)
+    - Required for ISH shell compatibility (ISH uses stat, not stat64)
+    - Same file metadata as stat64, but with `unsigned short` for mode/nlink/uid/gid
+  - Updated `stattest.c` to test both stat (106) and stat64 (195):
+    - Added tests for 32-bit stat structure
+    - Verified both syscalls return correct file metadata
+  - Implemented console input (stdin reading) in kernel:
+    - Added `stdin_buffer[256]` in kernel for input buffering
+    - Added `stdin_waiting_proc` pointer to track blocked process
+    - Modified `keyboard_handler()` to fill stdin buffer when process is waiting
+    - Characters are echoed to screen and serial as typed
+    - Backspace support removes last character
+    - Enter key marks buffer ready and wakes blocked process
+    - Modified `sys_read()` to block process when reading from stdin
+  - **Critical Bug Fix**: Stack overflow in `exec_program()`:
+    - **Symptom**: Keyboard stopped working after running user programs
+    - **Root cause**: 16KB local array `elf_buffer[16384]` on 16KB kernel stack
+    - **Investigation**: EN_us keyboard scancode table was being zeroed after exec
+    - **Solution**: Made `_exec_elf_buffer` static to avoid stack overflow
+    - Stack overflow was corrupting kernel data section including EN_us array
+  - Keyboard handler CR3 switching:
+    - Handler saves current CR3 and switches to kernel page directory
+    - Required because user process page directories may not have kernel data mapped correctly
+    - Restores original CR3 after handling key
+- All syscalls needed for ISH shell and utils are now implemented:
+  - exit (1), fork (2), read (3), write (4), open (5), close (6), waitpid (7)
+  - creat (8), unlink (10), execve (11), chdir (12), rename (38), dup2 (63)
+  - stat (106), getcwd (183), stat64 (195), getdents64 (220), utimensat (320)
+- Updated `rach2/Readme.md`:
+  - Added "Console input with line buffering" to Features
+  - Added stat (106) to Implemented Syscalls table
+  - Added detailed stat syscall documentation
+- Updated `utils/Readme.md`:
+  - Added stdintest.c and dup2test.c to Rach2 Test Programs list
+  - Added build commands and example output
+  - Added to Syscalls Used table
+- Verified: `exec stdintest` and `exec dup2test` both pass all tests
+- Test output:
+  ```
+  > exec stdintest
+  stdin syscall test starting...
+
+  Test 1: Testing read() blocking...
+  Type something and press Enter: hello
+  OK (read returned 6 bytes)
+
+  Test 2: Verifying content...
+  You typed: "hello
+  " OK
+
+  Test 3: Checking newline...
+  OK (line ends with newline)
+
+  Results: 3 passed, 0 failed
+  All stdin syscalls passed!
+
+  > exec dup2test
+  dup2 I/O redirection test starting...
+
+  Test 1: creat("dup2test.tmp")... OK (fd=3)
+  Test 2: dup2(3, 1) to redirect stdout... OK (returned 1)
+  Test 3: write to redirected stdout... OK (write returned 13)
+  Test 4: dup2(saved_stdout, 1) to restore... OK
+  Reading file content: "Hello, file!
+  "
+  Test 5: verify content matches... OK
+
+  Results: 4 passed, 0 failed
+  All dup2 syscalls passed!
+  ```
+- **Current Phase**: Phase 22 complete
+- **Next Step**: Phase 23 (Port User Programs)
 
 ---
 

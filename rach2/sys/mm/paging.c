@@ -270,9 +270,6 @@ void free_user_pages(page_dir_t *dir)
 {
     uint32_t dir_idx, page_idx;
     page_table_t *table;
-    uint32_t freed_count = 0;
-
-    serial_printf("free_user_pages: dir=0x%X\n", (uint32_t)dir);
 
     if (!dir) {
         return;
@@ -288,9 +285,6 @@ void free_user_pages(page_dir_t *dir)
         if (table == _kernel_dir->logical_page_tables[dir_idx]) {
             continue;
         }
-
-        serial_printf("free_user_pages: private table at dir_idx=%d table=0x%X\n",
-                      dir_idx, (uint32_t)table);
 
         /* This is a private page table - check each page */
         for (page_idx = 0; page_idx < 1024; page_idx++) {
@@ -319,15 +313,10 @@ void free_user_pages(page_dir_t *dir)
              * - phys_addr points to the page table itself (corruption)
              */
             if (phys_addr == 0 || phys_addr == (uint32_t)table) {
-                serial_printf("free_user_pages: SKIP invalid virt=0x%X phys=0x%X\n",
-                              virt_addr, phys_addr);
                 /* Clear the garbage entry but don't try to free frame */
                 table->pages[page_idx] = 0;
                 continue;
             }
-
-            serial_printf("free_user_pages: freeing virt=0x%X phys=0x%X\n",
-                          virt_addr, phys_addr);
 
             /* Mark frame as free */
             frame = phys_addr / PAGE_SIZE;
@@ -337,7 +326,6 @@ void free_user_pages(page_dir_t *dir)
 
             /* Clear page table entry */
             table->pages[page_idx] = 0;
-            freed_count++;
 
             /* Flush TLB if this is the current directory */
             if (dir == _curr_dir) {
@@ -345,6 +333,4 @@ void free_user_pages(page_dir_t *dir)
             }
         }
     }
-
-    serial_printf("free_user_pages: freed %d pages\n", freed_count);
 }

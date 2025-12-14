@@ -38,6 +38,17 @@ static volatile bool cmd_ready = false;
 /* Global tick counter - incremented at 100 Hz by timer IRQ */
 volatile uint32_t kernel_ticks = 0;
 
+/*
+ * Kernel input buffer for userspace stdin reads
+ * When a process reads from stdin, it blocks until Enter is pressed.
+ * The keyboard handler fills this buffer and signals when line is ready.
+ */
+#define STDIN_BUFFER_SIZE 256
+char stdin_buffer[STDIN_BUFFER_SIZE];
+volatile size_t stdin_pos = 0;
+volatile bool stdin_ready = false;
+volatile process_t *stdin_waiting_proc = NULL;  /* Process blocked on stdin */
+
 static void run_self_tests(void);
 static void shell_loop(void);
 static void process_command(const char *cmd);
@@ -75,6 +86,8 @@ static void keyboard_handler(isr_params_t *params)
 {
     uint8_t scancode;
     char c;
+    uint32_t saved_cr3;
+    bool switched_cr3 = false;
 
     (void) params;
 
@@ -83,22 +96,81 @@ static void keyboard_handler(isr_params_t *params)
     /* Ignore key release events (high bit set) */
     if (scancode & 0x80) return;
 
+    /*
+     * Switch to kernel page directory to access kernel data.
+     * The user process's page directory may not have the kernel data
+     * segment properly mapped (EN_us, stdin_buffer, etc.).
+     * Note: We directly set CR3 instead of using switch_page_directory()
+     * because that function checks _curr_dir which may be out of sync.
+     */
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(saved_cr3));
+    {
+        uint32_t kernel_cr3 = get_page_dir_phys(_kernel_dir);
+        if (saved_cr3 != kernel_cr3) {
+            __asm__ __volatile__("mov %0, %%cr3" : : "r"(kernel_cr3) : "memory");
+            switched_cr3 = true;
+        }
+    }
+
     c = EN_us[scancode & 0x7F];
 
-    if (c == '\n') {
-        cmd_buffer[cmd_pos] = '\0';
-        cmd_ready = true;
-        k_putc('\n');
-    } else if (c == '\b') {
-        if (cmd_pos > 0) {
-            --cmd_pos;
-            k_putc('\b');
-            k_putc(' ');
-            k_putc('\b');
+    /*
+     * If a process is waiting for stdin, fill stdin_buffer.
+     * Otherwise, fill the shell's cmd_buffer.
+     */
+    if (stdin_waiting_proc != NULL) {
+        /* Userspace process is waiting for stdin input */
+        if (c == '\n') {
+            /* Add newline to buffer and mark ready */
+            if (stdin_pos < STDIN_BUFFER_SIZE - 1) {
+                stdin_buffer[stdin_pos++] = '\n';
+            }
+            stdin_buffer[stdin_pos] = '\0';
+            stdin_ready = true;
+            k_putc('\n');
+            serial_putc('\n');
+
+            /* Wake up the waiting process */
+            if (stdin_waiting_proc->state == PROC_BLOCKED) {
+                ((process_t *)stdin_waiting_proc)->state = PROC_READY;
+            }
+        } else if (c == '\b') {
+            /* Backspace - remove last character if any */
+            if (stdin_pos > 0) {
+                --stdin_pos;
+                k_putc('\b');
+                k_putc(' ');
+                k_putc('\b');
+                serial_putc('\b');
+            }
+        } else if (c != 0 && stdin_pos < STDIN_BUFFER_SIZE - 1) {
+            /* Regular character - add to buffer and echo */
+            stdin_buffer[stdin_pos++] = c;
+            k_putc(c);
+            serial_putc(c);
         }
-    } else if (c != 0 && cmd_pos < CMD_BUFFER_SIZE - 1) {
-        cmd_buffer[cmd_pos++] = c;
-        k_putc(c);
+    } else {
+        /* Shell is active - use cmd_buffer */
+        if (c == '\n') {
+            cmd_buffer[cmd_pos] = '\0';
+            cmd_ready = true;
+            k_putc('\n');
+        } else if (c == '\b') {
+            if (cmd_pos > 0) {
+                --cmd_pos;
+                k_putc('\b');
+                k_putc(' ');
+                k_putc('\b');
+            }
+        } else if (c != 0 && cmd_pos < CMD_BUFFER_SIZE - 1) {
+            cmd_buffer[cmd_pos++] = c;
+            k_putc(c);
+        }
+    }
+
+    /* Restore original page directory if we switched */
+    if (switched_cr3) {
+        __asm__ __volatile__("mov %0, %%cr3" : : "r"(saved_cr3) : "memory");
     }
 }
 
@@ -731,7 +803,7 @@ static bool test_krffs_write(void)
 static bool test_elf(void)
 {
     const char *elf_filename = "hello";
-    char elf_buffer[8192];  /* Buffer to hold ELF file */
+    char _exec_elf_buffer[8192];  /* Buffer to hold ELF file */
     int bytes_read;
     uint32_t file_size;
     uint32_t entry_point;
@@ -751,24 +823,24 @@ static bool test_elf(void)
 
     /* Read the ELF file */
     file_size = krffs_get_file_size(elf_filename);
-    if (file_size > sizeof(elf_buffer)) {
+    if (file_size > sizeof(_exec_elf_buffer)) {
         return false;
     }
 
-    bytes_read = krffs_read(elf_filename, elf_buffer, file_size, 0);
+    bytes_read = krffs_read(elf_filename, _exec_elf_buffer, file_size, 0);
     if (bytes_read != (int)file_size) {
         return false;
     }
 
     /* Validate ELF header */
-    if (!elf_check(elf_buffer, file_size)) {
+    if (!elf_check(_exec_elf_buffer, file_size)) {
         return false;
     }
 
     /* Get entry point and program headers */
-    entry_point = elf_entry_point(elf_buffer);
-    phdrs = elf_program_headers(elf_buffer);
-    phdr_count = elf_program_header_count(elf_buffer);
+    entry_point = elf_entry_point(_exec_elf_buffer);
+    phdrs = elf_program_headers(_exec_elf_buffer);
+    phdr_count = elf_program_header_count(_exec_elf_buffer);
 
     if (!phdrs || phdr_count == 0 || entry_point == 0) {
         return false;
@@ -787,7 +859,7 @@ static bool test_elf(void)
             return false;
         }
 
-        if (elf_load(elf_buffer, file_size, test_dir) != 0) {
+        if (elf_load(_exec_elf_buffer, file_size, test_dir) != 0) {
             return false;
         }
 
@@ -814,9 +886,15 @@ static bool test_elf(void)
  * 6. Allocate user stack
  * 7. Transition to user mode at ELF entry point
  */
+/*
+ * Static buffer for ELF loading in exec_program.
+ * Must be static because the kernel stack is only 16KB - a local 16KB array
+ * would overflow the stack and corrupt kernel data (like EN_us keyboard table).
+ */
+static char _exec_elf_buffer[16384];
+
 static void exec_program(const char *path)
 {
-    char elf_buffer[16384];  /* Buffer for ELF file (16KB max) */
     uint32_t file_size;
     int bytes_read;
     uint32_t entry_point;
@@ -841,25 +919,25 @@ static void exec_program(const char *path)
 
     /* Read ELF file */
     file_size = krffs_get_file_size(path);
-    if (file_size > sizeof(elf_buffer)) {
+    if (file_size > sizeof(_exec_elf_buffer)) {
         k_printf("exec: File too large: %d bytes (max %d)\n",
-                 file_size, (int)sizeof(elf_buffer));
+                 file_size, (int)sizeof(_exec_elf_buffer));
         return;
     }
 
-    bytes_read = krffs_read(path, elf_buffer, file_size, 0);
+    bytes_read = krffs_read(path, _exec_elf_buffer, file_size, 0);
     if (bytes_read != (int)file_size) {
         k_printf("exec: Read error: %d/%d bytes\n", bytes_read, file_size);
         return;
     }
 
     /* Validate ELF */
-    if (!elf_check(elf_buffer, file_size)) {
+    if (!elf_check(_exec_elf_buffer, file_size)) {
         k_puts("exec: Not a valid ELF32 executable");
         return;
     }
 
-    entry_point = elf_entry_point(elf_buffer);
+    entry_point = elf_entry_point(_exec_elf_buffer);
     serial_printf("exec_program: ELF valid, entry=0x%X\n", entry_point);
     k_printf("exec: Loading %s (entry=0x%X)\n", path, entry_point);
 
@@ -872,7 +950,7 @@ static void exec_program(const char *path)
     serial_printf("exec_program: Cloned page directory\n");
 
     /* Load ELF segments into user pages */
-    if (elf_load(elf_buffer, file_size, user_dir) != 0) {
+    if (elf_load(_exec_elf_buffer, file_size, user_dir) != 0) {
         k_puts("exec: Failed to load ELF segments");
         return;
     }

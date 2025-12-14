@@ -1,8 +1,9 @@
 /*
  * stattest.c - File stat syscall test program for Rach2 OS
  *
- * Tests sys_stat64 syscall by checking file metadata.
- * Verifies that stat works on existing files and fails on nonexistent ones.
+ * Tests both sys_stat (syscall 106) and sys_stat64 (syscall 195) by checking
+ * file metadata. Verifies that both work on existing files and fail on
+ * nonexistent ones.
  *
  * Compile with:
  *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o stattest stattest.c
@@ -26,6 +27,7 @@ typedef unsigned long long ino64_t;
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
 #define SYS_EXIT   1
 #define SYS_WRITE  4
+#define SYS_STAT   106
 #define SYS_STAT64 195
 
 /* File type bits from mode */
@@ -34,8 +36,33 @@ typedef unsigned long long ino64_t;
 #define S_IFDIR  0040000
 
 /*
+ * stat structure - 32-bit Linux stat (used by ISH)
+ * This is the structure filled by sys_stat (syscall 106)
+ */
+struct stat {
+    unsigned long  st_dev;
+    unsigned long  st_ino;
+    unsigned short st_mode;
+    unsigned short st_nlink;
+    unsigned short st_uid;
+    unsigned short st_gid;
+    unsigned long  st_rdev;
+    unsigned long  st_size;
+    unsigned long  st_blksize;
+    unsigned long  st_blocks;
+    unsigned long  st_atime;
+    unsigned long  st_atime_nsec;
+    unsigned long  st_mtime;
+    unsigned long  st_mtime_nsec;
+    unsigned long  st_ctime;
+    unsigned long  st_ctime_nsec;
+    unsigned long  __unused4;
+    unsigned long  __unused5;
+};
+
+/*
  * stat64 structure - matches 32-bit Linux stat64
- * This is the structure filled by sys_stat64
+ * This is the structure filled by sys_stat64 (syscall 195)
  */
 struct stat64 {
     unsigned long long st_dev;
@@ -88,7 +115,23 @@ static void sys_exit(int status)
 }
 
 /*
- * sys_stat64 - Get file status
+ * sys_stat - Get file status (32-bit structure)
+ * Returns: 0 on success, -1 on error
+ */
+static int sys_stat(const char *path, struct stat *buf)
+{
+    int result;
+    __asm__ __volatile__ (
+        "int $0x80"
+        : "=a"(result)
+        : "0"(SYS_STAT), "b"(path), "c"(buf)
+        : "memory"
+    );
+    return result;
+}
+
+/*
+ * sys_stat64 - Get file status (64-bit structure)
  * Returns: 0 on success, -1 on error
  */
 static int sys_stat64(const char *path, struct stat64 *buf)
@@ -156,26 +199,39 @@ static void print_num(unsigned int n)
 }
 
 /*
- * print_size - Print file size (uses 32-bit for simplicity)
- * File sizes in our toy OS are small, so 32-bit is sufficient.
+ * print_octal - Print number in octal
  */
-static void print_size(long long n)
+static void print_octal(unsigned int m)
 {
-    /* Just use the low 32 bits - our files are small */
-    print_num((unsigned int)n);
+    char octal[12];
+    int j = 0;
+
+    if (m == 0) {
+        sys_write(STDOUT_FILENO, "0", 1);
+        return;
+    }
+
+    do {
+        octal[j++] = '0' + (m & 7);
+        m >>= 3;
+    } while (m > 0);
+
+    while (j > 0) {
+        sys_write(STDOUT_FILENO, &octal[--j], 1);
+    }
 }
 
 /*
  * _start - ELF entry point
  *
- * Tests stat64:
- * 1. stat("hello.txt") - should succeed, print size
- * 2. stat("/") - should succeed (root directory)
- * 3. stat("nonexistent") - should fail
+ * Tests both stat (106) and stat64 (195):
+ * Part A: stat64 tests (existing tests)
+ * Part B: stat tests (new tests for ISH compatibility)
  */
 void _start(void)
 {
-    struct stat64 st;
+    struct stat st;
+    struct stat64 st64;
     int result;
     int passed = 0;
     int failed = 0;
@@ -183,37 +239,93 @@ void _start(void)
     puts("Stat syscall test starting...");
     puts("");
 
-    /* Test 1: stat existing file */
-    print("Test 1: stat(\"hello.txt\")... ");
-    result = sys_stat64("hello.txt", &st);
+    /* ===== Part A: stat64 (syscall 195) tests ===== */
+    puts("=== Part A: stat64 (syscall 195) ===");
+    puts("");
+
+    /* Test A1: stat64 existing file */
+    print("Test A1: stat64(\"hello.txt\")... ");
+    result = sys_stat64("hello.txt", &st64);
     if (result == 0) {
         puts("OK");
-        /* Print detailed info */
-        print("       size=");
-        print_size(st.st_size);
+        print("        size=");
+        print_num((unsigned int)st64.st_size);
         print(" bytes, mode=0");
-        /* Print mode in octal */
-        {
-            unsigned int m = st.st_mode;
-            char octal[8];
-            int j = 0;
-            do {
-                octal[j++] = '0' + (m & 7);
-                m >>= 3;
-            } while (m > 0);
-            while (j > 0) {
-                sys_write(STDOUT_FILENO, &octal[--j], 1);
-            }
-        }
+        print_octal(st64.st_mode);
         print(", nlink=");
-        print_num(st.st_nlink);
-        print(", ino=");
-        print_num((unsigned int)st.st_ino);
+        print_num(st64.st_nlink);
         puts("");
         passed++;
 
         /* Verify it's a regular file */
-        print("       type: ");
+        print("        type: ");
+        if ((st64.st_mode & S_IFMT) == S_IFREG) {
+            puts("regular file (OK)");
+        } else {
+            puts("not a regular file (unexpected)");
+        }
+    } else {
+        puts("FAILED");
+        failed++;
+    }
+
+    /* Test A2: stat64 root directory */
+    print("Test A2: stat64(\"/\")... ");
+    result = sys_stat64("/", &st64);
+    if (result == 0) {
+        puts("OK");
+        print("        mode=0");
+        print_octal(st64.st_mode);
+        print(", nlink=");
+        print_num(st64.st_nlink);
+        puts("");
+        passed++;
+
+        /* Verify it's a directory */
+        print("        type: ");
+        if ((st64.st_mode & S_IFMT) == S_IFDIR) {
+            puts("directory (OK)");
+        } else {
+            puts("not a directory (unexpected)");
+        }
+    } else {
+        puts("FAILED");
+        failed++;
+    }
+
+    /* Test A3: stat64 nonexistent file */
+    print("Test A3: stat64(\"nonexistent\")... ");
+    result = sys_stat64("nonexistent", &st64);
+    if (result < 0) {
+        puts("OK (failed as expected)");
+        passed++;
+    } else {
+        puts("FAILED (should have failed)");
+        failed++;
+    }
+
+    puts("");
+
+    /* ===== Part B: stat (syscall 106) tests ===== */
+    puts("=== Part B: stat (syscall 106) ===");
+    puts("");
+
+    /* Test B1: stat existing file */
+    print("Test B1: stat(\"hello.txt\")... ");
+    result = sys_stat("hello.txt", &st);
+    if (result == 0) {
+        puts("OK");
+        print("        size=");
+        print_num(st.st_size);
+        print(" bytes, mode=0");
+        print_octal(st.st_mode);
+        print(", nlink=");
+        print_num(st.st_nlink);
+        puts("");
+        passed++;
+
+        /* Verify it's a regular file */
+        print("        type: ");
         if ((st.st_mode & S_IFMT) == S_IFREG) {
             puts("regular file (OK)");
         } else {
@@ -224,47 +336,33 @@ void _start(void)
         failed++;
     }
 
-    /* Test 2: stat root directory */
-    print("Test 2: stat(\"/\")... ");
-    result = sys_stat64("/", &st);
+    /* Test B2: stat root directory */
+    print("Test B2: stat(\"/\")... ");
+    result = sys_stat("/", &st);
     if (result == 0) {
         puts("OK");
-        print("       mode=0");
-        {
-            unsigned int m = st.st_mode;
-            char octal[8];
-            int j = 0;
-            do {
-                octal[j++] = '0' + (m & 7);
-                m >>= 3;
-            } while (m > 0);
-            while (j > 0) {
-                sys_write(STDOUT_FILENO, &octal[--j], 1);
-            }
-        }
+        print("        mode=0");
+        print_octal(st.st_mode);
         print(", nlink=");
         print_num(st.st_nlink);
-        print(", ino=");
-        print_num((unsigned int)st.st_ino);
         puts("");
         passed++;
 
         /* Verify it's a directory */
-        print("       type: ");
+        print("        type: ");
         if ((st.st_mode & S_IFMT) == S_IFDIR) {
             puts("directory (OK)");
         } else {
             puts("not a directory (unexpected)");
         }
     } else {
-        /* If root stat not implemented, that's acceptable for now */
-        puts("FAILED (or not implemented for root)");
+        puts("FAILED");
         failed++;
     }
 
-    /* Test 3: stat nonexistent file */
-    print("Test 3: stat(\"nonexistent\")... ");
-    result = sys_stat64("nonexistent", &st);
+    /* Test B3: stat nonexistent file */
+    print("Test B3: stat(\"nonexistent\")... ");
+    result = sys_stat("nonexistent", &st);
     if (result < 0) {
         puts("OK (failed as expected)");
         passed++;
@@ -273,17 +371,15 @@ void _start(void)
         failed++;
     }
 
-    /* Test 4: stat with leading slash */
-    print("Test 4: stat(\"/hello.txt\")... ");
-    result = sys_stat64("/hello.txt", &st);
+    /* Test B4: stat with leading slash */
+    print("Test B4: stat(\"/hello.txt\")... ");
+    result = sys_stat("/hello.txt", &st);
     if (result == 0) {
         puts("OK");
-        print("       size=");
-        print_size(st.st_size);
+        print("        size=");
+        print_num(st.st_size);
         print(" bytes, nlink=");
         print_num(st.st_nlink);
-        print(", ino=");
-        print_num((unsigned int)st.st_ino);
         puts("");
         passed++;
     } else {
@@ -293,15 +389,9 @@ void _start(void)
 
     puts("");
     print("Results: ");
-    {
-        char num = '0' + passed;
-        sys_write(STDOUT_FILENO, &num, 1);
-    }
+    print_num(passed);
     print(" passed, ");
-    {
-        char num = '0' + failed;
-        sys_write(STDOUT_FILENO, &num, 1);
-    }
+    print_num(failed);
     puts(" failed");
 
     if (failed == 0) {

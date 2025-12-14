@@ -33,6 +33,8 @@ These programs are compiled as freestanding ELF32 executables for the Rach2 kern
 * `rmtest.c`: Tests unlink syscall - deletes files, verifies deletion, tests error cases
 * `mvtest.c`: Tests rename syscall - renames files, verifies old name gone, tests error cases
 * `lstest.c`: Tests getdents64 syscall - opens "/" directory, reads and parses directory entries
+* `stdintest.c`: Tests stdin read syscall - verifies blocking behavior, character echo, and line buffering
+* `dup2test.c`: Tests dup2 syscall for I/O redirection - redirects stdout to file, verifies content
 
 ## Required Syscalls
 
@@ -118,6 +120,12 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o mvte
 
 # Build lstest (getdents64 syscall test)
 i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o lstest lstest.c
+
+# Build stdintest (stdin read syscall test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o stdintest stdintest.c
+
+# Build dup2test (dup2 I/O redirection test)
+i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o dup2test dup2test.c
 ```
 
 ### Running in Rach2
@@ -258,6 +266,39 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o lste
    Results: 6 passed, 0 failed
    All getdents64 syscalls passed!
    Process exited with status 0
+
+   > exec stdintest
+   stdin syscall test starting...
+
+   Test 1: Testing read() blocking...
+   Type something and press Enter: hello
+   OK (read returned 6 bytes)
+
+   Test 2: Verifying content...
+   You typed: "hello
+   " OK
+
+   Test 3: Checking newline...
+   OK (line ends with newline)
+
+   Results: 3 passed, 0 failed
+   All stdin syscalls passed!
+   Process exited with status 0
+
+   > exec dup2test
+   dup2 I/O redirection test starting...
+
+   Test 1: creat("dup2test.tmp")... OK (fd=3)
+   Test 2: dup2(3, 1) to redirect stdout... OK (returned 1)
+   Test 3: write to redirected stdout... OK (write returned 13)
+   Test 4: dup2(saved_stdout, 1) to restore... OK
+   Reading file content: "Hello, file!
+   "
+   Test 5: verify content matches... OK
+
+   Results: 4 passed, 0 failed
+   All dup2 syscalls passed!
+   Process exited with status 0
    ```
 
 ### Syscalls Used
@@ -274,3 +315,5 @@ i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o lste
 | rmtest    | creat (8), close (6), open (5), unlink (10), write (4), exit (1) |
 | mvtest    | creat (8), close (6), open (5), rename (38), unlink (10), write (4), exit (1) |
 | lstest    | open (5), getdents64 (220), close (6), write (4), exit (1) |
+| stdintest | read (3), write (4), exit (1) |
+| dup2test  | creat (8), dup2 (63), write (4), read (3), open (5), close (6), unlink (10), exit (1) |

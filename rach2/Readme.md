@@ -18,6 +18,7 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Basic paging with identity mapping (16 MB limit)
 * Kernel panic screen automatically triggered on page faults
 * System call infrastructure (int 0x80)
+* Console input with line buffering for userspace stdin reads
 * User mode (ring 3) execution with privilege transitions
 * Process control blocks (PCB) with process table (16 max) and file descriptors
 * Context switching between processes with TSS stack management
@@ -164,8 +165,9 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 | 12     | chdir     | path                         | Change current working directory|
 | 38     | rename    | oldpath, newpath             | Rename a file                   |
 | 63     | dup2      | oldfd, newfd                 | Duplicate file descriptor       |
+| 106    | stat      | path, statbuf                | Get file status (32-bit)        |
 | 183    | getcwd    | buf, size                    | Get current working directory   |
-| 195    | stat64    | path, statbuf                | Get file status                 |
+| 195    | stat64    | path, statbuf                | Get file status (64-bit)        |
 | 220    | getdents64| fd, dirp, count              | Read directory entries          |
 | 320    | utimensat | dirfd, path, times, flags    | Update file timestamps          |
 
@@ -226,9 +228,20 @@ Note: Uses static buffers for ELF data (16KB) and argv storage (512 bytes) to av
 
 ### read (syscall 3)
 
-Reads up to `count` bytes from file descriptor `fd` into `buf`. For console fds (stdin), returns 0 (stdin reading not yet implemented). For file fds, reads from KRFFS file at current offset and advances the offset.
+Reads up to `count` bytes from file descriptor `fd` into `buf`.
 
-Returns number of bytes read, 0 at EOF, or -1 on error.
+For stdin (fd 0, console type):
+* Blocks the process until the user presses Enter (line buffering)
+* Characters are echoed to the screen as they're typed
+* Backspace removes the last character
+* Returns the line including the newline character
+* If the user requests more bytes than available, returns what's available
+
+For file fds:
+* Reads from KRFFS file at current offset and advances the offset
+* Returns 0 at EOF
+
+Returns number of bytes read, or -1 on error.
 
 ### write (syscall 4)
 
@@ -285,6 +298,32 @@ Arguments:
 Returns the buffer pointer on success, or NULL (0) if the buffer is too small or invalid.
 
 For KRFFS, getcwd always returns "/" since there is only the root directory.
+
+### stat (syscall 106)
+
+Gets file status information using the 32-bit stat structure. This is the older stat syscall used by some programs (e.g., ISH shell).
+
+Arguments:
+* `path` - Path to the file (leading '/' is stripped)
+* `statbuf` - Pointer to 32-bit stat structure to fill
+
+The 32-bit stat structure uses `unsigned short` for st_mode, st_nlink, st_uid, st_gid (unlike stat64 which uses larger types).
+
+For the root directory "/":
+* `st_mode` = S_IFDIR | 0755 (directory, rwxr-xr-x)
+* `st_ino` = 0
+* `st_nlink` = 1
+
+For regular files:
+* `st_mode` = S_IFREG | (file permissions)
+* `st_ino` = DJB hash of filename (from KRFFS node ID)
+* `st_size` = file size in bytes
+* `st_nlink` = 1
+* `st_uid`, `st_gid` = from KRFFS node
+* `st_blksize` = 4096
+* `st_blocks` = (size + 511) / 512
+
+Returns 0 on success, -1 if file not found.
 
 ### stat64 (syscall 195)
 
@@ -405,6 +444,7 @@ Since KRFFS is a flat file system, "/" contains all files directly.
 * `sys_chdir()` - Change current working directory
 * `sys_getcwd()` - Get current working directory
 * `sys_rename()` - Rename file
+* `sys_stat()` - Get file status (32-bit Linux stat compatible)
 * `sys_stat64()` - Get file status (Linux stat64 compatible)
 * `sys_getdents64()` - Read directory entries
 * `sys_utimensat()` - Update file timestamps

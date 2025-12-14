@@ -20,6 +20,16 @@
 extern void isr_return(void);
 
 /*
+ * Stdin buffer from kernel.c - used for userspace stdin reads.
+ * The keyboard handler fills this buffer when a process is waiting.
+ */
+#define STDIN_BUFFER_SIZE 256
+extern char stdin_buffer[STDIN_BUFFER_SIZE];
+extern volatile size_t stdin_pos;
+extern volatile bool stdin_ready;
+extern volatile process_t *stdin_waiting_proc;
+
+/*
  * Syscall function type - takes pointer to params, returns int32_t
  */
 typedef int32_t (*syscall_fn_t)(isr_params_t *);
@@ -227,6 +237,11 @@ static int32_t sys_close(isr_params_t *params)
  * sys_read - read from file descriptor
  * Args: EBX = fd, ECX = buf, EDX = count
  * Returns: number of bytes read, or -1 on error
+ *
+ * For stdin (fd 0, console with READ flag):
+ * - Blocks the process until Enter is pressed
+ * - Returns the line of input (including newline)
+ * - Line buffering: keyboard handler fills stdin_buffer until Enter
  */
 static int32_t sys_read(isr_params_t *params)
 {
@@ -234,6 +249,7 @@ static int32_t sys_read(isr_params_t *params)
     char *buf = (char *)params->ecx;
     uint32_t count = params->edx;
     fd_entry_t *entry;
+    uint32_t bytes_to_copy;
 
     if (!current_proc || !buf) {
         return -1;
@@ -244,13 +260,61 @@ static int32_t sys_read(isr_params_t *params)
         return -1;
     }
 
-    /* Console fd (stdin) - not implemented yet, return 0 */
+    /* Console fd (stdin) - blocking read with line buffering */
     if (entry->type == FD_TYPE_CONSOLE) {
         if (!(entry->flags & FD_FLAG_READ)) {
-            return -1;  /* Not readable (e.g., stdout) */
+            return -1;  /* Not readable (e.g., stdout/stderr) */
         }
-        /* stdin reading will be implemented in Phase 23 */
-        return 0;
+
+        /*
+         * Stdin read implementation:
+         * 1. Reset stdin buffer state
+         * 2. Register current process as waiting for stdin
+         * 3. Block until Enter is pressed (keyboard handler wakes us)
+         * 4. Copy data to user buffer
+         * 5. Return bytes read
+         */
+
+        /* Reset stdin state for new input */
+        stdin_pos = 0;
+        stdin_ready = false;
+        stdin_waiting_proc = current_proc;
+
+        serial_printf("sys_read: PID %d blocking on stdin\n", current_proc->pid);
+
+        /*
+         * Block and wait for input using hlt.
+         * We can't rely on schedule() because there may be no other READY
+         * processes. Instead, we halt waiting for keyboard interrupt.
+         * The keyboard handler will set stdin_ready=true when Enter is pressed.
+         */
+        current_proc->state = PROC_BLOCKED;
+        while (!stdin_ready) {
+            /* Enable interrupts and halt until next interrupt */
+            __asm__ __volatile__("sti; hlt");
+        }
+        current_proc->state = PROC_RUNNING;
+
+        /* We've been woken up - stdin_ready should be true now */
+        serial_printf("sys_read: PID %d woken up, stdin_pos=%d\n",
+                      current_proc->pid, (int)stdin_pos);
+
+        /* Clear the waiting process */
+        stdin_waiting_proc = NULL;
+
+        /* Copy data to user buffer, limited by count */
+        bytes_to_copy = stdin_pos;
+        if (bytes_to_copy > count) {
+            bytes_to_copy = count;
+        }
+
+        k_memcpy(buf, stdin_buffer, bytes_to_copy);
+
+        /* Reset stdin state */
+        stdin_pos = 0;
+        stdin_ready = false;
+
+        return (int32_t)bytes_to_copy;
     }
 
     /* File fd - read from KRFFS file */
@@ -404,6 +468,31 @@ static int32_t sys_getcwd(isr_params_t *params)
 }
 
 /*
+ * Linux 32-bit stat structure (used by syscall 106)
+ * This is the older structure used by ISH and some programs.
+ */
+struct linux_stat {
+    unsigned long  st_dev;
+    unsigned long  st_ino;
+    unsigned short st_mode;
+    unsigned short st_nlink;
+    unsigned short st_uid;
+    unsigned short st_gid;
+    unsigned long  st_rdev;
+    unsigned long  st_size;
+    unsigned long  st_blksize;
+    unsigned long  st_blocks;
+    unsigned long  st_atime;
+    unsigned long  st_atime_nsec;
+    unsigned long  st_mtime;
+    unsigned long  st_mtime_nsec;
+    unsigned long  st_ctime;
+    unsigned long  st_ctime_nsec;
+    unsigned long  __unused4;
+    unsigned long  __unused5;
+};
+
+/*
  * Linux stat64 structure for 32-bit systems
  */
 struct linux_stat64 {
@@ -489,6 +578,68 @@ static int32_t sys_stat64(isr_params_t *params)
     /* Use node's DJB hash as inode number */
     st->st_ino = node->id;
     st->__st_ino = (unsigned long)node->id;
+
+    return 0;
+}
+
+/*
+ * sys_stat - get file status (32-bit structure)
+ * Args: EBX = path, ECX = stat buffer
+ * Returns: 0 on success, -1 on error
+ *
+ * This is the older 32-bit stat syscall (106), used by ISH and some programs.
+ * Uses struct linux_stat instead of struct linux_stat64.
+ */
+static int32_t sys_stat(isr_params_t *params)
+{
+    const char *path = (const char *)params->ebx;
+    struct linux_stat *st = (struct linux_stat *)params->ecx;
+    const char *name;
+    krffs_node_t *node;
+
+    if (!current_proc || !path || !st) {
+        return -1;
+    }
+
+    /* Clear the stat structure */
+    k_memset(st, 0, sizeof(struct linux_stat));
+
+    /* Handle root directory "/" */
+    if ((path[0] == '/' && path[1] == '\0') || path[0] == '\0') {
+        st->st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
+        st->st_nlink = 1;
+        st->st_ino = 0;  /* Root inode is 0 */
+        st->st_blksize = 4096;
+        return 0;
+    }
+
+    /* Skip leading '/' if present */
+    name = path;
+    if (name[0] == '/') {
+        name++;
+    }
+
+    /* Find the file in KRFFS */
+    if (!krffs_fs) {
+        return -1;
+    }
+
+    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    if (!node) {
+        return -1;  /* File not found */
+    }
+
+    /* Fill stat structure */
+    st->st_mode = S_IFREG | (node->mode & 0777);  /* Regular file + permissions */
+    st->st_nlink = 1;                              /* Always 1 for KRFFS */
+    st->st_uid = (unsigned short)node->uid;
+    st->st_gid = (unsigned short)node->gid;
+    st->st_size = (unsigned long)node->data_size;
+    st->st_blksize = 4096;
+    st->st_blocks = (node->data_size + 511) / 512;
+
+    /* Use node's DJB hash as inode number */
+    st->st_ino = (unsigned long)node->id;
 
     return 0;
 }
@@ -1390,6 +1541,7 @@ void init_syscall(void)
     _syscall_table[SYS_CHDIR] = sys_chdir;
     _syscall_table[SYS_RENAME] = sys_rename;
     _syscall_table[SYS_DUP2] = sys_dup2;
+    _syscall_table[SYS_STAT] = sys_stat;
     _syscall_table[SYS_GETCWD] = sys_getcwd;
     _syscall_table[SYS_STAT64] = sys_stat64;
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;

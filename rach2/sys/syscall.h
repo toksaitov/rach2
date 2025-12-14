@@ -24,6 +24,7 @@
 #define SYS_CHDIR   12
 #define SYS_RENAME    38
 #define SYS_DUP2      63
+#define SYS_STAT     106
 #define SYS_GETCWD   183
 #define SYS_STAT64   195
 #define SYS_GETDENTS64 220
