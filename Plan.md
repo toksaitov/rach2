@@ -565,7 +565,12 @@ Before implementing new functionality:
 - `ish_syscalls.i386.c` - syscall wrappers (shows syscall numbers)
 
 ### utils
-- Each `.c` file is self-contained with inline syscalls
+- Unix utilities (echo, cat, ls, etc.) - self-contained with inline syscalls
+
+### tests
+- Rach2 syscall test programs (hello, filetest, forktest, etc.)
+- Each test validates specific kernel syscalls
+- Built as freestanding ELF32 executables with `make`
 
 ### krffs (filesystem)
 - `krffs_node.h/c` - node types and traversal
@@ -1344,6 +1349,15 @@ Before implementing new functionality:
   Results: 4 passed, 0 failed
   All dup2 syscalls passed!
   ```
+- **Directory Reorganization**: Moved test programs to dedicated `tests/` directory:
+  - Created `tests/` directory at project root for Rach2 syscall test programs
+  - Moved 12 test programs from `utils/` to `tests/`:
+    - hello.c, filetest.c, forktest.c, shelltest.c, dirtest.c, stattest.c
+    - touchtest.c, rmtest.c, mvtest.c, lstest.c, stdintest.c, dup2test.c
+  - Created `tests/Makefile` with automatic compiler detection and build rules
+  - Created `tests/Readme.md` documenting all test programs
+  - Updated `utils/Readme.md` to contain only Unix utilities (echo, cat, ls, etc.)
+  - This separation prepares for Phase 23 (porting actual Unix utilities to Rach2)
 - **Current Phase**: Phase 22 complete
 - **Next Step**: Phase 23 (Port User Programs)
 
