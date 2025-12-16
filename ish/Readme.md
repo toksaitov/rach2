@@ -1,6 +1,8 @@
 # ISH Shell
 
-A minimal educational shell written in C. The project demonstrates Unix shell internals by implementing core shell functionality from scratch, including command parsing, process creation, and program execution. A key aspect is the direct system call layer that bypasses the standard C library entirely, using inline assembly to invoke Linux kernel syscalls on 32-bit x86 (i386). The shell intentionally avoids standard library string functions, providing custom implementations to illustrate low-level C programming without external dependencies. The codebase is designed to be statically linked, producing a self-contained binary.
+A minimal educational shell written in C. The project demonstrates Unix shell internals by implementing core shell functionality from scratch, including command parsing, process creation, and program execution. A key aspect is the direct system call layer that bypasses the standard C library entirely, using inline assembly to invoke kernel syscalls on 32-bit x86 (i386). The shell intentionally avoids standard library string functions, providing custom implementations to illustrate low-level C programming without external dependencies.
+
+The shell can be built for both Linux (native) and the Rach2 kernel (freestanding ELF32).
 
 ## Features
 
@@ -9,7 +11,7 @@ A minimal educational shell written in C. The project demonstrates Unix shell in
 * Input redirection with `<` (stdin from file)
 * Output redirection with `>` (stdout to file)
 * Process management: forks child process, parent waits for completion
-* Optional stdlib-free operation using custom syscall wrappers
+* Stdlib-free operation using custom syscall wrappers
 
 ## Structure
 
@@ -19,10 +21,12 @@ A minimal educational shell written in C. The project demonstrates Unix shell in
 * `ish_shell_utilities.c`: Argument parsing, PATH/HOME extraction, redirection handling
 * `ish_cstring_utilities.h`: Declarations for string operations
 * `ish_cstring_utilities.c`: String functions (length, compare, tokenize, path combine) without stdlib
-* `ish_syscalls.h`: System call declarations
+* `ish_syscalls.h`: System call declarations and macros to replace stdlib functions
 * `ish_syscalls.c`: Includes the i386 implementation
-* `ish_syscalls.i386.c`: 32-bit x86 Linux syscalls via inline assembly (int $0x80)
-* `Makefile`: Build configuration with static linking
+* `ish_syscalls.i386.c`: 32-bit x86 syscalls via inline assembly (int $0x80)
+* `crt0.c`: C runtime startup for Rach2 (provides `_start` entry point)
+* `Makefile`: Build configuration for Rach2 target
+* `Makefile.linux`: Build configuration for Linux target
 
 ## Required Syscalls
 
@@ -39,29 +43,39 @@ A minimal educational shell written in C. The project demonstrates Unix shell in
 * `waitpid`
 * `exit`
 
-## Build
+## Build for Rach2 (Default)
 
-On Ubuntu 24.04, install 32-bit build dependencies first:
-
-```
-sudo apt install gcc-multilib
-```
-
-Then build:
+Requires a cross-compiler (`i686-elf-gcc` or `x86_64-elf-gcc`):
 
 ```
 make
 ```
 
-Produces a statically-linked 32-bit binary. Compiled with `-m32 -mno-sse -mno-sse2` flags.
+This builds a freestanding ELF32 executable linked with `crt0.o` (provides `_start` entry point). The binary can be added to a KRFFS image and run on the Rach2 kernel.
 
-## Usage
+## Build for Linux
+
+Requires the same cross-compiler as the Rach2 build:
+
+```
+make -f Makefile.linux
+```
+
+This builds the same freestanding binary but with the default text address (instead of `0x08048000`).
+
+## Clean
+
+```
+make clean
+```
+
+## Usage (Linux)
 
 ```
 ./ish
 ```
 
-Example commands to test core capabilities:
+Example commands:
 
 ```
 ls -la
@@ -73,3 +87,13 @@ cat < out.txt
 cd
 exit 0
 ```
+
+## Usage (Rach2)
+
+Add the compiled `ish` binary to a KRFFS filesystem image, boot Rach2, and run from the kernel shell:
+
+```
+> exec ish
+```
+
+The shell will start and accept commands. External commands must also be present in the KRFFS image.

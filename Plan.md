@@ -455,18 +455,25 @@ Before implementing new functionality:
 ---
 
 ### Phase 23: Port User Programs
-**Goal**: Prepare shell and utilities for the OS.
+**Goal**: Port shell and utilities to run on Rach2 kernel.
 
 **Tasks**:
-1. Create `rach2/user/` directory structure
-2. Copy ish source to `rach2/user/ish/`
-3. Copy utils source to `rach2/user/utils/`
-4. Create Makefile for building user programs as ELF32 with `-nostdlib`
-5. Create `_start` entry point that calls main and then exit syscall
+1. Port `ish/` shell in place:
+   - Modify syscall wrappers to work with Rach2 syscall numbers
+   - Add `_start` entry point that calls main and exit syscall
+   - Update Makefile for freestanding ELF32 build with cross-compiler
+   - Update `ish/Readme.md` to document Rach2 build
+2. Port `utils/` utilities in place:
+   - Adapt syscall interface for Rach2 (same int 0x80, verify syscall numbers)
+   - Add `_start` entry point or equivalent
+   - Update Makefile for freestanding ELF32 build
+   - Update `utils/Readme.md` to document Rach2 build
 
-**Measurable Result**: User programs compile to standalone ELF binaries.
+**Note**: `rach2/` stays kernel-only. User programs live in `ish/` and `utils/`. Only `krffs_host/` contains host-side tools.
 
-**Documentation**: Add User Programs section to Readme.md.
+**Measurable Result**: Shell and utilities compile to standalone ELF binaries for Rach2.
+
+**Documentation**: Update `ish/Readme.md` and `utils/Readme.md` with Rach2 build instructions.
 
 ---
 
@@ -1360,6 +1367,40 @@ Before implementing new functionality:
   - This separation prepares for Phase 23 (porting actual Unix utilities to Rach2)
 - **Current Phase**: Phase 22 complete
 - **Next Step**: Phase 23 (Port User Programs)
+
+### Session 19 - Phase 23 Complete
+- **Completed Phase 23: Port User Programs**
+  - Created `crt0.c` for `utils/` directory:
+    - Provides `_start` entry point for freestanding executables
+    - Extracts argc, argv, envp from stack per System V ABI
+    - Calls `main(argc, argv, envp)` and then `sys_exit()` with return value
+    - Uses inline assembly to read stack pointer values
+  - Created `crt0.c` for `ish/` directory:
+    - Similar structure to utils/crt0.c
+    - Uses `ish_exit()` from ish_syscalls.h instead of inline syscall
+  - Updated Makefiles for dual-target builds (Rach2 and Linux):
+    - Split into separate Makefiles: `Makefile` (Rach2) and `Makefile.linux` (Linux)
+    - Rach2 build uses `-Wl,-Ttext=0x08048000` for kernel loader
+    - Linux build uses default text address
+    - Both use cross-compiler (i686-elf-gcc) with `-nostdlib -ffreestanding`
+    - Cross-compiler auto-detection (i686-elf-gcc or x86_64-elf-gcc)
+  - Updated `ish/` Makefiles to use separate compilation:
+    - Each translation unit compiles to .o file independently
+    - Proper dependency tracking for incremental builds
+    - Split CFLAGS (compile) and LDFLAGS (link) for correct flag usage
+  - Updated `ish/Readme.md`:
+    - Added Makefile.linux to Structure section
+    - Changed build instructions to use `make -f Makefile.linux` for Linux
+  - Updated `utils/Readme.md`:
+    - Changed build instructions to use `make -f Makefile.linux` for Linux
+  - All 12 utilities compile successfully: true, false, echo, yes, cat, pwd, touch, mkdir, rm, mv, cp, ls
+  - ISH shell compiles successfully with all source files
+- Build usage:
+  - Rach2: `make` (builds with text address 0x08048000)
+  - Linux: `make -f Makefile.linux` (builds with default text address)
+  - Clean: `make clean`
+- **Current Phase**: Phase 23 complete
+- **Next Step**: Phase 24 (Build RAM Disk Image)
 
 ---
 

@@ -1,0 +1,38 @@
+# Unix Utilities Makefile (Linux)
+#
+# Builds utilities for Linux using cross-compiler.
+# Usage: make -f Makefile.linux
+
+# Cross-compiler detection
+CC := $(shell command -v i686-elf-gcc 2>/dev/null)
+ifeq ($(CC),)
+	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
+endif
+
+CFLAGS = -m32 -nostdlib -static -ffreestanding
+
+UTILITIES = true  \
+            false \
+            echo  \
+            yes   \
+            cat   \
+            pwd   \
+            touch \
+            mkdir \
+            rm    \
+            mv    \
+            cp    \
+            ls
+
+.PHONY: all clean
+
+all: crt0.o $(UTILITIES)
+
+crt0.o: crt0.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+%: %.c crt0.o
+	$(CC) $(CFLAGS) -o $@ crt0.o $<
+
+clean:
+	rm -f $(UTILITIES) crt0.o

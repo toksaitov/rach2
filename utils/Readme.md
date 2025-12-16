@@ -1,6 +1,8 @@
 # OS Utils
 
-Minimal implementations of core Unix utilities in C for 32-bit x86 Linux. Each utility invokes system calls directly via inline assembly using `int $0x80`, with no standard library dependencies. All types and constants are defined locally, making the code suitable for bare-metal or custom OS environments.
+Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility invokes system calls directly via inline assembly using `int $0x80`, with no standard library dependencies. All types and constants are defined locally, making the code suitable for bare-metal or custom OS environments.
+
+The utilities can be built for both Linux (native) and the Rach2 kernel (freestanding ELF32).
 
 ## Utilities
 
@@ -32,39 +34,57 @@ Minimal implementations of core Unix utilities in C for 32-bit x86 Linux. Each u
 * `utimensat`
 * `getdents64`
 
-## Build
+## Build for Rach2 (Default)
 
-On Ubuntu 24.04, install 32-bit compilation support first:
-
-```
-sudo apt install gcc-multilib
-```
-
-Then build:
+Requires a cross-compiler (`i686-elf-gcc` or `x86_64-elf-gcc`):
 
 ```
 make
 ```
 
-## Usage
+This builds freestanding ELF32 executables linked with `crt0.o` (provides `_start` entry point). The binaries can be added to a KRFFS image and run on the Rach2 kernel.
+
+## Build for Linux
+
+Requires the same cross-compiler as the Rach2 build:
+
+```
+make -f Makefile.linux
+```
+
+This builds the same freestanding binaries but with the default text address (instead of `0x08048000`).
+
+## Clean
+
+```
+make clean
+```
+
+## Usage (Linux)
 
 ```
 ./true && echo "success"
 ./false || echo "failed"
 ./echo hello world
-./echo hello world > file.txt
-./yes
-./yes no
 ./cat file.txt
-./cat < file.txt
 ./pwd
 ./touch new_file.txt
 ./mkdir new_dir
 ./rm new_file.txt
-./rm -r new_dir
 ./mv file.txt hello.txt
-./cp hello.txt hi.txt
-./rm hello.txt hi.txt
 ./ls
-./ls /tmp
+```
+
+## Usage (Rach2)
+
+Add compiled binaries to a KRFFS filesystem image, boot Rach2, and run from the shell:
+
+```
+> exec echo hello world
+hello world
+Process exited with status 0
+
+> exec cat hello.txt
+hello, world
+Process exited with status 0
 ```

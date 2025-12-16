@@ -1,21 +1,31 @@
-CFLAGS  += -m32 -mno-sse -mno-sse2 -g -O1 -std=gnu99 -Wno-unused-result
-LDFLAGS += -m32 -static
+# ISH Shell Makefile (Rach2)
+#
+# Builds shell for the Rach2 kernel (freestanding ELF32).
+# For Linux builds, use: make -f Makefile.linux
 
-TARGET  = ish
-OBJECTS = ish.o                   \
-          ish_shell_utilities.o   \
-          ish_cstring_utilities.o
-SPECIAL_OBJECTS = ish_syscalls.o
+# Cross-compiler detection
+CC := $(shell command -v i686-elf-gcc 2>/dev/null)
+ifeq ($(CC),)
+	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
+endif
 
-.PHONY : all
-all : $(TARGET)
+CFLAGS = -m32 -ffreestanding
+LDFLAGS = -m32 -nostdlib -static -Wl,-Ttext=0x08048000
 
-$(TARGET) : $(OBJECTS) $(SPECIAL_OBJECTS)
+TARGET = ish
 
-$(OBJECTS) : %.o : %.c ish_common.h
+OBJECTS = crt0.o ish.o ish_shell_utilities.o ish_cstring_utilities.o ish_syscalls.o
+HEADERS = ish_common.h ish_syscalls.h ish_shell_utilities.h ish_cstring_utilities.h
 
-$(SPECIAL_OBJECTS) : %.o : %.c ish_syscalls.i386.c ish_common.h
+.PHONY: all clean
 
-.PHONY : clean
-clean :
-	rm -rf $(TARGET) $(OBJECTS) $(SPECIAL_OBJECTS)
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJECTS)
+
+%.o: %.c $(HEADERS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+clean:
+	rm -f $(TARGET) $(OBJECTS)

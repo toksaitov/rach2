@@ -1,4 +1,15 @@
-CFLAGS += -m32 -mno-sse -mno-sse2 -Wall -Wextra -O2
+# Unix Utilities Makefile (Rach2)
+#
+# Builds utilities for the Rach2 kernel (freestanding ELF32).
+# For Linux builds, use: make -f Makefile.linux
+
+# Cross-compiler detection
+CC := $(shell command -v i686-elf-gcc 2>/dev/null)
+ifeq ($(CC),)
+	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
+endif
+
+CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000
 
 UTILITIES = true  \
             false \
@@ -13,12 +24,15 @@ UTILITIES = true  \
             cp    \
             ls
 
-.PHONY : all
-all : $(UTILITIES)
+.PHONY: all clean
 
-% : %.c
-	$(CC) $(CFLAGS) -o $@ $<
+all: crt0.o $(UTILITIES)
 
-.PHONY : clean
-clean :
-	rm -f $(UTILITIES)
+crt0.o: crt0.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+%: %.c crt0.o
+	$(CC) $(CFLAGS) -o $@ crt0.o $<
+
+clean:
+	rm -f $(UTILITIES) crt0.o
