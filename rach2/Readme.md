@@ -95,7 +95,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 ├── vendor/
 │   └── multiboot.h        # Multiboot specification header
 ├── iso/
-│   └── boot/grub/grub.cfg # GRUB2 configuration for ISO boot
+│   └── boot/grub/grub.cfg.template # GRUB2 config template (grub.cfg is generated)
 └── .gdbinit               # GDB initialization script
 ```
 
@@ -881,6 +881,7 @@ The `exec_program()` function orchestrates the complete loading:
 ## Scripts
 
 * `run.sh`: quick test using QEMU's direct kernel loading with serial output to terminal
+* `run_with_ram_disk.sh`: run with KRFFS RAM disk from `../krffs_host/file_system.krffs`
 * `run_from_iso.sh`: boot from ISO image with real GRUB bootloader
 * `debug.sh`: start QEMU with GDB server and connect debugger
 
@@ -932,21 +933,30 @@ Remove compiled files:
 
         make && ./run.sh
 
-2. Build a bootable ISO image and test with real GRUB bootloader:
+2. Run with a KRFFS RAM disk (for testing user programs):
+
+        cd ../krffs_host
+        ./build_ramdisk.sh    # or ./build_test_ramdisk.sh for tests
+        cd ../rach2
+        make && ./run_with_ram_disk.sh
+
+   This loads the file system from `../krffs_host/file_system.krffs` as a multiboot module.
+
+3. Build a bootable ISO image and test with real GRUB bootloader:
 
         make iso
         ./run_from_iso.sh
 
-   The ISO creation requires Docker. The script will automatically build the ISO if needed.
+   The ISO creation requires Docker. If `../krffs_host/file_system.krffs` exists, it will be automatically included as a multiboot module.
 
-3. Debug the environment with GDB:
+4. Debug the environment with GDB:
 
         make
         ./debug.sh
 
    This starts QEMU paused with a GDB server and connects the debugger. The `.gdbinit` file automatically loads the executable symbols, connects to QEMU, and sets a breakpoint at `k_main`.
 
-4. Once the environment boots, you'll see initialization messages followed by self-tests. The interactive shell accepts these commands:
+5. Once the environment boots, you'll see initialization messages followed by self-tests. The interactive shell accepts these commands:
 
         > help     # Show available commands
         > info     # Display memory pointer, timer ticks, module count

@@ -1,0 +1,13 @@
+# Compiled test binaries
+hello
+filetest
+forktest
+shelltest
+dirtest
+stattest
+touchtest
+rmtest
+mvtest
+lstest
+stdintest
+dup2test

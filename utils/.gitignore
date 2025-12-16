@@ -1,0 +1,16 @@
+# Compiled utility binaries
+true
+false
+echo
+yes
+cat
+pwd
+touch
+mkdir
+rm
+mv
+cp
+ls
+
+# Object files
+crt0.o

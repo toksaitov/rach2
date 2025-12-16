@@ -21,6 +21,12 @@ The code in the `krffs` directory is for porting to the Rach2 kernel in the `rac
 * `fsviz.krffs`: interactive terminal visualizer (termbox2)
 * `edfs.krffs`: low-level node field editor for debugging/repair
 
+## Rach2 Build Scripts
+
+* `build_ramdisk.sh [size_mb]`: Builds ISH shell and Unix utilities, creates KRFFS image with all binaries
+* `build_test_ramdisk.sh [size_mb]`: Builds syscall test programs, creates KRFFS image with all test binaries
+* `create_file_system.krffs.sh [size_mb]`: Creates an empty KRFFS file system (helper script)
+
 ## Structure
 
 * `krffs.c`: FUSE driver, mounts file system from backing file
@@ -142,3 +148,21 @@ To remove compiled files:
 5. Visualize the file system structure with the `fsviz.krffs` program. The program uses the termbox2 [library](https://github.com/termbox/termbox2) to create an interactive interface. You can scroll with arrow keys if the visualization is too wide. Press CTRL+C to exit the program.
 
         ./fsviz.krffs file_system.krffs
+
+## Rach2 RAM Disk Creation
+
+To build a RAM disk with ISH shell and utilities for Rach2:
+
+    ./build_ramdisk.sh
+
+To build a RAM disk with syscall test programs:
+
+    ./build_test_ramdisk.sh
+
+Both scripts create `file_system.krffs` (10 MB by default). Specify a different size:
+
+    ./build_ramdisk.sh 5
+
+Boot Rach2 with the RAM disk:
+
+    qemu-system-i386 -kernel ../rach2/kernel -initrd file_system.krffs -serial stdio

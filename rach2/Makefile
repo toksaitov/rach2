@@ -10,6 +10,11 @@ LINKER_SCRIPT = link
 
 ISO_IMAGE = $(BIN_DIR)/boot.iso
 
+# RAM disk (optional, from krffs_host)
+RAMDISK_SRC = ../krffs_host/file_system.krffs
+RAMDISK_DST = $(ISO_DIR)/boot/file_system.krffs
+GRUB_CFG = $(ISO_DIR)/boot/grub/grub.cfg
+
 ASM_SRC = $(LOADER).s          \
 	  sys/isr_handler.s        \
 	  sys/tables/gdt_handler.s \
@@ -65,11 +70,33 @@ iso : $(ISO_IMAGE)
 $(ISO_IMAGE) : $(KERNEL)
 	@mkdir -p $(BIN_DIR)
 	@cp $(KERNEL) $(ISO_DIR)/boot/
+	@# Generate grub.cfg with or without ramdisk module
+	@if [ -f $(RAMDISK_SRC) ]; then \
+		cp $(RAMDISK_SRC) $(RAMDISK_DST); \
+		echo "set timeout=3" > $(GRUB_CFG); \
+		echo "set default=0" >> $(GRUB_CFG); \
+		echo "" >> $(GRUB_CFG); \
+		echo "menuentry \"Rach2 Kernel\" {" >> $(GRUB_CFG); \
+		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
+		echo "    module /boot/file_system.krffs" >> $(GRUB_CFG); \
+		echo "    boot" >> $(GRUB_CFG); \
+		echo "}" >> $(GRUB_CFG); \
+		echo "Including RAM disk: $(RAMDISK_SRC)"; \
+	else \
+		echo "set timeout=3" > $(GRUB_CFG); \
+		echo "set default=0" >> $(GRUB_CFG); \
+		echo "" >> $(GRUB_CFG); \
+		echo "menuentry \"Rach2 Kernel\" {" >> $(GRUB_CFG); \
+		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
+		echo "    boot" >> $(GRUB_CFG); \
+		echo "}" >> $(GRUB_CFG); \
+		echo "No RAM disk found (build with krffs_host/build_ramdisk.sh first)"; \
+	fi
 	@docker run --rm --platform linux/amd64 -v "$(CURDIR)":/work -w /work ubuntu:24.04 sh -c \
 		"apt-get update -qq && \
 		 apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && \
 		 grub-mkrescue -o $(ISO_IMAGE) $(ISO_DIR) 2>/dev/null"
-	@rm -f $(ISO_DIR)/boot/$(KERNEL)
+	@rm -f $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST)
 	@echo "Created $(ISO_IMAGE)"
 
 # Kernel
@@ -85,4 +112,4 @@ $(C_OBJECTS) : %.o : %.c
 
 .PHONY : clean
 clean :
-	rm -f $(ASM_OBJECTS) $(C_OBJECTS) $(KERNEL) $(ISO_IMAGE) $(ISO_DIR)/boot/$(KERNEL)
+	rm -f $(ASM_OBJECTS) $(C_OBJECTS) $(KERNEL) $(ISO_IMAGE) $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST) $(GRUB_CFG)
