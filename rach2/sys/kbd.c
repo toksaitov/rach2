@@ -88,14 +88,14 @@ uint8_t EN_us_shift[128] = {
 
 bool _shift = false;
 
-static void _keyboard_test(isr_params_t params);
+static void _keyboard_test(isr_params_t *params);
 
 void init_keyboard(void)
 {
     register_isr_handler(33, &_keyboard_test);
 }
 
-static void _keyboard_test(isr_params_t params)
+static void _keyboard_test(isr_params_t *params)
 {
     (void) params;
 

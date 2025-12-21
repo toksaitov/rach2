@@ -1,6 +1,6 @@
 #include "pit.h"
 
-static void _pit_test(isr_params_t params);
+static void _pit_test(isr_params_t *params);
 
 void init_pit(uint32_t frequency)
 {
@@ -14,7 +14,7 @@ void init_pit(uint32_t frequency)
 }
 
 uint32_t _counter = 0;
-static void _pit_test(isr_params_t params)
+static void _pit_test(isr_params_t *params)
 {
     (void) params;
 

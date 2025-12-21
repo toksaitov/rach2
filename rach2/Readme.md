@@ -908,7 +908,7 @@ The `exec_program()` function orchestrates the complete loading:
 ## Scripts
 
 * `run.sh`: quick test using QEMU's direct kernel loading with serial output to terminal
-* `run_with_ram_disk.sh`: run with KRFFS RAM disk from `../krffs_host/file_system.krffs`
+* `run_with_ram_disk.sh`: run with KRFFS RAM disk from `../krffs/file_system.krffs`
 * `run_from_iso.sh`: boot from ISO image with real GRUB bootloader
 * `debug.sh`: start QEMU with GDB server and connect debugger
 
@@ -962,19 +962,19 @@ Remove compiled files:
 
 2. Run with a KRFFS RAM disk (for testing user programs):
 
-        cd ../krffs_host
+        cd ../krffs
         ./build_ramdisk.sh    # or ./build_test_ramdisk.sh for tests
         cd ../rach2
         make && ./run_with_ram_disk.sh
 
-   This loads the file system from `../krffs_host/file_system.krffs` as a multiboot module.
+   This loads the file system from `../krffs/file_system.krffs` as a multiboot module.
 
 3. Build a bootable ISO image and test with real GRUB bootloader:
 
         make iso
         ./run_from_iso.sh
 
-   The ISO creation requires Docker. If `../krffs_host/file_system.krffs` exists, it will be automatically included as a multiboot module.
+   The ISO creation requires Docker. If `../krffs/file_system.krffs` exists, it will be automatically included as a multiboot module.
 
 4. Debug the environment with GDB:
 

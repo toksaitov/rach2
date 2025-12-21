@@ -2,6 +2,8 @@
 
 A minimal educational FUSE file system in C. The project stores files inside a regular file using a flat structure inspired by the K&R first-fit memory allocator from "The C Programming Language." Files are memory-mapped via `mmap`/`MapViewOfFile`, allowing direct read/write access through virtual memory. The codebase uses a platform abstraction layer to support Unix, Linux, macOS, and Windows, making it suitable for porting to custom OS environments.
 
+The code in the `krffs` directory HERE is for generating RAM disk images for Rach2 development and testing on host environments running the latest macOS, Ubuntu, or Windows.
+
 ## Features
 
 * Flat file system: files only, no subdirectories
@@ -18,6 +20,12 @@ A minimal educational FUSE file system in C. The project stores files inside a r
 * `defrag.krffs`: defragment by moving free blocks to end
 * `fsviz.krffs`: interactive terminal visualizer (termbox2)
 * `edfs.krffs`: low-level node field editor for debugging/repair
+
+## Rach2 Build Scripts
+
+* `build_ramdisk.sh [size_mb]`: Builds ISH shell and Unix utilities, creates KRFFS image with all binaries
+* `build_test_ramdisk.sh [size_mb]`: Builds syscall test programs, creates KRFFS image with all test binaries
+* `create_file_system.krffs.sh [size_mb]`: Creates an empty KRFFS file system (helper script)
 
 ## Structure
 
@@ -60,13 +68,9 @@ Nodes form a circular linked list via size/previous_node_size fields.
 
 ## Build
 
-The Makefile builds with 32-bit flags (`-m32 -mno-sse -mno-sse2`) for porting to custom OS environments targeting older x86 architectures. On Ubuntu 24.04, install the required packages first:
+The Makefile of this `krffs` directory builds with host version of the FUSE files system to allow to create RAM disk files to be used in the Rach2 kernel.
 
-    sudo dpkg --add-architecture i386
-    sudo apt update
-    sudo apt install gcc-multilib libfuse-dev libfuse-dev:i386
-
-Then compile:
+Compile with:
 
     make
 
@@ -144,3 +148,21 @@ To remove compiled files:
 5. Visualize the file system structure with the `fsviz.krffs` program. The program uses the termbox2 [library](https://github.com/termbox/termbox2) to create an interactive interface. You can scroll with arrow keys if the visualization is too wide. Press CTRL+C to exit the program.
 
         ./fsviz.krffs file_system.krffs
+
+## Rach2 RAM Disk Creation
+
+To build a RAM disk with ISH shell and utilities for Rach2:
+
+    ./build_ramdisk.sh
+
+To build a RAM disk with syscall test programs:
+
+    ./build_test_ramdisk.sh
+
+Both scripts create `file_system.krffs` (10 MB by default). Specify a different size:
+
+    ./build_ramdisk.sh 5
+
+Boot Rach2 with the RAM disk:
+
+    qemu-system-i386 -kernel ../rach2/kernel -initrd file_system.krffs -serial stdio

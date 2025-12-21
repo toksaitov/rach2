@@ -67,7 +67,7 @@ static page_dir_t *alloc_page_dir(void)
     return dir;
 }
 
-static void _page_fault_handler(isr_params_t params);
+static void _page_fault_handler(isr_params_t *params);
 
 static void _load_page_dir(page_dir_t *dir);
 
@@ -147,12 +147,12 @@ static void _load_page_dir(page_dir_t *dir)
     __asm__ __volatile__ ("mov %0, %%cr0" :: "r"(cr0));
 }
 
-static void _page_fault_handler(isr_params_t params)
+static void _page_fault_handler(isr_params_t *params)
 {
     uint32_t fault_address;
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(fault_address));
 
-    k_printf("Kernel message: page fault at 0x%X with error code 0x%X\n", fault_address, params.error_code);
+    k_printf("Kernel message: page fault at 0x%X with error code 0x%X\n", fault_address, params->error_code);
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }

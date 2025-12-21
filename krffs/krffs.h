@@ -8,6 +8,9 @@
 #include "krffs_platform.h"
 #include "krffs_utilities.h"
 
+/*
+    The currently opened KRFFS file system with its backing store.
+ */
 struct krffs_file_system *KRFFS_File_System = NULL;
 static struct krffs_file_system File_System_Store;
 

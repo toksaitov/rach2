@@ -10,8 +10,8 @@ LINKER_SCRIPT = link
 
 ISO_IMAGE = $(BIN_DIR)/boot.iso
 
-# RAM disk (optional, from krffs_host)
-RAMDISK_SRC = ../krffs_host/file_system.krffs
+# RAM disk (optional, from krffs/)
+RAMDISK_SRC = ../krffs/file_system.krffs
 RAMDISK_DST = $(ISO_DIR)/boot/file_system.krffs
 GRUB_CFG = $(ISO_DIR)/boot/grub/grub.cfg
 
@@ -90,7 +90,7 @@ $(ISO_IMAGE) : $(KERNEL)
 		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
 		echo "    boot" >> $(GRUB_CFG); \
 		echo "}" >> $(GRUB_CFG); \
-		echo "No RAM disk found (build with krffs_host/build_ramdisk.sh first)"; \
+		echo "No RAM disk found (build with krffs/build_ramdisk.sh first)"; \
 	fi
 	@docker run --rm --platform linux/amd64 -v "$(CURDIR)":/work -w /work ubuntu:24.04 sh -c \
 		"apt-get update -qq && \

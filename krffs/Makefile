@@ -1,6 +1,4 @@
-# 32-bit build (requires gcc-multilib on Ubuntu 24.04)
-CFLAGS += -g -std=gnu99 -MMD -D_FILE_OFFSET_BITS=64 -m32 -mno-sse -mno-sse2
-LDFLAGS += -m32
+CFLAGS += -g -std=gnu99 -MMD -D_FILE_OFFSET_BITS=64
 
 FUSE_PKG := $(shell pkg-config --exists fuse 2>/dev/null && echo fuse || echo fuse-t)
 FUSE_CFLAGS += `pkg-config $(FUSE_PKG) --cflags` -DFUSE_USE_VERSION=26
