@@ -257,6 +257,8 @@ Opens a file at `path` with the given `flags`:
 * 0 (O_RDONLY): Read-only access
 * 1 (O_WRONLY): Write-only access
 * 2 (O_RDWR): Read-write access
+* 0100 (O_CREAT): Create file if it doesn't exist
+* 01000 (O_TRUNC): Truncate file to zero length if it exists
 
 Returns a new file descriptor number (≥3) on success, or -1 on error. Leading '/' in path is stripped (KRFFS has no directory hierarchy).
 
@@ -679,10 +681,18 @@ The shell command `isolate` demonstrates memory isolation:
 
 The self-tests include an automated isolation test that verifies per-process memory separation.
 
+### Page Directory and Page Table Recycling
+
+To prevent memory exhaustion during repeated fork+exec cycles, page directories and page tables are recycled using free lists:
+
+* When a process is reaped via `waitpid`, its page directory and private page tables are added to free lists
+* `clone_page_directory()` and `alloc_user_page()` check free lists before allocating new memory
+* This allows unlimited fork+exec cycles without exhausting the bump allocator
+
 ### Files Modified for Per-Process Page Directories
-* `sys/mm/paging.c` - Added `clone_page_directory()`, `get_page_dir_phys()`, `switch_page_directory()`, `alloc_user_page()`, `free_user_pages()`
+* `sys/mm/paging.c` - Added `clone_page_directory()`, `get_page_dir_phys()`, `switch_page_directory()`, `alloc_user_page()`, `free_user_pages()`, `free_page_directory()`, and free list allocators
 * `sys/mm/paging.h` - Function prototypes and exported `_kernel_dir`, `_curr_dir`
-* `sys/proc/switch.s` - Added CR3 comparison and switching logic
+* `sys/proc/switch.s` - CR3 switching with `_curr_dir` synchronization (updates global after every CR3 change)
 * `sys/proc/process.h` - Added `cr3` field to `process_t` structure
 
 ## Multiboot Modules

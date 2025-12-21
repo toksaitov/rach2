@@ -4,7 +4,7 @@ typedef unsigned int size_t;
 
 #define STDOUT_FILENO 1
 
-#define PATH_MAX 4096
+#define PATH_MAX 256
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
@@ -42,7 +42,8 @@ static size_t strlen(const char *s)
 int main(void)
 {
     char cwd[PATH_MAX];
-    if (sys_getcwd(cwd, sizeof(cwd)) > 0) {
+    /* getcwd returns buf pointer on success (non-zero), 0 on error */
+    if (sys_getcwd(cwd, sizeof(cwd)) != 0) {
         sys_write(STDOUT_FILENO, cwd, strlen(cwd));
         sys_write(STDOUT_FILENO, "\n", 1);
         return 0;

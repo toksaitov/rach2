@@ -145,6 +145,10 @@ static int32_t sys_write(isr_params_t *params)
  *
  * Special case: opening "/" opens the root directory for getdents64.
  */
+/* Linux open flags */
+#define O_CREAT  0100
+#define O_TRUNC  01000
+
 static int32_t sys_open(isr_params_t *params)
 {
     const char *path = (const char *)params->ebx;
@@ -164,8 +168,10 @@ static int32_t sys_open(isr_params_t *params)
         name++;
     }
 
-    /* Check if opening root directory "/" */
-    if (name[0] == '\0') {
+    /* Check if opening root directory "/", ".", or ".." (cwd is always "/" in KRFFS) */
+    if (name[0] == '\0' ||
+        (name[0] == '.' && name[1] == '\0') ||
+        (name[0] == '.' && name[1] == '.' && name[2] == '\0')) {
         /* Opening root directory - allocate fd as directory type */
         fd = fd_alloc(&current_proc->fds);
         if (fd < 0) {
@@ -184,7 +190,23 @@ static int32_t sys_open(isr_params_t *params)
     /* Find the file in KRFFS */
     node = krffs_find_reserved_node_by_name(krffs_fs, name);
     if (!node) {
-        return -1;  /* File not found */
+        /* File not found - check if O_CREAT is set */
+        if (flags & O_CREAT) {
+            /* Create the file */
+            if (krffs_create(name) != 0) {
+                return -1;  /* Failed to create file */
+            }
+            /* Now find the newly created node */
+            node = krffs_find_reserved_node_by_name(krffs_fs, name);
+            if (!node) {
+                return -1;  /* Shouldn't happen, but check anyway */
+            }
+        } else {
+            return -1;  /* File not found and O_CREAT not set */
+        }
+    } else if (flags & O_TRUNC) {
+        /* File exists and O_TRUNC set - truncate to 0 length */
+        krffs_truncate(name, 0);
     }
 
     /* Allocate a file descriptor */
@@ -788,6 +810,9 @@ static int32_t sys_execve(isr_params_t *params)
     _exec_argv_bufs[argc] = NULL;
 
     serial_printf("sys_execve: argc=%d\n", argc);
+    for (i = 0; i < argc; i++) {
+        serial_printf("sys_execve: argv[%d]='%s'\n", i, _exec_argv_bufs[i]);
+    }
 
     /* Skip leading '/' if present */
     name = _exec_path_buf;
@@ -919,6 +944,19 @@ static int32_t sys_execve(isr_params_t *params)
 
     serial_printf("sys_execve: Stack setup complete, esp=0x%X\n", argv_ptrs_start);
 
+    /* Debug: print what's on the stack */
+    {
+        uint32_t *debug_sp = (uint32_t *)(stack_phys + (argv_ptrs_start - USER_STACK_BASE));
+        serial_printf("sys_execve: Stack[0]=0x%X (argc)\n", debug_sp[0]);
+        serial_printf("sys_execve: Stack[1]=0x%X (argv[0])\n", debug_sp[1]);
+        if (argc > 1) {
+            serial_printf("sys_execve: Stack[2]=0x%X (argv[1])\n", debug_sp[2]);
+        }
+        if (argc > 2) {
+            serial_printf("sys_execve: Stack[3]=0x%X (argv[2])\n", debug_sp[3]);
+        }
+    }
+
     /*
      * Modify the ISR return frame to jump to new code.
      * When the syscall returns via iret, it will:
@@ -928,6 +966,18 @@ static int32_t sys_execve(isr_params_t *params)
      */
     params->eip = entry_point;
     params->user_esp = argv_ptrs_start;
+
+    /*
+     * Flush TLB to ensure new page mappings take effect.
+     * After freeing old user pages and allocating new stack/code pages,
+     * the TLB may have stale entries from the parent process (e.g., ISH).
+     * Reloading CR3 flushes the entire TLB.
+     */
+    __asm__ __volatile__ (
+        "movl %%cr3, %%eax\n\t"
+        "movl %%eax, %%cr3"
+        ::: "eax", "memory"
+    );
 
     serial_printf("sys_execve: Returning to entry=0x%X esp=0x%X\n",
                   params->eip, params->user_esp);
@@ -1096,6 +1146,15 @@ static int32_t sys_waitpid(isr_params_t *params)
 
                 serial_printf("sys_waitpid: Child %d is zombie, status=%d\n",
                               child_pid, exit_code);
+
+                /* Free the child's user pages and page directory */
+                if (child->cr3 != 0) {
+                    page_dir_t *child_dir;
+                    child_dir = (page_dir_t *)(child->cr3 - 1024 * sizeof(page_table_t *));
+                    free_user_pages(child_dir);
+                    free_page_directory(child_dir);
+                    serial_printf("sys_waitpid: Freed pages and page dir for child %d\n", child_pid);
+                }
 
                 /* Free the child process slot */
                 free_process(child);

@@ -7,6 +7,66 @@ page_dir_t *_curr_dir;
 uint8_t *_frames;
 size_t   _frames_number;
 
+/*
+ * Free lists for page directories and page tables.
+ * When a process exits, we add its structures to these lists for reuse.
+ * The first pointer in the freed structure points to the next free entry.
+ */
+static page_dir_t   *_free_page_dirs = NULL;
+static page_table_t *_free_page_tables = NULL;
+
+/*
+ * Allocate a page table from free list or mem_reserve.
+ */
+static page_table_t *alloc_page_table(void)
+{
+    page_table_t *table;
+
+    if (_free_page_tables) {
+        table = _free_page_tables;
+        _free_page_tables = *(page_table_t **)table;
+        k_memset(table, 0, sizeof(page_table_t));
+        return table;
+    }
+
+    table = (page_table_t *)mem_reserve(sizeof(page_table_t), true);
+    if (table) {
+        k_memset(table, 0, sizeof(page_table_t));
+    }
+    return table;
+}
+
+/*
+ * Add a page table to the free list.
+ */
+static void free_page_table(page_table_t *table)
+{
+    if (!table) return;
+    *(page_table_t **)table = _free_page_tables;
+    _free_page_tables = table;
+}
+
+/*
+ * Allocate a page directory from free list or mem_reserve.
+ */
+static page_dir_t *alloc_page_dir(void)
+{
+    page_dir_t *dir;
+
+    if (_free_page_dirs) {
+        dir = _free_page_dirs;
+        _free_page_dirs = *(page_dir_t **)dir;
+        k_memset(dir, 0, sizeof(page_dir_t));
+        return dir;
+    }
+
+    dir = (page_dir_t *)mem_reserve(sizeof(page_dir_t), true);
+    if (dir) {
+        k_memset(dir, 0, sizeof(page_dir_t));
+    }
+    return dir;
+}
+
 static void _page_fault_handler(isr_params_t params);
 
 static void _load_page_dir(page_dir_t *dir);
@@ -131,13 +191,11 @@ page_dir_t *clone_page_directory(void)
     page_dir_t *new_dir;
     uint32_t i;
 
-    /* Allocate a new page directory */
-    new_dir = (page_dir_t *) mem_reserve(sizeof(page_dir_t), true);
+    /* Allocate a new page directory (from free list or fresh) */
+    new_dir = alloc_page_dir();
     if (!new_dir) {
         return NULL;
     }
-
-    k_memset(new_dir, 0, sizeof(page_dir_t));
 
     /*
      * Copy kernel page table references.
@@ -219,8 +277,11 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     if (table && dir != _kernel_dir &&
         table == _kernel_dir->logical_page_tables[table_index]) {
         /* Create a copy of the page table for this directory */
-        uintptr_t table_addr = mem_reserve(sizeof(page_table_t), true);
-        page_table_t *new_table = (page_table_t *)table_addr;
+        page_table_t *new_table = alloc_page_table();
+        if (!new_table) {
+            _frames[frame] = 0;  /* Release the frame we just claimed */
+            return 0;
+        }
 
         /* Copy existing entries */
         {
@@ -231,17 +292,19 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         }
 
         /* Update directory to use the new table */
-        dir->phys_page_tables[table_index] = table_addr | 0x7;  /* P + RW + U/S */
+        dir->phys_page_tables[table_index] = (uintptr_t)new_table | 0x7;  /* P + RW + U/S */
         dir->logical_page_tables[table_index] = new_table;
         table = new_table;
     } else if (!table) {
         /* Allocate new page table */
-        uintptr_t table_addr = mem_reserve(sizeof(page_table_t), true);
-        table = (page_table_t *)table_addr;
-        k_memset(table, 0, sizeof(page_table_t));
+        table = alloc_page_table();
+        if (!table) {
+            _frames[frame] = 0;  /* Release the frame we just claimed */
+            return 0;
+        }
 
         /* Add to directory with present, rw, and user bits set */
-        dir->phys_page_tables[table_index] = table_addr | 0x7;  /* P + RW + U/S */
+        dir->phys_page_tables[table_index] = (uintptr_t)table | 0x7;  /* P + RW + U/S */
         dir->logical_page_tables[table_index] = table;
     } else if (!(dir->phys_page_tables[table_index] & 0x4)) {
         /* Page table exists but not user-accessible, set U/S bit */
@@ -333,4 +396,46 @@ void free_user_pages(page_dir_t *dir)
             }
         }
     }
+}
+
+/*
+ * Free a page directory and all its private page tables.
+ *
+ * This should be called after free_user_pages() to release the page
+ * directory structures themselves. The directory and its private
+ * page tables are added to free lists for reuse.
+ *
+ * Note: This must NOT be called on the kernel directory or the
+ * currently active directory.
+ */
+void free_page_directory(page_dir_t *dir)
+{
+    uint32_t dir_idx;
+    page_table_t *table;
+
+    if (!dir || dir == _kernel_dir || dir == _curr_dir) {
+        return;
+    }
+
+    /* Free all private page tables (not shared with kernel) */
+    for (dir_idx = 0; dir_idx < 1024; dir_idx++) {
+        table = dir->logical_page_tables[dir_idx];
+        if (!table) {
+            continue;
+        }
+
+        /* Skip shared kernel page tables */
+        if (table == _kernel_dir->logical_page_tables[dir_idx]) {
+            continue;
+        }
+
+        /* This is a private page table - add to free list */
+        free_page_table(table);
+        dir->logical_page_tables[dir_idx] = NULL;
+        dir->phys_page_tables[dir_idx] = 0;
+    }
+
+    /* Add the page directory itself to the free list */
+    *(page_dir_t **)dir = _free_page_dirs;
+    _free_page_dirs = dir;
 }

@@ -7,8 +7,8 @@ typedef unsigned int size_t;
 
 #define DT_DIR 4
 
-#define MAX_PATH 4096
-#define BUF_SIZE 1024
+#define MAX_PATH 256
+#define BUF_SIZE 512
 
 #define WRITE_STR(fd, str) sys_write(fd, str, sizeof(str) - 1)
 

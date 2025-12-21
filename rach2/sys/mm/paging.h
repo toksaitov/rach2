@@ -106,6 +106,13 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr);
 void free_user_pages(page_dir_t *dir);
 
 /*
+ * Free a page directory and its private page tables.
+ * Adds structures to free lists for reuse. Call after free_user_pages().
+ * Must not be called on kernel directory or currently active directory.
+ */
+void free_page_directory(page_dir_t *dir);
+
+/*
  * Kernel page directory (shared by all processes for kernel mappings)
  */
 extern page_dir_t *_kernel_dir;

@@ -67,7 +67,7 @@ static void test_preempt(void);
 static bool test_isolation(void);
 static bool test_krffs_write(void);
 static bool test_elf(void);
-static void exec_program(const char *path);
+static void exec_program(int argc, char *argv[]);
 
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
@@ -893,8 +893,9 @@ static bool test_elf(void)
  */
 static char _exec_elf_buffer[16384];
 
-static void exec_program(const char *path)
+static void exec_program(int argc, char *argv[])
 {
+    const char *path;
     uint32_t file_size;
     int bytes_read;
     uint32_t entry_point;
@@ -902,8 +903,19 @@ static void exec_program(const char *path)
     process_t *user_proc;
     uintptr_t user_stack_phys;
     uint32_t user_stack_vaddr;
+    uint32_t *stack_ptr;
+    uint32_t *argv_ptrs;
+    char *string_area;
+    int i;
+    size_t len;
 
-    serial_printf("exec_program: Loading '%s'\n", path);
+    if (argc < 1 || !argv || !argv[0]) {
+        k_puts("exec: No program specified");
+        return;
+    }
+
+    path = argv[0];
+    serial_printf("exec_program: Loading '%s' with %d args\n", path, argc);
 
     /* Check file system is mounted */
     if (!krffs_fs) {
@@ -968,6 +980,73 @@ static void exec_program(const char *path)
     /* Zero the stack page */
     k_memset((void *)user_stack_phys, 0, PAGE_SIZE);
 
+    /*
+     * Set up user stack with argc, argv, envp:
+     *
+     * Stack layout (grows downward, addresses decrease):
+     *   [top of stack page]
+     *   ... string data for argv[n], ..., argv[0] ...
+     *   NULL (envp terminator)
+     *   NULL (argv terminator)
+     *   argv[n] pointer
+     *   ...
+     *   argv[0] pointer
+     *   argc
+     *   [ESP points here]
+     *
+     * We build from the top of the physical stack page.
+     */
+
+    /* Start string area at top of stack, work downward */
+    string_area = (char *)(user_stack_phys + PAGE_SIZE);
+
+    /* Copy argument strings to stack (from top, going down) */
+    for (i = argc - 1; i >= 0; i--) {
+        len = k_strlen(argv[i]) + 1;  /* Include null terminator */
+        string_area -= len;
+        k_memcpy(string_area, argv[i], len);
+    }
+
+    /* Align string_area down to 4-byte boundary */
+    string_area = (char *)((uintptr_t)string_area & ~3);
+
+    /* Now build the argv array and argc below the strings */
+    /* We need space for: argc + argv[0..n] + NULL + NULL (envp terminator) */
+    stack_ptr = (uint32_t *)string_area;
+
+    /* envp terminator (NULL) */
+    stack_ptr--;
+    *stack_ptr = 0;
+
+    /* argv terminator (NULL) */
+    stack_ptr--;
+    *stack_ptr = 0;
+
+    /* argv pointers (in reverse order, so argv[n] first) */
+    /* We need to calculate the virtual addresses for the strings */
+    {
+        char *str_virt = (char *)(user_stack_vaddr + PAGE_SIZE);
+        for (i = argc - 1; i >= 0; i--) {
+            len = k_strlen(argv[i]) + 1;
+            str_virt -= len;
+            stack_ptr--;
+            *stack_ptr = (uint32_t)str_virt;  /* Virtual address of this string */
+        }
+    }
+
+    /* Remember where argv starts (for debugging) */
+    argv_ptrs = stack_ptr;
+    (void)argv_ptrs;  /* Avoid unused warning */
+
+    /* argc */
+    stack_ptr--;
+    *stack_ptr = (uint32_t)argc;
+
+    /* Calculate the virtual ESP (where stack_ptr is in virtual address space) */
+    uint32_t user_esp = user_stack_vaddr + ((uintptr_t)stack_ptr - user_stack_phys);
+
+    serial_printf("exec_program: argc=%d, ESP=0x%X\n", argc, user_esp);
+
     /* Create process structure */
     user_proc = alloc_process();
     if (!user_proc) {
@@ -993,9 +1072,8 @@ static void exec_program(const char *path)
     /* Enable scheduler for fork/waitpid to work */
     sched_enable();
 
-    /* Enter user mode at ELF entry point */
-    /* Stack pointer starts at top of user stack page */
-    enter_usermode(entry_point, user_stack_vaddr + PAGE_SIZE);
+    /* Enter user mode at ELF entry point with proper stack */
+    enter_usermode(entry_point, user_esp);
 
     /* Should never return */
     k_puts("exec: ERROR - returned from user mode!");
@@ -1348,13 +1426,44 @@ static void process_command(const char *cmd)
             }
         }
     } else if (str_starts_with(cmd, "exec ")) {
-        /* Execute ELF program: exec <filename> */
-        const char *filename = cmd + 5;  /* Skip "exec " */
+        /* Execute ELF program: exec <filename> [args...] */
+        const char *args = cmd + 5;  /* Skip "exec " */
 
-        if (filename[0] == '\0') {
-            k_puts("Usage: exec <filename>");
+        if (args[0] == '\0') {
+            k_puts("Usage: exec <filename> [args...]");
         } else {
-            exec_program(filename);
+            /* Parse command line into argv */
+            static char exec_cmd_buf[256];
+            static char *exec_argv[16];
+            int exec_argc = 0;
+            char *p;
+            int in_arg = 0;
+
+            /* Copy to mutable buffer */
+            k_strncpy(exec_cmd_buf, args, sizeof(exec_cmd_buf) - 1);
+            exec_cmd_buf[sizeof(exec_cmd_buf) - 1] = '\0';
+
+            /* Parse into argv (simple space-separated) */
+            for (p = exec_cmd_buf; *p && exec_argc < 15; p++) {
+                if (*p == ' ' || *p == '\t') {
+                    if (in_arg) {
+                        *p = '\0';  /* Terminate current arg */
+                        in_arg = 0;
+                    }
+                } else {
+                    if (!in_arg) {
+                        exec_argv[exec_argc++] = p;  /* Start new arg */
+                        in_arg = 1;
+                    }
+                }
+            }
+            exec_argv[exec_argc] = (char *)0;  /* NULL terminator */
+
+            if (exec_argc > 0) {
+                exec_program(exec_argc, exec_argv);
+            } else {
+                k_puts("Usage: exec <filename> [args...]");
+            }
         }
     } else if (str_starts_with(cmd, "touch ")) {
         /* Create a new file: touch <filename> */

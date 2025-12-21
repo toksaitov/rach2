@@ -21,7 +21,14 @@ int main(int argc, char **argv, char **envp);
  *   [ESP+4+argc*4]   NULL (argv terminator)
  *   [ESP+4+argc*4+4] NULL (envp terminator)
  *
- * We extract argc, compute argv pointer, and call main.
+ * After the compiler's function prologue (push %ebp; mov %esp,%ebp):
+ *   [EBP+0]  = saved EBP
+ *   [EBP+4]  = argc
+ *   [EBP+8]  = argv[0]
+ *   [EBP+12] = argv[1]
+ *   ...
+ *
+ * We use EBP-relative addressing since the prologue modifies ESP.
  */
 void _start(void)
 {
@@ -30,15 +37,15 @@ void _start(void)
     char **envp;
     int ret;
 
-    /* Get argc from stack */
+    /* Get argc from stack (EBP+4, just above saved EBP) */
     __asm__ __volatile__ (
-        "movl (%%esp), %0"
+        "movl 4(%%ebp), %0"
         : "=r"(argc)
     );
 
-    /* argv is at ESP+4 */
+    /* argv is at EBP+8 (pointer to argv[0]) */
     __asm__ __volatile__ (
-        "leal 4(%%esp), %0"
+        "leal 8(%%ebp), %0"
         : "=r"(argv)
     );
 

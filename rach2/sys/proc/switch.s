@@ -46,16 +46,31 @@ switch_context:
     movl PROC_CR3(%ebx), %ecx   # old->cr3
     movl PROC_CR3(%eax), %edx   # new->cr3
 
-    # Skip CR3 switch if same directory (or both 0)
+    # Skip CR3 switch if same directory
     cmpl %ecx, %edx
     je .no_cr3_switch
 
-    # Only switch if new->cr3 != 0 (0 means use kernel directory)
+    # If new->cr3 == 0, use kernel directory
     testl %edx, %edx
-    jz .no_cr3_switch
+    jnz .use_new_cr3
 
+    # new->cr3 == 0: switch to kernel directory
+    movl _kernel_dir, %edx
+    addl $4096, %edx            # Convert page_dir_t* to phys_page_tables addr
+    movl %edx, %cr3
+    movl _kernel_dir, %edx
+    movl %edx, _curr_dir
+    jmp .no_cr3_switch
+
+.use_new_cr3:
     # Switch to new page directory
     movl %edx, %cr3
+
+    # Update _curr_dir to match new CR3
+    # cr3 points to phys_page_tables (offset 4096 in page_dir_t)
+    # So page_dir_t* = cr3 - 4096
+    subl $4096, %edx
+    movl %edx, _curr_dir
 
 .no_cr3_switch:
     # Switch to new process's stack

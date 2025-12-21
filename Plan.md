@@ -492,49 +492,58 @@ Before implementing new functionality:
 
 ---
 
-### Phase 25: Shell as Init Process
-**Goal**: Boot directly into shell.
+### Phase 25: External Command Execution
+**Goal**: Test utilities work correctly from kernel console before booting into shell.
 
 **Tasks**:
-1. After kernel init, exec "/ish" as process 1
-2. Shell displays prompt, accepts commands
-3. Shell can run built-in commands (cd, exit)
-4. Test: type "exit" and observe behavior
+1. Test all utilities via `exec` command from kernel console
+2. Test: `exec echo hello world`
+3. Test: `exec cat hello.txt`
+4. Test: `exec ls`
+5. Test: `exec pwd`, `exec touch`, `exec rm`, `exec mv`, `exec cp`
+6. Debug any issues with argument passing or syscalls
+7. Test ISH shell manually via `exec ish` from kernel console:
+   - Verify shell starts and displays prompt
+   - Test fork+exec+waitpid chain by running utilities from shell
+   - Debug any issues before making shell the init process
 
-**Measurable Result**: System boots to "$ " prompt.
-
-**Documentation**: Update Boot Process section in Readme.md.
-
----
-
-### Phase 26: External Command Execution
-**Goal**: Shell runs utilities.
-
-**Tasks**:
-1. Verify fork+exec+waitpid chain works
-2. Test: `echo hello world`
-3. Test: `cat filename`
-4. Test: `ls`
-5. Debug any issues with argument passing
-
-**Measurable Result**: Basic utilities run from shell.
+**Measurable Result**: All utilities run correctly from kernel console, and `exec ish` starts the shell successfully.
 
 **Documentation**: Document tested utilities in Readme.md.
 
 ---
 
-### Phase 27: I/O Redirection
-**Goal**: Shell redirects stdin/stdout.
+### Phase 26: I/O Redirection Testing
+**Goal**: Verify I/O redirection works in the shell before making it the init process.
 
 **Tasks**:
-1. Verify dup2 syscall works correctly
-2. Test: `echo hello > file.txt`
-3. Test: `cat < file.txt`
-4. Debug any fd handling issues
+1. Start shell manually via `exec ish` from kernel console
+2. Test dup2-based I/O redirection in shell:
+   - Test: `echo hello > file.txt`
+   - Test: `cat < file.txt`
+3. Debug any fd handling issues in shell context
+4. Verify shell handles redirection correctly before boot integration
 
-**Measurable Result**: File redirection works in shell.
+**Measurable Result**: I/O redirection works correctly in the manually-started shell.
 
 **Documentation**: Document redirection support.
+
+---
+
+### Phase 27: Shell as Init Process
+**Goal**: Boot directly into shell (after all utilities are verified working).
+
+**Tasks**:
+1. After kernel init, exec "/ish" as process 1
+2. Shell displays prompt, accepts commands
+3. Shell can run built-in commands (cd, exit)
+4. Shell can run external commands (echo, cat, ls, etc.)
+5. Test: `echo hello > file.txt` and `cat < file.txt`
+6. Test: type "exit" and observe behavior
+
+**Measurable Result**: System boots to "$ " prompt, all commands work.
+
+**Documentation**: Update Boot Process section in Readme.md.
 
 ---
 
@@ -1447,7 +1456,39 @@ Before implementing new functionality:
   - QEMU direct: `./run_with_ram_disk.sh` (loads `../krffs_host/file_system.krffs`)
   - ISO with ramdisk: `cd krffs_host && ./build_ramdisk.sh && cd ../rach2 && make iso`
 - **Current Phase**: Phase 24 complete
-- **Next Step**: Phase 25 (Shell as Init Process)
+- **Next Step**: Phase 25 (External Command Execution - test utilities from kernel console)
+
+### Session 21 - Phase 25 Complete
+- **Completed Phase 25: External Command Execution**
+  - Tested all utilities via `exec` command from kernel console
+  - Tested ISH shell manually via `exec ish` from kernel console
+  - All utilities work correctly: echo, yes, cat, pwd, ls, touch, rm, mv, cp, true, false
+  - Shell starts successfully, displays prompt, executes commands via fork+exec+waitpid
+  - **mkdir**: Correctly fails with status 1 (KRFFS has no directory support - by design)
+- **Critical Bug Fixes**:
+  - **TLB flush in sys_execve**: After freeing old user pages and loading new ELF, TLB had stale entries from parent process (e.g., ISH). Added CR3 reload to flush TLB at end of sys_execve.
+  - **O_CREAT flag in sys_open**: cp and touch failed to create files because sys_open didn't handle O_CREAT. Added O_CREAT (0100) and O_TRUNC (01000) flag handling using krffs_create() and krffs_truncate().
+  - **Memory leak in sys_waitpid**: User physical pages weren't freed when reaping zombie processes. Added free_user_pages() call before free_process().
+  - **Page directory memory leak**: clone_page_directory() used bump allocator (mem_reserve) that never freed memory. After ~23 fork+exec cycles, kernel ran out of reserved memory. Implemented free lists for page directories and page tables:
+    - Added `_free_page_dirs` and `_free_page_tables` static free list pointers
+    - Added `alloc_page_dir()`, `alloc_page_table()` - allocate from free list or mem_reserve
+    - Added `free_page_table()`, `free_page_directory()` - add to free lists for reuse
+    - Updated `clone_page_directory()` and `alloc_user_page()` to use new allocators
+    - Added `free_page_directory()` call in sys_waitpid after free_user_pages()
+  - **_curr_dir desynchronization in switch.s**: Context switch changed CR3 without updating `_curr_dir` global. This caused paging functions to check wrong directory for TLB flush decisions. Added code to update `_curr_dir` after every CR3 switch.
+  - **Kernel directory (cr3=0) handling in switch.s**: When switching to a kernel process (cr3=0), switch.s skipped CR3 switch entirely, leaving wrong directory active. Added proper handling to switch to `_kernel_dir` when new->cr3 == 0.
+  - **rm -r stack overflow**: rm utility had 5KB+ local arrays (MAX_PATH=4096, BUF_SIZE=1024) on 4KB user stack. Reduced to MAX_PATH=256, BUF_SIZE=512 (~900 bytes total).
+  - **mkdir exit code**: Always returned 0 even on failure. Fixed to return 1 when sys_mkdir fails.
+- **Files Modified**:
+  - `rach2/sys/syscall.c` - TLB flush, O_CREAT support, user page cleanup in waitpid
+  - `rach2/sys/mm/paging.c` - Free list allocators for page directories/tables
+  - `rach2/sys/mm/paging.h` - Added free_page_directory() declaration and _curr_dir extern
+  - `rach2/sys/proc/switch.s` - Update _curr_dir after CR3 switch, handle cr3=0
+  - `utils/rm.c` - Reduced buffer sizes to prevent stack overflow
+  - `utils/mkdir.c` - Fixed exit code to return 1 on failure
+- Verified: All utilities run correctly from ISH shell, no crashes after 30+ commands
+- **Current Phase**: Phase 25 complete
+- **Next Step**: Phase 26 (I/O Redirection Testing)
 
 ---
 

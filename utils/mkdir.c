@@ -39,6 +39,8 @@ static size_t strlen(const char *s)
 
 int main(int argc, char *argv[])
 {
+    int failed = 0;
+
     if (argc < 2) {
         WRITE_STR(STDERR_FILENO, "Usage: mkdir <dir> [...]\n");
         return 1;
@@ -49,8 +51,9 @@ int main(int argc, char *argv[])
             WRITE_STR(STDERR_FILENO, "mkdir: failed to create directory '");
             sys_write(STDERR_FILENO, argv[i], strlen(argv[i]));
             WRITE_STR(STDERR_FILENO, "'\n");
+            failed = 1;
         }
     }
 
-    return 0;
+    return failed;
 }

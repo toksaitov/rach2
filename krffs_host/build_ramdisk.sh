@@ -59,6 +59,10 @@ for util in true false echo yes cat pwd touch mkdir rm mv cp ls; do
     fi
 done
 
+# Create a test file for cat and other file-processing utilities
+echo "hello, world" > "$MOUNT_POINT/hello.txt"
+echo "  hello.txt (test file)"
+
 # Remove macOS AppleDouble files (._*) if any were created
 rm -f "$MOUNT_POINT"/._*
 

@@ -30,4 +30,10 @@ void* k_memset(void *ptr, char c, size_t n);
  */
 void* k_memcpy(void *dest, const void *src, size_t n);
 
+/*
+ * Copies up to 'n' characters from 'src' to 'dest'.
+ * If 'src' is shorter than 'n', 'dest' is padded with null bytes.
+ */
+char* k_strncpy(char *dest, const char *src, size_t n);
+
 #endif
