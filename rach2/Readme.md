@@ -11,7 +11,7 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Interrupt handling: IDT with 32 CPU exceptions and 16 IRQs
 * 8259 PIC initialization and EOI handling
 * Programmable Interval Timer (100 Hz tick)
-* PS/2 keyboard driver with US layout and shift key support
+* PS/2 keyboard driver with US layout, shift key, and CTRL+C support
 * VGA text mode display (80x25, 16 colors)
 * Serial port output (COM1) for debug logging
 * Simple bump allocator for physical memory
@@ -27,8 +27,10 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Multiboot module loading (RAM disk support via `-initrd`)
 * KRFFS file system with read/write support loaded from RAM disk module
 * ELF32 header parsing for executable validation and loading
+* Boots directly into ISH shell as init process (PID 1)
+* CTRL+C kills foreground user process (returns parent to shell, or kernel debug shell if init)
 * Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF load)
-* Interactive shell with commands: help, info, modules, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
+* Interactive kernel debug shell with commands: help, info, modules, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
 
 ## Memory Layout
 
@@ -515,6 +517,21 @@ Each process is represented by a `process_t` structure containing:
 ### Process Table
 
 The kernel maintains a fixed-size process table (`MAX_PROCS = 16`). At boot, process 0 (the idle/kernel process) is created and set as the current process.
+
+### Init Process and CTRL+C
+
+After boot and self-tests, the kernel automatically boots into ISH shell as the init process (PID 1). The init process is special:
+
+* When init exits normally (via `exit` command), control returns to the kernel debug shell
+* When init is killed by CTRL+C, control also returns to the kernel debug shell
+* From the kernel debug shell, you can run `exec ish` to restart the shell
+
+CTRL+C (keyboard interrupt) kills the currently running foreground user process:
+
+* If the process is init: Cleans up the process, resets stdin/command buffers, and returns to kernel debug shell
+* If the process is a child (e.g., `yes` running under ISH): Marks the child as ZOMBIE, wakes the parent, and the parent collects it via `waitpid`
+
+This provides a simple way to interrupt runaway processes (like `yes`) without full signal support.
 
 ### Files in `sys/proc/`
 * `process.h` - PCB structure, state definitions, function prototypes

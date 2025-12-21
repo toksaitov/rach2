@@ -39,6 +39,12 @@ static volatile bool cmd_ready = false;
 volatile uint32_t kernel_ticks = 0;
 
 /*
+ * Init process PID - when this process exits, we return to kernel shell.
+ * Set to 0 (invalid) when no init is running.
+ */
+volatile uint32_t init_pid = 0;
+
+/*
  * Kernel input buffer for userspace stdin reads
  * When a process reads from stdin, it blocks until Enter is pressed.
  * The keyboard handler fills this buffer and signals when line is ready.
@@ -50,11 +56,12 @@ volatile bool stdin_ready = false;
 volatile process_t *stdin_waiting_proc = NULL;  /* Process blocked on stdin */
 
 static void run_self_tests(void);
-static void shell_loop(void);
+void shell_loop(void);  /* Non-static: called from syscall.c when init exits */
 static void process_command(const char *cmd);
 static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
 static bool str_equal(const char *a, const char *b);
+static void boot_init_process(void);
 
 static bool test_memory(void);
 static bool test_strings(void);
@@ -85,6 +92,111 @@ static void timer_handler(isr_params_t *params)
 /* Shift key state for keyboard handler */
 static bool _kbd_shift = false;
 
+/* Ctrl key state for CTRL+C handling */
+static bool _kbd_ctrl = false;
+
+/*
+ * Kill the currently running foreground user process (CTRL+C handler).
+ *
+ * This is similar to sys_exit but triggered from keyboard interrupt.
+ * When a user process is running and CTRL+C is pressed:
+ * - If it's init: clean up and return to kernel debug shell
+ * - If it's a child: mark as zombie, wake parent, let parent collect it
+ */
+static void kill_foreground_process(void)
+{
+    process_t *parent;
+    bool is_init;
+
+    /* Only kill user processes (cr3 != 0 means it has its own page directory) */
+    if (!current_proc || current_proc->cr3 == 0) {
+        return;
+    }
+
+    is_init = (current_proc->pid == init_pid && init_pid != 0);
+
+    serial_printf("CTRL+C: Killing process %d (is_init=%d)\n",
+                  current_proc->pid, is_init);
+    k_puts("^C");
+
+    /* Mark process as zombie with "interrupted" exit code */
+    current_proc->state = PROC_ZOMBIE;
+    current_proc->exit_code = -2;  /* Indicates killed by interrupt */
+
+    /* Wake up parent if it's blocked (likely in waitpid) */
+    parent = get_process(current_proc->parent_pid);
+    if (parent && parent->state == PROC_BLOCKED) {
+        parent->state = PROC_READY;
+        serial_printf("CTRL+C: Woke parent process %d\n", parent->pid);
+    }
+
+    /* Clean up user pages before switching context */
+    if (current_proc->cr3 != 0) {
+        page_dir_t *dir;
+        dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
+        free_user_pages(dir);
+        free_page_directory(dir);
+        current_proc->cr3 = 0;
+    }
+
+    /* Switch to kernel page directory */
+    switch_page_directory(_kernel_dir);
+
+    if (is_init) {
+        /*
+         * Init was killed - return to kernel debug shell.
+         * This is the same path as when init exits normally.
+         */
+        serial_printf("CTRL+C: Init killed, returning to kernel shell\n");
+        k_puts("");
+        k_puts("Init process killed. Returning to kernel debug shell.");
+
+        free_process(current_proc);
+
+        /* Reset state */
+        init_pid = 0;
+        current_proc = &proc_table[0];
+        current_proc->state = PROC_RUNNING;
+
+        /* Reset stdin state so keyboard goes back to cmd_buffer */
+        stdin_waiting_proc = NULL;
+        stdin_ready = false;
+        stdin_pos = 0;
+
+        /* Reset command buffer for fresh shell */
+        cmd_pos = 0;
+        cmd_ready = false;
+
+        sched_disable();
+
+        /* Jump to shell with fresh kernel stack */
+        __asm__ __volatile__(
+            "movl %0, %%esp\n\t"
+            "sti\n\t"
+            "jmp *%1\n\t"
+            :
+            : "r"((uint32_t)stack + KERNEL_STACK_SIZE),
+              "r"((uint32_t)shell_loop)
+            : "memory"
+        );
+        /* Never reached */
+    } else {
+        /*
+         * Child process killed - leave as ZOMBIE for parent to collect.
+         * Parent's waitpid will clean up pages and free the process slot.
+         * We just need to schedule the parent to run.
+         *
+         * DON'T call free_process() here - waitpid needs to find the zombie!
+         */
+
+        /* Let scheduler pick the parent process (now READY) */
+        schedule();
+
+        /* If we get here, something went wrong - halt */
+        __asm__ __volatile__("cli; hlt");
+    }
+}
+
 static void keyboard_handler(isr_params_t *params)
 {
     uint8_t scancode;
@@ -106,8 +218,27 @@ static void keyboard_handler(isr_params_t *params)
         return;
     }
 
+    /* Handle Ctrl key press/release (Left Ctrl: 0x1D, Right Ctrl uses 0xE0 prefix) */
+    if (scancode == 0x1D) {
+        _kbd_ctrl = true;
+        return;
+    }
+    if (scancode == 0x9D) {  /* 0x1D | 0x80 = Ctrl release */
+        _kbd_ctrl = false;
+        return;
+    }
+
     /* Ignore other key release events (high bit set) */
     if (scancode & 0x80) return;
+
+    /*
+     * CTRL+C detection: Kill foreground user process.
+     * 'C' key has scancode 0x2E.
+     */
+    if (_kbd_ctrl && scancode == 0x2E) {
+        kill_foreground_process();
+        return;  /* Don't process as normal character */
+    }
 
     /*
      * Switch to kernel page directory to access kernel data.
@@ -1074,6 +1205,15 @@ static void exec_program(int argc, char *argv[])
     user_proc->parent_pid = current_proc ? current_proc->pid : 0;
     current_proc = user_proc;
 
+    /*
+     * If no init process is running, this is the init process.
+     * When init exits, the kernel returns to shell_loop().
+     */
+    if (init_pid == 0) {
+        init_pid = user_proc->pid;
+        serial_printf("exec_program: Process %d is init\n", init_pid);
+    }
+
     serial_printf("exec_program: Process %d created, CR3=0x%X\n",
                   user_proc->pid, user_proc->cr3);
 
@@ -1091,6 +1231,40 @@ static void exec_program(int argc, char *argv[])
 
     /* Should never return */
     k_puts("exec: ERROR - returned from user mode!");
+}
+
+/*
+ * Boot into the init process (ISH shell).
+ *
+ * This function attempts to exec "ish" as the init process (PID 1).
+ * Unlike exec_program(), this function is called at boot time to
+ * start the system's first user process.
+ *
+ * When init exits, the kernel returns to shell_loop() for debugging.
+ */
+static void boot_init_process(void)
+{
+    static char *init_argv[] = { "ish", NULL };
+
+    /* Check if ISH is available */
+    if (!krffs_fs || krffs_open("ish") != 0) {
+        k_puts("boot: ISH shell not found in RAM disk");
+        k_puts("boot: Falling back to kernel debug shell");
+        return;
+    }
+
+    /* Clear screen before starting shell */
+    k_cls();
+
+    k_puts("Booting into ISH shell...");
+    k_puts("Type 'exit' to return to kernel debug shell.");
+    k_puts("");
+
+    /* Use exec_program to boot into ISH */
+    exec_program(1, init_argv);
+
+    /* If exec_program returns (which it shouldn't normally), fall back */
+    k_puts("boot: Failed to start ISH shell");
 }
 
 static void run_self_tests(void)
@@ -1613,7 +1787,7 @@ static void process_command(const char *cmd)
     }
 }
 
-static void shell_loop(void)
+void shell_loop(void)
 {
     k_puts("Type 'help' for available commands.");
     k_puts("");
@@ -1827,5 +2001,24 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     run_self_tests();
 
     k_puts("");
-    shell_loop();
+
+    /*
+     * Boot directly into ISH shell as the init process.
+     * If ISH is not found or fails, fall back to kernel debug shell.
+     * When init (ISH) exits, control returns here and we restart the loop.
+     */
+    while (1) {
+        /* Reset init_pid for new boot */
+        init_pid = 0;
+
+        /* Try to boot into ISH */
+        boot_init_process();
+
+        /* If boot_init_process returns, ISH was not found or failed.
+         * Or init exited and control returned here.
+         * Run kernel debug shell until user runs a new exec command. */
+        k_puts("");
+        k_puts("Kernel debug shell active.");
+        shell_loop();
+    }
 }

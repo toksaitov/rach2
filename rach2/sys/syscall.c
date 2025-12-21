@@ -30,6 +30,19 @@ extern volatile bool stdin_ready;
 extern volatile process_t *stdin_waiting_proc;
 
 /*
+ * Init process tracking from kernel.c.
+ * When init exits, we return to the kernel debug shell.
+ */
+extern volatile uint32_t init_pid;
+
+/* Shell loop from kernel.c - called when init exits */
+extern void shell_loop(void);
+
+/* Kernel stack from loader.s */
+extern char stack[];
+#define KERNEL_STACK_SIZE_LOCAL 0x4000
+
+/*
  * Syscall function type - takes pointer to params, returns int32_t
  */
 typedef int32_t (*syscall_fn_t)(isr_params_t *);
@@ -45,11 +58,14 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
  * Returns: does not return
  *
  * Marks process as ZOMBIE, wakes parent if waiting, and reschedules.
+ * If init process exits, returns to kernel debug shell.
  */
 static int32_t sys_exit(isr_params_t *params)
 {
     int status = (int)params->ebx;
     process_t *parent;
+    bool is_init = false;
+    uint32_t exiting_pid;
 
     serial_printf("sys_exit: Process %d exited with status %d\n",
                   current_proc ? (int)current_proc->pid : -1, status);
@@ -59,6 +75,9 @@ static int32_t sys_exit(isr_params_t *params)
         __asm__ __volatile__("cli; hlt");
         return 0;
     }
+
+    exiting_pid = current_proc->pid;
+    is_init = (exiting_pid == init_pid && init_pid != 0);
 
     /* Mark process as zombie and store exit code */
     current_proc->state = PROC_ZOMBIE;
@@ -72,6 +91,55 @@ static int32_t sys_exit(isr_params_t *params)
 
     /* Schedule another process */
     schedule();
+
+    /*
+     * If we get here, there are no other READY processes.
+     * If init exited, return to kernel debug shell.
+     */
+    if (is_init) {
+        serial_printf("sys_exit: Init process %d exited, returning to kernel shell\n",
+                      exiting_pid);
+        k_puts("");
+        k_puts("Init process exited. Returning to kernel debug shell.");
+
+        /* Clean up the init process resources */
+        if (current_proc->cr3 != 0) {
+            page_dir_t *init_dir;
+            init_dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
+            free_user_pages(init_dir);
+            free_page_directory(init_dir);
+        }
+        free_process(current_proc);
+
+        /* Reset init tracking */
+        init_pid = 0;
+
+        /* Reset to kernel process 0 */
+        current_proc = &proc_table[0];
+        current_proc->state = PROC_RUNNING;
+
+        /* Disable scheduler while in kernel shell */
+        sched_disable();
+
+        /* Switch back to kernel page directory */
+        switch_page_directory(_kernel_dir);
+
+        /* Re-enable interrupts and return to shell via longjmp-like mechanism.
+         * We reset ESP to the kernel stack and jump to shell_loop.
+         * This is safe because we're in kernel mode and init has been cleaned up.
+         */
+        __asm__ __volatile__(
+            "movl %0, %%esp\n\t"    /* Reset to fresh kernel stack */
+            "sti\n\t"               /* Re-enable interrupts */
+            "jmp *%1\n\t"           /* Jump to shell_loop */
+            :
+            : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
+              "r"((uint32_t)shell_loop)
+            : "memory"
+        );
+
+        /* Never reached */
+    }
 
     /* If no other processes, halt */
     __asm__ __volatile__("cli; hlt");

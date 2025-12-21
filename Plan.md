@@ -1509,6 +1509,34 @@ Before implementing new functionality:
 - **Current Phase**: Phase 26 complete
 - **Next Step**: Phase 27 (Shell as Init Process)
 
+### Session 23 - Phase 27 Complete
+- **Completed Phase 27: Shell as Init Process**
+  - Kernel now boots directly into ISH shell as init process (PID 1)
+  - When init exits (via `exit` command), control returns to kernel debug shell
+  - Implemented CTRL+C to kill foreground user process without signal support
+  - CTRL+C on child processes properly returns control to parent (ISH)
+  - CTRL+C on init process returns to kernel debug shell
+- **Boot Sequence**:
+  - Added `init_pid` global to track init process
+  - Added `boot_init_process()` function that execs "ish" as init
+  - `k_main()` now loops: boot_init -> (init exits) -> kernel shell -> (user execs) -> repeat
+  - Screen is cleared before starting ISH shell
+- **CTRL+C Implementation**:
+  - Added `_kbd_ctrl` state variable for Ctrl key tracking (scancode 0x1D press, 0x9D release)
+  - Added `kill_foreground_process()` function in keyboard handler
+  - Detects CTRL+C via Ctrl + 0x2E scancode (C key)
+  - For init: Full cleanup, reset stdin/command buffers, jump to kernel shell
+  - For child: Mark as ZOMBIE, wake parent, schedule (parent's waitpid collects it)
+- **Bug Fixes**:
+  - Fixed zombie collection: Don't call `free_process()` for killed children - leave as ZOMBIE for waitpid
+  - Fixed keyboard input after CTRL+C: Reset `stdin_waiting_proc`, `stdin_ready`, `stdin_pos`, `cmd_pos`, `cmd_ready`
+- **Files Modified**:
+  - `rach2/kernel.c` - Added init_pid, boot_init_process(), kill_foreground_process(), _kbd_ctrl, Ctrl key handling
+  - `rach2/sys/syscall.c` - Modified sys_exit() for init exit handling (jump to kernel shell)
+  - `rach2/Readme.md` - Added init process and CTRL+C documentation
+- **Current Phase**: Phase 27 complete
+- **Next Step**: Phase 28 (Final Testing and Polish)
+
 ---
 
 ## Running QEMU for LLM Serial Output
