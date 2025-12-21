@@ -11,7 +11,7 @@ Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope wi
 * Interrupt handling: IDT with 32 CPU exceptions and 16 IRQs
 * 8259 PIC initialization and EOI handling
 * Programmable Interval Timer (100 Hz tick)
-* PS/2 keyboard driver with US layout
+* PS/2 keyboard driver with US layout and shift key support
 * VGA text mode display (80x25, 16 colors)
 * Serial port output (COM1) for debug logging
 * Simple bump allocator for physical memory
@@ -64,7 +64,7 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   ├── isr_handler.s      # ISR/IRQ stubs and common handlers
 │   ├── pic.c/h            # 8259 PIC initialization
 │   ├── pit.c/h            # Programmable Interval Timer
-│   ├── kbd.c/h            # PS/2 keyboard driver
+│   ├── kbd.c/h            # PS/2 keyboard driver with shift key support
 │   ├── panic.c/h          # Kernel panic with visual screen
 │   ├── display/
 │   │   ├── display.c/h    # VGA text mode, colors, scrolling

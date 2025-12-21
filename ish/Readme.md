@@ -97,3 +97,10 @@ Add the compiled `ish` binary to a KRFFS filesystem image, boot Rach2, and run f
 ```
 
 The shell will start and accept commands. External commands must also be present in the KRFFS image.
+
+I/O redirection is fully supported on Rach2:
+
+```
+echo hello > test.txt
+cat < test.txt
+```

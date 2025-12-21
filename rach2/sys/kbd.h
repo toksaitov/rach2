@@ -8,6 +8,7 @@
 #include "lib/kdef.h"
 
 extern uint8_t EN_us[128];
+extern uint8_t EN_us_shift[128];
 
 void init_keyboard(void);
 

@@ -1490,6 +1490,25 @@ Before implementing new functionality:
 - **Current Phase**: Phase 25 complete
 - **Next Step**: Phase 26 (I/O Redirection Testing)
 
+### Session 22 - Phase 26 Complete
+- **Completed Phase 26: I/O Redirection Testing**
+  - Tested `echo hello > test.txt` and `cat < test.txt` in ISH shell
+  - Both input and output redirection work correctly
+- **Keyboard Shift Key Fix**:
+  - **Problem**: Typing Shift+`.` produced `.` instead of `>`, breaking redirection syntax
+  - **Root cause**: Keyboard handler only looked up unshifted scancode table
+  - **Solution**: Added `EN_us_shift[128]` shifted scancode table to kbd.c with proper symbol mappings
+  - Added shift key tracking (`_kbd_shift`) in keyboard_handler to detect Shift press/release
+  - Handler now uses shifted table when Shift is held
+- **Files Modified**:
+  - `rach2/sys/kbd.c` - Added EN_us_shift table with shifted characters
+  - `rach2/sys/kbd.h` - Exported EN_us_shift
+  - `rach2/kernel.c` - Added _kbd_shift tracking and shifted table lookup in keyboard_handler
+  - `ish/Readme.md` - Added I/O redirection usage example for Rach2
+  - `rach2/Readme.md` - Updated keyboard driver feature to mention shift key support
+- **Current Phase**: Phase 26 complete
+- **Next Step**: Phase 27 (Shell as Init Process)
+
 ---
 
 ## Running QEMU for LLM Serial Output

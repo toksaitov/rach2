@@ -82,6 +82,9 @@ static void timer_handler(isr_params_t *params)
     schedule();
 }
 
+/* Shift key state for keyboard handler */
+static bool _kbd_shift = false;
+
 static void keyboard_handler(isr_params_t *params)
 {
     uint8_t scancode;
@@ -93,7 +96,17 @@ static void keyboard_handler(isr_params_t *params)
 
     scancode = inb(0x60);
 
-    /* Ignore key release events (high bit set) */
+    /* Handle shift key press/release */
+    if (scancode == 0x2A || scancode == 0x36) {
+        _kbd_shift = true;
+        return;
+    }
+    if (scancode == 0xAA || scancode == 0xB6) {
+        _kbd_shift = false;
+        return;
+    }
+
+    /* Ignore other key release events (high bit set) */
     if (scancode & 0x80) return;
 
     /*
@@ -112,7 +125,8 @@ static void keyboard_handler(isr_params_t *params)
         }
     }
 
-    c = EN_us[scancode & 0x7F];
+    /* Use shifted or unshifted scancode table */
+    c = _kbd_shift ? EN_us_shift[scancode & 0x7F] : EN_us[scancode & 0x7F];
 
     /*
      * If a process is waiting for stdin, fill stdin_buffer.
