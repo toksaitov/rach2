@@ -16,7 +16,7 @@
 #include "sys/fs/krffs.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
-#include "sys/display/display.h"
+#include "sys/display/vga_text.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 
@@ -115,6 +115,9 @@ static void kill_foreground_process(void)
 
     is_init = (current_proc->pid == init_pid && init_pid != 0);
 
+    /* Release framebuffer if this process owns it */
+    fb_release_if_owner(current_proc->pid);
+
     serial_printf("CTRL+C: Killing process %d (is_init=%d)\n",
                   current_proc->pid, is_init);
     k_puts("^C");
@@ -207,6 +210,9 @@ static void keyboard_handler(isr_params_t *params)
     (void) params;
 
     scancode = inb(0x60);
+
+    /* Push ALL scancodes to buffer for games (before any early returns) */
+    kbd_push_scancode(scancode);
 
     /* Handle shift key press/release */
     if (scancode == 0x2A || scancode == 0x36) {
@@ -1035,8 +1041,9 @@ static bool test_elf(void)
  * Static buffer for ELF loading in exec_program.
  * Must be static because the kernel stack is only 16KB - a local 16KB array
  * would overflow the stack and corrupt kernel data (like EN_us keyboard table).
+ * Increased to 512KB to support Doom (368KB).
  */
-static char _exec_elf_buffer[16384];
+static char _exec_elf_buffer[512 * 1024];
 
 static void exec_program(int argc, char *argv[])
 {
@@ -1060,7 +1067,6 @@ static void exec_program(int argc, char *argv[])
     }
 
     path = argv[0];
-    serial_printf("exec_program: Loading '%s' with %d args\n", path, argc);
 
     /* Check file system is mounted */
     if (!krffs_fs) {
@@ -1095,8 +1101,6 @@ static void exec_program(int argc, char *argv[])
     }
 
     entry_point = elf_entry_point(_exec_elf_buffer);
-    serial_printf("exec_program: ELF valid, entry=0x%X\n", entry_point);
-    k_printf("exec: Loading %s (entry=0x%X)\n", path, entry_point);
 
     /* Clone page directory for new process */
     user_dir = clone_page_directory();
@@ -1104,7 +1108,6 @@ static void exec_program(int argc, char *argv[])
         k_puts("exec: Failed to clone page directory");
         return;
     }
-    serial_printf("exec_program: Cloned page directory\n");
 
     /* Load ELF segments into user pages */
     if (elf_load(_exec_elf_buffer, file_size, user_dir) != 0) {
@@ -1119,8 +1122,6 @@ static void exec_program(int argc, char *argv[])
         k_puts("exec: Failed to allocate user stack");
         return;
     }
-    serial_printf("exec_program: User stack at virt=0x%X phys=0x%X\n",
-                  user_stack_vaddr, user_stack_phys);
 
     /* Zero the stack page */
     k_memset((void *)user_stack_phys, 0, PAGE_SIZE);
@@ -1190,8 +1191,6 @@ static void exec_program(int argc, char *argv[])
     /* Calculate the virtual ESP (where stack_ptr is in virtual address space) */
     uint32_t user_esp = user_stack_vaddr + ((uintptr_t)stack_ptr - user_stack_phys);
 
-    serial_printf("exec_program: argc=%d, ESP=0x%X\n", argc, user_esp);
-
     /* Create process structure */
     user_proc = alloc_process();
     if (!user_proc) {
@@ -1211,17 +1210,10 @@ static void exec_program(int argc, char *argv[])
      */
     if (init_pid == 0) {
         init_pid = user_proc->pid;
-        serial_printf("exec_program: Process %d is init\n", init_pid);
     }
-
-    serial_printf("exec_program: Process %d created, CR3=0x%X\n",
-                  user_proc->pid, user_proc->cr3);
 
     /* Switch to user page directory */
     switch_page_directory(user_dir);
-    serial_printf("exec_program: Switched to user page directory\n");
-
-    k_printf("exec: Entering user mode...\n");
 
     /* Enable scheduler for fork/waitpid to work */
     sched_enable();
@@ -1269,7 +1261,6 @@ static void boot_init_process(void)
 
 static void run_self_tests(void)
 {
-    k_puts("");
     k_puts("======= System Self-Test =======");
     serial_printf("\n======= System Self-Test =======\n");
     k_puts("");
@@ -1467,15 +1458,18 @@ static void run_self_tests(void)
 
     k_puts("");
     k_puts("================================");
-    serial_printf("================================\n");
+    serial_printf("\n================================\n");
 }
 
 static void process_command(const char *cmd)
 {
     if (str_equal(cmd, "help")) {
         k_puts("Available commands:");
+        serial_puts("Available commands:\n");
         k_puts("  help                - Show this help message");
+        serial_puts("  help                - Show this help message\n");
         k_puts("  info                - Display system information");
+        serial_puts("  info                - Display system information\n");
         k_puts("  modules             - List loaded multiboot modules");
         k_puts("  ls                  - List files on RAM disk");
         k_puts("  cat <file>          - Display file contents");
@@ -1493,6 +1487,7 @@ static void process_command(const char *cmd)
         k_puts("  usermode            - Test ring 3 execution");
         k_puts("  fault               - Trigger page fault (panic)");
         k_puts("  halt                - Halt the CPU");
+        serial_puts("  ...and more (see VGA display)\n");
     } else if (str_equal(cmd, "info")) {
         k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         k_printf("Timer ticks:     %d\n", kernel_ticks);
@@ -1790,8 +1785,10 @@ static void process_command(const char *cmd)
 void shell_loop(void)
 {
     k_puts("Type 'help' for available commands.");
+    serial_puts("Type 'help' for available commands.\n");
     k_puts("");
     k_printf("> ");
+    serial_puts("> ");
 
     while (1) {
         if (cmd_ready) {
@@ -1799,7 +1796,50 @@ void shell_loop(void)
             process_command(cmd_buffer);
             cmd_pos = 0;
             k_printf("> ");
+            serial_puts("> ");
         }
+
+        /*
+         * Poll serial input for piped commands via QEMU.
+         * Process serial characters like keyboard input.
+         */
+        while (serial_data_available()) {
+            int ch = serial_try_getc();
+            if (ch < 0) break;
+
+            /* Handle CR (0x0D) as newline - terminals send CR on Enter */
+            if (ch == '\r') ch = '\n';
+
+            if (ch == '\n') {
+                /* Newline - mark command ready */
+                cmd_buffer[cmd_pos] = '\0';
+                cmd_ready = true;
+                k_putc('\n');
+                serial_putc('\r');
+                serial_putc('\n');
+                break;
+            } else if (ch == '\b' || ch == 0x7F) {
+                /* Backspace or DEL - remove last character */
+                if (cmd_pos > 0) {
+                    --cmd_pos;
+                    k_putc('\b');
+                    k_putc(' ');
+                    k_putc('\b');
+                    serial_putc('\b');
+                    serial_putc(' ');
+                    serial_putc('\b');
+                }
+            } else if (ch >= 0x20 && ch < 0x7F) {
+                /* Printable character - add to buffer and echo */
+                if (cmd_pos < CMD_BUFFER_SIZE - 1) {
+                    cmd_buffer[cmd_pos++] = (char)ch;
+                    k_putc((char)ch);
+                    serial_putc((char)ch);
+                }
+            }
+            /* Ignore other control characters */
+        }
+
         /* Wait for next interrupt */
         __asm__ __volatile__("hlt");
     }
@@ -1811,10 +1851,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     /* Initialize serial port first for debug output */
     serial_init();
-    serial_printf("\n");
-    serial_printf("========================================\n");
-    serial_printf("Serial: Rach2 booting...\n");
-    serial_printf("========================================\n");
+    serial_printf("======= Rach2 Booting... =======\n\n");
 
     /*
      * Parse multiboot modules BEFORE paging is enabled.
@@ -1832,23 +1869,19 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         if (last_module && last_module->end > mem_reserved_ptr) {
             /* Align to page boundary and add some slack */
             mem_reserved_ptr = (last_module->end + 0xFFF) & ~0xFFF;
-            serial_printf("Memory: Adjusted mem_reserved_ptr to 0x%X (past modules)\n",
-                         mem_reserved_ptr);
         }
     }
 
     k_cls();
 
     set_fore_color(light_cyan);
-    k_puts("===================================");
-    k_puts("           Rach2 OS Test           ");
-    k_puts("===================================");
+    k_puts("======= Rach2 Booting... =======");
     set_fore_color(light_grey);
     k_puts("");
 
     k_puts("Initializing system components...");
     k_puts("");
-    serial_printf("Initializing system components...\n");
+    serial_printf("\nInitializing system components...\n");
 
     k_printf("  GDT...");
     serial_printf("  GDT...");
@@ -1995,12 +2028,20 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     set_fore_color(light_grey);
 
     k_puts("");
-    k_puts("Initialization complete.");
-    serial_printf("Initialization complete.\n");
+    set_fore_color(light_cyan);
+    k_puts("================================");
+    set_fore_color(light_grey);
+    k_puts("");
+    k_puts("---");
+    k_puts("");
+    serial_printf("\n================================\n\n---\n");
 
     run_self_tests();
 
     k_puts("");
+    k_puts("---");
+    k_puts("");
+    serial_printf("\n---\n\n");
 
     /*
      * Boot directly into ISH shell as the init process.

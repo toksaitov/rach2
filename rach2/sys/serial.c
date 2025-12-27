@@ -10,6 +10,7 @@
 #define SERIAL_LINE_STATUS   5   /* Line status register */
 
 /* Line status register bits */
+#define SERIAL_LSR_DR        0x01  /* Data ready (received data available) */
 #define SERIAL_LSR_THRE      0x20  /* Transmit holding register empty */
 
 /* Line control register bits */
@@ -58,4 +59,23 @@ void serial_printf(const char *format, ...)
 {
     char **args = (char **) &format; ++args;
     k_vprintf(_serial_putc_crlf, format, args);
+}
+
+int serial_data_available(void)
+{
+    return inb(SERIAL_COM1 + SERIAL_LINE_STATUS) & SERIAL_LSR_DR;
+}
+
+char serial_getc(void)
+{
+    while (!serial_data_available());
+    return inb(SERIAL_COM1 + SERIAL_DATA);
+}
+
+int serial_try_getc(void)
+{
+    if (serial_data_available()) {
+        return (int)(unsigned char)inb(SERIAL_COM1 + SERIAL_DATA);
+    }
+    return -1;
 }

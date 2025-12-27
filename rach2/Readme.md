@@ -1,55 +1,100 @@
-# Rach2 "Kernel"
+# Rach2 Kernel
 
 ![Self-test Screen](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-Rach2 is a minimal educational 32-bit x86 bare-metal environment that we hope will turn into a real kernel at some point. The environment demonstrates fundamental operating system concepts, including protected mode setup, interrupt handling, memory management with paging, and basic device drivers. The environment boots via the Multiboot1 specification, making it compatible with GRUB and QEMU's direct kernel loading.
+Rach2 is an educational 32-bit x86 kernel that implements core operating system concepts from scratch. The kernel boots into a Unix-like shell (ISH) with standard utilities, supports preemptive multitasking with per-process memory isolation, and can run Doom. It demonstrates protected mode, paging, system calls, process management, context switching, and device drivers—all in clean, readable C and assembly.
+
+**Highlights:**
+- Boots into ISH shell as init (PID 1) with cat, cp, echo, ls, mkdir, mv, pwd, rm, touch
+- 20 Linux-compatible system calls via `int 0x80`
+- Preemptive round-robin scheduler at 100 Hz
+- Per-process page directories with full memory isolation
+- KRFFS file system with read/write support
+- Doom port with VGA Mode 13h graphics and PC speaker sound
+- Multiboot1 compliant: boots with GRUB or QEMU's `-kernel` flag
 
 ## Features
 
+**Boot & CPU:**
 * Multiboot1 compliant: boots with GRUB or QEMU's `-kernel` flag
 * Protected mode with flat memory model (GDT with TSS for ring transitions)
 * Interrupt handling: IDT with 32 CPU exceptions and 16 IRQs
 * 8259 PIC initialization and EOI handling
 * Programmable Interval Timer (100 Hz tick)
-* PS/2 keyboard driver with US layout, shift key, and CTRL+C support
-* VGA text mode display (80x25, 16 colors)
-* Serial port output (COM1) for debug logging
+
+**Memory Management:**
 * Simple bump allocator for physical memory
-* Basic paging with identity mapping (16 MB limit)
+* Basic paging with identity mapping (32 MB limit)
+* Per-process page directories with CR3 switching for memory isolation
 * Kernel panic screen automatically triggered on page faults
-* System call infrastructure (int 0x80)
-* Console input with line buffering for userspace stdin reads
-* User mode (ring 3) execution with privilege transitions
+
+**Process Management:**
 * Process control blocks (PCB) with process table (16 max) and file descriptors
+* User mode (ring 3) execution with privilege transitions
 * Context switching between processes with TSS stack management
 * Preemptive round-robin scheduler (timer-driven)
-* Per-process page directories with CR3 switching for memory isolation
+* CTRL+C kills foreground user process (returns parent to shell, or kernel debug shell if init)
+
+**System Calls & I/O:**
+* System call infrastructure (int 0x80) with 20 Linux-compatible syscalls
+* Console input with line buffering for userspace stdin reads
+* Serial port I/O (COM1) for debug logging and piped command input
+
+**File System & Executables:**
 * Multiboot module loading (RAM disk support via `-initrd`)
 * KRFFS file system with read/write support loaded from RAM disk module
 * ELF32 header parsing for executable validation and loading
 * Boots directly into ISH shell as init process (PID 1)
-* CTRL+C kills foreground user process (returns parent to shell, or kernel debug shell if init)
+
+**Device Drivers:**
+* PS/2 keyboard driver with US layout, shift key, and CTRL+C support
+* VGA text mode display (80x25, 16 colors)
+* VGA Mode 13h graphics (320x200, 256 colors) via framebuffer device
+* PC speaker sound via PIT channel 2
+
+**Development & Testing:**
 * Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF load)
 * Interactive kernel debug shell with commands: help, info, modules, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+| Component        | macOS (Homebrew)               | Ubuntu 24.04                                 |
+|------------------|--------------------------------|----------------------------------------------|
+| Cross-compiler   | `brew install x86_64-elf-gcc`  | `sudo apt install gcc-multilib g++-multilib` |
+| Emulator         | `brew install qemu`            | `sudo apt install qemu-system-x86`           |
+| Debugger         | `brew install x86_64-elf-gdb`  | `sudo apt install gdb-multiarch`             |
+| ISO (optional)   | `brew install --cask docker`   | `sudo apt install docker.io`                 |
+
+### Build and Run
+
+```bash
+make                        # Compile the kernel
+./run.sh                    # Quick test with QEMU
+./run_with_ram_disk.sh      # Run with file system and shell
+./run_from_iso.sh           # Boot from ISO with GRUB
+./debug.sh                  # Debug with GDB
+```
+
+For detailed build instructions, see [Building and Usage](#building-and-usage) at the end of this document.
+
+---
 
 ## Memory Layout
 
 ```
-0x00000000 - 0x000FFFFF    Low memory (reserved, video memory at 0xB8000)
+0x00000000 - 0x000FFFFF    Low memory (BIOS, VGA at 0xB8000, framebuffer at 0xA0000)
 0x00100000 - kernel_end    Kernel code, data, BSS
-kernel_end - ...           Frame bitmap, page directory, page tables
+kernel_end - 0x01FFFFFF    Frame bitmap, page tables, user pages (up to 32 MB)
+0xBFFFF000 - 0xBFFFFFFF    User stack (per-process, 4 KB)
 ```
 
-The environment is loaded at 1 MB (0x100000) and identity-maps physical memory up to the reserved pointer plus 1 MB headroom. Paging uses 4 KB pages with a hard limit of 16 MB.
+The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 MB (HARD_MEMORY_LIMIT). Frames below `mem_reserved_ptr` are marked as used; frames above are available for user page allocation. Paging uses 4 KB pages.
 
-## Limitations
-
-* RAM disk only (no persistent disk drivers)
-* No dynamic memory allocation (only bump allocator)
-* 16 MB hard memory limit
-* PS/2 keyboard only (no USB)
-
-## Structure
+## Source Structure
 
 ```
 .
@@ -69,8 +114,10 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 │   ├── kbd.c/h            # PS/2 keyboard driver with shift key support
 │   ├── panic.c/h          # Kernel panic with visual screen
 │   ├── display/
-│   │   ├── display.c/h    # VGA text mode, colors, scrolling
-│   │   └── 80x25.h        # Screen dimensions, video buffer address
+│   │   ├── fb.h           # Common framebuffer interface (VBE-ready)
+│   │   ├── vga_text.c/h   # VGA text mode (Mode 3): colors, scrolling
+│   │   └── vga_gfx.c/h    # VGA graphics mode (Mode 13h): 320x200x256
+│   ├── speaker.c/h        # PC speaker driver (PIT channel 2)
 │   ├── tables/
 │   │   ├── gdt.c/h        # Global Descriptor Table setup
 │   │   ├── gdt_handler.s  # GDT and TSS loading routines
@@ -101,18 +148,22 @@ The environment is loaded at 1 MB (0x100000) and identity-maps physical memory u
 └── .gdbinit               # GDB initialization script
 ```
 
+---
+
+# Boot and CPU Initialization
+
 ## Global Descriptor Table (GDT)
 
 The GDT contains 6 segment descriptors:
 
-| Index | Selector | Description         |
-|-------|----------|---------------------|
-| 0     | 0x00     | Null descriptor     |
-| 1     | 0x08     | Kernel code (DPL 0) |
-| 2     | 0x10     | Kernel data (DPL 0) |
-| 3     | 0x18     | User code (DPL 3)   |
-| 4     | 0x20     | User data (DPL 3)   |
-| 5     | 0x28     | TSS descriptor      |
+| Index | Selector | Description         | DPL |
+|-------|----------|---------------------|-----|
+| 0     | 0x00     | Null descriptor     | -   |
+| 1     | 0x08     | Kernel code         | 0   |
+| 2     | 0x10     | Kernel data         | 0   |
+| 3     | 0x18     | User code           | 3   |
+| 4     | 0x20     | User data           | 3   |
+| 5     | 0x28     | TSS                 | 0   |
 
 ## Task State Segment (TSS)
 
@@ -125,23 +176,46 @@ Key fields:
 
 The TSS descriptor in the GDT has access byte 0x89 (present, DPL 0, 32-bit TSS available). After GDT is loaded, the task register is loaded via the `ltr` instruction with selector 0x28.
 
-## Serial Output
+## Serial I/O
 
-The kernel outputs debug messages to serial port COM1 (0x3F8) at 115200 baud, 8N1. This provides a reliable debug channel that appears in the terminal when running QEMU with `-serial stdio`.
+The kernel provides bidirectional serial communication on COM1 (0x3F8) at 115200 baud, 8N1. This enables:
+* Debug output to terminal when running QEMU with `-serial stdio`
+* Piping commands to the kernel for automated testing and scripting
 
-Functions available in `serial.c`:
-* `serial_init()` - Initialize COM1 for output
+### Serial Output
+
+Functions for output in `serial.c`:
+* `serial_init()` - Initialize COM1 for I/O
 * `serial_putc(char c)` - Write single character (raw, no CR/LF translation)
 * `serial_puts(const char *str)` - Write null-terminated string
 * `serial_printf(const char *format, ...)` - Formatted output (%d, %x, %s, %c, %%)
 
 Serial output is initialized first in `k_main()` before any other subsystem, ensuring debug messages are available even if VGA initialization fails.
 
+### Serial Input
+
+The kernel polls serial input alongside keyboard input, allowing commands to be piped through QEMU's serial interface. This works for both the kernel debug shell and userspace programs reading from stdin.
+
+Functions for input in `serial.c`:
+* `serial_data_available()` - Non-blocking check if data is ready (returns non-zero if available)
+* `serial_getc()` - Blocking read of single character
+* `serial_try_getc()` - Non-blocking read (returns character or -1 if no data)
+
+Serial input handling:
+* CR (0x0D) is converted to LF for cross-platform compatibility
+* Backspace and DEL (0x7F) remove the last character
+* Characters are echoed back to serial for interactive use
+* Line buffering with newline to mark input complete
+
 ## Generalized Printf
 
 The kernel provides `k_vprintf()` in `kio.c` which accepts a function pointer for character output, enabling formatted printing to any output channel. Both `k_printf()` (VGA) and `serial_printf()` (COM1) use this shared implementation, avoiding code duplication while reusing `k_itoa()` from `kstd.c` for number formatting.
 
-## System Calls
+---
+
+# System Calls
+
+## Overview
 
 The kernel includes system call infrastructure using the standard x86 software interrupt `int 0x80`. This follows the Linux 32-bit calling convention where:
 * EAX contains the syscall number
@@ -152,26 +226,28 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 
 ### Implemented Syscalls
 
-| Number | Name      | Arguments                    | Description                     |
-|--------|-----------|------------------------------|---------------------------------|
-| 1      | exit      | status                       | Terminate current process       |
-| 2      | fork      | -                            | Create child process            |
-| 3      | read      | fd, buf, count               | Read from file descriptor       |
-| 4      | write     | fd, buf, count               | Write to file descriptor        |
-| 5      | open      | path, flags                  | Open a file                     |
-| 6      | close     | fd                           | Close a file descriptor         |
-| 7      | waitpid   | pid, status, options         | Wait for child process to exit  |
-| 8      | creat     | path, mode                   | Create a new file               |
-| 10     | unlink    | path                         | Delete a file                   |
-| 11     | execve    | path, argv, envp             | Replace process with new program|
-| 12     | chdir     | path                         | Change current working directory|
-| 38     | rename    | oldpath, newpath             | Rename a file                   |
-| 63     | dup2      | oldfd, newfd                 | Duplicate file descriptor       |
-| 106    | stat      | path, statbuf                | Get file status (32-bit)        |
-| 183    | getcwd    | buf, size                    | Get current working directory   |
-| 195    | stat64    | path, statbuf                | Get file status (64-bit)        |
-| 220    | getdents64| fd, dirp, count              | Read directory entries          |
-| 320    | utimensat | dirfd, path, times, flags    | Update file timestamps          |
+| #   | Name         | Arguments                  | Description                   |
+|-----|--------------|----------------------------|-------------------------------|
+| 1   | exit         | status                     | Terminate current process     |
+| 2   | fork         | -                          | Create child process          |
+| 3   | read         | fd, buf, count             | Read from file descriptor     |
+| 4   | write        | fd, buf, count             | Write to file descriptor      |
+| 5   | open         | path, flags                | Open a file                   |
+| 6   | close        | fd                         | Close a file descriptor       |
+| 7   | waitpid      | pid, status, options       | Wait for child process        |
+| 8   | creat        | path, mode                 | Create a new file             |
+| 10  | unlink       | path                       | Delete a file                 |
+| 11  | execve       | path, argv, envp           | Replace process image         |
+| 12  | chdir        | path                       | Change directory              |
+| 38  | rename       | oldpath, newpath           | Rename a file                 |
+| 54  | ioctl        | fd, request, arg           | Device control                |
+| 63  | dup2         | oldfd, newfd               | Duplicate file descriptor     |
+| 78  | gettimeofday | tv, tz                     | Get time since boot           |
+| 106 | stat         | path, statbuf              | Get file status (32-bit)      |
+| 183 | getcwd       | buf, size                  | Get current working directory |
+| 195 | stat64       | path, statbuf              | Get file status (64-bit)      |
+| 220 | getdents64   | fd, dirp, count            | Read directory entries        |
+| 320 | utimensat    | dirfd, path, times, flags  | Update file timestamps        |
 
 ### exit (syscall 1)
 
@@ -216,7 +292,7 @@ Arguments:
 
 The syscall:
 1. Copies path and argv from user space to static kernel buffers
-2. Reads the ELF file from KRFFS into a static 16KB buffer
+2. Reads the ELF file from KRFFS into a static 512KB buffer
 3. Validates the ELF header (32-bit, executable, i386)
 4. Frees all existing user pages in the process's page directory
 5. Loads ELF segments into freshly allocated user pages
@@ -226,7 +302,7 @@ The syscall:
 
 On success, does not return - execution continues at the new program's entry point. On failure, returns -1 (though this may leave the process in an inconsistent state).
 
-Note: Uses static buffers for ELF data (16KB) and argv storage (512 bytes) to avoid kernel stack overflow, since the kernel stack is only 16KB.
+Note: Uses static buffers for ELF data (512KB) and argv storage (512 bytes) to avoid kernel stack overflow, since the kernel stack is only 16KB.
 
 ### read (syscall 3)
 
@@ -402,6 +478,39 @@ Time tracking uses the kernel's tick counter (PIT at 100 Hz). Each tick represen
 
 Returns 0 on success, -1 on error (file not found).
 
+### ioctl (syscall 54)
+
+Performs device-specific control operations.
+
+Arguments:
+* `fd` - File descriptor for the device
+* `request` - Request code specifying the operation
+* `arg` - Optional argument (depends on request)
+
+Supported request codes:
+
+For framebuffer device (fd from `open("fb")`):
+* `FB_SETPALETTE` (0x4603) - Set 256-color VGA palette. `arg` points to 768 bytes (256 colors × 3 RGB bytes)
+
+For console (fd 0):
+* `KIOCSOUND` (0x4B2F) - Set PC speaker frequency. `arg` is frequency in Hz (0 to turn off)
+
+Returns 0 on success, -1 on error (invalid fd or request).
+
+### gettimeofday (syscall 78)
+
+Gets the current time since boot.
+
+Arguments:
+* `tv` - Pointer to `struct timeval` to fill with time
+* `tz` - Timezone (ignored, can be NULL)
+
+The `timeval` structure contains:
+* `tv_sec` - Seconds since boot (kernel_ticks / 100)
+* `tv_usec` - Microseconds (kernel_ticks % 100 × 10000)
+
+Time resolution is 10 milliseconds (100 Hz PIT timer). Returns 0 on success, -1 on error.
+
 ### getdents64 (syscall 220)
 
 Reads directory entries from an open directory file descriptor into a buffer.
@@ -452,8 +561,14 @@ Since KRFFS is a flat file system, "/" contains all files directly.
 * `sys_stat64()` - Get file status (Linux stat64 compatible)
 * `sys_getdents64()` - Read directory entries
 * `sys_utimensat()` - Update file timestamps
+* `sys_ioctl()` - Device control (framebuffer palette, PC speaker)
+* `sys_gettimeofday()` - Get time since boot
 * `get_current_time()` - Helper to get current time from kernel tick counter
 * `copy_user_pages()` - Helper to copy all user pages from parent to child
+
+---
+
+# Process Management
 
 ## User Mode (Ring 3)
 
@@ -487,11 +602,9 @@ The shell command `usermode` tests ring 3 execution:
 
 When returning from the syscall, the TSS provides the kernel stack (ESP0/SS0), and after the syscall handler completes, the CPU returns to ring 3 using the saved user state.
 
-## Process Management
+## Process Control Block (PCB)
 
-The kernel includes a basic process management subsystem for tracking process state.
-
-### Process Control Block (PCB)
+The kernel includes a process management subsystem for tracking process state.
 
 Each process is represented by a `process_t` structure containing:
 * `pid` - Process ID (unique identifier)
@@ -506,13 +619,13 @@ Each process is represented by a `process_t` structure containing:
 
 ### Process States
 
-| State | Description |
-|-------|-------------|
-| UNUSED | Slot is free in process table |
-| READY | Process is ready to run |
-| RUNNING | Process is currently executing |
-| BLOCKED | Process is waiting for I/O or event |
-| ZOMBIE | Process has exited, waiting for parent |
+| State   | Description                            |
+|---------|----------------------------------------|
+| UNUSED  | Slot is free in process table          |
+| READY   | Process is ready to run                |
+| RUNNING | Process is currently executing         |
+| BLOCKED | Process is waiting for I/O or event    |
+| ZOMBIE  | Process has exited, waiting for parent |
 
 ### Process Table
 
@@ -546,11 +659,11 @@ Each process has a file descriptor table with 16 entries. File descriptors are s
 
 When a process is created, three file descriptors are automatically initialized:
 
-| FD | Name   | Type    | Description |
-|----|--------|---------|-------------|
-| 0  | stdin  | CONSOLE | Standard input (keyboard) |
+| FD | Name   | Type    | Description                    |
+|----|--------|---------|--------------------------------|
+| 0  | stdin  | CONSOLE | Standard input (keyboard)      |
 | 1  | stdout | CONSOLE | Standard output (VGA + serial) |
-| 2  | stderr | CONSOLE | Standard error (VGA + serial) |
+| 2  | stderr | CONSOLE | Standard error (VGA + serial)  |
 
 ### File Descriptor Entry
 
@@ -653,6 +766,10 @@ The self-tests include an automated scheduler test that verifies both processes 
 * `_last_sched_idx` - Index of last scheduled process (for round-robin fairness)
 * `schedule()` - Main scheduling function called from timer interrupt
 
+---
+
+# Memory Management
+
 ## Per-Process Page Directories
 
 Each process can have its own page directory, providing memory isolation between processes. Two processes can map the same virtual address to different physical pages, preventing one from reading or modifying another's memory.
@@ -711,6 +828,10 @@ To prevent memory exhaustion during repeated fork+exec cycles, page directories 
 * `sys/mm/paging.h` - Function prototypes and exported `_kernel_dir`, `_curr_dir`
 * `sys/proc/switch.s` - CR3 switching with `_curr_dir` synchronization (updates global after every CR3 change)
 * `sys/proc/process.h` - Added `cr3` field to `process_t` structure
+
+---
+
+# Storage and File System
 
 ## Multiboot Modules
 
@@ -836,25 +957,25 @@ ELF (Executable and Linkable Format) is the standard executable format for Unix-
 
 #### ELF Header (52 bytes)
 
-| Field | Size | Description |
-|-------|------|-------------|
-| e_ident | 16 | Magic number (0x7F 'E' 'L' 'F'), class, encoding, version |
-| e_type | 2 | Object file type (ET_EXEC = 2 for executables) |
-| e_machine | 2 | Machine type (EM_386 = 3 for i386) |
-| e_entry | 4 | Entry point virtual address |
-| e_phoff | 4 | Program header table offset |
-| e_phnum | 2 | Number of program headers |
+| Field     | Size | Description                                              |
+|-----------|------|----------------------------------------------------------|
+| e_ident   | 16   | Magic number (0x7F 'E' 'L' 'F'), class, encoding, version|
+| e_type    | 2    | Object file type (ET_EXEC = 2 for executables)           |
+| e_machine | 2    | Machine type (EM_386 = 3 for i386)                       |
+| e_entry   | 4    | Entry point virtual address                              |
+| e_phoff   | 4    | Program header table offset                              |
+| e_phnum   | 2    | Number of program headers                                |
 
 #### Program Header (32 bytes)
 
-| Field | Size | Description |
-|-------|------|-------------|
-| p_type | 4 | Segment type (PT_LOAD = 1 for loadable segments) |
-| p_offset | 4 | Offset in file |
-| p_vaddr | 4 | Virtual address in memory |
-| p_filesz | 4 | Size in file |
-| p_memsz | 4 | Size in memory (may be larger for BSS) |
-| p_flags | 4 | Permissions (PF_R=4, PF_W=2, PF_X=1) |
+| Field    | Size | Description                                    |
+|----------|------|------------------------------------------------|
+| p_type   | 4    | Segment type (PT_LOAD = 1 for loadable)        |
+| p_offset | 4    | Offset in file                                 |
+| p_vaddr  | 4    | Virtual address in memory                      |
+| p_filesz | 4    | Size in file                                   |
+| p_memsz  | 4    | Size in memory (may be larger for BSS)         |
+| p_flags  | 4    | Permissions (PF_R=4, PF_W=2, PF_X=1)           |
 
 ### Validation Checks
 
@@ -905,94 +1026,177 @@ The `exec_program()` function orchestrates the complete loading:
   * `elf_program_header_count(data)` - Get number of program headers
   * `elf_load(data, size, dir)` - Load PT_LOAD segments into page directory
 
-## Scripts
+---
 
-* `run.sh`: quick test using QEMU's direct kernel loading with serial output to terminal
-* `run_with_ram_disk.sh`: run with KRFFS RAM disk from `../krffs/file_system.krffs`
-* `run_from_iso.sh`: boot from ISO image with real GRUB bootloader
-* `debug.sh`: start QEMU with GDB server and connect debugger
+# Device Drivers
 
-## Prerequisites
+## VGA Mode 13h and Framebuffer Device
+
+The kernel supports VGA Mode 13h (320×200, 256 colors) for graphical applications like Doom. The framebuffer is accessed through a special device file.
+
+### Framebuffer Device
+
+Opening the special file "fb" returns a framebuffer file descriptor and switches the display to Mode 13h:
+
+```c
+int fb_fd = open("fb", O_RDWR);  /* Switches to Mode 13h */
+write(fb_fd, pixels, 64000);     /* Blit 320×200 pixels to screen */
+close(fb_fd);                    /* Restores text mode */
+```
+
+The framebuffer is at physical address 0xA0000 (64 KB). Each pixel is an 8-bit palette index.
+
+### VGA Palette
+
+The 256-color palette can be set via ioctl:
+
+```c
+uint8_t palette[768];  /* 256 colors × 3 bytes (R, G, B) */
+ioctl(fb_fd, FB_SETPALETTE, (unsigned long)palette);
+```
+
+Each RGB component is 6 bits (0-63 range, as per VGA hardware).
+
+### Mode 13h Implementation
+
+VGA Mode 13h is configured by programming:
+* Sequencer registers (0x3C4-0x3C5)
+* CRTC registers (0x3D4-0x3D5)
+* Graphics controller (0x3CE-0x3CF)
+* Attribute controller (0x3C0)
+* Miscellaneous output (0x3C2)
+
+The driver in `sys/display/vga_gfx.c` handles mode switching and palette loading.
+
+## PC Speaker
+
+The kernel provides PC speaker support for simple sound effects using PIT channel 2.
+
+### Speaker Control
+
+Sound is controlled via ioctl on the console:
+
+```c
+ioctl(0, KIOCSOUND, frequency);  /* Set frequency in Hz */
+ioctl(0, KIOCSOUND, 0);          /* Turn off speaker */
+```
+
+The speaker driver in `sys/speaker.c` programs:
+* PIT channel 2 (ports 0x42, 0x43) for frequency generation
+* Speaker gate (port 0x61, bits 0-1) for speaker enable/disable
+
+Frequency calculation: `divisor = 1193182 / frequency`
+
+---
+
+## Building and Usage
+
+### Scripts
+
+| Script                 | Description                                 |
+|------------------------|---------------------------------------------|
+| `run.sh`               | Quick QEMU test with serial output          |
+| `run_with_ram_disk.sh` | Run with KRFFS from `../krffs/`             |
+| `run_from_iso.sh`      | Boot ISO with GRUB                          |
+| `debug.sh`             | QEMU + GDB debugging                        |
+
+### Prerequisites
 
 Building requires a cross-compiler toolchain:
-
 * `x86_64-elf-gcc` (with `-m32` support)
 * `x86_64-elf-ld`
 * `make`
 
 For running and debugging:
-
 * `qemu-system-i386`
 * `x86_64-elf-gdb` or `gdb-multiarch`
 
 For ISO creation (optional):
-
 * Docker (uses Ubuntu 24.04 image with `grub-mkrescue`)
 
-On Ubuntu 24.04:
+**Ubuntu 24.04:**
+```bash
+sudo apt install gcc-multilib g++-multilib qemu-system-x86 gdb-multiarch docker.io
+sudo usermod -aG docker $USER  # Log out and back in for group change
+```
 
-    sudo apt install gcc-multilib g++-multilib qemu-system-x86 gdb-multiarch docker.io
-    sudo usermod -aG docker $USER  # Log out and back in for group change
+**macOS (Homebrew):**
+```bash
+brew install x86_64-elf-gcc x86_64-elf-gdb qemu
+brew install --cask docker
+```
 
-On macOS with Homebrew:
+### Build Commands
 
-    brew install x86_64-elf-gcc x86_64-elf-gdb qemu
-    brew install --cask docker
+```bash
+make           # Compile the kernel
+make clean     # Remove compiled files
+make iso       # Build bootable ISO (requires Docker)
+```
 
-## Build
+### Running the Kernel
 
-Compile the environment:
+**1. Quick test (fastest for development):**
+```bash
+make && ./run.sh
+```
 
-    make
+**2. With KRFFS file system (for user programs):**
+```bash
+cd ../krffs
+./build_ramdisk.sh    # or ./build_test_ramdisk.sh for tests
+cd ../rach2
+make && ./run_with_ram_disk.sh
+```
 
-Remove compiled files:
+**3. From ISO with GRUB:**
+```bash
+make iso
+./run_from_iso.sh
+```
 
-    make clean
+**4. Debug with GDB:**
+```bash
+make && ./debug.sh
+```
+The `.gdbinit` file automatically loads symbols, connects to QEMU, and sets a breakpoint at `k_main`.
 
-## Usage
+### Debug Shell Commands
 
-1. Build and run the environment directly in QEMU (fastest for development):
+When the kernel boots (or when init exits), the debug shell is available:
 
-        make
-        ./run.sh
+| Command          | Description                                 |
+|------------------|---------------------------------------------|
+| `help`           | Show available commands                     |
+| `info`           | Display memory pointer, ticks, module count |
+| `modules`        | List loaded multiboot modules               |
+| `ls`             | List files in KRFFS                         |
+| `cat <file>`     | Display file contents                       |
+| `elf <file>`     | Show ELF header information                 |
+| `exec <program>` | Run ELF program in user mode                |
+| `touch <file>`   | Create empty file                           |
+| `rm <file>`      | Delete file                                 |
+| `mv <old> <new>` | Rename file                                 |
+| `write <file>`   | Write to file                               |
+| `test`           | Run self-tests                              |
+| `clear`          | Clear the screen                            |
+| `switch`         | Test context switching (prints ABABABABAB)  |
+| `preempt`        | Test preemptive scheduler                   |
+| `isolate`        | Test memory isolation                       |
+| `usermode`       | Test ring 3 execution                       |
+| `fault`          | Trigger a page fault (demonstrates panic)   |
+| `halt`           | Stop the CPU                                |
 
-   Or simply:
+---
 
-        make && ./run.sh
+## Limitations
 
-2. Run with a KRFFS RAM disk (for testing user programs):
-
-        cd ../krffs
-        ./build_ramdisk.sh    # or ./build_test_ramdisk.sh for tests
-        cd ../rach2
-        make && ./run_with_ram_disk.sh
-
-   This loads the file system from `../krffs/file_system.krffs` as a multiboot module.
-
-3. Build a bootable ISO image and test with real GRUB bootloader:
-
-        make iso
-        ./run_from_iso.sh
-
-   The ISO creation requires Docker. If `../krffs/file_system.krffs` exists, it will be automatically included as a multiboot module.
-
-4. Debug the environment with GDB:
-
-        make
-        ./debug.sh
-
-   This starts QEMU paused with a GDB server and connects the debugger. The `.gdbinit` file automatically loads the executable symbols, connects to QEMU, and sets a breakpoint at `k_main`.
-
-5. Once the environment boots, you'll see initialization messages followed by self-tests. The interactive shell accepts these commands:
-
-        > help     # Show available commands
-        > info     # Display memory pointer, timer ticks, module count
-        > modules  # List loaded multiboot modules
-        > test     # Run self-tests again
-        > clear    # Clear the screen
-        > switch   # Test cooperative context switching (prints ABABABABAB)
-        > preempt  # Test preemptive scheduling (timer-driven ABABAB...)
-        > isolate  # Test memory isolation between processes
-        > usermode # Test ring 3 execution (prints message then loops)
-        > fault    # Trigger a page fault (demonstrates panic)
-        > halt     # Stop the CPU
+| Category | Supported                                    | Not Supported                       |
+|----------|----------------------------------------------|-------------------------------------|
+| Boot     | Multiboot1, GRUB, QEMU `-kernel`             | UEFI, Multiboot2                    |
+| Memory   | 32 MB address space, 4 KB pages              | Demand paging, virtual memory > 32MB|
+| Storage  | KRFFS RAM disk                               | Persistent disk, real file systems  |
+| Input    | PS/2 keyboard                                | USB, mouse                          |
+| Display  | VGA text (80×25), Mode 13h (320×200)         | Higher resolutions, VESA            |
+| Sound    | PC speaker                                   | Sound cards                         |
+| Processes| 16 concurrent, preemptive scheduling         | Threads, signals                    |

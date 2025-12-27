@@ -1,4 +1,8 @@
 #include "isr.h"
+#include "serial.h"
+
+/* Debug counter for IRQs */
+static volatile uint32_t irq_count = 0;
 
 /*
  * Custom interrupt handlers
@@ -41,6 +45,8 @@ void _isr_router(isr_params_t *params)
 
 void _irq_router(isr_params_t *params)
 {
+    irq_count++;
+
 #ifdef DEBUG
     k_printf("Kernel message: IRQ - 0x%X\n", params->vector);
 #endif

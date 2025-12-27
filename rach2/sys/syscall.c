@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include "serial.h"
 #include "kio.h"
+#include "kbd.h"
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/elf.h"
@@ -9,9 +10,39 @@
 #include "mm/paging.h"
 #include "mm/heap.h"
 #include "lib/kstring.h"
+#include "display/vga_gfx.h"
+#include "speaker.h"
 
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
+
+/*
+ * Framebuffer device tracking.
+ * Only one process can own the framebuffer at a time.
+ * When the owner exits or closes fb, text mode is restored.
+ */
+static volatile uint32_t fb_owner_pid = 0;
+
+/*
+ * Release framebuffer if owned by specified PID.
+ * Called when a process is killed (CTRL+C) to restore text mode.
+ */
+void fb_release_if_owner(uint32_t pid)
+{
+    if (fb_owner_pid == pid && fb_owner_pid != 0) {
+        serial_printf("fb_release_if_owner: Restoring text mode for PID %d\n", pid);
+        vga_mode13h_exit();
+        fb_owner_pid = 0;
+    }
+}
+
+/*
+ * ioctl request codes (Linux compatible subset)
+ */
+#define KIOCSOUND      0x4B2F  /* Set PC speaker frequency (0 = off) */
+#define FB_MODE_13H    0x4601  /* Switch to VGA Mode 13h */
+#define FB_MODE_TEXT   0x4602  /* Switch back to text mode */
+#define FB_SETPALETTE  0x4603  /* Set 256-color palette (768 bytes) */
 
 /* Kernel stack size (16KB) */
 #define KERNEL_STACK_SIZE 0x4000
@@ -69,6 +100,14 @@ static int32_t sys_exit(isr_params_t *params)
 
     serial_printf("sys_exit: Process %d exited with status %d\n",
                   current_proc ? (int)current_proc->pid : -1, status);
+
+    /* Check if this process owns the framebuffer - restore text mode */
+    if (current_proc && fb_owner_pid == current_proc->pid) {
+        serial_printf("sys_exit: Restoring text mode (fb owner exiting)\n");
+        vga_mode13h_exit();
+        fb_owner_pid = 0;
+    }
+
     k_printf("\nProcess exited with status %d\n", status);
 
     if (!current_proc) {
@@ -203,6 +242,26 @@ static int32_t sys_write(isr_params_t *params)
         return written;
     }
 
+    /* Framebuffer fd - copy pixels to VGA memory */
+    if (entry->type == FD_TYPE_FRAMEBUFFER) {
+        uint32_t to_copy;
+
+        if (!vga_graphics_mode) {
+            return -1;  /* Not in graphics mode */
+        }
+
+        /* Limit to framebuffer size */
+        to_copy = count;
+        if (to_copy > VGA_MODE13H_SIZE) {
+            to_copy = VGA_MODE13H_SIZE;
+        }
+
+        /* Copy pixel data to framebuffer */
+        k_memcpy((void *)VGA_FRAMEBUFFER, buf, to_copy);
+
+        return (int32_t)to_copy;
+    }
+
     return -1;
 }
 
@@ -234,6 +293,35 @@ static int32_t sys_open(isr_params_t *params)
     name = path;
     if (name[0] == '/') {
         name++;
+    }
+
+    /* Check if opening framebuffer device "fb" */
+    if (name[0] == 'f' && name[1] == 'b' && name[2] == '\0') {
+        /* Only one process can own the framebuffer */
+        if (fb_owner_pid != 0 && fb_owner_pid != current_proc->pid) {
+            return -1;  /* Already in use */
+        }
+
+        /* Allocate fd for framebuffer */
+        fd = fd_alloc(&current_proc->fds);
+        if (fd < 0) {
+            return -1;
+        }
+
+        entry = &current_proc->fds.entries[fd];
+        entry->type = FD_TYPE_FRAMEBUFFER;
+        entry->node = NULL;
+        entry->offset = 0;
+        entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+
+        /* Switch to Mode 13h and record owner */
+        vga_mode13h_enter();
+        fb_owner_pid = current_proc->pid;
+
+        /* Clear any stale scancodes from shell */
+        kbd_clear_scancodes();
+
+        return fd;
     }
 
     /* Check if opening root directory "/", ".", or ".." (cwd is always "/" in KRFFS) */
@@ -310,6 +398,7 @@ static int32_t sys_open(isr_params_t *params)
 static int32_t sys_close(isr_params_t *params)
 {
     int fd = (int)params->ebx;
+    fd_entry_t *entry;
 
     if (!current_proc) {
         return -1;
@@ -320,7 +409,70 @@ static int32_t sys_close(isr_params_t *params)
         return -1;
     }
 
+    /* Check if this is the framebuffer - need to restore text mode */
+    entry = fd_get(&current_proc->fds, fd);
+    if (entry && entry->type == FD_TYPE_FRAMEBUFFER) {
+        serial_printf("sys_close: PID %d closing framebuffer\n", current_proc->pid);
+
+        /* Restore text mode and clear ownership */
+        vga_mode13h_exit();
+        fb_owner_pid = 0;
+    }
+
     return fd_free(&current_proc->fds, fd);
+}
+
+/*
+ * sys_lseek - reposition file offset
+ * Args: EBX = fd, ECX = offset, EDX = whence (0=SET, 1=CUR, 2=END)
+ * Returns: new offset on success, -1 on error
+ */
+static int32_t sys_lseek(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    int32_t offset = (int32_t)params->ecx;
+    int whence = (int)params->edx;
+    fd_entry_t *entry;
+    uint32_t file_size;
+    int32_t new_offset;
+
+    if (!current_proc) {
+        return -1;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_FILE) {
+        return -1;
+    }
+
+    /* Get file size from the node */
+    if (!entry->node) {
+        return -1;
+    }
+    file_size = (uint32_t)entry->node->data_size;
+
+    /* Calculate new offset */
+    switch (whence) {
+        case 0:  /* SEEK_SET */
+            new_offset = offset;
+            break;
+        case 1:  /* SEEK_CUR */
+            new_offset = (int32_t)entry->offset + offset;
+            break;
+        case 2:  /* SEEK_END */
+            new_offset = (int32_t)file_size + offset;
+            break;
+        default:
+            return -1;
+    }
+
+    /* Validate new offset */
+    if (new_offset < 0) {
+        return -1;
+    }
+
+    entry->offset = (uint32_t)new_offset;
+    return new_offset;
 }
 
 /*
@@ -357,7 +509,16 @@ static int32_t sys_read(isr_params_t *params)
         }
 
         /*
-         * Stdin read implementation:
+         * If the process owns the framebuffer (graphics mode), use non-blocking
+         * raw scancode input for game controls.
+         */
+        if (fb_owner_pid == current_proc->pid) {
+            /* Non-blocking raw scancode read for games */
+            return kbd_read_scancodes((uint8_t *)buf, (int)count);
+        }
+
+        /*
+         * Stdin read implementation (text mode):
          * 1. Reset stdin buffer state
          * 2. Register current process as waiting for stdin
          * 3. Block until Enter is pressed (keyboard handler wakes us)
@@ -370,24 +531,65 @@ static int32_t sys_read(isr_params_t *params)
         stdin_ready = false;
         stdin_waiting_proc = current_proc;
 
-        serial_printf("sys_read: PID %d blocking on stdin\n", current_proc->pid);
-
         /*
          * Block and wait for input using hlt.
          * We can't rely on schedule() because there may be no other READY
-         * processes. Instead, we halt waiting for keyboard interrupt.
+         * processes. Instead, we halt waiting for keyboard or serial input.
          * The keyboard handler will set stdin_ready=true when Enter is pressed.
+         * We also poll serial input here to support piped commands via QEMU.
          */
         current_proc->state = PROC_BLOCKED;
         while (!stdin_ready) {
             /* Enable interrupts and halt until next interrupt */
             __asm__ __volatile__("sti; hlt");
+
+            /*
+             * After waking from hlt, check for serial input.
+             * Process serial characters like keyboard: handle backspace,
+             * newline, echo back to serial, and add to stdin_buffer.
+             */
+            while (serial_data_available()) {
+                int ch = serial_try_getc();
+                if (ch < 0) break;
+
+                /* Handle CR (0x0D) as newline - terminals send CR on Enter */
+                if (ch == '\r') ch = '\n';
+
+                if (ch == '\n') {
+                    /* Newline - mark input ready */
+                    if (stdin_pos < STDIN_BUFFER_SIZE - 1) {
+                        stdin_buffer[stdin_pos++] = '\n';
+                    }
+                    stdin_buffer[stdin_pos] = '\0';
+                    stdin_ready = true;
+                    k_putc('\n');
+                    serial_putc('\r');
+                    serial_putc('\n');
+                    break;
+                } else if (ch == '\b' || ch == 0x7F) {
+                    /* Backspace or DEL - remove last character */
+                    if (stdin_pos > 0) {
+                        --stdin_pos;
+                        k_putc('\b');
+                        k_putc(' ');
+                        k_putc('\b');
+                        /* Echo backspace to serial */
+                        serial_putc('\b');
+                        serial_putc(' ');
+                        serial_putc('\b');
+                    }
+                } else if (ch >= 0x20 && ch < 0x7F) {
+                    /* Printable character - add to buffer and echo */
+                    if (stdin_pos < STDIN_BUFFER_SIZE - 1) {
+                        stdin_buffer[stdin_pos++] = (char)ch;
+                        k_putc((char)ch);
+                        serial_putc((char)ch);
+                    }
+                }
+                /* Ignore other control characters */
+            }
         }
         current_proc->state = PROC_RUNNING;
-
-        /* We've been woken up - stdin_ready should be true now */
-        serial_printf("sys_read: PID %d woken up, stdin_pos=%d\n",
-                      current_proc->pid, (int)stdin_pos);
 
         /* Clear the waiting process */
         stdin_waiting_proc = NULL;
@@ -780,7 +982,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             virt_addr = (dir_idx << 22) | (page_idx << 12);
             parent_phys = pte & ~0xFFF;
 
-            /* Skip identity-mapped kernel region (first 16MB) */
+            /* Skip identity-mapped kernel region (first 32MB) */
             if (virt_addr < HARD_MEMORY_LIMIT) {
                 continue;
             }
@@ -815,8 +1017,9 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
 /*
  * Static buffer for ELF loading - must not be on stack!
  * Kernel stack is only 16KB, so large buffers cause stack overflow.
+ * Increased to 512KB to support Doom (368KB).
  */
-static char _exec_elf_buffer[16384];
+static char _exec_elf_buffer[512 * 1024];
 static char _exec_path_buf[64];
 static char _exec_argv_storage[512];
 static char *_exec_argv_bufs[16];
@@ -845,19 +1048,14 @@ static int32_t sys_execve(isr_params_t *params)
         return -1;
     }
 
-    serial_printf("sys_execve: PID %d exec'ing\n", current_proc->pid);
-
     /* Copy path from user space */
     if (!user_path) {
-        serial_printf("sys_execve: NULL path\n");
         return -1;
     }
     for (i = 0; i < 63 && user_path[i]; i++) {
         _exec_path_buf[i] = user_path[i];
     }
     _exec_path_buf[i] = '\0';
-
-    serial_printf("sys_execve: path='%s'\n", _exec_path_buf);
 
     /* Copy argv from user space */
     if (user_argv) {
@@ -877,11 +1075,6 @@ static int32_t sys_execve(isr_params_t *params)
     }
     _exec_argv_bufs[argc] = NULL;
 
-    serial_printf("sys_execve: argc=%d\n", argc);
-    for (i = 0; i < argc; i++) {
-        serial_printf("sys_execve: argv[%d]='%s'\n", i, _exec_argv_bufs[i]);
-    }
-
     /* Skip leading '/' if present */
     name = _exec_path_buf;
     if (name[0] == '/') {
@@ -890,37 +1083,31 @@ static int32_t sys_execve(isr_params_t *params)
 
     /* Check file system is mounted */
     if (!krffs_fs) {
-        serial_printf("sys_execve: No file system\n");
         return -1;
     }
 
     /* Check file exists */
     if (krffs_open(name) != 0) {
-        serial_printf("sys_execve: File not found: %s\n", name);
         return -1;
     }
 
     /* Read ELF file */
     file_size = krffs_get_file_size(name);
     if (file_size > sizeof(_exec_elf_buffer)) {
-        serial_printf("sys_execve: File too large: %d\n", file_size);
         return -1;
     }
 
     bytes_read = krffs_read(name, _exec_elf_buffer, file_size, 0);
     if (bytes_read != (int)file_size) {
-        serial_printf("sys_execve: Read error\n");
         return -1;
     }
 
     /* Validate ELF */
     if (!elf_check(_exec_elf_buffer, file_size)) {
-        serial_printf("sys_execve: Invalid ELF\n");
         return -1;
     }
 
     entry_point = elf_entry_point(_exec_elf_buffer);
-    serial_printf("sys_execve: ELF valid, entry=0x%X\n", entry_point);
 
     /* Get current process's page directory */
     if (current_proc->cr3 == 0) {
@@ -931,23 +1118,19 @@ static int32_t sys_execve(isr_params_t *params)
 
     /* Free old user pages */
     free_user_pages(proc_dir);
-    serial_printf("sys_execve: Freed old user pages\n");
 
     /* Load new ELF segments */
     if (elf_load(_exec_elf_buffer, file_size, proc_dir) != 0) {
-        serial_printf("sys_execve: ELF load failed\n");
         /* Can't recover - process is in broken state */
         current_proc->state = PROC_ZOMBIE;
         current_proc->exit_code = -1;
         schedule();
         return -1;
     }
-    serial_printf("sys_execve: ELF loaded\n");
 
     /* Allocate user stack */
     stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
     if (stack_phys == 0) {
-        serial_printf("sys_execve: Stack alloc failed\n");
         current_proc->state = PROC_ZOMBIE;
         current_proc->exit_code = -1;
         schedule();
@@ -1010,21 +1193,6 @@ static int32_t sys_execve(isr_params_t *params)
 
     *sp++ = 0;  /* NULL terminator for envp */
 
-    serial_printf("sys_execve: Stack setup complete, esp=0x%X\n", argv_ptrs_start);
-
-    /* Debug: print what's on the stack */
-    {
-        uint32_t *debug_sp = (uint32_t *)(stack_phys + (argv_ptrs_start - USER_STACK_BASE));
-        serial_printf("sys_execve: Stack[0]=0x%X (argc)\n", debug_sp[0]);
-        serial_printf("sys_execve: Stack[1]=0x%X (argv[0])\n", debug_sp[1]);
-        if (argc > 1) {
-            serial_printf("sys_execve: Stack[2]=0x%X (argv[1])\n", debug_sp[2]);
-        }
-        if (argc > 2) {
-            serial_printf("sys_execve: Stack[3]=0x%X (argv[2])\n", debug_sp[3]);
-        }
-    }
-
     /*
      * Modify the ISR return frame to jump to new code.
      * When the syscall returns via iret, it will:
@@ -1046,9 +1214,6 @@ static int32_t sys_execve(isr_params_t *params)
         "movl %%eax, %%cr3"
         ::: "eax", "memory"
     );
-
-    serial_printf("sys_execve: Returning to entry=0x%X esp=0x%X\n",
-                  params->eip, params->user_esp);
 
     /* Return value doesn't matter - we won't use it */
     return 0;
@@ -1074,26 +1239,21 @@ static int32_t sys_fork(isr_params_t *params)
         return -1;
     }
 
-    serial_printf("sys_fork: Parent PID %d forking\n", parent->pid);
-
     /* Allocate child process slot */
     child = alloc_process();
     if (!child) {
-        serial_printf("sys_fork: alloc_process failed\n");
         return -1;
     }
 
     /* Clone page directory */
     child_dir = clone_page_directory();
     if (!child_dir) {
-        serial_printf("sys_fork: clone_page_directory failed\n");
         free_process(child);
         return -1;
     }
 
     /* Copy user pages from parent to child */
     if (copy_user_pages(parent, child_dir) != 0) {
-        serial_printf("sys_fork: copy_user_pages failed\n");
         free_process(child);
         return -1;
     }
@@ -1101,7 +1261,6 @@ static int32_t sys_fork(isr_params_t *params)
     /* Allocate kernel stack for child */
     child_kstack_base = mem_reserve(KERNEL_STACK_SIZE, true);
     if (!child_kstack_base) {
-        serial_printf("sys_fork: kernel stack alloc failed\n");
         free_process(child);
         return -1;
     }
@@ -1155,9 +1314,6 @@ static int32_t sys_fork(isr_params_t *params)
     child->regs.esp = (uint32_t)child_sp;
     child->state = PROC_READY;
 
-    serial_printf("sys_fork: Child PID %d created, CR3=0x%X\n",
-                  child->pid, child->cr3);
-
     /* Parent returns child's PID */
     return (int32_t)child->pid;
 }
@@ -1183,8 +1339,6 @@ static int32_t sys_waitpid(isr_params_t *params)
     if (!current_proc) {
         return -1;
     }
-
-    serial_printf("sys_waitpid: PID %d waiting for %d\n", current_proc->pid, pid);
 
     while (1) {
         child = NULL;
@@ -1212,16 +1366,12 @@ static int32_t sys_waitpid(isr_params_t *params)
                 child_pid = child->pid;
                 exit_code = child->exit_code;
 
-                serial_printf("sys_waitpid: Child %d is zombie, status=%d\n",
-                              child_pid, exit_code);
-
                 /* Free the child's user pages and page directory */
                 if (child->cr3 != 0) {
                     page_dir_t *child_dir;
                     child_dir = (page_dir_t *)(child->cr3 - 1024 * sizeof(page_table_t *));
                     free_user_pages(child_dir);
                     free_page_directory(child_dir);
-                    serial_printf("sys_waitpid: Freed pages and page dir for child %d\n", child_pid);
                 }
 
                 /* Free the child process slot */
@@ -1241,21 +1391,14 @@ static int32_t sys_waitpid(isr_params_t *params)
 
         /* No matching child found */
         if (!child) {
-            serial_printf("sys_waitpid: No matching child found\n");
             return -1;
         }
 
         /* Child exists but not zombie - block and wait */
-        serial_printf("sys_waitpid: Blocking PID %d waiting for child\n",
-                      current_proc->pid);
         current_proc->state = PROC_BLOCKED;
 
         /* Yield to scheduler - will be woken when child exits */
         schedule();
-
-        /* After being woken up, re-check if child is zombie */
-        serial_printf("sys_waitpid: PID %d woken up, rechecking\n",
-                      current_proc->pid);
     }
 }
 
@@ -1415,8 +1558,8 @@ struct kernel_timespec {
 #define UTIME_NOW  ((1L << 30) - 1L)
 #define UTIME_OMIT ((1L << 30) - 2L)
 
-/* PIT frequency - timer ticks at 100 Hz */
-#define PIT_FREQUENCY 100
+/* Timer tick frequency (100 Hz) */
+#define TIMER_FREQUENCY 100
 
 /* Global tick counter from kernel.c - incremented at 100 Hz */
 extern volatile uint32_t kernel_ticks;
@@ -1428,8 +1571,8 @@ extern volatile uint32_t kernel_ticks;
 static void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t ticks = kernel_ticks;
-    *seconds = ticks / PIT_FREQUENCY;
-    *nanoseconds = (ticks % PIT_FREQUENCY) * 10000000LL;  /* 10ms per tick */
+    *seconds = ticks / TIMER_FREQUENCY;
+    *nanoseconds = (ticks % TIMER_FREQUENCY) * 10000000LL;  /* 10ms per tick */
 }
 
 /*
@@ -1629,6 +1772,115 @@ static int32_t sys_getdents64(isr_params_t *params)
 }
 
 /*
+ * timeval structure for gettimeofday
+ */
+struct kernel_timeval {
+    int32_t tv_sec;   /* seconds */
+    int32_t tv_usec;  /* microseconds */
+};
+
+/*
+ * sys_gettimeofday - get time since boot
+ * Args: EBX = tv (timeval*), ECX = tz (ignored)
+ * Returns: 0 on success, -1 on error
+ *
+ * Returns time since boot based on kernel_ticks counter (100 Hz).
+ */
+static int32_t sys_gettimeofday(isr_params_t *params)
+{
+    struct kernel_timeval *tv = (struct kernel_timeval *)params->ebx;
+
+    if (!tv) {
+        return -1;
+    }
+
+    /* Convert ticks to seconds and microseconds */
+    /* kernel_ticks runs at 100 Hz, so 1 tick = 10ms = 10000us */
+    tv->tv_sec = (int32_t)(kernel_ticks / 100);
+    tv->tv_usec = (int32_t)((kernel_ticks % 100) * 10000);
+
+    return 0;
+}
+
+/*
+ * sys_ioctl - device control
+ * Args: EBX = fd, ECX = request, EDX = arg
+ * Returns: 0 on success, -1 on error
+ *
+ * Supported requests:
+ * - KIOCSOUND: Set PC speaker frequency (arg = freq, 0 = off)
+ * - FB_SETPALETTE: Set 256-color palette (arg = pointer to 768 bytes)
+ */
+static int32_t sys_ioctl(isr_params_t *params)
+{
+    int fd_num = (int)params->ebx;
+    uint32_t request = params->ecx;
+    uint32_t arg = params->edx;
+    fd_entry_t *entry;
+
+    if (!current_proc) {
+        return -1;
+    }
+
+    /* Handle KIOCSOUND on stdout (console) - Linux convention */
+    if (fd_num == FD_STDOUT || fd_num == FD_STDERR) {
+        if (request == KIOCSOUND) {
+            if (arg == 0) {
+                speaker_off();
+            } else {
+                speaker_on(arg);
+            }
+            return 0;
+        }
+    }
+
+    /* Get fd entry for other operations */
+    entry = fd_get(&current_proc->fds, fd_num);
+    if (!entry) {
+        return -1;
+    }
+
+    /* Handle framebuffer ioctls */
+    if (entry->type == FD_TYPE_FRAMEBUFFER) {
+        switch (request) {
+            case FB_SETPALETTE:
+                if (arg != 0) {
+                    vga_mode13h_set_palette((const uint8_t *)arg);
+                    return 0;
+                }
+                return -1;
+
+            case FB_MODE_13H:
+                /* Already in mode 13h if fb is open */
+                return 0;
+
+            case FB_MODE_TEXT:
+                /* Switch back to text mode */
+                vga_mode13h_exit();
+                fb_owner_pid = 0;
+                return 0;
+
+            default:
+                return -1;
+        }
+    }
+
+    /* Handle console ioctls */
+    if (entry->type == FD_TYPE_CONSOLE) {
+        if (request == KIOCSOUND) {
+            if (arg == 0) {
+                speaker_off();
+            } else {
+                speaker_on(arg);
+            }
+            return 0;
+        }
+    }
+
+    return -1;  /* Unknown request */
+}
+
+/*
  * Syscall handler - dispatches to appropriate syscall function
  * Stores return value in params->eax so it's returned to userspace
  */
@@ -1666,8 +1918,11 @@ void init_syscall(void)
     _syscall_table[SYS_UNLINK] = sys_unlink;
     _syscall_table[SYS_EXECVE] = sys_execve;
     _syscall_table[SYS_CHDIR] = sys_chdir;
+    _syscall_table[SYS_LSEEK] = sys_lseek;
     _syscall_table[SYS_RENAME] = sys_rename;
+    _syscall_table[SYS_IOCTL] = sys_ioctl;
     _syscall_table[SYS_DUP2] = sys_dup2;
+    _syscall_table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
     _syscall_table[SYS_STAT] = sys_stat;
     _syscall_table[SYS_GETCWD] = sys_getcwd;
     _syscall_table[SYS_STAT64] = sys_stat64;

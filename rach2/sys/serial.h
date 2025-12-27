@@ -29,4 +29,23 @@ void serial_puts(const char *str);
  */
 void serial_printf(const char *format, ...);
 
+/*
+ * Check if data is available to read from serial port.
+ * Returns non-zero if data is ready, 0 otherwise.
+ * This is a non-blocking check.
+ */
+int serial_data_available(void);
+
+/*
+ * Read a single character from serial port (blocking).
+ * Waits until data is available, then returns the character.
+ */
+char serial_getc(void);
+
+/*
+ * Try to read a character from serial port (non-blocking).
+ * Returns the character if available, or -1 if no data ready.
+ */
+int serial_try_getc(void);
+
 #endif

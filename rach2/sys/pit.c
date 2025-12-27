@@ -1,4 +1,5 @@
 #include "pit.h"
+#include "serial.h"
 
 static void _pit_test(isr_params_t *params);
 
@@ -18,5 +19,5 @@ static void _pit_test(isr_params_t *params)
 {
     (void) params;
 
-    k_printf("Tick #%d\r", _counter++);
+    _counter++;
 }

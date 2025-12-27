@@ -1,4 +1,38 @@
 #include "kbd.h"
+#include "serial.h"
+
+/*
+ * Raw scancode ring buffer for games/graphics mode
+ */
+#define SCANCODE_BUF_SIZE 64
+static uint8_t scancode_buf[SCANCODE_BUF_SIZE];
+static volatile int scancode_head = 0;
+static volatile int scancode_tail = 0;
+
+void kbd_push_scancode(uint8_t sc)
+{
+    int next = (scancode_tail + 1) % SCANCODE_BUF_SIZE;
+    if (next != scancode_head) {
+        scancode_buf[scancode_tail] = sc;
+        scancode_tail = next;
+    }
+}
+
+void kbd_clear_scancodes(void)
+{
+    scancode_head = 0;
+    scancode_tail = 0;
+}
+
+int kbd_read_scancodes(uint8_t *buf, int max_count)
+{
+    int count = 0;
+    while (count < max_count && scancode_head != scancode_tail) {
+        buf[count++] = scancode_buf[scancode_head];
+        scancode_head = (scancode_head + 1) % SCANCODE_BUF_SIZE;
+    }
+    return count;
+}
 
 uint8_t EN_us[128] = {
     0,      /* 0x0: Error code */
@@ -100,6 +134,12 @@ static void _keyboard_test(isr_params_t *params)
     (void) params;
 
     uint8_t scancode = inb(0x60);
+
+    /* Debug: log scancode to serial */
+    serial_printf("KBD: sc=0x%x h=%d t=%d\n", scancode, scancode_head, scancode_tail);
+
+    /* Always push raw scancode to buffer for games */
+    kbd_push_scancode(scancode);
 
     switch (scancode) {
         case 0x2A:

@@ -1,7 +1,7 @@
 #ifndef  _KIO_H_
 #define  _KIO_H_
 
-#include "display/display.h"
+#include "display/vga_text.h"
 
 #include "lib/kdef.h"
 #include "lib/kstd.h"

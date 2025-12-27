@@ -1,0 +1,8 @@
+# Compiled binary
+doom
+
+# Object files
+*.o
+
+# WAD files (game data)
+*.wad

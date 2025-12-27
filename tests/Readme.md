@@ -85,17 +85,17 @@ make clean  # Remove compiled binaries
 
 ## Syscalls Tested
 
-| Program   | Syscalls                                                                          |
-|-----------|-----------------------------------------------------------------------------------|
-| hello     | write (4), exit (1)                                                               |
-| filetest  | open (5), read (3), write (4), close (6), exit (1)                                |
-| forktest  | fork (2), waitpid (7), write (4), exit (1)                                        |
-| shelltest | fork (2), execve (11), waitpid (7), write (4), exit (1)                           |
-| dirtest   | chdir (12), getcwd (183), write (4), exit (1)                                     |
-| stattest  | stat (106), stat64 (195), write (4), exit (1)                                     |
-| touchtest | creat (8), close (6), open (5), utimensat (320), unlink (10), write (4), exit (1) |
-| rmtest    | creat (8), close (6), open (5), unlink (10), write (4), exit (1)                  |
-| mvtest    | creat (8), close (6), open (5), rename (38), unlink (10), write (4), exit (1)     |
-| lstest    | open (5), getdents64 (220), close (6), write (4), exit (1)                        |
-| stdintest | read (3), write (4), exit (1)                                                     |
-| dup2test  | creat (8), dup2 (63), write (4), read (3), open (5), close (6), unlink (10), exit (1) |
+| Program   | Syscalls                                                                               |
+|-----------|----------------------------------------------------------------------------------------|
+| hello     | write (4), exit (1)                                                                    |
+| filetest  | open (5), read (3), write (4), close (6), exit (1)                                     |
+| forktest  | fork (2), waitpid (7), write (4), exit (1)                                             |
+| shelltest | fork (2), execve (11), waitpid (7), write (4), exit (1)                                |
+| dirtest   | chdir (12), getcwd (183), write (4), exit (1)                                          |
+| stattest  | stat (106), stat64 (195), write (4), exit (1)                                          |
+| touchtest | creat (8), close (6), open (5), utimensat (320), unlink (10), write (4), exit (1)      |
+| rmtest    | creat (8), close (6), open (5), unlink (10), write (4), exit (1)                       |
+| mvtest    | creat (8), close (6), open (5), rename (38), unlink (10), write (4), exit (1)          |
+| lstest    | open (5), getdents64 (220), close (6), write (4), exit (1)                             |
+| stdintest | read (3), write (4), exit (1)                                                          |
+| dup2test  | creat (8), dup2 (63), write (4), read (3), open (5), close (6), unlink (10), exit (1)  |

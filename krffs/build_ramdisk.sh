@@ -32,6 +32,12 @@ echo "=== Building Unix utilities ==="
 make -C ../utils
 
 echo ""
+echo "=== Building Doom (optional) ==="
+if [ -d "../apps/doom" ]; then
+    make -C ../apps/doom || echo "Doom build failed or skipped"
+fi
+
+echo ""
 echo "=== Creating KRFFS file system ($SIZE MB) ==="
 rm -f "$FS_FILE"
 dd if=/dev/zero of="$FS_FILE" bs=1048576 count=$SIZE
@@ -58,6 +64,18 @@ for util in true false echo yes cat pwd touch mkdir rm mv cp ls; do
         echo "  $util"
     fi
 done
+
+# Copy Doom if it was built
+if [ -f "../apps/doom/doom" ]; then
+    cp "../apps/doom/doom" "$MOUNT_POINT/"
+    echo "  doom"
+fi
+
+# Copy doom1.wad if it exists (user must provide this)
+if [ -f "../apps/doom/doom1.wad" ]; then
+    cp "../apps/doom/doom1.wad" "$MOUNT_POINT/"
+    echo "  doom1.wad"
+fi
 
 # Create a test file for cat and other file-processing utilities
 echo "hello, world" > "$MOUNT_POINT/hello.txt"

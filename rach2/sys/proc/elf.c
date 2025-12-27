@@ -7,6 +7,7 @@
 #include "elf.h"
 #include "../mm/paging.h"
 #include "../lib/kstring.h"
+#include "../serial.h"
 
 /*
  * Validate ELF header
@@ -172,7 +173,9 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
              page_addr < vaddr_end;
              page_addr += PAGE_SIZE) {
 
-            uintptr_t phys_addr = alloc_user_page(dir, page_addr);
+            uintptr_t phys_addr;
+
+            phys_addr = alloc_user_page(dir, page_addr);
             if (phys_addr == 0) {
                 return -1;
             }
@@ -204,6 +207,7 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
             /* Find physical address for this virtual page */
             pde_idx = page_base / PAGE_SIZE / 1024;
             pte_idx = (page_base / PAGE_SIZE) % 1024;
+
             pt = dir->logical_page_tables[pde_idx];
 
             if (!pt) {

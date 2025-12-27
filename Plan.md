@@ -547,8 +547,8 @@ Before implementing new functionality:
 
 ---
 
-### Phase 28: Final Testing and Polish
-**Goal**: Stable system.
+### Phase 28: Final Testing, Polish, and Doom Port
+**Goal**: Stable system with graphical application support.
 
 **Tasks**:
 1. Test all utilities systematically
@@ -556,10 +556,30 @@ Before implementing new functionality:
 3. Add error messages for failed syscalls
 4. Clean up debug output
 5. Final documentation update
+6. **Port Doom via doomgeneric**
 
-**Measurable Result**: Complete shell session without crashes.
+**Doom Porting Accomplishments**:
+- Added VGA Mode 13h driver (320x200, 256 colors) in `sys/display/vga13h.c`
+- Added `ioctl` syscall (54) with FB_SETPALETTE for VGA palette and KIOCSOUND for PC speaker
+- Added `gettimeofday` syscall (78) using kernel tick counter (100 Hz PIT)
+- Added framebuffer device: `open("fb")` switches to Mode 13h, `write()` blits pixels to 0xA0000
+- Added PC speaker driver in `sys/speaker.c` using PIT channel 2
+- Created `apps/doom/doomgeneric_rach2.c` platform layer implementing DG_Init, DG_DrawFrame, DG_GetTicksMs, DG_SleepMs, DG_GetKey
+- Used CMAP256 mode for efficient 8-bit indexed color (native Mode 13h)
+- Implemented PS/2 scancode to Doom key mapping (arrow keys, Ctrl=fire, Space=use, Shift=run)
+- Added 4MB bump allocator heap in userspace crt0.c for Doom's memory needs
+- Final binary: ~360KB ELF32 executable
 
-**Documentation**: Final Readme.md update with complete feature list.
+**Key Kernel Features Added for Doom**:
+- VGA graphics mode switching via ioctl
+- Direct framebuffer write access at 0xA0000
+- Millisecond timing via gettimeofday
+- PC speaker frequency control for sound effects
+- Large file support (doom1.wad ~4MB)
+
+**Measurable Result**: Complete shell session without crashes. Doom runs in VGA Mode 13h with keyboard input and PC speaker sound.
+
+**Documentation**: Final Readme.md update with complete feature list including graphics subsystem.
 
 ---
 
@@ -1537,19 +1557,127 @@ Before implementing new functionality:
 - **Current Phase**: Phase 27 complete
 - **Next Step**: Phase 28 (Final Testing and Polish)
 
+### Session 24 - Phase 28 Complete (Doom Port)
+- **Completed Phase 28: Final Testing, Polish, and Doom Port**
+  - Ported Doom (via doomgeneric) to run as a user-space application
+  - Added VGA Mode 13h driver (`sys/display/vga13h.c/.h`):
+    - Mode switching via VGA register programming
+    - Framebuffer at 0xA0000 (64 KB, 320×200 pixels)
+    - 256-color palette loading via DAC
+  - Added framebuffer device in `sys/syscall.c`:
+    - `open("fb")` returns FD_TYPE_FRAMEBUFFER and switches to Mode 13h
+    - `write(fb_fd, pixels, 64000)` blits to VGA framebuffer
+    - `close(fb_fd)` restores text mode
+  - Added `ioctl` syscall (54):
+    - FB_SETPALETTE (0x4603) for VGA palette
+    - KIOCSOUND (0x4B2F) for PC speaker frequency
+  - Added `gettimeofday` syscall (78):
+    - Returns seconds/microseconds since boot
+    - Uses kernel_ticks counter (100 Hz PIT)
+  - Added PC speaker driver (`sys/speaker.c/.h`):
+    - PIT channel 2 for frequency generation
+    - Port 0x61 speaker gate control
+  - Created `apps/doom/` directory with doomgeneric port:
+    - `doomgeneric_rach2.c` - Platform layer implementing 5 DG_* functions
+    - `crt0.c` - C runtime with 4MB bump allocator heap
+    - `include/` - Stub C library headers for freestanding build
+    - CMAP256 mode for native 8-bit palette rendering
+  - PS/2 scancode to Doom key mapping:
+    - Arrow keys, Ctrl=Fire, Space=Use, Shift=Run, Escape=Menu
+  - Final binary: ~360KB ELF32, runs from KRFFS RAM disk
+  - Cleaned up debug output from kernel and Doom code
+- **Files Created**:
+  - `rach2/sys/display/vga13h.c/.h` - VGA Mode 13h driver
+  - `rach2/sys/speaker.c/.h` - PC speaker driver
+  - `apps/doom/doomgeneric_rach2.c` - Platform layer
+  - `apps/doom/crt0.c` - C runtime with syscall wrappers
+  - `apps/doom/include/` - Stub headers (stdio, stdlib, string, math, etc.)
+- **Files Modified**:
+  - `rach2/sys/syscall.c` - Added ioctl, gettimeofday, framebuffer device
+  - `rach2/sys/fs/fd.h` - Added FD_TYPE_FRAMEBUFFER
+  - `rach2/Readme.md` - Added VGA Mode 13h, PC speaker, ioctl, gettimeofday docs
+  - `Plan.md` - Updated Phase 28 with Doom accomplishments
+- Verified: Doom runs in QEMU with keyboard input and PC speaker sound
+
+**Display Subsystem Refactoring**:
+- Reorganized `sys/display/` for VBE-ready architecture:
+  - Created `fb.h` - Common framebuffer interface with `gfx_info_t` struct and `gfx_mode_t` enum
+  - Created `vga_text.c/h` - Merged `80x25.h` + `display.c/h` for VGA text mode (Mode 3)
+  - Created `vga_gfx.c/h` - Renamed from `vga13h.c/h` for VGA graphics (Mode 13h)
+  - Deleted old files: `80x25.h`, `display.c/h`, `vga13h.c/h`
+- Updated includes in: `kio.h`, `kernel.c`, `panic.h`, `syscall.c`
+- Updated Makefile with new source file names
+- Structure now extensible for future VESA/VBE high-resolution modes
+
+**Serial Input for Debugging**:
+- Added bidirectional serial support to enable piping commands into QEMU
+- Implemented serial input functions in `serial.c`:
+  - `serial_data_available()` - Non-blocking check for incoming data
+  - `serial_getc()` - Blocking character read
+  - `serial_try_getc()` - Non-blocking character read (returns -1 if no data)
+- Modified stdin handling in `sys_read()` (syscall.c):
+  - Polls serial input after each `hlt` wake-up
+  - Handles CR/LF conversion, backspace, printable characters
+  - Echoes input to both VGA and serial
+- Modified kernel debug shell (`shell_loop()` in kernel.c):
+  - Polls serial input alongside keyboard
+  - Added serial output for shell prompt and help command
+- Usage: `(sleep 5; echo "help") | timeout 12 qemu-system-i386 -kernel kernel -serial stdio -display none`
+- Works on real hardware with serial port connection
+
 ---
 
-## Running QEMU for LLM Serial Output
+## Running the Kernel
 
-On macOS, the standard timeout approaches (`perl alarm()`, shell timeouts) don't work reliably with QEMU. Use this pattern to capture serial output for automated testing:
+### Prerequisites
 
-```sh
+Install GNU coreutils for the `timeout` command (required for automated testing):
+
+```bash
+# macOS with Homebrew
+brew install coreutils
+ln -s /opt/homebrew/opt/coreutils/libexec/gnubin/timeout /usr/local/bin/timeout
+```
+
+### Basic Usage
+
+```bash
+# Build and run interactively
+make && ./run.sh
+
+# Run with RAM disk (for userspace programs)
+make && ./run_with_ram_disk.sh
+
+# Run headless with serial output to terminal
+qemu-system-i386 -kernel kernel -serial stdio -display none
+```
+
+### Piping Commands via Serial Input
+
+Commands can be piped to QEMU's serial interface for automated testing and scripting:
+
+```bash
+# Send a single command (delay ensures kernel is ready)
+(sleep 5; echo "help") | timeout 12 qemu-system-i386 -kernel kernel -serial stdio -display none
+
+# Multiple commands with delays
+(sleep 5; echo "ls"; sleep 1; echo "info") | timeout 15 qemu-system-i386 -kernel kernel -serial stdio -display none
+
+# With RAM disk for userspace programs
+(sleep 5; echo "echo hello") | timeout 12 qemu-system-i386 -kernel kernel -initrd ../krffs/file_system.krffs -serial stdio -display none
+```
+
+### Alternative: File-Based Serial Output
+
+For capturing serial output to a file (useful when piping doesn't work):
+
+```bash
 # Write serial to file, run QEMU in background, wait, kill, read file
 (qemu-system-i386 -kernel kernel -serial file:/tmp/qemu_serial.txt -display none &) && sleep 4 && pkill -f "qemu-system-i386.*kernel"; sleep 1; cat /tmp/qemu_serial.txt | head -60
 ```
 
 With a multiboot module:
-```sh
+```bash
 (qemu-system-i386 -kernel kernel -initrd /path/to/module.bin -serial file:/tmp/qemu_serial.txt -display none &) && sleep 4 && pkill -f "qemu-system-i386.*kernel"; sleep 1; cat /tmp/qemu_serial.txt | head -60
 ```
 
@@ -1559,7 +1687,6 @@ Key points:
 - Run QEMU with `&` in a subshell `(...)`
 - Use `pkill -f "qemu-system-i386.*kernel"` to kill (pattern matches the specific command)
 - Add small sleep after kill to ensure file is flushed
-- No need to delete the file first - QEMU's `-serial file:` overwrites it
 
 ---
 

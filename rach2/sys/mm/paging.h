@@ -12,7 +12,8 @@
 
 #include "../lib/kstring.h"
 
-#define HARD_MEMORY_LIMIT 0x1000000
+/* Increased from 16MB to 32MB to support Doom (needs ~5MB for BSS+heap) */
+#define HARD_MEMORY_LIMIT 0x2000000
 
 #define PAGE_SIZE 0x1000
 
@@ -121,5 +122,11 @@ extern page_dir_t *_kernel_dir;
  * Current page directory
  */
 extern page_dir_t *_curr_dir;
+
+/*
+ * Frame bitmap and count (for tracking physical frame allocation)
+ */
+extern uint8_t *_frames;
+extern size_t _frames_number;
 
 #endif

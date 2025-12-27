@@ -16,6 +16,14 @@ static page_dir_t   *_free_page_dirs = NULL;
 static page_table_t *_free_page_tables = NULL;
 
 /*
+ * Starting frame index for user page allocation.
+ * Set once at init time to mem_reserved_ptr / PAGE_SIZE.
+ * This ensures freed user pages can be reused even if
+ * mem_reserved_ptr advances due to kernel allocations.
+ */
+static uintptr_t _user_frames_start = 0;
+
+/*
  * Allocate a page table from free list or mem_reserve.
  */
 static page_table_t *alloc_page_table(void)
@@ -31,6 +39,17 @@ static page_table_t *alloc_page_table(void)
 
     table = (page_table_t *)mem_reserve(sizeof(page_table_t), true);
     if (table) {
+        /*
+         * Mark the frame as used in the bitmap.
+         * This is critical: mem_reserve allocates memory after init_paging,
+         * but doesn't update the frame bitmap. If we don't mark this frame
+         * as used, alloc_user_page could allocate it for a user page,
+         * overwriting our page table structure!
+         */
+        uintptr_t frame = (uintptr_t)table / PAGE_SIZE;
+        if (frame < _frames_number) {
+            _frames[frame] = 1;
+        }
         k_memset(table, 0, sizeof(page_table_t));
     }
     return table;
@@ -62,6 +81,16 @@ static page_dir_t *alloc_page_dir(void)
 
     dir = (page_dir_t *)mem_reserve(sizeof(page_dir_t), true);
     if (dir) {
+        /*
+         * Mark the frames as used in the bitmap.
+         * page_dir_t is 8KB (2 pages), so mark both frames.
+         */
+        uintptr_t frame = (uintptr_t)dir / PAGE_SIZE;
+        uintptr_t num_frames = (sizeof(page_dir_t) + PAGE_SIZE - 1) / PAGE_SIZE;
+        uintptr_t i;
+        for (i = 0; i < num_frames && (frame + i) < _frames_number; i++) {
+            _frames[frame + i] = 1;
+        }
         k_memset(dir, 0, sizeof(page_dir_t));
     }
     return dir;
@@ -129,6 +158,28 @@ void init_paging(void)
 
         phys_address += PAGE_SIZE;
     }
+
+    /*
+     * Final pass: mark all frames up to mem_reserved_ptr as used.
+     * This is necessary because page tables allocated during the loop above
+     * may reside at physical addresses that were already scanned before
+     * those allocations occurred. Without this final pass, those frames
+     * would incorrectly appear free and could be allocated for user pages,
+     * overwriting kernel page tables.
+     */
+    {
+        uintptr_t final_frame = mem_reserved_ptr / PAGE_SIZE;
+        uintptr_t f;
+        for (f = 0; f < final_frame && f < _frames_number; f++) {
+            _frames[f] = 1;
+        }
+    }
+
+    /*
+     * Save the initial user frames starting point.
+     * User page allocations will search for free frames starting here.
+     */
+    _user_frames_start = mem_reserved_ptr / PAGE_SIZE;
 
     register_isr_handler(14, &_page_fault_handler);
 
@@ -248,25 +299,16 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     page_index = page_num % 1024;
 
     if (table_index >= 1024) {
+        serial_printf("alloc_user_page: table_index %d >= 1024\n", (int)table_index);
         return 0;
     }
 
-    /* Find a free physical frame */
-    for (frame = 0; frame < _frames_number; frame++) {
-        if (_frames[frame] == 0) {
-            break;
-        }
-    }
-
-    if (frame >= _frames_number) {
-        return 0;  /* No free frames */
-    }
-
-    /* Mark frame as used */
-    _frames[frame] = 1;
-    phys_addr = frame * PAGE_SIZE;
-
-    /* Get or create page table */
+    /*
+     * CRITICAL: Allocate or copy page table FIRST, before finding a free frame.
+     * This ensures mem_reserve() advances mem_reserved_ptr before we scan for
+     * free frames, preventing the same physical address from being used for
+     * both the page table and the user page.
+     */
     table = dir->logical_page_tables[table_index];
 
     /*
@@ -279,7 +321,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         /* Create a copy of the page table for this directory */
         page_table_t *new_table = alloc_page_table();
         if (!new_table) {
-            _frames[frame] = 0;  /* Release the frame we just claimed */
+            serial_printf("alloc_user_page: failed to copy kernel page table\n");
             return 0;
         }
 
@@ -299,7 +341,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         /* Allocate new page table */
         table = alloc_page_table();
         if (!table) {
-            _frames[frame] = 0;  /* Release the frame we just claimed */
+            serial_printf("alloc_user_page: failed to alloc new page table for idx %d\n", (int)table_index);
             return 0;
         }
 
@@ -310,6 +352,28 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         /* Page table exists but not user-accessible, set U/S bit */
         dir->phys_page_tables[table_index] |= 0x4;
     }
+
+    /*
+     * NOW find a free physical frame.
+     * Start scanning from _user_frames_start (set at init time) to avoid
+     * conflicts with kernel structures. This fixed starting point ensures
+     * freed user pages can be reused, even if mem_reserved_ptr advances
+     * due to later kernel allocations (like new page tables).
+     */
+    for (frame = _user_frames_start; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0) {
+            break;
+        }
+    }
+
+    if (frame >= _frames_number) {
+        serial_printf("alloc_user_page: no free frames! checked %d frames\n", (int)_frames_number);
+        return 0;  /* No free frames */
+    }
+
+    /* Mark frame as used */
+    _frames[frame] = 1;
+    phys_addr = frame * PAGE_SIZE;
 
     /* Map the page with present, rw, and user bits */
     table->pages[page_index] = phys_addr | 0x7;  /* P + RW + U/S */
@@ -364,7 +428,7 @@ void free_user_pages(page_dir_t *dir)
             virt_addr = (dir_idx << 22) | (page_idx << 12);
             phys_addr = pte & ~0xFFF;
 
-            /* Skip identity-mapped kernel region (first 16MB) */
+            /* Skip identity-mapped kernel region (first 32MB) */
             if (virt_addr < HARD_MEMORY_LIMIT) {
                 continue;
             }
