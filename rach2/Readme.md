@@ -10,7 +10,8 @@ Rach2 is an educational 32-bit x86 kernel that implements core operating system 
 - Preemptive round-robin scheduler at 100 Hz
 - Per-process page directories with full memory isolation
 - KRFFS file system with read/write support
-- Doom port with VGA Mode 13h graphics and PC speaker sound
+- Doom port with VGA Mode 13h graphics and real audio (SB16/HDA) or PC speaker fallback
+- Audio drivers: Sound Blaster 16 (ISA), Intel HD Audio (PCI), PC speaker
 - Multiboot1 compliant: boots with GRUB or QEMU's `-kernel` flag
 
 ## Features
@@ -50,7 +51,10 @@ Rach2 is an educational 32-bit x86 kernel that implements core operating system 
 * PS/2 keyboard driver with US layout, shift key, and CTRL+C support
 * VGA text mode display (80x25, 16 colors)
 * VGA Mode 13h graphics (320x200, 256 colors) via framebuffer device
-* PC speaker sound via PIT channel 2
+* Audio subsystem with automatic hardware detection:
+  - Sound Blaster 16 (ISA): 8/16-bit DMA, IRQ-driven playback
+  - Intel HD Audio (PCI): MMIO registers, CORB/RIRB codec communication
+  - PC speaker fallback via PIT channel 2
 
 **Development & Testing:**
 * Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF load)
@@ -117,6 +121,12 @@ The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 M
 │   │   ├── fb.h           # Common framebuffer interface (VBE-ready)
 │   │   ├── vga_text.c/h   # VGA text mode (Mode 3): colors, scrolling
 │   │   └── vga_gfx.c/h    # VGA graphics mode (Mode 13h): 320x200x256
+│   ├── audio/
+│   │   ├── audio.c/h      # Common audio interface, driver detection
+│   │   ├── dma.c/h        # ISA DMA controller (8237A) for SB16
+│   │   ├── sb16.c/h       # Sound Blaster 16 driver
+│   │   └── hda.c/h        # Intel HD Audio driver
+│   ├── pci.c/h            # PCI bus enumeration (for HDA detection)
 │   ├── speaker.c/h        # PC speaker driver (PIT channel 2)
 │   ├── tables/
 │   │   ├── gdt.c/h        # Global Descriptor Table setup
@@ -1068,13 +1078,43 @@ VGA Mode 13h is configured by programming:
 
 The driver in `sys/display/vga_gfx.c` handles mode switching and palette loading.
 
-## PC Speaker
+## Audio Subsystem
 
-The kernel provides PC speaker support for simple sound effects using PIT channel 2.
+The kernel provides a unified audio subsystem supporting multiple audio devices with automatic hardware detection.
 
-### Speaker Control
+### Audio Driver Detection
 
-Sound is controlled via ioctl on the console:
+At boot, the kernel probes for audio hardware in this order:
+1. **Intel HD Audio** - PCI scan for class 0x04 subclass 0x03
+2. **Sound Blaster 16** - ISA probe at port 0x220
+3. **PC Speaker** - Always available as fallback
+
+### Sound Blaster 16 (SB16)
+
+ISA sound card with 8/16-bit DMA playback:
+
+* **I/O Ports**: Base 0x220 (DSP, mixer)
+* **IRQ**: 5 (configurable)
+* **DMA**: Channel 1 (8-bit), Channel 5 (16-bit)
+* **Formats**: 8-bit unsigned, 16-bit signed little-endian
+* **Sample rates**: Up to 44.1 kHz
+
+The driver in `sys/audio/sb16.c` programs the DSP for auto-init DMA mode with double-buffering for continuous playback.
+
+### Intel HD Audio (HDA)
+
+PCI audio controller with MMIO registers:
+
+* **PCI Class**: 0x0403 (multimedia audio controller)
+* **BAR0**: Memory-mapped registers (16KB)
+* **Communication**: CORB/RIRB ring buffers for codec verbs
+* **Streams**: Configurable BDL (Buffer Descriptor List) for DMA
+
+The driver in `sys/audio/hda.c` uses PCI bus enumeration to find the controller, maps MMIO above 32MB using `map_mmio()`, and communicates with codecs via verb commands.
+
+### PC Speaker (Fallback)
+
+Simple tone generation using PIT channel 2:
 
 ```c
 ioctl(0, KIOCSOUND, frequency);  /* Set frequency in Hz */
@@ -1085,7 +1125,34 @@ The speaker driver in `sys/speaker.c` programs:
 * PIT channel 2 (ports 0x42, 0x43) for frequency generation
 * Speaker gate (port 0x61, bits 0-1) for speaker enable/disable
 
-Frequency calculation: `divisor = 1193182 / frequency`
+### Audio ioctl Interface
+
+Audio is controlled via ioctl on the console (fd 0):
+
+| Request         | Code   | Argument                    | Description                    |
+|-----------------|--------|------------------------------|--------------------------------|
+| AUDIO_GET_INFO  | 0x4101 | `struct audio_info *`        | Get driver type and capability |
+| AUDIO_START     | 0x4102 | `struct audio_start_params *`| Start playback                 |
+| AUDIO_STOP      | 0x4103 | -                            | Stop playback                  |
+| AUDIO_WRITE     | 0x4104 | `struct audio_write_params *`| Write audio samples            |
+| AUDIO_SET_VOLUME| 0x4105 | volume (0-100)               | Set playback volume            |
+
+### Running with Audio in QEMU
+
+```bash
+./run_with_ram_disk.sh           # PC speaker only (default)
+./run_with_ram_disk.sh sb16      # Sound Blaster 16
+./run_with_ram_disk.sh hda       # Intel HD Audio
+```
+
+For manual QEMU invocation:
+```bash
+# SB16
+qemu-system-i386 -kernel kernel -audiodev coreaudio,id=audio0 -device sb16,audiodev=audio0
+
+# HDA
+qemu-system-i386 -kernel kernel -audiodev coreaudio,id=audio0 -device intel-hda -device hda-duplex,audiodev=audio0
+```
 
 ---
 
@@ -1194,9 +1261,9 @@ When the kernel boots (or when init exits), the debug shell is available:
 | Category | Supported                                    | Not Supported                       |
 |----------|----------------------------------------------|-------------------------------------|
 | Boot     | Multiboot1, GRUB, QEMU `-kernel`             | UEFI, Multiboot2                    |
-| Memory   | 32 MB address space, 4 KB pages              | Demand paging, virtual memory > 32MB|
+| Memory   | 32 MB + MMIO mapping, 4 KB pages             | Demand paging, swap                 |
 | Storage  | KRFFS RAM disk                               | Persistent disk, real file systems  |
 | Input    | PS/2 keyboard                                | USB, mouse                          |
 | Display  | VGA text (80×25), Mode 13h (320×200)         | Higher resolutions, VESA            |
-| Sound    | PC speaker                                   | Sound cards                         |
+| Sound    | SB16, Intel HDA, PC speaker                  | AC97, USB audio                     |
 | Processes| 16 concurrent, preemptive scheduling         | Threads, signals                    |

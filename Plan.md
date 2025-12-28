@@ -1625,6 +1625,76 @@ Before implementing new functionality:
 - Usage: `(sleep 5; echo "help") | timeout 12 qemu-system-i386 -kernel kernel -serial stdio -display none`
 - Works on real hardware with serial port connection
 
+**Audio Subsystem Implementation**:
+- Implemented full audio subsystem with three drivers for Doom sound effects:
+  1. **Intel HD Audio (HDA)** - Modern PCI-based audio controller
+  2. **Sound Blaster 16 (SB16)** - Classic ISA audio card
+  3. **PC Speaker** - Fallback for systems without real audio hardware
+- Automatic hardware detection at boot (HDA → SB16 → PC Speaker)
+- Created `sys/audio/` directory with modular driver architecture:
+  - `audio.h/c` - Common audio interface (`audio_driver_t`) and driver detection
+  - `sb16.h/c` - Sound Blaster 16 driver with DSP programming and 8-bit DMA
+  - `hda.h/c` - Intel HD Audio driver with PCI enumeration and MMIO
+  - `dma.h/c` - ISA DMA controller (8237A) for SB16 double-buffering
+- Created `sys/pci.c/h` - PCI bus enumeration for HDA device discovery:
+  - Configuration space access via ports 0xCF8/0xCFC
+  - Device scanning by class/subclass (0x04/0x03 for audio)
+  - BAR address extraction and bus mastering enable
+- **Sound Blaster 16 Driver** (`sb16.c`):
+  - DSP reset and version detection at 0x220
+  - Auto-init DMA mode for gapless playback
+  - Double-buffering with IRQ 5 handler
+  - 8-bit unsigned PCM at 11025 Hz (Doom native format)
+  - IRQ-driven buffer swap for continuous audio
+- **Intel HD Audio Driver** (`hda.c`):
+  - PCI device detection (class 0x0403)
+  - MMIO register access via BAR0 (with `map_mmio()` for addresses above 32MB)
+  - Controller reset and initialization sequence
+  - Immediate Command Interface (ICI) for codec communication
+  - Codec enumeration: vendor ID, audio function group, DAC/PIN discovery
+  - Output stream configuration with Buffer Descriptor List (BDL)
+  - IRQ-driven buffer callbacks with ring buffer for sample writes
+  - 16-bit signed PCM at 11025 Hz with 8-bit to 16-bit conversion
+- **Audio ioctl Interface** (syscall.c):
+  - AUDIO_GET_INFO (0x4101) - Get driver type and capability
+  - AUDIO_START (0x4102) - Start playback with sample rate/format
+  - AUDIO_STOP (0x4103) - Stop playback
+  - AUDIO_WRITE (0x4104) - Write audio samples to ring buffer
+  - AUDIO_SET_VOLUME (0x4105) - Set master volume (0-100)
+- **Doom Sound Integration** (`apps/doom/i_pcsound.c`):
+  - Real audio playback when HDA or SB16 is available
+  - DMX sound lump parsing (8-bit unsigned PCM at 11025 Hz)
+  - Per-channel mixing with volume scaling
+  - Falls back to PC speaker beeps when no real audio hardware
+- **Performance Optimization**:
+  - Reduced HDA latency by starting stream immediately (like SB16)
+  - Ring buffer with high/low watermarks to prevent underruns
+  - Double-buffering in SB16 for seamless playback
+- **Files Created**:
+  - `rach2/sys/audio/audio.h/c` - Audio driver interface and detection
+  - `rach2/sys/audio/sb16.h/c` - Sound Blaster 16 driver
+  - `rach2/sys/audio/hda.h/c` - Intel HD Audio driver
+  - `rach2/sys/audio/dma.h/c` - ISA DMA controller
+  - `rach2/sys/pci.h/c` - PCI bus enumeration
+  - `rach2/AUDIO_PLAN.md` - Detailed implementation plan
+- **Files Modified**:
+  - `rach2/kernel.c` - Added `init_audio()` call with status display
+  - `rach2/sys/syscall.c` - Added audio ioctls (AUDIO_*)
+  - `rach2/sys/mm/paging.c` - Added `map_mmio()` for HDA BAR0 above 32MB
+  - `rach2/Makefile` - Added audio/ sources and pci.c
+  - `apps/doom/i_pcsound.c` - Integrated real audio playback
+- **Debug Output Cleanup**:
+  - Removed verbose audio detection messages
+  - Removed VGA mode switching debug messages
+  - Removed framebuffer ownership debug messages
+  - Removed `[exit() called]` and `[_exit() called]` from Doom
+  - Kept boot status line: `Audio... OK (Intel HD Audio)` format
+- **Testing Commands**:
+  - `./run_with_ram_disk.sh` - PC speaker only (default)
+  - `./run_with_ram_disk.sh sb16` - Sound Blaster 16
+  - `./run_with_ram_disk.sh hda` - Intel HD Audio
+- Verified: Doom plays with real sound effects on both SB16 and HDA
+
 ---
 
 ## Running the Kernel

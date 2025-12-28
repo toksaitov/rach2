@@ -1,14 +1,18 @@
 /*
- * i_pcsound.c - PC Speaker sound module for Doom on Rach2
+ * i_pcsound.c - Sound module for Doom on Rach2
  *
- * Implements a simple sound_module_t that converts Doom sound effects
- * to PC speaker beeps. The PC speaker can only play one tone at a time,
- * so we map sound effects to distinct frequencies.
+ * Supports two modes:
+ * 1. Real audio (SB16/HDA): Plays actual Doom sound samples
+ * 2. PC Speaker fallback: Maps sound effects to beep frequencies
+ *
+ * PC speaker can only play one tone at a time, so we map sfx to frequencies.
+ * Real audio mode supports proper sample playback with mixing.
  */
 
 #include "sounds.h"
 #include "i_sound.h"
 #include "w_wad.h"
+#include "z_zone.h"
 #include "doomtype.h"
 
 #include <stdint.h>
@@ -23,8 +27,42 @@ float libsamplerate_scale = 0.65f;
 /* Syscall wrappers */
 extern int ioctl(int fd, unsigned long request, ...);
 
-/* ioctl request code for PC speaker */
-#define KIOCSOUND 0x4B2F
+/* ioctl request codes */
+#define KIOCSOUND       0x4B2F  /* PC speaker frequency (0 = off) */
+#define AUDIO_GET_INFO  0x4101  /* Get audio driver info */
+#define AUDIO_START     0x4102  /* Start audio playback */
+#define AUDIO_STOP      0x4103  /* Stop audio playback */
+#define AUDIO_WRITE     0x4104  /* Write audio samples */
+#define AUDIO_SET_VOLUME 0x4105 /* Set volume (0-100) */
+
+/* Audio driver types */
+#define AUDIO_DRIVER_NONE    0
+#define AUDIO_DRIVER_SPEAKER 1
+#define AUDIO_DRIVER_SB16    2
+#define AUDIO_DRIVER_HDA     3
+
+/* Audio formats */
+#define AUDIO_U8    0
+#define AUDIO_S16LE 1
+
+/* Audio info structure */
+struct audio_info {
+    uint32_t driver_type;
+    uint32_t has_real_audio;
+};
+
+/* Audio start parameters */
+struct audio_start_params {
+    uint32_t sample_rate;
+    uint32_t format;
+    uint32_t channels;
+};
+
+/* Audio write parameters */
+struct audio_write_params {
+    const uint8_t *buffer;
+    uint32_t size;
+};
 
 /* Get current time in ms */
 extern uint32_t DG_GetTicksMs(void);
@@ -34,6 +72,33 @@ static boolean pcsound_initialized = false;
 static int current_sound_channel = -1;
 static uint32_t sound_end_time = 0;
 static uint32_t current_freq = 0;
+
+/* Real audio state */
+static boolean use_real_audio = false;
+static uint32_t audio_sample_rate = 11025;
+
+/* Sound mixing buffer for real audio (mono, unsigned 8-bit) */
+/* At 11025 Hz and ~35fps, we need ~315 samples per frame.
+ * Using 320 to match real-time consumption rate. */
+#define MIX_BUFFER_SIZE 320
+static uint8_t mix_buffer[MIX_BUFFER_SIZE];
+
+/* Channel state for real audio (8 channels like classic Doom) */
+#define NUM_CHANNELS 8
+static struct {
+    const uint8_t *data;    /* Sound sample data */
+    uint32_t length;        /* Sample length in bytes */
+    uint32_t position;      /* Current playback position */
+    int volume;             /* Channel volume (0-255) */
+    boolean active;         /* Is channel playing? */
+} channels[NUM_CHANNELS];
+
+/* Doom sound lump header (8 bytes) */
+struct doom_sound_header {
+    uint16_t format;        /* Always 3 */
+    uint16_t sample_rate;   /* Usually 11025 */
+    uint32_t num_samples;   /* Number of samples */
+};
 
 /*
  * Frequency mapping for Doom sound effects.
@@ -198,7 +263,33 @@ static void stop_tone(void)
 
 static boolean PCSoundInit(boolean use_sfx_prefix)
 {
+    struct audio_info info;
+    struct audio_start_params params;
+    int i;
+
     (void)use_sfx_prefix;
+
+    /* Initialize channel state */
+    for (i = 0; i < NUM_CHANNELS; i++) {
+        channels[i].data = NULL;
+        channels[i].length = 0;
+        channels[i].position = 0;
+        channels[i].volume = 0;
+        channels[i].active = false;
+    }
+
+    /* Check for real audio hardware */
+    if (ioctl(0, AUDIO_GET_INFO, &info) == 0 && info.has_real_audio) {
+        /* Start audio playback */
+        params.sample_rate = audio_sample_rate;
+        params.format = AUDIO_U8;    /* Doom native format */
+        params.channels = 1;         /* Mono */
+
+        if (ioctl(0, AUDIO_START, &params) == 0) {
+            use_real_audio = true;
+        }
+    }
+
     pcsound_initialized = true;
     current_sound_channel = -1;
     sound_end_time = 0;
@@ -207,6 +298,10 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
 
 static void PCSoundShutdown(void)
 {
+    if (use_real_audio) {
+        ioctl(0, AUDIO_STOP, 0);
+        use_real_audio = false;
+    }
     stop_tone();
     pcsound_initialized = false;
 }
@@ -214,10 +309,11 @@ static void PCSoundShutdown(void)
 static int PCSoundGetSfxLumpNum(sfxinfo_t *sfxinfo)
 {
     char namebuf[16];
+    int lumpnum;
 
-    /* Try to find the lump, but we don't actually use it */
+    /* Build lump name: "DS" prefix for digital sounds */
     namebuf[0] = 'D';
-    namebuf[1] = 'P';
+    namebuf[1] = 'S';  /* DS = Digital Sound (not DP = PC speaker) */
     namebuf[2] = '\0';
 
     /* Concatenate sfxinfo->name */
@@ -231,12 +327,57 @@ static int PCSoundGetSfxLumpNum(sfxinfo_t *sfxinfo)
         dst[i] = '\0';
     }
 
-    return W_CheckNumForName(namebuf);
+    lumpnum = W_CheckNumForName(namebuf);
+    return lumpnum;
 }
 
 static void PCSoundUpdate(void)
 {
-    /* Check if current sound has finished */
+    /* Real audio mode: mix active channels and write to audio device */
+    if (use_real_audio) {
+        struct audio_write_params wp;
+        int i, j;
+        int sample_sum;
+        int active_count;
+
+        /* Mix all active channels into the buffer */
+        for (j = 0; j < MIX_BUFFER_SIZE; j++) {
+            sample_sum = 0;
+            active_count = 0;
+
+            for (i = 0; i < NUM_CHANNELS; i++) {
+                if (channels[i].active && channels[i].position < channels[i].length) {
+                    /* Get sample (unsigned 8-bit, center is 128) */
+                    int sample = channels[i].data[channels[i].position];
+                    /* Apply volume (0-255) */
+                    sample = ((sample - 128) * channels[i].volume / 255) + 128;
+                    sample_sum += sample - 128;
+                    active_count++;
+                    channels[i].position++;
+                } else if (channels[i].active) {
+                    channels[i].active = false;
+                }
+            }
+
+            /* Mix: average and center at 128 */
+            if (active_count > 0) {
+                sample_sum = sample_sum / active_count + 128;
+                if (sample_sum < 0) sample_sum = 0;
+                if (sample_sum > 255) sample_sum = 255;
+                mix_buffer[j] = (uint8_t)sample_sum;
+            } else {
+                mix_buffer[j] = 128;  /* Silence */
+            }
+        }
+
+        /* Write mixed buffer to audio device */
+        wp.buffer = mix_buffer;
+        wp.size = MIX_BUFFER_SIZE;
+        ioctl(0, AUDIO_WRITE, &wp);
+        return;
+    }
+
+    /* PC speaker mode: check if current sound has finished */
     if (current_sound_channel >= 0 && sound_end_time > 0) {
         uint32_t now = DG_GetTicksMs();
         if (now >= sound_end_time) {
@@ -249,10 +390,18 @@ static void PCSoundUpdate(void)
 
 static void PCSoundUpdateSoundParams(int channel, int vol, int sep)
 {
+    (void)sep;  /* TODO: stereo panning not yet supported */
+
+    /* Real audio mode: update channel volume */
+    if (use_real_audio && channel >= 0 && channel < NUM_CHANNELS) {
+        /* Doom volume is 0-127, we use 0-255 */
+        channels[channel].volume = vol * 2;
+        return;
+    }
+
+    /* PC speaker doesn't support volume or panning */
     (void)channel;
     (void)vol;
-    (void)sep;
-    /* PC speaker doesn't support volume or panning */
 }
 
 static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
@@ -260,12 +409,62 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
     int sfx_id;
     uint32_t freq, duration;
 
-    (void)vol;
     (void)sep;
 
     if (!pcsound_initialized || !sfxinfo) {
         return -1;
     }
+
+    /* Real audio mode: load and play actual sound sample */
+    if (use_real_audio) {
+        int lumpnum;
+        byte *lumpdata;
+        int lumplen;
+        struct doom_sound_header *header;
+
+        /* Validate channel */
+        if (channel < 0 || channel >= NUM_CHANNELS) {
+            return -1;
+        }
+
+        /* Get the sound lump */
+        lumpnum = sfxinfo->lumpnum;
+        if (lumpnum < 0) {
+            return -1;
+        }
+
+        /* Cache the lump data */
+        lumpdata = W_CacheLumpNum(lumpnum, PU_STATIC);
+        if (!lumpdata) {
+            return -1;
+        }
+
+        lumplen = W_LumpLength(lumpnum);
+        if (lumplen < 8) {
+            /* Too short to be a valid Doom sound */
+            return -1;
+        }
+
+        /* Parse the Doom sound header */
+        header = (struct doom_sound_header *)lumpdata;
+
+        /* Validate format (Doom uses format code 3) */
+        if (header->format != 3) {
+            return -1;
+        }
+
+        /* Set up channel to play this sound */
+        channels[channel].data = lumpdata + 8;  /* Skip 8-byte header */
+        channels[channel].length = header->num_samples;
+        channels[channel].position = 0;
+        channels[channel].volume = vol * 2;  /* Doom: 0-127, we use 0-255 */
+        channels[channel].active = true;
+
+        return channel;
+    }
+
+    /* PC speaker fallback mode */
+    (void)vol;
 
     /* Get sfx ID from the S_sfx array index */
     sfx_id = sfxinfo - S_sfx;
@@ -292,6 +491,15 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
 
 static void PCSoundStopSound(int channel)
 {
+    /* Real audio mode: stop channel */
+    if (use_real_audio) {
+        if (channel >= 0 && channel < NUM_CHANNELS) {
+            channels[channel].active = false;
+        }
+        return;
+    }
+
+    /* PC speaker mode */
     if (channel == current_sound_channel) {
         stop_tone();
         current_sound_channel = -1;
@@ -301,6 +509,15 @@ static void PCSoundStopSound(int channel)
 
 static boolean PCSoundSoundIsPlaying(int channel)
 {
+    /* Real audio mode: check channel state */
+    if (use_real_audio) {
+        if (channel >= 0 && channel < NUM_CHANNELS) {
+            return channels[channel].active;
+        }
+        return false;
+    }
+
+    /* PC speaker mode */
     if (channel == current_sound_channel && sound_end_time > 0) {
         return DG_GetTicksMs() < sound_end_time;
     }

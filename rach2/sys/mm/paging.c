@@ -208,6 +208,53 @@ static void _page_fault_handler(isr_params_t *params)
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
 
+/*
+ * Map a physical MMIO region to the same virtual address (identity map).
+ * Creates page table entries for accessing device registers above HARD_MEMORY_LIMIT.
+ */
+uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
+{
+    uintptr_t start_page = phys_addr & ~(PAGE_SIZE - 1);
+    uintptr_t end_addr = phys_addr + size;
+    uintptr_t addr;
+
+    for (addr = start_page; addr < end_addr; addr += PAGE_SIZE) {
+        uintptr_t page_num = addr / PAGE_SIZE;
+        uintptr_t table_index = page_num / 1024;
+        uintptr_t page_index = page_num % 1024;
+        page_table_t *table;
+
+        if (table_index >= 1024) {
+            serial_printf("map_mmio: address 0x%x out of range\n", addr);
+            return 0;
+        }
+
+        /* Get or create page table */
+        table = _kernel_dir->logical_page_tables[table_index];
+        if (!table) {
+            table = alloc_page_table();
+            if (!table) {
+                serial_printf("map_mmio: failed to allocate page table\n");
+                return 0;
+            }
+            _kernel_dir->logical_page_tables[table_index] = table;
+            _kernel_dir->phys_page_tables[table_index] = (uintptr_t)table | 0x3;
+        }
+
+        /* Map page: present, writable, cache-disabled for MMIO */
+        table->pages[page_index] = addr | 0x1B;  /* P=1, R/W=1, PWT=1, PCD=1 */
+    }
+
+    /* Flush TLB */
+    __asm__ __volatile__(
+        "movl %%cr3, %%eax\n\t"
+        "movl %%eax, %%cr3"
+        ::: "eax", "memory"
+    );
+
+    return phys_addr;
+}
+
 void paging_set_user(uintptr_t addr, bool user)
 {
     uintptr_t page_num = addr / PAGE_SIZE;

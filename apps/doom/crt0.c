@@ -37,13 +37,6 @@ int main(int argc, char **argv);
  */
 void _exit(int status)
 {
-    /* Debug: print message before exiting using direct syscall */
-    const char *msg = "[_exit() called]\n";
-    __asm__ __volatile__ (
-        "int $0x80"
-        :
-        : "a"(SYS_WRITE), "b"(2), "c"(msg), "d"(17)
-    );
     __asm__ __volatile__ (
         "int $0x80"
         :
@@ -54,9 +47,6 @@ void _exit(int status)
 
 void exit(int status)
 {
-    /* Debug: show that exit was called */
-    const char *msg = "[exit() called]\n";
-    write(2, msg, 16);
     _exit(status);
 }
 

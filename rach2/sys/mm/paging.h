@@ -114,6 +114,15 @@ void free_user_pages(page_dir_t *dir);
 void free_page_directory(page_dir_t *dir);
 
 /*
+ * Map a physical MMIO region to the same virtual address (identity map).
+ * Used for PCI device memory-mapped registers.
+ * phys_addr: physical address to map
+ * size: size of region in bytes
+ * Returns virtual address (same as physical), or 0 on failure.
+ */
+uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
+
+/*
  * Kernel page directory (shared by all processes for kernel mappings)
  */
 extern page_dir_t *_kernel_dir;

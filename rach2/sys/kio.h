@@ -114,4 +114,10 @@ uint16_t inw(uint16_t port);
  */
 uint32_t ind(uint16_t port);
 
+/*
+ * Aliases for standard naming convention (outl/inl)
+ */
+#define outl outd
+#define inl  ind
+
 #endif

@@ -32,8 +32,13 @@ C_SRC   = $(KERNEL).c \
 	  sys/kbd.c       \
 	  sys/panic.c     \
 	  sys/speaker.c   \
+	  sys/pci.c       \
 	  sys/display/vga_text.c \
 	  sys/display/vga_gfx.c  \
+	  sys/audio/audio.c     \
+	  sys/audio/dma.c       \
+	  sys/audio/sb16.c      \
+	  sys/audio/hda.c       \
 	  sys/tables/gdt.c      \
 	  sys/tables/tss.c      \
 	  sys/tables/idt.c      \

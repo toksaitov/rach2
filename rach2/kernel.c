@@ -17,6 +17,7 @@
 #include "sys/pit.h"
 #include "sys/kbd.h"
 #include "sys/display/vga_text.h"
+#include "sys/audio/audio.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 
@@ -1983,6 +1984,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  Audio...");
+    serial_printf("  Audio...");
+    init_audio();
+    set_fore_color(light_green);
+    k_printf(" OK (%s)\n", audio_get_driver_name());
+    serial_printf(" OK (%s)\n", audio_get_driver_name());
     set_fore_color(light_grey);
 
     /* Modules were already parsed early (before paging) - just display status */

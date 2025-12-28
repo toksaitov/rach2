@@ -12,6 +12,7 @@
 #include "lib/kstring.h"
 #include "display/vga_gfx.h"
 #include "speaker.h"
+#include "audio/audio.h"
 
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
@@ -30,7 +31,6 @@ static volatile uint32_t fb_owner_pid = 0;
 void fb_release_if_owner(uint32_t pid)
 {
     if (fb_owner_pid == pid && fb_owner_pid != 0) {
-        serial_printf("fb_release_if_owner: Restoring text mode for PID %d\n", pid);
         vga_mode13h_exit();
         fb_owner_pid = 0;
     }
@@ -43,6 +43,40 @@ void fb_release_if_owner(uint32_t pid)
 #define FB_MODE_13H    0x4601  /* Switch to VGA Mode 13h */
 #define FB_MODE_TEXT   0x4602  /* Switch back to text mode */
 #define FB_SETPALETTE  0x4603  /* Set 256-color palette (768 bytes) */
+
+/*
+ * Audio ioctl request codes
+ */
+#define AUDIO_GET_INFO    0x4101  /* Get audio driver info */
+#define AUDIO_START       0x4102  /* Start audio playback */
+#define AUDIO_STOP        0x4103  /* Stop audio playback */
+#define AUDIO_WRITE       0x4104  /* Write audio samples */
+#define AUDIO_SET_VOLUME  0x4105  /* Set volume (0-100) */
+
+/*
+ * Audio info structure returned by AUDIO_GET_INFO
+ */
+struct audio_info {
+    uint32_t driver_type;   /* AUDIO_DRIVER_NONE, SPEAKER, SB16, HDA */
+    uint32_t has_real_audio; /* 1 if real audio (not PC speaker) */
+};
+
+/*
+ * Audio start parameters for AUDIO_START
+ */
+struct audio_start_params {
+    uint32_t sample_rate;   /* e.g., 11025, 22050, 44100 */
+    uint32_t format;        /* 0 = U8, 1 = S16LE */
+    uint32_t channels;      /* 1 = mono, 2 = stereo */
+};
+
+/*
+ * Audio write parameters for AUDIO_WRITE
+ */
+struct audio_write_params {
+    const uint8_t *buffer;
+    uint32_t size;
+};
 
 /* Kernel stack size (16KB) */
 #define KERNEL_STACK_SIZE 0x4000
@@ -98,17 +132,14 @@ static int32_t sys_exit(isr_params_t *params)
     bool is_init = false;
     uint32_t exiting_pid;
 
-    serial_printf("sys_exit: Process %d exited with status %d\n",
-                  current_proc ? (int)current_proc->pid : -1, status);
-
     /* Check if this process owns the framebuffer - restore text mode */
     if (current_proc && fb_owner_pid == current_proc->pid) {
-        serial_printf("sys_exit: Restoring text mode (fb owner exiting)\n");
         vga_mode13h_exit();
         fb_owner_pid = 0;
     }
 
     k_printf("\nProcess exited with status %d\n", status);
+    serial_printf("\nProcess exited with status %d\n", status);
 
     if (!current_proc) {
         __asm__ __volatile__("cli; hlt");
@@ -412,8 +443,6 @@ static int32_t sys_close(isr_params_t *params)
     /* Check if this is the framebuffer - need to restore text mode */
     entry = fd_get(&current_proc->fds, fd);
     if (entry && entry->type == FD_TYPE_FRAMEBUFFER) {
-        serial_printf("sys_close: PID %d closing framebuffer\n", current_proc->pid);
-
         /* Restore text mode and clear ownership */
         vga_mode13h_exit();
         fb_owner_pid = 0;
@@ -1874,6 +1903,48 @@ static int32_t sys_ioctl(isr_params_t *params)
                 speaker_on(arg);
             }
             return 0;
+        }
+
+        /* Audio ioctls on console fd */
+        switch (request) {
+            case AUDIO_GET_INFO: {
+                struct audio_info *info = (struct audio_info *)arg;
+                if (info) {
+                    info->driver_type = audio ? audio->type : AUDIO_DRIVER_NONE;
+                    info->has_real_audio = audio_has_real_output() ? 1 : 0;
+                }
+                return 0;
+            }
+
+            case AUDIO_START: {
+                struct audio_start_params *p = (struct audio_start_params *)arg;
+                if (!audio || !p) {
+                    return -1;
+                }
+                return audio->start(p->sample_rate, (audio_format_t)p->format, (int)p->channels);
+            }
+
+            case AUDIO_STOP:
+                if (audio) {
+                    audio->stop();
+                    return 0;
+                }
+                return -1;
+
+            case AUDIO_WRITE: {
+                struct audio_write_params *p = (struct audio_write_params *)arg;
+                if (!audio || !p || !p->buffer) {
+                    return -1;
+                }
+                return audio->write(p->buffer, p->size);
+            }
+
+            case AUDIO_SET_VOLUME:
+                if (audio) {
+                    audio->set_volume((int)arg);
+                    return 0;
+                }
+                return -1;
         }
     }
 

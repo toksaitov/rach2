@@ -392,15 +392,11 @@ static void vga_restore_text_palette(void)
 
 void vga_mode13h_exit(void)
 {
-    serial_printf("vga_mode13h_exit: graphics_mode=%d\n", vga_graphics_mode);
-
     if (!vga_graphics_mode) {
-        serial_printf("vga_mode13h_exit: already in text mode, skipping\n");
         return;
     }
 
     /* Apply Mode 3 (text mode) registers */
-    serial_printf("vga_mode13h_exit: switching to text mode\n");
     vga_set_mode(mode3_misc,
                  mode3_seq, sizeof(mode3_seq),
                  mode3_crtc, sizeof(mode3_crtc),
@@ -425,9 +421,7 @@ void vga_mode13h_exit(void)
     gfx_current.size = 0;
 
     /* Clear text mode screen */
-    serial_printf("vga_mode13h_exit: clearing screen\n");
     k_cls();
-    serial_printf("vga_mode13h_exit: done\n");
 }
 
 void vga_mode13h_set_palette(const uint8_t *data)
