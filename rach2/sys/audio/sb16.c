@@ -111,9 +111,13 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
 
 /*
  * Read samples from ring buffer into destination (called from IRQ context)
- * If not enough samples available, fills remainder with silence (128).
+ * If not enough samples available, fills remainder with silence.
  * Always fills exactly 'count' bytes in destination.
  * Tracks underruns for diagnostics.
+ *
+ * Silence value depends on format:
+ * - 8-bit unsigned: 128 (middle of 0-255 range)
+ * - 16-bit signed: 0 (middle of -32768 to 32767 range)
  */
 static void ring_read_to_buffer(uint8_t *dest, uint32_t count)
 {
@@ -136,8 +140,16 @@ static void ring_read_to_buffer(uint8_t *dest, uint32_t count)
     if (silence_needed > 0) {
         underrun_count++;
         underrun_samples += silence_needed;
-        for (; i < count; i++) {
-            dest[i] = 128;  /* 8-bit unsigned silence */
+        if (is_16bit) {
+            /* 16-bit signed silence is 0 */
+            for (; i < count; i++) {
+                dest[i] = 0;
+            }
+        } else {
+            /* 8-bit unsigned silence is 128 */
+            for (; i < count; i++) {
+                dest[i] = 128;
+            }
         }
     }
 }
@@ -259,21 +271,57 @@ static void mixer_write(uint8_t reg, uint8_t value)
  */
 static void sb16_start_auto_init(void)
 {
-    uint16_t block_size = SB16_BUFFER_SIZE - 1;  /* IRQ fires every block */
     uint32_t addr = (uint32_t)(uintptr_t)dma_buffer;
+    uint16_t block_size;
+    uint8_t mode;
+    int dma_channel;
+    uint8_t dsp_cmd;
+
+    /*
+     * Calculate block size and mode based on format/channels
+     * For 16-bit: block size is in samples (words), not bytes
+     * Mode byte: bit 5 = stereo, bit 4 = signed
+     */
+    if (is_16bit) {
+        /* 16-bit mode uses DMA channel 5 and DSP command 0xB6 */
+        dma_channel = SB16_DMA_16BIT;
+        dsp_cmd = DSP_16BIT_OUT_AI;
+        /* Mode: signed (bit 4), stereo if channels == 2 (bit 5) */
+        mode = 0x10;  /* Signed */
+        if (current_channels == 2) {
+            mode |= 0x20;  /* Stereo */
+        }
+        /* Block size in samples (words) for 16-bit DMA */
+        block_size = (SB16_BUFFER_SIZE / 2) - 1;
+        if (current_channels == 2) {
+            block_size = (SB16_BUFFER_SIZE / 4) - 1;  /* Stereo: 2 samples per frame */
+        }
+    } else {
+        /* 8-bit mode uses DMA channel 1 and DSP command 0xC6 */
+        dma_channel = SB16_DMA_8BIT;
+        dsp_cmd = DSP_8BIT_OUT_AI;
+        /* Mode: unsigned (bit 4 clear), stereo if channels == 2 (bit 5) */
+        mode = 0x00;  /* Unsigned */
+        if (current_channels == 2) {
+            mode |= 0x20;  /* Stereo */
+        }
+        /* Block size in bytes for 8-bit DMA */
+        block_size = SB16_BUFFER_SIZE - 1;
+        if (current_channels == 2) {
+            block_size = (SB16_BUFFER_SIZE / 2) - 1;  /* Stereo: 2 bytes per frame */
+        }
+    }
 
     /* Set up DMA for FULL double-buffer with auto-init flag */
-    dma_start(SB16_DMA_8BIT, addr, SB16_BUFFER_SIZE * 2,
+    dma_start(dma_channel, addr, SB16_BUFFER_SIZE * 2,
               DMA_MODE_SINGLE | DMA_MODE_READ | DMA_MODE_AUTOINIT);
 
     /*
-     * DSP 4.xx 8-bit auto-init command (0xC6)
+     * DSP 4.xx auto-init command
      * Format: command, mode, length_low, length_high
-     * Mode: 0x00 = mono unsigned (what Doom uses)
-     * Length: block size - 1 (when IRQs fire)
      */
-    dsp_write(DSP_8BIT_OUT_AI);     /* 0xC6 */
-    dsp_write(0x00);                /* Mode: mono, unsigned */
+    dsp_write(dsp_cmd);
+    dsp_write(mode);
     dsp_write(block_size & 0xFF);
     dsp_write((block_size >> 8) & 0xFF);
 }
@@ -295,7 +343,12 @@ static void sb16_irq_handler(isr_params_t *params)
     (void)params;
 
     /* Acknowledge the DSP interrupt - MUST be done first */
-    inb(sb16_base + SB16_INT_ACK_8BIT);
+    /* Use correct acknowledge port for 8-bit vs 16-bit mode */
+    if (is_16bit) {
+        inb(sb16_base + SB16_INT_ACK_16BIT);
+    } else {
+        inb(sb16_base + SB16_INT_ACK_8BIT);
+    }
 
     if (!playing) {
         return;
@@ -444,7 +497,8 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
     dsp_write(sample_rate & 0xFF);
 
     /* Fill both DMA buffer halves with silence initially */
-    k_memset(dma_buffer, 128, SB16_BUFFER_SIZE * 2);
+    /* 16-bit signed uses 0, 8-bit unsigned uses 128 */
+    k_memset(dma_buffer, is_16bit ? 0 : 128, SB16_BUFFER_SIZE * 2);
 
     /* Initialize ring buffer to empty */
     ring_read_ptr = 0;

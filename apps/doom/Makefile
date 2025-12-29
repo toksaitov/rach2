@@ -47,7 +47,7 @@ DOOM_SRC = \
 DOOM_OBJS = $(DOOM_SRC:.c=.o)
 
 # Local source files
-LOCAL_SRC = doomgeneric_rach2.c i_pcsound.c
+LOCAL_SRC = doomgeneric_rach2.c i_pcsound.c opl3.c mus2mid.c midifile.c i_oplmusic.c
 LOCAL_OBJS = $(LOCAL_SRC:.c=.o)
 
 # All objects

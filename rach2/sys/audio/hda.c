@@ -508,7 +508,7 @@ static void hda_irq_handler(isr_params_t *params)
 {
     uint32_t intsts;
     uint8_t sd_sts;
-    uint8_t *next_buffer;
+    volatile uint8_t *next_buffer;
     uint32_t lpib;
     int current_buf, next_buf;
     (void)params;
@@ -536,7 +536,7 @@ static void hda_irq_handler(isr_params_t *params)
 
     /* Fill buffer with new data */
     if (user_callback) {
-        user_callback(next_buffer, HDA_BUFFER_SIZE);
+        user_callback((uint8_t *)next_buffer, HDA_BUFFER_SIZE);
     } else {
         /* Use ring buffer - convert 8-bit to 16-bit */
         /* HDA_BUFFER_SIZE bytes of 16-bit = HDA_BUFFER_SIZE/2 samples */
@@ -639,7 +639,7 @@ static void hda_shutdown(void)
 /*
  * Fill buffer with silence
  */
-static void fill_silence(uint8_t *buffer, size_t size, bool is_signed)
+static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed)
 {
     size_t i;
     if (is_signed) {
@@ -698,7 +698,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     /* Fill buffers with initial data or silence */
     if (user_callback) {
         for (i = 0; i < HDA_NUM_BUFFERS; i++) {
-            user_callback(audio_buffer + (i * HDA_BUFFER_SIZE), HDA_BUFFER_SIZE);
+            user_callback((uint8_t *)(audio_buffer + (i * HDA_BUFFER_SIZE)), HDA_BUFFER_SIZE);
         }
     } else {
         /* For write-based audio, use 16-bit signed silence (zeros) */

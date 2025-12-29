@@ -1695,6 +1695,50 @@ Before implementing new functionality:
   - `./run_with_ram_disk.sh hda` - Intel HD Audio
 - Verified: Doom plays with real sound effects on both SB16 and HDA
 
+### Session 25 - Phase 28 Continued (OPL3 Music Support)
+- **Added OPL3 Music Playback for Doom**
+  - Integrated Nuked-OPL3 emulator for FM synthesis music
+  - Ported MIDI/MUS parsing from Chocolate Doom (midifile.c, mus2mid.c, memio.c)
+  - Created `apps/doom/i_oplmusic.c` - OPL3 music system:
+    - Voice management with 9 OPL voices
+    - GENMIDI lump loading for instrument definitions
+    - MIDI event processing (note on/off, program change, pitch bend, controllers)
+    - Tempo handling via MIDI meta events
+  - Created `apps/doom/opl3.c/h` - Nuked-OPL3 emulator core:
+    - Cycle-accurate OPL3 FM synthesis at 49716 Hz
+    - Stereo output generation via `OPL3_GenerateStream()`
+- **Audio Timing Fixes** (`apps/doom/i_pcsound.c`):
+  - Changed from fixed 315-sample writes to time-based audio pacing
+  - Added elapsed time tracking with fractional millisecond remainder:
+    ```c
+    out_samples_num = elapsed_ms * OUTPUT_SAMPLE_RATE + audio_ms_remainder;
+    out_samples = out_samples_num / 1000;
+    audio_ms_remainder = out_samples_num % 1000;
+    ```
+  - Added per-chunk OPL resampling with remainder tracking:
+    ```c
+    opl_samples_num = chunk * OPL_SAMPLE_RATE + opl_sample_remainder;
+    opl_samples_needed = opl_samples_num / OUTPUT_SAMPLE_RATE;
+    opl_sample_remainder = opl_samples_num % OUTPUT_SAMPLE_RATE;
+    ```
+  - Added catch-up cap (`MAX_CATCHUP_SAMPLES`) to prevent ring buffer overflow
+  - Adjusted OPL→8-bit scaling to reduce clipping (divide by 256 instead of 128)
+- **Music Timing Fixes** (`apps/doom/i_oplmusic.c`):
+  - Removed debug clamps that inserted artificial delays between zero-delta MIDI events
+  - Changed `samples_per_tick` guard to only prevent zero (avoids infinite loops)
+  - Increased `MAX_EVENTS_PER_ITERATION` to 1024 for dense MIDI passages
+  - Relaxed event batching to allow proper zero-delta event sequences
+- **Files Created**:
+  - `apps/doom/i_oplmusic.c/h` - OPL3 music interface
+  - `apps/doom/opl3.c/h` - Nuked-OPL3 emulator
+  - `apps/doom/midifile.c/h` - MIDI file parsing
+  - `apps/doom/mus2mid.c/h` - MUS to MIDI conversion
+  - `apps/doom/memio.c/h` - Memory stream I/O
+- **Files Modified**:
+  - `apps/doom/i_pcsound.c` - Integrated OPL mixing with time-based audio pacing
+  - `apps/doom/Makefile` - Added OPL3 and MIDI sources
+- Verified: Doom plays with both OPL3 music and real sound effects on HDA and SB16
+
 ---
 
 ## Running the Kernel

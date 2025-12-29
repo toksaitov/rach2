@@ -2,11 +2,11 @@
  * i_pcsound.c - Sound module for Doom on Rach2
  *
  * Supports two modes:
- * 1. Real audio (SB16/HDA): Plays actual Doom sound samples
- * 2. PC Speaker fallback: Maps sound effects to beep frequencies
+ * 1. Real audio (SB16/HDA): Plays actual Doom sound samples + OPL3 music
+ * 2. PC Speaker fallback: Maps sound effects to beep frequencies (no music)
  *
  * PC speaker can only play one tone at a time, so we map sfx to frequencies.
- * Real audio mode supports proper sample playback with mixing.
+ * Real audio mode supports proper sample playback with mixing and OPL3 music.
  */
 
 #include "sounds.h"
@@ -14,6 +14,7 @@
 #include "w_wad.h"
 #include "z_zone.h"
 #include "doomtype.h"
+#include "i_oplmusic.h"
 
 #include <stdint.h>
 
@@ -70,21 +71,45 @@ extern uint32_t DG_GetTicksMs(void);
 /* Sound state */
 static boolean pcsound_initialized = false;
 static int current_sound_channel = -1;
-static uint32_t sound_end_time = 0;
 static uint32_t current_freq = 0;
 
 /* Real audio state */
 static boolean use_real_audio = false;
-static uint32_t audio_sample_rate = 11025;
+static boolean opl_music_initialized = false;
+static uint32_t audio_sample_rate = 11025;  /* Output rate for DMA-backed audio */
 
 /* Sound mixing buffer for real audio (mono, unsigned 8-bit) */
-/* At 11025 Hz and ~35fps, we need ~315 samples per frame.
- * Using 320 to match real-time consumption rate. */
-#define MIX_BUFFER_SIZE 320
+#define MIX_BUFFER_SIZE 315  /* Max chunk size (~28.6 ms at 11025 Hz) */
 static uint8_t mix_buffer[MIX_BUFFER_SIZE];
+
+/*
+ * OPL timing and resampling
+ *
+ * We generate output samples based on elapsed time so audio stays aligned
+ * with the hardware sample rate even if game ticks jitter. OPL samples are
+ * generated at OPL_SAMPLE_RATE and downsampled to OUTPUT_SAMPLE_RATE.
+ */
+#define OPL_SAMPLE_RATE 49716
+#define OUTPUT_SAMPLE_RATE 11025
+#define OPL_BUFFER_SAMPLES (((MIX_BUFFER_SIZE * OPL_SAMPLE_RATE) / OUTPUT_SAMPLE_RATE) + 16)
+static int16_t opl_buffer[OPL_BUFFER_SAMPLES * 2];  /* Stereo 16-bit from OPL */
+
+/* Boost music to match SFX loudness at 8-bit output. */
+#define MUSIC_MIX_GAIN_NUM 6
+#define MUSIC_MIX_GAIN_DEN 1
+
+/* Audio timing state (ms -> samples) */
+static uint32_t last_audio_ms = 0;
+static uint32_t audio_ms_remainder = 0;
+static uint32_t opl_sample_remainder = 0;
+
+/* Cap catch-up to avoid overflowing the kernel ring buffer */
+#define MAX_CATCHUP_SAMPLES (MIX_BUFFER_SIZE * 4)
+
 
 /* Channel state for real audio (8 channels like classic Doom) */
 #define NUM_CHANNELS 8
+
 static struct {
     const uint8_t *data;    /* Sound sample data */
     uint32_t length;        /* Sample length in bytes */
@@ -101,141 +126,50 @@ struct doom_sound_header {
 };
 
 /*
- * Frequency mapping for Doom sound effects.
- * PC speaker is loudest at 150-600Hz. Very low (<100Hz) sounds weak.
- * Use mid-range for punch, high for sci-fi, distinct tones for each weapon.
+ * DP (PC speaker) sound lump header (4 bytes)
+ * Format: 2 bytes zeros, 2 bytes sample count (little-endian)
+ * Each sample is a tone value played at 140 Hz (7.14ms per sample)
  */
-static uint32_t get_sound_frequency(int sfx_id)
-{
-    switch (sfx_id) {
-        /* Weapons - mid frequencies where PC speaker has punch */
-        case sfx_pistol:  return 280;   /* Sharp gunshot crack */
-        case sfx_shotgn:  return 180;   /* Powerful boom */
-        case sfx_sgcock:  return 500;   /* Metallic click */
-        case sfx_dshtgn:  return 140;   /* Big double-barrel blast */
-        case sfx_plasma:  return 900;   /* Sci-fi energy zap */
-        case sfx_bfg:     return 120;   /* Low powerful hum */
-        case sfx_chgun:   return 320;   /* Rapid staccato */
-        case sfx_sawup:   return 350;   /* Engine revving */
-        case sfx_sawidl:  return 280;   /* Buzzing idle */
-        case sfx_sawful:  return 450;   /* High-speed whine */
-        case sfx_sawhit:  return 550;   /* Cutting sound */
-        case sfx_rlaunc:  return 200;   /* Whoosh launch */
-        case sfx_punch:   return 240;   /* Solid thump */
-
-        /* Explosions - low-mid range, audible but heavy */
-        case sfx_rxplod:  return 110;   /* Big explosion */
-        case sfx_barexp:  return 100;   /* Barrel boom */
-        case sfx_firxpl:  return 130;   /* Fireball burst */
-
-        /* Pickups - pleasant higher tones */
-        case sfx_itemup:  return 1047;  /* C6 - item pickup */
-        case sfx_wpnup:   return 1319;  /* E6 - weapon pickup */
-        case sfx_getpow:  return 1568;  /* G6 - powerup */
-
-        /* Doors and switches */
-        case sfx_doropn:  return 262;   /* C4 - door open */
-        case sfx_dorcls:  return 247;   /* B3 - door close */
-        case sfx_swtchn:  return 523;   /* C5 - switch on */
-        case sfx_swtchx:  return 494;   /* B4 - switch off */
-        case sfx_pstart:  return 200;   /* platform start */
-        case sfx_pstop:   return 180;   /* platform stop */
-        case sfx_stnmov:  return 150;   /* stone move */
-
-        /* Player sounds */
-        case sfx_plpain:  return 300;   /* player pain */
-        case sfx_oof:     return 280;   /* oof (wall bump) */
-        case sfx_pldeth:  return 120;   /* player death */
-        case sfx_pdiehi:  return 100;   /* player death high */
-        case sfx_noway:   return 200;   /* can't use */
-        case sfx_slop:    return 160;   /* gib sound */
-
-        /* Teleport */
-        case sfx_telept:  return 700;   /* teleport */
-
-        /* Menu/UI sounds - use swtchn as menu sound */
-        case sfx_tink:    return 1000;  /* tink (menu) */
-
-        /* Monster sounds - various frequencies */
-        case sfx_posit1:
-        case sfx_posit2:
-        case sfx_posit3:  return 250;   /* zombie sight */
-        case sfx_podth1:
-        case sfx_podth2:
-        case sfx_podth3:  return 170;   /* zombie death */
-        case sfx_bgdth1:
-        case sfx_bgdth2:  return 140;   /* shotgun guy death */
-        case sfx_cacsit:  return 320;   /* cacodemon sight */
-        case sfx_cacdth:  return 200;   /* cacodemon death */
-        case sfx_skldth:  return 400;   /* lost soul death */
-        case sfx_brssit:  return 180;   /* baron sight */
-        case sfx_brsdth:  return 100;   /* baron death */
-        case sfx_cybsit:  return 90;    /* cyberdemon sight */
-        case sfx_cybdth:  return 60;    /* cyberdemon death */
-        case sfx_spisit:  return 280;   /* spider sight */
-        case sfx_spidth:  return 70;    /* spider death */
-
-        /* Impact/hit sounds */
-        case sfx_firsht:  return 350;   /* fireball shot */
-        case sfx_claw:    return 450;   /* claw attack */
-
-        /* Default - no sound for unmapped effects */
-        default:          return 0;
-    }
-}
+struct dp_sound_header {
+    uint16_t zero;          /* Always 0 */
+    uint16_t num_samples;   /* Number of tone samples */
+};
 
 /*
- * Get sound duration in milliseconds based on sound type.
- * Short and snappy for rapid-fire, longer for powerful single shots.
+ * DP frequency lookup table (precomputed)
+ * Value 0 = silence, Values 1-127 = quarter-tone scale
+ * Formula: freq = 175 * 2^((value-1)/24)
  */
-static uint32_t get_sound_duration(int sfx_id)
-{
-    switch (sfx_id) {
-        /* Weapons - tuned for feel */
-        case sfx_pistol:  return 70;    /* Quick snap */
-        case sfx_chgun:   return 45;    /* Very rapid */
-        case sfx_shotgn:  return 120;   /* Solid boom */
-        case sfx_dshtgn:  return 160;   /* Bigger boom */
-        case sfx_sgcock:  return 50;    /* Quick click */
-        case sfx_plasma:  return 35;    /* Quick zap */
-        case sfx_bfg:     return 400;   /* Long charge */
-        case sfx_rlaunc:  return 150;   /* Whoosh */
-        case sfx_punch:   return 60;    /* Quick thud */
-        case sfx_sawup:   return 250;   /* Rev up */
-        case sfx_sawidl:  return 180;   /* Ongoing buzz */
-        case sfx_sawful:  return 120;   /* Active cutting */
-        case sfx_sawhit:  return 100;   /* Impact */
+static const uint16_t dp_freq_table[128] = {
+    0,    175,  180,  185,  191,  196,  202,  208,   /* 0-7 */
+    214,  220,  227,  233,  240,  247,  254,  262,   /* 8-15 */
+    269,  277,  285,  294,  302,  311,  320,  330,   /* 16-23 */
+    339,  349,  360,  370,  381,  392,  404,  415,   /* 24-31 */
+    428,  440,  453,  466,  480,  494,  509,  523,   /* 32-39 */
+    539,  554,  571,  587,  605,  622,  640,  659,   /* 40-47 */
+    678,  698,  719,  740,  761,  784,  807,  831,   /* 48-55 */
+    855,  880,  906,  932,  960,  988,  1017, 1047,  /* 56-63 */
+    1078, 1109, 1142, 1175, 1210, 1245, 1282, 1319,  /* 64-71 */
+    1358, 1397, 1438, 1480, 1523, 1568, 1614, 1661,  /* 72-79 */
+    1710, 1760, 1812, 1865, 1920, 1976, 2034, 2094,  /* 80-87 */
+    2155, 2219, 2284, 2351, 2420, 2491, 2564, 2639,  /* 88-95 */
+    2716, 2795, 2877, 2961, 3047, 3136, 3228, 3322,  /* 96-103 */
+    3419, 3520, 3624, 3730, 3840, 3952, 4068, 4188,  /* 104-111 */
+    4311, 4438, 4568, 4702, 4840, 4982, 5128, 5278,  /* 112-119 */
+    5432, 5591, 5754, 5922, 6095, 6273, 6456, 6645   /* 120-127 */
+};
 
-        /* Explosions - sustained rumble */
-        case sfx_rxplod:  return 300;   /* Big boom */
-        case sfx_barexp:  return 350;   /* Chain reaction feel */
-        case sfx_firxpl:  return 200;   /* Quick burst */
+/* DP playback timing: 140 Hz = 7.14ms per sample, use 7ms */
+#define DP_SAMPLE_MS 7
 
-        /* Pickups - medium */
-        case sfx_itemup:  return 100;
-        case sfx_wpnup:   return 120;
-        case sfx_getpow:  return 150;
-
-        /* Doors - longer */
-        case sfx_doropn:
-        case sfx_dorcls:  return 300;
-        case sfx_swtchn:
-        case sfx_swtchx:  return 80;
-
-        /* Player */
-        case sfx_plpain:  return 150;
-        case sfx_oof:     return 80;
-        case sfx_pldeth:
-        case sfx_pdiehi:  return 400;
-        case sfx_noway:   return 100;
-
-        /* Teleport */
-        case sfx_telept:  return 200;
-
-        /* Default */
-        default:          return 100;
-    }
-}
+/* PC speaker DP playback state */
+static struct {
+    const uint8_t *data;    /* Pointer to DP tone data */
+    uint16_t length;        /* Total number of samples */
+    uint16_t position;      /* Current sample position */
+    uint32_t last_update;   /* Timestamp of last sample advance */
+    boolean active;         /* Is DP sound playing? */
+} dp_state;
 
 /*
  * Play a tone on the PC speaker
@@ -280,24 +214,38 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
 
     /* Check for real audio hardware */
     if (ioctl(0, AUDIO_GET_INFO, &info) == 0 && info.has_real_audio) {
-        /* Start audio playback */
+        audio_sample_rate = OUTPUT_SAMPLE_RATE;
+        /* Start audio playback - use original mono 8-bit format that was working */
         params.sample_rate = audio_sample_rate;
-        params.format = AUDIO_U8;    /* Doom native format */
-        params.channels = 1;         /* Mono */
+        params.format = AUDIO_U8;     /* 8-bit unsigned (Doom native format) */
+        params.channels = 1;          /* Mono */
 
         if (ioctl(0, AUDIO_START, &params) == 0) {
             use_real_audio = true;
+
+            /* Initialize OPL music subsystem at higher rate for quality,
+             * we'll downsample when mixing */
+            if (OPLMusic_Init(OPL_SAMPLE_RATE)) {
+                opl_music_initialized = true;
+            }
         }
     }
 
     pcsound_initialized = true;
     current_sound_channel = -1;
-    sound_end_time = 0;
+    dp_state.active = false;
+    last_audio_ms = DG_GetTicksMs();
+    audio_ms_remainder = 0;
+    opl_sample_remainder = 0;
     return true;
 }
 
 static void PCSoundShutdown(void)
 {
+    if (opl_music_initialized) {
+        OPLMusic_Shutdown();
+        opl_music_initialized = false;
+    }
     if (use_real_audio) {
         ioctl(0, AUDIO_STOP, 0);
         use_real_audio = false;
@@ -311,9 +259,13 @@ static int PCSoundGetSfxLumpNum(sfxinfo_t *sfxinfo)
     char namebuf[16];
     int lumpnum;
 
-    /* Build lump name: "DS" prefix for digital sounds */
+    /*
+     * Build lump name with appropriate prefix:
+     * - "DS" = Digital Sound (for real audio hardware)
+     * - "DP" = Digital sound for PC speaker
+     */
     namebuf[0] = 'D';
-    namebuf[1] = 'S';  /* DS = Digital Sound (not DP = PC speaker) */
+    namebuf[1] = use_real_audio ? 'S' : 'P';
     namebuf[2] = '\0';
 
     /* Concatenate sfxinfo->name */
@@ -333,57 +285,207 @@ static int PCSoundGetSfxLumpNum(sfxinfo_t *sfxinfo)
 
 static void PCSoundUpdate(void)
 {
-    /* Real audio mode: mix active channels and write to audio device */
+    /* Real audio mode: mix active channels and OPL music */
     if (use_real_audio) {
         struct audio_write_params wp;
+        uint32_t now_ms;
+        uint32_t elapsed_ms;
+        uint32_t out_samples_num;
+        uint32_t out_samples;
         int i, j;
         int sample_sum;
         int active_count;
+        int opl_idx_start, opl_idx_end, k;
 
-        /* Mix all active channels into the buffer */
-        for (j = 0; j < MIX_BUFFER_SIZE; j++) {
-            sample_sum = 0;
-            active_count = 0;
+        now_ms = DG_GetTicksMs();
+        if (last_audio_ms == 0) {
+            last_audio_ms = now_ms;
+            return;
+        }
 
-            for (i = 0; i < NUM_CHANNELS; i++) {
-                if (channels[i].active && channels[i].position < channels[i].length) {
-                    /* Get sample (unsigned 8-bit, center is 128) */
-                    int sample = channels[i].data[channels[i].position];
-                    /* Apply volume (0-255) */
-                    sample = ((sample - 128) * channels[i].volume / 255) + 128;
-                    sample_sum += sample - 128;
-                    active_count++;
-                    channels[i].position++;
-                } else if (channels[i].active) {
-                    channels[i].active = false;
-                }
+        elapsed_ms = now_ms - last_audio_ms;
+        if (elapsed_ms == 0) {
+            return;
+        }
+        last_audio_ms = now_ms;
+
+        if (elapsed_ms > 1000) {
+            elapsed_ms = 1000;
+            audio_ms_remainder = 0;
+        }
+
+        out_samples_num = elapsed_ms * OUTPUT_SAMPLE_RATE + audio_ms_remainder;
+        out_samples = out_samples_num / 1000;
+        audio_ms_remainder = out_samples_num % 1000;
+
+        if (out_samples == 0) {
+            return;
+        }
+
+        if (out_samples > MAX_CATCHUP_SAMPLES) {
+            out_samples = MAX_CATCHUP_SAMPLES;
+            audio_ms_remainder = 0;
+        }
+
+        while (out_samples > 0) {
+            uint32_t chunk = out_samples > MIX_BUFFER_SIZE ? MIX_BUFFER_SIZE : out_samples;
+            uint32_t opl_samples_needed;
+
+            uint32_t opl_samples_num;
+
+            opl_samples_num = chunk * OPL_SAMPLE_RATE + opl_sample_remainder;
+            opl_samples_needed = opl_samples_num / OUTPUT_SAMPLE_RATE;
+            opl_sample_remainder = opl_samples_num % OUTPUT_SAMPLE_RATE;
+            if (opl_samples_needed > OPL_BUFFER_SAMPLES) {
+                opl_samples_needed = OPL_BUFFER_SAMPLES;
+                opl_sample_remainder = 0;
             }
 
-            /* Mix: average and center at 128 */
-            if (active_count > 0) {
-                sample_sum = sample_sum / active_count + 128;
+            /* Test OPL emulator directly with a simple tone
+             * Set to 1 to bypass MIDI and play a direct 440 Hz tone from OPL */
+#define OPL_DIRECT_TEST 0
+#if OPL_DIRECT_TEST
+            if (opl_music_initialized && opl_samples_needed > 0) {
+                /* Use OPL emulator to generate samples - test if emulator works */
+                extern void OPL3_WriteReg(void *chip, uint16_t reg, uint8_t v);
+                extern void OPL3_GenerateStream(void *chip, int16_t *buf, uint32_t samples);
+                extern void *OPLMusic_GetChip(void);  /* Need to add this */
+                static int opl_test_init = 0;
+                void *chip = OPLMusic_GetChip();
+
+                if (chip && !opl_test_init) {
+                    /* Set up a simple OPL tone on channel 0:
+                     * This programs the OPL to play a basic sine wave */
+                    OPL3_WriteReg(chip, 0x20, 0x01);  /* Tremolo/vibrato/sustain/KSR/mult for op1 */
+                    OPL3_WriteReg(chip, 0x23, 0x01);  /* Same for op2 */
+                    OPL3_WriteReg(chip, 0x40, 0x10);  /* Key scale level / output level for op1 */
+                    OPL3_WriteReg(chip, 0x43, 0x00);  /* Output level for op2 (carrier) - full volume */
+                    OPL3_WriteReg(chip, 0x60, 0xF0);  /* Attack/decay for op1 */
+                    OPL3_WriteReg(chip, 0x63, 0xF0);  /* Attack/decay for op2 */
+                    OPL3_WriteReg(chip, 0x80, 0x77);  /* Sustain/release for op1 */
+                    OPL3_WriteReg(chip, 0x83, 0x77);  /* Sustain/release for op2 */
+                    OPL3_WriteReg(chip, 0xA0, 0x98);  /* Frequency low byte - ~440 Hz */
+                    OPL3_WriteReg(chip, 0xB0, 0x31);  /* Key on + frequency high + octave */
+                    OPL3_WriteReg(chip, 0xC0, 0x30);  /* Feedback + connection + output to L/R */
+                    opl_test_init = 1;
+                }
+
+                if (chip) {
+                    OPL3_GenerateStream(chip, opl_buffer, opl_samples_needed);
+                } else {
+                    opl_samples_needed = 0;
+                }
+            } else {
+                opl_samples_needed = 0;
+            }
+#else
+            if (opl_music_initialized && opl_samples_needed > 0) {
+                /* Always call GenerateSamples - it handles state internally
+                 * This is needed for test modes that bypass music_playing state */
+                OPLMusic_GenerateSamples(opl_buffer, opl_samples_needed);
+            } else {
+                opl_samples_needed = 0;
+            }
+#endif
+
+            /* Mix all active channels into the buffer */
+            for (j = 0; j < (int)chunk; j++) {
+                sample_sum = 0;
+                active_count = 0;
+
+                /* Add OPL music (downsample from ~49716 Hz stereo 16-bit to 11025 Hz mono 8-bit) */
+                if (opl_samples_needed > 0) {
+                    int32_t mono_sum = 0;
+                    int count = 0;
+
+                    opl_idx_start = (j * (int)opl_samples_needed) / (int)chunk;
+                    opl_idx_end = ((j + 1) * (int)opl_samples_needed) / (int)chunk;
+
+                    if (opl_idx_end <= opl_idx_start) {
+                        opl_idx_end = opl_idx_start + 1;
+                    }
+                    if (opl_idx_end > (int)opl_samples_needed) {
+                        opl_idx_end = (int)opl_samples_needed;
+                    }
+
+                    for (k = opl_idx_start; k < opl_idx_end; k++) {
+                        int32_t left = opl_buffer[k * 2];
+                        int32_t right = opl_buffer[k * 2 + 1];
+                        mono_sum += (left + right) / 2;
+                        count++;
+                    }
+
+                    if (count > 0) {
+                        int32_t mono = mono_sum / count;
+                        /* Scale from 16-bit to 8-bit range (volume handled by OPL) */
+                        mono = mono / 256;
+                        mono = (mono * MUSIC_MIX_GAIN_NUM) / MUSIC_MIX_GAIN_DEN;
+                        if (mono > 127) mono = 127;
+                        if (mono < -128) mono = -128;
+                        sample_sum += mono;
+                    }
+                }
+
+                /* Mix in sound effects */
+                for (i = 0; i < NUM_CHANNELS; i++) {
+                    if (channels[i].active && channels[i].position < channels[i].length) {
+                        /* Get sample (unsigned 8-bit, center is 128) */
+                        int sample = channels[i].data[channels[i].position];
+                        /* Apply volume (0-255) */
+                        sample = ((sample - 128) * channels[i].volume / 255);
+                        sample_sum += sample;
+                        active_count++;
+                        channels[i].position++;
+                    } else if (channels[i].active) {
+                        channels[i].active = false;
+                    }
+                }
+
+                /* Convert back to unsigned 8-bit, clamp to valid range */
+                sample_sum += 128;
                 if (sample_sum < 0) sample_sum = 0;
                 if (sample_sum > 255) sample_sum = 255;
                 mix_buffer[j] = (uint8_t)sample_sum;
-            } else {
-                mix_buffer[j] = 128;  /* Silence */
             }
-        }
 
-        /* Write mixed buffer to audio device */
-        wp.buffer = mix_buffer;
-        wp.size = MIX_BUFFER_SIZE;
-        ioctl(0, AUDIO_WRITE, &wp);
+            /* Write mixed buffer to audio device */
+            wp.buffer = mix_buffer;
+            wp.size = chunk;
+            ioctl(0, AUDIO_WRITE, &wp);
+
+            out_samples -= chunk;
+        }
         return;
     }
 
-    /* PC speaker mode: check if current sound has finished */
-    if (current_sound_channel >= 0 && sound_end_time > 0) {
+    /* PC speaker mode: advance DP sound playback */
+    if (dp_state.active) {
         uint32_t now = DG_GetTicksMs();
-        if (now >= sound_end_time) {
-            stop_tone();
-            current_sound_channel = -1;
-            sound_end_time = 0;
+        uint32_t elapsed = now - dp_state.last_update;
+
+        /* Advance samples based on elapsed time (7ms per sample) */
+        while (elapsed >= DP_SAMPLE_MS && dp_state.active) {
+            dp_state.position++;
+            elapsed -= DP_SAMPLE_MS;
+            dp_state.last_update += DP_SAMPLE_MS;
+
+            /* Check if sound is finished */
+            if (dp_state.position >= dp_state.length) {
+                stop_tone();
+                dp_state.active = false;
+                current_sound_channel = -1;
+                break;
+            }
+
+            /* Play the next tone */
+            {
+                uint8_t tone_val = dp_state.data[dp_state.position];
+                if (tone_val < 128) {
+                    play_tone(dp_freq_table[tone_val]);
+                } else {
+                    play_tone(0);  /* Invalid value = silence */
+                }
+            }
         }
     }
 }
@@ -406,9 +508,6 @@ static void PCSoundUpdateSoundParams(int channel, int vol, int sep)
 
 static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
 {
-    int sfx_id;
-    uint32_t freq, duration;
-
     (void)sep;
 
     if (!pcsound_initialized || !sfxinfo) {
@@ -463,30 +562,64 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
         return channel;
     }
 
-    /* PC speaker fallback mode */
+    /* PC speaker fallback mode: load and play DP lump */
     (void)vol;
+    {
+        int lumpnum;
+        byte *lumpdata;
+        int lumplen;
+        struct dp_sound_header *header;
+        uint8_t tone_val;
 
-    /* Get sfx ID from the S_sfx array index */
-    sfx_id = sfxinfo - S_sfx;
+        /* Get the DP lump */
+        lumpnum = sfxinfo->lumpnum;
+        if (lumpnum < 0) {
+            return -1;
+        }
 
-    /* Get frequency for this sound */
-    freq = get_sound_frequency(sfx_id);
-    if (freq == 0) {
-        /* No mapping for this sound */
-        return -1;
+        /* Cache the lump data */
+        lumpdata = W_CacheLumpNum(lumpnum, PU_STATIC);
+        if (!lumpdata) {
+            return -1;
+        }
+
+        lumplen = W_LumpLength(lumpnum);
+        if (lumplen < 4) {
+            /* Too short to be a valid DP sound */
+            return -1;
+        }
+
+        /* Parse the DP sound header */
+        header = (struct dp_sound_header *)lumpdata;
+
+        /* Validate header (first 2 bytes should be 0) */
+        if (header->zero != 0 || header->num_samples == 0) {
+            return -1;
+        }
+
+        /* Stop any currently playing DP sound */
+        if (dp_state.active) {
+            stop_tone();
+        }
+
+        /* Set up DP playback state */
+        dp_state.data = lumpdata + 4;  /* Skip 4-byte header */
+        dp_state.length = header->num_samples;
+        dp_state.position = 0;
+        dp_state.last_update = DG_GetTicksMs();
+        dp_state.active = true;
+
+        /* Start playing the first tone */
+        tone_val = dp_state.data[0];
+        if (tone_val < 128) {
+            play_tone(dp_freq_table[tone_val]);
+        } else {
+            play_tone(0);  /* Invalid value = silence */
+        }
+
+        current_sound_channel = channel;
+        return channel;
     }
-
-    /* Get duration */
-    duration = get_sound_duration(sfx_id);
-
-    /* Play the tone */
-    play_tone(freq);
-
-    /* Set end time */
-    sound_end_time = DG_GetTicksMs() + duration;
-    current_sound_channel = channel;
-
-    return channel;
 }
 
 static void PCSoundStopSound(int channel)
@@ -502,8 +635,8 @@ static void PCSoundStopSound(int channel)
     /* PC speaker mode */
     if (channel == current_sound_channel) {
         stop_tone();
+        dp_state.active = false;
         current_sound_channel = -1;
-        sound_end_time = 0;
     }
 }
 
@@ -518,8 +651,8 @@ static boolean PCSoundSoundIsPlaying(int channel)
     }
 
     /* PC speaker mode */
-    if (channel == current_sound_channel && sound_end_time > 0) {
-        return DG_GetTicksMs() < sound_end_time;
+    if (channel == current_sound_channel) {
+        return dp_state.active;
     }
     return false;
 }
@@ -557,33 +690,92 @@ sound_module_t DG_sound_module = {
 };
 
 /*
- * Dummy music module (no music support)
+ * OPL Music module - uses Nuked-OPL3 for FM synthesis
  */
-static boolean DummyMusicInit(void) { return true; }
-static void DummyMusicShutdown(void) {}
-static void DummyMusicSetVolume(int vol) { (void)vol; }
-static void DummyMusicPause(void) {}
-static void DummyMusicResume(void) {}
-static void *DummyMusicRegister(void *data, int len) { (void)data; (void)len; return NULL; }
-static void DummyMusicUnregister(void *handle) { (void)handle; }
-static void DummyMusicPlay(void *handle, boolean loop) { (void)handle; (void)loop; }
-static void DummyMusicStop(void) {}
-static boolean DummyMusicIsPlaying(void) { return false; }
+static boolean OPLMusicModuleInit(void)
+{
+    /* OPL is already initialized in PCSoundInit when real audio is available */
+    return opl_music_initialized;
+}
 
-static snddevice_t music_devices[] = { SNDDEVICE_SB };
+static void OPLMusicModuleShutdown(void)
+{
+    /* OPL is shutdown in PCSoundShutdown */
+}
+
+static void OPLMusicSetVolume(int vol)
+{
+    /* Doom volume is 0-127 */
+    if (opl_music_initialized) {
+        OPLMusic_SetVolume(vol);
+    }
+}
+
+static void OPLMusicPause(void)
+{
+    if (opl_music_initialized) {
+        OPLMusic_PauseSong();
+    }
+}
+
+static void OPLMusicResume(void)
+{
+    if (opl_music_initialized) {
+        OPLMusic_ResumeSong();
+    }
+}
+
+static void *OPLMusicRegister(void *data, int len)
+{
+    if (!opl_music_initialized) {
+        return NULL;
+    }
+    return OPLMusic_RegisterSong(data, len);
+}
+
+static void OPLMusicUnregister(void *handle)
+{
+    if (opl_music_initialized && handle) {
+        OPLMusic_UnRegisterSong(handle);
+    }
+}
+
+static void OPLMusicPlay(void *handle, boolean loop)
+{
+    if (opl_music_initialized && handle) {
+        OPLMusic_PlaySong(handle, loop);
+    }
+}
+
+static void OPLMusicStop(void)
+{
+    if (opl_music_initialized) {
+        OPLMusic_StopSong();
+    }
+}
+
+static boolean OPLMusicIsPlaying(void)
+{
+    if (opl_music_initialized) {
+        return OPLMusic_IsPlaying();
+    }
+    return false;
+}
+
+static snddevice_t music_devices[] = { SNDDEVICE_SB, SNDDEVICE_ADLIB };
 
 music_module_t DG_music_module = {
     music_devices,
-    1,
-    DummyMusicInit,
-    DummyMusicShutdown,
-    DummyMusicSetVolume,
-    DummyMusicPause,
-    DummyMusicResume,
-    DummyMusicRegister,
-    DummyMusicUnregister,
-    DummyMusicPlay,
-    DummyMusicStop,
-    DummyMusicIsPlaying,
-    NULL,  /* Poll */
+    sizeof(music_devices) / sizeof(*music_devices),
+    OPLMusicModuleInit,
+    OPLMusicModuleShutdown,
+    OPLMusicSetVolume,
+    OPLMusicPause,
+    OPLMusicResume,
+    OPLMusicRegister,
+    OPLMusicUnregister,
+    OPLMusicPlay,
+    OPLMusicStop,
+    OPLMusicIsPlaying,
+    NULL,  /* Poll - we generate samples in PCSoundUpdate instead */
 };
