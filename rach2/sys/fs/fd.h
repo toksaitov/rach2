@@ -29,7 +29,8 @@ typedef enum {
     FD_TYPE_CONSOLE,      /* Console (stdin/stdout/stderr) */
     FD_TYPE_FILE,         /* Regular file from KRFFS */
     FD_TYPE_DIR,          /* Directory (for getdents64) */
-    FD_TYPE_FRAMEBUFFER   /* VGA framebuffer device */
+    FD_TYPE_FRAMEBUFFER,  /* VGA framebuffer device */
+    FD_TYPE_MOUSE         /* PS/2 mouse device */
 } fd_type_t;
 
 /*

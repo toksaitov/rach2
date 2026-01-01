@@ -16,6 +16,7 @@
 #include "sys/fs/krffs.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
+#include "sys/mouse.h"
 #include "sys/display/vga_text.h"
 #include "sys/audio/audio.h"
 #include "sys/lib/kint.h"
@@ -1949,6 +1950,19 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  Mouse...");
+    serial_printf("  Mouse...");
+    if (init_mouse() == 0) {
+        set_fore_color(light_green);
+        k_puts(" OK");
+        serial_printf(" OK\n");
+    } else {
+        set_fore_color(light_red);
+        k_puts(" Not detected");
+        serial_printf(" Not detected\n");
+    }
     set_fore_color(light_grey);
 
     k_printf("  Syscall...");

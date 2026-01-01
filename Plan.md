@@ -577,7 +577,19 @@ Before implementing new functionality:
 - PC speaker frequency control for sound effects
 - Large file support (doom1.wad ~4MB)
 
-**Measurable Result**: Complete shell session without crashes. Doom runs in VGA Mode 13h with keyboard input and PC speaker sound.
+**PS/2 Mouse Support Accomplishments**:
+- Added PS/2 mouse driver in `sys/mouse.c` and `sys/mouse.h`
+- Implemented 8042 controller auxiliary port initialization for mouse
+- Added IRQ12 handler (vector 44) for mouse interrupts
+- Created ring buffer for storing 3-byte mouse packets (buttons, dx, dy)
+- Added `FD_TYPE_MOUSE` to file descriptor types
+- Implemented `open("mouse")` device file for userspace access
+- Non-blocking `read()` returns mouse packets when available
+- Updated `doomgeneric_rach2.c` to poll mouse and post `ev_mouse` events via `D_PostEvent()`
+- Mouse X movement controls turning, Y movement controls forward/backward
+- Mouse buttons map to Doom fire (left) and use (right) actions
+
+**Measurable Result**: Complete shell session without crashes. Doom runs in VGA Mode 13h with keyboard and mouse input, plus PC speaker sound.
 
 **Documentation**: Final Readme.md update with complete feature list including graphics subsystem.
 
@@ -595,6 +607,7 @@ Before implementing new functionality:
 - `sys/mm/paging.c` - page directory, identity mapping
 - `sys/mm/heap.c` - bump allocator
 - `sys/kio.c` - VGA output, port I/O
+- `sys/mouse.c` - PS/2 mouse driver (IRQ12, device file interface)
 
 ### ish (shell)
 - `ish.c` - main loop, built-in commands

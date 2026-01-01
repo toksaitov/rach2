@@ -30,6 +30,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/pic.c       \
 	  sys/pit.c       \
 	  sys/kbd.c       \
+	  sys/mouse.c     \
 	  sys/panic.c     \
 	  sys/speaker.c   \
 	  sys/pci.c       \

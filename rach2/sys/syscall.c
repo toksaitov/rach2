@@ -2,6 +2,7 @@
 #include "serial.h"
 #include "kio.h"
 #include "kbd.h"
+#include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/elf.h"
@@ -355,6 +356,32 @@ static int32_t sys_open(isr_params_t *params)
         return fd;
     }
 
+    /* Check if opening mouse device "mouse" */
+    if (name[0] == 'm' && name[1] == 'o' && name[2] == 'u' &&
+        name[3] == 's' && name[4] == 'e' && name[5] == '\0') {
+        /* Check if mouse is available */
+        if (!mouse_is_available()) {
+            return -1;  /* Mouse not initialized */
+        }
+
+        /* Allocate fd for mouse */
+        fd = fd_alloc(&current_proc->fds);
+        if (fd < 0) {
+            return -1;
+        }
+
+        entry = &current_proc->fds.entries[fd];
+        entry->type = FD_TYPE_MOUSE;
+        entry->node = NULL;
+        entry->offset = 0;
+        entry->flags = FD_FLAG_READ;
+
+        /* Clear any stale mouse packets */
+        mouse_clear_packets();
+
+        return fd;
+    }
+
     /* Check if opening root directory "/", ".", or ".." (cwd is always "/" in KRFFS) */
     if (name[0] == '\0' ||
         (name[0] == '.' && name[1] == '\0') ||
@@ -636,6 +663,23 @@ static int32_t sys_read(isr_params_t *params)
         stdin_ready = false;
 
         return (int32_t)bytes_to_copy;
+    }
+
+    /* Mouse fd - non-blocking read of mouse packets */
+    if (entry->type == FD_TYPE_MOUSE) {
+        int packets_requested;
+        int packets_read;
+
+        /* Calculate how many complete packets can fit in user buffer */
+        packets_requested = (int)(count / sizeof(struct mouse_packet));
+        if (packets_requested <= 0) {
+            return 0;  /* Buffer too small for even one packet */
+        }
+
+        /* Read packets from the mouse ring buffer */
+        packets_read = mouse_read_packets((struct mouse_packet *)buf, packets_requested);
+
+        return packets_read * (int32_t)sizeof(struct mouse_packet);
     }
 
     /* File fd - read from KRFFS file */

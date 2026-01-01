@@ -8,9 +8,9 @@
 #   audio_device: sb16, hda, or speaker (default: speaker)
 #
 # Examples:
-#   ./run_with_ram_disk.sh           # PC speaker only (default)
-#   ./run_with_ram_disk.sh sb16      # Sound Blaster 16
-#   ./run_with_ram_disk.sh hda       # Intel HD Audio
+#   ./run_with_ram_disk.sh      # PC speaker only (default)
+#   ./run_with_ram_disk.sh sb16 # Sound Blaster 16
+#   ./run_with_ram_disk.sh hda  # Intel HD Audio
 
 AUDIO_DEVICE="${1:-speaker}"
 
@@ -43,17 +43,14 @@ case "$AUDIO_DEVICE" in
     sb16)
         # Sound Blaster 16 (ISA, IRQ 5, DMA 1/5)
         AUDIO_OPTS="$AUDIO_BACKEND -device sb16,audiodev=audio0"
-        echo "Audio: Sound Blaster 16"
         ;;
     hda)
         # Intel HD Audio (PCI)
         AUDIO_OPTS="$AUDIO_BACKEND -device intel-hda -device hda-duplex,audiodev=audio0"
-        echo "Audio: Intel HD Audio"
         ;;
     speaker|*)
         # PC Speaker only (default)
         AUDIO_OPTS="$AUDIO_BACKEND -machine pcspk-audiodev=audio0"
-        echo "Audio: PC Speaker"
         ;;
 esac
 

@@ -49,6 +49,7 @@ Rach2 is an educational 32-bit x86 kernel that implements core operating system 
 
 **Device Drivers:**
 * PS/2 keyboard driver with US layout, shift key, and CTRL+C support
+* PS/2 mouse driver with IRQ12 handler and device file interface
 * VGA text mode display (80x25, 16 colors)
 * VGA Mode 13h graphics (320x200, 256 colors) via framebuffer device
 * Audio subsystem with automatic hardware detection:
@@ -116,6 +117,7 @@ The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 M
 │   ├── pic.c/h            # 8259 PIC initialization
 │   ├── pit.c/h            # Programmable Interval Timer
 │   ├── kbd.c/h            # PS/2 keyboard driver with shift key support
+│   ├── mouse.c/h          # PS/2 mouse driver (IRQ12)
 │   ├── panic.c/h          # Kernel panic with visual screen
 │   ├── display/
 │   │   ├── fb.h           # Common framebuffer interface (VBE-ready)
@@ -1040,6 +1042,42 @@ The `exec_program()` function orchestrates the complete loading:
 
 # Device Drivers
 
+## PS/2 Mouse
+
+The kernel includes a PS/2 mouse driver using IRQ12, providing a device file interface for userspace applications.
+
+### Mouse Device
+
+Opening the special file "mouse" returns a file descriptor for reading mouse packets:
+
+```c
+int mouse_fd = open("mouse", O_RDONLY);
+struct mouse_packet {
+    uint8_t buttons;  /* bit 0=left, 1=right, 2=middle */
+    int8_t  dx;       /* X movement delta */
+    int8_t  dy;       /* Y movement delta */
+};
+struct mouse_packet pkt;
+read(mouse_fd, &pkt, sizeof(pkt));  /* Non-blocking read */
+close(mouse_fd);
+```
+
+### Hardware Details
+
+The PS/2 mouse driver uses:
+* **8042 Controller**: Ports 0x60 (data) and 0x64 (status/command)
+* **IRQ12**: Mouse interrupt (vector 44)
+* **Protocol**: Standard 3-byte PS/2 mouse packets
+
+The driver initializes the mouse via the 8042 controller auxiliary port, enables IRQ12, and stores incoming packets in a ring buffer. Userspace reads are non-blocking - if no packets are available, read() returns 0.
+
+### Doom Integration
+
+The Doom port uses the mouse device for turning and movement:
+* Mouse X movement controls turning (left/right)
+* Mouse Y movement controls forward/backward movement
+* Mouse buttons map to fire and use actions
+
 ## VGA Mode 13h and Framebuffer Device
 
 The kernel supports VGA Mode 13h (320×200, 256 colors) for graphical applications like Doom. The framebuffer is accessed through a special device file.
@@ -1263,7 +1301,7 @@ When the kernel boots (or when init exits), the debug shell is available:
 | Boot     | Multiboot1, GRUB, QEMU `-kernel`             | UEFI, Multiboot2                    |
 | Memory   | 32 MB + MMIO mapping, 4 KB pages             | Demand paging, swap                 |
 | Storage  | KRFFS RAM disk                               | Persistent disk, real file systems  |
-| Input    | PS/2 keyboard                                | USB, mouse                          |
+| Input    | PS/2 keyboard, PS/2 mouse                    | USB                                 |
 | Display  | VGA text (80×25), Mode 13h (320×200)         | Higher resolutions, VESA            |
 | Sound    | SB16, Intel HDA, PC speaker                  | AC97, USB audio                     |
 | Processes| 16 concurrent, preemptive scheduling         | Threads, signals                    |

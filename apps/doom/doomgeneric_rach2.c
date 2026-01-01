@@ -2,11 +2,13 @@
  * doomgeneric_rach2.c - Doom platform layer for Rach2 OS
  *
  * Implements the doomgeneric interface for running Doom on the Rach2
- * hobby operating system using VGA Mode 13h graphics and PS/2 keyboard.
+ * hobby operating system using VGA Mode 13h graphics, PS/2 keyboard,
+ * and PS/2 mouse.
  */
 
 #include "doomgeneric.h"
 #include "doomkeys.h"
+#include "d_event.h"
 #include "i_video.h"
 
 #include <stdint.h>
@@ -42,6 +44,19 @@ extern void *memset(void *s, int c, size_t n);
 /* File descriptors */
 static int fb_fd = -1;     /* Framebuffer device */
 static int console_fd = 0; /* Console for keyboard input */
+static int mouse_fd = -1;  /* Mouse device */
+
+/*
+ * Mouse packet structure - must match kernel's mouse.h
+ */
+struct mouse_packet {
+    uint8_t buttons;  /* bit 0=left, 1=right, 2=middle */
+    int8_t  dx;       /* X movement delta */
+    int8_t  dy;       /* Y movement delta */
+};
+
+/* Current mouse button state (for tracking changes) */
+static uint8_t mouse_button_state = 0;
 
 /* Framebuffer for Mode 13h (8-bit indexed color) */
 static uint8_t screen_buffer[SCREEN_WIDTH * SCREEN_HEIGHT];
@@ -182,8 +197,36 @@ static void poll_keyboard(void)
 }
 
 /*
+ * Poll mouse and post events directly via D_PostEvent
+ * Non-blocking read from mouse device
+ */
+static void poll_mouse(void)
+{
+    struct mouse_packet pkt;
+    int ret;
+    event_t event;
+
+    if (mouse_fd < 0) return;
+
+    /* Read mouse packets (non-blocking) */
+    while ((ret = read(mouse_fd, &pkt, sizeof(pkt))) == sizeof(pkt)) {
+        /* Update button state */
+        mouse_button_state = pkt.buttons;
+
+        /* Post mouse event to Doom */
+        event.type = ev_mouse;
+        event.data1 = mouse_button_state;
+        event.data2 = pkt.dx;  /* X movement (turn) */
+        event.data3 = pkt.dy;  /* Y movement (forward/backward) */
+        event.data4 = 0;
+
+        D_PostEvent(&event);
+    }
+}
+
+/*
  * DG_Init - Initialize the platform
- * Opens framebuffer device (switches to VGA Mode 13h)
+ * Opens framebuffer device (switches to VGA Mode 13h) and mouse device
  */
 void DG_Init(void)
 {
@@ -196,6 +239,10 @@ void DG_Init(void)
         write(2, "Failed to open framebuffer\n", 27);
         return;
     }
+
+    /* Open mouse device (optional - game works without it) */
+    mouse_fd = open("mouse", O_RDONLY);
+    /* No error message if mouse not available - keyboard still works */
 
     /* Clear screen buffer */
     memset(screen_buffer, 0, sizeof(screen_buffer));
@@ -248,8 +295,9 @@ void DG_DrawFrame(void)
     write(fb_fd, screen_buffer, SCREEN_WIDTH * SCREEN_HEIGHT);
 #endif
 
-    /* Poll keyboard after each frame */
+    /* Poll input after each frame */
     poll_keyboard();
+    poll_mouse();
 }
 
 /*
@@ -324,6 +372,10 @@ void DG_SetWindowTitle(const char *title)
  */
 void DG_Shutdown(void)
 {
+    if (mouse_fd >= 0) {
+        close(mouse_fd);
+        mouse_fd = -1;
+    }
     if (fb_fd >= 0) {
         close(fb_fd);
         fb_fd = -1;
