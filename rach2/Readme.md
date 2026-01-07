@@ -1,6 +1,6 @@
 # Rach2 Kernel
 
-![Self-test Screen](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
+![Rach2 BSODing](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/bsod.png)
 
 Rach2 is an educational 32-bit x86 kernel that implements core operating system concepts from scratch. The kernel boots into a Unix-like shell (ISH) with standard utilities, supports preemptive multitasking with per-process memory isolation, and can run Doom. It demonstrates protected mode, paging, system calls, process management, context switching, and device drivers—all in clean, readable C and assembly.
 

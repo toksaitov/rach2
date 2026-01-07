@@ -1,5 +1,7 @@
 # Rach2 Syscall Test Programs
 
+![List of Rach2 Test Programs](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/tests.png)
+
 Freestanding ELF32 test programs for validating the Rach2 kernel's syscall implementation. Each program tests specific syscalls and reports pass/fail results.
 
 ## Test Programs

@@ -1,5 +1,7 @@
 # KRFFS File System
 
+![KRFFS Visualization Utility's Output](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/fsviz.png)
+
 A minimal educational FUSE file system in C. The project stores files inside a regular file using a flat structure inspired by the K&R first-fit memory allocator from "The C Programming Language." Files are memory-mapped via `mmap`/`MapViewOfFile`, allowing direct read/write access through virtual memory. The codebase uses a platform abstraction layer to support Unix, Linux, macOS, and Windows, making it suitable for porting to custom OS environments.
 
 The code in the `krffs` directory HERE is for generating RAM disk images for Rach2 development and testing on host environments running the latest macOS, Ubuntu, or Windows.

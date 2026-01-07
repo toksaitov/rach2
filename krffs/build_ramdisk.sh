@@ -33,8 +33,8 @@ make -C ../utils
 
 echo ""
 echo "=== Building Doom (optional) ==="
-if [ -d "../apps/doom" ]; then
-    make -C ../apps/doom || echo "Doom build failed or skipped"
+if [ -d "../ports/doom" ]; then
+    make -C ../ports/doom || echo "Doom build failed or skipped"
 fi
 
 echo ""
@@ -66,14 +66,14 @@ for util in true false echo yes cat pwd touch mkdir rm mv cp ls; do
 done
 
 # Copy Doom if it was built
-if [ -f "../apps/doom/doom" ]; then
-    cp "../apps/doom/doom" "$MOUNT_POINT/"
+if [ -f "../ports/doom/doom" ]; then
+    cp "../ports/doom/doom" "$MOUNT_POINT/"
     echo "  doom"
 fi
 
 # Copy doom1.wad if it exists (user must provide this)
-if [ -f "../apps/doom/doom1.wad" ]; then
-    cp "../apps/doom/doom1.wad" "$MOUNT_POINT/"
+if [ -f "../ports/doom/doom1.wad" ]; then
+    cp "../ports/doom/doom1.wad" "$MOUNT_POINT/"
     echo "  doom1.wad"
 fi
 

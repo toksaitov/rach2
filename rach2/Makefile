@@ -57,12 +57,15 @@ C_SRC   = $(KERNEL).c \
 ASM_OBJECTS = $(ASM_SRC:.s=.o)
 C_OBJECTS   = $(C_SRC:.c=.o)
 
-# System Configuration
+# Cross-compiler detection
+CC := $(shell command -v i686-elf-gcc 2>/dev/null)
+ifeq ($(CC),)
+	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
+endif
 
-CC     = x86_64-elf-gcc
-CFLAGS = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra -ansi -nostdlib -nostartfiles -nodefaultlibs
+LD := $(subst gcc,ld,$(CC))
 
-LD      = x86_64-elf-ld
+CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra -ansi -nostdlib -nostartfiles -nodefaultlibs
 LDFLAGS = -m elf_i386 -T $(LINKER_SCRIPT).ld
 
 # General Rules

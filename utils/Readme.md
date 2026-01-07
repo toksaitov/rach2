@@ -1,5 +1,7 @@
 # OS Utils
 
+![List of Rach2 Utilities](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/utils.png)
+
 Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility invokes system calls directly via inline assembly using `int $0x80`, with no standard library dependencies. All types and constants are defined locally, making the code suitable for bare-metal or custom OS environments.
 
 The utilities can be built for both Linux (native) and the Rach2 kernel (freestanding ELF32).
