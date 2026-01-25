@@ -104,7 +104,14 @@ static uint32_t audio_ms_remainder = 0;
 static uint32_t opl_sample_remainder = 0;
 
 /* Cap catch-up to avoid overflowing the kernel ring buffer */
-#define MAX_CATCHUP_SAMPLES (MIX_BUFFER_SIZE * 4)
+/*
+ * Real hardware can run Doom slower than expected, which makes the elapsed time
+ * between PCSoundUpdate() calls larger and causes underruns if we clamp too low.
+ *
+ * Keep this comfortably below the kernel's audio ring capacity (currently 8KB)
+ * but large enough to absorb occasional long frames without audible gaps.
+ */
+#define MAX_CATCHUP_SAMPLES (MIX_BUFFER_SIZE * 16)
 
 
 /* Channel state for real audio (8 channels like classic Doom) */
@@ -222,6 +229,8 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
 
         if (ioctl(0, AUDIO_START, &params) == 0) {
             use_real_audio = true;
+            /* Ensure hardware amps are unmuted on real devices (HDA codecs can boot muted). */
+            ioctl(0, AUDIO_SET_VOLUME, 80);
 
             /* Initialize OPL music subsystem at higher rate for quality,
              * we'll downsample when mixing */
@@ -449,9 +458,19 @@ static void PCSoundUpdate(void)
             }
 
             /* Write mixed buffer to audio device */
-            wp.buffer = mix_buffer;
-            wp.size = chunk;
-            ioctl(0, AUDIO_WRITE, &wp);
+            {
+                uint32_t off = 0;
+                while (off < chunk) {
+                    int w;
+                    wp.buffer = mix_buffer + off;
+                    wp.size = chunk - off;
+                    w = ioctl(0, AUDIO_WRITE, &wp);
+                    if (w <= 0) {
+                        break; /* Ring full or device error; drop remainder */
+                    }
+                    off += (uint32_t)w;
+                }
+            }
 
             out_samples -= chunk;
         }

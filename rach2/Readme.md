@@ -1260,6 +1260,10 @@ make iso
 ./run_from_iso.sh
 ```
 
+**Note (real hardware / external GRUB):** If you load `kernel` and/or `file_system.krffs` from an existing GRUB install (or tools like Ventoy), make sure the files are **not sparse**. Some GRUB builds crash on sparse files with messages like `file.c:452: out of range pointer ...`.
+
+Use `rach2/grub_install.sh` to copy the files densely (no holes), or on Linux: `cp --sparse=never ...`.
+
 **4. Debug with GDB:**
 ```bash
 make && ./debug.sh

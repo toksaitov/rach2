@@ -76,9 +76,26 @@ isr_common_handler:
     movw %ax, %fs
     movw %ax, %gs
 
+    # Enable interrupts during syscalls (int 0x80 / vector 128) so PIT ticks
+    # and HDA servicing continue even while userspace is in long syscalls
+    # (e.g., Doom's framebuffer writes). IRQ stubs keep IF=0 as before.
+    movl 36(%esp), %eax
+    cmpl $128, %eax
+    jne 1f
+    sti
+1:
+
     pushl %esp          # Push pointer to isr_params_t structure
     call _isr_router
     addl $4, %esp       # Clean up pushed pointer
+
+    # If we re-enabled interrupts for a syscall, disable them again for the
+    # common epilogue (restore regs + iret). isr_return will sti just before iret.
+    movl 36(%esp), %eax
+    cmpl $128, %eax
+    jne 2f
+    cli
+2:
 
 # Fork child return point - child processes jump here after switch_context
 # Stack must contain: isr_params_t (ds, pushal regs, vector, error, iret frame)

@@ -98,6 +98,13 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
 bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out);
 
 /*
+ * Find a PCI device by class and subclass, skipping past a previously found device
+ * Pass skip_dev = NULL to find the first device, or pass a previously found device
+ * to find the next one.
+ */
+bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev, pci_device_t *out);
+
+/*
  * Find a PCI device by vendor and device ID
  * Returns true if found, fills out the pci_device_t structure
  */

@@ -163,6 +163,79 @@ bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out)
 }
 
 /*
+ * Find a PCI device by class and subclass, optionally skipping past a previous device
+ */
+bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev, pci_device_t *out)
+{
+    uint16_t bus;
+    uint8_t device, function;
+    bool past_skip = (skip_dev == NULL);
+
+    for (bus = 0; bus < 256; bus++) {
+        for (device = 0; device < 32; device++) {
+            /* Check function 0 first */
+            if (!pci_device_exists((uint8_t)bus, device, 0)) {
+                continue;
+            }
+
+            /* Check all functions if multi-function device */
+            for (function = 0; function < 8; function++) {
+                uint8_t cc, sc;
+
+                if (!pci_device_exists((uint8_t)bus, device, function)) {
+                    continue;
+                }
+
+                /* If we're at the skip device, mark that we've passed it */
+                if (skip_dev != NULL &&
+                    bus == skip_dev->bus &&
+                    device == skip_dev->device &&
+                    function == skip_dev->function) {
+                    past_skip = true;
+                    /* Continue to next function/device */
+                    if (function == 0) {
+                        uint8_t header_type = pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
+                        if (!(header_type & 0x80)) {
+                            break;  /* Not multi-function */
+                        }
+                    }
+                    continue;
+                }
+
+                if (!past_skip) {
+                    /* Only check other functions if bit 7 of header type is set */
+                    if (function == 0) {
+                        uint8_t header_type = pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
+                        if (!(header_type & 0x80)) {
+                            break;  /* Not multi-function */
+                        }
+                    }
+                    continue;
+                }
+
+                cc = pci_read_config8((uint8_t)bus, device, function, PCI_CLASS);
+                sc = pci_read_config8((uint8_t)bus, device, function, PCI_SUBCLASS);
+
+                if (cc == class_code && sc == subclass) {
+                    pci_read_device_info((uint8_t)bus, device, function, out);
+                    return true;
+                }
+
+                /* Only check other functions if bit 7 of header type is set */
+                if (function == 0) {
+                    uint8_t header_type = pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
+                    if (!(header_type & 0x80)) {
+                        break;  /* Not multi-function */
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+/*
  * Find a PCI device by vendor and device ID
  */
 bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t *out)

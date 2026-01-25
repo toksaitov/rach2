@@ -14,14 +14,14 @@ This milestone covers the foundational development of Rach2 OS, from initial boo
 2. **Memory Management**: Physical/virtual memory, paging, heap allocator
 3. **Process Management**: Kernel threads, user processes, syscalls, ELF loading
 4. **File System**: KRFFS RAM disk filesystem with read/write operations
-5. **Device Drivers**: VGA Mode 13h, PS/2 keyboard/mouse, PIT timer, PC speaker, Sound Blaster 16 and Intel HDA 11khz/8-bit audio support
+5. **Device Drivers**: VGA Mode 13h, PS/2 keyboard/mouse, PIT timer, PC speaker, Sound Blaster 16 and Intel HDA audio support (including real-hardware HDA bring-up for Doom)
 6. **Shell**: Basic `ish` shell with process control (Ctrl+C)
 7. **Application**: Doom port via doomgeneric and Chocolate Doom with audio/music support
 
 ## Contents
 
 - `Plan.md` - Detailed development plan and progress log
-- `01.md` - `34.md` - Individual development prompts for each phase
+- `01.md` - `35.md` - Individual development prompts for each phase
 
 ## Next Milestone
 

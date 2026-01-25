@@ -1909,4 +1909,22 @@ Key points:
 - **Files Modified**:
   - `ports/doom/i_pcsound.c` - Integrated OPL mixing with time-based audio pacing
   - `ports/doom/Makefile` - Added OPL3 and MIDI sources
-- Verified: Doom plays with both OPL3 music and real sound effects on HDA and SB16
+  - Verified: Doom plays with both OPL3 music and real sound effects on HDA and SB16 in QEMU
+- **Fix Intel HDA Sound on Real Hardware (Lenovo G50-70 / Conexant 0x14f1510f)**
+  - Diagnosed: boot test tone worked, but Doom and `audiowrite` were silent or produced "stuck" noises on real hardware.
+  - Fixed syscall interrupt starvation:
+    - The syscall entry path disabled interrupts for the entire syscall (via ISR stubs), so Doom’s heavy framebuffer `write()` loop could starve the PIT tick and `hda_tick()` refills.
+    - Re-enabled interrupts during `int 0x80` handling (vector 128) while the syscall is executing, keeping PIT ticks and HDA servicing running (`rach2/sys/isr_handler.s`).
+  - Fixed HDA DMA coherency on real hardware:
+    - Added cache flushing (`clflush` via CPUID; fallback `wbinvd`) for DMA buffers after each period fill and for the initial buffer priming (`rach2/sys/audio/hda.c`).
+    - Added DMA position buffer (DPLBASE/DPUBASE) support with LPIB fallback for more reliable position tracking (`rach2/sys/audio/hda.c`).
+  - Improved HDA codec/stream robustness:
+    - Run hardware at a codec-supported rate (typically 48 kHz) and convert/resample Doom’s 11025 Hz U8 mono to the hardware stream format (`rach2/sys/audio/hda.c`).
+    - Aggressively unmute amps and enable EAPD/BTL and GPIO for laptop speaker amplifiers (`rach2/sys/audio/hda.c`).
+  - Added compact bring-up/debug tools:
+    - Added `hdastats` and improved `hda`/`hdacodec`/`hdasense`/`hdaout`/`hdawatch` to debug real hardware quickly (`rach2/kernel.c`, `rach2/sys/audio/hda.c`).
+  - Improved Doom write-path reliability:
+    - Handle partial `AUDIO_WRITE` returns by looping until the full buffer is written; ensure volume is applied after `AUDIO_START` (`ports/doom/i_pcsound.c`).
+  - Improved real-hardware deployment:
+    - Avoid sparse file copies for GRUB setups that reject sparse modules (dense `cat`-based copy in `rach2/Makefile`, helper `rach2/grub_install.sh`).
+  - Verified: Doom sound effects work on real hardware via Intel HDA; boot test tone plays reliably.

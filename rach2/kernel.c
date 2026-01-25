@@ -19,6 +19,7 @@
 #include "sys/mouse.h"
 #include "sys/display/vga_text.h"
 #include "sys/audio/audio.h"
+#include "sys/audio/hda.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 
@@ -64,6 +65,10 @@ static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
 static bool str_equal(const char *a, const char *b);
 static void boot_init_process(void);
+static void run_audio_test_tone(uint32_t freq_hz, uint32_t duration_ms);
+static void run_audio_test_scale(uint32_t duration_ms);
+static void run_audio_write_test_scale(uint32_t duration_ms);
+static void run_audio_watch_tone(uint32_t freq_hz, uint32_t duration_ms, uint32_t interval_ms);
 
 static bool test_memory(void);
 static bool test_strings(void);
@@ -81,11 +86,426 @@ static void exec_program(int argc, char *argv[]);
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
 
+/* Set to 1 while debugging real hardware audio bring-up. */
+#define AUDIO_DEBUG_BOOT_TONE 1
+
+/* Simple kernel-side audio test tone (used for HDA/SB16 debugging). */
+static volatile uint32_t _tone_phase = 0;
+static volatile uint32_t _tone_half_period = 0;
+static volatile int16_t _tone_amp = 8000;
+static volatile int _tone_channels = 2;
+
+static void audio_test_callback(uint8_t *buffer, size_t size)
+{
+    size_t i;
+    int16_t *out = (int16_t *)buffer;
+    size_t samples16 = size / 2;
+
+    for (i = 0; i < samples16; ) {
+        int16_t s = (_tone_phase < _tone_half_period) ? _tone_amp : (int16_t)(-_tone_amp);
+        _tone_phase++;
+        if (_tone_phase >= (_tone_half_period * 2)) {
+            _tone_phase = 0;
+        }
+
+        if (_tone_channels == 2) {
+            if (i + 1 < samples16) {
+                out[i++] = s;
+                out[i++] = s;
+            } else {
+                out[i++] = s;
+            }
+        } else {
+            out[i++] = s;
+        }
+    }
+}
+
+static void run_audio_test_tone(uint32_t freq_hz, uint32_t duration_ms)
+{
+    uint32_t start_ticks;
+    uint32_t end_ticks;
+    uint32_t sample_rate = 48000;
+    uint32_t period;
+    int channels = 2;
+
+    if (!audio) {
+        k_puts("No audio driver.");
+        return;
+    }
+
+    /* Stop any existing playback */
+    if (audio->is_playing && audio->is_playing()) {
+        audio->stop();
+    }
+
+    /* Square wave period in samples */
+    if (freq_hz == 0) freq_hz = 440;
+    period = sample_rate / freq_hz;
+    if (period < 2) period = 2;
+
+    _tone_channels = channels;
+    _tone_half_period = period / 2;
+    if (_tone_half_period == 0) _tone_half_period = 1;
+    _tone_phase = 0;
+    _tone_amp = 12000;
+
+    /* Use callback-driven audio so the kernel fills DMA buffers */
+    if (audio->set_callback) {
+        audio->set_callback(audio_test_callback);
+    }
+
+    if (audio->start(sample_rate, AUDIO_S16LE, channels) != 0) {
+        k_puts("AUDIO_START failed.");
+        if (audio->set_callback) audio->set_callback((audio_callback_t)0);
+        return;
+    }
+
+    if (audio->set_volume) {
+        audio->set_volume(80);
+    }
+
+    k_printf("Playing %d Hz test tone for %d ms using %s...\n", freq_hz, duration_ms, audio_get_driver_name());
+    if (audio->type == AUDIO_DRIVER_HDA) {
+        hda_debug_dump();
+        hda_debug_dump_codec();
+    }
+
+    /* Sleep using timer ticks (100 Hz => 10ms per tick) */
+    start_ticks = kernel_ticks;
+    end_ticks = start_ticks + (duration_ms / 10);
+    while (kernel_ticks < end_ticks) {
+        __asm__ __volatile__("hlt");
+    }
+
+    if (audio->type == AUDIO_DRIVER_HDA) {
+        hda_debug_dump();
+    }
+
+    audio->stop();
+    if (audio->set_callback) {
+        audio->set_callback((audio_callback_t)0);
+    }
+    k_puts("Done.");
+}
+
+static void run_audio_test_scale(uint32_t duration_ms)
+{
+    uint32_t start_ticks;
+    uint32_t total_ticks;
+    uint32_t sample_rate = 48000;
+    int channels = 2;
+    size_t n;
+
+    /* C major: do re mi fa sol */
+    static const uint32_t freqs[] = { 262, 294, 330, 349, 392 };
+    const size_t num_notes = sizeof(freqs) / sizeof(freqs[0]);
+
+    if (!audio) {
+        k_puts("No audio driver.");
+        return;
+    }
+
+    if (duration_ms < 100) {
+        duration_ms = 100;
+    }
+
+    /* Stop any existing playback */
+    if (audio->is_playing && audio->is_playing()) {
+        audio->stop();
+    }
+
+    _tone_channels = channels;
+    _tone_amp = 12000;
+
+    /* Prime first note BEFORE starting so initial DMA buffers are correct. */
+    {
+        uint32_t period = sample_rate / freqs[0];
+        if (period < 2) period = 2;
+        _tone_half_period = period / 2;
+        if (_tone_half_period == 0) _tone_half_period = 1;
+        _tone_phase = 0;
+    }
+
+    if (audio->set_callback) {
+        audio->set_callback(audio_test_callback);
+    }
+
+    if (audio->start(sample_rate, AUDIO_S16LE, channels) != 0) {
+        k_puts("AUDIO_START failed.");
+        if (audio->set_callback) audio->set_callback((audio_callback_t)0);
+        return;
+    }
+
+    if (audio->set_volume) {
+        audio->set_volume(80);
+    }
+
+    k_printf("Playing scale test (%d ms) using %s...\n", duration_ms, audio_get_driver_name());
+
+    start_ticks = kernel_ticks;
+    total_ticks = duration_ms / 10;
+    if (total_ticks == 0) total_ticks = 1;
+
+    for (n = 0; n < num_notes; n++) {
+        uint32_t freq_hz = freqs[n];
+        uint32_t period;
+        uint32_t note_end_ticks;
+
+        period = sample_rate / freq_hz;
+        if (period < 2) period = 2;
+
+        _tone_half_period = period / 2;
+        if (_tone_half_period == 0) _tone_half_period = 1;
+        _tone_phase = 0;
+
+        note_end_ticks = start_ticks + (uint32_t)(((n + 1) * total_ticks) / num_notes);
+        while (kernel_ticks < note_end_ticks) {
+            __asm__ __volatile__("hlt");
+        }
+    }
+
+    audio->stop();
+    if (audio->set_callback) {
+        audio->set_callback((audio_callback_t)0);
+    }
+    k_puts("Done.");
+}
+
+static void run_audio_write_test_scale(uint32_t duration_ms)
+{
+    uint32_t start_ticks;
+    uint32_t total_ticks;
+    uint32_t sample_rate = 11025;
+    int channels = 1;
+    size_t n;
+    uint32_t tick_last;
+    uint32_t sample_acc = 0;
+    uint32_t phase = 0;
+    uint32_t half_period = 0;
+    uint8_t buf[512];
+    const uint8_t amp = 64;
+
+    /* C major: do re mi fa sol */
+    static const uint32_t freqs[] = { 262, 294, 330, 349, 392 };
+    const size_t num_notes = sizeof(freqs) / sizeof(freqs[0]);
+
+    if (!audio) {
+        k_puts("No audio driver.");
+        return;
+    }
+
+    if (duration_ms < 100) {
+        duration_ms = 100;
+    }
+
+    /* Stop any existing playback */
+    if (audio->is_playing && audio->is_playing()) {
+        audio->stop();
+    }
+
+    /* Force write-based mode (like Doom) */
+    if (audio->set_callback) {
+        audio->set_callback((audio_callback_t)0);
+    }
+
+    if (audio->start(sample_rate, AUDIO_U8, channels) != 0) {
+        k_puts("AUDIO_START failed.");
+        return;
+    }
+
+    if (audio->set_volume) {
+        audio->set_volume(80);
+    }
+
+    k_printf("Playing write-based scale test (%d ms) using %s...\n", duration_ms, audio_get_driver_name());
+
+    start_ticks = kernel_ticks;
+    total_ticks = duration_ms / 10;
+    if (total_ticks == 0) total_ticks = 1;
+
+    tick_last = kernel_ticks;
+
+    for (n = 0; n < num_notes; n++) {
+        uint32_t freq_hz = freqs[n];
+        uint32_t period;
+        uint32_t note_end_ticks;
+
+        period = sample_rate / freq_hz;
+        if (period < 2) period = 2;
+        half_period = period / 2;
+        if (half_period == 0) half_period = 1;
+        phase = 0;
+
+        note_end_ticks = start_ticks + (uint32_t)(((n + 1) * total_ticks) / num_notes);
+
+        while (kernel_ticks < note_end_ticks) {
+            uint32_t to_write;
+
+            /* Pace by 100Hz timer tick (10ms). */
+            while (kernel_ticks == tick_last) {
+                __asm__ __volatile__("hlt");
+            }
+            tick_last = kernel_ticks;
+
+            /* Samples for this tick: sample_rate / 100 (with remainder carry). */
+            sample_acc += sample_rate;
+            to_write = sample_acc / 100;
+            sample_acc %= 100;
+
+            while (to_write > 0) {
+                uint32_t chunk = (to_write > (uint32_t)sizeof(buf)) ? (uint32_t)sizeof(buf) : to_write;
+                uint32_t i;
+                uint32_t off = 0;
+
+                for (i = 0; i < chunk; i++) {
+                    uint8_t v = (phase < half_period) ? (uint8_t)(128 + amp) : (uint8_t)(128 - amp);
+                    buf[i] = v;
+                    phase++;
+                    if (phase >= half_period * 2) {
+                        phase = 0;
+                    }
+                }
+
+                while (off < chunk) {
+                    int w = audio->write(buf + off, (size_t)(chunk - off));
+                    if (w < 0) {
+                        k_puts("AUDIO_WRITE failed.");
+                        audio->stop();
+                        return;
+                    }
+                    if (w == 0) {
+                        /* Ring full; wait for DMA to drain. */
+                        __asm__ __volatile__("hlt");
+                        continue;
+                    }
+                    off += (uint32_t)w;
+                }
+
+                to_write -= chunk;
+            }
+        }
+    }
+
+    audio->stop();
+    k_puts("Done.");
+}
+
+static void run_audio_watch_tone(uint32_t freq_hz, uint32_t duration_ms, uint32_t interval_ms)
+{
+    uint32_t start_ticks;
+    uint32_t end_ticks;
+    uint32_t next_ticks;
+    uint32_t sample_rate;
+    uint32_t period;
+    uint32_t last_lpib;
+    uint32_t lpib;
+    uint32_t cbl;
+    uint32_t ctl;
+    uint8_t sts;
+    uint16_t fmt;
+    int channels;
+
+    if (!audio) {
+        k_puts("No audio driver.");
+        return;
+    }
+    if (audio->type != AUDIO_DRIVER_HDA) {
+        k_puts("HDA not active.");
+        return;
+    }
+
+    /* Stop any existing playback */
+    if (audio->is_playing && audio->is_playing()) {
+        audio->stop();
+    }
+
+    sample_rate = 48000;
+    channels = 2;
+    if (freq_hz == 0) freq_hz = 440;
+    if (interval_ms == 0) interval_ms = 100;
+
+    period = sample_rate / freq_hz;
+    if (period < 2) period = 2;
+
+    _tone_channels = channels;
+    _tone_half_period = period / 2;
+    if (_tone_half_period == 0) _tone_half_period = 1;
+    _tone_phase = 0;
+    _tone_amp = 12000;
+
+    if (audio->set_callback) {
+        audio->set_callback(audio_test_callback);
+    }
+
+    if (audio->start(sample_rate, AUDIO_S16LE, channels) != 0) {
+        k_puts("AUDIO_START failed.");
+        if (audio->set_callback) audio->set_callback((audio_callback_t)0);
+        return;
+    }
+
+    if (audio->set_volume) {
+        audio->set_volume(80);
+    }
+
+    cbl = hda_debug_get_cbl();
+    last_lpib = hda_debug_get_lpib();
+
+    k_printf("HDA watch: %d Hz, %d ms, interval %d ms\n", freq_hz, duration_ms, interval_ms);
+
+    start_ticks = kernel_ticks;
+    end_ticks = start_ticks + (duration_ms / 10);
+    next_ticks = start_ticks;
+
+    while (kernel_ticks < end_ticks) {
+        if (kernel_ticks >= next_ticks) {
+            lpib = hda_debug_get_lpib();
+            ctl = hda_debug_get_sd_ctl();
+            sts = hda_debug_get_sd_sts();
+            fmt = hda_debug_get_sd_format();
+
+            if (cbl != 0) {
+                uint32_t delta = (lpib >= last_lpib) ? (lpib - last_lpib) : (lpib + cbl - last_lpib);
+                k_printf("t=%dms lpib=%d (+%d) ctl=0x%x sts=0x%x fmt=0x%x\n",
+                         (kernel_ticks - start_ticks) * 10,
+                         lpib,
+                         delta,
+                         ctl,
+                         (uint32_t)sts,
+                         (uint32_t)fmt);
+            } else {
+                k_printf("t=%dms lpib=%d ctl=0x%x sts=0x%x fmt=0x%x\n",
+                         (kernel_ticks - start_ticks) * 10,
+                         lpib,
+                         ctl,
+                         (uint32_t)sts,
+                         (uint32_t)fmt);
+            }
+
+            last_lpib = lpib;
+            next_ticks += (interval_ms / 10);
+            if (interval_ms < 10) {
+                next_ticks += 1;
+            }
+        }
+        __asm__ __volatile__("hlt");
+    }
+
+    audio->stop();
+    if (audio->set_callback) {
+        audio->set_callback((audio_callback_t)0);
+    }
+    k_puts("Done.");
+}
+
 static void timer_handler(isr_params_t *params)
 {
     (void) params;
 
     ++kernel_ticks;
+
+    /* Service HDA audio even when legacy IRQs aren't delivered (MSI-only setups). */
+    hda_tick();
 
     /* Call the scheduler on every timer tick */
     schedule();
@@ -1487,6 +1907,14 @@ static void process_command(const char *cmd)
         k_puts("  preempt             - Test preemptive scheduling");
         k_puts("  isolate             - Test memory isolation");
         k_puts("  usermode            - Test ring 3 execution");
+        k_puts("  audiotest           - Play scale test tone");
+        k_puts("  audiowrite          - Play scale via AUDIO_WRITE (Doom path)");
+        k_puts("  hda                 - Dump HDA controller state");
+        k_puts("  hdacodec            - Dump HDA codec/pin state");
+        k_puts("  hdasense            - Show HDA pin sense summary");
+        k_puts("  hdastats            - Show compact HDA playback stats");
+        k_puts("  hdaout <mode>       - Set HDA output: auto|primary|hp|both");
+        k_puts("  hdawatch            - Play tone + watch HDA DMA");
         k_puts("  fault               - Trigger page fault (panic)");
         k_puts("  halt                - Halt the CPU");
         serial_puts("  ...and more (see VGA display)\n");
@@ -1766,6 +2194,55 @@ static void process_command(const char *cmd)
             k_puts("Memory isolation test FAILED!");
         }
         set_fore_color(light_grey);
+    } else if (str_equal(cmd, "audiotest")) {
+        run_audio_test_scale(2000);
+    } else if (str_equal(cmd, "audiowrite")) {
+        run_audio_write_test_scale(2000);
+    } else if (str_equal(cmd, "hda")) {
+        hda_debug_dump();
+    } else if (str_equal(cmd, "hdacodec")) {
+        hda_debug_dump_codec();
+    } else if (str_equal(cmd, "hdasense")) {
+        hda_debug_dump_pins();
+    } else if (str_equal(cmd, "hdastats")) {
+        hda_debug_dump_stats();
+    } else if (str_starts_with(cmd, "hdaout")) {
+        const char *arg = cmd + 6; /* after "hdaout" */
+        char mode_buf[16];
+        size_t i = 0;
+        int mode = -1;
+
+        while (*arg == ' ') arg++;
+
+        while (arg[i] && arg[i] != ' ' && arg[i] != '\t' && i < sizeof(mode_buf) - 1) {
+            mode_buf[i] = arg[i];
+            i++;
+        }
+        mode_buf[i] = '\0';
+
+        if (mode_buf[0] == '\0') {
+            k_printf("HDA out mode=%d\n", hda_get_output_mode());
+            k_puts("Usage: hdaout auto|primary|hp|both");
+        } else {
+            if (str_equal(mode_buf, "auto")) {
+                mode = 0;
+            } else if (str_equal(mode_buf, "primary") || str_equal(mode_buf, "spk") || str_equal(mode_buf, "speaker")) {
+                mode = 1;
+            } else if (str_equal(mode_buf, "hp") || str_equal(mode_buf, "headphones")) {
+                mode = 2;
+            } else if (str_equal(mode_buf, "both")) {
+                mode = 3;
+            }
+
+            if (mode < 0) {
+                k_puts("Usage: hdaout auto|primary|hp|both");
+            } else {
+                hda_set_output_mode(mode);
+                hda_debug_dump_pins();
+            }
+        }
+    } else if (str_equal(cmd, "hdawatch")) {
+        run_audio_watch_tone(440, 2000, 100);
     } else if (str_equal(cmd, "fault")) {
         volatile uint32_t *bad_ptr = (volatile uint32_t *) 0xA0000000;
         k_puts("Triggering page fault at 0xA0000000...");
@@ -2007,6 +2484,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     k_printf(" OK (%s)\n", audio_get_driver_name());
     serial_printf(" OK (%s)\n", audio_get_driver_name());
     set_fore_color(light_grey);
+
+#if AUDIO_DEBUG_BOOT_TONE
+    if (audio && audio->type == AUDIO_DRIVER_HDA) {
+        k_puts("  HDA debug: boot test tone...");
+        serial_printf("  HDA debug: boot test tone...\n");
+        run_audio_test_tone(440, 1500);
+    }
+#endif
 
     /* Modules were already parsed early (before paging) - just display status */
     k_printf("  Modules...");

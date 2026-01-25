@@ -100,12 +100,20 @@
  * Codec verbs (commands)
  */
 #define HDA_VERB_GET_PARAM      0xF0000     /* Get Parameter */
+#define HDA_VERB_GET_CONN_LIST  0xF0200     /* Get Connection List Entry */
+#define HDA_VERB_GET_CONN_SEL   0xF0100     /* Get Connection Select */
+#define HDA_VERB_GET_CONFIG_DEF 0xF1C00     /* Get Configuration Default */
+#define HDA_VERB_GET_PIN_SENSE  0xF0900     /* Get Pin Sense */
+#define HDA_VERB_SET_CONN_SEL   0x70100     /* Set Connection Select */
 #define HDA_VERB_SET_CHANNEL    0x70600     /* Set Converter Stream/Channel (706h) */
 #define HDA_VERB_SET_AMP_GAIN   0x30000     /* Set Amplifier Gain/Mute */
 #define HDA_VERB_SET_PIN_CTRL   0x70700     /* Set PIN Widget Control (707h) */
 #define HDA_VERB_SET_EAPD       0x70C00     /* Set EAPD/BTL Enable */
 #define HDA_VERB_SET_POWER      0x70500     /* Set Power State */
 #define HDA_VERB_SET_CONV_FMT   0x20000     /* Set Converter Format */
+#define HDA_VERB_SET_GPIO_MASK  0x71600     /* Set GPIO Enable Mask */
+#define HDA_VERB_SET_GPIO_DIR   0x71700     /* Set GPIO Direction */
+#define HDA_VERB_SET_GPIO_DATA  0x71500     /* Set GPIO Data */
 
 /*
  * Codec parameters (for GET_PARAM)
@@ -118,6 +126,41 @@
 #define HDA_PARAM_PIN_CAPS      0x0C
 #define HDA_PARAM_CONN_LIST     0x0E
 #define HDA_PARAM_OUTPUT_AMP    0x12
+#define HDA_PARAM_GPIO_COUNT    0x11    /* GPIO count and capabilities */
+
+/*
+ * Pin configuration default field extraction
+ * Format: [31:30] Port Connectivity, [29:28] Location (gross),
+ *         [27:24] Location (fine), [23:20] Default Device,
+ *         [19:16] Connection Type, [15:12] Color,
+ *         [11:8] Misc, [7:4] Default Association, [3:0] Sequence
+ */
+#define HDA_PIN_DEF_DEV(x)      (((x) >> 20) & 0xF)
+#define HDA_PIN_DEF_LOC(x)      (((x) >> 28) & 0x3)
+#define HDA_PIN_DEF_PORT(x)     (((x) >> 30) & 0x3)
+
+/* Default device types */
+#define HDA_DEF_DEV_LINE_OUT    0x0
+#define HDA_DEF_DEV_SPEAKER     0x1
+#define HDA_DEF_DEV_HP_OUT      0x2
+#define HDA_DEF_DEV_CD          0x3
+#define HDA_DEF_DEV_SPDIF_OUT   0x4
+#define HDA_DEF_DEV_DIG_OUT     0x5
+#define HDA_DEF_DEV_MODEM_LINE  0x6
+#define HDA_DEF_DEV_MODEM_HAND  0x7
+#define HDA_DEF_DEV_LINE_IN     0x8
+#define HDA_DEF_DEV_AUX         0x9
+#define HDA_DEF_DEV_MIC_IN      0xA
+#define HDA_DEF_DEV_TELEPHONY   0xB
+#define HDA_DEF_DEV_SPDIF_IN    0xC
+#define HDA_DEF_DEV_DIG_IN      0xD
+#define HDA_DEF_DEV_OTHER       0xF
+
+/* Port connectivity */
+#define HDA_PORT_CONN_JACK      0x0
+#define HDA_PORT_CONN_NONE      0x1
+#define HDA_PORT_CONN_FIXED     0x2
+#define HDA_PORT_CONN_BOTH      0x3
 
 /*
  * Widget types
@@ -156,5 +199,31 @@ typedef struct {
  * Intel HD Audio driver
  */
 extern audio_driver_t hda_driver;
+
+/*
+ * Periodic service hook (optional).
+ *
+ * Some real hardware may not deliver legacy PCI IRQs (e.g., MSI-only routing).
+ * Calling this from the PIT tick lets the HDA driver refill DMA buffers even
+ * when stream interrupts aren't available.
+ */
+void hda_tick(void);
+
+/* Debug helpers (safe to call even if HDA not active). */
+void hda_debug_dump(void);
+void hda_debug_dump_codec(void);
+void hda_debug_dump_pins(void);
+void hda_debug_dump_stats(void);
+
+/* Routing override (kernel debug). */
+void hda_set_output_mode(int mode); /* 0=auto 1=primary 2=hp 3=both */
+int hda_get_output_mode(void);
+
+/* Lightweight stream diagnostics for kernel commands. */
+uint32_t hda_debug_get_lpib(void);
+uint32_t hda_debug_get_cbl(void);
+uint32_t hda_debug_get_sd_ctl(void);
+uint8_t hda_debug_get_sd_sts(void);
+uint16_t hda_debug_get_sd_format(void);
 
 #endif /* _HDA_H_ */

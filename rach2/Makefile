@@ -80,16 +80,22 @@ iso : $(ISO_IMAGE)
 
 $(ISO_IMAGE) : $(KERNEL)
 	@mkdir -p $(BIN_DIR)
-	@cp $(KERNEL) $(ISO_DIR)/boot/
+	@# Copy without creating sparse files (some GRUB setups crash on sparse modules)
+	@cat $(KERNEL) > $(ISO_DIR)/boot/$(KERNEL)
 	@# Generate grub.cfg with or without ramdisk module
 	@if [ -f $(RAMDISK_SRC) ]; then \
-		cp $(RAMDISK_SRC) $(RAMDISK_DST); \
+		cat $(RAMDISK_SRC) > $(RAMDISK_DST); \
 		echo "set timeout=3" > $(GRUB_CFG); \
 		echo "set default=0" >> $(GRUB_CFG); \
 		echo "" >> $(GRUB_CFG); \
-		echo "menuentry \"Rach2 Kernel\" {" >> $(GRUB_CFG); \
+		echo "menuentry \"Rach2 Kernel (RAM disk)\" {" >> $(GRUB_CFG); \
 		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
 		echo "    module /boot/file_system.krffs" >> $(GRUB_CFG); \
+		echo "    boot" >> $(GRUB_CFG); \
+		echo "}" >> $(GRUB_CFG); \
+		echo "" >> $(GRUB_CFG); \
+		echo "menuentry \"Rach2 Kernel (no RAM disk)\" {" >> $(GRUB_CFG); \
+		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
 		echo "    boot" >> $(GRUB_CFG); \
 		echo "}" >> $(GRUB_CFG); \
 		echo "Including RAM disk: $(RAMDISK_SRC)"; \

@@ -33,8 +33,16 @@ void serial_printf(const char *format, ...);
  * Check if data is available to read from serial port.
  * Returns non-zero if data is ready, 0 otherwise.
  * This is a non-blocking check.
+ * Returns 0 if no serial port was detected during init.
  */
 int serial_data_available(void);
+
+/*
+ * Check if a serial port was detected during initialization.
+ * Returns 1 if COM1 exists, 0 if not (e.g., real hardware without serial).
+ * Used to avoid infinite loops when polling non-existent hardware.
+ */
+int serial_port_exists(void);
 
 /*
  * Read a single character from serial port (blocking).
