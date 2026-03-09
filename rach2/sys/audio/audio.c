@@ -15,6 +15,7 @@
 
 /* Current active audio driver */
 audio_driver_t *audio = NULL;
+static const char *audio_boot_status = "Not initialized";
 
 /*
  * PC Speaker fallback driver
@@ -97,26 +98,33 @@ audio_driver_t speaker_driver = {
  */
 void init_audio(void)
 {
+    audio = NULL;
+    audio_boot_status = "No audio";
+
     /* Try Intel HD Audio first (modern, PCI-based) */
     if (hda_driver.init && hda_driver.init() == 0) {
         audio = &hda_driver;
+        audio_boot_status = hda_get_boot_status();
         return;
     }
 
     /* Try Sound Blaster 16 (classic ISA audio) */
     if (sb16_driver.init && sb16_driver.init() == 0) {
         audio = &sb16_driver;
+        audio_boot_status = "Sound Blaster 16";
         return;
     }
 
     /* Fall back to PC Speaker */
     if (speaker_driver.init() == 0) {
         audio = &speaker_driver;
+        audio_boot_status = "PC Speaker fallback";
         return;
     }
 
     /* No audio available */
     audio = NULL;
+    audio_boot_status = "No audio";
 }
 
 /*
@@ -139,6 +147,11 @@ const char *audio_get_driver_name(void)
         return audio->name;
     }
     return "None";
+}
+
+const char *audio_get_boot_status(void)
+{
+    return audio_boot_status;
 }
 
 /*

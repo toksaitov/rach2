@@ -37,6 +37,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/display/vga_text.c \
 	  sys/display/vga_gfx.c  \
 	  sys/audio/audio.c     \
+	  sys/audio/audio_debug.c \
 	  sys/audio/dma.c       \
 	  sys/audio/sb16.c      \
 	  sys/audio/hda.c       \

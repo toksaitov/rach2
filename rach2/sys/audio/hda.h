@@ -219,11 +219,18 @@ void hda_debug_dump_stats(void);
 void hda_set_output_mode(int mode); /* 0=auto 1=primary 2=hp 3=both */
 int hda_get_output_mode(void);
 
+/* Short boot-time driver summary. */
+const char *hda_get_boot_status(void);
+
+typedef struct {
+    uint32_t lpib;
+    uint32_t cbl;
+    uint32_t ctl;
+    uint8_t sts;
+    uint16_t fmt;
+} hda_stream_debug_snapshot_t;
+
 /* Lightweight stream diagnostics for kernel commands. */
-uint32_t hda_debug_get_lpib(void);
-uint32_t hda_debug_get_cbl(void);
-uint32_t hda_debug_get_sd_ctl(void);
-uint8_t hda_debug_get_sd_sts(void);
-uint16_t hda_debug_get_sd_format(void);
+bool hda_debug_get_stream_snapshot(hda_stream_debug_snapshot_t *out);
 
 #endif /* _HDA_H_ */

@@ -60,3 +60,5 @@ From the ISH shell prompt:
 > echo hello > test.txt # Create file
 > doom                  # Play Doom
 ```
+
+If you fall back to the kernel debug shell, use `audio help` for the audio test and HDA diagnostic commands. In VGA text mode, `PageUp`, `PageDown`, `Home`, and `End` provide scrollback through boot logs and shell output.

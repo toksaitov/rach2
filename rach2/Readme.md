@@ -59,7 +59,8 @@ Rach2 is an educational 32-bit x86 kernel that implements core operating system 
 
 **Development & Testing:**
 * Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF load)
-* Interactive kernel debug shell with commands: help, info, modules, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, fault, halt
+* Interactive kernel debug shell with commands: help, info, modules, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, audio, fault, halt
+* VGA text scrollback in the kernel debug shell via PageUp, PageDown, Home, and End
 
 ---
 
@@ -1155,7 +1156,7 @@ For real hardware, the HDA path now also includes:
 * **Codec-aware output setup**: speaker and headphone pins, EAPD, GPIO, and connection selection
 * **DMA position tracking**: optional position buffer with automatic fallback to LPIB if the controller's position buffer is unreliable
 * **Write-path resampling**: write-based clients such as Doom can submit 11025 Hz 8-bit mono while the driver runs the hardware stream at a codec-supported format such as 48 kHz 16-bit stereo
-* **Bring-up diagnostics**: compact stats, codec dumps, pin-sense summaries, routing control, and DMA watch tools in the kernel debug shell
+* **Bring-up diagnostics**: compact stats, codec dumps, pin-sense summaries, routing control, and DMA watch tools under the kernel shell's `audio` command
 
 ### PC Speaker (Fallback)
 
@@ -1300,16 +1301,14 @@ When the kernel boots (or when init exits), the debug shell is available:
 | `preempt`        | Test preemptive scheduler                   |
 | `isolate`        | Test memory isolation                       |
 | `usermode`       | Test ring 3 execution                       |
-| `audiotest`      | Play a scale test tone                      |
-| `audiowrite`     | Play a scale through `AUDIO_WRITE`          |
-| `hda`            | Dump HDA controller state                   |
-| `hdacodec`       | Dump HDA codec and pin state                |
-| `hdasense`       | Show HDA pin sense summary                  |
-| `hdastats`       | Show compact HDA playback stats             |
-| `hdaout <mode>`  | Force HDA output to `auto`, `primary`, `hp`, or `both` |
-| `hdawatch`       | Play a tone and print live HDA DMA progress |
+| `audio`          | Show active audio driver and usage summary  |
+| `audio help`     | Show audio subcommand help                  |
+| `audio test ...` | Run callback, write-path, or HDA watch tests |
+| `audio hda ...`  | Dump HDA state or force HDA output routing  |
 | `fault`          | Trigger a page fault (demonstrates panic)   |
 | `halt`           | Stop the CPU                                |
+
+When the kernel debug shell is active in VGA text mode, `PageUp`, `PageDown`, `Home`, and `End` navigate scrollback. Typing a command snaps the view back to the live prompt automatically.
 
 ---
 

@@ -9,6 +9,7 @@
 #include "../kio.h"
 #include "../serial.h"
 #include "../isr.h"
+#include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/paging.h"
 
@@ -116,6 +117,12 @@ static volatile uint32_t walclk_start = 0;
 static volatile uint32_t walclk_end = 0;
 static volatile int16_t out_min_s16 = 0;
 static volatile int16_t out_max_s16 = 0;
+static char hda_boot_status[48] = "Intel HD Audio";
+static bool hda_probe_log_enabled = false;
+
+static void hda_serial_putc_crlf(char c);
+static void hda_probe_log(const char *format, ...);
+static void hda_build_boot_status(void);
 
 /*
  * Ring buffer helpers
@@ -289,6 +296,47 @@ void hda_set_output_mode(int mode)
         return;
     }
     hda_output_mode = mode;
+}
+
+static void hda_probe_log(const char *format, ...)
+{
+    char **args = (char **)&format;
+
+    if (!hda_probe_log_enabled) {
+        return;
+    }
+
+    ++args;
+    k_vprintf(hda_serial_putc_crlf, format, args);
+}
+
+static void hda_build_boot_status(void)
+{
+    static const char prefix[] = "Intel HD Audio, codec 0x";
+    char hex[16];
+    size_t i;
+    size_t pos = 0;
+
+    if (codec_vendor_id == 0) {
+        k_strncpy(hda_boot_status, "Intel HD Audio", sizeof(hda_boot_status) - 1);
+        hda_boot_status[sizeof(hda_boot_status) - 1] = '\0';
+        return;
+    }
+
+    k_itoa((int)codec_vendor_id, hex, sizeof(hex), 'x', false);
+
+    for (i = 0; prefix[i] != '\0' && pos < sizeof(hda_boot_status) - 1; ++i) {
+        hda_boot_status[pos++] = prefix[i];
+    }
+    for (i = 0; hex[i] != '\0' && pos < sizeof(hda_boot_status) - 1; ++i) {
+        hda_boot_status[pos++] = hex[i];
+    }
+    hda_boot_status[pos] = '\0';
+}
+
+const char *hda_get_boot_status(void)
+{
+    return hda_boot_status;
 }
 
 /*
@@ -715,7 +763,7 @@ static void hda_pci_force_d0(pci_device_t *dev)
         return;
     }
 
-    k_printf("  PCI PM: PMCSR=0x%x (D%d) -> D0\n", pmcsr, state);
+    hda_probe_log("HDA: PCI PMCSR=0x%x (D%d) -> D0\n", pmcsr, state);
 
     pmcsr &= (uint16_t)~0x3;
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(pmcap + 4), pmcsr);
@@ -724,7 +772,7 @@ static void hda_pci_force_d0(pci_device_t *dev)
     hda_delay(200000);  /* ~200ms worst-case */
 
     pmcsr = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(pmcap + 4));
-    k_printf("  PCI PM: PMCSR now 0x%x (D%d)\n", pmcsr, (int)(pmcsr & 0x3));
+    hda_probe_log("HDA: PCI PMCSR now 0x%x (D%d)\n", pmcsr, (int)(pmcsr & 0x3));
 }
 
 /*
@@ -887,7 +935,7 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
         hda_delay(1);
     }
     if (timeout <= 0) {
-        if (debug) k_printf("[ICI busy!]");
+        if (debug) serial_printf("HDA: ICI busy\n");
         return 0;
     }
 
@@ -916,7 +964,7 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
         if (!(ics & HDA_ICS_ICB)) {
             /* Command completed but no response */
             if (debug) {
-                k_printf("[no IRV, ics=0x%x]", ics);
+                serial_printf("HDA: no IRV, ics=0x%x\n", ics);
                 verb_debug_count--;
             }
             return 0;
@@ -925,7 +973,7 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
     }
 
     if (debug) {
-        k_printf("[timeout ics=0x%x]", hda_read16(HDA_ICS));
+        serial_printf("HDA: verb timeout, ics=0x%x\n", hda_read16(HDA_ICS));
         verb_debug_count--;
     }
     return 0;
@@ -1057,9 +1105,9 @@ static bool hda_find_output(void)
 
     /* Check for attached codecs */
     statests = hda_read16(HDA_STATESTS);
-    k_printf("STATESTS=0x%x\n", statests);
+    hda_probe_log("HDA: STATESTS=0x%x\n", statests);
     if (statests == 0) {
-        k_printf("no codec!");
+        hda_probe_log("HDA: no codec\n");
         return false;
     }
 
@@ -1081,19 +1129,19 @@ static bool hda_find_output(void)
                 vid = hda_send_verb(i, 0, HDA_VERB_GET_PARAM | HDA_PARAM_VENDOR_ID);
             }
 
-            k_printf("  Codec %d: vendor=0x%x", i, vid);
+            hda_probe_log("HDA: Codec %d vendor=0x%x", i, vid);
 
             if (vid == 0) {
-                k_printf(" (no response, skip)\n");
+                hda_probe_log(" (no response, skip)\n");
                 continue;
             }
 
             if (is_hdmi_codec(vid)) {
-                k_printf(" (HDMI, skip)\n");
+                hda_probe_log(" (HDMI, skip)\n");
                 continue;
             }
 
-            k_printf(" (analog)\n");
+            hda_probe_log(" (analog)\n");
 
             /* Found an analog codec - use it */
             if (analog_codec_addr == 0xFF) {
@@ -1114,7 +1162,7 @@ static bool hda_find_output(void)
                 if (vid != 0) {
                     analog_codec_addr = i;
                     analog_vendor = vid;
-                    k_printf("  Fallback to codec %d: 0x%x\n", i, vid);
+                    hda_probe_log("HDA: Fallback to codec %d: 0x%x\n", i, vid);
                     break;
                 }
             }
@@ -1122,14 +1170,14 @@ static bool hda_find_output(void)
     }
 
     if (analog_codec_addr == 0xFF) {
-        k_printf("no usable codec!");
+        hda_probe_log("HDA: no usable codec\n");
         return false;
     }
 
     codec_addr = analog_codec_addr;
     vendor = analog_vendor;
     codec_vendor_id = vendor;
-    k_printf("Using codec %d: 0x%x\n", codec_addr, vendor);
+    hda_probe_log("HDA: Using codec %d: 0x%x\n", codec_addr, vendor);
 
     /* Conexant laptop codecs are often picky about jack routing; default to primary output. */
     if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
@@ -1142,7 +1190,7 @@ static bool hda_find_output(void)
     node_count = hda_get_param(0, HDA_PARAM_NODE_COUNT);
     start_nid = (node_count >> 16) & 0xFF;
     num_nodes = node_count & 0xFF;
-    serial_printf("HDA: Root has %d subnodes starting at 0x%x\n", num_nodes, start_nid);
+    hda_probe_log("HDA: Root has %d subnodes starting at 0x%x\n", num_nodes, start_nid);
 
     /* Find audio function group */
     for (i = 0; i < num_nodes; i++) {
@@ -1154,10 +1202,10 @@ static bool hda_find_output(void)
     }
 
     if (audio_fg_nid == 0) {
-        serial_printf("HDA: No audio function group found\n");
+        hda_probe_log("HDA: No audio function group found\n");
         return false;
     }
-    serial_printf("HDA: Audio function group at 0x%x\n", audio_fg_nid);
+    hda_probe_log("HDA: Audio function group at 0x%x\n", audio_fg_nid);
 
     /* Power on the audio function group */
     hda_send_verb(codec_addr, audio_fg_nid, HDA_VERB_SET_POWER | 0x00);
@@ -1170,7 +1218,7 @@ static bool hda_find_output(void)
     subnode_count = hda_get_param(audio_fg_nid, HDA_PARAM_NODE_COUNT);
     fg_start = (subnode_count >> 16) & 0xFF;
     fg_count = subnode_count & 0xFF;
-    serial_printf("HDA: AFG has %d widgets starting at 0x%x\n", fg_count, fg_start);
+    hda_probe_log("HDA: AFG has %d widgets starting at 0x%x\n", fg_count, fg_start);
     afg_widget_start = fg_start;
     afg_widget_count = fg_count;
 
@@ -1183,7 +1231,7 @@ static bool hda_find_output(void)
         /* Remember first DAC found */
         if (widget_type == HDA_WIDGET_AUDIO_OUT && first_dac == 0) {
             first_dac = nid;
-            serial_printf("HDA: Found DAC at 0x%x\n", nid);
+            hda_probe_log("HDA: Found DAC at 0x%x\n", nid);
         }
 
         /* Check pins for their default device type */
@@ -1196,7 +1244,7 @@ static bool hda_find_output(void)
                 uint8_t def_dev = HDA_PIN_DEF_DEV(pin_cfg);
                 uint8_t port_conn = HDA_PIN_DEF_PORT(pin_cfg);
 
-                serial_printf("HDA: Pin 0x%x cfg=0x%x dev=%d port=%d\n",
+                hda_probe_log("HDA: Pin 0x%x cfg=0x%x dev=%d port=%d\n",
                               nid, pin_cfg, def_dev, port_conn);
 
                 /* Remember first output-capable pin as fallback */
@@ -1224,16 +1272,16 @@ static bool hda_find_output(void)
     /* Select output pin: prefer speaker > line out > headphone > any fallback */
     if (speaker_pin != 0) {
         pin_nid = speaker_pin;
-        serial_printf("HDA: Selected speaker pin 0x%x\n", pin_nid);
+        hda_probe_log("HDA: Selected speaker pin 0x%x\n", pin_nid);
     } else if (line_out_pin != 0) {
         pin_nid = line_out_pin;
-        serial_printf("HDA: Selected line out pin 0x%x\n", pin_nid);
+        hda_probe_log("HDA: Selected line out pin 0x%x\n", pin_nid);
     } else if (hp_pin != 0) {
         pin_nid = hp_pin;
-        serial_printf("HDA: Selected HP pin 0x%x\n", pin_nid);
+        hda_probe_log("HDA: Selected HP pin 0x%x\n", pin_nid);
     } else if (fallback_pin != 0) {
         pin_nid = fallback_pin;
-        serial_printf("HDA: Using fallback pin 0x%x\n", pin_nid);
+        hda_probe_log("HDA: Using fallback pin 0x%x\n", pin_nid);
     }
 
     /* Also save headphone pin for potential dual output */
@@ -1241,11 +1289,11 @@ static bool hda_find_output(void)
     speaker_pin_nid = speaker_pin;
 
     if (pin_nid == 0) {
-        k_printf("no pin! ");
+        hda_probe_log("HDA: no pin\n");
         return false;
     }
 
-    k_printf("pin=0x%x ", pin_nid);
+    hda_probe_log("HDA: pin=0x%x ", pin_nid);
 
     /* Trace back from output pin to find DAC
      * The connection list tells us what the pin is connected to */
@@ -1286,7 +1334,7 @@ static bool hda_find_output(void)
                 /* Direct connection to DAC */
                 dac_nid = conn_nid;
                 pin_conn_sel_idx = (uint8_t)idx;
-                serial_printf("HDA: Pin connects directly to DAC 0x%x\n", dac_nid);
+                hda_probe_log("HDA: Pin connects directly to DAC 0x%x\n", dac_nid);
                 break;
             } else if (wtype == HDA_WIDGET_AUDIO_MIX || wtype == HDA_WIDGET_AUDIO_SEL) {
                 /* Mixer or selector - trace further */
@@ -1296,7 +1344,7 @@ static bool hda_find_output(void)
 
                 mixer_nid = conn_nid;
                 pin_conn_sel_idx = (uint8_t)idx;
-                serial_printf("HDA: Pin connects to mixer/sel 0x%x\n", mixer_nid);
+                hda_probe_log("HDA: Pin connects to mixer/sel 0x%x\n", mixer_nid);
 
                 mix_num = hda_get_connections(mixer_nid, mix_conn, 8);
 
@@ -1306,7 +1354,7 @@ static bool hda_find_output(void)
                     uint32_t mcaps0 = hda_get_param(mix_conn[mix_sel], HDA_PARAM_AUDIO_CAPS);
                     if (((mcaps0 >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
                         dac_nid = mix_conn[mix_sel];
-                        serial_printf("HDA: Mixer selected DAC 0x%x\n", dac_nid);
+                        hda_probe_log("HDA: Mixer selected DAC 0x%x\n", dac_nid);
                         break;
                     }
                 }
@@ -1315,7 +1363,7 @@ static bool hda_find_output(void)
                     uint32_t mcaps = hda_get_param(mix_conn[j], HDA_PARAM_AUDIO_CAPS);
                     if (((mcaps >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
                         dac_nid = mix_conn[j];
-                        serial_printf("HDA: Mixer connects to DAC 0x%x\n", dac_nid);
+                        hda_probe_log("HDA: Mixer connects to DAC 0x%x\n", dac_nid);
                         break;
                     }
                 }
@@ -1328,19 +1376,19 @@ static bool hda_find_output(void)
     /* Fallback: if no DAC found through tracing, use first DAC */
     if (dac_nid == 0 && first_dac != 0) {
         dac_nid = first_dac;
-        serial_printf("HDA: Fallback to first DAC 0x%x\n", dac_nid);
+        hda_probe_log("HDA: Fallback to first DAC 0x%x\n", dac_nid);
     }
 
     if (dac_nid == 0) {
-        k_printf("no DAC! ");
+        hda_probe_log("HDA: no DAC\n");
         return false;
     }
 
-    k_printf("dac=0x%x", dac_nid);
+    hda_probe_log("dac=0x%x", dac_nid);
     if (mixer_nid != 0) {
-        k_printf(" mix=0x%x", mixer_nid);
+        hda_probe_log(" mix=0x%x", mixer_nid);
     }
-    k_printf("\n");
+    hda_probe_log("\n");
 
     /* If we have a headphone pin, find its DAC too */
     if (hp_pin_nid != 0 && hp_pin_nid != pin_nid) {
@@ -1485,20 +1533,23 @@ static int hda_init(void)
     pci_device_t temp_pci;
     bool found_controller = false;
 
-    k_printf("\nHDA debug:\n");
+    k_strncpy(hda_boot_status, "Intel HD Audio", sizeof(hda_boot_status) - 1);
+    hda_boot_status[sizeof(hda_boot_status) - 1] = '\0';
+
+    hda_probe_log("\nHDA: init\n");
 
     /* Find HDA controller on PCI, skipping HDMI controllers */
     while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, skip_dev, &temp_pci)) {
-        k_printf("  Found PCI %x:%x", temp_pci.vendor_id, temp_pci.device_id);
+        hda_probe_log("HDA: Found PCI %x:%x", temp_pci.vendor_id, temp_pci.device_id);
 
         if (is_hdmi_controller(temp_pci.vendor_id, temp_pci.device_id)) {
-            k_printf(" (HDMI, skip)\n");
+            hda_probe_log(" (HDMI, skip)\n");
             hda_pci = temp_pci;  /* Save for next skip */
             skip_dev = &hda_pci;
             continue;
         }
 
-        k_printf(" (use)\n");
+        hda_probe_log(" (use)\n");
         hda_pci = temp_pci;
         found_controller = true;
         break;
@@ -1507,30 +1558,30 @@ static int hda_init(void)
     /* If all controllers were HDMI, try using the first one anyway */
     if (!found_controller) {
         if (!pci_find_device(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, &hda_pci)) {
-            k_printf("  No PCI audio device\n");
+            hda_probe_log("HDA: No PCI audio device\n");
             return -1;
         }
-        k_printf("  Fallback to %x:%x\n", hda_pci.vendor_id, hda_pci.device_id);
+        hda_probe_log("HDA: Fallback to %x:%x\n", hda_pci.vendor_id, hda_pci.device_id);
     }
 
-    k_printf("  Using %x:%x BAR0=", hda_pci.vendor_id, hda_pci.device_id);
+    hda_probe_log("HDA: Using %x:%x BAR0=", hda_pci.vendor_id, hda_pci.device_id);
 
     /* Get MMIO base from BAR0 */
     bar0 = pci_bar_address(hda_pci.bar[0]);
-    k_printf("0x%x\n", bar0);
+    hda_probe_log("0x%x\n", bar0);
     if (bar0 == 0) {
-        k_printf("  BAR0 invalid!\n");
+        hda_probe_log("HDA: BAR0 invalid\n");
         return -1;
     }
 
     /* Map MMIO region if above identity-mapped memory */
     if (bar0 >= HARD_MEMORY_LIMIT) {
-        k_printf("  Mapping MMIO...");
+        hda_probe_log("HDA: Mapping MMIO...");
         if (map_mmio(bar0, HDA_MMIO_SIZE) == 0) {
-            k_printf("FAIL\n");
+            hda_probe_log("FAIL\n");
             return -1;
         }
-        k_printf("OK\n");
+        hda_probe_log("OK\n");
     }
 
     hda_base = (volatile uint8_t *)(uintptr_t)bar0;
@@ -1547,25 +1598,25 @@ static int hda_init(void)
     hda_pci_force_d0(&hda_pci);
 
     /* Reset controller */
-    k_printf("  Reset...");
+    hda_probe_log("HDA: Reset...");
     if (!hda_reset()) {
-        k_printf("FAIL\n");
+        hda_probe_log("FAIL\n");
         return -1;
     }
-    k_printf("OK\n");
+    hda_probe_log("OK\n");
 
     /* Read capabilities */
     gcap = hda_read16(HDA_GCAP);
     num_output_streams = (gcap >> 12) & 0xF;
     num_input_streams = (gcap >> 8) & 0xF;
     num_bidir_streams = (gcap >> 3) & 0x1F;
-    k_printf("  GCAP=0x%x out=%d\n", gcap, num_output_streams);
+    hda_probe_log("HDA: GCAP=0x%x out=%d\n", gcap, num_output_streams);
 
     /* Output streams come after input streams in the descriptor array */
     output_stream_index = num_input_streams;
 
     if (num_output_streams == 0) {
-        k_printf("  No output streams!\n");
+        hda_probe_log("HDA: No output streams\n");
         return -1;
     }
 
@@ -1580,12 +1631,12 @@ static int hda_init(void)
     hda_delay(50000);
 
     /* Find audio output path */
-    k_printf("  Find output...");
+    hda_probe_log("HDA: Find output...");
     if (!hda_find_output()) {
-        k_printf("FAIL\n");
+        hda_probe_log("FAIL\n");
         return -1;
     }
-    k_printf("OK\n");
+    hda_probe_log("OK\n");
 
     /* Register IRQ handler */
     if (hda_pci.irq > 0 && hda_pci.irq < 16) {
@@ -1595,7 +1646,8 @@ static int hda_init(void)
         hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
     }
 
-    serial_printf("HDA: Initialization complete\n");
+    hda_build_boot_status();
+    hda_probe_log("HDA: Initialization complete\n");
     return 0;
 }
 
@@ -2165,44 +2217,18 @@ void hda_debug_dump_stats(void)
     hda_log("  stream: ctl=0x%x sts=0x%x fmt=0x%x\n", ctl, (uint32_t)sts, (uint32_t)fmt);
 }
 
-uint32_t hda_debug_get_lpib(void)
+bool hda_debug_get_stream_snapshot(hda_stream_debug_snapshot_t *out)
 {
-    if (!hda_base) {
-        return 0;
+    if (!hda_base || !out) {
+        return false;
     }
-    return hda_sd_read32(output_stream_index, HDA_SD_LPIB);
-}
 
-uint32_t hda_debug_get_cbl(void)
-{
-    if (!hda_base) {
-        return 0;
-    }
-    return hda_sd_read32(output_stream_index, HDA_SD_CBL);
-}
-
-uint32_t hda_debug_get_sd_ctl(void)
-{
-    if (!hda_base) {
-        return 0;
-    }
-    return hda_sd_read32(output_stream_index, HDA_SD_CTL);
-}
-
-uint8_t hda_debug_get_sd_sts(void)
-{
-    if (!hda_base) {
-        return 0;
-    }
-    return hda_read8(hda_sd_offset(output_stream_index) + HDA_SD_STS);
-}
-
-uint16_t hda_debug_get_sd_format(void)
-{
-    if (!hda_base) {
-        return 0;
-    }
-    return hda_read16(hda_sd_offset(output_stream_index) + HDA_SD_FORMAT);
+    out->lpib = hda_sd_read32(output_stream_index, HDA_SD_LPIB);
+    out->cbl = hda_sd_read32(output_stream_index, HDA_SD_CBL);
+    out->ctl = hda_sd_read32(output_stream_index, HDA_SD_CTL);
+    out->sts = hda_read8(hda_sd_offset(output_stream_index) + HDA_SD_STS);
+    out->fmt = hda_read16(hda_sd_offset(output_stream_index) + HDA_SD_FORMAT);
+    return true;
 }
 
 /*

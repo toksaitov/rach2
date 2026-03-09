@@ -2,9 +2,6 @@
 
 void k_putc(char c)
 {
-    unsigned char *video_memory;
-    uint16_t cursor_pos;
-
     if (c < 31 || c == 127) {
         switch(c) {
             case CHAR_BS:
@@ -34,11 +31,7 @@ void k_putc(char c)
     }
 
     if (c) {
-        video_memory = (unsigned char *) VIDEO_COLOR_TEXT_BUFFER;
-        video_memory += 2*(y*SCREEN_NUMBER_OF_COLUMNS + x);
-
-        *(video_memory++) = c; *video_memory = get_curr_color_attr();
-
+        vga_text_write_cell(x, y, c, get_curr_color_attr());
         ++x;
     }
 
@@ -48,12 +41,7 @@ void k_putc(char c)
         y = SCREEN_NUMBER_OF_ROWS - 1;
     }
 
-    cursor_pos = y*SCREEN_NUMBER_OF_COLUMNS + x;
-
-    outb(0x3D4, 0xE);
-    outb(0x3D5, cursor_pos >> 8);
-    outb(0x3D4, 0xF);
-    outb(0x3D5, cursor_pos);
+    vga_text_sync();
 }
 
 void k_puts(const char *str)

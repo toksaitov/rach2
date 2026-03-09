@@ -129,7 +129,7 @@ This produces a ~390KB freestanding ELF32 executable.
    > doom
    ```
 
-On supported real hardware, the same `doom` binary uses the kernel's HDA driver directly. Useful kernel-side audio debug commands during bring-up are `audiotest`, `audiowrite`, `hda`, `hdacodec`, `hdasense`, `hdastats`, `hdaout`, and `hdawatch`.
+On supported real hardware, the same `doom` binary uses the kernel's HDA driver directly. Useful kernel-side audio debug commands during bring-up live under the `audio` command: `audio test scale`, `audio test write`, `audio test watch 440 2000 100`, `audio hda dump`, `audio hda codec`, `audio hda pins`, `audio hda stats`, and `audio hda out primary`.
 
 ## Controls
 

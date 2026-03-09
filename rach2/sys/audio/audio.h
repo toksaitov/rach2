@@ -138,6 +138,11 @@ void shutdown_audio(void);
 const char *audio_get_driver_name(void);
 
 /*
+ * Get a short boot-time audio probe summary.
+ */
+const char *audio_get_boot_status(void);
+
+/*
  * Check if real audio (not PC speaker) is available
  */
 bool audio_has_real_output(void);
