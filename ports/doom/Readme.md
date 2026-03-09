@@ -48,7 +48,7 @@ The `doomgeneric_rach2.c` file implements the doomgeneric interface for Rach2:
 |--------------------|------------------------------------------------------------------|
 | `DG_Init`          | Opens framebuffer device, switches to Mode 13h, sets VGA palette |
 | `DG_DrawFrame`     | Writes 64000-byte framebuffer to VGA via write() syscall         |
-| `DG_GetTicksMs`    | Uses gettimeofday() syscall, converts ticks to milliseconds      |
+| `DG_GetTicksMs`    | Uses gettimeofday() syscall, converts kernel time to milliseconds|
 | `DG_SleepMs`       | Busy-waits using gettimeofday() for timing                       |
 | `DG_GetKey`        | Reads PS/2 scancodes via read(), maps to Doom keycodes           |
 | `DG_SetWindowTitle`| No-op (no window system)                                         |
@@ -65,7 +65,9 @@ The port uses a layered audio system with automatic hardware detection:
 2. **Sound Blaster 16** (ISA): 8-bit DMA, IRQ-driven double-buffering
 3. **PC Speaker** (fallback): PIT channel 2 frequency control
 
-Audio is output at 11025 Hz, 8-bit mono. DMX sound lumps from the WAD are parsed and played through the detected audio device.
+Doom itself mixes sound effects and music into 11025 Hz, 8-bit mono chunks and submits them through `AUDIO_WRITE`.
+
+On SB16 this format is consumed directly. On Intel HDA, the kernel may resample and upmix the stream to a codec-supported hardware format, typically 48 kHz, 16-bit stereo on real machines. DMX sound lumps from the WAD are parsed and mixed in software before being written to the selected audio device.
 
 ### Music
 
@@ -76,7 +78,7 @@ OPL3 FM synthesis provides the classic Doom music:
 * **MIDI/MUS**: Music format parsing from Chocolate Doom
 * **9-voice polyphony**: Full OPL3 voice management with pitch bend and modulation
 
-The OPL emulator runs at 49716 Hz and is resampled to 11025 Hz for output.
+The OPL emulator runs at 49716 Hz and is downsampled into Doom's 11025 Hz mono mixer before the mixed stream is handed to the kernel audio layer. On HDA, the kernel may resample that stream again to match the hardware codec.
 
 ## Required Syscalls
 
@@ -118,15 +120,16 @@ This produces a ~390KB freestanding ELF32 executable.
 3. Boot Rach2:
    ```sh
    cd rach2
-   qemu-system-i386 -kernel kernel -initrd ../krffs/file_system.krffs \
-       -audiodev pa,id=audio0 -machine pcspk-audiodev=audio0 \
-       -device sb16,audiodev=audio0
+   ./run_with_ram_disk.sh sb16   # Sound Blaster 16
+   ./run_with_ram_disk.sh hda    # Intel HD Audio
    ```
 
 4. Run from the shell:
    ```
    > doom
    ```
+
+On supported real hardware, the same `doom` binary uses the kernel's HDA driver directly. Useful kernel-side audio debug commands during bring-up are `audiotest`, `audiowrite`, `hda`, `hdacodec`, `hdasense`, `hdastats`, `hdaout`, and `hdawatch`.
 
 ## Controls
 
@@ -150,7 +153,7 @@ This produces a ~390KB freestanding ELF32 executable.
 * **WAD file**: ~4MB (doom1.wad)
 * **Heap**: 4MB bump allocator in crt0.c
 * **Framebuffer**: 64KB at 0xA0000
-* **Audio buffer**: 4KB DMA buffer
+* **Audio buffers**: Doom mixes in small 11025 Hz chunks; the kernel provides the larger DMA/ring buffers (for HDA this is roughly 32 KB of DMA plus an 8 KB write ring)
 
 Total: Requires at least 10MB of available memory.
 

@@ -47,6 +47,9 @@ cd rach2 && ./run_with_ram_disk.sh
 
 # Run with audio (Sound Blaster 16)
 cd rach2 && ./run_with_ram_disk.sh sb16
+
+# Run with Intel HD Audio
+cd rach2 && ./run_with_ram_disk.sh hda
 ```
 
 From the ISH shell prompt:

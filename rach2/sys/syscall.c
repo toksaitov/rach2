@@ -2004,8 +2004,16 @@ static void _syscall_handler(isr_params_t *params)
     uint32_t syscall_num = params->eax;
     int32_t ret = -1;
 
+    if (current_proc) {
+        current_proc->in_syscall = 1;
+    }
+
     if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
         ret = _syscall_table[syscall_num](params);
+    }
+
+    if (current_proc) {
+        current_proc->in_syscall = 0;
     }
 
     /* Store return value in EAX - will be restored by popal */

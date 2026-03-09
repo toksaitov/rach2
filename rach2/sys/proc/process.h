@@ -59,6 +59,7 @@ struct process {
     int32_t exit_code;      /* Exit status (for zombie) */
     fd_table_t fds;         /* File descriptor table */
     char cwd[CWD_MAX];      /* Current working directory (always "/" for KRFFS) */
+    volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
 };
 
 typedef struct process process_t;

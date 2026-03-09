@@ -350,52 +350,11 @@ static void PCSoundUpdate(void)
                 opl_sample_remainder = 0;
             }
 
-            /* Test OPL emulator directly with a simple tone
-             * Set to 1 to bypass MIDI and play a direct 440 Hz tone from OPL */
-#define OPL_DIRECT_TEST 0
-#if OPL_DIRECT_TEST
             if (opl_music_initialized && opl_samples_needed > 0) {
-                /* Use OPL emulator to generate samples - test if emulator works */
-                extern void OPL3_WriteReg(void *chip, uint16_t reg, uint8_t v);
-                extern void OPL3_GenerateStream(void *chip, int16_t *buf, uint32_t samples);
-                extern void *OPLMusic_GetChip(void);  /* Need to add this */
-                static int opl_test_init = 0;
-                void *chip = OPLMusic_GetChip();
-
-                if (chip && !opl_test_init) {
-                    /* Set up a simple OPL tone on channel 0:
-                     * This programs the OPL to play a basic sine wave */
-                    OPL3_WriteReg(chip, 0x20, 0x01);  /* Tremolo/vibrato/sustain/KSR/mult for op1 */
-                    OPL3_WriteReg(chip, 0x23, 0x01);  /* Same for op2 */
-                    OPL3_WriteReg(chip, 0x40, 0x10);  /* Key scale level / output level for op1 */
-                    OPL3_WriteReg(chip, 0x43, 0x00);  /* Output level for op2 (carrier) - full volume */
-                    OPL3_WriteReg(chip, 0x60, 0xF0);  /* Attack/decay for op1 */
-                    OPL3_WriteReg(chip, 0x63, 0xF0);  /* Attack/decay for op2 */
-                    OPL3_WriteReg(chip, 0x80, 0x77);  /* Sustain/release for op1 */
-                    OPL3_WriteReg(chip, 0x83, 0x77);  /* Sustain/release for op2 */
-                    OPL3_WriteReg(chip, 0xA0, 0x98);  /* Frequency low byte - ~440 Hz */
-                    OPL3_WriteReg(chip, 0xB0, 0x31);  /* Key on + frequency high + octave */
-                    OPL3_WriteReg(chip, 0xC0, 0x30);  /* Feedback + connection + output to L/R */
-                    opl_test_init = 1;
-                }
-
-                if (chip) {
-                    OPL3_GenerateStream(chip, opl_buffer, opl_samples_needed);
-                } else {
-                    opl_samples_needed = 0;
-                }
-            } else {
-                opl_samples_needed = 0;
-            }
-#else
-            if (opl_music_initialized && opl_samples_needed > 0) {
-                /* Always call GenerateSamples - it handles state internally
-                 * This is needed for test modes that bypass music_playing state */
                 OPLMusic_GenerateSamples(opl_buffer, opl_samples_needed);
             } else {
                 opl_samples_needed = 0;
             }
-#endif
 
             /* Mix all active channels into the buffer */
             for (j = 0; j < (int)chunk; j++) {

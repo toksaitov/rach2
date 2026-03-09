@@ -1150,6 +1150,13 @@ PCI audio controller with MMIO registers:
 
 The driver in `sys/audio/hda.c` uses PCI bus enumeration to find the controller, maps MMIO above 32MB using `map_mmio()`, and communicates with codecs via verb commands.
 
+For real hardware, the HDA path now also includes:
+
+* **Codec-aware output setup**: speaker and headphone pins, EAPD, GPIO, and connection selection
+* **DMA position tracking**: optional position buffer with automatic fallback to LPIB if the controller's position buffer is unreliable
+* **Write-path resampling**: write-based clients such as Doom can submit 11025 Hz 8-bit mono while the driver runs the hardware stream at a codec-supported format such as 48 kHz 16-bit stereo
+* **Bring-up diagnostics**: compact stats, codec dumps, pin-sense summaries, routing control, and DMA watch tools in the kernel debug shell
+
 ### PC Speaker (Fallback)
 
 Simple tone generation using PIT channel 2:
@@ -1293,6 +1300,14 @@ When the kernel boots (or when init exits), the debug shell is available:
 | `preempt`        | Test preemptive scheduler                   |
 | `isolate`        | Test memory isolation                       |
 | `usermode`       | Test ring 3 execution                       |
+| `audiotest`      | Play a scale test tone                      |
+| `audiowrite`     | Play a scale through `AUDIO_WRITE`          |
+| `hda`            | Dump HDA controller state                   |
+| `hdacodec`       | Dump HDA codec and pin state                |
+| `hdasense`       | Show HDA pin sense summary                  |
+| `hdastats`       | Show compact HDA playback stats             |
+| `hdaout <mode>`  | Force HDA output to `auto`, `primary`, `hp`, or `both` |
+| `hdawatch`       | Play a tone and print live HDA DMA progress |
 | `fault`          | Trigger a page fault (demonstrates panic)   |
 | `halt`           | Stop the CPU                                |
 

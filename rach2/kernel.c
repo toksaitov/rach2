@@ -65,7 +65,6 @@ static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
 static bool str_equal(const char *a, const char *b);
 static void boot_init_process(void);
-static void run_audio_test_tone(uint32_t freq_hz, uint32_t duration_ms);
 static void run_audio_test_scale(uint32_t duration_ms);
 static void run_audio_write_test_scale(uint32_t duration_ms);
 static void run_audio_watch_tone(uint32_t freq_hz, uint32_t duration_ms, uint32_t interval_ms);
@@ -85,9 +84,6 @@ static void exec_program(int argc, char *argv[]);
 
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
-
-/* Set to 1 while debugging real hardware audio bring-up. */
-#define AUDIO_DEBUG_BOOT_TONE 1
 
 /* Simple kernel-side audio test tone (used for HDA/SB16 debugging). */
 static volatile uint32_t _tone_phase = 0;
@@ -119,74 +115,6 @@ static void audio_test_callback(uint8_t *buffer, size_t size)
             out[i++] = s;
         }
     }
-}
-
-static void run_audio_test_tone(uint32_t freq_hz, uint32_t duration_ms)
-{
-    uint32_t start_ticks;
-    uint32_t end_ticks;
-    uint32_t sample_rate = 48000;
-    uint32_t period;
-    int channels = 2;
-
-    if (!audio) {
-        k_puts("No audio driver.");
-        return;
-    }
-
-    /* Stop any existing playback */
-    if (audio->is_playing && audio->is_playing()) {
-        audio->stop();
-    }
-
-    /* Square wave period in samples */
-    if (freq_hz == 0) freq_hz = 440;
-    period = sample_rate / freq_hz;
-    if (period < 2) period = 2;
-
-    _tone_channels = channels;
-    _tone_half_period = period / 2;
-    if (_tone_half_period == 0) _tone_half_period = 1;
-    _tone_phase = 0;
-    _tone_amp = 12000;
-
-    /* Use callback-driven audio so the kernel fills DMA buffers */
-    if (audio->set_callback) {
-        audio->set_callback(audio_test_callback);
-    }
-
-    if (audio->start(sample_rate, AUDIO_S16LE, channels) != 0) {
-        k_puts("AUDIO_START failed.");
-        if (audio->set_callback) audio->set_callback((audio_callback_t)0);
-        return;
-    }
-
-    if (audio->set_volume) {
-        audio->set_volume(80);
-    }
-
-    k_printf("Playing %d Hz test tone for %d ms using %s...\n", freq_hz, duration_ms, audio_get_driver_name());
-    if (audio->type == AUDIO_DRIVER_HDA) {
-        hda_debug_dump();
-        hda_debug_dump_codec();
-    }
-
-    /* Sleep using timer ticks (100 Hz => 10ms per tick) */
-    start_ticks = kernel_ticks;
-    end_ticks = start_ticks + (duration_ms / 10);
-    while (kernel_ticks < end_ticks) {
-        __asm__ __volatile__("hlt");
-    }
-
-    if (audio->type == AUDIO_DRIVER_HDA) {
-        hda_debug_dump();
-    }
-
-    audio->stop();
-    if (audio->set_callback) {
-        audio->set_callback((audio_callback_t)0);
-    }
-    k_puts("Done.");
 }
 
 static void run_audio_test_scale(uint32_t duration_ms)
@@ -507,8 +435,14 @@ static void timer_handler(isr_params_t *params)
     /* Service HDA audio even when legacy IRQs aren't delivered (MSI-only setups). */
     hda_tick();
 
-    /* Call the scheduler on every timer tick */
-    schedule();
+    /*
+     * Allow timer IRQs to run during syscalls so HDA streaming keeps working,
+     * but do not preempt a process while it is inside kernel syscall code.
+     * Kernel threads still remain preemptible.
+     */
+    if (!current_proc || !current_proc->in_syscall) {
+        schedule();
+    }
 }
 
 /* Shift key state for keyboard handler */
@@ -2484,14 +2418,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     k_printf(" OK (%s)\n", audio_get_driver_name());
     serial_printf(" OK (%s)\n", audio_get_driver_name());
     set_fore_color(light_grey);
-
-#if AUDIO_DEBUG_BOOT_TONE
-    if (audio && audio->type == AUDIO_DRIVER_HDA) {
-        k_puts("  HDA debug: boot test tone...");
-        serial_printf("  HDA debug: boot test tone...\n");
-        run_audio_test_tone(440, 1500);
-    }
-#endif
 
     /* Modules were already parsed early (before paging) - just display status */
     k_printf("  Modules...");

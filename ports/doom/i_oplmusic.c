@@ -886,22 +886,6 @@ void OPLMusic_UnRegisterSong(void *handle)
     }
 }
 
-/* Test mode: bypass MIDI and play a test note using voice management
- * Set to 1 to test if VoiceKeyOn/voice allocation works
- * Set to 2 to always play test melody (ignores music_playing state) */
-#define VOICE_TEST_MODE 0
-
-#if VOICE_TEST_MODE
-static boolean voice_test_active = false;
-static boolean voice_test_initialized = false;
-static uint32_t voice_test_samples = 0;
-static int voice_test_note_idx = 0;
-/* Test melody: C4, E4, G4, C5 (MIDI notes 60, 64, 67, 72) */
-static const int test_notes[] = { 60, 64, 67, 72, 67, 64 };
-#define TEST_NOTE_COUNT 6
-#define TEST_NOTE_DURATION (sample_rate / 2)  /* 0.5 seconds per note */
-#endif
-
 // Play song
 void OPLMusic_PlaySong(void *handle, boolean looping)
 {
@@ -916,26 +900,6 @@ void OPLMusic_PlaySong(void *handle, boolean looping)
 
     current_file = handle;
     song_looping = looping;
-
-#if VOICE_TEST_MODE
-    /* Test mode: ignore MIDI, just set up for test melody */
-    for (i = 0; i < 16; i++)
-    {
-        InitChannel(&channels[i]);
-    }
-    InitVoices();
-
-    voice_test_active = true;
-    voice_test_samples = 0;
-    voice_test_note_idx = 0;
-
-    /* Start first test note using voice management */
-    VoiceKeyOn(0, &main_instrs[0], 0, test_notes[0], test_notes[0], 127);
-
-    music_playing = true;
-    music_paused = false;
-    return;
-#endif
 
     // Get track iterator (we only support single-track type 0 MIDI)
     track_iter = MIDI_IterateTrack(current_file, 0);
@@ -1060,93 +1024,6 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
     int samples_generated = 0;
     int samples_to_generate;
 
-#if VOICE_TEST_MODE == 2
-    /* Mode 2: Always play test melody, regardless of music state */
-    if (!music_initialized)
-    {
-        memset(buffer, 0, num_samples * 2 * sizeof(int16_t));
-        return num_samples;
-    }
-
-    /* Initialize test melody on first call */
-    if (!voice_test_initialized)
-    {
-        int i;
-        for (i = 0; i < 16; i++)
-        {
-            InitChannel(&channels[i]);
-        }
-        InitVoices();
-        voice_test_active = true;
-        voice_test_samples = 0;
-        voice_test_note_idx = 0;
-        VoiceKeyOn(0, &main_instrs[0], 0, test_notes[0], test_notes[0], 127);
-        voice_test_initialized = true;
-    }
-
-    /* Generate OPL samples */
-    OPL3_GenerateStream(&opl_chip, buffer, num_samples);
-
-    /* Update timing and switch notes */
-    voice_test_samples += num_samples;
-    if (voice_test_samples >= TEST_NOTE_DURATION)
-    {
-        voice_test_samples = 0;
-
-        /* Release current note */
-        while (voice_alloced_num > 0)
-        {
-            ReleaseVoice(0);
-        }
-
-        /* Advance to next note */
-        voice_test_note_idx = (voice_test_note_idx + 1) % TEST_NOTE_COUNT;
-
-        /* Play next note */
-        VoiceKeyOn(0, &main_instrs[0], 0,
-                   test_notes[voice_test_note_idx],
-                   test_notes[voice_test_note_idx], 127);
-    }
-
-    return num_samples;
-
-#elif VOICE_TEST_MODE == 1
-    if (!music_initialized || !music_playing || music_paused)
-    {
-        memset(buffer, 0, num_samples * 2 * sizeof(int16_t));
-        return num_samples;
-    }
-
-    /* Test mode: just generate OPL samples and advance test melody */
-    if (voice_test_active)
-    {
-        /* Generate all samples */
-        OPL3_GenerateStream(&opl_chip, buffer, num_samples);
-
-        /* Update timing and switch notes */
-        voice_test_samples += num_samples;
-        if (voice_test_samples >= TEST_NOTE_DURATION)
-        {
-            voice_test_samples = 0;
-
-            /* Release current note */
-            while (voice_alloced_num > 0)
-            {
-                ReleaseVoice(0);
-            }
-
-            /* Advance to next note */
-            voice_test_note_idx = (voice_test_note_idx + 1) % TEST_NOTE_COUNT;
-
-            /* Play next note */
-            VoiceKeyOn(0, &main_instrs[0], 0,
-                       test_notes[voice_test_note_idx],
-                       test_notes[voice_test_note_idx], 127);
-        }
-
-        return num_samples;
-    }
-#else
     /* If music system not initialized, generate silence */
     if (!music_initialized)
     {
@@ -1160,7 +1037,6 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
         memset(buffer, 0, num_samples * 2 * sizeof(int16_t));
         return num_samples;
     }
-#endif
 
     while (samples_generated < num_samples)
     {
@@ -1245,13 +1121,4 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
 boolean OPLMusic_IsPlaying(void)
 {
     return music_playing && !music_paused;
-}
-
-// Get OPL chip pointer for direct testing
-void *OPLMusic_GetChip(void)
-{
-    if (music_initialized) {
-        return &opl_chip;
-    }
-    return NULL;
 }
