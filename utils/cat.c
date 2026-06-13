@@ -74,7 +74,7 @@ int main(int argc, char *argv[])
     } else {
         for (int i = 1; i < argc; ++i) {
             int fd = sys_open(argv[i], O_RDONLY, 0);
-            if (fd != -1) {
+            if (fd >= 0) {
                 cat_file(fd);
                 sys_close(fd);
             }

@@ -9,10 +9,19 @@
 
 .text
 
-# Offsets within process_t structure
+# Offsets within process_t structure. These mirror struct process in
+# proc/process.h and are asserted against offsetof() at boot (init_proc); new
+# PCB fields must be APPENDED so these stay valid.
 .set PROC_REGS_ESP, 48     # offset of regs.esp (pid=4 + state=4 + regs offset 40)
 .set PROC_CR3, 52          # offset of cr3 (page directory physical address)
 .set PROC_KERNEL_STACK, 56 # offset of kernel_stack
+.set PROC_TLS_BASE, 456    # offset of tls_base (appended after in_syscall)
+
+# Shared TLS GDT descriptor (mirrors GDT_TLS_ENTRY / GDT_TLS_SELECTOR in
+# tables/gdt.h): entry 6, so its 8-byte descriptor lives at gdt_descriptors+48;
+# the selector is (6 << 3) | 3 = 0x33.
+.set GDT_TLS_ENTRY,    6
+.set GDT_TLS_SELECTOR, 0x33
 
 .globl switch_context
 switch_context:
@@ -41,6 +50,26 @@ switch_context:
     # Reload pointers (stack changed after call)
     movl 20(%esp), %ebx         # old
     movl 24(%esp), %eax         # new
+
+    # Program the incoming process's TLS base into the shared GDT TLS descriptor
+    # (entry 6) and refresh %gs, so %gs-relative reads resolve to this process's
+    # TCB -- the i386 equivalent of Linux load_TLS() on __switch_to. Done with
+    # interrupts disabled (the switch can be entered from syscall context with
+    # IF=1) so a nested IRQ never observes a half-written descriptor. The actual
+    # gs/fs/es/ds the user runs with are restored from the trapframe by the
+    # IRQ/syscall epilogue; reloading %gs here keeps the CPU's hidden descriptor
+    # cache coherent with the just-rewritten base. eax (new) and ebx (old) are
+    # preserved; ecx/edx are scratch here and reloaded by the CR3 logic below.
+    movl PROC_TLS_BASE(%eax), %edx          # new->tls_base
+    pushfl
+    cli
+    movw %dx, gdt_descriptors + GDT_TLS_ENTRY * 8 + 2   # base bits 0-15
+    shrl $16, %edx
+    movb %dl, gdt_descriptors + GDT_TLS_ENTRY * 8 + 4   # base bits 16-23
+    movb %dh, gdt_descriptors + GDT_TLS_ENTRY * 8 + 7   # base bits 24-31
+    movw $GDT_TLS_SELECTOR, %cx
+    movw %cx, %gs
+    popfl
 
     # Check if we need to switch page directories
     movl PROC_CR3(%ebx), %ecx   # old->cr3

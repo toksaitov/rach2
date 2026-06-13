@@ -13,7 +13,7 @@ qemu-system-i386 -s -S -kernel kernel $AUDIO_OPTS $NET_OPTS &
 QEMU_PID=$!
 
 # Ensure QEMU is killed when this script exits
-trap "kill $QEMU_PID 2>/dev/null" EXIT INT TERM
+trap 'kill $QEMU_PID 2>/dev/null' EXIT INT TERM
 
 sleep 1
 

@@ -1,6 +1,13 @@
 #include "process.h"
 #include "../lib/kstring.h"
 #include "../fs/fd.h"
+#include "../panic.h"
+
+/*
+ * Offset of a PCB field, without pulling in <stddef.h> (whose size_t would
+ * clash with kdef.h). Pointer and uint32_t are the same width on i386.
+ */
+#define PCB_OFF(field) ((uint32_t)&((process_t *)0)->field)
 
 /*
  * Process table - all process slots
@@ -20,6 +27,17 @@ static uint32_t next_pid = 0;
 void init_proc(void)
 {
     uint32_t i;
+
+    /* switch.s hard-codes these PCB field offsets; assert they still match the
+     * struct so a future field insertion fails loudly here at boot instead of
+     * silently corrupting context switches. Keep in sync with the .set values
+     * in proc/switch.s. */
+    if (PCB_OFF(regs.esp) != 48 ||
+        PCB_OFF(cr3) != 52 ||
+        PCB_OFF(kernel_stack) != 56 ||
+        PCB_OFF(tls_base) != 456) {
+        k_panic("process_t layout drifted from switch.s offsets");
+    }
 
     /* Clear all process slots */
     for (i = 0; i < MAX_PROCS; i++) {

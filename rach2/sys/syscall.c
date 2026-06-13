@@ -6,10 +6,17 @@
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/elf.h"
+#include "proc/uimage.h"
+#include "proc/tls.h"
+#include "tables/gdt.h"
+#include "lib/krandom.h"
+#include "lib/kerrno.h"
 #include "fs/fd.h"
 #include "fs/krffs.h"
 #include "mm/paging.h"
 #include "mm/heap.h"
+#include "mm/usercopy.h"
+#include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/vga_gfx.h"
 #include "speaker.h"
@@ -48,6 +55,8 @@ void fb_release_if_owner(uint32_t pid)
  * ioctl request codes (Linux compatible subset)
  */
 #define KIOCSOUND      0x4B2F  /* Set PC speaker frequency (0 = off) */
+#define TCGETS         0x5401  /* Get terminal attributes (termios) */
+#define TIOCGWINSZ     0x5413  /* Get terminal window size */
 #define FB_MODE_13H    0x4601  /* Switch to VGA Mode 13h */
 #define FB_MODE_TEXT   0x4602  /* Switch back to text mode */
 #define FB_SETPALETTE  0x4603  /* Set 256-color palette (768 bytes) */
@@ -171,6 +180,16 @@ static int32_t sys_exit(isr_params_t *params)
     exiting_pid = current_proc->pid;
     is_init = (exiting_pid == init_pid && init_pid != 0);
 
+#ifdef RACH2_HARNESS
+    /* Harness build: the instant the probe (run as init) exits, report its status
+     * to QEMU's isa-debug-exit device and stop -- BEFORE schedule() can switch to
+     * a still-READY child and bypass this path, so the runner always reads a real
+     * exit code. */
+    if (is_init) {
+        harness_exit((uint8_t)status);
+    }
+#endif
+
     /* Mark process as zombie and store exit code */
     current_proc->state = PROC_ZOMBIE;
     current_proc->exit_code = status;
@@ -245,46 +264,64 @@ static int32_t sys_exit(isr_params_t *params)
  * Args: EBX = fd, ECX = buf, EDX = count
  * Returns: number of bytes written, or -1 on error
  */
-static int32_t sys_write(isr_params_t *params)
+static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 {
-    int fd = (int)params->ebx;
-    const char *buf = (const char *)params->ecx;
-    uint32_t count = params->edx;
     fd_entry_t *entry;
-    uint32_t i;
 
     if (!current_proc) {
-        return -1;
+        return -ESRCH;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry) {
-        return -1;
+        return -EBADF;
     }
 
     /* Socket fd - send to the network */
     if (entry->type == FD_TYPE_SOCKET) {
         if (!entry->sock) {
-            return -1;
+            return -EBADF;
         }
         if (entry->sock->type == SOCK_STREAM) {
             if (!user_access_ok((uint32_t)buf, count)) {
-                return -1;
+                return -EFAULT;
             }
-            return tcp_send(entry->sock, (const uint8_t *)buf, (int)count);
+            /* tcp_send copies the user buffer into socket send buffers itself;
+             * __force strips the __user tag at this boundary. */
+            return tcp_send(entry->sock, (const uint8_t __force *)buf, (int)count);
         }
         /* Datagram sockets send via sendto(). */
-        return -1;
+        return -EOPNOTSUPP;
     }
 
     /* Console fd - write to VGA and serial */
     if (entry->type == FD_TYPE_CONSOLE) {
+        char kbuf[256];
+        uint32_t done = 0;
+
         if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -1;  /* Not writable (e.g., stdin) */
+            return -EBADF;  /* Not writable (e.g., stdin) */
         }
-        for (i = 0; i < count; i++) {
-            k_putc(buf[i]);
-            serial_putc(buf[i]);
+
+        /* Pull the user bytes in through a small kernel bounce buffer, then emit
+         * from kernel memory, looping until count bytes are done. A bad user
+         * pointer yields -EFAULT only if nothing has been written yet (otherwise
+         * report the bytes already emitted, matching the return-count convention). */
+        while (done < count) {
+            uint32_t chunk = count - done;
+            uint32_t i;
+
+            if (chunk > sizeof(kbuf)) {
+                chunk = sizeof(kbuf);
+            }
+            if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
+                return (done > 0) ? (int32_t)done : -EFAULT;
+            }
+            for (i = 0; i < chunk; i++) {
+                k_putc(kbuf[i]);
+                serial_putc(kbuf[i]);
+            }
+            done += chunk;
         }
         return (int32_t)count;
     }
@@ -295,18 +332,24 @@ static int32_t sys_write(isr_params_t *params)
         const char *path;
 
         if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -1;  /* Not opened for writing */
+            return -EBADF;  /* Not opened for writing */
         }
 
         if (!entry->node) {
-            return -1;
+            return -EBADF;
         }
 
-        path = (const char *)entry->node->name;
-        written = krffs_write(path, buf, count, entry->offset);
-        if (written > 0) {
-            entry->offset += (uint32_t)written;
+        /* krffs_write reads the user buffer directly, so range-check it first
+         * (as the socket path does) before stripping the __user tag. */
+        if (!user_access_ok((uint32_t)(__force uintptr_t)buf, count)) {
+            return -EFAULT;
         }
+        path = (const char *)entry->node->name;
+        written = krffs_write(path, (const char __force *)buf, count, entry->offset);
+        if (written < 0) {
+            return -EIO;  /* krffs reports failure with a bare -1 */
+        }
+        entry->offset += (uint32_t)written;
         return written;
     }
 
@@ -315,7 +358,7 @@ static int32_t sys_write(isr_params_t *params)
         uint32_t to_copy;
 
         if (!vga_graphics_mode) {
-            return -1;  /* Not in graphics mode */
+            return -EBADF;  /* Not in graphics mode */
         }
 
         /* Limit to framebuffer size */
@@ -325,12 +368,88 @@ static int32_t sys_write(isr_params_t *params)
         }
 
         /* Copy pixel data to framebuffer */
-        k_memcpy((void *)VGA_FRAMEBUFFER, buf, to_copy);
+        if (copy_from_user((void *)VGA_FRAMEBUFFER, (const void __user *)buf, to_copy) != 0) {
+            return -EFAULT;
+        }
 
         return (int32_t)to_copy;
     }
 
-    return -1;
+    return -EBADF;
+}
+
+/*
+ * sys_write - write to a file descriptor (write(2))
+ * Args: EBX = fd, ECX = buf, EDX = count
+ * Returns: number of bytes written, or a negative errno
+ */
+static int32_t sys_write(isr_params_t *params)
+{
+    return write_fd((int)params->ebx, (const char __user *)params->ecx, params->edx);
+}
+
+/*
+ * sys_writev - gather write (writev(2)). musl's buffered stdio (printf) emits
+ * its output through this call.
+ * Args: EBX = fd, ECX = pointer to struct iovec[], EDX = iovcnt
+ * Returns: total bytes written across the iovecs, or a negative errno.
+ */
+struct kernel_iovec {
+    uint32_t iov_base;
+    uint32_t iov_len;
+};
+
+#define IOV_MAX_LOCAL 1024
+
+static int32_t sys_writev(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    uint32_t iov_user = params->ecx;
+    int iovcnt = (int)params->edx;
+    struct kernel_iovec iov;
+    int32_t total = 0;
+    int i;
+
+    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
+        return -EINVAL;
+    }
+
+    for (i = 0; i < iovcnt; i++) {
+        int32_t r;
+
+        /* On any fault once bytes were already emitted, report the partial total
+         * (a caller that retried would otherwise duplicate output); only report
+         * the error itself when nothing has been written yet. */
+        if (copy_from_user(&iov,
+                           (const void __user *)(iov_user +
+                               (uint32_t)i * sizeof(struct kernel_iovec)),
+                           sizeof(iov)) != 0) {
+            return (total > 0) ? total : -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        /* An individual length past the signed range, or a running total that
+         * would overflow it, is rejected as Linux does (-EINVAL). */
+        if (iov.iov_len > 0x7FFFFFFFu ||
+            (uint32_t)total > 0x7FFFFFFFu - iov.iov_len) {
+            return (total > 0) ? total : -EINVAL;
+        }
+        if (!user_access_ok(iov.iov_base, iov.iov_len)) {
+            return (total > 0) ? total : -EFAULT;
+        }
+
+        r = write_fd(fd, (const char __user *)iov.iov_base, iov.iov_len);
+        if (r < 0) {
+            return (total > 0) ? total : r;
+        }
+        total += r;
+        if ((uint32_t)r < iov.iov_len) {
+            break;  /* short write -- stop, as writev does */
+        }
+    }
+
+    return total;
 }
 
 /*
@@ -346,19 +465,28 @@ static int32_t sys_write(isr_params_t *params)
 
 static int32_t sys_open(isr_params_t *params)
 {
-    const char *path = (const char *)params->ebx;
+    const char __user *path = (const char __user *)params->ebx;
     int flags = (int)params->ecx;
     fd_entry_t *entry;
     krffs_node_t *node;
+    char pathbuf[256];
     const char *name;
+    int len;
     int fd;
 
     if (!current_proc || !path) {
-        return -1;
+        return -EFAULT;
+    }
+
+    /* Copy the path into a kernel buffer; a bad user pointer or an over-long
+     * path is reported with the errno strncpy_from_user returns. */
+    len = strncpy_from_user(pathbuf, path, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
     }
 
     /* Skip leading '/' if present */
-    name = path;
+    name = pathbuf;
     if (name[0] == '/') {
         name++;
     }
@@ -367,13 +495,13 @@ static int32_t sys_open(isr_params_t *params)
     if (name[0] == 'f' && name[1] == 'b' && name[2] == '\0') {
         /* Only one process can own the framebuffer */
         if (fb_owner_pid != 0 && fb_owner_pid != current_proc->pid) {
-            return -1;  /* Already in use */
+            return -EBUSY;  /* Already in use */
         }
 
         /* Allocate fd for framebuffer */
         fd = fd_alloc(&current_proc->fds);
         if (fd < 0) {
-            return -1;
+            return -EMFILE;
         }
 
         entry = &current_proc->fds.entries[fd];
@@ -397,13 +525,13 @@ static int32_t sys_open(isr_params_t *params)
         name[3] == 's' && name[4] == 'e' && name[5] == '\0') {
         /* Check if mouse is available */
         if (!mouse_is_available()) {
-            return -1;  /* Mouse not initialized */
+            return -ENODEV;  /* Mouse not initialized */
         }
 
         /* Allocate fd for mouse */
         fd = fd_alloc(&current_proc->fds);
         if (fd < 0) {
-            return -1;
+            return -EMFILE;
         }
 
         entry = &current_proc->fds.entries[fd];
@@ -425,7 +553,7 @@ static int32_t sys_open(isr_params_t *params)
         /* Opening root directory - allocate fd as directory type */
         fd = fd_alloc(&current_proc->fds);
         if (fd < 0) {
-            return -1;
+            return -EMFILE;
         }
 
         entry = &current_proc->fds.entries[fd];
@@ -444,15 +572,15 @@ static int32_t sys_open(isr_params_t *params)
         if (flags & O_CREAT) {
             /* Create the file */
             if (krffs_create(name) != 0) {
-                return -1;  /* Failed to create file */
+                return -ENOSPC;  /* Failed to create file */
             }
             /* Now find the newly created node */
             node = krffs_find_reserved_node_by_name(krffs_fs, name);
             if (!node) {
-                return -1;  /* Shouldn't happen, but check anyway */
+                return -EIO;  /* Shouldn't happen, but check anyway */
             }
         } else {
-            return -1;  /* File not found and O_CREAT not set */
+            return -ENOENT;  /* File not found and O_CREAT not set */
         }
     } else if (flags & O_TRUNC) {
         /* File exists and O_TRUNC set - truncate to 0 length */
@@ -462,7 +590,7 @@ static int32_t sys_open(isr_params_t *params)
     /* Allocate a file descriptor */
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
-        return -1;  /* No free fds */
+        return -EMFILE;  /* No free fds */
     }
 
     /* Set up the fd entry */
@@ -495,12 +623,12 @@ static int32_t sys_close(isr_params_t *params)
     fd_entry_t *entry;
 
     if (!current_proc) {
-        return -1;
+        return -ESRCH;
     }
 
     /* Don't allow closing stdin/stdout/stderr */
     if (fd < 3) {
-        return -1;
+        return -EBADF;
     }
 
     /* Check if this is the framebuffer - need to restore text mode */
@@ -516,7 +644,12 @@ static int32_t sys_close(isr_params_t *params)
         socket_unref(entry->sock);
     }
 
-    return fd_free(&current_proc->fds, fd);
+    /* fd_free reports a bad/unallocated descriptor with -1; translate to the
+     * close(2) errno. */
+    if (fd_free(&current_proc->fds, fd) != 0) {
+        return -EBADF;
+    }
+    return 0;
 }
 
 /*
@@ -534,17 +667,17 @@ static int32_t sys_lseek(isr_params_t *params)
     int32_t new_offset;
 
     if (!current_proc) {
-        return -1;
+        return -ESRCH;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_FILE) {
-        return -1;
+        return -EBADF;
     }
 
     /* Get file size from the node */
     if (!entry->node) {
-        return -1;
+        return -EBADF;
     }
     file_size = (uint32_t)entry->node->data_size;
 
@@ -560,12 +693,12 @@ static int32_t sys_lseek(isr_params_t *params)
             new_offset = (int32_t)file_size + offset;
             break;
         default:
-            return -1;
+            return -EINVAL;
     }
 
     /* Validate new offset */
     if (new_offset < 0) {
-        return -1;
+        return -EINVAL;
     }
 
     entry->offset = (uint32_t)new_offset;
@@ -585,36 +718,38 @@ static int32_t sys_lseek(isr_params_t *params)
 static int32_t sys_read(isr_params_t *params)
 {
     int fd = (int)params->ebx;
-    char *buf = (char *)params->ecx;
+    char __user *buf = (char __user *)params->ecx;
     uint32_t count = params->edx;
     fd_entry_t *entry;
     uint32_t bytes_to_copy;
 
     if (!current_proc || !buf) {
-        return -1;
+        return -EFAULT;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry) {
-        return -1;
+        return -EBADF;
     }
 
     /* Socket fd - receive from the network */
     if (entry->type == FD_TYPE_SOCKET) {
         if (!entry->sock || !user_access_ok((uint32_t)buf, count)) {
-            return -1;
+            return -EFAULT;
         }
+        /* socket_recv/socket_tcp_recv write straight into the validated user
+         * buffer; __force strips the __user tag at the boundary. */
         if (entry->sock->type == SOCK_DGRAM) {
-            return socket_recv(entry->sock, (uint8_t *)buf, (int)count,
+            return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count,
                                NULL, NULL);
         }
-        return socket_tcp_recv(entry->sock, (uint8_t *)buf, (int)count);
+        return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count);
     }
 
     /* Console fd (stdin) - blocking read with line buffering */
     if (entry->type == FD_TYPE_CONSOLE) {
         if (!(entry->flags & FD_FLAG_READ)) {
-            return -1;  /* Not readable (e.g., stdout/stderr) */
+            return -EBADF;  /* Not readable (e.g., stdout/stderr) */
         }
 
         /*
@@ -622,8 +757,13 @@ static int32_t sys_read(isr_params_t *params)
          * raw scancode input for game controls.
          */
         if (fb_owner_pid == current_proc->pid) {
-            /* Non-blocking raw scancode read for games */
-            return kbd_read_scancodes((uint8_t *)buf, (int)count);
+            /* Non-blocking raw scancode read for games. kbd_read_scancodes
+             * writes into the user buffer; range-check it first, then __force
+             * strips the __user tag at the boundary. */
+            if (!user_access_ok((uint32_t)buf, count)) {
+                return -EFAULT;
+            }
+            return kbd_read_scancodes((uint8_t __force *)buf, (int)count);
         }
 
         /*
@@ -709,7 +849,12 @@ static int32_t sys_read(isr_params_t *params)
             bytes_to_copy = count;
         }
 
-        k_memcpy(buf, stdin_buffer, bytes_to_copy);
+        if (copy_to_user(buf, stdin_buffer, bytes_to_copy) != 0) {
+            /* Reset stdin state even on a bad user buffer. */
+            stdin_pos = 0;
+            stdin_ready = false;
+            return -EFAULT;
+        }
 
         /* Reset stdin state */
         stdin_pos = 0;
@@ -729,8 +874,14 @@ static int32_t sys_read(isr_params_t *params)
             return 0;  /* Buffer too small for even one packet */
         }
 
-        /* Read packets from the mouse ring buffer */
-        packets_read = mouse_read_packets((struct mouse_packet *)buf, packets_requested);
+        /* Read packets from the mouse ring buffer. mouse_read_packets writes
+         * into the user buffer; range-check it, then __force at the boundary. */
+        if (!user_access_ok((uint32_t)buf,
+                            (uint32_t)packets_requested * sizeof(struct mouse_packet))) {
+            return -EFAULT;
+        }
+        packets_read = mouse_read_packets((struct mouse_packet __force *)buf,
+                                          packets_requested);
 
         return packets_read * (int32_t)sizeof(struct mouse_packet);
     }
@@ -741,22 +892,28 @@ static int32_t sys_read(isr_params_t *params)
         const char *path;
 
         if (!(entry->flags & FD_FLAG_READ)) {
-            return -1;  /* Not opened for reading */
+            return -EBADF;  /* Not opened for reading */
         }
 
         if (!entry->node) {
-            return -1;
+            return -EBADF;
         }
 
-        path = (const char *)entry->node->name;
-        bytes_read = krffs_read(path, buf, count, entry->offset);
-        if (bytes_read > 0) {
-            entry->offset += (uint32_t)bytes_read;
+        /* krffs_read writes straight into the user buffer, so range-check it
+         * before stripping the __user tag. */
+        if (!user_access_ok((uint32_t)(__force uintptr_t)buf, count)) {
+            return -EFAULT;
         }
+        path = (const char *)entry->node->name;
+        bytes_read = krffs_read(path, (char __force *)buf, count, entry->offset);
+        if (bytes_read < 0) {
+            return -EIO;  /* krffs reports failure with a bare -1 */
+        }
+        entry->offset += (uint32_t)bytes_read;
         return bytes_read;
     }
 
-    return -1;
+    return -EBADF;
 }
 
 /*
@@ -772,18 +929,18 @@ static int32_t sys_dup2(isr_params_t *params)
     fd_entry_t *new_entry;
 
     if (!current_proc) {
-        return -1;
+        return -ESRCH;
     }
 
     /* Validate oldfd */
     old_entry = fd_get(&current_proc->fds, oldfd);
     if (!old_entry) {
-        return -1;
+        return -EBADF;
     }
 
     /* Validate newfd range */
     if (newfd < 0 || newfd >= MAX_FDS) {
-        return -1;
+        return -EBADF;
     }
 
     /* If oldfd == newfd, just return newfd */
@@ -827,11 +984,21 @@ static int32_t sys_dup2(isr_params_t *params)
  */
 static int32_t sys_chdir(isr_params_t *params)
 {
-    const char *path = (const char *)params->ebx;
+    const char __user *upath = (const char __user *)params->ebx;
+    char pathbuf[256];
+    char *path;
+    int len;
 
-    if (!current_proc || !path) {
-        return -1;
+    if (!current_proc || !upath) {
+        return -EFAULT;
     }
+
+    /* Copy the path into a kernel buffer and work on the copy. */
+    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+    path = pathbuf;
 
     /* Handle root directory */
     if (path[0] == '/' && path[1] == '\0') {
@@ -861,11 +1028,11 @@ static int32_t sys_chdir(isr_params_t *params)
     /* Check if path is a file (ENOTDIR) or doesn't exist (ENOENT) */
     if (krffs_fs && krffs_open(path) == 0) {
         /* File exists - it's a file, not a directory */
-        return -1;  /* ENOTDIR */
+        return -ENOTDIR;  /* ENOTDIR */
     }
 
     /* Path doesn't exist */
-    return -1;  /* ENOENT */
+    return -ENOENT;  /* ENOENT */
 }
 
 /*
@@ -875,23 +1042,34 @@ static int32_t sys_chdir(isr_params_t *params)
  */
 static int32_t sys_getcwd(isr_params_t *params)
 {
-    char *buf = (char *)params->ebx;
+    char __user *buf = (char __user *)params->ebx;
     uint32_t size = params->ecx;
     uint32_t cwd_len;
 
-    if (!current_proc || !buf || size == 0) {
-        return 0;  /* NULL */
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (!buf) {
+        return -EFAULT;
+    }
+    if (size == 0) {
+        return -EINVAL;
     }
 
     cwd_len = k_strlen(current_proc->cwd);
     if (cwd_len + 1 > size) {
-        return 0;  /* Buffer too small */
+        return -ERANGE;  /* buffer too small for the path + NUL */
     }
 
     /* Copy cwd to user buffer */
-    k_memcpy(buf, current_proc->cwd, cwd_len + 1);
+    if (copy_to_user(buf, current_proc->cwd, cwd_len + 1) != 0) {
+        return -EFAULT;
+    }
 
-    return (int32_t)buf;
+    /* Linux getcwd(2) returns the length including the NUL on success. (Returning
+     * the buffer pointer would be misread as an errno for high user addresses
+     * whose top bit is set.) */
+    return (int32_t)(cwd_len + 1);
 }
 
 /*
@@ -956,55 +1134,71 @@ struct linux_stat64 {
  */
 static int32_t sys_stat64(isr_params_t *params)
 {
-    const char *path = (const char *)params->ebx;
-    struct linux_stat64 *st = (struct linux_stat64 *)params->ecx;
+    const char __user *path = (const char __user *)params->ebx;
+    struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->ecx;
+    struct linux_stat64 kst;
+    char pathbuf[256];
     const char *name;
     krffs_node_t *node;
+    int len;
 
     if (!current_proc || !path || !st) {
-        return -1;
+        return -EFAULT;
     }
 
-    /* Clear the stat structure */
-    k_memset(st, 0, sizeof(struct linux_stat64));
+    /* Copy the path into a kernel buffer first. */
+    len = strncpy_from_user(pathbuf, path, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+
+    /* Build the result in a kernel struct, then copy it out in one shot. */
+    k_memset(&kst, 0, sizeof(kst));
 
     /* Handle root directory "/" */
-    if ((path[0] == '/' && path[1] == '\0') || path[0] == '\0') {
-        st->st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
-        st->st_nlink = 1;
-        st->st_ino = 0;  /* Root inode is 0 */
-        st->st_blksize = 4096;
+    if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
+        kst.st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
+        kst.st_nlink = 1;
+        kst.st_ino = 0;  /* Root inode is 0 */
+        kst.st_blksize = 4096;
+        if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+            return -EFAULT;
+        }
         return 0;
     }
 
     /* Skip leading '/' if present */
-    name = path;
+    name = pathbuf;
     if (name[0] == '/') {
         name++;
     }
 
     /* Find the file in KRFFS */
     if (!krffs_fs) {
-        return -1;
+        return -ENOENT;
     }
 
     node = krffs_find_reserved_node_by_name(krffs_fs, name);
     if (!node) {
-        return -1;  /* File not found */
+        return -ENOENT;  /* File not found */
     }
 
     /* Fill stat structure */
-    st->st_mode = S_IFREG | (node->mode & 0777);  /* Regular file + permissions */
-    st->st_nlink = 1;                              /* Always 1 for KRFFS */
-    st->st_uid = node->uid;
-    st->st_gid = node->gid;
-    st->st_size = (long long)node->data_size;
-    st->st_blksize = 4096;
-    st->st_blocks = (node->data_size + 511) / 512;
+    kst.st_mode = S_IFREG | (node->mode & 0777);  /* Regular file + permissions */
+    kst.st_nlink = 1;                              /* Always 1 for KRFFS */
+    kst.st_uid = node->uid;
+    kst.st_gid = node->gid;
+    kst.st_size = (long long)node->data_size;
+    kst.st_blksize = 4096;
+    kst.st_blocks = (node->data_size + 511) / 512;
 
     /* Use node's DJB hash as inode number */
-    st->st_ino = node->id;
-    st->__st_ino = (unsigned long)node->id;
+    kst.st_ino = node->id;
+    kst.__st_ino = (unsigned long)node->id;
+
+    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+        return -EFAULT;
+    }
 
     return 0;
 }
@@ -1019,54 +1213,70 @@ static int32_t sys_stat64(isr_params_t *params)
  */
 static int32_t sys_stat(isr_params_t *params)
 {
-    const char *path = (const char *)params->ebx;
-    struct linux_stat *st = (struct linux_stat *)params->ecx;
+    const char __user *path = (const char __user *)params->ebx;
+    struct linux_stat __user *st = (struct linux_stat __user *)params->ecx;
+    struct linux_stat kst;
+    char pathbuf[256];
     const char *name;
     krffs_node_t *node;
+    int len;
 
     if (!current_proc || !path || !st) {
-        return -1;
+        return -EFAULT;
     }
 
-    /* Clear the stat structure */
-    k_memset(st, 0, sizeof(struct linux_stat));
+    /* Copy the path into a kernel buffer first. */
+    len = strncpy_from_user(pathbuf, path, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+
+    /* Build the result in a kernel struct, then copy it out in one shot. */
+    k_memset(&kst, 0, sizeof(kst));
 
     /* Handle root directory "/" */
-    if ((path[0] == '/' && path[1] == '\0') || path[0] == '\0') {
-        st->st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
-        st->st_nlink = 1;
-        st->st_ino = 0;  /* Root inode is 0 */
-        st->st_blksize = 4096;
+    if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
+        kst.st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
+        kst.st_nlink = 1;
+        kst.st_ino = 0;  /* Root inode is 0 */
+        kst.st_blksize = 4096;
+        if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+            return -EFAULT;
+        }
         return 0;
     }
 
     /* Skip leading '/' if present */
-    name = path;
+    name = pathbuf;
     if (name[0] == '/') {
         name++;
     }
 
     /* Find the file in KRFFS */
     if (!krffs_fs) {
-        return -1;
+        return -ENOENT;
     }
 
     node = krffs_find_reserved_node_by_name(krffs_fs, name);
     if (!node) {
-        return -1;  /* File not found */
+        return -ENOENT;  /* File not found */
     }
 
     /* Fill stat structure */
-    st->st_mode = S_IFREG | (node->mode & 0777);  /* Regular file + permissions */
-    st->st_nlink = 1;                              /* Always 1 for KRFFS */
-    st->st_uid = (unsigned short)node->uid;
-    st->st_gid = (unsigned short)node->gid;
-    st->st_size = (unsigned long)node->data_size;
-    st->st_blksize = 4096;
-    st->st_blocks = (node->data_size + 511) / 512;
+    kst.st_mode = S_IFREG | (node->mode & 0777);  /* Regular file + permissions */
+    kst.st_nlink = 1;                              /* Always 1 for KRFFS */
+    kst.st_uid = (unsigned short)node->uid;
+    kst.st_gid = (unsigned short)node->gid;
+    kst.st_size = (unsigned long)node->data_size;
+    kst.st_blksize = 4096;
+    kst.st_blocks = (node->data_size + 511) / 512;
 
     /* Use node's DJB hash as inode number */
-    st->st_ino = (unsigned long)node->id;
+    kst.st_ino = (unsigned long)node->id;
+
+    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+        return -EFAULT;
+    }
 
     return 0;
 }
@@ -1154,61 +1364,167 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
  * Kernel stack is only 16KB, so large buffers cause stack overflow.
  * Increased to 512KB to support Doom (368KB).
  */
-static char _exec_elf_buffer[512 * 1024];
+/* elf_read_fn over a KRFFS file (ctx is the path): lets the segment loader pull
+ * the ELF header, program headers, and each PT_LOAD straight from the file. */
+static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
+{
+    return krffs_read((const char *)ctx, (char *)dst, count, off);
+}
+
 static char _exec_path_buf[64];
 static char _exec_argv_storage[512];
 static char *_exec_argv_bufs[16];
+static char _exec_envp_storage[512];
+static char *_exec_envp_bufs[16];
+
+/* A failed exec has already torn down the old address space, so the process
+ * cannot continue. Mark it a zombie, wake any parent waiting on it (giving the
+ * scheduler a target), switch away, and -- as a backstop -- never iret back
+ * into the destroyed space. */
+static void exec_fail_destroyed(void)
+{
+    process_t *parent;
+    page_dir_t *dir;
+
+    current_proc->state = PROC_ZOMBIE;
+    current_proc->exit_code = -1;
+
+    /* Wake a parent blocked in wait() so the scheduler has a target. */
+    parent = get_process(current_proc->parent_pid);
+    if (parent && parent->state == PROC_BLOCKED) {
+        parent->state = PROC_READY;
+    }
+    schedule();
+
+    /* schedule() returned -> nothing else is runnable. The address space is
+     * gone, so we cannot iret back. Tear the dead process down and resume the
+     * kernel debug shell on a fresh kernel stack, exactly as the init-exit path
+     * does -- never deadlock, never return into freed userspace. */
+    if (current_proc->pid == init_pid) {
+        init_pid = 0;
+    }
+    /* Switch to the kernel directory BEFORE freeing the dead one, otherwise
+     * free_page_directory() refuses the still-active directory and leaks it. */
+    sched_disable();
+    switch_page_directory(_kernel_dir);
+    if (current_proc->cr3 != 0) {
+        dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
+        free_user_pages(dir);
+        free_page_directory(dir);
+    }
+    free_process(current_proc);
+    current_proc = &proc_table[0];
+    current_proc->state = PROC_RUNNING;
+    __asm__ __volatile__("movl %0, %%esp\n\t"
+                         "sti\n\t"
+                         "jmp *%1\n\t"
+                         :
+                         : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
+                           "r"((uint32_t)shell_loop)
+                         : "memory");
+}
 
 static int32_t sys_execve(isr_params_t *params)
 {
-    const char *user_path = (const char *)params->ebx;
-    char *const *user_argv = (char *const *)params->ecx;
-    /* char *const *user_envp = (char *const *)params->edx; */  /* Unused for now */
+    const char __user *user_path = (const char __user *)params->ebx;
+    char *const __user *user_argv = (char *const __user *)params->ecx;
+    char *const __user *user_envp = (char *const __user *)params->edx;
 
     int argc = 0;
+    int envc = 0;
     uint32_t argv_offset = 0;
+    uint32_t envp_offset = 0;
 
-    uint32_t file_size;
-    int bytes_read;
     uint32_t entry_point;
+    elf_image_t img;
+    uint8_t random16[16];
     page_dir_t *proc_dir;
     uintptr_t stack_phys;
-    uint32_t *sp;
-    uint32_t strings_start;
-    uint32_t argv_ptrs_start;
     const char *name;
-    int i;
+    int len;
 
     if (!current_proc) {
-        return -1;
+        return -ESRCH;
     }
 
-    /* Copy path from user space */
+    /* Copy the path from user space with the fault-safe byte-by-byte helper. A
+     * bad user pointer or an over-long path is rejected by its return value, so a
+     * kernel-range pointer cannot leak kernel memory. Same 63-char bound as
+     * before (sizeof(_exec_path_buf) == 64, NUL included). */
     if (!user_path) {
-        return -1;
+        return -EFAULT;
     }
-    for (i = 0; i < 63 && user_path[i]; i++) {
-        _exec_path_buf[i] = user_path[i];
+    len = strncpy_from_user(_exec_path_buf, user_path, sizeof(_exec_path_buf));
+    if (len < 0) {
+        return len;
     }
-    _exec_path_buf[i] = '\0';
 
-    /* Copy argv from user space */
+    /* Copy argv from user space, range-checking every user pointer and bounding
+     * the cumulative offset so _exec_argv_storage cannot overflow. An argument
+     * that does not fit fails the exec rather than being silently truncated. The
+     * pointer array and each string are now read through the copy helpers, which
+     * fault-check each access; the bounds and validation order are unchanged. */
     if (user_argv) {
-        for (argc = 0; argc < 15 && user_argv[argc]; argc++) {
-            const char *arg = user_argv[argc];
-            int len = 0;
+        for (argc = 0; argc < 15; argc++) {
+            uint32_t arg_ptr = 0;
+            int r;
 
-            /* Copy string to static argv storage */
-            _exec_argv_bufs[argc] = &_exec_argv_storage[argv_offset];
-            while (arg[len] && argv_offset + len < 511) {
-                _exec_argv_storage[argv_offset + len] = arg[len];
-                len++;
+            /* Read the argv[argc] pointer out of the user array. */
+            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[argc],
+                               sizeof(arg_ptr)) != 0) {
+                return -EFAULT;
             }
-            _exec_argv_storage[argv_offset + len] = '\0';
-            argv_offset += len + 1;
+            if (arg_ptr == 0) {
+                break;  /* NULL terminator */
+            }
+            if (argv_offset >= sizeof(_exec_argv_storage)) {
+                return -EFAULT;
+            }
+            _exec_argv_bufs[argc] = &_exec_argv_storage[argv_offset];
+            r = strncpy_from_user(&_exec_argv_storage[argv_offset],
+                                  (const char __user *)arg_ptr,
+                                  sizeof(_exec_argv_storage) - argv_offset);
+            if (r == -EFAULT) {
+                return -EFAULT;
+            }
+            if (r < 0) {
+                return -E2BIG; /* did not fit */
+            }
+            argv_offset += (uint32_t)r + 1;
         }
     }
     _exec_argv_bufs[argc] = NULL;
+
+    /* Copy the real envp the same way. */
+    if (user_envp) {
+        for (envc = 0; envc < 15; envc++) {
+            uint32_t env_ptr = 0;
+            int r;
+
+            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[envc],
+                               sizeof(env_ptr)) != 0) {
+                return -EFAULT;
+            }
+            if (env_ptr == 0) {
+                break;  /* NULL terminator */
+            }
+            if (envp_offset >= sizeof(_exec_envp_storage)) {
+                return -EFAULT;
+            }
+            _exec_envp_bufs[envc] = &_exec_envp_storage[envp_offset];
+            r = strncpy_from_user(&_exec_envp_storage[envp_offset],
+                                  (const char __user *)env_ptr,
+                                  sizeof(_exec_envp_storage) - envp_offset);
+            if (r == -EFAULT) {
+                return -EFAULT;
+            }
+            if (r < 0) {
+                return -E2BIG; /* did not fit */
+            }
+            envp_offset += (uint32_t)r + 1;
+        }
+    }
+    _exec_envp_bufs[envc] = NULL;
 
     /* Skip leading '/' if present */
     name = _exec_path_buf;
@@ -1218,31 +1534,13 @@ static int32_t sys_execve(isr_params_t *params)
 
     /* Check file system is mounted */
     if (!krffs_fs) {
-        return -1;
+        return -ENOENT;
     }
 
     /* Check file exists */
     if (krffs_open(name) != 0) {
-        return -1;
+        return -ENOENT;
     }
-
-    /* Read ELF file */
-    file_size = krffs_get_file_size(name);
-    if (file_size > sizeof(_exec_elf_buffer)) {
-        return -1;
-    }
-
-    bytes_read = krffs_read(name, _exec_elf_buffer, file_size, 0);
-    if (bytes_read != (int)file_size) {
-        return -1;
-    }
-
-    /* Validate ELF */
-    if (!elf_check(_exec_elf_buffer, file_size)) {
-        return -1;
-    }
-
-    entry_point = elf_entry_point(_exec_elf_buffer);
 
     /* Get current process's page directory */
     if (current_proc->cr3 == 0) {
@@ -1251,25 +1549,34 @@ static int32_t sys_execve(isr_params_t *params)
         proc_dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
     }
 
-    /* Free old user pages */
+    /* Validate the ELF header BEFORE tearing down the old image, so the common
+     * "not a valid executable" failure leaves the calling process intact. */
+    {
+        Elf32_Ehdr ehdr;
+
+        if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+            !elf_valid_exec(&ehdr, sizeof(ehdr))) {
+            return -ENOEXEC;
+        }
+    }
+
+    /* Free old user pages, then stream the new program in (header + program
+     * headers + each PT_LOAD; no 512 KB whole-file buffer). Past this point the
+     * old image is gone, so any failure terminates the process rather than
+     * returning into a destroyed address space. */
     free_user_pages(proc_dir);
 
-    /* Load new ELF segments */
-    if (elf_load(_exec_elf_buffer, file_size, proc_dir) != 0) {
-        /* Can't recover - process is in broken state */
-        current_proc->state = PROC_ZOMBIE;
-        current_proc->exit_code = -1;
-        schedule();
-        return -1;
+    if (elf_load_image(exec_krffs_read, (void *)name, proc_dir, &img) != 0) {
+        exec_fail_destroyed();
+        __builtin_unreachable();
     }
+    entry_point = img.entry;
 
     /* Allocate user stack */
     stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
     if (stack_phys == 0) {
-        current_proc->state = PROC_ZOMBIE;
-        current_proc->exit_code = -1;
-        schedule();
-        return -1;
+        exec_fail_destroyed();
+        __builtin_unreachable();
     }
 
     /* Zero the stack page */
@@ -1288,55 +1595,40 @@ static int32_t sys_execve(isr_params_t *params)
      *   [argc]          <- ESP points here
      */
 
-    /* Calculate where to put strings (near top of stack page) */
-    strings_start = USER_STACK_BASE + PAGE_SIZE - 256;  /* Reserve 256 bytes for strings */
-
-    /* Copy arg strings to stack (using physical address for now) */
+    /* Build the SysV/i386 initial stack -- argc, the argv and real envp pointer
+     * arrays, and the auxv -- in the freshly zeroed page. build_user_stack copies
+     * the strings in and 16-byte-aligns the entry ESP; the layout is verified
+     * host-side (tests/host/uimage_hosttest.c). */
+    krandom_bytes(random16, 16);
     {
-        uint32_t phys_strings = stack_phys + PAGE_SIZE - 256;
-        uint32_t str_offset = 0;
+        uint32_t user_esp = build_user_stack((void *)stack_phys, USER_STACK_BASE,
+                                             PAGE_SIZE, argc, _exec_argv_bufs,
+                                             _exec_envp_bufs, &img, random16);
 
-        for (i = 0; i < argc; i++) {
-            int len = k_strlen(_exec_argv_bufs[i]) + 1;
-            k_memcpy((void *)(phys_strings + str_offset), _exec_argv_bufs[i], len);
-            /* Save virtual address for argv pointer */
-            _exec_argv_bufs[i] = (char *)(strings_start + str_offset);
-            str_offset += len;
+        if (user_esp == 0) {
+            exec_fail_destroyed();
+            __builtin_unreachable();
         }
+
+        /* Modify the ISR return frame so iret resumes at the new program's
+         * entry point on its fresh stack. */
+        params->eip = entry_point;
+        params->user_esp = user_esp;
+
+        /* Reset thread-local storage for the new image. exec replaces the
+         * program in place, so the trapframe still holds the old program's
+         * segment selectors (its %gs may be the 0x33 TLS selector) and the PCB
+         * still holds its TLS base. A fresh image has no TLS until its libc
+         * calls set_thread_area, so restore the plain user-data selector (0x23,
+         * as enter_usermode does for a brand-new process) in all four slots and
+         * clear the base in both the PCB and the live GDT descriptor. */
+        params->gs = 0x23;
+        params->fs = 0x23;
+        params->es = 0x23;
+        params->ds = 0x23;
+        current_proc->tls_base = 0;
+        gdt_set_tls(0);
     }
-
-    /* Calculate where to put argv pointers and argc */
-    argv_ptrs_start = strings_start - 4;  /* NULL terminator for envp */
-    argv_ptrs_start -= 4;                  /* NULL terminator for argv */
-    argv_ptrs_start -= argc * 4;           /* argv pointers */
-    argv_ptrs_start -= 4;                  /* argc */
-
-    /* Align to 16 bytes (required for some ABIs) */
-    argv_ptrs_start &= ~0xF;
-
-    /* Set up the stack using physical address */
-    sp = (uint32_t *)(stack_phys + (argv_ptrs_start - USER_STACK_BASE));
-
-    /* Push argc */
-    *sp++ = argc;
-
-    /* Push argv pointers */
-    for (i = 0; i < argc; i++) {
-        *sp++ = (uint32_t)_exec_argv_bufs[i];
-    }
-    *sp++ = 0;  /* NULL terminator for argv */
-
-    *sp++ = 0;  /* NULL terminator for envp */
-
-    /*
-     * Modify the ISR return frame to jump to new code.
-     * When the syscall returns via iret, it will:
-     * - Pop EIP = entry_point
-     * - Pop ESP = new user stack
-     * - Continue in the new program
-     */
-    params->eip = entry_point;
-    params->user_esp = argv_ptrs_start;
 
     /*
      * Flush TLB to ensure new page mappings take effect.
@@ -1371,39 +1663,46 @@ static int32_t sys_fork(isr_params_t *params)
     isr_params_t *child_frame;
 
     if (!parent) {
-        return -1;
+        return -ESRCH;
     }
 
     /* Allocate child process slot */
     child = alloc_process();
     if (!child) {
-        return -1;
+        return -EAGAIN;
     }
 
     /* Clone page directory */
     child_dir = clone_page_directory();
     if (!child_dir) {
         free_process(child);
-        return -1;
+        return -ENOMEM;
     }
 
     /* Copy user pages from parent to child */
     if (copy_user_pages(parent, child_dir) != 0) {
         free_process(child);
-        return -1;
+        return -ENOMEM;
     }
 
     /* Allocate kernel stack for child */
     child_kstack_base = mem_reserve(KERNEL_STACK_SIZE, true);
     if (!child_kstack_base) {
         free_process(child);
-        return -1;
+        return -ENOMEM;
     }
     child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
 
     /* Set up child's page directory and parent link */
     child->cr3 = get_page_dir_phys(child_dir);
     child->parent_pid = parent->pid;
+
+    /* Inherit the parent's TLS base: the child's copied trapframe keeps the
+     * parent's %gs selector, and its address space is a copy at the same
+     * virtual addresses, so the same base is correct. Without this the context
+     * switch would reprogram the TLS descriptor to 0 for the child and its
+     * %gs-relative reads (errno, the stack canary) would fault or read garbage. */
+    child->tls_base = parent->tls_base;
 
     /* Copy file descriptor table. Inherited sockets gain a reference each so
      * the parent and child release independently. */
@@ -1474,7 +1773,7 @@ static int32_t sys_fork(isr_params_t *params)
 static int32_t sys_waitpid(isr_params_t *params)
 {
     int pid = (int)params->ebx;
-    int *status = (int *)params->ecx;
+    int __user *status = (int __user *)params->ecx;
     /* int options = (int)params->edx; */  /* Unused for now */
     process_t *child = NULL;
     uint32_t child_pid;
@@ -1482,7 +1781,14 @@ static int32_t sys_waitpid(isr_params_t *params)
     uint32_t i;
 
     if (!current_proc) {
-        return -1;
+        return -ESRCH;
+    }
+
+    /* Validate the status pointer up front (a NULL pointer means "don't report
+     * status"), so a bad address is rejected before any child is reaped. */
+    if (status &&
+        !user_access_ok((uint32_t)(__force uintptr_t)status, sizeof(int))) {
+        return -EFAULT;
     }
 
     while (1) {
@@ -1522,9 +1828,10 @@ static int32_t sys_waitpid(isr_params_t *params)
                 /* Free the child process slot */
                 free_process(child);
 
-                /* Store exit status if pointer is valid */
+                /* Store exit status (pointer already validated above). */
                 if (status) {
-                    *status = exit_code;
+                    copy_to_user((void __user *)status, &exit_code,
+                                 sizeof(exit_code));
                 }
 
                 return (int32_t)child_pid;
@@ -1536,7 +1843,7 @@ static int32_t sys_waitpid(isr_params_t *params)
 
         /* No matching child found */
         if (!child) {
-            return -1;
+            return -ECHILD;
         }
 
         /* Child exists but not zombie - block and wait */
@@ -1557,42 +1864,50 @@ static int32_t sys_waitpid(isr_params_t *params)
  */
 static int32_t sys_creat(isr_params_t *params)
 {
-    const char *path = (const char *)params->ebx;
+    const char __user *path = (const char __user *)params->ebx;
     uint32_t mode = params->ecx;
     fd_entry_t *entry;
     krffs_node_t *node;
+    char pathbuf[256];
     const char *name;
+    int len;
     int fd;
 
     if (!current_proc || !path) {
-        return -1;
+        return -EFAULT;
+    }
+
+    /* Copy the path into a kernel buffer. */
+    len = strncpy_from_user(pathbuf, path, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
     }
 
     /* Skip leading '/' if present */
-    name = path;
+    name = pathbuf;
     if (name[0] == '/') {
         name++;
     }
 
     /* Empty filename is invalid */
     if (name[0] == '\0') {
-        return -1;
+        return -EINVAL;
     }
 
     /* Check if file system is mounted */
     if (!krffs_fs) {
-        return -1;
+        return -ENOENT;
     }
 
     /* Create the file (or open if exists) */
     if (krffs_create(name) != 0) {
-        return -1;
+        return -ENOSPC;
     }
 
     /* Find the node to set mode */
     node = krffs_find_reserved_node_by_name(krffs_fs, name);
     if (!node) {
-        return -1;
+        return -EIO;
     }
 
     /* Set file mode */
@@ -1601,7 +1916,7 @@ static int32_t sys_creat(isr_params_t *params)
     /* Allocate a file descriptor */
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
-        return -1;
+        return -EMFILE;
     }
 
     /* Set up the fd entry for writing */
@@ -1621,16 +1936,26 @@ static int32_t sys_creat(isr_params_t *params)
  */
 static int32_t sys_unlink(isr_params_t *params)
 {
-    const char *path = (const char *)params->ebx;
+    const char __user *upath = (const char __user *)params->ebx;
+    char pathbuf[256];
+    const char *path;
     const char *name;
+    int len;
 
-    if (!current_proc || !path) {
-        return -1;
+    if (!current_proc || !upath) {
+        return -EFAULT;
     }
+
+    /* Copy the path into a kernel buffer and work on the copy. */
+    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+    path = pathbuf;
 
     /* Can't unlink root directory */
     if (path[0] == '/' && path[1] == '\0') {
-        return -1;
+        return -EISDIR;
     }
 
     /* Skip leading '/' if present */
@@ -1641,12 +1966,12 @@ static int32_t sys_unlink(isr_params_t *params)
 
     /* Empty filename is invalid */
     if (name[0] == '\0') {
-        return -1;
+        return -EINVAL;
     }
 
     /* Check if file system is mounted */
     if (!krffs_fs) {
-        return -1;
+        return -ENOENT;
     }
 
     return krffs_unlink(name);
@@ -1659,33 +1984,46 @@ static int32_t sys_unlink(isr_params_t *params)
  */
 static int32_t sys_rename(isr_params_t *params)
 {
-    const char *old_path = (const char *)params->ebx;
-    const char *new_path = (const char *)params->ecx;
+    const char __user *old_path = (const char __user *)params->ebx;
+    const char __user *new_path = (const char __user *)params->ecx;
+    char old_buf[256];
+    char new_buf[256];
     const char *old_name;
     const char *new_name;
+    int len;
 
     if (!current_proc || !old_path || !new_path) {
-        return -1;
+        return -EFAULT;
+    }
+
+    /* Copy both paths into kernel buffers. */
+    len = strncpy_from_user(old_buf, old_path, sizeof(old_buf));
+    if (len < 0) {
+        return len;
+    }
+    len = strncpy_from_user(new_buf, new_path, sizeof(new_buf));
+    if (len < 0) {
+        return len;
     }
 
     /* Skip leading '/' if present */
-    old_name = old_path;
+    old_name = old_buf;
     if (old_name[0] == '/') {
         old_name++;
     }
-    new_name = new_path;
+    new_name = new_buf;
     if (new_name[0] == '/') {
         new_name++;
     }
 
     /* Empty filenames are invalid */
     if (old_name[0] == '\0' || new_name[0] == '\0') {
-        return -1;
+        return -EINVAL;
     }
 
     /* Check if file system is mounted */
     if (!krffs_fs) {
-        return -1;
+        return -ENOENT;
     }
 
     return krffs_rename(old_name, new_name);
@@ -1733,19 +2071,37 @@ static void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 static int32_t sys_utimensat(isr_params_t *params)
 {
     /* int dirfd = (int)params->ebx; */  /* Ignored - always use cwd */
-    const char *path = (const char *)params->ecx;
-    struct kernel_timespec *times = (struct kernel_timespec *)params->edx;
+    const char __user *user_path = (const char __user *)params->ecx;
+    struct kernel_timespec __user *user_times =
+        (struct kernel_timespec __user *)params->edx;
     /* int flags = (int)params->esi; */  /* Ignored for now */
+    char pathbuf[256];
+    struct kernel_timespec ktimes[2];
+    const struct kernel_timespec *times = NULL;
     const char *name;
     krffs_node_t *node;
     int64_t now_sec, now_nsec;
+    int len;
 
-    if (!current_proc || !path) {
-        return -1;
+    if (!current_proc || !user_path) {
+        return -EFAULT;
+    }
+
+    /* Copy the path and (if given) the two timespecs into kernel memory through
+     * the fault-safe helpers before touching them. */
+    len = strncpy_from_user(pathbuf, user_path, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+    if (user_times) {
+        if (copy_from_user(ktimes, user_times, sizeof(ktimes)) != 0) {
+            return -EFAULT;
+        }
+        times = ktimes;
     }
 
     /* Skip leading '/' if present */
-    name = path;
+    name = pathbuf;
     if (name[0] == '/') {
         name++;
     }
@@ -1758,13 +2114,13 @@ static int32_t sys_utimensat(isr_params_t *params)
 
     /* Check if file system is mounted */
     if (!krffs_fs) {
-        return -1;
+        return -ENOENT;
     }
 
     /* Find the file */
     node = krffs_find_reserved_node_by_name(krffs_fs, name);
     if (!node) {
-        return -1;  /* File not found */
+        return -ENOENT;  /* File not found */
     }
 
     /* Get current time (ticks since boot converted to seconds) */
@@ -1846,23 +2202,30 @@ static int32_t sys_getdents64(isr_params_t *params)
     struct linux_dirent64 *dirent;
 
     if (!current_proc || !buf || count == 0) {
-        return -1;
+        return -EFAULT;
+    }
+
+    /* Records are packed straight into the user buffer below, so range-check the
+     * whole [buf, buf+count) span once -- every record write then stays inside
+     * validated user memory. */
+    if (!user_access_ok((uint32_t)buf, count)) {
+        return -EFAULT;
     }
 
     /* Get and validate fd */
     entry = fd_get(&current_proc->fds, fd_num);
     if (!entry) {
-        return -1;
+        return -EBADF;
     }
 
     /* Must be a directory fd */
     if (entry->type != FD_TYPE_DIR) {
-        return -1;
+        return -ENOTDIR;
     }
 
     /* Check file system is mounted */
     if (!krffs_fs) {
-        return -1;
+        return -EIO;
     }
 
     /* entry->offset tracks which file index we're at */
@@ -1874,6 +2237,10 @@ static int32_t sys_getdents64(isr_params_t *params)
         if (node->type == KRFFS_RESERVED_NODE) {
             /* Found a file - check if we've reached our target position */
             if (file_index >= target_index) {
+                /* Staging buffer for one record (a KRFFS name is at most
+                 * KRFFS_FILE_NAME_BUFFER_SIZE bytes, so this always fits). */
+                uint8_t recbuf[KRFFS_FILE_NAME_BUFFER_SIZE + 32];
+
                 /* Calculate dirent size with proper alignment */
                 name_len = k_strlen((const char *)node->name);
                 /* Size = fixed fields (19 bytes) + name + null + padding to 8-byte alignment */
@@ -1886,20 +2253,26 @@ static int32_t sys_getdents64(isr_params_t *params)
                     /* No more room - return what we have */
                     if (bytes_written == 0) {
                         /* Buffer too small for even one entry */
-                        return -1;
+                        return -EINVAL;
                     }
                     break;
                 }
 
-                /* Fill in the dirent structure */
-                dirent = (struct linux_dirent64 *)(buf + bytes_written);
+                /* Build the record in kernel memory, then copy it to the user
+                 * buffer through the helper (no raw write into user space). */
+                k_memset(recbuf, 0, rec_len);
+                dirent = (struct linux_dirent64 *)recbuf;
                 dirent->d_ino = node->id;                      /* Use DJB hash as inode */
                 dirent->d_off = (int64_t)(file_index + 1);     /* Next position */
                 dirent->d_reclen = (uint16_t)rec_len;
                 dirent->d_type = DT_REG;                       /* Regular file */
-
-                /* Copy filename */
                 k_memcpy(dirent->d_name, node->name, name_len + 1);
+
+                if (copy_to_user((void __user *)(buf + bytes_written),
+                                 recbuf, rec_len) != 0) {
+                    return (bytes_written > 0) ?
+                           (int32_t)bytes_written : -EFAULT;
+                }
 
                 bytes_written += rec_len;
                 entry->offset = file_index + 1;  /* Update position for next call */
@@ -1933,16 +2306,22 @@ struct kernel_timeval {
  */
 static int32_t sys_gettimeofday(isr_params_t *params)
 {
-    struct kernel_timeval *tv = (struct kernel_timeval *)params->ebx;
+    struct kernel_timeval __user *tv = (struct kernel_timeval __user *)params->ebx;
+    struct kernel_timeval ktv;
 
     if (!tv) {
-        return -1;
+        return -EFAULT;
     }
 
-    /* Convert ticks to seconds and microseconds */
-    /* kernel_ticks runs at 100 Hz, so 1 tick = 10ms = 10000us */
-    tv->tv_sec = (int32_t)(kernel_ticks / 100);
-    tv->tv_usec = (int32_t)((kernel_ticks % 100) * 10000);
+    /* Build the result in a kernel struct, then copy it out (this also closes a
+     * previously unchecked raw write to the user pointer).
+     * kernel_ticks runs at 100 Hz, so 1 tick = 10ms = 10000us */
+    ktv.tv_sec = (int32_t)(kernel_ticks / 100);
+    ktv.tv_usec = (int32_t)((kernel_ticks % 100) * 10000);
+
+    if (copy_to_user(tv, &ktv, sizeof(ktv)) != 0) {
+        return -EFAULT;
+    }
 
     return 0;
 }
@@ -1964,7 +2343,21 @@ static int32_t sys_ioctl(isr_params_t *params)
     fd_entry_t *entry;
 
     if (!current_proc) {
-        return -1;
+        return -ESRCH;
+    }
+
+    /* Validate the fd first, so a bad fd reports -EBADF rather than a request-
+     * specific status (e.g. ioctl(-1, TCGETS) must be -EBADF, not -ENOTTY). */
+    entry = fd_get(&current_proc->fds, fd_num);
+    if (!entry) {
+        return -EBADF;
+    }
+
+    /* Terminal attribute queries on a valid fd: Rach2 has no termios layer, so
+     * report "not a terminal" exactly as Linux does for a non-tty fd. musl's
+     * isatty() then returns 0 and stdio chooses block buffering. */
+    if (request == TCGETS || request == TIOCGWINSZ) {
+        return -ENOTTY;
     }
 
     /* Handle KIOCSOUND on stdout (console) - Linux convention */
@@ -1979,21 +2372,19 @@ static int32_t sys_ioctl(isr_params_t *params)
         }
     }
 
-    /* Get fd entry for other operations */
-    entry = fd_get(&current_proc->fds, fd_num);
-    if (!entry) {
-        return -1;
-    }
-
     /* Handle framebuffer ioctls */
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
         switch (request) {
             case FB_SETPALETTE:
                 if (arg != 0) {
+                    /* 256 RGB triples = 768 bytes read straight from user. */
+                    if (!user_access_ok(arg, 768)) {
+                        return -EFAULT;
+                    }
                     vga_mode13h_set_palette((const uint8_t *)arg);
                     return 0;
                 }
-                return -1;
+                return -EFAULT;
 
             case FB_MODE_13H:
                 /* Already in mode 13h if fb is open */
@@ -2006,7 +2397,7 @@ static int32_t sys_ioctl(isr_params_t *params)
                 return 0;
 
             default:
-                return -1;
+                return -ENOTTY;
         }
     }
 
@@ -2024,20 +2415,30 @@ static int32_t sys_ioctl(isr_params_t *params)
         /* Audio ioctls on console fd */
         switch (request) {
             case AUDIO_GET_INFO: {
-                struct audio_info *info = (struct audio_info *)arg;
-                if (info) {
-                    info->driver_type = audio ? audio->type : AUDIO_DRIVER_NONE;
-                    info->has_real_audio = audio_has_real_output() ? 1 : 0;
+                struct audio_info kinfo;
+                if (arg) {
+                    k_memset(&kinfo, 0, sizeof(kinfo));
+                    kinfo.driver_type = audio ? audio->type : AUDIO_DRIVER_NONE;
+                    kinfo.has_real_audio = audio_has_real_output() ? 1 : 0;
+                    if (copy_to_user((void __user *)arg, &kinfo,
+                                     sizeof(kinfo)) != 0) {
+                        return -EFAULT;
+                    }
                 }
                 return 0;
             }
 
             case AUDIO_START: {
-                struct audio_start_params *p = (struct audio_start_params *)arg;
-                if (!audio || !p) {
-                    return -1;
+                struct audio_start_params kp;
+                if (!audio || !arg) {
+                    return -EFAULT;
                 }
-                return audio->start(p->sample_rate, (audio_format_t)p->format, (int)p->channels);
+                if (copy_from_user(&kp, (const void __user *)arg,
+                                   sizeof(kp)) != 0) {
+                    return -EFAULT;
+                }
+                return audio->start(kp.sample_rate, (audio_format_t)kp.format,
+                                    (int)kp.channels);
             }
 
             case AUDIO_STOP:
@@ -2045,14 +2446,26 @@ static int32_t sys_ioctl(isr_params_t *params)
                     audio->stop();
                     return 0;
                 }
-                return -1;
+                return -ENODEV;
 
             case AUDIO_WRITE: {
-                struct audio_write_params *p = (struct audio_write_params *)arg;
-                if (!audio || !p || !p->buffer) {
-                    return -1;
+                struct audio_write_params kp;
+                if (!audio || !arg) {
+                    return -EFAULT;
                 }
-                return audio->write(p->buffer, p->size);
+                /* Copy the param struct in through the helper, then range-check
+                 * the PCM buffer it points at before the driver reads it (the
+                 * bulk copy is the driver's, as with the framebuffer/socket
+                 * data paths). */
+                if (copy_from_user(&kp, (const void __user *)arg,
+                                   sizeof(kp)) != 0) {
+                    return -EFAULT;
+                }
+                if (!kp.buffer ||
+                    !user_access_ok((uint32_t)(uintptr_t)kp.buffer, kp.size)) {
+                    return -EFAULT;
+                }
+                return audio->write(kp.buffer, kp.size);
             }
 
             case AUDIO_SET_VOLUME:
@@ -2060,11 +2473,11 @@ static int32_t sys_ioctl(isr_params_t *params)
                     audio->set_volume((int)arg);
                     return 0;
                 }
-                return -1;
+                return -ENODEV;
         }
     }
 
-    return -1;  /* Unknown request */
+    return -ENOTTY;  /* Unknown request */
 }
 
 /* --- Network socketcall (SYS_SOCKETCALL = 102) ---------------------------
@@ -2078,20 +2491,13 @@ static int32_t sys_ioctl(isr_params_t *params)
  * User address window. The kernel is identity-mapped in the low 32 MB and user
  * space lives above it, below 0xC0000000. A user pointer and the whole length
  * it spans must fall inside this window; anything else is rejected so a syscall
- * argument cannot read or write kernel memory.
+ * argument cannot read or write kernel memory. The window and the check now
+ * live in mm/usercopy (USER_ADDR_MIN/MAX, user_range_ok); user_access_ok is a
+ * thin alias kept for the existing call sites.
  */
-#define USER_ADDR_MIN  0x02000000UL
-#define USER_ADDR_MAX  0xC0000000UL
-
 static int user_access_ok(uint32_t addr, uint32_t len)
 {
-    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
-        return 0;
-    }
-    if (len > USER_ADDR_MAX - addr) {
-        return 0;   /* spans past the end of user space (or overflows) */
-    }
-    return 1;
+    return user_range_ok(addr, len);
 }
 
 /* Read and write big-endian sockaddr fields (sin_port, sin_addr). */
@@ -2131,28 +2537,75 @@ static int user_access_ok(uint32_t addr, uint32_t len)
 /* We read sin_family/sin_port/sin_addr from the first 8 sockaddr bytes. */
 #define SOCKADDR_MIN 8
 
+/*
+ * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen) pair,
+ * respecting the caller's declared buffer capacity: read the in/out socklen,
+ * copy at most that many of the 16 sockaddr_in bytes, and report the true length
+ * (16) -- the recvfrom(2)/accept(2) truncation semantics. Returns 0 or -EFAULT.
+ */
+static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
+                                 uint16_t port, uint32_t ip)
+{
+    uint8_t  sa[16];
+    uint32_t caller_len;
+    uint32_t copy_len;
+
+    if (!sa_ptr || !salen_ptr) {
+        return 0;  /* caller does not want the address back */
+    }
+
+    if (copy_from_user(&caller_len, (const void __user *)salen_ptr,
+                       sizeof(caller_len)) != 0) {
+        return -EFAULT;
+    }
+
+    k_memset(sa, 0, sizeof(sa));
+    SC_WBE16(sa + 0, 0x0002);   /* AF_INET */
+    SC_WBE16(sa + 2, port);
+    SC_WBE32(sa + 4, ip);
+
+    copy_len = (caller_len < sizeof(sa)) ? caller_len : (uint32_t)sizeof(sa);
+    if (copy_len > 0 &&
+        copy_to_user((void __user *)sa_ptr, sa, copy_len) != 0) {
+        return -EFAULT;
+    }
+
+    /* Report the real sockaddr_in length even when the caller's buffer was
+     * shorter (and thus the address was truncated). */
+    caller_len = (uint32_t)sizeof(sa);
+    if (copy_to_user((void __user *)salen_ptr, &caller_len,
+                     sizeof(caller_len)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 static int32_t do_socket(int domain, int type, int protocol)
 {
     struct socket *sock;
     fd_entry_t    *entry;
     int            fd;
 
-    (void)domain;
     (void)protocol;
 
+    /* Only IPv4 (AF_INET == 2) is implemented; reject other families instead of
+     * silently creating an unusable socket. */
+    if (domain != 2) {
+        return -EAFNOSUPPORT;
+    }
     if (type != SOCK_DGRAM && type != SOCK_STREAM) {
-        return -1;
+        return -EINVAL;
     }
 
     sock = socket_alloc(type);
     if (!sock) {
-        return -1;
+        return -ENOMEM;
     }
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
         socket_unref(sock);
-        return -1;
+        return -EMFILE;
     }
 
     entry         = &current_proc->fds.entries[fd];
@@ -2168,24 +2621,31 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
     uint16_t    port;
+    uint8_t     sa[SOCKADDR_MIN];
 
-    (void)addrlen;
+    /* The caller's declared sockaddr must be at least the header we read; a
+     * short or negative addrlen must not make us read past it. */
+    if (addrlen < SOCKADDR_MIN) {
+        return -EINVAL;
+    }
 
-    if (!user_access_ok(sa_ptr, SOCKADDR_MIN)) {
-        return -1;
+    /* Copy the sockaddr header into a kernel buffer; the BE helpers below then
+     * operate on the kernel copy. */
+    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+        return -EFAULT;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -1;
+        return -ENOTSOCK;
     }
 
-    port = SC_BE16(sa_ptr + 2);
+    port = SC_BE16(sa + 2);
     entry->sock->local_port = port;
 
     if (entry->sock->type == SOCK_DGRAM) {
         if (udp_bind(port, entry->sock) < 0) {
-            return -1;
+            return -EADDRINUSE;
         }
     }
     return 0;
@@ -2197,18 +2657,24 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     fd_entry_t *entry;
     uint16_t    dst_port;
     uint32_t    dst_ip;
+    uint8_t     sa[SOCKADDR_MIN];
 
     (void)flags;
-    (void)addrlen;
 
-    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len) ||
-        !user_access_ok(sa_ptr, SOCKADDR_MIN)) {
-        return -1;
+    if (addrlen < SOCKADDR_MIN) {
+        return -EINVAL;  /* declared sockaddr shorter than the header we read */
+    }
+    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
+        return -EFAULT;
+    }
+    /* Copy the destination sockaddr into a kernel buffer for the BE helpers. */
+    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+        return -EFAULT;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -1;
+        return -ENOTSOCK;
     }
 
     /* A datagram socket needs a source port so replies can come back. */
@@ -2216,11 +2682,12 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
         udp_bind_ephemeral(entry->sock);
     }
 
-    dst_port = SC_BE16(sa_ptr + 2);
-    dst_ip   = SC_BE32(sa_ptr + 4);
+    dst_port = SC_BE16(sa + 2);
+    dst_ip   = SC_BE32(sa + 4);
 
+    /* udp_tx reads the payload itself; __force strips __user at the boundary. */
     udp_tx(entry->sock->local_port, dst_ip, dst_port,
-           (const uint8_t *)buf_ptr, (uint16_t)len);
+           (const uint8_t __force *)(const void __user *)buf_ptr, (uint16_t)len);
     return len;
 }
 
@@ -2233,38 +2700,34 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
     int         bytes;
 
     if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
-        return -1;
+        return -EFAULT;
     }
-    if (sa_ptr && !user_access_ok(sa_ptr, 16)) {
-        return -1;
-    }
-    if (salen_ptr && !user_access_ok(salen_ptr, 4)) {
-        return -1;
-    }
+    /* The source-address writeback is validated and truncated to the caller's
+     * declared length by copy_sockaddr_to_user below. */
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -1;
+        return -ENOTSOCK;
     }
 
+    /* socket_recv/socket_try_recv write straight into the validated user buffer;
+     * __force strips __user at the boundary. */
     if (flags & MSG_DONTWAIT) {
-        bytes = socket_try_recv(entry->sock, (uint8_t *)buf_ptr, len,
+        bytes = socket_try_recv(entry->sock,
+                                (uint8_t __force *)(void __user *)buf_ptr, len,
                                 &src_ip, &src_port);
         if (bytes < 0) {
             return bytes;   /* SOCK_EAGAIN: leave the caller's sockaddr alone */
         }
     } else {
-        bytes = socket_recv(entry->sock, (uint8_t *)buf_ptr, len,
+        bytes = socket_recv(entry->sock,
+                            (uint8_t __force *)(void __user *)buf_ptr, len,
                             &src_ip, &src_port);
     }
 
-    if (sa_ptr) {
-        SC_WBE16(sa_ptr + 0, 0x0002);   /* AF_INET */
-        SC_WBE16(sa_ptr + 2, src_port);
-        SC_WBE32(sa_ptr + 4, src_ip);
-    }
-    if (salen_ptr) {
-        *((uint32_t *)salen_ptr) = 16;
+    /* Report the source address, truncated to the caller's declared capacity. */
+    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, src_port, src_ip) != 0) {
+        return -EFAULT;
     }
     return bytes;
 }
@@ -2279,26 +2742,30 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     fd_entry_t *entry;
     uint32_t    dst_ip;
     uint16_t    dst_port;
+    uint8_t     sa[SOCKADDR_MIN];
 
-    (void)addrlen;
+    if (addrlen < SOCKADDR_MIN) {
+        return -EINVAL;  /* declared sockaddr shorter than the header we read */
+    }
 
-    if (!user_access_ok(sa_ptr, SOCKADDR_MIN)) {
-        return -1;
+    /* Copy the sockaddr header into a kernel buffer for the BE helpers. */
+    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+        return -EFAULT;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -1;
+        return -ENOTSOCK;
     }
     if (entry->sock->type != SOCK_STREAM) {
-        return -1;
+        return -EOPNOTSUPP;
     }
 
-    dst_port = SC_BE16(sa_ptr + 2);
-    dst_ip   = SC_BE32(sa_ptr + 4);
+    dst_port = SC_BE16(sa + 2);
+    dst_ip   = SC_BE32(sa + 4);
 
     if (tcp_connect(entry->sock, dst_ip, dst_port) < 0) {
-        return -1;
+        return -ECONNREFUSED;
     }
 
     /* Block until the handshake completes, fails, or times out. */
@@ -2313,7 +2780,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     current_proc->state       = PROC_RUNNING;
 
     if (!entry->sock->tcb || entry->sock->tcb->state != TCP_ESTABLISHED) {
-        return -1;
+        return -ECONNREFUSED;
     }
     return 0;
 }
@@ -2326,10 +2793,10 @@ static int32_t do_listen(int fd, int backlog)
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -1;
+        return -ENOTSOCK;
     }
     if (entry->sock->type != SOCK_STREAM) {
-        return -1;
+        return -EOPNOTSUPP;
     }
 
     entry->sock->listening = 1;
@@ -2344,16 +2811,12 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     struct socket *conn_sock;
     int            new_fd;
 
-    if (sa_ptr && !user_access_ok(sa_ptr, 16)) {
-        return -1;
-    }
-    if (salen_ptr && !user_access_ok(salen_ptr, 4)) {
-        return -1;
-    }
+    /* The peer-address writeback is validated and truncated to the caller's
+     * declared length by copy_sockaddr_to_user below. */
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -1;
+        return -ENOTSOCK;
     }
     listen_sock = entry->sock;
 
@@ -2375,7 +2838,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     new_fd = fd_alloc(&current_proc->fds);
     if (new_fd < 0) {
         socket_unref(conn_sock);
-        return -1;
+        return -EMFILE;
     }
     new_entry         = &current_proc->fds.entries[new_fd];
     new_entry->type   = FD_TYPE_SOCKET;
@@ -2384,13 +2847,15 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     new_entry->offset = 0;
     new_entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
 
-    if (sa_ptr) {
-        SC_WBE16(sa_ptr + 0, 0x0002);
-        SC_WBE16(sa_ptr + 2, conn_sock->remote_port);
-        SC_WBE32(sa_ptr + 4, conn_sock->remote_ip);
-        if (salen_ptr) {
-            *((uint32_t *)salen_ptr) = 16;
-        }
+    /* Report the peer address, truncated to the caller's declared capacity. On a
+     * bad user pointer, tear down the descriptor we just installed (fd_free only
+     * clears the slot, so the socket reference must be dropped explicitly) rather
+     * than leaking the accepted fd and its socket. */
+    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port,
+                              conn_sock->remote_ip) != 0) {
+        fd_free(&current_proc->fds, new_fd);
+        socket_unref(conn_sock);
+        return -EFAULT;
     }
     return new_fd;
 }
@@ -2402,18 +2867,21 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
     (void)flags;
 
     if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
-        return -1;
+        return -EFAULT;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -1;
+        return -ENOTSOCK;
     }
     if (entry->sock->type != SOCK_STREAM) {
-        return -1;
+        return -EOPNOTSUPP;
     }
 
-    return (int32_t)tcp_send(entry->sock, (const uint8_t *)buf_ptr, len);
+    /* tcp_send copies the payload itself; __force strips __user at the boundary. */
+    return (int32_t)tcp_send(entry->sock,
+                             (const uint8_t __force *)(const void __user *)buf_ptr,
+                             len);
 }
 
 static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
@@ -2423,18 +2891,22 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
     (void)flags;
 
     if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
-        return -1;
+        return -EFAULT;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -1;
+        return -ENOTSOCK;
     }
     if (entry->sock->type != SOCK_STREAM) {
-        return -1;
+        return -EOPNOTSUPP;
     }
 
-    return (int32_t)socket_tcp_recv(entry->sock, (uint8_t *)buf_ptr, len);
+    /* socket_tcp_recv writes into the validated user buffer; __force strips
+     * __user at the boundary. */
+    return (int32_t)socket_tcp_recv(entry->sock,
+                                    (uint8_t __force *)(void __user *)buf_ptr,
+                                    len);
 }
 
 static int32_t sys_socketcall(isr_params_t *params)
@@ -2443,7 +2915,6 @@ static int32_t sys_socketcall(isr_params_t *params)
     uint32_t argp = params->ecx;
     uint32_t args[6];
     int      nargs;
-    int      i;
 
     switch (call) {
     case SC_PING:                       nargs = 1; break;
@@ -2453,14 +2924,13 @@ static int32_t sys_socketcall(isr_params_t *params)
     case SC_SEND: case SC_RECV:         nargs = 4; break;
     case SC_SENDTO: case SC_RECVFROM:   nargs = 6; break;
     default:
-        return -1;
+        return -EINVAL;
     }
 
-    if (!user_access_ok(argp, (uint32_t)nargs * 4)) {
-        return -1;
-    }
-    for (i = 0; i < nargs; i++) {
-        args[i] = ((uint32_t *)argp)[i];
+    /* Pull the argument array out of user memory in one fault-checked copy. */
+    if (copy_from_user(args, (const void __user *)argp,
+                       (uint32_t)nargs * 4) != 0) {
+        return -EFAULT;
     }
 
     switch (call) {
@@ -2487,8 +2957,125 @@ static int32_t sys_socketcall(isr_params_t *params)
     case SC_RECV:
         return do_recv((int)args[0], args[1], (int)args[2], (int)args[3]);
     default:
-        return -1;
+        return -EINVAL;
     }
+}
+
+/*
+ * set_thread_area(2) -- Linux i386 thread-local storage. EBX points at a
+ * struct user_desc. We validate it, program the shared TLS GDT descriptor
+ * (entry GDT_TLS_ENTRY) and this process's PCB base, then write the chosen
+ * entry number back so the C library can load (entry_number << 3) | 3 into
+ * %gs. The base is reapplied to the GDT on every context switch (switch.s).
+ * Returns 0 on success or a negative errno on a bad pointer/request.
+ */
+static int32_t sys_set_thread_area(isr_params_t *params)
+{
+    uint32_t uptr = params->ebx;
+    user_desc_t desc;
+    uint32_t base = 0;
+
+    if (!current_proc) {
+        return -ESRCH;  /* TLS is only meaningful for a user process */
+    }
+
+    /* Read the descriptor through the fault-checked helper (it range-checks the
+     * full struct internally, so the prior explicit user_access_ok is redundant). */
+    if (copy_from_user(&desc, (const void __user *)uptr, sizeof(user_desc_t)) != 0) {
+        return -EFAULT;
+    }
+
+    if (tls_resolve_base(&desc, &base) != 0) {
+        return -EINVAL;
+    }
+
+    /* Program the descriptor now and remember the base so the context switch
+     * can reprogram entry GDT_TLS_ENTRY for this process when it is resumed. */
+    gdt_set_tls(base);
+    current_proc->tls_base = base;
+
+    /* Report the allocated slot back (musl reads user_desc.entry_number). */
+    desc.entry_number = GDT_TLS_ENTRY;
+    if (copy_to_user((void __user *)uptr, &desc.entry_number,
+                     sizeof(desc.entry_number)) != 0) {
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+/*
+ * sys_getpid - return the calling process's PID (getpid(2)).
+ */
+static int32_t sys_getpid(isr_params_t *params)
+{
+    (void)params;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    return (int32_t)current_proc->pid;
+}
+
+/*
+ * sys_set_tid_address - record the clear-child-tid pointer and return the tid
+ * (set_tid_address(2)). Rach2 has no threads, so we only need to return the
+ * caller's PID as its thread id; the pointer (EBX) is accepted and ignored.
+ */
+static int32_t sys_set_tid_address(isr_params_t *params)
+{
+    (void)params;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    return (int32_t)current_proc->pid;
+}
+
+/*
+ * sys_uname - report system identification (uname(2)). Fills the six 65-byte
+ * fields of struct utsname (new-style, as musl expects) in user memory.
+ * Args: EBX = struct utsname *
+ */
+struct kernel_utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+    char domainname[65];
+};
+
+/* Copy a C string into a fixed 65-byte utsname field (always NUL-terminated). */
+static void uname_field(char *dst, const char *src)
+{
+    uint32_t n = k_strlen(src);
+
+    if (n > 64) {
+        n = 64;
+    }
+    k_memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
+static int32_t sys_uname(isr_params_t *params)
+{
+    struct kernel_utsname __user *user_uts =
+        (struct kernel_utsname __user *)params->ebx;
+    struct kernel_utsname uts;
+
+    k_memset(&uts, 0, sizeof(uts));
+    uname_field(uts.sysname, "Rach2");
+    uname_field(uts.nodename, "rach2");
+    uname_field(uts.release, "1.0.0");
+    uname_field(uts.version, "Rach2 musl port");
+    uname_field(uts.machine, "i686");
+    uname_field(uts.domainname, "(none)");
+
+    if (copy_to_user(user_uts, &uts, sizeof(uts)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
 }
 
 /*
@@ -2498,15 +3085,32 @@ static int32_t sys_socketcall(isr_params_t *params)
 static void _syscall_handler(isr_params_t *params)
 {
     uint32_t syscall_num = params->eax;
-    int32_t ret = -1;
+    /* Default to -ENOSYS so an unimplemented or out-of-range number reports the
+     * real "no such syscall" errno; musl relies on -ENOSYS to fall back to an
+     * alternate path rather than treating it as a generic -EPERM failure. */
+    int32_t ret = -ENOSYS;
 
+    /* Mark this process non-preemptible BEFORE enabling interrupts. The ISR
+     * stub keeps IF=0 through entry (segments/%gs are still being saved), so
+     * setting in_syscall here and only then doing sti closes the window in
+     * which a timer IRQ could reschedule a process whose trapframe is still
+     * half-built. The timer handler skips scheduling while in_syscall is set. */
     if (current_proc) {
         current_proc->in_syscall = 1;
     }
 
+    /* Enable interrupts for the syscall body so the PIT/HDA keep ticking during
+     * long syscalls (e.g. Doom's framebuffer writes); preemption stays disabled
+     * via in_syscall above. The stub no longer does sti -- iret restores IF. */
+    __asm__ __volatile__("sti");
+
     if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
         ret = _syscall_table[syscall_num](params);
     }
+
+    /* Disable interrupts again so the epilogue restores the trapframe (segments
+     * and %gs) atomically; iret then restores the caller's IF. */
+    __asm__ __volatile__("cli");
 
     if (current_proc) {
         current_proc->in_syscall = 0;
@@ -2548,6 +3152,14 @@ void init_syscall(void)
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
     _syscall_table[SYS_SOCKETCALL] = sys_socketcall;
+    _syscall_table[SYS_SET_THREAD_AREA] = sys_set_thread_area;
+    _syscall_table[SYS_GETPID] = sys_getpid;
+    _syscall_table[SYS_WRITEV] = sys_writev;
+    _syscall_table[SYS_UNAME] = sys_uname;
+    _syscall_table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;
+    /* musl's exit() issues exit_group(); for a single-threaded process it is
+     * exactly _exit(). */
+    _syscall_table[SYS_EXIT_GROUP] = sys_exit;
 
     /* Register the interrupt handler */
     register_isr_handler(SYSCALL_VECTOR, _syscall_handler);

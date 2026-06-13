@@ -1,4 +1,5 @@
 # qemu_devices.sh - shared QEMU audio and networking options.
+# shellcheck shell=sh
 #
 # Sourced by the run/debug scripts. Set AUDIO_DEVICE (sb16, hda, or speaker;
 # default speaker) before sourcing; this sets AUDIO_OPTS and NET_OPTS for the

@@ -67,50 +67,55 @@ ISR_WITHOUT_ERROR_CODE 128
 isr_common_handler:
     pushal
 
+    # Save the interrupted segment registers individually so the per-process
+    # %gs TLS pointer survives this interrupt/syscall. Pushed ds, es, fs, gs so
+    # gs lands at the lowest frame address (struct isr_params: gs, fs, es, ds).
     movw %ds, %ax
     pushl %eax
+    movw %es, %ax
+    pushl %eax
+    movw %fs, %ax
+    pushl %eax
+    movw %gs, %ax
+    pushl %eax
 
+    # Run the kernel with the kernel data selector in ds/es/fs/gs.
     movw $0x10, %ax
     movw %ax, %ds
     movw %ax, %es
     movw %ax, %fs
     movw %ax, %gs
 
-    # Enable interrupts during syscalls (int 0x80 / vector 128) so PIT ticks
-    # and HDA servicing continue even while userspace is in long syscalls
-    # (e.g., Doom's framebuffer writes). IRQ stubs keep IF=0 as before.
-    movl 36(%esp), %eax
-    cmpl $128, %eax
-    jne 1f
-    sti
-1:
-
+    # Enter the router with IF=0. The syscall handler (_syscall_handler) sets
+    # the per-process in_syscall flag and only THEN does sti, closing the window
+    # in which a timer IRQ could preempt a half-built trapframe; it cli's again
+    # before returning here, so the epilogue restores segments/%gs atomically and
+    # iret restores the caller's IF. IRQ stubs run with IF=0 throughout.
     pushl %esp          # Push pointer to isr_params_t structure
     call _isr_router
     addl $4, %esp       # Clean up pushed pointer
 
-    # If we re-enabled interrupts for a syscall, disable them again for the
-    # common epilogue (restore regs + iret). isr_return will sti just before iret.
-    movl 36(%esp), %eax
-    cmpl $128, %eax
-    jne 2f
-    cli
-2:
-
 # Fork child return point - child processes jump here after switch_context
-# Stack must contain: isr_params_t (ds, pushal regs, vector, error, iret frame)
+# Stack must contain: isr_params_t (gs, fs, es, ds, pushal regs, vector,
+# error, iret frame)
 .globl isr_return
 isr_return:
+    # Restore each saved segment register from its own slot (popped gs, fs, es,
+    # ds), so the interrupted context's %gs TLS pointer is put back exactly.
+    popl %eax
+    movw %ax, %gs
+    popl %eax
+    movw %ax, %fs
+    popl %eax
+    movw %ax, %es
     popl %eax
     movw %ax, %ds
-    movw %ax, %es
-    movw %ax, %fs
-    movw %ax, %gs
 
     popal
     addl $8, %esp
-    sti
 
+    # iret restores EFLAGS (including IF) from the saved frame; no explicit sti,
+    # so no timer IRQ can preempt between sti and iret.
     iret
 
 # Macro for IRQ handlers
@@ -146,7 +151,15 @@ IRQ 15, 47
 irq_common_handler:
     pushal
 
+    # Save the interrupted segment registers individually (see isr_common_handler)
+    # so the per-process %gs TLS pointer survives the IRQ. gs at the lowest slot.
     movw %ds, %ax
+    pushl %eax
+    movw %es, %ax
+    pushl %eax
+    movw %fs, %ax
+    pushl %eax
+    movw %gs, %ax
     pushl %eax
 
     movw $0x10, %ax
@@ -159,14 +172,18 @@ irq_common_handler:
     call _irq_router
     addl $4, %esp       # Clean up pushed pointer
 
+    # Restore each saved segment register from its own slot (gs, fs, es, ds).
+    popl %eax
+    movw %ax, %gs
+    popl %eax
+    movw %ax, %fs
+    popl %eax
+    movw %ax, %es
     popl %eax
     movw %ax, %ds
-    movw %ax, %es
-    movw %ax, %fs
-    movw %ax, %gs
 
     popal
     addl $8, %esp
-    sti
 
+    # iret restores EFLAGS (including IF); no explicit sti before iret.
     iret

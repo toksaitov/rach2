@@ -68,7 +68,7 @@ int main(int argc, char *argv[])
 
     for (int i = 1; i < argc; ++i) {
         int fd = sys_open(argv[i], O_WRONLY | O_CREAT | O_NOCTTY | O_NONBLOCK, 0666);
-        if (fd != -1) {
+        if (fd >= 0) {
             sys_utimensat(fd, NULL, NULL, 0);
             sys_close(fd);
         }

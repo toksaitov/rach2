@@ -13,6 +13,8 @@
 #include "sys/proc/process.h"
 #include "sys/proc/sched.h"
 #include "sys/proc/elf.h"
+#include "sys/proc/uimage.h"
+#include "sys/lib/krandom.h"
 #include "sys/fs/krffs.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
@@ -1105,23 +1107,24 @@ static bool test_elf(void)
  * would overflow the stack and corrupt kernel data (like EN_us keyboard table).
  * Increased to 512KB to support Doom (368KB).
  */
-static char _exec_elf_buffer[512 * 1024];
+/* elf_read_fn over a KRFFS file (ctx is the path) for the segment loader. */
+static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
+{
+    return krffs_read((const char *)ctx, (char *)dst, count, off);
+}
 
 static void exec_program(int argc, char *argv[])
 {
     const char *path;
-    uint32_t file_size;
-    int bytes_read;
     uint32_t entry_point;
+    elf_image_t img;
     page_dir_t *user_dir;
     process_t *user_proc;
     uintptr_t user_stack_phys;
     uint32_t user_stack_vaddr;
-    uint32_t *stack_ptr;
-    uint32_t *argv_ptrs;
-    char *string_area;
-    int i;
-    size_t len;
+    uint32_t user_esp;
+    uint8_t random16[16];
+    static char *default_envp[] = {"PATH=/", "HOME=/", "TERM=rach2", 0};
 
     if (argc < 1 || !argv || !argv[0]) {
         k_puts("exec: No program specified");
@@ -1142,28 +1145,6 @@ static void exec_program(int argc, char *argv[])
         return;
     }
 
-    /* Read ELF file */
-    file_size = krffs_get_file_size(path);
-    if (file_size > sizeof(_exec_elf_buffer)) {
-        k_printf("exec: File too large: %d bytes (max %d)\n",
-                 file_size, (int)sizeof(_exec_elf_buffer));
-        return;
-    }
-
-    bytes_read = krffs_read(path, _exec_elf_buffer, file_size, 0);
-    if (bytes_read != (int)file_size) {
-        k_printf("exec: Read error: %d/%d bytes\n", bytes_read, file_size);
-        return;
-    }
-
-    /* Validate ELF */
-    if (!elf_check(_exec_elf_buffer, file_size)) {
-        k_puts("exec: Not a valid ELF32 executable");
-        return;
-    }
-
-    entry_point = elf_entry_point(_exec_elf_buffer);
-
     /* Clone page directory for new process */
     user_dir = clone_page_directory();
     if (!user_dir) {
@@ -1171,11 +1152,13 @@ static void exec_program(int argc, char *argv[])
         return;
     }
 
-    /* Load ELF segments into user pages */
-    if (elf_load(_exec_elf_buffer, file_size, user_dir) != 0) {
+    /* Load the program's segments straight from KRFFS (no 512 KB whole-file
+     * buffer, so the binary size is unbounded); record entry + auxv metadata. */
+    if (elf_load_image(exec_krffs_read, (void *)path, user_dir, &img) != 0) {
         k_puts("exec: Failed to load ELF segments");
         return;
     }
+    entry_point = img.entry;
 
     /* Allocate user stack */
     user_stack_vaddr = USER_STACK_BASE;
@@ -1188,70 +1171,18 @@ static void exec_program(int argc, char *argv[])
     /* Zero the stack page */
     k_memset((void *)user_stack_phys, 0, PAGE_SIZE);
 
-    /*
-     * Set up user stack with argc, argv, envp:
-     *
-     * Stack layout (grows downward, addresses decrease):
-     *   [top of stack page]
-     *   ... string data for argv[n], ..., argv[0] ...
-     *   NULL (envp terminator)
-     *   NULL (argv terminator)
-     *   argv[n] pointer
-     *   ...
-     *   argv[0] pointer
-     *   argc
-     *   [ESP points here]
-     *
-     * We build from the top of the physical stack page.
-     */
-
-    /* Start string area at top of stack, work downward */
-    string_area = (char *)(user_stack_phys + PAGE_SIZE);
-
-    /* Copy argument strings to stack (from top, going down) */
-    for (i = argc - 1; i >= 0; i--) {
-        len = k_strlen(argv[i]) + 1;  /* Include null terminator */
-        string_area -= len;
-        k_memcpy(string_area, argv[i], len);
+    /* Build the SysV/i386 initial stack -- argc, the argv pointers, a default
+     * envp, and the auxv -- in the freshly zeroed page. build_user_stack copies
+     * the strings in and lays out the pointer arrays and the AT_NULL-terminated
+     * auxv, 16-byte-aligning the entry ESP. The layout is verified host-side
+     * (tests/host/uimage_hosttest.c). */
+    krandom_bytes(random16, 16);
+    user_esp = build_user_stack((void *)user_stack_phys, user_stack_vaddr, PAGE_SIZE,
+                                argc, argv, default_envp, &img, random16);
+    if (user_esp == 0) {
+        k_puts("exec: argv/env too large for the initial stack");
+        return;
     }
-
-    /* Align string_area down to 4-byte boundary */
-    string_area = (char *)((uintptr_t)string_area & ~3);
-
-    /* Now build the argv array and argc below the strings */
-    /* We need space for: argc + argv[0..n] + NULL + NULL (envp terminator) */
-    stack_ptr = (uint32_t *)string_area;
-
-    /* envp terminator (NULL) */
-    stack_ptr--;
-    *stack_ptr = 0;
-
-    /* argv terminator (NULL) */
-    stack_ptr--;
-    *stack_ptr = 0;
-
-    /* argv pointers (in reverse order, so argv[n] first) */
-    /* We need to calculate the virtual addresses for the strings */
-    {
-        char *str_virt = (char *)(user_stack_vaddr + PAGE_SIZE);
-        for (i = argc - 1; i >= 0; i--) {
-            len = k_strlen(argv[i]) + 1;
-            str_virt -= len;
-            stack_ptr--;
-            *stack_ptr = (uint32_t)str_virt;  /* Virtual address of this string */
-        }
-    }
-
-    /* Remember where argv starts (for debugging) */
-    argv_ptrs = stack_ptr;
-    (void)argv_ptrs;  /* Avoid unused warning */
-
-    /* argc */
-    stack_ptr--;
-    *stack_ptr = (uint32_t)argc;
-
-    /* Calculate the virtual ESP (where stack_ptr is in virtual address space) */
-    uint32_t user_esp = user_stack_vaddr + ((uintptr_t)stack_ptr - user_stack_phys);
 
     /* Create process structure */
     user_proc = alloc_process();
@@ -1281,6 +1212,13 @@ static void exec_program(int argc, char *argv[])
     sched_enable();
 
     kernel_shell_active = false;
+
+    /* Program the shared TLS descriptor for this process before entering ring 3.
+     * This first-entry path bypasses switch_context (which normally reprograms
+     * GDT entry 6 per process), so without this a fresh program could observe a
+     * previous process's TLS base if it loaded the TLS selector before calling
+     * set_thread_area. A new process has tls_base == 0. */
+    gdt_set_tls(user_proc->tls_base);
 
     /* Enter user mode at ELF entry point with proper stack */
     enter_usermode(entry_point, user_esp);
@@ -2044,6 +1982,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  Entropy...");
+    serial_printf("  Entropy...");
+    krandom_seed(); /* best-effort: TSC + PIT tick + RTC seconds (AT_RANDOM) */
+    set_fore_color(light_green);
+    k_puts(" OK (best-effort)");
+    serial_printf(" OK (best-effort)\n");
     set_fore_color(light_grey);
 
     k_printf("  Keyboard...");

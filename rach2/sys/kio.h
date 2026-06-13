@@ -84,6 +84,15 @@ void k_printf(const char *format, ...);
  */
 void outb(uint16_t port, uint8_t  val);
 
+#ifdef RACH2_HARNESS
+/*
+ * Harness build only: report a process exit status to QEMU's isa-debug-exit
+ * device so the test harness reads a real exit code instead of scraping serial.
+ * See kio.c.
+ */
+void harness_exit(uint8_t status);
+#endif
+
 /*
  * Copies the word value from 'val' to the I/O
  * port specified by 'port'.

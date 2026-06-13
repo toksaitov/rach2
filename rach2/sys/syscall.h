@@ -23,15 +23,21 @@
 #define SYS_EXECVE  11
 #define SYS_CHDIR   12
 #define SYS_LSEEK   19
+#define SYS_GETPID   20
 #define SYS_RENAME    38
 #define SYS_SOCKETCALL 102
 #define SYS_IOCTL     54
 #define SYS_DUP2      63
 #define SYS_GETTIMEOFDAY 78
 #define SYS_STAT     106
+#define SYS_UNAME    122
+#define SYS_WRITEV   146
 #define SYS_GETCWD   183
 #define SYS_STAT64   195
 #define SYS_GETDENTS64 220
+#define SYS_SET_THREAD_AREA 243
+#define SYS_EXIT_GROUP 252
+#define SYS_SET_TID_ADDRESS 258
 #define SYS_UTIMENSAT 320
 
 /*

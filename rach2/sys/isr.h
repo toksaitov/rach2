@@ -11,7 +11,7 @@
  * Parameters pushed on the stack from the ISR common procedure
  */
 struct isr_params {
-    uint32_t ds;
+    uint32_t gs, fs, es, ds;
     uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
     uint32_t vector;
     uint32_t error_code;

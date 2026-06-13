@@ -66,11 +66,12 @@ static int sys_chdir(const char *path)
 
 /*
  * sys_getcwd - Get current working directory
- * Returns: buf on success (pointer to cwd), NULL on error
+ * Returns: the path length including the NUL on success (the path is written
+ * into buf), or a negative errno on error -- the Linux getcwd(2) ABI.
  */
-static char *sys_getcwd(char *buf, size_t size)
+static int sys_getcwd(char *buf, size_t size)
 {
-    char *result;
+    int result;
     __asm__ __volatile__ (
         "int $0x80"
         : "=a"(result)
@@ -123,7 +124,7 @@ static void print(const char *s)
 void _start(void)
 {
     char cwdbuf[64];
-    char *cwd;
+    int cwd;
     int result;
     int passed = 0;
     int failed = 0;
@@ -134,9 +135,9 @@ void _start(void)
     /* Test 1: getcwd initial value */
     print("Test 1: getcwd()... ");
     cwd = sys_getcwd(cwdbuf, sizeof(cwdbuf));
-    if (cwd != (char *)0 && cwd[0] == '/') {
+    if (cwd > 0 && cwdbuf[0] == '/') {
         print("OK (cwd=\"");
-        print(cwd);
+        print(cwdbuf);
         puts("\")");
         passed++;
     } else {
@@ -180,7 +181,7 @@ void _start(void)
     /* Test 5: getcwd after chdir operations */
     print("Test 5: getcwd() after chdir... ");
     cwd = sys_getcwd(cwdbuf, sizeof(cwdbuf));
-    if (cwd != (char *)0 && cwd[0] == '/' && cwd[1] == '\0') {
+    if (cwd > 0 && cwdbuf[0] == '/' && cwdbuf[1] == '\0') {
         puts("OK (still \"/\")");
         passed++;
     } else {

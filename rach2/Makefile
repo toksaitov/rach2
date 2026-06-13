@@ -46,9 +46,13 @@ C_SRC   = $(KERNEL).c \
 	  sys/tables/idt.c      \
 	  sys/mm/heap.c         \
 	  sys/mm/paging.c       \
+	  sys/mm/usercopy.c     \
+	  sys/mm/vm.c           \
 	  sys/proc/process.c    \
 	  sys/proc/sched.c      \
 	  sys/proc/elf.c        \
+	  sys/proc/uimage.c     \
+	  sys/proc/tls.c        \
 	  sys/fs/krffs.c        \
 	  sys/fs/fd.c           \
 	  sys/network/core/net_core.c \
@@ -62,7 +66,8 @@ C_SRC   = $(KERNEL).c \
 	  sys/network/socket/socket.c \
 	  sys/lib/kctypes.c     \
 	  sys/lib/kstd.c        \
-	  sys/lib/kstring.c
+	  sys/lib/kstring.c     \
+	  sys/lib/krandom.c
 
 ASM_OBJECTS = $(ASM_SRC:.s=.o)
 C_OBJECTS   = $(C_SRC:.c=.o)
@@ -75,8 +80,18 @@ endif
 
 LD := $(subst gcc,ld,$(CC))
 
-CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra -ansi -nostdlib -nostartfiles -nodefaultlibs
+# -Werror makes the existing zero-warning policy a hard compiler gate (the
+# quality gate builds with it on). Override with `make WERROR=` only for
+# transient debugging.
+WERROR ?= -Werror
+CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs
 LDFLAGS = -m elf_i386 -T $(LINKER_SCRIPT).ld
+
+# Harness build (`make HARNESS=1`): the kernel reports each process exit status
+# to QEMU's isa-debug-exit device so the test harness reads a real exit code.
+ifdef HARNESS
+CFLAGS += -DRACH2_HARNESS
+endif
 
 # General Rules
 

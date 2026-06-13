@@ -38,6 +38,7 @@ void schedule(void)
     uint32_t start_idx;
     process_t *next = NULL;
     process_t *old;
+    uint32_t saved_flags;
 
     /* Do nothing if scheduler is disabled */
     if (!_sched_enabled) {
@@ -86,10 +87,31 @@ void schedule(void)
 
     /* Mark new process as RUNNING */
     next->state = PROC_RUNNING;
+
+    /*
+     * Publish current_proc and switch with interrupts OFF. A timer IRQ between
+     * "current_proc = next" and the stack/CR3 swap inside switch_context would
+     * see current_proc == next with next->in_syscall == 0 and re-enter
+     * schedule() while still on the old stack with the TLS descriptor already
+     * rewritten -- corrupting next->regs.esp. We save the caller's IF, disable
+     * interrupts across the switch, and restore IF afterward. Each process does
+     * this symmetrically, so it resumes with its own IF; a process entered for
+     * the first time bypasses the restore and gets its IF from iret instead.
+     */
+    __asm__ __volatile__("pushf\n\t"
+                         "cli\n\t"
+                         "pop %0"
+                         : "=r"(saved_flags)
+                         :
+                         : "memory");
     current_proc = next;
 
     /* Perform the actual context switch */
     switch_context(old, next);
+
+    if (saved_flags & 0x200) {
+        __asm__ __volatile__("sti");
+    }
 }
 
 void sched_yield(void)

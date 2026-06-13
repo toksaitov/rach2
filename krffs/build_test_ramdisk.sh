@@ -46,12 +46,23 @@ echo "=== Copying test binaries ==="
 # Copy all test programs
 for prog in hello filetest forktest shelltest dirtest stattest \
             touchtest rmtest mvtest lstest stdintest dup2test \
-            pingtest udptest tcptest sockettest dnstest; do
+            pingtest udptest tcptest sockettest dnstest auxvprobe \
+            tlsprobe errnoprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
     fi
 done
+
+# Copy the statically-linked musl program (Phase 3 integration milestone), if
+# built. It lives under tests/musl and is linked against the ported libc. It is
+# installed as "mhello" so it does not collide with the small freestanding test
+# named "hello" (the boot self-test's test_elf() reads a hardcoded "hello" into
+# an 8 KB scratch buffer that a real musl binary, ~20 KB, would not fit).
+if [ -f "../tests/musl/hello" ]; then
+    cp "../tests/musl/hello" "$MOUNT_POINT/mhello"
+    echo "  mhello (musl)"
+fi
 
 # Also copy hello.txt for file tests
 echo "hello, world" > "$MOUNT_POINT/hello.txt"

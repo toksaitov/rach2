@@ -104,7 +104,7 @@ int main(int argc, char *argv[])
     const char *dir_path = (argc > 1) ? argv[1] : ".";
 
     int fd = sys_open(dir_path, O_RDONLY | O_DIRECTORY, 0);
-    if (fd == -1) {
+    if (fd < 0) {
         WRITE_STR(STDERR_FILENO, "ls: cannot open directory\n");
         return 1;
     }
@@ -116,7 +116,7 @@ int main(int argc, char *argv[])
     unsigned char d_type;
     for (;;) {
         nread = sys_getdents64(fd, buf, BUF_SIZE);
-        if (nread == -1) {
+        if (nread < 0) {
             WRITE_STR(STDERR_FILENO, "ls: getdents64 error\n");
             return 1;
         } else if (nread == 0) {

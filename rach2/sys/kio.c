@@ -113,6 +113,21 @@ void outb(uint16_t port, uint8_t val)
     __asm__ __volatile__ ("outb %1, %0" : : "dN" (port) , "a" (val));
 }
 
+#ifdef RACH2_HARNESS
+/*
+ * Harness build only: report the process exit status to QEMU's isa-debug-exit
+ * device (iobase 0xF4) so the test harness reads a real exit code instead of
+ * scraping the serial log -- a hang or triple-fault then surfaces as a wall-clock
+ * timeout, not a missing marker. Only ring 0 can write this port, so a ring-3
+ * probe cannot fake it. QEMU exits with ((status << 1) | 1), hence an exit code
+ * of 1 means the process exited with status 0.
+ */
+void harness_exit(uint8_t status)
+{
+    outb(0xF4, status);
+}
+#endif
+
 void outw(uint16_t port, uint16_t val)
 {
     __asm__ __volatile__ ("outw %1, %0" : : "dN" (port) , "a" (val));

@@ -1,0 +1,43 @@
+# Rach2 cppcheck suppressions.
+#
+# Each entry is a deliberate, justified exception -- this file is NOT a place to
+# silence real bugs. Bare ids suppress globally (they are systematically wrong
+# for our conventions); id:*path entries are scoped to specific legacy files so
+# the check stays live for new musl-port code. See tools/check.sh.
+
+# --- House conventions (these checks contradict our deliberate style) ---
+
+# C89 requires declarations at the top of a block; we never narrow scope.
+variableScope
+
+# Syscall handlers are installed in a function-pointer dispatch table, so their
+# signature is fixed; cppcheck itself flags the const-cast caveat here.
+constParameterCallback
+
+# We do not retrofit const-correctness onto the existing C89 kernel API surface.
+constParameterPointer
+constVariablePointer
+
+# --- Legacy audio drivers (pre-existing; untouched by the musl port) ---
+
+# Intentional `field | 0` idiom documenting an all-fields register composition.
+badBitmaskCheck:*sys/audio/hda.c
+unreadVariable:*sys/audio/hda.c
+unreadVariable:*sys/audio/audio_debug.c
+redundantInitialization:*sys/audio/hda.c
+knownConditionTrueFalse:*sys/audio/hda.c
+knownConditionTrueFalse:*sys/audio/audio_debug.c
+
+# --- New musl-port code: inline-asm the analyzer can't model ---
+
+# krandom_seed's `rdtsc` writes lo (eax) and hi (edx) via inline asm; cppcheck
+# cannot see that and treats them as the identical zero-initialized value.
+duplicateExpression:*sys/lib/krandom.c
+
+# --- Legacy boot / self-test (kernel.c) ---
+
+# test_syscall() returns a structural constant; the self-test condition is intentional.
+knownConditionTrueFalse:*kernel.c
+# _exec_elf_buffer shadows the global ELF buffer; that whole-file buffer is
+# replaced by a segment loader in Phase 1.
+shadowVariable:*kernel.c

@@ -277,7 +277,7 @@ KRFFS on-disk directory format updated in the **host tools** too, plus the
 descriptor / open-file-description split (Phase 6); real scheduler **wait queues**
 instead of `sti;hlt` (Phase 7); and **virtio-rng** entropy for dropbear (Part II-B).
 
-### [ ] Phase 0 — Research, decisions, toolchain, harness
+### [x] Phase 0 — Research, decisions, toolchain, harness
 **Goal:** kill every unknown that would stall a later phase; get a reproducible,
 in-repo musl build.
 **Concept taught:** what a libc is vs. what a kernel must provide; the SysV/i386
@@ -312,7 +312,7 @@ process ABI on paper.
 **Done when:** musl builds reproducibly in-repo, the startup/auxv contract is
 written in `libc/Readme.md`, baseline green.
 
-### [ ] Phase 1 — Process image and the initial stack (argv, env, auxv, alignment)
+### [x] Phase 1 — Process image and the initial stack (argv, env, auxv, alignment)
 **Goal:** hand a process a correct SysV/i386 stack: `argc`, `argv[]`, real
 `envp[]`, a complete **auxv**, 16-byte aligned.
 **Concept taught:** the process/binary ABI — where the kernel and the C runtime
@@ -353,7 +353,7 @@ expected entries/values, env round-trips, vector is `AT_NULL`-terminated,
 **Done when:** the probe shows a correct, terminated auxv with real env and
 non-constant `AT_RANDOM`, the stack is aligned, one builder serves both paths.
 
-### [ ] Phase 2 — Thread-local storage (the crux: Linux-style GDT TLS + `%gs` everywhere)
+### [x] Phase 2 — Thread-local storage (the crux: Linux-style GDT TLS + `%gs` everywhere)
 **Goal:** a `%gs`-based per-process thread pointer that **survives context
 switches, IRQs, and syscalls** — musl puts `errno`, the stack canary, and (later)
 `pthread_self` behind `%gs`.
@@ -399,7 +399,7 @@ proves per-process isolation across switches. Prints `All TLS checks passed!`.
 **Done when:** the probe proves `%gs` TLS survives IRQs/syscalls/switches with
 per-process isolation — without musl.
 
-### [ ] Phase 3 — The syscall contract (`-errno`) + MVP calls + first musl binary
+### [x] Phase 3 — The syscall contract (`-errno`) + MVP calls + first musl binary
 **Goal:** make the kernel speak the real `-errno` ABI, add the calls musl needs to
 reach `main`, and **run a static musl `hello` in the guest.**
 **Concept taught:** the real kernel/libc error contract — negative errno from the

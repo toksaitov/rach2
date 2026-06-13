@@ -42,8 +42,9 @@ static size_t strlen(const char *s)
 int main(void)
 {
     char cwd[PATH_MAX];
-    /* getcwd returns buf pointer on success (non-zero), 0 on error */
-    if (sys_getcwd(cwd, sizeof(cwd)) != 0) {
+    /* getcwd returns the path length (> 0) on success and writes the path into
+     * cwd; a negative errno on failure. */
+    if (sys_getcwd(cwd, sizeof(cwd)) > 0) {
         sys_write(STDOUT_FILENO, cwd, strlen(cwd));
         sys_write(STDOUT_FILENO, "\n", 1);
         return 0;

@@ -4,6 +4,7 @@
 #include "../lib/kdef.h"
 #include "../lib/kint.h"
 #include "../fs/fd.h"
+#include "../mm/vm.h"
 
 /*
  * Maximum number of processes
@@ -60,6 +61,11 @@ struct process {
     fd_table_t fds;         /* File descriptor table */
     char cwd[CWD_MAX];      /* Current working directory (always "/" for KRFFS) */
     volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
+    /* APPEND-ONLY below this line: switch.s hard-codes field offsets, so new
+     * PCB fields go at the end and the .set offsets in switch.s are re-checked
+     * in the same patch (PROC_TLS_BASE, asserted against offsetof at boot). */
+    uint32_t tls_base;      /* Per-process %gs TLS base (set_thread_area) */
+    vm_space_t vm;          /* Address-space map (VMAs + brk + stack limit) */
 };
 
 typedef struct process process_t;

@@ -1,0 +1,35 @@
+# Rach2 house style: LLVM base, 4-space, Allman braces on functions but K&R on
+# control statements, pointers bound right, includes left as written, 100 cols.
+# Used as a *check only* on the files a phase touches (clang-format --dry-run
+# -Werror); the existing tree is never reformatted wholesale.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+PointerAlignment: Right
+DerivePointerAlignment: false
+SortIncludes: false
+IndentCaseLabels: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakAfterReturnType: None
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterControlStatement: Never
+  AfterClass: false
+  AfterStruct: false
+  AfterUnion: false
+  AfterEnum: false
+  BeforeElse: false
+  BeforeWhile: false
+  SplitEmptyFunction: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+SpaceAfterCStyleCast: false
+AlignConsecutiveMacros: AcrossComments
+AlignTrailingComments: true
+AlignEscapedNewlines: Left

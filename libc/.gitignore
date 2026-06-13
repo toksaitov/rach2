@@ -1,0 +1,7 @@
+# Extracted musl source (rebuilt from the pinned tarball by build_libc.sh)
+
+musl-1.2.5/
+
+# Build output: static libc.a, crt*.o startup objects, installed headers
+
+install/

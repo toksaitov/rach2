@@ -9,6 +9,14 @@
 #include "../lib/kstring.h"
 #include "../serial.h"
 
+/* The user image window: a PT_LOAD segment must fit between the user/kernel
+ * boundary and the bottom of the user stack (matching the kernel's user_access_ok
+ * range). Segments outside it are rejected so a hostile ELF cannot request
+ * kernel- or stack-range mappings. The floor is below the conventional ELF base
+ * (a freestanding -Ttext=0x08048000 binary maps its header page at 0x08047000). */
+#define ELF_USER_MIN 0x02000000u
+#define ELF_USER_MAX 0xBFFFF000u
+
 /*
  * Validate ELF header
  * Returns true if the data is a valid ELF32 executable for i386
@@ -225,5 +233,165 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
         }
     }
 
+    return 0;
+}
+
+bool elf_valid_exec(const void *ehdr, uint32_t len)
+{
+    const Elf32_Ehdr *e = (const Elf32_Ehdr *)ehdr;
+
+    if (len < sizeof(Elf32_Ehdr)) {
+        return false;
+    }
+    if (e->e_ident[EI_MAG0] != ELFMAG0 || e->e_ident[EI_MAG1] != ELFMAG1 ||
+        e->e_ident[EI_MAG2] != ELFMAG2 || e->e_ident[EI_MAG3] != ELFMAG3) {
+        return false;
+    }
+    if (e->e_ident[EI_CLASS] != ELFCLASS32 || e->e_ident[EI_DATA] != ELFDATA2LSB ||
+        e->e_ident[EI_VERSION] != EV_CURRENT) {
+        return false;
+    }
+    if (e->e_type != ET_EXEC || e->e_machine != EM_386) {
+        return false;
+    }
+    if (e->e_phoff == 0 || e->e_phnum == 0 || e->e_phentsize != sizeof(Elf32_Phdr)) {
+        return false;
+    }
+    return true;
+}
+
+uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
+{
+    uint16_t i;
+
+    for (i = 0; i < phnum; i++) {
+        const Elf32_Phdr *p = &phdrs[i];
+
+        /* phoff - p_offset avoids the p_offset + p_filesz overflow. */
+        if (p->p_type == PT_LOAD && phoff >= p->p_offset &&
+            phoff - p->p_offset < p->p_filesz) {
+            return p->p_vaddr + (phoff - p->p_offset);
+        }
+    }
+    return 0;
+}
+
+int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *out)
+{
+    static Elf32_Phdr phdrs[ELF_MAX_PHNUM];
+    Elf32_Ehdr ehdr;
+    uint16_t i;
+    uint32_t ph_bytes;
+    uint32_t prev_end = ELF_USER_MIN; /* segments must ascend, no overlap */
+    int nload = 0;
+
+    if (!readfn || !dir || !out) {
+        return -1;
+    }
+
+    /* ELF header */
+    if (readfn(ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr)) {
+        return -1;
+    }
+    if (!elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
+        return -1;
+    }
+
+    /* Program headers */
+    ph_bytes = (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr);
+    if (readfn(ctx, phdrs, ph_bytes, ehdr.e_phoff) != (int)ph_bytes) {
+        return -1;
+    }
+
+    /* Each PT_LOAD: allocate and zero its pages, then stream filesz bytes in
+     * directly from the file -- no whole-file buffer, so size is unbounded. */
+    for (i = 0; i < ehdr.e_phnum; i++) {
+        Elf32_Phdr *ph = &phdrs[i];
+        uint32_t vaddr, vaddr_end, page_addr;
+        uint32_t file_offset, copied, to_copy;
+
+        if (ph->p_type != PT_LOAD) {
+            continue;
+        }
+        if (ph->p_filesz > ph->p_memsz) {
+            return -1;
+        }
+
+        vaddr = ph->p_vaddr;
+        vaddr_end = vaddr + ph->p_memsz;
+
+        /* Reject hostile or malformed segment geometry BEFORE allocating any
+         * page: wrapping address/file ranges, anything outside the user image
+         * window (so a hostile ELF cannot map kernel or stack range), and
+         * segments that overlap or precede an earlier one -- valid static ELFs
+         * have ascending, disjoint PT_LOADs. */
+        if (vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
+            return -1;
+        }
+        if (vaddr < ELF_USER_MIN || vaddr_end > ELF_USER_MAX) {
+            return -1;
+        }
+        if (vaddr < prev_end) {
+            return -1;
+        }
+        prev_end = vaddr_end;
+        nload++;
+
+        for (page_addr = (vaddr & ~(PAGE_SIZE - 1)); page_addr < vaddr_end;
+             page_addr += PAGE_SIZE) {
+            uintptr_t phys_addr = alloc_user_page(dir, page_addr);
+
+            if (phys_addr == 0) {
+                return -1;
+            }
+            k_memset((void *)phys_addr, 0, PAGE_SIZE);
+        }
+
+        file_offset = ph->p_offset;
+        copied = 0;
+        to_copy = ph->p_filesz;
+
+        while (copied < to_copy) {
+            uint32_t curr_vaddr = vaddr + copied;
+            uint32_t page_base = curr_vaddr & ~(PAGE_SIZE - 1);
+            uint32_t page_offset = curr_vaddr & (PAGE_SIZE - 1);
+            uint32_t chunk_size = PAGE_SIZE - page_offset;
+            uint32_t pde_idx, pte_idx;
+            page_table_t *pt;
+            uintptr_t phys_base;
+
+            if (chunk_size > to_copy - copied) {
+                chunk_size = to_copy - copied;
+            }
+
+            pde_idx = page_base / PAGE_SIZE / 1024;
+            pte_idx = (page_base / PAGE_SIZE) % 1024;
+            pt = dir->logical_page_tables[pde_idx];
+            if (!pt) {
+                return -1;
+            }
+            phys_base = pt->pages[pte_idx] & ~0xFFF;
+
+            if (readfn(ctx, (void *)(phys_base + page_offset), chunk_size,
+                       file_offset + copied) != (int)chunk_size) {
+                return -1;
+            }
+            copied += chunk_size;
+        }
+    }
+
+    /* A loadable image needs at least one PT_LOAD, its program headers must lie
+     * inside one (so AT_PHDR is real -- Phase 2 TLS depends on it), and the
+     * entry point must be in the user window. */
+    out->phdr_vaddr = elf_phdr_vaddr(phdrs, ehdr.e_phnum, ehdr.e_phoff);
+    if (nload == 0 || out->phdr_vaddr == 0) {
+        return -1;
+    }
+    if (ehdr.e_entry < ELF_USER_MIN || ehdr.e_entry >= ELF_USER_MAX) {
+        return -1;
+    }
+    out->entry = ehdr.e_entry;
+    out->phent = ehdr.e_phentsize;
+    out->phnum = ehdr.e_phnum;
     return 0;
 }

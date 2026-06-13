@@ -34,8 +34,22 @@ void init_gdt(void)
     _gdt_set_descriptor(4, 0, 0xFFFFFFFF, 0xF2, 0xCF); /* User data */
     /* TSS descriptor: access 0x89 = present, DPL 0, type 0x9 (32-bit TSS available) */
     _gdt_set_descriptor(5, tss_base, tss_limit, 0x89, 0x00);
+    /* TLS descriptor (entry 6): same shape as user data (present, DPL 3, 4 GB
+     * R/W data); base is reprogrammed at runtime by set_thread_area and the
+     * context switch. Present from boot so loading 0x33 into %gs never faults
+     * even before a thread has set its area. */
+    _gdt_set_descriptor(GDT_TLS_ENTRY, 0, 0xFFFFFFFF, 0xF2, 0xCF);
 
     _load_gdt(&gdt_address);
+}
+
+void gdt_set_tls(uint32_t base)
+{
+    /* Rewrite only the base of the TLS descriptor; access/flags/limit stay as
+     * init_gdt programmed them (a 4 GB DPL-3 data segment). */
+    gdt_descriptors[GDT_TLS_ENTRY].base_low    = base & 0xFFFF;
+    gdt_descriptors[GDT_TLS_ENTRY].base_middle = (base >> 16) & 0xFF;
+    gdt_descriptors[GDT_TLS_ENTRY].base_high   = (base >> 24) & 0xFF;
 }
 
 static void _gdt_set_descriptor(size_t index, uint32_t base,

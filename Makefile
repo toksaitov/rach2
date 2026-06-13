@@ -10,9 +10,19 @@ SUBDIRS = krffs    \
           utils    \
           ports/doom
 
-.PHONY: all clean ramdisk $(SUBDIRS)
+.PHONY: all clean ramdisk verify-style verify-host $(SUBDIRS)
 
 all: $(SUBDIRS) ramdisk
+
+# Lightweight quality gate (see tools/check.sh): -Werror build, scoped cppcheck,
+# shellcheck, the convention grep, clang-format, and a readelf ABI check.
+verify-style:
+	@./tools/check.sh
+
+# Dual-target seam tests (see tools/hosttest.sh): pure kernel logic compiled and
+# run natively under AddressSanitizer + UndefinedBehaviorSanitizer.
+verify-host:
+	@./tools/hosttest.sh
 
 $(SUBDIRS):
 	$(MAKE) -C $@

@@ -161,6 +161,49 @@ uint16_t elf_program_header_count(const void *data);
 struct page_dir;
 typedef struct page_dir page_dir_t;
 
+/* Maximum program headers the segment loader accepts; bounds the phdr buffer.
+ * Static binaries we target have far fewer. */
+#define ELF_MAX_PHNUM 32
+
+/*
+ * Byte-range reader for the segment loader: copy `count` bytes from source
+ * offset `off` into `dst`. Returns count on success, a negative value on error.
+ * The kernel supplies a KRFFS-backed reader so the whole file is never slurped
+ * into one buffer.
+ */
+typedef int (*elf_read_fn)(void *ctx, void *dst, uint32_t count, uint32_t off);
+
+/*
+ * Metadata the segment loader records for the auxiliary vector.
+ */
+typedef struct {
+    uint32_t entry;      /* AT_ENTRY  - program entry point */
+    uint32_t phdr_vaddr; /* AT_PHDR   - vaddr of the program header table */
+    uint32_t phent;      /* AT_PHENT  - size in bytes of one program header */
+    uint32_t phnum;      /* AT_PHNUM  - number of program headers */
+} elf_image_t;
+
+/*
+ * Validate an ELF header buffer (at least sizeof(Elf32_Ehdr) bytes) as a static
+ * i386 executable. Pure; returns true if loadable.
+ */
+bool elf_valid_exec(const void *ehdr, uint32_t len);
+
+/*
+ * Return the virtual address at which the program header table is mapped
+ * (AT_PHDR) given the headers and e_phoff, or 0 if no PT_LOAD covers e_phoff.
+ * Pure.
+ */
+uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff);
+
+/*
+ * Stream a static i386 ELF into `dir` via `read`, recording the auxv metadata
+ * in `out`. Replaces the whole-file-buffer loader: only the ELF header, the
+ * program headers, and each PT_LOAD's bytes are read -- no file-size cap.
+ * Returns 0 on success, -1 on error.
+ */
+int elf_load_image(elf_read_fn read, void *ctx, page_dir_t *dir, elf_image_t *out);
+
 /*
  * Load ELF segments into user memory
  *
