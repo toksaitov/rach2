@@ -10,6 +10,7 @@
 #include "sys/isr.h"
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
+#include "sys/mm/frame.h"
 #include "sys/proc/process.h"
 #include "sys/proc/sched.h"
 #include "sys/proc/elf.h"
@@ -121,63 +122,72 @@ static bool _kbd_ctrl = false;
 static bool _kbd_e0 = false;
 
 /*
- * Kill the currently running foreground user process (CTRL+C handler).
+ * Terminate the current user process and give up its CPU.
  *
- * This is similar to sys_exit but triggered from keyboard interrupt.
- * When a user process is running and CTRL+C is pressed:
- * - If it's init: clean up and return to kernel debug shell
- * - If it's a child: mark as zombie, wake parent, let parent collect it
+ * Shared teardown for every kill that originates outside sys_exit -- the CTRL+C
+ * handler and the page-fault segfault path both route here. Mark the process a
+ * zombie with 'exit_code', wake a parent blocked in waitpid, free its user pages
+ * and page directory, and switch off its address space. If it was init, reset the
+ * shell's input state and jump back into shell_loop on a fresh kernel stack;
+ * otherwise leave the zombie for the parent's waitpid to collect and schedule the
+ * (now READY) parent. Does not return when a user process was current.
+ *
+ * Declared extern (no header) by mm/paging.c, which calls it from the fault
+ * handler -- mirrors how syscall.c reaches shell_loop/stack.
  */
-static void kill_foreground_process(void)
+void terminate_current_process(int32_t exit_code)
 {
     process_t *parent;
     bool is_init;
+    uint32_t pid;
 
-    /* Only kill user processes (cr3 != 0 means it has its own page directory) */
+    /* Only user processes have their own page directory; ignore the kernel
+     * idle/shell context. */
     if (!current_proc || current_proc->cr3 == 0) {
         return;
     }
 
-    is_init = (current_proc->pid == init_pid && init_pid != 0);
+    pid = current_proc->pid;
+    is_init = (pid == init_pid && init_pid != 0);
 
     /* Release framebuffer if this process owns it */
-    fb_release_if_owner(current_proc->pid);
+    fb_release_if_owner(pid);
 
-    serial_printf("CTRL+C: Killing process %d (is_init=%d)\n",
-                  current_proc->pid, is_init);
-    k_puts("^C");
-
-    /* Mark process as zombie with "interrupted" exit code */
+    /* Mark process as zombie and store its exit code */
     current_proc->state = PROC_ZOMBIE;
-    current_proc->exit_code = -2;  /* Indicates killed by interrupt */
+    current_proc->exit_code = exit_code;
 
     /* Wake up parent if it's blocked (likely in waitpid) */
     parent = get_process(current_proc->parent_pid);
     if (parent && parent->state == PROC_BLOCKED) {
         parent->state = PROC_READY;
-        serial_printf("CTRL+C: Woke parent process %d\n", parent->pid);
+        serial_printf("terminate: woke parent process %d\n", parent->pid);
     }
 
-    /* Clean up user pages before switching context */
+    /* Clean up user pages, then switch off the dying address space BEFORE
+     * freeing its page directory: free_page_directory refuses to free whatever
+     * is currently loaded in CR3, so freeing while still on this directory would
+     * silently leak it and all its private page tables. */
     if (current_proc->cr3 != 0) {
         page_dir_t *dir;
         dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
         free_user_pages(dir);
+        switch_page_directory(_kernel_dir);
         free_page_directory(dir);
         current_proc->cr3 = 0;
+    } else {
+        switch_page_directory(_kernel_dir);
     }
-
-    /* Switch to kernel page directory */
-    switch_page_directory(_kernel_dir);
 
     if (is_init) {
         /*
-         * Init was killed - return to kernel debug shell.
-         * This is the same path as when init exits normally.
+         * Init terminated - return to the kernel debug shell. Same resume path
+         * as when init exits normally (see sys_exit).
          */
-        serial_printf("CTRL+C: Init killed, returning to kernel shell\n");
+        serial_printf("terminate: init process %d exited (status %d), "
+                      "returning to kernel shell\n", pid, exit_code);
         k_puts("");
-        k_puts("Init process killed. Returning to kernel debug shell.");
+        k_puts("Init process exited. Returning to kernel debug shell.");
 
         free_process(current_proc);
 
@@ -210,9 +220,8 @@ static void kill_foreground_process(void)
         /* Never reached */
     } else {
         /*
-         * Child process killed - leave as ZOMBIE for parent to collect.
+         * Child process terminated - leave as ZOMBIE for parent to collect.
          * Parent's waitpid will clean up pages and free the process slot.
-         * We just need to schedule the parent to run.
          *
          * DON'T call free_process() here - waitpid needs to find the zombie!
          */
@@ -223,6 +232,26 @@ static void kill_foreground_process(void)
         /* If we get here, something went wrong - halt */
         __asm__ __volatile__("cli; hlt");
     }
+}
+
+/*
+ * Kill the currently running foreground user process (CTRL+C handler).
+ *
+ * Triggered from the keyboard interrupt; echoes "^C" and routes through the
+ * shared terminate_current_process() teardown with the "interrupted" status.
+ */
+static void kill_foreground_process(void)
+{
+    /* Only kill user processes (cr3 != 0 means it has its own page directory) */
+    if (!current_proc || current_proc->cr3 == 0) {
+        return;
+    }
+
+    serial_printf("CTRL+C: killing process %d\n", current_proc->pid);
+    k_puts("^C");
+
+    terminate_current_process(-2);  /* -2: killed by interrupt */
+    /* Never reached for a user process */
 }
 
 static void keyboard_handler(isr_params_t *params)
@@ -1197,6 +1226,11 @@ static void exec_program(int argc, char *argv[])
     user_proc->parent_pid = current_proc ? current_proc->pid : 0;
     current_proc = user_proc;
 
+    /* Build the address-space map (VMAs) so the demand-paging fault handler can
+     * resolve heap/stack/mmap faults for this process (the ELF segments stay
+     * eagerly loaded above). */
+    elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH);
+
     /*
      * If no init process is running, this is the init process.
      * When init exits, the kernel returns to shell_loop().
@@ -1967,7 +2001,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_printf("  Paging...");
     serial_printf("  Paging...");
-    init_paging();
+    /* Size the physical frame pool from the multiboot memory map, capped to the
+     * direct-mapped window (frame_usable_count). */
+    init_paging(frame_usable_count(info));
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");

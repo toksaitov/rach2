@@ -440,7 +440,7 @@ kernel, `errno` set by the libc.
   reaches `main`, does buffered stdio, exits cleanly.
 **Done when:** the errno probe passes and musl `hello` runs in Rach2.
 
-### [ ] Phase 4 — Virtual memory: the address-space model (VMAs + demand paging)
+### [x] Phase 4 — Virtual memory: the address-space model (VMAs + demand paging)
 **Goal:** the real VM subsystem — a per-process map of memory regions, frames
 allocated lazily on fault, stacks that grow, `brk`/`mmap` as region operations,
 and a fault that kills a *process* (not the machine). **The centerpiece.**

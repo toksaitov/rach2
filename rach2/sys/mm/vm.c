@@ -19,6 +19,7 @@ void vm_init(vm_space_t *vm)
     vm->heap_start = 0;
     vm->brk = 0;
     vm->stack_limit = 0;
+    vm->mmap_top = 0;
 }
 
 vma_t *vm_find(vm_space_t *vm, uint32_t addr)
@@ -119,6 +120,34 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
             r->end = start; /* trim the high end */
         }
         i++;
+    }
+    return 0;
+}
+
+int vm_grow_stack(vm_space_t *vm, uint32_t page)
+{
+    uint32_t i, j;
+
+    for (i = 0; i < vm->count; i++) {
+        vma_t *r = &vm->vmas[i];
+
+        /* The faulting page must sit just below the stack region (which grows
+         * down) and stay at or above the limit set when the stack was created.
+         * Extending start covers every page from here up to the old start; the
+         * intervening pages fault in lazily as the stack is actually touched. */
+        if (r->type == VM_STACK && page < r->start && page >= vm->stack_limit) {
+            /* The new span [page, r->start) must be clear of every other region:
+             * a (possibly hostile) ELF segment or mmap inside the growth window
+             * must not be swallowed by the stack. */
+            for (j = 0; j < vm->count; j++) {
+                if (j != i && page < vm->vmas[j].end &&
+                    r->start > vm->vmas[j].start) {
+                    return 0;
+                }
+            }
+            r->start = page;
+            return 1;
+        }
     }
     return 0;
 }

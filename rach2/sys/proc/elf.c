@@ -6,6 +6,7 @@
 
 #include "elf.h"
 #include "../mm/paging.h"
+#include "../mm/vm.h"
 #include "../lib/kstring.h"
 #include "../serial.h"
 
@@ -282,12 +283,15 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     Elf32_Ehdr ehdr;
     uint16_t i;
     uint32_t ph_bytes;
-    uint32_t prev_end = ELF_USER_MIN; /* segments must ascend, no overlap */
+    uint32_t prev_end = ELF_USER_MIN; /* page-aligned end of the previous PT_LOAD */
     int nload = 0;
 
     if (!readfn || !dir || !out) {
         return -1;
     }
+
+    out->nsegs = 0;
+    out->image_end = 0;
 
     /* ELF header */
     if (readfn(ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr)) {
@@ -324,18 +328,43 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
          * page: wrapping address/file ranges, anything outside the user image
          * window (so a hostile ELF cannot map kernel or stack range), and
          * segments that overlap or precede an earlier one -- valid static ELFs
-         * have ascending, disjoint PT_LOADs. */
+         * have ascending, disjoint PT_LOADs. The overlap test is page-granular:
+         * two PT_LOADs that merely share a page would have their common page
+         * allocated twice (leaking a frame and losing the first segment's bytes),
+         * so a segment must start on or after the previous one's page-aligned end. */
         if (vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
             return -1;
         }
         if (vaddr < ELF_USER_MIN || vaddr_end > ELF_USER_MAX) {
             return -1;
         }
-        if (vaddr < prev_end) {
+        if ((vaddr & ~(PAGE_SIZE - 1)) < prev_end) {
             return -1;
         }
-        prev_end = vaddr_end;
+        prev_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
         nload++;
+
+        /* Record the page-aligned segment so exec can build a VMA for it with the
+         * right protection, and track the top of the image (the heap base). Every
+         * PT_LOAD must get a slot: an untracked segment would be loaded
+         * present+writable with no VMA, so a read-only segment past the cap would
+         * be silently writable. Reject rather than under-protect -- the static
+         * binaries we target have only a few PT_LOADs. */
+        {
+            uint32_t seg_start = vaddr & ~(PAGE_SIZE - 1);
+            uint32_t seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+            if (out->nsegs >= ELF_MAX_SEGS) {
+                return -1;
+            }
+            out->segs[out->nsegs].start = seg_start;
+            out->segs[out->nsegs].end = seg_end;
+            out->segs[out->nsegs].flags = ph->p_flags;
+            out->nsegs++;
+            if (seg_end > out->image_end) {
+                out->image_end = seg_end;
+            }
+        }
 
         for (page_addr = (vaddr & ~(PAGE_SIZE - 1)); page_addr < vaddr_end;
              page_addr += PAGE_SIZE) {
@@ -380,6 +409,42 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
         }
     }
 
+    /* Apply real PTE permissions now that every segment's bytes are in place.
+     * alloc_user_page mapped each page writable; a page covered only by
+     * non-writable segments (text: read + execute) is now made read-only, so a
+     * user write to it faults as a protection violation -- which the fault
+     * handler turns into a segfault, and which Phase 5's copy-on-write keys on to
+     * tell a write fault from a demand fault. A page shared with any writable
+     * segment stays writable (writable wins), so a text/data boundary page is
+     * never wrongly protected. Only the recorded (capped) segments participate;
+     * an image with more PT_LOADs than slots simply leaves the rest writable. */
+    {
+        int si, sj;
+
+        for (si = 0; si < out->nsegs; si++) {
+            uint32_t pg;
+
+            if (out->segs[si].flags & PF_W) {
+                continue;
+            }
+            for (pg = out->segs[si].start; pg < out->segs[si].end;
+                 pg += PAGE_SIZE) {
+                int writable = 0;
+
+                for (sj = 0; sj < out->nsegs; sj++) {
+                    if ((out->segs[sj].flags & PF_W) &&
+                        pg >= out->segs[sj].start && pg < out->segs[sj].end) {
+                        writable = 1;
+                        break;
+                    }
+                }
+                if (!writable) {
+                    paging_set_writable(dir, pg, false);
+                }
+            }
+        }
+    }
+
     /* A loadable image needs at least one PT_LOAD, its program headers must lie
      * inside one (so AT_PHDR is real -- Phase 2 TLS depends on it), and the
      * entry point must be in the user window. */
@@ -394,4 +459,43 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     out->phent = ehdr.e_phentsize;
     out->phnum = ehdr.e_phnum;
     return 0;
+}
+
+void elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
+                    uint32_t stack_top, uint32_t stack_growth)
+{
+    int si;
+
+    vm_init(vm);
+
+    /* One VMA per loaded segment, protection from the ELF p_flags. */
+    for (si = 0; si < img->nsegs; si++) {
+        uint32_t flags = img->segs[si].flags;
+        uint32_t prot = 0;
+        vm_type_t vt;
+
+        if (flags & PF_R) {
+            prot |= VM_PROT_READ;
+        }
+        if (flags & PF_W) {
+            prot |= VM_PROT_WRITE;
+        }
+        if (flags & PF_X) {
+            prot |= VM_PROT_EXEC;
+        }
+        vt = (flags & PF_X) ? VM_CODE : VM_DATA;
+        vm_insert(vm, img->segs[si].start, img->segs[si].end, prot, vt);
+    }
+
+    /* Heap starts empty just past the image; brk grows it on demand. */
+    vm->heap_start = img->image_end;
+    vm->brk = img->image_end;
+
+    /* Anonymous mmaps are bumped down from a fixed base between heap and stack. */
+    vm->mmap_top = VM_MMAP_BASE;
+
+    /* The stack: one page mapped at the top, growable downward to stack_limit. */
+    vm->stack_limit = stack_top - stack_growth;
+    vm_insert(vm, stack_top, stack_top + PAGE_SIZE,
+              VM_PROT_READ | VM_PROT_WRITE, VM_STACK);
 }

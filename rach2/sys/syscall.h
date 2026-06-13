@@ -25,6 +25,9 @@
 #define SYS_LSEEK   19
 #define SYS_GETPID   20
 #define SYS_RENAME    38
+#define SYS_BRK       45
+#define SYS_MUNMAP    91
+#define SYS_MMAP2    192
 #define SYS_SOCKETCALL 102
 #define SYS_IOCTL     54
 #define SYS_DUP2      63

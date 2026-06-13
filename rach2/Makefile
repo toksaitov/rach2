@@ -48,6 +48,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/mm/paging.c       \
 	  sys/mm/usercopy.c     \
 	  sys/mm/vm.c           \
+	  sys/mm/frame.c        \
 	  sys/proc/process.c    \
 	  sys/proc/sched.c      \
 	  sys/proc/elf.c        \

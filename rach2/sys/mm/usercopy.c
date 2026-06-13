@@ -1,4 +1,5 @@
 #include "usercopy.h"
+#include "paging.h"
 
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
@@ -32,6 +33,13 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
     {
         return -EFAULT;
     }
+    /* Back any demand-paged pages in the range before the kernel reads them, so
+     * a not-yet-present (but valid) user page faults in here rather than from the
+     * raw k_memcpy below; a page outside every VMA returns -EFAULT, not a panic. */
+    if (!vm_prefault_range(addr, n, 0))
+    {
+        return -EFAULT;
+    }
     k_memcpy(dst, (const void __force *)src, n);
     return 0;
 }
@@ -45,6 +53,13 @@ int copy_to_user(void __user *dst, const void *src, uint32_t n)
         return 0;
     }
     if (!user_range_ok(addr, n))
+    {
+        return -EFAULT;
+    }
+    /* Writing into user space: fault the pages in with write permission, so a
+     * lazily-allocated heap/stack page is created here and a read-only or
+     * unmapped destination yields -EFAULT instead of faulting in kernel mode. */
+    if (!vm_prefault_range(addr, n, 1))
     {
         return -EFAULT;
     }
@@ -64,10 +79,20 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
     }
     for (i = 0; i < n; i++)
     {
+        uint32_t a = addr + i;
+
         /* Validate each byte's address before reading it -- a short string near
          * the top of user space stays valid while an unterminated one cannot
          * walk off the end. */
-        if (!user_range_ok(addr + i, 1))
+        if (!user_range_ok(a, 1))
+        {
+            return -EFAULT;
+        }
+        /* Back the page before the read, once per page as we cross each boundary.
+         * The range is not prefaulted whole because n is only a cap: the string
+         * may terminate before a later (legitimately unmapped) page, and faulting
+         * that page in would wrongly reject a valid short string. */
+        if ((i == 0 || (a & (PAGE_SIZE - 1)) == 0) && !vm_prefault_range(a, 1, 0))
         {
             return -EFAULT;
         }

@@ -1,5 +1,17 @@
 #include "paging.h"
+#include "frame.h"
+#include "usercopy.h"
 #include "../serial.h"
+#include "../proc/process.h"
+
+/*
+ * Defined in kernel.c: tear the current user process down -- free its pages,
+ * wake a waiting parent -- and either resume the kernel debug shell (if it was
+ * init) or schedule the parent (if it was a child). Used by the page-fault
+ * handler to kill a process that faulted illegally without taking the machine
+ * down with it. Mirrors the CTRL+C kill path.
+ */
+extern void terminate_current_process(int32_t exit_code);
 
 page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;
@@ -100,7 +112,7 @@ static void _page_fault_handler(isr_params_t *params);
 
 static void _load_page_dir(page_dir_t *dir);
 
-void init_paging(void)
+void init_paging(size_t usable_frames)
 {
     unsigned int frame;
 
@@ -110,7 +122,16 @@ void init_paging(void)
 
     page_table_t *table;
 
-    _frames_number = HARD_MEMORY_LIMIT / PAGE_SIZE; /* ToDo: use real limit. */
+    /* frame.h mirrors these two values so it can stay host-linkable; fail loudly
+     * if the mirror ever drifts from the real definitions. */
+    if (FRAME_DIRECT_MAP_LIMIT != HARD_MEMORY_LIMIT || FRAME_PAGE_SIZE != PAGE_SIZE) {
+        k_panic("frame.h constants drifted from paging.h");
+    }
+
+    /* Size the frame pool from the multiboot memory map, capped to the
+     * direct-mapped window (computed by frame_usable_count in k_main). Falls
+     * back to the full window if the bootloader gave us nothing usable. */
+    _frames_number = usable_frames ? usable_frames : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _frames = (uint8_t *) mem_reserve(_frames_number, true);
     k_memset(_frames, 0, _frames_number);
 
@@ -198,12 +219,160 @@ static void _load_page_dir(page_dir_t *dir)
     __asm__ __volatile__ ("mov %0, %%cr0" :: "r"(cr0));
 }
 
+/* Page-fault error-code bits (Intel SDM Vol. 3A, 4.7). */
+#define PF_ERR_PRESENT 0x1u /* 0 = not-present page, 1 = protection violation */
+#define PF_ERR_WRITE   0x2u /* 0 = read access, 1 = write access */
+#define PF_ERR_USER    0x4u /* 0 = supervisor mode, 1 = user mode */
+
+/* Status a process is killed with when it faults illegally (128 + SIGSEGV, the
+ * value a real kernel reports to a parent's waitpid for a segfault). */
+#define SEGV_EXIT_STATUS 139
+
+/*
+ * Is the page containing 'addr' already present in 'dir'? Keeps the demand-paging
+ * resolver idempotent: an eager-loaded code/data page, or one the pre-fault path
+ * already backed, must not be allocated a second time (which would leak the old
+ * frame and wipe the page's contents).
+ */
+static int pte_present(page_dir_t *dir, uint32_t addr)
+{
+    uint32_t page_num = addr / PAGE_SIZE;
+    uint32_t table_index = page_num / 1024;
+    uint32_t page_index = page_num % 1024;
+    page_table_t *table;
+
+    if (table_index >= 1024) {
+        return 0;
+    }
+    table = dir->logical_page_tables[table_index];
+    if (!table) {
+        return 0;
+    }
+    return (table->pages[page_index] & 0x1) != 0;
+}
+
+/*
+ * Demand-paging resolver. Decide whether an access at the (not necessarily
+ * aligned) 'addr' is legal for the current process and, if so, make sure the
+ * page is backed. 'write' is 1 for a write. Returns 1 if the page is now mapped,
+ * 0 if the access is illegal -- no VMA covers it (and it is not a valid stack
+ * growth) or it writes a read-only region -- so the caller faults or segfaults.
+ *
+ * The current process always has a user address space here (the handler and the
+ * pre-fault path both gate on current_proc->cr3 != 0).
+ */
+static int vm_resolve(uint32_t addr, int write)
+{
+    vm_space_t *vm = &current_proc->vm;
+    vma_t *vma = vm_find(vm, addr);
+    uintptr_t phys;
+
+    if (!vma) {
+        /* The one legal access outside every region is growing the stack down. */
+        if (!vm_grow_stack(vm, addr & ~(PAGE_SIZE - 1))) {
+            return 0;
+        }
+        /* A grown stack page is read+write; fall through to back it. */
+    } else {
+        /* The access must be permitted by the region's protection. A write to a
+         * read-only region and any access to a PROT_NONE region are protection
+         * violations the caller turns into a segfault (or -EFAULT for a kernel
+         * prefault) -- never silently backed. */
+        if (write) {
+            if (!(vma->prot & VM_PROT_WRITE)) {
+                return 0;
+            }
+        } else if (!(vma->prot & VM_PROT_READ)) {
+            return 0;
+        }
+        if (pte_present(_curr_dir, addr)) {
+            return 1; /* already backed -- nothing to do */
+        }
+    }
+
+    /* Lazily back the page. alloc_user_page maps it present + user + writable;
+     * code/data pages are eager-loaded at exec, so only heap/stack/anon faults
+     * reach here. */
+    phys = alloc_user_page(_curr_dir, addr);
+    if (phys == 0) {
+        return 0; /* out of frames */
+    }
+
+    /* Zero the fresh page: brk/mmap/stack memory must read as zero, and the
+     * frame may carry a previous process's data. The frame is inside the
+     * identity-mapped window, so its physical address is directly writable. */
+    k_memset((void *)phys, 0, PAGE_SIZE);
+
+    /* Honor a read-only region's protection in the PTE, so a later write faults
+     * as a protection violation -- which the handler segfaults, and which Phase 5
+     * copy-on-write uses to tell a write fault from a demand fault. A grown stack
+     * page (vma == NULL here) is left writable. */
+    if (vma && !(vma->prot & VM_PROT_WRITE)) {
+        paging_set_writable(_curr_dir, addr, false);
+    }
+    return 1;
+}
+
+int vm_prefault_range(uint32_t addr, uint32_t len, int write)
+{
+    uint32_t page, end;
+
+    if (!current_proc || current_proc->cr3 == 0) {
+        return 0; /* no user address space to fault against */
+    }
+    if (len == 0) {
+        return 1; /* an empty range touches nothing */
+    }
+
+    /* Callers range-check with user_range_ok first, so addr + len does not
+     * overflow past USER_ADDR_MAX. */
+    end = addr + len;
+    for (page = addr & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
+        if (!vm_resolve(page, write)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void _page_fault_handler(isr_params_t *params)
 {
     uint32_t fault_address;
+    int write, user_mode, have_user_proc;
+
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(fault_address));
 
-    k_printf("Kernel message: page fault at 0x%X with error code 0x%X\n", fault_address, params->error_code);
+    write = (params->error_code & PF_ERR_WRITE) != 0;
+    user_mode = (params->error_code & PF_ERR_USER) != 0;
+    have_user_proc = (current_proc != NULL && current_proc->cr3 != 0);
+
+    /* Demand paging: a fault on a user-space address owned by a live user process
+     * is resolved by lazily backing the page (heap/stack/anon) or growing the
+     * stack. Keyed on the faulting *address* being in user space, not on the CPU
+     * mode, so a kernel touch of a lazy user page would resolve here too. */
+    if (have_user_proc && fault_address >= USER_ADDR_MIN &&
+        fault_address < USER_ADDR_MAX) {
+        if (vm_resolve(fault_address, write)) {
+            return; /* page mapped; iret retries the faulting instruction */
+        }
+    }
+
+    /* Unrecoverable. A fault taken in user mode is the process's own bug: kill
+     * just that process and survive -- terminate_current_process returns to the
+     * shell if it was init, or schedules the parent to collect the zombie. */
+    if (user_mode && have_user_proc) {
+        serial_printf("Page fault: killing pid %d -- bad %s at 0x%x (err 0x%x)\n",
+                      current_proc->pid, write ? "write" : "read", fault_address,
+                      params->error_code);
+        terminate_current_process(SEGV_EXIT_STATUS);
+        return; /* child case: the parent was scheduled; nothing to retry */
+    }
+
+    /* A fault in kernel mode (or with no user context) is a kernel bug. The
+     * fault-aware usercopy path returns -EFAULT before the kernel ever touches a
+     * bad user pointer, so reaching here means the kernel itself faulted. */
+    k_printf("Kernel message: page fault at 0x%X with error code 0x%X\n",
+             fault_address, params->error_code);
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
@@ -277,6 +446,35 @@ void paging_set_user(uintptr_t addr, bool user)
     }
 
     paging_flush_tlb(addr);
+}
+
+void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
+{
+    uintptr_t page_num = addr / PAGE_SIZE;
+    uintptr_t table_index = page_num / 1024;
+    uintptr_t page_index = page_num % 1024;
+    page_table_t *table;
+
+    if (table_index >= 1024) {
+        return;
+    }
+    table = dir->logical_page_tables[table_index];
+    if (!table) {
+        return;
+    }
+    if (!(table->pages[page_index] & 0x1)) {
+        return; /* not present */
+    }
+
+    if (writable) {
+        table->pages[page_index] |= 0x2;
+    } else {
+        table->pages[page_index] &= ~0x2; /* read-only for both ring 3 and 0 */
+    }
+
+    if (dir == _curr_dir) {
+        paging_flush_tlb(addr);
+    }
 }
 
 void paging_flush_tlb(uintptr_t addr)
@@ -505,6 +703,51 @@ void free_user_pages(page_dir_t *dir)
             if (dir == _curr_dir) {
                 paging_flush_tlb(virt_addr);
             }
+        }
+    }
+}
+
+void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
+{
+    uint32_t addr;
+
+    if (!dir) {
+        return;
+    }
+
+    for (addr = start; addr < end; addr += PAGE_SIZE) {
+        uint32_t page_num = addr / PAGE_SIZE;
+        uint32_t table_index = page_num / 1024;
+        uint32_t page_index = page_num % 1024;
+        page_table_t *table;
+        uint32_t pte, phys, frame;
+
+        if (table_index >= 1024) {
+            continue;
+        }
+        table = dir->logical_page_tables[table_index];
+        if (!table) {
+            continue;
+        }
+        /* Never touch a page table shared with the kernel directory. */
+        if (table == _kernel_dir->logical_page_tables[table_index]) {
+            continue;
+        }
+
+        pte = table->pages[page_index];
+        if (!(pte & 0x1)) {
+            continue; /* not present: a never-faulted lazy page, nothing to free */
+        }
+
+        /* Return the frame to the pool and drop the mapping. */
+        phys = pte & ~0xFFF;
+        frame = phys / PAGE_SIZE;
+        if (frame < _frames_number) {
+            _frames[frame] = 0;
+        }
+        table->pages[page_index] = 0;
+        if (dir == _curr_dir) {
+            paging_flush_tlb(addr);
         }
     }
 }

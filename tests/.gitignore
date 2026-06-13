@@ -16,3 +16,14 @@ udptest
 tcptest
 sockettest
 dnstest
+auxvprobe
+errnoprobe
+tlsprobe
+vmprobe
+vmfault
+vmro
+forkro
+
+# Statically-linked musl test programs
+musl/hello
+musl/mallocqsort

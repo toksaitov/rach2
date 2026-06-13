@@ -20,6 +20,13 @@
 /* Maximum regions per process. */
 #define VMA_MAX 16
 
+/* How far below its base the main stack VMA may grow on demand (8 MB). */
+#define VM_STACK_MAX_GROWTH 0x800000u
+
+/* Anonymous mmap regions are placed by bumping down from here (well below the
+ * stack-growth window, well above the heap), mirroring a Linux mmap_base. */
+#define VM_MMAP_BASE 0xB0000000u
+
 /* Region protection bits (mirror the PROT_* / page-table permission flags). */
 #define VM_PROT_READ  0x1u
 #define VM_PROT_WRITE 0x2u
@@ -50,6 +57,7 @@ typedef struct vm_space {
     uint32_t heap_start;  /* initial program break (base of the heap VMA) */
     uint32_t brk;         /* current program break (top of the heap VMA)  */
     uint32_t stack_limit; /* lowest address the stack VMA may grow down to */
+    uint32_t mmap_top;    /* next anonymous mmap is placed just below here */
 } vm_space_t;
 
 /* Reset an address space to empty. */
@@ -75,5 +83,14 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
  * success, or -1 if the split would need more than VMA_MAX slots.
  */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end);
+
+/*
+ * Stack-growth policy for the demand-paging fault handler. If the page-aligned
+ * 'page' lies just below the stack VMA and at or above stack_limit, extend that
+ * VMA's start down to 'page' and return 1; otherwise leave the map unchanged and
+ * return 0. 'page' must already be page-aligned (the caller floors the fault
+ * address). Pure: it only edits the VMA bookkeeping, never touches page tables.
+ */
+int vm_grow_stack(vm_space_t *vm, uint32_t page);
 
 #endif /* _VM_H_ */

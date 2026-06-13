@@ -47,7 +47,7 @@ echo "=== Copying test binaries ==="
 for prog in hello filetest forktest shelltest dirtest stattest \
             touchtest rmtest mvtest lstest stdintest dup2test \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
-            tlsprobe errnoprobe; do
+            tlsprobe errnoprobe vmprobe vmfault vmro forkro; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -62,6 +62,12 @@ done
 if [ -f "../tests/musl/hello" ]; then
     cp "../tests/musl/hello" "$MOUNT_POINT/mhello"
     echo "  mhello (musl)"
+fi
+
+# The Phase 4 malloc/qsort integration program, installed as "mqsort".
+if [ -f "../tests/musl/mallocqsort" ]; then
+    cp "../tests/musl/mallocqsort" "$MOUNT_POINT/mqsort"
+    echo "  mqsort (musl)"
 fi
 
 # Also copy hello.txt for file tests

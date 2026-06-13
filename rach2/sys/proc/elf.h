@@ -174,13 +174,29 @@ typedef struct page_dir page_dir_t;
 typedef int (*elf_read_fn)(void *ctx, void *dst, uint32_t count, uint32_t off);
 
 /*
- * Metadata the segment loader records for the auxiliary vector.
+ * One loaded PT_LOAD segment, page-aligned, recorded so exec can build a VMA
+ * per segment with the right protection.
+ */
+#define ELF_MAX_SEGS 8
+
+typedef struct elf_seg {
+    uint32_t start; /* page-aligned segment start (inclusive) */
+    uint32_t end;   /* page-aligned segment end (exclusive)   */
+    uint32_t flags; /* ELF p_flags (PF_R/PF_W/PF_X)           */
+} elf_seg_t;
+
+/*
+ * Metadata the segment loader records for the auxiliary vector and the
+ * address-space map (VMAs).
  */
 typedef struct {
     uint32_t entry;      /* AT_ENTRY  - program entry point */
     uint32_t phdr_vaddr; /* AT_PHDR   - vaddr of the program header table */
     uint32_t phent;      /* AT_PHENT  - size in bytes of one program header */
     uint32_t phnum;      /* AT_PHNUM  - number of program headers */
+    uint32_t image_end;  /* page-aligned end of all loaded segments (heap base) */
+    int      nsegs;      /* number of recorded PT_LOAD segments */
+    elf_seg_t segs[ELF_MAX_SEGS];
 } elf_image_t;
 
 /*
@@ -203,6 +219,19 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
  * Returns 0 on success, -1 on error.
  */
 int elf_load_image(elf_read_fn read, void *ctx, page_dir_t *dir, elf_image_t *out);
+
+struct vm_space; /* mm/vm.h */
+
+/*
+ * Populate a process address-space map from a just-loaded image: one VMA per
+ * recorded PT_LOAD segment (protection from p_flags), an empty heap at the top
+ * of the image (brk = image_end), and a growable stack VMA of one page at
+ * [stack_top, stack_top + PAGE_SIZE) whose lower growth limit is
+ * stack_top - stack_growth. Both exec paths call this so every user process has
+ * a map for the demand-paging fault handler to consult.
+ */
+void elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
+                    uint32_t stack_top, uint32_t stack_growth);
 
 /*
  * Load ELF segments into user memory

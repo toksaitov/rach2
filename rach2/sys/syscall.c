@@ -16,6 +16,7 @@
 #include "mm/paging.h"
 #include "mm/heap.h"
 #include "mm/usercopy.h"
+#include "mm/vm.h"
 #include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/vga_gfx.h"
@@ -31,6 +32,11 @@
 
 /* Validate a user-space address range (defined with the socketcall helpers). */
 static int user_access_ok(uint32_t addr, uint32_t len);
+
+/* Validate AND fault in a user buffer before the kernel hands the raw pointer to
+ * a lower layer that dereferences it directly (krffs, tcp, udp, drivers). 'write'
+ * is 1 if that layer writes into the buffer. Defined with user_access_ok. */
+static int user_buffer_ok(uint32_t addr, uint32_t len, int write);
 
 /*
  * Framebuffer device tracking.
@@ -213,12 +219,18 @@ static int32_t sys_exit(isr_params_t *params)
         k_puts("");
         k_puts("Init process exited. Returning to kernel debug shell.");
 
-        /* Clean up the init process resources */
+        /* Clean up the init process resources. Switch off its address space
+         * BEFORE freeing the page directory: free_page_directory refuses to free
+         * whatever CR3 currently points at, so freeing while still loaded would
+         * leak the directory and its private page tables. */
         if (current_proc->cr3 != 0) {
             page_dir_t *init_dir;
             init_dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
             free_user_pages(init_dir);
+            switch_page_directory(_kernel_dir);
             free_page_directory(init_dir);
+        } else {
+            switch_page_directory(_kernel_dir);
         }
         free_process(current_proc);
 
@@ -231,9 +243,6 @@ static int32_t sys_exit(isr_params_t *params)
 
         /* Disable scheduler while in kernel shell */
         sched_disable();
-
-        /* Switch back to kernel page directory */
-        switch_page_directory(_kernel_dir);
 
         /* Re-enable interrupts and return to shell via longjmp-like mechanism.
          * We reset ESP to the kernel stack and jump to shell_loop.
@@ -283,7 +292,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EBADF;
         }
         if (entry->sock->type == SOCK_STREAM) {
-            if (!user_access_ok((uint32_t)buf, count)) {
+            if (!user_buffer_ok((uint32_t)buf, count, 0)) {
                 return -EFAULT;
             }
             /* tcp_send copies the user buffer into socket send buffers itself;
@@ -339,9 +348,9 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EBADF;
         }
 
-        /* krffs_write reads the user buffer directly, so range-check it first
-         * (as the socket path does) before stripping the __user tag. */
-        if (!user_access_ok((uint32_t)(__force uintptr_t)buf, count)) {
+        /* krffs_write reads the user buffer directly, so range-check AND fault
+         * its pages in first (as the socket path does) before stripping __user. */
+        if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
             return -EFAULT;
         }
         path = (const char *)entry->node->name;
@@ -734,7 +743,7 @@ static int32_t sys_read(isr_params_t *params)
 
     /* Socket fd - receive from the network */
     if (entry->type == FD_TYPE_SOCKET) {
-        if (!entry->sock || !user_access_ok((uint32_t)buf, count)) {
+        if (!entry->sock || !user_buffer_ok((uint32_t)buf, count, 1)) {
             return -EFAULT;
         }
         /* socket_recv/socket_tcp_recv write straight into the validated user
@@ -760,7 +769,7 @@ static int32_t sys_read(isr_params_t *params)
             /* Non-blocking raw scancode read for games. kbd_read_scancodes
              * writes into the user buffer; range-check it first, then __force
              * strips the __user tag at the boundary. */
-            if (!user_access_ok((uint32_t)buf, count)) {
+            if (!user_buffer_ok((uint32_t)buf, count, 1)) {
                 return -EFAULT;
             }
             return kbd_read_scancodes((uint8_t __force *)buf, (int)count);
@@ -876,8 +885,9 @@ static int32_t sys_read(isr_params_t *params)
 
         /* Read packets from the mouse ring buffer. mouse_read_packets writes
          * into the user buffer; range-check it, then __force at the boundary. */
-        if (!user_access_ok((uint32_t)buf,
-                            (uint32_t)packets_requested * sizeof(struct mouse_packet))) {
+        if (!user_buffer_ok((uint32_t)buf,
+                            (uint32_t)packets_requested * sizeof(struct mouse_packet),
+                            1)) {
             return -EFAULT;
         }
         packets_read = mouse_read_packets((struct mouse_packet __force *)buf,
@@ -899,9 +909,9 @@ static int32_t sys_read(isr_params_t *params)
             return -EBADF;
         }
 
-        /* krffs_read writes straight into the user buffer, so range-check it
-         * before stripping the __user tag. */
-        if (!user_access_ok((uint32_t)(__force uintptr_t)buf, count)) {
+        /* krffs_read writes straight into the user buffer, so range-check AND
+         * fault its pages in (write) before stripping the __user tag. */
+        if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
             return -EFAULT;
         }
         path = (const char *)entry->node->name;
@@ -1341,6 +1351,14 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
 
             /* Copy page content (both phys addrs are identity-mapped) */
             k_memcpy((void *)child_phys, (void *)parent_phys, PAGE_SIZE);
+
+            /* Preserve the parent's protection: alloc_user_page mapped the child
+             * page writable, but if the parent page is read-only (ELF text, a
+             * PROT_READ mapping) the child must be read-only too -- otherwise fork
+             * would silently drop the read-only enforcement for the child. */
+            if (!(pte & 0x2)) {
+                paging_set_writable(child_dir, virt_addr, false);
+            }
         }
     }
 
@@ -1628,6 +1646,12 @@ static int32_t sys_execve(isr_params_t *params)
         params->ds = 0x23;
         current_proc->tls_base = 0;
         gdt_set_tls(0);
+
+        /* Build the address-space map (VMAs) for the new image so the Phase 4
+         * fault handler can demand-page, grow the stack, or segfault. The ELF
+         * code/data pages themselves are still eagerly loaded above. */
+        elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
+                       VM_STACK_MAX_GROWTH);
     }
 
     /*
@@ -1679,8 +1703,13 @@ static int32_t sys_fork(isr_params_t *params)
         return -ENOMEM;
     }
 
-    /* Copy user pages from parent to child */
+    /* Copy user pages from parent to child. On failure, release the frames
+     * copy_user_pages already allocated and the cloned directory -- not just the
+     * PCB -- or each failed fork leaks a directory and its private page tables.
+     * child_dir is never the running (parent) directory, so it frees cleanly. */
     if (copy_user_pages(parent, child_dir) != 0) {
+        free_user_pages(child_dir);
+        free_page_directory(child_dir);
         free_process(child);
         return -ENOMEM;
     }
@@ -1688,6 +1717,8 @@ static int32_t sys_fork(isr_params_t *params)
     /* Allocate kernel stack for child */
     child_kstack_base = mem_reserve(KERNEL_STACK_SIZE, true);
     if (!child_kstack_base) {
+        free_user_pages(child_dir);
+        free_page_directory(child_dir);
         free_process(child);
         return -ENOMEM;
     }
@@ -1703,6 +1734,13 @@ static int32_t sys_fork(isr_params_t *params)
      * switch would reprogram the TLS descriptor to 0 for the child and its
      * %gs-relative reads (errno, the stack canary) would fault or read garbage. */
     child->tls_base = parent->tls_base;
+
+    /* The child's address space is a copy of the parent's at the same virtual
+     * addresses (copy_user_pages duplicated the pages), so copy the VMA map too
+     * -- otherwise the child would have no regions and the first heap/stack
+     * fault would segfault it. (k_memcpy, not struct assignment, so the
+     * freestanding kernel does not need a compiler-emitted memcpy.) */
+    k_memcpy(&child->vm, &parent->vm, sizeof(child->vm));
 
     /* Copy file descriptor table. Inherited sockets gain a reference each so
      * the parent and child release independently. */
@@ -1784,10 +1822,13 @@ static int32_t sys_waitpid(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Validate the status pointer up front (a NULL pointer means "don't report
-     * status"), so a bad address is rejected before any child is reaped. */
+    /* Validate AND fault in the status pointer up front (a NULL pointer means
+     * "don't report status"), so a bad or not-yet-present address is rejected
+     * before any child is reaped -- otherwise the copy_to_user below could fail
+     * after free_process() has already destroyed the zombie, losing it. Prefault
+     * for write, since that is how the status is delivered. */
     if (status &&
-        !user_access_ok((uint32_t)(__force uintptr_t)status, sizeof(int))) {
+        !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
         return -EFAULT;
     }
 
@@ -2205,10 +2246,10 @@ static int32_t sys_getdents64(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Records are packed straight into the user buffer below, so range-check the
-     * whole [buf, buf+count) span once -- every record write then stays inside
-     * validated user memory. */
-    if (!user_access_ok((uint32_t)buf, count)) {
+    /* Records are packed straight into the user buffer below, so range-check AND
+     * fault in the whole [buf, buf+count) span once -- every record write then
+     * stays inside present, validated user memory. */
+    if (!user_buffer_ok((uint32_t)buf, count, 1)) {
         return -EFAULT;
     }
 
@@ -2378,7 +2419,7 @@ static int32_t sys_ioctl(isr_params_t *params)
             case FB_SETPALETTE:
                 if (arg != 0) {
                     /* 256 RGB triples = 768 bytes read straight from user. */
-                    if (!user_access_ok(arg, 768)) {
+                    if (!user_buffer_ok(arg, 768, 0)) {
                         return -EFAULT;
                     }
                     vga_mode13h_set_palette((const uint8_t *)arg);
@@ -2462,7 +2503,7 @@ static int32_t sys_ioctl(isr_params_t *params)
                     return -EFAULT;
                 }
                 if (!kp.buffer ||
-                    !user_access_ok((uint32_t)(uintptr_t)kp.buffer, kp.size)) {
+                    !user_buffer_ok((uint32_t)(uintptr_t)kp.buffer, kp.size, 0)) {
                     return -EFAULT;
                 }
                 return audio->write(kp.buffer, kp.size);
@@ -2498,6 +2539,20 @@ static int32_t sys_ioctl(isr_params_t *params)
 static int user_access_ok(uint32_t addr, uint32_t len)
 {
     return user_range_ok(addr, len);
+}
+
+/*
+ * Range-check a user buffer AND back its pages before the kernel passes the raw
+ * pointer to a lower layer (krffs, tcp, udp, the drivers) that dereferences it
+ * directly. With demand paging a numerically valid pointer may still be unmapped
+ * (a never-touched heap page, or a wild address in no VMA); vm_prefault_range
+ * faults the valid pages in here and rejects the bad ones, so the lower layer's
+ * raw access can never fault in kernel mode and panic. 'write' is 1 when that
+ * layer writes into the buffer (so the pages need write permission).
+ */
+static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
+{
+    return user_access_ok(addr, len) && vm_prefault_range(addr, len, write);
 }
 
 /* Read and write big-endian sockaddr fields (sin_port, sin_addr). */
@@ -2664,7 +2719,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     if (addrlen < SOCKADDR_MIN) {
         return -EINVAL;  /* declared sockaddr shorter than the header we read */
     }
-    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
+    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
         return -EFAULT;
     }
     /* Copy the destination sockaddr into a kernel buffer for the BE helpers. */
@@ -2699,7 +2754,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
     uint16_t    src_port;
     int         bytes;
 
-    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
+    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
     }
     /* The source-address writeback is validated and truncated to the caller's
@@ -2866,7 +2921,7 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 
     (void)flags;
 
-    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
+    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
         return -EFAULT;
     }
 
@@ -2890,7 +2945,7 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
 
     (void)flags;
 
-    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
+    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
     }
 
@@ -3079,6 +3134,190 @@ static int32_t sys_uname(isr_params_t *params)
 }
 
 /*
+ * mmap2 protection bits and flags (Linux i386 ABI). We support PROT_* as VMA
+ * permissions and only anonymous private mappings -- file-backed mmap would need
+ * a page cache.
+ */
+#define PROT_READ     0x1
+#define PROT_WRITE    0x2
+#define PROT_EXEC     0x4
+#define MAP_PRIVATE   0x02
+#define MAP_FIXED     0x10
+#define MAP_ANONYMOUS 0x20
+
+/* Round 'v' up to the next page boundary. */
+#define PAGE_UP(v) (((v) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
+
+/*
+ * sys_brk - set the program break (heap top).
+ * Arg: EBX = requested break. Returns the resulting break: the new value on
+ * success, or the unchanged current break if the request is out of range. This
+ * is the contract musl's __brk relies on (it compares the return to its request).
+ * The heap is a single demand-paged VMA [heap_start, page_up(brk)); growing only
+ * extends the region (pages fault in lazily), shrinking frees the pages above.
+ */
+static int32_t sys_brk(isr_params_t *params)
+{
+    uint32_t req = params->ebx;
+    vm_space_t *vm;
+    vma_t *heap;
+    uint32_t i, old_top, new_top;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    vm = &current_proc->vm;
+
+    /* brk(0) queries the break; below the heap base or into the stack window is
+     * refused with the break left unchanged. */
+    if (req < vm->heap_start || req > vm->stack_limit) {
+        return (int32_t)vm->brk;
+    }
+
+    old_top = PAGE_UP(vm->brk);
+    new_top = PAGE_UP(req);
+
+    /* Find the heap region, if the heap has ever grown above its base. */
+    heap = NULL;
+    for (i = 0; i < vm->count; i++) {
+        if (vm->vmas[i].type == VM_HEAP) {
+            heap = &vm->vmas[i];
+            break;
+        }
+    }
+
+    if (new_top > old_top) {
+        /* Grow: the new pages [old_top, new_top) must not collide with mmap or
+         * any other region. The heap's own [heap_start, old_top) abuts that span
+         * without overlapping, so vm_overlaps tests only the *other* regions. */
+        if (vm_overlaps(vm, old_top, new_top)) {
+            return (int32_t)vm->brk;
+        }
+        /* Extend the region, or create it on the first non-empty break. */
+        if (heap) {
+            heap->end = new_top;
+        } else if (vm_insert(vm, vm->heap_start, new_top,
+                             VM_PROT_READ | VM_PROT_WRITE, VM_HEAP) != 0) {
+            return (int32_t)vm->brk;
+        }
+    } else if (new_top < old_top) {
+        /* Shrink: free the pages above the new top, then trim or drop the VMA. */
+        unmap_user_range(_curr_dir, new_top, old_top);
+        if (heap) {
+            if (new_top <= vm->heap_start) {
+                vm_remove(vm, heap->start, heap->end);
+            } else {
+                heap->end = new_top;
+            }
+        }
+    }
+
+    vm->brk = req;
+    return (int32_t)req;
+}
+
+/*
+ * sys_mmap2 - map anonymous memory.
+ * Args: EBX=addr (hint, ignored), ECX=length, EDX=prot, ESI=flags, EDI=fd,
+ * EBP=pgoffset. Returns the mapped base address, or -errno. Only
+ * MAP_ANONYMOUS|MAP_PRIVATE is supported (what musl's allocator uses); the region
+ * is placed by bumping mmap_top down and is demand-paged + zero-filled on touch.
+ */
+static int32_t sys_mmap2(isr_params_t *params)
+{
+    uint32_t length = params->ecx;
+    uint32_t prot = params->edx;
+    uint32_t flags = params->esi;
+    vm_space_t *vm;
+    uint32_t len, base, vmprot;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    vm = &current_proc->vm;
+
+    if (length == 0) {
+        return -EINVAL;
+    }
+    if (!(flags & MAP_ANONYMOUS)) {
+        return -ENOSYS; /* file-backed mmap is not implemented */
+    }
+    if (flags & MAP_FIXED) {
+        /* We choose the address ourselves; honoring a fixed hint would need
+         * overlap/replace handling we do not have. Reject rather than silently
+         * return a different address the caller would then fault on. */
+        return -ENOSYS;
+    }
+
+    len = PAGE_UP(length);
+
+    vmprot = 0;
+    if (prot & PROT_READ) {
+        vmprot |= VM_PROT_READ;
+    }
+    if (prot & PROT_WRITE) {
+        /* On i386 a present page is always readable -- there is no write-only
+         * PTE -- so writable implies readable. Record that in the VMA prot so the
+         * fault check agrees with the hardware (a read of a PROT_WRITE page does
+         * not wrongly segfault). */
+        vmprot |= VM_PROT_WRITE | VM_PROT_READ;
+    }
+    if (prot & PROT_EXEC) {
+        vmprot |= VM_PROT_EXEC;
+    }
+
+    /* Bump down from mmap_top; refuse if it would underflow or hit the heap. The
+     * addr hint is ignored (no MAP_FIXED support), which suits musl's malloc. */
+    if (len > vm->mmap_top || vm->mmap_top - len < PAGE_UP(vm->brk)) {
+        return -ENOMEM;
+    }
+    base = vm->mmap_top - len;
+
+    if (vm_insert(vm, base, base + len, vmprot, VM_ANON) != 0) {
+        return -ENOMEM;
+    }
+    vm->mmap_top = base;
+    return (int32_t)base;
+}
+
+/*
+ * sys_munmap - unmap a range.
+ * Args: EBX=addr (page-aligned), ECX=length. Returns 0, or -errno. Drops the VMA
+ * bookkeeping (trimming or splitting partial overlaps) and frees the backing
+ * frames; unmapping never-faulted or never-mapped pages is a no-op, as on Linux.
+ */
+static int32_t sys_munmap(isr_params_t *params)
+{
+    uint32_t addr = params->ebx;
+    uint32_t length = params->ecx;
+    vm_space_t *vm;
+    uint32_t start, end;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    vm = &current_proc->vm;
+
+    if (length == 0 || (addr & (PAGE_SIZE - 1)) != 0) {
+        return -EINVAL;
+    }
+    /* Reject a range that leaves user space or wraps, so PAGE_UP(addr + length)
+     * below cannot overflow to a smaller end and silently no-op. */
+    if (addr >= USER_ADDR_MAX || length > USER_ADDR_MAX - addr) {
+        return -EINVAL;
+    }
+
+    start = addr;
+    end = PAGE_UP(addr + length);
+
+    if (vm_remove(vm, start, end) != 0) {
+        return -ENOMEM; /* a hole-punch split would exceed VMA_MAX */
+    }
+    unmap_user_range(_curr_dir, start, end);
+    return 0;
+}
+
+/*
  * Syscall handler - dispatches to appropriate syscall function
  * Stores return value in params->eax so it's returned to userspace
  */
@@ -3141,6 +3380,9 @@ void init_syscall(void)
     _syscall_table[SYS_UNLINK] = sys_unlink;
     _syscall_table[SYS_EXECVE] = sys_execve;
     _syscall_table[SYS_CHDIR] = sys_chdir;
+    _syscall_table[SYS_BRK] = sys_brk;
+    _syscall_table[SYS_MMAP2] = sys_mmap2;
+    _syscall_table[SYS_MUNMAP] = sys_munmap;
     _syscall_table[SYS_LSEEK] = sys_lseek;
     _syscall_table[SYS_RENAME] = sys_rename;
     _syscall_table[SYS_IOCTL] = sys_ioctl;
