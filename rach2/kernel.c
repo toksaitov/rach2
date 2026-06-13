@@ -2166,10 +2166,11 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         k_printf(" OK (%s)\n", net_status());
         serial_printf(" OK (%s)\n", net_status());
         set_fore_color(light_grey);
+        net_print_info();
     } else {
         set_fore_color(light_brown);
-        k_puts(" None");
-        serial_printf(" None\n");
+        k_printf(" None (%s)\n", net_error());
+        serial_printf(" None (%s)\n", net_error());
         set_fore_color(light_grey);
     }
 

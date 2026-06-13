@@ -43,14 +43,11 @@ void write32be(uint8_t *p, uint32_t value)
 
 int init_network(void)
 {
-    serial_printf("Network: initializing...\n");
-
     /* Allocate the TCB and socket pools before the NIC starts receiving. */
     tcp_init();
     socket_init();
 
     if (!rtl8139_init()) {
-        serial_printf("Network: no NIC found, networking disabled\n");
         return 0;
     }
 
@@ -60,14 +57,34 @@ int init_network(void)
      * are ported.
      */
 
-    serial_printf("Network: ready (IP 10.0.2.15/24 GW 10.0.2.2)\n");
-
     return 1;
 }
 
 const char *net_status(void)
 {
     return "RTL8139 10.0.2.15";
+}
+
+const char *net_error(void)
+{
+    return rtl8139_error();
+}
+
+void net_print_info(void)
+{
+    /* Indented detail under the "  Network... OK" banner line (serial only; the
+     * console keeps just the one-line summary). serial_printf has no field
+     * width, so the MAC is printed a nibble at a time. */
+    serial_printf("    RTL8139: IRQ %d, I/O 0x%X, "
+                  "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
+                  (int)rtl8139_irq_line(), (unsigned)rtl8139_iobase(),
+                  (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
+                  (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
+                  (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
+                  (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
+                  (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
+                  (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+    serial_printf("    IPv4 10.0.2.15/24, gateway 10.0.2.2\n");
 }
 
 uint32_t net_lock(void)

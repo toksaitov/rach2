@@ -42,6 +42,10 @@ static int tx_idx = 0;
 static uint8_t *rx_buf;
 static uint32_t rx_ptr = 0;
 
+/* Reason the most recent rtl8139_init() returned 0, surfaced via rtl8139_error()
+ * for the boot banner. The success path prints nothing (see net_print_info). */
+static const char *rtl_err = "no card";
+
 static void rtl8139_irq(isr_params_t *params);
 static void rtl8139_rx(void);
 static void rtl8139_rx_reset(void);
@@ -53,21 +57,18 @@ int rtl8139_init(void)
     uint32_t timeout;
 
     if (!pci_find_device_by_id(0x10EC, 0x8139, &rtl_pci)) {
-        serial_printf("RTL8139: not found on PCI bus\n");
+        rtl_err = "RTL8139 not found on PCI bus";
         return 0;
     }
 
     /* Reject an unrouted interrupt line rather than register a bogus vector. */
     if (rtl_pci.irq == 0xFF) {
-        serial_printf("RTL8139: no usable IRQ line (0xFF), disabled\n");
+        rtl_err = "RTL8139 has no usable IRQ line";
         return 0;
     }
 
     pci_enable_bus_master(&rtl_pci);
     iobase = (uint16_t)pci_bar_address(rtl_pci.bar[0]);
-
-    serial_printf("RTL8139: found, IRQ=%d iobase=0x%X\n",
-                  (int)rtl_pci.irq, (unsigned)iobase);
 
     /* Enter config-write mode so the configuration registers are writable. */
     outb(iobase + RTL_9346CR, 0xC0);
@@ -79,7 +80,7 @@ int rtl8139_init(void)
         /* spin */
     }
     if (timeout == 0) {
-        serial_printf("RTL8139: soft reset timed out\n");
+        rtl_err = "RTL8139 soft reset timed out";
         return 0;
     }
 
@@ -93,22 +94,13 @@ int rtl8139_init(void)
     net_mac[4] = (uint8_t)(mac_hi >>  0);
     net_mac[5] = (uint8_t)(mac_hi >>  8);
 
-    /* serial_printf has no field width, so print each byte as two nibbles. */
-    serial_printf("RTL8139: MAC = %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
-                  (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
-                  (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
-                  (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
-                  (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
-                  (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
-                  (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
-
     /* Allocate the RX ring from kernel memory (page-aligned, which also
      * satisfies the chip's DMA alignment). Point the chip at it; Rach2 is
      * identity-mapped, so the pointer is also the physical (DMA) address. */
     if (!rx_buf) {
         rx_buf = (uint8_t *)mem_reserve(RTL_RX_BUF_SIZE, true);
         if (!rx_buf) {
-            serial_printf("RTL8139: cannot allocate RX ring\n");
+            rtl_err = "RTL8139 cannot allocate RX ring";
             return 0;
         }
     }
@@ -141,10 +133,13 @@ int rtl8139_init(void)
     /* Enable the receiver and transmitter (after the buffers are configured). */
     outb(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 
-    serial_printf("RTL8139: init complete, RE+TE enabled, IRQ vector %d\n",
-                  32 + (int)rtl_pci.irq);
     return 1;
 }
+
+/* Boot-summary accessors (see net_print_info). */
+uint16_t rtl8139_iobase(void)   { return iobase; }
+uint8_t  rtl8139_irq_line(void) { return rtl_pci.irq; }
+const char *rtl8139_error(void) { return rtl_err; }
 
 void rtl8139_tx(const uint8_t *data, uint16_t len)
 {

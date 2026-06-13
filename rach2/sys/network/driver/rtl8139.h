@@ -86,4 +86,12 @@ int rtl8139_init(void);
  */
 void rtl8139_tx(const uint8_t *data, uint16_t len);
 
+/*
+ * Boot-summary accessors: the configured I/O base and IRQ line, and the reason
+ * the most recent rtl8139_init() returned 0 (valid only after a 0 return).
+ */
+uint16_t rtl8139_iobase(void);
+uint8_t  rtl8139_irq_line(void);
+const char *rtl8139_error(void);
+
 #endif /* _RTL8139_H_ */

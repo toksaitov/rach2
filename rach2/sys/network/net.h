@@ -55,6 +55,15 @@ int init_network(void);
 /* One-line description of the running stack, for the boot banner. */
 const char *net_status(void);
 
+/* One-line reason init_network() returned 0 (valid only after a 0 return). */
+const char *net_error(void);
+
+/*
+ * Print the network detail lines (NIC IRQ/IO/MAC, IPv4 config) indented under
+ * the "  Network... OK" boot banner line. Serial only; call after the OK line.
+ */
+void net_print_info(void);
+
 /*
  * Enter/leave a network critical section from syscall context. net_lock saves
  * the interrupt flag and disables interrupts; net_unlock restores it. See the
