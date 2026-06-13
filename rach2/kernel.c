@@ -21,6 +21,9 @@
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
 #include "sys/audio/hda.h"
+#include "sys/network/net.h"
+#include "sys/network/ip/icmp.h"
+#include "sys/network/tcp/tcp.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 
@@ -92,6 +95,9 @@ static void timer_handler(isr_params_t *params)
 
     /* Service HDA audio even when legacy IRQs aren't delivered (MSI-only setups). */
     hda_tick();
+
+    /* Drive TCP retransmission, RTT, zero-window probe, and TIME_WAIT timers. */
+    tcp_tick();
 
     /*
      * Allow timer IRQs to run during syscalls so HDA streaming keeps working,
@@ -1544,6 +1550,8 @@ static void process_command(const char *cmd)
         k_puts("  isolate             - Test memory isolation");
         k_puts("  usermode            - Test ring 3 execution");
         k_puts("  audio ...           - Audio tests, routing, and HDA diagnostics");
+        k_puts("  netping             - Ping the gateway (10.0.2.2)");
+        k_puts("  netbad              - Ping an unreachable host (timeout demo)");
         k_puts("  fault               - Trigger page fault (panic)");
         k_puts("  halt                - Halt the CPU");
         serial_puts("  ...and more (see VGA display)\n");
@@ -1824,6 +1832,32 @@ static void process_command(const char *cmd)
         }
         set_fore_color(light_grey);
     } else if (audio_debug_handle_command(cmd)) {
+    } else if (str_equal(cmd, "netping")) {
+        int rtt = icmp_ping(NET_IP_GATEWAY);
+        if (rtt >= 0) {
+            set_fore_color(light_green);
+            k_printf("ping 10.0.2.2: reply in %d ticks (%d ms)\n",
+                     rtt, rtt * 10);
+            serial_printf("ping 10.0.2.2: reply in %d ticks\n", rtt);
+        } else {
+            set_fore_color(light_red);
+            k_puts("ping 10.0.2.2: timeout");
+            serial_printf("ping 10.0.2.2: timeout\n");
+        }
+        set_fore_color(light_grey);
+    } else if (str_equal(cmd, "netbad")) {
+        /* Ping an unreachable host on our subnet to exercise the timeout. */
+        int rtt = icmp_ping(0x0A000263UL);   /* 10.0.2.99 */
+        if (rtt >= 0) {
+            set_fore_color(light_red);
+            k_printf("ping 10.0.2.99: unexpected reply (%d ticks)\n", rtt);
+            serial_printf("ping 10.0.2.99: unexpected reply\n");
+        } else {
+            set_fore_color(light_green);
+            k_puts("ping 10.0.2.99: timeout (expected)");
+            serial_printf("ping 10.0.2.99: timeout (expected)\n");
+        }
+        set_fore_color(light_grey);
     } else if (str_equal(cmd, "fault")) {
         volatile uint32_t *bad_ptr = (volatile uint32_t *) 0xA0000000;
         k_puts("Triggering page fault at 0xA0000000...");
@@ -2124,6 +2158,20 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         serial_printf(" None (no ramdisk)\n");
     }
     set_fore_color(light_grey);
+
+    k_printf("  Network...");
+    serial_printf("  Network...");
+    if (init_network()) {
+        set_fore_color(light_green);
+        k_printf(" OK (%s)\n", net_status());
+        serial_printf(" OK (%s)\n", net_status());
+        set_fore_color(light_grey);
+    } else {
+        set_fore_color(light_brown);
+        k_puts(" None");
+        serial_printf(" None\n");
+        set_fore_color(light_grey);
+    }
 
     k_puts("");
     set_fore_color(light_cyan);

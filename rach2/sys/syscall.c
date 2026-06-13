@@ -14,9 +14,16 @@
 #include "display/vga_gfx.h"
 #include "speaker.h"
 #include "audio/audio.h"
+#include "network/socket/socket.h"
+#include "network/udp/udp.h"
+#include "network/tcp/tcp.h"
+#include "network/ip/icmp.h"
 
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
+
+/* Validate a user-space address range (defined with the socketcall helpers). */
+static int user_access_ok(uint32_t addr, uint32_t len);
 
 /*
  * Framebuffer device tracking.
@@ -139,6 +146,20 @@ static int32_t sys_exit(isr_params_t *params)
         fb_owner_pid = 0;
     }
 
+    /* Release any sockets this process still holds open, so the slots,
+     * port bindings, and TCBs are not leaked. */
+    if (current_proc) {
+        int fdi;
+        for (fdi = 0; fdi < MAX_FDS; fdi++) {
+            fd_entry_t *e = &current_proc->fds.entries[fdi];
+            if (e->type == FD_TYPE_SOCKET && e->sock) {
+                socket_unref(e->sock);
+                e->sock = NULL;
+                e->type = FD_TYPE_NONE;
+            }
+        }
+    }
+
     k_printf("\nProcess exited with status %d\n", status);
     serial_printf("\nProcess exited with status %d\n", status);
 
@@ -238,6 +259,21 @@ static int32_t sys_write(isr_params_t *params)
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry) {
+        return -1;
+    }
+
+    /* Socket fd - send to the network */
+    if (entry->type == FD_TYPE_SOCKET) {
+        if (!entry->sock) {
+            return -1;
+        }
+        if (entry->sock->type == SOCK_STREAM) {
+            if (!user_access_ok((uint32_t)buf, count)) {
+                return -1;
+            }
+            return tcp_send(entry->sock, (const uint8_t *)buf, (int)count);
+        }
+        /* Datagram sockets send via sendto(). */
         return -1;
     }
 
@@ -475,6 +511,11 @@ static int32_t sys_close(isr_params_t *params)
         fb_owner_pid = 0;
     }
 
+    /* Drop this descriptor's reference to its socket. */
+    if (entry && entry->type == FD_TYPE_SOCKET && entry->sock) {
+        socket_unref(entry->sock);
+    }
+
     return fd_free(&current_proc->fds, fd);
 }
 
@@ -556,6 +597,18 @@ static int32_t sys_read(isr_params_t *params)
     entry = fd_get(&current_proc->fds, fd);
     if (!entry) {
         return -1;
+    }
+
+    /* Socket fd - receive from the network */
+    if (entry->type == FD_TYPE_SOCKET) {
+        if (!entry->sock || !user_access_ok((uint32_t)buf, count)) {
+            return -1;
+        }
+        if (entry->sock->type == SOCK_DGRAM) {
+            return socket_recv(entry->sock, (uint8_t *)buf, (int)count,
+                               NULL, NULL);
+        }
+        return socket_tcp_recv(entry->sock, (uint8_t *)buf, (int)count);
     }
 
     /* Console fd (stdin) - blocking read with line buffering */
@@ -738,17 +791,26 @@ static int32_t sys_dup2(isr_params_t *params)
         return newfd;
     }
 
-    /* Close newfd if it's open (ignore errors) */
+    /* Close newfd if it's open (ignore errors), releasing any socket it held. */
     if (fd_is_valid(&current_proc->fds, newfd)) {
+        new_entry = fd_get(&current_proc->fds, newfd);
+        if (new_entry && new_entry->type == FD_TYPE_SOCKET && new_entry->sock) {
+            socket_unref(new_entry->sock);
+        }
         fd_free(&current_proc->fds, newfd);
     }
 
-    /* Copy the entry */
+    /* Copy the entry. A duplicated socket gains another reference. */
     new_entry = &current_proc->fds.entries[newfd];
     new_entry->type = old_entry->type;
     new_entry->node = old_entry->node;
+    new_entry->sock = old_entry->sock;
     new_entry->offset = old_entry->offset;
     new_entry->flags = old_entry->flags;
+
+    if (new_entry->type == FD_TYPE_SOCKET && new_entry->sock) {
+        socket_ref(new_entry->sock);
+    }
 
     return newfd;
 }
@@ -1343,8 +1405,18 @@ static int32_t sys_fork(isr_params_t *params)
     child->cr3 = get_page_dir_phys(child_dir);
     child->parent_pid = parent->pid;
 
-    /* Copy file descriptor table */
+    /* Copy file descriptor table. Inherited sockets gain a reference each so
+     * the parent and child release independently. */
     k_memcpy(&child->fds, &parent->fds, sizeof(fd_table_t));
+    {
+        int fdi;
+        for (fdi = 0; fdi < MAX_FDS; fdi++) {
+            if (child->fds.entries[fdi].type == FD_TYPE_SOCKET &&
+                child->fds.entries[fdi].sock) {
+                socket_ref(child->fds.entries[fdi].sock);
+            }
+        }
+    }
 
     /*
      * Set up child's kernel stack for returning from fork.
@@ -1995,6 +2067,430 @@ static int32_t sys_ioctl(isr_params_t *params)
     return -1;  /* Unknown request */
 }
 
+/* --- Network socketcall (SYS_SOCKETCALL = 102) ---------------------------
+ *
+ * Linux i386 convention: EBX is the sub-call number, ECX points to an array of
+ * 32-bit arguments in user memory. Pointer arguments index into user memory,
+ * so every user address is range-checked before it is dereferenced.
+ */
+
+/*
+ * User address window. The kernel is identity-mapped in the low 32 MB and user
+ * space lives above it, below 0xC0000000. A user pointer and the whole length
+ * it spans must fall inside this window; anything else is rejected so a syscall
+ * argument cannot read or write kernel memory.
+ */
+#define USER_ADDR_MIN  0x02000000UL
+#define USER_ADDR_MAX  0xC0000000UL
+
+static int user_access_ok(uint32_t addr, uint32_t len)
+{
+    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
+        return 0;
+    }
+    if (len > USER_ADDR_MAX - addr) {
+        return 0;   /* spans past the end of user space (or overflows) */
+    }
+    return 1;
+}
+
+/* Read and write big-endian sockaddr fields (sin_port, sin_addr). */
+#define SC_BE16(p) \
+    ((uint16_t)(((uint8_t *)(p))[0] << 8 | ((uint8_t *)(p))[1]))
+#define SC_BE32(p) \
+    (((uint32_t)((uint8_t *)(p))[0] << 24) | \
+     ((uint32_t)((uint8_t *)(p))[1] << 16) | \
+     ((uint32_t)((uint8_t *)(p))[2] <<  8) | \
+     ((uint32_t)((uint8_t *)(p))[3]))
+#define SC_WBE16(p, v) do { \
+    ((uint8_t *)(p))[0] = (uint8_t)((v) >> 8); \
+    ((uint8_t *)(p))[1] = (uint8_t)(v); \
+} while (0)
+#define SC_WBE32(p, v) do { \
+    ((uint8_t *)(p))[0] = (uint8_t)((v) >> 24); \
+    ((uint8_t *)(p))[1] = (uint8_t)((v) >> 16); \
+    ((uint8_t *)(p))[2] = (uint8_t)((v) >>  8); \
+    ((uint8_t *)(p))[3] = (uint8_t)(v); \
+} while (0)
+
+/* socketcall sub-function numbers (Linux standard). */
+#define SC_SOCKET    1
+#define SC_BIND      2
+#define SC_CONNECT   3
+#define SC_LISTEN    4
+#define SC_ACCEPT    5
+#define SC_SEND      9
+#define SC_RECV     10
+#define SC_SENDTO   11
+#define SC_RECVFROM 12
+#define SC_PING     15
+
+/* recv flags: only MSG_DONTWAIT is honored. */
+#define MSG_DONTWAIT 0x40
+
+/* We read sin_family/sin_port/sin_addr from the first 8 sockaddr bytes. */
+#define SOCKADDR_MIN 8
+
+static int32_t do_socket(int domain, int type, int protocol)
+{
+    struct socket *sock;
+    fd_entry_t    *entry;
+    int            fd;
+
+    (void)domain;
+    (void)protocol;
+
+    if (type != SOCK_DGRAM && type != SOCK_STREAM) {
+        return -1;
+    }
+
+    sock = socket_alloc(type);
+    if (!sock) {
+        return -1;
+    }
+
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        socket_unref(sock);
+        return -1;
+    }
+
+    entry         = &current_proc->fds.entries[fd];
+    entry->type   = FD_TYPE_SOCKET;
+    entry->sock   = sock;
+    entry->node   = NULL;
+    entry->offset = 0;
+    entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
+    return fd;
+}
+
+static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
+{
+    fd_entry_t *entry;
+    uint16_t    port;
+
+    (void)addrlen;
+
+    if (!user_access_ok(sa_ptr, SOCKADDR_MIN)) {
+        return -1;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -1;
+    }
+
+    port = SC_BE16(sa_ptr + 2);
+    entry->sock->local_port = port;
+
+    if (entry->sock->type == SOCK_DGRAM) {
+        if (udp_bind(port, entry->sock) < 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
+                         int flags, uint32_t sa_ptr, int addrlen)
+{
+    fd_entry_t *entry;
+    uint16_t    dst_port;
+    uint32_t    dst_ip;
+
+    (void)flags;
+    (void)addrlen;
+
+    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len) ||
+        !user_access_ok(sa_ptr, SOCKADDR_MIN)) {
+        return -1;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -1;
+    }
+
+    /* A datagram socket needs a source port so replies can come back. */
+    if (entry->sock->local_port == 0) {
+        udp_bind_ephemeral(entry->sock);
+    }
+
+    dst_port = SC_BE16(sa_ptr + 2);
+    dst_ip   = SC_BE32(sa_ptr + 4);
+
+    udp_tx(entry->sock->local_port, dst_ip, dst_port,
+           (const uint8_t *)buf_ptr, (uint16_t)len);
+    return len;
+}
+
+static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
+                           int flags, uint32_t sa_ptr, uint32_t salen_ptr)
+{
+    fd_entry_t *entry;
+    uint32_t    src_ip;
+    uint16_t    src_port;
+    int         bytes;
+
+    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
+        return -1;
+    }
+    if (sa_ptr && !user_access_ok(sa_ptr, 16)) {
+        return -1;
+    }
+    if (salen_ptr && !user_access_ok(salen_ptr, 4)) {
+        return -1;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -1;
+    }
+
+    if (flags & MSG_DONTWAIT) {
+        bytes = socket_try_recv(entry->sock, (uint8_t *)buf_ptr, len,
+                                &src_ip, &src_port);
+        if (bytes < 0) {
+            return bytes;   /* SOCK_EAGAIN: leave the caller's sockaddr alone */
+        }
+    } else {
+        bytes = socket_recv(entry->sock, (uint8_t *)buf_ptr, len,
+                            &src_ip, &src_port);
+    }
+
+    if (sa_ptr) {
+        SC_WBE16(sa_ptr + 0, 0x0002);   /* AF_INET */
+        SC_WBE16(sa_ptr + 2, src_port);
+        SC_WBE32(sa_ptr + 4, src_ip);
+    }
+    if (salen_ptr) {
+        *((uint32_t *)salen_ptr) = 16;
+    }
+    return bytes;
+}
+
+static int32_t do_ping(uint32_t dst_ip)
+{
+    return (int32_t)icmp_ping(dst_ip);
+}
+
+static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
+{
+    fd_entry_t *entry;
+    uint32_t    dst_ip;
+    uint16_t    dst_port;
+
+    (void)addrlen;
+
+    if (!user_access_ok(sa_ptr, SOCKADDR_MIN)) {
+        return -1;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -1;
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -1;
+    }
+
+    dst_port = SC_BE16(sa_ptr + 2);
+    dst_ip   = SC_BE32(sa_ptr + 4);
+
+    if (tcp_connect(entry->sock, dst_ip, dst_port) < 0) {
+        return -1;
+    }
+
+    /* Block until the handshake completes, fails, or times out. */
+    entry->sock->waiting_proc = current_proc;
+    current_proc->state       = PROC_BLOCKED;
+    while (entry->sock->tcb != NULL &&
+           entry->sock->tcb->state != TCP_ESTABLISHED &&
+           entry->sock->tcb->state != TCP_CLOSED) {
+        __asm__ __volatile__("sti; hlt");
+    }
+    entry->sock->waiting_proc = NULL;
+    current_proc->state       = PROC_RUNNING;
+
+    if (!entry->sock->tcb || entry->sock->tcb->state != TCP_ESTABLISHED) {
+        return -1;
+    }
+    return 0;
+}
+
+static int32_t do_listen(int fd, int backlog)
+{
+    fd_entry_t *entry;
+
+    (void)backlog;   /* a fixed-size accept queue is used */
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -1;
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -1;
+    }
+
+    entry->sock->listening = 1;
+    return tcp_listen(entry->sock, entry->sock->local_port);
+}
+
+static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+{
+    fd_entry_t    *entry;
+    fd_entry_t    *new_entry;
+    struct socket *listen_sock;
+    struct socket *conn_sock;
+    int            new_fd;
+
+    if (sa_ptr && !user_access_ok(sa_ptr, 16)) {
+        return -1;
+    }
+    if (salen_ptr && !user_access_ok(salen_ptr, 4)) {
+        return -1;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -1;
+    }
+    listen_sock = entry->sock;
+
+    /* Block until a connection is queued. */
+    listen_sock->waiting_proc = current_proc;
+    current_proc->state       = PROC_BLOCKED;
+    while (listen_sock->accept_head == listen_sock->accept_tail) {
+        __asm__ __volatile__("sti; hlt");
+    }
+    listen_sock->waiting_proc = NULL;
+    current_proc->state       = PROC_RUNNING;
+
+    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
+    listen_sock->accept_head =
+        (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+
+    /* The queued socket already holds the reference created when tcp_rx
+     * accepted it; the new descriptor takes ownership of that reference. */
+    new_fd = fd_alloc(&current_proc->fds);
+    if (new_fd < 0) {
+        socket_unref(conn_sock);
+        return -1;
+    }
+    new_entry         = &current_proc->fds.entries[new_fd];
+    new_entry->type   = FD_TYPE_SOCKET;
+    new_entry->sock   = conn_sock;
+    new_entry->node   = NULL;
+    new_entry->offset = 0;
+    new_entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
+
+    if (sa_ptr) {
+        SC_WBE16(sa_ptr + 0, 0x0002);
+        SC_WBE16(sa_ptr + 2, conn_sock->remote_port);
+        SC_WBE32(sa_ptr + 4, conn_sock->remote_ip);
+        if (salen_ptr) {
+            *((uint32_t *)salen_ptr) = 16;
+        }
+    }
+    return new_fd;
+}
+
+static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
+{
+    fd_entry_t *entry;
+
+    (void)flags;
+
+    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
+        return -1;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -1;
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -1;
+    }
+
+    return (int32_t)tcp_send(entry->sock, (const uint8_t *)buf_ptr, len);
+}
+
+static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
+{
+    fd_entry_t *entry;
+
+    (void)flags;
+
+    if (len < 0 || !user_access_ok(buf_ptr, (uint32_t)len)) {
+        return -1;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -1;
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -1;
+    }
+
+    return (int32_t)socket_tcp_recv(entry->sock, (uint8_t *)buf_ptr, len);
+}
+
+static int32_t sys_socketcall(isr_params_t *params)
+{
+    int      call = (int)params->ebx;
+    uint32_t argp = params->ecx;
+    uint32_t args[6];
+    int      nargs;
+    int      i;
+
+    switch (call) {
+    case SC_PING:                       nargs = 1; break;
+    case SC_LISTEN:                     nargs = 2; break;
+    case SC_SOCKET: case SC_BIND:
+    case SC_CONNECT: case SC_ACCEPT:    nargs = 3; break;
+    case SC_SEND: case SC_RECV:         nargs = 4; break;
+    case SC_SENDTO: case SC_RECVFROM:   nargs = 6; break;
+    default:
+        return -1;
+    }
+
+    if (!user_access_ok(argp, (uint32_t)nargs * 4)) {
+        return -1;
+    }
+    for (i = 0; i < nargs; i++) {
+        args[i] = ((uint32_t *)argp)[i];
+    }
+
+    switch (call) {
+    case SC_SOCKET:
+        return do_socket((int)args[0], (int)args[1], (int)args[2]);
+    case SC_BIND:
+        return do_bind((int)args[0], args[1], (int)args[2]);
+    case SC_SENDTO:
+        return do_sendto((int)args[0], args[1], (int)args[2],
+                         (int)args[3], args[4], (int)args[5]);
+    case SC_RECVFROM:
+        return do_recvfrom((int)args[0], args[1], (int)args[2],
+                           (int)args[3], args[4], args[5]);
+    case SC_PING:
+        return do_ping(args[0]);
+    case SC_CONNECT:
+        return do_connect((int)args[0], args[1], (int)args[2]);
+    case SC_LISTEN:
+        return do_listen((int)args[0], (int)args[1]);
+    case SC_ACCEPT:
+        return do_accept((int)args[0], args[1], args[2]);
+    case SC_SEND:
+        return do_send((int)args[0], args[1], (int)args[2], (int)args[3]);
+    case SC_RECV:
+        return do_recv((int)args[0], args[1], (int)args[2], (int)args[3]);
+    default:
+        return -1;
+    }
+}
+
 /*
  * Syscall handler - dispatches to appropriate syscall function
  * Stores return value in params->eax so it's returned to userspace
@@ -2051,6 +2547,7 @@ void init_syscall(void)
     _syscall_table[SYS_STAT64] = sys_stat64;
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
+    _syscall_table[SYS_SOCKETCALL] = sys_socketcall;
 
     /* Register the interrupt handler */
     register_isr_handler(SYSCALL_VECTOR, _syscall_handler);

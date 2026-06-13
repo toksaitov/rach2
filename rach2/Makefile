@@ -51,6 +51,15 @@ C_SRC   = $(KERNEL).c \
 	  sys/proc/elf.c        \
 	  sys/fs/krffs.c        \
 	  sys/fs/fd.c           \
+	  sys/network/core/net_core.c \
+	  sys/network/driver/rtl8139.c \
+	  sys/network/ethernet/ethernet.c \
+	  sys/network/arp/arp.c \
+	  sys/network/ip/ip.c \
+	  sys/network/ip/icmp.c \
+	  sys/network/udp/udp.c \
+	  sys/network/tcp/tcp.c \
+	  sys/network/socket/socket.c \
 	  sys/lib/kctypes.c     \
 	  sys/lib/kstd.c        \
 	  sys/lib/kstring.c

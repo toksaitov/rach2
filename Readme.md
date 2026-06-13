@@ -4,13 +4,14 @@
 
 An educational 32-bit x86 operating system that boots into a Unix-like shell and can run Doom.
 
-Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements 20 Linux-compatible syscalls, supports a custom file system (KRFFS), and includes audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker.
+Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements 21 Linux-compatible syscalls, supports a custom file system (KRFFS), includes audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and has a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
 
 ## Components
 
 | Directory                  | Description                                                    | Documentation                  |
 |----------------------------|----------------------------------------------------------------|--------------------------------|
 | [rach2/](rach2/)           | 32-bit x86 kernel with syscalls, paging, preemptive scheduling | [Readme](rach2/Readme.md)      |
+| [rach2/sys/network/](rach2/sys/network/) | TCP/IP stack: RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets | [Readme](rach2/sys/network/Readme.md) |
 | [tests/](tests/)           | Syscall test programs for kernel validation                    | [Readme](tests/Readme.md)      |
 | [krffs/](krffs/)           | K&R First-Fit File System tools and RAM disk builder           | [Readme](krffs/Readme.md)      |
 | [ish/](ish/)               | Minimal Unix shell with I/O redirection and process management | [Readme](ish/Readme.md)        |

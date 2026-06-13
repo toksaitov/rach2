@@ -1,7 +1,15 @@
 #!/bin/sh
 
-# Start QEMU with GDB server (-s) paused at first instruction (-S)
-qemu-system-i386 -s -S -kernel kernel &
+# Start QEMU with GDB server (-s) paused at first instruction (-S).
+# Audio and networking devices are attached so their drivers can be debugged.
+#
+# Usage: ./debug.sh [audio_device]
+#   audio_device: sb16, hda, or speaker (default: speaker)
+
+AUDIO_DEVICE="${1:-speaker}"
+. "$(dirname "$0")/qemu_devices.sh"
+
+qemu-system-i386 -s -S -kernel kernel $AUDIO_OPTS $NET_OPTS &
 QEMU_PID=$!
 
 # Ensure QEMU is killed when this script exits

@@ -11,3 +11,8 @@ mvtest
 lstest
 stdintest
 dup2test
+pingtest
+udptest
+tcptest
+sockettest
+dnstest

@@ -13,6 +13,7 @@ void fd_table_init(fd_table_t *table)
     for (i = 0; i < MAX_FDS; i++) {
         table->entries[i].type = FD_TYPE_NONE;
         table->entries[i].node = NULL;
+        table->entries[i].sock = NULL;
         table->entries[i].offset = 0;
         table->entries[i].flags = 0;
     }
@@ -78,6 +79,7 @@ int fd_free(fd_table_t *table, int fd)
     /* Clear the entry */
     table->entries[fd].type = FD_TYPE_NONE;
     table->entries[fd].node = NULL;
+    table->entries[fd].sock = NULL;
     table->entries[fd].offset = 0;
     table->entries[fd].flags = 0;
 

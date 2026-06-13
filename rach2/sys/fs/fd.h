@@ -30,7 +30,8 @@ typedef enum {
     FD_TYPE_FILE,         /* Regular file from KRFFS */
     FD_TYPE_DIR,          /* Directory (for getdents64) */
     FD_TYPE_FRAMEBUFFER,  /* VGA framebuffer device */
-    FD_TYPE_MOUSE         /* PS/2 mouse device */
+    FD_TYPE_MOUSE,        /* PS/2 mouse device */
+    FD_TYPE_SOCKET        /* Network socket */
 } fd_type_t;
 
 /*
@@ -41,9 +42,10 @@ typedef enum {
 #define FD_FLAG_APPEND 0x04
 
 /*
- * Forward declaration for krffs_node_t
+ * Forward declarations for the types a descriptor can point at.
  */
 struct krffs_node;
+struct socket;
 
 /*
  * File descriptor entry
@@ -51,6 +53,7 @@ struct krffs_node;
 typedef struct fd_entry {
     fd_type_t type;              /* Type of this fd (NONE, CONSOLE, FILE) */
     struct krffs_node *node;     /* Pointer to KRFFS node (for FILE type) */
+    struct socket *sock;         /* Pointer to socket (for SOCKET type) */
     uint32_t offset;             /* Current read/write offset */
     uint32_t flags;              /* Open flags (READ, WRITE, APPEND) */
 } fd_entry_t;

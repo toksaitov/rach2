@@ -58,7 +58,7 @@ cp ../ish/ish "$MOUNT_POINT/"
 echo "  ish"
 
 # Copy utilities
-for util in true false echo yes cat pwd touch mkdir rm mv cp ls; do
+for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; do
     if [ -f "../utils/$util" ]; then
         cp "../utils/$util" "$MOUNT_POINT/"
         echo "  $util"
@@ -80,6 +80,14 @@ fi
 # Create a test file for cat and other file-processing utilities
 echo "hello, world" > "$MOUNT_POINT/hello.txt"
 echo "  hello.txt (test file)"
+
+# Name-resolution config for the network utilities. KRFFS has no directories,
+# so these live in the flat root; the resolver opens them as /resolv.conf and
+# /hosts. nameserver 10.0.2.3 is QEMU SLIRP's built-in DNS forwarder.
+printf 'nameserver 10.0.2.3\n' > "$MOUNT_POINT/resolv.conf"
+echo "  resolv.conf"
+printf '127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n' > "$MOUNT_POINT/hosts"
+echo "  hosts"
 
 # Remove macOS AppleDouble files (._*) if any were created
 rm -f "$MOUNT_POINT"/._*

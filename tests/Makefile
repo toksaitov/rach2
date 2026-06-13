@@ -16,7 +16,8 @@ CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000
 
 # All test programs
 PROGS = hello filetest forktest shelltest dirtest stattest \
-        touchtest rmtest mvtest lstest stdintest dup2test
+        touchtest rmtest mvtest lstest stdintest dup2test \
+        pingtest udptest tcptest sockettest dnstest
 
 .PHONY: all clean
 
@@ -25,6 +26,11 @@ all: $(PROGS)
 # Generic rule: build program from .c file
 %: %.c
 	$(CC) $(CFLAGS) -o $@ $<
+
+# dnstest links the shared stub resolver from utils/ so it can exercise both the
+# pure parser (crafted vectors) and resolve_host() (live).
+dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h
+	$(CC) $(CFLAGS) -o $@ dnstest.c ../utils/resolv.c
 
 clean:
 	rm -f $(PROGS)

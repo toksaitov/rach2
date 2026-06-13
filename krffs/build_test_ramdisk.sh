@@ -45,7 +45,8 @@ echo "=== Copying test binaries ==="
 
 # Copy all test programs
 for prog in hello filetest forktest shelltest dirtest stattest \
-            touchtest rmtest mvtest lstest stdintest dup2test; do
+            touchtest rmtest mvtest lstest stdintest dup2test \
+            pingtest udptest tcptest sockettest dnstest; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -55,6 +56,14 @@ done
 # Also copy hello.txt for file tests
 echo "hello, world" > "$MOUNT_POINT/hello.txt"
 echo "  hello.txt (test data)"
+
+# Name-resolution config for the network tests (dnstest). KRFFS has no
+# directories, so these live in the flat root; the resolver opens them as
+# /resolv.conf and /hosts. nameserver 10.0.2.3 is SLIRP's DNS forwarder.
+printf 'nameserver 10.0.2.3\n' > "$MOUNT_POINT/resolv.conf"
+echo "  resolv.conf"
+printf '127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n' > "$MOUNT_POINT/hosts"
+echo "  hosts"
 
 # Remove macOS AppleDouble files (._*) if any were created
 rm -f "$MOUNT_POINT"/._*

@@ -22,7 +22,10 @@ UTILITIES = true  \
             rm    \
             mv    \
             cp    \
-            ls
+            ls    \
+            ping  \
+            nc    \
+            httpd
 
 .PHONY: all clean
 
@@ -33,6 +36,13 @@ crt0.o: crt0.c
 
 %: %.c crt0.o
 	$(CC) $(CFLAGS) -o $@ crt0.o $<
+
+# ping and nc link the shared stub resolver (resolv.c, declared in netdb.h).
+ping: ping.c resolv.c netdb.h crt0.o
+	$(CC) $(CFLAGS) -o $@ crt0.o ping.c resolv.c
+
+nc: nc.c resolv.c netdb.h crt0.o
+	$(CC) $(CFLAGS) -o $@ crt0.o nc.c resolv.c
 
 clean:
 	rm -f $(UTILITIES) crt0.o

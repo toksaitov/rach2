@@ -20,6 +20,16 @@ The utilities can be built for both Linux (native) and the Rach2 kernel (freesta
 * `mv.c`: Moves/renames files
 * `cp.c`: Copies file contents
 * `ls.c`: Lists directory entries with type and owner permissions
+* `ping.c`: Sends ICMP echo requests via the SC_PING socketcall (`ping [host]`, default gateway 10.0.2.2); `host` may be a dotted-quad or a name
+* `nc.c`: Minimal TCP client (`nc <host> <port>`); relays a line of input and prints the reply over the socket descriptor; `host` may be a dotted-quad or a name
+* `httpd.c`: Minimal HTTP/1.0 server serving a diagnostic status page — the client endpoint, the request line and User-Agent the stack decoded, uptime and per-connection counters (listen on port 80; reach it via QEMU hostfwd)
+
+The network utilities use the `SYS_SOCKETCALL` interface and target QEMU's
+SLIRP network (gateway 10.0.2.2). `ping` and `nc` resolve a host argument
+through a small stub resolver (`resolv.c`, declared in `netdb.h`): a numeric
+literal, then the `/hosts` file, then a DNS query to the nameserver in
+`/resolv.conf` (SLIRP's forwarder 10.0.2.3). Both files live in the flat KRFFS
+root and are staged by `krffs/build_ramdisk.sh`.
 
 ## Required Syscalls
 
@@ -35,6 +45,8 @@ The utilities can be built for both Linux (native) and the Rach2 kernel (freesta
 * `getcwd`
 * `utimensat`
 * `getdents64`
+* `gettimeofday`
+* `socketcall` (network utilities)
 
 ## Build for Rach2 (Default)
 

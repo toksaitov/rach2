@@ -18,6 +18,16 @@ Freestanding ELF32 test programs for validating the Rach2 kernel's syscall imple
 * `lstest.c`: Tests getdents64 syscall - opens "/" directory, reads and parses directory entries
 * `stdintest.c`: Tests stdin read syscall - verifies blocking behavior, character echo, and line buffering
 * `dup2test.c`: Tests dup2 syscall for I/O redirection - redirects stdout to file, verifies content
+* `pingtest.c`: Tests the SC_PING socketcall - pings the gateway (replies) and an unreachable host (clean timeout)
+* `udptest.c`: Tests UDP sockets - socket/bind, blocking and non-blocking (MSG_DONTWAIT) recvfrom, echo round-trip, bad-pointer rejection
+* `tcptest.c`: Tests TCP sockets - connect, write/read echo over the socket fd, graceful close, connect-to-closed-port refused
+* `sockettest.c`: Tests socket lifecycle - close/dup2/fork sharing and process-exit cleanup do not leak or double-free
+* `dnstest.c`: Tests the userspace stub resolver in `utils/resolv.c` - `inet_aton`, `/hosts` lookup, the DNS message parser against crafted responses (A record, CNAME chain, compression pointers, NXDOMAIN, malformed input), and live name resolution through SLIRP's DNS forwarder
+
+The network tests target QEMU's SLIRP gateway 10.0.2.2. `udptest` and `tcptest`
+expect a host echo server reachable at 10.0.2.2:7777 (UDP and TCP respectively).
+`dnstest` reads `/resolv.conf` and `/hosts` from the image root; its live cases
+resolve real names through SLIRP's DNS forwarder 10.0.2.3 and need host internet.
 
 ## Build
 
@@ -101,3 +111,7 @@ make clean  # Remove compiled binaries
 | lstest    | open (5), getdents64 (220), close (6), write (4), exit (1)                             |
 | stdintest | read (3), write (4), exit (1)                                                          |
 | dup2test  | creat (8), dup2 (63), write (4), read (3), open (5), close (6), unlink (10), exit (1)  |
+| pingtest  | socketcall (102: ping), write (4), exit (1)                                            |
+| udptest   | socketcall (102: socket/bind/sendto/recvfrom), gettimeofday (78), write (4), exit (1)  |
+| tcptest   | socketcall (102: socket/connect), read (3), write (4), close (6), exit (1)             |
+| sockettest| socketcall (102: socket), fork (2), waitpid (7), dup2 (63), close (6), write (4), exit (1) |

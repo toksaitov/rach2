@@ -24,6 +24,7 @@
 #define SYS_CHDIR   12
 #define SYS_LSEEK   19
 #define SYS_RENAME    38
+#define SYS_SOCKETCALL 102
 #define SYS_IOCTL     54
 #define SYS_DUP2      63
 #define SYS_GETTIMEOFDAY 78
