@@ -342,7 +342,6 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     /* File fd - write to KRFFS file */
     if (entry->type == FD_TYPE_FILE) {
         int written;
-        const char *path;
 
         if (!(entry->flags & FD_FLAG_WRITE)) {
             return -EBADF;  /* Not opened for writing */
@@ -357,8 +356,11 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
             return -EFAULT;
         }
-        path = (const char *)entry->node->name;
-        written = krffs_write(path, (const char __force *)buf, count, entry->offset);
+        /* Write via the node the descriptor already resolved (a subdir file's
+         * node->name is only its basename, so re-resolving by name would fail).
+         * krffs_write_node updates entry->node if a grow relocates the file. */
+        written = krffs_write_node(&entry->node, (const char __force *)buf, count,
+                                   entry->offset);
         if (written < 0) {
             return -EIO;  /* krffs reports failure with a bare -1 */
         }
@@ -579,7 +581,7 @@ static int32_t sys_open(isr_params_t *params)
     }
 
     /* Find the file in KRFFS */
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    node = krffs_resolve(name);
     if (!node) {
         /* File not found - check if O_CREAT is set */
         if (flags & O_CREAT) {
@@ -588,7 +590,7 @@ static int32_t sys_open(isr_params_t *params)
                 return -ENOSPC;  /* Failed to create file */
             }
             /* Now find the newly created node */
-            node = krffs_find_reserved_node_by_name(krffs_fs, name);
+            node = krffs_resolve(name);
             if (!node) {
                 return -EIO;  /* Shouldn't happen, but check anyway */
             }
@@ -903,7 +905,6 @@ static int32_t sys_read(isr_params_t *params)
     /* File fd - read from KRFFS file */
     if (entry->type == FD_TYPE_FILE) {
         int bytes_read;
-        const char *path;
 
         if (!(entry->flags & FD_FLAG_READ)) {
             return -EBADF;  /* Not opened for reading */
@@ -918,8 +919,10 @@ static int32_t sys_read(isr_params_t *params)
         if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
             return -EFAULT;
         }
-        path = (const char *)entry->node->name;
-        bytes_read = krffs_read(path, (char __force *)buf, count, entry->offset);
+        /* Read via the resolved node (see the write path) -- the descriptor's
+         * node->name is only the basename for a file in a subdirectory. */
+        bytes_read = krffs_read_node(entry->node, (char __force *)buf, count,
+                                     entry->offset);
         if (bytes_read < 0) {
             return -EIO;  /* krffs reports failure with a bare -1 */
         }
@@ -1192,7 +1195,7 @@ static int32_t sys_stat64(isr_params_t *params)
         return -ENOENT;
     }
 
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    node = krffs_resolve(name);
     if (!node) {
         return -ENOENT;  /* File not found */
     }
@@ -1271,7 +1274,7 @@ static int32_t sys_stat(isr_params_t *params)
         return -ENOENT;
     }
 
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    node = krffs_resolve(name);
     if (!node) {
         return -ENOENT;  /* File not found */
     }
@@ -2006,7 +2009,7 @@ static int32_t sys_creat(isr_params_t *params)
     }
 
     /* Find the node to set mode */
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    node = krffs_resolve(name);
     if (!node) {
         return -EIO;
     }
@@ -2076,6 +2079,70 @@ static int32_t sys_unlink(isr_params_t *params)
     }
 
     return krffs_unlink(name);
+}
+
+/*
+ * sys_mkdir - create a directory.
+ * Args: EBX = path, ECX = mode (ignored -- no permission model). Returns 0 or
+ * -errno (-EEXIST if it exists, -ENOENT if a parent is missing).
+ */
+static int32_t sys_mkdir(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    char pathbuf[256];
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    if (!krffs_fs) {
+        return -ENOENT;
+    }
+    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+    if (krffs_resolve(pathbuf)) {
+        return -EEXIST;
+    }
+    if (krffs_mkdir(pathbuf) != 0) {
+        return -ENOENT; /* a parent directory does not exist */
+    }
+    return 0;
+}
+
+/*
+ * sys_rmdir - remove an empty directory.
+ * Args: EBX = path. Returns 0 or -errno (-ENOENT, -ENOTDIR, -ENOTEMPTY).
+ */
+static int32_t sys_rmdir(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    krffs_node_t *node;
+    char pathbuf[256];
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    if (!krffs_fs) {
+        return -ENOENT;
+    }
+    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+    node = krffs_resolve(pathbuf);
+    if (!node) {
+        return -ENOENT;
+    }
+    if (!KRFFS_IS_DIR(node->mode)) {
+        return -ENOTDIR;
+    }
+    if (krffs_rmdir(pathbuf) != 0) {
+        return -ENOTEMPTY; /* still has children */
+    }
+    return 0;
 }
 
 /*
@@ -2219,7 +2286,7 @@ static int32_t sys_utimensat(isr_params_t *params)
     }
 
     /* Find the file */
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
+    node = krffs_resolve(name);
     if (!node) {
         return -ENOENT;  /* File not found */
     }
@@ -3439,6 +3506,8 @@ void init_syscall(void)
     _syscall_table[SYS_WAIT4] = sys_wait4;
     _syscall_table[SYS_CREAT] = sys_creat;
     _syscall_table[SYS_UNLINK] = sys_unlink;
+    _syscall_table[SYS_MKDIR] = sys_mkdir;
+    _syscall_table[SYS_RMDIR] = sys_rmdir;
     _syscall_table[SYS_EXECVE] = sys_execve;
     _syscall_table[SYS_CHDIR] = sys_chdir;
     _syscall_table[SYS_BRK] = sys_brk;

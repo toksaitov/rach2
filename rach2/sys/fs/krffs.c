@@ -154,27 +154,223 @@ krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, 
 }
 
 /*
+ * ===== Hierarchical path resolution (KRFFS v2) =====
+ *
+ * A node's parent_id is its directory's logical id (KRFFS_ROOT_ID == 0 for the
+ * root, whose own node is fs->node and carries no parent reference). A directory
+ * node's id is mix(parent_id, name) -- unique because sibling names are unique --
+ * so children reference it unambiguously. Resolution matches each path component
+ * by (name, parent_id), descending only into directories. Regular files' ids are
+ * never referenced, so they keep the legacy DJB(name) value for compatibility.
+ */
+
+/* Combine a parent directory id and a child name into a unique node id (FNV-1a
+ * style). Never returns 0 (the root's logical id). */
+static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
+{
+    uint64_t h = (parent_id + 1) * 1099511628211ULL;
+
+    h ^= krffs_calculate_djb_hash((const uint8_t *)name);
+    h *= 1099511628211ULL;
+    return h ? h : 1;
+}
+
+/* Compare a NUL-terminated node name with the component comp[0..len). */
+static int krffs_name_eq(const char *node_name, const char *comp, uint32_t len)
+{
+    uint32_t i;
+
+    for (i = 0; i < len; i++) {
+        if (node_name[i] == '\0' || node_name[i] != comp[i]) {
+            return 0;
+        }
+    }
+    return node_name[len] == '\0';
+}
+
+/* Find the reserved node with a given id (for ".." and directory descent).
+ * Returns NULL for the root id (which has no reserved node). */
+static krffs_node_t *krffs_find_node_by_id(krffs_file_system_t *fs, uint64_t id)
+{
+    krffs_node_t *node;
+
+    if (id == KRFFS_ROOT_ID) {
+        return NULL;
+    }
+    node = fs->node;
+    do {
+        if (node->type == KRFFS_RESERVED_NODE && node->id == id) {
+            return node;
+        }
+    } while ((node = krffs_get_next_node(fs, node)) != fs->node);
+    return NULL;
+}
+
+/* Find a child named comp[0..len) directly inside directory dir_id. */
+static krffs_node_t *krffs_find_child(krffs_file_system_t *fs, uint64_t dir_id,
+                                      const char *comp, uint32_t len)
+{
+    krffs_node_t *node = fs->node;
+
+    do {
+        if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id &&
+            krffs_name_eq((const char *)node->name, comp, len)) {
+            return node;
+        }
+    } while ((node = krffs_get_next_node(fs, node)) != fs->node);
+    return NULL;
+}
+
+/*
+ * Resolve a path to its node, or NULL if any component is missing or a non-final
+ * component is not a directory. "/" (or "") resolves to the root node (fs->node).
+ * '.' and '..' are honored.
+ */
+static krffs_node_t *krffs_walk(krffs_file_system_t *fs, const char *path)
+{
+    uint64_t cur_id = KRFFS_ROOT_ID;
+    krffs_node_t *node = fs->node; /* the current directory's node; root = fs->node */
+    const char *p = path ? path : "";
+
+    while (*p == '/') {
+        p++;
+    }
+    if (*p == '\0') {
+        return fs->node;
+    }
+
+    for (;;) {
+        const char *start = p;
+        uint32_t len = 0;
+        int last;
+
+        while (start[len] != '\0' && start[len] != '/') {
+            len++;
+        }
+        p = start + len;
+        while (*p == '/') {
+            p++;
+        }
+        last = (*p == '\0');
+
+        if (len == 1 && start[0] == '.') {
+            /* current directory: unchanged */
+        } else if (len == 2 && start[0] == '.' && start[1] == '.') {
+            node = krffs_find_node_by_id(fs, node ? node->parent_id : KRFFS_ROOT_ID);
+            cur_id = node ? node->id : KRFFS_ROOT_ID;
+        } else {
+            node = krffs_find_child(fs, cur_id, start, len);
+            if (!node) {
+                return NULL;
+            }
+            if (!last && !KRFFS_IS_DIR(node->mode)) {
+                return NULL; /* a non-final component must be a directory */
+            }
+            cur_id = node->id;
+        }
+
+        if (last) {
+            return node;
+        }
+    }
+}
+
+/* Split path into its directory part and final component. dir gets the parent
+ * path ("/" if the target is at the root), base gets the last component. */
+static void krffs_split_path(const char *path, char *dir, char *base)
+{
+    const char *p = path;
+    const char *last_slash = NULL;
+    const char *comp;
+    uint32_t i;
+
+    while (*p == '/') {
+        p++;
+    }
+    /* Find the last '/' that precedes the final non-empty component. */
+    last_slash = NULL;
+    {
+        const char *s = path;
+        for (; *s != '\0'; s++) {
+            if (*s == '/' && s[1] != '\0' && s[1] != '/') {
+                last_slash = s;
+            }
+        }
+    }
+
+    if (!last_slash) {
+        dir[0] = '/';
+        dir[1] = '\0';
+        comp = p;
+    } else {
+        uint32_t n = (uint32_t)(last_slash - path);
+        if (n == 0) {
+            n = 1; /* keep the leading '/' as the root dir */
+        }
+        if (n > KRFFS_FILE_NAME_BUFFER_SIZE - 1) {
+            n = KRFFS_FILE_NAME_BUFFER_SIZE - 1;
+        }
+        for (i = 0; i < n; i++) {
+            dir[i] = path[i];
+        }
+        dir[n] = '\0';
+        comp = last_slash + 1;
+    }
+
+    for (i = 0; i + 1 < KRFFS_FILE_NAME_BUFFER_SIZE && comp[i] != '\0' &&
+                comp[i] != '/';
+         i++) {
+        base[i] = comp[i];
+    }
+    base[i] = '\0';
+}
+
+/* Resolve a path that must name a directory; returns its logical id, or
+ * (uint64_t)-1 if the path is not an existing directory. */
+static uint64_t krffs_resolve_dir_id(krffs_file_system_t *fs, const char *path)
+{
+    krffs_node_t *node = krffs_walk(fs, path);
+
+    if (!node) {
+        return (uint64_t)-1;
+    }
+    if (node == fs->node) {
+        return KRFFS_ROOT_ID; /* the root directory */
+    }
+    if (!KRFFS_IS_DIR(node->mode)) {
+        return (uint64_t)-1;
+    }
+    return node->id;
+}
+
+/*
+ * Public path resolver: returns the node for `path` (the root node for "/"), or
+ * NULL if any component is missing. The syscall layer uses it to attach a file or
+ * directory to a file descriptor; callers inspect node->mode for the type.
+ */
+krffs_node_t *krffs_resolve(const char *path)
+{
+    if (!krffs_fs) {
+        return NULL;
+    }
+    return krffs_walk(krffs_fs, path);
+}
+
+/*
  * Open a file (checks if it exists)
  * Returns 0 on success, -1 if not found
  */
 int krffs_open(const char *path)
 {
     krffs_node_t *node;
-    const char *name;
 
     if (!krffs_fs) {
         return -1;
     }
 
-    /* Skip leading '/' if present */
-    name = path;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
-    if (!node) {
-        return -1;
+    node = krffs_walk(krffs_fs, path);
+    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+        return -1; /* missing, or a directory (opened through the *at dir API) */
     }
 
     return 0;
@@ -184,51 +380,47 @@ int krffs_open(const char *path)
  * Read file contents into buffer
  * Returns number of bytes read, or -1 on error
  */
+/*
+ * Read directly from an already-resolved node (the fd layer holds the node
+ * pointer, so it need not re-resolve a path -- which would fail for a file in a
+ * subdirectory, whose node->name is only its basename). Returns bytes read.
+ */
+int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
+                    uint32_t offset)
+{
+    char *src;
+    uint64_t data_size;
+    uint32_t i;
+
+    if (!node || !buffer) {
+        return -1;
+    }
+    data_size = node->data_size;
+    if ((uint64_t)offset >= data_size) {
+        return 0; /* offset past end of file */
+    }
+    if ((uint64_t)offset + size > data_size) {
+        size = (uint32_t)(data_size - offset);
+    }
+    src = ((char *)(node + 1)) + offset;
+    for (i = 0; i < size; i++) {
+        buffer[i] = src[i];
+    }
+    return (int)size;
+}
+
 int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset)
 {
     krffs_node_t *node;
-    const char *name;
-    void *base;
-    uint64_t data_size;
 
     if (!krffs_fs || !buffer) {
         return -1;
     }
-
-    /* Skip leading '/' if present */
-    name = path;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
-    if (!node) {
+    node = krffs_walk(krffs_fs, path);
+    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
         return -1;
     }
-
-    /* Data follows immediately after the node header */
-    base = (void *)(node + 1);
-    data_size = node->data_size;
-
-    if ((uint64_t)offset >= data_size) {
-        /* Offset past end of file */
-        return 0;
-    }
-
-    if ((uint64_t)offset + size > data_size) {
-        size = (uint32_t)(data_size - offset);
-    }
-
-    /* Copy data to buffer */
-    {
-        uint32_t i;
-        char *src = ((char *)base) + offset;
-        for (i = 0; i < size; i++) {
-            buffer[i] = src[i];
-        }
-    }
-
-    return (int)size;
+    return krffs_read_node(node, buffer, size, offset);
 }
 
 /*
@@ -238,20 +430,13 @@ int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset)
 uint32_t krffs_get_file_size(const char *path)
 {
     krffs_node_t *node;
-    const char *name;
 
     if (!krffs_fs) {
         return 0;
     }
 
-    /* Skip leading '/' if present */
-    name = path;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
-    if (!node) {
+    node = krffs_walk(krffs_fs, path);
+    if (!node || node == krffs_fs->node) {
         return 0;
     }
 
@@ -595,23 +780,27 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 int krffs_create(const char *path)
 {
     krffs_node_t *node;
-    const char *name;
+    uint64_t parent_id;
+    char dir[KRFFS_FILE_NAME_BUFFER_SIZE];
+    char base[KRFFS_FILE_NAME_BUFFER_SIZE];
 
     if (!krffs_fs) {
         return -1;
     }
 
-    /* Skip leading '/' if present */
-    name = path;
-    if (name[0] == '/') {
-        name++;
+    /* Already exists (file or directory of that name) -> success, like creat. */
+    if (krffs_walk(krffs_fs, path)) {
+        return 0;
     }
 
-    /* Check if file already exists */
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
-    if (node) {
-        /* File exists - this is OK for create, we just return success */
-        return 0;
+    /* Resolve the parent directory; the leaf must be created inside it. */
+    krffs_split_path(path, dir, base);
+    if (base[0] == '\0') {
+        return -1;
+    }
+    parent_id = krffs_resolve_dir_id(krffs_fs, dir);
+    if (parent_id == (uint64_t)-1) {
+        return -1; /* parent directory does not exist */
     }
 
     /* Allocate a new reserved node with 0 data size */
@@ -620,11 +809,13 @@ int krffs_create(const char *path)
         return -1;
     }
 
-    /* Set the file name */
-    krffs_set_reserved_node_name(node, name);
+    /* Set the leaf name (sets id = DJB(base), never referenced for a file) and
+     * its containing directory. */
+    krffs_set_reserved_node_name(node, base);
+    node->parent_id = parent_id;
 
     /* Set default mode and uid/gid */
-    node->mode = 0644;  /* rw-r--r-- */
+    node->mode = 0644;  /* rw-r--r-- regular file */
     node->uid = 0;
     node->gid = 0;
 
@@ -643,54 +834,55 @@ int krffs_create(const char *path)
  * Write data to a file
  * Returns number of bytes written, or -1 on error
  */
-int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t offset)
+/*
+ * Write directly to an already-resolved node. The node may be relocated by a
+ * grow (krffs_resize_reserved_node), so *nodep is updated in place -- the fd
+ * layer must store the result so its descriptor keeps pointing at the file.
+ */
+int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
+                     uint32_t offset)
 {
     krffs_node_t *node;
-    const char *name;
     void *base;
     uint64_t available_space;
     uint64_t new_size;
 
-    if (!krffs_fs || !buffer) {
+    if (!krffs_fs || !nodep || !*nodep || !buffer) {
         return -1;
     }
-
-    /* Skip leading '/' if present */
-    name = path;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
-    if (!node) {
-        serial_printf("KRFFS: File '%s' not found for write\n", name);
-        return -1;
-    }
-
+    node = *nodep;
     base = node + 1;
     available_space = node->size - sizeof(krffs_node_t);
     new_size = (uint64_t)offset + size;
 
-    if (new_size <= available_space) {
-        /* Fits in current allocation */
-        if (new_size > node->data_size) {
-            node->data_size = new_size;
-        }
-
-        _krffs_memcpy((char *)base + offset, buffer, size);
-        return (int)size;
-    } else {
-        /* Need to resize */
+    if (new_size > available_space) {
         node = krffs_resize_reserved_node(krffs_fs, node, new_size);
         if (!node) {
-            serial_printf("KRFFS: No space to expand file '%s'\n", name);
             return -1;
         }
-
+        *nodep = node; /* the node may have moved */
         base = node + 1;
-        _krffs_memcpy((char *)base + offset, buffer, size);
-        return (int)size;
     }
+    if (new_size > node->data_size) {
+        node->data_size = new_size;
+    }
+    _krffs_memcpy((char *)base + offset, buffer, size);
+    return (int)size;
+}
+
+int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t offset)
+{
+    krffs_node_t *node;
+
+    if (!krffs_fs || !buffer) {
+        return -1;
+    }
+    node = krffs_walk(krffs_fs, path);
+    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+        serial_printf("KRFFS: File '%s' not found for write\n", path);
+        return -1;
+    }
+    return krffs_write_node(&node, buffer, size, offset);
 }
 
 /*
@@ -700,22 +892,15 @@ int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t of
 int krffs_truncate(const char *path, uint32_t new_size)
 {
     krffs_node_t *node;
-    const char *name;
     uint64_t old_data_size;
 
     if (!krffs_fs) {
         return -1;
     }
 
-    /* Skip leading '/' if present */
-    name = path;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
-    if (!node) {
-        serial_printf("KRFFS: File '%s' not found for truncate\n", name);
+    node = krffs_walk(krffs_fs, path);
+    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+        serial_printf("KRFFS: File '%s' not found for truncate\n", path);
         return -1;
     }
 
@@ -723,7 +908,7 @@ int krffs_truncate(const char *path, uint32_t new_size)
 
     node = krffs_resize_reserved_node(krffs_fs, node, new_size);
     if (!node) {
-        serial_printf("KRFFS: No space to resize file '%s'\n", name);
+        serial_printf("KRFFS: No space to resize file '%s'\n", path);
         return -1;
     }
 
@@ -745,22 +930,15 @@ int krffs_truncate(const char *path, uint32_t new_size)
 int krffs_unlink(const char *path)
 {
     krffs_node_t *node;
-    const char *name;
 
     if (!krffs_fs) {
         return -1;
     }
 
-    /* Skip leading '/' if present */
-    name = path;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    node = krffs_find_reserved_node_by_name(krffs_fs, name);
-    if (!node) {
-        serial_printf("KRFFS: File '%s' not found for unlink\n", name);
-        return -1;
+    node = krffs_walk(krffs_fs, path);
+    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+        serial_printf("KRFFS: File '%s' not found for unlink\n", path);
+        return -1; /* not a regular file (rmdir removes directories) */
     }
 
     krffs_remove_reserved_node(krffs_fs, node);
@@ -775,38 +953,170 @@ int krffs_rename(const char *old_path, const char *new_path)
 {
     krffs_node_t *node;
     krffs_node_t *existing;
-    const char *old_name;
-    const char *new_name;
+    uint64_t parent_id;
+    char dir[KRFFS_FILE_NAME_BUFFER_SIZE];
+    char base[KRFFS_FILE_NAME_BUFFER_SIZE];
 
     if (!krffs_fs) {
         return -1;
     }
 
-    /* Skip leading '/' if present */
-    old_name = old_path;
-    if (old_name[0] == '/') {
-        old_name++;
+    node = krffs_walk(krffs_fs, old_path);
+    if (!node || node == krffs_fs->node) {
+        serial_printf("KRFFS: File '%s' not found for rename\n", old_path);
+        return -1;
     }
-    new_name = new_path;
-    if (new_name[0] == '/') {
-        new_name++;
-    }
-
-    node = krffs_find_reserved_node_by_name(krffs_fs, old_name);
-    if (!node) {
-        serial_printf("KRFFS: File '%s' not found for rename\n", old_name);
+    /* A directory's id is mix(parent,name) and its children reference it, so a
+     * rename/move would orphan them. Renaming directories is unsupported. */
+    if (KRFFS_IS_DIR(node->mode)) {
         return -1;
     }
 
-    /* If new name exists, delete it first */
-    existing = krffs_find_reserved_node_by_name(krffs_fs, new_name);
-    if (existing) {
+    krffs_split_path(new_path, dir, base);
+    if (base[0] == '\0') {
+        return -1;
+    }
+    parent_id = krffs_resolve_dir_id(krffs_fs, dir);
+    if (parent_id == (uint64_t)-1) {
+        return -1; /* destination directory does not exist */
+    }
+
+    /* If the destination name exists (and is not the source), drop it. */
+    existing = krffs_walk(krffs_fs, new_path);
+    if (existing && existing != node) {
         krffs_remove_reserved_node(krffs_fs, existing);
     }
 
-    /* Update the name */
-    krffs_set_reserved_node_name(node, new_name);
+    /* Move: new name + new containing directory. */
+    krffs_set_reserved_node_name(node, base);
+    node->parent_id = parent_id;
     return 0;
+}
+
+/*
+ * Create a directory at `path`. Returns 0 on success, -1 if the parent directory
+ * is missing or the name is already taken.
+ */
+int krffs_mkdir(const char *path)
+{
+    krffs_node_t *node;
+    uint64_t parent_id;
+    char dir[KRFFS_FILE_NAME_BUFFER_SIZE];
+    char base[KRFFS_FILE_NAME_BUFFER_SIZE];
+
+    if (!krffs_fs) {
+        return -1;
+    }
+    if (krffs_walk(krffs_fs, path)) {
+        return -1; /* a file or directory of that name already exists */
+    }
+
+    krffs_split_path(path, dir, base);
+    if (base[0] == '\0') {
+        return -1;
+    }
+    parent_id = krffs_resolve_dir_id(krffs_fs, dir);
+    if (parent_id == (uint64_t)-1) {
+        return -1;
+    }
+
+    node = krffs_allocate_reserved_node(krffs_fs, 0, NULL);
+    if (!node) {
+        return -1;
+    }
+
+    /* A directory carries its name, the S_IFDIR mode, an empty body, and a UNIQUE
+     * id (mix of parent + name) that its children reference as their parent_id. */
+    _krffs_strncpy((char *)node->name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
+    node->name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
+    node->parent_id = parent_id;
+    node->id = krffs_mix_id(parent_id, base);
+    node->mode = (uint16_t)(KRFFS_S_IFDIR | 0755);
+    node->uid = 0;
+    node->gid = 0;
+    node->access_time.seconds = 0;
+    node->access_time.nanoseconds = 0;
+    node->modification_time.seconds = 0;
+    node->modification_time.nanoseconds = 0;
+    node->attribute_change_time.seconds = 0;
+    node->attribute_change_time.nanoseconds = 0;
+    return 0;
+}
+
+/*
+ * Remove an empty directory. Returns 0, or -1 if `path` is not a directory or
+ * still has children.
+ */
+int krffs_rmdir(const char *path)
+{
+    krffs_node_t *node;
+    krffs_node_t *scan;
+
+    if (!krffs_fs) {
+        return -1;
+    }
+    node = krffs_walk(krffs_fs, path);
+    if (!node || node == krffs_fs->node || !KRFFS_IS_DIR(node->mode)) {
+        return -1;
+    }
+
+    /* A directory is empty only if no node names it as a parent. */
+    scan = krffs_fs->node;
+    do {
+        if (scan->type == KRFFS_RESERVED_NODE && scan->parent_id == node->id) {
+            return -1; /* not empty */
+        }
+    } while ((scan = krffs_get_next_node(krffs_fs, scan)) != krffs_fs->node);
+
+    krffs_remove_reserved_node(krffs_fs, node);
+    return 0;
+}
+
+/*
+ * Directory iteration for getdents: copy the index-th child name of the directory
+ * at `path` into name_out (NUL-terminated, up to buf_size) and report whether it
+ * is itself a directory via is_dir_out. Returns 1 if a child was returned, 0 past
+ * the end, -1 on error. Linear per index -- a teaching simplification.
+ */
+int krffs_readdir(const char *path, uint32_t index, char *name_out,
+                  uint32_t buf_size, int *is_dir_out)
+{
+    krffs_node_t *node;
+    krffs_node_t *scan;
+    uint64_t dir_id;
+    uint32_t seen = 0;
+
+    if (!krffs_fs || !name_out || buf_size == 0) {
+        return -1;
+    }
+    node = krffs_walk(krffs_fs, path);
+    if (!node) {
+        return -1;
+    }
+    if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+        return -1; /* not a directory */
+    }
+    dir_id = (node == krffs_fs->node) ? KRFFS_ROOT_ID : node->id;
+
+    scan = krffs_fs->node;
+    do {
+        if (scan->type == KRFFS_RESERVED_NODE && scan->parent_id == dir_id) {
+            if (seen == index) {
+                uint32_t i;
+                for (i = 0; i + 1 < buf_size && scan->name[i] != '\0'; i++) {
+                    name_out[i] = (char)scan->name[i];
+                }
+                name_out[i] = '\0';
+                if (is_dir_out) {
+                    *is_dir_out = KRFFS_IS_DIR(scan->mode) ? 1 : 0;
+                }
+                return 1;
+            }
+            seen++;
+        }
+    } while ((scan = krffs_get_next_node(krffs_fs, scan)) != krffs_fs->node);
+
+    return 0; /* past the last entry */
 }
 
 /*

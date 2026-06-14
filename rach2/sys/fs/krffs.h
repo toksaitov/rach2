@@ -42,7 +42,7 @@
 #define KRFFS_S_IFMT  0170000u  /* file-type mask within mode */
 #define KRFFS_S_IFDIR 0040000u  /* directory */
 #define KRFFS_S_IFREG 0100000u  /* regular file */
-#define KRFFS_ROOT_ID 1u        /* fixed id of the root directory */
+#define KRFFS_ROOT_ID 0u        /* logical id of the root directory (host nodes zero parent_id) */
 
 /* A directory's mode is S_IFDIR | 0755; a regular file is just its perm bits
  * (S_IFREG is implied when no type bits are set, for backward compatibility with
@@ -121,6 +121,20 @@ krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *no
 krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const char *name);
 krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, const char *name);
 
+/* Hierarchical path resolver (KRFFS v2): the node for `path`, or NULL if absent. */
+krffs_node_t *krffs_resolve(const char *path);
+
+/*
+ * Read/write directly via a resolved node pointer (used by the fd layer so a file
+ * descriptor need not re-resolve a path -- which fails for a file in a subdir,
+ * whose node->name is only the basename). krffs_write_node updates *nodep if a
+ * grow relocates the node.
+ */
+int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
+                    uint32_t offset);
+int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
+                     uint32_t offset);
+
 /*
  * File system operations - read
  */
@@ -136,6 +150,15 @@ int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t of
 int krffs_truncate(const char *path, uint32_t new_size);
 int krffs_unlink(const char *path);
 int krffs_rename(const char *old_path, const char *new_path);
+
+/*
+ * Directory operations (KRFFS v2). mkdir/rmdir create/remove an (empty)
+ * directory; readdir returns the index-th child name of a directory.
+ */
+int krffs_mkdir(const char *path);
+int krffs_rmdir(const char *path);
+int krffs_readdir(const char *path, uint32_t index, char *name_out,
+                  uint32_t buf_size, int *is_dir_out);
 
 /*
  * Node manipulation functions (internal, but exposed for testing)
