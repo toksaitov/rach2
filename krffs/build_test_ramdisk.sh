@@ -183,6 +183,12 @@ if [ -f "../tests/busybox" ]; then
     echo "  busybox (Phase 18)"
 fi
 
+# The Phase 23 dropbear SSH server (static musl), if built.
+if [ -f "../tests/dropbearmulti" ]; then
+    cp "../tests/dropbearmulti" "$MOUNT_POINT/dropbearmulti"
+    echo "  dropbearmulti (Phase 23)"
+fi
+
 # Also copy hello.txt for file tests
 echo "hello, world" > "$MOUNT_POINT/hello.txt"
 echo "  hello.txt (test data)"

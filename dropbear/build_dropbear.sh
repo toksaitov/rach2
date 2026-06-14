@@ -1,0 +1,83 @@
+#!/usr/bin/env sh
+
+#
+# build_dropbear.sh -- build a static-musl Dropbear SSH server for Rach2 from the
+# pinned, vendored tarball (Phase 23). Verifies the sha256, extracts, configures
+# against the ported musl via the muslgcc wrapper (bundled libtomcrypt/libtommath,
+# no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the binary links static
+# non-PIE -- Rach2's ELF loader does not relocate a PIE), applies the curated
+# localoptions.h, builds dropbearmulti (the dropbear server + dropbearkey), strips,
+# and stages it to ../tests/dropbearmulti (installed into the RAM disk as
+# /dropbearmulti). Run libc/build_libc.sh first.
+#
+# Usage: ./build_dropbear.sh
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+VERSION="2022.83"
+TARBALL="dropbear-${VERSION}.tar.bz2"
+SRC="dropbear-${VERSION}"
+PREFIX="$SCRIPT_DIR/../libc/install"
+WRAP="$SCRIPT_DIR/muslgcc"
+
+# Pinned sha256 of the vendored tarball (published on matt.ucc.asn.au/dropbear).
+TARBALL_SHA256="bc5a121ffbc94b5171ad5ebe01be42746d50aa797c9549a4639894a16749443b"
+
+sha256_of()
+{
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+if [ ! -f "$PREFIX/lib/libc.a" ]; then
+    echo "error: $PREFIX/lib/libc.a not found; run libc/build_libc.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$TARBALL" ]; then
+    echo "error: $TARBALL missing (the vendored source)" >&2
+    exit 1
+fi
+
+echo "=== Verifying $TARBALL ==="
+GOT="$(sha256_of "$TARBALL")"
+if [ "$GOT" != "$TARBALL_SHA256" ]; then
+    echo "error: sha256 mismatch for $TARBALL" >&2
+    echo "  expected $TARBALL_SHA256" >&2
+    echo "  got      $GOT" >&2
+    exit 1
+fi
+
+echo "=== Extracting ==="
+rm -rf "$SRC"
+tar xjf "$TARBALL"
+
+echo "=== Installing curated localoptions.h ==="
+cp localoptions.h "$SRC/localoptions.h"
+
+echo "=== Configuring (muslgcc, bundled libtom, static, hardening off) ==="
+( cd "$SRC" && CC="$WRAP" AR=i686-elf-ar RANLIB=i686-elf-ranlib \
+    ./configure --host=i686-linux-musl --build=x86_64-apple-darwin \
+    --disable-zlib --enable-bundled-libtom --disable-syslog --disable-harden \
+    --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
+    --disable-lastlog --disable-loginfunc --disable-pututline --disable-pututxline \
+    >/dev/null )
+
+echo "=== Building dropbearmulti (dropbear server + dropbearkey, static) ==="
+make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
+    PROGRAMS="dropbear dropbearkey" MULTI=1 STATIC=1 SKIP_STRIP=y dropbearmulti
+
+echo "=== Staging stripped binary -> ../tests/dropbearmulti ==="
+i686-elf-strip "$SRC/dropbearmulti" -o ../tests/dropbearmulti
+ls -l ../tests/dropbearmulti
+
+echo ""
+echo "=== Done ==="
+echo "Dropbear $VERSION: $(wc -c < ../tests/dropbearmulti) bytes, static, musl, i686."
+echo "Rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /dropbearmulti."

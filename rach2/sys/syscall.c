@@ -5474,7 +5474,12 @@ static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
     }
 
     k_memset(sa, 0, sizeof(sa));
-    SC_WBE16(sa + 0, 0x0002);   /* AF_INET */
+    /* sin_family is in HOST byte order (little-endian on i386) -- NOT network
+     * order: a big-endian AF_INET would read back as 0x0200 and a peer-address
+     * consumer (dropbear's connection logging) rejects it as an unknown family.
+     * Only sin_port and sin_addr are network (big-endian). */
+    sa[0] = 2; /* AF_INET, low byte */
+    sa[1] = 0;
     SC_WBE16(sa + 2, port);
     SC_WBE32(sa + 4, ip);
 
