@@ -83,6 +83,23 @@ void free_process(process_t *proc)
     }
 }
 
+void proc_wake_sleepers(uint32_t now)
+{
+    uint32_t i;
+
+    /* Move any timed sleeper (nanosleep) whose wakeup tick has arrived from
+     * BLOCKED back to READY so the scheduler runs it. Called from the timer tick.
+     * The (int32_t) difference is tick-wraparound-safe (~248 days at 100 Hz). */
+    for (i = 0; i < MAX_PROCS; i++) {
+        process_t *p = &proc_table[i];
+        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&
+            (int32_t)(now - p->wakeup_tick) >= 0) {
+            p->wakeup_tick = 0;
+            p->state = PROC_READY;
+        }
+    }
+}
+
 process_t *get_process(uint32_t pid)
 {
     uint32_t i;

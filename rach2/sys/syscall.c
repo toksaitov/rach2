@@ -3026,6 +3026,167 @@ static int32_t sys_gettimeofday(isr_params_t *params)
 }
 
 /*
+ * sys_clock_gettime - read a POSIX clock (syscall 265, 32-bit timespec).
+ * Args: EBX = clockid, ECX = struct timespec*. CLOCK_REALTIME(0) and
+ * CLOCK_MONOTONIC(1) both report time since boot at the 10 ms tick resolution
+ * (there is no wall-clock RTC sync yet). musl falls back here from
+ * clock_gettime64 (403), which this kernel does not provide.
+ */
+static int32_t sys_clock_gettime(isr_params_t *params)
+{
+    int clk = (int)params->ebx;
+    struct kernel_timespec __user *ts = (struct kernel_timespec __user *)params->ecx;
+    struct kernel_timespec kts;
+    uint32_t ticks;
+
+    if (!ts) {
+        return -EFAULT;
+    }
+    if (clk != 0 && clk != 1) { /* CLOCK_REALTIME / CLOCK_MONOTONIC only */
+        return -EINVAL;
+    }
+
+    ticks = kernel_ticks;
+    kts.tv_sec = (int32_t)(ticks / 100);
+    kts.tv_nsec = (int32_t)((ticks % 100) * 10000000); /* 10 ms = 1e7 ns per tick */
+
+    if (copy_to_user(ts, &kts, sizeof(kts)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/*
+ * sys_nanosleep - block-and-schedule sleep (syscall 162, 32-bit timespec).
+ * Args: EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
+ * Rounds up to whole 10 ms ticks, then parks the process BLOCKED on its
+ * wakeup_tick and yields; the timer wakes it at the deadline while OTHER
+ * processes keep running. rem is written as zero on normal completion.
+ */
+static int32_t sys_nanosleep(isr_params_t *params)
+{
+    const struct kernel_timespec __user *ureq =
+        (const struct kernel_timespec __user *)params->ebx;
+    struct kernel_timespec __user *urem =
+        (struct kernel_timespec __user *)params->ecx;
+    struct kernel_timespec req;
+    uint32_t ticks, target;
+
+    if (!current_proc || !ureq) {
+        return -EFAULT;
+    }
+    if (copy_from_user(&req, ureq, sizeof(req)) != 0) {
+        return -EFAULT;
+    }
+    if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000) {
+        return -EINVAL;
+    }
+
+    /* Convert to whole 10 ms ticks without 64-bit division (the freestanding
+     * kernel has no libgcc __udivdi3): 1 s == 100 ticks, plus the ceil of the
+     * sub-second nanoseconds. Absurd durations are clamped so sec*100 cannot
+     * overflow and the signed tick comparison below stays valid. */
+    {
+        uint32_t sec = (uint32_t)req.tv_sec;
+        uint32_t nsec_ticks = ((uint32_t)req.tv_nsec + 9999999u) / 10000000u;
+        if (sec > 21474836u) {
+            sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */
+        }
+        ticks = sec * 100u + nsec_ticks;
+        if (ticks > 0x7FFFFFFFu) {
+            ticks = 0x7FFFFFFFu; /* keep the signed (target-now) delta valid */
+        }
+    }
+    if (ticks == 0 && (req.tv_sec != 0 || req.tv_nsec != 0)) {
+        ticks = 1; /* any nonzero request waits at least one tick */
+    }
+
+    target = kernel_ticks + ticks;
+    if (target == 0) {
+        target = 1; /* 0 is the "not sleeping" sentinel; never store it as a deadline */
+    }
+    while ((int32_t)(target - kernel_ticks) > 0) {
+        current_proc->wakeup_tick = target;
+        current_proc->state = PROC_BLOCKED;
+        schedule(); /* yield to any other READY process; the timer wakes us */
+        if ((int32_t)(target - kernel_ticks) > 0) {
+            /* schedule() found nobody else to run: idle until the next interrupt
+             * (the tick) rather than busy-spinning on the scheduler. */
+            __asm__ __volatile__("sti; hlt");
+        }
+    }
+    current_proc->wakeup_tick = 0;
+    current_proc->state = PROC_RUNNING;
+
+    if (urem) {
+        struct kernel_timespec zero;
+        zero.tv_sec = 0;
+        zero.tv_nsec = 0;
+        if (copy_to_user(urem, &zero, sizeof(zero)) != 0) {
+            return -EFAULT;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Identity: Rach2 is single-user, so every process is root. getuid/geteuid/
+ * getgid/getegid (the i386 *32 variants, 199-202) all report 0.
+ */
+static int32_t sys_getuid(isr_params_t *params)
+{
+    (void)params;
+    return 0;
+}
+
+/* getrandom flag bits (Linux). We never block and have one source, so they only
+ * gate validation here. */
+#define GRND_NONBLOCK 0x0001u
+#define GRND_RANDOM   0x0002u
+#define GRND_INSECURE 0x0004u
+
+/*
+ * sys_getrandom - fill a buffer with random bytes (syscall 355).
+ * Args: EBX = buf, ECX = buflen, EDX = flags. Backed by the kernel random source
+ * (lib/krandom). Returns the byte count, like Linux; musl's getrandom/arc4random
+ * sit on top of this. We never block (GRND_NONBLOCK is a no-op) and have a single
+ * source (GRND_RANDOM is equivalent); unknown flag bits are rejected.
+ */
+static int32_t sys_getrandom(isr_params_t *params)
+{
+    void __user *buf = (void __user *)params->ebx;
+    uint32_t len = params->ecx;
+    uint32_t flags = params->edx;
+    uint8_t kbuf[256];
+    uint32_t done = 0;
+
+    if (flags & ~(GRND_NONBLOCK | GRND_RANDOM | GRND_INSECURE)) {
+        return -EINVAL; /* unknown flag bits, as Linux rejects */
+    }
+    if (len > 0x7FFFFFFFu) {
+        return -EINVAL; /* keep the byte count representable as a positive int32 */
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (!buf) {
+        return -EFAULT;
+    }
+    while (done < len) {
+        uint32_t chunk = len - done;
+        if (chunk > sizeof(kbuf)) {
+            chunk = sizeof(kbuf);
+        }
+        krandom_bytes(kbuf, chunk);
+        if (copy_to_user((uint8_t __user *)buf + done, kbuf, chunk) != 0) {
+            return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        done += chunk;
+    }
+    return (int32_t)done;
+}
+
+/*
  * sys_ioctl - device control
  * Args: EBX = fd, ECX = request, EDX = arg
  * Returns: 0 on success, -1 on error
@@ -4059,6 +4220,14 @@ void init_syscall(void)
     _syscall_table[SYS_FCNTL64] = sys_fcntl64;
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
+    _syscall_table[SYS_CLOCK_GETTIME] = sys_clock_gettime;
+    _syscall_table[SYS_NANOSLEEP] = sys_nanosleep;
+    _syscall_table[SYS_GETRANDOM] = sys_getrandom;
+    /* Single-user: all four identity calls report root (uid/gid 0). */
+    _syscall_table[SYS_GETUID32] = sys_getuid;
+    _syscall_table[SYS_GETGID32] = sys_getuid;
+    _syscall_table[SYS_GETEUID32] = sys_getuid;
+    _syscall_table[SYS_GETEGID32] = sys_getuid;
     _syscall_table[SYS_SOCKETCALL] = sys_socketcall;
     _syscall_table[SYS_SET_THREAD_AREA] = sys_set_thread_area;
     _syscall_table[SYS_GETPID] = sys_getpid;

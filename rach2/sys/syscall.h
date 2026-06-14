@@ -50,12 +50,19 @@
 #define SYS_EXIT_GROUP 252
 #define SYS_SET_TID_ADDRESS 258
 #define SYS_UTIMENSAT 320
+#define SYS_NANOSLEEP 162
+#define SYS_GETUID32 199
+#define SYS_GETGID32 200
+#define SYS_GETEUID32 201
+#define SYS_GETEGID32 202
+#define SYS_CLOCK_GETTIME 265
+#define SYS_GETRANDOM 355
 
 /*
  * Size of the syscall dispatch table
  * Must be large enough to hold highest syscall number + 1
  */
-#define SYSCALL_TABLE_SIZE 321
+#define SYSCALL_TABLE_SIZE 356
 
 /*
  * Initialize syscall handling by registering the syscall handler.

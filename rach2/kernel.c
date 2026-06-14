@@ -97,6 +97,10 @@ static void timer_handler(isr_params_t *params)
 
     ++kernel_ticks;
 
+    /* Wake any nanosleep timer that has expired (independent of in_syscall, so a
+     * sleeper parked inside its syscall still becomes runnable on time). */
+    proc_wake_sleepers(kernel_ticks);
+
     /* Service HDA audio even when legacy IRQs aren't delivered (MSI-only setups). */
     hda_tick();
 

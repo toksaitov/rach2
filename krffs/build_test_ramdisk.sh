@@ -47,7 +47,8 @@ echo "=== Copying test binaries ==="
 for prog in hello filetest forktest shelltest dirtest stattest \
             touchtest rmtest mvtest lstest stdintest dup2test \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
-            tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe; do
+            tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
+            timeprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"

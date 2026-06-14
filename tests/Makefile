@@ -18,7 +18,8 @@ CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000
 PROGS = hello filetest forktest shelltest dirtest stattest \
         touchtest rmtest mvtest lstest stdintest dup2test \
         pingtest udptest tcptest sockettest dnstest auxvprobe \
-        tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe
+        tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
+        timeprobe
 
 .PHONY: all clean
 

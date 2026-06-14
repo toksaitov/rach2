@@ -25,6 +25,7 @@ vmro
 forkro
 cowprobe
 dirprobe
+timeprobe
 
 # Statically-linked musl test programs
 musl/hello

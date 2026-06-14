@@ -66,6 +66,7 @@ struct process {
      * in the same patch (PROC_TLS_BASE, asserted against offsetof at boot). */
     uint32_t tls_base;      /* Per-process %gs TLS base (set_thread_area) */
     vm_space_t vm;          /* Address-space map (VMAs + brk + stack limit) */
+    uint32_t wakeup_tick;   /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
 };
 
 typedef struct process process_t;
@@ -101,6 +102,12 @@ void free_process(process_t *proc);
  * Returns pointer to process, or NULL if not found
  */
 process_t *get_process(uint32_t pid);
+
+/*
+ * Wake timed sleepers: any BLOCKED process whose wakeup_tick has reached `now`
+ * (the current kernel tick) becomes READY. Called from the timer interrupt.
+ */
+void proc_wake_sleepers(uint32_t now);
 
 /*
  * Context switch between two processes
