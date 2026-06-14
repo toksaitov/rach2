@@ -101,6 +101,15 @@ if [ -f "../tests/musl/ctrlcmusl" ]; then
     echo "  mctrlc (musl)"
 fi
 
+# The Phase 9 musl-linked Unix utilities, under their real names so the combined
+# boot can exercise them (e.g. "exec cat hello.txt", "exec ls", "exec echo hi").
+for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; do
+    if [ -f "../utils/$util" ]; then
+        cp "../utils/$util" "$MOUNT_POINT/"
+        echo "  $util (musl util)"
+    fi
+done
+
 # Also copy hello.txt for file tests
 echo "hello, world" > "$MOUNT_POINT/hello.txt"
 echo "  hello.txt (test data)"

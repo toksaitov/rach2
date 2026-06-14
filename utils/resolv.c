@@ -144,7 +144,7 @@ static void delay_ms(int ms)
 
 /* --- public: numeric literal --------------------------------------------- */
 
-int inet_aton(const char *s, unsigned int *out_ip)
+int rach2_inet_aton(const char *s, unsigned int *out_ip)
 {
     u32 ip = 0;
     int octet = 0, parts = 0, digits = 0;
@@ -216,7 +216,7 @@ int hosts_find(const char *buf, int len, const char *name, unsigned int *out_ip)
 
             if (ntok == 0) {
                 /* first token is the address; a bad one voids the line */
-                if (inet_aton(tok, &ip) != 0) {
+                if (rach2_inet_aton(tok, &ip) != 0) {
                     break;
                 }
             } else if (ci_eq(tok, name)) {
@@ -403,7 +403,7 @@ static u32 read_nameserver(void)
             val[t] = '\0';
             {
                 u32 ns;
-                if (inet_aton(val, &ns) == 0) {
+                if (rach2_inet_aton(val, &ns) == 0) {
                     return ns;
                 }
             }
@@ -482,7 +482,7 @@ int resolve_host(const char *host, unsigned int *out_ip)
     int n;
 
     /* 1. numeric dotted-quad literal */
-    if (inet_aton(host, out_ip) == 0) {
+    if (rach2_inet_aton(host, out_ip) == 0) {
         return 0;
     }
 

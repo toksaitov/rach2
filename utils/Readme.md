@@ -2,9 +2,9 @@
 
 ![List of Rach2 Utilities](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/utils.png)
 
-Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility invokes system calls directly via inline assembly using `int $0x80`, with no standard library dependencies. All types and constants are defined locally, making the code suitable for bare-metal or custom OS environments.
+Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility is an ordinary hosted C program linked statically against the ported musl libc (see [libc/](../libc/)): it uses the real standard headers (`<stdio.h>`, `<unistd.h>`, `<fcntl.h>`, `<dirent.h>`, `<sys/socket.h>`, …), musl's `crt1` startup, and libc's syscall wrappers — the hand-rolled `int $0x80` stubs and `crt0.c` were dropped in the musl port. (`resolv.c`, the stub resolver shared by `ping` and `nc`, stays freestanding for now; a thin `getaddrinfo` shim is a documented follow-on.)
 
-The utilities can be built for both Linux (native) and the Rach2 kernel (freestanding ELF32).
+Built for the Rach2 kernel with `make` against `../libc/install` (run `libc/build_libc.sh` once first). A separate `Makefile.linux` still builds them natively on Linux.
 
 ## Utilities
 

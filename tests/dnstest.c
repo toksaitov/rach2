@@ -138,16 +138,16 @@ void _start(void)
     puts("");
 
     puts("inet_aton (numeric literals):");
-    check("10.0.2.2",        inet_aton("10.0.2.2", &ip) == 0 && ip == 0x0A000202U);
-    check("127.0.0.1",       inet_aton("127.0.0.1", &ip) == 0 && ip == 0x7F000001U);
-    check("0.0.0.0",         inet_aton("0.0.0.0", &ip) == 0 && ip == 0x00000000U);
-    check("255.255.255.255", inet_aton("255.255.255.255", &ip) == 0 && ip == 0xFFFFFFFFU);
-    check("reject 999.1.1.1", inet_aton("999.1.1.1", &ip) != 0);
-    check("reject 1.2.3",     inet_aton("1.2.3", &ip) != 0);
-    check("reject 1.2.3.4.5", inet_aton("1.2.3.4.5", &ip) != 0);
-    check("reject 1.2.3.",    inet_aton("1.2.3.", &ip) != 0);
-    check("reject abc",       inet_aton("abc", &ip) != 0);
-    check("reject empty",     inet_aton("", &ip) != 0);
+    check("10.0.2.2",        rach2_inet_aton("10.0.2.2", &ip) == 0 && ip == 0x0A000202U);
+    check("127.0.0.1",       rach2_inet_aton("127.0.0.1", &ip) == 0 && ip == 0x7F000001U);
+    check("0.0.0.0",         rach2_inet_aton("0.0.0.0", &ip) == 0 && ip == 0x00000000U);
+    check("255.255.255.255", rach2_inet_aton("255.255.255.255", &ip) == 0 && ip == 0xFFFFFFFFU);
+    check("reject 999.1.1.1", rach2_inet_aton("999.1.1.1", &ip) != 0);
+    check("reject 1.2.3",     rach2_inet_aton("1.2.3", &ip) != 0);
+    check("reject 1.2.3.4.5", rach2_inet_aton("1.2.3.4.5", &ip) != 0);
+    check("reject 1.2.3.",    rach2_inet_aton("1.2.3.", &ip) != 0);
+    check("reject abc",       rach2_inet_aton("abc", &ip) != 0);
+    check("reject empty",     rach2_inet_aton("", &ip) != 0);
 
     puts("hosts_find (crafted buffer):");
     check("gateway",   hosts_find(hosts, hlen, "gateway", &ip) == 0 && ip == 0x0A000202U);

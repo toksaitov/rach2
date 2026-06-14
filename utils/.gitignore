@@ -14,6 +14,3 @@ ls
 ping
 nc
 httpd
-
-# Object files
-crt0.o

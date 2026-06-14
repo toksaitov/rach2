@@ -1,15 +1,14 @@
-# Unix Utilities Makefile (Linux)
+# Unix Utilities Makefile (native Linux)
 #
-# Builds utilities for Linux using cross-compiler.
-# Usage: make -f Makefile.linux
+# Builds the file utilities as ordinary native programs with the host compiler
+# and its libc, for running/testing on Linux. Usage: make -f Makefile.linux
+#
+# Only the portable file utilities are built here; the network utilities
+# (ping/nc/httpd) target the Rach2 kernel's sockets and stay with the main
+# musl-linked Makefile.
 
-# Cross-compiler detection
-CC := $(shell command -v i686-elf-gcc 2>/dev/null)
-ifeq ($(CC),)
-	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
-endif
-
-CFLAGS = -m32 -nostdlib -static -ffreestanding
+CC ?= cc
+CFLAGS = -O2 -Wall -Wextra
 
 UTILITIES = true  \
             false \
@@ -26,13 +25,10 @@ UTILITIES = true  \
 
 .PHONY: all clean
 
-all: crt0.o $(UTILITIES)
+all: $(UTILITIES)
 
-crt0.o: crt0.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-%: %.c crt0.o
-	$(CC) $(CFLAGS) -o $@ crt0.o $<
+%: %.c
+	$(CC) $(CFLAGS) -o $@ $<
 
 clean:
-	rm -f $(UTILITIES) crt0.o
+	rm -f $(UTILITIES)

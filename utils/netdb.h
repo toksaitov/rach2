@@ -22,7 +22,7 @@
  * numeric address. ("0.0.0.0" succeeds with *out_ip == 0, so a 0 return is the
  * only success signal -- callers must not treat a zero address as an error.)
  */
-int inet_aton(const char *s, unsigned int *out_ip);
+int rach2_inet_aton(const char *s, unsigned int *out_ip);
 
 /*
  * Look up name in a /hosts-format buffer: lines of "ip name [alias...]", with

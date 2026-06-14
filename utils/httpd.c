@@ -15,25 +15,17 @@
  *   curl http://127.0.0.1:8080/
  */
 
-typedef unsigned char  uint8_t;
-typedef unsigned short uint16_t;
-typedef unsigned int   uint32_t;
-typedef int            int32_t;
-typedef unsigned int   size_t;
+#include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/time.h>
 
 #define LISTEN_PORT 80
-#define AF_INET     2
-#define SOCK_STREAM 1
 
 /* The stack's static SLIRP address; shown as the server endpoint. */
 #define SERVER_ADDR "10.0.2.15:80"
-
-#define SC_SOCKET   1
-#define SC_BIND     2
-#define SC_LISTEN   4
-#define SC_ACCEPT   5
-#define SC_SEND     9
-#define SC_RECV    10
 
 #define PEER_RING    6   /* last-N connections shown on the page */
 #define REQLINE_MAX 64   /* stored length of a request line  */
@@ -41,69 +33,13 @@ typedef unsigned int   size_t;
 #define AGENT_MAX   76   /* stored User-Agent length         */
 #define HOST_MAX    48   /* stored Host header length        */
 
-struct sockaddr_in {
-    uint16_t sin_family;
-    uint16_t sin_port;
-    uint32_t sin_addr;
-    char     sin_zero[8];
-};
-
-struct timeval { int32_t tv_sec; int32_t tv_usec; };
-
-static uint16_t htons(uint16_t x)
-{
-    return (uint16_t)((x >> 8) | ((x & 0xFF) << 8));
-}
-
-static int sys_socketcall(int call, uint32_t *args)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(102), "b"(call), "c"(args) : "memory");
-    return r;
-}
-
-static int sys_write(int fd, const void *b, size_t n)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(4), "b"(fd), "c"(b), "d"(n) : "memory");
-    return r;
-}
-
-static int sys_close(int fd)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(6), "b"(fd) : "memory");
-    return r;
-}
-
-static void sys_exit(int s)
-{
-    __asm__ __volatile__("int $0x80" : : "a"(1), "b"(s) : "memory");
-}
-
-static int sys_gettimeofday(struct timeval *tv)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(78), "b"(tv), "c"(0) : "memory");
-    return r;
-}
-
-static int sys_send(int fd, const void *b, size_t n)
-{
-    uint32_t a[4];
-    a[0] = (uint32_t)fd; a[1] = (uint32_t)b; a[2] = (uint32_t)n; a[3] = 0;
-    return sys_socketcall(SC_SEND, a);
-}
-
-static int sys_recv(int fd, void *b, size_t n)
-{
-    uint32_t a[4];
-    a[0] = (uint32_t)fd; a[1] = (uint32_t)b; a[2] = (uint32_t)n; a[3] = 0;
-    return sys_socketcall(SC_RECV, a);
-}
+/* Thin libc wrappers so the rest of the server reads as it did freestanding. */
+static int sys_write(int fd, const void *b, size_t n) { return (int)write(fd, b, n); }
+static int sys_close(int fd) { return close(fd); }
+static void sys_exit(int s) { exit(s); }
+static int sys_gettimeofday(struct timeval *tv) { return gettimeofday(tv, 0); }
+static int sys_send(int fd, const void *b, size_t n) { return (int)send(fd, b, n, 0); }
+static int sys_recv(int fd, void *b, size_t n) { return (int)recv(fd, b, n, 0); }
 
 static void print(const char *s)
 {
@@ -485,25 +421,22 @@ int main(void)
 {
     int fd, conn;
     struct sockaddr_in addr, peer;
-    uint32_t peerlen, a[6];
+    socklen_t peerlen;
     int i;
 
-    a[0] = AF_INET; a[1] = SOCK_STREAM; a[2] = 0;
-    fd = sys_socketcall(SC_SOCKET, a);
+    fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { print("httpd: error: socket() failed\n"); sys_exit(1); }
 
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(LISTEN_PORT);
-    addr.sin_addr   = 0;
+    addr.sin_addr.s_addr = 0;
     for (i = 0; i < 8; i++) addr.sin_zero[i] = 0;
-    a[0] = (uint32_t)fd; a[1] = (uint32_t)&addr; a[2] = 16;
-    if (sys_socketcall(SC_BIND, a) < 0) {
+    if (bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
         print("httpd: error: cannot bind port 80 (already in use?)\n");
         sys_exit(1);
     }
 
-    a[0] = (uint32_t)fd; a[1] = 4;
-    if (sys_socketcall(SC_LISTEN, a) < 0) {
+    if (listen(fd, 4) < 0) {
         print("httpd: error: listen() failed\n"); sys_exit(1);
     }
 
@@ -514,22 +447,21 @@ int main(void)
         int rlen, total, sent, n;
         uint32_t uptime_s;
 
-        peerlen = 16;
-        a[0] = (uint32_t)fd; a[1] = (uint32_t)&peer; a[2] = (uint32_t)&peerlen;
-        conn = sys_socketcall(SC_ACCEPT, a);
+        peerlen = sizeof peer;
+        conn = accept(fd, (struct sockaddr *)&peer, &peerlen);
         if (conn < 0) { print("httpd: warn: accept() failed\n"); continue; }
 
         rlen = sys_recv(conn, reqbuf, sizeof(reqbuf));
         if (rlen <= 0) {
             print("httpd: warn: ");
-            log_addr(peer.sin_addr, peer.sin_port);
+            log_addr(peer.sin_addr.s_addr, peer.sin_port);
             print(" closed before sending a request\n");
             sys_close(conn);
             continue;
         }
 
         /* Decode what we can of the request for the readout. */
-        cur_client_ip   = peer.sin_addr;
+        cur_client_ip   = peer.sin_addr.s_addr;
         cur_client_port = peer.sin_port;
         cur_bytes_in    = (unsigned int)rlen;
         copy_request(reqbuf, rlen, cur_reqline, REQLINE_MAX, 0);
@@ -548,7 +480,7 @@ int main(void)
          * The response size is not known mid-render (it is the size of the very
          * reply being built), so it is recorded as 0 now and patched in once the
          * reply has been sent; the in-flight row shows a blank byte count. */
-        record_peer(peer.sin_addr, peer.sin_port, served, 0);
+        record_peer(peer.sin_addr.s_addr, peer.sin_port, served, 0);
 
         total = build_response(uptime_s);
 
@@ -571,7 +503,7 @@ int main(void)
          */
         print("httpd: ");
         if (sent < total) print("warn: ");
-        log_addr(peer.sin_addr, peer.sin_port);
+        log_addr(peer.sin_addr.s_addr, peer.sin_port);
         print(" \"");
         print(cur_reqline);
         print("\" 200 ");

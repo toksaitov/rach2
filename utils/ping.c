@@ -7,88 +7,56 @@
  *
  * Sends a few echo requests via the SC_PING socketcall and reports the
  * round-trip time in kernel ticks (10 ms each) or a timeout.
+ *
+ * Ported to musl: <stdio.h> for output, the shared resolver, and the one
+ * Rach2-specific operation (SC_PING -- there is no libc wrapper for it) via a
+ * direct socketcall(2). No hand-rolled int-0x80 stubs or crt0.
  */
 
-#include "netdb.h"
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/syscall.h>
 
-typedef unsigned int size_t;
-typedef unsigned int uint32_t;
+#include "netdb.h" /* resolve_host */
 
-#define STDOUT_FILENO 1
-
-#define SYS_SOCKETCALL 102
-#define SC_PING        15
-
-#define DEFAULT_IP 0x0A000202UL   /* 10.0.2.2 */
+#define SC_PING    15           /* Rach2 socketcall extension: ICMP echo */
+#define DEFAULT_IP 0x0A000202UL /* 10.0.2.2 */
 #define PING_COUNT 4
 
-static int sys_write(int fd, const void *buf, size_t count)
+/* One echo to ip (host byte order); returns the RTT in ticks, or < 0 on timeout. */
+static int ping_once(unsigned int ip)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(4), "b"(fd), "c"(buf), "d"(count) : "memory");
-    return r;
-}
+    unsigned int args[1];
 
-static int socketcall(int call, uint32_t *args)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(SYS_SOCKETCALL), "b"(call), "c"(args) : "memory");
-    return r;
-}
-
-static size_t strlen(const char *s)
-{
-    size_t n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
-static void print(const char *s)  { sys_write(STDOUT_FILENO, s, strlen(s)); }
-
-static void print_num(int n)
-{
-    char buf[12];
-    int i = 0;
-    if (n < 0) { sys_write(STDOUT_FILENO, "-", 1); n = -n; }
-    if (n == 0) buf[i++] = '0';
-    while (n > 0) { buf[i++] = (char)('0' + n % 10); n /= 10; }
-    while (i > 0) sys_write(STDOUT_FILENO, &buf[--i], 1);
+    args[0] = ip;
+    return (int)syscall(SYS_socketcall, SC_PING, args);
 }
 
 int main(int argc, char **argv)
 {
-    uint32_t ip, args[1];
-    int i, rtt, replies = 0;
+    unsigned int ip = DEFAULT_IP;
+    int i, replies = 0;
 
-    ip = DEFAULT_IP;
     if (argc > 1) {
         if (resolve_host(argv[1], &ip) != 0) {
-            print("ping: cannot resolve host\n");
+            fputs("ping: cannot resolve host\n", stderr);
             return 1;
         }
     }
 
-    print("PING ");
-    print_num((int)((ip >> 24) & 0xFF)); print(".");
-    print_num((int)((ip >> 16) & 0xFF)); print(".");
-    print_num((int)((ip >>  8) & 0xFF)); print(".");
-    print_num((int)( ip        & 0xFF)); print("\n");
+    printf("PING %u.%u.%u.%u\n", (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF,
+           ip & 0xFF);
 
     for (i = 0; i < PING_COUNT; i++) {
-        args[0] = ip;
-        rtt = socketcall(SC_PING, args);
+        int rtt = ping_once(ip);
         if (rtt >= 0) {
-            print("  reply: seq="); print_num(i);
-            print(" time="); print_num(rtt * 10); print(" ms\n");
+            printf("  reply: seq=%d time=%d ms\n", i, rtt * 10);
             replies++;
         } else {
-            print("  seq="); print_num(i); print(" timeout\n");
+            printf("  seq=%d timeout\n", i);
         }
     }
 
-    print(""); print_num(replies); print("/"); print_num(PING_COUNT);
-    print(" replies\n");
+    printf("%d/%d replies\n", replies, PING_COUNT);
     return replies > 0 ? 0 : 1;
 }
