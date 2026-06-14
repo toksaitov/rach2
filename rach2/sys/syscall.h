@@ -30,6 +30,11 @@
 #define SYS_MKDIR   39
 #define SYS_RMDIR   40
 #define SYS_GETPID   20
+#define SYS_TIMES     43   /* busybox-required misc (Phase 18) */
+#define SYS_UMASK     60
+#define SYS_GETPPID   64
+#define SYS_SYSINFO  116
+#define SYS_VFORK    190
 #define SYS_PAUSE     29   /* sessions + job control (Phase 17) */
 #define SYS_SETPGID   57
 #define SYS_GETPGRP   65

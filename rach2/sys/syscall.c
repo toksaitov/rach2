@@ -3054,6 +3054,7 @@ static int32_t sys_fork(isr_params_t *params)
      * (Phase 17). alloc_process defaulted these to the child's own pid. */
     child->sid = parent->sid;
     child->pgid = parent->pgid;
+    child->umask = parent->umask; /* the file-creation mask is inherited (Phase 18) */
 
     /* Inherit the parent's TLS base: the child's copied trapframe keeps the
      * parent's %gs selector, and its address space is a copy at the same
@@ -5923,6 +5924,124 @@ static int32_t sys_getsid(isr_params_t *params)
 }
 
 /*
+ * sys_getppid - return the parent's PID (getppid(2)).
+ */
+static int32_t sys_getppid(isr_params_t *params)
+{
+    (void)params;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    return (int32_t)current_proc->parent_pid;
+}
+
+/*
+ * sys_umask - set the file-creation mask, returning the previous value (umask(2)).
+ * Args: EBX = new mask (only the low 9 permission bits are kept).
+ */
+static int32_t sys_umask(isr_params_t *params)
+{
+    uint32_t old;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    old = current_proc->umask;
+    current_proc->umask = params->ebx & 0777;
+    return (int32_t)old;
+}
+
+/*
+ * sys_times - process times (times(2)). Per-process CPU time is not tracked, so
+ * the four tms fields are reported as zero; the return value is the monotonic
+ * tick count (already in CLK_TCK = 100 Hz units). Args: EBX = struct tms * (NULL
+ * is allowed -- the caller may only want the return value).
+ */
+static int32_t sys_times(isr_params_t *params)
+{
+    struct kernel_tms {
+        int32_t tms_utime;
+        int32_t tms_stime;
+        int32_t tms_cutime;
+        int32_t tms_cstime;
+    } t;
+
+    if (params->ebx) {
+        t.tms_utime = 0;
+        t.tms_stime = 0;
+        t.tms_cutime = 0;
+        t.tms_cstime = 0;
+        if (copy_to_user((void __user *)params->ebx, &t, sizeof(t)) != 0) {
+            return -EFAULT;
+        }
+    }
+    return (int32_t)kernel_ticks;
+}
+
+/*
+ * sys_sysinfo - system statistics (sysinfo(2)). Fills the 64-byte i386 struct
+ * sysinfo: uptime in seconds, a live-process count, mem_unit = 1; CPU load and
+ * memory/swap figures are reported as zero (not tracked). Args: EBX = struct
+ * sysinfo *.
+ */
+static int32_t sys_sysinfo(isr_params_t *params)
+{
+    struct kernel_sysinfo {
+        int32_t uptime;
+        uint32_t loads[3];
+        uint32_t totalram;
+        uint32_t freeram;
+        uint32_t sharedram;
+        uint32_t bufferram;
+        uint32_t totalswap;
+        uint32_t freeswap;
+        uint16_t procs;
+        uint16_t pad;
+        uint32_t totalhigh;
+        uint32_t freehigh;
+        uint32_t mem_unit;
+        char _f[8];
+    } si;
+    uint32_t i;
+    int n = 0;
+
+    if (!params->ebx) {
+        return -EFAULT;
+    }
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (proc_table[i].state != PROC_UNUSED) {
+            n++;
+        }
+    }
+    /* Fill every field of the ABI struct explicitly: uptime, the process count,
+     * and mem_unit are real; load average and memory/swap are not tracked, so
+     * they are reported as zero. */
+    si.uptime = (int32_t)(kernel_ticks / 100);
+    si.loads[0] = 0;
+    si.loads[1] = 0;
+    si.loads[2] = 0;
+    si.totalram = 0;
+    si.freeram = 0;
+    si.sharedram = 0;
+    si.bufferram = 0;
+    si.totalswap = 0;
+    si.freeswap = 0;
+    si.procs = (uint16_t)n;
+    si.pad = 0;
+    si.totalhigh = 0;
+    si.freehigh = 0;
+    si.mem_unit = 1;
+    for (i = 0; i < sizeof(si._f); i++) {
+        si._f[i] = 0;
+    }
+    if (copy_to_user((void __user *)params->ebx, &si, sizeof(si)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/*
  * sys_set_tid_address - record the clear-child-tid pointer and return the tid
  * (set_tid_address(2)). Rach2 has no threads, so we only need to return the
  * caller's PID as its thread id; the pointer (EBX) is accepted and ignored.
@@ -6290,6 +6409,11 @@ void init_syscall(void)
     _syscall_table[SYS_GETSID] = sys_getsid;
     _syscall_table[SYS_PAUSE] = sys_pause;
     _syscall_table[SYS_RT_SIGSUSPEND] = sys_rt_sigsuspend;
+    _syscall_table[SYS_GETPPID] = sys_getppid;
+    _syscall_table[SYS_UMASK] = sys_umask;
+    _syscall_table[SYS_TIMES] = sys_times;
+    _syscall_table[SYS_SYSINFO] = sys_sysinfo;
+    _syscall_table[SYS_VFORK] = sys_fork; /* conservative alias (Phase 18) */
     _syscall_table[SYS_WRITEV] = sys_writev;
     _syscall_table[SYS_UNAME] = sys_uname;
     _syscall_table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;

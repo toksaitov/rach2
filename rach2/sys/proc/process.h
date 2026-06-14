@@ -86,6 +86,8 @@ struct process {
      * Linux WIFSTOPPED value ((stopsig<<8)|0x7f) when stopped, or 0xffff when
      * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED). */
     uint32_t jc_status;
+    /* File-creation mask (umask(2), Phase 18); inherited across fork, low 9 bits. */
+    uint32_t umask;
 };
 
 typedef struct process process_t;

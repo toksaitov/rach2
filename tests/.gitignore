@@ -49,3 +49,4 @@ pollprobe
 devprobe
 ttyprobe
 jobprobe
+miscprobe

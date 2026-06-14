@@ -49,7 +49,7 @@ for prog in hello filetest forktest shelltest dirtest stattest \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
             tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
             timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe \
-            ttyprobe jobprobe; do
+            ttyprobe jobprobe miscprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"

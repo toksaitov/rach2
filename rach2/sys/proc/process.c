@@ -74,6 +74,7 @@ process_t *alloc_process(void)
              * fork() overrides these to inherit the parent's (Phase 17). */
             proc_table[i].sid = candidate;
             proc_table[i].pgid = candidate;
+            proc_table[i].umask = 022; /* the usual default file-creation mask */
 
             /* Initialize file descriptor table with stdin/stdout/stderr */
             fd_table_init(&proc_table[i].fds);
