@@ -69,6 +69,7 @@ volatile process_t *stdin_waiting_proc = NULL;  /* Process blocked on stdin */
 
 static void run_self_tests(void);
 void shell_loop(void);  /* Non-static: called from syscall.c when init exits */
+void shell_reset_input(void);  /* Non-static: called from syscall.c exit paths */
 static void process_command(const char *cmd);
 static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
@@ -208,14 +209,8 @@ void terminate_current_process(int32_t signo)
         current_proc = &proc_table[0];
         current_proc->state = PROC_RUNNING;
 
-        /* Reset stdin state so keyboard goes back to cmd_buffer */
-        stdin_waiting_proc = NULL;
-        stdin_ready = false;
-        stdin_pos = 0;
-
-        /* Reset command buffer for fresh shell */
-        cmd_pos = 0;
-        cmd_ready = false;
+        /* Fresh command line + drop stdin-wait state, before re-enabling IRQs. */
+        shell_reset_input();
 
         sched_disable();
 
@@ -1863,8 +1858,34 @@ static void process_command(const char *cmd)
     }
 }
 
+/*
+ * Reset the kernel shell's command-line and stdin-wait state to "fresh prompt".
+ *
+ * Used on every transition back to the debug shell. An exec'd program never
+ * returns through process_command (exec_program calls enter_usermode), so the
+ * post-process_command "cmd_pos = 0" never runs for it; without this reset the
+ * next keystrokes append to the previous command's buffer and the shell re-runs
+ * it (e.g. a second "exec cat ..." parses as the leftover "exec cp ..."). It also
+ * drops any stale stdin-wait state from a program that exited mid-read.
+ *
+ * The exit paths (sys_exit, terminate, exec_fail_destroyed) call this BEFORE they
+ * re-enable interrupts and jump here, so a keyboard IRQ in the jump window cannot
+ * observe stale state; shell_loop calls it again on entry as the catch-all (boot,
+ * and any path that did not).
+ */
+void shell_reset_input(void)
+{
+    cmd_pos = 0;
+    cmd_ready = false;
+    stdin_waiting_proc = NULL;
+    stdin_ready = false;
+    stdin_pos = 0;
+}
+
 void shell_loop(void)
 {
+    shell_reset_input();
+
     kernel_shell_active = true;
     k_puts("Type 'help' for available commands.");
     serial_puts("Type 'help' for available commands.\n");

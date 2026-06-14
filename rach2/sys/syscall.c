@@ -126,6 +126,7 @@ extern volatile uint32_t init_pid;
 
 /* Shell loop from kernel.c - called when init exits */
 extern void shell_loop(void);
+extern void shell_reset_input(void);
 
 /* Kernel stack from loader.s */
 extern char stack[];
@@ -251,6 +252,12 @@ static int32_t sys_exit(isr_params_t *params)
 
         /* Disable scheduler while in kernel shell */
         sched_disable();
+
+        /* Clear the shell's command line + stdin-wait state BEFORE re-enabling
+         * interrupts below, so a keyboard IRQ during the jump cannot append to a
+         * stale command buffer or see a dangling stdin waiter. shell_loop resets
+         * again on entry as the catch-all. */
+        shell_reset_input();
 
         /* Re-enable interrupts and return to shell via longjmp-like mechanism.
          * We reset ESP to the kernel stack and jump to shell_loop.
@@ -2001,6 +2008,8 @@ static void exec_fail_destroyed(void)
     free_process(current_proc);
     current_proc = &proc_table[0];
     current_proc->state = PROC_RUNNING;
+    /* Fresh command line + drop stdin-wait state before re-enabling IRQs. */
+    shell_reset_input();
     __asm__ __volatile__("movl %0, %%esp\n\t"
                          "sti\n\t"
                          "jmp *%1\n\t"
