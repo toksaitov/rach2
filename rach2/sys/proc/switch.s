@@ -15,7 +15,8 @@
 .set PROC_REGS_ESP, 48     # offset of regs.esp (pid=4 + state=4 + regs offset 40)
 .set PROC_CR3, 52          # offset of cr3 (page directory physical address)
 .set PROC_KERNEL_STACK, 56 # offset of kernel_stack
-.set PROC_TLS_BASE, 456    # offset of tls_base (appended after in_syscall)
+.set PROC_TLS_BASE, 584    # offset of tls_base (after in_syscall; the embedded fd
+                           # table grew by 8 bytes/entry in Phase 12: 456 -> 584)
 
 # Shared TLS GDT descriptor (mirrors GDT_TLS_ENTRY / GDT_TLS_SELECTOR in
 # tables/gdt.h): entry 6, so its 8-byte descriptor lives at gdt_descriptors+48;

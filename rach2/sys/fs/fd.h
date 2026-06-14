@@ -39,39 +39,55 @@ typedef enum {
  */
 #define FD_FLAG_READ    0x01
 #define FD_FLAG_WRITE   0x02
-#define FD_FLAG_APPEND  0x04
 #define FD_FLAG_CLOEXEC 0x08  /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
+/* O_APPEND/O_NONBLOCK are OFD status flags (OFD_* in struct open_file), not
+ * per-descriptor flags -- they are shared by dup/dup2/fork. */
+
+/*
+ * Open-file-description status flags. POSIX keeps these on the open-file
+ * description (so dup/dup2/fork share them, and fcntl(F_SETFL) on one descriptor
+ * is visible through its duplicates), unlike FD_CLOEXEC which is per-descriptor.
+ * The values are the Linux i386 O_* bits so fcntl passes them straight through.
+ */
+#define OFD_APPEND    02000     /* O_APPEND: every write goes to end-of-file */
+#define OFD_NONBLOCK  04000     /* O_NONBLOCK: a would-block returns -EAGAIN */
 
 /*
  * Forward declarations for the types a descriptor can point at.
  */
 struct krffs_node;
 struct socket;
+struct file_ops;
 
 /*
- * Open-file description (OFD): the shared, refcounted seek position behind one or
- * more descriptors. dup/dup2/fork copy the fd's pointer to this and bump the
- * refcount, so the duplicates share one seek offset (the POSIX open-file
- * description semantics) instead of each carrying its own. It is freed back to a
- * static pool when the last referencing descriptor closes. Allocated from a fixed
- * pool (see fd.c); refcount 0 means the slot is free.
+ * Open-file description (OFD): the shared, refcounted state behind one or more
+ * descriptors -- the seek offset plus the POSIX status flags. dup/dup2/fork copy
+ * the fd's pointer to this and bump the refcount, so the duplicates share one
+ * offset and one set of status flags (the POSIX open-file description semantics)
+ * instead of each carrying its own. It is freed back to a static pool when the
+ * last referencing descriptor closes. Allocated from a fixed pool (see fd.c);
+ * refcount 0 means the slot is free.
  */
 struct open_file {
-    uint32_t refcount;           /* Number of descriptors sharing this offset */
+    uint32_t refcount;           /* Number of descriptors sharing this OFD */
     uint32_t offset;             /* Shared read/write offset */
+    uint32_t status_flags;       /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
 };
 
 /*
- * File descriptor entry. The backing object (type/node/sock) and its own
- * reference (sockets are refcounted per descriptor) live here; only the seek
- * offset is shared through the open-file description ofd.
+ * File descriptor entry. The backing object (type/node/sock, or an ops vtable
+ * for pipes/ttys/ptys) and its own reference (sockets are refcounted per
+ * descriptor) live here; the seek offset and status flags are shared through the
+ * open-file description ofd.
  */
 typedef struct fd_entry {
     fd_type_t type;              /* Type of this fd (NONE, CONSOLE, FILE) */
     struct krffs_node *node;     /* Pointer to KRFFS node (for FILE type) */
     struct socket *sock;         /* Pointer to socket (for SOCKET type) */
-    struct open_file *ofd;       /* Shared open-file description (the offset) */
-    uint32_t flags;              /* Open flags (READ, WRITE, APPEND, CLOEXEC) */
+    struct open_file *ofd;       /* Shared open-file description (offset+flags) */
+    const struct file_ops *ops;  /* Backing ops (pipes/ttys/...); NULL = enum dispatch */
+    void *priv;                  /* Backing private object (e.g. a pipe end) */
+    uint32_t flags;              /* Per-fd flags (READ, WRITE, CLOEXEC) */
 } fd_entry_t;
 
 /*

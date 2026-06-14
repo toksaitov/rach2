@@ -3,6 +3,7 @@
 
 #include "../../lib/kint.h"
 #include "../../proc/process.h"
+#include "../../proc/wait_queue.h"
 
 /*
  * Socket abstraction. A socket is the kernel object behind one (or more) user
@@ -52,8 +53,10 @@ typedef struct socket {
     uint8_t  recv_buf[SOCK_RECV_BUF_SIZE];
     uint16_t recv_len;
 
-    /* Process blocked waiting for data or a connection (NULL if none). */
-    volatile process_t *waiting_proc;
+    /* Processes blocked waiting for data, a connection, or an accept. The
+     * IRQ-side deliver/accept/connect/fin routines wake every waiter; each
+     * re-checks its own condition (Phase 12 replaced the single-waiter park). */
+    wait_queue_t waiters;
 } socket_t;
 
 /* Allocate the socket pool; called once from init_network. */

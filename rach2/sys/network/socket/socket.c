@@ -57,7 +57,7 @@ struct socket *socket_alloc(int type)
             socket_pool[i].last_src_ip   = 0;
             socket_pool[i].last_src_port = 0;
             socket_pool[i].recv_len      = 0;
-            socket_pool[i].waiting_proc  = NULL;
+            wait_queue_init(&socket_pool[i].waiters);
             k_memset(socket_pool[i].accept_queue, 0,
                      sizeof(socket_pool[i].accept_queue));
             net_unlock(flags);
@@ -128,28 +128,42 @@ void socket_udp_deliver(struct socket *sock,
     sock->last_src_ip   = src_ip;
     sock->last_src_port = src_port;
 
-    if (sock->waiting_proc) {
-        sock->waiting_proc->state = PROC_READY;
-        sock->waiting_proc = NULL;
+    wq_wake_all(&sock->waiters);
+}
+
+/* Wait predicate: a UDP datagram is buffered. */
+static int udp_recv_ready(void *arg)
+{
+    socket_t *sock = (socket_t *)arg;
+    return sock->recv_len != 0;
+}
+
+/* Wait predicate: a stream socket has buffered data, saw a FIN (EOF), or its
+ * connection has closed/reset -- any of which ends a blocking recv. */
+static int tcp_recv_ready(void *arg)
+{
+    socket_t *sock = (socket_t *)arg;
+    struct tcb *tcb = sock->tcb;
+    if (!tcb) {
+        return 1; /* no control block: do not block, the caller reports the error */
     }
+    return (tcb->recv_tail - tcb->recv_head) != 0 ||
+           tcb->fin_received ||
+           tcb->state == TCP_CLOSED;
 }
 
 int socket_recv(struct socket *sock, uint8_t *buf, int len,
                 uint32_t *src_ip, uint16_t *src_port)
 {
     int copy_len;
+    int rc;
 
-    /* Register as waiter and block. If a datagram already arrived
-     * (recv_len > 0), the loop body never runs. */
-    current_proc->state = PROC_BLOCKED;
-    sock->waiting_proc  = current_proc;
-
-    while (sock->recv_len == 0) {
-        __asm__ __volatile__("sti; hlt");
+    /* Block until a datagram arrives, yielding so other processes run; a pending
+     * signal unwinds the wait with -EINTR. */
+    rc = wq_wait_event(&sock->waiters, udp_recv_ready, sock);
+    if (rc < 0) {
+        return rc;
     }
-
-    sock->waiting_proc  = NULL;
-    current_proc->state = PROC_RUNNING;
 
     copy_len = (int)sock->recv_len;
     if (copy_len > len) {
@@ -217,20 +231,14 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
     listen_sock->accept_queue[listen_sock->accept_tail] = conn_sock;
     listen_sock->accept_tail = next_tail;
 
-    if (listen_sock->waiting_proc) {
-        listen_sock->waiting_proc->state = PROC_READY;
-        listen_sock->waiting_proc = NULL;
-    }
+    wq_wake_all(&listen_sock->waiters);
 }
 
 void socket_tcp_connected(struct socket *sock)
 {
     if (!sock) return;
 
-    if (sock->waiting_proc) {
-        sock->waiting_proc->state = PROC_READY;
-        sock->waiting_proc = NULL;
-    }
+    wq_wake_all(&sock->waiters);
 }
 
 void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
@@ -250,38 +258,30 @@ void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
     }
     tcb->recv_tail += copy_len;
 
-    if (sock->waiting_proc) {
-        sock->waiting_proc->state = PROC_READY;
-        sock->waiting_proc = NULL;
-    }
+    wq_wake_all(&sock->waiters);
 }
 
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
 {
     struct tcb *tcb;
     uint32_t avail, copy_len, i;
+    int rc;
 
     if (!sock || !sock->tcb) return -1;
     tcb = sock->tcb;
 
-    current_proc->state = PROC_BLOCKED;
-    sock->waiting_proc  = current_proc;
-
-    /* Block until data arrives, a FIN signals EOF, or the connection resets. */
-    while ((tcb->recv_tail - tcb->recv_head) == 0 && !tcb->fin_received) {
-        if (tcb->state == TCP_CLOSED) {
-            sock->waiting_proc  = NULL;
-            current_proc->state = PROC_RUNNING;
-            return -1;
-        }
-        __asm__ __volatile__("sti; hlt");
+    /* Block until data arrives, a FIN signals EOF, or the connection resets,
+     * yielding meanwhile; a pending signal unwinds with -EINTR. */
+    rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
+    if (rc < 0) {
+        return rc;
     }
 
-    sock->waiting_proc  = NULL;
-    current_proc->state = PROC_RUNNING;
-
     avail = tcb->recv_tail - tcb->recv_head;
-    if (avail == 0) return 0;   /* EOF */
+    if (avail == 0 && !tcb->fin_received && tcb->state == TCP_CLOSED) {
+        return -1;              /* connection reset/closed with no data */
+    }
+    if (avail == 0) return 0;   /* EOF (FIN, no buffered data) */
 
     copy_len = avail;
     if (copy_len > (uint32_t)len) copy_len = (uint32_t)len;
@@ -323,8 +323,5 @@ void socket_tcp_fin(struct socket *sock)
 {
     if (!sock) return;
 
-    if (sock->waiting_proc) {
-        sock->waiting_proc->state = PROC_READY;
-        sock->waiting_proc = NULL;
-    }
+    wq_wake_all(&sock->waiters);
 }

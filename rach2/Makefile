@@ -51,6 +51,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/mm/frame.c        \
 	  sys/proc/process.c    \
 	  sys/proc/sched.c      \
+	  sys/proc/wait_queue.c \
 	  sys/proc/elf.c        \
 	  sys/proc/uimage.c     \
 	  sys/proc/tls.c        \

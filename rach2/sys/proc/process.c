@@ -35,7 +35,7 @@ void init_proc(void)
     if (PCB_OFF(regs.esp) != 48 ||
         PCB_OFF(cr3) != 52 ||
         PCB_OFF(kernel_stack) != 56 ||
-        PCB_OFF(tls_base) != 456) {
+        PCB_OFF(tls_base) != 584) {
         k_panic("process_t layout drifted from switch.s offsets");
     }
 

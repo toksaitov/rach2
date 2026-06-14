@@ -21,8 +21,9 @@ static struct open_file *ofd_alloc(void)
 
     for (i = 0; i < OFD_POOL_SIZE; i++) {
         if (ofd_pool[i].refcount == 0) {
-            ofd_pool[i].refcount = 1;
-            ofd_pool[i].offset   = 0;
+            ofd_pool[i].refcount     = 1;
+            ofd_pool[i].offset       = 0;
+            ofd_pool[i].status_flags = 0;
             return &ofd_pool[i];
         }
     }
@@ -59,6 +60,8 @@ void fd_table_init(fd_table_t *table)
         table->entries[i].node   = NULL;
         table->entries[i].sock   = NULL;
         table->entries[i].ofd    = NULL;
+        table->entries[i].ops    = NULL;
+        table->entries[i].priv   = NULL;
         table->entries[i].flags  = 0;
     }
 }
@@ -78,6 +81,8 @@ void fd_init_stdio(fd_table_t *table)
         table->entries[i].node  = NULL;
         table->entries[i].sock  = NULL;
         table->entries[i].ofd   = ofd_alloc();
+        table->entries[i].ops   = NULL;
+        table->entries[i].priv  = NULL;
         table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;
     }
 }
@@ -98,7 +103,9 @@ int fd_alloc_from(fd_table_t *table, int minfd)
             if (!ofd) {
                 return -1;   /* OFD pool exhausted */
             }
-            table->entries[i].ofd = ofd;
+            table->entries[i].ofd  = ofd;
+            table->entries[i].ops  = NULL;
+            table->entries[i].priv = NULL;
             return i;
         }
     }
@@ -132,6 +139,8 @@ int fd_free(fd_table_t *table, int fd)
     table->entries[fd].node   = NULL;
     table->entries[fd].sock   = NULL;
     table->entries[fd].ofd    = NULL;
+    table->entries[fd].ops    = NULL;
+    table->entries[fd].priv   = NULL;
     table->entries[fd].flags  = 0;
 
     return 0;

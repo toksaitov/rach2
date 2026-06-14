@@ -39,3 +39,4 @@ musl/tcpsendrecv
 musl/ofdmusl
 sigprobe
 ofdprobe
+waitprobe

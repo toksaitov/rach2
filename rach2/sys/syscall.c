@@ -13,6 +13,7 @@
 #include "lib/kerrno.h"
 #include "lib/ksignal.h"
 #include "fs/fd.h"
+#include "fs/file.h"
 #include "fs/krffs.h"
 #include "mm/paging.h"
 #include "mm/heap.h"
@@ -55,6 +56,42 @@ void fb_release_if_owner(uint32_t pid)
     if (fb_owner_pid == pid && fb_owner_pid != 0) {
         vga_mode13h_exit();
         fb_owner_pid = 0;
+    }
+}
+
+/*
+ * Release every backing reference a descriptor holds -- framebuffer ownership,
+ * the per-fd socket reference, and an ops-backed object (pipe/tty/pty) -- before
+ * the slot itself is freed. EVERY fd-teardown site routes through this (close,
+ * the dup2 replacement of an open target, the execve CLOEXEC sweep, and the
+ * process-exit fd-table release) so none can forget a backing kind as new ones
+ * are added. It does NOT free the slot; the caller does that with fd_free.
+ *
+ * An ops-backed object rides the shared open-file description: dup/dup2/fork copy
+ * the ops/priv pointers and bump the OFD refcount, so the object must be released
+ * exactly once, when its LAST descriptor closes -- i.e. when this teardown is
+ * dropping the final OFD reference (refcount about to reach 0). The socket
+ * reference, by contrast, is counted per descriptor (socket_ref on dup/fork), so
+ * it is always dropped here. (No descriptor is both an ops object and a socket.)
+ */
+static void fd_release_backing(fd_entry_t *e)
+{
+    if (!e) {
+        return;
+    }
+    /* Restore text mode only if THIS process actually owns the framebuffer, so a
+     * fork child that merely inherited the fb descriptor cannot clear the
+     * parent's graphics mode when the child closes the fd or exits. */
+    if (e->type == FD_TYPE_FRAMEBUFFER && current_proc &&
+        fb_owner_pid == current_proc->pid) {
+        vga_mode13h_exit();
+        fb_owner_pid = 0;
+    }
+    if (e->type == FD_TYPE_SOCKET && e->sock) {
+        socket_unref(e->sock);
+    }
+    if (e->ops && e->ops->close && e->ofd && e->ofd->refcount == 1) {
+        e->ops->close(e);
     }
 }
 
@@ -162,9 +199,7 @@ void release_fd_table(fd_table_t *table)
         if (e->type == FD_TYPE_NONE) {
             continue;
         }
-        if (e->type == FD_TYPE_SOCKET && e->sock) {
-            socket_unref(e->sock);
-        }
+        fd_release_backing(e);
         fd_free(table, fdi); /* unref the OFD and clear the slot */
     }
 }
@@ -321,6 +356,12 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return -EBADF;
     }
 
+    /* Backing-ops object (pipe/tty/pty): dispatch through its vtable. The Part I
+     * types below have no ops and fall through to the enum dispatch. */
+    if (entry->ops) {
+        return entry->ops->write ? entry->ops->write(entry, buf, count) : -EBADF;
+    }
+
     /* Socket fd - send to the network */
     if (entry->type == FD_TYPE_SOCKET) {
         if (!entry->sock) {
@@ -388,8 +429,9 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EFAULT;
         }
         /* O_APPEND: every write lands at the current end of file, regardless of
-         * any intervening seek (the POSIX append contract). */
-        if (entry->flags & FD_FLAG_APPEND) {
+         * any intervening seek (the POSIX append contract). The flag lives on the
+         * shared open-file description. */
+        if (entry->ofd && (entry->ofd->status_flags & OFD_APPEND)) {
             entry->ofd->offset = (uint32_t)entry->node->data_size;
         }
 
@@ -512,10 +554,11 @@ static int32_t sys_writev(isr_params_t *params)
  * Special case: opening "/" opens the root directory for getdents64.
  */
 /* Linux open flags */
-#define O_APPEND  02000     /* every write lands at end-of-file */
-#define O_CREAT   0100
-#define O_TRUNC   01000
-#define O_CLOEXEC 02000000  /* close-on-exec: the fd is dropped across execve */
+#define O_APPEND   02000    /* every write lands at end-of-file */
+#define O_CREAT    0100
+#define O_TRUNC    01000
+#define O_NONBLOCK 04000    /* a would-block operation returns -EAGAIN */
+#define O_CLOEXEC  02000000 /* close-on-exec: the fd is dropped across execve */
 
 /* Special dir fd for the openat family: resolve relative to the current dir. */
 #define AT_FDCWD (-100)
@@ -797,8 +840,14 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     } else {
         entry->flags = FD_FLAG_READ;
     }
-    if (flags & O_APPEND) {
-        entry->flags |= FD_FLAG_APPEND; /* fopen(.,"a") writes always go to EOF */
+    if (entry->ofd) {
+        /* O_APPEND/O_NONBLOCK are OFD status flags, shared by dup/fork. */
+        if (flags & O_APPEND) {
+            entry->ofd->status_flags |= OFD_APPEND;
+        }
+        if (flags & O_NONBLOCK) {
+            entry->ofd->status_flags |= OFD_NONBLOCK;
+        }
     }
     if (flags & O_CLOEXEC) {
         entry->flags |= FD_FLAG_CLOEXEC; /* opendir() and fopen(.,"e") rely on this */
@@ -875,26 +924,14 @@ static int32_t sys_close(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Don't allow closing stdin/stdout/stderr */
-    if (fd < 3) {
-        return -EBADF;
-    }
+    /* Closing stdin/stdout/stderr is legal -- a shell or daemon closes fd 0/1/2
+     * and reopens onto the freed (lowest) number to redirect them. */
 
-    /* Check if this is the framebuffer - need to restore text mode */
+    /* Release the descriptor's backing (framebuffer/socket/ops object), then free
+     * the slot. fd_free reports a bad/unallocated descriptor with -1; translate
+     * to the close(2) errno. */
     entry = fd_get(&current_proc->fds, fd);
-    if (entry && entry->type == FD_TYPE_FRAMEBUFFER) {
-        /* Restore text mode and clear ownership */
-        vga_mode13h_exit();
-        fb_owner_pid = 0;
-    }
-
-    /* Drop this descriptor's reference to its socket. */
-    if (entry && entry->type == FD_TYPE_SOCKET && entry->sock) {
-        socket_unref(entry->sock);
-    }
-
-    /* fd_free reports a bad/unallocated descriptor with -1; translate to the
-     * close(2) errno. */
+    fd_release_backing(entry);
     if (fd_free(&current_proc->fds, fd) != 0) {
         return -EBADF;
     }
@@ -981,16 +1018,33 @@ static int32_t sys_read(isr_params_t *params)
         return -EBADF;
     }
 
-    /* Socket fd - receive from the network */
+    /* Backing-ops object (pipe/tty/pty): dispatch through its vtable. The Part I
+     * types below have no ops and fall through to the enum dispatch. */
+    if (entry->ops) {
+        return entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
+    }
+
+    /* Socket fd - receive from the network. read() honors O_NONBLOCK (an OFD
+     * status flag) exactly like recv(), routing to the non-blocking variant. */
     if (entry->type == FD_TYPE_SOCKET) {
+        int sock_nonblock;
         if (!entry->sock || !user_buffer_ok((uint32_t)buf, count, 1)) {
             return -EFAULT;
         }
-        /* socket_recv/socket_tcp_recv write straight into the validated user
-         * buffer; __force strips the __user tag at the boundary. */
+        sock_nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
+        /* socket_*recv write straight into the validated user buffer; __force
+         * strips the __user tag at the boundary. */
         if (entry->sock->type == SOCK_DGRAM) {
+            if (sock_nonblock) {
+                return socket_try_recv(entry->sock, (uint8_t __force *)buf,
+                                       (int)count, NULL, NULL);
+            }
             return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count,
                                NULL, NULL);
+        }
+        if (sock_nonblock) {
+            return socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf,
+                                       (int)count);
         }
         return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count);
     }
@@ -1227,6 +1281,8 @@ static int32_t sys_dup(isr_params_t *params)
     dst->type  = entry->type;
     dst->node  = entry->node;
     dst->sock  = entry->sock;
+    dst->ops   = entry->ops;  /* a dup shares the same backing object + vtable */
+    dst->priv  = entry->priv;
     dst->ofd   = entry->ofd;
     fd_ofd_ref(dst->ofd);
     dst->flags = entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
@@ -1268,12 +1324,10 @@ static int32_t sys_dup2(isr_params_t *params)
         return newfd;
     }
 
-    /* Close newfd if it's open (ignore errors), releasing any socket it held. */
+    /* Close newfd if it's open (ignore errors), releasing every backing it held
+     * (socket reference, ops object, framebuffer ownership). */
     if (fd_is_valid(&current_proc->fds, newfd)) {
-        new_entry = fd_get(&current_proc->fds, newfd);
-        if (new_entry && new_entry->type == FD_TYPE_SOCKET && new_entry->sock) {
-            socket_unref(new_entry->sock);
-        }
+        fd_release_backing(fd_get(&current_proc->fds, newfd));
         fd_free(&current_proc->fds, newfd);
     }
 
@@ -1284,6 +1338,8 @@ static int32_t sys_dup2(isr_params_t *params)
     new_entry->type  = old_entry->type;
     new_entry->node  = old_entry->node;
     new_entry->sock  = old_entry->sock;
+    new_entry->ops   = old_entry->ops;  /* share the backing object + vtable */
+    new_entry->priv  = old_entry->priv;
     new_entry->ofd   = old_entry->ofd;
     fd_ofd_ref(new_entry->ofd);
     new_entry->flags = old_entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
@@ -1747,7 +1803,7 @@ static int32_t sys_fcntl64(isr_params_t *params)
             return 0;
         case F_GETFL: {
             /* Report the access mode (O_RDONLY=0/O_WRONLY=1/O_RDWR=2) plus the
-             * status flags we track (just O_APPEND). */
+             * OFD status flags we track (O_APPEND, O_NONBLOCK). */
             int rw = entry->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
             int fl;
             if (rw == (FD_FLAG_READ | FD_FLAG_WRITE)) {
@@ -1757,17 +1813,18 @@ static int32_t sys_fcntl64(isr_params_t *params)
             } else {
                 fl = 0;
             }
-            if (entry->flags & FD_FLAG_APPEND) {
-                fl |= O_APPEND;
+            if (entry->ofd) {
+                fl |= (int)(entry->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK));
             }
             return fl;
         }
         case F_SETFL:
-            /* O_APPEND is the only status flag we honor; the rest are accepted. */
-            if (arg & 02000u) {
-                entry->flags |= FD_FLAG_APPEND;
-            } else {
-                entry->flags &= ~(uint32_t)FD_FLAG_APPEND;
+            /* O_APPEND and O_NONBLOCK are the settable status flags; they live on
+             * the open-file description (shared by dup/fork), not the descriptor.
+             * Other bits in arg (access mode, O_CLOEXEC) are accepted and ignored
+             * per POSIX. */
+            if (entry->ofd) {
+                entry->ofd->status_flags = arg & (OFD_APPEND | OFD_NONBLOCK);
             }
             return 0;
         case F_DUPFD:
@@ -1793,6 +1850,8 @@ static int32_t sys_fcntl64(isr_params_t *params)
             dst->type  = entry->type;
             dst->node  = entry->node;
             dst->sock  = entry->sock;
+            dst->ops   = entry->ops;  /* share the backing object + vtable */
+            dst->priv  = entry->priv;
             dst->ofd   = entry->ofd;
             fd_ofd_ref(dst->ofd);
             dst->flags = entry->flags;
@@ -1991,13 +2050,7 @@ static void close_cloexec_fds(void)
         if (!entry || !(entry->flags & FD_FLAG_CLOEXEC)) {
             continue;
         }
-        if (entry->type == FD_TYPE_FRAMEBUFFER) {
-            vga_mode13h_exit();
-            fb_owner_pid = 0;
-        }
-        if (entry->type == FD_TYPE_SOCKET && entry->sock) {
-            socket_unref(entry->sock);
-        }
+        fd_release_backing(entry);
         fd_free(&current_proc->fds, fd);
     }
 }
@@ -3854,17 +3907,10 @@ static int32_t sys_ioctl(isr_params_t *params)
         return -ENOTTY;
     }
 
-    /* Handle KIOCSOUND on stdout (console) - Linux convention */
-    if (fd_num == FD_STDOUT || fd_num == FD_STDERR) {
-        if (request == KIOCSOUND) {
-            if (arg == 0) {
-                speaker_off();
-            } else {
-                speaker_on(arg);
-            }
-            return 0;
-        }
-    }
+    /* KIOCSOUND is handled by the console-type block below, keyed on the backing
+     * object's type -- not the fd number -- so it cannot fire on an fd 1/2 that
+     * has been closed and reopened onto a regular file (now that close(0/1/2) is
+     * legal). */
 
     /* Handle framebuffer ioctls */
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
@@ -4217,6 +4263,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
     uint32_t    src_ip;
     uint16_t    src_port;
     int         bytes;
+    int         nonblock;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
@@ -4229,12 +4276,17 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
         return -ENOTSOCK;
     }
 
+    /* Receive without blocking when the caller asked per-call (MSG_DONTWAIT) or
+     * the descriptor is O_NONBLOCK (an OFD status flag, shared by dup/fork). */
+    nonblock = (flags & MSG_DONTWAIT) ||
+               (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+
     /* On a connected stream socket, recvfrom behaves like recv -- the peer is the
      * connection's, so the optional source-address writeback is skipped and a NULL
      * sockaddr is fine (this is the path musl's recv() takes: recvfrom with a NULL
-     * addr). MSG_DONTWAIT is honored via the non-blocking TCP receive. */
+     * addr). */
     if (entry->sock->type == SOCK_STREAM) {
-        if (flags & MSG_DONTWAIT) {
+        if (nonblock) {
             return (int32_t)socket_tcp_try_recv(
                 entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
         }
@@ -4245,7 +4297,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
 
     /* socket_recv/socket_try_recv write straight into the validated user buffer;
      * __force strips __user at the boundary. */
-    if (flags & MSG_DONTWAIT) {
+    if (nonblock) {
         bytes = socket_try_recv(entry->sock,
                                 (uint8_t __force *)(void __user *)buf_ptr, len,
                                 &src_ip, &src_port);
@@ -4270,12 +4322,30 @@ static int32_t do_ping(uint32_t dst_ip)
     return (int32_t)icmp_ping(dst_ip);
 }
 
+/* Wait predicate: a stream connect has finished its handshake one way or the
+ * other (established, or the TCB went away / reset). */
+static int connect_done(void *arg)
+{
+    struct socket *sock = (struct socket *)arg;
+    return sock->tcb == NULL ||
+           sock->tcb->state == TCP_ESTABLISHED ||
+           sock->tcb->state == TCP_CLOSED;
+}
+
+/* Wait predicate: a listening socket has a connection queued for accept. */
+static int accept_ready(void *arg)
+{
+    struct socket *sock = (struct socket *)arg;
+    return sock->accept_head != sock->accept_tail;
+}
+
 static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
     uint32_t    dst_ip;
     uint16_t    dst_port;
     uint8_t     sa[SOCKADDR_MIN];
+    int         rc;
 
     if (addrlen < SOCKADDR_MIN) {
         return -EINVAL;  /* declared sockaddr shorter than the header we read */
@@ -4301,16 +4371,21 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
         return -ECONNREFUSED;
     }
 
-    /* Block until the handshake completes, fails, or times out. */
-    entry->sock->waiting_proc = current_proc;
-    current_proc->state       = PROC_BLOCKED;
-    while (entry->sock->tcb != NULL &&
-           entry->sock->tcb->state != TCP_ESTABLISHED &&
-           entry->sock->tcb->state != TCP_CLOSED) {
-        __asm__ __volatile__("sti; hlt");
+    /* A non-blocking socket does not wait out the handshake: report it as
+     * in-progress (or already done) and let the caller poll for completion. */
+    if (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK)) {
+        if (entry->sock->tcb && entry->sock->tcb->state == TCP_ESTABLISHED) {
+            return 0;
+        }
+        return -EINPROGRESS;
     }
-    entry->sock->waiting_proc = NULL;
-    current_proc->state       = PROC_RUNNING;
+
+    /* Block until the handshake completes, fails, or times out, yielding to
+     * other processes; a pending signal unwinds with -EINTR. */
+    rc = wq_wait_event(&entry->sock->waiters, connect_done, entry->sock);
+    if (rc < 0) {
+        return rc;
+    }
 
     if (!entry->sock->tcb || entry->sock->tcb->state != TCP_ESTABLISHED) {
         return -ECONNREFUSED;
@@ -4353,14 +4428,20 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     }
     listen_sock = entry->sock;
 
-    /* Block until a connection is queued. */
-    listen_sock->waiting_proc = current_proc;
-    current_proc->state       = PROC_BLOCKED;
-    while (listen_sock->accept_head == listen_sock->accept_tail) {
-        __asm__ __volatile__("sti; hlt");
+    /* A non-blocking listener returns immediately when nothing is queued. */
+    if (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK) &&
+        listen_sock->accept_head == listen_sock->accept_tail) {
+        return -EAGAIN;
     }
-    listen_sock->waiting_proc = NULL;
-    current_proc->state       = PROC_RUNNING;
+
+    /* Block until a connection is queued, yielding to other processes; a pending
+     * signal unwinds with -EINTR. */
+    {
+        int rc = wq_wait_event(&listen_sock->waiters, accept_ready, listen_sock);
+        if (rc < 0) {
+            return rc;
+        }
+    }
 
     conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
     listen_sock->accept_head =
@@ -4381,13 +4462,12 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     new_entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
 
     /* Report the peer address, truncated to the caller's declared capacity. On a
-     * bad user pointer, tear down the descriptor we just installed (fd_free only
-     * clears the slot, so the socket reference must be dropped explicitly) rather
-     * than leaking the accepted fd and its socket. */
+     * bad user pointer, tear down the descriptor we just installed (releasing its
+     * socket reference) rather than leaking the accepted fd and its socket. */
     if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port,
                               conn_sock->remote_ip) != 0) {
+        fd_release_backing(new_entry);
         fd_free(&current_proc->fds, new_fd);
-        socket_unref(conn_sock);
         return -EFAULT;
     }
     return new_fd;
@@ -4420,8 +4500,7 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
-
-    (void)flags;
+    int         nonblock;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
@@ -4435,8 +4514,15 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
         return -EOPNOTSUPP;
     }
 
-    /* socket_tcp_recv writes into the validated user buffer; __force strips
-     * __user at the boundary. */
+    /* Don't block when the caller asked per-call (MSG_DONTWAIT) or the descriptor
+     * is O_NONBLOCK. socket_tcp_*recv write into the validated user buffer;
+     * __force strips __user at the boundary. */
+    nonblock = (flags & MSG_DONTWAIT) ||
+               (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    if (nonblock) {
+        return (int32_t)socket_tcp_try_recv(
+            entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
+    }
     return (int32_t)socket_tcp_recv(entry->sock,
                                     (uint8_t __force *)(void __user *)buf_ptr,
                                     len);
