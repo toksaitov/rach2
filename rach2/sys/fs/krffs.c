@@ -7,6 +7,7 @@
 
 #include "krffs.h"
 #include "../serial.h"
+#include "../lib/kerrno.h"
 
 /*
  * Global file system instance
@@ -226,11 +227,21 @@ static krffs_node_t *krffs_find_child(krffs_file_system_t *fs, uint64_t dir_id,
  * component is not a directory. "/" (or "") resolves to the root node (fs->node).
  * '.' and '..' are honored.
  */
-static krffs_node_t *krffs_walk(krffs_file_system_t *fs, const char *path)
+/*
+ * Resolve `path` to a node, reporting via *err (if non-NULL) whether a failure
+ * was a missing component (-ENOENT) or a non-directory in a non-final position
+ * (-ENOTDIR). The thin krffs_walk() wrapper below keeps the common no-error
+ * callers unchanged.
+ */
+static krffs_node_t *krffs_walk_e(krffs_file_system_t *fs, const char *path, int *err)
 {
     uint64_t cur_id = KRFFS_ROOT_ID;
     krffs_node_t *node = fs->node; /* the current directory's node; root = fs->node */
     const char *p = path ? path : "";
+
+    if (err) {
+        *err = 0;
+    }
 
     while (*p == '/') {
         p++;
@@ -256,15 +267,32 @@ static krffs_node_t *krffs_walk(krffs_file_system_t *fs, const char *path)
         if (len == 1 && start[0] == '.') {
             /* current directory: unchanged */
         } else if (len == 2 && start[0] == '.' && start[1] == '.') {
-            node = krffs_find_node_by_id(fs, node ? node->parent_id : KRFFS_ROOT_ID);
-            cur_id = node ? node->id : KRFFS_ROOT_ID;
+            /* Parent directory. krffs_find_node_by_id cannot return the root (it
+             * owns the reserved id 0), so resolve a root parent to fs->node
+             * directly -- otherwise ".." back to the root would yield NULL. The
+             * continuing id is ROOT_ID so the root's children (parent_id == 0)
+             * still resolve after the "..". */
+            uint64_t parent = node ? node->parent_id : (uint64_t)KRFFS_ROOT_ID;
+            if (parent == (uint64_t)KRFFS_ROOT_ID) {
+                node = fs->node;
+                cur_id = (uint64_t)KRFFS_ROOT_ID;
+            } else {
+                node = krffs_find_node_by_id(fs, parent);
+                cur_id = node ? node->id : (uint64_t)KRFFS_ROOT_ID;
+            }
         } else {
             node = krffs_find_child(fs, cur_id, start, len);
             if (!node) {
+                if (err) {
+                    *err = -ENOENT;
+                }
                 return NULL;
             }
             if (!last && !KRFFS_IS_DIR(node->mode)) {
-                return NULL; /* a non-final component must be a directory */
+                if (err) {
+                    *err = -ENOTDIR; /* a non-final component must be a directory */
+                }
+                return NULL;
             }
             cur_id = node->id;
         }
@@ -273,6 +301,12 @@ static krffs_node_t *krffs_walk(krffs_file_system_t *fs, const char *path)
             return node;
         }
     }
+}
+
+/* The common resolver: a node for `path`, or NULL, with no error distinction. */
+static krffs_node_t *krffs_walk(krffs_file_system_t *fs, const char *path)
+{
+    return krffs_walk_e(fs, path, (int *)0);
 }
 
 /* Split path into its directory part and final component. dir gets the parent
@@ -354,6 +388,85 @@ krffs_node_t *krffs_resolve(const char *path)
         return NULL;
     }
     return krffs_walk(krffs_fs, path);
+}
+
+/*
+ * Like krffs_resolve, but reports the failure kind through *err: 0 on success,
+ * -ENOENT for a missing component, -ENOTDIR for a non-directory in the path. The
+ * syscall layer uses this to return the right errno from open, stat, chdir, and
+ * the *at calls.
+ */
+krffs_node_t *krffs_resolve_e(const char *path, int *err)
+{
+    if (!krffs_fs) {
+        if (err) {
+            *err = -ENOENT;
+        }
+        return NULL;
+    }
+    return krffs_walk_e(krffs_fs, path, err);
+}
+
+/*
+ * Build the absolute path of `node` into buf (size bytes) by walking the
+ * parent_id chain up to the root, then emitting the basenames in forward order.
+ * Canonical by construction -- it follows real directory links, so it collapses
+ * any '.'/'..' that were in the path used to reach the node. The root yields "/".
+ * Returns 0 on success, -1 if the node is unreachable or the path does not fit.
+ */
+int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
+{
+    const char *names[KRFFS_PATH_MAX_DEPTH];
+    int depth = 0;
+    int i;
+    uint32_t pos = 0;
+    krffs_node_t *cur = node;
+
+    if (!krffs_fs || !node || !buf || size == 0) {
+        return -1;
+    }
+
+    /* Collect basenames from the node up toward the root. krffs_find_node_by_id
+     * cannot return the root (it has the reserved id 0), so we stop as soon as a
+     * node's parent IS the root rather than trying to look the root up. */
+    for (;;) {
+        if (cur == krffs_fs->node || cur->id == (uint64_t)KRFFS_ROOT_ID) {
+            break; /* the node itself is the root (matched by pointer or id) */
+        }
+        if (depth >= KRFFS_PATH_MAX_DEPTH) {
+            return -1; /* nested deeper than we can represent */
+        }
+        names[depth++] = (const char *)cur->name;
+        if (cur->parent_id == (uint64_t)KRFFS_ROOT_ID) {
+            break; /* parent is the root: every component is collected */
+        }
+        cur = krffs_find_node_by_id(krffs_fs, cur->parent_id);
+        if (!cur) {
+            return -1; /* a parent link was dangling */
+        }
+    }
+    if (depth == 0) {
+        /* The node is the root. */
+        if (size < 2) {
+            return -1;
+        }
+        buf[0] = '/';
+        buf[1] = '\0';
+        return 0;
+    }
+
+    /* Emit "/name" for each component, deepest last. */
+    for (i = depth - 1; i >= 0; i--) {
+        uint32_t n = (uint32_t)k_strlen(names[i]);
+        if (pos + 1 + n + 1 > size) {
+            return -1; /* would not fit, including the NUL */
+        }
+        buf[pos++] = '/';
+        k_memcpy(buf + pos, names[i], n);
+        pos += n;
+    }
+    buf[pos] = '\0';
+    return 0;
 }
 
 /*

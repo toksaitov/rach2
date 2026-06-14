@@ -59,7 +59,7 @@ struct process {
     uint32_t parent_pid;    /* Parent process ID */
     int32_t exit_code;      /* Exit status (for zombie) */
     fd_table_t fds;         /* File descriptor table */
-    char cwd[CWD_MAX];      /* Current working directory (always "/" for KRFFS) */
+    char cwd[CWD_MAX];      /* Current working directory (absolute, canonical; "/" at start) */
     volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
     /* APPEND-ONLY below this line: switch.s hard-codes field offsets, so new
      * PCB fields go at the end and the .set offsets in switch.s are re-checked

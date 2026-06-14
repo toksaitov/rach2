@@ -43,6 +43,7 @@
 #define KRFFS_S_IFDIR 0040000u  /* directory */
 #define KRFFS_S_IFREG 0100000u  /* regular file */
 #define KRFFS_ROOT_ID 0u        /* logical id of the root directory (host nodes zero parent_id) */
+#define KRFFS_PATH_MAX_DEPTH 64 /* max directory nesting krffs_node_path reconstructs */
 
 /* A directory's mode is S_IFDIR | 0755; a regular file is just its perm bits
  * (S_IFREG is implied when no type bits are set, for backward compatibility with
@@ -123,6 +124,14 @@ krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, 
 
 /* Hierarchical path resolver (KRFFS v2): the node for `path`, or NULL if absent. */
 krffs_node_t *krffs_resolve(const char *path);
+
+/* As krffs_resolve, but *err distinguishes -ENOENT (missing) from -ENOTDIR (a
+ * non-directory component); 0 on success. */
+krffs_node_t *krffs_resolve_e(const char *path, int *err);
+
+/* Reconstruct the absolute, canonical path of `node` into buf (chdir/getcwd and
+ * dirfd resolution use it). Returns 0 on success, -1 if it does not fit. */
+int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
 
 /*
  * Read/write directly via a resolved node pointer (used by the fd layer so a file

@@ -490,6 +490,131 @@ static int32_t sys_writev(isr_params_t *params)
 #define AT_FDCWD (-100)
 
 /*
+ * Join base + '/' + rel into pathbuf as an absolute path (base is "/" or "/a/b",
+ * with no trailing slash). Returns the length, or -ENAMETOOLONG if it would not
+ * fit. rellen is k_strlen(rel).
+ */
+static int join_abs(char *pathbuf, uint32_t size, const char *base,
+                    const char *rel, uint32_t rellen)
+{
+    uint32_t blen = (uint32_t)k_strlen(base);
+
+    if (blen <= 1) {
+        /* base is "/" (or empty): the result is just "/" + rel. */
+        if (1 + rellen + 1 > size) {
+            return -ENAMETOOLONG;
+        }
+        pathbuf[0] = '/';
+        k_memcpy(pathbuf + 1, rel, rellen + 1);
+        return (int)(1 + rellen);
+    }
+    if (blen + 1 + rellen + 1 > size) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(pathbuf, base, blen);
+    pathbuf[blen] = '/';
+    k_memcpy(pathbuf + blen + 1, rel, rellen + 1);
+    return (int)(blen + 1 + rellen);
+}
+
+/*
+ * Copy a user path into pathbuf as an ABSOLUTE path. An absolute user path is
+ * taken verbatim; a relative one is joined onto the process's current working
+ * directory so the existing root-relative resolver -- which already honors
+ * '.'/'..' -- walks the right tree. Same return contract as strncpy_from_user:
+ * the resulting length on success, or a negative errno (a join that overruns the
+ * buffer is -ENAMETOOLONG). The "fb"/"mouse" device names resolve correctly only
+ * from cwd "/", which holds because programs open them at startup.
+ */
+static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
+{
+    char tmp[256];
+    int len;
+
+    len = strncpy_from_user(tmp, upath, sizeof(tmp));
+    if (len < 0) {
+        return len;
+    }
+    if (len == 0) {
+        return -ENOENT; /* the empty path is never a valid file (Linux ENOENT) */
+    }
+    if (tmp[0] == '/') {
+        if ((uint32_t)len + 1 > size) {
+            return -ENAMETOOLONG;
+        }
+        k_memcpy(pathbuf, tmp, (uint32_t)len + 1);
+        return len;
+    }
+    return join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
+}
+
+/*
+ * Copy a user path for the *at family into pathbuf as an ABSOLUTE path. Absolute
+ * paths are taken verbatim; a relative path resolves against AT_FDCWD (the cwd)
+ * or, for a real dirfd, against that descriptor -- which must be an open
+ * directory (else -EBADF/-ENOTDIR). Same return contract as copy_path_cwd.
+ */
+static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
+                        const char __user *upath)
+{
+    char tmp[256];
+    char dirpath[256];
+    fd_entry_t *entry;
+    krffs_node_t *dnode;
+    int len;
+
+    len = strncpy_from_user(tmp, upath, sizeof(tmp));
+    if (len < 0) {
+        return len;
+    }
+    if (len == 0) {
+        /* Empty path: Linux needs AT_EMPTY_PATH (unsupported) to mean the dirfd
+         * itself, so this is ENOENT for both open and stat. */
+        return -ENOENT;
+    }
+    if (tmp[0] == '/') {
+        if ((uint32_t)len + 1 > size) {
+            return -ENAMETOOLONG;
+        }
+        k_memcpy(pathbuf, tmp, (uint32_t)len + 1);
+        return len;
+    }
+    if (dirfd == AT_FDCWD) {
+        return join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
+    }
+
+    /* A real dirfd must be an open directory; resolve relative to its path. */
+    entry = fd_get(&current_proc->fds, dirfd);
+    if (!entry) {
+        return -EBADF;
+    }
+    if (entry->type != FD_TYPE_DIR) {
+        return -ENOTDIR;
+    }
+    dnode = entry->node; /* NULL marks the root directory */
+    if (dnode) {
+        /* SIMPLIFICATION: KRFFS nodes are not refcounted (the open-file-
+         * description split that would pin them is Part II), so a directory fd can
+         * outlive its node if the directory is rmdir'd. Reject a stale fd
+         * defensively: the node must still be a live reserved node, and its
+         * reconstructed path must round-trip back to the same node. */
+        if (dnode->type != KRFFS_RESERVED_NODE) {
+            return -EBADF;
+        }
+        if (krffs_node_path(dnode, dirpath, sizeof(dirpath)) != 0) {
+            return -ENAMETOOLONG;
+        }
+        if (krffs_resolve(dirpath) != dnode) {
+            return -EBADF;
+        }
+    } else {
+        dirpath[0] = '/';
+        dirpath[1] = '\0';
+    }
+    return join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
+}
+
+/*
  * Open core shared by open(5) and openat(295). `name` is a kernel-space path with
  * any leading '/' already stripped; `flags` are the Linux open flags and `mode`
  * the permission bits to stamp on a file created by O_CREAT (ignored otherwise).
@@ -579,28 +704,34 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return fd;
     }
 
-    /* Find the file in KRFFS */
-    node = krffs_resolve(name);
-    if (!node) {
-        /* File not found - check if O_CREAT is set */
-        if (flags & O_CREAT) {
-            /* Create the file */
-            if (krffs_create(name) != 0) {
-                return -ENOSPC;  /* Failed to create file */
+    /* Find the file in KRFFS. resolve_e distinguishes a missing component
+     * (-ENOENT) from a non-directory in the path (-ENOTDIR) so open() reports the
+     * Linux errno; only a genuine ENOENT continues to the O_CREAT path. */
+    {
+        int rerr = 0;
+        node = krffs_resolve_e(name, &rerr);
+        if (!node) {
+            if (rerr == -ENOTDIR) {
+                return -ENOTDIR;
             }
-            /* Now find the newly created node */
-            node = krffs_resolve(name);
-            if (!node) {
-                return -EIO;  /* Shouldn't happen, but check anyway */
+            if (flags & O_CREAT) {
+                /* Create the file */
+                if (krffs_create(name) != 0) {
+                    return -ENOSPC;  /* Failed to create file */
+                }
+                node = krffs_resolve(name);
+                if (!node) {
+                    return -EIO;  /* Shouldn't happen, but check anyway */
+                }
+                /* Stamp the caller's requested permission bits on the new file. */
+                node->mode = (uint16_t)(mode & 0777);
+            } else {
+                return -ENOENT;  /* File not found and O_CREAT not set */
             }
-            /* Stamp the caller's requested permission bits on the new file. */
-            node->mode = (uint16_t)(mode & 0777);
-        } else {
-            return -ENOENT;  /* File not found and O_CREAT not set */
+        } else if (flags & O_TRUNC) {
+            /* File exists and O_TRUNC set - truncate to 0 length */
+            krffs_truncate(name, 0);
         }
-    } else if (flags & O_TRUNC) {
-        /* File exists and O_TRUNC set - truncate to 0 length */
-        krffs_truncate(name, 0);
     }
 
     /* Allocate a file descriptor */
@@ -610,10 +741,17 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     }
 
     /* Set up the fd entry. A directory opens as a FD_TYPE_DIR (its node is the
-     * directory whose children getdents lists); a regular file as FD_TYPE_FILE. */
+     * directory whose children getdents lists); a regular file as FD_TYPE_FILE. A
+     * path that resolved to the root (e.g. "x/..") is the root directory, stored
+     * with a NULL node like the literal-root open above. */
     entry = &current_proc->fds.entries[fd];
-    entry->type = KRFFS_IS_DIR(node->mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
-    entry->node = node;
+    if (node == krffs_fs->node) {
+        entry->type = FD_TYPE_DIR;
+        entry->node = NULL;
+    } else {
+        entry->type = KRFFS_IS_DIR(node->mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
+        entry->node = node;
+    }
     entry->offset = 0;
 
     /* Convert Linux flags to internal flags */
@@ -650,7 +788,7 @@ static int32_t sys_open(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
     if (len < 0) {
         return len;
     }
@@ -664,9 +802,9 @@ static int32_t sys_open(isr_params_t *params)
 /*
  * sys_openat - open relative to a directory fd (syscall 295).
  * Args: EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl issues openat (not the
- * legacy open) for every <stdio.h> file open, so this is the path that actually
- * backs fopen. AT_FDCWD or an absolute path resolves from the root (the cwd is
- * "/"); a real dirfd with a relative path is not yet supported.
+ * legacy open) for every <stdio.h> file open. An absolute path is taken as-is, a
+ * relative path resolves against the cwd (AT_FDCWD) or against the directory the
+ * dirfd refers to -- see copy_path_at.
  */
 static int32_t sys_openat(isr_params_t *params)
 {
@@ -681,12 +819,9 @@ static int32_t sys_openat(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
     if (len < 0) {
         return len;
-    }
-    if (dirfd != AT_FDCWD && pathbuf[0] != '/') {
-        return -ENOSYS; /* relative-to-dirfd resolution not implemented */
     }
     name = pathbuf;
     if (name[0] == '/') {
@@ -1071,53 +1206,55 @@ static int32_t sys_chdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
     char pathbuf[256];
-    char *path;
+    const char *name;
+    krffs_node_t *node;
     int len;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
 
-    /* Copy the path into a kernel buffer and work on the copy. */
-    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    /* Resolve the target relative to the current cwd, into an absolute path. */
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
     if (len < 0) {
         return len;
     }
-    path = pathbuf;
 
-    /* Handle root directory */
-    if (path[0] == '/' && path[1] == '\0') {
-        return 0;  /* Already in root */
+    /* "/" (or an empty path that absolutized to "/") is the root. */
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
     }
-
-    /* Handle "." - stay in current directory */
-    if (path[0] == '.' && path[1] == '\0') {
+    if (name[0] == '\0') {
+        current_proc->cwd[0] = '/';
+        current_proc->cwd[1] = '\0';
         return 0;
     }
 
-    /* Handle ".." - parent of root is root */
-    if (path[0] == '.' && path[1] == '.' && path[2] == '\0') {
-        return 0;
+    if (!krffs_fs) {
+        return -ENOENT;
+    }
+    {
+        int rerr = 0;
+        node = krffs_resolve_e(name, &rerr);
+        if (!node) {
+            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+        }
+    }
+    /* The root node is always a directory even if its on-disk mode lacks the
+     * S_IFDIR bit (it is the filesystem anchor, not a mkdir'd node). A regular
+     * file as the final component is ENOTDIR. */
+    if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+        return -ENOTDIR;
     }
 
-    /* Skip leading '/' if present */
-    if (path[0] == '/') {
-        path++;
+    /* Store the canonical absolute path (krffs_node_path follows real parent
+     * links, so any '.'/'..' in the request is collapsed). If it does not fit the
+     * fixed cwd buffer the cwd is left unchanged. */
+    if (krffs_node_path(node, current_proc->cwd, sizeof(current_proc->cwd)) != 0) {
+        return -ENAMETOOLONG;
     }
-
-    /* Empty path after stripping '/' means root */
-    if (path[0] == '\0') {
-        return 0;
-    }
-
-    /* Check if path is a file (ENOTDIR) or doesn't exist (ENOENT) */
-    if (krffs_fs && krffs_open(path) == 0) {
-        /* File exists - it's a file, not a directory */
-        return -ENOTDIR;  /* ENOTDIR */
-    }
-
-    /* Path doesn't exist */
-    return -ENOENT;  /* ENOENT */
+    return 0;
 }
 
 /*
@@ -1220,8 +1357,14 @@ struct linux_stat64 {
 static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
 {
     k_memset(kst, 0, sizeof(*kst));
-    kst->st_mode = (KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
-                   (node->mode & 0777);
+    if (node == krffs_fs->node) {
+        /* The root is a directory even if its on-disk mode lacks S_IFDIR (it is
+         * the filesystem anchor); a path can reach it via "..". */
+        kst->st_mode = S_IFDIR | 0755;
+    } else {
+        kst->st_mode = (KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
+                       (node->mode & 0777);
+    }
     kst->st_nlink = 1; /* KRFFS has no hard links */
     kst->st_uid = node->uid;
     kst->st_gid = node->gid;
@@ -1252,7 +1395,7 @@ static int32_t sys_stat64(isr_params_t *params)
     }
 
     /* Copy the path into a kernel buffer first. */
-    len = strncpy_from_user(pathbuf, path, sizeof(pathbuf));
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
     if (len < 0) {
         return len;
     }
@@ -1283,9 +1426,12 @@ static int32_t sys_stat64(isr_params_t *params)
         return -ENOENT;
     }
 
-    node = krffs_resolve(name);
-    if (!node) {
-        return -ENOENT;  /* File not found */
+    {
+        int rerr = 0;
+        node = krffs_resolve_e(name, &rerr);
+        if (!node) {
+            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT; /* missing vs not-a-dir */
+        }
     }
 
     krffs_fill_stat64(&kst, node);
@@ -1344,8 +1490,10 @@ static int32_t sys_fstat64(isr_params_t *params)
 
 /*
  * sys_fstatat64 - stat a path relative to a directory fd (syscall 300).
- * Args: EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI = flags. AT_FDCWD or an
- * absolute path resolves from the root (the cwd is "/").
+ * Args: EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI = flags. The path
+ * resolves the same way as openat -- absolute, or relative to AT_FDCWD/the dirfd
+ * (see copy_path_at). The flags (e.g. AT_SYMLINK_NOFOLLOW) are accepted but
+ * inert, as KRFFS has no symlinks.
  */
 static int32_t sys_fstatat64(isr_params_t *params)
 {
@@ -1361,17 +1509,9 @@ static int32_t sys_fstatat64(isr_params_t *params)
     if (!current_proc || !upath || !st) {
         return -EFAULT;
     }
-    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
     if (len < 0) {
         return len;
-    }
-    if (dirfd != AT_FDCWD && pathbuf[0] != '/') {
-        return -ENOSYS;
-    }
-    if (pathbuf[0] == '\0') {
-        /* An empty path means "stat the dirfd itself", which needs AT_EMPTY_PATH;
-         * without it Linux returns ENOENT, so we do too. */
-        return -ENOENT;
     }
     if (!krffs_fs) {
         return -ENOENT;
@@ -1387,9 +1527,12 @@ static int32_t sys_fstatat64(isr_params_t *params)
         if (name[0] == '/') {
             name++;
         }
-        node = krffs_resolve(name);
-        if (!node) {
-            return -ENOENT;
+        {
+            int rerr = 0;
+            node = krffs_resolve_e(name, &rerr);
+            if (!node) {
+                return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+            }
         }
         krffs_fill_stat64(&kst, node);
     }
@@ -1586,7 +1729,7 @@ static int32_t sys_stat(isr_params_t *params)
     }
 
     /* Copy the path into a kernel buffer first. */
-    len = strncpy_from_user(pathbuf, path, sizeof(pathbuf));
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
     if (len < 0) {
         return len;
     }
@@ -1617,9 +1760,12 @@ static int32_t sys_stat(isr_params_t *params)
         return -ENOENT;
     }
 
-    node = krffs_resolve(name);
-    if (!node) {
-        return -ENOENT;  /* File not found */
+    {
+        int rerr = 0;
+        node = krffs_resolve_e(name, &rerr);
+        if (!node) {
+            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT; /* missing vs not-a-dir */
+        }
     }
 
     /* Fill stat structure */
@@ -1854,14 +2000,14 @@ static int32_t sys_execve(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Copy the path from user space with the fault-safe byte-by-byte helper. A
-     * bad user pointer or an over-long path is rejected by its return value, so a
-     * kernel-range pointer cannot leak kernel memory. Same 63-char bound as
-     * before (sizeof(_exec_path_buf) == 64, NUL included). */
+    /* Resolve the program path (relative names against the cwd) into the static
+     * buffer. A bad user pointer, an over-long path, or an empty path is rejected
+     * by the return value, so a kernel-range pointer cannot leak kernel memory.
+     * The buffer is 64 bytes (NUL included). */
     if (!user_path) {
         return -EFAULT;
     }
-    len = strncpy_from_user(_exec_path_buf, user_path, sizeof(_exec_path_buf));
+    len = copy_path_cwd(_exec_path_buf, sizeof(_exec_path_buf), user_path);
     if (len < 0) {
         return len;
     }
@@ -2135,6 +2281,9 @@ static int32_t sys_fork(isr_params_t *params)
      * freestanding kernel does not need a compiler-emitted memcpy.) */
     k_memcpy(&child->vm, &parent->vm, sizeof(child->vm));
 
+    /* The child inherits the parent's current working directory. */
+    k_memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
+
     /* Copy file descriptor table. Inherited sockets gain a reference each so
      * the parent and child release independently. */
     k_memcpy(&child->fds, &parent->fds, sizeof(fd_table_t));
@@ -2356,7 +2505,7 @@ static int32_t sys_creat(isr_params_t *params)
     }
 
     /* Copy the path into a kernel buffer. */
-    len = strncpy_from_user(pathbuf, path, sizeof(pathbuf));
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
     if (len < 0) {
         return len;
     }
@@ -2425,7 +2574,7 @@ static int32_t sys_unlink(isr_params_t *params)
     }
 
     /* Copy the path into a kernel buffer and work on the copy. */
-    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
     if (len < 0) {
         return len;
     }
@@ -2472,7 +2621,7 @@ static int32_t sys_mkdir(isr_params_t *params)
     if (!krffs_fs) {
         return -ENOENT;
     }
-    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
     if (len < 0) {
         return len;
     }
@@ -2502,7 +2651,7 @@ static int32_t sys_rmdir(isr_params_t *params)
     if (!krffs_fs) {
         return -ENOENT;
     }
-    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
     if (len < 0) {
         return len;
     }
@@ -2538,12 +2687,12 @@ static int32_t sys_rename(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Copy both paths into kernel buffers. */
-    len = strncpy_from_user(old_buf, old_path, sizeof(old_buf));
+    /* Copy both paths into kernel buffers, resolving relative names against cwd. */
+    len = copy_path_cwd(old_buf, sizeof(old_buf), old_path);
     if (len < 0) {
         return len;
     }
-    len = strncpy_from_user(new_buf, new_path, sizeof(new_buf));
+    len = copy_path_cwd(new_buf, sizeof(new_buf), new_path);
     if (len < 0) {
         return len;
     }
@@ -2612,11 +2761,11 @@ static void get_current_time(int64_t *seconds, int64_t *nanoseconds)
  */
 static int32_t sys_utimensat(isr_params_t *params)
 {
-    /* int dirfd = (int)params->ebx; */  /* Ignored - always use cwd */
+    int dirfd = (int)params->ebx;
     const char __user *user_path = (const char __user *)params->ecx;
     struct kernel_timespec __user *user_times =
         (struct kernel_timespec __user *)params->edx;
-    /* int flags = (int)params->esi; */  /* Ignored for now */
+    /* int flags = (int)params->esi; */  /* AT_SYMLINK_NOFOLLOW: inert, no symlinks */
     char pathbuf[256];
     struct kernel_timespec ktimes[2];
     const struct kernel_timespec *times = NULL;
@@ -2629,9 +2778,9 @@ static int32_t sys_utimensat(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Copy the path and (if given) the two timespecs into kernel memory through
-     * the fault-safe helpers before touching them. */
-    len = strncpy_from_user(pathbuf, user_path, sizeof(pathbuf));
+    /* Copy the path (resolved against AT_FDCWD/the dirfd) and, if given, the two
+     * timespecs into kernel memory through the fault-safe helpers. */
+    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, user_path);
     if (len < 0) {
         return len;
     }
@@ -2660,9 +2809,12 @@ static int32_t sys_utimensat(isr_params_t *params)
     }
 
     /* Find the file */
-    node = krffs_resolve(name);
-    if (!node) {
-        return -ENOENT;  /* File not found */
+    {
+        int rerr = 0;
+        node = krffs_resolve_e(name, &rerr);
+        if (!node) {
+            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT; /* missing vs not-a-dir */
+        }
     }
 
     /* Get current time (ticks since boot converted to seconds) */

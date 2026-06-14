@@ -22,6 +22,8 @@ typedef unsigned int size_t;
 #define SYS_CLOSE      6
 #define SYS_CREAT      8
 #define SYS_UNLINK     10
+#define SYS_CHDIR      12
+#define SYS_GETCWD     183
 #define SYS_LLSEEK     140
 #define SYS_FSTAT64    197
 #define SYS_FCNTL64    221
@@ -40,6 +42,8 @@ typedef unsigned int size_t;
 #define O_WRONLY 1
 #define O_CREAT  0100
 #define O_APPEND 02000
+
+#define ENOTDIR 20
 
 /* Special dir fd: openat/fstatat resolve relative to the current dir ("/"). */
 #define AT_FDCWD (-100)
@@ -303,6 +307,74 @@ void _start(void)
     }
 
     check(syscall1(SYS_UNLINK, (int)(size_t)"/g") == 0, "unlink /g");
+
+    /* 12. chdir into a subdir, getcwd, relative-name resolution, and a
+     *     dirfd-relative openat. */
+    {
+        char cwd[64];
+        char rb[8];
+        int n, dfd;
+
+        check(syscall2(SYS_MKDIR, (int)(size_t)"/work", 0755) == 0, "mkdir /work");
+        check(syscall1(SYS_CHDIR, (int)(size_t)"/work") == 0, "chdir /work");
+
+        n = syscall2(SYS_GETCWD, (int)(size_t)cwd, sizeof cwd);
+        check(n > 0 && cwd[0] == '/' && cwd[1] == 'w' && cwd[2] == 'o' && cwd[3] == 'r' &&
+                  cwd[4] == 'k' && cwd[5] == '\0',
+              "getcwd is /work");
+
+        /* Create + write a file by a RELATIVE name; it must land in /work. */
+        fd = syscall2(SYS_CREAT, (int)(size_t)"rel.txt", 0644);
+        check(fd >= 0, "creat relative rel.txt");
+        if (fd >= 0) {
+            check(sys_write(fd, "deep", 4) == 4, "write rel.txt");
+            syscall1(SYS_CLOSE, fd);
+        }
+        /* The same file is visible at the absolute path /work/rel.txt. */
+        fd = syscall3(SYS_OPEN, (int)(size_t)"/work/rel.txt", O_RDONLY, 0);
+        check(fd >= 0, "open /work/rel.txt (absolute)");
+        if (fd >= 0) {
+            int r = sys_read(fd, rb, sizeof rb);
+            check(r == 4 && rb[0] == 'd', "relative write landed in /work");
+            syscall1(SYS_CLOSE, fd);
+        }
+
+        /* dirfd-relative openat: open /work as a dir fd, then resolve "rel.txt"
+         * against it. */
+        dfd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/work", O_RDONLY);
+        check(dfd >= 0, "open /work as a dir fd");
+        if (dfd >= 0) {
+            fd = syscall3(SYS_OPENAT, dfd, (int)(size_t)"rel.txt", O_RDONLY);
+            check(fd >= 0, "openat(dirfd, rel.txt)");
+            if (fd >= 0) {
+                int r = sys_read(fd, rb, sizeof rb);
+                check(r == 4 && rb[0] == 'd', "dirfd-relative read");
+                syscall1(SYS_CLOSE, fd);
+            }
+            syscall1(SYS_CLOSE, dfd);
+        }
+
+        /* A path that descends through a regular file is ENOTDIR, not ENOENT. */
+        check(syscall1(SYS_CHDIR, (int)(size_t)"rel.txt/x") == -ENOTDIR,
+              "chdir through a file is ENOTDIR");
+
+        /* "/work/.." resolves back to the root, which is a directory. */
+        {
+            unsigned char rst[STAT64_SIZE] = {0}; /* fstatat64 overwrites */
+            check(syscall5(SYS_FSTATAT64, AT_FDCWD, (int)(size_t)"/work/..", (int)(size_t)rst, 0,
+                           0) == 0,
+                  "fstatat64 /work/..");
+            check((STAT64_MODE(rst) & S_IFMT) == S_IFDIR, "/work/.. is the root directory");
+        }
+
+        /* chdir back to the root via ".."; getcwd is "/". */
+        check(syscall1(SYS_CHDIR, (int)(size_t)"..") == 0, "chdir ..");
+        n = syscall2(SYS_GETCWD, (int)(size_t)cwd, sizeof cwd);
+        check(n > 0 && cwd[0] == '/' && cwd[1] == '\0', "getcwd is / after chdir ..");
+
+        check(syscall1(SYS_UNLINK, (int)(size_t)"/work/rel.txt") == 0, "unlink /work/rel.txt");
+        check(syscall1(SYS_RMDIR, (int)(size_t)"/work") == 0, "rmdir /work");
+    }
 
     if (fails == 0) {
         puts("DIRPROBE OK");
