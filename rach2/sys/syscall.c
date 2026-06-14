@@ -286,6 +286,17 @@ static int32_t sys_exit(isr_params_t *params)
     exiting_pid = current_proc->pid;
     is_init = (exiting_pid == init_pid && init_pid != 0);
 
+    /* If the dying process is the console-owning session leader (init, or a later
+     * leader that claimed the console via TIOCSCTTY -- NOT only init), release the
+     * controlling terminal NOW, before it zombifies and the teardown below runs
+     * with interrupts on. Otherwise the timer-IRQ serial drain (tty_console_poll)
+     * keeps draining COM1 against this vanishing session -- dropping a ^C/^Z and
+     * stealing bytes the kernel debug shell should read. shell_reset_input on the
+     * is_init path releases again (idempotent). */
+    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
+        tty_set_session(&console_tty, 0, 0);
+    }
+
 #ifdef RACH2_HARNESS
     /* Harness build: the instant the probe (run as init) exits, report its status
      * to QEMU's isa-debug-exit device and stop -- BEFORE schedule() can switch to
@@ -1282,10 +1293,13 @@ static int32_t sys_read(isr_params_t *params)
          * console now arrives as a posted SIGINT, and a pending signal unwinds
          * the wait with -EINTR.
          */
-        /* A process reading the console with no controlling session claims it as
-         * its ctty (its group becomes the foreground), so a lone program receives
-         * ^C; once a session owns the console, the foreground is set by TIOCSPGRP. */
-        tty_acquire_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
+        /* A SESSION LEADER reading the console with no controlling session claims
+         * it as its ctty (its group becomes the foreground), so a lone program
+         * receives ^C; a non-leader does not (it would strand the tty on its
+         * since-dead leader). Once a session owns the console, the foreground is
+         * set by TIOCSPGRP. */
+        tty_acquire_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid,
+                         (int)current_proc->pid);
         /* A BACKGROUND process reading its controlling terminal is stopped with
          * SIGTTIN (POSIX) -- unless that would wedge it (SIGTTIN blocked or
          * ignored), in which case the read fails with -EIO. Decided BEFORE marking
@@ -2689,6 +2703,15 @@ static void exec_fail_destroyed(void)
     process_t *parent;
     page_dir_t *dir;
 
+    /* If the console-owning session leader is the one whose exec failed, release
+     * the controlling terminal before zombifying so the timer-IRQ serial drain
+     * does not target this dead session during the teardown window (mirrors
+     * sys_exit; usually a no-op here because sys_execve already released before
+     * free_user_pages -- kept as a defensive backstop). */
+    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
+        tty_set_session(&console_tty, 0, 0);
+    }
+
     current_proc->state = PROC_ZOMBIE;
     /* A failed exec destroyed the image; report it as a SIGKILL death (Linux
      * wait-status: low 7 bits = the signal) so the parent's waitpid sees an
@@ -2747,6 +2770,7 @@ static int32_t sys_execve(isr_params_t *params)
     int envc = 0;
     uint32_t argv_offset = 0;
     uint32_t envp_offset = 0;
+    int owned_console = 0;
 
     uint32_t entry_point;
     elf_image_t img;
@@ -2894,6 +2918,19 @@ static int32_t sys_execve(isr_params_t *params)
         current_proc->sig_pending = 0;
     }
 
+    /* If this process owns the console, release the controlling terminal across
+     * the destructive load below: once free_user_pages runs the old image is gone
+     * and a load/stack failure routes to exec_fail_destroyed (death), so leaving
+     * sid set would let the timer-IRQ serial drain target a destroyed image in
+     * that window (the same class as the sys_exit teardown bug). On success it is
+     * re-published with the unchanged session/group before returning to userspace,
+     * preserving exec's keep-the-controlling-terminal semantics; on failure
+     * exec_fail_destroyed releases again (idempotent). */
+    owned_console = tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid);
+    if (owned_console) {
+        tty_set_session(&console_tty, 0, 0);
+    }
+
     /* Free old user pages, then stream the new program in (header + program
      * headers + each PT_LOAD; no 512 KB whole-file buffer). Past this point the
      * old image is gone, so any failure terminates the process rather than
@@ -2981,6 +3018,13 @@ static int32_t sys_execve(isr_params_t *params)
         "movl %%eax, %%cr3"
         ::: "eax", "memory"
     );
+
+    /* Exec succeeded: re-publish the controlling terminal we released above, with
+     * the unchanged session/group (exec keeps the controlling terminal), so the
+     * new image owns the console exactly as the old one did. */
+    if (owned_console) {
+        tty_set_session(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
+    }
 
     /* Return value doesn't matter - we won't use it */
     return 0;
@@ -5045,15 +5089,15 @@ static int32_t sys_ioctl(isr_params_t *params)
                 if (console_tty.sid != 0 && console_tty.sid != (int)current_proc->sid) {
                     return -EPERM; /* owned by another session */
                 }
-                console_tty.sid = (int)current_proc->sid;
-                console_tty.fg_pgid = (int)current_proc->pgid;
+                /* Atomic publish (tty_set_session) so the timer-IRQ serial drain
+                 * never sees sid set while fg_pgid is still the stale value. */
+                tty_set_session(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
                 return 0;
 
             case TIOCNOTTY:
                 /* Give up the controlling terminal if it belongs to our session. */
                 if (console_tty.sid == (int)current_proc->sid) {
-                    console_tty.sid = 0;
-                    console_tty.fg_pgid = 0;
+                    tty_set_session(&console_tty, 0, 0);
                 }
                 return 0;
 

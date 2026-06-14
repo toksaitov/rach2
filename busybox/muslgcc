@@ -1,0 +1,26 @@
+#!/bin/sh
+# muslgcc -- wrap the bare i686-elf-gcc cross compiler to build busybox against
+# the ported musl (libc/install). Three modes: a compile (-c/-S/-E) just adds the
+# musl headers; a partial/relocatable link (-r, busybox's built-in.o merge) adds
+# the headers but NO crt/libs (else crt would be merged into built-in.o and then
+# clash at the final link); a final link injects the musl crt objects, the lib
+# search path, libc.a and libgcc (the tests/musl/build.sh recipe).
+PREFIX=/Users/toksaitov/Desktop/rach2/libc/install
+GCC=i686-elf-gcc
+MODE=link
+for a in "$@"; do
+  case "$a" in
+    -c|-S|-E|-M|-MM) MODE=compile ;;
+    -r) MODE=partial ;;
+  esac
+done
+case "$MODE" in
+  compile) exec "$GCC" -m32 -isystem "$PREFIX/include" "$@" ;;
+  partial) exec "$GCC" -m32 -isystem "$PREFIX/include" -nostdlib "$@" ;;
+  *)
+    LIBGCC=$("$GCC" -print-libgcc-file-name)
+    exec "$GCC" -m32 -isystem "$PREFIX/include" -nostdlib -nostartfiles -static \
+         -L "$PREFIX/lib" \
+         "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$@" \
+         "$PREFIX/lib/libc.a" "$LIBGCC" "$PREFIX/lib/crtn.o" ;;
+esac

@@ -96,17 +96,52 @@ int tty_is_background(struct tty *t, int sid, int pgid)
     return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 && t->fg_pgid != pgid;
 }
 
-void tty_acquire_ctty(struct tty *t, int sid, int pgid)
+void tty_acquire_ctty(struct tty *t, int sid, int pgid, int pid)
 {
-    /* A process using a console with no controlling session claims it: its session
-     * becomes the console's, its group the foreground -- so a lone program gets ^C
-     * without an explicit TIOCSCTTY. Once claimed, only TIOCSCTTY/TIOCSPGRP change
-     * it. (sid/fg_pgid are ints; the ISIG path reads fg_pgid by value, so a racing
-     * single-int update is never seen torn.) */
-    if (t->sid == 0) {
-        t->sid = sid;
-        t->fg_pgid = pgid;
+    /* A SESSION LEADER (sid == pid) using a console with no controlling session
+     * claims it: its session becomes the console's, its group the foreground -- so
+     * a lone program (exec_program launches init as its own session leader) gets
+     * ^C without an explicit TIOCSCTTY. Requiring leader-ness keeps console_tty.sid
+     * always equal to a live leader's id, so the leader-death release path
+     * (tty_console_owned_by_leader) always fires; a non-leader child that reads an
+     * unowned console does NOT strand the terminal on a since-dead leader. Once
+     * claimed, only TIOCSCTTY/TIOCSPGRP change it. The publish goes through
+     * tty_set_session so the timer-IRQ drain never sees sid set while fg_pgid is
+     * still stale. */
+    if (t->sid == 0 && sid == pid) {
+        tty_set_session(t, sid, pgid);
     }
+}
+
+void tty_set_session(struct tty *t, int sid, int pgid)
+{
+    uint32_t flags;
+
+    /* Publish the controlling session AND foreground group as one indivisible
+     * step. The timer-IRQ drain (tty_console_poll) gates on sid != 0 and then
+     * delivers ISIG to fg_pgid by value, so a torn update -- sid already set while
+     * fg_pgid is still the stale 0 -- would route a serial ^C/^Z to group 0 and
+     * drop it. Interrupts off makes the two stores atomic against that drain.
+     * Used both to claim the console (exec) and to release it (sid=pgid=0). */
+    flags = tty_irq_save();
+    t->sid = sid;
+    t->fg_pgid = pgid;
+    tty_irq_restore(flags);
+}
+
+int tty_console_owned_by_leader(int sid, int pid)
+{
+    /* True iff the (sid, pid) process is the session leader that owns the console:
+     * its session holds the controlling terminal (console_tty.sid == sid) AND it
+     * is that session's leader (sid == pid). This is the exact condition under
+     * which a process exiting, being killed, or replacing its image must release
+     * (and on a successful exec re-publish) the controlling terminal, so the
+     * timer-IRQ serial drain never targets a session that is vanishing. It is true
+     * for init (alloc_process makes every process its own session leader and
+     * exec_program publishes init's sid) and for any later leader that claimed the
+     * console via TIOCSCTTY; it is FALSE for a mere job-group member of the owning
+     * session, whose exit must NOT pull the terminal out from under the shell. */
+    return console_tty.sid != 0 && console_tty.sid == sid && sid == pid;
 }
 
 void tty_input_char(struct tty *t, unsigned char c)
@@ -281,6 +316,32 @@ static void console_pump(struct tty *t)
     }
 }
 
+/* The timer-IRQ drain: like console_pump but with echo SUPPRESSED. Echo runs
+ * through serial_putc, which busy-waits on the UART transmit-holding register --
+ * unacceptable in interrupt context, where a 64-byte burst could mask interrupts
+ * for milliseconds. n_tty_receive still recognizes ISIG chars and queues
+ * type-ahead independent of the (here null) sink, so a serial ^C/^Z reaches the
+ * foreground group and ordinary bytes are queued un-echoed for the next reader;
+ * the echoing drain (console_pump) runs only in thread context. Bounded by the
+ * pump budget so a flood cannot hold the IRQ off. */
+static void console_pump_irq(struct tty *t)
+{
+    int budget = TTY_PUMP_BUDGET;
+
+    while (budget-- > 0 && serial_data_available()) {
+        int ch = serial_try_getc();
+        int signo = 0;
+
+        if (ch < 0) {
+            break;
+        }
+        n_tty_receive(&t->ldisc, (unsigned char)ch, null_sink, NULL, &signo);
+        if (signo != 0) {
+            tty_deliver_signal(t, signo);
+        }
+    }
+}
+
 void tty_console_init(void)
 {
     tty_init(&console_tty, console_sink, NULL);
@@ -298,7 +359,22 @@ void tty_console_poll(void)
      * echoing, or signal delivery happens in this IRQ. Gated on a waiter so it
      * never steals bytes from the kernel debug shell, which polls COM1 itself.
      */
-    if (wq_active(&console_tty.input_wq) && serial_data_available()) {
+    if (!serial_data_available()) {
+        return;
+    }
+    if (wq_active(&console_tty.input_wq)) {
+        /* A reader/poller is parked: wake it to drain (WITH echo) in its own
+         * thread context -- no draining/echo/signalling in this IRQ (the Phase 16
+         * discipline). */
         wq_wake_all(&console_tty.input_wq);
+    } else if (console_tty.sid != 0) {
+        /* A session owns the console but nobody is parked reading it -- a
+         * foreground job is running while the shell waits in wait4. Drain here,
+         * echo suppressed (console_pump_irq avoids blocking serial TX in the IRQ),
+         * so a serial ^C/^Z still reaches the foreground group; type-ahead is
+         * queued un-echoed for the next reader. The shell releases the console
+         * (tty_set_session 0) when it regains control, so this never steals the
+         * kernel debug shell's own serial input. */
+        console_pump_irq(&console_tty);
     }
 }

@@ -165,6 +165,15 @@ void terminate_current_process(int32_t signo)
     pid = current_proc->pid;
     is_init = (pid == init_pid && init_pid != 0);
 
+    /* If the console-owning session leader is dying (init, or a later TIOCSCTTY
+     * leader -- NOT only init), release the controlling terminal before zombifying
+     * so the timer-IRQ serial drain does not target this vanishing session during
+     * teardown (mirrors sys_exit; shell_reset_input on the is_init path below
+     * releases again, idempotent). */
+    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
+        tty_set_session(&console_tty, 0, 0);
+    }
+
     /* Release framebuffer if this process owns it */
     fb_release_if_owner(pid);
 
@@ -1247,6 +1256,18 @@ static void exec_program(int argc, char *argv[])
         init_pid = user_proc->pid;
     }
 
+    /*
+     * Make this program the console's controlling-terminal foreground group
+     * (Phase 17/18). A job-control shell (busybox ash) checks tcgetpgrp() against
+     * its own group at startup and SIGTTIN-stops itself if it is not the
+     * foreground -- so a shell launched here must already own the terminal. The
+     * kernel debug shell hands the terminal over for the program's lifetime.
+     * One interrupts-off update (tty_set_session) so the timer-IRQ serial drain
+     * never sees sid set while fg_pgid is still the stale 0 -- which would route a
+     * serial ^C/^Z to group 0 and drop it.
+     */
+    tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
+
     /* Switch to user page directory */
     switch_page_directory(user_dir);
 
@@ -1878,6 +1899,11 @@ void shell_reset_input(void)
     stdin_waiting_proc = NULL;
     stdin_ready = false;
     stdin_pos = 0;
+    /* Release the console controlling terminal: the kernel debug shell polls the
+     * serial port itself, so the tty timer drain must not steal its input. A
+     * launched program re-claims it (exec_program sets sid/fg_pgid). One
+     * interrupts-off update so the timer-IRQ drain never sees a torn owner. */
+    tty_set_session(&console_tty, 0, 0);
 }
 
 void shell_loop(void)

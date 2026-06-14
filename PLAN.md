@@ -988,7 +988,7 @@ state machine, and the `wait4` encoding — fix every finding.
 **Done when:** all five sub-steps pass their probes (pgrp/session, ctty, stop/cont,
 `wait4`/`kill(-pgid)`, fg-group routing), and Codex is addressed.
 
-### [ ] Phase 18 — BusyBox-required syscalls + the BusyBox port (the II-A capstone)
+### [x] Phase 18 — BusyBox-required syscalls + the BusyBox port (the II-A capstone)
 **Goal:** a static musl **busybox** runs as the interactive login shell on the console
 tty.
 **Concept taught:** that the preceding subsystems compose into a *real shell* — and the

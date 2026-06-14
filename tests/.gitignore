@@ -50,3 +50,6 @@ devprobe
 ttyprobe
 jobprobe
 miscprobe
+
+# The Phase 18 busybox capstone binary (built by busybox/build_busybox.sh)
+busybox

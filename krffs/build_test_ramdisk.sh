@@ -147,6 +147,12 @@ for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; d
     fi
 done
 
+# The Phase 18 busybox capstone (static musl, ~190 KB), if built.
+if [ -f "../tests/busybox" ]; then
+    cp "../tests/busybox" "$MOUNT_POINT/busybox"
+    echo "  busybox (Phase 18)"
+fi
+
 # Also copy hello.txt for file tests
 echo "hello, world" > "$MOUNT_POINT/hello.txt"
 echo "  hello.txt (test data)"

@@ -47,9 +47,23 @@ void tty_console_init(void);
 /* Post `signo` to every live member of process group `pgid` (job-control routing). */
 void tty_signal_group(int pgid, int signo);
 
-/* Claim the tty as a controlling terminal if it has none: its session becomes
- * `sid` and its foreground group `pgid`. A no-op if already claimed. */
-void tty_acquire_ctty(struct tty *t, int sid, int pgid);
+/* Claim the tty as a controlling terminal if it has none AND the caller is its
+ * session leader (sid == pid): its session becomes `sid`, its foreground group
+ * `pgid`. A no-op if already claimed or the caller is not a session leader (so a
+ * non-leader never strands the tty on a since-dead leader). */
+void tty_acquire_ctty(struct tty *t, int sid, int pgid, int pid);
+
+/* Set the controlling session and foreground group as one interrupts-off step,
+ * so the timer-IRQ drain never sees a torn (sid set, fg_pgid stale) owner. Used
+ * to hand the console to a launched program (exec) and to release it (0, 0). */
+void tty_set_session(struct tty *t, int sid, int pgid);
+
+/* True iff (sid, pid) is the session leader that owns the console (console_tty.sid
+ * == sid && sid == pid). The condition under which a process exiting/dying/exec'ing
+ * must release (and a successful exec re-publish) the controlling terminal, so the
+ * timer-IRQ serial drain never targets a vanishing session. False for a non-leader
+ * member of the owning session. */
+int tty_console_owned_by_leader(int sid, int pid);
 
 /* True if the tty is the caller's controlling terminal but its group is not the
  * foreground -- a background process, whose read/write is gated by SIGTTIN/SIGTTOU. */
