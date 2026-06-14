@@ -17,6 +17,14 @@
 
 #define PAGE_SIZE 0x1000
 
+/*
+ * Software-available PTE bit (bit 9; the CPU ignores bits 9-11) used to mark a
+ * page as copy-on-write: present + user + read-only + PTE_COW means "shared, copy
+ * on the next write". The fault handler distinguishes a COW write (copy/re-grant)
+ * from a genuine write to a read-only region (segfault) by this bit.
+ */
+#define PTE_COW 0x200u
+
 struct pde {
     uint32_t present       : 1;
     uint32_t rw            : 1;
@@ -115,6 +123,16 @@ void switch_page_directory(page_dir_t *dir);
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr);
 
 /*
+ * Map an already-owned physical frame 'phys' at user virtual address 'virt' in
+ * 'dir' with the given low-12-bit PTE 'flags' (present/user/write/PTE_COW, etc.),
+ * creating a private page table for the slot if needed. Unlike alloc_user_page it
+ * neither allocates a frame nor changes any reference count -- the caller owns the
+ * frame lifecycle. Used by copy-on-write fork to share a frame read-only.
+ * Returns 0 on success, -1 on failure.
+ */
+int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t flags);
+
+/*
  * Pre-fault [addr, addr+len) in the current process's address space before the
  * kernel touches it (fault-aware usercopy). Each page in a valid VMA is backed
  * on demand -- growing the stack if needed -- exactly as a user-mode fault would;
@@ -167,9 +185,25 @@ extern page_dir_t *_kernel_dir;
 extern page_dir_t *_curr_dir;
 
 /*
- * Frame bitmap and count (for tracking physical frame allocation)
+ * Physical frame reference counts (one byte per frame) and the frame count.
+ * 0 means the frame is free; N means N mappings share it. A fresh allocation
+ * sets the count to 1; copy-on-write fork bumps it; freeing a mapping drops it,
+ * and the frame returns to the pool only when the last reference is gone.
  */
 extern uint8_t *_frames;
 extern size_t _frames_number;
+
+/*
+ * Take an extra reference on the frame backing physical address 'phys' (used
+ * when a page is shared, e.g. a COW fork). No-op for a free or out-of-range
+ * frame, or one already at the max count.
+ */
+void frame_ref(uintptr_t phys);
+
+/*
+ * Drop one reference on the frame backing 'phys'; it returns to the pool only
+ * when the count reaches zero. Returns the new reference count (0 == freed).
+ */
+uint32_t frame_unref(uintptr_t phys);
 
 #endif

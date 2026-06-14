@@ -47,7 +47,7 @@ echo "=== Copying test binaries ==="
 for prog in hello filetest forktest shelltest dirtest stattest \
             touchtest rmtest mvtest lstest stdintest dup2test \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
-            tlsprobe errnoprobe vmprobe vmfault vmro forkro; do
+            tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -68,6 +68,12 @@ fi
 if [ -f "../tests/musl/mallocqsort" ]; then
     cp "../tests/musl/mallocqsort" "$MOUNT_POINT/mqsort"
     echo "  mqsort (musl)"
+fi
+
+# The Phase 5 fork/wait integration program, installed as "mcowfork".
+if [ -f "../tests/musl/cowfork" ]; then
+    cp "../tests/musl/cowfork" "$MOUNT_POINT/mcowfork"
+    echo "  mcowfork (musl)"
 fi
 
 # Also copy hello.txt for file tests

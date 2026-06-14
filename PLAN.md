@@ -489,7 +489,7 @@ program runs and exits 0.
 **Done when:** VMAs + demand paging + stack growth work under the probe, faults are
 per-process, and a malloc-using musl program runs.
 
-### [ ] Phase 5 — Copy-on-write fork
+### [x] Phase 5 — Copy-on-write fork
 **Goal:** make `fork` copy-on-write instead of deep-copying, and add `wait4` to
 complete the process model. COW is the canonical fork optimization *and* genuinely
 pays off for the end goal — the shell and sshd `fork`-then-`exec` constantly, and

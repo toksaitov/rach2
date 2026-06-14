@@ -16,6 +16,7 @@
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
 #include "sys/lib/krandom.h"
+#include "sys/lib/ksignal.h"
 #include "sys/fs/krffs.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
@@ -125,17 +126,19 @@ static bool _kbd_e0 = false;
  * Terminate the current user process and give up its CPU.
  *
  * Shared teardown for every kill that originates outside sys_exit -- the CTRL+C
- * handler and the page-fault segfault path both route here. Mark the process a
- * zombie with 'exit_code', wake a parent blocked in waitpid, free its user pages
- * and page directory, and switch off its address space. If it was init, reset the
- * shell's input state and jump back into shell_loop on a fresh kernel stack;
- * otherwise leave the zombie for the parent's waitpid to collect and schedule the
- * (now READY) parent. Does not return when a user process was current.
+ * handler and the page-fault segfault path both route here. The process is dying
+ * by signal 'signo' (SIGSEGV for a fault, SIGINT for CTRL+C); store the Linux
+ * wait-status encoding of a signal death (low 7 bits = the signal, so the
+ * parent's waitpid sees WIFSIGNALED/WTERMSIG). Wake a parent blocked in waitpid,
+ * free its user pages and page directory, and switch off its address space. If it
+ * was init, reset the shell's input state and jump back into shell_loop on a
+ * fresh kernel stack; otherwise leave the zombie for the parent's waitpid to
+ * collect and schedule the (now READY) parent. Does not return for a user process.
  *
  * Declared extern (no header) by mm/paging.c, which calls it from the fault
  * handler -- mirrors how syscall.c reaches shell_loop/stack.
  */
-void terminate_current_process(int32_t exit_code)
+void terminate_current_process(int32_t signo)
 {
     process_t *parent;
     bool is_init;
@@ -153,9 +156,9 @@ void terminate_current_process(int32_t exit_code)
     /* Release framebuffer if this process owns it */
     fb_release_if_owner(pid);
 
-    /* Mark process as zombie and store its exit code */
+    /* Mark process a zombie with the signal-death wait status. */
     current_proc->state = PROC_ZOMBIE;
-    current_proc->exit_code = exit_code;
+    current_proc->exit_code = signo & 0x7F;
 
     /* Wake up parent if it's blocked (likely in waitpid) */
     parent = get_process(current_proc->parent_pid);
@@ -184,8 +187,8 @@ void terminate_current_process(int32_t exit_code)
          * Init terminated - return to the kernel debug shell. Same resume path
          * as when init exits normally (see sys_exit).
          */
-        serial_printf("terminate: init process %d exited (status %d), "
-                      "returning to kernel shell\n", pid, exit_code);
+        serial_printf("terminate: init process %d killed by signal %d, "
+                      "returning to kernel shell\n", pid, signo);
         k_puts("");
         k_puts("Init process exited. Returning to kernel debug shell.");
 
@@ -250,7 +253,7 @@ static void kill_foreground_process(void)
     serial_printf("CTRL+C: killing process %d\n", current_proc->pid);
     k_puts("^C");
 
-    terminate_current_process(-2);  /* -2: killed by interrupt */
+    terminate_current_process(SIGINT);  /* CTRL+C: killed by SIGINT */
     /* Never reached for a user process */
 }
 

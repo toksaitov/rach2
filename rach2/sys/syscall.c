@@ -11,6 +11,7 @@
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
+#include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/krffs.h"
 #include "mm/paging.h"
@@ -196,9 +197,12 @@ static int32_t sys_exit(isr_params_t *params)
     }
 #endif
 
-    /* Mark process as zombie and store exit code */
+    /* Mark process a zombie and store the Linux wait-status encoding of a normal
+     * exit (the parent's waitpid/wait4 copies exit_code straight out): the low 8
+     * bits of the code go in bits 8-15, so WIFEXITED is true and WEXITSTATUS
+     * returns the code. (harness_exit above still gets the raw status byte.) */
     current_proc->state = PROC_ZOMBIE;
-    current_proc->exit_code = status;
+    current_proc->exit_code = (status & 0xFF) << 8;
 
     /* Wake up parent if it's blocked (waiting for us) */
     parent = get_process(current_proc->parent_pid);
@@ -1292,9 +1296,12 @@ static int32_t sys_stat(isr_params_t *params)
 }
 
 /*
- * copy_user_pages - copy all user pages from parent to child
- * Iterates through parent's page directory and copies user-accessible pages.
- * Returns 0 on success, -1 on failure.
+ * copy_user_pages - duplicate the parent's user address space into the child
+ * COPY-ON-WRITE. Iterates the parent's page directory and, for each present user
+ * page, maps the SAME physical frame into the child (bumping the frame refcount)
+ * rather than copying it; writable pages are write-protected and PTE_COW-marked
+ * in both directories so the first write faults into cow_fault for a private
+ * copy. Returns 0 on success, -1 on failure.
  */
 static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
 {
@@ -1327,7 +1334,6 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             uint32_t pte = parent_table->pages[page_idx];
             uint32_t virt_addr;
             uint32_t parent_phys;
-            uint32_t child_phys;
 
             /* Check if page is present and user-accessible */
             if (!(pte & 0x1) || !(pte & 0x4)) {
@@ -1337,28 +1343,35 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             virt_addr = (dir_idx << 22) | (page_idx << 12);
             parent_phys = pte & ~0xFFF;
 
-            /* Skip identity-mapped kernel region (first 32MB) */
-            if (virt_addr < HARD_MEMORY_LIMIT) {
+            /* Skip the identity-mapped kernel region (first 32MB) and any bogus
+             * mapping. */
+            if (virt_addr < HARD_MEMORY_LIMIT || parent_phys == 0) {
                 continue;
             }
 
-            /* Allocate a new page for child at same virtual address */
-            child_phys = alloc_user_page(child_dir, virt_addr);
-            if (child_phys == 0) {
-                serial_printf("copy_user_pages: alloc failed at 0x%X\n", virt_addr);
-                return -1;  /* Out of memory */
+            /*
+             * Copy-on-write: share the frame instead of copying it. The child
+             * maps the same physical frame, and the frame's reference count is
+             * bumped so it survives until both sides drop it. A WRITABLE parent
+             * page is write-protected and marked PTE_COW in BOTH directories, so
+             * the first write on either side faults into cow_fault (which makes a
+             * private copy and re-grants write). A READ-ONLY page (ELF text,
+             * PROT_READ, or an already-COW page from an earlier fork) is shared
+             * with its exact flags -- no copy; a write to genuine read-only text
+             * still segfaults because it carries no PTE_COW.
+             */
+            if (pte & 0x2) {
+                uint32_t cow = 0x1u | 0x4u | PTE_COW; /* present + user + COW (RO) */
+                if (map_user_frame(child_dir, virt_addr, parent_phys, cow) != 0) {
+                    return -1;
+                }
+                parent_table->pages[page_idx] = (pte & ~0x2u) | PTE_COW;
+                paging_flush_tlb(virt_addr); /* the parent is the current dir */
+            } else if (map_user_frame(child_dir, virt_addr, parent_phys,
+                                      pte & 0xFFFu) != 0) {
+                return -1;
             }
-
-            /* Copy page content (both phys addrs are identity-mapped) */
-            k_memcpy((void *)child_phys, (void *)parent_phys, PAGE_SIZE);
-
-            /* Preserve the parent's protection: alloc_user_page mapped the child
-             * page writable, but if the parent page is read-only (ELF text, a
-             * PROT_READ mapping) the child must be read-only too -- otherwise fork
-             * would silently drop the read-only enforcement for the child. */
-            if (!(pte & 0x2)) {
-                paging_set_writable(child_dir, virt_addr, false);
-            }
+            frame_ref(parent_phys);
         }
     }
 
@@ -1405,7 +1418,10 @@ static void exec_fail_destroyed(void)
     page_dir_t *dir;
 
     current_proc->state = PROC_ZOMBIE;
-    current_proc->exit_code = -1;
+    /* A failed exec destroyed the image; report it as a SIGKILL death (Linux
+     * wait-status: low 7 bits = the signal) so the parent's waitpid sees an
+     * abnormal termination rather than a bogus exit code. */
+    current_proc->exit_code = SIGKILL & 0x7F;
 
     /* Wake a parent blocked in wait() so the scheduler has a target. */
     parent = get_process(current_proc->parent_pid);
@@ -1808,11 +1824,22 @@ static int32_t sys_fork(isr_params_t *params)
  * If child is ZOMBIE, collects exit status and frees the process.
  * If child is still running, blocks until it exits.
  */
-static int32_t sys_waitpid(isr_params_t *params)
+/* waitpid/wait4 options. */
+#define WNOHANG 1
+
+/* Bytes of struct rusage to zero-fill for wait4 (i386: two 8-byte timevals plus
+ * 14 longs). We do not track per-process resource usage yet, so it is reported
+ * as all zero. */
+#define RUSAGE_BYTES 72
+
+/*
+ * Shared core of waitpid(7) and wait4(114). 'status' (may be NULL) receives the
+ * Linux-encoded wait status that sys_exit/terminate already stored in exit_code;
+ * 'rusage_ptr' (0 for waitpid, may be 0 for wait4) is zero-filled on reap. With
+ * WNOHANG, returns 0 instead of blocking when a child exists but has not exited.
+ */
+static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
 {
-    int pid = (int)params->ebx;
-    int __user *status = (int __user *)params->ecx;
-    /* int options = (int)params->edx; */  /* Unused for now */
     process_t *child = NULL;
     uint32_t child_pid;
     int exit_code;
@@ -1822,13 +1849,16 @@ static int32_t sys_waitpid(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Validate AND fault in the status pointer up front (a NULL pointer means
-     * "don't report status"), so a bad or not-yet-present address is rejected
-     * before any child is reaped -- otherwise the copy_to_user below could fail
-     * after free_process() has already destroyed the zombie, losing it. Prefault
-     * for write, since that is how the status is delivered. */
+    /* Validate AND fault in the status (and rusage) pointers up front (a NULL
+     * status means "don't report status"), so a bad or not-yet-present address is
+     * rejected before any child is reaped -- otherwise the copy_to_user below
+     * could fail after free_process() has destroyed the zombie, losing it.
+     * Prefault for write, since that is how the results are delivered. */
     if (status &&
         !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
+        return -EFAULT;
+    }
+    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
         return -EFAULT;
     }
 
@@ -1869,10 +1899,16 @@ static int32_t sys_waitpid(isr_params_t *params)
                 /* Free the child process slot */
                 free_process(child);
 
-                /* Store exit status (pointer already validated above). */
+                /* Deliver the (already Linux-encoded) status and a zeroed rusage;
+                 * the pointers were validated/prefaulted above. */
                 if (status) {
                     copy_to_user((void __user *)status, &exit_code,
                                  sizeof(exit_code));
+                }
+                if (rusage_ptr) {
+                    uint8_t zero[RUSAGE_BYTES];
+                    k_memset(zero, 0, sizeof(zero));
+                    copy_to_user((void __user *)rusage_ptr, zero, RUSAGE_BYTES);
                 }
 
                 return (int32_t)child_pid;
@@ -1887,12 +1923,36 @@ static int32_t sys_waitpid(isr_params_t *params)
             return -ECHILD;
         }
 
-        /* Child exists but not zombie - block and wait */
+        /* A child exists but has not exited. WNOHANG returns immediately (0);
+         * otherwise block until it exits and the scheduler wakes us. */
+        if (options & WNOHANG) {
+            return 0;
+        }
         current_proc->state = PROC_BLOCKED;
-
-        /* Yield to scheduler - will be woken when child exits */
         schedule();
     }
+}
+
+/*
+ * sys_waitpid - wait for a child to change state.
+ * Args: EBX = pid (-1 = any child), ECX = status pointer, EDX = options.
+ * Returns the reaped child's PID, 0 (WNOHANG, none ready), or -errno.
+ */
+static int32_t sys_waitpid(isr_params_t *params)
+{
+    return do_wait((int)params->ebx, (int __user *)params->ecx,
+                   (int)params->edx, 0);
+}
+
+/*
+ * sys_wait4 - like waitpid plus an optional rusage out-pointer (zero-filled).
+ * Args: EBX = pid, ECX = status, EDX = options, ESI = rusage. musl's wait/waitpid
+ * are implemented on top of this.
+ */
+static int32_t sys_wait4(isr_params_t *params)
+{
+    return do_wait((int)params->ebx, (int __user *)params->ecx,
+                   (int)params->edx, params->esi);
 }
 
 /*
@@ -3376,6 +3436,7 @@ void init_syscall(void)
     _syscall_table[SYS_OPEN] = sys_open;
     _syscall_table[SYS_CLOSE] = sys_close;
     _syscall_table[SYS_WAITPID] = sys_waitpid;
+    _syscall_table[SYS_WAIT4] = sys_wait4;
     _syscall_table[SYS_CREAT] = sys_creat;
     _syscall_table[SYS_UNLINK] = sys_unlink;
     _syscall_table[SYS_EXECVE] = sys_execve;

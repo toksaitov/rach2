@@ -2,16 +2,17 @@
 #include "frame.h"
 #include "usercopy.h"
 #include "../serial.h"
+#include "../lib/ksignal.h"
 #include "../proc/process.h"
 
 /*
- * Defined in kernel.c: tear the current user process down -- free its pages,
- * wake a waiting parent -- and either resume the kernel debug shell (if it was
- * init) or schedule the parent (if it was a child). Used by the page-fault
- * handler to kill a process that faulted illegally without taking the machine
- * down with it. Mirrors the CTRL+C kill path.
+ * Defined in kernel.c: tear the current user process down with a signal death
+ * ('signo'; SIGSEGV here) -- free its pages, wake a waiting parent -- and either
+ * resume the kernel debug shell (if it was init) or schedule the parent (if it
+ * was a child). Kills a process that faulted illegally without taking the machine
+ * down. Mirrors the CTRL+C kill path.
  */
-extern void terminate_current_process(int32_t exit_code);
+extern void terminate_current_process(int32_t signo);
 
 page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;
@@ -224,9 +225,6 @@ static void _load_page_dir(page_dir_t *dir)
 #define PF_ERR_WRITE   0x2u /* 0 = read access, 1 = write access */
 #define PF_ERR_USER    0x4u /* 0 = supervisor mode, 1 = user mode */
 
-/* Status a process is killed with when it faults illegally (128 + SIGSEGV, the
- * value a real kernel reports to a parent's waitpid for a segfault). */
-#define SEGV_EXIT_STATUS 139
 
 /*
  * Is the page containing 'addr' already present in 'dir'? Keeps the demand-paging
@@ -335,23 +333,86 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
     return 1;
 }
 
+/*
+ * Copy-on-write resolver for a write fault on a present, PTE_COW page in the
+ * current address space. If this process is the frame's last owner (refcount 1)
+ * the page is just made writable in place; otherwise a private writable copy is
+ * allocated, the shared bytes are copied in, and the shared frame's reference is
+ * dropped. Returns 1 if it handled a COW page, 0 if the page is not COW (the
+ * caller continues to demand paging / segfault).
+ */
+static int cow_fault(uint32_t addr)
+{
+    uint32_t page_num = addr / PAGE_SIZE;
+    uint32_t table_index = page_num / 1024;
+    uint32_t page_index = page_num % 1024;
+    page_table_t *table;
+    uint32_t pte, old_phys, frame;
+    uintptr_t new_phys;
+
+    if (table_index >= 1024) {
+        return 0;
+    }
+    table = _curr_dir->logical_page_tables[table_index];
+    if (!table) {
+        return 0;
+    }
+    pte = table->pages[page_index];
+    if (!(pte & 0x1) || !(pte & PTE_COW)) {
+        return 0; /* not a copy-on-write page */
+    }
+
+    old_phys = pte & ~0xFFFu;
+    frame = old_phys / PAGE_SIZE;
+
+    /* Sole owner: re-grant write and drop the COW mark in place, no copy. */
+    if (frame >= _frames_number || _frames[frame] <= 1) {
+        table->pages[page_index] = (pte & ~PTE_COW) | 0x2u; /* +write, -COW */
+        paging_flush_tlb(addr);
+        return 1;
+    }
+
+    /* Shared: alloc_user_page installs a fresh writable frame (present+rw+user,
+     * no COW) at addr; copy the shared page into it, then drop our reference to
+     * the old shared frame. */
+    new_phys = alloc_user_page(_curr_dir, addr);
+    if (new_phys == 0) {
+        return 0; /* out of frames -> caller segfaults the process */
+    }
+    k_memcpy((void *)new_phys, (void *)old_phys, PAGE_SIZE);
+    frame_unref(old_phys);
+    return 1;
+}
+
 static void _page_fault_handler(isr_params_t *params)
 {
     uint32_t fault_address;
-    int write, user_mode, have_user_proc;
+    int write, user_mode, have_user_proc, in_user_range;
 
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(fault_address));
 
     write = (params->error_code & PF_ERR_WRITE) != 0;
     user_mode = (params->error_code & PF_ERR_USER) != 0;
     have_user_proc = (current_proc != NULL && current_proc->cr3 != 0);
+    in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
+
+    /* Copy-on-write: a write that faulted on a *present* page (protection
+     * violation) may be a COW page shared by a fork. Resolve it before demand
+     * paging, since vm_resolve would see the page already present and loop. A
+     * non-COW present-page write falls through (a genuine read-only region then
+     * segfaults below). */
+    if (have_user_proc && write && in_user_range &&
+        (params->error_code & PF_ERR_PRESENT)) {
+        if (cow_fault(fault_address)) {
+            return; /* page is now private + writable; retry the instruction */
+        }
+    }
 
     /* Demand paging: a fault on a user-space address owned by a live user process
      * is resolved by lazily backing the page (heap/stack/anon) or growing the
      * stack. Keyed on the faulting *address* being in user space, not on the CPU
      * mode, so a kernel touch of a lazy user page would resolve here too. */
-    if (have_user_proc && fault_address >= USER_ADDR_MIN &&
-        fault_address < USER_ADDR_MAX) {
+    if (have_user_proc && in_user_range) {
         if (vm_resolve(fault_address, write)) {
             return; /* page mapped; iret retries the faulting instruction */
         }
@@ -364,7 +425,7 @@ static void _page_fault_handler(isr_params_t *params)
         serial_printf("Page fault: killing pid %d -- bad %s at 0x%x (err 0x%x)\n",
                       current_proc->pid, write ? "write" : "read", fault_address,
                       params->error_code);
-        terminate_current_process(SEGV_EXIT_STATUS);
+        terminate_current_process(SIGSEGV);
         return; /* child case: the parent was scheduled; nothing to retry */
     }
 
@@ -526,6 +587,104 @@ void switch_page_directory(page_dir_t *dir)
     __asm__ __volatile__("mov %0, %%cr3" :: "r"(get_page_dir_phys(dir)) : "memory");
 }
 
+void frame_ref(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+
+    /* Only a live frame can gain a sharer; cap at the byte's range so a runaway
+     * count cannot wrap to 0 (which would read as "free"). */
+    if (frame < _frames_number && _frames[frame] != 0 && _frames[frame] < 0xFF) {
+        _frames[frame]++;
+    }
+}
+
+uint32_t frame_unref(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+
+    if (frame >= _frames_number || _frames[frame] == 0) {
+        return 0;
+    }
+    /* A frame whose count ever saturated (frame_ref caps at 0xFF) has lost its
+     * exact share count, so decrementing it could drop below the real number of
+     * mappings and free a still-live frame. Pin it instead -- leaking a frame is
+     * safe, a use-after-free is not. (Unreachable while MAX_PROCS <= 255 bounds
+     * sharing far below the cap; this is a guard, not a hot path.) */
+    if (_frames[frame] == 0xFF) {
+        return 0xFF;
+    }
+    _frames[frame]--;
+    return _frames[frame];
+}
+
+/*
+ * Ensure 'dir' has a PRIVATE (not kernel-shared) page table for table_index and
+ * return it, or NULL on allocation failure. A table inherited from the kernel
+ * directory by clone_page_directory is copied so per-process mappings stay
+ * isolated; a missing table is allocated; an existing private table is made
+ * user-accessible. Factored out of alloc_user_page so map_user_frame (and thus
+ * copy-on-write) shares exactly the same table-management logic.
+ */
+static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
+{
+    page_table_t *table = dir->logical_page_tables[table_index];
+
+    if (table && dir != _kernel_dir &&
+        table == _kernel_dir->logical_page_tables[table_index]) {
+        page_table_t *new_table = alloc_page_table();
+        uint32_t i;
+
+        if (!new_table) {
+            serial_printf("ensure_user_table: failed to copy kernel page table\n");
+            return NULL;
+        }
+        for (i = 0; i < 1024; i++) {
+            new_table->pages[i] = table->pages[i];
+        }
+        dir->phys_page_tables[table_index] = (uintptr_t)new_table | 0x7; /* P+RW+U */
+        dir->logical_page_tables[table_index] = new_table;
+        table = new_table;
+    } else if (!table) {
+        table = alloc_page_table();
+        if (!table) {
+            serial_printf("ensure_user_table: failed to alloc table for idx %d\n",
+                          (int)table_index);
+            return NULL;
+        }
+        dir->phys_page_tables[table_index] = (uintptr_t)table | 0x7; /* P+RW+U */
+        dir->logical_page_tables[table_index] = table;
+    } else if (!(dir->phys_page_tables[table_index] & 0x4)) {
+        dir->phys_page_tables[table_index] |= 0x4; /* make table user-accessible */
+    }
+    return table;
+}
+
+int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t flags)
+{
+    uintptr_t page_num, table_index, page_index;
+    page_table_t *table;
+
+    virt &= ~(PAGE_SIZE - 1);
+    page_num = virt / PAGE_SIZE;
+    table_index = page_num / 1024;
+    page_index = page_num % 1024;
+    if (table_index >= 1024) {
+        return -1;
+    }
+
+    table = ensure_user_table(dir, table_index);
+    if (!table) {
+        return -1;
+    }
+
+    /* The caller owns the frame and its reference count; we only write the PTE. */
+    table->pages[page_index] = (phys & ~0xFFFu) | (flags & 0xFFFu);
+    if (dir == _curr_dir) {
+        paging_flush_tlb(virt);
+    }
+    return 0;
+}
+
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 {
     uintptr_t phys_addr;
@@ -549,53 +708,14 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     }
 
     /*
-     * CRITICAL: Allocate or copy page table FIRST, before finding a free frame.
-     * This ensures mem_reserve() advances mem_reserved_ptr before we scan for
-     * free frames, preventing the same physical address from being used for
-     * both the page table and the user page.
+     * CRITICAL: ensure the page table FIRST, before finding a free frame. This
+     * advances mem_reserve()'s pointer (if a new table is allocated) before we
+     * scan for free frames, preventing the same physical address from being used
+     * for both the page table and the user page.
      */
-    table = dir->logical_page_tables[table_index];
-
-    /*
-     * If the page table exists but is shared with the kernel directory
-     * (inherited from clone_page_directory), we need to create a private
-     * copy for this process to ensure memory isolation.
-     */
-    if (table && dir != _kernel_dir &&
-        table == _kernel_dir->logical_page_tables[table_index]) {
-        /* Create a copy of the page table for this directory */
-        page_table_t *new_table = alloc_page_table();
-        if (!new_table) {
-            serial_printf("alloc_user_page: failed to copy kernel page table\n");
-            return 0;
-        }
-
-        /* Copy existing entries */
-        {
-            uint32_t i;
-            for (i = 0; i < 1024; i++) {
-                new_table->pages[i] = table->pages[i];
-            }
-        }
-
-        /* Update directory to use the new table */
-        dir->phys_page_tables[table_index] = (uintptr_t)new_table | 0x7;  /* P + RW + U/S */
-        dir->logical_page_tables[table_index] = new_table;
-        table = new_table;
-    } else if (!table) {
-        /* Allocate new page table */
-        table = alloc_page_table();
-        if (!table) {
-            serial_printf("alloc_user_page: failed to alloc new page table for idx %d\n", (int)table_index);
-            return 0;
-        }
-
-        /* Add to directory with present, rw, and user bits set */
-        dir->phys_page_tables[table_index] = (uintptr_t)table | 0x7;  /* P + RW + U/S */
-        dir->logical_page_tables[table_index] = table;
-    } else if (!(dir->phys_page_tables[table_index] & 0x4)) {
-        /* Page table exists but not user-accessible, set U/S bit */
-        dir->phys_page_tables[table_index] |= 0x4;
+    table = ensure_user_table(dir, table_index);
+    if (!table) {
+        return 0;
     }
 
     /*
@@ -616,7 +736,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;  /* No free frames */
     }
 
-    /* Mark frame as used */
+    /* Mark frame as used (one reference) */
     _frames[frame] = 1;
     phys_addr = frame * PAGE_SIZE;
 
@@ -663,7 +783,6 @@ void free_user_pages(page_dir_t *dir)
             uint32_t pte = table->pages[page_idx];
             uint32_t virt_addr;
             uint32_t phys_addr;
-            uint32_t frame;
 
             /* Check if page is present and user-accessible */
             if (!(pte & 0x1) || !(pte & 0x4)) {
@@ -690,11 +809,9 @@ void free_user_pages(page_dir_t *dir)
                 continue;
             }
 
-            /* Mark frame as free */
-            frame = phys_addr / PAGE_SIZE;
-            if (frame < _frames_number) {
-                _frames[frame] = 0;
-            }
+            /* Drop this mapping's reference; the frame returns to the pool only
+             * when its last reference (e.g. a COW-sharing sibling) is gone. */
+            frame_unref(phys_addr);
 
             /* Clear page table entry */
             table->pages[page_idx] = 0;
@@ -720,7 +837,7 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
         uint32_t table_index = page_num / 1024;
         uint32_t page_index = page_num % 1024;
         page_table_t *table;
-        uint32_t pte, phys, frame;
+        uint32_t pte, phys;
 
         if (table_index >= 1024) {
             continue;
@@ -739,12 +856,9 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
             continue; /* not present: a never-faulted lazy page, nothing to free */
         }
 
-        /* Return the frame to the pool and drop the mapping. */
+        /* Drop the mapping's reference (frees the frame on the last reference). */
         phys = pte & ~0xFFF;
-        frame = phys / PAGE_SIZE;
-        if (frame < _frames_number) {
-            _frames[frame] = 0;
-        }
+        frame_unref(phys);
         table->pages[page_index] = 0;
         if (dir == _curr_dir) {
             paging_flush_tlb(addr);

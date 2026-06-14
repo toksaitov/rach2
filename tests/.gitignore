@@ -23,7 +23,9 @@ vmprobe
 vmfault
 vmro
 forkro
+cowprobe
 
 # Statically-linked musl test programs
 musl/hello
 musl/mallocqsort
+musl/cowfork

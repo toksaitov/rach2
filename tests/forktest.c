@@ -22,6 +22,10 @@ typedef unsigned int size_t;
 /* Exit status for child to return */
 #define CHILD_EXIT_STATUS 42
 
+/* Linux wait-status decoding (the kernel encodes a normal exit as code<<8). */
+#define WIFEXITED(s)   (((s) & 0x7F) == 0)
+#define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
+
 /*
  * sys_write - Write to a file descriptor
  */
@@ -192,18 +196,18 @@ void _start(void)
 
     print("Parent: waitpid returned PID=");
     print_num(child_pid);
-    print(", status=");
-    print_num(status);
+    print(", exit status=");
+    print_num(WEXITSTATUS(status));
     puts("");
 
-    if (status == CHILD_EXIT_STATUS) {
+    if (WIFEXITED(status) && WEXITSTATUS(status) == CHILD_EXIT_STATUS) {
         puts("All fork/waitpid syscalls passed!");
         sys_exit(0);
     } else {
-        print("FAILED: Expected status ");
+        print("FAILED: Expected exit status ");
         print_num(CHILD_EXIT_STATUS);
         print(", got ");
-        print_num(status);
+        print_num(WEXITSTATUS(status));
         puts("");
         sys_exit(1);
     }

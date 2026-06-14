@@ -5,9 +5,9 @@
  * forks. The child writes to that read-only page: because fork must copy the
  * page into the child with the SAME (read-only) protection, the write is a
  * protection violation and the kernel kills the child. The parent reaps it and
- * checks the status is the segfault code (128 + SIGSEGV = 139). If fork wrongly
- * made the child's copy writable, the child would survive and exit 0, which this
- * probe reports as a failure.
+ * checks the wait status is a SIGSEGV death (WIFSIGNALED + WTERMSIG == SIGSEGV).
+ * If fork wrongly made the child's copy writable, the child would survive and
+ * exit 0, which this probe reports as a failure.
  *
  * Build:
  *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
@@ -30,7 +30,11 @@ typedef unsigned int size_t;
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
 
-#define SEGV_STATUS 139 /* 128 + SIGSEGV, what the kernel sets for a fault kill */
+#define SIGSEGV 11 /* the signal a fault kill is reported as */
+
+/* Linux wait-status decoding for a signal death (low 7 bits = the signal). */
+#define WIFSIGNALED(s) (((s) & 0x7F) != 0 && ((s) & 0x7F) != 0x7F)
+#define WTERMSIG(s)    ((s) & 0x7F)
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
@@ -133,10 +137,10 @@ void _start(void)
         sys_exit(1);
     }
 
-    if (status == SEGV_STATUS) {
+    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV) {
         puts("FORKRO OK");
         sys_exit(0);
     }
-    puts("forkro: FAIL child was not killed by the read-only write");
+    puts("forkro: FAIL child was not killed by SIGSEGV on the read-only write");
     sys_exit(1);
 }

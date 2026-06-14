@@ -27,6 +27,7 @@
 #define SYS_RENAME    38
 #define SYS_BRK       45
 #define SYS_MUNMAP    91
+#define SYS_WAIT4    114
 #define SYS_MMAP2    192
 #define SYS_SOCKETCALL 102
 #define SYS_IOCTL     54
