@@ -15,8 +15,23 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [tests/](tests/)           | Syscall test programs for kernel validation                    | [Readme](tests/Readme.md)      |
 | [krffs/](krffs/)           | K&R First-Fit File System tools and RAM disk builder           | [Readme](krffs/Readme.md)      |
 | [ish/](ish/)               | Minimal Unix shell with I/O redirection and process management | [Readme](ish/Readme.md)        |
-| [utils/](utils/)           | Core Unix utilities: `echo`, `cat`, `ls`, `mv`, `rm`, ...      | [Readme](utils/Readme.md)      |
+| [utils/](utils/)           | Core Unix utilities (`echo`, `cat`, `ls`, `mv`, `rm`, `ping`, `nc`, `httpd`, …), linked against the ported musl | [Readme](utils/Readme.md)      |
+| [libc/](libc/)             | The ported **musl** libc: reproducible build, the SysV/auxv startup contract | [Readme](libc/Readme.md)       |
 | [ports/doom/](ports/doom/) | Doom port with VGA graphics, mouse, and audio                  | [Readme](ports/doom/Readme.md) |
+
+## Kernel subsystems
+
+The musl port grew the kernel into real OS subsystems; each is documented in its
+own voice and backed by a probe.
+
+| Subsystem            | What it provides                                                         | Documentation                          |
+|----------------------|-------------------------------------------------------------------------|----------------------------------------|
+| Memory management    | Physical frames, page tables, the VMA address-space model, demand paging, COW fork | [Readme](rach2/sys/mm/Readme.md)       |
+| File system (KRFFS)  | Hierarchical directories, path resolution, the `*at` file API           | [Readme](rach2/sys/fs/Readme.md)       |
+| Thread-local storage | `%gs` TLS via `set_thread_area`, per-process and switch-safe            | [Readme](rach2/sys/proc/tls.Readme.md) |
+| Signals              | Dispositions, masks, delivery on return-to-user, the `sigreturn` frame  | [Readme](rach2/sys/proc/signal.Readme.md) |
+| CSPRNG (`krandom`)   | ChaCha20 seeded from `RDSEED`/`RDRAND`, backing `AT_RANDOM` and `getrandom` | [Readme](rach2/sys/lib/krandom.Readme.md) |
+| Network stack        | RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets                   | [Readme](rach2/sys/network/Readme.md)  |
 
 ## Prerequisites
 
