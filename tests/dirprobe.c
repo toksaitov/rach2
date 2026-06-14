@@ -15,15 +15,16 @@ typedef unsigned int size_t;
 
 #define STDOUT_FILENO 1
 
-#define SYS_EXIT   1
-#define SYS_READ   3
-#define SYS_WRITE  4
-#define SYS_OPEN   5
-#define SYS_CLOSE  6
-#define SYS_CREAT  8
-#define SYS_UNLINK 10
-#define SYS_MKDIR  39
-#define SYS_RMDIR  40
+#define SYS_EXIT       1
+#define SYS_READ       3
+#define SYS_WRITE      4
+#define SYS_OPEN       5
+#define SYS_CLOSE      6
+#define SYS_CREAT      8
+#define SYS_UNLINK     10
+#define SYS_MKDIR      39
+#define SYS_RMDIR      40
+#define SYS_GETDENTS64 220
 
 #define O_RDONLY 0
 
@@ -128,6 +129,46 @@ void _start(void)
 
     /* 7. The file is gone. */
     check(syscall3(SYS_OPEN, (int)(size_t)"/d/f", O_RDONLY, 0) < 0, "open removed /d/f fails");
+
+    /* 8. getdents on a subdirectory lists EXACTLY its own children. */
+    check(syscall2(SYS_MKDIR, (int)(size_t)"/e", 0755) == 0, "mkdir /e");
+    fd = syscall2(SYS_CREAT, (int)(size_t)"/e/a", 0644);
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    fd = syscall2(SYS_CREAT, (int)(size_t)"/e/b", 0644);
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/e", O_RDONLY, 0);
+    check(fd >= 0, "open /e as directory");
+    if (fd >= 0) {
+        char dbuf[256];
+        int n = syscall3(SYS_GETDENTS64, fd, (int)(size_t)dbuf, (int)sizeof dbuf);
+        int off = 0, count = 0, saw_a = 0, saw_b = 0;
+
+        while (off + 19 < n) {
+            unsigned short reclen = *(unsigned short *)(dbuf + off + 16);
+            const char *nm = dbuf + off + 19;
+
+            if (nm[0] == 'a' && nm[1] == '\0') {
+                saw_a = 1;
+            }
+            if (nm[0] == 'b' && nm[1] == '\0') {
+                saw_b = 1;
+            }
+            count++;
+            if (reclen == 0) {
+                break;
+            }
+            off += reclen;
+        }
+        check(count == 2 && saw_a && saw_b, "getdents /e lists exactly a and b");
+        syscall1(SYS_CLOSE, fd);
+    }
+    syscall1(SYS_UNLINK, (int)(size_t)"/e/a");
+    syscall1(SYS_UNLINK, (int)(size_t)"/e/b");
+    check(syscall1(SYS_RMDIR, (int)(size_t)"/e") == 0, "rmdir emptied /e");
 
     if (fails == 0) {
         puts("DIRPROBE OK");

@@ -608,9 +608,10 @@ static int32_t sys_open(isr_params_t *params)
         return -EMFILE;  /* No free fds */
     }
 
-    /* Set up the fd entry */
+    /* Set up the fd entry. A directory opens as a FD_TYPE_DIR (its node is the
+     * directory whose children getdents lists); a regular file as FD_TYPE_FILE. */
     entry = &current_proc->fds.entries[fd];
-    entry->type = FD_TYPE_FILE;
+    entry->type = KRFFS_IS_DIR(node->mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
     entry->node = node;
     entry->offset = 0;
 
@@ -2367,6 +2368,7 @@ static int32_t sys_getdents64(isr_params_t *params)
     uint32_t target_index;
     uint32_t name_len;
     uint32_t rec_len;
+    uint64_t dir_id;
     struct linux_dirent64 *dirent;
 
     if (!current_proc || !buf || count == 0) {
@@ -2399,10 +2401,14 @@ static int32_t sys_getdents64(isr_params_t *params)
     /* entry->offset tracks which file index we're at */
     target_index = entry->offset;
 
+    /* List only the children of THIS directory: entry->node is the directory
+     * (NULL == the root), so match nodes whose parent_id is its id. */
+    dir_id = entry->node ? entry->node->id : (uint64_t)KRFFS_ROOT_ID;
+
     /* Iterate through KRFFS nodes */
     node = krffs_fs->node;
     do {
-        if (node->type == KRFFS_RESERVED_NODE) {
+        if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id) {
             /* Found a file - check if we've reached our target position */
             if (file_index >= target_index) {
                 /* Staging buffer for one record (a KRFFS name is at most
@@ -2433,7 +2439,7 @@ static int32_t sys_getdents64(isr_params_t *params)
                 dirent->d_ino = node->id;                      /* Use DJB hash as inode */
                 dirent->d_off = (int64_t)(file_index + 1);     /* Next position */
                 dirent->d_reclen = (uint16_t)rec_len;
-                dirent->d_type = DT_REG;                       /* Regular file */
+                dirent->d_type = KRFFS_IS_DIR(node->mode) ? DT_DIR : DT_REG;
                 k_memcpy(dirent->d_name, node->name, name_len + 1);
 
                 if (copy_to_user((void __user *)(buf + bytes_written),
