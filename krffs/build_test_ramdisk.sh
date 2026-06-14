@@ -109,6 +109,14 @@ else
     exit 1
 fi
 
+# Stage a real directory tree (/etc) directly into the unmounted image, so the
+# guest boots with populated directories (not just a flat root). This writes v2
+# hierarchical nodes the kernel resolver reads -- proving the host tools speak the
+# directory format, the integration half of Phase 6.
+echo ""
+echo "=== Staging directory tree (/etc) ==="
+./stagetree.krffs "$FS_FILE"
+
 echo ""
 echo "=== Done ==="
 echo "RAM disk image: $FS_FILE"

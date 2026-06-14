@@ -66,6 +66,17 @@ EDFS_KRFFS_OBJECTS = krffs_file_system.o \
                      edfs.krffs.o
 EDFS_KRFFS_DEPENDENCIES = $(EDFS_KRFFS_OBJECTS:%.o=%.d)
 
+# stagetree.krffs
+
+STAGETREE_KRFFS_TARGET  = stagetree.krffs
+STAGETREE_KRFFS_OBJECTS = krffs_file_system.o \
+                          krffs_node.o        \
+                          krffs_allocator.o   \
+                          krffs_platform.o    \
+                          krffs_utilities.o   \
+                          stagetree.krffs.o
+STAGETREE_KRFFS_DEPENDENCIES = $(STAGETREE_KRFFS_OBJECTS:%.o=%.d)
+
 # ---
 
 TARGETS = $(KRFFS_TARGET)        \
@@ -73,19 +84,22 @@ TARGETS = $(KRFFS_TARGET)        \
           $(DEFRAG_KRFFS_TARGET) \
           $(FSCK_KRFFS_TARGET)   \
           $(FSVIZ_KRFFS_TARGET)  \
-          $(EDFS_KRFFS_TARGET)
+          $(EDFS_KRFFS_TARGET)   \
+          $(STAGETREE_KRFFS_TARGET)
 OBJECTS = $(KRFFS_OBJECTS)        \
           $(MKFS_KRFFS_OBJECTS)   \
           $(DEFRAG_KRFFS_OBJECTS) \
           $(FSCK_KRFFS_OBJECTS)   \
           $(FSVIZ_KRFFS_OBJECTS)  \
-          $(EDFS_KRFFS_OBJECTS)
+          $(EDFS_KRFFS_OBJECTS)   \
+          $(STAGETREE_KRFFS_OBJECTS)
 DEPENDENCIES = $(KRFFS_DEPENDENCIES)        \
                $(MKFS_KRFFS_DEPENDENCIES)   \
                $(DEFRAG_KRFFS_DEPENDENCIES) \
                $(FSCK_KRFFS_DEPENDENCIES)   \
                $(FSVIZ_KRFFS_DEPENDENCIES)  \
-               $(EDFS_KRFFS_DEPENDENCIES)
+               $(EDFS_KRFFS_DEPENDENCIES)   \
+               $(STAGETREE_KRFFS_DEPENDENCIES)
 
 .PHONY : all
 all : $(TARGETS)
@@ -127,6 +141,12 @@ $(FSVIZ_KRFFS_OBJECTS) : %.o : %.c
 $(EDFS_KRFFS_TARGET) : $(EDFS_KRFFS_OBJECTS)
 
 $(EDFS_KRFFS_OBJECTS) : %.o : %.c
+
+# stagetree.krffs
+
+$(STAGETREE_KRFFS_TARGET) : $(STAGETREE_KRFFS_OBJECTS)
+
+$(STAGETREE_KRFFS_OBJECTS) : %.o : %.c
 
 # ---
 

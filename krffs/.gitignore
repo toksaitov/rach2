@@ -11,6 +11,7 @@ edfs.krffs
 fsviz.krffs
 fsck.krffs
 defrag.krffs
+stagetree.krffs
 
 # File Systems
 

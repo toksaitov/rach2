@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -42,6 +43,35 @@ int main(void)
         return 1;
     }
     fclose(f);
+
+    /* 1b. Read a HOST-staged nested file (/etc/motd, written into the image by
+     * stagetree.krffs) and list /etc -- proving musl navigates a pre-staged tree,
+     * not only one created at runtime. */
+    buf[0] = '\0'; /* so a read failure does not print stale /hello.txt bytes */
+    f = fopen("/etc/motd", "r");
+    if (!f) { printf("CATFILE FAIL: open /etc/motd\n"); return 1; }
+    if (!fgets(buf, sizeof buf, f) || strncmp(buf, "Welcome to Rach2", 16) != 0) {
+        printf("CATFILE FAIL: read /etc/motd got \"%s\"\n", buf);
+        fclose(f);
+        return 1;
+    }
+    fclose(f);
+    {
+        int saw_motd = 0, saw_hostname = 0;
+        d = opendir("/etc");
+        if (!d) { printf("CATFILE FAIL: opendir /etc\n"); return 1; }
+        errno = 0;
+        while ((de = readdir(d)) != NULL) {
+            if (strcmp(de->d_name, "motd") == 0) { saw_motd = 1; }
+            if (strcmp(de->d_name, "hostname") == 0) { saw_hostname = 1; }
+        }
+        if (errno != 0) { printf("CATFILE FAIL: readdir /etc error\n"); closedir(d); return 1; }
+        if (closedir(d) != 0) { printf("CATFILE FAIL: closedir /etc\n"); return 1; }
+        if (!saw_motd || !saw_hostname) {
+            printf("CATFILE FAIL: readdir /etc missing motd/hostname\n");
+            return 1;
+        }
+    }
 
     /* 2. Make a directory and create+write a file inside it. */
     if (mkdir("/cf", 0755) != 0) { printf("CATFILE FAIL: mkdir /cf\n"); return 1; }
