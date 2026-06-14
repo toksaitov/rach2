@@ -2055,7 +2055,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     serial_printf("  Timer (100 Hz)...");
     __asm__ __volatile__("cli"); /* Disable interrupts during timer setup */
     init_pit(100);
-    register_isr_handler(32, &timer_handler); /* Override with silent handler */
+    set_isr_handler(32, &timer_handler); /* Replace the PIT boot stub with the real handler */
     __asm__ __volatile__("sti"); /* Re-enable interrupts */
     set_fore_color(light_green);
     k_puts(" OK");
@@ -2072,7 +2072,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_printf("  Keyboard...");
     serial_printf("  Keyboard...");
-    register_isr_handler(33, &keyboard_handler);
+    set_isr_handler(33, &keyboard_handler); /* Replace the keyboard boot stub with the real handler */
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");

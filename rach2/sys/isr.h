@@ -97,7 +97,14 @@ void init_isr(void);
 
 /*
  * Registers a custom interrupt 'handler' for a specific interrupt 'vector'.
+ * Handlers chain, so several devices sharing one PIC line each get called.
  */
 void register_isr_handler(uint8_t vector, isr_handler_t handler);
+
+/*
+ * Replaces every handler on 'vector' with a single 'handler', dropping any
+ * previously registered ones (for a deliberate override of a boot stub).
+ */
+void set_isr_handler(uint8_t vector, isr_handler_t handler);
 
 #endif
