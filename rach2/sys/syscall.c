@@ -356,6 +356,12 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
             return -EFAULT;
         }
+        /* O_APPEND: every write lands at the current end of file, regardless of
+         * any intervening seek (the POSIX append contract). */
+        if (entry->flags & FD_FLAG_APPEND) {
+            entry->offset = (uint32_t)entry->node->data_size;
+        }
+
         /* Write via the node the descriptor already resolved (a subdir file's
          * node->name is only its basename, so re-resolving by name would fail).
          * krffs_write_node updates entry->node if a grow relocates the file. */
@@ -475,36 +481,26 @@ static int32_t sys_writev(isr_params_t *params)
  * Special case: opening "/" opens the root directory for getdents64.
  */
 /* Linux open flags */
-#define O_CREAT  0100
-#define O_TRUNC  01000
+#define O_APPEND  02000     /* every write lands at end-of-file */
+#define O_CREAT   0100
+#define O_TRUNC   01000
+#define O_CLOEXEC 02000000  /* close-on-exec: the fd is dropped across execve */
 
-static int32_t sys_open(isr_params_t *params)
+/* Special dir fd for the openat family: resolve relative to the current dir. */
+#define AT_FDCWD (-100)
+
+/*
+ * Open core shared by open(5) and openat(295). `name` is a kernel-space path with
+ * any leading '/' already stripped; `flags` are the Linux open flags and `mode`
+ * the permission bits to stamp on a file created by O_CREAT (ignored otherwise).
+ * Resolves a device ("fb"/"mouse") or a KRFFS path and installs a descriptor.
+ * Returns the fd or -errno.
+ */
+static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
-    const char __user *path = (const char __user *)params->ebx;
-    int flags = (int)params->ecx;
     fd_entry_t *entry;
     krffs_node_t *node;
-    char pathbuf[256];
-    const char *name;
-    int len;
     int fd;
-
-    if (!current_proc || !path) {
-        return -EFAULT;
-    }
-
-    /* Copy the path into a kernel buffer; a bad user pointer or an over-long
-     * path is reported with the errno strncpy_from_user returns. */
-    len = strncpy_from_user(pathbuf, path, sizeof(pathbuf));
-    if (len < 0) {
-        return len;
-    }
-
-    /* Skip leading '/' if present */
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
 
     /* Check if opening framebuffer device "fb" */
     if (name[0] == 'f' && name[1] == 'b' && name[2] == '\0') {
@@ -576,6 +572,9 @@ static int32_t sys_open(isr_params_t *params)
         entry->node = NULL;  /* NULL indicates root directory */
         entry->offset = 0;   /* Position in directory listing */
         entry->flags = FD_FLAG_READ;
+        if (flags & O_CLOEXEC) {
+            entry->flags |= FD_FLAG_CLOEXEC; /* opendir("/") passes O_CLOEXEC */
+        }
 
         return fd;
     }
@@ -594,6 +593,8 @@ static int32_t sys_open(isr_params_t *params)
             if (!node) {
                 return -EIO;  /* Shouldn't happen, but check anyway */
             }
+            /* Stamp the caller's requested permission bits on the new file. */
+            node->mode = (uint16_t)(mode & 0777);
         } else {
             return -ENOENT;  /* File not found and O_CREAT not set */
         }
@@ -617,15 +618,81 @@ static int32_t sys_open(isr_params_t *params)
 
     /* Convert Linux flags to internal flags */
     /* O_RDONLY=0, O_WRONLY=1, O_RDWR=2 */
-    if (flags == 0) {
-        entry->flags = FD_FLAG_READ;
-    } else if (flags == 1) {
+    /* Access mode is the low two bits (O_RDONLY=0/O_WRONLY=1/O_RDWR=2); create,
+     * trunc and cloexec live higher up, so mask before testing -- the legacy
+     * `flags == 0` form misreads O_RDONLY|O_CREAT as not-readable. */
+    if ((flags & 3) == 1) {
         entry->flags = FD_FLAG_WRITE;
-    } else {
+    } else if ((flags & 3) == 2) {
         entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    } else {
+        entry->flags = FD_FLAG_READ;
+    }
+    if (flags & O_APPEND) {
+        entry->flags |= FD_FLAG_APPEND; /* fopen(.,"a") writes always go to EOF */
+    }
+    if (flags & O_CLOEXEC) {
+        entry->flags |= FD_FLAG_CLOEXEC; /* opendir() and fopen(.,"e") rely on this */
     }
 
     return fd;
+}
+
+static int32_t sys_open(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    int flags = (int)params->ecx;
+    uint32_t mode = params->edx; /* open(2): the O_CREAT mode is the third arg */
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_open(name, flags, mode);
+}
+
+/*
+ * sys_openat - open relative to a directory fd (syscall 295).
+ * Args: EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl issues openat (not the
+ * legacy open) for every <stdio.h> file open, so this is the path that actually
+ * backs fopen. AT_FDCWD or an absolute path resolves from the root (the cwd is
+ * "/"); a real dirfd with a relative path is not yet supported.
+ */
+static int32_t sys_openat(isr_params_t *params)
+{
+    int dirfd = (int)params->ebx;
+    const char __user *upath = (const char __user *)params->ecx;
+    int flags = (int)params->edx;
+    uint32_t mode = params->esi; /* openat(2): the O_CREAT mode is the fourth arg */
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+    if (dirfd != AT_FDCWD && pathbuf[0] != '/') {
+        return -ENOSYS; /* relative-to-dirfd resolution not implemented */
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_open(name, flags, mode);
 }
 
 /*
@@ -1146,6 +1213,26 @@ struct linux_stat64 {
 #define S_IFDIR  0040000
 
 /*
+ * Fill a stat64 buffer from a resolved KRFFS node. Shared by stat64/fstat64/
+ * fstatat64. Reports S_IFDIR for directories and S_IFREG for regular files; the
+ * node id is the inode number.
+ */
+static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
+{
+    k_memset(kst, 0, sizeof(*kst));
+    kst->st_mode = (KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
+                   (node->mode & 0777);
+    kst->st_nlink = 1; /* KRFFS has no hard links */
+    kst->st_uid = node->uid;
+    kst->st_gid = node->gid;
+    kst->st_size = (long long)node->data_size;
+    kst->st_blksize = 4096;
+    kst->st_blocks = (node->data_size + 511) / 512;
+    kst->st_ino = node->id;
+    kst->__st_ino = (unsigned long)node->id;
+}
+
+/*
  * sys_stat64 - get file status
  * Args: EBX = path, ECX = stat64 buffer
  * Returns: 0 on success, -1 on error
@@ -1201,24 +1288,279 @@ static int32_t sys_stat64(isr_params_t *params)
         return -ENOENT;  /* File not found */
     }
 
-    /* Fill stat structure */
-    kst.st_mode = S_IFREG | (node->mode & 0777);  /* Regular file + permissions */
-    kst.st_nlink = 1;                              /* Always 1 for KRFFS */
-    kst.st_uid = node->uid;
-    kst.st_gid = node->gid;
-    kst.st_size = (long long)node->data_size;
-    kst.st_blksize = 4096;
-    kst.st_blocks = (node->data_size + 511) / 512;
-
-    /* Use node's DJB hash as inode number */
-    kst.st_ino = node->id;
-    kst.__st_ino = (unsigned long)node->id;
+    krffs_fill_stat64(&kst, node);
 
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
     }
 
     return 0;
+}
+
+/*
+ * sys_fstat64 - get file status by descriptor (syscall 197).
+ * Args: EBX = fd, ECX = stat64 buffer. The descriptor's node is stat'd; a root
+ * directory fd (node == NULL) reports the root directory.
+ */
+static int32_t sys_fstat64(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->ecx;
+    struct linux_stat64 kst;
+    fd_entry_t *entry;
+
+    if (!current_proc || !st) {
+        return -EFAULT;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry) {
+        return -EBADF;
+    }
+
+    k_memset(&kst, 0, sizeof(kst));
+    if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
+        kst.st_mode = S_IFDIR | 0755; /* the root directory */
+        kst.st_nlink = 1;
+        kst.st_blksize = 4096;
+    } else if (entry->node) {
+        krffs_fill_stat64(&kst, entry->node);
+    } else if (entry->type == FD_TYPE_SOCKET) {
+        /* A socket fd: programs classify these with S_ISSOCK. */
+        kst.st_mode = 0140666; /* S_IFSOCK | 0666 */
+        kst.st_nlink = 1;
+        kst.st_blksize = 4096;
+    } else {
+        /* A console/framebuffer/mouse fd: report a character device, size 0. */
+        kst.st_mode = 020666; /* S_IFCHR | 0666 */
+        kst.st_nlink = 1;
+        kst.st_blksize = 4096;
+    }
+
+    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/*
+ * sys_fstatat64 - stat a path relative to a directory fd (syscall 300).
+ * Args: EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI = flags. AT_FDCWD or an
+ * absolute path resolves from the root (the cwd is "/").
+ */
+static int32_t sys_fstatat64(isr_params_t *params)
+{
+    int dirfd = (int)params->ebx;
+    const char __user *upath = (const char __user *)params->ecx;
+    struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->edx;
+    struct linux_stat64 kst;
+    char pathbuf[256];
+    const char *name;
+    krffs_node_t *node;
+    int len;
+
+    if (!current_proc || !upath || !st) {
+        return -EFAULT;
+    }
+    len = strncpy_from_user(pathbuf, upath, sizeof(pathbuf));
+    if (len < 0) {
+        return len;
+    }
+    if (dirfd != AT_FDCWD && pathbuf[0] != '/') {
+        return -ENOSYS;
+    }
+    if (pathbuf[0] == '\0') {
+        /* An empty path means "stat the dirfd itself", which needs AT_EMPTY_PATH;
+         * without it Linux returns ENOENT, so we do too. */
+        return -ENOENT;
+    }
+    if (!krffs_fs) {
+        return -ENOENT;
+    }
+
+    k_memset(&kst, 0, sizeof(kst));
+    if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
+        kst.st_mode = S_IFDIR | 0755; /* the root directory */
+        kst.st_nlink = 1;
+        kst.st_blksize = 4096;
+    } else {
+        name = pathbuf;
+        if (name[0] == '/') {
+            name++;
+        }
+        node = krffs_resolve(name);
+        if (!node) {
+            return -ENOENT;
+        }
+        krffs_fill_stat64(&kst, node);
+    }
+
+    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/*
+ * sys__llseek - 64-bit seek (syscall 140).
+ * Args: EBX=fd, ECX=offset_high, EDX=offset_low, ESI=result (long long*),
+ * EDI=whence. musl's lseek is implemented on top of this on i386. KRFFS files are
+ * under 4 GB so offset_high is 0.
+ */
+static int32_t sys__llseek(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    uint32_t offset_high = params->ecx;
+    uint32_t offset_low = params->edx;
+    long long __user *result = (long long __user *)params->esi;
+    int whence = (int)params->edi;
+    fd_entry_t *entry;
+    long long off, new_off;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_FILE || !entry->node) {
+        return -EBADF;
+    }
+
+    off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
+    switch (whence) {
+        case 0: /* SEEK_SET */
+            new_off = off;
+            break;
+        case 1: /* SEEK_CUR */
+            new_off = (long long)entry->offset + off;
+            break;
+        case 2: /* SEEK_END */
+            new_off = (long long)entry->node->data_size + off;
+            break;
+        default:
+            return -EINVAL;
+    }
+    if (new_off < 0) {
+        return -EINVAL;
+    }
+    /* The descriptor offset is 32-bit (KRFFS files are well under 4 GB); refuse a
+     * seek it cannot represent rather than silently truncating to a wrong place. */
+    if (new_off > (long long)0xFFFFFFFFu) {
+        return -EINVAL;
+    }
+    /* The result pointer is mandatory: a NULL one is a caller bug, not a silent
+     * success (musl always passes a valid loff_t*). */
+    if (!result) {
+        return -EFAULT;
+    }
+
+    entry->offset = (uint32_t)new_off;
+    if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/*
+ * sys_fcntl64 - descriptor control (syscall 221).
+ * Args: EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
+ * round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the close-on-exec
+ * bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND, stored, not enforced).
+ */
+static int32_t sys_fcntl64(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    int cmd = (int)params->ecx;
+    uint32_t arg = params->edx;
+    fd_entry_t *entry;
+
+    enum {
+        F_DUPFD = 0,
+        F_GETFD = 1,
+        F_SETFD = 2,
+        F_GETFL = 3,
+        F_SETFL = 4,
+        F_DUPFD_CLOEXEC = 1030
+    };
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry) {
+        return -EBADF;
+    }
+
+    switch (cmd) {
+        case F_GETFD:
+            return (entry->flags & FD_FLAG_CLOEXEC) ? 1 : 0; /* 1 == FD_CLOEXEC */
+        case F_SETFD:
+            if (arg & 1) {
+                entry->flags |= FD_FLAG_CLOEXEC;
+            } else {
+                entry->flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
+            }
+            return 0;
+        case F_GETFL: {
+            /* Report the access mode (O_RDONLY=0/O_WRONLY=1/O_RDWR=2) plus the
+             * status flags we track (just O_APPEND). */
+            int rw = entry->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
+            int fl;
+            if (rw == (FD_FLAG_READ | FD_FLAG_WRITE)) {
+                fl = 2;
+            } else if (rw == FD_FLAG_WRITE) {
+                fl = 1;
+            } else {
+                fl = 0;
+            }
+            if (entry->flags & FD_FLAG_APPEND) {
+                fl |= O_APPEND;
+            }
+            return fl;
+        }
+        case F_SETFL:
+            /* O_APPEND is the only status flag we honor; the rest are accepted. */
+            if (arg & 02000u) {
+                entry->flags |= FD_FLAG_APPEND;
+            } else {
+                entry->flags &= ~(uint32_t)FD_FLAG_APPEND;
+            }
+            return 0;
+        case F_DUPFD:
+        case F_DUPFD_CLOEXEC: {
+            int newfd;
+            fd_entry_t *dst;
+            /* F_DUPFD duplicates onto the LOWEST free fd >= arg (the POSIX
+             * contract). An arg past the table is -EINVAL; no slot at or above
+             * it is -EMFILE. */
+            if (arg >= (uint32_t)MAX_FDS) {
+                return -EINVAL;
+            }
+            newfd = fd_alloc_from(&current_proc->fds, (int)arg);
+            if (newfd < 0) {
+                return -EMFILE;
+            }
+            dst = &current_proc->fds.entries[newfd];
+            /* SIMPLIFICATION: fd_entry_t is itself the open object, so the copy
+             * gives the duplicate its own offset rather than sharing one open
+             * file description the Unix way (same as dup2 here). Honest because
+             * the PCB layout is frozen (the tls_base offset is asserted and hard-
+             * coded in switch.s, so fd_entry cannot grow a description pointer);
+             * the refcounted open-file-description split is Part II work, where
+             * pipes and ptys actually need the shared offset. FD_CLOEXEC is
+             * correctly per-descriptor below. */
+            *dst = *entry;
+            if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+                socket_ref(entry->sock);
+            }
+            if (cmd == F_DUPFD_CLOEXEC) {
+                dst->flags |= FD_FLAG_CLOEXEC;
+            } else {
+                dst->flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
+            }
+            return newfd;
+        }
+        default:
+            return -EINVAL;
+    }
 }
 
 /*
@@ -1380,6 +1722,33 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
     }
 
     return 0;
+}
+
+/*
+ * close_cloexec_fds - drop every descriptor marked close-on-exec.
+ * Called by execve once it has committed to the new image so FD_FLAG_CLOEXEC
+ * descriptors (set via O_CLOEXEC or fcntl F_SETFD) do not leak into it. Mirrors
+ * sys_close's per-type teardown. Scans from fd 0: stdio is not close-on-exec by
+ * default, but a program may set FD_CLOEXEC on it, and Linux honors that here.
+ */
+static void close_cloexec_fds(void)
+{
+    int fd;
+
+    for (fd = 0; fd < MAX_FDS; fd++) {
+        fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+        if (!entry || !(entry->flags & FD_FLAG_CLOEXEC)) {
+            continue;
+        }
+        if (entry->type == FD_TYPE_FRAMEBUFFER) {
+            vga_mode13h_exit();
+            fb_owner_pid = 0;
+        }
+        if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+            socket_unref(entry->sock);
+        }
+        fd_free(&current_proc->fds, fd);
+    }
 }
 
 /*
@@ -1597,6 +1966,10 @@ static int32_t sys_execve(isr_params_t *params)
             return -ENOEXEC;
         }
     }
+
+    /* The exec is now committed (the image is valid). Drop close-on-exec
+     * descriptors before the old address space goes away. */
+    close_cloexec_fds();
 
     /* Free old user pages, then stream the new program in (header + program
      * headers + each PT_LOAD; no 512 KB whole-file buffer). Past this point the
@@ -3527,6 +3900,11 @@ void init_syscall(void)
     _syscall_table[SYS_STAT] = sys_stat;
     _syscall_table[SYS_GETCWD] = sys_getcwd;
     _syscall_table[SYS_STAT64] = sys_stat64;
+    _syscall_table[SYS_FSTAT64] = sys_fstat64;
+    _syscall_table[SYS_FSTATAT64] = sys_fstatat64;
+    _syscall_table[SYS_OPENAT] = sys_openat;
+    _syscall_table[SYS_LLSEEK] = sys__llseek;
+    _syscall_table[SYS_FCNTL64] = sys_fcntl64;
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
     _syscall_table[SYS_SOCKETCALL] = sys_socketcall;

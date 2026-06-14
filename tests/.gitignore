@@ -30,3 +30,4 @@ dirprobe
 musl/hello
 musl/mallocqsort
 musl/cowfork
+musl/catfile

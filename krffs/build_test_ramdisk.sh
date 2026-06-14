@@ -76,6 +76,12 @@ if [ -f "../tests/musl/cowfork" ]; then
     echo "  mcowfork (musl)"
 fi
 
+# The Phase 6 directory/file navigation program, installed as "mcatfile".
+if [ -f "../tests/musl/catfile" ]; then
+    cp "../tests/musl/catfile" "$MOUNT_POINT/mcatfile"
+    echo "  mcatfile (musl)"
+fi
+
 # Also copy hello.txt for file tests
 echo "hello, world" > "$MOUNT_POINT/hello.txt"
 echo "  hello.txt (test data)"

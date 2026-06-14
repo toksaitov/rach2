@@ -44,25 +44,29 @@ void fd_init_stdio(fd_table_t *table)
     table->entries[FD_STDERR].flags = FD_FLAG_WRITE;
 }
 
-int fd_alloc(fd_table_t *table)
+int fd_alloc_from(fd_table_t *table, int minfd)
 {
     int i;
 
-    if (!table) {
+    if (!table || minfd < 0 || minfd >= MAX_FDS) {
         return -1;
     }
 
-    /* Find first free slot (skip 0, 1, 2 which are reserved for stdio) */
-    for (i = 0; i < MAX_FDS; i++) {
+    /* Find the first free slot at or above minfd. The caller then sets type,
+     * node, and flags as needed. */
+    for (i = minfd; i < MAX_FDS; i++) {
         if (table->entries[i].type == FD_TYPE_NONE) {
-            /* Mark as allocated but type not yet set */
-            /* Caller should set type, node, flags as needed */
             return i;
         }
     }
 
-    /* No free slots */
+    /* No free slot at or above minfd */
     return -1;
+}
+
+int fd_alloc(fd_table_t *table)
+{
+    return fd_alloc_from(table, 0);
 }
 
 int fd_free(fd_table_t *table, int fd)

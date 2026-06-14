@@ -22,11 +22,42 @@ typedef unsigned int size_t;
 #define SYS_CLOSE      6
 #define SYS_CREAT      8
 #define SYS_UNLINK     10
+#define SYS_LLSEEK     140
+#define SYS_FSTAT64    197
+#define SYS_FCNTL64    221
 #define SYS_MKDIR      39
 #define SYS_RMDIR      40
 #define SYS_GETDENTS64 220
+#define SYS_OPENAT     295
+#define SYS_FSTATAT64  300
+
+#define F_DUPFD    0
+#define F_GETFD    1
+#define F_SETFD    2
+#define FD_CLOEXEC 1
 
 #define O_RDONLY 0
+#define O_WRONLY 1
+#define O_CREAT  0100
+#define O_APPEND 02000
+
+/* Special dir fd: openat/fstatat resolve relative to the current dir ("/"). */
+#define AT_FDCWD (-100)
+
+/* File-type bits in st_mode. */
+#define S_IFMT  0170000
+#define S_IFREG 0100000
+#define S_IFDIR 0040000
+
+/*
+ * fstat64/fstatat64 fill a Linux i386 stat64 image (the kernel's struct
+ * linux_stat64, 96 bytes). The probe only checks two fields, read straight from
+ * the buffer at their ABI byte offsets: st_mode is a 32-bit field at +16, and
+ * st_size's low 32 bits sit at +44.
+ */
+#define STAT64_SIZE       96
+#define STAT64_MODE(b)    (*(unsigned int *)((b) + 16))
+#define STAT64_SIZE_LO(b) (*(unsigned int *)((b) + 44))
 
 static int syscall1(int n, int a)
 {
@@ -46,6 +77,16 @@ static int syscall3(int n, int a, int b, int c)
 {
     int r;
     __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
+
+static int syscall5(int n, int a, int b, int c, int d, int e)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
+                         : "memory");
     return r;
 }
 
@@ -169,6 +210,99 @@ void _start(void)
     syscall1(SYS_UNLINK, (int)(size_t)"/e/a");
     syscall1(SYS_UNLINK, (int)(size_t)"/e/b");
     check(syscall1(SYS_RMDIR, (int)(size_t)"/e") == 0, "rmdir emptied /e");
+
+    /* 9. The *at API on a regular file: openat, fstat64, _llseek, fcntl64. */
+    fd = syscall2(SYS_CREAT, (int)(size_t)"/g", 0644);
+    check(fd >= 0, "creat /g");
+    if (fd >= 0) {
+        check(sys_write(fd, "hello", 5) == 5, "write /g");
+        syscall1(SYS_CLOSE, fd);
+    }
+    /* openat with AT_FDCWD resolves from the root, like open. */
+    fd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/g", O_RDONLY);
+    check(fd >= 0, "openat /g");
+    if (fd >= 0) {
+        unsigned char st[STAT64_SIZE] = {0}; /* fstat64 overwrites; init quiets cppcheck */
+        long long result = 0;
+        char c = 0;
+
+        /* fstat64 the descriptor: a 5-byte regular file. */
+        check(syscall2(SYS_FSTAT64, fd, (int)(size_t)st) == 0, "fstat64 /g");
+        check((STAT64_MODE(st) & S_IFMT) == S_IFREG, "fstat64 /g is regular");
+        check(STAT64_SIZE_LO(st) == 5, "fstat64 /g size is 5");
+
+        /* _llseek SEEK_SET to offset 1; the result offset must come back as 1. */
+        check(syscall5(SYS_LLSEEK, fd, 0, 1, (int)(size_t)&result, 0) == 0, "_llseek /g");
+        check(result == 1, "_llseek result offset is 1");
+        check(sys_read(fd, &c, 1) == 1 && c == 'e', "read byte after seek is 'e'");
+
+        /* FD_CLOEXEC round-trip through fcntl64. */
+        check(syscall3(SYS_FCNTL64, fd, F_SETFD, FD_CLOEXEC) == 0, "fcntl F_SETFD CLOEXEC");
+        check(syscall3(SYS_FCNTL64, fd, F_GETFD, 0) == FD_CLOEXEC, "fcntl F_GETFD CLOEXEC");
+
+        syscall1(SYS_CLOSE, fd);
+    }
+
+    /* 10. fstatat64 by path: the file is regular, a directory reports S_IFDIR. */
+    {
+        unsigned char st[STAT64_SIZE] = {0}; /* fstatat64 overwrites; init quiets cppcheck */
+
+        check(syscall5(SYS_FSTATAT64, AT_FDCWD, (int)(size_t)"/g", (int)(size_t)st, 0, 0) == 0,
+              "fstatat64 /g");
+        check((STAT64_MODE(st) & S_IFMT) == S_IFREG && STAT64_SIZE_LO(st) == 5,
+              "fstatat64 /g regular, size 5");
+
+        check(syscall2(SYS_MKDIR, (int)(size_t)"/h", 0755) == 0, "mkdir /h");
+        check(syscall5(SYS_FSTATAT64, AT_FDCWD, (int)(size_t)"/h", (int)(size_t)st, 0, 0) == 0,
+              "fstatat64 /h");
+        check((STAT64_MODE(st) & S_IFMT) == S_IFDIR, "fstatat64 /h is directory");
+        check(syscall1(SYS_RMDIR, (int)(size_t)"/h") == 0, "rmdir /h");
+    }
+
+    /* 11. O_APPEND forces writes to EOF; F_DUPFD honors its minimum fd; O_CREAT
+     *     stamps the requested mode. */
+    {
+        unsigned char st[STAT64_SIZE] = {0}; /* fstat64 overwrites; init quiets cppcheck */
+        long long result = 0;
+        char rb[8];
+        int dupfd, r;
+
+        /* /g holds "hello". Open O_APPEND, seek to 0, write '!': the append
+         * contract must ignore the seek and place it at EOF -> "hello!". */
+        fd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/g", O_WRONLY | O_APPEND);
+        check(fd >= 0, "openat /g O_APPEND");
+        if (fd >= 0) {
+            syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&result, 0); /* SEEK_SET 0 */
+            check(sys_write(fd, "!", 1) == 1, "append write /g");
+            syscall1(SYS_CLOSE, fd);
+        }
+        fd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/g", O_RDONLY);
+        if (fd >= 0) {
+            r = sys_read(fd, rb, sizeof rb);
+            check(r == 6 && rb[5] == '!', "O_APPEND wrote at EOF (hello!)");
+
+            /* F_DUPFD must return the lowest free fd >= 10, not just any fd. */
+            dupfd = syscall3(SYS_FCNTL64, fd, F_DUPFD, 10);
+            check(dupfd >= 10, "F_DUPFD honors minimum fd");
+            if (dupfd >= 0) {
+                syscall1(SYS_CLOSE, dupfd);
+            }
+            syscall1(SYS_CLOSE, fd);
+        }
+
+        /* O_CREAT must apply the requested mode (openat's mode is the 4th arg,
+         * passed in ESI, so use the 5-arg form). */
+        fd = syscall5(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/m", O_WRONLY | O_CREAT, 0644, 0);
+        check(fd >= 0, "openat /m O_CREAT");
+        if (fd >= 0) {
+            check(syscall2(SYS_FSTAT64, fd, (int)(size_t)st) == 0, "fstat64 /m");
+            check((STAT64_MODE(st) & 0777) == 0644, "O_CREAT applied mode 0644");
+            syscall1(SYS_CLOSE, fd);
+        }
+        check(syscall1(SYS_UNLINK, (int)(size_t)"/m") == 0, "unlink /m");
+    }
+
+    check(syscall1(SYS_UNLINK, (int)(size_t)"/g") == 0, "unlink /g");
 
     if (fails == 0) {
         puts("DIRPROBE OK");

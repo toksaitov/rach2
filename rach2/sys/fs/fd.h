@@ -37,9 +37,10 @@ typedef enum {
 /*
  * File descriptor flags (for open mode)
  */
-#define FD_FLAG_READ   0x01
-#define FD_FLAG_WRITE  0x02
-#define FD_FLAG_APPEND 0x04
+#define FD_FLAG_READ    0x01
+#define FD_FLAG_WRITE   0x02
+#define FD_FLAG_APPEND  0x04
+#define FD_FLAG_CLOEXEC 0x08  /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
 
 /*
  * Forward declarations for the types a descriptor can point at.
@@ -83,6 +84,13 @@ void fd_init_stdio(fd_table_t *table);
  * Returns fd number (>= 0) on success, -1 if table full
  */
 int fd_alloc(fd_table_t *table);
+
+/*
+ * Allocate the lowest free descriptor with number >= minfd.
+ * This is the fcntl(F_DUPFD) contract. Returns the fd (>= 0) on success, -1 if
+ * minfd is out of range or no free slot exists at or above it.
+ */
+int fd_alloc_from(fd_table_t *table, int minfd);
 
 /*
  * Free a file descriptor

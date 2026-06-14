@@ -39,6 +39,11 @@
 #define SYS_UNAME    122
 #define SYS_WRITEV   146
 #define SYS_GETCWD   183
+#define SYS_LLSEEK   140
+#define SYS_FSTAT64  197
+#define SYS_FCNTL64  221
+#define SYS_OPENAT   295
+#define SYS_FSTATAT64 300
 #define SYS_STAT64   195
 #define SYS_GETDENTS64 220
 #define SYS_SET_THREAD_AREA 243
