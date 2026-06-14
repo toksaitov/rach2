@@ -91,12 +91,19 @@ The honest hobby-OS line, drawn at the *right* place (not at the tree structure)
   hashing or B-trees); fine at teaching scale.
 * **No hard links, no symlink chains, no journaling.** `AT_SYMLINK_NOFOLLOW` is
   accepted but inert.
-* **Descriptors are not yet refcounted open-file descriptions.** `fd_entry_t` is
-  the open object, so `dup`/`fork`/`F_DUPFD` give the copy its own offset rather
-  than a shared one, and a directory fd is not pinned against `rmdir` (a stale
-  dirfd is rejected defensively by a round-trip check). The two-level
-  descriptor → refcounted open-file-description split is **Part II** work, where
-  pipes and ptys need the shared offset. `FD_CLOEXEC` is already per-descriptor.
+* **Open-file descriptions are refcounted (the shared seek offset).** `fd_entry_t`
+  holds a `struct open_file *` -- a small refcounted cell from a fixed pool
+  (`fs/fd.c`) carrying the seek offset -- so `dup`/`dup2`/`fork`/`F_DUPFD` share one
+  offset the Unix way (a read or seek through one descriptor is seen by the
+  others), and closing one descriptor leaves the duplicates working until the last
+  reference goes; `release_fd_table` drops every reference when a process dies, so
+  the pool never leaks. The backing object (KRFFS node / socket) and `FD_CLOEXEC`
+  stay per-descriptor (a socket is refcounted per fd; `dup`/`dup2` clear the new
+  fd's CLOEXEC, `execve` closes the marked ones). Probe: `tests/ofdprobe.c`
+  (`OFDPROBE OK`) and the musl `tests/musl/ofdmusl.c` (`OFDMUSL OK`). Remaining
+  caveat: a directory fd is still not pinned against `rmdir` (a stale dirfd is
+  rejected defensively by a round-trip check) -- pinning the inode in the
+  description is a later refinement.
 * **The interactive host FUSE mount stays flat.** Images gain directories through
   `krffs/stagetree.krffs` (which writes v2 directory nodes directly) and the
   in-guest `mkdir`; teaching the 1100-line FUSE mount to browse directories is a

@@ -49,14 +49,29 @@ struct krffs_node;
 struct socket;
 
 /*
- * File descriptor entry
+ * Open-file description (OFD): the shared, refcounted seek position behind one or
+ * more descriptors. dup/dup2/fork copy the fd's pointer to this and bump the
+ * refcount, so the duplicates share one seek offset (the POSIX open-file
+ * description semantics) instead of each carrying its own. It is freed back to a
+ * static pool when the last referencing descriptor closes. Allocated from a fixed
+ * pool (see fd.c); refcount 0 means the slot is free.
+ */
+struct open_file {
+    uint32_t refcount;           /* Number of descriptors sharing this offset */
+    uint32_t offset;             /* Shared read/write offset */
+};
+
+/*
+ * File descriptor entry. The backing object (type/node/sock) and its own
+ * reference (sockets are refcounted per descriptor) live here; only the seek
+ * offset is shared through the open-file description ofd.
  */
 typedef struct fd_entry {
     fd_type_t type;              /* Type of this fd (NONE, CONSOLE, FILE) */
     struct krffs_node *node;     /* Pointer to KRFFS node (for FILE type) */
     struct socket *sock;         /* Pointer to socket (for SOCKET type) */
-    uint32_t offset;             /* Current read/write offset */
-    uint32_t flags;              /* Open flags (READ, WRITE, APPEND) */
+    struct open_file *ofd;       /* Shared open-file description (the offset) */
+    uint32_t flags;              /* Open flags (READ, WRITE, APPEND, CLOEXEC) */
 } fd_entry_t;
 
 /*
@@ -103,6 +118,15 @@ int fd_free(fd_table_t *table, int fd);
  * Returns pointer to entry, or NULL if fd invalid or free
  */
 fd_entry_t *fd_get(fd_table_t *table, int fd);
+
+/*
+ * Add / drop a reference to an open-file description. dup/dup2/fork point a new
+ * descriptor at an existing OFD and call fd_ofd_ref so the shared seek offset
+ * outlives the original; fd_free calls fd_ofd_unref. (The OFD frees itself back
+ * to the pool when its last reference goes.)
+ */
+void fd_ofd_ref(struct open_file *ofd);
+void fd_ofd_unref(struct open_file *ofd);
 
 /*
  * Check if a file descriptor is valid (allocated)

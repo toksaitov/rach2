@@ -70,6 +70,7 @@ volatile process_t *stdin_waiting_proc = NULL;  /* Process blocked on stdin */
 static void run_self_tests(void);
 void shell_loop(void);  /* Non-static: called from syscall.c when init exits */
 void shell_reset_input(void);  /* Non-static: called from syscall.c exit paths */
+void release_fd_table(fd_table_t *table);  /* Defined in syscall.c; fd teardown */
 static void process_command(const char *cmd);
 static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
@@ -176,6 +177,11 @@ void terminate_current_process(int32_t signo)
             serial_printf("terminate: woke parent process %d\n", parent->pid);
         }
     }
+
+    /* Release the descriptor table (socket refs + shared open-file descriptions),
+     * the same teardown sys_exit does, so a signal-killed process leaks no
+     * sockets or OFDs. */
+    release_fd_table(&current_proc->fds);
 
     /* Clean up user pages, then switch off the dying address space BEFORE
      * freeing its page directory: free_page_directory refuses to free whatever

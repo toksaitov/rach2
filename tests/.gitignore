@@ -36,4 +36,6 @@ musl/timemusl
 musl/sigmusl
 musl/ctrlcmusl
 musl/tcpsendrecv
+musl/ofdmusl
 sigprobe
+ofdprobe

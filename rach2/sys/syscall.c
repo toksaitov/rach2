@@ -143,6 +143,33 @@ typedef int32_t (*syscall_fn_t)(isr_params_t *);
 static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 
 /*
+ * Release every descriptor a dying process still holds: drop each socket
+ * reference and each shared open-file description (the seek offset), and clear
+ * the slot. Called from both exit paths -- sys_exit here and
+ * terminate_current_process (signal death) via an extern -- so sockets, port
+ * bindings, TCBs, and OFDs are freed however a process dies. Idempotent: a
+ * second call sees an empty table (fd_free skips free slots).
+ */
+void release_fd_table(fd_table_t *table)
+{
+    int fdi;
+
+    if (!table) {
+        return;
+    }
+    for (fdi = 0; fdi < MAX_FDS; fdi++) {
+        fd_entry_t *e = &table->entries[fdi];
+        if (e->type == FD_TYPE_NONE) {
+            continue;
+        }
+        if (e->type == FD_TYPE_SOCKET && e->sock) {
+            socket_unref(e->sock);
+        }
+        fd_free(table, fdi); /* unref the OFD and clear the slot */
+    }
+}
+
+/*
  * sys_exit - terminate current process
  * Args: EBX = exit status
  * Returns: does not return
@@ -163,18 +190,11 @@ static int32_t sys_exit(isr_params_t *params)
         fb_owner_pid = 0;
     }
 
-    /* Release any sockets this process still holds open, so the slots,
-     * port bindings, and TCBs are not leaked. */
+    /* Release the descriptor table: drop each socket reference and each shared
+     * open-file description, so slots, port bindings, TCBs, and OFDs are not
+     * leaked when the process dies. */
     if (current_proc) {
-        int fdi;
-        for (fdi = 0; fdi < MAX_FDS; fdi++) {
-            fd_entry_t *e = &current_proc->fds.entries[fdi];
-            if (e->type == FD_TYPE_SOCKET && e->sock) {
-                socket_unref(e->sock);
-                e->sock = NULL;
-                e->type = FD_TYPE_NONE;
-            }
-        }
+        release_fd_table(&current_proc->fds);
     }
 
     k_printf("\nProcess exited with status %d\n", status);
@@ -370,18 +390,18 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         /* O_APPEND: every write lands at the current end of file, regardless of
          * any intervening seek (the POSIX append contract). */
         if (entry->flags & FD_FLAG_APPEND) {
-            entry->offset = (uint32_t)entry->node->data_size;
+            entry->ofd->offset = (uint32_t)entry->node->data_size;
         }
 
         /* Write via the node the descriptor already resolved (a subdir file's
          * node->name is only its basename, so re-resolving by name would fail).
          * krffs_write_node updates entry->node if a grow relocates the file. */
         written = krffs_write_node(&entry->node, (const char __force *)buf, count,
-                                   entry->offset);
+                                   entry->ofd->offset);
         if (written < 0) {
             return -EIO;  /* krffs reports failure with a bare -1 */
         }
-        entry->offset += (uint32_t)written;
+        entry->ofd->offset += (uint32_t)written;
         return written;
     }
 
@@ -654,7 +674,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         entry = &current_proc->fds.entries[fd];
         entry->type = FD_TYPE_FRAMEBUFFER;
         entry->node = NULL;
-        entry->offset = 0;
+        entry->ofd->offset = 0;
         entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
 
         /* Switch to Mode 13h and record owner */
@@ -684,7 +704,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         entry = &current_proc->fds.entries[fd];
         entry->type = FD_TYPE_MOUSE;
         entry->node = NULL;
-        entry->offset = 0;
+        entry->ofd->offset = 0;
         entry->flags = FD_FLAG_READ;
 
         /* Clear any stale mouse packets */
@@ -706,7 +726,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         entry = &current_proc->fds.entries[fd];
         entry->type = FD_TYPE_DIR;
         entry->node = NULL;  /* NULL indicates root directory */
-        entry->offset = 0;   /* Position in directory listing */
+        entry->ofd->offset = 0;   /* Position in directory listing */
         entry->flags = FD_FLAG_READ;
         if (flags & O_CLOEXEC) {
             entry->flags |= FD_FLAG_CLOEXEC; /* opendir("/") passes O_CLOEXEC */
@@ -763,7 +783,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         entry->type = KRFFS_IS_DIR(node->mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
         entry->node = node;
     }
-    entry->offset = 0;
+    entry->ofd->offset = 0;
 
     /* Convert Linux flags to internal flags */
     /* O_RDONLY=0, O_WRONLY=1, O_RDWR=2 */
@@ -916,7 +936,7 @@ static int32_t sys_lseek(isr_params_t *params)
             new_offset = offset;
             break;
         case 1:  /* SEEK_CUR */
-            new_offset = (int32_t)entry->offset + offset;
+            new_offset = (int32_t)entry->ofd->offset + offset;
             break;
         case 2:  /* SEEK_END */
             new_offset = (int32_t)file_size + offset;
@@ -930,7 +950,7 @@ static int32_t sys_lseek(isr_params_t *params)
         return -EINVAL;
     }
 
-    entry->offset = (uint32_t)new_offset;
+    entry->ofd->offset = (uint32_t)new_offset;
     return new_offset;
 }
 
@@ -1165,15 +1185,55 @@ static int32_t sys_read(isr_params_t *params)
         /* Read via the resolved node (see the write path) -- the descriptor's
          * node->name is only the basename for a file in a subdirectory. */
         bytes_read = krffs_read_node(entry->node, (char __force *)buf, count,
-                                     entry->offset);
+                                     entry->ofd->offset);
         if (bytes_read < 0) {
             return -EIO;  /* krffs reports failure with a bare -1 */
         }
-        entry->offset += (uint32_t)bytes_read;
+        entry->ofd->offset += (uint32_t)bytes_read;
         return bytes_read;
     }
 
     return -EBADF;
+}
+
+/*
+ * sys_dup - duplicate a descriptor onto the lowest free fd (POSIX dup).
+ * Args: EBX = oldfd. Returns the new fd, or -errno. The duplicate SHARES oldfd's
+ * open-file description (shared seek offset); a socket gains a reference; the new
+ * fd's FD_CLOEXEC is clear.
+ */
+static int32_t sys_dup(isr_params_t *params)
+{
+    int oldfd = (int)params->ebx;
+    fd_entry_t *entry;
+    fd_entry_t *dst;
+    int newfd;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(&current_proc->fds, oldfd);
+    if (!entry) {
+        return -EBADF;
+    }
+
+    newfd = fd_alloc_from(&current_proc->fds, 0);
+    if (newfd < 0) {
+        return -EMFILE;
+    }
+    /* entry still points at entries[oldfd] (a fixed array; alloc did not move it). */
+    dst = &current_proc->fds.entries[newfd];
+    fd_ofd_unref(dst->ofd); /* drop the fresh OFD; share oldfd's instead */
+    dst->type  = entry->type;
+    dst->node  = entry->node;
+    dst->sock  = entry->sock;
+    dst->ofd   = entry->ofd;
+    fd_ofd_ref(dst->ofd);
+    dst->flags = entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
+    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+        socket_ref(entry->sock);
+    }
+    return newfd;
 }
 
 /*
@@ -1217,13 +1277,16 @@ static int32_t sys_dup2(isr_params_t *params)
         fd_free(&current_proc->fds, newfd);
     }
 
-    /* Copy the entry. A duplicated socket gains another reference. */
+    /* Duplicate the descriptor: it SHARES the open-file description (so the seek
+     * offset is shared, per POSIX), gaining a reference; a duplicated socket gains
+     * another reference too; and dup2 leaves the new fd's CLOEXEC clear. */
     new_entry = &current_proc->fds.entries[newfd];
-    new_entry->type = old_entry->type;
-    new_entry->node = old_entry->node;
-    new_entry->sock = old_entry->sock;
-    new_entry->offset = old_entry->offset;
-    new_entry->flags = old_entry->flags;
+    new_entry->type  = old_entry->type;
+    new_entry->node  = old_entry->node;
+    new_entry->sock  = old_entry->sock;
+    new_entry->ofd   = old_entry->ofd;
+    fd_ofd_ref(new_entry->ofd);
+    new_entry->flags = old_entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
 
     if (new_entry->type == FD_TYPE_SOCKET && new_entry->sock) {
         socket_ref(new_entry->sock);
@@ -1613,7 +1676,7 @@ static int32_t sys__llseek(isr_params_t *params)
             new_off = off;
             break;
         case 1: /* SEEK_CUR */
-            new_off = (long long)entry->offset + off;
+            new_off = (long long)entry->ofd->offset + off;
             break;
         case 2: /* SEEK_END */
             new_off = (long long)entry->node->data_size + off;
@@ -1635,7 +1698,7 @@ static int32_t sys__llseek(isr_params_t *params)
         return -EFAULT;
     }
 
-    entry->offset = (uint32_t)new_off;
+    entry->ofd->offset = (uint32_t)new_off;
     if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
         return -EFAULT;
     }
@@ -1722,15 +1785,17 @@ static int32_t sys_fcntl64(isr_params_t *params)
                 return -EMFILE;
             }
             dst = &current_proc->fds.entries[newfd];
-            /* SIMPLIFICATION: fd_entry_t is itself the open object, so the copy
-             * gives the duplicate its own offset rather than sharing one open
-             * file description the Unix way (same as dup2 here). Honest because
-             * the PCB layout is frozen (the tls_base offset is asserted and hard-
-             * coded in switch.s, so fd_entry cannot grow a description pointer);
-             * the refcounted open-file-description split is Part II work, where
-             * pipes and ptys actually need the shared offset. FD_CLOEXEC is
-             * correctly per-descriptor below. */
-            *dst = *entry;
+            /* The duplicate SHARES oldfd's open-file description (so the seek
+             * offset is shared, per POSIX). fd_alloc_from just gave dst a fresh
+             * OFD; drop it and point dst at oldfd's, taking a reference. A shared
+             * socket gains a reference too; FD_CLOEXEC is per-descriptor. */
+            fd_ofd_unref(dst->ofd);
+            dst->type  = entry->type;
+            dst->node  = entry->node;
+            dst->sock  = entry->sock;
+            dst->ofd   = entry->ofd;
+            fd_ofd_ref(dst->ofd);
+            dst->flags = entry->flags;
             if (entry->type == FD_TYPE_SOCKET && entry->sock) {
                 socket_ref(entry->sock);
             }
@@ -1987,6 +2052,11 @@ static void exec_fail_destroyed(void)
     if (parent && parent->state == PROC_BLOCKED) {
         parent->state = PROC_READY;
     }
+
+    /* Release the descriptor table (socket refs + open-file descriptions), the
+     * same teardown sys_exit and terminate do, so a failed-exec death leaks no
+     * sockets or OFDs. */
+    release_fd_table(&current_proc->fds);
     schedule();
 
     /* schedule() returned -> nothing else is runnable. The address space is
@@ -2291,6 +2361,11 @@ static int32_t sys_fork(isr_params_t *params)
         return -EAGAIN;
     }
 
+    /* alloc_process gave the child its own stdio open-file descriptions; release
+     * them now (before any failure path or the fd-table copy below overwrites the
+     * table), or those OFDs would be orphaned and leak the pool on every fork. */
+    release_fd_table(&child->fds);
+
     /* Clone page directory */
     child_dir = clone_page_directory();
     if (!child_dir) {
@@ -2346,12 +2421,18 @@ static int32_t sys_fork(isr_params_t *params)
     child->sig_blocked = parent->sig_blocked;
     child->sig_pending = 0;
 
-    /* Copy file descriptor table. Inherited sockets gain a reference each so
-     * the parent and child release independently. */
+    /* Copy file descriptor table. The child shares the parent's open-file
+     * descriptions (so a seek in one is seen by the other, per POSIX), so each
+     * inherited OFD gains a reference; inherited sockets gain one too, so the
+     * parent and child release independently. */
     k_memcpy(&child->fds, &parent->fds, sizeof(fd_table_t));
     {
         int fdi;
         for (fdi = 0; fdi < MAX_FDS; fdi++) {
+            if (child->fds.entries[fdi].type == FD_TYPE_NONE) {
+                continue;
+            }
+            fd_ofd_ref(child->fds.entries[fdi].ofd);
             if (child->fds.entries[fdi].type == FD_TYPE_SOCKET &&
                 child->fds.entries[fdi].sock) {
                 socket_ref(child->fds.entries[fdi].sock);
@@ -2619,7 +2700,7 @@ static int32_t sys_creat(isr_params_t *params)
     entry = &current_proc->fds.entries[fd];
     entry->type = FD_TYPE_FILE;
     entry->node = node;
-    entry->offset = 0;
+    entry->ofd->offset = 0;
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
 
     return fd;
@@ -2992,8 +3073,8 @@ static int32_t sys_getdents64(isr_params_t *params)
         return -EIO;
     }
 
-    /* entry->offset tracks which file index we're at */
-    target_index = entry->offset;
+    /* entry->ofd->offset tracks which file index we're at */
+    target_index = entry->ofd->offset;
 
     /* List only the children of THIS directory: entry->node is the directory
      * (NULL == the root), so match nodes whose parent_id is its id. */
@@ -3043,7 +3124,7 @@ static int32_t sys_getdents64(isr_params_t *params)
                 }
 
                 bytes_written += rec_len;
-                entry->offset = file_index + 1;  /* Update position for next call */
+                entry->ofd->offset = file_index + 1;  /* Update position for next call */
             }
             file_index++;
         }
@@ -4039,7 +4120,7 @@ static int32_t do_socket(int domain, int type, int protocol)
     entry->type   = FD_TYPE_SOCKET;
     entry->sock   = sock;
     entry->node   = NULL;
-    entry->offset = 0;
+    entry->ofd->offset = 0;
     entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
     return fd;
 }
@@ -4296,7 +4377,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     new_entry->type   = FD_TYPE_SOCKET;
     new_entry->sock   = conn_sock;
     new_entry->node   = NULL;
-    new_entry->offset = 0;
+    new_entry->ofd->offset = 0;
     new_entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
 
     /* Report the peer address, truncated to the caller's declared capacity. On a
@@ -4786,6 +4867,7 @@ void init_syscall(void)
     _syscall_table[SYS_LSEEK] = sys_lseek;
     _syscall_table[SYS_RENAME] = sys_rename;
     _syscall_table[SYS_IOCTL] = sys_ioctl;
+    _syscall_table[SYS_DUP] = sys_dup;
     _syscall_table[SYS_DUP2] = sys_dup2;
     _syscall_table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
     _syscall_table[SYS_STAT] = sys_stat;

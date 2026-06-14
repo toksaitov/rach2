@@ -48,7 +48,7 @@ for prog in hello filetest forktest shelltest dirtest stattest \
             touchtest rmtest mvtest lstest stdintest dup2test \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
             tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
-            timeprobe sigprobe; do
+            timeprobe sigprobe ofdprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -105,6 +105,12 @@ fi
 if [ -f "../tests/musl/tcpsendrecv" ]; then
     cp "../tests/musl/tcpsendrecv" "$MOUNT_POINT/mtcpsr"
     echo "  mtcpsr (musl)"
+fi
+
+# The Phase 11 shared-open-file-offset program, installed as "mofd".
+if [ -f "../tests/musl/ofdmusl" ]; then
+    cp "../tests/musl/ofdmusl" "$MOUNT_POINT/mofd"
+    echo "  mofd (musl)"
 fi
 
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined

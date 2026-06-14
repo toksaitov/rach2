@@ -33,6 +33,7 @@
 #define SYS_MMAP2    192
 #define SYS_SOCKETCALL 102
 #define SYS_IOCTL     54
+#define SYS_DUP       41
 #define SYS_DUP2      63
 #define SYS_GETTIMEOFDAY 78
 #define SYS_STAT     106
