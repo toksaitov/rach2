@@ -100,6 +100,14 @@ isr_common_handler:
 # error, iret frame)
 .globl isr_return
 isr_return:
+    # Before returning to user mode, deliver any pending signal: this may rewrite
+    # the trapframe (run a handler) or not return at all (default-terminate). It
+    # is a no-op when returning to kernel mode (it checks the saved CS RPL). Runs
+    # with IF=0, so it cannot be preempted. esp still points at the trapframe.
+    pushl %esp
+    call deliver_signals
+    addl $4, %esp
+
     # Restore each saved segment register from its own slot (popped gs, fs, es,
     # ds), so the interrupted context's %gs TLS pointer is put back exactly.
     popl %eax
@@ -171,6 +179,13 @@ irq_common_handler:
     pushl %esp          # Push pointer to isr_params_t structure
     call _irq_router
     addl $4, %esp       # Clean up pushed pointer
+
+    # Deliver any pending signal before returning to user (no-op in kernel mode;
+    # the IRQ may have switched processes, so esp/current_proc are the resumed
+    # process's). IF is still 0.
+    pushl %esp
+    call deliver_signals
+    addl $4, %esp
 
     # Restore each saved segment register from its own slot (gs, fs, es, ds).
     popl %eax

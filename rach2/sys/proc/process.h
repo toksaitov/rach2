@@ -3,6 +3,7 @@
 
 #include "../lib/kdef.h"
 #include "../lib/kint.h"
+#include "../lib/ksignal.h"
 #include "../fs/fd.h"
 #include "../mm/vm.h"
 
@@ -67,6 +68,11 @@ struct process {
     uint32_t tls_base;      /* Per-process %gs TLS base (set_thread_area) */
     vm_space_t vm;          /* Address-space map (VMAs + brk + stack limit) */
     uint32_t wakeup_tick;   /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
+    /* Signal state (Phase 8): per-signal disposition (sigacts[signo], index 0
+     * unused) plus 64-bit pending and blocked masks (bit signo-1). */
+    struct k_sigaction sigacts[KSIG_MAX + 1];
+    uint64_t sig_pending;
+    uint64_t sig_blocked;
 };
 
 typedef struct process process_t;
@@ -108,6 +114,26 @@ process_t *get_process(uint32_t pid);
  * (the current kernel tick) becomes READY. Called from the timer interrupt.
  */
 void proc_wake_sleepers(uint32_t now);
+
+/*
+ * Post signal `signo` to `target` (set its pending bit; wake it if blocked).
+ * Delivered on the target's next return to user mode. Defined in syscall.c.
+ */
+void signal_post(process_t *target, int signo);
+
+/*
+ * Non-zero if the current process has a deliverable (pending, unblocked) signal.
+ * Blocking syscall loops poll it to break out so the signal is acted on. Defined
+ * in syscall.c.
+ */
+int signal_pending(void);
+
+/*
+ * Deliver a pending signal to the current process on the way back to user mode.
+ * Called from the ISR/IRQ return path with the trapframe. Defined in syscall.c.
+ */
+struct isr_params;
+void deliver_signals(struct isr_params *tf);
 
 /*
  * Context switch between two processes

@@ -164,11 +164,16 @@ void terminate_current_process(int32_t signo)
     current_proc->state = PROC_ZOMBIE;
     current_proc->exit_code = signo & 0x7F;
 
-    /* Wake up parent if it's blocked (likely in waitpid) */
+    /* Notify the parent: post SIGCHLD (a reaper handler relies on it for
+     * signal-killed children too, not just normal exits) and wake it if blocked
+     * in waitpid. */
     parent = get_process(current_proc->parent_pid);
-    if (parent && parent->state == PROC_BLOCKED) {
-        parent->state = PROC_READY;
-        serial_printf("terminate: woke parent process %d\n", parent->pid);
+    if (parent) {
+        signal_post(parent, SIGCHLD);
+        if (parent->state == PROC_BLOCKED) {
+            parent->state = PROC_READY;
+            serial_printf("terminate: woke parent process %d\n", parent->pid);
+        }
     }
 
     /* Clean up user pages, then switch off the dying address space BEFORE
@@ -254,11 +259,14 @@ static void kill_foreground_process(void)
         return;
     }
 
-    serial_printf("CTRL+C: killing process %d\n", current_proc->pid);
+    serial_printf("CTRL+C: signaling process %d\n", current_proc->pid);
     k_puts("^C");
 
-    terminate_current_process(SIGINT);  /* CTRL+C: killed by SIGINT */
-    /* Never reached for a user process */
+    /* Post SIGINT through the disposition: a handler can catch it, otherwise the
+     * default action terminates. Delivered when this keyboard IRQ returns to the
+     * interrupted user process (a process blocked in a syscall is not yet
+     * interrupted -- EINTR is deferred to Part II-A). */
+    signal_post(current_proc, SIGINT);
 }
 
 static void keyboard_handler(isr_params_t *params)

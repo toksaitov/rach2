@@ -57,6 +57,12 @@
 #define SYS_GETEGID32 202
 #define SYS_CLOCK_GETTIME 265
 #define SYS_GETRANDOM 355
+#define SYS_KILL 37
+#define SYS_RT_SIGRETURN 173
+#define SYS_RT_SIGACTION 174
+#define SYS_RT_SIGPROCMASK 175
+#define SYS_TKILL 238
+#define SYS_TGKILL 270
 
 /*
  * Size of the syscall dispatch table

@@ -1,17 +1,86 @@
 #ifndef _KSIGNAL_H_
 #define _KSIGNAL_H_
 
+#include "kint.h"
+
 /*
- * Linux i386 signal numbers.
- *
- * Phase 5 (copy-on-write fork) uses a few of these only for the wait-status
- * encoding: a process killed by a fault stores its signal number so the parent's
- * waitpid/wait4 reports WIFSIGNALED/WTERMSIG correctly. The actual signal
- * delivery machinery (handlers, masks, sigreturn) arrives in Phase 8; the numbers
- * are stable, so they live here from the start.
+ * Linux i386 signals: numbers, the kernel-side sigaction, and the small policy
+ * helpers (default action per signal). The delivery machinery -- per-process
+ * disposition + pending/blocked masks, delivery on return-to-user via a signal
+ * frame on the user stack, and rt_sigreturn -- lives in syscall.c and the ISR
+ * return path. Standard signals only (1..64); no real-time queueing.
  */
+#define SIGHUP   1
 #define SIGINT   2  /* terminal interrupt (CTRL+C) */
+#define SIGQUIT  3
+#define SIGILL   4
+#define SIGTRAP  5
+#define SIGABRT  6  /* abort() */
+#define SIGBUS   7
+#define SIGFPE   8
 #define SIGKILL  9  /* uncatchable kill */
-#define SIGSEGV 11  /* invalid memory reference */
+#define SIGUSR1  10
+#define SIGSEGV  11 /* invalid memory reference */
+#define SIGUSR2  12
+#define SIGPIPE  13
+#define SIGALRM  14
+#define SIGTERM  15 /* termination */
+#define SIGSTKFLT 16
+#define SIGCHLD  17 /* child stopped or exited */
+#define SIGCONT  18
+#define SIGSTOP  19 /* uncatchable stop */
+#define SIGTSTP  20
+#define SIGTTIN  21
+#define SIGTTOU  22
+#define SIGURG   23
+#define SIGXCPU  24
+#define SIGXFSZ  25
+#define SIGVTALRM 26
+#define SIGPROF  27
+#define SIGWINCH 28
+#define SIGIO    29
+#define SIGPWR   30
+#define SIGSYS   31
+
+#define KSIG_MAX 64 /* signals 1..64 are deliverable */
+
+/* Disposition sentinels stored where a handler address goes. */
+#define KSIG_DFL 0u /* default action */
+#define KSIG_IGN 1u /* ignore */
+
+/* sa_flags bits the kernel honors (Linux i386 values). */
+#define SA_SIGINFO   0x00000004u
+#define SA_RESTORER  0x04000000u
+#define SA_RESTART   0x10000000u
+#define SA_NODEFER   0x40000000u
+#define SA_RESETHAND 0x80000000u
+
+/*
+ * The kernel-side sigaction as musl's rt_sigaction(174) passes it on i386:
+ * handler, flags, the restorer trampoline (musl's __restore_rt -> rt_sigreturn),
+ * and an 8-byte signal mask (signals 1..64). Byte-identical to musl's
+ * `struct k_sigaction`.
+ */
+struct k_sigaction {
+    uint32_t handler;
+    uint32_t flags;
+    uint32_t restorer;
+    uint32_t mask[2]; /* low = signals 1..32, high = 33..64 */
+};
+
+/* A 64-bit signal set: bit (signo-1) set means signo is in the set. */
+#define KSIG_BIT(signo) (1ULL << ((signo) - 1))
+
+/* Signals that can never be caught, blocked, or ignored. */
+#define KSIG_UNCATCHABLE (KSIG_BIT(SIGKILL) | KSIG_BIT(SIGSTOP))
+
+/* Default-action classes (see ksig_default_action in syscall.c). The common
+ * default is TERM; SIGCHLD/SIGURG/SIGWINCH/SIGCONT ignore; the job-control stop
+ * signals are deferred to Part II-A (treated as ignore for now). */
+enum ksig_default {
+    KSIG_DEFAULT_TERM,   /* terminate (the common case, incl. core signals) */
+    KSIG_DEFAULT_IGNORE, /* ignore */
+    KSIG_DEFAULT_STOP    /* stop (job control, deferred to Part II-A) */
+};
 
 #endif /* _KSIGNAL_H_ */
