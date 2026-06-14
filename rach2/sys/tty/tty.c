@@ -59,19 +59,53 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->sink = sink ? sink : null_sink;
     t->sink_ctx = sink_ctx;
     t->pump = NULL;
-    t->fg_pid = 0;
+    t->sid = 0;
+    t->fg_pgid = 0;
 }
 
-/* Deliver an ISIG-recognized signal to the tty's foreground process -- NOT to
- * current_proc, which (when input is drained from the timer IRQ or fed from the
- * keyboard IRQ) may be an unrelated process that merely happens to be running.
- * Phase 16's foreground is the console's reader; Phase 17 makes it the fg group. */
+/* Post a signal to every (live, user) member of process group pgid. */
+void tty_signal_group(int pgid, int signo)
+{
+    int i;
+
+    if (pgid == 0) {
+        return;
+    }
+    for (i = 0; i < MAX_PROCS; i++) {
+        process_t *p = &proc_table[i];
+        if (p->state != PROC_UNUSED && p->state != PROC_ZOMBIE && p->cr3 != 0 &&
+            (int)p->pgid == pgid) {
+            signal_post(p, signo);
+        }
+    }
+}
+
+/* Deliver an ISIG-recognized signal to the tty's FOREGROUND PROCESS GROUP -- NOT
+ * to current_proc, which (when input is fed from an IRQ) may be an unrelated
+ * process, and not to a single process: ^C reaches every member of the fg group. */
 static void tty_deliver_signal(struct tty *t, int signo)
 {
-    process_t *p = (t->fg_pid != 0) ? get_process((uint32_t)t->fg_pid) : NULL;
+    tty_signal_group(t->fg_pgid, signo);
+}
 
-    if (p && p->cr3 != 0) {
-        signal_post(p, signo);
+int tty_is_background(struct tty *t, int sid, int pgid)
+{
+    /* True when this tty is the caller's controlling terminal (same session) but
+     * the caller's group is NOT the foreground group -- a background process whose
+     * tty I/O must be gated by SIGTTIN/SIGTTOU. */
+    return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 && t->fg_pgid != pgid;
+}
+
+void tty_acquire_ctty(struct tty *t, int sid, int pgid)
+{
+    /* A process using a console with no controlling session claims it: its session
+     * becomes the console's, its group the foreground -- so a lone program gets ^C
+     * without an explicit TIOCSCTTY. Once claimed, only TIOCSCTTY/TIOCSPGRP change
+     * it. (sid/fg_pgid are ints; the ISIG path reads fg_pgid by value, so a racing
+     * single-int update is never seen torn.) */
+    if (t->sid == 0) {
+        t->sid = sid;
+        t->fg_pgid = pgid;
     }
 }
 
@@ -238,13 +272,6 @@ static void console_pump(struct tty *t)
 {
     int budget = TTY_PUMP_BUDGET;
 
-    /* Draining always runs in the waiting process's own context (a reader's
-     * tty_ready_cond, a poller's tty_poll, an inquirer's tty_inq), so that
-     * process IS the console's foreground -- claim it here so an ISIG (^C) typed
-     * over serial targets the actual waiter, not whoever last called read(). */
-    if (current_proc && current_proc->cr3 != 0) {
-        t->fg_pid = (int)current_proc->pid;
-    }
     while (budget-- > 0 && serial_data_available()) {
         int ch = serial_try_getc();
         if (ch < 0) {

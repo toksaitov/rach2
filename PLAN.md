@@ -955,7 +955,7 @@ correctly. **Then a harsh, independent Codex review** of the discipline edges
 through real musl (ABI assert green), the discipline passes its host tests, and Codex is
 addressed.
 
-### [ ] Phase 17 — Sessions, process groups, and job control (the highest-risk phase)
+### [x] Phase 17 — Sessions, process groups, and job control (the highest-risk phase)
 **Goal:** the session/process-group model and full job control — Ctrl-C/Ctrl-Z reach the
 **right** group, jobs stop and resume, and the shell learns when a child stops.
 **Concept taught:** the Unix session→process-group→process hierarchy, the controlling

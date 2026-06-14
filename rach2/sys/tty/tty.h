@@ -31,7 +31,8 @@ struct tty {
     n_tty_out_fn sink;           /* echo/output byte sink (NULL discards) */
     void *sink_ctx;              /* opaque context handed to sink */
     void (*pump)(struct tty *t); /* optional polled input drain (NULL = none) */
-    int fg_pid;                  /* foreground process (ISIG target); 0 = none */
+    int sid;                     /* controlling session id (0 = none) (Phase 17) */
+    int fg_pgid;                 /* foreground process group (ISIG target); 0 = none */
 };
 
 /* The system console: VGA + serial, bound to every process's fds 0/1/2. */
@@ -42,6 +43,17 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx);
 
 /* Bring up console_tty (sink = VGA + serial, pump = serial drain). Boot-time. */
 void tty_console_init(void);
+
+/* Post `signo` to every live member of process group `pgid` (job-control routing). */
+void tty_signal_group(int pgid, int signo);
+
+/* Claim the tty as a controlling terminal if it has none: its session becomes
+ * `sid` and its foreground group `pgid`. A no-op if already claimed. */
+void tty_acquire_ctty(struct tty *t, int sid, int pgid);
+
+/* True if the tty is the caller's controlling terminal but its group is not the
+ * foreground -- a background process, whose read/write is gated by SIGTTIN/SIGTTOU. */
+int tty_is_background(struct tty *t, int sid, int pgid);
 
 /* Timer-tick hook: drain the console's (interrupt-less) serial port into the
  * discipline when a reader/poller is waiting, so serial input wakes them even

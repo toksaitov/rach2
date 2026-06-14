@@ -30,6 +30,13 @@
 #define SYS_MKDIR   39
 #define SYS_RMDIR   40
 #define SYS_GETPID   20
+#define SYS_PAUSE     29   /* sessions + job control (Phase 17) */
+#define SYS_SETPGID   57
+#define SYS_GETPGRP   65
+#define SYS_SETSID    66
+#define SYS_GETPGID  132
+#define SYS_GETSID   147
+#define SYS_RT_SIGSUSPEND 179
 #define SYS_RENAME    38
 #define SYS_BRK       45
 #define SYS_MUNMAP    91

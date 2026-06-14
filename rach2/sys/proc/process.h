@@ -20,7 +20,8 @@ typedef enum {
     PROC_READY,     /* Ready to run */
     PROC_RUNNING,   /* Currently executing */
     PROC_BLOCKED,   /* Waiting for I/O or event */
-    PROC_ZOMBIE     /* Exited, waiting for parent to collect */
+    PROC_ZOMBIE,    /* Exited, waiting for parent to collect */
+    PROC_STOPPED    /* Job-control stopped (SIGSTOP/SIGTSTP), resumes on SIGCONT */
 } proc_state_t;
 
 /*
@@ -76,6 +77,15 @@ struct process {
     /* Program name (basename of the execve'd path, NUL-terminated, truncated):
      * the "comm" /proc/<pid>/stat reports and ps shows. Set at execve. */
     char comm[16];
+    /* Session + process-group identity (Phase 17). A process belongs to process
+     * group `pgid` within session `sid`; fork inherits both, setsid/setpgid change
+     * them. The session leader has sid==pid; a group leader has pgid==pid. */
+    uint32_t sid;
+    uint32_t pgid;
+    /* Job-control status pending for the parent's wait4 (Phase 17): 0 = none, a
+     * Linux WIFSTOPPED value ((stopsig<<8)|0x7f) when stopped, or 0xffff when
+     * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED). */
+    uint32_t jc_status;
 };
 
 typedef struct process process_t;

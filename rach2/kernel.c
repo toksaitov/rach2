@@ -254,26 +254,20 @@ void terminate_current_process(int32_t signo)
 }
 
 /*
- * Kill the currently running foreground user process (CTRL+C handler).
- *
- * Triggered from the keyboard interrupt; echoes "^C" and routes through the
- * shared terminate_current_process() teardown with the "interrupted" status.
+ * Ctrl+C from the PS/2 keyboard: deliver SIGINT to the console's FOREGROUND
+ * PROCESS GROUP (Phase 17) -- the same target the serial ^C reaches through the
+ * line discipline -- NOT current_proc, which in this keyboard IRQ may be an
+ * unrelated process. If the console has no foreground group yet, fall back to the
+ * running user process so a lone program is still interruptible.
  */
 static void kill_foreground_process(void)
 {
-    /* Only kill user processes (cr3 != 0 means it has its own page directory) */
-    if (!current_proc || current_proc->cr3 == 0) {
-        return;
-    }
-
-    serial_printf("CTRL+C: signaling process %d\n", current_proc->pid);
     k_puts("^C");
-
-    /* Post SIGINT through the disposition: a handler can catch it, otherwise the
-     * default action terminates. Delivered when this keyboard IRQ returns to the
-     * interrupted user process (a process blocked in a syscall is not yet
-     * interrupted -- EINTR is deferred to Part II-A). */
-    signal_post(current_proc, SIGINT);
+    if (console_tty.fg_pgid != 0) {
+        tty_signal_group(console_tty.fg_pgid, SIGINT);
+    } else if (current_proc && current_proc->cr3 != 0) {
+        signal_post(current_proc, SIGINT);
+    }
 }
 
 static void keyboard_handler(isr_params_t *params)

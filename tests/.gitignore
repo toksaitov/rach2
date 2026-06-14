@@ -48,3 +48,4 @@ pipeprobe
 pollprobe
 devprobe
 ttyprobe
+jobprobe

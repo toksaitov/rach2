@@ -70,6 +70,10 @@ process_t *alloc_process(void)
             } while (get_process(candidate) != NULL);
             proc_table[i].pid = candidate;
             proc_table[i].state = PROC_READY;
+            /* Default to its own session and process group (a leader of both);
+             * fork() overrides these to inherit the parent's (Phase 17). */
+            proc_table[i].sid = candidate;
+            proc_table[i].pgid = candidate;
 
             /* Initialize file descriptor table with stdin/stdout/stderr */
             fd_table_init(&proc_table[i].fds);

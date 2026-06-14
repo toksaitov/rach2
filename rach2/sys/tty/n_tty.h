@@ -45,6 +45,7 @@ struct ktermios {
 #define ECHO 0000010
 #define ECHOE 0000020
 #define ECHOK 0000040
+#define TOSTOP 0000400
 #define ECHOCTL 0001000
 
 /* c_iflag bits. */
