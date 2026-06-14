@@ -2085,10 +2085,20 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_printf("  Entropy...");
     serial_printf("  Entropy...");
-    krandom_seed(); /* best-effort: TSC + PIT tick + RTC seconds (AT_RANDOM) */
-    set_fore_color(light_green);
-    k_puts(" OK (best-effort)");
-    serial_printf(" OK (best-effort)\n");
+    krandom_seed();
+    {
+        /* Report the actual source: RDSEED/RDRAND are trusted hardware entropy
+         * (getrandom + /dev/[u]random work); jitter is best-effort only and the
+         * crypto sources fail closed (Phase 20). */
+        int src = krandom_source();
+        const char *desc = (src == KRANDOM_SRC_RDSEED)   ? " OK (RDSEED, trusted)"
+                           : (src == KRANDOM_SRC_RDRAND) ? " OK (RDRAND, trusted)"
+                                                         : " OK (jitter, best-effort -- "
+                                                           "crypto RNG fails closed)";
+        set_fore_color(src == KRANDOM_SRC_JITTER ? light_brown : light_green);
+        k_puts(desc);
+        serial_printf("%s\n", desc);
+    }
     set_fore_color(light_grey);
 
     k_printf("  Keyboard...");

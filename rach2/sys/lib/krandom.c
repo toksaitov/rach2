@@ -24,6 +24,10 @@ static uint32_t cc_state[16] = {
 static uint32_t cc_out[16];     /* current keystream block */
 static uint32_t cc_byte_pos = 64; /* byte cursor into cc_out (64 == exhausted) */
 
+/* The entropy source the last krandom_seed() used (KRANDOM_SRC_*); the fail-closed
+ * policy reads it. Starts at JITTER so a draw before seeding is never "trusted". */
+static int cc_src = KRANDOM_SRC_JITTER;
+
 #define ROTL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
 #define QR(a, b, c, d)             \
@@ -141,6 +145,16 @@ void krandom_bytes(void *buf, uint32_t n)
     }
 }
 
+int krandom_source(void)
+{
+    return cc_src;
+}
+
+int krandom_is_trusted(void)
+{
+    return cc_src == KRANDOM_SRC_RDSEED || cc_src == KRANDOM_SRC_RDRAND;
+}
+
 #if defined(__i386__)
 
 /* Hardware entropy sources, kernel-side only (see kio.c / kernel.c). */
@@ -220,16 +234,16 @@ static int hw_key(uint32_t key[8])
     if (max_leaf >= 7) {
         cpuid(7, &a, &b, &c, &d);
         if ((b & (1u << 18)) && collect_key(rdseed32, key)) {
-            return 1; /* RDSEED */
+            return KRANDOM_SRC_RDSEED;
         }
     }
     if (max_leaf >= 1) {
         cpuid(1, &a, &b, &c, &d);
         if ((c & (1u << 30)) && collect_key(rdrand32, key)) {
-            return 1; /* RDRAND */
+            return KRANDOM_SRC_RDRAND;
         }
     }
-    return 0;
+    return KRANDOM_SRC_JITTER;
 }
 
 void krandom_seed(void)
@@ -237,22 +251,28 @@ void krandom_seed(void)
     uint32_t key[8];
     uint32_t lo = 0, hi = 0;
     uint8_t sec;
+    int src;
 
-    /* Real hardware entropy when the CPU offers it: a defensible CSPRNG seed. */
-    if (hw_key(key)) {
+    /* Real hardware entropy when the CPU offers it: a defensible CSPRNG seed that
+     * marks the generator trusted (Phase 20's fail-closed gate). */
+    src = hw_key(key);
+    if (src != KRANDOM_SRC_JITTER) {
         chacha_setup(key);
+        cc_src = src;
         return;
     }
 
     /* Fallback: boot-time jitter (CPU timestamp counter + CMOS RTC seconds + the
-     * PIT tick). This VARIES across boots but is NOT defensible entropy -- the
-     * real fail-closed source (virtio-rng) lands in Part II-B. */
+     * PIT tick). This VARIES across boots but is NOT defensible entropy, so the
+     * source stays UNTRUSTED -- getrandom and /dev/[u]random fail closed, and only
+     * the best-effort AT_RANDOM / stack-canary uses draw from it. */
     __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
     outb(0x70, 0x00);
     sec = inb(0x71);
 
     krandom_reseed(lo ^ (uint32_t)sec, hi, kernel_ticks ^ ((uint32_t)sec << 16),
                    lo ^ hi ^ kernel_ticks ^ (uint32_t)sec);
+    cc_src = KRANDOM_SRC_JITTER;
 }
 
 #else

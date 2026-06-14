@@ -43,6 +43,7 @@ musl/devtest
 musl/ttymusl
 musl/ptymusl
 musl/budgetmusl
+musl/rngmusl
 sigprobe
 ofdprobe
 waitprobe
@@ -53,6 +54,7 @@ ttyprobe
 jobprobe
 miscprobe
 ptyprobe
+rngprobe
 
 # The Phase 18 busybox capstone binary (built by busybox/build_busybox.sh)
 busybox

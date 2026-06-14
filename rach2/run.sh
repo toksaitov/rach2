@@ -10,4 +10,9 @@
 AUDIO_DEVICE="${1:-speaker}"
 . "$(dirname "$0")/qemu_devices.sh"
 
-qemu-system-i386 -kernel kernel -serial stdio $AUDIO_OPTS $NET_OPTS
+# -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG seeds from trusted hardware
+# entropy (Phase 20); without it getrandom + /dev/[u]random fail closed and SSH
+# key generation (dropbear) cannot run. Override with CPU=... to test fail-closed.
+CPU="${CPU:-max}"
+
+qemu-system-i386 -cpu "$CPU" -kernel kernel -serial stdio $AUDIO_OPTS $NET_OPTS

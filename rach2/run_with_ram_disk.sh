@@ -19,4 +19,8 @@
 AUDIO_DEVICE="${1:-speaker}"
 . "$(dirname "$0")/qemu_devices.sh"
 
-qemu-system-i386 -kernel kernel -initrd ../krffs/file_system.krffs -serial stdio $AUDIO_OPTS $NET_OPTS
+# -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG is trusted (Phase 20);
+# without it getrandom + /dev/[u]random fail closed. Override with CPU=... to test.
+CPU="${CPU:-max}"
+
+qemu-system-i386 -cpu "$CPU" -kernel kernel -initrd ../krffs/file_system.krffs -serial stdio $AUDIO_OPTS $NET_OPTS

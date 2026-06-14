@@ -76,5 +76,23 @@ int main(void)
     }
     CHECK(nonzero);
 
+    /* Monobit sanity (the Phase-20 fail-closed gate trusts this stream for keys):
+     * over 4096 ChaCha-keystream bits the set-bit count must be near half (2048).
+     * A stuck/biased generator lands far outside; a uniform one is comfortably
+     * within +/-205 (~5%), wide enough that a healthy stream never flakes. */
+    {
+        uint8_t big[512];
+        int ones = 0;
+        unsigned int x;
+        krandom_reseed(0x243f6a88u, 0x85a308d3u, 0x13198a2eu, 0x03707344u);
+        krandom_bytes(big, sizeof(big));
+        for (i = 0; i < (int)sizeof(big); i++) {
+            for (x = big[i]; x; x &= x - 1) {
+                ones++;
+            }
+        }
+        CHECK(ones > 2048 - 205 && ones < 2048 + 205);
+    }
+
     return (fails > 120) ? 120 : fails;
 }

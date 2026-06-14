@@ -49,7 +49,7 @@ for prog in hello filetest forktest shelltest dirtest stattest \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
             tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
             timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe \
-            ttyprobe jobprobe miscprobe ptyprobe; do
+            ttyprobe jobprobe miscprobe ptyprobe rngprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -148,6 +148,12 @@ fi
 if [ -f "../tests/musl/budgetmusl" ]; then
     cp "../tests/musl/budgetmusl" "$MOUNT_POINT/mbudget"
     echo "  mbudget (musl)"
+fi
+
+# The Phase 20 musl getrandom + /dev/urandom keygen-shape program, as "mrng".
+if [ -f "../tests/musl/rngmusl" ]; then
+    cp "../tests/musl/rngmusl" "$MOUNT_POINT/mrng"
+    echo "  mrng (musl)"
 fi
 
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined

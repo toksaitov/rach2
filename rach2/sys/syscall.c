@@ -4355,6 +4355,13 @@ static int32_t sys_getrandom(isr_params_t *params)
     if (!buf) {
         return -EFAULT;
     }
+    /* Fail closed (Phase 20): with no trusted hardware entropy (RDSEED/RDRAND),
+     * refuse rather than hand out the weak boot-jitter stream for a key. A caller
+     * that explicitly accepts insecure bytes passes GRND_INSECURE (the same tier
+     * as AT_RANDOM / the stack canary). */
+    if (!krandom_is_trusted() && !(flags & GRND_INSECURE)) {
+        return -EIO;
+    }
     while (done < len) {
         uint32_t chunk = len - done;
         if (chunk > sizeof(kbuf)) {

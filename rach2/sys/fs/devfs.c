@@ -80,7 +80,13 @@ static int32_t dev_zero_read(fd_entry_t *e, char __user *buf, uint32_t count)
 
 static int32_t dev_rand_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    return dev_fill_read(e, buf, count, 1); /* /dev/random and /dev/urandom */
+    /* Fail closed (Phase 20): /dev/random and /dev/urandom refuse when the CSPRNG
+     * was seeded only from boot jitter, so no weak randomness is handed out for a
+     * key. With RDSEED/RDRAND present the source is trusted and reads succeed. */
+    if (!krandom_is_trusted()) {
+        return -EIO;
+    }
+    return dev_fill_read(e, buf, count, 1);
 }
 
 static int32_t dev_full_write(fd_entry_t *e, const char __user *buf, uint32_t count)

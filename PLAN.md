@@ -1057,7 +1057,7 @@ the master/slave wakeup paths, the pts lifecycle, and the ctty interplay.
 **Done when:** ptmx/pts pairs work with the pinned ioctls, the slave is a full tty, musl
 `openpty` round-trips, the one-session budget fits, and Codex is addressed.
 
-### [ ] Phase 20 — Trusted entropy: RDSEED/RDRAND → `/dev/urandom`, fail-closed
+### [x] Phase 20 — Trusted entropy: RDSEED/RDRAND → `/dev/urandom`, fail-closed
 **Goal:** an entropy pipeline good enough to generate SSH keys — seeded from a genuine
 hardware source, exposed as `/dev/urandom` + trusted `getrandom`, **fail-closed** when no
 real source exists. **(Required path; virtio-rng is the optional stretch, 20-opt.)**
