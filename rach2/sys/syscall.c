@@ -4088,20 +4088,31 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
 
     (void)flags;
 
-    if (addrlen < SOCKADDR_MIN) {
-        return -EINVAL;  /* declared sockaddr shorter than the header we read */
-    }
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
-        return -EFAULT;
-    }
-    /* Copy the destination sockaddr into a kernel buffer for the BE helpers. */
-    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
         return -EFAULT;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+
+    /* On a connected stream socket, sendto with any (or no) destination behaves
+     * like send -- the connection's peer is the destination, so the sockaddr is
+     * ignored (this is the path musl's send() takes: sendto with a NULL addr). */
+    if (entry->sock->type == SOCK_STREAM) {
+        return (int32_t)tcp_send(entry->sock,
+                                 (const uint8_t __force *)(const void __user *)buf_ptr,
+                                 len);
+    }
+
+    /* Datagram path: a real destination address is required. */
+    if (addrlen < SOCKADDR_MIN) {
+        return -EINVAL;  /* declared sockaddr shorter than the header we read */
+    }
+    /* Copy the destination sockaddr into a kernel buffer for the BE helpers. */
+    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+        return -EFAULT;
     }
 
     /* A datagram socket needs a source port so replies can come back. */
@@ -4135,6 +4146,20 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+
+    /* On a connected stream socket, recvfrom behaves like recv -- the peer is the
+     * connection's, so the optional source-address writeback is skipped and a NULL
+     * sockaddr is fine (this is the path musl's recv() takes: recvfrom with a NULL
+     * addr). MSG_DONTWAIT is honored via the non-blocking TCP receive. */
+    if (entry->sock->type == SOCK_STREAM) {
+        if (flags & MSG_DONTWAIT) {
+            return (int32_t)socket_tcp_try_recv(
+                entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
+        }
+        return (int32_t)socket_tcp_recv(entry->sock,
+                                        (uint8_t __force *)(void __user *)buf_ptr,
+                                        len);
     }
 
     /* socket_recv/socket_try_recv write straight into the validated user buffer;

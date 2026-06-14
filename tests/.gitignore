@@ -35,4 +35,5 @@ musl/catfile
 musl/timemusl
 musl/sigmusl
 musl/ctrlcmusl
+musl/tcpsendrecv
 sigprobe

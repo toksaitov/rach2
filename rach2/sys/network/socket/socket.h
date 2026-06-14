@@ -93,6 +93,8 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
 void socket_tcp_connected(struct socket *sock);
 void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len);
 int  socket_tcp_recv(struct socket *sock, uint8_t *buf, int len);
+/* Non-blocking variant: SOCK_EAGAIN if no data is buffered (for MSG_DONTWAIT). */
+int  socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len);
 void socket_tcp_fin(struct socket *sock);
 
 #endif /* _SOCKET_H_ */

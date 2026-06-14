@@ -293,6 +293,32 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
     return (int)copy_len;
 }
 
+int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
+{
+    struct tcb *tcb;
+    uint32_t avail, copy_len, i;
+
+    if (!sock || !sock->tcb) return -1;
+    tcb = sock->tcb;
+
+    /* Non-blocking: with no buffered data, report EOF on a half-closed peer, an
+     * error on a reset/closed connection, else EAGAIN -- never block. */
+    avail = tcb->recv_tail - tcb->recv_head;
+    if (avail == 0) {
+        if (tcb->fin_received)        return 0;            /* EOF */
+        if (tcb->state == TCP_CLOSED) return -1;           /* reset/closed */
+        return SOCK_EAGAIN;                                /* no data yet */
+    }
+
+    copy_len = avail;
+    if (copy_len > (uint32_t)len) copy_len = (uint32_t)len;
+    for (i = 0; i < copy_len; i++) {
+        buf[i] = tcb->recv_buf[(tcb->recv_head + i) & (TCP_RING_SIZE - 1)];
+    }
+    tcb->recv_head += copy_len;
+    return (int)copy_len;
+}
+
 void socket_tcp_fin(struct socket *sock)
 {
     if (!sock) return;

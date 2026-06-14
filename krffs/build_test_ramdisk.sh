@@ -101,6 +101,12 @@ if [ -f "../tests/musl/ctrlcmusl" ]; then
     echo "  mctrlc (musl)"
 fi
 
+# The Phase 10 TCP send()/recv() round-trip program, installed as "mtcpsr".
+if [ -f "../tests/musl/tcpsendrecv" ]; then
+    cp "../tests/musl/tcpsendrecv" "$MOUNT_POINT/mtcpsr"
+    echo "  mtcpsr (musl)"
+fi
+
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined
 # boot can exercise them (e.g. "exec cat hello.txt", "exec ls", "exec echo hi").
 for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; do
