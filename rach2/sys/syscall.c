@@ -641,6 +641,8 @@ static int32_t sys_writev(isr_params_t *params)
 /* Special dir fd for the openat family: resolve relative to the current dir. */
 #define AT_FDCWD (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_SYMLINK_FOLLOW 0x400 /* linkat: follow a symlink source */
+#define AT_EMPTY_PATH 0x1000    /* *at: operate on the dirfd itself */
 
 /*
  * Join base + '/' + rel into pathbuf as an absolute path (base is "/" or "/a/b",
@@ -1123,6 +1125,30 @@ static int32_t sys_close(isr_params_t *params)
     entry = fd_get(&current_proc->fds, fd);
     fd_release_backing(entry);
     if (fd_free(&current_proc->fds, fd) != 0) {
+        return -EBADF;
+    }
+    return 0;
+}
+
+/*
+ * sys_fsync - flush a file's data to stable storage (also serves fdatasync)
+ * Args: EBX = fd
+ * Returns: 0 on success, -EBADF for a bad descriptor.
+ *
+ * KRFFS lives in RAM, so a write is already as durable as the medium gets and
+ * there is nothing to flush -- fsync is a no-op that just validates the fd. This
+ * matters because dropbear writes its host key with the open/write/fsync/rename
+ * idiom and treats any fsync error as fatal; an unimplemented fsync (-ENOSYS)
+ * aborts key generation.
+ */
+static int32_t sys_fsync(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (!fd_get(&current_proc->fds, fd)) {
         return -EBADF;
     }
     return 0;
@@ -2310,6 +2336,325 @@ static int32_t sys_faccessat(isr_params_t *params)
         name++;
     }
     return do_access(name, mode);
+}
+
+/* An owner/group argument is acceptable iff it names root (0) or is (id_t)-1
+ * ("leave unchanged"); see do_chown and the setre/setres handlers. */
+static int sc_id_is_root_or_keep(uint32_t id)
+{
+    return id == 0 || id == (uint32_t) -1;
+}
+
+/* Does an object exist at `name` (absolute, leading '/' stripped)? 0 if so, else
+ * -ENOENT/-ENOTDIR -- the same synthetic-vs-KRFFS resolution do_access uses. link()
+ * resolves its source through this so a missing source is reported honestly before
+ * the "no hard links" -EPERM. */
+static int32_t path_exists(const char *name)
+{
+    struct vpath vp;
+    int rerr = 0;
+
+    if (name[0] == '\0') {
+        return 0; /* the root directory */
+    }
+    if (synth_classify(name, &vp) != VNODE_KRFFS) {
+        struct linux_stat64 s;
+        return synth_stat(&vp, &s, 0);
+    }
+    if (!krffs_fs) {
+        return -ENOENT;
+    }
+    if (!krffs_resolve_e(name, &rerr)) {
+        return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+    }
+    return 0;
+}
+
+/*
+ * chmod/chown family. Rach2 has a single (root, id 0) identity over a RAM file
+ * system, so these keep just enough state to satisfy a login server and a shell.
+ * chmod updates a KRFFS file's stored permission bits; a synthetic /dev or /proc
+ * object has a fixed mode, so chmod there is a no-op that only validates the path
+ * exists. chown only ever (re)assigns root -- there is no other user or group, so
+ * uid/gid 0 (or -1) succeeds and anything else is -EPERM. dropbear chmod/chowns
+ * the session pty (a /dev/pts node) to root before running the shell; busybox
+ * chmod/chown drive the KRFFS path. `name` is absolute with the leading '/'
+ * stripped, matching do_access.
+ */
+static int32_t do_chmod(const char *name, uint32_t mode)
+{
+    struct vpath vp;
+    krffs_node_t *node;
+    int rerr = 0;
+
+    if (name[0] == '\0') {
+        return 0; /* the root directory: fixed perms, no-op success */
+    }
+    if (synth_classify(name, &vp) != VNODE_KRFFS) {
+        struct linux_stat64 s;
+        int32_t rc = synth_stat(&vp, &s, 1);
+        return (rc != 0) ? rc : 0; /* synthetic node: validate, then no-op */
+    }
+    if (!krffs_fs) {
+        return -ENOENT;
+    }
+    node = krffs_resolve_e(name, &rerr);
+    if (!node) {
+        return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+    }
+    if (node != krffs_fs->node) {
+        /* keep the type bits (e.g. the directory bit), replace the perm bits */
+        node->mode = (uint16_t) ((node->mode & ~0777u) | (mode & 0777u));
+    }
+    return 0;
+}
+
+static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
+{
+    struct vpath vp;
+    int rerr = 0;
+
+    if (!sc_id_is_root_or_keep(uid) || !sc_id_is_root_or_keep(gid)) {
+        return -EPERM; /* no such user/group: only root exists */
+    }
+    if (name[0] == '\0') {
+        return 0; /* the root directory is already root-owned */
+    }
+    if (synth_classify(name, &vp) != VNODE_KRFFS) {
+        struct linux_stat64 s;
+        return synth_stat(&vp, &s, 1); /* validate existence; ownership is fixed */
+    }
+    if (!krffs_fs) {
+        return -ENOENT;
+    }
+    if (!krffs_resolve_e(name, &rerr)) {
+        return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+    }
+    return 0; /* already uid/gid 0; nothing to store */
+}
+
+/* chmod(path, mode) and fchmodat(dirfd, path, mode[, flags]) share do_chmod. */
+static int32_t sys_chmod(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *) params->ebx;
+    uint32_t mode = params->ecx;
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_chmod(name, mode);
+}
+
+static int32_t sys_fchmodat(isr_params_t *params)
+{
+    int dirfd = (int) params->ebx;
+    const char __user *upath = (const char __user *) params->ecx;
+    uint32_t mode = params->edx;
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_chmod(name, mode);
+}
+
+/* fchmod(fd, mode): the descriptor form. A KRFFS-backed regular file's stored
+ * perms are updated; any other descriptor (device/pipe/socket/tty) is a no-op. */
+static int32_t sys_fchmod(isr_params_t *params)
+{
+    int fd = (int) params->ebx;
+    uint32_t mode = params->ecx;
+    fd_entry_t *entry;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry) {
+        return -EBADF;
+    }
+    if (entry->type == FD_TYPE_FILE && entry->node &&
+        entry->node != krffs_fs->node) {
+        entry->node->mode = (uint16_t) ((entry->node->mode & ~0777u) | (mode & 0777u));
+    }
+    return 0;
+}
+
+/* chown/lchown/fchownat share do_chown; both the 16-bit and *32 numbers route
+ * here since musl issues the 16-bit chown on i386. */
+static int32_t sys_chown(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *) params->ebx;
+    uint32_t uid = params->ecx;
+    uint32_t gid = params->edx;
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_chown(name, uid, gid);
+}
+
+static int32_t sys_fchownat(isr_params_t *params)
+{
+    int dirfd = (int) params->ebx;
+    const char __user *upath = (const char __user *) params->ecx;
+    uint32_t uid = params->edx;
+    uint32_t gid = params->esi;
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_chown(name, uid, gid);
+}
+
+/* fchown(fd, uid, gid): the descriptor form. Only the root identity exists, so
+ * the id policy is enforced and the call is otherwise a no-op. */
+static int32_t sys_fchown(isr_params_t *params)
+{
+    int fd = (int) params->ebx;
+    uint32_t uid = params->ecx;
+    uint32_t gid = params->edx;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (!fd_get(&current_proc->fds, fd)) {
+        return -EBADF;
+    }
+    if (!sc_id_is_root_or_keep(uid) || !sc_id_is_root_or_keep(gid)) {
+        return -EPERM;
+    }
+    return 0;
+}
+
+/*
+ * link/linkat: KRFFS stores exactly one name per node (no link count, no shared
+ * data), so hard links are unsupported and the call returns -EPERM -- the POSIX
+ * errno for "the filesystem does not support the creation of hard links"
+ * (link(2)). The source is copied and resolved first, so a bad pointer (-EFAULT),
+ * bad dirfd (-EBADF), or missing source (-ENOENT) is reported honestly rather than
+ * masked by EPERM. dropbear depends on the EPERM: it moves a freshly generated
+ * host key with link(tmp, final) and, on EPERM/EACCES, falls back to writing the
+ * key directly to the final path.
+ */
+static int32_t sys_link(isr_params_t *params)
+{
+    const char __user *uold = (const char __user *) params->ebx;
+    const char __user *unew = (const char __user *) params->ecx;
+    char oldbuf[256];
+    char newbuf[256];
+    const char *name;
+    int len;
+    int32_t rc;
+
+    if (!current_proc || !uold || !unew) {
+        return -EFAULT;
+    }
+    /* Validate BOTH paths (copy_path_cwd faults a bad pointer to -EFAULT) and that
+     * the source exists, before reporting that the filesystem cannot hard-link --
+     * link(valid, bad_ptr) is -EFAULT, link(missing, x) is -ENOENT, not -EPERM. */
+    len = copy_path_cwd(oldbuf, sizeof(oldbuf), uold);
+    if (len < 0) {
+        return len;
+    }
+    len = copy_path_cwd(newbuf, sizeof(newbuf), unew);
+    if (len < 0) {
+        return len;
+    }
+    name = oldbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    rc = path_exists(name);
+    if (rc != 0) {
+        return rc;
+    }
+    return -EPERM;
+}
+
+static int32_t sys_linkat(isr_params_t *params)
+{
+    int olddirfd = (int) params->ebx;
+    const char __user *uold = (const char __user *) params->ecx;
+    int newdirfd = (int) params->edx;
+    const char __user *unew = (const char __user *) params->esi;
+    int flags = (int) params->edi;
+    char oldbuf[256];
+    char newbuf[256];
+    const char *name;
+    int len;
+    int32_t rc;
+
+    if (!current_proc || !uold || !unew) {
+        return -EFAULT;
+    }
+    /* Only AT_SYMLINK_FOLLOW and AT_EMPTY_PATH are defined for linkat. */
+    if (flags & ~(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) {
+        return -EINVAL;
+    }
+    /* Resolve the source against olddirfd and the destination against newdirfd, so
+     * a bad dirfd (-EBADF) or pointer (-EFAULT) and a missing source (-ENOENT) are
+     * reported before the "no hard links" -EPERM. */
+    len = copy_path_at(oldbuf, sizeof(oldbuf), olddirfd, uold);
+    if (len < 0) {
+        return len;
+    }
+    len = copy_path_at(newbuf, sizeof(newbuf), newdirfd, unew);
+    if (len < 0) {
+        return len;
+    }
+    name = oldbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    rc = path_exists(name);
+    if (rc != 0) {
+        return rc;
+    }
+    return -EPERM;
 }
 
 /*
@@ -6497,6 +6842,33 @@ static int32_t sys_setgid(isr_params_t *params)
 {
     return (params->ebx == 0) ? 0 : -EPERM;
 }
+/* setreuid/setregid/setresuid/setresgid: the same single-root-identity policy in
+ * the 2- and 3-argument forms a login server uses to drop and restore privilege
+ * around an unprivileged step (dropbear reads authorized_keys under
+ * setegid(pw_gid)/seteuid(pw_uid), then reverts). Each id argument is either
+ * (id_t)-1 ("leave unchanged") or 0 (root, the only identity); any other value is
+ * -EPERM, so a caller is never fooled into believing it became a user that does
+ * not exist. uid and gid share these handlers because both are 0-only.
+ * (sc_id_is_root_or_keep is defined earlier, near do_chown.) */
+static int32_t sys_setreid(isr_params_t *params)
+{
+    /* setreuid(ruid, euid) / setregid(rgid, egid) */
+    if (!sc_id_is_root_or_keep(params->ebx) ||
+        !sc_id_is_root_or_keep(params->ecx)) {
+        return -EPERM;
+    }
+    return 0;
+}
+static int32_t sys_setresid(isr_params_t *params)
+{
+    /* setresuid(ruid, euid, suid) / setresgid(rgid, egid, sgid) */
+    if (!sc_id_is_root_or_keep(params->ebx) ||
+        !sc_id_is_root_or_keep(params->ecx) ||
+        !sc_id_is_root_or_keep(params->edx)) {
+        return -EPERM;
+    }
+    return 0;
+}
 /* setgroups: the only group is root (gid 0). Clearing the list (size 0) succeeds;
  * a list is validated to be readable and to contain ONLY gid 0 -- any other gid is
  * "no such group" (-EPERM), so a caller is never fooled into believing it set real
@@ -6950,6 +7322,28 @@ void init_syscall(void)
     _syscall_table[SYS_UGETRLIMIT] = sys_getrlimit;
     _syscall_table[SYS_PRLIMIT64] = sys_prlimit64;
     _syscall_table[SYS_DUP3] = sys_dup3;
+    _syscall_table[SYS_FSYNC] = sys_fsync;
+    _syscall_table[SYS_FDATASYNC] = sys_fsync;
+    _syscall_table[SYS_LINK] = sys_link;
+    _syscall_table[SYS_LINKAT] = sys_linkat;
+    _syscall_table[SYS_SETREUID] = sys_setreid;
+    _syscall_table[SYS_SETREGID] = sys_setreid;
+    _syscall_table[SYS_SETREUID32] = sys_setreid;
+    _syscall_table[SYS_SETREGID32] = sys_setreid;
+    _syscall_table[SYS_SETRESUID] = sys_setresid;
+    _syscall_table[SYS_SETRESGID] = sys_setresid;
+    _syscall_table[SYS_SETRESUID32] = sys_setresid;
+    _syscall_table[SYS_SETRESGID32] = sys_setresid;
+    _syscall_table[SYS_CHMOD] = sys_chmod;
+    _syscall_table[SYS_FCHMODAT] = sys_fchmodat;
+    _syscall_table[SYS_FCHMOD] = sys_fchmod;
+    _syscall_table[SYS_CHOWN] = sys_chown;
+    _syscall_table[SYS_CHOWN32] = sys_chown;
+    _syscall_table[SYS_LCHOWN] = sys_chown;
+    _syscall_table[SYS_LCHOWN32] = sys_chown;
+    _syscall_table[SYS_FCHOWNAT] = sys_fchownat;
+    _syscall_table[SYS_FCHOWN] = sys_fchown;
+    _syscall_table[SYS_FCHOWN32] = sys_fchown;
     _syscall_table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;
     /* musl's exit() issues exit_group(); for a single-threaded process it is
      * exactly _exit(). */

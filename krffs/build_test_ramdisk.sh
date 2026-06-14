@@ -23,6 +23,25 @@ cd "$SCRIPT_DIR"
 SIZE=${1:-10}
 MOUNT_POINT="mount_point"
 FS_FILE="file_system.krffs"
+DEMO_KEY="rach2_demo_ed25519"
+
+# Provision a demo SSH keypair for the dropbear login (Phase 23) if the operator
+# has not supplied one. Only the PUBLIC half is staged (into
+# /root/.ssh/authorized_keys by stagetree below); the private half stays on the
+# host -- log in with `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost`.
+# Both are git-ignored test credentials and are never committed.
+if [ ! -f authorized_keys ]; then
+    if command -v ssh-keygen >/dev/null 2>&1; then
+        echo "=== Generating demo SSH key ($DEMO_KEY) ==="
+        rm -f "$DEMO_KEY" "$DEMO_KEY.pub"
+        ssh-keygen -t ed25519 -N "" -C "rach2-demo" -f "$DEMO_KEY" >/dev/null
+        cp "$DEMO_KEY.pub" authorized_keys
+        echo "  private key: krffs/$DEMO_KEY"
+        echo "  log in with: ssh -i krffs/$DEMO_KEY -p 2222 root@localhost"
+    else
+        echo "note: no authorized_keys and no ssh-keygen; dropbear SSH login will lack a key"
+    fi
+fi
 
 echo "=== Building test programs ==="
 make -C ../tests
@@ -168,6 +187,13 @@ if [ -f "../tests/musl/authmusl" ]; then
     echo "  mauth (musl)"
 fi
 
+# The Phase 23 musl permission/identity probe (fsync/link/chmod/chown/seteuid),
+# installed as "mperm".
+if [ -f "../tests/musl/permmusl" ]; then
+    cp "../tests/musl/permmusl" "$MOUNT_POINT/mperm"
+    echo "  mperm (musl)"
+fi
+
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined
 # boot can exercise them (e.g. "exec cat hello.txt", "exec ls", "exec echo hi").
 for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; do
@@ -181,6 +207,11 @@ done
 if [ -f "../tests/busybox" ]; then
     cp "../tests/busybox" "$MOUNT_POINT/busybox"
     echo "  busybox (Phase 18)"
+    # Also install it as the flat-root login shell /sh: dropbear (Phase 23) execs
+    # the /etc/passwd shell, and busybox invoked with basename "sh" runs ash. A
+    # flat-root copy works through the krffs FUSE mount (which cannot mkdir).
+    cp "../tests/busybox" "$MOUNT_POINT/sh"
+    echo "  sh (busybox login shell for dropbear)"
 fi
 
 # The Phase 23 dropbear SSH server (static musl), if built.

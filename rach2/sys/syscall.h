@@ -101,6 +101,36 @@
 #define SYS_DUP3        330
 #define SYS_PRLIMIT64   340
 
+/* Phase 23: durability no-ops the dropbear host-key write needs (KRFFS is RAM). */
+#define SYS_FSYNC       118
+#define SYS_FDATASYNC   148
+/* KRFFS has no hard links; link/linkat return -EPERM (dropbear falls back). */
+#define SYS_LINK        9
+#define SYS_LINKAT      303
+/* The 2-/3-arg privilege drop+restore a login server uses (dropbear seteuid).
+ * Both the legacy 16-bit-uid and the *32 variants, since musl issues the former
+ * for seteuid/setegid on i386 and busybox may issue the latter. */
+#define SYS_SETREUID    70
+#define SYS_SETREGID    71
+#define SYS_SETRESUID   164
+#define SYS_SETRESGID   170
+#define SYS_SETREUID32  203
+#define SYS_SETREGID32  204
+#define SYS_SETRESUID32 208
+#define SYS_SETRESGID32 210
+/* chmod/chown the session pty (dropbear) and arbitrary KRFFS paths (busybox).
+ * Both legacy 16-bit-id and *32 chown numbers, since musl issues the former. */
+#define SYS_CHMOD       15
+#define SYS_FCHMOD      94
+#define SYS_FCHMODAT    306
+#define SYS_CHOWN       182
+#define SYS_CHOWN32     212
+#define SYS_LCHOWN      16
+#define SYS_LCHOWN32    198
+#define SYS_FCHOWN      95
+#define SYS_FCHOWN32    207
+#define SYS_FCHOWNAT    298
+
 /*
  * Size of the syscall dispatch table
  * Must be large enough to hold highest syscall number + 1
