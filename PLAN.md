@@ -56,22 +56,26 @@ use (`int 0x80`; number in EAX; args EBX/ECX/EDX/ESI/EDI; result in EAX), so the
 The endpoint is a **minimal but real Unix**: an interactive **busybox** shell you
 reach over the network by **SSH (dropbear)**. The work is three arcs:
 
-- **Part I — musl + core kernel subsystems** (Phases 0-9, detailed below): static
+- **Part I — musl + core kernel subsystems** (Phases 0-11, **done**): static
   musl runs the utilities, atop the foundations done the real way — a real frame
   allocator over actual RAM, a VMA + demand-paging VM subsystem (incl. copy-on-
   write fork), Linux-style `%gs` TLS, the `-errno` contract, a **simple
   hierarchical filesystem** (KRFFS gains directories), a crypto-ready entropy
-  source, and a real signal subsystem.
-- **Part II-A — a real interactive shell (busybox)** (roadmapped below):
-  poll/select, pipes, `termios` + a line discipline, and `/dev` device files.
-- **Part II-B — remote login (dropbear)** (roadmapped below): pseudo-terminals,
-  crypto-grade `/dev/urandom`, and the socket fill-out — then you `ssh` into Rach2.
+  source, a real signal subsystem, the TCP `send`/`recv` path, and refcounted
+  open-file descriptions.
+- **Part II-A — a real interactive shell (busybox)** (Phases 12-18, detailed below):
+  the blocking/dispatch substrate, pipes, poll/select, `/dev` + a minimal `/proc`,
+  `termios` + a line discipline, sessions + job control, then the busybox port.
+- **Part II-B — remote login (dropbear)** (Phases 19-23, detailed below):
+  pseudo-terminals, crypto-grade `/dev/urandom` (RDSEED/RDRAND fail-closed; virtio-rng
+  optional), the socket fill-out, auth/key staging, then the dropbear port — and you
+  `ssh` into Rach2.
 
 The busybox+dropbear target is deliberately Rach2-shaped: both are **static,
 fork-based, and low-memory** (the Alpine Linux combination), so — as the resolved
 blockers at the end show — the end goal needs **no threads, no dynamic linker, and
-no memory-architecture rewrite**. Part I is detailed; Part II is detailed when
-reached.
+no memory-architecture rewrite**. Part I and Part II are both detailed below to the
+same depth.
 
 This is **not** "minimal musl." The "simplest expedient" choices (eager mapping,
 big static stack, partial errno) are rejected precisely because they are *not* how
@@ -517,7 +521,7 @@ minimum the fork+COW path is exercised.
 **Done when:** the COW probe shows share-then-split with no leak, and fork works
 under musl.
 
-### [ ] Phase 6 — Files and directories (a hierarchical KRFFS + the `*at` API)
+### [x] Phase 6 — Files and directories (a hierarchical KRFFS + the `*at` API)
 **Goal:** give KRFFS **simple real directories** and add the file-API syscalls
 musl's `fopen`/`stat`/`opendir`/`mkdir` need — so file utilities and a navigable
 tree work, and the existing `mkdir`/`rm -r` utils finally do something real.
@@ -562,7 +566,7 @@ and the existing `mkdir`/`rm -r` utils work on real subdirs.
 **Done when:** the probe passes, real directories work, and musl file utils
 navigate the tree in-guest.
 
-### [ ] Phase 7 — Time, identity, and entropy
+### [x] Phase 7 — Time, identity, and entropy
 **Goal:** monotonic/real time, real sleep, identity, and `getrandom`.
 **Concept taught:** time from a tick source; blocking sleep via the scheduler; a
 kernel entropy source.
@@ -584,7 +588,7 @@ entropy and the real source (**virtio-rng**) lands in Part II-B;
 sleeps, and seeds `arc4random` runs.
 **Done when:** the time/entropy probe passes and a musl time/sleep program works.
 
-### [ ] Phase 8 — Signals (minimal, but the real model)
+### [x] Phase 8 — Signals (minimal, but the real model)
 **Goal:** a small, correct signal subsystem covering what `abort()`, faults, and a
 shell + sshd need — synchronous `SIGSEGV`/`SIGFPE`, `SIGINT` from Ctrl-C, and the
 process-control signals `SIGCHLD` (reap), `SIGPIPE` (broken pipe), and
@@ -611,7 +615,7 @@ blocks/unblocks a pending signal in order; default-terminate works.
 `sigaction()` fires; Ctrl-C interrupts a running musl program.
 **Done when:** the signal probe passes and musl `abort`/handlers/Ctrl-C work.
 
-### [ ] Phase 9 — Adopt musl for the utilities, regress, document
+### [x] Phase 9 — Adopt musl for the utilities, regress, document
 **Goal:** convert the real programs to musl, prove nothing regressed, write the
 docs that make all of this teachable.
 **Do:**
@@ -634,71 +638,572 @@ cppcheck, shellcheck, host seam tests under ASan/UBSan) plus the convention grep
 **Done when:** utilities run on musl, the whole suite is green from clean, every
 new subsystem has a Readme + passing probe.
 
+### [x] Phase 10 — Finish the socket path: `send`/`recv` on connected TCP
+**Goal:** make musl's `send()`/`recv()` work on a connected TCP socket so the musl
+`httpd` actually serves requests — the regression the Phase 9 port introduced and
+the head-to-head check missed.
+**Concept taught:** the Linux **socketcall multiplexer**, and the ABI subtlety
+that `send`/`recv` are *not* their own syscalls — musl compiles them to `sendto`/
+`recvfrom` with a NULL address. A from-scratch stack that routes by *sub-call
+number* instead of *socket type* silently pushes stream traffic down the datagram
+path. "Adopt musl" is the forcing function that exposes it; the freestanding
+`httpd` dodged it by calling `SC_SEND`/`SC_RECV` directly, and `nc` by using
+`read`/`write`, which is why only the ported `httpd` broke.
+**Design:** in `rach2/sys/syscall.c`, `do_send`(SC_SEND=9)/`do_recv`(SC_RECV=10)
+route to `tcp_send`/`socket_tcp_recv`, but `do_sendto`(11)/`do_recvfrom`(12) route
+to the UDP path (`udp_tx`/`socket_recv`). When the fd is a connected `SOCK_STREAM`
+socket, route `sendto`/`recvfrom` to the TCP path exactly like `send`/`recv`
+(POSIX: a null destination on a connected socket means `send`/`recv`). Leave the
+`SOCK_DGRAM` path untouched; for stream `recvfrom` accept a NULL `sockaddr` (no
+`-EFAULT`) and skip the source-address writeback.
+**Verify (probe `tests/musl/tcpsendrecv.c` + live `httpd`):** a new musl program
+connects out through the SLIRP gateway `10.0.2.2` to a host echo server and
+round-trips a line using `send()`/`recv()` (**not** `read`/`write`), printing a
+marker; and the **musl** `httpd`, run under QEMU `hostfwd`, serves a real `curl` —
+HTTP 200, non-empty body, a `"GET / HTTP/1.1" 200` access-log line (the
+freestanding `httpd` already proves the kernel TCP works, so this isolates the
+send/recv routing). `ping`/`nc`/`dnstest` unchanged; `make verify-style`/
+`verify-host`. **Then a harsh, independent Codex review** of exactly the
+`do_sendto`/`do_recvfrom` change — it touches the untrusted socket path, so
+scrutinize the NULL-`sockaddr` handling, the buffer/length bounds, and that the
+`SOCK_DGRAM` path is byte-for-byte unchanged — and fix **every** finding.
+**Done when:** musl `send()`/`recv()` round-trip over TCP, the musl `httpd` serves
+`curl`, the rest of the suite is unchanged, and Codex's findings are addressed.
+
+### [x] Phase 11 — Refcounted open-file descriptions (`dup`/`fork` share the offset)
+**Goal:** give file descriptors real POSIX semantics — a `dup`'d or `fork`'d fd
+shares one **open-file description** (and its seek offset) — closing the Phase 6
+deferral.
+**Concept taught:** the **three-layer fd model** every Unix has: the per-process
+*fd table* → a shared, refcounted *open-file description* (offset + status flags) →
+the underlying *file/inode/socket*. Today Rach2 collapses the first two, so
+`dup2(fd,1)` then `printf` and the original `fd` disagree about the offset, and
+`lseek` on one does not move the other. This is *the* structure that makes shell
+redirection, pipes, and `fork`+`exec` behave; Linux calls it `struct file`.
+**Design:** add a refcounted `struct open_file` (the OFD) from a fixed static pool:
+`{ refcount; offset; status_flags (O_APPEND / access mode); backing (KRFFS node id
+/ socket* / device kind) }`. The fd-table entry becomes `{ fd_flags (FD_CLOEXEC —
+**per-fd**, not per-OFD); struct open_file *ofd }`. `open`/`creat`/`openat`
+allocate an OFD (refcount 1); `dup`/`dup2` copy the pointer + `ref++` and clear the
+new fd's `FD_CLOEXEC`; `fork` copies each entry's pointer + `ref++` (parent and
+child share the offset); `close` does `ref--` and frees at zero (releasing the
+backing socket via its own unref); `read`/`write`/`lseek`/`getdents` use the OFD's
+shared offset and honor `O_APPEND`; `execve` closes the `FD_CLOEXEC` fds;
+`fd_init_stdio` builds the stdin/stdout/stderr OFDs. Refactor `fs/fd.{c,h}`
+(`fd_get`/`fd_alloc`/`fd_table_init`); `alloc_process` `k_memset`s the fd table so
+OFD pointers start NULL.
+**Verify (probe `tests/ofdprobe.c`, hermetic + a musl check):** prove (a) `dup`/
+`dup2` **share** the offset — read N bytes via one fd, then read via the dup and
+confirm it continues from N (not 0); (b) `fork` **shares** the offset — the child
+advances it and exits, the parent `waitpid`s and its next read sees the advance;
+(c) closing one fd leaves the dup working, and many open/close cycles leak no OFDs;
+(d) `execve` still closes `O_CLOEXEC` fds. Plus a musl integration check: `dup2` a
+file over `stdout`, `printf`, confirm the shared offset advanced. The **whole**
+suite + utilities stay green from a clean `make clean && make` (zero warnings, one
+combined boot). Update `fs/Readme.md` to document the OFD layer and drop the
+Part-II deferral note. `make verify-style`/`verify-host`. **Then a harsh,
+independent Codex review** of the fd-layer refactor — scrutinize the refcount
+lifecycle (no leak, no double-free, the socket-unref-on-last-close interplay), the
+`fork`/`execve`/`dup2` paths, and the PCB layout — and fix **every** finding.
+**Done when:** `dup`/`dup2`/`fork` share the seek offset, the OFD pool is
+leak-free, the whole suite is green from clean, the OFD layer is documented, and
+Codex's findings are addressed.
+
 ---
 
 ## Part II — busybox and dropbear: a real Unix you can log into
 
 Part I (musl) is the foundation. The end goal is a **minimal but real Unix**: an
 interactive **busybox** shell, reachable by **SSH (dropbear)** — the Alpine
-combination. Re-evaluating the deferred list against *these two programs* promotes
-several "someday" items to **required**, and confirms the scary ones stay off the
-path. Detailed when reached; here is the roadmap and the *why*.
+combination. Part II is now **detailed to the same depth as Part I**: each item below
+is a full phase (Goal · Concept · Design · Build · Verify (probe + integration) ·
+Codex review · Done when), dependency-ordered, numbered **12-23** continuing Part I,
+and it inherits every Ground rule, the verification philosophy, and the quality gate
+above unchanged. The arc is two halves: **II-A (12-18)** turns the console into a real
+interactive shell; **II-B (19-23)** lets you SSH in. wait4(114) and the refcounted
+open-file descriptions already landed in Part I (Phases 5/11), so they are
+prerequisites met, not phases here.
+
+**This Part II was itself hardened by an adversarial Codex pass over the real source
+and the vendored musl headers** (it found six BLOCKERs in the first draft). The
+corrections are folded in below; the ones worth stating up front, as Part I lessons
+sharpened:
+
+- **ABI numbers/structs are pinned against the *vendored* `libc/musl-1.2.5`, not from
+  memory.** Part I's `httpd` regression (musl compiling `send`/`recv` into
+  `sendto`/`recvfrom`, us routing by sub-call number) is the cautionary tale; the
+  first draft of *this* plan repeated it three times. Confirmed from the headers:
+  `getpgid` is **132** (not 155); musl i386 defines the whole **select family**
+  `select(82)`/`_newselect(142)`/`pselect6(308)` plus `poll(168)`/`ppoll(309)` — so we
+  implement the family routed to one core and let the real busybox binary pick, never
+  a hand-guessed single number; socketcall sub-call **15 is already our private
+  `SC_PING`** but Linux 15 is `getsockopt`, so the private ping must be renumbered
+  before the socket fill-out; `struct termios` in musl userspace is **NCCS=32 + speeds**
+  (the kernel `TCGETS` 19-`c_cc` struct is a layout-compatible *prefix*), and pty
+  ioctls are exact bit patterns (`TIOCGPTN=0x80045430`, `TIOCSPTLCK=0x40045431`).
+  **The musl-1.2 64-bit-`time_t` transition matters on i386:** musl issues the
+  `*_time64` variant *first* — `clock_gettime64`(403), `clock_nanosleep_time64`(407),
+  `pselect6_time64`(413), `ppoll_time64`(414) — and falls back to the time32 number
+  (265/267/308/309) on `-ENOSYS`. Part I already leans on that fallback (it implements
+  `clock_gettime`(265)/`nanosleep`(162) and lets musl down-convert), so Part II's
+  poll/select and `clock_nanosleep` either implement the time32 number and rely on the
+  same fallback or implement `*_time64` directly — but must **pick deliberately and
+  prove it against the real binary**, never assume the bare number. Every
+  ABI-crossing phase adds a **by-number/by-offset ABI probe** and proves it against the
+  real binary.
+- **A generic backing-dispatch + a real multi-waiter wait queue do not exist yet — so
+  they are Phase 12, built *first*.** Part I's `struct open_file` carries only
+  `{refcount, offset}`, fd dispatch is still an `enum` switch, and a blocking socket
+  parks a **single** `waiting_proc` with `sti; hlt`. Pipes, poll, ttys, ptys, and
+  signal-interruptible sockets all need a real `wait_queue` (many waiters, lost-wakeup-
+  safe) and a `file_ops`-style backing table before they can be built.
+- **The OFD layer is the per-object substrate.** Each new object (pipe, tty, pty,
+  accepted socket) is a backing kind hung off the refcounted `struct open_file`;
+  `fork`/`dup`/`close` refcounting already works, so each only implements its
+  read/write/poll/close ops — *and* `O_NONBLOCK` must become a real OFD status flag
+  that is **enforced** (today `F_SETFL` only honors `O_APPEND`), and **`close(0/1/2)`
+  must be made legal** (a daemon/shell closes and reopens stdio; the kernel bans
+  `fd<3` today).
+- **New PCB fields are append-only** (`switch.s` hard-codes offsets — the Phase-2
+  lesson): pgid/sid/ctty and the new `PROC_STOPPED` state (Phase 17) **append** and
+  re-check the asm offsets in the same patch.
+- **Entropy: the required path is RDSEED/RDRAND, fail-closed — virtio-rng is the
+  optional paravirt upgrade, off the critical path.** The kernel already CPUID-gates
+  RDSEED/RDRAND (Phase 7); a from-scratch virtio-pci driver is educationally nice but
+  unrelated to busybox/dropbear and could sink the run, so it is split out as an
+  explicit stretch (Phase 20-opt). New PCI devices share IRQs — now safe via this
+  session's chained-IRQ dispatcher — and every new IRQ handler still checks its own
+  device first.
+- **Pure logic uses the dual-target host seam** (pipe ring buffer, N_TTY cook/erase/echo
+  state machine, `fd_set`↔`pollfd` translation, virtqueue index math) — compiled both
+  into the kernel and into a native ASan/UBSan test, the cheap catch for the off-by-ones
+  that are murder to see in-guest.
+- **The interactive + SSH harness drivers live *in-tree* (`tools/`), not in `/tmp`,**
+  and are **raw-byte with hard failures** — the tracked `tools/harness.py` force-appends
+  a newline and *ignores* a failed `expect=`, which cannot validate Ctrl-C/Ctrl-Z, raw
+  mode, backspace echo, an `ssh` password prompt, or a PTY session. Part II adds a
+  raw-byte expect driver (control chars, no forced newline, assert-on-miss) and a host
+  `ssh`-through-`hostfwd` driver, both committed.
+- **Re-`make clean` after any `.h` edit** (no header-dependency tracking — a Part-I
+  footgun), and **respect the fixed limits** (`MAX_PROCS`/`MAX_FDS`/socket pool = 16):
+  static accounting up front, then a **live** budget probe once ptys exist (after Phase
+  19), raising the limits (append-only PCB, re-check asm offsets) before dropbear if one
+  session does not fit.
 
 ### Part II-A — a real interactive shell (busybox)
 
-busybox's `ash` + applets need, beyond Part I:
+### [ ] Phase 12 — Blocking & dispatch substrate (wait queues + the file-backing layer)
+**Goal:** build the two primitives every later II-A/II-B object needs and that Part I
+does **not** have yet — a real multi-waiter **wait queue** and a **file-backing dispatch
+table** — and fix the two fd-layer gaps (`O_NONBLOCK`, `close(0/1/2)`) that block the
+shell. No new userspace feature; the foundation pipes/poll/tty/pty/sockets all stand on.
+**Concept taught:** how a kernel sleeps and wakes the *right* set of waiters without
+lost wakeups, and how one `read`/`write`/`poll`/`close` entry point dispatches to many
+object types (the `file_operations` indirection real kernels are built on).
+**Design (grounded in the source):** today `struct open_file` carries only
+`{refcount, offset}` ([fd.h](rach2/sys/fs/fd.h)), fd handling is an `enum`-switch, and a
+blocking socket parks a **single** `waiting_proc` with `sti; hlt`
+([socket.c](rach2/sys/network/socket/socket.c)) — none of that scales to pipes/poll.
+Build (a) a `wait_queue` (a small fixed waiter list + `wq_wait`/`wq_wake_all`) on the
+Phase-7 sleeper substrate, lost-wakeup-safe (check-condition-under-no-preempt, then
+sleep), **signal-interruptible** (`-EINTR`); (b) a `struct file_ops`
+(`read`/`write`/`poll`/`ioctl`/`close`) and a backing-kind tag on the OFD, replacing the
+`enum`-switch with a dispatch the new objects register into; (c) add **`O_NONBLOCK`** as
+a real OFD status flag honored by `F_SETFL`/`F_GETFL` (today only `O_APPEND` is —
+[syscall.c](rach2/sys/syscall.c)); (d) **make `close(0/1/2)` legal** (drop the `fd<3`
+ban — a shell/daemon closes and reopens stdio); (e) migrate the socket single-waiter
+park onto the wait queue so socket blocking becomes `EINTR`/`EAGAIN`-correct. The wait
+queue + dispatch are written on the **host seam**.
+**Build:** `sys/proc/wait_queue.{c,h}`, the `file_ops`/backing-tag in `fs/fd.{c,h}`, the
+`F_SETFL`/`O_NONBLOCK` + `close` fixes, the socket-wait migration; a `proc/wait_queue`
+Readme citing the Linux analogue.
+**Verify (probe `tests/waitprobe.c`, hermetic):** two processes block on one wait queue,
+a third wakes **both** (no lost wakeup, both run); a blocked wait returns `-EINTR` when a
+signal arrives; `O_NONBLOCK` flips via `F_SETFL` and is read back by `F_GETFL`;
+`close(1)` then re-`open` onto fd 1 succeeds (stdio is closable). **Host seam:** the
+wait-queue + dispatch under ASan/UBSan. **Integration:** an existing musl net test still
+blocks/wakes correctly through the migrated socket path (no regression). **Then a harsh,
+independent Codex review** of the lost-wakeup race, the `EINTR` path, and the dispatch
+refactor — fix every finding.
+**Done when:** multi-waiter wake + `EINTR` + enforced `O_NONBLOCK` + closable stdio all
+pass, sockets ride the new wait queue with no net regression, and Codex is addressed.
 
-- **[ ] I/O multiplexing — `poll`/`pselect6`/`ppoll`.** Required by most applets and
-  anything juggling fds. *(The call musl's own resolver wanted, deferred then;
-  busybox forces it.)* Over the fd layer + scheduler block/wake. Probe: poll two
-  pipes with a timeout.
-- **[ ] Pipes — `pipe`/`pipe2`.** Shell pipelines `a | b`: a kernel pipe object
-  (ring buffer, two fds, blocking, `SIGPIPE`). Probe: fork, write/read across it.
-- **[ ] Reaping — `wait4`(114)** (with the Phase 5 process model). The shell reaps
-  children and reads exit status; pairs with `SIGCHLD`.
-- **[ ] Terminal layer — `termios` + line discipline.** Raw vs. cooked, echo, line
-  editing, `tcgetattr/tcsetattr` (ioctl `TCGETS/TCSETS`), `TIOCGWINSZ`. The console
-  becomes a real tty — the heart of an interactive shell. Probe: toggle raw/cooked,
-  check echo/erase.
-- **[ ] Device files + `/dev` (a devfs).** The hierarchical FS (Phase 6) already
-  hosts `/etc`, `/tmp`, `/home`; here a small **devfs** mounted at `/dev` adds the
-  char devices a shell expects — `/dev/null`, `/dev/zero`, `/dev/full`, `/dev/tty`,
-  `/dev/console` — routed to in-kernel device handlers. (The ptys in II-B extend
-  this namespace with `/dev/pts`.)
-- **[ ] Sessions + job control — `setsid`/`setpgid`/`getpgrp`, a controlling tty,
-  and the `SIGTSTP`/`SIGCONT` handlers deferred from Phase 8.** Foreground/
-  background jobs; Ctrl-C/Ctrl-Z to the right process group.
-- **Milestone:** a static musl **busybox** runs as the shell — `ls`, `cat`,
-  `grep`, pipelines, and job control work interactively.
+### [ ] Phase 13 — Pipes (`pipe`/`pipe2`)
+**Goal:** a real kernel pipe — a bounded FIFO that blocks, signals EOF on writer-close,
+and raises `SIGPIPE`/`EPIPE` on reader-close. Shell pipelines `a | b` stand on it.
+**Concept taught:** the pipe as the original Unix IPC primitive — a ring buffer with two
+refcounted descriptors, reader/writer **wait queues** (Phase 12), and the EOF/`SIGPIPE`
+end-of-stream contract.
+**Design:** a `struct pipe` from a fixed pool — a one-page ring buffer, read/write end
+counts, reader/writer `wait_queue`s (12), registered through the Phase-12 `file_ops` as
+a pipe backing on the OFD layer (`fork`/`dup` already refcount). `pipe`(42)/`pipe2`(331)
+honoring `O_CLOEXEC`/`O_NONBLOCK` (enforced per 12). `read` blocks while empty unless all
+write ends are closed (→ `0`, EOF); `write` blocks while full; a write with no readers
+raises `SIGPIPE` + `-EPIPE`; `O_NONBLOCK` → `-EAGAIN`. Implement the pipe's `poll` op
+(consumed by 14) and `FIONREAD`. The ring-buffer logic is on the **host seam**.
+**Build:** `sys/ipc/pipe.{c,h}` + the `file_ops` registration, the syscalls; an
+`ipc/pipe` Readme.
+**Verify (probe `tests/pipeprobe.c`, hermetic):** `fork`; parent writes, child reads,
+bytes + order match; fill the pipe so the writer **blocks** until the reader drains;
+close the read end → write gets `SIGPIPE`/`-EPIPE`; close the write end → read gets `0`;
+`O_NONBLOCK` write on a full pipe → `-EAGAIN`. **Host seam:** the ring buffer under
+ASan. **Integration:** a musl `pipe`+`fork` round-trip. **Then a harsh, independent
+Codex review** of the lifecycle (no pool leak, last-close ordering, the SIGPIPE/EOF
+edges).
+**Done when:** the probe shows blocking + EOF + `SIGPIPE` + non-blocking, a musl
+fork+pipe round-trips, the pool is leak-free, and Codex is addressed.
+
+### [ ] Phase 14 — I/O multiplexing (the `select`/`poll` family)
+**Goal:** wait on many descriptors with a timeout — the call busybox's `ash` loop and
+most applets depend on.
+**Concept taught:** readiness-based multiplexing — each pollable object answers "which of
+`{readable, writable, error/hup}` now" and offers a wait queue (12); the syscall scans,
+and if nothing is ready, blocks on all of them until a wakeup or timeout.
+**ABI (Part-I lesson applied — confirmed from the vendored musl headers):** i386 musl
+defines the **whole family** — `select(82)`, `_newselect(142)`, `poll(168)`,
+`pselect6(308)`, `ppoll(309)`, plus the `time64` variants `pselect6_time64(413)`/
+`ppoll_time64(414)` musl tries first — so we **implement them all routed to one core**
+(the `time64` ones down-converting the `timespec`, or relying on musl's `-ENOSYS`
+fallback to the time32 number) and let the real busybox binary pick, rather than betting
+on one (the first draft wrongly assumed `pselect6`). `fd_set` is musl's `FD_SETSIZE=1024`
+shape while `MAX_FDS=16`, so the translation scans only the first `MAX_FDS` bits: a large
+`nfds` with **no** bit set past `MAX_FDS` is fine (we simply have no descriptors up
+there), but a bit set for an fd ≥ `MAX_FDS` is an invalid descriptor → `-EBADF` (the real
+select/poll contract) — never a silent truncation.
+**Design:** a per-backing `poll(events) -> revents` + register-on-wait-queue op for pipes
+(13), tty (16), sockets (now on the wait queue, 12), regular files (always ready), devfs
+char devices (15). The poll core scans (fast path), else sleeps on every referenced wait
+queue until a wakeup or timeout, then re-scans (lost-wakeup-safe per 12). `_newselect`/
+`select`/`pselect6` translate `fd_set`↔pollfd (the `p*` variants do the atomic sigmask
+swap honestly); document the 10 ms tick resolution. The `fd_set`↔pollfd translation is on
+the **host seam**.
+**Build:** `sys/io/poll.{c,h}`, the per-backing poll ops + a number-by-number ABI probe;
+a Readme on readiness + wait queues.
+**Verify (probe `tests/pollprobe.c`, hermetic):** two pipes (13); poll with nothing
+ready → `0` on timeout (~the requested time elapsed); write one → `POLLIN`; close a write
+end → `POLLHUP`; the same via `select`/`_newselect` `fd_set`; a large `nfds` with only
+in-range bits works, while a bit set for an fd ≥ `MAX_FDS` returns `-EBADF` (no silent
+truncation). **Host seam:** the set↔pollfd translation under ASan.
+**Integration:** a musl program polling `stdin` + a pipe; an **ABI-by-number probe**
+logs which select/poll number the real binary emits. **Then a harsh, independent Codex
+review** of the wait/rescan race and the sigmask handling.
+**Done when:** the probe passes (timeout, readable, `POLLHUP`, the select family), a musl
+poll/select program works, the lost-wakeup race is closed, and Codex is addressed.
+
+### [ ] Phase 15 — Synthetic filesystems: a `/dev` devfs and a minimal `/proc`
+**Goal:** real device files (`/dev`) and the slice of `/proc` that musl + busybox
+actually need — so the tty, the shell, and (in II-B) `ttyname` work.
+**Concept taught:** the synthetic filesystem — names backed by in-kernel drivers, not
+storage: a char device dispatches `open` to a `struct device_ops`, and `/proc` exposes
+kernel/process state as files. The seam between the namespace and driver code.
+**Design:** a **devfs** integrated with the Phase-6 KRFFS path resolution (a `/dev` whose
+children resolve to registered `device_ops`; pick + document a device-node kind carrying
+`{major,minor}` vs. a mounted devfs). Core char devices: `/dev/null` (read→EOF,
+write→sink), `/dev/zero` (zeros), `/dev/full` (write→`-ENOSPC`), `/dev/console` +
+`/dev/tty` (the console, a full tty in 16), `/dev/random`+`/dev/urandom` (best-effort
+now, crypto in Phase 20), routed through the Phase-12 `file_ops`. **A minimal `/proc`**
+(Codex BLOCKER — busybox `ps` and musl `ttyname_r`/`realpath` read it): `/proc/self/fd/N`
+(symlink-ish to the open file's name — what musl's `ttyname_r` uses), `/proc/PID/stat`
++ `/proc/PID/cmdline` (enough for `ps`), `/proc/self` → the caller's PID. Stage `/dev`
+into the image (host tool + `build_*.sh`); `/proc` is purely synthetic.
+**Build:** `sys/fs/devfs.{c,h}` + `device_ops`, `sys/fs/procfs.{c,h}` (the minimal set);
+path-resolution/open wiring; image staging; a `fs/devfs` + `fs/procfs` Readme.
+**Verify (probe `tests/devprobe.c`, hermetic):** `/dev/zero`→zeros, `/dev/null`→EOF/sink,
+`/dev/full`→`-ENOSPC`, `/dev/urandom` varies; `/proc/self/fd/0` resolves to the console;
+`/proc/<pid>/stat` reports the live process. **Integration (a self-contained musl
+`devtest`, since pipes/busybox do not exist yet):** it reads N bytes of `/dev/zero` and
+checks they are zero, reads `/dev/null` for EOF, writes `/dev/full` for `-ENOSPC`, and
+calls `ttyname(0)` → a `/dev` name (exercising `/proc/self/fd`). **Then a harsh,
+independent Codex review** of the device dispatch + the `/proc` synthesis.
+**Done when:** the core char devices behave, the minimal `/proc` answers `ttyname_r`/`ps`,
+and musl uses both; Codex is addressed.
+
+### [ ] Phase 16 — The TTY subsystem: `termios` + the N_TTY line discipline
+**Goal:** turn the console into a **real terminal** — cooked vs. raw input, echo, line
+editing, control chars — controlled via `termios`. The heart of an interactive shell,
+and the layer ptys reuse.
+**Concept taught:** the tty/line-discipline model — the canonical **N_TTY** discipline
+(cooked line buffering with ERASE/KILL editing + ECHO; `ISIG` turning INTR/QUIT/SUSP into
+signals; OPOST/ONLCR output), and `termios` as its control surface.
+**ABI (pinned against vendored musl, Codex MAJOR):** musl's *userspace* `struct termios`
+is **`NCCS=32` + `__c_ispeed/__c_ospeed`**; the kernel `TCGETS`(0x5401)/`TCSETS`(0x5402)
+struct is the **19-`c_cc` prefix** (`c_iflag/oflag/cflag/lflag`, `c_line`, `c_cc[19]`),
+which musl's larger struct is layout-compatible with (speed lives in `c_cflag`). Add a
+**compile-time `offsetof`/`sizeof` ABI assert** generated from the vendored headers and
+prove the real busybox `tcgetattr`/`tcsetattr` round-trips — do not hand-guess the
+layout.
+**Design:** a generic `struct tty` = input queue + line-discipline state (`termios`) +
+output processing + reader `wait_queue` (12) + a foreground-pgrp hook (filled in 17). The
+**N_TTY discipline** is pure logic on the **host seam**: `ICANON` line-assembly with
+ERASE/WERASE/KILL + `ECHO`/`ECHOE`, `ICRNL`/`INLCR`/`IGNCR`, `OPOST`/`ONLCR`, and
+`VMIN`/`VTIME` for raw mode; `ISIG` recognizes INTR/QUIT/SUSP (delivery to the fg group
+lands in 17). Retrofit the **console** (PS/2 keyboard + serial in, VGA + serial out) onto
+a `struct tty` registered as `/dev/console` + `/dev/tty` (15); `read(0)` flows through the
+discipline; implement `poll`/`FIONREAD`. ioctls: `TCGETS`/`TCSETS`/`TCSETSW`/`TCSETSF`,
+`TIOCGWINSZ`/`TIOCSWINSZ`, `TCFLSH` (pgrp/ctty ioctls in 17).
+**Build:** `sys/tty/tty.{c,h}` + `sys/tty/n_tty.{c,h}` (dual-target), the console
+retrofit, the ioctls + the termios ABI assert; a `tty` Readme.
+**Verify (probe `tests/ttyprobe.c`, harness-driven over serial — raw-byte in-tree
+driver):** cooked mode — the driver sends `a`,`b`,BS,BS,`c`,`d`,NL → `read` returns
+`"cd\n"` with the right echo; raw mode (`VMIN=1`, no `ICANON`/`ECHO`) → bytes un-echoed,
+one at a time; `TCGETS`/`TCSETS` round-trip a known `termios`; `TIOCGWINSZ` sane. **Host
+seam:** the cook/erase/echo state machine under ASan. **Integration:** the classic musl
+`cfmakeraw`+`tcsetattr`+per-byte-`read` "getch" loop works; cooked line edit echoes
+correctly. **Then a harsh, independent Codex review** of the discipline edges
+(buffer-full, erase at line start, EOF, CR-NL) and the console retrofit.
+**Done when:** cooked + raw line discipline works on the console, `termios` round-trips
+through real musl (ABI assert green), the discipline passes its host tests, and Codex is
+addressed.
+
+### [ ] Phase 17 — Sessions, process groups, and job control (the highest-risk phase)
+**Goal:** the session/process-group model and full job control — Ctrl-C/Ctrl-Z reach the
+**right** group, jobs stop and resume, and the shell learns when a child stops.
+**Concept taught:** the Unix session→process-group→process hierarchy, the controlling
+terminal and its **foreground group**, foreground/background signal routing, and the
+stop/continue mechanism (the classic APUE chapter).
+**Codex flagged this as the single most likely phase to sink the run** (today the kernel
+classifies stop signals but **ignores** them — [syscall.c](rach2/sys/syscall.c) — has no
+`PROC_STOPPED` state, and `wait4` only reaps zombies), so it is built in five explicit
+sub-steps, each probe-verified before the next: **(a)** `setsid`(66)/`setpgid`(57)/
+**`getpgid`(132)** [not 155]/`getpgrp`(65)/`getsid`(147) + the append-only PCB `sid`/`pgid`
+(re-check `switch.s` offsets); **(b)** the controlling-tty ioctls
+`TIOCSCTTY`/`TIOCGPGRP`/`TIOCSPGRP`/`TIOCNOTTY` and `/dev/tty` → the caller's ctty;
+**(c)** a real **`PROC_STOPPED`** state + `SIGSTOP`/`SIGTSTP` stop and `SIGCONT` resume,
+with `SIGCHLD` to the parent on stop/continue; **(d)** `wait4` `WUNTRACED`/`WCONTINUED`
+and `kill(-pgid, sig)` (negative-pid → whole group) + `rt_sigsuspend`(179)/`pause`(29)
+for the shell's wait loop; **(e)** wire the line discipline (16) to deliver INTR→`SIGINT`/
+QUIT→`SIGQUIT`/SUSP→`SIGTSTP` to the **foreground group**, background read→`SIGTTIN`,
+`TOSTOP` write→`SIGTTOU`, and **`SIGPIPE`** (now that pipes exist — deferred from Phase 8).
+**Build:** the PCB fields, the session/pgrp syscalls, the ctty ioctls, the `PROC_STOPPED`
+state + `wait4` flags + `kill(-pgid)` + `rt_sigsuspend`/`pause`, the signal-routing edits;
+a Readme on sessions + job control.
+**Verify (probe `tests/jobprobe.c`, harness-driven raw-byte over serial):** `fork` a
+child into its own pgrp as the tty's fg group; Ctrl-C → **only** the fg child gets
+`SIGINT`; a background child reading the tty gets `SIGTTIN`; Ctrl-Z **stops** the fg
+child and the parent's `wait4(WUNTRACED)` reports it; `SIGCONT` resumes (parent sees
+`WCONTINUED`); `kill(-pgid, SIGTERM)` hits the whole group; `setsid`/`setpgid`/`getpgid`
+round-trip; `pause` returns on a signal. **Integration:** a musl job-control sketch.
+**Then a harsh, independent Codex review** of the signal-routing matrix, the stop/cont
+state machine, and the `wait4` encoding — fix every finding.
+**Done when:** all five sub-steps pass their probes (pgrp/session, ctty, stop/cont,
+`wait4`/`kill(-pgid)`, fg-group routing), and Codex is addressed.
+
+### [ ] Phase 18 — BusyBox-required syscalls + the BusyBox port (the II-A capstone)
+**Goal:** a static musl **busybox** runs as the interactive login shell on the console
+tty.
+**Concept taught:** that the preceding subsystems compose into a *real shell* — and the
+discipline of porting a large real program (curate a config, surface and fill the gaps
+honestly) rather than writing a toy.
+**Design:** first land the **busybox-required misc syscalls** Codex flagged as scheduled
+too late — `getppid`(64), `times`(43), `sysinfo`(116), `umask`(60), `access`(33)/
+`faccessat`(307), `vfork`(190) (a conservative alias to `fork`, or force the config off
+it), `FIONBIO`/`FIONREAD` for every backing, and a decision on `statfs64`(268)/`readlink`
+(implement minimal, or disable `df`/`readlink`/`realpath` applets and document) — each
+with the `-errno` discipline. Then pin + vendor busybox (tarball, no submodule); a
+`busybox/` build step (static against musl, `i686-elf-gcc`); a curated `.config` (ash +
+`ls`/`cat`/`echo`/`grep`/`sort`/`head`/`tail`/`wc`/`mkdir`/`rm`/`cp`/`mv`/`kill`/`sleep`/
+`ps`/…) with applets needing unimplemented facilities **disabled and documented**, and a
+**file-backed-`mmap` pre-flight**: confirm the static config triggers no `mmap` of a file
+(Rach2 returns `-ENOSYS` for non-anon `mmap` — [syscall.c](rach2/sys/syscall.c)) and no
+mapped zoneinfo (set `TZ`/UTC). Stage busybox + a minimal `/etc` into the **runtime**
+image; the console launches busybox `ash` (`ish` stays a fallback/init).
+**Build:** the misc syscalls, the `busybox/` build step + `.config` + staging; a
+`busybox/Readme.md` on the config + disabled-applet rationale + the `getcwd` `CWD_MAX=64`
+cap.
+**Verify (interactive, the in-tree raw-byte driver over serial):** busybox `ash` prompts;
+`ls /`, `cat /etc/...`, `echo hi`, a pipeline `ls / | grep etc`, redirection `echo hi >
+/tmp/x; cat /tmp/x`, job control (`sleep 5 &`, `jobs`, `fg`, Ctrl-Z/Ctrl-C), `ps`, and
+`busybox --list` all behave. The **entire** Part-I suite + every probe green from `make
+clean && make`; `make verify-style`/`verify-host`. **Then a harsh, independent Codex
+review** of the misc syscalls + the shell-launch glue.
+**Done when:** busybox `ash` runs interactively with pipelines, redirection, job control,
+and `ps` on the console; nothing regressed; Codex is addressed.
 
 ### Part II-B — remote login (dropbear SSH)
 
-dropbear (server + client, static, fork-per-connection — **no threads**) needs,
-beyond II-A:
+> **Budget — static first, live after ptys.** Up front, do *static accounting*: one SSH
+> session ≈ dropbear (1 proc) + its forked session child (1) + the shell — and fds:
+> listen socket + accepted socket + pty master + pty slave + stdio. Against
+> `MAX_PROCS`/`MAX_FDS`/socket pool = 16 this should fit but is tight. The **live**
+> budget probe (stand the whole stack up and count) needs a pty pair, so it runs **after
+> Phase 19**, gating Phase 23; raise the fixed limits (append-only PCB, re-check asm
+> offsets) then if it does not fit.
 
-- **[ ] Pseudo-terminals — `/dev/ptmx` + `/dev/pts/N`.** The master/slave pair: the
-  sshd child runs the shell on the slave (II-A termios), the server shuttles bytes
-  between the socket and the master (`TIOCGPTN`/`TIOCSPTLCK`/`openpty`). The biggest
-  II-B subsystem; builds on the II-A terminal layer. Probe: open ptmx, fork a child
-  on the slave, round-trip bytes through the master.
-- **[ ] Crypto-grade entropy — `/dev/urandom` + the Phase 1/7 CSPRNG, promoted.**
-  dropbear generates host and session keys — **security-load-bearing**, so the
-  CSPRNG must be seeded from a **QEMU `virtio-rng` device** (the real entropy source;
-  `RDRAND` only behind a CPUID check, *never* timer jitter alone) and **fail closed**
-  if no real source is present. Exposed as `/dev/urandom` + `getrandom`. Probe:
-  statistical sanity + reseed.
-- **[ ] Key + auth staging.** Stage `/etc/dropbear` host keys (host-generated or
-  first-boot) and pick the auth policy — `/etc/passwd` + a fixed password, or
-  `authorized_keys` — now that the Phase-6 directory tree can hold them.
-- **[ ] Socket fill-out — `getsockname`/`getpeername`/`setsockopt`/`getsockopt`/
-  `shutdown`.** dropbear sets `SO_REUSEADDR`/`TCP_NODELAY`, queries peers,
-  half-closes. Small additions to the existing socketcall.
-- **[ ] A few more syscalls** both touch: `dup`/`dup3`, `umask`,
-  `access`/`faccessat`, `getrlimit`/`setrlimit`, `sysinfo`, `gethostname`/
-  `sethostname`, `clock_nanosleep` — each tiny, with the `-errno` discipline.
-- **Milestone (the capstone):** from the host, `ssh -p <hostfwd> root@localhost`
-  into the guest; dropbear authenticates, allocates a pty, execs busybox `ash` — an
-  **interactive shell over SSH**. A real, if tiny, Unix.
+### [ ] Phase 19 — Pseudo-terminals (`/dev/ptmx` + `/dev/pts/N`)
+**Goal:** the pty master/slave pair — the mechanism a network login uses to give a
+remote user a real terminal. The biggest II-B subsystem, built on the Phase-16 tty layer.
+**Concept taught:** the pseudo-terminal — a bidirectional channel whose **slave** end is
+a full tty (reusing the N_TTY discipline) and whose **master** end is what sshd drives;
+the dynamic `/dev/pts` namespace.
+**Design:** a `struct pty` pool, each = a master endpoint + a slave `struct tty` (16).
+`open("/dev/ptmx")` allocates a pair and returns the master fd; the slave appears as
+`/dev/pts/N` (devfs, 15). Master write → slave input (line discipline) → slave `read`;
+slave write → output processing → master `read`; both ends **pollable** (14) and
+**blocking** (12). ioctls — **exact bit patterns pinned from the vendored musl headers**
+(Codex MAJOR): `TIOCGPTN`=`0x80045430` (slave index), `TIOCSPTLCK`=`0x40045431` (unlock),
+`TIOCSWINSZ` propagation, plus the ctty/pgrp ioctls (17) on the slave. Supports musl
+`openpty`/`grantpt`/`unlockpt`/`ptsname` (which reads `/proc/self/fd` from 15). `/dev/pts/N`
+appears/disappears on open/close. **Run the live budget probe here**, now the full
+listen+accept+pty+child+stdio stack exists.
+**Build:** `sys/tty/pty.{c,h}` reusing `n_tty`, the `/dev/ptmx` + `/dev/pts` devfs nodes,
+the ioctls; a `tty/pty` Readme.
+**Verify (probe `tests/ptyprobe.c`, hermetic):** `open` ptmx, `TIOCGPTN`→N (exact value),
+`open` `/dev/pts/N`, `fork` a child that `setsid`+`TIOCSCTTY`s the slave as ctty/stdio;
+the parent writes a line to the master → the child reads the **cooked** line and the echo
+returns on the master; the child writes → the parent reads; `poll` works on the master;
+the live budget probe fits one session. **Integration:** a musl `openpty`+`fork` program
+round-trips — the exact shape sshd uses. **Then a harsh, independent Codex review** of
+the master/slave wakeup paths, the pts lifecycle, and the ctty interplay.
+**Done when:** ptmx/pts pairs work with the pinned ioctls, the slave is a full tty, musl
+`openpty` round-trips, the one-session budget fits, and Codex is addressed.
+
+### [ ] Phase 20 — Trusted entropy: RDSEED/RDRAND → `/dev/urandom`, fail-closed
+**Goal:** an entropy pipeline good enough to generate SSH keys — seeded from a genuine
+hardware source, exposed as `/dev/urandom` + trusted `getrandom`, **fail-closed** when no
+real source exists. **(Required path; virtio-rng is the optional stretch, 20-opt.)**
+**Concept taught:** the entropy chain a CSPRNG must sit on, and the security rule a key
+generator embodies — **refuse to run on non-defensible entropy** (timer jitter is not a
+seed).
+**Design (Codex MAJOR — virtio is gold-plating on the critical path):** the kernel
+already CPUID-gates **`RDSEED`/`RDRAND`** seeding ([krandom.c](rach2/sys/lib/krandom.c)).
+Add a **trusted-entropy flag**: seed the Phase-7 ChaCha CSPRNG from `RDSEED`/`RDRAND`,
+mark the source trusted; if neither instruction is present, **fail closed** — `getrandom`
+blocks/`-EIO` and `/dev/urandom` refuses, with a clear log (the weak jitter fallback is
+**never** used for keys). Expose `/dev/urandom` + `/dev/random` (devfs, 15) and promote
+`getrandom`(355) to crypto-trusted; `AT_RANDOM`/the stack canary stay best-effort (Phase
+1) — document the tiering.
+**Verify (probe `tests/rngprobe.c`, hermetic):** `/dev/urandom` reads vary, no long zero
+runs, pass a cheap monobit/byte-distribution sanity; reseed changes the stream;
+**(separate boot, CPU with no `RDRAND`)** the fail-closed policy holds — no silent weak
+output. **Host seam:** the ChaCha core (dual-target since Phase 7) + the monobit check.
+**Integration:** a musl `getrandom` + `/dev/urandom` consumer and a tiny keygen shape.
+**Then a harsh, independent Codex review** (security-load-bearing — adversarial on the
+seeding and the fail-closed path).
+**Done when:** `RDSEED`/`RDRAND` seeds a crypto CSPRNG, `/dev/urandom` is non-trivially
+random, fail-closed holds with no real source, and Codex is addressed.
+
+**[ ] Phase 20-opt (stretch, off the critical path) — virtio-rng as a paravirtual entropy
+source.** Purely educational (the modern VM device model): a minimal **virtio-pci**
+transport — PCI discovery (`1af4:1005`/`1044`), one **virtqueue** (descriptor/avail/used
+rings in direct-mapped low RAM — respect the Part-I frame cap), feature negotiation, kick
++ the used-ring ISR (a possibly-shared IRQ — safe via the chained dispatcher) — and a
+`virtio_rng` driver that becomes a *preferred* trusted seed when present, RDSEED/RDRAND
+still the fallback. `sys/virtio/virtio_{pci,rng}.{c,h}`; the virtqueue index math on the
+host seam; a `virtio` Readme. Probe: `/dev/urandom` is virtio-seeded when the device is
+attached. **Do this only if Phase 20 landed clean and time allows — it must not gate
+dropbear.**
+
+### [ ] Phase 21 — The socket fill-out for a real server
+**Goal:** the rest of the BSD socket surface a fork-per-connection sshd needs beyond Part
+I's connect/send/recv — naming, options, half-close — and a hardened, interruptible
+inbound path.
+**Concept taught:** the server side of the socket API — `accept` minting a connected
+socket, `getsockname`/`getpeername`, socket **options**, `shutdown` half-close — riding
+the Phase-12 `file_ops`/wait-queue substrate over the Phase-11 refcounted OFDs, so a
+forking server's fds block, poll, and refcount correctly.
+**Design (Codex BLOCKER — a numbering collision):** Linux socketcall sub-call **15 is
+`getsockopt`, but Rach2 already defines a private `SC_PING=15`**
+([syscall.c](rach2/sys/syscall.c)) — **renumber the private ping out of the BSD range
+first**, then add the real sub-calls **`getsockname`(6)/`getpeername`(7)/`shutdown`(13)/
+`setsockopt`(14)/`getsockopt`(15)**. Honest `SO_REUSEADDR`/`TCP_NODELAY`/`SO_ERROR`/
+`SO_KEEPALIVE` (real where cheap, documented no-op where not) + `FIONREAD`/`FIONBIO`. Make
+`accept` return an **OFD-backed**, wait-queue-blocking (12), poll-able (14), `EINTR`-able
+socket that inherits `O_NONBLOCK`, so `fork`-per-connection refcounts cleanly; confirm
+`accept`/`poll` wake on an inbound SYN; `shutdown(SHUT_RDWR)`/`close` drive TCP teardown.
+**Build:** the renumbered ping, the new sub-calls + a `get/setsockopt` table, the
+accept/poll/EINTR hardening, `FIONREAD`/`FIONBIO`; a number-by-number socketcall ABI
+probe; Readme additions.
+**Verify (probe `tests/sockfilltest.c`, musl, via `hostfwd`):** a musl server
+binds/listens, the host connects, `accept` returns; `getpeername`/`getsockname` correct;
+`setsockopt`(`SO_REUSEADDR`/`TCP_NODELAY`)+`getsockopt` round-trip; `shutdown` half-closes
+(peer sees EOF); a second `connect` after close works; a blocked `accept` returns `-EINTR`
+on a signal. **Integration:** the Part-I musl `httpd` (unchanged) still serves `curl`
+(no regression after the ping renumber); a fork-per-connection echo server handles two
+host connections. **Then a harsh, independent Codex review** of the renumber, the option
+table, and the accept/OFD/EINTR interplay.
+**Done when:** the ping renumber is clean (`httpd` still serves), the server socket
+surface is complete, options + `FIONREAD` round-trip, half-close + `EINTR` work,
+`accept` is OFD-clean, and Codex is addressed.
+
+### [ ] Phase 22 — Auth, key staging, and the last small syscalls
+**Goal:** stage the identity/credentials a login server needs, and clear the long tail of
+tiny POSIX calls dropbear touches.
+**Concept taught:** how a Unix authenticates a login (the `/etc/passwd` + keys staging)
+and the honest line a credential-less hobby OS draws — plus the `-errno` discipline on
+the last syscalls.
+**Design:** stage **`/etc/passwd`** (root + a fixed password hash or a pubkey policy),
+**`/etc/dropbear`** host keys (staged, or generated first-boot via Phase-20 entropy), and
+**`authorized_keys`** in the Phase-6 tree; pick + document the auth policy (fixed password
+vs. pubkey). No real users → `setuid`/`setgid`/`setgroups` accept 0 / are documented
+no-ops; `getpwnam`/`getpwuid` work via `/etc/passwd` through musl. The tail syscalls, each
+`-errno`: **`dup3`(330), `getrlimit`(76)/`ugetrlimit`(191)/`prlimit64`(340),
+`gethostname`/`sethostname`(74), `clock_nanosleep`(267 — plus the `_time64`(407)
+fallback per the ABI note)** (the busybox-shared ones —
+`umask`/`access`/`sysinfo` — landed in Phase 18), with honest values (`RLIMIT_NOFILE`=
+`MAX_FDS`, `RLIMIT_STACK`=the stack-VMA cap). **Advisory locks (Codex):** dropbear/musl
+may issue `fcntl` `F_SETLK`/`F_GETLK` — implement **documented single-user no-conflict
+semantics** (always grant) or disable the callers; do not silently `-ENOSYS` a path
+dropbear needs.
+**Build:** the staging (host tool + `build_*.sh`), the syscalls, the `F_SETLK` decision;
+a Readme on the auth policy + the no-real-uid + no-conflict-locks simplifications.
+**Verify (probe `tests/miscprobe.c`, hermetic):** each new syscall round-trips
+(`getrlimit` honest caps; `dup3` dups + sets `CLOEXEC`; `gethostname` round-trips;
+`clock_nanosleep` waits + yields; `F_SETLK` grants); musl `getpwnam("root")` parses
+`/etc/passwd`. **Integration:** a musl program that `getpwnam`s root and reads its
+rlimits. **Then a harsh, independent Codex review** of the staging + the tail syscalls.
+**Done when:** identity/keys are staged, the auth policy is set, every tail syscall
+round-trips under `-errno`, advisory locks have honest semantics, and Codex is addressed.
+
+### [ ] Phase 23 — Port dropbear; SSH into Rach2 (the capstone); regress
+**Goal:** from the host, `ssh -p 2222 root@localhost` into the guest — dropbear
+authenticates, allocates a pty (19), and execs busybox `ash` (18) over it with
+crypto-grade entropy (20): **an interactive shell over SSH.** The whole arc's definition
+of done.
+**Concept taught:** that the subsystems compose into a *real, networked* Unix — and the
+capstone discipline of porting a security daemon honestly.
+**Design:** pin + vendor dropbear; build **`dropbearmulti`** static against musl (no
+PAM/zlib; a KEX/cipher set that fits Rach2's crypto + Phase-20 entropy; curate
+`options.h`); a `dropbear/` build step. Generate/stage host keys (22); run `dropbear -F
+-E` (foreground, log to stderr) on port 22 with `hostfwd tcp:127.0.0.1:2222-:22`. Running
+it surfaces the last gaps (a socket option, a pty ioctl, an rlimit) — fix with the
+established discipline. The session: sshd `accept`s (21) → `fork`s → the child `setsid`s +
+opens a pty slave as ctty (17/19) → execs busybox `ash` (18); the server shuttles
+socket↔master.
+**Build:** the `dropbear/` build step + `options.h` + key staging + the run wiring; a
+`dropbear/Readme.md` on the config + the SSH-session anatomy.
+**Verify (the capstone, the in-tree host `ssh` driver):** the driver runs a **real host
+`ssh` client** through the `hostfwd` with the fixed credential, executes `uname -a; id;
+ls /; echo SSH_OK`, and **hard-asserts** the output returns over the SSH channel; a second
+run requests an **interactive PTY**, runs busybox `ash`, types a pipeline + Ctrl-C, and
+asserts the right behavior. Host + session keys use Phase-20 entropy. The **entire** Part
+I + Part II suite + every probe green from `make clean && make`; `make verify-style`/
+`verify-host`. **Then a harsh, independent Codex review** of the integration glue, any new
+syscalls, and the crypto/entropy wiring (adversarial — the security surface).
+**Done when:** `ssh root@localhost -p 2222` yields an interactive busybox shell over a
+dropbear-allocated pty with crypto-grade entropy, the full suite is green, and Codex is
+addressed — **you can SSH into Rach2.**
+
+## Part II execution risk (live)
+
+- **Job control (Phase 17) is the single highest-risk phase** (Codex's verdict, not
+  dropbear): the kernel today *classifies* stop signals but ignores them, has no
+  `PROC_STOPPED`, and `wait4` only reaps zombies — so it is split into five probe-gated
+  sub-steps. "Exactly which process gets the signal" is the hard part; `jobprobe` drives
+  Ctrl-C/Ctrl-Z over the raw-byte serial driver and asserts the recipient.
+- **ABI fidelity is the recurring Part-I trap, now pinned from the vendored headers:**
+  the select **family** (not `pselect6` alone), `getpgid`=132, the `SC_PING`=15
+  collision, the `NCCS=32` termios prefix, the exact pty ioctl bit patterns — each gets a
+  by-number/by-offset probe and is judged by the real busybox/dropbear binary.
+- **The blocking/dispatch substrate (Phase 12) underpins everything** — if the wait
+  queue has a lost-wakeup or the `file_ops` refactor regresses sockets, every later phase
+  wobbles; its probe hammers multi-waiter wake + `EINTR` first.
+- **Entropy is de-risked by making RDSEED/RDRAND the required path** (Phase 20) and
+  **virtio-rng an explicit stretch** (20-opt) — the one genuinely new driver model can no
+  longer sink the run. If a probe wedges anywhere, the Phase-0 diagnostic mode (`-d
+  int,cpu_reset`, gdbstub) applies unchanged.
+- **The one-session fixed-limit budget** is settled by a live probe after Phase 19 (ptys
+  exist), raising `MAX_PROCS`/`MAX_FDS`/the socket pool (append-only PCB, re-check asm
+  offsets) before dropbear if needed.
 
 ## Resolved leftover blockers — confirmed NOT needed even for busybox + dropbear
 
@@ -734,19 +1239,36 @@ the three big architectural blockers is required — a clean, low-risk roadmap.
 
 ## Open research questions / spikes (resolve in the owning phase)
 
-- Exact musl auxv dependency for a static, no-TLS hello (Phase 0/1).
-- KRFFS v2 on-disk directory format (`parent_id` vs. a dirent node) — and threading
-  the same change through the host tools (mkfs / FUSE / fsck / build scripts)
-  (Phase 6).
-- Fixed-limit budget for one SSH session: confirm `MAX_PROCS`(16), `MAX_FDS`(16),
-  and the socket pool(16) suffice via a budget probe; raise them if not (before
-  Part II).
-- `/dev` devfs: how device nodes sit in the Phase-6 directory tree and route to
-  in-kernel handlers (II-A).
-- pty/termios: how much real line discipline to implement now vs. defer (II-A/B).
+**Part I — all resolved** (the subsystems shipped): the musl auxv set (Phase 1), the
+KRFFS v2 directory format threaded through the host tools (Phase 6), and the discovery
+that surfaced *after* Part I — musl's `send`/`recv` → `sendto`/`recvfrom` routing
+(Phase 10) and the IRQ-11 sharing between HDA and RTL8139 (the chained-IRQ dispatcher).
 
-*(Settled by the Codex review: directories extend KRFFS in place; VMA = small fixed
-array; entropy = virtio-rng, fail-closed; job control moves to Part II-A; `getpid`
+**Part II — open spikes, each owned by a phase:**
+- Backing-dispatch + wait-queue shape: the `file_ops` table and the multi-waiter
+  `wait_queue` that replace the fd `enum`-switch and the single-`waiting_proc` park
+  (Phase 12) — the foundation everything else registers into.
+- `/dev` devfs + `/proc` shape: a device-node kind in KRFFS carrying `{major,minor}` vs.
+  a mounted devfs, and the minimal `/proc/self/fd` + `/proc/PID/stat` slice `ttyname_r`
+  and `ps` need — pick the simplest real one (Phase 15).
+- N_TTY scope: how much line discipline now (ERASE/KILL/ECHO/ISIG/OPOST + VMIN/VTIME)
+  vs. deferred (IXON flow control, full `c_cc`) — settle in Phase 16 and reuse for ptys.
+- ABI layouts pinned against the vendored `libc/musl-1.2.5`: the select **family**
+  (`select`/`_newselect`/`poll`/`pselect6`/`ppoll`, implement all routed to one core —
+  Phase 14), the `TCGETS` 19-`c_cc` termios prefix under musl's `NCCS=32` struct (Phase
+  16), the exact pty ioctl bit patterns (Phase 19), and the `SC_PING`=15 renumber before
+  the socketcall fill-out (Phase 21).
+- Entropy: RDSEED/RDRAND fail-closed is the required source (Phase 20); virtio-pci +
+  virtqueue is the optional paravirt upgrade, off the critical path (Phase 20-opt).
+- Fixed-limit budget for one SSH session: static accounting up front, then a **live**
+  probe after ptys exist (Phase 19) confirms `MAX_PROCS`/`MAX_FDS`/socket pool (16 each)
+  hold listen + accept + pty + child + stdio; raise them (append-only PCB, re-check asm
+  offsets) before dropbear if not.
+- dropbear crypto/entropy fit: which KEX/cipher set Rach2's CSPRNG + entropy support, and
+  the auth policy (fixed password vs. `authorized_keys`) (Phases 22/23).
+
+*(Settled earlier by the Codex review: directories extend KRFFS in place; VMA = small
+fixed array; entropy = virtio-rng, fail-closed; job control is Part II-A; `getpid`
 lives only in Phase 3.)*
 
 ## Definition of done (the full arc)
