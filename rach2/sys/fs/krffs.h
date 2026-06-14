@@ -33,6 +33,23 @@
 #define KRFFS_FILE_SYSTEM_ROOT_NODE_MODE 0755
 
 /*
+ * Hierarchical KRFFS (v2): a node's directory membership is its parent
+ * directory's unique id, and a directory is a reserved node whose mode carries
+ * the S_IFDIR type bit. The root directory has a fixed id KRFFS_ROOT_ID. A
+ * node's own id is mix(parent_id, name) -- unique because sibling names are
+ * unique -- so parent_id references are unambiguous and survive node moves.
+ */
+#define KRFFS_S_IFMT  0170000u  /* file-type mask within mode */
+#define KRFFS_S_IFDIR 0040000u  /* directory */
+#define KRFFS_S_IFREG 0100000u  /* regular file */
+#define KRFFS_ROOT_ID 1u        /* fixed id of the root directory */
+
+/* A directory's mode is S_IFDIR | 0755; a regular file is just its perm bits
+ * (S_IFREG is implied when no type bits are set, for backward compatibility with
+ * v1 images that stored bare permission modes). */
+#define KRFFS_IS_DIR(mode) (((mode) & KRFFS_S_IFMT) == KRFFS_S_IFDIR)
+
+/*
  * Node types in the file system
  */
 typedef enum {
@@ -74,6 +91,7 @@ typedef struct krffs_node {
     uint64_t size;                                   /* Total node size (header + data space) */
     uint64_t previous_node_size;                     /* Size of previous node (for backward traversal) */
     uint64_t data_size;                              /* Actual data bytes used */
+    uint64_t parent_id;                              /* id of the containing directory (KRFFS_ROOT_ID at the root) */
 } krffs_node_t;
 #pragma pack(pop)
 
