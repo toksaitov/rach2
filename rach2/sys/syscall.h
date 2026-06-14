@@ -17,6 +17,10 @@
 #define SYS_WRITE    4
 #define SYS_OPEN     5
 #define SYS_CLOSE    6
+#define SYS_READLINK   85
+#define SYS_READLINKAT 305
+#define SYS_ACCESS     33
+#define SYS_FACCESSAT  307
 #define SYS_WAITPID  7
 #define SYS_CREAT    8
 #define SYS_UNLINK  10
@@ -44,6 +48,7 @@
 #define SYS_PPOLL     309
 #define SYS_GETTIMEOFDAY 78
 #define SYS_STAT     106
+#define SYS_LSTAT    107
 #define SYS_UNAME    122
 #define SYS_WRITEV   146
 #define SYS_GETCWD   183
@@ -53,6 +58,7 @@
 #define SYS_OPENAT   295
 #define SYS_FSTATAT64 300
 #define SYS_STAT64   195
+#define SYS_LSTAT64  196
 #define SYS_GETDENTS64 220
 #define SYS_SET_THREAD_AREA 243
 #define SYS_EXIT_GROUP 252

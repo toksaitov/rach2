@@ -39,8 +39,10 @@ musl/tcpsendrecv
 musl/ofdmusl
 musl/pipemusl
 musl/pollmusl
+musl/devtest
 sigprobe
 ofdprobe
 waitprobe
 pipeprobe
 pollprobe
+devprobe

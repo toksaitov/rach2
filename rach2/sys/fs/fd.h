@@ -32,7 +32,10 @@ typedef enum {
     FD_TYPE_FRAMEBUFFER,  /* VGA framebuffer device */
     FD_TYPE_MOUSE,        /* PS/2 mouse device */
     FD_TYPE_SOCKET,       /* Network socket */
-    FD_TYPE_PIPE          /* Pipe end (backed by file_ops + priv) */
+    FD_TYPE_PIPE,         /* Pipe end (backed by file_ops + priv) */
+    FD_TYPE_DEVICE,       /* devfs character device (backed by file_ops + priv) */
+    FD_TYPE_PROC,         /* procfs file snapshot (backed by file_ops + priv) */
+    FD_TYPE_SYNTH_DIR     /* synthetic directory (/dev, /proc, ...); priv encodes it */
 } fd_type_t;
 
 /*

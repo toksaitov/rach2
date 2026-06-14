@@ -1241,6 +1241,7 @@ static void exec_program(int argc, char *argv[])
     user_proc->cr3 = get_page_dir_phys(user_dir);
     user_proc->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
     user_proc->parent_pid = current_proc ? current_proc->pid : 0;
+    proc_set_comm(user_proc, path); /* program name for /proc/<pid>/stat and ps */
     current_proc = user_proc;
 
     /* Build the address-space map (VMAs) so the demand-paging fault handler can

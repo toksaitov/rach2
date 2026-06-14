@@ -17,6 +17,9 @@
 #include "ipc/pipe.h"
 #include "io/poll.h"
 #include "fs/krffs.h"
+#include "fs/devfs.h"
+#include "fs/synthfs.h"
+#include "fs/procfs.h"
 #include "mm/paging.h"
 #include "mm/heap.h"
 #include "mm/usercopy.h"
@@ -76,10 +79,37 @@ void fb_release_if_owner(uint32_t pid)
  * reference, by contrast, is counted per descriptor (socket_ref on dup/fork), so
  * it is always dropped here. (No descriptor is both an ops object and a socket.)
  */
+/*
+ * The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit packed
+ * in the fd's priv pointer alongside the kind without truncation, so the (kind,
+ * pid) live here (struct synth_dir is in synthfs.h); priv points at the slot,
+ * freed when the last descriptor referencing it closes (see fd_release_backing).
+ */
+static struct synth_dir synth_dir_pool[32];
+
+static struct synth_dir *synth_dir_alloc(int kind, int pid)
+{
+    int i;
+    for (i = 0; i < (int)(sizeof(synth_dir_pool) / sizeof(synth_dir_pool[0])); i++) {
+        if (!synth_dir_pool[i].used) {
+            synth_dir_pool[i].kind = kind;
+            synth_dir_pool[i].pid = pid;
+            synth_dir_pool[i].used = 1;
+            return &synth_dir_pool[i];
+        }
+    }
+    return NULL;
+}
+
 static void fd_release_backing(fd_entry_t *e)
 {
     if (!e) {
         return;
+    }
+    /* A synthetic directory fd's pooled cookie is freed when its last descriptor
+     * closes (dup/fork share it via the OFD refcount, like an ops backing). */
+    if (e->type == FD_TYPE_SYNTH_DIR && e->priv && e->ofd && e->ofd->refcount == 1) {
+        ((struct synth_dir *)e->priv)->used = 0;
     }
     /* Restore text mode only if THIS process actually owns the framebuffer, so a
      * fork child that merely inherited the fb descriptor cannot clear the
@@ -358,9 +388,14 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return -EBADF;
     }
 
-    /* Backing-ops object (pipe/tty/pty): dispatch through its vtable. The Part I
-     * types below have no ops and fall through to the enum dispatch. */
+    /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable, but
+     * only if the descriptor was opened for writing (a read-only fd -> -EBADF, as
+     * Linux reports). The Part I types below have no ops and fall through to the
+     * enum dispatch. */
     if (entry->ops) {
+        if (!(entry->flags & FD_FLAG_WRITE)) {
+            return -EBADF;
+        }
         return entry->ops->write ? entry->ops->write(entry, buf, count) : -EBADF;
     }
 
@@ -558,12 +593,14 @@ static int32_t sys_writev(isr_params_t *params)
 /* Linux open flags */
 #define O_APPEND   02000    /* every write lands at end-of-file */
 #define O_CREAT    0100
+#define O_EXCL     0200
 #define O_TRUNC    01000
 #define O_NONBLOCK 04000    /* a would-block operation returns -EAGAIN */
 #define O_CLOEXEC  02000000 /* close-on-exec: the fd is dropped across execve */
 
 /* Special dir fd for the openat family: resolve relative to the current dir. */
 #define AT_FDCWD (-100)
+#define AT_SYMLINK_NOFOLLOW 0x100
 
 /*
  * Join base + '/' + rel into pathbuf as an absolute path (base is "/" or "/a/b",
@@ -664,6 +701,16 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
     if (!entry) {
         return -EBADF;
     }
+    /* A synthetic directory fd (/dev, /proc, /proc/<pid>[/fd]): reconstruct its
+     * absolute path from the pooled kind/pid and resolve the relative name there. */
+    if (entry->type == FD_TYPE_SYNTH_DIR) {
+        struct synth_dir *sd = (struct synth_dir *)entry->priv;
+        if (!sd) {
+            return -EBADF;
+        }
+        synth_dir_path(sd->kind, sd->pid, dirpath, (int)sizeof(dirpath));
+        return join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
+    }
     if (entry->type != FD_TYPE_DIR) {
         return -ENOTDIR;
     }
@@ -697,11 +744,104 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
  * Resolves a device ("fb"/"mouse") or a KRFFS path and installs a descriptor.
  * Returns the fd or -errno.
  */
+static int32_t synth_open_dir(const struct vpath *vp, int flags);
+
+/*
+ * Open a path that classified as synthetic (/dev or /proc). Devices bind their
+ * file_ops; directories get a synthetic dir fd; /proc files snapshot their text.
+ * A synthetic mount is never created or fallen-through to KRFFS.
+ */
+static int32_t synth_open(const struct vpath *vp, int flags)
+{
+    switch (vp->kind) {
+        case VNODE_DEV:
+            return devfs_open(vp->name, flags);
+        case VNODE_PROC_FILE:
+            return procfs_open(vp, flags);
+        case VNODE_DEV_DIR:
+        case VNODE_PROC_DIR:
+        case VNODE_PROC_PID:
+        case VNODE_PROC_FD_DIR:
+            return synth_open_dir(vp, flags);
+        case VNODE_ENOTDIR:
+            return -ENOTDIR;
+        default:
+            return -ENOENT; /* including VNODE_PROC_FD_LINK: read via readlink */
+    }
+}
+
+/*
+ * A mutation (mkdir/rmdir/unlink/rename/...) that targets a synthetic mount must
+ * be refused here, not passed to KRFFS -- otherwise e.g. mkdir("/dev") would
+ * create a real KRFFS directory that shadows the synthetic one. `name` is the
+ * absolute path with the leading '/' stripped.
+ */
+static int synth_is_synth(const char *name)
+{
+    struct vpath vp;
+    return synth_classify(name, &vp) != VNODE_KRFFS;
+}
+
+/* Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd). The
+ * SYNTH_DIR_* priv encode/decode macros live in synthfs.h. */
+static int32_t synth_open_dir(const struct vpath *vp, int flags)
+{
+    fd_entry_t *e;
+    int fd;
+    int pid = 0;
+
+    struct synth_dir *sd;
+
+    if (vp->kind == VNODE_PROC_PID || vp->kind == VNODE_PROC_FD_DIR) {
+        pid = procfs_resolve_pid(vp->pid);
+        if (pid < 0) {
+            return -ENOENT;
+        }
+    }
+    /* The directory exists, so honour flags that contradict that. An exclusive
+     * create of an existing object is -EEXIST regardless of access mode (the usual
+     * O_CREAT|O_EXCL form carries write access), so that check comes first; then a
+     * directory cannot be opened for writing. */
+    if ((flags & O_CREAT) && (flags & O_EXCL)) {
+        return -EEXIST;
+    }
+    if ((flags & 3) != 0) {
+        return -EISDIR;
+    }
+    sd = synth_dir_alloc(vp->kind, pid);
+    if (!sd) {
+        return -ENFILE;
+    }
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        sd->used = 0;
+        return -EMFILE;
+    }
+    e = &current_proc->fds.entries[fd];
+    e->type = FD_TYPE_SYNTH_DIR;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = NULL;
+    e->priv = sd;
+    e->ofd->offset = 0;
+    e->flags = FD_FLAG_READ;
+    if (flags & O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     fd_entry_t *entry;
     krffs_node_t *node;
     int fd;
+    struct vpath vp;
+
+    /* /dev and /proc are synthetic -- classified in one place, never KRFFS. */
+    if (synth_classify(name, &vp) != VNODE_KRFFS) {
+        return synth_open(&vp, flags);
+    }
 
     /* Check if opening framebuffer device "fb" */
     if (name[0] == 'f' && name[1] == 'b' && name[2] == '\0') {
@@ -965,6 +1105,18 @@ static int32_t sys_lseek(isr_params_t *params)
     if (entry->type == FD_TYPE_PIPE) {
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
+    if (entry->type == FD_TYPE_DEVICE) {
+        /* mem devices (null/zero/full) accept a seek that always lands at 0; the
+         * stream devices (random/urandom) are not seekable. */
+        if (devfs_lseek_zero(entry)) {
+            entry->ofd->offset = 0;
+            return 0;
+        }
+        return -ESPIPE;
+    }
+    if (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE) {
+        return -ESPIPE; /* a terminal/mouse is a valid fd, just not seekable */
+    }
     if (entry->type != FD_TYPE_FILE) {
         return -EBADF;
     }
@@ -1035,9 +1187,13 @@ static int32_t sys_read(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Backing-ops object (pipe/tty/pty): dispatch through its vtable. The Part I
-     * types below have no ops and fall through to the enum dispatch. */
+    /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable, but
+     * only if the descriptor was opened for reading (a write-only fd -> -EBADF).
+     * The Part I types below have no ops and fall through to the enum dispatch. */
     if (entry->ops) {
+        if (!(entry->flags & FD_FLAG_READ)) {
+            return -EBADF;
+        }
         return entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
     }
 
@@ -1407,6 +1563,29 @@ static int32_t sys_chdir(isr_params_t *params)
         return 0;
     }
 
+    /* A synthetic directory becomes the cwd (its canonical path -- self resolved to
+     * a real pid -- so later relative opens re-classify correctly); a synthetic
+     * leaf is ENOTDIR, a missing one ENOENT. */
+    {
+        struct vpath vp;
+        int kind = synth_classify(name, &vp);
+        if (kind != VNODE_KRFFS) {
+            int rpid = 0;
+            if (kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR) {
+                rpid = procfs_resolve_pid(vp.pid);
+                if (rpid < 0) {
+                    return -ENOENT;
+                }
+            }
+            if (kind == VNODE_DEV_DIR || kind == VNODE_PROC_DIR ||
+                kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR) {
+                synth_dir_path(kind, rpid, current_proc->cwd, sizeof(current_proc->cwd));
+                return 0;
+            }
+            return (kind == VNODE_ENOENT) ? -ENOENT : -ENOTDIR;
+        }
+    }
+
     if (!krffs_fs) {
         return -ENOENT;
     }
@@ -1556,10 +1735,215 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
  * Args: EBX = path, ECX = stat64 buffer
  * Returns: 0 on success, -1 on error
  */
-static int32_t sys_stat64(isr_params_t *params)
+/* Fill a stat64 from an open descriptor (factored from sys_fstat64 so the magic
+ * /proc/<pid>/fd/<n> symlinks can stat their target when followed). */
+static void fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
+
+/*
+ * Fill a stat64 for a synthetic (/dev or /proc) path. Devices report a character
+ * device with their major/minor; /dev itself is a directory; the /proc magic
+ * symlinks (/proc/self, /proc/<pid>/fd/<n>) report S_IFLNK when NOT followed and
+ * their target when followed (`follow`). st_dev is the synthetic fs id, distinct
+ * from KRFFS's 0, so a device's (st_dev, st_ino) identity never aliases a file's.
+ */
+static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
 {
-    const char __user *path = (const char __user *)params->ebx;
-    struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->ecx;
+    uint32_t mode = 0, rdev = 0, ino = 0;
+
+    k_memset(kst, 0, sizeof(*kst));
+    kst->st_nlink = 1;
+    kst->st_blksize = 4096;
+
+    switch (vp->kind) {
+        case VNODE_DEV_DIR:
+            (void)devfs_stat("", &mode, &rdev, &ino);
+            kst->st_dev = DEVFS_FSID;
+            kst->st_mode = mode;
+            kst->st_ino = ino;
+            return 0;
+        case VNODE_DEV:
+            if (devfs_stat(vp->name, &mode, &rdev, &ino) != 0) {
+                return -ENOENT;
+            }
+            kst->st_dev = DEVFS_FSID;
+            kst->st_mode = mode;
+            kst->st_rdev = rdev;
+            kst->st_ino = ino;
+            return 0;
+        case VNODE_PROC_DIR:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFDIR | 0555;
+            kst->st_ino = procfs_ino_dir();
+            return 0;
+        case VNODE_PROC_PID:
+        case VNODE_PROC_FD_DIR:
+            if (procfs_resolve_pid(vp->pid) < 0) {
+                return -ENOENT;
+            }
+            /* /proc/self is a symlink: an un-followed stat (lstat) sees the link,
+             * a followed one resolves to the pid directory. /proc/<numeric> and
+             * /proc/<pid>/fd are real directories. */
+            if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && !follow) {
+                kst->st_dev = PROCFS_FSID;
+                kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+                kst->st_ino = procfs_ino_dir();
+                return 0;
+            }
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFDIR | 0555;
+            kst->st_ino = procfs_ino_pid(procfs_resolve_pid(vp->pid));
+            return 0;
+        case VNODE_PROC_FILE:
+            if (procfs_resolve_pid(vp->pid) < 0) {
+                return -ENOENT;
+            }
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_pid(procfs_resolve_pid(vp->pid));
+            return 0;
+        case VNODE_PROC_FD_LINK: {
+            char scratch[16];
+            int rpid = procfs_resolve_pid(vp->pid);
+            if (rpid < 0) {
+                return -ENOENT;
+            }
+            /* The link exists only if descriptor procfd is actually open (the same
+             * check readlink makes), so stat and readlink agree. */
+            if (procfs_readlink_fd(rpid, vp->procfd, scratch, (int)sizeof(scratch)) < 0) {
+                return -ENOENT;
+            }
+            if (follow) {
+                /* A followed stat reports the target descriptor's identity. */
+                process_t *p = get_process((uint32_t)rpid);
+                if (p && vp->procfd >= 0 && vp->procfd < MAX_FDS &&
+                    p->fds.entries[vp->procfd].type != FD_TYPE_NONE) {
+                    fstat_fill(&p->fds.entries[vp->procfd], kst);
+                    return 0;
+                }
+                return -ENOENT;
+            }
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+            kst->st_ino = procfs_ino_pid(rpid);
+            return 0;
+        }
+        case VNODE_ENOTDIR:
+            return -ENOTDIR;
+        default:
+            return -ENOENT;
+    }
+}
+
+/*
+ * readlink core. The only symlinks Rach2 has are the /proc/<pid>/fd/<n> magic
+ * links (which ttyname reads). The result is the byte count and is NOT
+ * NUL-terminated (the readlink contract; musl appends its own terminator and
+ * treats a full buffer as truncation). `name` is the path, leading '/' stripped.
+ */
+static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
+{
+    struct vpath vp;
+    char link[256]; /* fit a full fd-target path (the syscall path limit) */
+    int n, pid, kind;
+
+    if (!ubuf || bufsiz == 0) {
+        return -EINVAL;
+    }
+    kind = synth_classify(name, &vp);
+
+    if (kind == VNODE_PROC_PID && vp.pid == SYNTH_PID_SELF) {
+        /* /proc/self is a symlink to the caller's numeric pid. */
+        uint32_t uv;
+        char t[12];
+        int tn = 0;
+        pid = procfs_resolve_pid(vp.pid);
+        if (pid < 0) {
+            return -ENOENT;
+        }
+        n = 0;
+        uv = (uint32_t)pid;
+        if (uv == 0) {
+            link[n++] = '0';
+        } else {
+            while (uv) {
+                t[tn++] = (char)('0' + uv % 10u);
+                uv /= 10u;
+            }
+            while (tn) {
+                link[n++] = t[--tn];
+            }
+        }
+    } else if (kind == VNODE_PROC_FD_LINK) {
+        pid = procfs_resolve_pid(vp.pid);
+        if (pid < 0) {
+            return -ENOENT;
+        }
+        n = procfs_readlink_fd(pid, vp.procfd, link, (int)sizeof(link));
+        if (n < 0) {
+            return n;
+        }
+    } else {
+        return (kind == VNODE_ENOENT) ? -ENOENT : -EINVAL; /* not a symlink */
+    }
+
+    if ((uint32_t)n > bufsiz) {
+        n = (int)bufsiz; /* truncate to the caller's buffer */
+    }
+    if (copy_to_user(ubuf, link, (uint32_t)n) != 0) {
+        return -EFAULT;
+    }
+    return n;
+}
+
+static int32_t sys_readlink(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    char __user *ubuf = (char __user *)params->ecx;
+    uint32_t bufsiz = params->edx;
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_readlink(name, ubuf, bufsiz);
+}
+
+static int32_t sys_readlinkat(isr_params_t *params)
+{
+    int dirfd = (int)params->ebx;
+    const char __user *upath = (const char __user *)params->ecx;
+    char __user *ubuf = (char __user *)params->edx;
+    uint32_t bufsiz = params->esi;
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_readlink(name, ubuf, bufsiz);
+}
+
+static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st, int follow)
+{
     struct linux_stat64 kst;
     char pathbuf[256];
     const char *name;
@@ -1597,6 +1981,21 @@ static int32_t sys_stat64(isr_params_t *params)
         name++;
     }
 
+    /* /dev and /proc are synthetic. */
+    {
+        struct vpath vp;
+        if (synth_classify(name, &vp) != VNODE_KRFFS) {
+            int32_t rc = synth_stat(&vp, &kst, follow);
+            if (rc != 0) {
+                return rc;
+            }
+            if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
+    }
+
     /* Find the file in KRFFS */
     if (!krffs_fs) {
         return -ENOENT;
@@ -1619,6 +2018,93 @@ static int32_t sys_stat64(isr_params_t *params)
     return 0;
 }
 
+/* stat64(195) follows symlinks; lstat64(196) does not. On i386 musl maps its
+ * stat()/lstat() onto these (via the statx -> *stat64 fallback), so lstat() only
+ * works once 196 exists. The follow flag matters only for the /proc magic links. */
+static int32_t sys_stat64(isr_params_t *params)
+{
+    return do_stat64((const char __user *)params->ebx,
+                     (struct linux_stat64 __user *)params->ecx, 1);
+}
+
+static int32_t sys_lstat64(isr_params_t *params)
+{
+    return do_stat64((const char __user *)params->ebx,
+                     (struct linux_stat64 __user *)params->ecx, 0);
+}
+
+/*
+ * Fill a stat64 from an open descriptor by type. Shared by sys_fstat64 and the
+ * followed /proc/<pid>/fd/<n> path (whose target is just this fd).
+ */
+static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
+{
+    k_memset(kst, 0, sizeof(*kst));
+    if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
+        kst->st_mode = S_IFDIR | 0755; /* the root directory */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+    } else if (entry->node) {
+        krffs_fill_stat64(kst, entry->node);
+    } else if (entry->type == FD_TYPE_SOCKET) {
+        /* A socket fd: programs classify these with S_ISSOCK. */
+        kst->st_mode = 0140666; /* S_IFSOCK | 0666 */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+    } else if (entry->type == FD_TYPE_PIPE) {
+        /* A pipe end: programs classify these with S_ISFIFO. */
+        kst->st_mode = 010666; /* S_IFIFO | 0666 */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+    } else if (entry->type == FD_TYPE_DEVICE) {
+        /* A devfs character device: report its identity so fstat matches the
+         * stat of its /dev path (what ttyname compares). */
+        kst->st_mode = 020666; /* S_IFCHR | 0666 */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        kst->st_dev = DEVFS_FSID;
+        kst->st_rdev = devfs_rdev(entry);
+        kst->st_ino = devfs_fd_ino(entry);
+    } else if (entry->type == FD_TYPE_PROC) {
+        /* A /proc text snapshot: a regular file. */
+        kst->st_mode = 0100444; /* S_IFREG | 0444 */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        kst->st_dev = PROCFS_FSID;
+    } else if (entry->type == FD_TYPE_CONSOLE) {
+        /* stdin/stdout/stderr and /dev/console: report the same identity as
+         * stat("/dev/console") so ttyname's (st_dev, st_ino) comparison matches. */
+        uint32_t cmode = 0, crdev = 0, cino = 0;
+        (void)devfs_stat("console", &cmode, &crdev, &cino);
+        kst->st_mode = 020666; /* S_IFCHR | 0666 */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        kst->st_dev = DEVFS_FSID;
+        kst->st_rdev = crdev;
+        kst->st_ino = cino;
+    } else if (entry->type == FD_TYPE_SYNTH_DIR) {
+        /* A /dev or /proc directory fd: report the SAME identity its path stat
+         * would (so fstat and stat agree on the directory), reconstructed from the
+         * fd's pooled kind/pid. */
+        struct vpath vp;
+        struct synth_dir *sd = (struct synth_dir *)entry->priv;
+        k_memset(&vp, 0, sizeof(vp));
+        vp.kind = sd ? sd->kind : VNODE_ENOENT;
+        vp.pid = sd ? sd->pid : 0;
+        if (synth_stat(&vp, kst, 1) != 0) {
+            kst->st_mode = S_IFDIR | 0555; /* the process exited: a bare directory */
+            kst->st_nlink = 1;
+            kst->st_blksize = 4096;
+            kst->st_dev = PROCFS_FSID;
+        }
+    } else {
+        /* A framebuffer/mouse fd: report a character device, size 0. */
+        kst->st_mode = 020666; /* S_IFCHR | 0666 */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+    }
+}
+
 /*
  * sys_fstat64 - get file status by descriptor (syscall 197).
  * Args: EBX = fd, ECX = stat64 buffer. The descriptor's node is stat'd; a root
@@ -1638,31 +2124,7 @@ static int32_t sys_fstat64(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-
-    k_memset(&kst, 0, sizeof(kst));
-    if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
-        kst.st_mode = S_IFDIR | 0755; /* the root directory */
-        kst.st_nlink = 1;
-        kst.st_blksize = 4096;
-    } else if (entry->node) {
-        krffs_fill_stat64(&kst, entry->node);
-    } else if (entry->type == FD_TYPE_SOCKET) {
-        /* A socket fd: programs classify these with S_ISSOCK. */
-        kst.st_mode = 0140666; /* S_IFSOCK | 0666 */
-        kst.st_nlink = 1;
-        kst.st_blksize = 4096;
-    } else if (entry->type == FD_TYPE_PIPE) {
-        /* A pipe end: programs classify these with S_ISFIFO. */
-        kst.st_mode = 010666; /* S_IFIFO | 0666 */
-        kst.st_nlink = 1;
-        kst.st_blksize = 4096;
-    } else {
-        /* A console/framebuffer/mouse fd: report a character device, size 0. */
-        kst.st_mode = 020666; /* S_IFCHR | 0666 */
-        kst.st_nlink = 1;
-        kst.st_blksize = 4096;
-    }
-
+    fstat_fill(entry, &kst);
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
     }
@@ -1694,9 +2156,6 @@ static int32_t sys_fstatat64(isr_params_t *params)
     if (len < 0) {
         return len;
     }
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
 
     k_memset(&kst, 0, sizeof(kst));
     if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
@@ -1704,9 +2163,27 @@ static int32_t sys_fstatat64(isr_params_t *params)
         kst.st_nlink = 1;
         kst.st_blksize = 4096;
     } else {
+        struct vpath vp;
         name = pathbuf;
         if (name[0] == '/') {
             name++;
+        }
+        /* /dev and /proc are synthetic -- classified before the KRFFS mount check,
+         * so they stat even on a kernel with no RAM disk. AT_SYMLINK_NOFOLLOW
+         * (lstat) reports the magic symlinks; otherwise they are followed. */
+        if (synth_classify(name, &vp) != VNODE_KRFFS) {
+            int follow = !((int)params->esi & AT_SYMLINK_NOFOLLOW);
+            int32_t rc = synth_stat(&vp, &kst, follow);
+            if (rc != 0) {
+                return rc;
+            }
+            if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
+        if (!krffs_fs) {
+            return -ENOENT;
         }
         {
             int rerr = 0;
@@ -1722,6 +2199,105 @@ static int32_t sys_fstatat64(isr_params_t *params)
         return -EFAULT;
     }
     return 0;
+}
+
+/* access(2) mode bits. */
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
+
+/*
+ * access core: does the path exist and grant the requested mode? There is no real
+ * uid/credential model, so R/W/X are checked against the object's mode bits (which
+ * is what makes /proc/<pid>/stat reject W_OK while granting F_OK/R_OK). `name` is
+ * absolute with the leading '/' stripped.
+ */
+static int32_t do_access(const char *name, int mode)
+{
+    struct vpath vp;
+    uint32_t fmode;
+
+    if (mode & ~(R_OK | W_OK | X_OK)) {
+        return -EINVAL; /* undefined access-mode bits */
+    }
+    if (name[0] == '\0') {
+        fmode = S_IFDIR | 0755; /* the root directory; falls through to the checks */
+    } else if (synth_classify(name, &vp) != VNODE_KRFFS) {
+        struct linux_stat64 s;
+        int32_t rc = synth_stat(&vp, &s, 1); /* access follows symlinks */
+        if (rc != 0) {
+            return rc; /* -ENOENT / -ENOTDIR */
+        }
+        fmode = s.st_mode;
+    } else {
+        krffs_node_t *node;
+        int rerr = 0;
+        if (!krffs_fs) {
+            return -ENOENT;
+        }
+        node = krffs_resolve_e(name, &rerr);
+        if (!node) {
+            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+        }
+        fmode = (node == krffs_fs->node) ? (uint32_t)(S_IFDIR | 0755)
+                                         : (uint32_t)(S_IFREG | (node->mode & 0777));
+    }
+    if ((mode & R_OK) && !(fmode & 0444u)) {
+        return -EACCES;
+    }
+    if ((mode & W_OK) && !(fmode & 0222u)) {
+        return -EACCES;
+    }
+    if ((mode & X_OK) && !(fmode & 0111u)) {
+        return -EACCES;
+    }
+    return 0;
+}
+
+static int32_t sys_access(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    int mode = (int)params->ecx;
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_access(name, mode);
+}
+
+static int32_t sys_faccessat(isr_params_t *params)
+{
+    int dirfd = (int)params->ebx;
+    const char __user *upath = (const char __user *)params->ecx;
+    int mode = (int)params->edx;
+    char pathbuf[256];
+    const char *name;
+    int len;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
+    if (len < 0) {
+        return len;
+    }
+    name = pathbuf;
+    if (name[0] == '/') {
+        name++;
+    }
+    return do_access(name, mode);
 }
 
 /*
@@ -1746,6 +2322,20 @@ static int32_t sys__llseek(isr_params_t *params)
     entry = fd_get(&current_proc->fds, fd);
     if (entry && entry->type == FD_TYPE_PIPE) {
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
+    }
+    if (entry && entry->type == FD_TYPE_DEVICE) {
+        if (devfs_lseek_zero(entry)) {
+            long long zero = 0;
+            entry->ofd->offset = 0;
+            if (result && copy_to_user(result, &zero, sizeof(zero)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
+        return -ESPIPE;
+    }
+    if (entry && (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE)) {
+        return -ESPIPE;
     }
     if (!entry || entry->type != FD_TYPE_FILE || !entry->node) {
         return -EBADF;
@@ -1901,12 +2491,12 @@ static int32_t sys_fcntl64(isr_params_t *params)
  * Returns: 0 on success, -1 on error
  *
  * This is the older 32-bit stat syscall (106), used by ISH and some programs.
- * Uses struct linux_stat instead of struct linux_stat64.
+ * Uses struct linux_stat instead of struct linux_stat64. `follow` distinguishes
+ * stat(106) (follow symlinks) from lstat(107) (do not) -- which matters only for
+ * the /proc magic symlinks, since KRFFS has none.
  */
-static int32_t sys_stat(isr_params_t *params)
+static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st, int follow)
 {
-    const char __user *path = (const char __user *)params->ebx;
-    struct linux_stat __user *st = (struct linux_stat __user *)params->ecx;
     struct linux_stat kst;
     char pathbuf[256];
     const char *name;
@@ -1944,6 +2534,29 @@ static int32_t sys_stat(isr_params_t *params)
         name++;
     }
 
+    /* /dev and /proc are synthetic. The old stat(2) ABI is a narrower struct, so
+     * translate the synthetic stat64 result down into it. */
+    {
+        struct vpath vp;
+        if (synth_classify(name, &vp) != VNODE_KRFFS) {
+            struct linux_stat64 s64;
+            int32_t rc = synth_stat(&vp, &s64, follow);
+            if (rc != 0) {
+                return rc;
+            }
+            kst.st_mode = (unsigned short)s64.st_mode;
+            kst.st_nlink = (unsigned short)s64.st_nlink;
+            kst.st_dev = (unsigned long)s64.st_dev;
+            kst.st_ino = (unsigned long)s64.st_ino;
+            kst.st_rdev = (unsigned long)s64.st_rdev;
+            kst.st_blksize = (unsigned long)s64.st_blksize;
+            if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
+    }
+
     /* Find the file in KRFFS */
     if (!krffs_fs) {
         return -ENOENT;
@@ -1974,6 +2587,20 @@ static int32_t sys_stat(isr_params_t *params)
     }
 
     return 0;
+}
+
+/* stat(106) follows symlinks; lstat(107) does not. musl falls back to these from
+ * statx for AT_FDCWD paths, so both must exist for stat()/lstat() to work. */
+static int32_t sys_stat(isr_params_t *params)
+{
+    return do_old_stat((const char __user *)params->ebx,
+                       (struct linux_stat __user *)params->ecx, 1);
+}
+
+static int32_t sys_lstat(isr_params_t *params)
+{
+    return do_old_stat((const char __user *)params->ebx,
+                       (struct linux_stat __user *)params->ecx, 0);
 }
 
 /*
@@ -2306,6 +2933,9 @@ static int32_t sys_execve(isr_params_t *params)
     /* The exec is now committed (the image is valid). Drop close-on-exec
      * descriptors before the old address space goes away. */
     close_cloexec_fds();
+
+    /* Record the program's basename as comm for /proc/<pid>/stat and ps. */
+    proc_set_comm(current_proc, name);
 
     /* Reset caught signal dispositions to default: their handler addresses point
      * into the OLD image that is about to be replaced. SIG_IGN dispositions and
@@ -2749,6 +3379,11 @@ static int32_t sys_creat(isr_params_t *params)
         return -EINVAL;
     }
 
+    /* A synthetic mount is read-only: never create/shadow under /dev or /proc. */
+    if (synth_is_synth(name)) {
+        return -EROFS;
+    }
+
     /* Check if file system is mounted */
     if (!krffs_fs) {
         return -ENOENT;
@@ -2824,6 +3459,11 @@ static int32_t sys_unlink(isr_params_t *params)
         return -EINVAL;
     }
 
+    /* A synthetic mount is read-only. */
+    if (synth_is_synth(name)) {
+        return -EROFS;
+    }
+
     /* Check if file system is mounted */
     if (!krffs_fs) {
         return -ENOENT;
@@ -2852,6 +3492,9 @@ static int32_t sys_mkdir(isr_params_t *params)
     len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
     if (len < 0) {
         return len;
+    }
+    if (synth_is_synth(pathbuf[0] == '/' ? pathbuf + 1 : pathbuf)) {
+        return -EROFS; /* cannot create under (or shadow) /dev or /proc */
     }
     if (krffs_resolve(pathbuf)) {
         return -EEXIST;
@@ -2882,6 +3525,9 @@ static int32_t sys_rmdir(isr_params_t *params)
     len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
     if (len < 0) {
         return len;
+    }
+    if (synth_is_synth(pathbuf[0] == '/' ? pathbuf + 1 : pathbuf)) {
+        return -EROFS; /* /dev and /proc are not removable */
     }
     node = krffs_resolve(pathbuf);
     if (!node) {
@@ -2938,6 +3584,11 @@ static int32_t sys_rename(isr_params_t *params)
     /* Empty filenames are invalid */
     if (old_name[0] == '\0' || new_name[0] == '\0') {
         return -EINVAL;
+    }
+
+    /* Neither end may be a synthetic mount. */
+    if (synth_is_synth(old_name) || synth_is_synth(new_name)) {
+        return -EROFS;
     }
 
     /* Check if file system is mounted */
@@ -3031,6 +3682,11 @@ static int32_t sys_utimensat(isr_params_t *params)
         return 0;
     }
 
+    /* A synthetic mount is read-only. */
+    if (synth_is_synth(name)) {
+        return -EROFS;
+    }
+
     /* Check if file system is mounted */
     if (!krffs_fs) {
         return -ENOENT;
@@ -3109,6 +3765,179 @@ struct linux_dirent64 {
  * Fills the buffer with linux_dirent64 structures for each file.
  * Uses fd->offset to track position in directory (file index).
  */
+#ifndef DT_CHR
+#define DT_CHR 2
+#endif
+#ifndef DT_LNK
+#define DT_LNK 10
+#endif
+
+/* Format an unsigned decimal into out (NUL-terminated). */
+static void synth_u32_str(char *out, uint32_t v)
+{
+    char tmp[12];
+    int n = 0;
+    int i = 0;
+
+    if (v == 0) {
+        out[0] = '0';
+        out[1] = '\0';
+        return;
+    }
+    while (v) {
+        tmp[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (n) {
+        out[i++] = tmp[--n];
+    }
+    out[i] = '\0';
+}
+
+/*
+ * The n-th entry of a synthetic directory (kind/pid from the dir fd's cookie):
+ * fills name/ino/dtype and returns 1, or 0 past the end. "." and ".." are entries
+ * 0 and 1 of every directory.
+ */
+static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    if (n == 0) {
+        name[0] = '.';
+        name[1] = '\0';
+        *ino = 1;
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (n == 1) {
+        name[0] = '.';
+        name[1] = '.';
+        name[2] = '\0';
+        *ino = 1;
+        *dtype = DT_DIR;
+        return 1;
+    }
+    n -= 2;
+
+    if (kind == VNODE_DEV_DIR) {
+        const char *dn = devfs_name(n);
+        int i;
+        if (!dn) {
+            return 0;
+        }
+        for (i = 0; i < 30 && dn[i]; i++) {
+            name[i] = dn[i];
+        }
+        name[i] = '\0';
+        *ino = 16u + (uint32_t)n;
+        *dtype = DT_CHR;
+        return 1;
+    }
+    if (kind == VNODE_PROC_DIR) {
+        if (n == 0) {
+            name[0] = 's';
+            name[1] = 'e';
+            name[2] = 'l';
+            name[3] = 'f';
+            name[4] = '\0';
+            *ino = procfs_ino_dir();
+            *dtype = DT_LNK;
+            return 1;
+        }
+        {
+            int p = procfs_nth_pid(n - 1);
+            if (p < 0) {
+                return 0;
+            }
+            synth_u32_str(name, (uint32_t)p);
+            *ino = procfs_ino_pid(p);
+            *dtype = DT_DIR;
+            return 1;
+        }
+    }
+    if (kind == VNODE_PROC_PID) {
+        static const char *files[3] = {"stat", "cmdline", "fd"};
+        process_t *pp = get_process((uint32_t)pid);
+        int i;
+        if (!pp || pp->state == PROC_UNUSED) {
+            return 0; /* the process exited: an empty directory (just . and ..) */
+        }
+        if (n >= 3) {
+            return 0;
+        }
+        for (i = 0; files[n][i]; i++) {
+            name[i] = files[n][i];
+        }
+        name[i] = '\0';
+        *ino = procfs_ino_pid(pid);
+        *dtype = (n == 2) ? (uint8_t)DT_DIR : (uint8_t)DT_REG;
+        return 1;
+    }
+    if (kind == VNODE_PROC_FD_DIR) {
+        process_t *pp = get_process((uint32_t)pid);
+        int i, c = 0;
+        if (!pp) {
+            return 0;
+        }
+        for (i = 0; i < MAX_FDS; i++) {
+            if (pp->fds.entries[i].type != FD_TYPE_NONE) {
+                if (c == n) {
+                    synth_u32_str(name, (uint32_t)i);
+                    *ino = procfs_ino_pid(pid);
+                    *dtype = DT_LNK;
+                    return 1;
+                }
+                c++;
+            }
+        }
+        return 0;
+    }
+    return 0;
+}
+
+/* getdents for a synthetic directory fd: pack records from synth_dirent_at,
+ * advancing the fd's offset cursor (same record layout as the KRFFS path). */
+static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
+{
+    struct synth_dir *sd = (struct synth_dir *)e->priv;
+    int kind = sd ? sd->kind : VNODE_ENOENT;
+    int pid = sd ? sd->pid : 0;
+    uint32_t written = 0;
+    uint32_t idx = e->ofd->offset;
+    char name[32];
+    uint64_t ino;
+    uint8_t dtype;
+
+    while (synth_dirent_at(kind, pid, (int)idx, name, &ino, &dtype)) {
+        uint8_t recbuf[64];
+        uint32_t name_len = k_strlen(name);
+        uint32_t rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) +
+                           sizeof(uint8_t) + name_len + 1;
+        struct linux_dirent64 *d;
+
+        rec_len = (rec_len + 7) & ~7u;
+        if (written + rec_len > count) {
+            if (written == 0) {
+                return -EINVAL; /* buffer too small for even one entry */
+            }
+            break;
+        }
+        k_memset(recbuf, 0, rec_len);
+        d = (struct linux_dirent64 *)recbuf;
+        d->d_ino = ino;
+        d->d_off = (int64_t)(idx + 1);
+        d->d_reclen = (uint16_t)rec_len;
+        d->d_type = dtype;
+        k_memcpy(d->d_name, name, name_len + 1);
+        if (copy_to_user((void __user *)(buf + written), recbuf, rec_len) != 0) {
+            return written > 0 ? (int32_t)written : -EFAULT;
+        }
+        written += rec_len;
+        idx++;
+        e->ofd->offset = idx;
+    }
+    return (int32_t)written;
+}
+
 static int32_t sys_getdents64(isr_params_t *params)
 {
     int fd_num = (int)params->ebx;
@@ -3139,6 +3968,13 @@ static int32_t sys_getdents64(isr_params_t *params)
     entry = fd_get(&current_proc->fds, fd_num);
     if (!entry) {
         return -EBADF;
+    }
+
+    /* A synthetic directory (/dev, /proc, /proc/<pid>[/fd]) lists from the process
+     * table / device registry, not KRFFS. (Bare `ls /` does not yet merge these
+     * mount names -- they are reached by their absolute paths.) */
+    if (entry->type == FD_TYPE_SYNTH_DIR) {
+        return synth_getdents(entry, buf, count);
     }
 
     /* Must be a directory fd */
@@ -3932,9 +4768,27 @@ static int32_t sys_ioctl(isr_params_t *params)
                                  : -ENOTTY;
     }
 
-    /* Terminal attribute queries on a valid fd: Rach2 has no termios layer, so
-     * report "not a terminal" exactly as Linux does for a non-tty fd. musl's
-     * isatty() then returns 0 and stdio chooses block buffering. */
+    /* TIOCGWINSZ on the console succeeds with a window size -- this is what musl's
+     * isatty() probes, so the console reads as a terminal (and ttyname can then
+     * resolve it). TCGETS stays -ENOTTY until the termios layer (Phase 16): a fake
+     * tcgetattr would invite programs to tcsetattr and expect line discipline.
+     * Both remain -ENOTTY on a non-terminal fd, as Linux reports. */
+    if (request == TIOCGWINSZ && entry->type == FD_TYPE_CONSOLE) {
+        struct kernel_winsize {
+            uint16_t ws_row;
+            uint16_t ws_col;
+            uint16_t ws_xpixel;
+            uint16_t ws_ypixel;
+        } ws;
+        ws.ws_row = 25;
+        ws.ws_col = 80;
+        ws.ws_xpixel = 0;
+        ws.ws_ypixel = 0;
+        if (arg && copy_to_user((void __user *)arg, &ws, sizeof(ws)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
     if (request == TCGETS || request == TIOCGWINSZ) {
         return -ENOTTY;
     }
@@ -4996,11 +5850,17 @@ void init_syscall(void)
     _syscall_table[SYS_PSELECT6] = sys_pselect6;
     _syscall_table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
     _syscall_table[SYS_STAT] = sys_stat;
+    _syscall_table[SYS_LSTAT] = sys_lstat;
     _syscall_table[SYS_GETCWD] = sys_getcwd;
     _syscall_table[SYS_STAT64] = sys_stat64;
+    _syscall_table[SYS_LSTAT64] = sys_lstat64;
     _syscall_table[SYS_FSTAT64] = sys_fstat64;
     _syscall_table[SYS_FSTATAT64] = sys_fstatat64;
     _syscall_table[SYS_OPENAT] = sys_openat;
+    _syscall_table[SYS_READLINK] = sys_readlink;
+    _syscall_table[SYS_READLINKAT] = sys_readlinkat;
+    _syscall_table[SYS_ACCESS] = sys_access;
+    _syscall_table[SYS_FACCESSAT] = sys_faccessat;
     _syscall_table[SYS_LLSEEK] = sys__llseek;
     _syscall_table[SYS_FCNTL64] = sys_fcntl64;
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;

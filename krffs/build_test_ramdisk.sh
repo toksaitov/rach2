@@ -48,7 +48,7 @@ for prog in hello filetest forktest shelltest dirtest stattest \
             touchtest rmtest mvtest lstest stdintest dup2test \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
             tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
-            timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe; do
+            timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -123,6 +123,12 @@ fi
 if [ -f "../tests/musl/pollmusl" ]; then
     cp "../tests/musl/pollmusl" "$MOUNT_POINT/mpoll"
     echo "  mpoll (musl)"
+fi
+
+# The Phase 15 /dev + /proc + ttyname program, installed as "mdevtest".
+if [ -f "../tests/musl/devtest" ]; then
+    cp "../tests/musl/devtest" "$MOUNT_POINT/mdevtest"
+    echo "  mdevtest (musl)"
 fi
 
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined

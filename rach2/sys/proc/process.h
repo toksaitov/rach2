@@ -73,6 +73,9 @@ struct process {
     struct k_sigaction sigacts[KSIG_MAX + 1];
     uint64_t sig_pending;
     uint64_t sig_blocked;
+    /* Program name (basename of the execve'd path, NUL-terminated, truncated):
+     * the "comm" /proc/<pid>/stat reports and ps shows. Set at execve. */
+    char comm[16];
 };
 
 typedef struct process process_t;
@@ -108,6 +111,12 @@ void free_process(process_t *proc);
  * Returns pointer to process, or NULL if not found
  */
 process_t *get_process(uint32_t pid);
+
+/*
+ * Record a process's program name (the basename of `path`, truncated to fit) as
+ * its comm, for /proc/<pid>/stat and ps. Called from both exec paths.
+ */
+void proc_set_comm(process_t *p, const char *path);
 
 /*
  * Wake timed sleepers: any BLOCKED process whose wakeup_tick has reached `now`

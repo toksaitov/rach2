@@ -56,8 +56,19 @@ process_t *alloc_process(void)
     /* Find first unused slot */
     for (i = 0; i < MAX_PROCS; i++) {
         if (proc_table[i].state == PROC_UNUSED) {
+            uint32_t candidate;
             k_memset(&proc_table[i], 0, sizeof(process_t));
-            proc_table[i].pid = next_pid++;
+            /* Assign a pid bounded to the positive int range -- the /proc path
+             * layer carries pid as int -- skipping any still-live pid so live pids
+             * stay unique. The wrap is unreachable in practice (~2e9 spawns), so
+             * this is normally just next_pid++. */
+            do {
+                if (next_pid >= 2000000000u) {
+                    next_pid = 1;
+                }
+                candidate = next_pid++;
+            } while (get_process(candidate) != NULL);
+            proc_table[i].pid = candidate;
             proc_table[i].state = PROC_READY;
 
             /* Initialize file descriptor table with stdin/stdout/stderr */
@@ -111,6 +122,27 @@ process_t *get_process(uint32_t pid)
     }
 
     return NULL;
+}
+
+void proc_set_comm(process_t *p, const char *path)
+{
+    const char *base;
+    const char *q;
+    int i;
+
+    if (!p || !path) {
+        return;
+    }
+    base = path;
+    for (q = path; *q; q++) {
+        if (*q == '/') {
+            base = q + 1; /* keep only the final component */
+        }
+    }
+    for (i = 0; i < (int)sizeof(p->comm) - 1 && base[i]; i++) {
+        p->comm[i] = base[i];
+    }
+    p->comm[i] = '\0';
 }
 
 void setup_process_stack(process_t *proc, void (*entry_point)(void))

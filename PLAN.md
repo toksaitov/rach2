@@ -890,7 +890,7 @@ review** of the wait/rescan race and the sigmask handling.
 **Done when:** the probe passes (timeout, readable, `POLLHUP`, the select family), a musl
 poll/select program works, the lost-wakeup race is closed, and Codex is addressed.
 
-### [ ] Phase 15 — Synthetic filesystems: a `/dev` devfs and a minimal `/proc`
+### [x] Phase 15 — Synthetic filesystems: a `/dev` devfs and a minimal `/proc`
 **Goal:** real device files (`/dev`) and the slice of `/proc` that musl + busybox
 actually need — so the tty, the shell, and (in II-B) `ttyname` work.
 **Concept taught:** the synthetic filesystem — names backed by in-kernel drivers, not
