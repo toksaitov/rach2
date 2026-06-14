@@ -4,21 +4,21 @@
 #include "kint.h"
 
 /*
- * Best-effort, NON-cryptographic entropy.
+ * The kernel CSPRNG: a ChaCha20 keystream generator.
  *
- * The generator is a small, fast xorshift128 PRNG. krandom_seed() mixes real
- * boot-time jitter into it (the CPU timestamp counter, the PIT tick, and the
- * CMOS RTC seconds), which gives values that VARY across boots -- adequate for
- * AT_RANDOM as a source of variability, but NOT unpredictable to an attacker and
- * NOT a hardening primitive. It is not cryptographically secure: the
- * fail-closed getrandom/urandom seeded by virtio-rng arrives in Part II-B
- * (before dropbear), and that is what stack canaries and keys must use.
+ * krandom_seed() keys it from the best entropy the machine offers: the hardware
+ * RNG (RDSEED, else RDRAND, each behind a CPUID feature bit) when present -- a
+ * defensible seed -- otherwise boot-time jitter (the CPU timestamp counter, the
+ * PIT tick, the CMOS RTC seconds), which only VARIES across boots and is NOT
+ * defensible entropy. The fail-closed getrandom/urandom seeded by virtio-rng
+ * arrives in Part II-B (before dropbear); on a host that lacks RDSEED/RDRAND,
+ * treat keys produced here as seeded by jitter, not by real entropy.
  *
- * Real-OS analogue: a weak early-boot entropy source vs. the kernel CSPRNG.
+ * Real-OS analogue: the kernel CSPRNG (ChaCha) and its early-boot seeding.
  *
- * The PRNG core (reseed/u32/bytes) is pure and compiles both freestanding and
- * hosted, so it is unit-tested natively under the sanitizers (the dual-target
- * seam); only krandom_seed() touches hardware and is i386-only.
+ * The CSPRNG core (reseed/u32/bytes, ChaCha) is pure and compiles both
+ * freestanding and hosted, so it is unit-tested natively under the sanitizers
+ * (the dual-target seam); only krandom_seed() touches hardware and is i386-only.
  */
 
 /* Re-seed the generator from four explicit words (pure; the non-zero state is

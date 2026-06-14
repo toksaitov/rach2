@@ -3147,10 +3147,11 @@ static int32_t sys_getuid(isr_params_t *params)
 
 /*
  * sys_getrandom - fill a buffer with random bytes (syscall 355).
- * Args: EBX = buf, ECX = buflen, EDX = flags. Backed by the kernel random source
- * (lib/krandom). Returns the byte count, like Linux; musl's getrandom/arc4random
- * sit on top of this. We never block (GRND_NONBLOCK is a no-op) and have a single
- * source (GRND_RANDOM is equivalent); unknown flag bits are rejected.
+ * Args: EBX = buf, ECX = buflen, EDX = flags. Backed by the kernel CSPRNG
+ * (lib/krandom, ChaCha20). Returns the byte count, like Linux; musl's
+ * getrandom/arc4random sit on top of this. We never block (GRND_NONBLOCK is a
+ * no-op) and have a single source (GRND_RANDOM is equivalent); unknown flag bits
+ * are rejected.
  */
 static int32_t sys_getrandom(isr_params_t *params)
 {
