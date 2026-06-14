@@ -918,7 +918,7 @@ independent Codex review** of the device dispatch + the `/proc` synthesis.
 **Done when:** the core char devices behave, the minimal `/proc` answers `ttyname_r`/`ps`,
 and musl uses both; Codex is addressed.
 
-### [ ] Phase 16 — The TTY subsystem: `termios` + the N_TTY line discipline
+### [x] Phase 16 — The TTY subsystem: `termios` + the N_TTY line discipline
 **Goal:** turn the console into a **real terminal** — cooked vs. raw input, echo, line
 editing, control chars — controlled via `termios`. The heart of an interactive shell,
 and the layer ptys reuse.

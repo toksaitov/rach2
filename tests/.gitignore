@@ -40,9 +40,11 @@ musl/ofdmusl
 musl/pipemusl
 musl/pollmusl
 musl/devtest
+musl/ttymusl
 sigprobe
 ofdprobe
 waitprobe
 pipeprobe
 pollprobe
 devprobe
+ttyprobe

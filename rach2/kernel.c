@@ -12,6 +12,7 @@
 #include "sys/mm/paging.h"
 #include "sys/mm/frame.h"
 #include "sys/proc/process.h"
+#include "sys/tty/tty.h"
 #include "sys/ipc/pipe.h"
 #include "sys/proc/sched.h"
 #include "sys/proc/elf.h"
@@ -109,6 +110,10 @@ static void timer_handler(isr_params_t *params)
 
     /* Drive TCP retransmission, RTT, zero-window probe, and TIME_WAIT timers. */
     tcp_tick();
+
+    /* Drain the console's interrupt-less serial port when a reader/poller waits,
+     * so serial input wakes them even while another process runs. */
+    tty_console_poll();
 
     /*
      * Allow timer IRQs to run during syscalls so HDA streaming keeps working,
@@ -369,36 +374,27 @@ static void keyboard_handler(isr_params_t *params)
      * If a process is waiting for stdin, fill stdin_buffer.
      * Otherwise, fill the shell's cmd_buffer.
      */
-    if (stdin_waiting_proc != NULL) {
-        /* Userspace process is waiting for stdin input */
-        if (c == '\n') {
-            /* Add newline to buffer and mark ready */
-            if (stdin_pos < STDIN_BUFFER_SIZE - 1) {
-                stdin_buffer[stdin_pos++] = '\n';
+    if (wq_active(&console_tty.input_wq)) {
+        /*
+         * A user process is waiting on the console (a blocked reader OR poller):
+         * cook the keystroke through the tty line discipline, which echoes it and
+         * wakes every waiter (so pollers and a second reader are not missed -- the
+         * single-reader stdin_waiting_proc flag would drop those). The PS/2
+         * keyboard sends '\b' for Backspace; map it to the discipline's ERASE
+         * (DEL), and turn Ctrl+letter into its control byte, so line editing
+         * (^U/^W) and EOF (^D) reach the discipline like a real terminal. (Ctrl+C
+         * is intercepted earlier by the kill_foreground_process path.)
+         */
+        if (c != 0) {
+            unsigned char tc = (unsigned char)c;
+            if (_kbd_ctrl && c >= 'a' && c <= 'z') {
+                tc = (unsigned char)(c - 'a' + 1);
+            } else if (_kbd_ctrl && c >= 'A' && c <= 'Z') {
+                tc = (unsigned char)(c - 'A' + 1);
+            } else if (c == '\b') {
+                tc = 0x7F;
             }
-            stdin_buffer[stdin_pos] = '\0';
-            stdin_ready = true;
-            k_putc('\n');
-            serial_putc('\n');
-
-            /* Wake up the waiting process */
-            if (stdin_waiting_proc->state == PROC_BLOCKED) {
-                ((process_t *)stdin_waiting_proc)->state = PROC_READY;
-            }
-        } else if (c == '\b') {
-            /* Backspace - remove last character if any */
-            if (stdin_pos > 0) {
-                --stdin_pos;
-                k_putc('\b');
-                k_putc(' ');
-                k_putc('\b');
-                serial_putc('\b');
-            }
-        } else if (c != 0 && stdin_pos < STDIN_BUFFER_SIZE - 1) {
-            /* Regular character - add to buffer and echo */
-            stdin_buffer[stdin_pos++] = c;
-            k_putc(c);
-            serial_putc(c);
+            tty_input_char(&console_tty, tc);
         }
     } else if (kernel_shell_active) {
         /* Shell is active - use cmd_buffer */
@@ -2075,6 +2071,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     k_printf("  Keyboard...");
     serial_printf("  Keyboard...");
     set_isr_handler(33, &keyboard_handler); /* Replace the keyboard boot stub with the real handler */
+    tty_console_init(); /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");

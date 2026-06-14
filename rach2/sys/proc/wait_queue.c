@@ -151,6 +151,21 @@ void wq_poll_remove(wait_queue_t *wq, process_t *p)
     }
 }
 
+int wq_active(const wait_queue_t *wq)
+{
+    int i;
+
+    if (!wq) {
+        return 0;
+    }
+    for (i = 0; i < WQ_MAX_WAITERS; i++) {
+        if (wq->waiters[i] != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void wq_wake_all(wait_queue_t *wq)
 {
     uint32_t flags;

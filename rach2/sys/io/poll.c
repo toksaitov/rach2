@@ -22,6 +22,7 @@
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 #include "../proc/sched.h"
+#include "../tty/tty.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -76,8 +77,21 @@ static short fd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         /* A regular file/directory never blocks: always readable, and writable. */
         return (short)(events & (POLLIN | POLLOUT));
     }
-    /* Console/framebuffer/mouse: reported ready (no wait queue). Proper tty poll,
-     * with a real input wait queue, arrives in Phase 16. */
+    if (e->type == FD_TYPE_CONSOLE) {
+        /* The console answers through its tty, but masked to what THIS descriptor
+         * can do: only a readable fd queries (and drains) input; only a writable
+         * fd reports POLLOUT. So poll(stdout, POLLOUT) never drains serial input
+         * or claims the console foreground. */
+        short want = 0;
+        if (e->flags & FD_FLAG_READ) {
+            want = (short)(events & POLLIN);
+        }
+        if (e->flags & FD_FLAG_WRITE) {
+            want = (short)(want | (events & POLLOUT));
+        }
+        return tty_poll(&console_tty, want, wq);
+    }
+    /* Framebuffer/mouse: reported ready (no wait queue). */
     return (short)(events & (POLLIN | POLLOUT));
 }
 

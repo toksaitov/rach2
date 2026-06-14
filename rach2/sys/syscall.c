@@ -16,6 +16,7 @@
 #include "fs/file.h"
 #include "ipc/pipe.h"
 #include "io/poll.h"
+#include "tty/tty.h"
 #include "fs/krffs.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
@@ -132,7 +133,13 @@ static void fd_release_backing(fd_entry_t *e)
  */
 #define KIOCSOUND      0x4B2F  /* Set PC speaker frequency (0 = off) */
 #define TCGETS         0x5401  /* Get terminal attributes (termios) */
+#define TCSETS         0x5402  /* Set terminal attributes now */
+#define TCSETSW        0x5403  /* Set after the output drains */
+#define TCSETSF        0x5404  /* Set after output drains, flush input */
+#define TCFLSH         0x540B  /* Flush input and/or output queues */
+#define FIONREAD       0x541B  /* Bytes available to read */
 #define TIOCGWINSZ     0x5413  /* Get terminal window size */
+#define TIOCSWINSZ     0x5414  /* Set terminal window size */
 #define FB_MODE_13H    0x4601  /* Switch to VGA Mode 13h */
 #define FB_MODE_TEXT   0x4602  /* Switch back to text mode */
 #define FB_SETPALETTE  0x4603  /* Set 256-color palette (768 bytes) */
@@ -426,12 +433,13 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         }
 
         /* Pull the user bytes in through a small kernel bounce buffer, then emit
-         * from kernel memory, looping until count bytes are done. A bad user
-         * pointer yields -EFAULT only if nothing has been written yet (otherwise
-         * report the bytes already emitted, matching the return-count convention). */
+         * from kernel memory through the tty output processor (OPOST/ONLCR, so a
+         * bare '\n' becomes CR LF on both the VGA screen and the serial line),
+         * looping until count bytes are done. A bad user pointer yields -EFAULT
+         * only if nothing has been written yet (otherwise report the bytes
+         * already emitted, matching the return-count convention). */
         while (done < count) {
             uint32_t chunk = count - done;
-            uint32_t i;
 
             if (chunk > sizeof(kbuf)) {
                 chunk = sizeof(kbuf);
@@ -439,10 +447,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
                 return (done > 0) ? (int32_t)done : -EFAULT;
             }
-            for (i = 0; i < chunk; i++) {
-                k_putc(kbuf[i]);
-                serial_putc(kbuf[i]);
-            }
+            tty_write(&console_tty, (const unsigned char *)kbuf, (int)chunk);
             done += chunk;
         }
         return (int32_t)count;
@@ -1167,7 +1172,6 @@ static int32_t sys_read(isr_params_t *params)
     char __user *buf = (char __user *)params->ecx;
     uint32_t count = params->edx;
     fd_entry_t *entry;
-    uint32_t bytes_to_copy;
 
     if (!current_proc) {
         return -EFAULT;
@@ -1222,15 +1226,19 @@ static int32_t sys_read(isr_params_t *params)
         return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count);
     }
 
-    /* Console fd (stdin) - blocking read with line buffering */
+    /* Console fd (stdin): a blocking read through the tty line discipline. */
     if (entry->type == FD_TYPE_CONSOLE) {
+        unsigned char kbuf[N_TTY_READ_MAX];
+        uint32_t want;
+        int n;
+
         if (!(entry->flags & FD_FLAG_READ)) {
             return -EBADF;  /* Not readable (e.g., stdout/stderr) */
         }
 
         /*
          * If the process owns the framebuffer (graphics mode), use non-blocking
-         * raw scancode input for game controls.
+         * raw scancode input for game controls -- bypassing the line discipline.
          */
         if (fb_owner_pid == current_proc->pid) {
             /* Non-blocking raw scancode read for games. kbd_read_scancodes
@@ -1242,130 +1250,31 @@ static int32_t sys_read(isr_params_t *params)
             return kbd_read_scancodes((uint8_t __force *)buf, (int)count);
         }
 
-        /*
-         * Stdin read implementation (text mode):
-         * 1. Reset stdin buffer state
-         * 2. Register current process as waiting for stdin
-         * 3. Block until Enter is pressed (keyboard handler wakes us)
-         * 4. Copy data to user buffer
-         * 5. Return bytes read
-         */
+        want = count;
+        if (want > sizeof(kbuf)) {
+            want = sizeof(kbuf);  /* one line/burst per call; caller loops */
+        }
 
-        /* Reset stdin state for new input */
-        stdin_pos = 0;
-        stdin_ready = false;
+        /*
+         * Park on console_tty until a line (cooked) or VMIN bytes (raw) arrive.
+         * stdin_waiting_proc tells the keyboard IRQ a user process owns the
+         * console, so keystrokes are cooked into console_tty (which wakes us)
+         * rather than the kernel shell; tty_read drains the serial port itself.
+         * The discipline echoes, edits, and recognizes ISIG -- so Ctrl-C on the
+         * console now arrives as a posted SIGINT, and a pending signal unwinds
+         * the wait with -EINTR.
+         */
         stdin_waiting_proc = current_proc;
-
-        /*
-         * Block and wait for input using hlt.
-         * We can't rely on schedule() because there may be no other READY
-         * processes. Instead, we halt waiting for keyboard or serial input.
-         * The keyboard handler will set stdin_ready=true when Enter is pressed.
-         * We also poll serial input here to support piped commands via QEMU.
-         */
-        current_proc->state = PROC_BLOCKED;
-        while (!stdin_ready) {
-            /* Enable interrupts and halt until next interrupt */
-            __asm__ __volatile__("sti; hlt");
-
-            /*
-             * After waking from hlt, check for serial input.
-             * Process serial characters like keyboard: handle backspace,
-             * newline, echo back to serial, and add to stdin_buffer.
-             */
-            while (serial_data_available()) {
-                int ch = serial_try_getc();
-                if (ch < 0) break;
-
-                /* Handle CR (0x0D) as newline - terminals send CR on Enter */
-                if (ch == '\r') ch = '\n';
-
-                /* Ctrl-C (ETX, 0x03) on the serial console: deliver SIGINT to the
-                 * foreground process, like a tty line discipline with ISIG set
-                 * (the PS/2 keyboard path does the same on Ctrl+C). If the signal
-                 * is actually deliverable (SIGINT not blocked), stop waiting and
-                 * unwind with -EINTR so it is acted on -- the installed handler, or
-                 * the default terminate -- on the way back to user mode. */
-                if (ch == 0x03) {
-                    k_putc('^');
-                    k_putc('C');
-                    k_putc('\n');
-                    serial_putc('^');
-                    serial_putc('C');
-                    serial_putc('\r');
-                    serial_putc('\n');
-                    signal_post(current_proc, SIGINT);
-                    if (signal_pending()) {
-                        current_proc->state = PROC_RUNNING;
-                        stdin_waiting_proc = NULL;
-                        stdin_pos = 0;
-                        stdin_ready = false;
-                        return -EINTR;
-                    }
-                    /* SIGINT is blocked/ignored: it stays pending for later.
-                     * signal_post() woke us to PROC_READY; we are still parked in
-                     * this read, so restore PROC_BLOCKED before waiting again. */
-                    current_proc->state = PROC_BLOCKED;
-                    continue;
-                }
-
-                if (ch == '\n') {
-                    /* Newline - mark input ready */
-                    if (stdin_pos < STDIN_BUFFER_SIZE - 1) {
-                        stdin_buffer[stdin_pos++] = '\n';
-                    }
-                    stdin_buffer[stdin_pos] = '\0';
-                    stdin_ready = true;
-                    k_putc('\n');
-                    serial_putc('\r');
-                    serial_putc('\n');
-                    break;
-                } else if (ch == '\b' || ch == 0x7F) {
-                    /* Backspace or DEL - remove last character */
-                    if (stdin_pos > 0) {
-                        --stdin_pos;
-                        k_putc('\b');
-                        k_putc(' ');
-                        k_putc('\b');
-                        /* Echo backspace to serial */
-                        serial_putc('\b');
-                        serial_putc(' ');
-                        serial_putc('\b');
-                    }
-                } else if (ch >= 0x20 && ch < 0x7F) {
-                    /* Printable character - add to buffer and echo */
-                    if (stdin_pos < STDIN_BUFFER_SIZE - 1) {
-                        stdin_buffer[stdin_pos++] = (char)ch;
-                        k_putc((char)ch);
-                        serial_putc((char)ch);
-                    }
-                }
-                /* Ignore other control characters */
-            }
-        }
-        current_proc->state = PROC_RUNNING;
-
-        /* Clear the waiting process */
+        console_tty.fg_pid = current_proc->pid; /* ISIG (^C) target while reading */
+        n = tty_read(&console_tty, kbuf, (int)want);
         stdin_waiting_proc = NULL;
-
-        /* Copy data to user buffer, limited by count */
-        bytes_to_copy = stdin_pos;
-        if (bytes_to_copy > count) {
-            bytes_to_copy = count;
+        if (n < 0) {
+            return n;  /* -EINTR: a signal cut the wait short */
         }
-
-        if (copy_to_user(buf, stdin_buffer, bytes_to_copy) != 0) {
-            /* Reset stdin state even on a bad user buffer. */
-            stdin_pos = 0;
-            stdin_ready = false;
+        if (copy_to_user(buf, kbuf, (uint32_t)n) != 0) {
             return -EFAULT;
         }
-
-        /* Reset stdin state */
-        stdin_pos = 0;
-        stdin_ready = false;
-
-        return (int32_t)bytes_to_copy;
+        return n;
     }
 
     /* Mouse fd - non-blocking read of mouse packets */
@@ -4768,29 +4677,94 @@ static int32_t sys_ioctl(isr_params_t *params)
                                  : -ENOTTY;
     }
 
-    /* TIOCGWINSZ on the console succeeds with a window size -- this is what musl's
-     * isatty() probes, so the console reads as a terminal (and ttyname can then
-     * resolve it). TCGETS stays -ENOTTY until the termios layer (Phase 16): a fake
-     * tcgetattr would invite programs to tcsetattr and expect line discipline.
-     * Both remain -ENOTTY on a non-terminal fd, as Linux reports. */
-    if (request == TIOCGWINSZ && entry->type == FD_TYPE_CONSOLE) {
-        struct kernel_winsize {
-            uint16_t ws_row;
-            uint16_t ws_col;
-            uint16_t ws_xpixel;
-            uint16_t ws_ypixel;
-        } ws;
-        ws.ws_row = 25;
-        ws.ws_col = 80;
-        ws.ws_xpixel = 0;
-        ws.ws_ypixel = 0;
-        if (arg && copy_to_user((void __user *)arg, &ws, sizeof(ws)) != 0) {
-            return -EFAULT;
+    /* The console's terminal ioctls -- the real termios layer (Phase 16) plus the
+     * window size musl's isatty() probes. TCGETS/TCSETS exchange the 36-byte
+     * kernel termios (n_tty.h); TCSETSF and TCFLSH flush the unread input. On any
+     * non-terminal fd these stay -ENOTTY, as Linux reports. */
+    if (entry->type == FD_TYPE_CONSOLE) {
+        switch (request) {
+            case TCGETS:
+                if (!arg) {
+                    return -EFAULT;
+                }
+                if (copy_to_user((void __user *)arg, &console_tty.ldisc.tio,
+                                 sizeof(struct ktermios)) != 0) {
+                    return -EFAULT;
+                }
+                return 0;
+
+            case FIONREAD: {
+                /* Bytes a read would return right now (a complete cooked line, or
+                 * the queued count in raw mode); a pending EOF counts as 0. Drains
+                 * the serial port first so freshly arrived input is counted. */
+                int navail;
+                if (!arg) {
+                    return -EFAULT;
+                }
+                navail = tty_inq(&console_tty);
+                if (copy_to_user((void __user *)arg, &navail, sizeof(navail)) != 0) {
+                    return -EFAULT;
+                }
+                return 0;
+            }
+
+            case TCSETS:
+            case TCSETSW:
+            case TCSETSF: {
+                struct ktermios kt;
+                if (!arg) {
+                    return -EFAULT;
+                }
+                if (copy_from_user(&kt, (const void __user *)arg,
+                                   sizeof(struct ktermios)) != 0) {
+                    return -EFAULT;
+                }
+                /* Install with interrupts off (vs IRQ-side input); TCSETSF also
+                 * discards pending input. */
+                tty_set_termios(&console_tty, &kt, request == TCSETSF);
+                return 0;
+            }
+
+            case TCFLSH:
+                /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input;
+                 * we hold no output queue, so TCOFLUSH(1) is a no-op. Anything
+                 * else is invalid. */
+                if (arg > 2) {
+                    return -EINVAL;
+                }
+                if (arg == 0 || arg == 2) {
+                    tty_flush_input(&console_tty);
+                }
+                return 0;
+
+            case TIOCGWINSZ:
+                if (!arg) {
+                    return -EFAULT;
+                }
+                if (copy_to_user((void __user *)arg, &console_tty.winsize,
+                                 sizeof(console_tty.winsize)) != 0) {
+                    return -EFAULT;
+                }
+                return 0;
+
+            case TIOCSWINSZ:
+                if (!arg) {
+                    return -EFAULT;
+                }
+                if (copy_from_user(&console_tty.winsize, (const void __user *)arg,
+                                   sizeof(console_tty.winsize)) != 0) {
+                    return -EFAULT;
+                }
+                return 0;
+
+            default:
+                break; /* fall through to the KIOCSOUND/audio console block */
         }
-        return 0;
     }
-    if (request == TCGETS || request == TIOCGWINSZ) {
-        return -ENOTTY;
+    if (request == TCGETS || request == TCSETS || request == TCSETSW ||
+        request == TCSETSF || request == TCFLSH || request == TIOCGWINSZ ||
+        request == TIOCSWINSZ) {
+        return -ENOTTY; /* terminal-only requests on a non-terminal fd */
     }
 
     /* KIOCSOUND is handled by the console-type block below, keyed on the backing

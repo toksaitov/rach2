@@ -48,7 +48,8 @@ for prog in hello filetest forktest shelltest dirtest stattest \
             touchtest rmtest mvtest lstest stdintest dup2test \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
             tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
-            timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe; do
+            timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe \
+            ttyprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -129,6 +130,12 @@ fi
 if [ -f "../tests/musl/devtest" ]; then
     cp "../tests/musl/devtest" "$MOUNT_POINT/mdevtest"
     echo "  mdevtest (musl)"
+fi
+
+# The Phase 16 termios program (tcgetattr/cfmakeraw/raw getch), as "mtty".
+if [ -f "../tests/musl/ttymusl" ]; then
+    cp "../tests/musl/ttymusl" "$MOUNT_POINT/mtty"
+    echo "  mtty (musl)"
 fi
 
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined

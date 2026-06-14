@@ -68,4 +68,12 @@ void wq_wake_all(wait_queue_t *wq);
 void wq_poll_add(wait_queue_t *wq, process_t *p);
 void wq_poll_remove(wait_queue_t *wq, process_t *p);
 
+/*
+ * Non-zero if any process is currently blocked on wq. Used to gate work that is
+ * only worth doing while someone is waiting -- e.g. polling an interrupt-less
+ * device (the console serial port) for input from the timer tick. Read it with
+ * interrupts off if a concurrent waker could change it underneath you.
+ */
+int wq_active(const wait_queue_t *wq);
+
 #endif /* _WAIT_QUEUE_H_ */
