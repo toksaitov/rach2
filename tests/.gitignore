@@ -45,6 +45,7 @@ musl/ptymusl
 musl/budgetmusl
 musl/rngmusl
 musl/sockfillmusl
+musl/authmusl
 sigprobe
 ofdprobe
 waitprobe

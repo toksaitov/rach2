@@ -1125,7 +1125,7 @@ table, and the accept/OFD/EINTR interplay.
 surface is complete, options + `FIONREAD` round-trip, half-close + `EINTR` work,
 `accept` is OFD-clean, and Codex is addressed.
 
-### [ ] Phase 22 — Auth, key staging, and the last small syscalls
+### [x] Phase 22 — Auth, key staging, and the last small syscalls
 **Goal:** stage the identity/credentials a login server needs, and clear the long tail of
 tiny POSIX calls dropbear touches.
 **Concept taught:** how a Unix authenticates a login (the `/etc/passwd` + keys staging)

@@ -2407,6 +2407,12 @@ static int32_t sys_fcntl64(isr_params_t *params)
         F_SETFD = 2,
         F_GETFL = 3,
         F_SETFL = 4,
+        F_GETLK = 5,
+        F_SETLK = 6,
+        F_SETLKW = 7,
+        F_GETLK64 = 12,
+        F_SETLK64 = 13,
+        F_SETLKW64 = 14,
         F_DUPFD_CLOEXEC = 1030
     };
 
@@ -2492,6 +2498,28 @@ static int32_t sys_fcntl64(isr_params_t *params)
             }
             return newfd;
         }
+        case F_SETLK:
+        case F_SETLKW:
+        case F_SETLK64:
+        case F_SETLKW64:
+            /* Advisory POSIX locks. Rach2 is single-user with no competing locker,
+             * so every lock request is granted (documented no-conflict semantics) --
+             * dropbear/musl lock utmp/lastlog and must not see -EINVAL/-ENOSYS. */
+            return 0;
+        case F_GETLK:
+        case F_GETLK64:
+            /* Report that no lock would conflict: set l_type (the first short of
+             * the struct flock the caller passed) to F_UNLCK (2). */
+            if (!arg) {
+                return -EFAULT;
+            }
+            {
+                short unlck = 2; /* F_UNLCK */
+                if (copy_to_user((void __user *)arg, &unlck, sizeof(unlck)) != 0) {
+                    return -EFAULT;
+                }
+            }
+            return 0;
         default:
             return -EINVAL;
     }
@@ -6396,6 +6424,10 @@ struct kernel_utsname {
     char domainname[65];
 };
 
+/* The mutable host name (uname's nodename, what gethostname reads, sethostname
+ * sets). Single global -- Rach2 is one host. */
+static char k_hostname[65] = "rach2";
+
 /* Copy a C string into a fixed 65-byte utsname field (always NUL-terminated). */
 static void uname_field(char *dst, const char *src)
 {
@@ -6416,7 +6448,7 @@ static int32_t sys_uname(isr_params_t *params)
 
     k_memset(&uts, 0, sizeof(uts));
     uname_field(uts.sysname, "Rach2");
-    uname_field(uts.nodename, "rach2");
+    uname_field(uts.nodename, k_hostname);
     uname_field(uts.release, "1.0.0");
     uname_field(uts.version, "Rach2 musl port");
     uname_field(uts.machine, "i686");
@@ -6426,6 +6458,167 @@ static int32_t sys_uname(isr_params_t *params)
         return -EFAULT;
     }
     return 0;
+}
+
+/* sethostname(74): set the single mutable host name (uname's nodename, what
+ * gethostname reads back). */
+static int32_t sys_sethostname(isr_params_t *params)
+{
+    const char __user *name = (const char __user *)params->ebx;
+    int len = (int)params->ecx;
+    char buf[65];
+
+    if (len < 0 || len > 64) {
+        return -EINVAL;
+    }
+    if (len > 0 && copy_from_user(buf, name, (uint32_t)len) != 0) {
+        return -EFAULT;
+    }
+    buf[len] = '\0';
+    k_memcpy(k_hostname, buf, (uint32_t)len + 1);
+    return 0;
+}
+
+/* setuid/setgid: Rach2 has a single (root, id 0) identity and no user database.
+ * Setting the id to 0 succeeds as a no-op (a login server's post-auth privilege
+ * drop to the authenticated root must not fail); setting it to any OTHER id fails
+ * with -EPERM rather than silently pretending to drop to a user that does not
+ * exist -- so a caller is never fooled into believing it shed privilege. */
+static int32_t sys_setuid(isr_params_t *params)
+{
+    return (params->ebx == 0) ? 0 : -EPERM;
+}
+static int32_t sys_setgid(isr_params_t *params)
+{
+    return (params->ebx == 0) ? 0 : -EPERM;
+}
+/* setgroups: the only group is root (gid 0). Clearing the list (size 0) succeeds;
+ * a list is validated to be readable and to contain ONLY gid 0 -- any other gid is
+ * "no such group" (-EPERM), so a caller is never fooled into believing it set real
+ * supplementary groups. */
+static int32_t sys_setgroups(isr_params_t *params)
+{
+    int size = (int)params->ebx;
+    uint32_t list_ptr = params->ecx;
+    uint32_t g;
+    int i;
+
+    if (size < 0 || size > 256) {
+        return -EINVAL; /* a single-group OS never has a long supplementary list */
+    }
+    for (i = 0; i < size; i++) {
+        if (!list_ptr ||
+            copy_from_user(&g, (const void __user *)(list_ptr + (uint32_t)i * 4),
+                           sizeof(g)) != 0) {
+            return -EFAULT;
+        }
+        if (g != 0) {
+            return -EPERM;
+        }
+    }
+    return 0;
+}
+
+/* The honest resource caps: RLIMIT_NOFILE/NPROC mirror the kernel's fixed pools,
+ * RLIMIT_STACK the user stack growth cap; the rest are effectively unlimited.
+ * cur == max. */
+#define RLIMIT_STACK_RES  3
+#define RLIMIT_NPROC_RES  6
+#define RLIMIT_NOFILE_RES 7
+#define RLIM_INF32 0xFFFFFFFFu
+static void rlimit_for(uint32_t resource, uint32_t *cur, uint32_t *max)
+{
+    uint32_t v;
+
+    switch (resource) {
+    case RLIMIT_NOFILE_RES:
+        v = (uint32_t)MAX_FDS;
+        break;
+    case RLIMIT_NPROC_RES:
+        v = (uint32_t)MAX_PROCS;
+        break;
+    case RLIMIT_STACK_RES:
+        v = 0x800000u; /* 8 MB user-stack growth cap (documented) */
+        break;
+    default:
+        v = RLIM_INF32;
+        break;
+    }
+    *cur = v;
+    *max = v;
+}
+
+/* getrlimit(76)/ugetrlimit(191): 32-bit struct rlimit { u32 rlim_cur, rlim_max }. */
+static int32_t sys_getrlimit(isr_params_t *params)
+{
+    uint32_t resource = params->ebx;
+    uint32_t rl = params->ecx;
+    uint32_t out[2];
+
+    if (!rl) {
+        return -EFAULT;
+    }
+    rlimit_for(resource, &out[0], &out[1]);
+    if (copy_to_user((void __user *)rl, out, sizeof(out)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/* prlimit64(340): EBX=pid (0/self), ECX=resource, EDX=new (rlimit64* or NULL),
+ * ESI=old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }. New limits
+ * are accepted (validated readable) but not enforced; old limits report the
+ * honest caps. This is the form modern musl getrlimit/setrlimit issue. */
+static int32_t sys_prlimit64(isr_params_t *params)
+{
+    uint32_t resource = params->ecx;
+    uint32_t newp = params->edx;
+    uint32_t oldp = params->esi;
+    uint32_t cur32, max32;
+
+    if (oldp) {
+        uint32_t out[4]; /* cur_lo, cur_hi, max_lo, max_hi */
+        rlimit_for(resource, &cur32, &max32);
+        out[0] = cur32;
+        out[1] = (cur32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u; /* 64-bit RLIM_INFINITY */
+        out[2] = max32;
+        out[3] = (max32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u;
+        if (copy_to_user((void __user *)oldp, out, sizeof(out)) != 0) {
+            return -EFAULT;
+        }
+    }
+    if (newp) {
+        uint32_t in[4];
+        if (copy_from_user(in, (const void __user *)newp, sizeof(in)) != 0) {
+            return -EFAULT;
+        }
+    }
+    return 0;
+}
+
+/* dup3(330): like dup2 but oldfd == newfd is -EINVAL and a flag can set O_CLOEXEC
+ * on the new descriptor. */
+static int32_t sys_dup3(isr_params_t *params)
+{
+    int oldfd = (int)params->ebx;
+    int newfd = (int)params->ecx;
+    uint32_t flags = params->edx;
+    int32_t r;
+
+    if (oldfd == newfd) {
+        return -EINVAL;
+    }
+    if (flags & ~(uint32_t)O_CLOEXEC) {
+        return -EINVAL;
+    }
+    r = sys_dup2(params); /* shares EBX=oldfd, ECX=newfd */
+    if (r >= 0 && (flags & O_CLOEXEC)) {
+        fd_entry_t *e = fd_get(&current_proc->fds, newfd);
+        if (e) {
+            e->flags |= FD_FLAG_CLOEXEC;
+        }
+    }
+    return r;
 }
 
 /*
@@ -6742,6 +6935,16 @@ void init_syscall(void)
     _syscall_table[SYS_VFORK] = sys_fork; /* conservative alias (Phase 18) */
     _syscall_table[SYS_WRITEV] = sys_writev;
     _syscall_table[SYS_UNAME] = sys_uname;
+    /* Phase 22: auth/identity (no-op privilege drop), resource limits, and the
+     * tail syscalls dropbear touches. */
+    _syscall_table[SYS_SETHOSTNAME] = sys_sethostname;
+    _syscall_table[SYS_SETUID32] = sys_setuid;
+    _syscall_table[SYS_SETGID32] = sys_setgid;
+    _syscall_table[SYS_SETGROUPS32] = sys_setgroups;
+    _syscall_table[SYS_GETRLIMIT] = sys_getrlimit;
+    _syscall_table[SYS_UGETRLIMIT] = sys_getrlimit;
+    _syscall_table[SYS_PRLIMIT64] = sys_prlimit64;
+    _syscall_table[SYS_DUP3] = sys_dup3;
     _syscall_table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;
     /* musl's exit() issues exit_group(); for a single-threaded process it is
      * exactly _exit(). */

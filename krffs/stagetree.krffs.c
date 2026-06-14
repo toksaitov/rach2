@@ -46,6 +46,13 @@ static const char STAGE_MOTD[] =
     "Welcome to Rach2.\n";
 static const char STAGE_HOSTNAME[] =
     "rach2\n";
+/* The root identity a login server (dropbear, Phase 23) reads via getpwnam. The
+ * auth policy is PUBLIC KEY (authorized_keys, staged with the dropbear build):
+ * Rach2 has no /etc/shadow and no password hashing, so the password field is "x"
+ * and login is by key, not password. uid/gid 0, home /root, shell /bin/sh (which
+ * Phase 23 points at busybox). */
+static const char STAGE_PASSWD[] =
+    "root:x:0:0:root:/root:/bin/sh\n";
 
 /* Match the kernel's krffs_mix_id (rach2/sys/fs/krffs.c) so a host-staged node
    and the same node created in-guest get the same id: a stable mix of the
@@ -262,9 +269,10 @@ int main(int argc, char **argv)
     /* Preflight space for the whole tree so a run is all-or-nothing: three node
        headers plus the two file payloads must fit one free block. */
     needed =
-        (uint64_t) sizeof(struct krffs_node) * 3 +
+        (uint64_t) sizeof(struct krffs_node) * 4 +
         (sizeof(STAGE_MOTD) - 1) +
-        (sizeof(STAGE_HOSTNAME) - 1);
+        (sizeof(STAGE_HOSTNAME) - 1) +
+        (sizeof(STAGE_PASSWD) - 1);
 
     if (largest_free_block(&file_system) < needed) {
         fprintf(stderr, "stagetree: not enough free space to stage /etc in '%s'.\n", argv[1]);
@@ -283,6 +291,9 @@ int main(int argc, char **argv)
         stage_node(&file_system, etc_id, "motd", 0644, STAGE_MOTD, sizeof(STAGE_MOTD) - 1) == 0 ||
         stage_node(
             &file_system, etc_id, "hostname", 0644, STAGE_HOSTNAME, sizeof(STAGE_HOSTNAME) - 1
+        ) == 0 ||
+        stage_node(
+            &file_system, etc_id, "passwd", 0644, STAGE_PASSWD, sizeof(STAGE_PASSWD) - 1
         ) == 0) {
         exit_status =
             EXIT_FAILURE;
@@ -290,7 +301,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    printf("stagetree: staged /etc/motd and /etc/hostname into '%s'.\n", argv[1]);
+    printf("stagetree: staged /etc/motd, /etc/hostname, /etc/passwd into '%s'.\n", argv[1]);
 
 cleanup:
     if (file_descriptor != -1) {

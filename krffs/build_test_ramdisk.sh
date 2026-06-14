@@ -162,6 +162,12 @@ if [ -f "../tests/musl/sockfillmusl" ]; then
     echo "  msockfill (musl)"
 fi
 
+# The Phase 22 musl auth/identity + tail-syscall probe, installed as "mauth".
+if [ -f "../tests/musl/authmusl" ]; then
+    cp "../tests/musl/authmusl" "$MOUNT_POINT/mauth"
+    echo "  mauth (musl)"
+fi
+
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined
 # boot can exercise them (e.g. "exec cat hello.txt", "exec ls", "exec echo hi").
 for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; do

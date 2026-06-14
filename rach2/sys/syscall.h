@@ -91,6 +91,16 @@
 #define SYS_TKILL 238
 #define SYS_TGKILL 270
 
+/* Phase 22: the auth/identity + resource + tail syscalls dropbear touches. */
+#define SYS_SETHOSTNAME 74
+#define SYS_GETRLIMIT   76
+#define SYS_UGETRLIMIT  191
+#define SYS_SETGROUPS32 206
+#define SYS_SETUID32    213
+#define SYS_SETGID32    214
+#define SYS_DUP3        330
+#define SYS_PRLIMIT64   340
+
 /*
  * Size of the syscall dispatch table
  * Must be large enough to hold highest syscall number + 1
