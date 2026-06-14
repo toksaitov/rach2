@@ -129,4 +129,10 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 /* Begin a graceful close (FIN handshake); detaches the TCB from the socket. */
 void tcp_close(struct socket *sock);
 
+/* 1 if the socket has a peer connection past the handshake (ESTABLISHED through
+ * the closing states) -- the condition getpeername/shutdown require. 0 for a
+ * listener, a still-handshaking (SYN_SENT/RCVD), or closed/never-connected stream
+ * (and for any non-stream socket). */
+int tcp_is_connected(struct socket *sock);
+
 #endif /* _TCP_H_ */

@@ -627,6 +627,26 @@ void tcp_close(struct socket *sock)
     net_unlock(flags);
 }
 
+int tcp_is_connected(struct socket *sock)
+{
+    struct tcb *tcb;
+
+    if (!sock || sock->type != SOCK_STREAM || sock->listening) {
+        return 0;
+    }
+    /* Snapshot the TCB pointer once (an IRQ-side tcp_close detaches it by NULLing
+     * sock->tcb); re-reading sock->tcb after the NULL check could deref NULL. This
+     * is the same access discipline as socket_tcp_recv. */
+    tcb = sock->tcb;
+    if (!tcb) {
+        return 0;
+    }
+    /* A peer exists from ESTABLISHED through every closing state; the handshake
+     * states (SYN_SENT/RCVD), LISTEN, and CLOSED have no peer to name. The state
+     * enum is ordered so ESTABLISHED and later compare >= TCP_ESTABLISHED. */
+    return tcb->state >= TCP_ESTABLISHED;
+}
+
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             const uint8_t *data, uint16_t len)
 {

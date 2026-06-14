@@ -1093,7 +1093,7 @@ host seam; a `virtio` Readme. Probe: `/dev/urandom` is virtio-seeded when the de
 attached. **Do this only if Phase 20 landed clean and time allows — it must not gate
 dropbear.**
 
-### [ ] Phase 21 — The socket fill-out for a real server
+### [x] Phase 21 — The socket fill-out for a real server
 **Goal:** the rest of the BSD socket surface a fork-per-connection sshd needs beyond Part
 I's connect/send/recv — naming, options, half-close — and a hardened, interruptible
 inbound path.

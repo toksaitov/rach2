@@ -18,7 +18,7 @@ typedef unsigned int uint32_t;
 #define SYS_WRITE      4
 #define SYS_SOCKETCALL 102
 
-#define SC_PING 15
+#define SC_PING 0x1000  /* renumbered off Linux getsockopt=15 */
 
 /* IPs in host byte order. */
 #define GATEWAY_IP     0x0A000202UL   /* 10.0.2.2  */

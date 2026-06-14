@@ -35,6 +35,7 @@
 #include "network/udp/udp.h"
 #include "network/tcp/tcp.h"
 #include "network/ip/icmp.h"
+#include "network/net.h" /* NET_IP_ADDR for getsockname */
 
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
@@ -5397,16 +5398,24 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 } while (0)
 
 /* socketcall sub-function numbers (Linux standard). */
-#define SC_SOCKET    1
-#define SC_BIND      2
-#define SC_CONNECT   3
-#define SC_LISTEN    4
-#define SC_ACCEPT    5
-#define SC_SEND      9
-#define SC_RECV     10
-#define SC_SENDTO   11
-#define SC_RECVFROM 12
-#define SC_PING     15
+#define SC_SOCKET       1
+#define SC_BIND         2
+#define SC_CONNECT      3
+#define SC_LISTEN       4
+#define SC_ACCEPT       5
+#define SC_GETSOCKNAME  6
+#define SC_GETPEERNAME  7
+#define SC_SEND         9
+#define SC_RECV        10
+#define SC_SENDTO      11
+#define SC_RECVFROM    12
+#define SC_SHUTDOWN    13
+#define SC_SETSOCKOPT  14
+#define SC_GETSOCKOPT  15
+/* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it used
+ * to squat on 15 == Linux getsockopt, which a real server needs). Userspace
+ * callers (utils/ping.c, tests/pingtest.c) use the same value. */
+#define SC_PING     0x1000
 
 /* recv flags: only MSG_DONTWAIT is honored. */
 #define MSG_DONTWAIT 0x40
@@ -5851,6 +5860,145 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
                                     len);
 }
 
+/* getsockname: the socket's local address -- the single NIC IP (NET_IP_ADDR) plus
+ * its bound or ephemeral port. */
+static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    /* Unlike accept/recvfrom, getsockname requires the buffers (copy_sockaddr_to_
+     * user treats NULL as "no address wanted"). */
+    if (!sa_ptr || !salen_ptr) {
+        return -EFAULT;
+    }
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port,
+                                 (uint32_t)NET_IP_ADDR);
+}
+
+/* getpeername: the connected peer's address (a connected stream socket only). */
+static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    /* A peer exists only once the TCP handshake completes (not a listener, not a
+     * still-connecting SYN_SENT, not a closed/UDP socket). */
+    if (!tcp_is_connected(entry->sock)) {
+        return -ENOTCONN;
+    }
+    if (!sa_ptr || !salen_ptr) {
+        return -EFAULT;
+    }
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->remote_port,
+                                 entry->sock->remote_ip);
+}
+
+/* shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2). Any direction that includes
+ * the write side drives the TCP active close (a FIN, so the peer reads EOF);
+ * SHUT_RD alone is accepted as a no-op. We have no lingering half-open state, so a
+ * write-side shutdown sends the FIN exactly as close() would (documented). */
+#define SHUT_RD   0
+#define SHUT_WR   1
+#define SHUT_RDWR 2
+static int32_t do_shutdown(int fd, int how)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (how < SHUT_RD || how > SHUT_RDWR) {
+        return -EINVAL;
+    }
+    /* Only a connected stream socket can be shut down -- NOT a listener (which
+     * would free its LISTEN TCB and silently stop accepting), an unconnected, or a
+     * UDP socket. */
+    if (!tcp_is_connected(entry->sock)) {
+        return -ENOTCONN;
+    }
+    if (how == SHUT_WR || how == SHUT_RDWR) {
+        tcp_close(entry->sock); /* send FIN; idempotent vs the later close() */
+    }
+    return 0;
+}
+
+/* Socket-option levels/names recognized by get/setsockopt. */
+#define SOL_SOCKET    1
+#define SO_REUSEADDR  2
+#define SO_TYPE       3
+#define SO_ERROR      4
+#define SO_KEEPALIVE  9
+#define IPPROTO_TCP   6
+#define TCP_NODELAY   1
+
+/* setsockopt: accept the boolean options a forking server sets (SO_REUSEADDR,
+ * TCP_NODELAY, SO_KEEPALIVE) so its setup succeeds. The stack already reuses
+ * listen ports and sends promptly, so these are honored-by-behavior or documented
+ * no-ops; an unknown option is accepted rather than failing a server's startup. */
+static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr,
+                             int optlen)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    int val = 0;
+
+    (void)level;
+    (void)optname;
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    /* A declared int-sized option with a NULL value is a bad pointer, not a
+     * silently-accepted no-op. */
+    if (optlen >= (int)sizeof(int)) {
+        if (!optval_ptr ||
+            copy_from_user(&val, (const void __user *)optval_ptr, sizeof(val)) != 0) {
+            return -EFAULT;
+        }
+    }
+    return 0;
+}
+
+/* getsockopt: report the integer options programs read at setup -- SO_ERROR (no
+ * async error is tracked, so 0), SO_TYPE (the real socket type), and the boolean
+ * options as 0 (off). Always reports a 4-byte int result. */
+static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
+                             uint32_t optlen_ptr)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    int val = 0;
+    uint32_t olen;
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (level == SOL_SOCKET && optname == SO_TYPE) {
+        val = entry->sock->type;
+    } else {
+        val = 0; /* SO_ERROR / SO_REUSEADDR / SO_KEEPALIVE / TCP_NODELAY: off/none */
+    }
+    if (!optval_ptr || !optlen_ptr) {
+        return -EFAULT;
+    }
+    if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
+        return -EFAULT;
+    }
+    if (olen > sizeof(val)) {
+        olen = (uint32_t)sizeof(val);
+    }
+    if (olen > 0 && copy_to_user((void __user *)optval_ptr, &val, olen) != 0) {
+        return -EFAULT;
+    }
+    olen = (uint32_t)sizeof(val);
+    if (copy_to_user((void __user *)optlen_ptr, &olen, sizeof(olen)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 static int32_t sys_socketcall(isr_params_t *params)
 {
     int      call = (int)params->ebx;
@@ -5860,10 +6008,14 @@ static int32_t sys_socketcall(isr_params_t *params)
 
     switch (call) {
     case SC_PING:                       nargs = 1; break;
-    case SC_LISTEN:                     nargs = 2; break;
+    case SC_LISTEN: case SC_SHUTDOWN:   nargs = 2; break;
     case SC_SOCKET: case SC_BIND:
-    case SC_CONNECT: case SC_ACCEPT:    nargs = 3; break;
+    case SC_CONNECT: case SC_ACCEPT:
+    case SC_GETSOCKNAME:
+    case SC_GETPEERNAME:                nargs = 3; break;
     case SC_SEND: case SC_RECV:         nargs = 4; break;
+    case SC_SETSOCKOPT:
+    case SC_GETSOCKOPT:                 nargs = 5; break;
     case SC_SENDTO: case SC_RECVFROM:   nargs = 6; break;
     default:
         return -EINVAL;
@@ -5894,6 +6046,18 @@ static int32_t sys_socketcall(isr_params_t *params)
         return do_listen((int)args[0], (int)args[1]);
     case SC_ACCEPT:
         return do_accept((int)args[0], args[1], args[2]);
+    case SC_GETSOCKNAME:
+        return do_getsockname((int)args[0], args[1], args[2]);
+    case SC_GETPEERNAME:
+        return do_getpeername((int)args[0], args[1], args[2]);
+    case SC_SHUTDOWN:
+        return do_shutdown((int)args[0], (int)args[1]);
+    case SC_SETSOCKOPT:
+        return do_setsockopt((int)args[0], (int)args[1], (int)args[2], args[3],
+                             (int)args[4]);
+    case SC_GETSOCKOPT:
+        return do_getsockopt((int)args[0], (int)args[1], (int)args[2], args[3],
+                             args[4]);
     case SC_SEND:
         return do_send((int)args[0], args[1], (int)args[2], (int)args[3]);
     case SC_RECV:

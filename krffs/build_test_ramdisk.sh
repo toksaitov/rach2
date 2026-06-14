@@ -156,6 +156,12 @@ if [ -f "../tests/musl/rngmusl" ]; then
     echo "  mrng (musl)"
 fi
 
+# The Phase 21 socket server-side fill-out probe, installed as "msockfill".
+if [ -f "../tests/musl/sockfillmusl" ]; then
+    cp "../tests/musl/sockfillmusl" "$MOUNT_POINT/msockfill"
+    echo "  msockfill (musl)"
+fi
+
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined
 # boot can exercise them (e.g. "exec cat hello.txt", "exec ls", "exec echo hi").
 for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; do
