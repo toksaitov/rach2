@@ -33,4 +33,6 @@ musl/mallocqsort
 musl/cowfork
 musl/catfile
 musl/timemusl
+musl/sigmusl
+musl/ctrlcmusl
 sigprobe

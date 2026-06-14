@@ -89,6 +89,18 @@ if [ -f "../tests/musl/timemusl" ]; then
     echo "  mtimemusl (musl)"
 fi
 
+# The Phase 8 signals program, installed as "msigmusl".
+if [ -f "../tests/musl/sigmusl" ]; then
+    cp "../tests/musl/sigmusl" "$MOUNT_POINT/msigmusl"
+    echo "  msigmusl (musl)"
+fi
+
+# The Phase 8 Ctrl-C interrupt program, installed as "mctrlc".
+if [ -f "../tests/musl/ctrlcmusl" ]; then
+    cp "../tests/musl/ctrlcmusl" "$MOUNT_POINT/mctrlc"
+    echo "  mctrlc (musl)"
+fi
+
 # Also copy hello.txt for file tests
 echo "hello, world" > "$MOUNT_POINT/hello.txt"
 echo "  hello.txt (test data)"

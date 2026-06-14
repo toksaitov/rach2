@@ -1026,6 +1026,35 @@ static int32_t sys_read(isr_params_t *params)
                 /* Handle CR (0x0D) as newline - terminals send CR on Enter */
                 if (ch == '\r') ch = '\n';
 
+                /* Ctrl-C (ETX, 0x03) on the serial console: deliver SIGINT to the
+                 * foreground process, like a tty line discipline with ISIG set
+                 * (the PS/2 keyboard path does the same on Ctrl+C). If the signal
+                 * is actually deliverable (SIGINT not blocked), stop waiting and
+                 * unwind with -EINTR so it is acted on -- the installed handler, or
+                 * the default terminate -- on the way back to user mode. */
+                if (ch == 0x03) {
+                    k_putc('^');
+                    k_putc('C');
+                    k_putc('\n');
+                    serial_putc('^');
+                    serial_putc('C');
+                    serial_putc('\r');
+                    serial_putc('\n');
+                    signal_post(current_proc, SIGINT);
+                    if (signal_pending()) {
+                        current_proc->state = PROC_RUNNING;
+                        stdin_waiting_proc = NULL;
+                        stdin_pos = 0;
+                        stdin_ready = false;
+                        return -EINTR;
+                    }
+                    /* SIGINT is blocked/ignored: it stays pending for later.
+                     * signal_post() woke us to PROC_READY; we are still parked in
+                     * this read, so restore PROC_BLOCKED before waiting again. */
+                    current_proc->state = PROC_BLOCKED;
+                    continue;
+                }
+
                 if (ch == '\n') {
                     /* Newline - mark input ready */
                     if (stdin_pos < STDIN_BUFFER_SIZE - 1) {
@@ -3326,12 +3355,17 @@ void signal_post(process_t *target, int signo)
 int signal_pending(void)
 {
     uint64_t deliverable;
+    uint32_t flags;
     int signo;
 
     if (!current_proc) {
         return 0;
     }
+    /* Snapshot the 64-bit masks with IRQs off: on i386 a 64-bit read is two
+     * 32-bit loads, and a signal posted from an IRQ in between could tear it. */
+    flags = sig_irq_save();
     deliverable = current_proc->sig_pending & ~current_proc->sig_blocked;
+    sig_irq_restore(flags);
     /* Only a signal that would ACT interrupts a wait: a caught handler or a
      * default-terminate. A pending signal that is ignored (SIG_IGN or a
      * default-ignore like SIGCHLD) must NOT cause -EINTR. */
@@ -3565,14 +3599,18 @@ static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *s
 }
 
 /*
- * sys_rt_sigreturn (173) - return from a signal handler. The restorer trampoline
- * (musl __restore_rt) entered here; the user esp points just past `pretcode`, so
- * the frame begins 4 bytes below it. Restore the saved trapframe (with the
- * segment selectors and EFLAGS forced to safe user values -- the frame is on the
- * untrusted user stack) and the pre-handler signal mask. Returns the restored
+ * signal_restore - the shared body of sigreturn: read the frame the restorer
+ * left on the user stack, validate it, and restore the saved trapframe (segment
+ * selectors and EFLAGS forced to safe user values -- the frame is on the
+ * untrusted user stack) plus the pre-handler signal mask. Returns the restored
  * EAX so the dispatcher does not clobber it.
+ *
+ * `delta` is how far below the current user esp the frame begins, which differs
+ * by trampoline: musl's __restore_rt enters with esp just past `pretcode`
+ * (delta 4), while the legacy __restore pops the signal word first and so enters
+ * 4 bytes higher (delta 8). Both read the same kernel-built frame.
  */
-static int32_t sys_rt_sigreturn(isr_params_t *tf)
+static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
 {
     struct sig_frame frame;
     uint32_t frame_addr;
@@ -3580,7 +3618,7 @@ static int32_t sys_rt_sigreturn(isr_params_t *tf)
     if (!current_proc) {
         return -ESRCH;
     }
-    frame_addr = tf->user_esp - 4;
+    frame_addr = tf->user_esp - delta;
     if (copy_from_user(&frame, (const void __user *)frame_addr, sizeof(frame)) != 0) {
         terminate_current_process(SIGSEGV);
         return 0;
@@ -3616,6 +3654,26 @@ static int32_t sys_rt_sigreturn(isr_params_t *tf)
 
     current_proc->sig_blocked = frame.saved_mask & ~KSIG_UNCATCHABLE;
     return (int32_t)tf->eax;
+}
+
+/*
+ * sys_rt_sigreturn (173) - return through musl's __restore_rt (SA_SIGINFO
+ * handlers): a bare `int $0x80`, so the frame sits 4 bytes below the user esp.
+ */
+static int32_t sys_rt_sigreturn(isr_params_t *tf)
+{
+    return signal_restore(tf, 4);
+}
+
+/*
+ * sys_sigreturn (119) - return through musl's legacy __restore (plain handlers,
+ * no SA_SIGINFO): it pops the signal word before the `int $0x80`, so the frame
+ * sits 8 bytes below the user esp. Reads the same kernel-built frame as the rt
+ * path; the popped word is the handler's `sig` argument and is discarded.
+ */
+static int32_t sys_sigreturn(isr_params_t *tf)
+{
+    return signal_restore(tf, 8);
 }
 
 /*
@@ -4715,6 +4773,7 @@ void init_syscall(void)
     _syscall_table[SYS_RT_SIGACTION] = sys_rt_sigaction;
     _syscall_table[SYS_RT_SIGPROCMASK] = sys_rt_sigprocmask;
     _syscall_table[SYS_RT_SIGRETURN] = sys_rt_sigreturn;
+    _syscall_table[SYS_SIGRETURN] = sys_sigreturn;
     /* Single-user: all four identity calls report root (uid/gid 0). */
     _syscall_table[SYS_GETUID32] = sys_getuid;
     _syscall_table[SYS_GETGID32] = sys_getuid;
