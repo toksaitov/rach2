@@ -31,7 +31,8 @@ typedef enum {
     FD_TYPE_DIR,          /* Directory (for getdents64) */
     FD_TYPE_FRAMEBUFFER,  /* VGA framebuffer device */
     FD_TYPE_MOUSE,        /* PS/2 mouse device */
-    FD_TYPE_SOCKET        /* Network socket */
+    FD_TYPE_SOCKET,       /* Network socket */
+    FD_TYPE_PIPE          /* Pipe end (backed by file_ops + priv) */
 } fd_type_t;
 
 /*

@@ -40,3 +40,4 @@ musl/ofdmusl
 sigprobe
 ofdprobe
 waitprobe
+pipeprobe

@@ -14,6 +14,7 @@
 #include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/file.h"
+#include "ipc/pipe.h"
 #include "fs/krffs.h"
 #include "mm/paging.h"
 #include "mm/heap.h"
@@ -957,7 +958,13 @@ static int32_t sys_lseek(isr_params_t *params)
     }
 
     entry = fd_get(&current_proc->fds, fd);
-    if (!entry || entry->type != FD_TYPE_FILE) {
+    if (!entry) {
+        return -EBADF;
+    }
+    if (entry->type == FD_TYPE_PIPE) {
+        return -ESPIPE; /* a pipe is not seekable (POSIX) */
+    }
+    if (entry->type != FD_TYPE_FILE) {
         return -EBADF;
     }
 
@@ -1009,13 +1016,22 @@ static int32_t sys_read(isr_params_t *params)
     fd_entry_t *entry;
     uint32_t bytes_to_copy;
 
-    if (!current_proc || !buf) {
+    if (!current_proc) {
         return -EFAULT;
     }
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry) {
         return -EBADF;
+    }
+
+    /* A zero-length read is a no-op that returns 0 -- even with a NULL buffer, per
+     * POSIX -- once the fd is known valid; do not touch buf. */
+    if (count == 0) {
+        return 0;
+    }
+    if (!buf) {
+        return -EFAULT;
     }
 
     /* Backing-ops object (pipe/tty/pty): dispatch through its vtable. The Part I
@@ -1634,6 +1650,11 @@ static int32_t sys_fstat64(isr_params_t *params)
         kst.st_mode = 0140666; /* S_IFSOCK | 0666 */
         kst.st_nlink = 1;
         kst.st_blksize = 4096;
+    } else if (entry->type == FD_TYPE_PIPE) {
+        /* A pipe end: programs classify these with S_ISFIFO. */
+        kst.st_mode = 010666; /* S_IFIFO | 0666 */
+        kst.st_nlink = 1;
+        kst.st_blksize = 4096;
     } else {
         /* A console/framebuffer/mouse fd: report a character device, size 0. */
         kst.st_mode = 020666; /* S_IFCHR | 0666 */
@@ -1722,6 +1743,9 @@ static int32_t sys__llseek(isr_params_t *params)
         return -ESRCH;
     }
     entry = fd_get(&current_proc->fds, fd);
+    if (entry && entry->type == FD_TYPE_PIPE) {
+        return -ESPIPE; /* a pipe is not seekable (POSIX) */
+    }
     if (!entry || entry->type != FD_TYPE_FILE || !entry->node) {
         return -EBADF;
     }
@@ -3900,6 +3924,13 @@ static int32_t sys_ioctl(isr_params_t *params)
         return -EBADF;
     }
 
+    /* A backing-ops object (pipe/tty/pty) owns its own ioctls -- FIONREAD,
+     * FIONBIO, and (for ttys) the termios/window-size requests. */
+    if (entry->ops) {
+        return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg)
+                                 : -ENOTTY;
+    }
+
     /* Terminal attribute queries on a valid fd: Rach2 has no termios layer, so
      * report "not a terminal" exactly as Linux does for a non-tty fd. musl's
      * isatty() then returns 0 and stdio chooses block buffering. */
@@ -4955,6 +4986,8 @@ void init_syscall(void)
     _syscall_table[SYS_IOCTL] = sys_ioctl;
     _syscall_table[SYS_DUP] = sys_dup;
     _syscall_table[SYS_DUP2] = sys_dup2;
+    _syscall_table[SYS_PIPE] = sys_pipe;
+    _syscall_table[SYS_PIPE2] = sys_pipe2;
     _syscall_table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
     _syscall_table[SYS_STAT] = sys_stat;
     _syscall_table[SYS_GETCWD] = sys_getcwd;

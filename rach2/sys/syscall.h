@@ -35,6 +35,8 @@
 #define SYS_IOCTL     54
 #define SYS_DUP       41
 #define SYS_DUP2      63
+#define SYS_PIPE      42
+#define SYS_PIPE2     331
 #define SYS_GETTIMEOFDAY 78
 #define SYS_STAT     106
 #define SYS_UNAME    122

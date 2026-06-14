@@ -48,7 +48,7 @@ for prog in hello filetest forktest shelltest dirtest stattest \
             touchtest rmtest mvtest lstest stdintest dup2test \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
             tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
-            timeprobe sigprobe ofdprobe waitprobe; do
+            timeprobe sigprobe ofdprobe waitprobe pipeprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -111,6 +111,12 @@ fi
 if [ -f "../tests/musl/ofdmusl" ]; then
     cp "../tests/musl/ofdmusl" "$MOUNT_POINT/mofd"
     echo "  mofd (musl)"
+fi
+
+# The Phase 13 pipe+fork round-trip program, installed as "mpipe".
+if [ -f "../tests/musl/pipemusl" ]; then
+    cp "../tests/musl/pipemusl" "$MOUNT_POINT/mpipe"
+    echo "  mpipe (musl)"
 fi
 
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined

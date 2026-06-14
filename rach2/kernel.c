@@ -12,6 +12,7 @@
 #include "sys/mm/paging.h"
 #include "sys/mm/frame.h"
 #include "sys/proc/process.h"
+#include "sys/ipc/pipe.h"
 #include "sys/proc/sched.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
@@ -2182,6 +2183,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         serial_printf(" None (no ramdisk)\n");
     }
     set_fore_color(light_grey);
+
+    /* Allocate the pipe pool (kept out of BSS) before user processes can pipe(). */
+    pipe_init_pool();
 
     k_printf("  Network...");
     serial_printf("  Network...");
