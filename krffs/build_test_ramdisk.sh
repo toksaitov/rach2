@@ -83,6 +83,12 @@ if [ -f "../tests/musl/catfile" ]; then
     echo "  mcatfile (musl)"
 fi
 
+# The Phase 7 time/sleep/random program, installed as "mtimemusl".
+if [ -f "../tests/musl/timemusl" ]; then
+    cp "../tests/musl/timemusl" "$MOUNT_POINT/mtimemusl"
+    echo "  mtimemusl (musl)"
+fi
+
 # Also copy hello.txt for file tests
 echo "hello, world" > "$MOUNT_POINT/hello.txt"
 echo "  hello.txt (test data)"
