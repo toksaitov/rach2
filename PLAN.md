@@ -1029,7 +1029,7 @@ and `ps` on the console; nothing regressed; Codex is addressed.
 > Phase 19**, gating Phase 23; raise the fixed limits (append-only PCB, re-check asm
 > offsets) then if it does not fit.
 
-### [ ] Phase 19 — Pseudo-terminals (`/dev/ptmx` + `/dev/pts/N`)
+### [x] Phase 19 — Pseudo-terminals (`/dev/ptmx` + `/dev/pts/N`)
 **Goal:** the pty master/slave pair — the mechanism a network login uses to give a
 remote user a real terminal. The biggest II-B subsystem, built on the Phase-16 tty layer.
 **Concept taught:** the pseudo-terminal — a bidirectional channel whose **slave** end is

@@ -17,6 +17,7 @@
 #include "ipc/pipe.h"
 #include "io/poll.h"
 #include "tty/tty.h"
+#include "tty/pty.h"
 #include "fs/krffs.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
@@ -296,6 +297,9 @@ static int32_t sys_exit(isr_params_t *params)
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
         tty_set_session(&console_tty, 0, 0);
     }
+    /* A dying session leader also disassociates any pty slave it controlled, so a
+     * later session can claim the same /dev/pts/N. */
+    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
 #ifdef RACH2_HARNESS
     /* Harness build: the instant the probe (run as init) exits, report its status
@@ -630,6 +634,7 @@ static int32_t sys_writev(isr_params_t *params)
 #define O_EXCL     0200
 #define O_TRUNC    01000
 #define O_NONBLOCK 04000    /* a would-block operation returns -EAGAIN */
+#define O_DIRECTORY 0200000 /* the target must be a directory (else -ENOTDIR) */
 #define O_CLOEXEC  02000000 /* close-on-exec: the fd is dropped across execve */
 
 /* Special dir fd for the openat family: resolve relative to the current dir. */
@@ -790,9 +795,17 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     switch (vp->kind) {
         case VNODE_DEV:
             return devfs_open(vp->name, flags);
+        case VNODE_PTS:
+            /* /dev/pts/N: the slave end of pty N (pty_open_slave does its own fd
+             * allocation, and rejects an unallocated/locked pair). */
+            if (flags & O_DIRECTORY) {
+                return -ENOTDIR;
+            }
+            return pty_open_slave(vp->pts_index, flags);
         case VNODE_PROC_FILE:
             return procfs_open(vp, flags);
         case VNODE_DEV_DIR:
+        case VNODE_PTS_DIR:
         case VNODE_PROC_DIR:
         case VNODE_PROC_PID:
         case VNODE_PROC_FD_DIR:
@@ -1534,8 +1547,9 @@ static int32_t sys_chdir(isr_params_t *params)
                     return -ENOENT;
                 }
             }
-            if (kind == VNODE_DEV_DIR || kind == VNODE_PROC_DIR ||
-                kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR) {
+            if (kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR ||
+                kind == VNODE_PROC_DIR || kind == VNODE_PROC_PID ||
+                kind == VNODE_PROC_FD_DIR) {
                 synth_dir_path(kind, rpid, current_proc->cwd, sizeof(current_proc->cwd));
                 return 0;
             }
@@ -1703,6 +1717,11 @@ static void fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
  * their target when followed (`follow`). st_dev is the synthetic fs id, distinct
  * from KRFFS's 0, so a device's (st_dev, st_ino) identity never aliases a file's.
  */
+/* Stable /dev/pts inodes (distinct from devfs's): the directory, then one per
+ * slave (so a slave's (st_dev, st_ino) identity is consistent for ttyname). */
+#define PTS_INO_DIR  3u
+#define PTS_INO_BASE 0x1000u
+
 static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
@@ -1784,6 +1803,23 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_ino = procfs_ino_pid(rpid);
             return 0;
         }
+        case VNODE_PTS_DIR:
+            /* /dev/pts: a directory. */
+            kst->st_dev = DEVFS_FSID;
+            kst->st_mode = S_IFDIR | 0755;
+            kst->st_ino = PTS_INO_DIR;
+            return 0;
+        case VNODE_PTS:
+            /* /dev/pts/N: a slave terminal (S_IFCHR), only if pty N is allocated.
+             * The rdev is the Linux Unix98 pty slave major 136. */
+            if (!pty_is_allocated(vp->pts_index)) {
+                return -ENOENT;
+            }
+            kst->st_dev = DEVFS_FSID;
+            kst->st_mode = 0020620; /* S_IFCHR | 0620 (crw--w----) */
+            kst->st_rdev = (136u << 8) | (uint32_t)vp->pts_index;
+            kst->st_ino = PTS_INO_BASE + (uint32_t)vp->pts_index;
+            return 0;
         case VNODE_ENOTDIR:
             return -ENOTDIR;
         default:
@@ -2054,6 +2090,24 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
             kst->st_blksize = 4096;
             kst->st_dev = PROCFS_FSID;
         }
+    } else if (entry->type == FD_TYPE_PTS) {
+        /* A pty slave: report the SAME identity as stat("/dev/pts/N") so ttyname's
+         * (st_dev, st_ino) comparison matches the /proc/self/fd readlink. */
+        struct vpath vp;
+        k_memset(&vp, 0, sizeof(vp));
+        vp.kind = VNODE_PTS;
+        vp.pts_index = pty_slave_index(entry);
+        if (synth_stat(&vp, kst, 1) != 0) {
+            kst->st_mode = 020620; /* S_IFCHR | 0620 (master hung up) */
+            kst->st_nlink = 1;
+            kst->st_blksize = 4096;
+            kst->st_dev = DEVFS_FSID;
+        }
+    } else if (entry->type == FD_TYPE_PTM) {
+        /* A pty master (/dev/ptmx): a character device. */
+        kst->st_mode = 020666; /* S_IFCHR | 0666 */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
     } else {
         /* A framebuffer/mouse fd: report a character device, size 0. */
         kst->st_mode = 020666; /* S_IFCHR | 0666 */
@@ -2711,6 +2765,9 @@ static void exec_fail_destroyed(void)
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
         tty_set_session(&console_tty, 0, 0);
     }
+    /* A dying session leader also disassociates any pty slave it controlled, so a
+     * later session can claim the same /dev/pts/N. */
+    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
     current_proc->state = PROC_ZOMBIE;
     /* A failed exec destroyed the image; report it as a SIGKILL death (Linux
@@ -3862,6 +3919,22 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         *dtype = DT_CHR;
         return 1;
     }
+    if (kind == VNODE_PTS_DIR) {
+        /* /dev/pts: one entry per allocated pty slave, named by its index. */
+        int i, c = 0;
+        for (i = 0; i < PTY_MAX; i++) {
+            if (pty_is_allocated(i)) {
+                if (c == n) {
+                    synth_u32_str(name, (uint32_t)i);
+                    *ino = PTS_INO_BASE + (uint32_t)i;
+                    *dtype = DT_CHR;
+                    return 1;
+                }
+                c++;
+            }
+        }
+        return 0;
+    }
     if (kind == VNODE_PROC_DIR) {
         if (n == 0) {
             name[0] = 's';
@@ -4931,6 +5004,167 @@ static int pgrp_in_session(int pgid, int sid)
     return 0;
 }
 
+/* The tty behind a descriptor for the shared terminal ioctls: the console for a
+ * FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd, else NULL. */
+static struct tty *fd_tty(fd_entry_t *e)
+{
+    if (e->type == FD_TYPE_CONSOLE) {
+        return &console_tty;
+    }
+    if (e->type == FD_TYPE_PTS) {
+        return pty_slave_tty(e);
+    }
+    return NULL;
+}
+
+/*
+ * The shared terminal ioctls -- the real termios layer (Phase 16) plus the
+ * session/job-control requests (Phase 17) -- operating on a GIVEN tty, so the
+ * console and a pty slave (Phase 19) share one implementation. Sets *handled = 1
+ * and returns the result for a recognized terminal request; sets *handled = 0
+ * (return value unused) otherwise, so the caller falls through to its own
+ * handling. TCGETS/TCSETS exchange the 36-byte kernel termios (n_tty.h); TCSETSF
+ * and TCFLSH flush the unread input.
+ */
+static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, int *handled)
+{
+    *handled = 1;
+    switch (request) {
+        case TCGETS:
+            if (!arg) {
+                return -EFAULT;
+            }
+            if (copy_to_user((void __user *)arg, &t->ldisc.tio,
+                             sizeof(struct ktermios)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+
+        case FIONREAD: {
+            /* Bytes a read would return right now (a complete cooked line, or the
+             * queued count in raw mode); a pending EOF counts as 0. Drains the
+             * input source first so freshly arrived input is counted. */
+            int navail;
+            if (!arg) {
+                return -EFAULT;
+            }
+            navail = tty_inq(t);
+            if (copy_to_user((void __user *)arg, &navail, sizeof(navail)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
+
+        case TCSETS:
+        case TCSETSW:
+        case TCSETSF: {
+            struct ktermios kt;
+            if (!arg) {
+                return -EFAULT;
+            }
+            if (copy_from_user(&kt, (const void __user *)arg,
+                               sizeof(struct ktermios)) != 0) {
+                return -EFAULT;
+            }
+            /* Install with interrupts off (vs IRQ-side input); TCSETSF also
+             * discards pending input. */
+            tty_set_termios(t, &kt, request == TCSETSF);
+            return 0;
+        }
+
+        case TCFLSH:
+            /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input; we
+             * hold no output queue, so TCOFLUSH(1) is a no-op. Else invalid. */
+            if (arg > 2) {
+                return -EINVAL;
+            }
+            if (arg == 0 || arg == 2) {
+                tty_flush_input(t);
+            }
+            return 0;
+
+        case TIOCGWINSZ:
+            if (!arg) {
+                return -EFAULT;
+            }
+            if (copy_to_user((void __user *)arg, &t->winsize,
+                             sizeof(t->winsize)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+
+        case TIOCSWINSZ:
+            if (!arg) {
+                return -EFAULT;
+            }
+            if (copy_from_user(&t->winsize, (const void __user *)arg,
+                               sizeof(t->winsize)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+
+        case TIOCGPGRP: {
+            int pgrp = t->fg_pgid;
+            if (!arg) {
+                return -EFAULT;
+            }
+            if (copy_to_user((void __user *)arg, &pgrp, sizeof(pgrp)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
+
+        case TIOCSPGRP: {
+            int pgrp;
+            if (!arg) {
+                return -EFAULT;
+            }
+            if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
+                return -EFAULT;
+            }
+            /* The caller must hold this terminal as its controlling terminal
+             * (checked before the argument, as Linux does)... */
+            if (t->sid == 0 || (int)current_proc->sid != t->sid) {
+                return -ENOTTY;
+            }
+            if (pgrp <= 0) {
+                return -EINVAL;
+            }
+            /* ...and the new foreground group must live in that session. */
+            if (!pgrp_in_session(pgrp, t->sid)) {
+                return -EPERM;
+            }
+            t->fg_pgid = pgrp;
+            return 0;
+        }
+
+        case TIOCSCTTY:
+            /* A session leader with no controlling tty claims this terminal for its
+             * session; re-claiming by the same session is idempotent. */
+            if ((int)current_proc->sid != (int)current_proc->pid) {
+                return -EPERM; /* not a session leader */
+            }
+            if (t->sid != 0 && t->sid != (int)current_proc->sid) {
+                return -EPERM; /* owned by another session */
+            }
+            /* Atomic publish (tty_set_session) so the timer-IRQ serial drain never
+             * sees sid set while fg_pgid is still the stale value. */
+            tty_set_session(t, (int)current_proc->sid, (int)current_proc->pgid);
+            return 0;
+
+        case TIOCNOTTY:
+            /* Give up the controlling terminal if it belongs to our session. */
+            if (t->sid == (int)current_proc->sid) {
+                tty_set_session(t, 0, 0);
+            }
+            return 0;
+
+        default:
+            *handled = 0;
+            return 0;
+    }
+}
+
 /*
  * sys_ioctl - device control
  * Args: EBX = fd, ECX = request, EDX = arg
@@ -4958,152 +5192,29 @@ static int32_t sys_ioctl(isr_params_t *params)
         return -EBADF;
     }
 
-    /* A backing-ops object (pipe/tty/pty) owns its own ioctls -- FIONREAD,
-     * FIONBIO, and (for ttys) the termios/window-size requests. */
+    /* tty-family fds (the console and a pty slave) share the termios/session
+     * ioctls -- handled here, BEFORE the generic ops dispatch, so a pty slave's
+     * TCGETS/TIOCSCTTY reach the shared handler rather than its FIONBIO-only
+     * ops->ioctl. On a non-terminal fd the terminal-only requests stay -ENOTTY
+     * (the fallthrough below), as Linux reports. */
+    {
+        struct tty *t = fd_tty(entry);
+        if (t) {
+            int handled;
+            int32_t r = tty_common_ioctl(t, request, arg, &handled);
+            if (handled) {
+                return r;
+            }
+            /* not a terminal ioctl: fall through (a pts slave still has its
+             * ops->ioctl for FIONBIO; the console falls to the audio block). */
+        }
+    }
+
+    /* A backing-ops object (pipe/pty/device) owns its remaining ioctls -- FIONBIO,
+     * and (for the pty master) TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ. */
     if (entry->ops) {
         return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg)
                                  : -ENOTTY;
-    }
-
-    /* The console's terminal ioctls -- the real termios layer (Phase 16) plus the
-     * window size musl's isatty() probes. TCGETS/TCSETS exchange the 36-byte
-     * kernel termios (n_tty.h); TCSETSF and TCFLSH flush the unread input. On any
-     * non-terminal fd these stay -ENOTTY, as Linux reports. */
-    if (entry->type == FD_TYPE_CONSOLE) {
-        switch (request) {
-            case TCGETS:
-                if (!arg) {
-                    return -EFAULT;
-                }
-                if (copy_to_user((void __user *)arg, &console_tty.ldisc.tio,
-                                 sizeof(struct ktermios)) != 0) {
-                    return -EFAULT;
-                }
-                return 0;
-
-            case FIONREAD: {
-                /* Bytes a read would return right now (a complete cooked line, or
-                 * the queued count in raw mode); a pending EOF counts as 0. Drains
-                 * the serial port first so freshly arrived input is counted. */
-                int navail;
-                if (!arg) {
-                    return -EFAULT;
-                }
-                navail = tty_inq(&console_tty);
-                if (copy_to_user((void __user *)arg, &navail, sizeof(navail)) != 0) {
-                    return -EFAULT;
-                }
-                return 0;
-            }
-
-            case TCSETS:
-            case TCSETSW:
-            case TCSETSF: {
-                struct ktermios kt;
-                if (!arg) {
-                    return -EFAULT;
-                }
-                if (copy_from_user(&kt, (const void __user *)arg,
-                                   sizeof(struct ktermios)) != 0) {
-                    return -EFAULT;
-                }
-                /* Install with interrupts off (vs IRQ-side input); TCSETSF also
-                 * discards pending input. */
-                tty_set_termios(&console_tty, &kt, request == TCSETSF);
-                return 0;
-            }
-
-            case TCFLSH:
-                /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input;
-                 * we hold no output queue, so TCOFLUSH(1) is a no-op. Anything
-                 * else is invalid. */
-                if (arg > 2) {
-                    return -EINVAL;
-                }
-                if (arg == 0 || arg == 2) {
-                    tty_flush_input(&console_tty);
-                }
-                return 0;
-
-            case TIOCGWINSZ:
-                if (!arg) {
-                    return -EFAULT;
-                }
-                if (copy_to_user((void __user *)arg, &console_tty.winsize,
-                                 sizeof(console_tty.winsize)) != 0) {
-                    return -EFAULT;
-                }
-                return 0;
-
-            case TIOCSWINSZ:
-                if (!arg) {
-                    return -EFAULT;
-                }
-                if (copy_from_user(&console_tty.winsize, (const void __user *)arg,
-                                   sizeof(console_tty.winsize)) != 0) {
-                    return -EFAULT;
-                }
-                return 0;
-
-            case TIOCGPGRP: {
-                int pgrp = console_tty.fg_pgid;
-                if (!arg) {
-                    return -EFAULT;
-                }
-                if (copy_to_user((void __user *)arg, &pgrp, sizeof(pgrp)) != 0) {
-                    return -EFAULT;
-                }
-                return 0;
-            }
-
-            case TIOCSPGRP: {
-                int pgrp;
-                if (!arg) {
-                    return -EFAULT;
-                }
-                if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
-                    return -EFAULT;
-                }
-                /* The caller must hold this console as its controlling terminal
-                 * (checked before the argument, as Linux does)... */
-                if (console_tty.sid == 0 || (int)current_proc->sid != console_tty.sid) {
-                    return -ENOTTY;
-                }
-                if (pgrp <= 0) {
-                    return -EINVAL;
-                }
-                /* ...and the new foreground group must live in that session. */
-                if (!pgrp_in_session(pgrp, console_tty.sid)) {
-                    return -EPERM;
-                }
-                console_tty.fg_pgid = pgrp;
-                return 0;
-            }
-
-            case TIOCSCTTY:
-                /* A session leader with no controlling tty claims this console for
-                 * its session; re-claiming by the same session is idempotent. */
-                if ((int)current_proc->sid != (int)current_proc->pid) {
-                    return -EPERM; /* not a session leader */
-                }
-                if (console_tty.sid != 0 && console_tty.sid != (int)current_proc->sid) {
-                    return -EPERM; /* owned by another session */
-                }
-                /* Atomic publish (tty_set_session) so the timer-IRQ serial drain
-                 * never sees sid set while fg_pgid is still the stale value. */
-                tty_set_session(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
-                return 0;
-
-            case TIOCNOTTY:
-                /* Give up the controlling terminal if it belongs to our session. */
-                if (console_tty.sid == (int)current_proc->sid) {
-                    tty_set_session(&console_tty, 0, 0);
-                }
-                return 0;
-
-            default:
-                break; /* fall through to the KIOCSOUND/audio console block */
-        }
     }
     if (request == TCGETS || request == TCSETS || request == TCSETSW ||
         request == TCSETSF || request == TCFLSH || request == TIOCGWINSZ ||

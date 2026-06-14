@@ -20,7 +20,7 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
         pingtest udptest tcptest sockettest dnstest auxvprobe \
         tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
         timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe \
-        ttyprobe jobprobe miscprobe
+        ttyprobe jobprobe miscprobe ptyprobe
 
 .PHONY: all clean
 

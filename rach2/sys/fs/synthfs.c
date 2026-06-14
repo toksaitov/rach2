@@ -135,6 +135,8 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
     }
     if (kind == VNODE_DEV_DIR) {
         synth_put(out, cap, &pos, "/dev");
+    } else if (kind == VNODE_PTS_DIR) {
+        synth_put(out, cap, &pos, "/dev/pts");
     } else if (kind == VNODE_PROC_DIR) {
         synth_put(out, cap, &pos, "/proc");
     } else if (kind == VNODE_PROC_PID) {
@@ -159,6 +161,7 @@ int synth_classify(const char *path, struct vpath *vp)
     vp->pid = 0;
     vp->procfd = -1;
     vp->procfile = 0;
+    vp->pts_index = -1;
 
     n = synth_split(path, c, SYNTH_MAXC);
 
@@ -171,7 +174,26 @@ int synth_classify(const char *path, struct vpath *vp)
     if (comp_eq(c[0], "dev")) {
         if (n == 1) {
             vp->kind = VNODE_DEV_DIR;
-        } else if (n == 2) {
+            return vp->kind;
+        }
+        /* /dev/pts (the pty slave directory) and /dev/pts/N (a slave). */
+        if (comp_eq(c[1], "pts")) {
+            if (n == 2) {
+                vp->kind = VNODE_PTS_DIR;
+            } else if (n == 3) {
+                int idx = comp_uint(c[2]);
+                if (idx < 0) {
+                    vp->kind = VNODE_ENOENT; /* /dev/pts/<not-a-number> */
+                } else {
+                    vp->kind = VNODE_PTS;
+                    vp->pts_index = idx;
+                }
+            } else {
+                vp->kind = VNODE_ENOENT; /* /dev/pts/N/<more> */
+            }
+            return vp->kind;
+        }
+        if (n == 2) {
             vp->kind = VNODE_DEV;
             synth_copy_name(vp, c[1]);
         } else {

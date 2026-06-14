@@ -18,6 +18,7 @@
 #include "../lib/krandom.h"
 #include "../lib/kerrno.h"
 #include "../io/poll.h"
+#include "../tty/pty.h"
 
 /* Linux O_* bits devfs_open honours (the rest are irrelevant to a char device). */
 #define DEVFS_O_CLOEXEC   02000000
@@ -133,7 +134,7 @@ static const struct devfs_entry dev_table[] = {
     {"null", 1, 3, 1, &null_ops},   {"zero", 1, 5, 1, &zero_ops},
     {"full", 1, 7, 1, &full_ops},   {"random", 1, 8, 0, &rand_ops},
     {"urandom", 1, 9, 0, &rand_ops}, {"console", 5, 1, 0, NULL},
-    {"tty", 5, 0, 0, NULL}};
+    {"tty", 5, 0, 0, NULL},          {"ptmx", 5, 2, 0, NULL}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
@@ -169,6 +170,15 @@ int devfs_open(const char *name, int flags)
     const struct devfs_entry *dev;
     fd_entry_t *e;
     int fd;
+
+    /* /dev/ptmx is a clone device: each open mints a NEW pty pair and returns its
+     * master fd (pty_open_master does its own fd allocation and ops binding). */
+    if (name_eq(name, "ptmx")) {
+        if (flags & DEVFS_O_DIRECTORY) {
+            return -ENOTDIR;
+        }
+        return pty_open_master(flags);
+    }
 
     dev = devfs_find(name);
     if (!dev) {

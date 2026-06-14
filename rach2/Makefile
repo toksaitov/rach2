@@ -58,6 +58,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/io/poll_select.c  \
 	  sys/tty/n_tty.c       \
 	  sys/tty/tty.c         \
+	  sys/tty/pty.c         \
 	  sys/proc/elf.c        \
 	  sys/proc/uimage.c     \
 	  sys/proc/tls.c        \

@@ -20,6 +20,8 @@ enum vnode_kind {
     VNODE_KRFFS = 0,    /* not synthetic: resolve through KRFFS */
     VNODE_DEV_DIR,      /* /dev */
     VNODE_DEV,          /* /dev/<name> -- a character device */
+    VNODE_PTS_DIR,      /* /dev/pts -- the pty slave directory */
+    VNODE_PTS,          /* /dev/pts/N -- a pty slave (pts_index = N) */
     VNODE_PROC_DIR,     /* /proc */
     VNODE_PROC_PID,     /* /proc/<pid> (or /proc/self) */
     VNODE_PROC_FD_DIR,  /* /proc/<pid>/fd */
@@ -46,6 +48,7 @@ struct vpath {
     int pid;       /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
     int procfd;    /* VNODE_PROC_FD_LINK: the linked descriptor number */
     int procfile;  /* VNODE_PROC_FILE: SYNTH_PROC_* */
+    int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
 };
 
 /*

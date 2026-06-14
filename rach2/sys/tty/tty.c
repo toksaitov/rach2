@@ -285,6 +285,21 @@ void tty_flush_input(struct tty *t)
     tty_irq_restore(flags);
 }
 
+void tty_hangup(struct tty *t)
+{
+    uint32_t flags;
+
+    /* Mark end-of-file at the current queue tail (so any already-cooked input is
+     * still read first, then reads return 0) and wake every parked reader/poller.
+     * A pty slave whose master has closed uses this so its blocked readers return
+     * EOF instead of hanging forever. */
+    flags = tty_irq_save();
+    t->ldisc.eof = 1;
+    t->ldisc.eof_pos = t->ldisc.rq_tail;
+    tty_irq_restore(flags);
+    wq_wake_all(&t->input_wq);
+}
+
 /* --- the system console: VGA screen + COM1 serial --- */
 
 /* Echo and output bytes go to both the screen and the serial line, so a serial

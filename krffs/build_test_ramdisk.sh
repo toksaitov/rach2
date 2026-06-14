@@ -49,7 +49,7 @@ for prog in hello filetest forktest shelltest dirtest stattest \
             pingtest udptest tcptest sockettest dnstest auxvprobe \
             tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
             timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe \
-            ttyprobe jobprobe miscprobe; do
+            ttyprobe jobprobe miscprobe ptyprobe; do
     if [ -f "../tests/$prog" ]; then
         cp "../tests/$prog" "$MOUNT_POINT/"
         echo "  $prog"
@@ -136,6 +136,18 @@ fi
 if [ -f "../tests/musl/ttymusl" ]; then
     cp "../tests/musl/ttymusl" "$MOUNT_POINT/mtty"
     echo "  mtty (musl)"
+fi
+
+# The Phase 19 musl openpty()+fork pty round-trip program, installed as "mpty".
+if [ -f "../tests/musl/ptymusl" ]; then
+    cp "../tests/musl/ptymusl" "$MOUNT_POINT/mpty"
+    echo "  mpty (musl)"
+fi
+
+# The Phase 19 live one-session budget probe, installed as "mbudget".
+if [ -f "../tests/musl/budgetmusl" ]; then
+    cp "../tests/musl/budgetmusl" "$MOUNT_POINT/mbudget"
+    echo "  mbudget (musl)"
 fi
 
 # The Phase 9 musl-linked Unix utilities, under their real names so the combined

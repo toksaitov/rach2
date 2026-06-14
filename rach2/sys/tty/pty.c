@@ -1,0 +1,571 @@
+/*
+ * pty.c -- pseudo-terminals (Phase 19): the /dev/ptmx + /dev/pts/N master/slave
+ * pairs a network login uses to hand a remote user a real terminal. See pty.h for
+ * the data-flow model. The SLAVE is a full struct tty (the Phase-16 N_TTY
+ * discipline + Phase-17 sessions/job-control), so it reuses every terminal
+ * service; the MASTER is a byte ring (m_buf) carrying the slave's output and the
+ * discipline's echo. Each endpoint rides the Phase-12 file_ops layer.
+ */
+
+#include "pty.h"
+#include "../fs/fd.h"
+#include "../fs/file.h"
+#include "../proc/process.h"
+#include "../mm/usercopy.h"
+#include "../mm/heap.h"
+#include "../io/poll.h"
+#include "../lib/kstring.h"
+#include "../lib/kerrno.h"
+#include "../lib/ksignal.h"
+
+/* Linux ioctls. The pty-number requests are pinned exactly (musl uses these). */
+#define FIONREAD   0x541B
+#define FIONBIO    0x5421
+#define TIOCGWINSZ 0x5413
+#define TIOCSWINSZ 0x5414
+#define TIOCGPTN   0x80045430 /* master: get the slave index N (arg int*) */
+#define TIOCSPTLCK 0x40045431 /* master: set/clear the slave lock (arg int*, 0 = unlock) */
+
+/* O_* flags honored on open (mirror syscall.c / fd.h). */
+#define O_CLOEXEC_FLAG  02000000
+#define O_NONBLOCK_FLAG 04000
+
+static struct pty *pty_pool;
+
+void pty_init_pool(void)
+{
+    pty_pool = (struct pty *)mem_reserve(sizeof(struct pty) * PTY_MAX, true);
+    if (pty_pool) {
+        k_memset(pty_pool, 0, sizeof(struct pty) * PTY_MAX);
+    }
+}
+
+/* Save EFLAGS and disable interrupts; restore puts IF back. Guards the m_buf ring
+ * (two producers -- master-write echo and slave-write output -- can interleave
+ * under preemption, so the head/tail updates are not lock-free). */
+static uint32_t pty_irq_save(void)
+{
+    uint32_t flags;
+    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
+    return flags;
+}
+
+static void pty_irq_restore(uint32_t flags)
+{
+    __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
+}
+
+static uint32_t pty_m_avail(struct pty *p)
+{
+    return p->m_tail - p->m_head;
+}
+
+/*
+ * The slave's output SINK: push one byte into the master ring (drop it if the
+ * master is not draining fast enough -- a real pty also bounds this). The waking
+ * of master readers is done once per write op by the caller (ptm_write echo /
+ * pts_write output), not per byte. Runs in thread context (no IRQ feeds a pty).
+ */
+static void pty_slave_sink(void *ctx, unsigned char c)
+{
+    struct pty *p = (struct pty *)ctx;
+    uint32_t flags;
+
+    flags = pty_irq_save();
+    if (p->m_tail - p->m_head < PTY_BUF_SIZE) {
+        p->m_buf[p->m_tail & (PTY_BUF_SIZE - 1)] = c;
+        p->m_tail++;
+    }
+    pty_irq_restore(flags);
+}
+
+static struct pty *pty_alloc(void)
+{
+    int i;
+
+    if (!pty_pool) {
+        return NULL;
+    }
+    for (i = 0; i < PTY_MAX; i++) {
+        if (!pty_pool[i].in_use) {
+            struct pty *p = &pty_pool[i];
+            k_memset(p, 0, sizeof(*p));
+            p->in_use = 1;
+            p->index = i;
+            p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
+            tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
+            wait_queue_init(&p->m_read_wq);
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static int fd_is_nonblock(fd_entry_t *e)
+{
+    return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
+}
+
+/* ---- the MASTER endpoint ---- */
+
+/* A master reader can stop blocking: the slave produced output, or every slave
+ * descriptor has closed (EOF). */
+static int ptm_readable(void *arg)
+{
+    struct pty *p = (struct pty *)arg;
+    return pty_m_avail(p) != 0 || p->slave_opens == 0;
+}
+
+static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct pty *p = (struct pty *)e->priv;
+    uint8_t kbuf[512];
+    uint32_t got = 0;
+    uint32_t to_read;
+
+    if (count == 0) {
+        return 0;
+    }
+    if (!user_range_ok((uint32_t)(__force uintptr_t)buf, count)) {
+        return -EFAULT;
+    }
+    while (pty_m_avail(p) == 0) {
+        if (p->slave_opens == 0) {
+            return 0; /* EOF: every slave has closed and the ring is drained */
+        }
+        if (fd_is_nonblock(e)) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&p->m_read_wq, ptm_readable, p) < 0) {
+            return -EINTR;
+        }
+    }
+    to_read = pty_m_avail(p);
+    if (to_read > count) {
+        to_read = count;
+    }
+    while (got < to_read) {
+        uint32_t chunk = to_read - got;
+        uint32_t i;
+        uint32_t flags;
+
+        if (chunk > sizeof(kbuf)) {
+            chunk = sizeof(kbuf);
+        }
+        /* Drain the ring under interrupts off (vs a concurrent slave producer),
+         * then copy out to user memory (which may fault) outside the lock. */
+        flags = pty_irq_save();
+        for (i = 0; i < chunk; i++) {
+            kbuf[i] = p->m_buf[p->m_head & (PTY_BUF_SIZE - 1)];
+            p->m_head++;
+        }
+        pty_irq_restore(flags);
+        if (copy_to_user((void __user *)(buf + got), kbuf, chunk) != 0) {
+            return (got > 0) ? (int32_t)got : -EFAULT;
+        }
+        got += chunk;
+    }
+    return (int32_t)got;
+}
+
+static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct pty *p = (struct pty *)e->priv;
+    uint8_t kbuf[256];
+    uint32_t done = 0;
+
+    if (count == 0) {
+        return 0;
+    }
+    if (!user_range_ok((uint32_t)(__force uintptr_t)buf, count)) {
+        return -EFAULT;
+    }
+    /* Feed each byte to the slave's line discipline: it cooks the input, echoes
+     * (the echo lands in m_buf via the slave sink), and wakes a blocked slave
+     * reader once a line is ready (tty_input_char). */
+    while (done < count) {
+        uint32_t chunk = count - done;
+        uint32_t i;
+
+        if (chunk > sizeof(kbuf)) {
+            chunk = sizeof(kbuf);
+        }
+        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
+            return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        for (i = 0; i < chunk; i++) {
+            tty_input_char(&p->slave, kbuf[i]);
+        }
+        done += chunk;
+    }
+    /* The echo just pushed into m_buf: wake any master reader/poller once. */
+    wq_wake_all(&p->m_read_wq);
+    return (int32_t)done;
+}
+
+static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    struct pty *p = (struct pty *)e->priv;
+    short revents = 0;
+
+    if (wq) {
+        *wq = &p->m_read_wq;
+    }
+    if (pty_m_avail(p) != 0 || p->slave_opens == 0) {
+        revents |= (short)(events & POLLIN);
+    }
+    if (p->slave_opens == 0) {
+        revents |= POLLHUP; /* every slave hung up */
+    }
+    /* The master write is always accepted -- the slave discipline absorbs it. */
+    revents |= (short)(events & POLLOUT);
+    return revents;
+}
+
+static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+{
+    struct pty *p = (struct pty *)e->priv;
+
+    switch (request) {
+    case TIOCGPTN: {
+        int n = p->index;
+        if (copy_to_user((void __user *)arg, &n, sizeof(n)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+    case TIOCSPTLCK: {
+        int lock;
+        if (copy_from_user(&lock, (const void __user *)arg, sizeof(lock)) != 0) {
+            return -EFAULT;
+        }
+        p->locked = lock ? 1 : 0;
+        return 0;
+    }
+    case TIOCGWINSZ:
+        if (copy_to_user((void __user *)arg, &p->slave.winsize,
+                         sizeof(p->slave.winsize)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    case TIOCSWINSZ:
+        if (copy_from_user(&p->slave.winsize, (const void __user *)arg,
+                           sizeof(p->slave.winsize)) != 0) {
+            return -EFAULT;
+        }
+        /* A resize notifies the slave's foreground group (SIGWINCH). */
+        if (p->slave.fg_pgid != 0) {
+            tty_signal_group(p->slave.fg_pgid, SIGWINCH);
+        }
+        return 0;
+    case FIONREAD: {
+        int n = (int)pty_m_avail(p);
+        if (copy_to_user((void __user *)arg, &n, sizeof(n)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+    case FIONBIO: {
+        int on;
+        if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
+            return -EFAULT;
+        }
+        if (e->ofd) {
+            if (on) {
+                e->ofd->status_flags |= OFD_NONBLOCK;
+            } else {
+                e->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
+            }
+        }
+        return 0;
+    }
+    default:
+        return -ENOTTY;
+    }
+}
+
+static void ptm_close(fd_entry_t *e)
+{
+    struct pty *p = (struct pty *)e->priv;
+
+    if (!p) {
+        return;
+    }
+    p->master_open = 0;
+    /* The terminal vanished: SIGHUP the slave's foreground group, then hang the
+     * slave discipline up so its blocked readers/pollers return EOF. */
+    if (p->slave.fg_pgid != 0) {
+        tty_signal_group(p->slave.fg_pgid, SIGHUP);
+    }
+    tty_hangup(&p->slave);
+    if (p->slave_opens == 0) {
+        p->in_use = 0; /* both ends gone: free the slot */
+    }
+}
+
+static const struct file_ops ptm_ops = {ptm_read, ptm_write, ptm_poll, ptm_ioctl, ptm_close};
+
+/* ---- the SLAVE endpoint ---- */
+
+static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct pty *p = (struct pty *)e->priv;
+    unsigned char kbuf[N_TTY_READ_MAX];
+    uint32_t want;
+    int n;
+
+    if (!(e->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    want = count;
+    if (want > sizeof(kbuf)) {
+        want = sizeof(kbuf);
+    }
+    /* A session leader reading its pts with no controlling terminal claims it
+     * (so a job-control shell on the pty receives ^C); a background process is
+     * stopped with SIGTTIN -- the same rules as the console. */
+    tty_acquire_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid,
+                     (int)current_proc->pid);
+    if (tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
+        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
+            current_proc->sigacts[SIGTTIN].handler == KSIG_IGN) {
+            return -EIO;
+        }
+        tty_signal_group((int)current_proc->pgid, SIGTTIN);
+        return -EINTR;
+    }
+    /* Blocks until a line/byte is ready; tty_hangup (master close) makes this
+     * return 0 (EOF). */
+    n = tty_read(&p->slave, kbuf, (int)want);
+    if (n < 0) {
+        return n;
+    }
+    if (copy_to_user(buf, kbuf, (uint32_t)n) != 0) {
+        return -EFAULT;
+    }
+    return n;
+}
+
+static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct pty *p = (struct pty *)e->priv;
+    uint8_t kbuf[256];
+    uint32_t done = 0;
+
+    if (!(e->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    if (!p->master_open) {
+        return -EIO; /* hung up: nobody will ever read the output */
+    }
+    /* A background writer is stopped with SIGTTOU only when TOSTOP is set (the
+     * same rule as the console). */
+    if ((p->slave.ldisc.tio.c_lflag & TOSTOP) &&
+        tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
+        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
+            current_proc->sigacts[SIGTTOU].handler == KSIG_IGN) {
+            return -EIO;
+        }
+        tty_signal_group((int)current_proc->pgid, SIGTTOU);
+        return -EINTR;
+    }
+    while (done < count) {
+        uint32_t chunk = count - done;
+
+        if (chunk > sizeof(kbuf)) {
+            chunk = sizeof(kbuf);
+        }
+        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
+            return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        /* Output processing (OPOST/ONLCR) lands the bytes in m_buf via the sink. */
+        tty_write(&p->slave, kbuf, (int)chunk);
+        done += chunk;
+    }
+    wq_wake_all(&p->m_read_wq); /* output pushed into m_buf: wake the master */
+    return (int32_t)done;
+}
+
+static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    struct pty *p = (struct pty *)e->priv;
+    short revents = tty_poll(&p->slave, events, wq); /* parks on slave.input_wq */
+
+    if (!p->master_open) {
+        revents |= POLLHUP; /* the master hung up */
+    }
+    return revents;
+}
+
+static int32_t pts_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+{
+    /* The termios/session ioctls and FIONREAD are handled by tty_common_ioctl
+     * (sys_ioctl routes a pts slave there before this op runs); only FIONBIO
+     * reaches here. */
+    switch (request) {
+    case FIONBIO: {
+        int on;
+        if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
+            return -EFAULT;
+        }
+        if (e->ofd) {
+            if (on) {
+                e->ofd->status_flags |= OFD_NONBLOCK;
+            } else {
+                e->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
+            }
+        }
+        return 0;
+    }
+    default:
+        return -ENOTTY;
+    }
+}
+
+static void pts_close(fd_entry_t *e)
+{
+    struct pty *p = (struct pty *)e->priv;
+
+    if (!p) {
+        return;
+    }
+    if (p->slave_opens > 0) {
+        p->slave_opens--;
+    }
+    if (p->slave_opens == 0) {
+        wq_wake_all(&p->m_read_wq); /* master read now returns EOF */
+        if (!p->master_open) {
+            p->in_use = 0; /* both ends gone */
+        }
+    }
+}
+
+static const struct file_ops pts_ops = {pts_read, pts_write, pts_poll, pts_ioctl, pts_close};
+
+/* ---- open paths ---- */
+
+int pty_open_master(int flags)
+{
+    struct pty *p;
+    int fd;
+    fd_entry_t *e;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    p = pty_alloc();
+    if (!p) {
+        return -ENFILE;
+    }
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        p->in_use = 0;
+        return -EMFILE;
+    }
+    e = &current_proc->fds.entries[fd];
+    e->type = FD_TYPE_PTM;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &ptm_ops;
+    e->priv = p;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    if (flags & O_CLOEXEC_FLAG) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    if ((flags & O_NONBLOCK_FLAG) && e->ofd) {
+        e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    p->master_open = 1;
+    return fd;
+}
+
+int pty_open_slave(int index, int flags)
+{
+    struct pty *p;
+    int fd;
+    fd_entry_t *e;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (index < 0 || index >= PTY_MAX || !pty_pool) {
+        return -ENXIO;
+    }
+    p = &pty_pool[index];
+    if (!p->in_use || !p->master_open) {
+        return -ENXIO; /* no such pty */
+    }
+    if (p->locked) {
+        return -EIO; /* not unlocked yet (unlockpt not called) */
+    }
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        return -EMFILE;
+    }
+    e = &current_proc->fds.entries[fd];
+    e->type = FD_TYPE_PTS;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &pts_ops;
+    e->priv = p;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    if (flags & O_CLOEXEC_FLAG) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    if ((flags & O_NONBLOCK_FLAG) && e->ofd) {
+        e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    p->slave_opens++;
+    return fd;
+}
+
+struct tty *pty_slave_tty(struct fd_entry *e)
+{
+    if (!e || e->type != FD_TYPE_PTS || !e->priv) {
+        return NULL;
+    }
+    return &((struct pty *)e->priv)->slave;
+}
+
+int pty_is_allocated(int index)
+{
+    if (index < 0 || index >= PTY_MAX || !pty_pool) {
+        return 0;
+    }
+    return pty_pool[index].in_use && pty_pool[index].master_open;
+}
+
+int pty_slave_index(struct fd_entry *e)
+{
+    if (!e || e->type != FD_TYPE_PTS || !e->priv) {
+        return -1;
+    }
+    return ((struct pty *)e->priv)->index;
+}
+
+void pty_release_leader(int sid, int pid)
+{
+    int i;
+
+    /* Only a session leader (sid == pid) owns a controlling terminal. When that
+     * leader exits/dies, disassociate any pty slave it controlled (POSIX), so a
+     * later session can claim the same /dev/pts/N via TIOCSCTTY instead of seeing a
+     * stale, dead owner. Called beside the console release on the leader-death
+     * paths (sys_exit, terminate, exec_fail). A pty has no timer-IRQ drain, so this
+     * is a correctness/reuse fix, not the byte-stealing hazard the console faced. */
+    if (!pty_pool || sid == 0 || sid != pid) {
+        return;
+    }
+    for (i = 0; i < PTY_MAX; i++) {
+        struct pty *p = &pty_pool[i];
+        if (p->in_use && p->slave.sid == sid) {
+            tty_set_session(&p->slave, 0, 0);
+        }
+    }
+}

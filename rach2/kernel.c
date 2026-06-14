@@ -13,6 +13,7 @@
 #include "sys/mm/frame.h"
 #include "sys/proc/process.h"
 #include "sys/tty/tty.h"
+#include "sys/tty/pty.h"
 #include "sys/ipc/pipe.h"
 #include "sys/proc/sched.h"
 #include "sys/proc/elf.h"
@@ -173,6 +174,8 @@ void terminate_current_process(int32_t signo)
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
         tty_set_session(&console_tty, 0, 0);
     }
+    /* A dying session leader also disassociates any pty slave it controlled. */
+    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
     /* Release framebuffer if this process owns it */
     fb_release_if_owner(pid);
@@ -2204,6 +2207,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     /* Allocate the pipe pool (kept out of BSS) before user processes can pipe(). */
     pipe_init_pool();
+
+    /* Allocate the pty pool before user processes can open /dev/ptmx. */
+    pty_init_pool();
 
     k_printf("  Network...");
     serial_printf("  Network...");

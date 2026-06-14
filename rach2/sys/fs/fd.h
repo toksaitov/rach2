@@ -35,7 +35,9 @@ typedef enum {
     FD_TYPE_PIPE,         /* Pipe end (backed by file_ops + priv) */
     FD_TYPE_DEVICE,       /* devfs character device (backed by file_ops + priv) */
     FD_TYPE_PROC,         /* procfs file snapshot (backed by file_ops + priv) */
-    FD_TYPE_SYNTH_DIR     /* synthetic directory (/dev, /proc, ...); priv encodes it */
+    FD_TYPE_SYNTH_DIR,    /* synthetic directory (/dev, /proc, ...); priv encodes it */
+    FD_TYPE_PTM,          /* pty master (/dev/ptmx; file_ops + priv = struct pty) */
+    FD_TYPE_PTS           /* pty slave (/dev/pts/N; file_ops + priv = struct pty) */
 } fd_type_t;
 
 /*

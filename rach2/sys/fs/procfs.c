@@ -14,6 +14,7 @@
 #include "file.h"
 #include "devfs.h"
 #include "krffs.h"
+#include "../tty/pty.h"
 #include "../io/poll.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
@@ -206,6 +207,14 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             break;
         case FD_TYPE_PIPE:
             ap_str(buf, cap, &len, "pipe:[1]");
+            break;
+        case FD_TYPE_PTS:
+            /* a pty slave: /dev/pts/N (so musl ttyname_r can match it). */
+            ap_str(buf, cap, &len, "/dev/pts/");
+            ap_int(buf, cap, &len, pty_slave_index(e));
+            break;
+        case FD_TYPE_PTM:
+            ap_str(buf, cap, &len, "/dev/ptmx");
             break;
         case FD_TYPE_SOCKET:
             ap_str(buf, cap, &len, "socket:[1]");
