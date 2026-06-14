@@ -137,6 +137,20 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return rc;
 }
 
+void wq_poll_add(wait_queue_t *wq, process_t *p)
+{
+    if (wq && p) {
+        wq_enqueue(wq, p); /* caller holds interrupts off (see wait_queue.h) */
+    }
+}
+
+void wq_poll_remove(wait_queue_t *wq, process_t *p)
+{
+    if (wq && p) {
+        wq_dequeue(wq, p);
+    }
+}
+
 void wq_wake_all(wait_queue_t *wq)
 {
     uint32_t flags;

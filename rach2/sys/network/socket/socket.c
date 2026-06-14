@@ -15,6 +15,7 @@
 #include "../net.h"
 #include "../udp/udp.h"
 #include "../tcp/tcp.h"
+#include "../../io/poll.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../mm/heap.h"
@@ -324,4 +325,47 @@ void socket_tcp_fin(struct socket *sock)
     if (!sock) return;
 
     wq_wake_all(&sock->waiters);
+}
+
+short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
+{
+    short revents = 0;
+
+    if (!sock) {
+        return POLLNVAL;
+    }
+    if (wq) {
+        *wq = &sock->waiters;
+    }
+
+    if (sock->type == SOCK_DGRAM) {
+        if (sock->recv_len != 0) {
+            revents |= (short)(events & POLLIN);
+        }
+        revents |= (short)(events & POLLOUT); /* a datagram socket can always send */
+        return revents;
+    }
+
+    /* SOCK_STREAM. */
+    if (sock->listening) {
+        /* A listener is "readable" when a connection is queued for accept. */
+        if (sock->accept_head != sock->accept_tail) {
+            revents |= (short)(events & POLLIN);
+        }
+        return revents;
+    }
+    if (sock->tcb) {
+        struct tcb *tcb = sock->tcb;
+        if ((tcb->recv_tail - tcb->recv_head) != 0 || tcb->fin_received) {
+            revents |= (short)(events & POLLIN); /* buffered data, or EOF (FIN) */
+        }
+        if (tcb->state == TCP_ESTABLISHED) {
+            revents |= (short)(events & POLLOUT); /* connected -> writable */
+        }
+        if (tcb->state == TCP_CLOSED) {
+            revents |= POLLHUP;                  /* reset / fully closed */
+            revents |= (short)(events & POLLIN); /* a recv will return 0/-1 at once */
+        }
+    }
+    return revents;
 }

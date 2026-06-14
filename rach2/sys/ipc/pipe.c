@@ -217,10 +217,17 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 #define PIPE_POLLERR 0x008
 #define PIPE_POLLHUP 0x010
 
-static short pipe_poll(fd_entry_t *e, short events)
+static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     pipe_t *p = (pipe_t *)e->priv;
     short revents = 0;
+
+    /* A readiness change for this end is signaled on its own wait queue: the read
+     * end's read_wq (data arrives / writer closes), the write end's write_wq
+     * (space frees / reader closes). The poll core parks on it. */
+    if (wq) {
+        *wq = (e->flags & FD_FLAG_READ) ? &p->read_wq : &p->write_wq;
+    }
 
     /* Readiness must match the read/write wait predicates so a poller wakes for
      * exactly what unblocks read/write: a read end is readable when data is

@@ -15,6 +15,7 @@
 #include "fs/fd.h"
 #include "fs/file.h"
 #include "ipc/pipe.h"
+#include "io/poll.h"
 #include "fs/krffs.h"
 #include "mm/paging.h"
 #include "mm/heap.h"
@@ -4988,6 +4989,11 @@ void init_syscall(void)
     _syscall_table[SYS_DUP2] = sys_dup2;
     _syscall_table[SYS_PIPE] = sys_pipe;
     _syscall_table[SYS_PIPE2] = sys_pipe2;
+    _syscall_table[SYS_POLL] = sys_poll;
+    _syscall_table[SYS_PPOLL] = sys_ppoll;
+    _syscall_table[SYS_SELECT] = sys_select;
+    _syscall_table[SYS_NEWSELECT] = sys__newselect;
+    _syscall_table[SYS_PSELECT6] = sys_pselect6;
     _syscall_table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
     _syscall_table[SYS_STAT] = sys_stat;
     _syscall_table[SYS_GETCWD] = sys_getcwd;

@@ -37,6 +37,11 @@
 #define SYS_DUP2      63
 #define SYS_PIPE      42
 #define SYS_PIPE2     331
+#define SYS_SELECT    82   /* old i386 select: 5 args behind one pointer */
+#define SYS_NEWSELECT 142  /* _newselect: the normal 5-arg form */
+#define SYS_POLL      168
+#define SYS_PSELECT6  308
+#define SYS_PPOLL     309
 #define SYS_GETTIMEOFDAY 78
 #define SYS_STAT     106
 #define SYS_UNAME    122

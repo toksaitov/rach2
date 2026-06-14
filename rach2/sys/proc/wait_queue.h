@@ -55,4 +55,17 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
  */
 void wq_wake_all(wait_queue_t *wq);
 
+/*
+ * poll/select support: park the current process on SEVERAL wait queues at once.
+ * wq_wait_event blocks on one queue; a poller instead calls wq_poll_add on every
+ * polled object's queue, then sleeps once (with interrupts disciplined by the
+ * caller), and any object's wq_wake_all wakes it; on wake it calls wq_poll_remove
+ * on each. Both are idempotent (a wake already removed the waiter) and must be
+ * called with interrupts off. They do NOT block or change process state -- the
+ * poll core owns the BLOCKED/schedule()/RUNNING transitions, the same
+ * lost-wakeup-safe way wq_wait_event does.
+ */
+void wq_poll_add(wait_queue_t *wq, process_t *p);
+void wq_poll_remove(wait_queue_t *wq, process_t *p);
+
 #endif /* _WAIT_QUEUE_H_ */

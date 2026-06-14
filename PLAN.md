@@ -792,7 +792,7 @@ sharpened:
 
 ### Part II-A — a real interactive shell (busybox)
 
-### [ ] Phase 12 — Blocking & dispatch substrate (wait queues + the file-backing layer)
+### [x] Phase 12 — Blocking & dispatch substrate (wait queues + the file-backing layer)
 **Goal:** build the two primitives every later II-A/II-B object needs and that Part I
 does **not** have yet — a real multi-waiter **wait queue** and a **file-backing dispatch
 table** — and fix the two fd-layer gaps (`O_NONBLOCK`, `close(0/1/2)`) that block the
@@ -828,7 +828,7 @@ refactor — fix every finding.
 **Done when:** multi-waiter wake + `EINTR` + enforced `O_NONBLOCK` + closable stdio all
 pass, sockets ride the new wait queue with no net regression, and Codex is addressed.
 
-### [ ] Phase 13 — Pipes (`pipe`/`pipe2`)
+### [x] Phase 13 — Pipes (`pipe`/`pipe2`)
 **Goal:** a real kernel pipe — a bounded FIFO that blocks, signals EOF on writer-close,
 and raises `SIGPIPE`/`EPIPE` on reader-close. Shell pipelines `a | b` stand on it.
 **Concept taught:** the pipe as the original Unix IPC primitive — a ring buffer with two
@@ -853,7 +853,7 @@ edges).
 **Done when:** the probe shows blocking + EOF + `SIGPIPE` + non-blocking, a musl
 fork+pipe round-trips, the pool is leak-free, and Codex is addressed.
 
-### [ ] Phase 14 — I/O multiplexing (the `select`/`poll` family)
+### [x] Phase 14 — I/O multiplexing (the `select`/`poll` family)
 **Goal:** wait on many descriptors with a timeout — the call busybox's `ash` loop and
 most applets depend on.
 **Concept taught:** readiness-based multiplexing — each pollable object answers "which of

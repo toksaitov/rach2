@@ -100,4 +100,12 @@ int  socket_tcp_recv(struct socket *sock, uint8_t *buf, int len);
 int  socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len);
 void socket_tcp_fin(struct socket *sock);
 
+/*
+ * poll/select readiness for a socket: return the subset of `events`
+ * ({POLLIN, POLLOUT}) ready now plus any POLLHUP/POLLERR, and set *wq to the
+ * socket's wait queue (whose wake signals a readiness change). Defined in
+ * socket.c; the POLL* bits live in io/poll.h.
+ */
+short socket_poll(struct socket *sock, short events, struct wait_queue **wq);
+
 #endif /* _SOCKET_H_ */
