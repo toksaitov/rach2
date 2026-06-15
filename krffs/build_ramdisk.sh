@@ -31,11 +31,15 @@ echo ""
 echo "=== Building Unix utilities ==="
 make -C ../utils
 
-echo ""
-echo "=== Building Doom (optional) ==="
-if [ -d "../ports/doom" ]; then
-    make -C ../ports/doom || echo "Doom build failed or skipped"
-fi
+# Doom is a capstone (ports/), not part of the base teaching image, so this base build
+# neither builds nor stages it by default. The staging script deliberately does NOT
+# build Doom -- it only STAGES an already-built ../ports/doom/doom when
+# RAMDISK_WITH_DOOM=1, so it can never stage a stale binary from a failed build. That
+# opt-in is for a STANDALONE `./build_ramdisk.sh` run after building the binary (`make
+# -C ../ports/doom`); the Make `ramdisk` target forces RAMDISK_WITH_DOOM=0, so `make`/
+# `make full` stay capstone-free and the staging never races the sibling ports/doom
+# build. A Make-wired bootable Doom capstone image is the next phase.
+RAMDISK_WITH_DOOM=${RAMDISK_WITH_DOOM:-0}
 
 echo ""
 echo "=== Creating KRFFS file system ($SIZE MB) ==="
@@ -65,16 +69,20 @@ for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; d
     fi
 done
 
-# Copy Doom if it was built
-if [ -f "../ports/doom/doom" ]; then
-    cp "../ports/doom/doom" "$MOUNT_POINT/"
-    echo "  doom"
-fi
-
-# Copy doom1.wad if it exists (user must provide this)
-if [ -f "../ports/doom/doom1.wad" ]; then
-    cp "../ports/doom/doom1.wad" "$MOUNT_POINT/"
-    echo "  doom1.wad"
+# Stage Doom + its WAD only when requested and already built (RAMDISK_WITH_DOOM=1).
+# The script never builds Doom, so it cannot stage a stale binary from a failed build;
+# the WAD is not vendored, so the operator supplies ../ports/doom/doom1.wad.
+if [ "$RAMDISK_WITH_DOOM" = 1 ]; then
+    if [ -f "../ports/doom/doom" ]; then
+        cp "../ports/doom/doom" "$MOUNT_POINT/"
+        echo "  doom"
+        if [ -f "../ports/doom/doom1.wad" ]; then
+            cp "../ports/doom/doom1.wad" "$MOUNT_POINT/"
+            echo "  doom1.wad"
+        fi
+    else
+        echo "note: RAMDISK_WITH_DOOM=1 but ../ports/doom/doom is not built (run 'make full' first); skipping" >&2
+    fi
 fi
 
 # Create a test file for cat and other file-processing utilities

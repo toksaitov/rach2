@@ -62,12 +62,23 @@ echo "=== Installing curated localoptions.h ==="
 cp localoptions.h "$SRC/localoptions.h"
 
 echo "=== Configuring (muslgcc, bundled libtom, static, hardening off) ==="
-( cd "$SRC" && CC="$WRAP" AR=i686-elf-ar RANLIB=i686-elf-ranlib \
-    ./configure --host=i686-linux-musl --build=x86_64-apple-darwin \
-    --disable-zlib --enable-bundled-libtom --disable-syslog --disable-harden \
-    --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
-    --disable-lastlog --disable-loginfunc --disable-pututline --disable-pututxline \
-    >/dev/null )
+# --build is THIS host's own triple. config.guess ships with dropbear (not +x in the
+# tarball, so run it through sh); computing the triple -- instead of hard-coding
+# x86_64-apple-darwin -- makes the cross-configure work on Linux and on Intel or
+# Apple-Silicon macOS alike. If config.guess fails, omit --build and let configure
+# infer it.
+BUILD_TRIPLE="$(sh "$SRC/config.guess" 2>/dev/null || true)"
+(
+    cd "$SRC"
+    set -- --host=i686-linux-musl
+    [ -n "$BUILD_TRIPLE" ] && set -- "$@" --build="$BUILD_TRIPLE"
+    CC="$WRAP" AR=i686-elf-ar RANLIB=i686-elf-ranlib \
+        ./configure "$@" \
+        --disable-zlib --enable-bundled-libtom --disable-syslog --disable-harden \
+        --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
+        --disable-lastlog --disable-loginfunc --disable-pututline --disable-pututxline \
+        >/dev/null
+)
 
 echo "=== Building dropbearmulti (dropbear server + dropbearkey, static) ==="
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \

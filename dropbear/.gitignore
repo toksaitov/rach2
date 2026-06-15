@@ -1,2 +1,5 @@
 # Extracted dropbear source + build output (rebuilt by build_dropbear.sh).
 dropbear-2022.83/
+
+# Build stamp (mk top-level orchestration)
+.stamp

@@ -1,3 +1,6 @@
 # Extracted busybox source + build output (rebuilt by build_busybox.sh from the
 # pinned tarball + rach2.config).
 busybox-1.36.1/
+
+# Build stamp (mk top-level orchestration)
+.stamp

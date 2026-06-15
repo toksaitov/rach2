@@ -1321,7 +1321,7 @@ shellcheck-clean (rides `verify-style`).
 **Done when:** `make doctor` accurately reports the toolchain with hints and the right
 exit code; Codex review addressed.
 
-### [ ] Phase 27 — Top-level orchestration: tiered targets + stamp-wrapped third-party
+### [x] Phase 27 — Top-level orchestration: tiered targets + stamp-wrapped third-party
 **Goal:** a clean clone "just works" — `make` builds the base teaching OS **in order
 with no manual steps** (no hand-running the three `build_*.sh`); `make full` adds the
 slow capstones; `make help` lists everything and points at the `run*.sh` scripts.

@@ -5,7 +5,10 @@
 # the headers but NO crt/libs (else crt would be merged into built-in.o and then
 # clash at the final link); a final link injects the musl crt objects, the lib
 # search path, libc.a and libgcc (the tests/musl/build.sh recipe).
-PREFIX=/Users/toksaitov/Desktop/rach2/libc/install
+# Resolve libc/install relative to this wrapper (build_busybox.sh invokes it by its
+# absolute path), so a clone in any directory uses the right musl tree.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PREFIX="$SCRIPT_DIR/../libc/install"
 GCC=i686-elf-gcc
 MODE=link
 for a in "$@"; do
