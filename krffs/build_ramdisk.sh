@@ -24,12 +24,17 @@ SIZE=${1:-10}
 MOUNT_POINT="mount_point"
 FS_FILE="file_system.krffs"
 
-echo "=== Building ISH shell ==="
-make -C ../ish
+# Build the guest programs, unless Make already built them (SKIP_BUILD=1, set by the
+# `make ramdisk` target so nothing is built twice) -- a standalone run still builds
+# them for convenience.
+if [ "${SKIP_BUILD:-0}" != 1 ]; then
+    echo "=== Building ISH shell ==="
+    make -C ../ish
 
-echo ""
-echo "=== Building Unix utilities ==="
-make -C ../utils
+    echo ""
+    echo "=== Building Unix utilities ==="
+    make -C ../utils
+fi
 
 # Doom is a capstone (ports/), not part of the base teaching image, so this base build
 # neither builds nor stages it by default. The staging script deliberately does NOT

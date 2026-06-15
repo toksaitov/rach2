@@ -3,7 +3,8 @@
 # Quick start (run `make doctor` first to check your toolchain):
 #   make            build the BASE teaching OS: libc, kernel, host tools, tests,
 #                   utils, and the RAM disk -- the everyday build, kept fast.
-#   make full       + the capstones: busybox, dropbear, and the Doom port.
+#   make full       + the capstones (busybox, dropbear, Doom) -- ends at the bootable
+#                   capstone RAM-disk image the dropbear SSH login uses.
 #   make deps       build the vendored third-party (libc; DEPS=full adds bb+dropbear)
 #   make doctor     check the toolchain (PASS/MISSING with install hints)
 #   make verify-style / verify-host   the quality gates
@@ -34,15 +35,19 @@ LIBC_TARBALL     = libc/musl-1.2.5.tar.gz
 BUSYBOX_TARBALL  = busybox/busybox-1.36.1.tar.bz2
 DROPBEAR_TARBALL = dropbear/dropbear-2022.83.tar.bz2
 
-.PHONY: all full deps clean distclean ramdisk verify-style verify-host doctor help \
+.PHONY: all full deps clean distclean ramdisk test-ramdisk capstone-ramdisk \
+        check-busybox check-dropbearmulti \
+        verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
 
 # Default: the base teaching OS.
 all: ramdisk
 
-# Everything, including the slow capstones (the bootable capstone image is wired in
-# the next phase; today `full` builds the binaries + deps).
-full: all $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) ports/doom
+# Everything: the base components, the slow capstones (busybox, dropbear, Doom), and
+# the capstone RAM-disk image the SSH login boots (test-ramdisk). `make full` ENDS at
+# that image; it does not also build the lighter base image (`make` alone does that),
+# since both write krffs/file_system.krffs.
+full: $(BASE_DIRS) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) ports/doom test-ramdisk
 
 # Build the vendored third-party. libc is built by default (utils link it); busybox
 # and dropbear are added with DEPS=full (they are slow capstones).
@@ -100,7 +105,34 @@ ports/doom: rach2
 # rebuilding it. (The env var is honored only for a standalone `./build_ramdisk.sh`;
 # the build/stage split + a Make-wired Doom capstone image are the next phase.)
 ramdisk: $(BASE_DIRS)
-	cd krffs && RAMDISK_WITH_DOOM=0 ./build_ramdisk.sh
+	cd krffs && RAMDISK_WITH_DOOM=0 SKIP_BUILD=1 ./build_ramdisk.sh
+
+# The staged capstone binaries are the REAL prerequisites of the capstone image. A
+# stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards
+# while the stamp lingers, and the staging script treats it as optional -- so without
+# this the image could silently ship without /sh or the SSH server. These are PHONY
+# check targets (depending on the stamp so it builds first), so the `test -s` runs on
+# EVERY build and catches a missing OR zero-byte artifact, not only a missing one.
+check-busybox: $(BUSYBOX_STAMP)
+	@test -s tests/busybox || { echo "tests/busybox missing/empty -- rm busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
+check-dropbearmulti: $(DROPBEAR_STAMP)
+	@test -s tests/dropbearmulti || { echo "tests/dropbearmulti missing/empty -- rm dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
+
+# Capstone RAM disk: the busybox/dropbear/probe image the SSH login boots. Make builds
+# every component it stages -- the host krffs tools, the probe programs, the musl
+# utils, and the busybox+dropbear capstones (gated by the check targets above) -- and
+# SKIP_BUILD=1 tells the script to PACKAGE only, never to re-invoke a component build
+# (so nothing is built twice). The script auto-generates the demo SSH keypair and
+# stages /etc + /root/.ssh via stagetree. capstone-ramdisk is an alias.
+#
+# `ramdisk` and `test-ramdisk` both write krffs/file_system.krffs (and use
+# krffs/mount_point), so they are mutually exclusive; if a base-image goal (`ramdisk`,
+# or `all` which builds it) is requested alongside test-ramdisk, depend on it so they
+# serialize (base first, then overwritten by the capstone) instead of racing under -j.
+test-ramdisk: krffs tests utils check-busybox check-dropbearmulti $(filter ramdisk all,$(MAKECMDGOALS))
+	cd krffs && SKIP_BUILD=1 ./build_test_ramdisk.sh
+
+capstone-ramdisk: test-ramdisk
 
 # --- toolchain preflight + quality gates ---
 doctor:
@@ -136,10 +168,11 @@ distclean: clean
 help:
 	@echo "Rach2 build targets:"
 	@echo "  make            base teaching OS (libc, kernel, host tools, tests, utils, ramdisk)"
-	@echo "  make full       + capstones (busybox, dropbear, Doom)"
+	@echo "  make full       + capstones (busybox, dropbear, Doom) + the capstone SSH image"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
 	@echo "  make busybox / make dropbear   one capstone's third-party build"
-	@echo "  make ramdisk    rebuild the RAM disk image"
+	@echo "  make ramdisk        rebuild the base RAM disk image"
+	@echo "  make test-ramdisk   build the capstone image (busybox/dropbear/probes; the SSH login)"
 	@echo "  make doctor     check the toolchain (PASS/MISSING with install hints)"
 	@echo "  make verify-style / verify-host   quality gates"
 	@echo "  make clean      remove component build products (objects, .d, binaries, ramdisk)"

@@ -43,8 +43,13 @@ if [ ! -f authorized_keys ]; then
     fi
 fi
 
-echo "=== Building test programs ==="
-make -C ../tests
+# Build the test programs, unless Make already built them (SKIP_BUILD=1, set by the
+# `make test-ramdisk` target so nothing is built twice) -- a standalone run still
+# builds them for convenience.
+if [ "${SKIP_BUILD:-0}" != 1 ]; then
+    echo "=== Building test programs ==="
+    make -C ../tests
+fi
 
 echo ""
 echo "=== Creating KRFFS file system ($SIZE MB) ==="

@@ -1346,7 +1346,7 @@ targets; `make verify-style`/`verify-host` + boot green.
 **Done when:** `make` from a clean tree produces the base OS with no manual steps,
 tiers + stamps behave (incl. the `.DELETE_ON_ERROR` failure path); Codex review addressed.
 
-### [ ] Phase 28 — Ramdisk build/stage split + the capstone image + no double-build
+### [x] Phase 28 — Ramdisk build/stage split + the capstone image + no double-build
 **Goal:** Make **owns building**; the ramdisk scripts only **package**. `make ramdisk`
 produces the base image and `make test-ramdisk` (a.k.a. the capstone image) the
 busybox/dropbear/probe image — neither rebuilds components Make already built — and

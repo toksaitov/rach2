@@ -153,13 +153,20 @@ To remove compiled files:
 
 ## Rach2 RAM Disk Creation
 
-To build a RAM disk with ISH shell and utilities for Rach2:
+The top-level Makefile drives this for you -- run from the repo root:
 
-    ./build_ramdisk.sh
+    make ramdisk        # base image: ISH shell + Unix utilities
+    make test-ramdisk   # capstone image: busybox, dropbear, and the syscall probes
 
-To build a RAM disk with syscall test programs:
+Each target builds every component first, then runs the script below with `SKIP_BUILD=1`
+so the script only PACKAGES the already-built binaries -- no component is built twice.
+`make full` ends at the capstone image, the one the dropbear SSH login boots.
 
-    ./build_test_ramdisk.sh
+You can also run the scripts directly. On their own (no `SKIP_BUILD`) they build the
+guest programs first, for convenience:
+
+    ./build_ramdisk.sh          # ISH shell + utilities
+    ./build_test_ramdisk.sh     # syscall test programs (+ busybox/dropbear if built)
 
 Both scripts create `file_system.krffs` (10 MB by default). Specify a different size:
 
