@@ -18,21 +18,34 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
         timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe \
         ttyprobe jobprobe miscprobe ptyprobe rngprobe
 
+# These compile+link in one step, so there are no .o intermediates -- only the
+# GCC-written .d, which -MF redirects into .build/ to keep the source tree clean. The
+# final probe binaries stay in place for the RAM-disk staging.
+BUILD = .build
+
 .PHONY: all clean
 
 all: $(PROGS)
 
-# Each probe is a single freestanding source compiled+linked in one step; -MMD
-# (from $(DEPFLAGS)) writes a <prog>.d, so editing a shared header rebuilds it.
+# Each probe is a single freestanding source compiled+linked in one step; -MMD (from
+# $(DEPFLAGS)) writes the deps, -MF puts that .d under .build/, so editing a shared
+# header rebuilds it.
 %: %.c
-	$(CC) $(CFLAGS) -o $@ $<
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $<
 
-# dnstest links the shared stub resolver from utils/ so it can exercise both the
-# pure parser (crafted vectors) and resolve_host() (live).
+# dnstest links the shared stub resolver from utils/ so it can exercise both the pure
+# parser (crafted vectors) and resolve_host() (live). It compiles+links two sources in
+# one step, where -MF records only the last source's headers, so the build inputs
+# (dnstest.c, resolv.c, netdb.h) are declared as explicit prerequisites; the .build/ .d
+# adds the resolver's transitive headers on top.
 dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h
-	$(CC) $(CFLAGS) -o $@ dnstest.c ../utils/resolv.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -MF $(BUILD)/dnstest.d -o $@ dnstest.c ../utils/resolv.c
 
--include $(PROGS:=.d)
+-include $(addprefix $(BUILD)/, $(PROGS:=.d))
 
 clean:
-	rm -f $(PROGS) $(PROGS:=.d)
+	rm -rf $(BUILD)
+	rm -f $(PROGS)
+	@find . \( -name '*.o' -o -name '*.d' \) -type f -exec rm -f {} +

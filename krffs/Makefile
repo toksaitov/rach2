@@ -10,15 +10,21 @@ FUSE_PKG := $(shell pkg-config --exists fuse 2>/dev/null && echo fuse || echo fu
 FUSE_CFLAGS += `pkg-config $(FUSE_PKG) --cflags` -DFUSE_USE_VERSION=26
 FUSE_LDLIBS += `pkg-config $(FUSE_PKG) --libs`
 
+# Out-of-tree intermediates under .build/ (git-ignored); the host-tool binaries stay
+# in place -- the RAM-disk scripts run ./mkfs.krffs, ./krffs, ./stagetree.krffs here.
+BUILD = .build
+
 # The four objects every tool shares.
-CORE = krffs_file_system.o krffs_node.o krffs_platform.o krffs_utilities.o
+CORE = $(addprefix $(BUILD)/, krffs_file_system.o krffs_node.o krffs_platform.o \
+                              krffs_utilities.o)
 
 # Objects compiled WITH the FUSE cflags: the mount tool and everything linked into
 # it, including the shared core. The standalone tool mains are compiled WITHOUT the
 # FUSE cflags -- exactly the split the previous per-target rules produced.
-FUSE_OBJS = $(CORE) krffs_allocator.o krffs_fuse_operations.o krffs.o
-TOOL_OBJS = mkfs.krffs.o defrag.krffs.o fsck.krffs.o fsviz.krffs.o edfs.krffs.o \
-            stagetree.krffs.o
+FUSE_OBJS = $(CORE) $(addprefix $(BUILD)/, krffs_allocator.o krffs_fuse_operations.o \
+                                           krffs.o)
+TOOL_OBJS = $(addprefix $(BUILD)/, mkfs.krffs.o defrag.krffs.o fsck.krffs.o \
+                                   fsviz.krffs.o edfs.krffs.o stagetree.krffs.o)
 
 OBJECTS = $(FUSE_OBJS) $(TOOL_OBJS)
 TARGETS = krffs mkfs.krffs defrag.krffs fsck.krffs fsviz.krffs edfs.krffs \
@@ -32,22 +38,29 @@ krffs : $(FUSE_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(FUSE_LDLIBS)
 
 # stagetree also needs the allocator (it writes KRFFS nodes directly).
-stagetree.krffs : $(CORE) krffs_allocator.o stagetree.krffs.o
+stagetree.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/stagetree.krffs.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # The remaining standalone tools: the shared core + the tool's own object.
-mkfs.krffs defrag.krffs fsck.krffs fsviz.krffs edfs.krffs : %.krffs : $(CORE) %.krffs.o
+mkfs.krffs defrag.krffs fsck.krffs fsviz.krffs edfs.krffs : %.krffs : $(CORE) $(BUILD)/%.krffs.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-# Compile rules: FUSE objects get the FUSE cflags, tool mains do not.
-$(FUSE_OBJS) : %.o : %.c
+# Compile rules: FUSE objects get the FUSE cflags, tool mains do not. Each makes its
+# .build/ output dir first.
+$(FUSE_OBJS) : $(BUILD)/%.o : %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(FUSE_CFLAGS) -c $< -o $@
-$(TOOL_OBJS) : %.o : %.c
+$(TOOL_OBJS) : $(BUILD)/%.o : %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Pull in the per-object header dependencies GCC wrote (-MMD).
+# Pull in the per-object header dependencies GCC wrote (-MMD), now beside the objects.
 -include $(OBJECTS:.o=.d)
 
 .PHONY : clean
 clean :
-	rm -f $(TARGETS) $(OBJECTS) $(OBJECTS:.o=.d)
+	rm -rf $(BUILD)
+	rm -f $(TARGETS)
+	@# Sweep any stray in-tree objects/deps; prune mount_point so a still-mounted FUSE
+	@# image is never traversed.
+	@find . -path ./mount_point -prune -o \( -name '*.o' -o -name '*.d' \) -type f -exec rm -f {} +

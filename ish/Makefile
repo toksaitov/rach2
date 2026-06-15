@@ -13,7 +13,11 @@ LDFLAGS = -m32 -nostdlib -static -Wl,-Ttext=0x08048000
 
 TARGET = ish
 
-OBJECTS = crt0.o ish.o ish_shell_utilities.o ish_cstring_utilities.o ish_syscalls.o
+# Out-of-tree intermediates under .build/ (see ../mk/rules.mk); the ish binary stays
+# in place for the RAM-disk staging.
+BUILD = .build
+OBJECTS = $(addprefix $(BUILD)/, crt0.o ish.o ish_shell_utilities.o \
+                                 ish_cstring_utilities.o ish_syscalls.o)
 
 .PHONY: all clean
 
@@ -22,10 +26,12 @@ all: $(TARGET)
 $(TARGET): $(OBJECTS)
 	$(CC) $(LDFLAGS) -o $@ $(OBJECTS)
 
-# The `%.o: %.c` compile rule and `-include $(OBJECTS:.o=.d)` come from
+# The `$(BUILD)/%.o: %.c` compile rule and `-include $(OBJECTS:.o=.d)` come from
 # ../mk/rules.mk -- a header edit now rebuilds exactly the objects that include it
 # (the old hand-maintained $(HEADERS) prerequisite list is gone).
 include ../mk/rules.mk
 
 clean:
-	rm -f $(TARGET) $(OBJECTS) $(OBJECTS:.o=.d)
+	rm -rf $(BUILD)
+	rm -f $(TARGET)
+	@find . \( -name '*.o' -o -name '*.d' \) -type f -exec rm -f {} +

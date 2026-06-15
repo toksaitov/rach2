@@ -4,3 +4,8 @@ compile_commands.json
 
 # clangd's per-project index cache.
 .cache/
+
+# Out-of-tree build intermediates (objects + .d) -- each component builds into its own
+# .build/; final artifacts (rach2/kernel, the host tools, the guest binaries) stay in
+# place. Matches .build/ at any depth.
+.build/

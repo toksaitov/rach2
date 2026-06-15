@@ -9,15 +9,28 @@ duplication, they do not hide what the build does.
 |-----------------|------------------|
 | `toolchain.mk`  | detects the freestanding cross GCC (`i686-elf-gcc`, else `x86_64-elf-gcc`) once and derives `CROSS_LD/AR/STRIP/OBJCOPY`; errors with an actionable message if none is found (override with `make CROSS_CC=...`). |
 | `deps.mk`       | `DEPFLAGS = -MMD -MP` — automatic header-dependency tracking. |
-| `rules.mk`      | the canonical `%.o: %.c` compile rule + `-include $(OBJECTS:.o=.d)` for a component that compiles to objects then links the plain way (`ish/`). Components with a special compile shape (`ports/doom`, the krffs FUSE tools) keep their own rules but still share `toolchain.mk`/`deps.mk`. |
+| `rules.mk`      | the canonical out-of-tree `$(BUILD)/%.o: %.c` compile rule (`mkdir -p` + compile) + `-include $(OBJECTS:.o=.d)` for a component that compiles to objects then links the plain way (`ish/`). Components with a special compile shape (`ports/doom`, the krffs FUSE tools) keep their own rules but still share the `.build/` convention and `toolchain.mk`/`deps.mk`. |
+
+## Out-of-tree intermediates (`.build/`)
+
+Each in-house component compiles into its own `.build/` directory — objects and the
+GCC-written `.d` files live there, never beside the sources — so the source tree stays
+clean. The **final** artifacts stay in place (`rach2/kernel`, the krffs host tools, the
+guest binaries) where the run scripts, ISO, and RAM-disk steps expect them. A component
+sets `BUILD = .build`, names its `OBJECTS` as `$(SRC:%.c=$(BUILD)/%.o)`, and either
+includes `rules.mk` or carries the same `mkdir -p $(dir $@)` compile shape; the
+single-source test/util programs (compile+link, no `.o`) redirect their `.d` with
+`-MF $(BUILD)/...`. `.build/` is git-ignored (one root `.gitignore` entry covers every
+component's), and `make clean` removes it. The vendored `ports/doom`, like the vendored
+musl/busybox/dropbear trees, keeps its own intermediates.
 
 ## Automatic header dependencies (no more `make clean`)
 
 With `$(DEPFLAGS)` on each C compile and `-include $(OBJECTS:.o=.d)` near the end of a
-Makefile, GCC writes a `.d` next to each `.o` recording the headers that object
-actually included; make then rebuilds **exactly** the objects affected by a header
-edit. Editing a `.h` no longer needs a full `make clean && make`. The `.d` files are
-build artifacts (git-ignored) and are removed by `make clean`.
+Makefile, GCC writes a `.d` beside each `.o` (under `.build/`) recording the headers
+that object actually included; make then rebuilds **exactly** the objects affected by a
+header edit. Editing a `.h` no longer needs a full `make clean && make`. The `.d` files
+are build artifacts (git-ignored) and are removed by `make clean`.
 
 A component Makefile uses both like this:
 

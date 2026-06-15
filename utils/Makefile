@@ -61,18 +61,30 @@ libc-check:
 	    echo "error: $(PREFIX)/lib/libc.a not found; run libc/build_libc.sh first" >&2; \
 	    exit 1; }
 
+# These compile+link in one step (no .o intermediates); -MF redirects the GCC-written
+# .d into .build/ to keep the source tree clean. The musl util binaries stay in place.
+BUILD = .build
+
 # Each <name>.c links into a static musl guest binary <name>.
 %: %.c
-	$(CC) $(CFLAGS) -o $@ $(LINK_PRE) $< $(LINK_POST)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
-# ping and nc link the shared stub resolver (resolv.c, declared in netdb.h).
+# ping and nc link the shared stub resolver (resolv.c, declared in netdb.h). These
+# compile+link two sources in one step -- -MF records only the last source's headers --
+# so the inputs (the program source, resolv.c, netdb.h) are explicit prerequisites; the
+# .build/ .d adds the resolver's transitive headers.
 ping: ping.c resolv.c netdb.h
-	$(CC) $(CFLAGS) -o $@ $(LINK_PRE) ping.c resolv.c $(LINK_POST)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -MF $(BUILD)/ping.d -o $@ $(LINK_PRE) ping.c resolv.c $(LINK_POST)
 
 nc: nc.c resolv.c netdb.h
-	$(CC) $(CFLAGS) -o $@ $(LINK_PRE) nc.c resolv.c $(LINK_POST)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -MF $(BUILD)/nc.d -o $@ $(LINK_PRE) nc.c resolv.c $(LINK_POST)
 
--include $(UTILITIES:=.d)
+-include $(addprefix $(BUILD)/, $(UTILITIES:=.d))
 
 clean:
-	rm -f $(UTILITIES) $(UTILITIES:=.d)
+	rm -rf $(BUILD)
+	rm -f $(UTILITIES)
+	@find . \( -name '*.o' -o -name '*.d' \) -type f -exec rm -f {} +

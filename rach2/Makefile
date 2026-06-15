@@ -81,8 +81,13 @@ C_SRC   = $(KERNEL).c \
 	  sys/lib/kstring.c     \
 	  sys/lib/krandom.c
 
-ASM_OBJECTS = $(ASM_SRC:.s=.o)
-C_OBJECTS   = $(C_SRC:.c=.o)
+# Out-of-tree intermediates: objects + the GCC-written .d files live under .build/
+# (git-ignored), so the source tree stays clean. The final kernel binary stays in
+# place (rach2/kernel) for the run scripts and the ISO/RAM-disk steps.
+BUILD = .build
+
+ASM_OBJECTS = $(ASM_SRC:%.s=$(BUILD)/%.o)
+C_OBJECTS   = $(C_SRC:%.c=$(BUILD)/%.o)
 
 # Cross toolchain + automatic header-dependency tracking (shared; see ../mk/).
 include ../mk/toolchain.mk
@@ -159,15 +164,17 @@ $(ISO_IMAGE) : $(KERNEL)
 $(KERNEL) : $(ASM_OBJECTS) $(C_OBJECTS)
 	$(LD) $(LDFLAGS) -o $@ $^
 
-$(ASM_OBJECTS) : %.o : %.s
+$(ASM_OBJECTS) : $(BUILD)/%.o : %.s
+	@mkdir -p $(dir $@)
 	$(CC) -m32 -g -c -o $@ $<
 
-$(C_OBJECTS) : %.o : %.c
+$(C_OBJECTS) : $(BUILD)/%.o : %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -o $@ -c $<
 
 # Pull in the per-object header dependencies GCC wrote (-MMD), so editing a header
 # rebuilds exactly the objects that include it. Missing on a first build (no .d
-# yet) -- the leading '-' makes that silent.
+# yet) -- the leading '-' makes that silent. They live beside the objects in .build/.
 -include $(C_OBJECTS:.o=.d)
 
 # Emit the explicit kernel source list (expanded), for tools/check_sources.sh -- the
@@ -179,6 +186,7 @@ print-c-src :
 
 .PHONY : clean
 clean :
-	rm -f $(ASM_OBJECTS) $(C_OBJECTS) $(KERNEL) $(ISO_IMAGE) $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST) $(GRUB_CFG)
-	@# Sweep every generated .d (including any left by a since-renamed/removed source).
-	find . -name '*.d' -type f -delete
+	rm -rf $(BUILD)
+	rm -f $(KERNEL) $(ISO_IMAGE) $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST) $(GRUB_CFG)
+	@# Belt-and-suspenders: drop any stray in-tree objects/deps from an older build.
+	@find . \( -name '*.o' -o -name '*.d' \) -type f -exec rm -f {} +

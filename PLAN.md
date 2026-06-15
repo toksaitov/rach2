@@ -1395,7 +1395,7 @@ verify-style`/`verify-host` green.
 **Done when:** `compile_commands.json` regenerates via Make and clangd resolves kernel
 symbols; `check-sources` catches an unlisted kernel source; Codex review addressed.
 
-### [ ] Phase 30 — Out-of-tree intermediates: a clean source tree (`.build/`)
+### [x] Phase 30 — Out-of-tree intermediates: a clean source tree (`.build/`)
 **Goal:** the source tree stays clean — intermediates (`.o`, `.d`) live under `.build/`,
 while final artifacts stay exactly where the run scripts expect (`rach2/kernel`,
 `krffs/file_system.krffs`). `make clean` becomes `rm -rf .build` + the artifacts.
