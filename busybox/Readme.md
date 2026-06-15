@@ -8,6 +8,10 @@ Part II-A capstone.
 
     ./build_busybox.sh
 
+Or build it through the top level — `make full`, or `make deps DEPS=full` — either builds
+BusyBox on demand behind a stamp file (it relinks only when the tarball, `rach2.config`,
+the `muslgcc` wrapper, or libc changes).
+
 It verifies the pinned tarball (`busybox-1.36.1.tar.bz2`, sha256 gated), extracts
 it, applies `rach2.config`, and builds with `muslgcc` (the wrapper that bridges
 the bare `i686-elf-gcc` cross compiler to the ported musl: musl headers on

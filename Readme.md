@@ -2,9 +2,9 @@
 
 ![First Versions of Rach2 Booting](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-An educational 32-bit x86 operating system that boots into a Unix-like shell and can run Doom.
+An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static **musl** programs and **BusyBox**, accepts real **SSH** logins (Dropbear), and can run Doom.
 
-Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements 21 Linux-compatible syscalls, supports a custom file system (KRFFS), includes audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and has a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
+Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements a broad set of Linux-compatible syscalls — enough to host a ported musl libc, a static BusyBox `ash`, and a Dropbear SSH server — supports a custom file system (KRFFS), includes audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and has a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
 
 ## Components
 
@@ -17,7 +17,10 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [ish/](ish/)               | Minimal Unix shell with I/O redirection and process management | [Readme](ish/Readme.md)        |
 | [utils/](utils/)           | Core Unix utilities (`echo`, `cat`, `ls`, `mv`, `rm`, `ping`, `nc`, `httpd`, …), linked against the ported musl | [Readme](utils/Readme.md)      |
 | [libc/](libc/)             | The ported **musl** libc: reproducible build, the SysV/auxv startup contract | [Readme](libc/Readme.md)       |
+| [busybox/](busybox/)       | Static-musl **BusyBox** build — the interactive `ash` login shell | [Readme](busybox/Readme.md)    |
+| [dropbear/](dropbear/)     | Static-musl **Dropbear** SSH server — the remote-login capstone | [Readme](dropbear/Readme.md)   |
 | [ports/doom/](ports/doom/) | Doom port with VGA graphics, mouse, and audio                  | [Readme](ports/doom/Readme.md) |
+| [mk/](mk/)                 | Shared GNU-Make building blocks: cross-toolchain detection, header-deps, out-of-tree `.build/`, the clangd/IDE setup | [Readme](mk/Readme.md)         |
 
 ## Kernel subsystems
 
@@ -35,37 +38,64 @@ own voice and backed by a probe.
 
 ## Prerequisites
 
-| Tool           | macOS (Homebrew)              | Ubuntu 24.04                       |
+Run `make doctor` at any time to check your toolchain — it reports each tool as
+PASS / MISSING with a per-OS install hint.
+
+| Tool           | macOS (Homebrew)              | Linux                              |
 |----------------|-------------------------------|------------------------------------|
-| Cross-compiler | `brew install x86_64-elf-gcc` | `sudo apt install gcc-multilib`    |
+| Cross-compiler | `brew install i686-elf-gcc`   | build the OSDev `i686-elf` cross GCC (or `brew install i686-elf-gcc` via Homebrew) |
 | Emulator       | `brew install qemu`           | `sudo apt install qemu-system-x86` |
-| FUSE (krffs)   | `brew install fuse-t`         | `sudo apt install libfuse-dev`     |
+| FUSE (krffs)   | `brew install --cask fuse-t`  | `sudo apt install libfuse-dev`     |
+| pkg-config     | `brew install pkg-config`     | `sudo apt install pkg-config`      |
+
+The kernel is freestanding and links no libgcc, so it alone also builds with
+`x86_64-elf-gcc`; the musl-linked utilities need a 32-bit libgcc, which only
+`i686-elf-gcc` supplies — so `i686-elf-gcc` is the project default.
 
 ## Build
 
-The root Makefile builds all components in the correct order and creates the RAM disk:
-
 ```sh
-make       # Build everything (kernel, tests, shell, utils, doom, RAM disk)
-make clean # Clean all subdirectories
+make doctor    # check your toolchain (PASS/MISSING with install hints)
+make           # the BASE teaching OS: libc, kernel, host tools, tests, utils, RAM disk
+make full      # + the capstones (BusyBox, Dropbear SSH, Doom); ends at the capstone
+               #   RAM-disk image the SSH login boots
+make deps      # just the vendored third-party (libc; DEPS=full adds busybox+dropbear)
+make help      # list every target
+make clean     # remove component build products
+make distclean # + the vendored libc/busybox/dropbear builds (a full from-scratch reset)
 ```
 
-Build order: krffs tools, kernel, shell, tests, utilities, doom, then RAM disk.
+`make` builds everything the everyday workflow needs, in dependency order, with no
+manual `build_*.sh` and no `make clean` rituals — a header edit rebuilds only the
+objects that include it. The ported musl libc and the BusyBox/Dropbear capstones are
+vendored as pinned tarballs and built on demand behind stamp files; build intermediates
+live out-of-tree under `.build/`, so the source tree stays clean. The build system does
+not run QEMU — the run scripts in `rach2/` do that.
 
 ## Quick Start
 
 ```sh
-# Build everything
-make
+make doctor                                 # check the toolchain
+make                                        # build the base OS
+cd rach2 && ./run_with_ram_disk.sh          # boot into the ISH shell
 
-# Run with shell and utilities
-cd rach2 && ./run_with_ram_disk.sh
+# With audio:
+cd rach2 && ./run_with_ram_disk.sh sb16     # Sound Blaster 16
+cd rach2 && ./run_with_ram_disk.sh hda      # Intel HD Audio
+```
 
-# Run with audio (Sound Blaster 16)
-cd rach2 && ./run_with_ram_disk.sh sb16
+### The SSH capstone — log into Rach2 with a real client
 
-# Run with Intel HD Audio
-cd rach2 && ./run_with_ram_disk.sh hda
+```sh
+make full                                   # build busybox + dropbear + the capstone image
+
+# Terminal 1 — boot with SSH port-forwarding (the run scripts default to -cpu max, which
+# Dropbear needs for trusted entropy to generate a host key):
+cd rach2 && NET_HOSTFWD=hostfwd=tcp::2222-:22 ./run_with_ram_disk.sh
+#   then, at the guest shell:  exec dropbearmulti dropbear -F -R -p 22
+
+# Terminal 2 — from the repo root, log in with the auto-generated demo key:
+ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 ```
 
 From the ISH shell prompt:

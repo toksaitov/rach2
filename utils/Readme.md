@@ -50,13 +50,19 @@ root and are staged by `krffs/build_ramdisk.sh`.
 
 ## Build for Rach2 (Default)
 
-Requires a cross-compiler (`i686-elf-gcc` or `x86_64-elf-gcc`):
+Requires `i686-elf-gcc` specifically — the musl utilities link a 32-bit libgcc that a
+non-multilib `x86_64-elf-gcc` cannot supply — and the ported musl built once. The
+simplest path is the top-level `make` (it builds libc first, in order); to build just
+these utilities once libc exists:
 
 ```
 make
 ```
 
-This builds freestanding ELF32 executables linked with `crt0.o` (provides `_start` entry point). The binaries can be added to a KRFFS image and run on the Rach2 kernel.
+This links each utility statically against the ported musl (`../libc/install`: musl's
+`crt1/crti` + `libc.a` + `crtn`, no hand-rolled `crt0`) as a freestanding ELF32
+executable at `0x08048000`. The binaries are staged into a KRFFS RAM disk by
+`krffs/build_ramdisk.sh` (or `make ramdisk` from the repo root) and run on the kernel.
 
 ## Build for Linux
 

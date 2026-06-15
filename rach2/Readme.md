@@ -68,17 +68,21 @@ Rach2 is an educational 32-bit x86 kernel that implements core operating system 
 
 ### Prerequisites
 
-| Component        | macOS (Homebrew)               | Ubuntu 24.04                                 |
+| Component        | macOS (Homebrew)               | Linux                                        |
 |------------------|--------------------------------|----------------------------------------------|
-| Cross-compiler   | `brew install x86_64-elf-gcc`  | `sudo apt install gcc-multilib g++-multilib` |
+| Cross-compiler   | `brew install i686-elf-gcc`    | build the OSDev `i686-elf` cross GCC (or Homebrew) |
 | Emulator         | `brew install qemu`            | `sudo apt install qemu-system-x86`           |
-| Debugger         | `brew install x86_64-elf-gdb`  | `sudo apt install gdb-multiarch`             |
+| Debugger         | `brew install i686-elf-gdb`    | `sudo apt install gdb-multiarch`             |
 | ISO (optional)   | `brew install --cask docker`   | `sudo apt install docker.io`                 |
+
+`i686-elf-gcc` is the project default and what `make doctor` checks; the freestanding
+kernel by itself also links with `x86_64-elf-gcc`. To build the whole OS, prefer the
+top-level `make` / `make full` from the repo root (see the [root Readme](../Readme.md)).
 
 ### Build and Run
 
 ```bash
-make                        # Compile the kernel
+make                        # Compile the kernel (objects land in .build/; binary: ./kernel)
 ./run.sh                    # Quick test with QEMU
 ./run_with_ram_disk.sh      # Run with file system and shell
 ./run_from_iso.sh           # Boot from ISO with GRUB

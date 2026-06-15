@@ -16,6 +16,9 @@ the SysV/i386 process ABI that Linux implements.
 ./build_libc.sh
 ```
 
+You rarely run this by hand: the top-level `make` (and `make deps`) builds libc on
+demand behind a stamp file, in dependency order, before anything that links against it.
+
 No musl cross-toolchain is required. The build uses the **same `i686-elf-gcc`**
 the kernel uses (`CROSS_COMPILE=i686-elf- ./configure --target=i686
 --disable-shared`), so the onramp stays "one compiler, one library build." The

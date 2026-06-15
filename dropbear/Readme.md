@@ -11,6 +11,10 @@ and lands in an interactive BusyBox `ash` shell over an SSH-driven pty.
 
     ./build_dropbear.sh
 
+Or build it through the top level — `make full`, or `make deps DEPS=full` — either builds
+Dropbear on demand behind a stamp file (it relinks only when the tarball, `localoptions.h`,
+the `muslgcc` wrapper, or libc changes).
+
 It verifies the pinned tarball (`dropbear-2022.83.tar.bz2`, sha256 gated),
 extracts it, applies the curated `localoptions.h`, and configures against the
 ported musl with the `muslgcc` wrapper (shared with busybox), bundled
