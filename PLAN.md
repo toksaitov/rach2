@@ -1198,6 +1198,231 @@ resolves to the caller's controlling terminal (console or pty slave, else -ENXIO
 instead of always the console — this also removes the "Failed to disconnect from
 controlling tty" warning.
 
+## Part III — Polish the build: streamline, unify, modernize (the toolchain a student meets first)
+
+Parts I and II built a real Unix you can `ssh` into. Part III makes the thing a
+student **builds and edits** every day fast, obvious, and friendly. It is a
+**polishing stage**, not new OS surface: the kernel and its binaries do not change
+(objects stay byte-identical wherever a command line is intentionally unchanged);
+only the *build system* does. The recurring Part-I/II footgun — **no
+header-dependency tracking, so any `.h` edit needs `make clean && make`** — is the
+headline; the rest removes the cruft a teaching repo accumulates: three different
+dependency styles, cross-compiler detection copy-pasted in four Makefiles, a top
+build that builds some components twice, three vendored third-party builds a student
+must run *by hand* before `make` works, and no IDE language support for kernel hacking.
+
+Part III inherits Part I/II's discipline unchanged. Each phase is **Goal · Concept ·
+Design · Build · Verify · Codex review · Done when**, dependency-ordered, numbered
+**24-30** continuing Part II. Per phase: build it; **prove it** — the build itself
+plus a targeted demo, **and the invariant that guards every phase: `make
+verify-style` and `make verify-host` stay green, a real in-guest boot still passes
+(`tools/harness.py`, not just the static gates), and the dropbear SSH capstone still
+reproduces end-to-end**; then a **harsh independent Codex review of exactly that
+phase's build files with every finding fixed**; then a **one-line house-style commit,
+no attribution**. Touch the relevant `Readme.md` in the same phase so docs never
+contradict the new `make` flow.
+
+**This Part III was jointly designed AND adversarially reviewed by Claude + Codex**
+(the same pass Part II got; Codex's first read found ten issues — Phase 26 was too
+broad, the third-party stamps under-specified, and the verification not mechanical
+enough to protect the "still builds + boots + SSH reproduces" invariant — all folded
+in below). The guiding value the two of us locked: for a *teaching* OS the **build is
+curriculum** — a student must read and modify it with confidence, so **transparency
+beats cleverness**. Decisions settled up front (do not relitigate during the run):
+
+- **Stay on GNU Make.** No CMake/Meson/Bazel: a generator hides the freestanding
+  compile + custom-`ld` link steps we *want* visible, and Make is the least-surprising
+  common language for kernel + asm + FUSE host tools + QEMU scripts + vendored
+  autotools/kbuild. Add **modern Make hygiene, not a framework** — and **keep commands
+  visible** (no quiet/color macros that hide `i686-elf-gcc … -T link.ld`; a `V=`
+  switch is a possible later nicety, not a headline).
+- **Explicit kernel source list stays** — `find sys -name '*.c'` would silently link
+  stray scratch files and make builds order-dependent. A `make check-sources` detector
+  (Phase 29) catches a new `.c` not added to the **kernel** list and hard-fails the
+  gate for it; it is advisory (not fatal) for Doom/vendored trees, where imported or
+  unused `.c` files are intentional.
+- **`compile_commands.json` is generated from Make's own source lists**, NOT `gcc -MJ`
+  — verified: `i686-elf-gcc` (GCC 16.1) rejects `-MJ` (a clang-only flag).
+- **Tiered builds:** plain `make` is the *base teaching OS* and stays fast; the slow
+  capstones (busybox, dropbear, Doom) are opt-in (`make full`). `libc` is a real
+  default prerequisite (utils hard-fail without it).
+- **The SSH capstone rides the *test* ramdisk** (`krffs/build_test_ramdisk.sh`, which
+  stages `/busybox`, `/sh`, `/dropbearmulti`, `/etc`, the demo key) — NOT the base
+  `build_ramdisk.sh`. `make full` must produce *that* image, so the capstone is
+  verified against what `make` actually emits.
+- **Hybrid build dir:** final artifacts stay where the run scripts expect
+  (`rach2/kernel`, `krffs/file_system.krffs`); only intermediates move out of tree
+  (Phase 30, last and deferrable).
+- **No `make run`.** The build system builds and supports build tasks; *running* the
+  kernel has a real option matrix (disk/iso, audio device, `NET`/`NET_HOSTFWD`,
+  `-cpu`, a future SSH boot) the `run*.sh` scripts already model — Make would only
+  become a worse second copy. `make help` *points to* the run scripts.
+
+### [ ] Phase 24 — Shared cross-toolchain + automatic header-dependency tracking
+**Goal:** end the `make clean && make` ritual — editing any kernel `.h` rebuilds
+exactly the objects that include it, nothing more, nothing less; `make -j` is correct;
+cross-compiler detection lives in one place, not copy-pasted.
+**Concept taught:** automatic prerequisite generation (`gcc -MMD -MP` writes a `.d` of
+each object's real header set, `-include`'d back) and DRY build config via a shared
+`mk/` include — the modern-Make idiom every later phase reuses.
+**Design:** `mk/toolchain.mk` detects the freestanding cross GCC (`i686-elf-gcc`, else
+`x86_64-elf-gcc`) once and derives `CROSS_LD/AR/STRIP/OBJCOPY`; `mk/deps.mk` defines
+`DEPFLAGS = -MMD -MP`. `rach2/Makefile` includes both, adds `$(DEPFLAGS)` to the C
+compile, `-include $(C_OBJECTS:.o=.d)`, cleans the `.d`; `*.d` git-ignored. Asm (`.s`,
+not preprocessed) needs none. The `.o` stay byte-identical (`-MMD` only adds sidecars).
+*(Groundwork already in the working tree, uncommitted: Codex-review and commit it.)*
+**Build:** `mk/toolchain.mk`, `mk/deps.mk`, the `rach2/Makefile` wiring, the gitignore.
+**Verify:** clean build; **the demo — `touch sys/syscall.h`, `make` rebuilds only its
+includers and relinks, leaving the other ~60 objects alone** (before, that edit rebuilt
+nothing — the bug); `make verify-style`/`verify-host` green; **kernel binary unchanged
+vs `HEAD`** (`cmp` the `.o`/kernel); a real boot still passes.
+**Done when:** a kernel header edit triggers a correct partial rebuild with no
+`make clean`; verify gates + boot green; Codex review of the Make logic addressed.
+
+### [ ] Phase 25 — One build idiom: fold every component Makefile onto `mk/`
+**Goal:** kernel, tests, ish, utils, the Doom port, and the krffs host tools share
+**one** transparent build idiom — no Makefile re-implements toolchain detection (was
+4×) or header tracking (was three styles: krffs's verbose `-MMD`, ish's hand-listed
+`$(HEADERS)`, none in tests/utils).
+**Concept taught:** a small reusable rules layer that removes boilerplate without
+hiding the command.
+**Design:** `mk/rules.mk` provides the compile/link pattern rules + `-include
+$(OBJ:.o=.d)`; each component Makefile shrinks to *flags + source list + `include
+../mk/…`*. tests/ish/utils/doom gain header deps; the krffs host-tool Makefile (host
+compiler, so `deps.mk` only) collapses its ~100 lines of per-target repetition.
+Commands stay visible. **Byte-identity caveat:** turning a single-source `%.c ->
+binary` rule into `%.o -> binary` *can* change final bytes, so either preserve the
+exact compile/link shape for those, or scope the "unchanged" claim to artifacts whose
+command line is intentionally identical — and check behavior, not just bytes, for the rest.
+**Build:** `mk/rules.mk` + the five component-Makefile refactors + their Readmes.
+**Verify:** every component builds; **touch a shared user-side header → only dependents
+rebuild**; the musl utils build; **a real in-guest probe sweep + busybox boot via
+`tools/harness.py`**; `make verify-style`/`verify-host` green; kernel `.o` byte-identical.
+**Done when:** no component Makefile re-implements toolchain detection or header deps;
+verify gates + boot green; Codex review addressed.
+
+### [ ] Phase 26 — `make doctor`: a friendly toolchain preflight (before any automation)
+**Goal:** a student or a fresh box runs `make doctor` and gets a clear present/missing
+report for every required tool with a per-tool install hint — *before* the new
+third-party automation (Phase 27) can fail late on a missing `pkg-config`, FUSE,
+`i686-elf-strip`, `ssh-keygen`, or `qemu-system-i386`.
+**Concept taught:** environment preflight / actionable onboarding — the cross toolchain
+is an OS course's single biggest first-day friction.
+**Design:** `tools/doctor.sh` + a `make doctor` target check `i686-elf-gcc`/`-ld`/
+`-strip`, `qemu-system-i386`, FUSE (fuse/fuse-t via `pkg-config`), `ssh-keygen`,
+`cppcheck`, `shellcheck`, `clang-format`, host `cc`; print **ASCII** status
+(`PASS`/`MISSING`/`OPTIONAL`, no Unicode — the convention gate is ASCII-only) with the
+`brew`/`apt` line per miss; exit non-zero if a *required* tool is absent. The top
+Makefile suggests `make doctor` when a build trips on a missing tool.
+**Build:** `tools/doctor.sh`, the `doctor` target, the failure hint.
+**Verify:** `make doctor` here reports all-present, exit 0; with a required tool hidden
+from `PATH` it reports it MISSING + the hint and exits non-zero; `tools/doctor.sh` is
+shellcheck-clean (rides `verify-style`).
+**Done when:** `make doctor` accurately reports the toolchain with hints and the right
+exit code; Codex review addressed.
+
+### [ ] Phase 27 — Top-level orchestration: tiered targets + stamp-wrapped third-party
+**Goal:** a clean clone "just works" — `make` builds the base teaching OS **in order
+with no manual steps** (no hand-running the three `build_*.sh`); `make full` adds the
+slow capstones; `make help` lists everything and points at the `run*.sh` scripts.
+**Concept taught:** **stamp files** for opaque/external builds (vendored
+autotools/kbuild) and default-vs-extras build tiers.
+**Design:** the top Makefile gains `deps` — `libc` built by default (utils need
+`libc.a`), busybox + dropbear under `make full`/`DEPS=full` — each wrapped in a
+**stamp file with its REAL inputs**: the `libc` stamp depends on the build script and
+validates `install/lib/libc.a` + crt objects + headers before it is touched; the
+`busybox` stamp on `busybox-*.tar.bz2` + `build_busybox.sh` + `rach2.config` +
+`muslgcc` + the libc stamp; the `dropbear` stamp on its tarball + `build_dropbear.sh`
++ `localoptions.h` + `muslgcc` + the libc stamp. **`.DELETE_ON_ERROR`** so a failed
+third-party build never leaves a valid-looking stamp. `make` = krffs, libc, kernel,
+tests, ish, utils; `make full` = + busybox, dropbear, Doom. `make help` documents
+targets; the per-component Readmes and the build-script headers stop telling students
+to run `build_*.sh` by hand.
+**Build:** the top Makefile, the three stamp wrappers, `make help`, the Readme/doc updates.
+**Verify:** from a pristine state (stamps removed), `make` builds the base in order
+with **no manual `build_*.sh`**; `make full` builds the capstones; a deliberately
+corrupted third-party build leaves **no** stamp (re-runs next make); `make help` lists
+targets; `make verify-style`/`verify-host` + boot green.
+**Done when:** `make` from a clean tree produces the base OS with no manual steps,
+tiers + stamps behave (incl. the `.DELETE_ON_ERROR` failure path); Codex review addressed.
+
+### [ ] Phase 28 — Ramdisk build/stage split + the capstone image + no double-build
+**Goal:** Make **owns building**; the ramdisk scripts only **package**. `make ramdisk`
+produces the base image and `make test-ramdisk` (a.k.a. the capstone image) the
+busybox/dropbear/probe image — neither rebuilds components Make already built — and
+`make full` ends at the exact image the SSH capstone logs into.
+**Concept taught:** separation of *build* from *package*; making the capstone's real
+artifact a first-class, reproducible target.
+**Design:** `krffs/build_ramdisk.sh` and `krffs/build_test_ramdisk.sh` are split (or
+`SKIP_BUILD=1`-guarded) so they stage prebuilt binaries instead of re-invoking
+`make`/`ish`/`utils`/Doom internally (today's double-build at `build_ramdisk.sh`).
+Top Makefile: `ramdisk` -> `file_system.krffs` (base); `test-ramdisk`/`capstone-ramdisk`
+-> the staged image with `/busybox`, `/sh`, `/dropbearmulti`, `/etc`,
+`/root/.ssh/authorized_keys` + the auto-generated demo key; `make full` depends on
+`test-ramdisk`.
+**Build:** the build/stage split of both ramdisk scripts + the new ramdisk targets +
+the docs.
+**Verify:** **no component is built twice** (grep the build log for a second
+`ish`/`utils`/Doom compile); the base and capstone images build; **and the exact SSH
+capstone, against the image `make full` produced:** boot `qemu-system-i386 -cpu max
+-kernel rach2/kernel -initrd krffs/file_system.krffs` with `NET_HOSTFWD=hostfwd=
+tcp::2222-:22`, guest `exec dropbearmulti dropbear -F -R -p 22`, host `ssh -i
+krffs/rach2_demo_ed25519 -p 2222 -o StrictHostKeyChecking=no -o
+UserKnownHostsFile=/dev/null root@127.0.0.1 'echo SSH_OK; whoami; uname -srm; ls /;
+cat /etc/motd'` returns `SSH_OK`/`root` (rc 0); `make verify-style`/`verify-host` green.
+**Done when:** the double-build is gone, the capstone image is a reproducible target,
+and the real `ssh` login passes against `make full`'s output; Codex review addressed.
+
+### [ ] Phase 29 — IDE support: `compile_commands.json` + `.clangd`, and a source-list guard
+**Goal:** clangd gives students real autocomplete, go-to-definition, and inline
+diagnostics on the **freestanding** kernel; and a guard catches a new kernel `.c` not
+added to `C_SRC`.
+**Concept taught:** the LSP **compilation database** (generated from the build, since
+GCC has no `-MJ`); explicit-source-list discipline backed by a detector.
+**Design:** `tools/gen_compile_commands.sh` + `make compile-commands` read each
+component's source list + flags (from Make) and write a repo-root
+`compile_commands.json` (git-ignored, regenerable); a checked-in `.clangd` points
+clangd at the cross GCC (`query-driver`/target) so it resolves `i686-elf-gcc`'s
+freestanding headers, not the host's. `make check-sources` diffs the **kernel** `C_SRC`
+against `find sys -name '*.c'` and **hard-fails** on an unlisted source (wired into the
+gate); for Doom/vendored trees it is advisory only.
+**Build:** the generator, `.clangd`, `make compile-commands`, `make check-sources`,
+a short "IDE setup" Readme note.
+**Verify:** `make compile-commands` writes a database whose kernel entries parse (a
+`clang --syntax-only`/clangd check resolves a kernel TU's headers); `make check-sources`
+flags a deliberately-unlisted scratch `.c`, then passes once removed; `make
+verify-style`/`verify-host` green.
+**Done when:** `compile_commands.json` regenerates via Make and clangd resolves kernel
+symbols; `check-sources` catches an unlisted kernel source; Codex review addressed.
+
+### [ ] Phase 30 — Out-of-tree intermediates: a clean source tree (`.build/`)
+**Goal:** the source tree stays clean — intermediates (`.o`, `.d`) live under `.build/`,
+while final artifacts stay exactly where the run scripts expect (`rach2/kernel`,
+`krffs/file_system.krffs`). `make clean` becomes `rm -rf .build` + the artifacts.
+*(The one phase with real Make complexity and a moderate payoff; last and explicitly
+deferrable — drop it if it costs more readability than the clean tree is worth.)*
+**Concept taught:** out-of-source intermediates with in-place final artifacts (the
+hybrid model), the path mechanics owned by `mk/rules.mk` so component Makefiles stay simple.
+**Design:** `mk/rules.mk` gains a per-object `.build/<component>/…` output path and the
+matching `-include`; final link/artifact targets unchanged so the run scripts, ISO, and
+ramdisk steps are unaffected; `.build/` git-ignored. `compile_commands.json` paths
+updated to match.
+**Build:** the `.build/` relocation in `mk/rules.mk` + each component's object paths +
+the compile-commands generator.
+**Verify:** clean build; **no stray `.o`/`.d` anywhere in the source tree**; touch a
+header → correct partial rebuild from `.build/`; `make clean` leaves a pristine tree;
+the run scripts still find `rach2/kernel`; **a real boot + the SSH capstone reproduce**;
+`make verify-style`/`verify-host` green.
+**Done when:** intermediates are under `.build/`, the source tree is clean, final
+artifacts + run scripts unaffected; verify gates + boot + SSH green; Codex review addressed.
+
+**Part III done when:** a clean clone runs `make doctor` → `make full` and gets the
+**entire OS including the dropbear SSH capstone** with no manual `build_*.sh` and no
+`make clean` rituals; every component shares one transparent Make idiom; a header edit
+rebuilds only its dependents; clangd works on the kernel; and `make verify-style`/
+`verify-host`, a real boot, and the `ssh` login all still pass — **the build a student
+meets first is now fast, obvious, and friendly.**
+
 ## Part II execution risk (live)
 
 - **Job control (Phase 17) is the single highest-risk phase** (Codex's verdict, not
@@ -1298,6 +1523,11 @@ lives only in Phase 3.)*
   job control, termios, and `/dev`, navigating the Part-I directory tree.
 - **Part II-B:** **dropbear** accepts an SSH connection and runs that shell over a
   pty with crypto-grade entropy — **you can `ssh` into Rach2.**
+- **Part III:** the build a student meets first is fast, obvious, and friendly — one
+  transparent GNU-Make idiom across every component, automatic header dependencies
+  (no `make clean` ritual), `make doctor`/`make help`, `make`/`make full` tiers that
+  build the whole OS (incl. the SSH capstone) from a clean clone with no manual
+  `build_*.sh`, and clangd support — with the kernel and all binaries unchanged.
 - Every subsystem ships a `Readme.md` (with its real-OS analogue) and a passing
   `tests/*probe`; the existing syscall + network suites never regress; the whole
   project builds clean under our conventions. All commits are the user's; this plan
