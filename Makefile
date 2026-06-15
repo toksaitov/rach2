@@ -10,9 +10,15 @@ SUBDIRS = krffs    \
           utils    \
           ports/doom
 
-.PHONY: all clean ramdisk verify-style verify-host $(SUBDIRS)
+.PHONY: all clean ramdisk verify-style verify-host doctor $(SUBDIRS)
 
 all: $(SUBDIRS) ramdisk
+
+# Toolchain preflight (see tools/doctor.sh): report each required/optional tool as
+# PASS/MISSING/OPTIONAL with an install hint; non-zero exit if a required tool is
+# missing. Run this first on a fresh machine.
+doctor:
+	@./tools/doctor.sh
 
 # Lightweight quality gate (see tools/check.sh): -Werror build, scoped cppcheck,
 # shellcheck, the convention grep, clang-format, and a readelf ABI check.

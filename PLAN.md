@@ -1301,7 +1301,7 @@ rebuild**; the musl utils build; **a real in-guest probe sweep + busybox boot vi
 **Done when:** no component Makefile re-implements toolchain detection or header deps;
 verify gates + boot green; Codex review addressed.
 
-### [ ] Phase 26 — `make doctor`: a friendly toolchain preflight (before any automation)
+### [x] Phase 26 — `make doctor`: a friendly toolchain preflight (before any automation)
 **Goal:** a student or a fresh box runs `make doctor` and gets a clear present/missing
 report for every required tool with a per-tool install hint — *before* the new
 third-party automation (Phase 27) can fail late on a missing `pkg-config`, FUSE,
