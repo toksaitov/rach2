@@ -67,6 +67,16 @@ int pty_open_master(int flags);
  */
 int pty_open_slave(int index, int flags);
 
+/* Index of the allocated pty whose slave is the controlling terminal of session
+ * `sid`, or -1. Lets /dev/tty resolve to the caller's controlling pty. */
+int pty_session_slave(int sid);
+
+/* Atomically claim `keep` as the SOLE controlling terminal of session `sid` (with
+ * foreground group `pgid`): publish keep and release every other terminal (the
+ * console and any other pty) the session controls, in one interrupts-off region.
+ * Replaces the claim itself; the caller must have authorised it. */
+void tty_make_sole_ctty(struct tty *keep, int sid, int pgid);
+
 /* The slave tty behind a FD_TYPE_PTS descriptor (for the shared tty ioctls), or
  * NULL if e is not a pty slave. */
 struct tty *pty_slave_tty(struct fd_entry *e);

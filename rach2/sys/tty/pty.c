@@ -324,11 +324,15 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (want > sizeof(kbuf)) {
         want = sizeof(kbuf);
     }
-    /* A session leader reading its pts with no controlling terminal claims it
-     * (so a job-control shell on the pty receives ^C); a background process is
-     * stopped with SIGTTIN -- the same rules as the console. */
-    tty_acquire_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid,
-                     (int)current_proc->pid);
+    /* A session LEADER reading its pts with no controlling terminal claims it as
+     * its SOLE ctty (dropping the console or any other pty it held), so a
+     * job-control shell on the pty receives ^C and /dev/tty resolves to it; a
+     * background process is stopped with SIGTTIN below -- the same rules as the
+     * console. An explicit TIOCSCTTY already claimed it, so this is then a no-op. */
+    if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
+        tty_make_sole_ctty(&p->slave, (int)current_proc->sid,
+                           (int)current_proc->pgid);
+    }
     if (tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
         if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
             current_proc->sigacts[SIGTTIN].handler == KSIG_IGN) {
@@ -514,7 +518,15 @@ int pty_open_slave(int index, int flags)
     e->sock = NULL;
     e->ops = &pts_ops;
     e->priv = p;
-    e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    /* Honour the access mode: a slave (or /dev/tty resolving to it) opened
+     * O_RDONLY/O_WRONLY must not silently gain the other direction. */
+    if ((flags & 3) == 1) {
+        e->flags = FD_FLAG_WRITE;
+    } else if ((flags & 3) == 2) {
+        e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    } else {
+        e->flags = FD_FLAG_READ;
+    }
     if (flags & O_CLOEXEC_FLAG) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
@@ -523,6 +535,62 @@ int pty_open_slave(int index, int flags)
     }
     p->slave_opens++;
     return fd;
+}
+
+/* Index of the allocated pty whose slave is the controlling terminal of session
+ * `sid` (slave.sid == sid), or -1. /dev/tty resolves through this to the caller's
+ * controlling pty rather than unconditionally the console. */
+int pty_session_slave(int sid)
+{
+    int i;
+
+    if (sid == 0 || !pty_pool) {
+        return -1;
+    }
+    for (i = 0; i < PTY_MAX; i++) {
+        if (pty_pool[i].in_use && pty_pool[i].slave.sid == sid) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Atomically make `keep` the SOLE controlling terminal of session `sid`: publish
+ * `keep` as the session's terminal (sid + foreground group pgid) AND drop every
+ * OTHER terminal the session controls -- the console and any other pty -- in one
+ * interrupts-off region. The whole claim-and-release is atomic against the
+ * timer-IRQ console drain, which gates on console_tty.sid: it must never observe
+ * the new terminal claimed while the old console is still owned by the same
+ * session (that transient would let it drain serial input or deliver ISIG for a
+ * terminal the session no longer uses). Lives here because it must reach both
+ * console_tty and the pty pool. The caller has already authorised the claim
+ * (TIOCSCTTY checks leadership/ownership; the implicit read-claims require the
+ * terminal to be free and the caller a session leader). */
+void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
+{
+    uint32_t flags;
+    int i;
+
+    if (sid == 0 || !keep) {
+        return;
+    }
+    flags = pty_irq_save();
+    keep->sid = sid;
+    keep->fg_pgid = pgid;
+    if (&console_tty != keep && console_tty.sid == sid) {
+        console_tty.sid = 0;
+        console_tty.fg_pgid = 0;
+    }
+    if (pty_pool) {
+        for (i = 0; i < PTY_MAX; i++) {
+            if (pty_pool[i].in_use && &pty_pool[i].slave != keep &&
+                pty_pool[i].slave.sid == sid) {
+                pty_pool[i].slave.sid = 0;
+                pty_pool[i].slave.fg_pgid = 0;
+            }
+        }
+    }
+    pty_irq_restore(flags);
 }
 
 struct tty *pty_slave_tty(struct fd_entry *e)

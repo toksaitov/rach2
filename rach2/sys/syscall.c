@@ -1333,13 +1333,15 @@ static int32_t sys_read(isr_params_t *params)
          * console now arrives as a posted SIGINT, and a pending signal unwinds
          * the wait with -EINTR.
          */
-        /* A SESSION LEADER reading the console with no controlling session claims
-         * it as its ctty (its group becomes the foreground), so a lone program
-         * receives ^C; a non-leader does not (it would strand the tty on its
-         * since-dead leader). Once a session owns the console, the foreground is
-         * set by TIOCSPGRP. */
-        tty_acquire_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid,
-                         (int)current_proc->pid);
+        /* A SESSION LEADER reading the console with no controlling terminal claims
+         * it as its SOLE ctty (its group becomes the foreground, and any pty it held
+         * is dropped), so a lone program receives ^C; a non-leader does not (it would
+         * strand the tty on its since-dead leader). Once a session owns the console,
+         * the foreground is set by TIOCSPGRP. */
+        if (console_tty.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
+            tty_make_sole_ctty(&console_tty, (int)current_proc->sid,
+                               (int)current_proc->pgid);
+        }
         /* A BACKGROUND process reading its controlling terminal is stopped with
          * SIGTTIN (POSIX) -- unless that would wedge it (SIGTTIN blocked or
          * ignored), in which case the read fails with -EIO. Decided BEFORE marking
@@ -5528,9 +5530,12 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
             if (t->sid != 0 && t->sid != (int)current_proc->sid) {
                 return -EPERM; /* owned by another session */
             }
-            /* Atomic publish (tty_set_session) so the timer-IRQ serial drain never
-             * sees sid set while fg_pgid is still the stale value. */
-            tty_set_session(t, (int)current_proc->sid, (int)current_proc->pgid);
+            /* Claim t as this session's SOLE controlling terminal: one atomic step
+             * publishes t (sid + foreground group) AND drops every other terminal
+             * the session held (the console and any other pty), so the timer-IRQ
+             * serial drain never sees a torn or doubled ctty and /dev/tty resolves
+             * to t. */
+            tty_make_sole_ctty(t, (int)current_proc->sid, (int)current_proc->pgid);
             return 0;
 
         case TIOCNOTTY:

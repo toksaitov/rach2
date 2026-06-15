@@ -200,6 +200,26 @@ int devfs_open(const char *name, int flags)
         return -ENOTDIR;
     }
 
+    /* /dev/tty is the CALLER's controlling terminal (POSIX), not unconditionally
+     * the console. A job-control shell over a pty (dropbear's busybox ash) opens
+     * /dev/tty to read/set the foreground process group; it must get its pty, or
+     * its setjobctl loop never sees itself as foreground and stops on SIGTTIN. The
+     * console owns the session whose leader holds console_tty.sid; otherwise a pty
+     * slave owns the caller's session; otherwise the caller has no ctty (-ENXIO,
+     * which is also what makes dropbear's post-setsid /dev/tty probe come back
+     * empty as it expects). /dev/console (dev->ops==NULL too) is unaffected. */
+    if (dev->ops == NULL && name_eq(name, "tty")) {
+        int sid = current_proc ? (int)current_proc->sid : 0;
+        if (console_tty.sid == 0 || console_tty.sid != sid) {
+            int idx = pty_session_slave(sid);
+            if (idx >= 0) {
+                return pty_open_slave(idx, flags);
+            }
+            return -ENXIO; /* the caller has no controlling terminal */
+        }
+        /* ctty is the console -> fall through to the FD_TYPE_CONSOLE path below. */
+    }
+
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
         return -EMFILE;

@@ -96,23 +96,6 @@ int tty_is_background(struct tty *t, int sid, int pgid)
     return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 && t->fg_pgid != pgid;
 }
 
-void tty_acquire_ctty(struct tty *t, int sid, int pgid, int pid)
-{
-    /* A SESSION LEADER (sid == pid) using a console with no controlling session
-     * claims it: its session becomes the console's, its group the foreground -- so
-     * a lone program (exec_program launches init as its own session leader) gets
-     * ^C without an explicit TIOCSCTTY. Requiring leader-ness keeps console_tty.sid
-     * always equal to a live leader's id, so the leader-death release path
-     * (tty_console_owned_by_leader) always fires; a non-leader child that reads an
-     * unowned console does NOT strand the terminal on a since-dead leader. Once
-     * claimed, only TIOCSCTTY/TIOCSPGRP change it. The publish goes through
-     * tty_set_session so the timer-IRQ drain never sees sid set while fg_pgid is
-     * still stale. */
-    if (t->sid == 0 && sid == pid) {
-        tty_set_session(t, sid, pgid);
-    }
-}
-
 void tty_set_session(struct tty *t, int sid, int pgid)
 {
     uint32_t flags;

@@ -47,12 +47,6 @@ void tty_console_init(void);
 /* Post `signo` to every live member of process group `pgid` (job-control routing). */
 void tty_signal_group(int pgid, int signo);
 
-/* Claim the tty as a controlling terminal if it has none AND the caller is its
- * session leader (sid == pid): its session becomes `sid`, its foreground group
- * `pgid`. A no-op if already claimed or the caller is not a session leader (so a
- * non-leader never strands the tty on a since-dead leader). */
-void tty_acquire_ctty(struct tty *t, int sid, int pgid, int pid);
-
 /* Set the controlling session and foreground group as one interrupts-off step,
  * so the timer-IRQ drain never sees a torn (sid set, fg_pgid stale) owner. Used
  * to hand the console to a launched program (exec) and to release it (0, 0). */
