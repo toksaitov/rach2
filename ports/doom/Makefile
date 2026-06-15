@@ -2,11 +2,10 @@
 #
 # Builds Doom using doomgeneric for the Rach2 kernel (freestanding ELF32).
 
-# Cross-compiler detection
-CC := $(shell command -v i686-elf-gcc 2>/dev/null)
-ifeq ($(CC),)
-	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
-endif
+# Shared cross toolchain + automatic header-dependency tracking (see ../../mk/).
+include ../../mk/toolchain.mk
+include ../../mk/deps.mk
+CC := $(CROSS_CC)
 
 # Doomgeneric source directory (self-contained in src/)
 DOOMGENERIC_DIR = src
@@ -24,6 +23,8 @@ CFLAGS += -std=gnu99
 CFLAGS += -DFEATURE_SOUND
 # Disable features we don't support
 CFLAGS += -DSNDSERV=0 -D_DEFAULT_SOURCE
+# Automatic header-dependency tracking (see ../../mk/deps.mk).
+CFLAGS += $(DEPFLAGS)
 
 # Output binary
 OUTPUT = doom
@@ -73,5 +74,8 @@ crt0.o: crt0.c
 %.o: $(DOOMGENERIC_DIR)/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# Header-dependency files GCC wrote (-MMD); a header edit rebuilds its includers.
+-include $(OBJS:.o=.d)
+
 clean:
-	rm -f $(OUTPUT) $(OBJS)
+	rm -f $(OUTPUT) $(OBJS) $(OBJS:.o=.d)

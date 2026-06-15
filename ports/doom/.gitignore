@@ -6,3 +6,6 @@ doom
 
 # WAD files (game data)
 *.wad
+
+# Auto-generated header-dependency files (-MMD)
+*.d

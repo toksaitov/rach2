@@ -1,157 +1,53 @@
-CFLAGS += -g -std=gnu99 -MMD -D_FILE_OFFSET_BITS=64
+# KRFFS host tools: the FUSE mount plus the mkfs/defrag/fsck/fsviz/edfs/stagetree
+# utilities. These run on the HOST, so they use the host compiler (cc), not the
+# cross toolchain -- only the shared header-dependency tracking (../mk/deps.mk)
+# applies, so editing a krffs header rebuilds exactly the objects that include it.
+include ../mk/deps.mk
+
+CFLAGS += -g -std=gnu99 $(DEPFLAGS) -D_FILE_OFFSET_BITS=64
 
 FUSE_PKG := $(shell pkg-config --exists fuse 2>/dev/null && echo fuse || echo fuse-t)
 FUSE_CFLAGS += `pkg-config $(FUSE_PKG) --cflags` -DFUSE_USE_VERSION=26
 FUSE_LDLIBS += `pkg-config $(FUSE_PKG) --libs`
 
-# KRFFS
+# The four objects every tool shares.
+CORE = krffs_file_system.o krffs_node.o krffs_platform.o krffs_utilities.o
 
-KRFFS_TARGET  = krffs
-KRFFS_OBJECTS = krffs_file_system.o     \
-                krffs_node.o            \
-                krffs_allocator.o       \
-                krffs_platform.o        \
-                krffs_utilities.o       \
-                krffs_fuse_operations.o \
-                krffs.o
-KRFFS_DEPENDENCIES = $(KRFFS_OBJECTS:%.o=%.d)
+# Objects compiled WITH the FUSE cflags: the mount tool and everything linked into
+# it, including the shared core. The standalone tool mains are compiled WITHOUT the
+# FUSE cflags -- exactly the split the previous per-target rules produced.
+FUSE_OBJS = $(CORE) krffs_allocator.o krffs_fuse_operations.o krffs.o
+TOOL_OBJS = mkfs.krffs.o defrag.krffs.o fsck.krffs.o fsviz.krffs.o edfs.krffs.o \
+            stagetree.krffs.o
 
-# mkfs.krffs
-
-MKFS_KRFFS_TARGET  = mkfs.krffs
-MKFS_KRFFS_OBJECTS = krffs_file_system.o \
-                     krffs_node.o        \
-                     krffs_platform.o    \
-                     krffs_utilities.o   \
-                     mkfs.krffs.o
-MKFS_KRFFS_DEPENDENCIES = $(MKFS_KRFFS_OBJECTS:%.o=%.d)
-
-# defrag.krffs
-
-DEFRAG_KRFFS_TARGET  = defrag.krffs
-DEFRAG_KRFFS_OBJECTS = krffs_file_system.o \
-                       krffs_node.o        \
-                       krffs_platform.o    \
-                       krffs_utilities.o   \
-                       defrag.krffs.o
-DEFRAG_KRFFS_DEPENDENCIES = $(DEFRAG_KRFFS_OBJECTS:%.o=%.d)
-
-# fsck.krffs
-
-FSCK_KRFFS_TARGET  = fsck.krffs
-FSCK_KRFFS_OBJECTS = krffs_file_system.o \
-                     krffs_node.o        \
-                     krffs_platform.o    \
-                     krffs_utilities.o   \
-                     fsck.krffs.o
-FSCK_KRFFS_DEPENDENCIES = $(FSCK_KRFFS_OBJECTS:%.o=%.d)
-
-# fsviz.krffs
-
-FSVIZ_KRFFS_TARGET  = fsviz.krffs
-FSVIZ_KRFFS_OBJECTS = krffs_file_system.o \
-                      krffs_node.o        \
-                      krffs_platform.o    \
-                      krffs_utilities.o   \
-                      fsviz.krffs.o
-FSVIZ_KRFFS_DEPENDENCIES = $(FSVIZ_KRFFS_OBJECTS:%.o=%.d)
-
-# edfs.krffs
-
-EDFS_KRFFS_TARGET  = edfs.krffs
-EDFS_KRFFS_OBJECTS = krffs_file_system.o \
-                     krffs_node.o        \
-                     krffs_platform.o    \
-                     krffs_utilities.o   \
-                     edfs.krffs.o
-EDFS_KRFFS_DEPENDENCIES = $(EDFS_KRFFS_OBJECTS:%.o=%.d)
-
-# stagetree.krffs
-
-STAGETREE_KRFFS_TARGET  = stagetree.krffs
-STAGETREE_KRFFS_OBJECTS = krffs_file_system.o \
-                          krffs_node.o        \
-                          krffs_allocator.o   \
-                          krffs_platform.o    \
-                          krffs_utilities.o   \
-                          stagetree.krffs.o
-STAGETREE_KRFFS_DEPENDENCIES = $(STAGETREE_KRFFS_OBJECTS:%.o=%.d)
-
-# ---
-
-TARGETS = $(KRFFS_TARGET)        \
-          $(MKFS_KRFFS_TARGET)   \
-          $(DEFRAG_KRFFS_TARGET) \
-          $(FSCK_KRFFS_TARGET)   \
-          $(FSVIZ_KRFFS_TARGET)  \
-          $(EDFS_KRFFS_TARGET)   \
-          $(STAGETREE_KRFFS_TARGET)
-OBJECTS = $(KRFFS_OBJECTS)        \
-          $(MKFS_KRFFS_OBJECTS)   \
-          $(DEFRAG_KRFFS_OBJECTS) \
-          $(FSCK_KRFFS_OBJECTS)   \
-          $(FSVIZ_KRFFS_OBJECTS)  \
-          $(EDFS_KRFFS_OBJECTS)   \
-          $(STAGETREE_KRFFS_OBJECTS)
-DEPENDENCIES = $(KRFFS_DEPENDENCIES)        \
-               $(MKFS_KRFFS_DEPENDENCIES)   \
-               $(DEFRAG_KRFFS_DEPENDENCIES) \
-               $(FSCK_KRFFS_DEPENDENCIES)   \
-               $(FSVIZ_KRFFS_DEPENDENCIES)  \
-               $(EDFS_KRFFS_DEPENDENCIES)   \
-               $(STAGETREE_KRFFS_DEPENDENCIES)
+OBJECTS = $(FUSE_OBJS) $(TOOL_OBJS)
+TARGETS = krffs mkfs.krffs defrag.krffs fsck.krffs fsviz.krffs edfs.krffs \
+          stagetree.krffs
 
 .PHONY : all
 all : $(TARGETS)
 
-# KRFFS
-
-$(KRFFS_TARGET) : $(KRFFS_OBJECTS)
+# The FUSE mount tool: the FUSE objects + the FUSE libraries.
+krffs : $(FUSE_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(FUSE_LDLIBS)
 
-$(KRFFS_OBJECTS) : %.o : %.c
+# stagetree also needs the allocator (it writes KRFFS nodes directly).
+stagetree.krffs : $(CORE) krffs_allocator.o stagetree.krffs.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# The remaining standalone tools: the shared core + the tool's own object.
+mkfs.krffs defrag.krffs fsck.krffs fsviz.krffs edfs.krffs : %.krffs : $(CORE) %.krffs.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# Compile rules: FUSE objects get the FUSE cflags, tool mains do not.
+$(FUSE_OBJS) : %.o : %.c
 	$(CC) $(CFLAGS) $(FUSE_CFLAGS) -c $< -o $@
+$(TOOL_OBJS) : %.o : %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# mkfs.krffs
-
-$(MKFS_KRFFS_TARGET) : $(MKFS_KRFFS_OBJECTS)
-
-$(MKFS_KRFFS_OBJECTS) : %.o : %.c
-
-# defrag.krffs
-
-$(DEFRAG_KRFFS_TARGET) : $(DEFRAG_KRFFS_OBJECTS)
-
-$(DEFRAG_KRFFS_OBJECTS) : %.o : %.c
-
-# fsck.krffs
-
-$(FSCK_KRFFS_TARGET) : $(FSCK_KRFFS_OBJECTS)
-
-$(FSCK_KRFFS_OBJECTS) : %.o : %.c
-
-# fsviz.krffs
-
-$(FSVIZ_KRFFS_TARGET) : $(FSVIZ_KRFFS_OBJECTS)
-
-$(FSVIZ_KRFFS_OBJECTS) : %.o : %.c
-
-# edfs.krffs
-
-$(EDFS_KRFFS_TARGET) : $(EDFS_KRFFS_OBJECTS)
-
-$(EDFS_KRFFS_OBJECTS) : %.o : %.c
-
-# stagetree.krffs
-
-$(STAGETREE_KRFFS_TARGET) : $(STAGETREE_KRFFS_OBJECTS)
-
-$(STAGETREE_KRFFS_OBJECTS) : %.o : %.c
-
-# ---
-
--include $(DEPENDENCIES)
+# Pull in the per-object header dependencies GCC wrote (-MMD).
+-include $(OBJECTS:.o=.d)
 
 .PHONY : clean
 clean :
-	rm -f $(TARGETS) $(OBJECTS) $(DEPENDENCIES)
+	rm -f $(TARGETS) $(OBJECTS) $(OBJECTS:.o=.d)

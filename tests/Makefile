@@ -3,16 +3,12 @@
 # Builds freestanding ELF32 executables for testing kernel syscalls.
 # These programs run in user mode on the Rach2 kernel.
 
-# Try to find a suitable cross-compiler
-CC := $(shell command -v i686-elf-gcc 2>/dev/null)
-ifeq ($(CC),)
-	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
-endif
-ifeq ($(CC),)
-	CC := gcc
-endif
+# Shared cross toolchain + automatic header-dependency tracking (see ../mk/).
+include ../mk/toolchain.mk
+include ../mk/deps.mk
+CC := $(CROSS_CC)
 
-CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000
+CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 $(DEPFLAGS)
 
 # All test programs
 PROGS = hello filetest forktest shelltest dirtest stattest \
@@ -26,7 +22,8 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
 
 all: $(PROGS)
 
-# Generic rule: build program from .c file
+# Each probe is a single freestanding source compiled+linked in one step; -MMD
+# (from $(DEPFLAGS)) writes a <prog>.d, so editing a shared header rebuilds it.
 %: %.c
 	$(CC) $(CFLAGS) -o $@ $<
 
@@ -35,5 +32,7 @@ all: $(PROGS)
 dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h
 	$(CC) $(CFLAGS) -o $@ dnstest.c ../utils/resolv.c
 
+-include $(PROGS:=.d)
+
 clean:
-	rm -f $(PROGS)
+	rm -f $(PROGS) $(PROGS:=.d)

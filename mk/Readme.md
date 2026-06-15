@@ -9,6 +9,7 @@ duplication, they do not hide what the build does.
 |-----------------|------------------|
 | `toolchain.mk`  | detects the freestanding cross GCC (`i686-elf-gcc`, else `x86_64-elf-gcc`) once and derives `CROSS_LD/AR/STRIP/OBJCOPY`; errors with an actionable message if none is found (override with `make CROSS_CC=...`). |
 | `deps.mk`       | `DEPFLAGS = -MMD -MP` — automatic header-dependency tracking. |
+| `rules.mk`      | the canonical `%.o: %.c` compile rule + `-include $(OBJECTS:.o=.d)` for a component that compiles to objects then links the plain way (`ish/`). Components with a special compile shape (`ports/doom`, the krffs FUSE tools) keep their own rules but still share `toolchain.mk`/`deps.mk`. |
 
 ## Automatic header dependencies (no more `make clean`)
 

@@ -14,3 +14,6 @@ ls
 ping
 nc
 httpd
+
+# Auto-generated header-dependency files (-MMD)
+*.d

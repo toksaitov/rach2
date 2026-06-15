@@ -62,3 +62,6 @@ rngprobe
 # The Phase 18 busybox capstone binary (built by busybox/build_busybox.sh)
 busybox
 dropbearmulti
+
+# Auto-generated header-dependency files (-MMD)
+*.d

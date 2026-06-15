@@ -1279,7 +1279,7 @@ vs `HEAD`** (`cmp` the `.o`/kernel); a real boot still passes.
 **Done when:** a kernel header edit triggers a correct partial rebuild with no
 `make clean`; verify gates + boot green; Codex review of the Make logic addressed.
 
-### [ ] Phase 25 — One build idiom: fold every component Makefile onto `mk/`
+### [x] Phase 25 — One build idiom: fold every component Makefile onto `mk/`
 **Goal:** kernel, tests, ish, utils, the Doom port, and the krffs host tools share
 **one** transparent build idiom — no Makefile re-implements toolchain detection (was
 4×) or header tracking (was three styles: krffs's verbose `-MMD`, ish's hand-listed
