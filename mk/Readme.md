@@ -30,3 +30,34 @@ A component Makefile uses both like this:
 
 The host-side krffs FUSE tools build with the *host* compiler, so they include
 `deps.mk` only, not `toolchain.mk`.
+
+## IDE support (clangd): `compile_commands.json` + `.clangd`
+
+For real autocomplete, go-to-definition, and inline diagnostics on the **freestanding**
+kernel, clangd needs a compilation database. GCC has no clang-style `-MJ`, so it is
+generated from the build's own commands:
+
+    make compile-commands     # writes compile_commands.json at the repo root
+
+The generator (`tools/gen_compile_commands.sh`) dry-runs each in-house component
+(`make -Bn`) and turns every i686-elf cross-GCC C compile into a database entry. It
+covers the kernel (`rach2`) and the musl guest programs (`tests`, `ish`, `utils`); the
+host krffs FUSE tools and the vendored/Doom trees are excluded. The file is git-ignored
+and regenerable — rerun it after adding a source or changing flags.
+
+The checked-in **`.clangd`** points clangd at the i686-elf cross GCC for those trees, so
+it resolves the cross toolchain's freestanding headers (`<stddef.h>`, …) instead of the
+host's. clangd only queries a non-host driver when you allow it, so launch clangd with:
+
+    --query-driver=**/i686-elf-*gcc
+
+(VS Code: set `"clangd.arguments": ["--query-driver=**/i686-elf-*gcc"]`; JetBrains and
+others have an equivalent.)
+
+## Kernel source-list guard: `make check-sources`
+
+The kernel's sources are an **explicit** list (`C_SRC` in `rach2/Makefile`), so a new
+`.c` that is not added there is silently left out of the build. `make check-sources`
+(`tools/check_sources.sh`) compares `C_SRC` against the `.c` files on disk under
+`rach2/` and fails if they disagree — and it runs inside `make verify-style` as a hard
+gate. Doom and the vendored trees keep their own lists and are not gated.

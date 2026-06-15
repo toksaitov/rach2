@@ -1,0 +1,21 @@
+# Rach2 clangd configuration (checked in).
+#
+# Run `make compile-commands` to generate compile_commands.json (git-ignored) at the
+# repo root; clangd reads it for each file's real compile flags. The kernel and the
+# musl guest programs are built FREESTANDING with the i686-elf cross GCC, so clangd has
+# to resolve THAT toolchain's headers (<stddef.h>, <stdint.h>, ...) and builtins, not
+# the host's. clangd does that by querying the compiler named in the database -- but
+# only for drivers you allow, so launch clangd with:
+#
+#     --query-driver=**/i686-elf-*gcc
+#
+# (VS Code: set "clangd.arguments" to ["--query-driver=**/i686-elf-*gcc"]; other
+# editors have an equivalent. See the "IDE support" note in mk/Readme.md.)
+#
+# For the cross-compiled trees, pin the driver to the i686-elf cross GCC so clangd uses
+# its freestanding headers even before the database is regenerated. The host krffs FUSE
+# tools are left to their own (host cc) flags from the database.
+If:
+  PathMatch: [rach2/.*, tests/.*, ish/.*, utils/.*]
+CompileFlags:
+  Compiler: i686-elf-gcc

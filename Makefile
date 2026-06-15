@@ -36,7 +36,7 @@ BUSYBOX_TARBALL  = busybox/busybox-1.36.1.tar.bz2
 DROPBEAR_TARBALL = dropbear/dropbear-2022.83.tar.bz2
 
 .PHONY: all full deps clean distclean ramdisk test-ramdisk capstone-ramdisk \
-        check-busybox check-dropbearmulti \
+        check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
 
@@ -148,6 +148,18 @@ verify-style:
 verify-host:
 	@./tools/hosttest.sh
 
+# --- IDE support + source-list guard ---
+# clangd compilation database, generated from the build's own commands (GCC has no
+# clang-style -MJ). Output: compile_commands.json at the repo root (git-ignored). The
+# checked-in .clangd points clangd at the i686-elf cross GCC; see mk/Readme.md.
+compile-commands:
+	@./tools/gen_compile_commands.sh
+
+# Kernel source-list guard: fail if a rach2 .c on disk is missing from C_SRC (so a new
+# kernel source cannot be silently dropped from the build). Also run inside the gate.
+check-sources:
+	@./tools/check_sources.sh
+
 # clean: the everyday reset -- component build products (each sub-make removes its
 # own objects/.d/binaries) plus the generated RAM-disk image. The expensive vendored
 # third-party (libc/install, the busybox/dropbear builds) is LEFT in place so a
@@ -175,6 +187,8 @@ help:
 	@echo "  make test-ramdisk   build the capstone image (busybox/dropbear/probes; the SSH login)"
 	@echo "  make doctor     check the toolchain (PASS/MISSING with install hints)"
 	@echo "  make verify-style / verify-host   quality gates"
+	@echo "  make compile-commands   regenerate compile_commands.json for clangd (IDE)"
+	@echo "  make check-sources      verify the kernel C_SRC list matches the sources on disk"
 	@echo "  make clean      remove component build products (objects, .d, binaries, ramdisk)"
 	@echo "  make distclean  + the vendored libc/busybox/dropbear builds (full from-scratch)"
 	@echo ""

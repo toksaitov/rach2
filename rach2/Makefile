@@ -170,6 +170,13 @@ $(C_OBJECTS) : %.o : %.c
 # yet) -- the leading '-' makes that silent.
 -include $(C_OBJECTS:.o=.d)
 
+# Emit the explicit kernel source list (expanded), for tools/check_sources.sh -- the
+# source-list guard that fails if a rach2 .c on disk is missing from C_SRC. .PHONY so
+# it always runs; prints nothing but the list.
+.PHONY : print-c-src
+print-c-src :
+	@echo $(C_SRC)
+
 .PHONY : clean
 clean :
 	rm -f $(ASM_OBJECTS) $(C_OBJECTS) $(KERNEL) $(ISO_IMAGE) $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST) $(GRUB_CFG)

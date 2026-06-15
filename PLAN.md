@@ -1373,7 +1373,7 @@ cat /etc/motd'` returns `SSH_OK`/`root` (rc 0); `make verify-style`/`verify-host
 **Done when:** the double-build is gone, the capstone image is a reproducible target,
 and the real `ssh` login passes against `make full`'s output; Codex review addressed.
 
-### [ ] Phase 29 — IDE support: `compile_commands.json` + `.clangd`, and a source-list guard
+### [x] Phase 29 — IDE support: `compile_commands.json` + `.clangd`, and a source-list guard
 **Goal:** clangd gives students real autocomplete, go-to-definition, and inline
 diagnostics on the **freestanding** kernel; and a guard catches a new kernel `.c` not
 added to `C_SRC`.
