@@ -1258,7 +1258,7 @@ beats cleverness**. Decisions settled up front (do not relitigate during the run
   `-cpu`, a future SSH boot) the `run*.sh` scripts already model — Make would only
   become a worse second copy. `make help` *points to* the run scripts.
 
-### [ ] Phase 24 — Shared cross-toolchain + automatic header-dependency tracking
+### [x] Phase 24 — Shared cross-toolchain + automatic header-dependency tracking
 **Goal:** end the `make clean && make` ritual — editing any kernel `.h` rebuilds
 exactly the objects that include it, nothing more, nothing less; `make -j` is correct;
 cross-compiler detection lives in one place, not copy-pasted.

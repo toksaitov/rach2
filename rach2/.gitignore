@@ -5,3 +5,6 @@ bin/
 
 # Generated GRUB config (see grub.cfg.template)
 iso/boot/grub/grub.cfg
+
+# Auto-generated header-dependency files (-MMD)
+*.d

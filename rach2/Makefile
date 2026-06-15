@@ -84,19 +84,20 @@ C_SRC   = $(KERNEL).c \
 ASM_OBJECTS = $(ASM_SRC:.s=.o)
 C_OBJECTS   = $(C_SRC:.c=.o)
 
-# Cross-compiler detection
-CC := $(shell command -v i686-elf-gcc 2>/dev/null)
-ifeq ($(CC),)
-	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
-endif
-
-LD := $(subst gcc,ld,$(CC))
+# Cross toolchain + automatic header-dependency tracking (shared; see ../mk/).
+include ../mk/toolchain.mk
+include ../mk/deps.mk
+CC := $(CROSS_CC)
+# LD comes from CROSS_LD (mk/toolchain.mk): it honors an explicit `CROSS_LD=...`
+# override and otherwise tracks CROSS_CC -- and CROSS_CC itself absorbs a
+# command-line `make CC=...`, so both the CC and CROSS_LD knobs reach the linker.
+LD := $(CROSS_LD)
 
 # -Werror makes the existing zero-warning policy a hard compiler gate (the
 # quality gate builds with it on). Override with `make WERROR=` only for
 # transient debugging.
 WERROR ?= -Werror
-CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs
+CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
 LDFLAGS = -m elf_i386 -T $(LINKER_SCRIPT).ld
 
 # Harness build (`make HARNESS=1`): the kernel reports each process exit status
@@ -164,6 +165,13 @@ $(ASM_OBJECTS) : %.o : %.s
 $(C_OBJECTS) : %.o : %.c
 	$(CC) $(CFLAGS) -o $@ -c $<
 
+# Pull in the per-object header dependencies GCC wrote (-MMD), so editing a header
+# rebuilds exactly the objects that include it. Missing on a first build (no .d
+# yet) -- the leading '-' makes that silent.
+-include $(C_OBJECTS:.o=.d)
+
 .PHONY : clean
 clean :
 	rm -f $(ASM_OBJECTS) $(C_OBJECTS) $(KERNEL) $(ISO_IMAGE) $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST) $(GRUB_CFG)
+	@# Sweep every generated .d (including any left by a since-renamed/removed source).
+	find . -name '*.d' -type f -delete
