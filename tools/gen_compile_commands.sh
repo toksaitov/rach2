@@ -40,7 +40,7 @@ for comp in rach2 tests ish utils; do
     # Dry-run an always-make build. Capture it to a file (a pipe would lose the exit
     # status), so a toolchain/Make failure is a hard error, not a silent empty DB.
     if ! ( cd "$dir" && make -Bn ) >"$dump" 2>/dev/null; then
-        echo "error: 'make -Bn' failed in $comp/ -- cannot generate the database" >&2
+        echo "compile_commands: 'make -Bn' failed in $comp/: cannot generate the database" >&2
         echo "       (is the i686-elf cross toolchain installed? try 'make doctor')" >&2
         exit 1
     fi
@@ -78,19 +78,19 @@ done
 # status and an empty list would vacuously "pass"), then require it to have succeeded
 # and be non-empty before checking each source is present.
 if ! make --no-print-directory -C "$REPO/rach2" print-c-src >"$rawlist" 2>/dev/null; then
-    echo "error: 'make -C rach2 print-c-src' failed -- cannot verify kernel coverage" >&2
+    echo "compile_commands: 'make -C rach2 print-c-src' failed: cannot verify kernel coverage" >&2
     exit 1
 fi
 tr ' ' '\n' <"$rawlist" | sed '/^[[:space:]]*$/d' | sort -u >"$expected"
 if [ ! -s "$expected" ]; then
-    echo "error: kernel source list (C_SRC) is empty -- is rach2's print-c-src intact?" >&2
+    echo "compile_commands: kernel source list (C_SRC) is empty; is rach2's print-c-src intact?" >&2
     exit 1
 fi
 while IFS= read -r src; do
     grep -qF "\"file\": \"$src\"" "$out_tmp" || echo "$src" >>"$missing"
 done <"$expected"
 if [ -s "$missing" ]; then
-    echo "error: kernel sources missing from compile_commands.json (generator bug):" >&2
+    echo "compile_commands: kernel sources missing from compile_commands.json (generator bug):" >&2
     sed 's/^/  /' "$missing" >&2
     exit 1
 fi
@@ -98,7 +98,7 @@ fi
 # Coverage passed; promote the temp DB into place (guarded: the script does not run
 # under set -e, so an unchecked mv could fall through and falsely report success).
 if ! mv "$out_tmp" "$OUT"; then
-    echo "error: failed to write $OUT" >&2
+    echo "compile_commands: failed to write $OUT" >&2
     exit 1
 fi
 

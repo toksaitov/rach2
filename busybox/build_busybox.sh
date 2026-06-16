@@ -35,41 +35,39 @@ sha256_of()
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "error: $PREFIX/lib/libc.a not found; run libc/build_libc.sh first" >&2
+    echo "busybox: $PREFIX/lib/libc.a not found; run libc/build_libc.sh first" >&2
     exit 1
 fi
 if [ ! -f "$TARBALL" ]; then
-    echo "error: $TARBALL missing (the vendored source)" >&2
+    echo "busybox: $TARBALL missing (the vendored source)" >&2
     exit 1
 fi
 
-echo "=== Verifying $TARBALL ==="
+echo "busybox: verifying $TARBALL"
 GOT="$(sha256_of "$TARBALL")"
 if [ "$GOT" != "$TARBALL_SHA256" ]; then
-    echo "error: sha256 mismatch for $TARBALL" >&2
+    echo "busybox: sha256 mismatch for $TARBALL" >&2
     echo "  expected $TARBALL_SHA256" >&2
     echo "  got      $GOT" >&2
     exit 1
 fi
 
-echo "=== Extracting ==="
+echo "busybox: extracting"
 rm -rf "$SRC"
 tar xjf "$TARBALL"
 
-echo "=== Configuring (rach2.config: static musl ash + coreutils) ==="
+echo "busybox: configuring (rach2.config: static musl ash + coreutils)"
 cp rach2.config "$SRC/.config"
 # Resolve any new/derived symbols against the pinned config, taking defaults.
 yes "" | make -C "$SRC" oldconfig HOSTCC=cc >/dev/null
 
-echo "=== Building (CC=muslgcc, CROSS_COMPILE=i686-elf-, HOSTCC=cc) ==="
+echo "busybox: building (CC=muslgcc, CROSS_COMPILE=i686-elf-, HOSTCC=cc)"
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
     CROSS_COMPILE=i686-elf- CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
 
-echo "=== Staging stripped binary -> ../tests/busybox ==="
+echo "busybox: staging the stripped binary to ../tests/busybox"
 i686-elf-strip "$SRC/busybox" -o ../tests/busybox
 ls -l ../tests/busybox
 
-echo ""
-echo "=== Done ==="
-echo "BusyBox $VERSION: $(wc -c < ../tests/busybox) bytes, static, musl, i686."
-echo "Rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /busybox."
+echo "busybox: built $VERSION ($(wc -c < ../tests/busybox) bytes, static, musl, i686)"
+echo "busybox: rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /busybox"

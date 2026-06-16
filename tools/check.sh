@@ -67,7 +67,7 @@ hr "1/7 kernel build (-Werror)"
 if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
     echo "  PASS (0 warnings/errors)"
 else
-    echo "  FAIL -- see $VDIR/verify_build.log"; fail=1
+    echo "  FAIL: see $VDIR/verify_build.log"; fail=1
 fi
 
 # 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
@@ -82,7 +82,7 @@ if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=
       --file-list="$VDIR/_srcs.txt" >"$VDIR/verify_cppcheck.log" 2>&1; then
     echo "  PASS (0 findings)"
 else
-    echo "  FAIL -- see $VDIR/verify_cppcheck.log"; fail=1
+    echo "  FAIL: see $VDIR/verify_cppcheck.log"; fail=1
 fi
 
 # 3. shellcheck. New in-house scripts (tools/, libc/) are STRICT; SC2086 stays
@@ -99,7 +99,7 @@ shellcheck -x -e SC1091 $(ls tools/*.sh libc/*.sh 2>/dev/null) \
 shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
     $(ls rach2/*.sh krffs/build_*.sh krffs/create_*.sh 2>/dev/null) \
     >>"$VDIR/verify_shellcheck.log" 2>&1 || sc=1
-if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL -- see $VDIR/verify_shellcheck.log"; fail=1; fi
+if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
 hr "4/7 conventions (no //, ASCII, header guards)"
@@ -155,13 +155,13 @@ if [ -f "$LIBC/lib/libc.a" ]; then
            && case "$entry" in 0x804[0-9a-f]*) true ;; *) false ;; esac; then
             echo "  PASS (ELF32 EXEC i386, static, LOAD@0x08048000, entry $entry)"
         else
-            echo "  FAIL -- off-ABI (entry=$entry); see $VDIR/_abi.log"; fail=1
+            echo "  FAIL: off-ABI (entry=$entry); see $VDIR/_abi.log"; fail=1
         fi
     else
-        echo "  FAIL -- musl link failed; see $VDIR/_abi.log"; fail=1
+        echo "  FAIL: musl link failed; see $VDIR/_abi.log"; fail=1
     fi
 else
-    echo "  FAIL -- libc not built; run libc/build_libc.sh first (the ABI gate"
+    echo "  FAIL: libc not built; run libc/build_libc.sh first (the ABI gate"
     echo "          cannot verify the musl ABI without it, so it does not pass)"
     fail=1
 fi
@@ -172,7 +172,7 @@ hr "7/7 kernel source list (C_SRC vs disk)"
 if "$REPO/tools/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
 else
-    echo "  FAIL -- see $VDIR/verify_sources.log"; fail=1
+    echo "  FAIL: see $VDIR/verify_sources.log"; fail=1
 fi
 
 # Text style (advisory): the mechanical natural-text checks (tools/textcheck.sh). It

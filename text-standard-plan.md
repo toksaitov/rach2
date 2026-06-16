@@ -145,8 +145,11 @@ Each phase changes text only, never behavior. Each ends with `make verify-style`
        bullets to *, strip bold abuse, align tables.
     2. Vocabulary and voice: rewrite slogan and diary phrasing across comments,
        Markdown, shell, and Makefiles, by judgment.
-    3. Messages: standardize tool, Make, and kernel/user output to the prefixed format;
-       keep probe tokens.
+    3. Messages: remove slop from tool diagnostics and standardize the build-script
+       progress to the prefixed `component: action` form. The numbered verify gate and
+       the doctor status rows are deliberate aligned displays and keep their shape; the
+       kernel boot log already reads as `subsystem: event` and carries no slop, so it
+       stays. Probe success tokens and the [PASS]/[FAIL] markers are contracts, untouched.
     4. Docs: rewrite the high-traffic Readmes (root, mk/, libc/, the kernel subsystem
        Readmes).
     5. Foundation-era C comments: remove restating body comments, write real headers,

@@ -49,7 +49,7 @@ req() {
     if command -v "$1" >/dev/null 2>&1 && "$1" --version >/dev/null 2>&1; then
         row "[PASS]" "$1" "$(command -v "$1")"
     else
-        row "[MISSING]" "$1" "-- $(hint "$2")"
+        row "[MISSING]" "$1" "$(hint "$2")"
         missing=$((missing + 1))
     fi
 }
@@ -60,7 +60,7 @@ opt() {
     if command -v "$1" >/dev/null 2>&1; then
         row "[PASS]" "$1" "$(command -v "$1")"
     else
-        row "[OPTIONAL]" "$1" "($2) -- $(hint "$3")"
+        row "[OPTIONAL]" "$1" "($2); $(hint "$3")"
     fi
 }
 
@@ -80,13 +80,13 @@ req cc               cc
 # FUSE is uncheckable; report that without counting it a second time (pkg-config
 # is already the failure above).
 if ! pkg-config --version >/dev/null 2>&1; then
-    row "[SKIP]" "FUSE" "-- cannot check until pkg-config works"
+    row "[SKIP]" "FUSE" "cannot check until pkg-config works"
 elif pkg-config --exists fuse 2>/dev/null; then
     row "[PASS]" "FUSE" "fuse ($(pkg-config --modversion fuse 2>/dev/null))"
 elif pkg-config --exists fuse-t 2>/dev/null; then
     row "[PASS]" "FUSE" "fuse-t ($(pkg-config --modversion fuse-t 2>/dev/null))"
 else
-    row "[MISSING]" "FUSE" "-- $(hint fuse)"
+    row "[MISSING]" "FUSE" "$(hint fuse)"
     missing=$((missing + 1))
 fi
 
@@ -99,8 +99,8 @@ opt ssh-keygen   "the SSH capstone demo key" openssh
 
 echo
 if [ "$missing" -eq 0 ]; then
-    echo "Result: all required tools present."
+    echo "doctor: all required tools present"
     exit 0
 fi
-echo "Result: $missing required tool(s) missing -- install them (hints above), then re-run 'make doctor'."
+echo "doctor: $missing required tool(s) missing; install them (hints above), then re-run 'make doctor'" >&2
 exit 1

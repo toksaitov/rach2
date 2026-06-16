@@ -28,11 +28,10 @@ FS_FILE="file_system.krffs"
 # `make ramdisk` target so nothing is built twice); a standalone run still builds
 # them for convenience.
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
-    echo "=== Building ISH shell ==="
+    echo "ramdisk: building the ish shell"
     make -C ../ish
 
-    echo ""
-    echo "=== Building Unix utilities ==="
+    echo "ramdisk: building the utilities"
     make -C ../utils
 fi
 
@@ -46,21 +45,18 @@ fi
 # build.
 RAMDISK_WITH_DOOM=${RAMDISK_WITH_DOOM:-0}
 
-echo ""
-echo "=== Creating KRFFS file system ($SIZE MB) ==="
+echo "ramdisk: creating a $SIZE MB image"
 rm -f "$FS_FILE"
 dd if=/dev/zero of="$FS_FILE" bs=1048576 count=$SIZE
 ./mkfs.krffs "$FS_FILE"
 
-echo ""
-echo "=== Mounting file system ==="
+echo "ramdisk: mounting"
 mkdir -p "$MOUNT_POINT"
 # Clear mount point if not empty
 rm -rf "${MOUNT_POINT:?}"/*
 ./krffs "$FS_FILE" "$MOUNT_POINT"
 
-echo ""
-echo "=== Copying binaries ==="
+echo "ramdisk: staging binaries"
 
 # Copy ISH shell
 cp ../ish/ish "$MOUNT_POINT/"
@@ -86,7 +82,7 @@ if [ "$RAMDISK_WITH_DOOM" = 1 ]; then
             echo "  doom1.wad"
         fi
     else
-        echo "note: RAMDISK_WITH_DOOM=1 but ../ports/doom/doom is not built (run 'make full' first); skipping" >&2
+        echo "ramdisk: RAMDISK_WITH_DOOM=1 but ../ports/doom/doom is not built (run 'make full' first); skipping" >&2
     fi
 fi
 
@@ -105,21 +101,16 @@ echo "  hosts"
 # Remove macOS AppleDouble files (._*) if any were created
 rm -f "$MOUNT_POINT"/._*
 
-echo ""
-echo "=== Unmounting file system ==="
+echo "ramdisk: unmounting"
 # Try fusermount first, fall back to umount
 if command -v fusermount >/dev/null 2>&1; then
     fusermount -u "$MOUNT_POINT"
 elif command -v umount >/dev/null 2>&1; then
     umount "$MOUNT_POINT"
 else
-    echo "Error: Neither fusermount nor umount available"
+    echo "ramdisk: no fusermount or umount available" >&2
     exit 1
 fi
 
-echo ""
-echo "=== Done ==="
-echo "RAM disk image: $FS_FILE"
-echo ""
-echo "To use with QEMU:"
-echo "  qemu-system-i386 -kernel ../rach2/kernel -initrd $FS_FILE -serial stdio"
+echo "ramdisk: wrote $FS_FILE"
+echo "ramdisk: boot with qemu-system-i386 -kernel ../rach2/kernel -initrd $FS_FILE -serial stdio"

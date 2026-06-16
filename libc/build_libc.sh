@@ -39,46 +39,40 @@ sha256_of()
     fi
 }
 
-echo "=== Verifying pinned musl tarball ==="
+echo "libc: verifying the pinned musl tarball"
 if [ ! -f "$TARBALL" ]; then
-    echo "Error: $TARBALL not found. It is vendored beside this script."
+    echo "libc: $TARBALL not found; it is vendored beside this script" >&2
     exit 1
 fi
 GOT="$(sha256_of "$TARBALL")"
 if [ "$GOT" != "$SHA256" ]; then
-    echo "Error: sha256 mismatch for $TARBALL"
-    echo "  expected $SHA256"
-    echo "  got      $GOT"
+    echo "libc: sha256 mismatch for $TARBALL" >&2
+    echo "  expected $SHA256" >&2
+    echo "  got      $GOT" >&2
     exit 1
 fi
-echo "  OK ($SHA256)"
+echo "libc: verified ($SHA256)"
 
-echo ""
-echo "=== Extracting ==="
+echo "libc: extracting"
 rm -rf "$SRC"
 tar xzf "$TARBALL"
 
-echo ""
-echo "=== Configuring (CROSS_COMPILE=i686-elf-, static, target i686) ==="
+echo "libc: configuring (CROSS_COMPILE=i686-elf-, static, target i686)"
 cd "$SRC"
 CROSS_COMPILE=i686-elf- ./configure --target=i686 --disable-shared --prefix="$PREFIX"
 
-echo ""
-echo "=== Building ==="
+echo "libc: building"
 make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
 
-echo ""
-echo "=== Installing to $PREFIX (cleaned first for a reproducible tree) ==="
+echo "libc: installing to $PREFIX (cleaned first for a reproducible tree)"
 rm -rf "$PREFIX"
 make install
 
-echo ""
-echo "=== Done ==="
+echo "libc: built"
 echo "  libc.a:  $PREFIX/lib/libc.a"
 echo "  startup: $PREFIX/lib/crt1.o $PREFIX/lib/crti.o $PREFIX/lib/crtn.o"
 echo "  headers: $PREFIX/include"
-echo ""
-echo "Link a program against it (see Readme.md for the full recipe):"
+echo "libc: link a program against it (see Readme.md for the full recipe):"
 echo "  i686-elf-gcc -static -nostdlib -nostartfiles -isystem $PREFIX/include \\"
 echo "    -o prog crt1.o crti.o prog.c libc.a \$(i686-elf-gcc -print-libgcc-file-name) \\"
 echo "    crtn.o -Wl,-z,noexecstack"

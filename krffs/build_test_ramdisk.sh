@@ -32,14 +32,14 @@ DEMO_KEY="rach2_demo_ed25519"
 # Both are git-ignored test credentials and are never committed.
 if [ ! -f authorized_keys ]; then
     if command -v ssh-keygen >/dev/null 2>&1; then
-        echo "=== Generating demo SSH key ($DEMO_KEY) ==="
+        echo "ramdisk: generating the demo ssh key ($DEMO_KEY)"
         rm -f "$DEMO_KEY" "$DEMO_KEY.pub"
         ssh-keygen -t ed25519 -N "" -C "rach2-demo" -f "$DEMO_KEY" >/dev/null
         cp "$DEMO_KEY.pub" authorized_keys
         echo "  private key: krffs/$DEMO_KEY"
         echo "  log in with: ssh -i krffs/$DEMO_KEY -p 2222 root@localhost"
     else
-        echo "note: no authorized_keys and no ssh-keygen; dropbear SSH login will lack a key"
+        echo "ramdisk: no authorized_keys and no ssh-keygen; dropbear SSH login will lack a key" >&2
     fi
 fi
 
@@ -47,25 +47,22 @@ fi
 # `make test-ramdisk` target so nothing is built twice); a standalone run still
 # builds them for convenience.
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
-    echo "=== Building test programs ==="
+    echo "ramdisk: building the test programs"
     make -C ../tests
 fi
 
-echo ""
-echo "=== Creating KRFFS file system ($SIZE MB) ==="
+echo "ramdisk: creating a $SIZE MB image"
 rm -f "$FS_FILE"
 dd if=/dev/zero of="$FS_FILE" bs=1048576 count=$SIZE
 ./mkfs.krffs "$FS_FILE"
 
-echo ""
-echo "=== Mounting file system ==="
+echo "ramdisk: mounting"
 mkdir -p "$MOUNT_POINT"
 # Clear mount point if not empty
 rm -rf "${MOUNT_POINT:?}"/*
 ./krffs "$FS_FILE" "$MOUNT_POINT"
 
-echo ""
-echo "=== Copying test binaries ==="
+echo "ramdisk: staging test binaries"
 
 # Copy all test programs
 for prog in hello filetest forktest shelltest dirtest stattest \
@@ -240,15 +237,14 @@ echo "  hosts"
 # Remove macOS AppleDouble files (._*) if any were created
 rm -f "$MOUNT_POINT"/._*
 
-echo ""
-echo "=== Unmounting file system ==="
+echo "ramdisk: unmounting"
 # Try fusermount first, fall back to umount
 if command -v fusermount >/dev/null 2>&1; then
     fusermount -u "$MOUNT_POINT"
 elif command -v umount >/dev/null 2>&1; then
     umount "$MOUNT_POINT"
 else
-    echo "Error: Neither fusermount nor umount available"
+    echo "ramdisk: no fusermount or umount available" >&2
     exit 1
 fi
 
@@ -256,13 +252,8 @@ fi
 # guest boots with populated directories (not just a flat root). This writes v2
 # hierarchical nodes the kernel resolver reads, proving the host tools speak the
 # directory format.
-echo ""
-echo "=== Staging directory tree (/etc) ==="
+echo "ramdisk: staging the /etc directory tree"
 ./stagetree.krffs "$FS_FILE"
 
-echo ""
-echo "=== Done ==="
-echo "RAM disk image: $FS_FILE"
-echo ""
-echo "To use with QEMU:"
-echo "  qemu-system-i386 -kernel ../rach2/kernel -initrd $FS_FILE -serial stdio"
+echo "ramdisk: wrote $FS_FILE"
+echo "ramdisk: boot with qemu-system-i386 -kernel ../rach2/kernel -initrd $FS_FILE -serial stdio"

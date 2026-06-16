@@ -37,31 +37,31 @@ sha256_of()
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "error: $PREFIX/lib/libc.a not found; run libc/build_libc.sh first" >&2
+    echo "dropbear: $PREFIX/lib/libc.a not found; run libc/build_libc.sh first" >&2
     exit 1
 fi
 if [ ! -f "$TARBALL" ]; then
-    echo "error: $TARBALL missing (the vendored source)" >&2
+    echo "dropbear: $TARBALL missing (the vendored source)" >&2
     exit 1
 fi
 
-echo "=== Verifying $TARBALL ==="
+echo "dropbear: verifying $TARBALL"
 GOT="$(sha256_of "$TARBALL")"
 if [ "$GOT" != "$TARBALL_SHA256" ]; then
-    echo "error: sha256 mismatch for $TARBALL" >&2
+    echo "dropbear: sha256 mismatch for $TARBALL" >&2
     echo "  expected $TARBALL_SHA256" >&2
     echo "  got      $GOT" >&2
     exit 1
 fi
 
-echo "=== Extracting ==="
+echo "dropbear: extracting"
 rm -rf "$SRC"
 tar xjf "$TARBALL"
 
-echo "=== Installing curated localoptions.h ==="
+echo "dropbear: installing the curated localoptions.h"
 cp localoptions.h "$SRC/localoptions.h"
 
-echo "=== Configuring (muslgcc, bundled libtom, static, hardening off) ==="
+echo "dropbear: configuring (muslgcc, bundled libtom, static, hardening off)"
 # --build is THIS host's own triple. config.guess ships with dropbear (not +x in the
 # tarball, so run it through sh); computing the triple (instead of hard-coding
 # x86_64-apple-darwin) makes the cross-configure work on Linux and on Intel or
@@ -80,15 +80,13 @@ BUILD_TRIPLE="$(sh "$SRC/config.guess" 2>/dev/null || true)"
         >/dev/null
 )
 
-echo "=== Building dropbearmulti (dropbear server + dropbearkey, static) ==="
+echo "dropbear: building dropbearmulti (dropbear server + dropbearkey, static)"
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
     PROGRAMS="dropbear dropbearkey" MULTI=1 STATIC=1 SKIP_STRIP=y dropbearmulti
 
-echo "=== Staging stripped binary -> ../tests/dropbearmulti ==="
+echo "dropbear: staging the stripped binary to ../tests/dropbearmulti"
 i686-elf-strip "$SRC/dropbearmulti" -o ../tests/dropbearmulti
 ls -l ../tests/dropbearmulti
 
-echo ""
-echo "=== Done ==="
-echo "Dropbear $VERSION: $(wc -c < ../tests/dropbearmulti) bytes, static, musl, i686."
-echo "Rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /dropbearmulti."
+echo "dropbear: built $VERSION ($(wc -c < ../tests/dropbearmulti) bytes, static, musl, i686)"
+echo "dropbear: rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /dropbearmulti"
