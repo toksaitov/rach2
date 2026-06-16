@@ -4,21 +4,28 @@
 gdt_descriptor_t gdt_descriptors[GDT_ENTRY_COUNT];
 gdt_ptr_t gdt_address;
 
-/*
- * Loads GDT address structure to the GDTR register and set the new segment
- * selectors in the CS, DS, SS, ES, FS, and GS registers.
+/**
+ * Load the GDT pointer into GDTR and reload the segment registers.
+ *
+ * Writes `lgdt`, then reloads CS, DS, SS, ES, FS, and GS so the new
+ * descriptors take effect. Implemented in gdt_handler.s.
  */
-extern void _load_gdt(gdt_ptr_t*); /* implemented in gdt_handler.s */
+extern void _load_gdt(gdt_ptr_t*);
 
-/*
- * Sets the segment descriptor at 'index' in the GDT table with an
- * appropriate 'base', 'limit', 'access', and 'flags' values.
- */
 static void _gdt_set_descriptor(size_t index, uint32_t base,
                                               uint32_t limit,
                                               uint8_t  access,
                                               uint8_t  flags);
 
+/**
+ * Build the flat GDT and load it.
+ *
+ * Programs all seven GDT descriptors: a null descriptor, flat 4 GB code and
+ * data for ring 0 and ring 3, the task-state segment used for the ring-0 stack
+ * on traps, and a TLS data segment whose base is fixed up later by
+ * `gdt_set_tls`. All segments span the full address space, so segmentation is
+ * effectively disabled and paging does the protection.
+ */
 void init_gdt(void)
 {
     uint32_t tss_base = (uint32_t)&kernel_tss;
@@ -43,15 +50,30 @@ void init_gdt(void)
     _load_gdt(&gdt_address);
 }
 
+/**
+ * Point the TLS segment at `base`.
+ *
+ * Rewrites only the base field of the TLS descriptor, split across its three
+ * scattered bytes; access, flags, and limit stay as `init_gdt` programmed them
+ * (a 4 GB DPL-3 data segment). Called from `set_thread_area`; the context
+ * switch performs the same base rewrite inline in asm (switch.s) rather than
+ * calling this, so %gs:0 always names the current thread's TLS block.
+ */
 void gdt_set_tls(uint32_t base)
 {
-    /* Rewrite only the base of the TLS descriptor; access/flags/limit stay as
-     * init_gdt programmed them (a 4 GB DPL-3 data segment). */
     gdt_descriptors[GDT_TLS_ENTRY].base_low    = base & 0xFFFF;
     gdt_descriptors[GDT_TLS_ENTRY].base_middle = (base >> 16) & 0xFF;
     gdt_descriptors[GDT_TLS_ENTRY].base_high   = (base >> 24) & 0xFF;
 }
 
+/**
+ * Pack one GDT entry from its raw fields.
+ *
+ * The descriptor format scatters the 32-bit `base` across three fields and the
+ * 20-bit `limit` across two, with the high limit nibble sharing a byte with the
+ * `flags`. `access` is the full access byte (present/DPL/type); `flags` carries
+ * the granularity and size bits in its high nibble.
+ */
 static void _gdt_set_descriptor(size_t index, uint32_t base,
                                               uint32_t limit,
                                               uint8_t access,

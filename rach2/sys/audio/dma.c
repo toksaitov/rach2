@@ -1,7 +1,5 @@
 /*
- * dma.c - ISA DMA controller (8237A) implementation
- *
- * Programs the 8237A DMA controller for Sound Blaster 16 audio transfers.
+ * ISA DMA controller (8237A) driver for Sound Blaster 16 audio transfers.
  */
 
 #include "dma.h"
@@ -69,8 +67,8 @@ static const uint8_t dma_page_ports[] = {
     DMA_PAGE_CH4, DMA_PAGE_CH5, DMA_PAGE_CH6, DMA_PAGE_CH7
 };
 
-/*
- * Get address port for a channel
+/**
+ * Return the address-register port for a DMA channel, or 0 if out of range.
  */
 static uint16_t dma_get_addr_port(uint8_t channel)
 {
@@ -87,8 +85,8 @@ static uint16_t dma_get_addr_port(uint8_t channel)
     }
 }
 
-/*
- * Get count port for a channel
+/**
+ * Return the count-register port for a DMA channel, or 0 if out of range.
  */
 static uint16_t dma_get_count_port(uint8_t channel)
 {
@@ -105,8 +103,23 @@ static uint16_t dma_get_count_port(uint8_t channel)
     }
 }
 
-/*
- * Start a DMA transfer
+/**
+ * Program the 8237A for a single transfer on `channel` and unmask it.
+ *
+ * `buffer` is a physical address and `length` a byte count; both must satisfy
+ * dma_address_valid for the channel width. Channels 0-3 are the 8-bit
+ * controller; channels 5-7 are the 16-bit controller, where the address and
+ * count are expressed in words. Channel 4 is the cascade and is rejected.
+ *
+ * The 8237A loads its 16-bit address and count registers one byte at a time,
+ * sequenced by an internal flip-flop that selects low then high byte. The
+ * flip-flop is reset before each pair, and the channel is masked across the
+ * reprogramming so the controller does not act on a half-written register.
+ *
+ * `mode` supplies the transfer-type and direction bits of the mode register;
+ * this routine OR's in the low two channel-select bits.
+ *
+ * @return 0 on success, -1 for an invalid channel or address.
  */
 int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode)
 {
@@ -116,68 +129,62 @@ int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode)
     uint8_t page;
 
     if (channel > 7 || channel == 4) {
-        return -1;  /* Invalid channel */
+        return -1;
     }
 
-    /* Validate address for DMA */
     if (!dma_address_valid(buffer, length, channel >= 4)) {
         serial_printf("DMA: Invalid address 0x%x length %d\n", buffer, length);
         return -1;
     }
 
-    /* Determine which controller */
     if (channel < 4) {
-        /* Controller 1 (8-bit) */
         mask_port = DMA1_SINGLEMASK;
         mode_port = DMA1_MODE;
         flipflop_port = DMA1_FLIPFLOP;
         addr = buffer;
-        count = length - 1;  /* Count is length - 1 */
+        count = length - 1;  /* count register holds N-1 */
     } else {
-        /* Controller 2 (16-bit) */
         mask_port = DMA2_SINGLEMASK;
         mode_port = DMA2_MODE;
         flipflop_port = DMA2_FLIPFLOP;
-        /* 16-bit channels use word addresses (divide by 2) */
+        /* 16-bit channels address and count in words */
         addr = buffer >> 1;
-        count = (length >> 1) - 1;  /* Count in words - 1 */
+        count = (length >> 1) - 1;
     }
 
     addr_port = dma_get_addr_port(channel);
     count_port = dma_get_count_port(channel);
     page = (buffer >> 16) & 0xFF;
 
-    /* Mask the channel (disable it) */
+    /* single-mask register: bit 2 sets the mask, low two bits select channel */
     outb(mask_port, (channel & 3) | 0x04);
 
-    /* Clear flip-flop */
     outb(flipflop_port, 0);
 
-    /* Set the mode (channel bits + mode flags) */
+    /* mode register: low two bits select channel, rest is caller's mode */
     outb(mode_port, (channel & 3) | mode);
 
-    /* Set address (low byte, then high byte) */
+    /* address: low byte then high byte, sequenced by the flip-flop */
     outb(addr_port, addr & 0xFF);
     outb(addr_port, (addr >> 8) & 0xFF);
 
-    /* Set page register (bits 16-23 of physical address) */
+    /* page register holds bits 16-23 of the physical address */
     outb(dma_page_ports[channel], page);
 
-    /* Clear flip-flop again for count */
     outb(flipflop_port, 0);
 
-    /* Set count (low byte, then high byte) */
+    /* count: low byte then high byte */
     outb(count_port, count & 0xFF);
     outb(count_port, (count >> 8) & 0xFF);
 
-    /* Unmask the channel (enable it) */
+    /* clear the mask bit to enable the channel */
     outb(mask_port, channel & 3);
 
     return 0;
 }
 
-/*
- * Stop a DMA transfer
+/**
+ * Stop transfers on `channel` by setting its single-mask bit.
  */
 void dma_stop(uint8_t channel)
 {
@@ -187,12 +194,17 @@ void dma_stop(uint8_t channel)
 
     mask_port = (channel < 4) ? DMA1_SINGLEMASK : DMA2_SINGLEMASK;
 
-    /* Mask the channel (disable it) */
+    /* single-mask register: bit 2 sets the mask, low two bits select channel */
     outb(mask_port, (channel & 3) | 0x04);
 }
 
-/*
- * Get the remaining transfer count
+/**
+ * Return the bytes remaining in the current transfer on `channel`.
+ *
+ * The count register reads back low byte then high byte under the same
+ * flip-flop discipline as writing it, and holds one less than the residual.
+ * For 16-bit channels the register counts words, so the result is doubled to
+ * report bytes.
  */
 uint32_t dma_get_count(uint8_t channel)
 {
@@ -204,17 +216,14 @@ uint32_t dma_get_count(uint8_t channel)
     count_port = dma_get_count_port(channel);
     flipflop_port = (channel < 4) ? DMA1_FLIPFLOP : DMA2_FLIPFLOP;
 
-    /* Clear flip-flop */
     outb(flipflop_port, 0);
 
-    /* Read count (low byte, then high byte) */
+    /* low byte then high byte, sequenced by the flip-flop */
     count = inb(count_port);
     count |= (uint32_t)inb(count_port) << 8;
 
-    /* Count is length - 1, so add 1 */
     count++;
 
-    /* For 16-bit channels, count is in words */
     if (channel >= 4) {
         count <<= 1;
     }
@@ -222,29 +231,28 @@ uint32_t dma_get_count(uint8_t channel)
     return count;
 }
 
-/*
- * Check if a physical address is valid for DMA
+/**
+ * Report whether [address, address+length) is a legal ISA DMA buffer.
+ *
+ * ISA DMA reaches only the low 16MB. The controller increments the address
+ * register but not the page register, so a transfer may not cross a page
+ * boundary: 64KB for 8-bit channels, 128KB for 16-bit channels.
  */
 bool dma_address_valid(uint32_t address, uint32_t length, bool is_16bit)
 {
     uint32_t end, boundary;
 
-    /* Must be below 16MB (ISA DMA limit) */
     if (address >= 0x1000000 || address + length > 0x1000000) {
         return false;
     }
 
-    /* Check for boundary crossing */
     end = address + length - 1;
     if (is_16bit) {
-        /* 16-bit transfers must not cross 128KB boundary */
         boundary = 0x20000;
     } else {
-        /* 8-bit transfers must not cross 64KB boundary */
         boundary = 0x10000;
     }
 
-    /* Check if start and end are in the same boundary block */
     if ((address / boundary) != (end / boundary)) {
         return false;
     }

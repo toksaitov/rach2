@@ -9,7 +9,12 @@
 
 extern volatile uint32_t kernel_ticks;
 
-/* Simple kernel-side square-wave test tone. */
+/*
+ * State for the kernel-side square-wave test tone. The mixer callback runs in
+ * interrupt context and reads these while the shell command writes them, so
+ * they are volatile. _tone_half_period is the count of frames in each half of
+ * the wave; _tone_phase counts frames within one full period.
+ */
 static volatile uint32_t _tone_phase = 0;
 static volatile uint32_t _tone_half_period = 0;
 static volatile int16_t _tone_amp = 8000;
@@ -41,6 +46,15 @@ static bool audio_str_starts_with(const char *str, const char *prefix)
     return true;
 }
 
+/**
+ * Split `buffer` into space- or tab-delimited tokens in place.
+ *
+ * Each separator run is overwritten with a NUL and the first character of each
+ * token is recorded in `argv`. At most `max_args` tokens are stored; any tail
+ * beyond that is left untouched in the buffer.
+ *
+ * @return the number of tokens stored in `argv`.
+ */
 static int audio_tokenize(char *buffer, char **argv, int max_args)
 {
     int argc = 0;
@@ -60,6 +74,15 @@ static int audio_tokenize(char *buffer, char **argv, int max_args)
     return argc;
 }
 
+/**
+ * Parse a non-negative decimal integer with no sign or whitespace.
+ *
+ * The whole string must be digits; anything else (including an empty string or
+ * a null `str` or `out`) fails and leaves `*out` unchanged. Overflow past 32
+ * bits wraps rather than being rejected.
+ *
+ * @return true on success, false on a malformed input.
+ */
 static bool audio_parse_uint(const char *str, uint32_t *out)
 {
     uint32_t value = 0;
@@ -80,6 +103,16 @@ static bool audio_parse_uint(const char *str, uint32_t *out)
     return true;
 }
 
+/**
+ * Mixer callback that fills `buffer` with the current square-wave tone.
+ *
+ * Runs in interrupt context from the driver's playback path. It emits signed
+ * 16-bit samples driven by the file-scope _tone_* state, duplicating each
+ * sample across both channels when stereo. `size` is in bytes, treated as
+ * `size / 2` samples (a trailing odd byte is dropped). In stereo, the
+ * `i + 1 < samples16` guard writes a final lone sample to one channel only, so
+ * the buffer is never overrun.
+ */
 static void audio_test_callback(uint8_t *buffer, size_t size)
 {
     size_t i;
@@ -106,6 +139,11 @@ static void audio_test_callback(uint8_t *buffer, size_t size)
     }
 }
 
+/**
+ * Stop any active playback and detach the test callback.
+ *
+ * Safe to call when no driver is bound or nothing is playing.
+ */
 static void audio_stop_playback(void)
 {
     if (!audio) {
@@ -121,6 +159,12 @@ static void audio_stop_playback(void)
     }
 }
 
+/**
+ * Spin until `kernel_ticks` reaches `target_ticks`, halting between ticks.
+ *
+ * The `hlt` parks the CPU until the next interrupt (the timer tick advances
+ * kernel_ticks), so the wait does not busy-burn the core.
+ */
 static void audio_wait_until(uint32_t target_ticks)
 {
     while (kernel_ticks < target_ticks) {
@@ -128,6 +172,14 @@ static void audio_wait_until(uint32_t target_ticks)
     }
 }
 
+/**
+ * Play a five-note C-major scale through the callback path.
+ *
+ * Drives the driver in 48 kHz stereo signed-16 mode, retunes the shared tone
+ * state once per note, and lets the interrupt-time callback synthesize the
+ * samples. The notes split `duration_ms` evenly; the total is clamped to at
+ * least 100 ms. Always stops playback on the way out.
+ */
 static void audio_run_scale_test(uint32_t duration_ms)
 {
     uint32_t start_ticks;
@@ -209,6 +261,16 @@ static void audio_run_scale_test(uint32_t duration_ms)
     k_puts("Done.");
 }
 
+/**
+ * Play the same scale through the blocking write path instead of the callback.
+ *
+ * Uses 11025 Hz unsigned-8 mono and synthesizes samples in this thread,
+ * pushing them with audio->write(). Each timer tick it computes how many frames
+ * are due (sample_acc carries the fractional remainder across ticks so the rate
+ * stays exact over time) and writes them in <= sizeof(buf) chunks, halting on a
+ * short write until the driver drains. Exercises the write side that the
+ * callback test bypasses.
+ */
 static void audio_run_write_test(uint32_t duration_ms)
 {
     uint32_t start_ticks;
@@ -321,6 +383,16 @@ static void audio_run_write_test(uint32_t duration_ms)
     k_puts("Done.");
 }
 
+/**
+ * Play a steady tone while periodically dumping the HDA stream position.
+ *
+ * Only valid when the active driver is HDA. It plays `freq_hz` and, every
+ * `interval_ms`, reads the link position-in-buffer (LPIB) and stream registers
+ * via the debug snapshot, printing the LPIB delta since the last sample. The
+ * delta wraps modulo the cyclic buffer length (CBL), so a DMA that has looped
+ * past the buffer end still reports forward progress. Useful for confirming the
+ * stream's DMA engine is actually advancing.
+ */
 static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t interval_ms)
 {
     uint32_t start_ticks;
@@ -449,6 +521,17 @@ static void audio_print_summary(void)
     k_puts("Use 'audio help' for commands.");
 }
 
+/**
+ * Handle an `audio ...` shell command line.
+ *
+ * Recognizes a line whose first token is exactly "audio" (so it does not claim
+ * "audioctl" or the like), copies it into a local buffer, tokenizes in place,
+ * and dispatches the subcommand. A bare "audio" or an unknown form prints the
+ * summary or help text.
+ *
+ * @return true if the line was an audio command (handled here), false if it
+ *         belongs to another handler.
+ */
 bool audio_debug_handle_command(const char *cmd)
 {
     char buffer[128];

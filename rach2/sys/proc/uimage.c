@@ -2,6 +2,21 @@
 #include "auxv.h"
 #include "../lib/kstring.h"
 
+/**
+ * Lay out a fresh user stack image in `page` per the System V i386 ABI.
+ *
+ * The strings (argv then envp) and the 16 AT_RANDOM bytes are copied near the
+ * top of the page; the info block (argc, the argv and envp pointer arrays each
+ * NUL-terminated, then the auxiliary vector) is written just below them with
+ * ESP aligned down to a 16-byte boundary. `page` maps at `base_vaddr`, so a
+ * stored pointer is the virtual address `base_vaddr + (mem offset)` while the
+ * copy itself targets `mem + (vaddr - base_vaddr)`.
+ *
+ * @param page mapped backing store for the topmost stack page.
+ * @param base_vaddr virtual address at which `page` is mapped in the new image.
+ * @param random16 16 bytes published to the program through AT_RANDOM.
+ * @return the initial ESP, or 0 if the arguments are rejected or do not fit.
+ */
 uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, int argc,
                           char *const argv[], char *const envp[], const elf_image_t *img,
                           const uint8_t random16[16])
@@ -27,19 +42,17 @@ uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, i
         return 0;
     }
 
-    /* Count envp entries (NULL-terminated). */
     if (envp) {
         while (envc < UIMAGE_MAX_ARGS && envp[envc]) {
             envc++;
         }
         if (envp[envc]) {
-            return 0; /* more than UIMAGE_MAX_ARGS env entries -- reject, not truncate */
+            return 0; /* over UIMAGE_MAX_ARGS env entries: reject, do not truncate */
         }
     }
 
-    /* Copy the argv then envp strings near the top of the page, recording the
-     * virtual address of each. `cur - base_vaddr` is the space still free below
-     * `cur`; comparing against it avoids unsigned underflow. */
+    /* `cur - base_vaddr` is the room still free below `cur`; comparing the
+     * needed length against it bounds the copy and avoids unsigned underflow. */
     for (i = 0; i < argc; i++) {
         uint32_t len = (uint32_t)k_strlen(argv[i]) + 1;
 
@@ -69,7 +82,6 @@ uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, i
     k_memcpy(mem + (cur - base_vaddr), random16, 16);
     random_v = cur;
 
-    /* Build the auxiliary vector. */
     aux[naux].a_type = AT_PHDR;
     aux[naux].a_val = img->phdr_vaddr;
     naux++;
@@ -102,7 +114,7 @@ uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, i
      * + 2 words per auxv entry. */
     info_words = 1 + (uint32_t)argc + 1 + (uint32_t)envc + 1 + 2 * (uint32_t)naux;
 
-    /* The info block sits below the strings, with ESP aligned down to 16. */
+    /* The info block sits below the strings; ESP is then aligned down to 16. */
     if (info_words * 4 > cur - base_vaddr) {
         return 0;
     }
@@ -111,8 +123,6 @@ uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, i
         return 0;
     }
 
-    /* Write argc, the argv pointers + NULL, the envp pointers + NULL, and the
-     * auxv pairs from ESP upward. */
     w = (uint32_t *)(mem + (esp - base_vaddr));
     *w++ = (uint32_t)argc;
     for (i = 0; i < argc; i++) {

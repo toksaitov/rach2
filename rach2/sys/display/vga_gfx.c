@@ -1,5 +1,5 @@
 /*
- * vga_gfx.c - VGA Graphics Mode driver (Mode 13h) implementation
+ * VGA Graphics Mode driver (Mode 13h, 320x200, 256 colors).
  */
 
 #include "vga_gfx.h"
@@ -10,10 +10,7 @@
 
 bool vga_graphics_mode = false;
 
-/*
- * Global framebuffer state (from fb.h)
- * Updated when entering/exiting graphics mode
- */
+/* Live framebuffer state, updated on entry to and exit from graphics mode. */
 gfx_info_t gfx_current = {
     .mode = GFX_MODE_NONE,
     .width = 0,
@@ -24,17 +21,11 @@ gfx_info_t gfx_current = {
     .size = 0
 };
 
-/*
- * Saved VGA font data (8x16 font, 256 characters = 4KB)
- * Must be saved before entering Mode 13h and restored on exit
- */
+/* 8x16 text font (256 chars * 16 bytes), saved before Mode 13h, restored on exit. */
 #define VGA_FONT_SIZE (256 * 16)
 static uint8_t saved_font[VGA_FONT_SIZE];
 
-/*
- * VGA Mode 13h register values (320x200, 256 colors, linear framebuffer)
- * These are the standard values for BIOS mode 0x13
- */
+/* Standard register values for BIOS Mode 13h: 320x200, 256 colors, linear A0000. */
 
 /* Miscellaneous Output Register */
 static const uint8_t mode13h_misc = 0x63;
@@ -101,9 +92,7 @@ static const uint8_t mode13h_ac[] = {
     0x00   /* Color Select */
 };
 
-/*
- * VGA Text Mode 3 register values (80x25, 16 colors)
- */
+/* Standard register values for BIOS Mode 3: 80x25 text, 16 colors. */
 
 static const uint8_t mode3_misc = 0x67;
 
@@ -128,59 +117,59 @@ static const uint8_t mode3_ac[] = {
     0x0C, 0x00, 0x0F, 0x08, 0x00
 };
 
-/*
- * Write a value to a VGA sequencer register
- */
+/** Write a Sequencer register: index to SEQ_INDEX, then value to SEQ_DATA. */
 static void vga_seq_write(uint8_t index, uint8_t value)
 {
     outb(VGA_SEQ_INDEX, index);
     outb(VGA_SEQ_DATA, value);
 }
 
-/*
- * Write a value to a VGA CRTC register
- */
+/** Write a CRTC register: index to CRTC_INDEX, then value to CRTC_DATA. */
 static void vga_crtc_write(uint8_t index, uint8_t value)
 {
     outb(VGA_CRTC_INDEX, index);
     outb(VGA_CRTC_DATA, value);
 }
 
-/*
- * Write a value to a VGA Graphics Controller register
- */
+/** Write a Graphics Controller register: index to GC_INDEX, then value to GC_DATA. */
 static void vga_gc_write(uint8_t index, uint8_t value)
 {
     outb(VGA_GC_INDEX, index);
     outb(VGA_GC_DATA, value);
 }
 
-/*
- * Write a value to a VGA Attribute Controller register
+/**
+ * Write an Attribute Controller register.
+ *
+ * The AC index port is a shared index/data flip-flop. Reading INSTAT_READ
+ * resets it to the index phase before the index write. Bit 5 of the index
+ * (palette address source) stays clear during register programming, so video
+ * is disabled; the mode sequence re-enables it afterward by writing index 0x20.
  */
 static void vga_ac_write(uint8_t index, uint8_t value)
 {
-    /* Read input status to reset AC flip-flop */
     (void)inb(VGA_INSTAT_READ);
-    /* Write index (with bit 5 set to keep video enabled) */
     outb(VGA_AC_INDEX, index);
-    /* Write value */
     outb(VGA_AC_WRITE, value);
 }
 
-/*
- * Unlock CRTC registers by clearing the protect bit in register 0x11
- */
+/** Clear the write-protect bit (bit 7) of CRTC register 0x11 so CRTC 0x00-0x07 are writable. */
 static void vga_crtc_unlock(void)
 {
     uint8_t val;
     outb(VGA_CRTC_INDEX, 0x11);
     val = inb(VGA_CRTC_DATA);
-    outb(VGA_CRTC_DATA, val & 0x7F);  /* Clear protect bit */
+    outb(VGA_CRTC_DATA, val & 0x7F);
 }
 
-/*
- * Apply a set of VGA register values
+/**
+ * Program a full VGA mode from its register tables.
+ *
+ * The order is the required VGA programming sequence: Miscellaneous Output,
+ * Sequencer, then CRTC (unlocked first by clearing the 0x11 protect bit),
+ * Graphics Controller, and Attribute Controller. The final INSTAT_READ resets
+ * the AC flip-flop and writing AC index 0x20 sets the palette-address-source
+ * bit, which re-enables video output.
  */
 static void vga_set_mode(uint8_t misc,
                          const uint8_t *seq, size_t seq_count,
@@ -190,138 +179,137 @@ static void vga_set_mode(uint8_t misc,
 {
     size_t i;
 
-    /* Write Miscellaneous Output Register */
     outb(VGA_MISC_WRITE, misc);
 
-    /* Write Sequencer registers */
     for (i = 0; i < seq_count; i++) {
         vga_seq_write(i, seq[i]);
     }
 
-    /* Unlock CRTC registers */
     vga_crtc_unlock();
 
-    /* Write CRTC registers */
     for (i = 0; i < crtc_count; i++) {
         vga_crtc_write(i, crtc[i]);
     }
 
-    /* Write Graphics Controller registers */
     for (i = 0; i < gc_count; i++) {
         vga_gc_write(i, gc[i]);
     }
 
-    /* Write Attribute Controller registers */
     for (i = 0; i < ac_count; i++) {
         vga_ac_write(i, ac[i]);
     }
 
-    /* Re-enable video output */
     (void)inb(VGA_INSTAT_READ);
     outb(VGA_AC_INDEX, 0x20);
 }
 
-/*
- * Save VGA font from plane 2 (character generator RAM)
+/**
+ * Save the text-mode font from plane 2 (character generator RAM) into saved_font.
+ *
+ * The font lives in plane 2 at A0000. To read it as linear memory the Sequencer
+ * and Graphics Controller are switched out of the odd/even text layout into
+ * sequential access to plane 2 alone. Each glyph occupies 32 bytes there but
+ * only the first 16 are used by the 8x16 font.
  */
 static void vga_save_font(void)
 {
     volatile uint8_t *font_mem = (volatile uint8_t *)0xA0000;
     int i;
 
-    /* Set sequencer to access plane 2 */
     outb(VGA_SEQ_INDEX, 0x02);  /* Map Mask */
-    outb(VGA_SEQ_DATA, 0x04);   /* Enable plane 2 only */
+    outb(VGA_SEQ_DATA, 0x04);   /* enable plane 2 only */
 
     outb(VGA_SEQ_INDEX, 0x04);  /* Memory Mode */
-    outb(VGA_SEQ_DATA, 0x06);   /* Sequential, Extended memory, Odd/Even disabled */
+    outb(VGA_SEQ_DATA, 0x06);   /* sequential, extended memory, odd/even off */
 
-    /* Set graphics controller for plane 2 read */
     outb(VGA_GC_INDEX, 0x04);   /* Read Map Select */
-    outb(VGA_GC_DATA, 0x02);    /* Read from plane 2 */
+    outb(VGA_GC_DATA, 0x02);    /* read from plane 2 */
 
     outb(VGA_GC_INDEX, 0x05);   /* Graphics Mode */
-    outb(VGA_GC_DATA, 0x00);    /* Read mode 0, write mode 0 */
+    outb(VGA_GC_DATA, 0x00);    /* read mode 0, write mode 0 */
 
     outb(VGA_GC_INDEX, 0x06);   /* Miscellaneous */
-    outb(VGA_GC_DATA, 0x04);    /* Map at A0000-AFFFF (64K region) */
+    outb(VGA_GC_DATA, 0x04);    /* map at A0000-AFFFF (64K) */
 
-    /* Copy font data (256 chars * 32 bytes per char, but only first 16 used) */
     for (i = 0; i < 256; i++) {
         k_memcpy(&saved_font[i * 16], (void *)(font_mem + i * 32), 16);
     }
 }
 
-/*
- * Restore VGA font to plane 2
+/**
+ * Restore saved_font to plane 2 and return the Sequencer and Graphics
+ * Controller to the text-mode odd/even configuration.
+ *
+ * The first block mirrors vga_save_font's plane-2 sequential access to write
+ * the glyphs back; the second restores the text layout: Map Mask to planes 0
+ * and 1, odd/even memory mode, plane 0 reads, and the B8000 text window.
  */
 static void vga_restore_font(void)
 {
     volatile uint8_t *font_mem = (volatile uint8_t *)0xA0000;
     int i;
 
-    /* Set sequencer to write plane 2 */
     outb(VGA_SEQ_INDEX, 0x02);  /* Map Mask */
-    outb(VGA_SEQ_DATA, 0x04);   /* Enable plane 2 only */
+    outb(VGA_SEQ_DATA, 0x04);   /* enable plane 2 only */
 
     outb(VGA_SEQ_INDEX, 0x04);  /* Memory Mode */
-    outb(VGA_SEQ_DATA, 0x06);   /* Sequential, Extended memory, Odd/Even disabled */
+    outb(VGA_SEQ_DATA, 0x06);   /* sequential, extended memory, odd/even off */
 
-    /* Set graphics controller for plane 2 write */
     outb(VGA_GC_INDEX, 0x04);   /* Read Map Select */
-    outb(VGA_GC_DATA, 0x02);    /* Read from plane 2 */
+    outb(VGA_GC_DATA, 0x02);    /* read from plane 2 */
 
     outb(VGA_GC_INDEX, 0x05);   /* Graphics Mode */
-    outb(VGA_GC_DATA, 0x00);    /* Read mode 0, write mode 0 */
+    outb(VGA_GC_DATA, 0x00);    /* read mode 0, write mode 0 */
 
     outb(VGA_GC_INDEX, 0x06);   /* Miscellaneous */
-    outb(VGA_GC_DATA, 0x04);    /* Map at A0000-AFFFF (64K region) */
+    outb(VGA_GC_DATA, 0x04);    /* map at A0000-AFFFF (64K) */
 
-    /* Write font data (each char takes 32 bytes in memory, use first 16) */
     for (i = 0; i < 256; i++) {
         k_memcpy((void *)(font_mem + i * 32), &saved_font[i * 16], 16);
     }
 
-    /* Restore sequencer for text mode */
     outb(VGA_SEQ_INDEX, 0x02);
     outb(VGA_SEQ_DATA, 0x03);   /* Map Mask: planes 0 and 1 */
 
     outb(VGA_SEQ_INDEX, 0x04);
-    outb(VGA_SEQ_DATA, 0x02);   /* Memory Mode: Odd/Even enabled */
+    outb(VGA_SEQ_DATA, 0x02);   /* Memory Mode: odd/even enabled */
 
-    /* Restore graphics controller for text mode */
     outb(VGA_GC_INDEX, 0x04);
-    outb(VGA_GC_DATA, 0x00);    /* Read from plane 0 */
+    outb(VGA_GC_DATA, 0x00);    /* read from plane 0 */
 
     outb(VGA_GC_INDEX, 0x05);
-    outb(VGA_GC_DATA, 0x10);    /* Odd/Even mode */
+    outb(VGA_GC_DATA, 0x10);    /* odd/even mode */
 
     outb(VGA_GC_INDEX, 0x06);
-    outb(VGA_GC_DATA, 0x0E);    /* Map at B8000, text mode */
+    outb(VGA_GC_DATA, 0x0E);    /* map at B8000, text mode */
 }
 
+/**
+ * Switch to Mode 13h and return the linear framebuffer at A0000.
+ *
+ * Saves the text font first so vga_mode13h_exit can restore it. A no-op that
+ * returns the framebuffer if already in graphics mode. Publishes gfx_current.
+ *
+ * @return Pointer to the 320x200 8bpp framebuffer.
+ */
 uint8_t *vga_mode13h_enter(void)
 {
     if (vga_graphics_mode) {
         return (uint8_t *)VGA_GFX_FRAMEBUFFER;
     }
 
-    /* Save font before switching to graphics mode */
     vga_save_font();
 
-    /* Apply Mode 13h registers */
     vga_set_mode(mode13h_misc,
                  mode13h_seq, sizeof(mode13h_seq),
                  mode13h_crtc, sizeof(mode13h_crtc),
                  mode13h_gc, sizeof(mode13h_gc),
                  mode13h_ac, sizeof(mode13h_ac));
 
-    /* Clear the framebuffer */
     k_memset((void *)VGA_GFX_FRAMEBUFFER, 0, VGA_GFX_SIZE);
 
     vga_graphics_mode = true;
 
-    /* Update global framebuffer info */
     gfx_current.mode = GFX_MODE_VGA_13H;
     gfx_current.width = VGA_GFX_WIDTH;
     gfx_current.height = VGA_GFX_HEIGHT;
@@ -333,19 +321,17 @@ uint8_t *vga_mode13h_enter(void)
     return (uint8_t *)VGA_GFX_FRAMEBUFFER;
 }
 
-/*
- * Standard VGA text mode palette (first 16 colors)
- * These are the classic CGA/EGA colors used in text mode
+/**
+ * Load the classic 16-color CGA/EGA palette into the DAC for text mode.
+ *
+ * The Mode 3 Attribute Controller maps the 16 text attributes to scattered DAC
+ * indices, so the DAC entries are written where those AC registers point:
+ * AC[0-7] -> DAC 0x00-0x07 (low intensity), AC[6] -> DAC 0x14 (brown is the
+ * odd one out), AC[8-15] -> DAC 0x38-0x3F (high intensity). DAC values are
+ * 6-bit (0-63).
  */
 static void vga_restore_text_palette(void)
 {
-    /*
-     * Text mode uses AC palette registers that map attributes to DAC indices:
-     * AC[0-7] = 0x00-0x07 (low intensity colors at DAC 0-7)
-     * AC[6] = 0x14 (brown is special, at DAC 20)
-     * AC[8-15] = 0x38-0x3F (high intensity colors at DAC 56-63)
-     */
-
     /* Low intensity colors at DAC indices 0-7 */
     static const uint8_t low_colors[8 * 3] = {
         0x00, 0x00, 0x00,  /* 0: Black */
@@ -371,47 +357,46 @@ static void vga_restore_text_palette(void)
     };
     int i;
 
-    /* Set DAC indices 0-7 (low intensity colors) */
     outb(VGA_DAC_WRITE_INDEX, 0);
     for (i = 0; i < 8 * 3; i++) {
         outb(VGA_DAC_DATA, low_colors[i]);
     }
 
-    /* Set DAC index 0x14 (20) for brown - AC[6] maps here */
+    /* DAC 0x14 is where AC[6] (brown) points. */
     outb(VGA_DAC_WRITE_INDEX, 0x14);
     outb(VGA_DAC_DATA, 0x2A);  /* R */
     outb(VGA_DAC_DATA, 0x15);  /* G */
     outb(VGA_DAC_DATA, 0x00);  /* B */
 
-    /* Set DAC indices 0x38-0x3F (high intensity colors) */
     outb(VGA_DAC_WRITE_INDEX, 0x38);
     for (i = 0; i < 8 * 3; i++) {
         outb(VGA_DAC_DATA, high_colors[i]);
     }
 }
 
+/**
+ * Leave graphics mode and return the VGA to its 80x25 text state.
+ *
+ * Reprograms Mode 3, reloads the text palette and font, clears gfx_current, and
+ * clears the text screen. A no-op if not currently in graphics mode.
+ */
 void vga_mode13h_exit(void)
 {
     if (!vga_graphics_mode) {
         return;
     }
 
-    /* Apply Mode 3 (text mode) registers */
     vga_set_mode(mode3_misc,
                  mode3_seq, sizeof(mode3_seq),
                  mode3_crtc, sizeof(mode3_crtc),
                  mode3_gc, sizeof(mode3_gc),
                  mode3_ac, sizeof(mode3_ac));
 
-    /* Restore standard text mode palette */
     vga_restore_text_palette();
-
-    /* Restore font to character generator RAM */
     vga_restore_font();
 
     vga_graphics_mode = false;
 
-    /* Clear global framebuffer info */
     gfx_current.mode = GFX_MODE_NONE;
     gfx_current.width = 0;
     gfx_current.height = 0;
@@ -420,10 +405,15 @@ void vga_mode13h_exit(void)
     gfx_current.framebuffer = NULL;
     gfx_current.size = 0;
 
-    /* Clear text mode screen */
     k_cls();
 }
 
+/**
+ * Load a 256-entry RGB palette into the DAC.
+ *
+ * @param data 768 bytes, 256 entries of 8-bit R, G, B. Each component is shifted
+ *   right by 2 because the VGA DAC holds 6-bit values (0-63). Ignored if NULL.
+ */
 void vga_mode13h_set_palette(const uint8_t *data)
 {
     int i;
@@ -432,13 +422,10 @@ void vga_mode13h_set_palette(const uint8_t *data)
         return;
     }
 
-    /* Start writing at palette index 0 */
     outb(VGA_DAC_WRITE_INDEX, 0);
 
-    /* Write 256 colors * 3 components (R, G, B) */
-    /* VGA DAC expects 6-bit values (0-63), not 8-bit */
     for (i = 0; i < 768; i++) {
-        outb(VGA_DAC_DATA, data[i] >> 2);  /* Convert 8-bit to 6-bit */
+        outb(VGA_DAC_DATA, data[i] >> 2);
     }
 }
 
@@ -447,6 +434,7 @@ uint8_t *vga_mode13h_get_framebuffer(void)
     return (uint8_t *)VGA_GFX_FRAMEBUFFER;
 }
 
+/** Copy a full VGA_GFX_SIZE frame to the framebuffer; ignored unless in graphics mode and src is non-NULL. */
 void vga_mode13h_blit(const uint8_t *src)
 {
     if (src && vga_graphics_mode) {

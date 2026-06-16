@@ -2,38 +2,41 @@
 #include "serial.h"
 #include "lib/kstring.h"
 
-/*
- * Module table - stores info about all loaded modules
- */
 module_info_t module_table[MAX_MODULES];
 
-/*
- * Number of modules found
- */
 uint32_t module_count = 0;
 
+/**
+ * Record the boot modules the bootloader handed us through Multiboot.
+ *
+ * The bootloader passes its information structure and a magic value; on a
+ * valid handoff `info->mods_addr` points at an array of `mods_count`
+ * descriptors, each giving a module's physical start, end, and command line.
+ * Copy up to `MAX_MODULES` of these into `module_table`. Any of the three
+ * preconditions failing (wrong magic, no module flag, no modules) leaves the
+ * table empty.
+ *
+ * @return the number of modules recorded, which is the count truncated to
+ * `MAX_MODULES`.
+ */
 uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
 {
     multiboot_module_t *mods;
     uint32_t i;
 
-    /* Clear module table */
     k_memset(module_table, 0, sizeof(module_table));
     module_count = 0;
 
-    /* Verify multiboot magic */
     if (magic != MULTIBOOT_BOOTLOADER_MAGIC) {
         serial_printf("Module: Invalid multiboot magic: 0x%X\n", magic);
         return 0;
     }
 
-    /* Check if module info is available */
     if (!(info->flags & MULTIBOOT_INFO_MODS)) {
         serial_printf("Module: No module info flag set\n");
         return 0;
     }
 
-    /* Check if any modules were loaded */
     if (info->mods_count == 0) {
         serial_printf("Module: No modules loaded\n");
         return 0;
@@ -41,10 +44,8 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
 
     serial_printf("Module: Found %d module(s)\n", info->mods_count);
 
-    /* Get pointer to module array */
     mods = (multiboot_module_t *)info->mods_addr;
 
-    /* Parse each module */
     for (i = 0; i < info->mods_count && i < MAX_MODULES; i++) {
         module_table[i].start = mods[i].mod_start;
         module_table[i].end = mods[i].mod_end;

@@ -4,19 +4,37 @@
 
 uintptr_t mem_reserved_ptr;
 
+/**
+ * Anchor the bump allocator at the end of the kernel image.
+ *
+ * `mem_reserved_ptr` is the next free physical address. The boot code may
+ * already have raised it past loaded modules, so only advance it, never
+ * lower it.
+ */
 void init_mm(void)
 {
     uintptr_t kernel_end = (uintptr_t) &k_phys_mem_end;
 
-    /*
-     * Set mem_reserved_ptr to the kernel end, unless it's already
-     * been set to a higher value (e.g., to skip past modules).
-     */
     if (mem_reserved_ptr < kernel_end) {
         mem_reserved_ptr = kernel_end;
     }
 }
 
+/**
+ * Carve `size` bytes off the top of reserved physical memory.
+ *
+ * A monotonic bump allocator over identity-mapped memory: it returns the
+ * current break and advances it, never freeing. With `align` set the break
+ * is first rounded up to a page boundary.
+ *
+ * Once the frame bitmap exists this allocator and the page allocator
+ * (`alloc_user_page`) share the same physical range, so the reservation must
+ * avoid frames already handed out. Any used frame in the span moves the break
+ * past it and the search restarts; on success every covered frame is claimed.
+ *
+ * @return The reserved physical address, or 0 if the request would cross
+ *         `HARD_MEMORY_LIMIT`, the top of identity-mapped memory.
+ */
 uintptr_t mem_reserve(size_t size, bool align)
 {
     uintptr_t result;
@@ -31,19 +49,12 @@ retry:
     result = mem_reserved_ptr;
     new_ptr = mem_reserved_ptr + size;
 
-    /* Check if we're exceeding identity-mapped memory */
     if (new_ptr > HARD_MEMORY_LIMIT) {
         serial_printf("mem_reserve: OUT OF MEMORY! ptr=0x%X size=0x%X limit=0x%X\n",
                       mem_reserved_ptr, size, HARD_MEMORY_LIMIT);
         return 0;
     }
 
-    /*
-     * If the frame bitmap is initialized, check if any frames in this
-     * range are already used (e.g., by alloc_user_page). If so, skip
-     * past them and try again. This prevents mem_reserve from allocating
-     * over memory already assigned to user pages.
-     */
     if (_frames != NULL) {
         uintptr_t start_frame = result / PAGE_SIZE;
         uintptr_t end_frame = (new_ptr + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -51,13 +62,11 @@ retry:
 
         for (f = start_frame; f < end_frame && f < _frames_number; f++) {
             if (_frames[f]) {
-                /* Frame already in use - skip past it and retry */
                 mem_reserved_ptr = (f + 1) * PAGE_SIZE;
                 goto retry;
             }
         }
 
-        /* Mark all frames as used */
         for (f = start_frame; f < end_frame && f < _frames_number; f++) {
             _frames[f] = 1;
         }

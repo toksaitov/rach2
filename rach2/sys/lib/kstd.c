@@ -1,5 +1,20 @@
 #include "kstd.h"
 
+/**
+ * Convert `input` to its base-`radix` text in `buffer`.
+ *
+ * `radix` is either a numeric base in [2, 36] or one of the format letters
+ * 'b', 'o', 'd', 'x', 'X' selecting binary, octal, decimal, lowercase hex,
+ * or uppercase hex. Only the 'd' form is signed: a negative value gets a
+ * leading minus. The other bases format the raw bit pattern as unsigned.
+ * `force_sign` reserves room in the returned count for a leading plus on a
+ * positive decimal, but the current code does not write that plus.
+ *
+ * Returns the number of characters the conversion needs, including any sign
+ * and the terminating NUL. It returns 0 and writes nothing when `buffer_size`
+ * is smaller than that count or the radix is out of range; the two cases are
+ * not distinguished.
+ */
 size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force_sign)
 {
     bool switch_case = false;
@@ -33,7 +48,6 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
 
     if (radix < 2 || radix > 36) return 0;
 
-    /* For signed decimal, handle negative; for others, treat as unsigned */
     if (is_signed && input < 0) {
         uinput = (unsigned int)(-input);
         ++num_of_chars;
@@ -44,7 +58,6 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
         uinput = (unsigned int)input;
     }
 
-    /* Count digits */
     {
         unsigned int tmp = uinput;
         do { ++num_of_chars; } while (tmp /= radix);

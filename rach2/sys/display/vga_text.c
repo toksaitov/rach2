@@ -1,5 +1,15 @@
 /*
- * vga_text.c - VGA Text Mode (Mode 3) driver implementation
+ * VGA text mode (Mode 3) driver.
+ *
+ * The visible screen is a window onto a ring of scrollback lines. Each line
+ * is VGA_TEXT_COLS cells, a cell is a character byte plus an attribute byte.
+ * Lines are numbered by a monotonic logical index; `_history` indexes that
+ * number modulo VGA_TEXT_SCROLLBACK_LINES, so the oldest line is overwritten
+ * once the ring fills. `_live_top_line` is the logical line at the top of the
+ * live (bottom) area where new text lands; `_viewport_top_line` is the line at
+ * the top of what is currently displayed. They differ while the user scrolls
+ * back through history; `_follow_live` is true when the viewport tracks live
+ * output. vga_text_sync() blits the viewport's lines to the hardware buffer.
  */
 
 #include "vga_text.h"
@@ -78,6 +88,14 @@ static void vga_text_clear_line(uint32_t line)
     }
 }
 
+/**
+ * Append one blank line to the bottom of the scrollback history.
+ *
+ * While the ring has room the line count grows. Once it is full the oldest
+ * line is evicted by advancing `_history_start_line`, so the new line reuses
+ * the freed slot. If the viewport pointed at the evicted line it is dragged
+ * forward to the new oldest line.
+ */
 static void vga_text_append_blank_line(void)
 {
     uint32_t line;
@@ -112,6 +130,14 @@ static void vga_text_reset_history(void)
     }
 }
 
+/**
+ * Move the hardware cursor to follow (x, y) within the live area.
+ *
+ * The cursor sits at (x, y) of the live area while following live output.
+ * When scrolled back it is placed at the corresponding cell only if that cell
+ * is on screen; otherwise it is parked in the last cell so it stays visible
+ * but out of the way.
+ */
 static void vga_text_update_cursor(void)
 {
     uint32_t cursor_line = _live_top_line + y;
@@ -126,12 +152,21 @@ static void vga_text_update_cursor(void)
         cursor_pos = (uint16_t)(VGA_TEXT_ROWS * VGA_TEXT_COLS - 1);
     }
 
+    /* CRTC port 0x3D4 selects a register, 0x3D5 reads/writes it; cursor
+       location is the 16-bit value in registers 0xE (high) and 0xF (low). */
     outb(0x3D4, 0xE);
     outb(0x3D5, cursor_pos >> 8);
     outb(0x3D4, 0xF);
     outb(0x3D5, cursor_pos);
 }
 
+/**
+ * Blit the current viewport to the VGA text buffer and update the cursor.
+ *
+ * Each on-screen row is filled from its scrollback line; rows mapping to lines
+ * that do not exist (above the start of history) are filled with blanks. Call
+ * this after any change to the history or viewport pointers to make it visible.
+ */
 void vga_text_sync(void)
 {
     volatile uint16_t *video_memory;
@@ -167,6 +202,13 @@ void k_cls(void)
     vga_text_sync();
 }
 
+/**
+ * Scroll the live area down by one line.
+ *
+ * Appends a fresh blank line and advances the live top. The viewport follows
+ * only when tracking live output; a user scrolled back into history stays put,
+ * except that it is pulled forward if its line has just been evicted.
+ */
 void k_scroll_down(void)
 {
     vga_text_append_blank_line();
@@ -181,6 +223,13 @@ void k_scroll_down(void)
     vga_text_sync();
 }
 
+/**
+ * Write one character cell at (col, row) of the live area.
+ *
+ * Coordinates are relative to the live top, not the viewport. Out-of-range
+ * coordinates and missing history lines are ignored. The write lands in the
+ * history ring; vga_text_sync() is needed to make it visible.
+ */
 void vga_text_write_cell(unsigned int col, unsigned int row, char c, uint8_t attr)
 {
     uint32_t line = _live_top_line + row;

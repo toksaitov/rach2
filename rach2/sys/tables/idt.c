@@ -3,19 +3,25 @@
 idt_descriptor_t idt_descriptors[256];
 idt_ptr_t idt_address;
 
-/*
- * Loads IDT to the IDTR register.
+/**
+ * Loads `idt_address` into the IDTR with `lidt`. Defined in idt_handler.asm.
  */
-extern void _load_idt(idt_ptr_t*); /* implemented in idt_handler.asm */
+extern void _load_idt(idt_ptr_t*);
 
-/*
- * Sets the interrupt descriptor at 'index' in the IDT with an
- * appropriate 'offset', 'segment' selector, and 'flags' values.
- */
 static void _idt_set_desciptor(size_t index, uint32_t offset,
                                              uint16_t segment_selector,
                                              uint8_t  flags);
 
+/**
+ * Builds the IDT and loads it into the IDTR.
+ *
+ * Installs gates for the 32 CPU exception vectors (0..31), programs the PIC,
+ * installs the 16 hardware IRQ vectors remapped to 32..47, and the syscall
+ * trap at vector 0x80. Exception and IRQ gates use flags 0x8E (present,
+ * DPL=0, 32-bit interrupt gate); the syscall gate uses 0xEE so its DPL is 3
+ * and user mode can reach it with `int 0x80`. All gates target the kernel
+ * code segment 0x08. The PIC is remapped before its IRQ gates are installed.
+ */
 void init_idt(void)
 {
     idt_address.base  = (uintptr_t) &idt_descriptors;
@@ -75,12 +81,20 @@ void init_idt(void)
     _idt_set_desciptor(46, (uintptr_t) &irq14, 0x08, 0x8E);
     _idt_set_desciptor(47, (uintptr_t) &irq15, 0x08, 0x8E);
 
-    /* Syscall interrupt - 0xEE sets DPL=3 so user mode can invoke int 0x80 */
+    /* 0xEE: DPL=3 gate so user mode can invoke int 0x80. */
     _idt_set_desciptor(128, (uintptr_t) &isr128, 0x08, 0xEE);
 
     _load_idt(&idt_address);
 }
 
+/**
+ * Writes one 8-byte IDT gate at `index`.
+ *
+ * The handler `offset` is split across the descriptor's two 16-bit halves as
+ * the x86 gate layout requires: bits 0..15 in `offset_low`, bits 16..31 in
+ * `offset_high`. `segment_selector` names the code segment the handler runs
+ * in, and `flags` is the gate's type/DPL/present byte.
+ */
 static void _idt_set_desciptor(size_t index, uint32_t offset,
                                              uint16_t segment_selector,
                                              uint8_t  flags)

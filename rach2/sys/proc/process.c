@@ -9,29 +9,25 @@
  */
 #define PCB_OFF(field) ((uint32_t)&((process_t *)0)->field)
 
-/*
- * Process table - all process slots
- */
 process_t proc_table[MAX_PROCS];
 
-/*
- * Currently running process
- */
 process_t *current_proc = NULL;
 
-/*
- * Next PID to assign
- */
 static uint32_t next_pid = 0;
 
+/**
+ * Reset the process table to its boot state and verify the PCB layout.
+ *
+ * `switch.s` hard-codes the byte offsets of the registers it saves and
+ * restores during a context switch. Before clearing the table this asserts
+ * those offsets still match `process_t`, so a future field insertion fails
+ * loudly here at boot instead of silently corrupting context switches.
+ */
 void init_proc(void)
 {
     uint32_t i;
 
-    /* switch.s hard-codes these PCB field offsets; assert they still match the
-     * struct so a future field insertion fails loudly here at boot instead of
-     * silently corrupting context switches. Keep in sync with the .set values
-     * in proc/switch.s. */
+    /* Keep in sync with the .set values in proc/switch.s. */
     if (PCB_OFF(regs.esp) != 48 ||
         PCB_OFF(cr3) != 52 ||
         PCB_OFF(kernel_stack) != 56 ||
@@ -39,7 +35,6 @@ void init_proc(void)
         k_panic("process_t layout drifted from switch.s offsets");
     }
 
-    /* Clear all process slots */
     for (i = 0; i < MAX_PROCS; i++) {
         k_memset(&proc_table[i], 0, sizeof(process_t));
         proc_table[i].state = PROC_UNUSED;
@@ -49,19 +44,26 @@ void init_proc(void)
     current_proc = NULL;
 }
 
+/**
+ * Claim the first unused process slot and return it ready to run.
+ *
+ * The new pid is bounded to the positive int range, since the /proc path
+ * layer carries pid as an int, and any still-live pid is skipped so live
+ * pids stay unique. The wrap is unreachable in practice (~2e9 spawns), so
+ * the assignment is normally just `next_pid++`. The process starts as the
+ * leader of its own session and process group; fork() overrides `sid` and
+ * `pgid` to inherit the parent's.
+ *
+ * @return the slot, or NULL when the table is full.
+ */
 process_t *alloc_process(void)
 {
     uint32_t i;
 
-    /* Find first unused slot */
     for (i = 0; i < MAX_PROCS; i++) {
         if (proc_table[i].state == PROC_UNUSED) {
             uint32_t candidate;
             k_memset(&proc_table[i], 0, sizeof(process_t));
-            /* Assign a pid bounded to the positive int range -- the /proc path
-             * layer carries pid as int -- skipping any still-live pid so live pids
-             * stay unique. The wrap is unreachable in practice (~2e9 spawns), so
-             * this is normally just next_pid++. */
             do {
                 if (next_pid >= 2000000000u) {
                     next_pid = 1;
@@ -70,17 +72,13 @@ process_t *alloc_process(void)
             } while (get_process(candidate) != NULL);
             proc_table[i].pid = candidate;
             proc_table[i].state = PROC_READY;
-            /* Default to its own session and process group (a leader of both);
-             * fork() overrides these to inherit the parent's (Phase 17). */
             proc_table[i].sid = candidate;
             proc_table[i].pgid = candidate;
-            proc_table[i].umask = 022; /* the usual default file-creation mask */
+            proc_table[i].umask = 022;
 
-            /* Initialize file descriptor table with stdin/stdout/stderr */
             fd_table_init(&proc_table[i].fds);
             fd_init_stdio(&proc_table[i].fds);
 
-            /* Initialize current working directory to root */
             proc_table[i].cwd[0] = '/';
             proc_table[i].cwd[1] = '\0';
 
@@ -88,7 +86,6 @@ process_t *alloc_process(void)
         }
     }
 
-    /* No free slots */
     return NULL;
 }
 
@@ -99,13 +96,17 @@ void free_process(process_t *proc)
     }
 }
 
+/**
+ * Wake timed sleepers whose deadline has passed.
+ *
+ * Moves any nanosleep sleeper whose wakeup tick has arrived from BLOCKED back
+ * to READY so the scheduler runs it. Called from the timer tick. The
+ * `(int32_t)` difference is tick-wraparound-safe (~248 days at 100 Hz).
+ */
 void proc_wake_sleepers(uint32_t now)
 {
     uint32_t i;
 
-    /* Move any timed sleeper (nanosleep) whose wakeup tick has arrived from
-     * BLOCKED back to READY so the scheduler runs it. Called from the timer tick.
-     * The (int32_t) difference is tick-wraparound-safe (~248 days at 100 Hz). */
     for (i = 0; i < MAX_PROCS; i++) {
         process_t *p = &proc_table[i];
         if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&
@@ -129,6 +130,11 @@ process_t *get_process(uint32_t pid)
     return NULL;
 }
 
+/**
+ * Set a process's `comm` name from a path's final component.
+ *
+ * Stores the basename of `path`, truncated to fit `comm` and NUL-terminated.
+ */
 void proc_set_comm(process_t *p, const char *path)
 {
     const char *base;
@@ -150,28 +156,28 @@ void proc_set_comm(process_t *p, const char *path)
     p->comm[i] = '\0';
 }
 
+/**
+ * Prime a new process's kernel stack for its first context switch.
+ *
+ * `switch_context` restores callee-saved registers and rets, so it expects
+ * the stack to look as if it had pushed them. The frame this builds, from
+ * high to low address:
+ *
+ *     [entry_point]  return address (where execution begins)
+ *     [ebp]          saved EBP (0 for a new process)
+ *     [ebx]          saved EBX (0)
+ *     [esi]          saved ESI (0)
+ *     [edi]          saved EDI (0)   <- regs.esp points here
+ */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
     uint32_t *sp;
 
-    /*
-     * Set up the kernel stack for first context switch.
-     * switch_context expects the stack to have saved callee registers:
-     *
-     *   [entry_point]  <- return address (where to start)
-     *   [ebp]          <- saved EBP (0 for new process)
-     *   [ebx]          <- saved EBX (0)
-     *   [esi]          <- saved ESI (0)
-     *   [edi]          <- saved EDI (0) <- ESP points here
-     */
-
     sp = (uint32_t *)proc->kernel_stack;
 
-    /* Push return address (entry point) */
     --sp;
     *sp = (uint32_t)entry_point;
 
-    /* Push saved callee registers (all zero for new process) */
     --sp;
     *sp = 0;  /* EBP */
     --sp;
@@ -181,6 +187,5 @@ void setup_process_stack(process_t *proc, void (*entry_point)(void))
     --sp;
     *sp = 0;  /* EDI */
 
-    /* Save stack pointer in process regs */
     proc->regs.esp = (uint32_t)sp;
 }

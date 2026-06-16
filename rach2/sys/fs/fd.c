@@ -4,16 +4,18 @@
 /*
  * The open-file-description pool. Each OFD carries one shared seek offset and a
  * refcount of how many descriptors point at it (dup/dup2/fork add references). A
- * slot with refcount 0 is free. The pool covers the worst case of every
- * descriptor in every process holding a distinct OFD: MAX_PROCS (16) * MAX_FDS,
+ * slot with refcount 0 is free. The pool is sized for the worst case of every
+ * descriptor in every process holding a distinct OFD, MAX_PROCS (16) * MAX_FDS,
  * since the number of live OFDs can never exceed the number of live descriptors.
  */
 #define OFD_POOL_SIZE (16 * MAX_FDS)
 static struct open_file ofd_pool[OFD_POOL_SIZE];
 
-/*
- * Allocate a fresh open-file description (refcount 1, offset 0), or NULL if the
- * pool is exhausted.
+/**
+ * Allocate a fresh open-file description.
+ *
+ * Returns an OFD with refcount 1, offset 0, and cleared status flags, or NULL
+ * if the pool is exhausted.
  */
 static struct open_file *ofd_alloc(void)
 {
@@ -37,14 +39,26 @@ void fd_ofd_ref(struct open_file *ofd)
     }
 }
 
+/**
+ * Drop one reference to an open-file description.
+ *
+ * The pool slot frees itself when the last reference goes: a refcount of 0
+ * marks the slot reusable by `ofd_alloc`.
+ */
 void fd_ofd_unref(struct open_file *ofd)
 {
-    /* Drop one reference; the slot frees itself when the last reference goes. */
     if (ofd && ofd->refcount > 0) {
         ofd->refcount--;
     }
 }
 
+/**
+ * Clear every entry of a descriptor table.
+ *
+ * This does not unref any OFDs; it is for a fresh (zeroed) table only. A live
+ * table is torn down descriptor by descriptor through `fd_free`, which releases
+ * each OFD reference.
+ */
 void fd_table_init(fd_table_t *table)
 {
     int i;
@@ -53,8 +67,6 @@ void fd_table_init(fd_table_t *table)
         return;
     }
 
-    /* Clear all entries. Note: this does NOT unref any OFDs -- it is for a fresh
-     * (zeroed) table only; a live table is torn down fd by fd via fd_free. */
     for (i = 0; i < MAX_FDS; i++) {
         table->entries[i].type   = FD_TYPE_NONE;
         table->entries[i].node   = NULL;
@@ -66,6 +78,12 @@ void fd_table_init(fd_table_t *table)
     }
 }
 
+/**
+ * Wire up the three standard descriptors on a fresh table.
+ *
+ * fd 0 is stdin (read-only); fd 1 and fd 2 are stdout and stderr (write-only).
+ * Each is a console descriptor with its own open-file description.
+ */
 void fd_init_stdio(fd_table_t *table)
 {
     int i;
@@ -74,8 +92,6 @@ void fd_init_stdio(fd_table_t *table)
         return;
     }
 
-    /* fd 0: stdin (read-only); fd 1/2: stdout/stderr (write-only). Each gets its
-     * own open-file description. */
     for (i = FD_STDIN; i <= FD_STDERR; i++) {
         table->entries[i].type  = FD_TYPE_CONSOLE;
         table->entries[i].node  = NULL;
@@ -87,6 +103,13 @@ void fd_init_stdio(fd_table_t *table)
     }
 }
 
+/**
+ * Reserve the lowest free descriptor at or above `minfd`.
+ *
+ * The chosen slot gets a fresh OFD but stays FD_TYPE_NONE; the caller fills in
+ * type, node or sock, and flags. Returns the descriptor number, or -1 if the
+ * table has no free slot at or above `minfd` or the OFD pool is exhausted.
+ */
 int fd_alloc_from(fd_table_t *table, int minfd)
 {
     int i;
@@ -95,13 +118,11 @@ int fd_alloc_from(fd_table_t *table, int minfd)
         return -1;
     }
 
-    /* Find the first free slot at or above minfd and give it a fresh OFD. The
-     * caller then sets type, node/sock, and flags. */
     for (i = minfd; i < MAX_FDS; i++) {
         if (table->entries[i].type == FD_TYPE_NONE) {
             struct open_file *ofd = ofd_alloc();
             if (!ofd) {
-                return -1;   /* OFD pool exhausted */
+                return -1;
             }
             table->entries[i].ofd  = ofd;
             table->entries[i].ops  = NULL;
@@ -110,7 +131,6 @@ int fd_alloc_from(fd_table_t *table, int minfd)
         }
     }
 
-    /* No free slot at or above minfd */
     return -1;
 }
 
@@ -119,6 +139,14 @@ int fd_alloc(fd_table_t *table)
     return fd_alloc_from(table, 0);
 }
 
+/**
+ * Release a descriptor and its OFD reference, clearing the slot.
+ *
+ * A slot with no backing and no reserved OFD is already free; freeing it
+ * returns -1. The OFD reference is dropped even when the slot is still typeless,
+ * so a slot that `fd_alloc_from` reserved but a caller bailed on before
+ * assigning a type does not leak its OFD.
+ */
 int fd_free(fd_table_t *table, int fd)
 {
     if (!table || fd < 0 || fd >= MAX_FDS) {
@@ -126,14 +154,9 @@ int fd_free(fd_table_t *table, int fd)
     }
 
     if (table->entries[fd].type == FD_TYPE_NONE && table->entries[fd].ofd == NULL) {
-        /* Already free (no backing and no reserved OFD). */
         return -1;
     }
 
-    /* Drop this descriptor's reference to its shared open-file description, then
-     * clear the slot. (Releasing an OFD even on a still-typeless reserved slot --
-     * one fd_alloc_from set up but a caller never finished -- keeps the pool from
-     * leaking on a bail-out before the type is assigned.) */
     fd_ofd_unref(table->entries[fd].ofd);
     table->entries[fd].type   = FD_TYPE_NONE;
     table->entries[fd].node   = NULL;

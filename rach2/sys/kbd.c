@@ -2,7 +2,9 @@
 #include "serial.h"
 
 /*
- * Raw scancode ring buffer for games/graphics mode
+ * Raw scancode ring buffer. The IRQ handler is the sole producer (tail) and
+ * graphics-mode readers are the sole consumer (head); a full ring drops the
+ * new code rather than overwrite an unread one.
  */
 #define SCANCODE_BUF_SIZE 64
 static uint8_t scancode_buf[SCANCODE_BUF_SIZE];
@@ -75,10 +77,7 @@ uint8_t EN_us[128] = {
     /* All others are undefined... */
 };
 
-/*
- * Shifted scancode table for US keyboard layout
- * Maps scancodes to characters when Shift is held
- */
+/* US layout, scancode to character when Shift is held. */
 uint8_t EN_us_shift[128] = {
     0,      /* 0x0: Error code */
     27,     /* 0x1: Escape */
@@ -129,16 +128,22 @@ void init_keyboard(void)
     register_isr_handler(33, &_keyboard_test);
 }
 
+/**
+ * IRQ 1 handler: read one byte from the i8042 and dispatch it.
+ *
+ * Reading port 0x60 acknowledges the controller's output buffer. Every raw
+ * code is pushed to the ring for graphics-mode readers; in addition this
+ * tracks the shift state (make 0x2A/0x36, break 0xAA/0xB6) and echoes printable
+ * make codes to the console. Bit 7 of a scancode marks a break (key release).
+ */
 static void _keyboard_test(isr_params_t *params)
 {
     (void) params;
 
     uint8_t scancode = inb(0x60);
 
-    /* Debug: log scancode to serial */
     serial_printf("KBD: sc=0x%x h=%d t=%d\n", scancode, scancode_head, scancode_tail);
 
-    /* Always push raw scancode to buffer for games */
     kbd_push_scancode(scancode);
 
     switch (scancode) {

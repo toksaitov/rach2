@@ -1,8 +1,6 @@
 /*
- * sb16.c - Sound Blaster 16 driver implementation
- *
- * Implements PCM audio playback using the SB16 DSP and ISA DMA.
- * Uses double-buffering for continuous playback.
+ * Sound Blaster 16 driver. PCM playback through the SB16 DSP and ISA DMA,
+ * double-buffered for continuous output.
  */
 
 #include "sb16.h"
@@ -11,63 +9,54 @@
 #include "../serial.h"
 #include "../isr.h"
 
-/* Default SB16 configuration */
 #define SB16_BASE           0x220
 #define SB16_IRQ            5
 #define SB16_DMA_8BIT       1
 #define SB16_DMA_16BIT      5
 
-/* IRQ vector (IRQ 5 = vector 32 + 5 = 37) */
+/* PIC remaps the ISA IRQs to vectors 32..47, so IRQ 5 is vector 37. */
 #define SB16_IRQ_VECTOR     (32 + SB16_IRQ)
 
-/* Current base port (set during probe) */
 static uint16_t sb16_base = SB16_BASE;
 
-/* DSP version */
 static uint16_t dsp_version = 0;
 
-/* Current audio configuration */
 static uint32_t current_sample_rate = 0;
 static audio_format_t current_format = AUDIO_U8;
 static int current_channels = 1;
 static bool is_16bit = false;
 
-/* Playback state */
 static bool playing = false;
 static audio_callback_t user_callback = NULL;
 
 /*
- * Double-buffering for DMA
- * Buffers must be in low memory (below 16MB) and not cross 64KB boundary
- * We use a single contiguous buffer split into two halves
+ * DMA double-buffer: one contiguous region split into two halves. ISA DMA
+ * requires the buffer to lie below 16MB and not cross a 64KB boundary.
  */
 static uint8_t dma_buffer[SB16_BUFFER_SIZE * 2] __attribute__((aligned(16)));
-static int current_buffer = 0;  /* Which half is currently playing */
-static volatile uint32_t irq_count = 0;  /* IRQ counter for debugging */
+static int current_buffer = 0;  /* half the DMA is currently playing */
+static volatile uint32_t irq_count = 0;
 
 /*
- * Ring buffer for audio buffering
- *
- * Decouples producer (Doom via AUDIO_WRITE) from consumer (DMA via IRQ).
- * This absorbs timing variations between Doom's frame rate and the fixed
- * DMA consumption rate, preventing stuttering and silence gaps.
- *
- * Size is 8 DMA buffer periods (~116ms at 11025 Hz) to absorb jitter.
- * With 160-sample DMA buffers, this holds ~4 Doom frames worth of audio.
+ * Ring buffer that decouples the producer (Doom via AUDIO_WRITE) from the
+ * consumer (DMA via IRQ), absorbing timing jitter between Doom's frame rate
+ * and the fixed DMA consumption rate. Eight DMA periods deep (~116ms at
+ * 11025 Hz, about four Doom frames with 160-sample DMA buffers).
  */
-#define RING_BUFFER_SIZE (SB16_BUFFER_SIZE * 8)  /* 1280 samples = ~116ms at 11025 Hz */
+#define RING_BUFFER_SIZE (SB16_BUFFER_SIZE * 8)
 
 static uint8_t ring_buffer[RING_BUFFER_SIZE];
-static volatile uint32_t ring_read_ptr = 0;   /* Where IRQ reads from */
-static volatile uint32_t ring_write_ptr = 0;  /* Where write() appends to */
+static volatile uint32_t ring_read_ptr = 0;   /* IRQ reads here */
+static volatile uint32_t ring_write_ptr = 0;  /* write() appends here */
 
-/* Diagnostics */
-static volatile uint32_t underrun_count = 0;  /* Times ring was empty/partial */
-static volatile uint32_t underrun_samples = 0; /* Total silence samples inserted */
+static volatile uint32_t underrun_count = 0;
+static volatile uint32_t underrun_samples = 0;
 
-/*
- * Get number of samples available to read from ring buffer
- * Safe to call from both IRQ and syscall context
+/**
+ * Return the number of samples queued in the ring buffer.
+ *
+ * Safe to call from both IRQ and syscall context: it samples the volatile
+ * pointers once and reads no shared state that the other side may tear.
  */
 static uint32_t ring_available(void)
 {
@@ -79,18 +68,25 @@ static uint32_t ring_available(void)
     return RING_BUFFER_SIZE - r + w;
 }
 
-/*
- * Get number of samples that can be written to ring buffer
- * We keep one slot empty to distinguish full from empty
+/**
+ * Return the number of samples that can be appended to the ring buffer.
+ *
+ * One slot is always left empty so a full buffer is distinguishable from an
+ * empty one.
  */
 static uint32_t ring_free(void)
 {
     return RING_BUFFER_SIZE - 1 - ring_available();
 }
 
-/*
- * Write samples to ring buffer (called from syscall context)
- * Returns number of samples actually written
+/**
+ * Append up to `count` samples to the ring buffer, dropping any overflow.
+ *
+ * Called from syscall context (the sole writer). The write pointer is
+ * published only after every byte lands, so the IRQ-side reader never sees a
+ * half-written sample.
+ *
+ * @return the number of samples actually stored.
  */
 static uint32_t ring_write(const uint8_t *data, uint32_t count)
 {
@@ -104,20 +100,18 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
         wp = (wp + 1) % RING_BUFFER_SIZE;
     }
 
-    /* Update write pointer atomically after all writes complete */
     ring_write_ptr = wp;
     return to_write;
 }
 
-/*
- * Read samples from ring buffer into destination (called from IRQ context)
- * If not enough samples available, fills remainder with silence.
- * Always fills exactly 'count' bytes in destination.
- * Tracks underruns for diagnostics.
+/**
+ * Drain `count` samples from the ring buffer into `dest`, padding with silence.
  *
- * Silence value depends on format:
- * - 8-bit unsigned: 128 (middle of 0-255 range)
- * - 16-bit signed: 0 (middle of -32768 to 32767 range)
+ * Called from IRQ context (the sole reader). It always fills exactly `count`
+ * bytes: a short ring is an underrun, counted in the diagnostics and made up
+ * with the format's zero level. The read pointer is published only after the
+ * copy completes. Silence is 0 for 16-bit signed and 128 for 8-bit unsigned,
+ * each the midpoint of its range.
  */
 static void ring_read_to_buffer(uint8_t *dest, uint32_t count)
 {
@@ -127,26 +121,21 @@ static void ring_read_to_buffer(uint8_t *dest, uint32_t count)
     uint32_t i;
     uint32_t rp = ring_read_ptr;
 
-    /* Read available samples from ring */
     for (i = 0; i < to_read; i++) {
         dest[i] = ring_buffer[rp];
         rp = (rp + 1) % RING_BUFFER_SIZE;
     }
 
-    /* Update read pointer atomically after all reads complete */
     ring_read_ptr = rp;
 
-    /* Fill remainder with silence if underrun */
     if (silence_needed > 0) {
         underrun_count++;
         underrun_samples += silence_needed;
         if (is_16bit) {
-            /* 16-bit signed silence is 0 */
             for (; i < count; i++) {
                 dest[i] = 0;
             }
         } else {
-            /* 8-bit unsigned silence is 128 */
             for (; i < count; i++) {
                 dest[i] = 128;
             }
@@ -154,19 +143,24 @@ static void ring_read_to_buffer(uint8_t *dest, uint32_t count)
     }
 }
 
-/*
- * Small delay for DSP timing
+/**
+ * Spin for a few microseconds to let the DSP settle between accesses.
+ *
+ * Reads of port 0x80 (the POST diagnostic port) are the classic ISA-bus way
+ * to burn a short, bus-paced delay.
  */
 static void sb16_delay(void)
 {
     int i;
     for (i = 0; i < 10; i++) {
-        inb(0x80);  /* Dummy port read for delay */
+        inb(0x80);
     }
 }
 
-/*
- * Wait for DSP to be ready to accept data
+/**
+ * Poll the write-status port until the DSP can accept a byte, or time out.
+ *
+ * Bit 7 of the write-status port is set while the DSP buffer is full.
  */
 static bool dsp_write_ready(void)
 {
@@ -180,8 +174,10 @@ static bool dsp_write_ready(void)
     return false;
 }
 
-/*
- * Wait for DSP to have data available
+/**
+ * Poll the read-status port until the DSP has a byte ready, or time out.
+ *
+ * Bit 7 of the read-status port is set when output data is available.
  */
 static bool dsp_read_ready(void)
 {
@@ -195,8 +191,10 @@ static bool dsp_read_ready(void)
     return false;
 }
 
-/*
- * Write a byte to the DSP
+/**
+ * Send one command or data byte to the DSP after waiting for readiness.
+ *
+ * @return false if the DSP never drained, leaving the byte unsent.
  */
 static bool dsp_write(uint8_t value)
 {
@@ -208,8 +206,8 @@ static bool dsp_write(uint8_t value)
     return true;
 }
 
-/*
- * Read a byte from the DSP
+/**
+ * Read one byte from the DSP, returning 0 if none arrives in time.
  */
 static uint8_t dsp_read(void)
 {
@@ -220,32 +218,33 @@ static uint8_t dsp_read(void)
     return inb(sb16_base + SB16_READ_DATA);
 }
 
-/*
- * Reset the DSP
+/**
+ * Reset the DSP and wait for its 0xAA ready acknowledgement.
+ *
+ * The reset protocol is: write 1 to the reset port, hold it for at least 3us,
+ * write 0, then poll the read port for the 0xAA byte the DSP emits once it has
+ * come back up.
+ *
+ * @return true if 0xAA arrived, false on timeout (no SB16 at this base).
  */
 static bool dsp_reset(void)
 {
     int i, j;
 
-    /* Write 1 to reset port */
     outb(sb16_base + SB16_RESET, 1);
 
-    /* Wait at least 3 microseconds */
     for (i = 0; i < 100; i++) {
         inb(0x80);
     }
 
-    /* Write 0 to reset port */
     outb(sb16_base + SB16_RESET, 0);
 
-    /* Wait for data ready and check for 0xAA */
     for (i = 0; i < 100; i++) {
         if (dsp_read_ready()) {
             if (inb(sb16_base + SB16_READ_DATA) == 0xAA) {
                 return true;
             }
         }
-        /* Small delay */
         for (j = 0; j < 100; j++) {
             inb(0x80);
         }
@@ -254,8 +253,11 @@ static bool dsp_reset(void)
     return false;
 }
 
-/*
- * Write to mixer register
+/**
+ * Write `value` to mixer register `reg`.
+ *
+ * The mixer is a register file behind an address/data port pair: latch the
+ * register index, settle, then write the datum.
  */
 static void mixer_write(uint8_t reg, uint8_t value)
 {
@@ -264,10 +266,19 @@ static void mixer_write(uint8_t reg, uint8_t value)
     outb(sb16_base + SB16_MIXER_DATA, value);
 }
 
-/*
- * Start auto-init DMA playback
- * Sets up DMA for the full double-buffer and starts continuous playback.
- * IRQs fire every half-buffer; DMA automatically cycles.
+/**
+ * Program DMA and the DSP for auto-init playback of the double-buffer.
+ *
+ * DMA covers the full double-buffer; the DSP block size is one half, so an
+ * IRQ fires each time a half completes while the DMA controller cycles the
+ * buffer automatically. The DSP transfer command, the mode byte, and the
+ * block-size unit all depend on the active format:
+ *
+ *   8-bit  uses DMA channel 1, command 0xC6, block size counted in bytes.
+ *   16-bit uses DMA channel 5, command 0xB6, block size counted in words.
+ *
+ * Mode byte: bit 4 = signed sample encoding, bit 5 = stereo. The block-size
+ * register holds the count minus one.
  */
 static void sb16_start_auto_init(void)
 {
@@ -277,73 +288,57 @@ static void sb16_start_auto_init(void)
     int dma_channel;
     uint8_t dsp_cmd;
 
-    /*
-     * Calculate block size and mode based on format/channels
-     * For 16-bit: block size is in samples (words), not bytes
-     * Mode byte: bit 5 = stereo, bit 4 = signed
-     */
     if (is_16bit) {
-        /* 16-bit mode uses DMA channel 5 and DSP command 0xB6 */
         dma_channel = SB16_DMA_16BIT;
         dsp_cmd = DSP_16BIT_OUT_AI;
-        /* Mode: signed (bit 4), stereo if channels == 2 (bit 5) */
-        mode = 0x10;  /* Signed */
+        mode = 0x10;  /* signed */
         if (current_channels == 2) {
-            mode |= 0x20;  /* Stereo */
+            mode |= 0x20;  /* stereo */
         }
-        /* Block size in samples (words) for 16-bit DMA */
         block_size = (SB16_BUFFER_SIZE / 2) - 1;
         if (current_channels == 2) {
-            block_size = (SB16_BUFFER_SIZE / 4) - 1;  /* Stereo: 2 samples per frame */
+            block_size = (SB16_BUFFER_SIZE / 4) - 1;  /* two words per stereo frame */
         }
     } else {
-        /* 8-bit mode uses DMA channel 1 and DSP command 0xC6 */
         dma_channel = SB16_DMA_8BIT;
         dsp_cmd = DSP_8BIT_OUT_AI;
-        /* Mode: unsigned (bit 4 clear), stereo if channels == 2 (bit 5) */
-        mode = 0x00;  /* Unsigned */
+        mode = 0x00;  /* unsigned */
         if (current_channels == 2) {
-            mode |= 0x20;  /* Stereo */
+            mode |= 0x20;  /* stereo */
         }
-        /* Block size in bytes for 8-bit DMA */
         block_size = SB16_BUFFER_SIZE - 1;
         if (current_channels == 2) {
-            block_size = (SB16_BUFFER_SIZE / 2) - 1;  /* Stereo: 2 bytes per frame */
+            block_size = (SB16_BUFFER_SIZE / 2) - 1;  /* two bytes per stereo frame */
         }
     }
 
-    /* Set up DMA for FULL double-buffer with auto-init flag */
     dma_start(dma_channel, addr, SB16_BUFFER_SIZE * 2,
               DMA_MODE_SINGLE | DMA_MODE_READ | DMA_MODE_AUTOINIT);
 
-    /*
-     * DSP 4.xx auto-init command
-     * Format: command, mode, length_low, length_high
-     */
+    /* DSP 4.xx auto-init: command, mode, length_low, length_high. */
     dsp_write(dsp_cmd);
     dsp_write(mode);
     dsp_write(block_size & 0xFF);
     dsp_write((block_size >> 8) & 0xFF);
 }
 
-/*
- * IRQ handler for SB16 (auto-init mode with ring buffer)
+/**
+ * Service the SB16 half-buffer interrupt: refill the half that just drained.
  *
- * In auto-init mode, the DMA controller automatically cycles through the
- * double-buffer. The IRQ fires when each half finishes. We:
- * 1. Acknowledge the interrupt
- * 2. Fill the finished DMA buffer from the ring buffer
- *
- * The ring buffer decouples Doom's write timing from DMA consumption,
- * absorbing timing jitter and preventing stuttering/silence gaps.
+ * In auto-init mode the DMA controller cycles the double-buffer on its own and
+ * raises this IRQ as each half completes, so the handler only acknowledges the
+ * interrupt and refills the finished half from the ring buffer; no DMA restart
+ * is needed. ring_read_to_buffer() covers any underrun with silence.
  */
 static void sb16_irq_handler(isr_params_t *params)
 {
     uint8_t *fill_buffer;
     (void)params;
 
-    /* Acknowledge the DSP interrupt - MUST be done first */
-    /* Use correct acknowledge port for 8-bit vs 16-bit mode */
+    /*
+     * Acknowledge the DSP interrupt first. The 8-bit and 16-bit transfers
+     * latch their interrupt on different ports.
+     */
     if (is_16bit) {
         inb(sb16_base + SB16_INT_ACK_16BIT);
     } else {
@@ -356,26 +351,21 @@ static void sb16_irq_handler(isr_params_t *params)
 
     irq_count++;
 
-    /*
-     * Determine which DMA buffer half just finished playing.
-     * current_buffer indicates which half WAS playing (just finished).
-     */
+    /* current_buffer names the half that was playing and just finished. */
     fill_buffer = dma_buffer + (current_buffer * SB16_BUFFER_SIZE);
 
-    /* Switch to track that the other buffer is now playing */
     current_buffer = 1 - current_buffer;
 
-    /*
-     * Fill the finished DMA buffer from the ring buffer.
-     * ring_read_to_buffer() handles underrun by filling with silence.
-     */
     ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);
-
-    /* In auto-init mode, DMA continues automatically - no restart needed */
 }
 
-/*
- * Probe for SB16 at a specific base address
+/**
+ * Probe for an SB16 at `base` and record its DSP version.
+ *
+ * Resets the DSP and reads the version word; an SB16 reports DSP version 4.xx,
+ * so anything below 4 is an older card and is rejected.
+ *
+ * @return true only if a DSP 4.xx answered at this base.
  */
 bool sb16_probe(uint16_t base)
 {
@@ -384,7 +374,6 @@ bool sb16_probe(uint16_t base)
         return false;
     }
 
-    /* Get DSP version */
     if (!dsp_write(DSP_GET_VERSION)) {
         return false;
     }
@@ -392,7 +381,6 @@ bool sb16_probe(uint16_t base)
     dsp_version = (uint16_t)dsp_read() << 8;
     dsp_version |= dsp_read();
 
-    /* SB16 has DSP version 4.xx */
     if ((dsp_version >> 8) < 4) {
         serial_printf("SB16: Found SB (version %d.%d), need SB16\n",
                       dsp_version >> 8, dsp_version & 0xFF);
@@ -402,20 +390,22 @@ bool sb16_probe(uint16_t base)
     return true;
 }
 
-/*
- * Get DSP version
- */
 uint16_t sb16_get_version(void)
 {
     return dsp_version;
 }
 
-/*
- * Initialize SB16 driver
+/**
+ * Locate the SB16, install its IRQ handler, and program the mixer.
+ *
+ * Probes the four standard ISA base ports in turn. Once found, registers the
+ * interrupt, resets the mixer, opens the master and voice volumes, and selects
+ * IRQ 5 and DMA channels 1 (8-bit) and 5 (16-bit).
+ *
+ * @return 0 on success, -1 if no card responded.
  */
 static int sb16_init(void)
 {
-    /* Probe for SB16 at common base addresses */
     uint16_t bases[] = { 0x220, 0x240, 0x260, 0x280 };
     int i;
     bool found = false;
@@ -431,45 +421,45 @@ static int sb16_init(void)
         return -1;
     }
 
-    /* Register IRQ handler */
     register_isr_handler(SB16_IRQ_VECTOR, sb16_irq_handler);
 
-    /* Reset mixer */
     mixer_write(MIXER_RESET, 0);
 
-    /* Set master volume to maximum (0xFF = 100%) */
     mixer_write(MIXER_MASTER_VOL, 0xFF);
     mixer_write(MIXER_VOICE_VOL, 0xFF);
 
-    /* Verify/set IRQ and DMA in mixer */
-    /* IRQ 5 = bit 1, IRQ 7 = bit 2, IRQ 10 = bit 3 */
-    mixer_write(MIXER_IRQ_SELECT, 0x02);  /* IRQ 5 */
+    /* IRQ select: bit 1 = IRQ 5, bit 2 = IRQ 7, bit 3 = IRQ 10. */
+    mixer_write(MIXER_IRQ_SELECT, 0x02);
 
-    /* DMA 8-bit channel 1 = bit 1, DMA 16-bit channel 5 = bit 5 */
-    mixer_write(MIXER_DMA_SELECT, 0x22);  /* DMA 1 and 5 */
+    /* DMA select: bit 1 = 8-bit channel 1, bit 5 = 16-bit channel 5. */
+    mixer_write(MIXER_DMA_SELECT, 0x22);
 
     return 0;
 }
 
-/*
- * Shutdown SB16 driver
+/**
+ * Stop playback, silence the speaker, and reset the DSP.
  */
 static void sb16_shutdown(void)
 {
-    /* Stop any playing audio */
     if (playing) {
         sb16_driver.stop();
     }
 
-    /* Turn off speaker */
     dsp_write(DSP_SPEAKER_OFF);
 
-    /* Reset DSP */
     dsp_reset();
 }
 
-/*
- * Start audio playback (auto-init mode)
+/**
+ * Begin auto-init playback at the given rate, format, and channel count.
+ *
+ * Stops any current playback, primes both DMA halves with silence (and the
+ * callback's data if one is set), resets the ring buffer, then arms the DSP.
+ * The DSP 4.xx sample-rate command must precede the transfer command, so the
+ * rate is programmed before sb16_start_auto_init() issues 0xC6/0xB6.
+ *
+ * @return 0 on success, -1 if the rate is outside 5000..44100 Hz.
  */
 static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
@@ -482,52 +472,44 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
     current_channels = channels;
     is_16bit = (format == AUDIO_S16LE);
 
-    /* Validate sample rate */
     if (sample_rate < 5000 || sample_rate > 44100) {
         serial_printf("SB16: Invalid sample rate %d\n", sample_rate);
         return -1;
     }
 
-    /* Turn on speaker */
     dsp_write(DSP_SPEAKER_ON);
 
-    /* Set sample rate using DSP 4.xx command (required before 0xC6) */
+    /* DSP 4.xx sample-rate command must precede the transfer command. */
     dsp_write(DSP_SET_SAMPLE_RATE);
     dsp_write((sample_rate >> 8) & 0xFF);
     dsp_write(sample_rate & 0xFF);
 
-    /* Fill both DMA buffer halves with silence initially */
-    /* 16-bit signed uses 0, 8-bit unsigned uses 128 */
+    /* Silence both halves: 0 for 16-bit signed, 128 for 8-bit unsigned. */
     k_memset(dma_buffer, is_16bit ? 0 : 128, SB16_BUFFER_SIZE * 2);
 
-    /* Initialize ring buffer to empty */
     ring_read_ptr = 0;
     ring_write_ptr = 0;
 
-    /* If callback is set, pre-fill both DMA halves directly */
     if (user_callback) {
         user_callback(dma_buffer, SB16_BUFFER_SIZE);
         user_callback(dma_buffer + SB16_BUFFER_SIZE, SB16_BUFFER_SIZE);
     }
 
-    /* Reset state */
     irq_count = 0;
-    current_buffer = 0;  /* Buffer 0 will play first */
+    current_buffer = 0;
     playing = true;
 
-    /* Start auto-init playback (DMA + DSP) */
     sb16_start_auto_init();
 
     return 0;
 }
 
-/*
- * Stop audio playback (auto-init mode)
+/**
+ * Halt auto-init playback and silence the card.
  *
- * For auto-init, we must:
- * 1. Send DSP_EXIT_8BIT (0xDA) to tell DSP to stop after current block
- * 2. Send DSP_STOP_8BIT (0xD0) to immediately pause
- * 3. Mask the DMA channel
+ * The DSP needs both an exit-auto-init command (0xDA/0xD9) so it stops after
+ * the current block and an immediate-pause command (0xD0/0xD5); the DMA
+ * channel is then masked and the speaker turned off.
  */
 static void sb16_stop(void)
 {
@@ -537,50 +519,40 @@ static void sb16_stop(void)
 
     playing = false;
 
-    /* Exit auto-init mode: DSP will stop after current block */
     if (is_16bit) {
         dsp_write(DSP_EXIT_16BIT);
         dsp_write(DSP_STOP_16BIT);
     } else {
-        dsp_write(DSP_EXIT_8BIT);   /* 0xDA - exit auto-init */
-        dsp_write(DSP_STOP_8BIT);   /* 0xD0 - pause immediately */
+        dsp_write(DSP_EXIT_8BIT);
+        dsp_write(DSP_STOP_8BIT);
     }
 
-    /* Stop DMA channel */
     dma_stop(is_16bit ? SB16_DMA_16BIT : SB16_DMA_8BIT);
 
-    /* Turn off speaker */
     dsp_write(DSP_SPEAKER_OFF);
 
-    /* Reset diagnostics for next session */
     underrun_count = 0;
     underrun_samples = 0;
 }
 
-/*
- * Check if audio is playing
- */
 static bool sb16_is_playing(void)
 {
     return playing;
 }
 
-/*
- * Set audio callback
- */
 static void sb16_set_callback(audio_callback_t fn)
 {
     user_callback = fn;
 }
 
-/*
- * Write audio samples to the ring buffer
+/**
+ * Queue audio samples for playback.
  *
- * Samples are queued in the ring buffer and will be consumed by the
- * IRQ handler when DMA buffers need refilling. This decouples Doom's
- * frame-based writes from the fixed DMA consumption rate.
+ * Samples are appended to the ring buffer and later drained by the IRQ handler
+ * as DMA halves need refilling, decoupling Doom's frame-paced writes from the
+ * fixed DMA rate. Overflow beyond the ring's free space is dropped.
  *
- * Returns number of samples written, or -1 on error.
+ * @return the number of samples queued, or -1 if not playing or given no data.
  */
 static int sb16_write(const uint8_t *buffer, size_t size)
 {
@@ -594,14 +566,17 @@ static int sb16_write(const uint8_t *buffer, size_t size)
         return -1;
     }
 
-    /* Write samples to ring buffer */
     written = ring_write(buffer, (uint32_t)size);
 
     return (int)written;
 }
 
-/*
- * Set volume (0-100)
+/**
+ * Set output volume from a 0..100 percentage.
+ *
+ * The percentage is clamped and scaled to the mixer's 0..255 range. The master
+ * register packs left in the high nibble and right in the low nibble, so the
+ * scaled value is folded into both nibbles for an equal stereo level.
  */
 static void sb16_set_volume(int volume)
 {
@@ -610,17 +585,12 @@ static void sb16_set_volume(int volume)
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
 
-    /* Convert 0-100 to 0-255 for mixer */
     val = (uint8_t)((volume * 255) / 100);
 
-    /* Set both left and right channels */
     mixer_write(MIXER_MASTER_VOL, (val & 0xF0) | ((val >> 4) & 0x0F));
     mixer_write(MIXER_VOICE_VOL, val);
 }
 
-/*
- * SB16 audio driver definition
- */
 audio_driver_t sb16_driver = {
     .name = "Sound Blaster 16",
     .type = AUDIO_DRIVER_SB16,

@@ -1,5 +1,13 @@
 #include "kio.h"
 
+/**
+ * Write one character to the VGA text screen and advance the cursor.
+ *
+ * Printable characters are placed at the cursor and the cursor moves right,
+ * wrapping and scrolling at the screen edges. The control characters BS, HT,
+ * LF, and CR move the cursor without drawing; any other control character is
+ * shown as `CHAR_NON_PRINTABLE`. The hardware cursor is synced after each call.
+ */
 void k_putc(char c)
 {
     if (c < 31 || c == 127) {
@@ -51,6 +59,17 @@ void k_puts(const char *str)
     while (*str) { k_putc(*str++); } k_putc(CHAR_LF);
 }
 
+/**
+ * Format `format` against the varargs in `args`, emitting each byte through
+ * `putc_fn`.
+ *
+ * Supported conversions are `%d` (signed decimal), `%b`, `%o`, `%x`, `%X`
+ * (binary, octal, lower- and upper-case hex), `%s` (a string, with a NULL
+ * pointer rendered as `(null)`), `%c` (a character), and `%%` (a literal
+ * percent). An unknown conversion is emitted verbatim. `args` points at the
+ * first argument and is consumed left to right; each consumed slot is one
+ * stack word, which is why integers and characters are read as `int`.
+ */
 void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
 {
     char c, buffer[_K_PRINTF_BUFFER_SIZE_];
@@ -114,13 +133,14 @@ void outb(uint16_t port, uint8_t val)
 }
 
 #ifdef RACH2_HARNESS
-/*
- * Harness build only: report the process exit status to QEMU's isa-debug-exit
- * device (iobase 0xF4) so the test harness reads a real exit code instead of
- * scraping the serial log -- a hang or triple-fault then surfaces as a wall-clock
- * timeout, not a missing marker. Only ring 0 can write this port, so a ring-3
- * probe cannot fake it. QEMU exits with ((status << 1) | 1), hence an exit code
- * of 1 means the process exited with status 0.
+/**
+ * Report a process exit status to QEMU's isa-debug-exit device (harness only).
+ *
+ * Writing the status to I/O port 0xF4 makes the test harness read a real exit
+ * code instead of scraping the serial log: a hang or triple-fault then surfaces
+ * as a wall-clock timeout rather than a missing marker. Only ring 0 may write
+ * this port, so a ring-3 probe cannot fake it. QEMU exits with the value
+ * `((status << 1) | 1)`, so an exit code of 1 means a status of 0.
  */
 void harness_exit(uint8_t status)
 {

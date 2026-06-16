@@ -1,27 +1,26 @@
 /*
- * KRFFS - K&R First-Fit File System Implementation
- * Read-only version for Phase 11
+ * KRFFS: a K&R first-fit file system.
  *
- * Ported from the educational FUSE file system project.
+ * The medium is one contiguous region holding a circular doubly linked list of
+ * nodes. Each node carries a header (krffs_node_t) followed by its data; a node
+ * is either free or reserved (a file or directory). Allocation is first-fit with
+ * split-and-coalesce, after the storage allocator in The C Programming Language.
+ * Directories are hierarchical (the v2 parent_id scheme described below).
  */
 
 #include "krffs.h"
 #include "../serial.h"
 #include "../lib/kerrno.h"
 
-/*
- * Global file system instance
- */
 krffs_file_system_t *krffs_fs = NULL;
 
-/*
- * Local file system structure (static allocation)
- */
 static krffs_file_system_t _krffs_fs_instance;
 
-/*
- * DJB hash function for file name lookup
- * Same as original krffs implementation
+/**
+ * Hash a file name with Bernstein's DJB algorithm.
+ *
+ * A NULL pointer hashes to the seed (5381). This is the legacy id of a regular
+ * file, kept for on-disk compatibility; directory ids use krffs_mix_id instead.
  */
 uint64_t krffs_calculate_djb_hash(const uint8_t *str)
 {
@@ -39,8 +38,11 @@ uint64_t krffs_calculate_djb_hash(const uint8_t *str)
     return hash;
 }
 
-/*
- * Wrap node position to handle circular linked list
+/**
+ * Wrap a node address back into the file system region.
+ *
+ * The node list is circular: walking off either end of [fs->node, fs->node +
+ * fs->size) folds the address by one region size so it lands on the other end.
  */
 krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *node)
 {
@@ -67,8 +69,8 @@ krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *no
     return (krffs_node_t *)position;
 }
 
-/*
- * Get the previous node in the linked list
+/**
+ * Return the node preceding `node`, using its stored previous_node_size.
  */
 krffs_node_t *krffs_get_previous_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
@@ -86,8 +88,8 @@ krffs_node_t *krffs_get_previous_node(krffs_file_system_t *fs, krffs_node_t *nod
     return previous;
 }
 
-/*
- * Get the next node in the linked list
+/**
+ * Return the node following `node`, advancing by its own size.
  */
 krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
@@ -105,8 +107,12 @@ krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node)
     return next;
 }
 
-/*
- * Find a reserved (file) node by name
+/**
+ * Find a reserved node whose name hashes to that of `name`.
+ *
+ * Scans the whole list by DJB id, ignoring the directory hierarchy, so it can
+ * collide with same-named files in different directories. The hierarchical
+ * krffs_walk is the real path resolver; this remains for flat-namespace callers.
  */
 krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const char *name)
 {
@@ -129,8 +135,8 @@ krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const ch
     return NULL;
 }
 
-/*
- * Find a reserved or root node by name
+/**
+ * Like krffs_find_reserved_node_by_name, but also matches the root node.
  */
 krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, const char *name)
 {
@@ -155,18 +161,22 @@ krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, 
 }
 
 /*
- * ===== Hierarchical path resolution (KRFFS v2) =====
+ * Hierarchical path resolution (the KRFFS v2 on-disk format).
  *
  * A node's parent_id is its directory's logical id (KRFFS_ROOT_ID == 0 for the
  * root, whose own node is fs->node and carries no parent reference). A directory
- * node's id is mix(parent_id, name) -- unique because sibling names are unique --
- * so children reference it unambiguously. Resolution matches each path component
- * by (name, parent_id), descending only into directories. Regular files' ids are
+ * node's id is mix(parent_id, name), unique because sibling names are unique, so
+ * children reference it unambiguously. Resolution matches each path component by
+ * (name, parent_id), descending only into directories. Regular files' ids are
  * never referenced, so they keep the legacy DJB(name) value for compatibility.
  */
 
-/* Combine a parent directory id and a child name into a unique node id (FNV-1a
- * style). Never returns 0 (the root's logical id). */
+/**
+ * Combine a parent directory id and a child name into a unique node id.
+ *
+ * FNV-1a style mixing. Never returns 0, which is reserved for the root's
+ * logical id (KRFFS_ROOT_ID).
+ */
 static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
 {
     uint64_t h = (parent_id + 1) * 1099511628211ULL;
@@ -176,7 +186,9 @@ static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
     return h ? h : 1;
 }
 
-/* Compare a NUL-terminated node name with the component comp[0..len). */
+/**
+ * Test whether the NUL-terminated `node_name` equals the component comp[0..len).
+ */
 static int krffs_name_eq(const char *node_name, const char *comp, uint32_t len)
 {
     uint32_t i;
@@ -189,8 +201,12 @@ static int krffs_name_eq(const char *node_name, const char *comp, uint32_t len)
     return node_name[len] == '\0';
 }
 
-/* Find the reserved node with a given id (for ".." and directory descent).
- * Returns NULL for the root id (which has no reserved node). */
+/**
+ * Find the reserved node with logical id `id`, for ".." and directory descent.
+ *
+ * Returns NULL for KRFFS_ROOT_ID: the root has no reserved node (it is fs->node),
+ * so callers must handle the root specially rather than expect a lookup here.
+ */
 static krffs_node_t *krffs_find_node_by_id(krffs_file_system_t *fs, uint64_t id)
 {
     krffs_node_t *node;
@@ -207,7 +223,9 @@ static krffs_node_t *krffs_find_node_by_id(krffs_file_system_t *fs, uint64_t id)
     return NULL;
 }
 
-/* Find a child named comp[0..len) directly inside directory dir_id. */
+/**
+ * Find the child named comp[0..len) directly inside directory `dir_id`.
+ */
 static krffs_node_t *krffs_find_child(krffs_file_system_t *fs, uint64_t dir_id,
                                       const char *comp, uint32_t len)
 {
@@ -222,21 +240,19 @@ static krffs_node_t *krffs_find_child(krffs_file_system_t *fs, uint64_t dir_id,
     return NULL;
 }
 
-/*
- * Resolve a path to its node, or NULL if any component is missing or a non-final
- * component is not a directory. "/" (or "") resolves to the root node (fs->node).
- * '.' and '..' are honored.
- */
-/*
- * Resolve `path` to a node, reporting via *err (if non-NULL) whether a failure
- * was a missing component (-ENOENT) or a non-directory in a non-final position
- * (-ENOTDIR). The thin krffs_walk() wrapper below keeps the common no-error
- * callers unchanged.
+/**
+ * Resolve `path` to its node, honoring '.' and '..'.
+ *
+ * "/" (or "") resolves to the root node (fs->node). A non-final component that
+ * is not a directory, or any missing component, fails. When `err` is non-NULL it
+ * receives -ENOENT for a missing component or -ENOTDIR for a non-directory in a
+ * non-final position. The thin krffs_walk wrapper below serves the common
+ * callers that do not care which.
  */
 static krffs_node_t *krffs_walk_e(krffs_file_system_t *fs, const char *path, int *err)
 {
     uint64_t cur_id = KRFFS_ROOT_ID;
-    krffs_node_t *node = fs->node; /* the current directory's node; root = fs->node */
+    krffs_node_t *node = fs->node; /* current directory's node; root == fs->node */
     const char *p = path ? path : "";
 
     if (err) {
@@ -265,13 +281,12 @@ static krffs_node_t *krffs_walk_e(krffs_file_system_t *fs, const char *path, int
         last = (*p == '\0');
 
         if (len == 1 && start[0] == '.') {
-            /* current directory: unchanged */
+            /* "." stays in the current directory */
         } else if (len == 2 && start[0] == '.' && start[1] == '.') {
-            /* Parent directory. krffs_find_node_by_id cannot return the root (it
-             * owns the reserved id 0), so resolve a root parent to fs->node
-             * directly -- otherwise ".." back to the root would yield NULL. The
-             * continuing id is ROOT_ID so the root's children (parent_id == 0)
-             * still resolve after the "..". */
+            /* krffs_find_node_by_id cannot return the root (it owns reserved id
+             * 0), so resolve a root parent to fs->node directly; otherwise ".."
+             * back to the root would yield NULL. The continuing id is ROOT_ID so
+             * the root's children (parent_id == 0) still resolve after the "..". */
             uint64_t parent = node ? node->parent_id : (uint64_t)KRFFS_ROOT_ID;
             if (parent == (uint64_t)KRFFS_ROOT_ID) {
                 node = fs->node;
@@ -290,7 +305,7 @@ static krffs_node_t *krffs_walk_e(krffs_file_system_t *fs, const char *path, int
             }
             if (!last && !KRFFS_IS_DIR(node->mode)) {
                 if (err) {
-                    *err = -ENOTDIR; /* a non-final component must be a directory */
+                    *err = -ENOTDIR;
                 }
                 return NULL;
             }
@@ -303,14 +318,21 @@ static krffs_node_t *krffs_walk_e(krffs_file_system_t *fs, const char *path, int
     }
 }
 
-/* The common resolver: a node for `path`, or NULL, with no error distinction. */
+/**
+ * Resolve `path` to its node, or NULL, with no error distinction.
+ */
 static krffs_node_t *krffs_walk(krffs_file_system_t *fs, const char *path)
 {
     return krffs_walk_e(fs, path, (int *)0);
 }
 
-/* Split path into its directory part and final component. dir gets the parent
- * path ("/" if the target is at the root), base gets the last component. */
+/**
+ * Split `path` into its directory part and final component.
+ *
+ * `dir` receives the parent path ("/" if the target sits at the root) and `base`
+ * the last component. Both buffers are KRFFS_FILE_NAME_BUFFER_SIZE and the output
+ * is truncated to fit.
+ */
 static void krffs_split_path(const char *path, char *dir, char *base)
 {
     const char *p = path;
@@ -359,8 +381,12 @@ static void krffs_split_path(const char *path, char *dir, char *base)
     base[i] = '\0';
 }
 
-/* Resolve a path that must name a directory; returns its logical id, or
- * (uint64_t)-1 if the path is not an existing directory. */
+/**
+ * Resolve a path that must name a directory and return its logical id.
+ *
+ * Returns KRFFS_ROOT_ID for "/", or (uint64_t)-1 if the path is not an existing
+ * directory.
+ */
 static uint64_t krffs_resolve_dir_id(krffs_file_system_t *fs, const char *path)
 {
     krffs_node_t *node = krffs_walk(fs, path);
@@ -369,7 +395,7 @@ static uint64_t krffs_resolve_dir_id(krffs_file_system_t *fs, const char *path)
         return (uint64_t)-1;
     }
     if (node == fs->node) {
-        return KRFFS_ROOT_ID; /* the root directory */
+        return KRFFS_ROOT_ID;
     }
     if (!KRFFS_IS_DIR(node->mode)) {
         return (uint64_t)-1;
@@ -377,10 +403,12 @@ static uint64_t krffs_resolve_dir_id(krffs_file_system_t *fs, const char *path)
     return node->id;
 }
 
-/*
- * Public path resolver: returns the node for `path` (the root node for "/"), or
- * NULL if any component is missing. The syscall layer uses it to attach a file or
- * directory to a file descriptor; callers inspect node->mode for the type.
+/**
+ * Resolve `path` to its node for the syscall layer.
+ *
+ * Returns the node for `path` (the root node for "/"), or NULL if any component
+ * is missing. Callers attach the node to a file descriptor and inspect
+ * node->mode for the type.
  */
 krffs_node_t *krffs_resolve(const char *path)
 {
@@ -390,11 +418,12 @@ krffs_node_t *krffs_resolve(const char *path)
     return krffs_walk(krffs_fs, path);
 }
 
-/*
- * Like krffs_resolve, but reports the failure kind through *err: 0 on success,
- * -ENOENT for a missing component, -ENOTDIR for a non-directory in the path. The
- * syscall layer uses this to return the right errno from open, stat, chdir, and
- * the *at calls.
+/**
+ * Like krffs_resolve, but report the failure kind through `err`.
+ *
+ * Sets *err to 0 on success, -ENOENT for a missing component, or -ENOTDIR for a
+ * non-directory in the path. The syscall layer uses this to return the right
+ * errno from open, stat, chdir, and the *at calls.
  */
 krffs_node_t *krffs_resolve_e(const char *path, int *err)
 {
@@ -407,12 +436,14 @@ krffs_node_t *krffs_resolve_e(const char *path, int *err)
     return krffs_walk_e(krffs_fs, path, err);
 }
 
-/*
- * Build the absolute path of `node` into buf (size bytes) by walking the
- * parent_id chain up to the root, then emitting the basenames in forward order.
- * Canonical by construction -- it follows real directory links, so it collapses
- * any '.'/'..' that were in the path used to reach the node. The root yields "/".
- * Returns 0 on success, -1 if the node is unreachable or the path does not fit.
+/**
+ * Build the absolute path of `node` into `buf` (size bytes).
+ *
+ * Walks the parent_id chain up to the root, then emits the basenames in forward
+ * order. Canonical by construction: it follows real directory links, so it
+ * collapses any '.' or '..' in the path used to reach the node. The root yields
+ * "/". Returns 0 on success, -1 if the node is unreachable or the path does not
+ * fit.
  */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
 {
@@ -427,18 +458,18 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
     }
 
     /* Collect basenames from the node up toward the root. krffs_find_node_by_id
-     * cannot return the root (it has the reserved id 0), so we stop as soon as a
-     * node's parent IS the root rather than trying to look the root up. */
+     * cannot return the root (it has the reserved id 0), so stop as soon as a
+     * node's parent IS the root rather than try to look the root up. */
     for (;;) {
         if (cur == krffs_fs->node || cur->id == (uint64_t)KRFFS_ROOT_ID) {
-            break; /* the node itself is the root (matched by pointer or id) */
+            break;
         }
         if (depth >= KRFFS_PATH_MAX_DEPTH) {
-            return -1; /* nested deeper than we can represent */
+            return -1;
         }
         names[depth++] = (const char *)cur->name;
         if (cur->parent_id == (uint64_t)KRFFS_ROOT_ID) {
-            break; /* parent is the root: every component is collected */
+            break;
         }
         cur = krffs_find_node_by_id(krffs_fs, cur->parent_id);
         if (!cur) {
@@ -446,7 +477,6 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
         }
     }
     if (depth == 0) {
-        /* The node is the root. */
         if (size < 2) {
             return -1;
         }
@@ -459,7 +489,7 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
     for (i = depth - 1; i >= 0; i--) {
         uint32_t n = (uint32_t)k_strlen(names[i]);
         if (pos + 1 + n + 1 > size) {
-            return -1; /* would not fit, including the NUL */
+            return -1; /* the path, including its NUL, would not fit */
         }
         buf[pos++] = '/';
         k_memcpy(buf + pos, names[i], n);
@@ -469,9 +499,12 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
     return 0;
 }
 
-/*
- * Open a file (checks if it exists)
- * Returns 0 on success, -1 if not found
+/**
+ * Check that `path` names an existing regular file.
+ *
+ * Returns 0 if so, -1 if the path is missing or names a directory (directories
+ * are opened through the *at directory API). It does not retain any state; the
+ * fd layer resolves and holds the node itself.
  */
 int krffs_open(const char *path)
 {
@@ -483,20 +516,18 @@ int krffs_open(const char *path)
 
     node = krffs_walk(krffs_fs, path);
     if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-        return -1; /* missing, or a directory (opened through the *at dir API) */
+        return -1;
     }
 
     return 0;
 }
 
-/*
- * Read file contents into buffer
- * Returns number of bytes read, or -1 on error
- */
-/*
- * Read directly from an already-resolved node (the fd layer holds the node
- * pointer, so it need not re-resolve a path -- which would fail for a file in a
- * subdirectory, whose node->name is only its basename). Returns bytes read.
+/**
+ * Read up to `size` bytes at `offset` from an already-resolved node.
+ *
+ * The fd layer holds the node pointer, so it need not re-resolve a path, which
+ * would fail for a file in a subdirectory whose node->name is only its basename.
+ * Returns the number of bytes read (0 past end of file), or -1 on error.
  */
 int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
                     uint32_t offset)
@@ -510,7 +541,7 @@ int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
     }
     data_size = node->data_size;
     if ((uint64_t)offset >= data_size) {
-        return 0; /* offset past end of file */
+        return 0;
     }
     if ((uint64_t)offset + size > data_size) {
         size = (uint32_t)(data_size - offset);
@@ -522,6 +553,9 @@ int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
     return (int)size;
 }
 
+/**
+ * Resolve `path` and read from it via krffs_read_node.
+ */
 int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset)
 {
     krffs_node_t *node;
@@ -536,9 +570,8 @@ int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset)
     return krffs_read_node(node, buffer, size, offset);
 }
 
-/*
- * Get file size
- * Returns file size or 0 if not found
+/**
+ * Return the data size of the file at `path`, or 0 if it does not exist.
  */
 uint32_t krffs_get_file_size(const char *path)
 {
@@ -556,8 +589,8 @@ uint32_t krffs_get_file_size(const char *path)
     return (uint32_t)node->data_size;
 }
 
-/*
- * Count number of files (reserved nodes)
+/**
+ * Count the reserved nodes (files and directories) in the file system.
  */
 uint32_t krffs_count_files(void)
 {
@@ -578,8 +611,8 @@ uint32_t krffs_count_files(void)
     return count;
 }
 
-/*
- * List all files to serial output
+/**
+ * Print every reserved node's name and size to the serial console.
  */
 void krffs_list_files(void)
 {
@@ -607,13 +640,8 @@ void krffs_list_files(void)
     }
 }
 
-/*
- * ========== Phase 12: Write Operations ==========
- */
+/* Freestanding: no libc, so the write path carries its own memcpy and strncpy. */
 
-/*
- * Helper: copy memory (no memcpy in kernel)
- */
 static void _krffs_memcpy(void *dest, const void *src, uint32_t n)
 {
     char *d = (char *)dest;
@@ -624,9 +652,6 @@ static void _krffs_memcpy(void *dest, const void *src, uint32_t n)
     }
 }
 
-/*
- * Helper: copy string with limit (no strncpy in kernel)
- */
 static void _krffs_strncpy(char *dest, const char *src, uint32_t n)
 {
     uint32_t i;
@@ -638,8 +663,9 @@ static void _krffs_strncpy(char *dest, const char *src, uint32_t n)
     }
 }
 
-/*
- * Initialize a free node
+/**
+ * Stamp a region as a free node of `size` bytes whose predecessor was
+ * `previous_node_size` bytes.
  */
 krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size, uint64_t previous_node_size)
 {
@@ -656,8 +682,11 @@ krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size, uint
     return node;
 }
 
-/*
- * Set reserved node name and compute DJB hash
+/**
+ * Copy `name` into a reserved node and set its id to DJB(name).
+ *
+ * Used for regular files, whose id is never referenced by a child. Directory
+ * ids must instead come from krffs_mix_id so that parent_id lookups stay unique.
  */
 void krffs_set_reserved_node_name(krffs_node_t *node, const char *name)
 {
@@ -670,9 +699,14 @@ void krffs_set_reserved_node_name(krffs_node_t *node, const char *name)
     node->id = krffs_calculate_djb_hash(node->name);
 }
 
-/*
- * K&R first-fit allocator: allocate a reserved node
- * If original_node is provided, copies metadata and data from it
+/**
+ * Allocate a reserved node with room for `size` data bytes (K&R first-fit).
+ *
+ * Scans the list for the first free node large enough for the header plus
+ * `size`. A larger free node is split, leaving the remainder free, unless the
+ * remainder is too small to hold a header (then the whole node is taken). If
+ * `original` is non-NULL its metadata and data are copied into the new node, as
+ * the relocation half of a grow. Returns the node, or NULL if no block fits.
  */
 krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size, krffs_node_t *original)
 {
@@ -690,35 +724,29 @@ krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t siz
     do {
         if (node->type == KRFFS_FREE_NODE && node->size >= size_with_header) {
             if (node->size > size_with_header) {
-                /* Found a larger block, splitting it */
                 uint64_t total_size = node->size;
                 uint64_t second_half_size = total_size - size_with_header;
 
-                /* Second part must be big enough for a header */
+                /* Split only if the tail can hold a node header of its own;
+                 * otherwise leave the slack inside this node. */
                 if (second_half_size >= sizeof(krffs_node_t)) {
                     krffs_node_t *next_node;
 
-                    /* Mark first half as used */
                     node->size = size_with_header;
 
-                    /* Move to second half */
                     next_node = krffs_get_next_node(fs, node);
-
-                    /* Initialize second half as free */
                     krffs_initialize_free_node(next_node, second_half_size, size_with_header);
 
-                    /* Update next block's previous_node_size */
+                    /* Repair the following node's back link to the new tail. */
                     next_node = krffs_get_next_node(fs, next_node);
                     next_node->previous_node_size = second_half_size;
                 }
             }
 
-            /* Initialize as reserved node */
             node->type = KRFFS_RESERVED_NODE;
             node->data_size = size;
 
             if (original) {
-                /* Copy metadata from original */
                 _krffs_strncpy((char *)node->name, (char *)original->name, KRFFS_FILE_NAME_BUFFER_SIZE);
                 node->name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
                 node->id = original->id;
@@ -729,7 +757,6 @@ krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t siz
                 node->modification_time = original->modification_time;
                 node->attribute_change_time = original->attribute_change_time;
 
-                /* Copy data if present */
                 if (original->data_size > 0) {
                     _krffs_memcpy(node + 1, original + 1, (uint32_t)original->data_size);
                 }
@@ -742,8 +769,16 @@ krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t siz
     return result;
 }
 
-/*
- * K&R allocator: resize a reserved node
+/**
+ * Resize a reserved node to hold `size` data bytes (K&R allocator).
+ *
+ * Growing extends into the adjacent free node when one is large enough;
+ * otherwise the node is relocated to a fresh allocation and the old one freed,
+ * so the returned pointer may differ from the argument. Shrinking returns the
+ * surplus to the free list, coalescing with a following free node. In either
+ * direction a remainder too small for a header is absorbed into the node rather
+ * than left as an unusable fragment. Returns the (possibly moved) node, or NULL
+ * if a relocation could not find space.
  */
 krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node, uint64_t size)
 {
@@ -761,7 +796,6 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
 
     size_with_header = sizeof(krffs_node_t) + size;
 
-    /* Same size - nothing to do */
     if (node->size == size_with_header) {
         return node;
     }
@@ -769,13 +803,11 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
     next_node = krffs_get_next_node(fs, node);
 
     if (size_with_header > node->size) {
-        /* Need to increase size */
         uint64_t difference = size_with_header - node->size;
 
         if (next_node != fs->node &&
             next_node->type == KRFFS_FREE_NODE &&
             next_node->size >= difference) {
-            /* Extend into adjacent free block */
             uint64_t node_size;
             uint64_t next_node_size = next_node->size - difference;
 
@@ -787,10 +819,9 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
 
             if (next_node_size > 0) {
                 if (next_node_size < sizeof(krffs_node_t)) {
-                    /* Not enough for header, extend reserved node further */
+                    /* Remainder cannot hold a header: absorb it. */
                     node->size += next_node_size;
                 } else {
-                    /* Resize the free block */
                     node = krffs_get_next_node(fs, node);
                     krffs_initialize_free_node(node, next_node_size, node_size);
                 }
@@ -799,14 +830,13 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
             next_node = krffs_get_next_node(fs, node);
             next_node->previous_node_size = node->size;
         } else {
-            /* Not enough adjacent space, relocate */
+            /* No adjacent room: relocate, then free the old node. */
             result = krffs_allocate_reserved_node(fs, size, node);
             if (result) {
                 krffs_remove_reserved_node(fs, node);
             }
         }
     } else {
-        /* Shrinking */
         uint64_t difference = node->size - size_with_header;
 
         node->size = size_with_header;
@@ -814,16 +844,15 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
         result = node;
 
         if (next_node->type == KRFFS_FREE_NODE) {
-            /* Combine with adjacent free block */
+            /* Merge the surplus with the following free node. */
             node = krffs_get_next_node(fs, node);
             krffs_initialize_free_node(node, difference + next_node->size, size_with_header);
             next_node = krffs_get_next_node(fs, node);
         } else {
             if (difference < sizeof(krffs_node_t)) {
-                /* Not enough for header, extend reserved node back */
+                /* Surplus cannot hold a header: absorb it. */
                 node->size += difference;
             } else {
-                /* Create new free block */
                 node = krffs_get_next_node(fs, node);
                 krffs_initialize_free_node(node, difference, size_with_header);
             }
@@ -835,8 +864,13 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
     return result;
 }
 
-/*
- * K&R allocator: remove a reserved node (mark as free and coalesce)
+/**
+ * Free a reserved node and coalesce it with adjacent free neighbors.
+ *
+ * Marks the node free, then merges forward with a free successor and backward
+ * with a free predecessor, so the free list never holds two adjacent free nodes.
+ * When the merged extent changes size, the following node's back link is
+ * repaired to point at the new size.
  */
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
@@ -852,43 +886,40 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
         return;
     }
 
-    /* Get previous node (if not at start) */
+    /* The first node has no predecessor to merge with; the last has no
+     * successor (next would wrap to the root). */
     if (node != fs->node) {
         previous_node = krffs_get_previous_node(fs, node);
     }
-
-    /* Get next node */
     next_node = krffs_get_next_node(fs, node);
     if (next_node == fs->node) {
         next_node = NULL;
     }
 
-    /* Mark as free */
     node->type = KRFFS_FREE_NODE;
 
-    /* Try to coalesce with next free block */
     if (next_node && next_node->type == KRFFS_FREE_NODE) {
         node->size += next_node->size;
         size_changed = true;
     }
-
-    /* Try to coalesce with previous free block */
     if (previous_node && previous_node->type == KRFFS_FREE_NODE) {
         previous_node->size += node->size;
         node = previous_node;
         size_changed = true;
     }
 
-    /* Update next block's previous_node_size if needed */
     if (size_changed) {
         next_node = krffs_get_next_node(fs, node);
         next_node->previous_node_size = node->size;
     }
 }
 
-/*
- * Create a new empty file
- * Returns 0 on success, -1 on error
+/**
+ * Create an empty regular file at `path`.
+ *
+ * Idempotent like creat: an existing name (file or directory) returns success.
+ * The parent directory must already exist. Returns 0 on success, -1 if the
+ * parent is missing or no node could be allocated.
  */
 int krffs_create(const char *path)
 {
@@ -901,38 +932,32 @@ int krffs_create(const char *path)
         return -1;
     }
 
-    /* Already exists (file or directory of that name) -> success, like creat. */
     if (krffs_walk(krffs_fs, path)) {
         return 0;
     }
 
-    /* Resolve the parent directory; the leaf must be created inside it. */
     krffs_split_path(path, dir, base);
     if (base[0] == '\0') {
         return -1;
     }
     parent_id = krffs_resolve_dir_id(krffs_fs, dir);
     if (parent_id == (uint64_t)-1) {
-        return -1; /* parent directory does not exist */
+        return -1;
     }
 
-    /* Allocate a new reserved node with 0 data size */
     node = krffs_allocate_reserved_node(krffs_fs, 0, NULL);
     if (!node) {
         return -1;
     }
 
-    /* Set the leaf name (sets id = DJB(base), never referenced for a file) and
-     * its containing directory. */
     krffs_set_reserved_node_name(node, base);
     node->parent_id = parent_id;
 
-    /* Set default mode and uid/gid */
     node->mode = 0644;  /* rw-r--r-- regular file */
     node->uid = 0;
     node->gid = 0;
 
-    /* Set timestamps to 0 (we don't have a real clock) */
+    /* No real clock: timestamps are zero. */
     node->access_time.seconds = 0;
     node->access_time.nanoseconds = 0;
     node->modification_time.seconds = 0;
@@ -943,14 +968,12 @@ int krffs_create(const char *path)
     return 0;
 }
 
-/*
- * Write data to a file
- * Returns number of bytes written, or -1 on error
- */
-/*
- * Write directly to an already-resolved node. The node may be relocated by a
- * grow (krffs_resize_reserved_node), so *nodep is updated in place -- the fd
- * layer must store the result so its descriptor keeps pointing at the file.
+/**
+ * Write `size` bytes at `offset` into an already-resolved node.
+ *
+ * A write past the node's capacity grows it, which may relocate the node, so
+ * *nodep is updated in place. The fd layer must store the result so its
+ * descriptor keeps pointing at the file. Returns bytes written, or -1 on error.
  */
 int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
                      uint32_t offset)
@@ -973,7 +996,7 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
         if (!node) {
             return -1;
         }
-        *nodep = node; /* the node may have moved */
+        *nodep = node;
         base = node + 1;
     }
     if (new_size > node->data_size) {
@@ -983,6 +1006,9 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
     return (int)size;
 }
 
+/**
+ * Resolve `path` and write to it via krffs_write_node.
+ */
 int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t offset)
 {
     krffs_node_t *node;
@@ -998,9 +1024,11 @@ int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t of
     return krffs_write_node(&node, buffer, size, offset);
 }
 
-/*
- * Truncate (resize) a file
- * Returns 0 on success, -1 on error
+/**
+ * Resize the file at `path` to `new_size` bytes, zero-filling any growth.
+ *
+ * Returns 0 on success, -1 if the path is not a regular file or there is no
+ * space to grow it.
  */
 int krffs_truncate(const char *path, uint32_t new_size)
 {
@@ -1025,7 +1053,6 @@ int krffs_truncate(const char *path, uint32_t new_size)
         return -1;
     }
 
-    /* Zero-fill if extending */
     if ((uint64_t)new_size > old_data_size) {
         void *base = node + 1;
         char *dest = (char *)base + old_data_size;
@@ -1036,9 +1063,11 @@ int krffs_truncate(const char *path, uint32_t new_size)
     return 0;
 }
 
-/*
- * Delete a file
- * Returns 0 on success, -1 on error
+/**
+ * Remove the regular file at `path`.
+ *
+ * Returns 0 on success, -1 if the path is not a regular file (directories are
+ * removed by krffs_rmdir).
  */
 int krffs_unlink(const char *path)
 {
@@ -1051,16 +1080,19 @@ int krffs_unlink(const char *path)
     node = krffs_walk(krffs_fs, path);
     if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
         serial_printf("KRFFS: File '%s' not found for unlink\n", path);
-        return -1; /* not a regular file (rmdir removes directories) */
+        return -1;
     }
 
     krffs_remove_reserved_node(krffs_fs, node);
     return 0;
 }
 
-/*
- * Rename a file
- * Returns 0 on success, -1 on error
+/**
+ * Rename or move the regular file `old_path` to `new_path`.
+ *
+ * The destination directory must exist; an existing destination file is
+ * replaced. Renaming a directory is rejected (see below). Returns 0 on success,
+ * -1 on error.
  */
 int krffs_rename(const char *old_path, const char *new_path)
 {
@@ -1091,24 +1123,25 @@ int krffs_rename(const char *old_path, const char *new_path)
     }
     parent_id = krffs_resolve_dir_id(krffs_fs, dir);
     if (parent_id == (uint64_t)-1) {
-        return -1; /* destination directory does not exist */
+        return -1;
     }
 
-    /* If the destination name exists (and is not the source), drop it. */
+    /* Replace any existing destination (but not the source itself). */
     existing = krffs_walk(krffs_fs, new_path);
     if (existing && existing != node) {
         krffs_remove_reserved_node(krffs_fs, existing);
     }
 
-    /* Move: new name + new containing directory. */
     krffs_set_reserved_node_name(node, base);
     node->parent_id = parent_id;
     return 0;
 }
 
-/*
- * Create a directory at `path`. Returns 0 on success, -1 if the parent directory
- * is missing or the name is already taken.
+/**
+ * Create a directory at `path`.
+ *
+ * Returns 0 on success, -1 if the parent directory is missing or the name is
+ * already taken.
  */
 int krffs_mkdir(const char *path)
 {
@@ -1121,7 +1154,7 @@ int krffs_mkdir(const char *path)
         return -1;
     }
     if (krffs_walk(krffs_fs, path)) {
-        return -1; /* a file or directory of that name already exists */
+        return -1;
     }
 
     krffs_split_path(path, dir, base);
@@ -1138,8 +1171,8 @@ int krffs_mkdir(const char *path)
         return -1;
     }
 
-    /* A directory carries its name, the S_IFDIR mode, an empty body, and a UNIQUE
-     * id (mix of parent + name) that its children reference as their parent_id. */
+    /* A directory carries its name, the S_IFDIR mode, an empty body, and a unique
+     * id (mix of parent and name) that its children reference as their parent_id. */
     _krffs_strncpy((char *)node->name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     node->name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     node->parent_id = parent_id;
@@ -1156,9 +1189,10 @@ int krffs_mkdir(const char *path)
     return 0;
 }
 
-/*
- * Remove an empty directory. Returns 0, or -1 if `path` is not a directory or
- * still has children.
+/**
+ * Remove the empty directory at `path`.
+ *
+ * Returns 0, or -1 if `path` is not a directory or still has children.
  */
 int krffs_rmdir(const char *path)
 {
@@ -1177,7 +1211,7 @@ int krffs_rmdir(const char *path)
     scan = krffs_fs->node;
     do {
         if (scan->type == KRFFS_RESERVED_NODE && scan->parent_id == node->id) {
-            return -1; /* not empty */
+            return -1;
         }
     } while ((scan = krffs_get_next_node(krffs_fs, scan)) != krffs_fs->node);
 
@@ -1185,11 +1219,13 @@ int krffs_rmdir(const char *path)
     return 0;
 }
 
-/*
- * Directory iteration for getdents: copy the index-th child name of the directory
- * at `path` into name_out (NUL-terminated, up to buf_size) and report whether it
- * is itself a directory via is_dir_out. Returns 1 if a child was returned, 0 past
- * the end, -1 on error. Linear per index -- a teaching simplification.
+/**
+ * Return the `index`-th child of the directory at `path`, for getdents.
+ *
+ * Copies the child name into `name_out` (NUL-terminated, up to buf_size) and
+ * reports through is_dir_out whether the child is itself a directory. Returns 1
+ * if a child was returned, 0 past the end, -1 on error. Each call rescans the
+ * whole node list for the index, a teaching simplification.
  */
 int krffs_readdir(const char *path, uint32_t index, char *name_out,
                   uint32_t buf_size, int *is_dir_out)
@@ -1207,7 +1243,7 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out,
         return -1;
     }
     if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
-        return -1; /* not a directory */
+        return -1;
     }
     dir_id = (node == krffs_fs->node) ? KRFFS_ROOT_ID : node->id;
 
@@ -1229,12 +1265,15 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out,
         }
     } while ((scan = krffs_get_next_node(krffs_fs, scan)) != krffs_fs->node);
 
-    return 0; /* past the last entry */
+    return 0;
 }
 
-/*
- * Initialize KRFFS from a RAM disk
- * Returns 0 on success, -1 on failure
+/**
+ * Mount a KRFFS image laid out at `ramdisk_base` of `ramdisk_size` bytes.
+ *
+ * The first node is the root: it must carry KRFFS_FILE_SYSTEM_MAGIC and be of
+ * type KRFFS_ROOT_NODE. On success the global krffs_fs points at the mounted
+ * file system. Returns 0 on success, -1 if the image is too small or malformed.
  */
 int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
 {
@@ -1246,23 +1285,18 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
         return -1;
     }
 
-    /* Point to the root node */
     root = (krffs_node_t *)ramdisk_base;
 
-    /* Verify magic number */
     if (root->magic != KRFFS_FILE_SYSTEM_MAGIC) {
         serial_printf("KRFFS: Invalid magic 0x%X (expected 0x%X)\n",
                      root->magic, KRFFS_FILE_SYSTEM_MAGIC);
         return -1;
     }
-
-    /* Verify this is a root node */
     if (root->type != KRFFS_ROOT_NODE) {
         serial_printf("KRFFS: First node is not root (type=%d)\n", root->type);
         return -1;
     }
 
-    /* Set up the file system structure */
     _krffs_fs_instance.node = root;
     _krffs_fs_instance.size = ramdisk_size;
     krffs_fs = &_krffs_fs_instance;
