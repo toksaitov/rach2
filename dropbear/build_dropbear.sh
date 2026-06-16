@@ -2,7 +2,7 @@
 
 #
 # build_dropbear.sh: build a static-musl Dropbear SSH server for Rach2 from the
-# pinned, vendored tarball (Phase 23). Verifies the sha256, extracts, configures
+# pinned, vendored tarball. Verifies the sha256, extracts, configures
 # against the ported musl via the muslgcc wrapper (bundled libtomcrypt/libtommath,
 # no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the binary links static
 # non-PIE; Rach2's ELF loader does not relocate a PIE), applies the curated

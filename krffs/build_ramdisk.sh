@@ -43,7 +43,7 @@ fi
 # opt-in is for a STANDALONE `./build_ramdisk.sh` run after building the binary (`make
 # -C ../ports/doom`); the Make `ramdisk` target forces RAMDISK_WITH_DOOM=0, so `make`/
 # `make full` stay capstone-free and the staging never races the sibling ports/doom
-# build. A Make-wired bootable Doom capstone image is the next phase.
+# build.
 RAMDISK_WITH_DOOM=${RAMDISK_WITH_DOOM:-0}
 
 echo ""

@@ -25,7 +25,7 @@ MOUNT_POINT="mount_point"
 FS_FILE="file_system.krffs"
 DEMO_KEY="rach2_demo_ed25519"
 
-# Provision a demo SSH keypair for the dropbear login (Phase 23) if the operator
+# Provision a demo SSH keypair for the dropbear login if the operator
 # has not supplied one. Only the PUBLIC half is staged (into
 # /root/.ssh/authorized_keys by stagetree below); the private half stays on the
 # host; log in with `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost`.
@@ -80,8 +80,8 @@ for prog in hello filetest forktest shelltest dirtest stattest \
     fi
 done
 
-# Copy the statically-linked musl program (Phase 3 integration milestone), if
-# built. It lives under tests/musl and is linked against the ported libc. It is
+# Copy the statically-linked musl program if built. It lives under tests/musl and is
+# linked against the ported libc. It is
 # installed as "mhello" so it does not collide with the small freestanding test
 # named "hello" (the boot self-test's test_elf() reads a hardcoded "hello" into
 # an 8 KB scratch buffer that a real musl binary, ~20 KB, would not fit).
@@ -90,116 +90,116 @@ if [ -f "../tests/musl/hello" ]; then
     echo "  mhello (musl)"
 fi
 
-# The Phase 4 malloc/qsort integration program, installed as "mqsort".
+# The malloc/qsort program, installed as "mqsort".
 if [ -f "../tests/musl/mallocqsort" ]; then
     cp "../tests/musl/mallocqsort" "$MOUNT_POINT/mqsort"
     echo "  mqsort (musl)"
 fi
 
-# The Phase 5 fork/wait integration program, installed as "mcowfork".
+# The fork/wait program, installed as "mcowfork".
 if [ -f "../tests/musl/cowfork" ]; then
     cp "../tests/musl/cowfork" "$MOUNT_POINT/mcowfork"
     echo "  mcowfork (musl)"
 fi
 
-# The Phase 6 directory/file navigation program, installed as "mcatfile".
+# The directory/file navigation program, installed as "mcatfile".
 if [ -f "../tests/musl/catfile" ]; then
     cp "../tests/musl/catfile" "$MOUNT_POINT/mcatfile"
     echo "  mcatfile (musl)"
 fi
 
-# The Phase 7 time/sleep/random program, installed as "mtimemusl".
+# The time/sleep/random program, installed as "mtimemusl".
 if [ -f "../tests/musl/timemusl" ]; then
     cp "../tests/musl/timemusl" "$MOUNT_POINT/mtimemusl"
     echo "  mtimemusl (musl)"
 fi
 
-# The Phase 8 signals program, installed as "msigmusl".
+# The signals program, installed as "msigmusl".
 if [ -f "../tests/musl/sigmusl" ]; then
     cp "../tests/musl/sigmusl" "$MOUNT_POINT/msigmusl"
     echo "  msigmusl (musl)"
 fi
 
-# The Phase 8 Ctrl-C interrupt program, installed as "mctrlc".
+# The Ctrl-C interrupt program, installed as "mctrlc".
 if [ -f "../tests/musl/ctrlcmusl" ]; then
     cp "../tests/musl/ctrlcmusl" "$MOUNT_POINT/mctrlc"
     echo "  mctrlc (musl)"
 fi
 
-# The Phase 10 TCP send()/recv() round-trip program, installed as "mtcpsr".
+# The TCP send()/recv() round-trip program, installed as "mtcpsr".
 if [ -f "../tests/musl/tcpsendrecv" ]; then
     cp "../tests/musl/tcpsendrecv" "$MOUNT_POINT/mtcpsr"
     echo "  mtcpsr (musl)"
 fi
 
-# The Phase 11 shared-open-file-offset program, installed as "mofd".
+# The shared-open-file-offset program, installed as "mofd".
 if [ -f "../tests/musl/ofdmusl" ]; then
     cp "../tests/musl/ofdmusl" "$MOUNT_POINT/mofd"
     echo "  mofd (musl)"
 fi
 
-# The Phase 13 pipe+fork round-trip program, installed as "mpipe".
+# The pipe+fork round-trip program, installed as "mpipe".
 if [ -f "../tests/musl/pipemusl" ]; then
     cp "../tests/musl/pipemusl" "$MOUNT_POINT/mpipe"
     echo "  mpipe (musl)"
 fi
 
-# The Phase 14 poll()/select() program, installed as "mpoll".
+# The poll()/select() program, installed as "mpoll".
 if [ -f "../tests/musl/pollmusl" ]; then
     cp "../tests/musl/pollmusl" "$MOUNT_POINT/mpoll"
     echo "  mpoll (musl)"
 fi
 
-# The Phase 15 /dev + /proc + ttyname program, installed as "mdevtest".
+# The /dev + /proc + ttyname program, installed as "mdevtest".
 if [ -f "../tests/musl/devtest" ]; then
     cp "../tests/musl/devtest" "$MOUNT_POINT/mdevtest"
     echo "  mdevtest (musl)"
 fi
 
-# The Phase 16 termios program (tcgetattr/cfmakeraw/raw getch), as "mtty".
+# The termios program (tcgetattr/cfmakeraw/raw getch), as "mtty".
 if [ -f "../tests/musl/ttymusl" ]; then
     cp "../tests/musl/ttymusl" "$MOUNT_POINT/mtty"
     echo "  mtty (musl)"
 fi
 
-# The Phase 19 musl openpty()+fork pty round-trip program, installed as "mpty".
+# The openpty()+fork pty round-trip program, installed as "mpty".
 if [ -f "../tests/musl/ptymusl" ]; then
     cp "../tests/musl/ptymusl" "$MOUNT_POINT/mpty"
     echo "  mpty (musl)"
 fi
 
-# The Phase 19 live one-session budget probe, installed as "mbudget".
+# The live one-session budget probe, installed as "mbudget".
 if [ -f "../tests/musl/budgetmusl" ]; then
     cp "../tests/musl/budgetmusl" "$MOUNT_POINT/mbudget"
     echo "  mbudget (musl)"
 fi
 
-# The Phase 20 musl getrandom + /dev/urandom keygen-shape program, as "mrng".
+# The getrandom + /dev/urandom keygen-shape program, as "mrng".
 if [ -f "../tests/musl/rngmusl" ]; then
     cp "../tests/musl/rngmusl" "$MOUNT_POINT/mrng"
     echo "  mrng (musl)"
 fi
 
-# The Phase 21 socket server-side fill-out probe, installed as "msockfill".
+# The socket server-side fill-out probe, installed as "msockfill".
 if [ -f "../tests/musl/sockfillmusl" ]; then
     cp "../tests/musl/sockfillmusl" "$MOUNT_POINT/msockfill"
     echo "  msockfill (musl)"
 fi
 
-# The Phase 22 musl auth/identity + tail-syscall probe, installed as "mauth".
+# The auth/identity + tail-syscall probe, installed as "mauth".
 if [ -f "../tests/musl/authmusl" ]; then
     cp "../tests/musl/authmusl" "$MOUNT_POINT/mauth"
     echo "  mauth (musl)"
 fi
 
-# The Phase 23 musl permission/identity probe (fsync/link/chmod/chown/seteuid),
+# The permission/identity probe (fsync/link/chmod/chown/seteuid),
 # installed as "mperm".
 if [ -f "../tests/musl/permmusl" ]; then
     cp "../tests/musl/permmusl" "$MOUNT_POINT/mperm"
     echo "  mperm (musl)"
 fi
 
-# The Phase 9 musl-linked Unix utilities, under their real names so the combined
+# The musl-linked Unix utilities, under their real names so the combined
 # boot can exercise them (e.g. "exec cat hello.txt", "exec ls", "exec echo hi").
 for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; do
     if [ -f "../utils/$util" ]; then
@@ -208,21 +208,21 @@ for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; d
     fi
 done
 
-# The Phase 18 busybox capstone (static musl, ~190 KB), if built.
+# The busybox capstone (static musl, ~190 KB), if built.
 if [ -f "../tests/busybox" ]; then
     cp "../tests/busybox" "$MOUNT_POINT/busybox"
-    echo "  busybox (Phase 18)"
-    # Also install it as the flat-root login shell /sh: dropbear (Phase 23) execs
+    echo "  busybox"
+    # Also install it as the flat-root login shell /sh: dropbear execs
     # the /etc/passwd shell, and busybox invoked with basename "sh" runs ash. A
     # flat-root copy works through the krffs FUSE mount (which cannot mkdir).
     cp "../tests/busybox" "$MOUNT_POINT/sh"
     echo "  sh (busybox login shell for dropbear)"
 fi
 
-# The Phase 23 dropbear SSH server (static musl), if built.
+# The dropbear SSH server (static musl), if built.
 if [ -f "../tests/dropbearmulti" ]; then
     cp "../tests/dropbearmulti" "$MOUNT_POINT/dropbearmulti"
-    echo "  dropbearmulti (Phase 23)"
+    echo "  dropbearmulti"
 fi
 
 # Also copy hello.txt for file tests
@@ -255,7 +255,7 @@ fi
 # Stage a real directory tree (/etc) directly into the unmounted image, so the
 # guest boots with populated directories (not just a flat root). This writes v2
 # hierarchical nodes the kernel resolver reads, proving the host tools speak the
-# directory format, the integration half of Phase 6.
+# directory format.
 echo ""
 echo "=== Staging directory tree (/etc) ==="
 ./stagetree.krffs "$FS_FILE"

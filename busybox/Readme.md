@@ -1,6 +1,6 @@
-# BusyBox for Rach2 (Phase 18)
+# BusyBox for Rach2
 
-A static BusyBox 1.36.1 linked against the ported musl (`libc/install`), run as the interactive job-control shell (`ash`) on the console tty. Phase 18, the Part II-A capstone.
+A static BusyBox 1.36.1 linked against the ported musl (`libc/install`), run as the interactive job-control shell (`ash`) on the console tty.
 
 ## Build
 

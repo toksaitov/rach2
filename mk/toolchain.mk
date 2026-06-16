@@ -29,7 +29,7 @@ CROSS_CC := $(or $(CROSS_CC),\
 # goal) or ANY goal other than clean (but not when clean is the sole goal)
 # (`make clean` on a box without the cross GCC must work). `$(or $(MAKECMDGOALS),
 # build)` stands in a placeholder for the empty default-build goal list. `make
-# doctor` (Phase 26) explains how to install the toolchain.
+# doctor` explains how to install the toolchain.
 ifeq ($(strip $(CROSS_CC)),)
 ifneq ($(filter-out clean,$(or $(MAKECMDGOALS),build)),)
 $(error no cross compiler found: install i686-elf-gcc (or x86_64-elf-gcc), or pass CROSS_CC=/path/to/gcc -- see `make doctor`)

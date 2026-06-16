@@ -102,8 +102,7 @@ ports/doom: rach2
 # Base RAM disk. Force RAMDISK_WITH_DOOM=0 so the Make-driven build is always
 # capstone-free: a stray `RAMDISK_WITH_DOOM=1 make -j full` can then never make the
 # staging script copy ../ports/doom/doom while the sibling ports/doom target is
-# rebuilding it. (The env var is honored only for a standalone `./build_ramdisk.sh`;
-# the build/stage split + a Make-wired Doom capstone image are the next phase.)
+# rebuilding it. (The env var is honored only for a standalone `./build_ramdisk.sh`.)
 ramdisk: $(BASE_DIRS)
 	cd krffs && RAMDISK_WITH_DOOM=0 SKIP_BUILD=1 ./build_ramdisk.sh
 

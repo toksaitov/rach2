@@ -1,6 +1,6 @@
-# Dropbear SSH for Rach2 (Phase 23, the capstone)
+# Dropbear SSH for Rach2
 
-A static Dropbear 2022.83 SSH server linked against the ported musl (`libc/install`). Phase 23, the Part II finale: a real OpenSSH client does
+A static Dropbear 2022.83 SSH server linked against the ported musl (`libc/install`). A real OpenSSH client does
 
     ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 
@@ -24,7 +24,7 @@ From the kernel debug shell, with the RAM disk attached:
 
     exec dropbearmulti dropbear -F -R -p 22
 
-* `-cpu max` (the default in `run*.sh`) is mandatory. Dropbear seeds its CSPRNG from the kernel's trusted entropy (Phase 20); the default QEMU i386 CPU exposes no RDRAND/RDSEED, so `getrandom`/`/dev/urandom` fail closed and key generation cannot run.
+* `-cpu max` (the default in `run*.sh`) is mandatory. Dropbear seeds its CSPRNG from the kernel's trusted entropy; the default QEMU i386 CPU exposes no RDRAND/RDSEED, so `getrandom`/`/dev/urandom` fail closed and key generation cannot run.
 * `-R` auto-generates the host key on first connection into `/etc/dropbear/` (staged as an empty dir by `krffs/stagetree.krffs.c`).
 * `-F` keeps it in the foreground. Do NOT pass `-E`; it is invalid without syslog (stderr is already the default log sink).
 
