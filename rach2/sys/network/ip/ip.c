@@ -22,6 +22,14 @@
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 
+/**
+ * Compute the one's complement checksum over `len` bytes of `buf`.
+ *
+ * Sums 16-bit big-endian words, folding each carry back into the low 16 bits,
+ * and returns the one's complement of the result. An odd trailing byte is
+ * padded with a zero low byte. A header that already carries a valid checksum
+ * sums to zero, so callers verify by checking the result against zero.
+ */
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
 {
     uint32_t sum = 0;
@@ -43,6 +51,15 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
     return (uint16_t)(~sum & 0xFFFF);
 }
 
+/**
+ * Validate one received IPv4 datagram and dispatch it to the upper protocol.
+ *
+ * Drops anything malformed or not for us: a short buffer, a non-4 version, an
+ * IHL or total length that does not fit the frame, a fragment (we do no
+ * reassembly), a bad header checksum, or a destination that is not our address.
+ * Options are skipped using IHL; the payload handed to the upper layer starts
+ * at the header end and runs to `total_len`.
+ */
 void ip_rx(const uint8_t *data, uint16_t len)
 {
     uint8_t  ihl, proto;
@@ -110,6 +127,15 @@ static uint16_t ip_id_counter = 0;
 /* TX assembly buffer at file scope. */
 static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
 
+/**
+ * Build an IPv4 datagram around `payload` and hand it to the link layer.
+ *
+ * Routes on-subnet destinations directly and everything else through the
+ * gateway, then resolves the next hop's MAC by ARP. On an ARP miss it sends a
+ * request and drops this packet; the caller retries once the cache is warm.
+ * The header is emitted with DF set and no fragmentation, so payloads over the
+ * 1500-byte MTU are dropped rather than split.
+ */
 void ip_tx(uint32_t dst_ip, uint8_t proto,
            const uint8_t *payload, uint16_t plen)
 {
@@ -131,10 +157,6 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
         route_ip = NET_IP_GATEWAY;
     }
 
-    /*
-     * On an ARP miss, send a request and drop this packet. The caller (ICMP
-     * ping, UDP/TCP send) retries, and by then the reply has warmed the cache.
-     */
     if (!arp_lookup(route_ip, dst_mac)) {
         arp_request(route_ip);
         return;

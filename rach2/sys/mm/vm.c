@@ -5,6 +5,12 @@
 /* A VMA boundary must be page-aligned (4 KB). */
 #define VM_PAGE_MASK 0xFFFu
 
+/**
+ * Reset an address space to empty.
+ *
+ * Clears every VMA slot and zeroes the heap, brk, stack limit, and mmap
+ * cursor. The space owns no mappings until vm_insert adds them.
+ */
 void vm_init(vm_space_t *vm)
 {
     uint32_t i;
@@ -22,6 +28,11 @@ void vm_init(vm_space_t *vm)
     vm->mmap_top = 0;
 }
 
+/**
+ * Return the VMA containing addr, or NULL if none does.
+ *
+ * Regions are half-open [start, end), so end is not part of the region.
+ */
 vma_t *vm_find(vm_space_t *vm, uint32_t addr)
 {
     uint32_t i;
@@ -34,6 +45,9 @@ vma_t *vm_find(vm_space_t *vm, uint32_t addr)
     return NULL;
 }
 
+/**
+ * Report whether [start, end) intersects any existing region.
+ */
 int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end)
 {
     uint32_t i;
@@ -48,6 +62,13 @@ int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end)
     return 0;
 }
 
+/**
+ * Add region [start, end) with the given protection and type.
+ *
+ * The range must be non-empty, page-aligned at both ends, and clear of every
+ * existing region; there must be a free slot. Returns 0 on success or -1 if
+ * any of those conditions fails.
+ */
 int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type)
 {
     vma_t *slot;
@@ -74,6 +95,14 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
     return 0;
 }
 
+/**
+ * Remove the span [start, end) from every region it touches.
+ *
+ * A fully covered region is dropped, a region clipped at one end is trimmed,
+ * and a region straddling the span is split in two. VMA order is irrelevant,
+ * so a dropped region's slot is filled from the end of the array. Returns 0,
+ * or -1 if a split needs a free slot and none is available.
+ */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
 {
     uint32_t i;
@@ -124,6 +153,14 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
     return 0;
 }
 
+/**
+ * Extend a stack region downward to cover the faulting page.
+ *
+ * Returns 1 if a stack region was grown to include page, 0 otherwise. The page
+ * must lie just below a VM_STACK region and at or above the stack limit, and
+ * the growth window must not swallow any other region: a hostile ELF segment
+ * or mmap inside that window must not be absorbed into the stack.
+ */
 int vm_grow_stack(vm_space_t *vm, uint32_t page)
 {
     uint32_t i, j;

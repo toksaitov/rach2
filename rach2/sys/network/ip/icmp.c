@@ -43,6 +43,17 @@ static uint16_t          ping_seq      = 0;
 /* Kernel tick counter, for the timeout. */
 extern volatile uint32_t kernel_ticks;
 
+/**
+ * Handle one received ICMP datagram: answer echo requests, match echo replies.
+ *
+ * An echo request is reflected back to its source: the payload is copied
+ * verbatim, the type is changed to reply, and the checksum is recomputed.
+ * An echo reply is accepted only if it matches the single ping in flight by
+ * source address, identifier, and sequence; a match sets `ping_replied`.
+ *
+ * @param src_ip source address of the datagram, host byte order.
+ * @param len ICMP length; datagrams shorter than the 8-byte header are dropped.
+ */
 void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
 {
     if (len < 8) {
@@ -50,7 +61,6 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     }
 
     if (data[0] == ICMP_ECHO_REQUEST) {
-        /* Reply: copy the request verbatim, flip the type, re-checksum. */
         if (len > 1500) {
             len = 1500;
         }
@@ -61,7 +71,6 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         write16be(icmp_reply_buf + 2, ip_checksum(icmp_reply_buf, len));
         ip_tx(src_ip, IP_PROTO_ICMP, icmp_reply_buf, len);
     } else if (data[0] == ICMP_ECHO_REPLY) {
-        /* Match against the ping in flight before accepting it. */
         uint16_t id  = read16be(data + 4);
         uint16_t seq = read16be(data + 6);
         if (ping_active && src_ip == ping_peer_ip &&
@@ -71,6 +80,16 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     }
 }
 
+/**
+ * Send an ICMP echo request to `dst_ip` and wait for the matching reply.
+ *
+ * Caller must run where the timer will not preempt it away (a syscall, or the
+ * boot shell). The first request on a cold ARP cache is dropped, so up to
+ * `ICMP_PING_ATTEMPTS` are sent; an early attempt warms the cache. Each attempt
+ * polls with sti/hlt for up to `ICMP_PING_WAIT` ticks.
+ *
+ * @return round-trip time in ticks, or -1 if every attempt timed out.
+ */
 int icmp_ping(uint32_t dst_ip)
 {
     uint32_t start, flags;

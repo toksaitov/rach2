@@ -80,6 +80,12 @@ static void ap_int(char *buf, int cap, int *len, int v)
 
 /* ---- queries over the process table ---- */
 
+/**
+ * Resolve a /proc pid token to a live pid, or -1.
+ *
+ * SYNTH_PID_SELF maps to the caller's pid. A numeric pid must name a process
+ * that exists and is not PROC_UNUSED.
+ */
 int procfs_resolve_pid(int pid)
 {
     process_t *p;
@@ -112,10 +118,12 @@ static char proc_state_char(proc_state_t s)
     }
 }
 
-/*
- * /proc/<pid>/stat: the space-separated fields ps and friends parse. comm (field
- * 2) is wrapped in parentheses, with any stray parens scrubbed so a naive parser
- * that scans for the closing ')' is not fooled. Accounting fields we do not track
+/**
+ * Format /proc/<pid>/stat into `buf`, returning its length or -ENOENT.
+ *
+ * Emits the space-separated fields ps and friends parse. comm (field 2) is
+ * wrapped in parentheses, with any stray parens scrubbed so a naive parser that
+ * scans for the closing ')' is not fooled. Accounting fields we do not track
  * (faults, cpu time, sizes) are zero, but every field is present and in order.
  */
 static int procfs_gen_stat(int pid, char *buf, int cap)
@@ -158,8 +166,12 @@ static int procfs_gen_stat(int pid, char *buf, int cap)
     return len;
 }
 
-/* /proc/<pid>/cmdline: argv NUL-separated. We do not retain the full argv, so we
- * emit the program name as the single argument (busybox falls back to comm). */
+/**
+ * Format /proc/<pid>/cmdline into `buf`, returning its length or -ENOENT.
+ *
+ * argv is NUL-separated. We do not retain the full argv, so the program name is
+ * emitted as the single argument (busybox falls back to comm).
+ */
 static int procfs_gen_cmdline(int pid, char *buf, int cap)
 {
     process_t *p;
@@ -179,6 +191,14 @@ static int procfs_gen_cmdline(int pid, char *buf, int cap)
     return len;
 }
 
+/**
+ * Render the /proc/<pid>/fd/<fd> symlink target into `buf`, or -ENOENT.
+ *
+ * The target string matches what each descriptor type reports through the real
+ * Linux /proc: a path for files and dirs, /dev/console, /dev/pts/N, /dev/ptmx,
+ * and the pipe:[1]/socket:[1]/anon_inode forms. musl ttyname_r relies on the
+ * /dev/pts/N spelling.
+ */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
     process_t *p;
@@ -261,6 +281,11 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     return len;
 }
 
+/**
+ * Return the pid of the n-th live process in process-table order, or -1.
+ *
+ * Lets a /proc directory read walk the table by index without exposing slots.
+ */
 int procfs_nth_pid(int n)
 {
     int i;
@@ -351,6 +376,16 @@ static void procfs_close(fd_entry_t *e)
 static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procfs_poll,
                                                 procfs_ioctl, procfs_close};
 
+/**
+ * Open a /proc/<pid>/{stat,cmdline} file, returning a descriptor or -errno.
+ *
+ * The text is generated and snapshotted into a pooled slot at open, then served
+ * read-only through procfs_file_ops; the slot returns to the pool on the last
+ * close. These files are read-only regular files, so the open-flag checks are
+ * ordered to report the conventional errno: O_CREAT|O_EXCL on an existing file
+ * is -EEXIST first, then O_DIRECTORY is -ENOTDIR, then any write or create
+ * intent is -EACCES.
+ */
 int procfs_open(const struct vpath *vp, int flags)
 {
     int pid;
@@ -362,9 +397,6 @@ int procfs_open(const struct vpath *vp, int flags)
     if (pid < 0) {
         return -ENOENT;
     }
-    /* A /proc file is a read-only regular file. An exclusive create of the existing
-     * file is -EEXIST first; then it is not a directory; then not writable or
-     * creatable. */
     if ((flags & 0100 /* O_CREAT */) && (flags & 0200 /* O_EXCL */)) {
         return -EEXIST;
     }

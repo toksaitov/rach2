@@ -23,6 +23,12 @@
 /* Socket pool, allocated from kernel memory at init (kept out of BSS). */
 static socket_t *socket_pool;
 
+/**
+ * Reserve the socket pool from kernel memory.
+ *
+ * Allocated rather than placed in BSS so the table does not bloat the kernel
+ * image. A failed reservation leaves the pool NULL; socket_alloc then fails.
+ */
 void socket_init(void)
 {
     socket_pool = (socket_t *)mem_reserve(sizeof(socket_t) * MAX_SOCKETS, true);
@@ -31,6 +37,15 @@ void socket_init(void)
     }
 }
 
+/**
+ * Claim a free socket slot and initialize it for the given type.
+ *
+ * Returns a socket with refcount 1 and clean protocol state, or NULL if the
+ * pool is exhausted. The scan runs under net_lock because the slot table is
+ * shared with the IRQ-context allocator (an incoming SYN claims a slot too).
+ *
+ * @param type SOCK_DGRAM or SOCK_STREAM.
+ */
 struct socket *socket_alloc(int type)
 {
     int i;
@@ -82,6 +97,13 @@ void socket_ref(struct socket *sock)
     }
 }
 
+/**
+ * Drop a reference and tear the socket down at zero.
+ *
+ * At the last reference, unbind the UDP port or close the TCP connection and
+ * return the slot to the pool. tcp_close detaches the TCB so it can finish the
+ * FIN handshake on its own after the slot is freed.
+ */
 void socket_unref(struct socket *sock)
 {
     uint32_t flags;
@@ -101,12 +123,9 @@ void socket_unref(struct socket *sock)
         return;
     }
 
-    /* Last reference: tear down protocol state and return the slot. */
     if (sock->type == SOCK_DGRAM && sock->local_port != 0) {
         udp_unbind(sock->local_port);
     } else if (sock->type == SOCK_STREAM && sock->tcb) {
-        /* tcp_close detaches the TCB so it can finish the FIN handshake on
-         * its own after the socket slot is freed. */
         tcp_close(sock);
     }
 
@@ -114,6 +133,13 @@ void socket_unref(struct socket *sock)
     net_unlock(flags);
 }
 
+/**
+ * Deliver a received datagram into a UDP socket and wake its waiter.
+ *
+ * Called from the IRQ-side receive path. The single-datagram buffer holds at
+ * most SOCK_RECV_BUF_SIZE bytes; a longer payload is truncated. The source
+ * address is recorded for a later recvfrom.
+ */
 void socket_udp_deliver(struct socket *sock,
                         uint32_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len)
@@ -153,14 +179,23 @@ static int tcp_recv_ready(void *arg)
            tcb->state == TCP_CLOSED;
 }
 
+/**
+ * Blocking UDP receive: wait for a datagram, then copy it out.
+ *
+ * Sleeps until a datagram is buffered; a pending signal unwinds the wait and
+ * returns -EINTR. A payload longer than `len` is truncated to `len` (the
+ * remainder of the single-datagram buffer is discarded, as for SOCK_DGRAM).
+ *
+ * @param src_ip   if non-NULL, receives the sender's address.
+ * @param src_port if non-NULL, receives the sender's port.
+ * @return bytes copied, or a negative errno.
+ */
 int socket_recv(struct socket *sock, uint8_t *buf, int len,
                 uint32_t *src_ip, uint16_t *src_port)
 {
     int copy_len;
     int rc;
 
-    /* Block until a datagram arrives, yielding so other processes run; a pending
-     * signal unwinds the wait with -EINTR. */
     rc = wq_wait_event(&sock->waiters, udp_recv_ready, sock);
     if (rc < 0) {
         return rc;
@@ -183,6 +218,11 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len,
     return copy_len;
 }
 
+/**
+ * Non-blocking UDP receive: copy a buffered datagram, else SOCK_EAGAIN.
+ *
+ * Same copy and source-address contract as socket_recv but never sleeps.
+ */
 int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
                     uint32_t *src_ip, uint16_t *src_port)
 {
@@ -214,6 +254,12 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
  * socket_tcp_recv, which is the blocking syscall path.
  */
 
+/**
+ * Queue an established connection on a listener and wake an accept waiter.
+ *
+ * Called from tcp_rx in IRQ context. The accept queue is a power-of-two ring;
+ * a full queue refuses the connection (see the body) rather than overrun.
+ */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
 {
     int next_tail;
@@ -242,6 +288,13 @@ void socket_tcp_connected(struct socket *sock)
     wq_wake_all(&sock->waiters);
 }
 
+/**
+ * Copy received stream bytes into the TCB receive ring and wake a reader.
+ *
+ * Called from tcp_rx in IRQ context. Copies at most the ring's free space;
+ * surplus bytes are dropped here, leaving the peer to retransmit them once the
+ * window reopens. recv_head/recv_tail are free-running indices masked to size.
+ */
 void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
 {
     struct tcb *tcb;
@@ -262,6 +315,14 @@ void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
     wq_wake_all(&sock->waiters);
 }
 
+/**
+ * Blocking stream receive from the TCB ring.
+ *
+ * Sleeps until data arrives, a FIN signals EOF, or the connection resets; a
+ * pending signal unwinds with -EINTR. Returns the byte count on data, 0 at EOF
+ * (FIN with no buffered data), and -1 on a reset/closed connection with no
+ * data.
+ */
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
 {
     struct tcb *tcb;
@@ -271,8 +332,6 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
     if (!sock || !sock->tcb) return -1;
     tcb = sock->tcb;
 
-    /* Block until data arrives, a FIN signals EOF, or the connection resets,
-     * yielding meanwhile; a pending signal unwinds with -EINTR. */
     rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
     if (rc < 0) {
         return rc;
@@ -294,6 +353,12 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
     return (int)copy_len;
 }
 
+/**
+ * Non-blocking stream receive: drain the ring, else report status.
+ *
+ * Never sleeps. With no buffered data: 0 on a half-closed peer (FIN), -1 on a
+ * reset/closed connection, and SOCK_EAGAIN otherwise.
+ */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
 {
     struct tcb *tcb;
@@ -302,8 +367,6 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
     if (!sock || !sock->tcb) return -1;
     tcb = sock->tcb;
 
-    /* Non-blocking: with no buffered data, report EOF on a half-closed peer, an
-     * error on a reset/closed connection, else EAGAIN -- never block. */
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0) {
         if (tcb->fin_received)        return 0;            /* EOF */
@@ -327,6 +390,16 @@ void socket_tcp_fin(struct socket *sock)
     wq_wake_all(&sock->waiters);
 }
 
+/**
+ * Map current socket state to poll revents.
+ *
+ * Returns the subset of the requested `events` that are ready now, plus any
+ * unconditional condition (POLLHUP, POLLNVAL). When `wq` is non-NULL it is set
+ * to the socket's wait queue so the poller can sleep on it. The readiness rules
+ * differ by socket kind and are noted at each site.
+ *
+ * @return the ready revents, or POLLNVAL for a NULL socket.
+ */
 short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
 {
     short revents = 0;

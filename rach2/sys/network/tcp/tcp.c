@@ -60,7 +60,12 @@ static struct tcb    *tcp_find(uint16_t local_port,
                                uint32_t remote_ip, uint16_t remote_port);
 static struct socket *tcp_find_listen_sock(uint16_t local_port);
 
-/* Generate an initial sequence number that varies with time and the tuple. */
+/**
+ * Generate an initial sequence number that varies with time and the tuple.
+ *
+ * Not a security ISN; just enough variation to avoid colliding with sequence
+ * numbers from a recently closed connection on the same port pair.
+ */
 static uint32_t tcp_isn(uint16_t local_port, uint16_t remote_port)
 {
     return kernel_ticks * 1103515245UL + 12345UL +
@@ -87,6 +92,13 @@ static void tcb_init(struct tcb *tcb)
     tcb->rto      = TCP_RTO_INIT;
 }
 
+/**
+ * Allocate a TCB from the shared pool, reclaiming a closing slot if full.
+ *
+ * Returns a free, initialized TCB, or NULL if none can be had. When every
+ * slot is in use, the soonest-to-expire TIME_WAIT or FIN_WAIT_2 connection is
+ * recycled rather than failing the new connection (see the reclaim note below).
+ */
 struct tcb *tcb_alloc(void)
 {
     int i;
@@ -340,6 +352,13 @@ static void tcp_pump(struct tcb *tcb)
     }
 }
 
+/**
+ * Queue up to `len` bytes for transmission and return the count accepted.
+ *
+ * Copies into the send ring (bounded by free space measured from the
+ * acknowledged position) and kicks tcp_output. Only valid in ESTABLISHED or
+ * CLOSE_WAIT; returns -1 on a bad socket, a negative length, or a wrong state.
+ */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len)
 {
     struct tcb *tcb;
@@ -455,6 +474,13 @@ static void tcp_giveup(struct tcb *tcb)
     }
 }
 
+/**
+ * Drive the per-connection timers, called once per kernel tick.
+ *
+ * Expires TIME_WAIT and FIN_WAIT_2 slots, runs the RTO timer (backing off and
+ * retransmitting, or giving up after TCP_MAX_RETX tries), and runs the
+ * zero-window probe timer.
+ */
 void tcp_tick(void)
 {
     int i;
@@ -535,6 +561,9 @@ void tcp_tick(void)
     }
 }
 
+/**
+ * Bind a socket to a port in the LISTEN state for passive opens.
+ */
 int tcp_listen(struct socket *sock, uint16_t port)
 {
     struct tcb *tcb;
@@ -559,6 +588,11 @@ int tcp_listen(struct socket *sock, uint16_t port)
     return 0;
 }
 
+/**
+ * Begin an active open: allocate a TCB, send the SYN, and enter SYN_SENT.
+ *
+ * Does not block; the handshake completes in tcp_rx and wakes the socket.
+ */
 int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 {
     struct tcb *tcb;
@@ -595,6 +629,14 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
     return 0;
 }
 
+/**
+ * Detach the socket and begin closing the connection.
+ *
+ * In ESTABLISHED or CLOSE_WAIT, flushes queued data and sends a FIN after the
+ * last byte (a graceful teardown that outlives the socket); otherwise frees
+ * the TCB. The socket is freed by the caller right after this returns, so the
+ * TCB is unlinked from it here.
+ */
 void tcp_close(struct socket *sock)
 {
     struct tcb *tcb;
@@ -627,6 +669,9 @@ void tcp_close(struct socket *sock)
     net_unlock(flags);
 }
 
+/**
+ * Report whether a stream socket has a peer (ESTABLISHED or any later state).
+ */
 int tcp_is_connected(struct socket *sock)
 {
     struct tcb *tcb;
@@ -647,6 +692,14 @@ int tcp_is_connected(struct socket *sock)
     return tcb->state >= TCP_ESTABLISHED;
 }
 
+/**
+ * Process an inbound segment, driving the state machine for its connection.
+ *
+ * Validates length and checksum, finds the matching connection (or the LISTEN
+ * TCB), handles RST, then dispatches on TCP state: completing handshakes,
+ * delivering in-order data and acknowledging, and stepping through the closing
+ * states. Called in IRQ context off the IP receive path.
+ */
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             const uint8_t *data, uint16_t len)
 {

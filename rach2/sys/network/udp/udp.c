@@ -23,7 +23,6 @@ typedef struct udp_binding {
 
 static udp_binding_t port_table[UDP_PORT_TABLE_SIZE];
 
-/* TX assembly buffer at file scope. */
 static uint8_t udp_tx_buf[UDP_HDR_SIZE + 1500];
 
 /* Next ephemeral port to try (kept inside the 49152-65535 range). */
@@ -41,6 +40,15 @@ static int udp_port_in_use(uint16_t port)
     return 0;
 }
 
+/**
+ * Bind a socket to a UDP port so udp_rx can route inbound datagrams to it.
+ *
+ * Fails if the port is already bound or the port table is full. The table is
+ * shared with udp_rx, which runs in IRQ context, so the update is done under
+ * net_lock.
+ *
+ * @return 0 on success, -1 on conflict or a full table.
+ */
 int udp_bind(uint16_t port, struct socket *sock)
 {
     int i;
@@ -70,6 +78,15 @@ int udp_bind(uint16_t port, struct socket *sock)
     return -1;
 }
 
+/**
+ * Bind a socket to a free ephemeral port in the 49152-65535 range.
+ *
+ * Scans forward from udp_next_ephemeral, wrapping at the top of the range, and
+ * binds the first free port. do_sendto calls this to auto-bind an unbound
+ * socket before its first send.
+ *
+ * @return the bound port, or 0 if none could be allocated.
+ */
 uint16_t udp_bind_ephemeral(struct socket *sock)
 {
     int tries;
@@ -108,6 +125,16 @@ void udp_unbind(uint16_t port)
     net_unlock(flags);
 }
 
+/**
+ * Demultiplex one received UDP datagram to its bound socket.
+ *
+ * Called from IP receive in IRQ context. Drops the datagram if it is shorter
+ * than the header or no socket is bound to the destination port. The payload is
+ * handed to socket_udp_deliver along with the sender's address and port.
+ *
+ * @param data the UDP header followed by its payload.
+ * @param len  bytes actually received, the upper bound on the wire length.
+ */
 void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
 {
     uint16_t dst_port, udp_len, payload_len;
@@ -143,6 +170,13 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     }
 }
 
+/**
+ * Build a UDP datagram around the payload and hand it to IP for transmission.
+ *
+ * Drops payloads larger than 1500 bytes; this stack does not fragment. The
+ * checksum field is left zero, which the protocol permits over IPv4 to signal
+ * "no checksum". The shared TX buffer is filled and queued under net_lock.
+ */
 void udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
             const uint8_t *payload, uint16_t plen)
 {

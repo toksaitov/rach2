@@ -4,6 +4,13 @@
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 
+/**
+ * Report whether [addr, addr+len) lies wholly within user space.
+ *
+ * The length test is written as `len > USER_ADDR_MAX - addr` so a range whose
+ * end wraps past the top of the address space is rejected without overflowing.
+ * An empty range is always in bounds.
+ */
 int user_range_ok(uint32_t addr, uint32_t len)
 {
     if (len == 0)
@@ -21,6 +28,12 @@ int user_range_ok(uint32_t addr, uint32_t len)
     return 1;
 }
 
+/**
+ * Copy `n` bytes from a user pointer into the kernel buffer `dst`.
+ *
+ * Returns 0 on success and -EFAULT if any byte of the source range is outside
+ * user space or backs no VMA. Returns 0 for a zero-length copy.
+ */
 int copy_from_user(void *dst, const void __user *src, uint32_t n)
 {
     uint32_t addr = (uint32_t)(__force uintptr_t)src;
@@ -44,6 +57,12 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
     return 0;
 }
 
+/**
+ * Copy `n` bytes from the kernel buffer `src` into a user pointer.
+ *
+ * Returns 0 on success and -EFAULT if any byte of the destination range is
+ * outside user space, unmapped, or read-only. Returns 0 for a zero-length copy.
+ */
 int copy_to_user(void __user *dst, const void *src, uint32_t n)
 {
     uint32_t addr = (uint32_t)(__force uintptr_t)dst;
@@ -67,6 +86,13 @@ int copy_to_user(void __user *dst, const void *src, uint32_t n)
     return 0;
 }
 
+/**
+ * Copy a NUL-terminated string from user space into `dst`, at most `n` bytes.
+ *
+ * On success returns the string length not counting the NUL, which is also
+ * copied. Returns -EINVAL for `n` of 0, -EFAULT if a byte lies outside user
+ * space or backs no VMA, and -ENAMETOOLONG if no NUL appears within `n` bytes.
+ */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
 {
     uint32_t addr = (uint32_t)(__force uintptr_t)src;

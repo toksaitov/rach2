@@ -13,9 +13,17 @@
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 
-/* TX assembly buffer at file scope (no large stack frames in the kernel). */
+/* TX assembly buffer at file scope: the kernel keeps no large stack frames. */
 static uint8_t eth_tx_frame[ETH_HDR_SIZE + 1500];
 
+/**
+ * Dispatch a received Ethernet frame to ARP or IP by EtherType.
+ *
+ * The EtherType is the big-endian 16-bit field at bytes 12..13 of the header.
+ * Each handler receives only the payload (the bytes after the 14-byte header),
+ * so it never needs to know about Ethernet. Frames shorter than a header are
+ * dropped.
+ */
 void ethernet_rx(const uint8_t *data, uint16_t len)
 {
     uint16_t etype;
@@ -26,10 +34,6 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
 
     etype = (uint16_t)(((uint16_t)data[12] << 8) | data[13]);
 
-    /*
-     * Dispatch by EtherType. Each handler receives only the payload (the bytes
-     * after the 14-byte header), so it never needs to know about Ethernet.
-     */
     switch (etype) {
     case ETH_TYPE_ARP:
         arp_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
@@ -42,6 +46,14 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
     }
 }
 
+/**
+ * Build an Ethernet frame and hand it to the driver.
+ *
+ * Prepends the 14-byte header (destination MAC, our `net_mac` source MAC, and
+ * the big-endian EtherType) ahead of the payload and transmits via the
+ * RTL8139. The payload must fit the 1500-byte MTU; an oversize payload is
+ * dropped, not truncated.
+ */
 void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
                  const uint8_t *payload, uint16_t plen)
 {

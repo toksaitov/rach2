@@ -1,5 +1,13 @@
 #include "frame.h"
 
+/**
+ * Return the highest available physical address in the multiboot memory map.
+ *
+ * Each entry's `size` field gives the bytes that follow it, so the next entry
+ * is at `p + size + sizeof(size)`. The walk is defensive: it stops on a short
+ * or non-advancing entry rather than read past the buffer or loop forever.
+ * Returns 0 when `mmap_buf` is NULL or no AVAILABLE region is found.
+ */
 uint64_t frame_top_available(const void *mmap_buf, uint32_t mmap_len)
 {
     const uint8_t *p;
@@ -14,9 +22,6 @@ uint64_t frame_top_available(const void *mmap_buf, uint32_t mmap_len)
     p = (const uint8_t *)mmap_buf;
     end = p + mmap_len;
 
-    /* Each entry's 'size' field gives the bytes that follow it, so the next
-     * entry is at p + size + sizeof(size). Walk defensively: stop on a short or
-     * non-advancing entry rather than read past the buffer or loop forever. */
     while (p + sizeof(multiboot_uint32_t) <= end)
     {
         const multiboot_memory_map_t *e = (const multiboot_memory_map_t *)p;
@@ -44,6 +49,14 @@ uint64_t frame_top_available(const void *mmap_buf, uint32_t mmap_len)
     return top;
 }
 
+/**
+ * Return the number of usable physical page frames reported by the bootloader.
+ *
+ * Prefers the multiboot memory map; falls back to the legacy `mem_upper`
+ * field when no map is present. The count is capped to the direct-mapped
+ * window so the frame allocator never hands out a page the kernel cannot
+ * address, and never exceeds real RAM.
+ */
 size_t frame_usable_count(const multiboot_info_t *info)
 {
     uint64_t top = 0;

@@ -48,16 +48,15 @@ static int user_access_ok(uint32_t addr, uint32_t len);
  * is 1 if that layer writes into the buffer. Defined with user_access_ok. */
 static int user_buffer_ok(uint32_t addr, uint32_t len, int write);
 
-/*
- * Framebuffer device tracking.
- * Only one process can own the framebuffer at a time.
- * When the owner exits or closes fb, text mode is restored.
- */
+/* Only one process owns the framebuffer at a time; when it exits or closes fb,
+ * text mode is restored. */
 static volatile uint32_t fb_owner_pid = 0;
 
-/*
- * Release framebuffer if owned by specified PID.
- * Called when a process is killed (CTRL+C) to restore text mode.
+/**
+ * Restore text mode if `pid` owns the framebuffer.
+ *
+ * Called when a process is killed (Ctrl-C) so the dead owner does not strand the
+ * screen in graphics mode.
  */
 void fb_release_if_owner(uint32_t pid)
 {
@@ -67,27 +66,11 @@ void fb_release_if_owner(uint32_t pid)
     }
 }
 
-/*
- * Release every backing reference a descriptor holds -- framebuffer ownership,
- * the per-fd socket reference, and an ops-backed object (pipe/tty/pty) -- before
- * the slot itself is freed. EVERY fd-teardown site routes through this (close,
- * the dup2 replacement of an open target, the execve CLOEXEC sweep, and the
- * process-exit fd-table release) so none can forget a backing kind as new ones
- * are added. It does NOT free the slot; the caller does that with fd_free.
- *
- * An ops-backed object rides the shared open-file description: dup/dup2/fork copy
- * the ops/priv pointers and bump the OFD refcount, so the object must be released
- * exactly once, when its LAST descriptor closes -- i.e. when this teardown is
- * dropping the final OFD reference (refcount about to reach 0). The socket
- * reference, by contrast, is counted per descriptor (socket_ref on dup/fork), so
- * it is always dropped here. (No descriptor is both an ops object and a socket.)
- */
-/*
- * The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit packed
- * in the fd's priv pointer alongside the kind without truncation, so the (kind,
- * pid) live here (struct synth_dir is in synthfs.h); priv points at the slot,
- * freed when the last descriptor referencing it closes (see fd_release_backing).
- */
+/* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit
+ * packed in the fd's priv pointer alongside the kind without truncation, so the
+ * (kind, pid) live here (struct synth_dir is in synthfs.h); priv points at the
+ * slot, freed when the last descriptor referencing it closes (see
+ * fd_release_backing). */
 static struct synth_dir synth_dir_pool[32];
 
 static struct synth_dir *synth_dir_alloc(int kind, int pid)
@@ -104,6 +87,22 @@ static struct synth_dir *synth_dir_alloc(int kind, int pid)
     return NULL;
 }
 
+/**
+ * Release every backing reference a descriptor holds before its slot is freed.
+ *
+ * Drops framebuffer ownership, the per-fd socket reference, and an ops-backed
+ * object (pipe/tty/pty). Every fd-teardown site routes through this (close, the
+ * dup2 replacement of an open target, the execve CLOEXEC sweep, and the
+ * process-exit fd-table release) so none can forget a backing kind as new ones
+ * are added. It does NOT free the slot; the caller does that with fd_free.
+ *
+ * An ops-backed object rides the shared open-file description: dup/dup2/fork copy
+ * the ops/priv pointers and bump the OFD refcount, so the object must be released
+ * exactly once, when its LAST descriptor closes (the final OFD reference, refcount
+ * about to reach 0). The socket reference, by contrast, is counted per descriptor
+ * (socket_ref on dup/fork), so it is always dropped here. No descriptor is both an
+ * ops object and a socket.
+ */
 static void fd_release_backing(fd_entry_t *e)
 {
     if (!e) {
@@ -224,13 +223,14 @@ typedef int32_t (*syscall_fn_t)(isr_params_t *);
  */
 static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 
-/*
- * Release every descriptor a dying process still holds: drop each socket
- * reference and each shared open-file description (the seek offset), and clear
- * the slot. Called from both exit paths -- sys_exit here and
- * terminate_current_process (signal death) via an extern -- so sockets, port
- * bindings, TCBs, and OFDs are freed however a process dies. Idempotent: a
- * second call sees an empty table (fd_free skips free slots).
+/**
+ * Release every descriptor a dying process still holds.
+ *
+ * Drops each socket reference and each shared open-file description (the seek
+ * offset), and clears the slot. Called from both exit paths (sys_exit here and
+ * terminate_current_process via an extern), so sockets, port bindings, TCBs, and
+ * OFDs are freed however a process dies. Idempotent: a second call sees an empty
+ * table (fd_free skips free slots).
  */
 void release_fd_table(fd_table_t *table)
 {
@@ -245,17 +245,16 @@ void release_fd_table(fd_table_t *table)
             continue;
         }
         fd_release_backing(e);
-        fd_free(table, fdi); /* unref the OFD and clear the slot */
+        fd_free(table, fdi);
     }
 }
 
-/*
- * sys_exit - terminate current process
- * Args: EBX = exit status
- * Returns: does not return
+/**
+ * Terminate the current process (exit(2)/exit_group(2)). Does not return.
  *
- * Marks process as ZOMBIE, wakes parent if waiting, and reschedules.
- * If init process exits, returns to kernel debug shell.
+ * EBX holds the exit status. Marks the process a zombie, wakes the parent if it
+ * waits, and reschedules. If init exits, control returns to the kernel debug
+ * shell.
  */
 static int32_t sys_exit(isr_params_t *params)
 {
@@ -264,15 +263,11 @@ static int32_t sys_exit(isr_params_t *params)
     bool is_init = false;
     uint32_t exiting_pid;
 
-    /* Check if this process owns the framebuffer - restore text mode */
     if (current_proc && fb_owner_pid == current_proc->pid) {
         vga_mode13h_exit();
         fb_owner_pid = 0;
     }
 
-    /* Release the descriptor table: drop each socket reference and each shared
-     * open-file description, so slots, port bindings, TCBs, and OFDs are not
-     * leaked when the process dies. */
     if (current_proc) {
         release_fd_table(&current_proc->fds);
     }
@@ -329,13 +324,10 @@ static int32_t sys_exit(isr_params_t *params)
         }
     }
 
-    /* Schedule another process */
     schedule();
 
-    /*
-     * If we get here, there are no other READY processes.
-     * If init exited, return to kernel debug shell.
-     */
+    /* No other process is READY. If init exited, return to the kernel debug
+     * shell; otherwise halt. */
     if (is_init) {
         serial_printf("sys_exit: Init process %d exited, returning to kernel shell\n",
                       exiting_pid);
@@ -357,14 +349,11 @@ static int32_t sys_exit(isr_params_t *params)
         }
         free_process(current_proc);
 
-        /* Reset init tracking */
         init_pid = 0;
 
-        /* Reset to kernel process 0 */
         current_proc = &proc_table[0];
         current_proc->state = PROC_RUNNING;
 
-        /* Disable scheduler while in kernel shell */
         sched_disable();
 
         /* Clear the shell's command line + stdin-wait state BEFORE re-enabling
@@ -373,34 +362,30 @@ static int32_t sys_exit(isr_params_t *params)
          * again on entry as the catch-all. */
         shell_reset_input();
 
-        /* Re-enable interrupts and return to shell via longjmp-like mechanism.
-         * We reset ESP to the kernel stack and jump to shell_loop.
-         * This is safe because we're in kernel mode and init has been cleaned up.
-         */
+        /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe because
+         * we are in kernel mode and init has been torn down. */
         __asm__ __volatile__(
-            "movl %0, %%esp\n\t"    /* Reset to fresh kernel stack */
-            "sti\n\t"               /* Re-enable interrupts */
-            "jmp *%1\n\t"           /* Jump to shell_loop */
+            "movl %0, %%esp\n\t"
+            "sti\n\t"
+            "jmp *%1\n\t"
             :
             : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
               "r"((uint32_t)shell_loop)
             : "memory"
         );
-
-        /* Never reached */
     }
 
-    /* If no other processes, halt */
     __asm__ __volatile__("cli; hlt");
-
-    /* Never reached */
     return 0;
 }
 
-/*
- * sys_write - write to file descriptor
- * Args: EBX = fd, ECX = buf, EDX = count
- * Returns: number of bytes written, or -1 on error
+/**
+ * Write `count` bytes of user buffer `buf` to descriptor `fd`.
+ *
+ * The shared body of write(2) and writev(2). Dispatches by backing kind: an
+ * ops-backed object (pipe/tty/pty/device) through its vtable, a socket to the
+ * network, the console through the tty output processor, a KRFFS file, or the
+ * framebuffer. Returns the bytes written or a negative errno.
  */
 static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 {
@@ -426,7 +411,6 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return entry->ops->write ? entry->ops->write(entry, buf, count) : -EBADF;
     }
 
-    /* Socket fd - send to the network */
     if (entry->type == FD_TYPE_SOCKET) {
         if (!entry->sock) {
             return -EBADF;
@@ -443,7 +427,6 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return -EOPNOTSUPP;
     }
 
-    /* Console fd - write to VGA and serial */
     if (entry->type == FD_TYPE_CONSOLE) {
         char kbuf[256];
         uint32_t done = 0;
@@ -487,7 +470,6 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return (int32_t)count;
     }
 
-    /* File fd - write to KRFFS file */
     if (entry->type == FD_TYPE_FILE) {
         int written;
 
@@ -523,7 +505,6 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return written;
     }
 
-    /* Framebuffer fd - copy pixels to VGA memory */
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
         uint32_t to_copy;
 
@@ -531,13 +512,11 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EBADF;  /* Not in graphics mode */
         }
 
-        /* Limit to framebuffer size */
         to_copy = count;
         if (to_copy > VGA_MODE13H_SIZE) {
             to_copy = VGA_MODE13H_SIZE;
         }
 
-        /* Copy pixel data to framebuffer */
         if (copy_from_user((void *)VGA_FRAMEBUFFER, (const void __user *)buf, to_copy) != 0) {
             return -EFAULT;
         }
@@ -548,21 +527,16 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     return -EBADF;
 }
 
-/*
- * sys_write - write to a file descriptor (write(2))
- * Args: EBX = fd, ECX = buf, EDX = count
- * Returns: number of bytes written, or a negative errno
- */
+/* write(2): EBX = fd, ECX = buf, EDX = count. */
 static int32_t sys_write(isr_params_t *params)
 {
     return write_fd((int)params->ebx, (const char __user *)params->ecx, params->edx);
 }
 
 /*
- * sys_writev - gather write (writev(2)). musl's buffered stdio (printf) emits
- * its output through this call.
- * Args: EBX = fd, ECX = pointer to struct iovec[], EDX = iovcnt
- * Returns: total bytes written across the iovecs, or a negative errno.
+ * Gather write (writev(2)). musl's buffered stdio (printf) emits its output
+ * through this call. EBX = fd, ECX = struct iovec[], EDX = iovcnt. Returns the
+ * total bytes written across the iovecs, or a negative errno.
  */
 struct kernel_iovec {
     uint32_t iov_base;
@@ -622,13 +596,6 @@ static int32_t sys_writev(isr_params_t *params)
     return total;
 }
 
-/*
- * sys_open - open a file or directory
- * Args: EBX = path, ECX = flags (O_RDONLY=0, O_WRONLY=1, O_RDWR=2)
- * Returns: fd number on success, -1 on error
- *
- * Special case: opening "/" opens the root directory for getdents64.
- */
 /* Linux open flags */
 #define O_APPEND   02000    /* every write lands at end-of-file */
 #define O_CREAT    0100
@@ -644,10 +611,11 @@ static int32_t sys_writev(isr_params_t *params)
 #define AT_SYMLINK_FOLLOW 0x400 /* linkat: follow a symlink source */
 #define AT_EMPTY_PATH 0x1000    /* *at: operate on the dirfd itself */
 
-/*
- * Join base + '/' + rel into pathbuf as an absolute path (base is "/" or "/a/b",
- * with no trailing slash). Returns the length, or -ENAMETOOLONG if it would not
- * fit. rellen is k_strlen(rel).
+/**
+ * Join base + '/' + rel into pathbuf as an absolute path.
+ *
+ * `base` is "/" or "/a/b" with no trailing slash; `rellen` is k_strlen(rel).
+ * Returns the length, or -ENAMETOOLONG if it would not fit.
  */
 static int join_abs(char *pathbuf, uint32_t size, const char *base,
                     const char *rel, uint32_t rellen)
@@ -672,14 +640,16 @@ static int join_abs(char *pathbuf, uint32_t size, const char *base,
     return (int)(blen + 1 + rellen);
 }
 
-/*
- * Copy a user path into pathbuf as an ABSOLUTE path. An absolute user path is
- * taken verbatim; a relative one is joined onto the process's current working
- * directory so the existing root-relative resolver -- which already honors
- * '.'/'..' -- walks the right tree. Same return contract as strncpy_from_user:
- * the resulting length on success, or a negative errno (a join that overruns the
- * buffer is -ENAMETOOLONG). The "fb"/"mouse" device names resolve correctly only
- * from cwd "/", which holds because programs open them at startup.
+/**
+ * Copy a user path into pathbuf as an ABSOLUTE path.
+ *
+ * An absolute user path is taken verbatim; a relative one is joined onto the
+ * process's current working directory so the root-relative resolver (which
+ * already honors '.'/'..') walks the right tree. Same return contract as
+ * strncpy_from_user: the resulting length on success, or a negative errno (a join
+ * that overruns the buffer is -ENAMETOOLONG). The "fb"/"mouse" device names
+ * resolve correctly only from cwd "/", which holds because programs open them at
+ * startup.
  */
 static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
 {
@@ -703,10 +673,11 @@ static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
     return join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
 }
 
-/*
- * Copy a user path for the *at family into pathbuf as an ABSOLUTE path. Absolute
- * paths are taken verbatim; a relative path resolves against AT_FDCWD (the cwd)
- * or, for a real dirfd, against that descriptor -- which must be an open
+/**
+ * Copy a user path for the *at family into pathbuf as an ABSOLUTE path.
+ *
+ * Absolute paths are taken verbatim; a relative path resolves against AT_FDCWD
+ * (the cwd) or, for a real dirfd, against that descriptor, which must be an open
  * directory (else -EBADF/-ENOTDIR). Same return contract as copy_path_cwd.
  */
 static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
@@ -758,11 +729,10 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
     }
     dnode = entry->node; /* NULL marks the root directory */
     if (dnode) {
-        /* SIMPLIFICATION: KRFFS nodes are not refcounted (the open-file-
-         * description split that would pin them is Part II), so a directory fd can
-         * outlive its node if the directory is rmdir'd. Reject a stale fd
-         * defensively: the node must still be a live reserved node, and its
-         * reconstructed path must round-trip back to the same node. */
+        /* KRFFS nodes are not refcounted, so a directory fd can outlive its node
+         * if the directory is rmdir'd. Reject a stale fd defensively: the node
+         * must still be a live reserved node, and its reconstructed path must
+         * round-trip back to the same node. */
         if (dnode->type != KRFFS_RESERVED_NODE) {
             return -EBADF;
         }
@@ -779,19 +749,14 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
     return join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
 }
 
-/*
- * Open core shared by open(5) and openat(295). `name` is a kernel-space path with
- * any leading '/' already stripped; `flags` are the Linux open flags and `mode`
- * the permission bits to stamp on a file created by O_CREAT (ignored otherwise).
- * Resolves a device ("fb"/"mouse") or a KRFFS path and installs a descriptor.
- * Returns the fd or -errno.
- */
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
 
-/*
- * Open a path that classified as synthetic (/dev or /proc). Devices bind their
- * file_ops; directories get a synthetic dir fd; /proc files snapshot their text.
- * A synthetic mount is never created or fallen-through to KRFFS.
+/**
+ * Open a path that classified as synthetic (/dev or /proc).
+ *
+ * Devices bind their file_ops; directories get a synthetic dir fd; /proc files
+ * snapshot their text. A synthetic mount is never created or fallen through to
+ * KRFFS.
  */
 static int32_t synth_open(const struct vpath *vp, int flags)
 {
@@ -820,11 +785,12 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     }
 }
 
-/*
- * A mutation (mkdir/rmdir/unlink/rename/...) that targets a synthetic mount must
- * be refused here, not passed to KRFFS -- otherwise e.g. mkdir("/dev") would
- * create a real KRFFS directory that shadows the synthetic one. `name` is the
- * absolute path with the leading '/' stripped.
+/**
+ * True if `name` (absolute, leading '/' stripped) names a synthetic mount.
+ *
+ * A mutation (mkdir/rmdir/unlink/rename/...) targeting /dev or /proc must be
+ * refused here, not passed to KRFFS: otherwise mkdir("/dev") would create a real
+ * KRFFS directory that shadows the synthetic one.
  */
 static int synth_is_synth(const char *name)
 {
@@ -881,6 +847,15 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     return fd;
 }
 
+/**
+ * Open core shared by open(5) and openat(295).
+ *
+ * `name` is a kernel-space path with any leading '/' already stripped; `flags`
+ * are the Linux open flags and `mode` the permission bits to stamp on a file
+ * created by O_CREAT (ignored otherwise). Resolves a device ("fb"/"mouse") or a
+ * KRFFS path and installs a descriptor. Returns the fd or -errno. Opening "/"
+ * opens the root directory for getdents64.
+ */
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     fd_entry_t *entry;
@@ -893,14 +868,11 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return synth_open(&vp, flags);
     }
 
-    /* Check if opening framebuffer device "fb" */
     if (name[0] == 'f' && name[1] == 'b' && name[2] == '\0') {
-        /* Only one process can own the framebuffer */
         if (fb_owner_pid != 0 && fb_owner_pid != current_proc->pid) {
             return -EBUSY;  /* Already in use */
         }
 
-        /* Allocate fd for framebuffer */
         fd = fd_alloc(&current_proc->fds);
         if (fd < 0) {
             return -EMFILE;
@@ -912,25 +884,20 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         entry->ofd->offset = 0;
         entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
 
-        /* Switch to Mode 13h and record owner */
         vga_mode13h_enter();
         fb_owner_pid = current_proc->pid;
 
-        /* Clear any stale scancodes from shell */
-        kbd_clear_scancodes();
+        kbd_clear_scancodes(); /* drop stale scancodes left by the shell */
 
         return fd;
     }
 
-    /* Check if opening mouse device "mouse" */
     if (name[0] == 'm' && name[1] == 'o' && name[2] == 'u' &&
         name[3] == 's' && name[4] == 'e' && name[5] == '\0') {
-        /* Check if mouse is available */
         if (!mouse_is_available()) {
             return -ENODEV;  /* Mouse not initialized */
         }
 
-        /* Allocate fd for mouse */
         fd = fd_alloc(&current_proc->fds);
         if (fd < 0) {
             return -EMFILE;
@@ -942,17 +909,15 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         entry->ofd->offset = 0;
         entry->flags = FD_FLAG_READ;
 
-        /* Clear any stale mouse packets */
         mouse_clear_packets();
 
         return fd;
     }
 
-    /* Check if opening root directory "/", ".", or ".." (cwd is always "/" in KRFFS) */
+    /* "/", ".", "..": the root directory (cwd is always "/" in KRFFS). */
     if (name[0] == '\0' ||
         (name[0] == '.' && name[1] == '\0') ||
         (name[0] == '.' && name[1] == '.' && name[2] == '\0')) {
-        /* Opening root directory - allocate fd as directory type */
         fd = fd_alloc(&current_proc->fds);
         if (fd < 0) {
             return -EMFILE;
@@ -961,7 +926,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         entry = &current_proc->fds.entries[fd];
         entry->type = FD_TYPE_DIR;
         entry->node = NULL;  /* NULL indicates root directory */
-        entry->ofd->offset = 0;   /* Position in directory listing */
+        entry->ofd->offset = 0;
         entry->flags = FD_FLAG_READ;
         if (flags & O_CLOEXEC) {
             entry->flags |= FD_FLAG_CLOEXEC; /* opendir("/") passes O_CLOEXEC */
@@ -981,7 +946,6 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
                 return -ENOTDIR;
             }
             if (flags & O_CREAT) {
-                /* Create the file */
                 if (krffs_create(name) != 0) {
                     return -ENOSPC;  /* Failed to create file */
                 }
@@ -995,12 +959,10 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
                 return -ENOENT;  /* File not found and O_CREAT not set */
             }
         } else if (flags & O_TRUNC) {
-            /* File exists and O_TRUNC set - truncate to 0 length */
             krffs_truncate(name, 0);
         }
     }
 
-    /* Allocate a file descriptor */
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
         return -EMFILE;  /* No free fds */
@@ -1020,8 +982,6 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     }
     entry->ofd->offset = 0;
 
-    /* Convert Linux flags to internal flags */
-    /* O_RDONLY=0, O_WRONLY=1, O_RDWR=2 */
     /* Access mode is the low two bits (O_RDONLY=0/O_WRONLY=1/O_RDWR=2); create,
      * trunc and cloexec live higher up, so mask before testing -- the legacy
      * `flags == 0` form misreads O_RDONLY|O_CREAT as not-readable. */
@@ -1072,11 +1032,10 @@ static int32_t sys_open(isr_params_t *params)
 }
 
 /*
- * sys_openat - open relative to a directory fd (syscall 295).
- * Args: EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl issues openat (not the
- * legacy open) for every <stdio.h> file open. An absolute path is taken as-is, a
- * relative path resolves against the cwd (AT_FDCWD) or against the directory the
- * dirfd refers to -- see copy_path_at.
+ * openat (syscall 295): EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl issues
+ * openat (not the legacy open) for every <stdio.h> file open. An absolute path is
+ * taken as-is, a relative path resolves against the cwd (AT_FDCWD) or against the
+ * directory the dirfd refers to (see copy_path_at).
  */
 static int32_t sys_openat(isr_params_t *params)
 {
@@ -1102,11 +1061,7 @@ static int32_t sys_openat(isr_params_t *params)
     return do_open(name, flags, mode);
 }
 
-/*
- * sys_close - close a file descriptor
- * Args: EBX = fd
- * Returns: 0 on success, -1 on error
- */
+/* close(2): EBX = fd. Returns 0 or -EBADF. */
 static int32_t sys_close(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -1130,16 +1085,14 @@ static int32_t sys_close(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_fsync - flush a file's data to stable storage (also serves fdatasync)
- * Args: EBX = fd
- * Returns: 0 on success, -EBADF for a bad descriptor.
+/**
+ * Flush a file's data to stable storage (fsync(2); also serves fdatasync).
  *
- * KRFFS lives in RAM, so a write is already as durable as the medium gets and
- * there is nothing to flush -- fsync is a no-op that just validates the fd. This
- * matters because dropbear writes its host key with the open/write/fsync/rename
- * idiom and treats any fsync error as fatal; an unimplemented fsync (-ENOSYS)
- * aborts key generation.
+ * EBX = fd. Returns 0, or -EBADF for a bad descriptor. KRFFS lives in RAM, so a
+ * write is already as durable as the medium gets: fsync is a no-op that only
+ * validates the fd. dropbear writes its host key with the open/write/fsync/rename
+ * idiom and treats any fsync error (including -ENOSYS) as fatal, aborting key
+ * generation, so this must succeed.
  */
 static int32_t sys_fsync(isr_params_t *params)
 {
@@ -1154,11 +1107,8 @@ static int32_t sys_fsync(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_lseek - reposition file offset
- * Args: EBX = fd, ECX = offset, EDX = whence (0=SET, 1=CUR, 2=END)
- * Returns: new offset on success, -1 on error
- */
+/* lseek(2): EBX = fd, ECX = offset, EDX = whence (0=SET, 1=CUR, 2=END). Returns
+ * the new offset or -errno. */
 static int32_t sys_lseek(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -1195,13 +1145,11 @@ static int32_t sys_lseek(isr_params_t *params)
         return -EBADF;
     }
 
-    /* Get file size from the node */
     if (!entry->node) {
         return -EBADF;
     }
     file_size = (uint32_t)entry->node->data_size;
 
-    /* Calculate new offset */
     switch (whence) {
         case 0:  /* SEEK_SET */
             new_offset = offset;
@@ -1216,7 +1164,6 @@ static int32_t sys_lseek(isr_params_t *params)
             return -EINVAL;
     }
 
-    /* Validate new offset */
     if (new_offset < 0) {
         return -EINVAL;
     }
@@ -1225,15 +1172,13 @@ static int32_t sys_lseek(isr_params_t *params)
     return new_offset;
 }
 
-/*
- * sys_read - read from file descriptor
- * Args: EBX = fd, ECX = buf, EDX = count
- * Returns: number of bytes read, or -1 on error
+/**
+ * Read up to `count` bytes from descriptor `fd` (read(2)).
  *
- * For stdin (fd 0, console with READ flag):
- * - Blocks the process until Enter is pressed
- * - Returns the line of input (including newline)
- * - Line buffering: keyboard handler fills stdin_buffer until Enter
+ * EBX = fd, ECX = buf, EDX = count. Returns the bytes read, 0 at end, or -errno.
+ * Dispatches by backing kind. A console read (stdin) blocks in the tty line
+ * discipline until a cooked line or VMIN raw bytes arrive; in graphics mode it is
+ * a non-blocking raw scancode read instead.
  */
 static int32_t sys_read(isr_params_t *params)
 {
@@ -1270,8 +1215,8 @@ static int32_t sys_read(isr_params_t *params)
         return entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
     }
 
-    /* Socket fd - receive from the network. read() honors O_NONBLOCK (an OFD
-     * status flag) exactly like recv(), routing to the non-blocking variant. */
+    /* read() honors O_NONBLOCK (an OFD status flag) exactly like recv(), routing
+     * to the non-blocking variant. */
     if (entry->type == FD_TYPE_SOCKET) {
         int sock_nonblock;
         if (!entry->sock || !user_buffer_ok((uint32_t)buf, count, 1)) {
@@ -1295,7 +1240,6 @@ static int32_t sys_read(isr_params_t *params)
         return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count);
     }
 
-    /* Console fd (stdin): a blocking read through the tty line discipline. */
     if (entry->type == FD_TYPE_CONSOLE) {
         unsigned char kbuf[N_TTY_READ_MAX];
         uint32_t want;
@@ -1367,12 +1311,10 @@ static int32_t sys_read(isr_params_t *params)
         return n;
     }
 
-    /* Mouse fd - non-blocking read of mouse packets */
     if (entry->type == FD_TYPE_MOUSE) {
         int packets_requested;
         int packets_read;
 
-        /* Calculate how many complete packets can fit in user buffer */
         packets_requested = (int)(count / sizeof(struct mouse_packet));
         if (packets_requested <= 0) {
             return 0;  /* Buffer too small for even one packet */
@@ -1391,7 +1333,6 @@ static int32_t sys_read(isr_params_t *params)
         return packets_read * (int32_t)sizeof(struct mouse_packet);
     }
 
-    /* File fd - read from KRFFS file */
     if (entry->type == FD_TYPE_FILE) {
         int bytes_read;
 
@@ -1422,9 +1363,10 @@ static int32_t sys_read(isr_params_t *params)
     return -EBADF;
 }
 
-/*
- * sys_dup - duplicate a descriptor onto the lowest free fd (POSIX dup).
- * Args: EBX = oldfd. Returns the new fd, or -errno. The duplicate SHARES oldfd's
+/**
+ * Duplicate a descriptor onto the lowest free fd (dup(2)).
+ *
+ * EBX = oldfd. Returns the new fd, or -errno. The duplicate SHARES oldfd's
  * open-file description (shared seek offset); a socket gains a reference; the new
  * fd's FD_CLOEXEC is clear.
  */
@@ -1464,11 +1406,7 @@ static int32_t sys_dup(isr_params_t *params)
     return newfd;
 }
 
-/*
- * sys_dup2 - duplicate file descriptor
- * Args: EBX = oldfd, ECX = newfd
- * Returns: newfd on success, -1 on error
- */
+/* dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno. */
 static int32_t sys_dup2(isr_params_t *params)
 {
     int oldfd = (int)params->ebx;
@@ -1480,18 +1418,15 @@ static int32_t sys_dup2(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Validate oldfd */
     old_entry = fd_get(&current_proc->fds, oldfd);
     if (!old_entry) {
         return -EBADF;
     }
 
-    /* Validate newfd range */
     if (newfd < 0 || newfd >= MAX_FDS) {
         return -EBADF;
     }
 
-    /* If oldfd == newfd, just return newfd */
     if (oldfd == newfd) {
         return newfd;
     }
@@ -1523,15 +1458,12 @@ static int32_t sys_dup2(isr_params_t *params)
     return newfd;
 }
 
-/*
- * sys_chdir - change current working directory
- * Args: EBX = path
- * Returns: 0 on success, -1 on error
+/**
+ * Change the current working directory (chdir(2)).
  *
- * Since KRFFS has no directory hierarchy (only root "/"):
- * - "/" and "." and ".." succeed (stay in root)
- * - File names fail with -ENOTDIR
- * - Nonexistent paths fail with -ENOENT
+ * EBX = path. Returns 0 or -errno. Stores the canonical absolute path of the
+ * resolved directory (a KRFFS directory or a synthetic /dev or /proc directory);
+ * a regular file is -ENOTDIR, a missing path -ENOENT.
  */
 static int32_t sys_chdir(isr_params_t *params)
 {
@@ -1612,11 +1544,8 @@ static int32_t sys_chdir(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_getcwd - get current working directory
- * Args: EBX = buf, ECX = size
- * Returns: buf pointer on success, NULL (0) on error
- */
+/* getcwd(2): EBX = buf, ECX = size. Returns the path length including the NUL, or
+ * -errno. */
 static int32_t sys_getcwd(isr_params_t *params)
 {
     char __user *buf = (char __user *)params->ebx;
@@ -1638,7 +1567,6 @@ static int32_t sys_getcwd(isr_params_t *params)
         return -ERANGE;  /* buffer too small for the path + NUL */
     }
 
-    /* Copy cwd to user buffer */
     if (copy_to_user(buf, current_proc->cwd, cwd_len + 1) != 0) {
         return -EFAULT;
     }
@@ -1704,10 +1632,11 @@ struct linux_stat64 {
 #define S_IFREG  0100000
 #define S_IFDIR  0040000
 
-/*
- * Fill a stat64 buffer from a resolved KRFFS node. Shared by stat64/fstat64/
- * fstatat64. Reports S_IFDIR for directories and S_IFREG for regular files; the
- * node id is the inode number.
+/**
+ * Fill a stat64 buffer from a resolved KRFFS node.
+ *
+ * Shared by stat64/fstat64/fstatat64. Reports S_IFDIR for directories and S_IFREG
+ * for regular files; the node id is the inode number.
  */
 static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
 {
@@ -1730,11 +1659,6 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
     kst->__st_ino = (unsigned long)node->id;
 }
 
-/*
- * sys_stat64 - get file status
- * Args: EBX = path, ECX = stat64 buffer
- * Returns: 0 on success, -1 on error
- */
 /* Fill a stat64 from an open descriptor (factored from sys_fstat64 so the magic
  * /proc/<pid>/fd/<n> symlinks can stat their target when followed). */
 static void fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
@@ -1856,8 +1780,10 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
     }
 }
 
-/*
- * readlink core. The only symlinks Rach2 has are the /proc/<pid>/fd/<n> magic
+/**
+ * readlink core (readlink(2)/readlinkat(2)).
+ *
+ * The only symlinks Rach2 has are /proc/self and the /proc/<pid>/fd/<n> magic
  * links (which ttyname reads). The result is the byte count and is NOT
  * NUL-terminated (the readlink contract; musl appends its own terminator and
  * treats a full buffer as truncation). `name` is the path, leading '/' stripped.
@@ -1976,7 +1902,6 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
         return -EFAULT;
     }
 
-    /* Copy the path into a kernel buffer first. */
     len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
     if (len < 0) {
         return len;
@@ -1985,7 +1910,6 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
     /* Build the result in a kernel struct, then copy it out in one shot. */
     k_memset(&kst, 0, sizeof(kst));
 
-    /* Handle root directory "/" */
     if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
         kst.st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
         kst.st_nlink = 1;
@@ -1997,7 +1921,6 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
         return 0;
     }
 
-    /* Skip leading '/' if present */
     name = pathbuf;
     if (name[0] == '/') {
         name++;
@@ -2018,7 +1941,6 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
         }
     }
 
-    /* Find the file in KRFFS */
     if (!krffs_fs) {
         return -ENOENT;
     }
@@ -2055,9 +1977,11 @@ static int32_t sys_lstat64(isr_params_t *params)
                      (struct linux_stat64 __user *)params->ecx, 0);
 }
 
-/*
- * Fill a stat64 from an open descriptor by type. Shared by sys_fstat64 and the
- * followed /proc/<pid>/fd/<n> path (whose target is just this fd).
+/**
+ * Fill a stat64 from an open descriptor by type.
+ *
+ * Shared by sys_fstat64 and the followed /proc/<pid>/fd/<n> path (whose target is
+ * just this fd).
  */
 static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 {
@@ -2146,9 +2070,8 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 }
 
 /*
- * sys_fstat64 - get file status by descriptor (syscall 197).
- * Args: EBX = fd, ECX = stat64 buffer. The descriptor's node is stat'd; a root
- * directory fd (node == NULL) reports the root directory.
+ * fstat64 (syscall 197): EBX = fd, ECX = stat64 buffer. The descriptor's node is
+ * stat'd; a root directory fd (node == NULL) reports the root directory.
  */
 static int32_t sys_fstat64(isr_params_t *params)
 {
@@ -2172,11 +2095,10 @@ static int32_t sys_fstat64(isr_params_t *params)
 }
 
 /*
- * sys_fstatat64 - stat a path relative to a directory fd (syscall 300).
- * Args: EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI = flags. The path
- * resolves the same way as openat -- absolute, or relative to AT_FDCWD/the dirfd
- * (see copy_path_at). The flags (e.g. AT_SYMLINK_NOFOLLOW) are accepted but
- * inert, as KRFFS has no symlinks.
+ * fstatat64 (syscall 300): EBX = dirfd, ECX = path, EDX = stat64 buffer,
+ * ESI = flags. The path resolves the same way as openat (absolute, or relative to
+ * AT_FDCWD/the dirfd; see copy_path_at). AT_SYMLINK_NOFOLLOW is honored for the
+ * /proc magic symlinks; KRFFS has none.
  */
 static int32_t sys_fstatat64(isr_params_t *params)
 {
@@ -2247,11 +2169,12 @@ static int32_t sys_fstatat64(isr_params_t *params)
 #define W_OK 2
 #define R_OK 4
 
-/*
- * access core: does the path exist and grant the requested mode? There is no real
- * uid/credential model, so R/W/X are checked against the object's mode bits (which
- * is what makes /proc/<pid>/stat reject W_OK while granting F_OK/R_OK). `name` is
- * absolute with the leading '/' stripped.
+/**
+ * access core: does the path exist and grant the requested mode?
+ *
+ * There is no real uid/credential model, so R/W/X are checked against the
+ * object's mode bits (which is what makes /proc/<pid>/stat reject W_OK while
+ * granting F_OK/R_OK). `name` is absolute with the leading '/' stripped.
  */
 static int32_t do_access(const char *name, int mode)
 {
@@ -2348,7 +2271,7 @@ static int sc_id_is_root_or_keep(uint32_t id)
 }
 
 /* Does an object exist at `name` (absolute, leading '/' stripped)? 0 if so, else
- * -ENOENT/-ENOTDIR -- the same synthetic-vs-KRFFS resolution do_access uses. link()
+ * -ENOENT/-ENOTDIR, the same synthetic-vs-KRFFS resolution do_access uses. link()
  * resolves its source through this so a missing source is reported honestly before
  * the "no hard links" -EPERM. */
 static int32_t path_exists(const char *name)
@@ -2372,16 +2295,18 @@ static int32_t path_exists(const char *name)
     return 0;
 }
 
-/*
- * chmod/chown family. Rach2 has a single (root, id 0) identity over a RAM file
- * system, so these keep just enough state to satisfy a login server and a shell.
- * chmod updates a KRFFS file's stored permission bits; a synthetic /dev or /proc
- * object has a fixed mode, so chmod there is a no-op that only validates the path
- * exists. chown only ever (re)assigns root -- there is no other user or group, so
- * uid/gid 0 (or -1) succeeds and anything else is -EPERM. dropbear chmod/chowns
- * the session pty (a /dev/pts node) to root before running the shell; busybox
- * chmod/chown drive the KRFFS path. `name` is absolute with the leading '/'
- * stripped, matching do_access.
+/**
+ * chmod core for the chmod/chown family.
+ *
+ * Rach2 has a single (root, id 0) identity over a RAM file system, so these keep
+ * just enough state to satisfy a login server and a shell. chmod updates a KRFFS
+ * file's stored permission bits; a synthetic /dev or /proc object has a fixed
+ * mode, so chmod there is a no-op that only validates the path exists. chown only
+ * ever (re)assigns root (no other user or group exists), so uid/gid 0 (or -1)
+ * succeeds and anything else is -EPERM. dropbear chmod/chowns the session pty (a
+ * /dev/pts node) to root before running the shell; busybox chmod/chown drive the
+ * KRFFS path. `name` is absolute with the leading '/' stripped, matching
+ * do_access.
  */
 static int32_t do_chmod(const char *name, uint32_t mode)
 {
@@ -2572,15 +2497,16 @@ static int32_t sys_fchown(isr_params_t *params)
     return 0;
 }
 
-/*
- * link/linkat: KRFFS stores exactly one name per node (no link count, no shared
- * data), so hard links are unsupported and the call returns -EPERM -- the POSIX
- * errno for "the filesystem does not support the creation of hard links"
- * (link(2)). The source is copied and resolved first, so a bad pointer (-EFAULT),
- * bad dirfd (-EBADF), or missing source (-ENOENT) is reported honestly rather than
- * masked by EPERM. dropbear depends on the EPERM: it moves a freshly generated
- * host key with link(tmp, final) and, on EPERM/EACCES, falls back to writing the
- * key directly to the final path.
+/**
+ * link(2): always -EPERM (KRFFS has no hard links).
+ *
+ * KRFFS stores exactly one name per node (no link count, no shared data), so the
+ * call returns -EPERM, the POSIX errno for "the filesystem does not support the
+ * creation of hard links". The source is copied and resolved first, so a bad
+ * pointer (-EFAULT), bad dirfd (-EBADF), or missing source (-ENOENT) is reported
+ * honestly rather than masked by EPERM. dropbear depends on the EPERM: it moves a
+ * freshly generated host key with link(tmp, final) and, on EPERM/EACCES, falls
+ * back to writing the key directly to the final path.
  */
 static int32_t sys_link(isr_params_t *params)
 {
@@ -2660,10 +2586,9 @@ static int32_t sys_linkat(isr_params_t *params)
 }
 
 /*
- * sys__llseek - 64-bit seek (syscall 140).
- * Args: EBX=fd, ECX=offset_high, EDX=offset_low, ESI=result (long long*),
- * EDI=whence. musl's lseek is implemented on top of this on i386. KRFFS files are
- * under 4 GB so offset_high is 0.
+ * _llseek (syscall 140): 64-bit seek. EBX=fd, ECX=offset_high, EDX=offset_low,
+ * ESI=result (long long*), EDI=whence. musl's lseek is implemented on top of this
+ * on i386. KRFFS files are under 4 GB so offset_high is 0.
  */
 static int32_t sys__llseek(isr_params_t *params)
 {
@@ -2735,9 +2660,10 @@ static int32_t sys__llseek(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_fcntl64 - descriptor control (syscall 221).
- * Args: EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
+/**
+ * Descriptor control (fcntl64, syscall 221).
+ *
+ * EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
  * round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the close-on-exec
  * bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND, stored, not enforced).
  */
@@ -2872,15 +2798,13 @@ static int32_t sys_fcntl64(isr_params_t *params)
     }
 }
 
-/*
- * sys_stat - get file status (32-bit structure)
- * Args: EBX = path, ECX = stat buffer
- * Returns: 0 on success, -1 on error
+/**
+ * stat core for the old 32-bit stat struct (stat(106)/lstat(107)).
  *
- * This is the older 32-bit stat syscall (106), used by ISH and some programs.
- * Uses struct linux_stat instead of struct linux_stat64. `follow` distinguishes
- * stat(106) (follow symlinks) from lstat(107) (do not) -- which matters only for
- * the /proc magic symlinks, since KRFFS has none.
+ * Used by ISH and some programs; fills struct linux_stat, not linux_stat64.
+ * `follow` distinguishes stat (follow symlinks) from lstat (do not), which matters
+ * only for the /proc magic symlinks, since KRFFS has none. EBX = path, ECX = stat
+ * buffer.
  */
 static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st, int follow)
 {
@@ -2894,7 +2818,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         return -EFAULT;
     }
 
-    /* Copy the path into a kernel buffer first. */
     len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
     if (len < 0) {
         return len;
@@ -2903,7 +2826,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     /* Build the result in a kernel struct, then copy it out in one shot. */
     k_memset(&kst, 0, sizeof(kst));
 
-    /* Handle root directory "/" */
     if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
         kst.st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
         kst.st_nlink = 1;
@@ -2915,7 +2837,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         return 0;
     }
 
-    /* Skip leading '/' if present */
     name = pathbuf;
     if (name[0] == '/') {
         name++;
@@ -2944,7 +2865,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         }
     }
 
-    /* Find the file in KRFFS */
     if (!krffs_fs) {
         return -ENOENT;
     }
@@ -2957,17 +2877,14 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         }
     }
 
-    /* Fill stat structure */
-    kst.st_mode = S_IFREG | (node->mode & 0777);  /* Regular file + permissions */
+    kst.st_mode = S_IFREG | (node->mode & 0777);
     kst.st_nlink = 1;                              /* Always 1 for KRFFS */
     kst.st_uid = (unsigned short)node->uid;
     kst.st_gid = (unsigned short)node->gid;
     kst.st_size = (unsigned long)node->data_size;
     kst.st_blksize = 4096;
     kst.st_blocks = (node->data_size + 511) / 512;
-
-    /* Use node's DJB hash as inode number */
-    kst.st_ino = (unsigned long)node->id;
+    kst.st_ino = (unsigned long)node->id; /* the node's DJB hash is the inode */
 
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
@@ -2990,13 +2907,14 @@ static int32_t sys_lstat(isr_params_t *params)
                        (struct linux_stat __user *)params->ecx, 0);
 }
 
-/*
- * copy_user_pages - duplicate the parent's user address space into the child
- * COPY-ON-WRITE. Iterates the parent's page directory and, for each present user
- * page, maps the SAME physical frame into the child (bumping the frame refcount)
- * rather than copying it; writable pages are write-protected and PTE_COW-marked
- * in both directories so the first write faults into cow_fault for a private
- * copy. Returns 0 on success, -1 on failure.
+/**
+ * Duplicate the parent's user address space into the child, copy-on-write.
+ *
+ * Iterates the parent's page directory and, for each present user page, maps the
+ * SAME physical frame into the child (bumping the frame refcount) rather than
+ * copying it; writable pages are write-protected and PTE_COW-marked in both
+ * directories so the first write faults into cow_fault for a private copy. Returns
+ * 0 on success, -1 on failure.
  */
 static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
 {
@@ -3004,35 +2922,29 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
     uint32_t dir_idx, page_idx;
     page_table_t *parent_table;
 
-    /* Get parent's page directory */
     if (parent->cr3 == 0) {
         parent_dir = _kernel_dir;
     } else {
-        /*
-         * cr3 stores &page_dir->phys_page_tables (from get_page_dir_phys).
-         * To get the page_dir_t*, we subtract the offset of phys_page_tables.
-         * page_dir_t layout: logical_page_tables[1024] then phys_page_tables[1024]
-         * So offset = 1024 * sizeof(page_table_t*) = 4096 bytes.
-         */
+        /* cr3 holds &page_dir->phys_page_tables (get_page_dir_phys); recover the
+         * page_dir_t* by subtracting that offset. The layout is
+         * logical_page_tables[1024] then phys_page_tables[1024], so the offset is
+         * 1024 * sizeof(page_table_t*) = 4096 bytes. */
         parent_dir = (page_dir_t *)(parent->cr3 - 1024 * sizeof(page_table_t *));
     }
 
-    /* Iterate through all page directory entries */
     for (dir_idx = 0; dir_idx < 1024; dir_idx++) {
         parent_table = parent_dir->logical_page_tables[dir_idx];
         if (!parent_table) {
             continue;
         }
 
-        /* Check each page in this table */
         for (page_idx = 0; page_idx < 1024; page_idx++) {
             uint32_t pte = parent_table->pages[page_idx];
             uint32_t virt_addr;
             uint32_t parent_phys;
 
-            /* Check if page is present and user-accessible */
             if (!(pte & 0x1) || !(pte & 0x4)) {
-                continue;  /* Not present or not user page */
+                continue;  /* present (0x1) + user (0x4) only */
             }
 
             virt_addr = (dir_idx << 22) | (page_idx << 12);
@@ -3073,8 +2985,9 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
     return 0;
 }
 
-/*
- * close_cloexec_fds - drop every descriptor marked close-on-exec.
+/**
+ * Drop every descriptor marked close-on-exec.
+ *
  * Called by execve once it has committed to the new image so FD_FLAG_CLOEXEC
  * descriptors (set via O_CLOEXEC or fcntl F_SETFD) do not leak into it. Mirrors
  * sys_close's per-type teardown. Scans from fd 0: stdio is not close-on-exec by
@@ -3094,23 +3007,6 @@ static void close_cloexec_fds(void)
     }
 }
 
-/*
- * sys_execve - replace current process image with a new program
- * Args: EBX = path, ECX = argv[], EDX = envp[]
- * Returns: does not return on success, -1 on error
- *
- * 1. Copy path and argv from user space
- * 2. Read ELF file from KRFFS
- * 3. Free old user pages
- * 4. Load new ELF segments
- * 5. Set up user stack with argc/argv
- * 6. Return to new entry point via modified iret frame
- */
-/*
- * Static buffer for ELF loading - must not be on stack!
- * Kernel stack is only 16KB, so large buffers cause stack overflow.
- * Increased to 512KB to support Doom (368KB).
- */
 /* elf_read_fn over a KRFFS file (ctx is the path): lets the segment loader pull
  * the ELF header, program headers, and each PT_LOAD straight from the file. */
 static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
@@ -3124,10 +3020,14 @@ static char *_exec_argv_bufs[16];
 static char _exec_envp_storage[512];
 static char *_exec_envp_bufs[16];
 
-/* A failed exec has already torn down the old address space, so the process
- * cannot continue. Mark it a zombie, wake any parent waiting on it (giving the
- * scheduler a target), switch away, and -- as a backstop -- never iret back
- * into the destroyed space. */
+/**
+ * Kill the current process after exec has destroyed its old address space.
+ *
+ * Past free_user_pages there is no image to return to, so a load/stack failure
+ * cannot continue. Mark the process a zombie, wake any parent waiting on it (so
+ * the scheduler has a target), switch away, and never iret back into the
+ * destroyed space.
+ */
 static void exec_fail_destroyed(void)
 {
     process_t *parent;
@@ -3193,6 +3093,16 @@ static void exec_fail_destroyed(void)
                          : "memory");
 }
 
+/**
+ * Replace the current process image with a new program (execve(2)).
+ *
+ * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies the
+ * path, argv, and envp into static buffers, validates the ELF header BEFORE
+ * tearing the old image down (so a bad executable leaves the caller intact), then
+ * frees the old user pages, streams the new program in, builds the SysV/i386
+ * initial stack, and redirects the iret frame to the entry point. A failure after
+ * the old image is gone routes to exec_fail_destroyed.
+ */
 static int32_t sys_execve(isr_params_t *params)
 {
     const char __user *user_path = (const char __user *)params->ebx;
@@ -3296,23 +3206,19 @@ static int32_t sys_execve(isr_params_t *params)
     }
     _exec_envp_bufs[envc] = NULL;
 
-    /* Skip leading '/' if present */
     name = _exec_path_buf;
     if (name[0] == '/') {
         name++;
     }
 
-    /* Check file system is mounted */
     if (!krffs_fs) {
         return -ENOENT;
     }
 
-    /* Check file exists */
     if (krffs_open(name) != 0) {
-        return -ENOENT;
+        return -ENOENT; /* the file does not exist */
     }
 
-    /* Get current process's page directory */
     if (current_proc->cr3 == 0) {
         proc_dir = _kernel_dir;
     } else {
@@ -3376,19 +3282,16 @@ static int32_t sys_execve(isr_params_t *params)
     }
     entry_point = img.entry;
 
-    /* Allocate user stack */
     stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
     if (stack_phys == 0) {
         exec_fail_destroyed();
         __builtin_unreachable();
     }
 
-    /* Zero the stack page */
     k_memset((void *)stack_phys, 0, PAGE_SIZE);
 
     /*
-     * Set up user stack with argc, argv pointers, and strings.
-     * Stack layout (growing down from USER_STACK_BASE + PAGE_SIZE):
+     * Initial user stack layout (growing down from USER_STACK_BASE + PAGE_SIZE):
      *
      *   [arg strings]   - null-terminated strings
      *   [NULL]          - envp terminator
@@ -3433,19 +3336,16 @@ static int32_t sys_execve(isr_params_t *params)
         current_proc->tls_base = 0;
         gdt_set_tls(0);
 
-        /* Build the address-space map (VMAs) for the new image so the Phase 4
-         * fault handler can demand-page, grow the stack, or segfault. The ELF
-         * code/data pages themselves are still eagerly loaded above. */
+        /* Build the address-space map (VMAs) for the new image so the page-fault
+         * handler can demand-page, grow the stack, or segfault. The ELF code/data
+         * pages themselves are still eagerly loaded above. */
         elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
                        VM_STACK_MAX_GROWTH);
     }
 
-    /*
-     * Flush TLB to ensure new page mappings take effect.
-     * After freeing old user pages and allocating new stack/code pages,
-     * the TLB may have stale entries from the parent process (e.g., ISH).
-     * Reloading CR3 flushes the entire TLB.
-     */
+    /* Reload CR3 to flush the whole TLB: after freeing the old user pages and
+     * mapping new stack/code pages, the TLB may hold stale entries from the
+     * replaced image. */
     __asm__ __volatile__ (
         "movl %%cr3, %%eax\n\t"
         "movl %%eax, %%cr3"
@@ -3459,16 +3359,15 @@ static int32_t sys_execve(isr_params_t *params)
         tty_set_session(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
     }
 
-    /* Return value doesn't matter - we won't use it */
-    return 0;
+    return 0; /* unused: iret resumes at the new entry point */
 }
 
-/*
- * sys_fork - create a child process
- * Returns: 0 to child, child's PID to parent, -1 on error
+/**
+ * Create a child process (fork(2)).
  *
- * Clones the current process: PCB, page directory, user pages, fd table.
- * Child is set up to return from fork with value 0.
+ * Clones the current process: PCB, page directory (copy-on-write user pages), and
+ * fd table. The child is set up to return from fork with value 0; the parent gets
+ * the child's PID. Returns -errno on failure.
  */
 static int32_t sys_fork(isr_params_t *params)
 {
@@ -3483,7 +3382,6 @@ static int32_t sys_fork(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Allocate child process slot */
     child = alloc_process();
     if (!child) {
         return -EAGAIN;
@@ -3494,7 +3392,6 @@ static int32_t sys_fork(isr_params_t *params)
      * table), or those OFDs would be orphaned and leak the pool on every fork. */
     release_fd_table(&child->fds);
 
-    /* Clone page directory */
     child_dir = clone_page_directory();
     if (!child_dir) {
         free_process(child);
@@ -3512,7 +3409,6 @@ static int32_t sys_fork(isr_params_t *params)
         return -ENOMEM;
     }
 
-    /* Allocate kernel stack for child */
     child_kstack_base = mem_reserve(KERNEL_STACK_SIZE, true);
     if (!child_kstack_base) {
         free_user_pages(child_dir);
@@ -3522,16 +3418,15 @@ static int32_t sys_fork(isr_params_t *params)
     }
     child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
 
-    /* Set up child's page directory and parent link */
     child->cr3 = get_page_dir_phys(child_dir);
     child->parent_pid = parent->pid;
 
     /* Inherit the parent's session and process group: a forked child stays in the
-     * parent's job-control group until it (or the parent) calls setsid/setpgid
-     * (Phase 17). alloc_process defaulted these to the child's own pid. */
+     * parent's job-control group until it (or the parent) calls setsid/setpgid.
+     * alloc_process defaulted these to the child's own pid. */
     child->sid = parent->sid;
     child->pgid = parent->pgid;
-    child->umask = parent->umask; /* the file-creation mask is inherited (Phase 18) */
+    child->umask = parent->umask; /* the file-creation mask is inherited */
 
     /* Inherit the parent's TLS base: the child's copied trapframe keeps the
      * parent's %gs selector, and its address space is a copy at the same
@@ -3590,19 +3485,15 @@ static int32_t sys_fork(isr_params_t *params)
      */
     child_sp = (uint32_t *)child->kernel_stack;
 
-    /* Copy ISR frame from parent */
+    /* The ISR frame, copied from the parent, with eax (fork's return) set to 0. */
     child_sp -= sizeof(isr_params_t) / sizeof(uint32_t);
     child_frame = (isr_params_t *)child_sp;
     k_memcpy(child_frame, params, sizeof(isr_params_t));
-
-    /* Set child's return value to 0 */
     child_frame->eax = 0;
 
-    /* Push return address (isr_return) */
+    /* The switch_context return address, then its saved EBP/EBX/ESI/EDI. */
     --child_sp;
     *child_sp = (uint32_t)isr_return;
-
-    /* Push saved registers for switch_context (EBP, EBX, ESI, EDI) */
     --child_sp;
     *child_sp = 0;  /* EBP */
     --child_sp;
@@ -3612,22 +3503,12 @@ static int32_t sys_fork(isr_params_t *params)
     --child_sp;
     *child_sp = 0;  /* EDI */
 
-    /* Set child's ESP for switch_context */
     child->regs.esp = (uint32_t)child_sp;
     child->state = PROC_READY;
 
-    /* Parent returns child's PID */
     return (int32_t)child->pid;
 }
 
-/*
- * sys_waitpid - wait for child process to exit
- * Args: EBX = pid (-1 for any child), ECX = status pointer, EDX = options
- * Returns: PID of exited child, or -1 on error
- *
- * If child is ZOMBIE, collects exit status and frees the process.
- * If child is still running, blocks until it exits.
- */
 /* waitpid/wait4 options. */
 #define WNOHANG    1
 #define WUNTRACED  2  /* also report a child that has STOPPED */
@@ -3663,11 +3544,13 @@ static int wait_pid_match(int pid, const process_t *p)
     return (int)p->pgid == -pid;
 }
 
-/*
- * Shared core of waitpid(7) and wait4(114). 'status' (may be NULL) receives the
- * Linux-encoded wait status that sys_exit/terminate already stored in exit_code;
- * 'rusage_ptr' (0 for waitpid, may be 0 for wait4) is zero-filled on reap. With
- * WNOHANG, returns 0 instead of blocking when a child exists but has not exited.
+/**
+ * Shared core of waitpid(7) and wait4(114).
+ *
+ * `status` (may be NULL) receives the Linux-encoded wait status that
+ * sys_exit/terminate already stored in exit_code; `rusage_ptr` (0 for waitpid,
+ * may be 0 for wait4) is zero-filled on reap. With WNOHANG, returns 0 instead of
+ * blocking when a child exists but has not exited.
  */
 static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
 {
@@ -3803,12 +3686,8 @@ static int32_t sys_wait4(isr_params_t *params)
 }
 
 /*
- * sys_creat - create a new file
- * Args: EBX = path, ECX = mode
- * Returns: fd on success, -1 on error
- *
- * Creates a new file and returns an open file descriptor.
- * If file already exists, opens it for writing (truncates).
+ * creat(2): EBX = path, ECX = mode. Returns an fd open for writing, or -errno. An
+ * existing file is opened (and truncated by the caller's later writes).
  */
 static int32_t sys_creat(isr_params_t *params)
 {
@@ -3825,21 +3704,18 @@ static int32_t sys_creat(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Copy the path into a kernel buffer. */
     len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
     if (len < 0) {
         return len;
     }
 
-    /* Skip leading '/' if present */
     name = pathbuf;
     if (name[0] == '/') {
         name++;
     }
 
-    /* Empty filename is invalid */
     if (name[0] == '\0') {
-        return -EINVAL;
+        return -EINVAL; /* empty filename */
     }
 
     /* A synthetic mount is read-only: never create/shadow under /dev or /proc. */
@@ -3847,32 +3723,26 @@ static int32_t sys_creat(isr_params_t *params)
         return -EROFS;
     }
 
-    /* Check if file system is mounted */
     if (!krffs_fs) {
         return -ENOENT;
     }
 
-    /* Create the file (or open if exists) */
     if (krffs_create(name) != 0) {
         return -ENOSPC;
     }
 
-    /* Find the node to set mode */
     node = krffs_resolve(name);
     if (!node) {
         return -EIO;
     }
 
-    /* Set file mode */
     node->mode = (uint16_t)(mode & 0777);
 
-    /* Allocate a file descriptor */
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
         return -EMFILE;
     }
 
-    /* Set up the fd entry for writing */
     entry = &current_proc->fds.entries[fd];
     entry->type = FD_TYPE_FILE;
     entry->node = node;
@@ -3882,11 +3752,7 @@ static int32_t sys_creat(isr_params_t *params)
     return fd;
 }
 
-/*
- * sys_unlink - delete a file
- * Args: EBX = path
- * Returns: 0 on success, -1 on error
- */
+/* unlink(2): EBX = path. Returns 0 or -errno. */
 static int32_t sys_unlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
@@ -3899,27 +3765,23 @@ static int32_t sys_unlink(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Copy the path into a kernel buffer and work on the copy. */
     len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
     if (len < 0) {
         return len;
     }
     path = pathbuf;
 
-    /* Can't unlink root directory */
     if (path[0] == '/' && path[1] == '\0') {
-        return -EISDIR;
+        return -EISDIR; /* the root directory cannot be unlinked */
     }
 
-    /* Skip leading '/' if present */
     name = path;
     if (name[0] == '/') {
         name++;
     }
 
-    /* Empty filename is invalid */
     if (name[0] == '\0') {
-        return -EINVAL;
+        return -EINVAL; /* empty filename */
     }
 
     /* A synthetic mount is read-only. */
@@ -3927,7 +3789,6 @@ static int32_t sys_unlink(isr_params_t *params)
         return -EROFS;
     }
 
-    /* Check if file system is mounted */
     if (!krffs_fs) {
         return -ENOENT;
     }
@@ -4005,11 +3866,7 @@ static int32_t sys_rmdir(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_rename - rename a file
- * Args: EBX = old path, ECX = new path
- * Returns: 0 on success, -1 on error
- */
+/* rename(2): EBX = old path, ECX = new path. Returns 0 or -errno. */
 static int32_t sys_rename(isr_params_t *params)
 {
     const char __user *old_path = (const char __user *)params->ebx;
@@ -4034,7 +3891,6 @@ static int32_t sys_rename(isr_params_t *params)
         return len;
     }
 
-    /* Skip leading '/' if present */
     old_name = old_buf;
     if (old_name[0] == '/') {
         old_name++;
@@ -4044,9 +3900,8 @@ static int32_t sys_rename(isr_params_t *params)
         new_name++;
     }
 
-    /* Empty filenames are invalid */
     if (old_name[0] == '\0' || new_name[0] == '\0') {
-        return -EINVAL;
+        return -EINVAL; /* empty filename */
     }
 
     /* Neither end may be a synthetic mount. */
@@ -4054,7 +3909,6 @@ static int32_t sys_rename(isr_params_t *params)
         return -EROFS;
     }
 
-    /* Check if file system is mounted */
     if (!krffs_fs) {
         return -ENOENT;
     }
@@ -4091,15 +3945,13 @@ static void get_current_time(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = (ticks % TIMER_FREQUENCY) * 10000000LL;  /* 10ms per tick */
 }
 
-/*
- * sys_utimensat - update file timestamps
- * Args: EBX = dirfd (ignored, always use cwd), ECX = path, EDX = times, ESI = flags
- * Returns: 0 on success, -1 on error
+/**
+ * Update a file's access and modification timestamps (utimensat(2)).
  *
- * times is array of 2 timespec: [atime, mtime]
- * If times is NULL, set both to current time
- * If tv_nsec is UTIME_NOW, set to current time
- * If tv_nsec is UTIME_OMIT, leave unchanged
+ * EBX = dirfd, ECX = path, EDX = times, ESI = flags. `times` is a 2-element
+ * timespec array [atime, mtime]; a NULL `times` sets both to the current time. A
+ * tv_nsec of UTIME_NOW means "now", UTIME_OMIT means "leave unchanged". Returns 0
+ * or -errno.
  */
 static int32_t sys_utimensat(isr_params_t *params)
 {
@@ -4133,16 +3985,13 @@ static int32_t sys_utimensat(isr_params_t *params)
         times = ktimes;
     }
 
-    /* Skip leading '/' if present */
     name = pathbuf;
     if (name[0] == '/') {
         name++;
     }
 
-    /* Empty filename - check if it's root "/" */
     if (name[0] == '\0') {
-        /* Can't modify root timestamps, but return success */
-        return 0;
+        return 0; /* root timestamps are not modifiable; report success */
     }
 
     /* A synthetic mount is read-only. */
@@ -4150,12 +3999,10 @@ static int32_t sys_utimensat(isr_params_t *params)
         return -EROFS;
     }
 
-    /* Check if file system is mounted */
     if (!krffs_fs) {
         return -ENOENT;
     }
 
-    /* Find the file */
     {
         int rerr = 0;
         node = krffs_resolve_e(name, &rerr);
@@ -4164,20 +4011,16 @@ static int32_t sys_utimensat(isr_params_t *params)
         }
     }
 
-    /* Get current time (ticks since boot converted to seconds) */
     get_current_time(&now_sec, &now_nsec);
 
-    /* Update timestamps */
     if (times == NULL) {
-        /* NULL means set both to current time */
         node->access_time.seconds = now_sec;
         node->access_time.nanoseconds = now_nsec;
         node->modification_time.seconds = now_sec;
         node->modification_time.nanoseconds = now_nsec;
     } else {
-        /* Update access time */
         if (times[0].tv_nsec == UTIME_OMIT) {
-            /* Leave unchanged */
+            /* leave atime unchanged */
         } else if (times[0].tv_nsec == UTIME_NOW) {
             node->access_time.seconds = now_sec;
             node->access_time.nanoseconds = now_nsec;
@@ -4186,9 +4029,8 @@ static int32_t sys_utimensat(isr_params_t *params)
             node->access_time.nanoseconds = times[0].tv_nsec;
         }
 
-        /* Update modification time */
         if (times[1].tv_nsec == UTIME_OMIT) {
-            /* Leave unchanged */
+            /* leave mtime unchanged */
         } else if (times[1].tv_nsec == UTIME_NOW) {
             node->modification_time.seconds = now_sec;
             node->modification_time.nanoseconds = now_nsec;
@@ -4198,7 +4040,7 @@ static int32_t sys_utimensat(isr_params_t *params)
         }
     }
 
-    /* Update attribute change time (ctime is always updated on metadata change) */
+    /* ctime always advances on a metadata change. */
     node->attribute_change_time.seconds = now_sec;
     node->attribute_change_time.nanoseconds = now_nsec;
 
@@ -4219,15 +4061,6 @@ struct linux_dirent64 {
 /* Directory entry types */
 #define DT_REG  8   /* Regular file */
 #define DT_DIR  4   /* Directory */
-
-/*
- * sys_getdents64 - read directory entries
- * Args: EBX = fd, ECX = dirp (buffer), EDX = count (buffer size)
- * Returns: bytes read on success, 0 at end, -1 on error
- *
- * Fills the buffer with linux_dirent64 structures for each file.
- * Uses fd->offset to track position in directory (file index).
- */
 #ifndef DT_CHR
 #define DT_CHR 2
 #endif
@@ -4417,6 +4250,13 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
     return (int32_t)written;
 }
 
+/**
+ * Read directory entries (getdents64(2)).
+ *
+ * EBX = fd, ECX = dirp buffer, EDX = count. Packs linux_dirent64 records into the
+ * buffer, one per child, and advances the fd's offset cursor. Returns the bytes
+ * written, 0 at end of directory, or -errno.
+ */
 static int32_t sys_getdents64(isr_params_t *params)
 {
     int fd_num = (int)params->ebx;
@@ -4443,69 +4283,58 @@ static int32_t sys_getdents64(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Get and validate fd */
     entry = fd_get(&current_proc->fds, fd_num);
     if (!entry) {
         return -EBADF;
     }
 
     /* A synthetic directory (/dev, /proc, /proc/<pid>[/fd]) lists from the process
-     * table / device registry, not KRFFS. (Bare `ls /` does not yet merge these
-     * mount names -- they are reached by their absolute paths.) */
+     * table or device registry, not KRFFS. Bare `ls /` does not merge these mount
+     * names; they are reached by their absolute paths. */
     if (entry->type == FD_TYPE_SYNTH_DIR) {
         return synth_getdents(entry, buf, count);
     }
 
-    /* Must be a directory fd */
     if (entry->type != FD_TYPE_DIR) {
         return -ENOTDIR;
     }
 
-    /* Check file system is mounted */
     if (!krffs_fs) {
         return -EIO;
     }
 
-    /* entry->ofd->offset tracks which file index we're at */
-    target_index = entry->ofd->offset;
+    target_index = entry->ofd->offset; /* the file index reached so far */
 
     /* List only the children of THIS directory: entry->node is the directory
      * (NULL == the root), so match nodes whose parent_id is its id. */
     dir_id = entry->node ? entry->node->id : (uint64_t)KRFFS_ROOT_ID;
 
-    /* Iterate through KRFFS nodes */
     node = krffs_fs->node;
     do {
         if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id) {
-            /* Found a file - check if we've reached our target position */
             if (file_index >= target_index) {
                 /* Staging buffer for one record (a KRFFS name is at most
                  * KRFFS_FILE_NAME_BUFFER_SIZE bytes, so this always fits). */
                 uint8_t recbuf[KRFFS_FILE_NAME_BUFFER_SIZE + 32];
 
-                /* Calculate dirent size with proper alignment */
                 name_len = k_strlen((const char *)node->name);
-                /* Size = fixed fields (19 bytes) + name + null + padding to 8-byte alignment */
+                /* Fixed fields (19 bytes) + name + NUL, padded to 8-byte align. */
                 rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) + name_len + 1;
-                /* Align to 8 bytes */
                 rec_len = (rec_len + 7) & ~7;
 
-                /* Check if entry fits in remaining buffer */
                 if (bytes_written + rec_len > count) {
-                    /* No more room - return what we have */
                     if (bytes_written == 0) {
-                        /* Buffer too small for even one entry */
-                        return -EINVAL;
+                        return -EINVAL; /* buffer too small for even one entry */
                     }
                     break;
                 }
 
-                /* Build the record in kernel memory, then copy it to the user
-                 * buffer through the helper (no raw write into user space). */
+                /* Build the record in kernel memory, then copy it out through the
+                 * helper (no raw write into user space). */
                 k_memset(recbuf, 0, rec_len);
                 dirent = (struct linux_dirent64 *)recbuf;
-                dirent->d_ino = node->id;                      /* Use DJB hash as inode */
-                dirent->d_off = (int64_t)(file_index + 1);     /* Next position */
+                dirent->d_ino = node->id;                      /* the DJB hash is the inode */
+                dirent->d_off = (int64_t)(file_index + 1);     /* next position */
                 dirent->d_reclen = (uint16_t)rec_len;
                 dirent->d_type = KRFFS_IS_DIR(node->mode) ? DT_DIR : DT_REG;
                 k_memcpy(dirent->d_name, node->name, name_len + 1);
@@ -4517,15 +4346,15 @@ static int32_t sys_getdents64(isr_params_t *params)
                 }
 
                 bytes_written += rec_len;
-                entry->ofd->offset = file_index + 1;  /* Update position for next call */
+                entry->ofd->offset = file_index + 1;
             }
             file_index++;
         }
     } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
 
-    /* If we wrote nothing and went through all files, we're at end */
+    /* Wrote nothing after scanning every child: end of directory. */
     if (bytes_written == 0 && file_index > 0 && target_index >= file_index) {
-        return 0;  /* End of directory */
+        return 0;
     }
 
     return (int32_t)bytes_written;
@@ -4540,11 +4369,8 @@ struct kernel_timeval {
 };
 
 /*
- * sys_gettimeofday - get time since boot
- * Args: EBX = tv (timeval*), ECX = tz (ignored)
- * Returns: 0 on success, -1 on error
- *
- * Returns time since boot based on kernel_ticks counter (100 Hz).
+ * gettimeofday(2): EBX = tv (timeval*), ECX = tz (ignored). Reports time since
+ * boot from the kernel_ticks counter (100 Hz). Returns 0 or -errno.
  */
 static int32_t sys_gettimeofday(isr_params_t *params)
 {
@@ -4568,12 +4394,13 @@ static int32_t sys_gettimeofday(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_clock_gettime - read a POSIX clock (syscall 265, 32-bit timespec).
- * Args: EBX = clockid, ECX = struct timespec*. CLOCK_REALTIME(0) and
- * CLOCK_MONOTONIC(1) both report time since boot at the 10 ms tick resolution
- * (there is no wall-clock RTC sync yet). musl falls back here from
- * clock_gettime64 (403), which this kernel does not provide.
+/**
+ * Read a POSIX clock (clock_gettime, syscall 265, 32-bit timespec).
+ *
+ * EBX = clockid, ECX = struct timespec*. CLOCK_REALTIME(0) and CLOCK_MONOTONIC(1)
+ * both report time since boot at the 10 ms tick resolution (there is no wall-clock
+ * RTC sync). musl falls back here from clock_gettime64 (403), which this kernel
+ * does not provide.
  */
 static int32_t sys_clock_gettime(isr_params_t *params)
 {
@@ -4599,12 +4426,13 @@ static int32_t sys_clock_gettime(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_nanosleep - block-and-schedule sleep (syscall 162, 32-bit timespec).
- * Args: EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
- * Rounds up to whole 10 ms ticks, then parks the process BLOCKED on its
- * wakeup_tick and yields; the timer wakes it at the deadline while OTHER
- * processes keep running. rem is written as zero on normal completion.
+/**
+ * Block-and-schedule sleep (nanosleep, syscall 162, 32-bit timespec).
+ *
+ * EBX = const struct timespec* req, ECX = struct timespec* rem (optional). Rounds
+ * up to whole 10 ms ticks, then parks the process BLOCKED on its wakeup_tick and
+ * yields; the timer wakes it at the deadline while OTHER processes keep running.
+ * rem is written as zero on normal completion, or the time left on -EINTR.
  */
 static int32_t sys_nanosleep(isr_params_t *params)
 {
@@ -4703,13 +4531,13 @@ static int32_t sys_getuid(isr_params_t *params)
 #define GRND_RANDOM   0x0002u
 #define GRND_INSECURE 0x0004u
 
-/*
- * sys_getrandom - fill a buffer with random bytes (syscall 355).
- * Args: EBX = buf, ECX = buflen, EDX = flags. Backed by the kernel CSPRNG
- * (lib/krandom, ChaCha20). Returns the byte count, like Linux; musl's
- * getrandom/arc4random sit on top of this. We never block (GRND_NONBLOCK is a
- * no-op) and have a single source (GRND_RANDOM is equivalent); unknown flag bits
- * are rejected.
+/**
+ * Fill a buffer with random bytes (getrandom, syscall 355).
+ *
+ * EBX = buf, ECX = buflen, EDX = flags. Backed by the kernel CSPRNG (lib/krandom,
+ * ChaCha20). Returns the byte count, like Linux; musl's getrandom/arc4random sit
+ * on top of this. We never block (GRND_NONBLOCK is a no-op) and have a single
+ * source (GRND_RANDOM is equivalent); unknown flag bits are rejected.
  */
 static int32_t sys_getrandom(isr_params_t *params)
 {
@@ -4731,10 +4559,10 @@ static int32_t sys_getrandom(isr_params_t *params)
     if (!buf) {
         return -EFAULT;
     }
-    /* Fail closed (Phase 20): with no trusted hardware entropy (RDSEED/RDRAND),
-     * refuse rather than hand out the weak boot-jitter stream for a key. A caller
-     * that explicitly accepts insecure bytes passes GRND_INSECURE (the same tier
-     * as AT_RANDOM / the stack canary). */
+    /* Fail closed: with no trusted hardware entropy (RDSEED/RDRAND), refuse rather
+     * than hand out the weak boot-jitter stream for a key. A caller that explicitly
+     * accepts insecure bytes passes GRND_INSECURE (the same tier as AT_RANDOM / the
+     * stack canary). */
     if (!krandom_is_trusted() && !(flags & GRND_INSECURE)) {
         return -EIO;
     }
@@ -4753,8 +4581,8 @@ static int32_t sys_getrandom(isr_params_t *params)
 }
 
 /* ===========================================================================
- * Signals (Phase 8): per-process disposition + pending/blocked masks, delivery
- * on return-to-user via a frame on the user stack, and rt_sigreturn.
+ * Signals: per-process disposition + pending/blocked masks, delivery on
+ * return-to-user via a frame on the user stack, and rt_sigreturn.
  * ======================================================================== */
 
 extern void terminate_current_process(int32_t signo);
@@ -5023,12 +4851,13 @@ static int32_t sys_pause(isr_params_t *params)
     return -EINTR;
 }
 
-/*
- * sys_rt_sigsuspend - atomically install a signal mask and wait (rt_sigsuspend(2)).
- * Args: EBX = const sigset_t *mask, ECX = sigsetsize (8). Replaces the blocked
- * mask with *mask, waits for a deliverable signal, restores the old mask, then
- * returns -EINTR. (The handler runs under the RESTORED mask -- a simplification;
- * full save-the-mask-through-the-handler semantics are not modelled.)
+/**
+ * Atomically install a signal mask and wait (rt_sigsuspend(2)).
+ *
+ * EBX = const sigset_t *mask, ECX = sigsetsize (8). Replaces the blocked mask with
+ * *mask, waits for a deliverable signal, restores the old mask, then returns
+ * -EINTR. The handler runs under the RESTORED mask: a simplification, since full
+ * save-the-mask-through-the-handler semantics are not modelled.
  */
 static int32_t sys_rt_sigsuspend(isr_params_t *params)
 {
@@ -5054,9 +4883,10 @@ static int32_t sys_rt_sigsuspend(isr_params_t *params)
     return -EINTR;
 }
 
-/*
- * sys_rt_sigaction (174) - install/query a signal disposition.
- * Args: EBX=signo, ECX=const struct k_sigaction* act, EDX=struct k_sigaction* old,
+/**
+ * Install or query a signal disposition (rt_sigaction, syscall 174).
+ *
+ * EBX=signo, ECX=const struct k_sigaction* act, EDX=struct k_sigaction* old,
  * ESI=sigsetsize. Stores the action per-signal; SIGKILL/SIGSTOP cannot be changed.
  */
 static int32_t sys_rt_sigaction(isr_params_t *params)
@@ -5098,9 +4928,10 @@ static int32_t sys_rt_sigaction(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_rt_sigprocmask (175) - examine/change the blocked-signal mask.
- * Args: EBX=how (0 BLOCK/1 UNBLOCK/2 SETMASK), ECX=const set*, EDX=old set*,
+/**
+ * Examine or change the blocked-signal mask (rt_sigprocmask, syscall 175).
+ *
+ * EBX=how (0 BLOCK/1 UNBLOCK/2 SETMASK), ECX=const set*, EDX=old set*,
  * ESI=sigsetsize. SIGKILL/SIGSTOP can never be blocked.
  */
 static int32_t sys_rt_sigprocmask(isr_params_t *params)
@@ -5169,8 +5000,10 @@ struct sig_frame {
 
 #define SIG_FRAME_MAGIC 0x5347464du /* "SGFM" */
 
-/* Build a signal frame on the user stack and redirect the trapframe to the
- * handler. Returns 0, or -1 if the user stack could not be written. */
+/**
+ * Build a signal frame on the user stack and redirect the trapframe to the
+ * handler. Returns 0, or -1 if the user stack could not be written.
+ */
 static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *sa)
 {
     struct sig_frame frame;
@@ -5217,17 +5050,18 @@ static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *s
     return 0;
 }
 
-/*
- * signal_restore - the shared body of sigreturn: read the frame the restorer
- * left on the user stack, validate it, and restore the saved trapframe (segment
- * selectors and EFLAGS forced to safe user values -- the frame is on the
- * untrusted user stack) plus the pre-handler signal mask. Returns the restored
- * EAX so the dispatcher does not clobber it.
+/**
+ * The shared body of sigreturn.
  *
- * `delta` is how far below the current user esp the frame begins, which differs
- * by trampoline: musl's __restore_rt enters with esp just past `pretcode`
- * (delta 4), while the legacy __restore pops the signal word first and so enters
- * 4 bytes higher (delta 8). Both read the same kernel-built frame.
+ * Reads the frame the restorer left on the user stack, validates it, and restores
+ * the saved trapframe (segment selectors and EFLAGS forced to safe user values,
+ * since the frame is on the untrusted user stack) plus the pre-handler signal
+ * mask. Returns the restored EAX so the dispatcher does not clobber it.
+ *
+ * `delta` is how far below the current user esp the frame begins, which differs by
+ * trampoline: musl's __restore_rt enters with esp just past `pretcode` (delta 4),
+ * while the legacy __restore pops the signal word first and so enters 4 bytes
+ * higher (delta 8). Both read the same kernel-built frame.
  */
 static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
 {
@@ -5276,8 +5110,8 @@ static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
 }
 
 /*
- * sys_rt_sigreturn (173) - return through musl's __restore_rt (SA_SIGINFO
- * handlers): a bare `int $0x80`, so the frame sits 4 bytes below the user esp.
+ * rt_sigreturn (syscall 173): return through musl's __restore_rt (SA_SIGINFO
+ * handlers), a bare `int $0x80`, so the frame sits 4 bytes below the user esp.
  */
 static int32_t sys_rt_sigreturn(isr_params_t *tf)
 {
@@ -5285,21 +5119,23 @@ static int32_t sys_rt_sigreturn(isr_params_t *tf)
 }
 
 /*
- * sys_sigreturn (119) - return through musl's legacy __restore (plain handlers,
- * no SA_SIGINFO): it pops the signal word before the `int $0x80`, so the frame
- * sits 8 bytes below the user esp. Reads the same kernel-built frame as the rt
- * path; the popped word is the handler's `sig` argument and is discarded.
+ * sigreturn (syscall 119): return through musl's legacy __restore (plain
+ * handlers, no SA_SIGINFO). It pops the signal word before the `int $0x80`, so the
+ * frame sits 8 bytes below the user esp. Reads the same kernel-built frame as the
+ * rt path; the popped word is the handler's `sig` argument and is discarded.
  */
 static int32_t sys_sigreturn(isr_params_t *tf)
 {
     return signal_restore(tf, 8);
 }
 
-/*
- * deliver_signals - called from the ISR/IRQ return path just before iret, with
- * the trapframe about to be restored. If the current process is returning to USER
- * mode and has a deliverable (pending, not blocked) signal, act on the
- * lowest-numbered one: ignore it, terminate (default), or build a handler frame.
+/**
+ * Act on a pending signal at the return-to-user boundary.
+ *
+ * Called from the ISR/IRQ return path just before iret, with the trapframe about
+ * to be restored. If the current process is returning to USER mode and has a
+ * deliverable (pending, not blocked) signal, act on the lowest-numbered one:
+ * ignore it, terminate (default), stop, or build a handler frame.
  */
 void deliver_signals(isr_params_t *tf)
 {
@@ -5350,7 +5186,7 @@ void deliver_signals(isr_params_t *tf)
                 }
                 /* Yield to others; if none are runnable, idle. The scheduler keeps
                  * us STOPPED (it only flips RUNNING->READY); signal_post resumes us.
-                 * `sti;hlt;cli` from IF=0 is lost-wakeup-safe (Phase 12). */
+                 * `sti;hlt;cli` from IF=0 is lost-wakeup-safe. */
                 while (current_proc->state == PROC_STOPPED) {
                     schedule();
                     if (current_proc->state == PROC_STOPPED) {
@@ -5400,14 +5236,15 @@ static struct tty *fd_tty(fd_entry_t *e)
     return NULL;
 }
 
-/*
- * The shared terminal ioctls -- the real termios layer (Phase 16) plus the
- * session/job-control requests (Phase 17) -- operating on a GIVEN tty, so the
- * console and a pty slave (Phase 19) share one implementation. Sets *handled = 1
- * and returns the result for a recognized terminal request; sets *handled = 0
- * (return value unused) otherwise, so the caller falls through to its own
- * handling. TCGETS/TCSETS exchange the 36-byte kernel termios (n_tty.h); TCSETSF
- * and TCFLSH flush the unread input.
+/**
+ * The shared terminal ioctls operating on a GIVEN tty.
+ *
+ * The real termios layer plus the session/job-control requests, so the console
+ * and a pty slave share one implementation. Sets *handled = 1 and returns the
+ * result for a recognized terminal request; sets *handled = 0 (return value
+ * unused) otherwise, so the caller falls through to its own handling. TCGETS/TCSETS
+ * exchange the 36-byte kernel termios (n_tty.h); TCSETSF and TCFLSH flush the
+ * unread input.
  */
 static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, int *handled)
 {
@@ -5551,14 +5388,14 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
     }
 }
 
-/*
- * sys_ioctl - device control
- * Args: EBX = fd, ECX = request, EDX = arg
- * Returns: 0 on success, -1 on error
+/**
+ * Device control (ioctl(2)).
  *
- * Supported requests:
- * - KIOCSOUND: Set PC speaker frequency (arg = freq, 0 = off)
- * - FB_SETPALETTE: Set 256-color palette (arg = pointer to 768 bytes)
+ * EBX = fd, ECX = request, EDX = arg. A tty fd (console or pty slave) routes to
+ * the shared termios/session handler first; an ops-backed object handles its own
+ * remaining requests; the framebuffer and console handle their device-specific
+ * ones (FB_*, KIOCSOUND, AUDIO_*). Returns 0, the request result, or -errno
+ * (-ENOTTY for a terminal request on a non-terminal fd).
  */
 static int32_t sys_ioctl(isr_params_t *params)
 {
@@ -5614,7 +5451,6 @@ static int32_t sys_ioctl(isr_params_t *params)
      * has been closed and reopened onto a regular file (now that close(0/1/2) is
      * legal). */
 
-    /* Handle framebuffer ioctls */
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
         switch (request) {
             case FB_SETPALETTE:
@@ -5629,11 +5465,9 @@ static int32_t sys_ioctl(isr_params_t *params)
                 return -EFAULT;
 
             case FB_MODE_13H:
-                /* Already in mode 13h if fb is open */
-                return 0;
+                return 0; /* already in mode 13h while fb is open */
 
             case FB_MODE_TEXT:
-                /* Switch back to text mode */
                 vga_mode13h_exit();
                 fb_owner_pid = 0;
                 return 0;
@@ -5643,7 +5477,6 @@ static int32_t sys_ioctl(isr_params_t *params)
         }
     }
 
-    /* Handle console ioctls */
     if (entry->type == FD_TYPE_CONSOLE) {
         if (request == KIOCSOUND) {
             if (arg == 0) {
@@ -5654,7 +5487,6 @@ static int32_t sys_ioctl(isr_params_t *params)
             return 0;
         }
 
-        /* Audio ioctls on console fd */
         switch (request) {
             case AUDIO_GET_INFO: {
                 struct audio_info kinfo;
@@ -5719,7 +5551,7 @@ static int32_t sys_ioctl(isr_params_t *params)
         }
     }
 
-    return -ENOTTY;  /* Unknown request */
+    return -ENOTTY;
 }
 
 /* --- Network socketcall (SYS_SOCKETCALL = 102) ---------------------------
@@ -5801,11 +5633,12 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 /* We read sin_family/sin_port/sin_addr from the first 8 sockaddr bytes. */
 #define SOCKADDR_MIN 8
 
-/*
- * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen) pair,
- * respecting the caller's declared buffer capacity: read the in/out socklen,
- * copy at most that many of the 16 sockaddr_in bytes, and report the true length
- * (16) -- the recvfrom(2)/accept(2) truncation semantics. Returns 0 or -EFAULT.
+/**
+ * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen) pair.
+ *
+ * Respects the caller's declared buffer capacity: read the in/out socklen, copy at
+ * most that many of the 16 sockaddr_in bytes, and report the true length (16), the
+ * recvfrom(2)/accept(2) truncation semantics. Returns 0 or -EFAULT.
  */
 static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
                                  uint16_t port, uint32_t ip)
@@ -5849,6 +5682,8 @@ static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
     return 0;
 }
 
+/* socket(2): only AF_INET (domain 2), SOCK_STREAM, and SOCK_DGRAM. Returns a new
+ * socket fd or -errno. */
 static int32_t do_socket(int domain, int type, int protocol)
 {
     struct socket *sock;
@@ -5886,6 +5721,8 @@ static int32_t do_socket(int domain, int type, int protocol)
     return fd;
 }
 
+/* bind(2): record the local port from the sockaddr; a datagram socket also
+ * registers it with UDP (-EADDRINUSE if taken). */
 static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
@@ -5920,6 +5757,8 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
     return 0;
 }
 
+/* sendto(2): a stream socket ignores the destination and behaves like send; a
+ * datagram socket sends to the sockaddr, binding an ephemeral source port first. */
 static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
                          int flags, uint32_t sa_ptr, int addrlen)
 {
@@ -5971,6 +5810,9 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     return len;
 }
 
+/* recvfrom(2): a stream socket behaves like recv (no source writeback); a datagram
+ * socket reports the source address, truncated to the caller's capacity. Honors
+ * MSG_DONTWAIT and O_NONBLOCK. */
 static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
                            int flags, uint32_t sa_ptr, uint32_t salen_ptr)
 {
@@ -6054,6 +5896,8 @@ static int accept_ready(void *arg)
     return sock->accept_head != sock->accept_tail;
 }
 
+/* connect(2): start the TCP handshake to the sockaddr. A blocking socket waits it
+ * out (-EINTR on a signal); a non-blocking one returns 0 or -EINPROGRESS. */
 static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
@@ -6108,6 +5952,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     return 0;
 }
 
+/* listen(2): mark a stream socket passive and open its LISTEN TCB. */
 static int32_t do_listen(int fd, int backlog)
 {
     fd_entry_t *entry;
@@ -6126,6 +5971,8 @@ static int32_t do_listen(int fd, int backlog)
     return tcp_listen(entry->sock, entry->sock->local_port);
 }
 
+/* accept(2): dequeue a completed connection (blocking, or -EAGAIN on a
+ * non-blocking listener), install a new fd for it, and report the peer address. */
 static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
     fd_entry_t    *entry;
@@ -6188,6 +6035,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     return new_fd;
 }
 
+/* send(2): write to a connected stream socket (the peer is the connection's). */
 static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
@@ -6212,6 +6060,8 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
                              len);
 }
 
+/* recv(2): read from a connected stream socket. Honors MSG_DONTWAIT and
+ * O_NONBLOCK. */
 static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
@@ -6382,6 +6232,14 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
     return 0;
 }
 
+/**
+ * Multiplexed socket syscall (socketcall, syscall 102).
+ *
+ * EBX is the SC_* sub-call number, ECX a user pointer to its argument array.
+ * Copies the right number of 32-bit args in one fault-checked read, then
+ * dispatches to the matching do_* helper. Returns its result, or -EINVAL for an
+ * unknown sub-call.
+ */
 static int32_t sys_socketcall(isr_params_t *params)
 {
     int      call = (int)params->ebx;
@@ -6450,13 +6308,14 @@ static int32_t sys_socketcall(isr_params_t *params)
     }
 }
 
-/*
- * set_thread_area(2) -- Linux i386 thread-local storage. EBX points at a
- * struct user_desc. We validate it, program the shared TLS GDT descriptor
- * (entry GDT_TLS_ENTRY) and this process's PCB base, then write the chosen
- * entry number back so the C library can load (entry_number << 3) | 3 into
+/**
+ * Set up thread-local storage (set_thread_area(2), Linux i386).
+ *
+ * EBX points at a struct user_desc. Validates it, programs the shared TLS GDT
+ * descriptor (entry GDT_TLS_ENTRY) and this process's PCB base, then writes the
+ * chosen entry number back so the C library can load (entry_number << 3) | 3 into
  * %gs. The base is reapplied to the GDT on every context switch (switch.s).
- * Returns 0 on success or a negative errno on a bad pointer/request.
+ * Returns 0 or a negative errno on a bad pointer/request.
  */
 static int32_t sys_set_thread_area(isr_params_t *params)
 {
@@ -6506,13 +6365,13 @@ static int32_t sys_getpid(isr_params_t *params)
     return (int32_t)current_proc->pid;
 }
 
-/*
- * sys_setsid - create a new session (setsid(2)). The caller becomes the leader of
- * a new session AND a new process group, both numbered with its pid. Fails with
- * -EPERM if the caller already leads a process group (a group leader cannot carry
- * its group into a new session). Returns the new session id (the caller's pid).
- * (Dropping a controlling terminal is wired in Phase 17b once the tty tracks its
- * controlling session.)
+/**
+ * Create a new session (setsid(2)).
+ *
+ * The caller becomes the leader of a new session AND a new process group, both
+ * numbered with its pid. Fails with -EPERM if the caller already leads a process
+ * group (a group leader cannot carry its group into a new session). Returns the
+ * new session id (the caller's pid).
  */
 static int32_t sys_setsid(isr_params_t *params)
 {
@@ -6529,11 +6388,12 @@ static int32_t sys_setsid(isr_params_t *params)
     return (int32_t)current_proc->pid;
 }
 
-/*
- * sys_setpgid - set a process's process group (setpgid(2)).
- * Args: EBX = pid (0 = caller), ECX = pgid (0 = the target's own pid, i.e. make it
- * a group leader). The target must be the caller or a child of the caller, must
- * not be a session leader, and the destination group must live in the target's
+/**
+ * Set a process's process group (setpgid(2)).
+ *
+ * EBX = pid (0 = caller), ECX = pgid (0 = the target's own pid, i.e. make it a
+ * group leader). The target must be the caller or a child of the caller, must not
+ * be a session leader, and the destination group must live in the target's
  * session. Returns 0 or -errno.
  */
 static int32_t sys_setpgid(isr_params_t *params)
@@ -6661,11 +6521,13 @@ static int32_t sys_umask(isr_params_t *params)
     return (int32_t)old;
 }
 
-/*
- * sys_times - process times (times(2)). Per-process CPU time is not tracked, so
- * the four tms fields are reported as zero; the return value is the monotonic
- * tick count (already in CLK_TCK = 100 Hz units). Args: EBX = struct tms * (NULL
- * is allowed -- the caller may only want the return value).
+/**
+ * Process times (times(2)).
+ *
+ * Per-process CPU time is not tracked, so the four tms fields are reported as
+ * zero; the return value is the monotonic tick count (already in CLK_TCK = 100 Hz
+ * units). EBX = struct tms * (NULL is allowed: the caller may want only the return
+ * value).
  */
 static int32_t sys_times(isr_params_t *params)
 {
@@ -6688,11 +6550,12 @@ static int32_t sys_times(isr_params_t *params)
     return (int32_t)kernel_ticks;
 }
 
-/*
- * sys_sysinfo - system statistics (sysinfo(2)). Fills the 64-byte i386 struct
- * sysinfo: uptime in seconds, a live-process count, mem_unit = 1; CPU load and
- * memory/swap figures are reported as zero (not tracked). Args: EBX = struct
- * sysinfo *.
+/**
+ * System statistics (sysinfo(2)).
+ *
+ * Fills the 64-byte i386 struct sysinfo: uptime in seconds, a live-process count,
+ * mem_unit = 1; CPU load and memory/swap figures are reported as zero (not
+ * tracked). EBX = struct sysinfo *.
  */
 static int32_t sys_sysinfo(isr_params_t *params)
 {
@@ -6750,10 +6613,11 @@ static int32_t sys_sysinfo(isr_params_t *params)
     return 0;
 }
 
-/*
- * sys_set_tid_address - record the clear-child-tid pointer and return the tid
- * (set_tid_address(2)). Rach2 has no threads, so we only need to return the
- * caller's PID as its thread id; the pointer (EBX) is accepted and ignored.
+/**
+ * Record the clear-child-tid pointer and return the tid (set_tid_address(2)).
+ *
+ * Rach2 has no threads, so this only returns the caller's PID as its thread id;
+ * the pointer (EBX) is accepted and ignored.
  */
 static int32_t sys_set_tid_address(isr_params_t *params)
 {
@@ -6766,9 +6630,8 @@ static int32_t sys_set_tid_address(isr_params_t *params)
 }
 
 /*
- * sys_uname - report system identification (uname(2)). Fills the six 65-byte
- * fields of struct utsname (new-style, as musl expects) in user memory.
- * Args: EBX = struct utsname *
+ * uname(2): fill the six 65-byte fields of struct utsname (new-style, as musl
+ * expects) in user memory. EBX = struct utsname *.
  */
 struct kernel_utsname {
     char sysname[65];
@@ -7187,9 +7050,13 @@ static int32_t sys_munmap(isr_params_t *params)
     return 0;
 }
 
-/*
- * Syscall handler - dispatches to appropriate syscall function
- * Stores return value in params->eax so it's returned to userspace
+/**
+ * The syscall trap handler: dispatch on the number in EAX.
+ *
+ * Looks up _syscall_table[EAX] and calls it, storing the result back in
+ * params->eax for popal/iret to return to userspace. Marks the process
+ * non-preemptible (in_syscall) around the dispatch and runs the body with
+ * interrupts on so the PIT/HDA keep ticking during long syscalls.
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -7233,12 +7100,10 @@ void init_syscall(void)
 {
     uint32_t i;
 
-    /* Clear dispatch table */
     for (i = 0; i < SYSCALL_TABLE_SIZE; i++) {
         _syscall_table[i] = NULL;
     }
 
-    /* Register implemented syscalls */
     _syscall_table[SYS_EXIT] = sys_exit;
     _syscall_table[SYS_FORK] = sys_fork;
     _syscall_table[SYS_READ] = sys_read;
@@ -7314,11 +7179,9 @@ void init_syscall(void)
     _syscall_table[SYS_UMASK] = sys_umask;
     _syscall_table[SYS_TIMES] = sys_times;
     _syscall_table[SYS_SYSINFO] = sys_sysinfo;
-    _syscall_table[SYS_VFORK] = sys_fork; /* conservative alias (Phase 18) */
+    _syscall_table[SYS_VFORK] = sys_fork; /* conservative alias */
     _syscall_table[SYS_WRITEV] = sys_writev;
     _syscall_table[SYS_UNAME] = sys_uname;
-    /* Phase 22: auth/identity (no-op privilege drop), resource limits, and the
-     * tail syscalls dropbear touches. */
     _syscall_table[SYS_SETHOSTNAME] = sys_sethostname;
     _syscall_table[SYS_SETUID32] = sys_setuid;
     _syscall_table[SYS_SETGID32] = sys_setgid;
@@ -7354,6 +7217,5 @@ void init_syscall(void)
      * exactly _exit(). */
     _syscall_table[SYS_EXIT_GROUP] = sys_exit;
 
-    /* Register the interrupt handler */
     register_isr_handler(SYSCALL_VECTOR, _syscall_handler);
 }

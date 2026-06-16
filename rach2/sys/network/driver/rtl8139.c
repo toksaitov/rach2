@@ -13,8 +13,8 @@
  *
  * IRQ: registered at vector 32 + IRQ line. The shared IRQ router sends the PIC
  *      EOI before calling us, so this driver must not touch the PIC. The card
- *      sits on a PCI line that can be shared (e.g. with the HDA device); the
- *      concurrency implications are addressed in Phase 5.
+ *      sits on a PCI line that can be shared (e.g. with the HDA device); see the
+ *      service-loop note in rtl8139_irq for the shared-line handling.
  */
 
 #include "rtl8139.h"
@@ -50,6 +50,18 @@ static void rtl8139_irq(isr_params_t *params);
 static void rtl8139_rx(void);
 static void rtl8139_rx_reset(void);
 
+/**
+ * Probe, reset, and bring up the RTL8139.
+ *
+ * Finds the card on the PCI bus, resets it, latches net_mac from the chip,
+ * programs the RX ring and TX descriptor base addresses, sets the receive and
+ * transmit configuration, registers the IRQ handler, and enables the receiver
+ * and transmitter. The receiver and transmitter are enabled last, after the
+ * buffers are in place, so no DMA can start against an unconfigured ring.
+ *
+ * @return 1 on success; 0 if no card is present or bring-up fails, with
+ *         rtl8139_error() set to the reason.
+ */
 int rtl8139_init(void)
 {
     uint32_t mac_lo, mac_hi;
@@ -141,6 +153,24 @@ uint16_t rtl8139_iobase(void)   { return iobase; }
 uint8_t  rtl8139_irq_line(void) { return rtl_pci.irq; }
 const char *rtl8139_error(void) { return rtl_err; }
 
+/**
+ * Copy a frame into the next TX descriptor and start its DMA.
+ *
+ * Frames larger than RTL_TX_BUF_SIZE are dropped; short frames are padded to
+ * the 60-byte Ethernet minimum with zeroed pad so no stale buffer bytes leak
+ * onto the wire. The descriptor is selected round-robin over the four slots.
+ *
+ * The four TX descriptors and tx_idx are shared between syscall-context and
+ * IRQ-context senders, so the descriptor write runs with interrupts disabled
+ * and the prior interrupt flag restored on return. In normal operation IF is
+ * already 0 here (see the transmit concurrency note in net.h); the guard makes
+ * that requirement explicit rather than trusting every caller to honor it.
+ *
+ * QEMU completes each transmit synchronously when the TSD is written, so a
+ * descriptor is always free again by the time the four-slot rotation returns to
+ * it; no OWN-bit poll is needed. Real hardware would poll the TSD OWN bit, but
+ * this driver targets QEMU only.
+ */
 void rtl8139_tx(const uint8_t *data, uint16_t len)
 {
     uint16_t txlen;
@@ -152,25 +182,10 @@ void rtl8139_tx(const uint8_t *data, uint16_t len)
         return;
     }
 
-    /*
-     * The four TX descriptors and tx_idx are shared between syscall-context and
-     * IRQ-context senders. Save the interrupt flag and disable interrupts so a
-     * NIC or timer IRQ cannot begin its own transmit partway through ours, then
-     * restore it. In normal operation IF is already 0 here (see the transmit
-     * concurrency note in net.h), so this guard is what makes that requirement
-     * explicit and robust rather than relying on every caller to honor it.
-     *
-     * QEMU completes each transmit synchronously when the TSD is written, so a
-     * descriptor is always free again by the time the four-slot rotation comes
-     * back to it; no ownership poll is needed (real hardware would poll the TSD
-     * OWN bit, but this driver targets QEMU only).
-     */
     __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(eflags) : : "memory");
 
     k_memcpy(tx_buf[tx_idx], data, len);
 
-    /* Pad short frames to the 60-byte minimum and zero the pad so no stale
-     * buffer bytes leak onto the wire. */
     txlen = len;
     if (txlen < 60) {
         k_memset(tx_buf[tx_idx] + len, 0, (size_t)(60 - len));
@@ -185,10 +200,11 @@ void rtl8139_tx(const uint8_t *data, uint16_t len)
     __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory", "cc");
 }
 
-/*
- * Resync the receiver after an overflow or a desynced ring header: disable RX,
- * reset the software pointer, reprogram the ring (which also resets the chip's
- * internal write pointer), then re-enable RX.
+/**
+ * Resync the receiver after an overflow or a desynced ring header.
+ *
+ * Disables RX, resets the software read pointer, reprograms the ring (which
+ * also resets the chip's internal write pointer), then re-enables RX.
  */
 static void rtl8139_rx_reset(void)
 {
@@ -201,6 +217,14 @@ static void rtl8139_rx_reset(void)
     outb(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 }
 
+/**
+ * Drain completed frames from the RX ring up to the chip's write pointer.
+ *
+ * Reads each 4-byte ring header, validates its status and length before
+ * trusting the length, hands the frame (minus its 4-byte CRC) to ethernet_rx,
+ * and advances the read pointer and CAPR. A bad header means an error packet or
+ * a desynced ring, so the receiver is resynced rather than advanced by garbage.
+ */
 static void rtl8139_rx(void)
 {
     uint16_t status;
@@ -245,6 +269,17 @@ static void rtl8139_rx(void)
 #define RTL_ISR_HANDLED  (RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | \
                           RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW)
 
+/**
+ * Service the card until its interrupt status reads clear.
+ *
+ * The card shares a PCI interrupt line (e.g. with the HDA device), and a frame
+ * finishing after ISR is acknowledged but before the ring drains would
+ * re-assert ROK. Reading and acknowledging in a loop until nothing is pending
+ * leaves the line deasserted and the ring drained on return, so no event is
+ * stranded for the next IRQ. The guard bounds the loop should a status bit ever
+ * stick. The shared IRQ router has already sent the PIC EOI, so this handler
+ * must not touch the PIC.
+ */
 static void rtl8139_irq(isr_params_t *params)
 {
     uint16_t isr_val;
@@ -252,14 +287,6 @@ static void rtl8139_irq(isr_params_t *params)
 
     (void)params;
 
-    /*
-     * Service status in a loop until ISR reads clear. The card shares a PCI
-     * interrupt line (e.g. with the HDA device) and a frame finishing after we
-     * acknowledge ISR but before the ring drains would re-assert ROK; reading
-     * and acknowledging until nothing is pending leaves the line deasserted and
-     * the ring drained on return, so no event is left stranded for the next
-     * IRQ. The guard bounds the loop should a status bit ever stick.
-     */
     for (guard = 0; guard < 64; guard++) {
         isr_val = inw(iobase + RTL_ISR);
         if ((isr_val & RTL_ISR_HANDLED) == 0) {

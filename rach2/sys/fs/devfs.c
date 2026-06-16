@@ -1,10 +1,10 @@
 /*
- * devfs.c -- a synthetic /dev built on the Phase-12 file_ops dispatch.
+ * devfs.c: a synthetic /dev built on the file_ops dispatch.
  *
  * Each character device is a tiny file_ops vtable; a registry binds a leaf name to
  * its ops and a {major,minor}. open("/dev/<name>") allocates a descriptor and
  * points its ops/priv at the registry entry (FD_TYPE_DEVICE), after which the
- * generic read/write/close paths dispatch through the vtable -- the device code
+ * generic read/write/close paths dispatch through the vtable, so the device code
  * lives nowhere in the syscall layer. The namespace is virtual: /dev is not stored
  * in KRFFS; stat and getdents synthesize from this table.
  */
@@ -80,7 +80,7 @@ static int32_t dev_zero_read(fd_entry_t *e, char __user *buf, uint32_t count)
 
 static int32_t dev_rand_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    /* Fail closed (Phase 20): /dev/random and /dev/urandom refuse when the CSPRNG
+    /* Fail closed: /dev/random and /dev/urandom refuse with -EIO when the CSPRNG
      * was seeded only from boot jitter, so no weak randomness is handed out for a
      * key. With RDSEED/RDRAND present the source is trusted and reads succeed. */
     if (!krandom_is_trusted()) {
@@ -171,6 +171,17 @@ static const struct devfs_entry *devfs_find(const char *name)
     return NULL;
 }
 
+/**
+ * Open a /dev leaf by name and return its descriptor.
+ *
+ * `name` is the leaf under /dev, `flags` the Linux O_* set. Most entries bind an
+ * fd to the registry vtable (FD_TYPE_DEVICE); three are special. /dev/ptmx is a
+ * clone device that mints a fresh pty pair per open; /dev/console and /dev/tty
+ * map to the kernel console (FD_TYPE_CONSOLE), except that /dev/tty resolves to
+ * the caller's controlling terminal, which may be a pty rather than the console.
+ *
+ * @return the new descriptor, or a negative errno.
+ */
 int devfs_open(const char *name, int flags)
 {
     const struct devfs_entry *dev;
@@ -257,6 +268,15 @@ int devfs_open(const char *name, int flags)
     return fd;
 }
 
+/**
+ * Synthesize stat fields for /dev or a device leaf.
+ *
+ * An empty `name` is /dev itself, a directory; otherwise it names a registry
+ * leaf, a character device. Each out pointer is optional. rdev packs the entry's
+ * {major,minor} the way the Linux mem devices number themselves.
+ *
+ * @return 0 on success, -1 if the named leaf does not exist.
+ */
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
 {
     const struct devfs_entry *dev;

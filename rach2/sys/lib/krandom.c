@@ -46,8 +46,12 @@ static int cc_src = KRANDOM_SRC_JITTER;
         (b) = ROTL32((b), 7);      \
     } while (0)
 
-/* One ChaCha20 block: 20 rounds (10 column/diagonal double-rounds) over a copy
- * of `in`, then add `in` back, giving 16 words of keystream in `out`. */
+/**
+ * Compute one ChaCha20 keystream block.
+ *
+ * Twenty rounds (ten column/diagonal double-rounds) over a copy of `in`, then
+ * `in` is added back, giving 16 words of keystream in `out`.
+ */
 static void chacha_block(uint32_t out[16], const uint32_t in[16])
 {
     uint32_t x[16];
@@ -71,8 +75,12 @@ static void chacha_block(uint32_t out[16], const uint32_t in[16])
     }
 }
 
-/* Install an eight-word key, reset the counter/nonce, and force a fresh block on
- * the next draw. Internal; reseed/seed are the entry points. */
+/**
+ * Install an eight-word key, reset the counter and nonce, and force a fresh
+ * block on the next draw.
+ *
+ * Internal; krandom_reseed and krandom_seed are the entry points.
+ */
 static void chacha_setup(const uint32_t key[8])
 {
     int i;
@@ -91,9 +99,13 @@ static void chacha_setup(const uint32_t key[8])
     cc_byte_pos = 64; /* exhausted: regenerate on the next byte */
 }
 
-/* Next keystream byte, regenerating a block (and bumping the 64-bit counter)
- * when the current one is spent. Both u32 and bytes draw from this one cursor, so
- * the byte stream is contiguous (bytes(1) then bytes(3) == bytes(4)). */
+/**
+ * Return the next keystream byte, regenerating a block and bumping the 64-bit
+ * counter when the current one is spent.
+ *
+ * Both the u32 and byte draws pull from this one cursor, so the byte stream is
+ * contiguous: bytes(1) then bytes(3) yields the same four bytes as bytes(4).
+ */
 static uint8_t cc_next_byte(void)
 {
     if (cc_byte_pos >= 64) {
@@ -106,13 +118,17 @@ static uint8_t cc_next_byte(void)
     return ((const uint8_t *)cc_out)[cc_byte_pos++];
 }
 
+/**
+ * Reseed the CSPRNG from four seed words.
+ *
+ * The four words expand to a full eight-word key deterministically (each high
+ * word a distinct mix), so a reseed is a pure function of its inputs. ChaCha has
+ * no all-zero lock state, so even a zero seed yields a non-zero stream.
+ */
 void krandom_reseed(uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 {
     uint32_t key[8];
 
-    /* Expand the four seed words to a full key deterministically (each high word
-     * a distinct mix), so reseed stays a pure function of its inputs. ChaCha has
-     * no all-zero lock state, so a zero seed still yields a non-zero stream. */
     key[0] = a;
     key[1] = b;
     key[2] = c;
@@ -162,7 +178,7 @@ extern void outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 extern volatile uint32_t kernel_ticks;
 
-/* CPUID leaf `leaf`, sub-leaf 0. */
+/** Execute CPUID for `leaf`, sub-leaf 0, into *a, *b, *c, *d (EAX, EBX, ECX, EDX). */
 static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
     __asm__ __volatile__("cpuid"
@@ -170,9 +186,13 @@ static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t
                          : "a"(leaf), "c"(0));
 }
 
-/* RDSEED -> a true-hardware entropy word; RDRAND -> a hardware CSPRNG word. Both
- * set CF on success and may transiently fail, so each retries a bounded number of
- * times. Return 1 and store *out on success, 0 if the instruction never delivers.
+/**
+ * Draw one true-hardware entropy word with RDSEED.
+ *
+ * RDSEED sets CF on success and may transiently fail, so it retries a bounded
+ * number of times. Return 1 and store *out on success, 0 if the instruction
+ * never delivers. (RDRAND, below, is a hardware CSPRNG word with the same CF
+ * contract.)
  */
 static int rdseed32(uint32_t *out)
 {
@@ -206,7 +226,7 @@ static int rdrand32(uint32_t *out)
     return 0;
 }
 
-/* Fill key[8] from a hardware draw; returns 1 if all eight words came through. */
+/** Fill key[8] from `draw`; return 1 only if all eight words came through. */
 static int collect_key(int (*draw)(uint32_t *), uint32_t key[8])
 {
     int i;
@@ -219,12 +239,18 @@ static int collect_key(int (*draw)(uint32_t *), uint32_t key[8])
     return 1;
 }
 
-/* Gather an eight-word key from hardware: RDSEED (leaf 7 EBX[18]) preferred, then
- * RDRAND (leaf 1 ECX[30]). Each is gated by BOTH its feature bit and a CPUID
- * max-leaf check (probing an unsupported leaf returns junk that could falsely
- * advertise the bit, then #UD when the instruction runs). If RDSEED is present
- * but does not deliver, it falls through to RDRAND. Returns 1 on a full hardware
- * key, 0 otherwise. */
+/**
+ * Gather an eight-word key from hardware entropy.
+ *
+ * RDSEED (CPUID leaf 7, EBX bit 18) is preferred, then RDRAND (leaf 1, ECX bit
+ * 30). Each is gated by BOTH its feature bit and a CPUID max-leaf check: probing
+ * an unsupported leaf returns junk that could falsely advertise the bit, then
+ * #UD when the instruction runs. If RDSEED is present but does not deliver, the
+ * code falls through to RDRAND.
+ *
+ * @return The KRANDOM_SRC_* of the source that filled the key, or
+ *         KRANDOM_SRC_JITTER if neither delivered.
+ */
 static int hw_key(uint32_t key[8])
 {
     uint32_t a, b, c, d, max_leaf;
@@ -246,6 +272,16 @@ static int hw_key(uint32_t key[8])
     return KRANDOM_SRC_JITTER;
 }
 
+/**
+ * Seed the CSPRNG once at boot, before any user.
+ *
+ * Real hardware entropy is used when the CPU offers it: a defensible seed that
+ * marks the generator trusted. Otherwise the seed comes from boot-time jitter
+ * (CPU timestamp counter, CMOS RTC seconds, and the PIT tick). Jitter varies
+ * across boots but is not defensible entropy, so the source stays untrusted:
+ * getrandom and /dev/[u]random fail closed, and only the best-effort AT_RANDOM
+ * and stack-canary uses draw from it.
+ */
 void krandom_seed(void)
 {
     uint32_t key[8];
@@ -253,8 +289,6 @@ void krandom_seed(void)
     uint8_t sec;
     int src;
 
-    /* Real hardware entropy when the CPU offers it: a defensible CSPRNG seed that
-     * marks the generator trusted (Phase 20's fail-closed gate). */
     src = hw_key(key);
     if (src != KRANDOM_SRC_JITTER) {
         chacha_setup(key);
@@ -262,12 +296,8 @@ void krandom_seed(void)
         return;
     }
 
-    /* Fallback: boot-time jitter (CPU timestamp counter + CMOS RTC seconds + the
-     * PIT tick). This VARIES across boots but is NOT defensible entropy, so the
-     * source stays UNTRUSTED -- getrandom and /dev/[u]random fail closed, and only
-     * the best-effort AT_RANDOM / stack-canary uses draw from it. */
     __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
-    outb(0x70, 0x00);
+    outb(0x70, 0x00); /* CMOS index 0x00: RTC seconds, read at 0x71 */
     sec = inb(0x71);
 
     krandom_reseed(lo ^ (uint32_t)sec, hi, kernel_ticks ^ ((uint32_t)sec << 16),
@@ -277,10 +307,13 @@ void krandom_seed(void)
 
 #else
 
+/**
+ * Seed the CSPRNG for the host build, which has no hardware entropy.
+ *
+ * Tests that need a specific stream call krandom_reseed() explicitly.
+ */
 void krandom_seed(void)
 {
-    /* Host build (dual-target seam): no hardware entropy. Tests that need a
-     * specific stream call krandom_reseed() explicitly. */
     krandom_reseed(0x12345678u, 0x9abcdef0u, 0x0f0f0f0fu, 0xa5a5a5a5u);
 }
 

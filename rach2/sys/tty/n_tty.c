@@ -35,6 +35,12 @@ static unsigned char rq_pop(struct n_tty *t)
 
 /* --- output + echo --- */
 
+/**
+ * Emit one output byte through OPOST processing.
+ *
+ * With OPOST set, ONLCR maps `\n` to CR LF and OCRNL maps `\r` to `\n`; any
+ * other byte, or output with OPOST clear, passes through unchanged.
+ */
 void n_tty_output(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx)
 {
     if (t->tio.c_oflag & OPOST) {
@@ -51,8 +57,12 @@ void n_tty_output(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx)
     out(ctx, c);
 }
 
-/* Echo an input byte (through output processing), rendering a control char as ^X
- * when ECHOCTL is set. A no-op unless ECHO is on. */
+/**
+ * Echo an input byte through output processing.
+ *
+ * A control char is rendered as `^X` when ECHOCTL is set. A no-op unless ECHO
+ * is on.
+ */
 static void echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c)
 {
     if (!(t->tio.c_lflag & ECHO)) {
@@ -97,7 +107,9 @@ static void erase_line(struct n_tty *t, n_tty_out_fn out, void *ctx)
     }
 }
 
-/* Move the assembled line into the readable queue and start a fresh line. */
+/**
+ * Move the assembled line into the readable queue and start a fresh line.
+ */
 static void commit_line(struct n_tty *t)
 {
     int i;
@@ -107,6 +119,13 @@ static void commit_line(struct n_tty *t)
     t->line_len = 0;
 }
 
+/**
+ * Reset a line discipline to its default cooked-mode termios and empty buffers.
+ *
+ * Defaults match a standard tty: ICRNL input, OPOST|ONLCR output, and
+ * ISIG|ICANON with ECHO editing, plus the conventional control chars (^C, ^\,
+ * DEL, ^U, ^D, ^Z, ^W) and VMIN 1.
+ */
 void n_tty_init(struct n_tty *t)
 {
     int i;
@@ -135,6 +154,14 @@ void n_tty_init(struct n_tty *t)
     t->eof_pos = 0;
 }
 
+/**
+ * Process one received input byte through the line discipline.
+ *
+ * Applies input flags (ISTRIP, IGNCR, ICRNL, INLCR), then ISIG signal chars,
+ * then either canonical line editing (ERASE/WERASE/KILL/EOF/EOL) or raw queuing.
+ * Echo and any output go through `out`. `*signo` is set to a NTTY_SIG* code when
+ * an ISIG char fires, else 0.
+ */
 void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo)
 {
     struct ktermios *tio = &t->tio;
@@ -159,7 +186,7 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
     }
 
     /* ISIG: an INTR/QUIT/SUSP char is recognized, echoed, flushes the line, and is
-     * reported for delivery (to the foreground group, Phase 17). */
+     * reported for delivery to the foreground group. */
     if (tio->c_lflag & ISIG) {
         if (c == tio->c_cc[VINTR] || c == tio->c_cc[VQUIT] || c == tio->c_cc[VSUSP]) {
             echo(t, out, ctx, c);
@@ -221,6 +248,13 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
     echo(t, out, ctx, c);
 }
 
+/**
+ * Report how many bytes a read could return now, or 0 if it would block.
+ *
+ * In canonical mode any queued byte means a completed line is ready, and a
+ * pending EOF counts as readable (the read returns 0). In raw mode VMIN 0 never
+ * blocks; otherwise the queue must hold at least VMIN bytes.
+ */
 int n_tty_readable(const struct n_tty *t)
 {
     if (t->tio.c_lflag & ICANON) {
@@ -239,14 +273,25 @@ int n_tty_readable(const struct n_tty *t)
     }
 }
 
+/**
+ * Return the count of bytes the next read can return (the TIOCINQ value).
+ *
+ * Only completed lines reach the queue (the edit line is not counted), and a
+ * pending EOF holds no bytes, so the ready-queue count is exact, EOF reading
+ * as 0.
+ */
 int n_tty_inq(const struct n_tty *t)
 {
-    /* Only completed lines reach the queue (the edit line is not counted), and a
-     * pending EOF holds no bytes -- so the ready-queue count is exactly what the
-     * next read can return, EOF reading as 0. */
     return (int)rq_count(t);
 }
 
+/**
+ * Copy available input into `buf`, returning the byte count.
+ *
+ * A canonical read returns at most one line and stops at a pending EOF, which
+ * it reports as a 0-length read once the head reaches the EOF position. A raw
+ * read returns up to `count` queued bytes with no line structure.
+ */
 int n_tty_read(struct n_tty *t, unsigned char *buf, int count)
 {
     int canon = (t->tio.c_lflag & ICANON) != 0;

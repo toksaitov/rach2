@@ -41,21 +41,23 @@ void write32be(uint8_t *p, uint32_t value)
     p[3] = (uint8_t)(value & 0xFF);
 }
 
+/**
+ * Bring the network stack up from the bottom and start the NIC.
+ *
+ * The TCB and socket pools are allocated before rtl8139_init() so they are
+ * ready before the NIC can deliver the first packet. ARP, IP, and ICMP keep
+ * their state in zero-initialized statics and need no explicit init.
+ *
+ * @return 1 on success, 0 if the RTL8139 NIC is absent or fails to init.
+ */
 int init_network(void)
 {
-    /* Allocate the TCB and socket pools before the NIC starts receiving. */
     tcp_init();
     socket_init();
 
     if (!rtl8139_init()) {
         return 0;
     }
-
-    /*
-     * ARP, IP, and ICMP keep their state in zero-initialized statics, so they
-     * need no explicit init. UDP, TCP, and sockets are brought up here as they
-     * are ported.
-     */
 
     return 1;
 }

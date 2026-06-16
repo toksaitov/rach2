@@ -126,6 +126,14 @@ static void synth_put_uint(char *out, int cap, int *pos, unsigned int v)
     }
 }
 
+/**
+ * Render the canonical directory path for a synthetic vnode kind into `out`.
+ *
+ * The inverse of `synth_classify` for the directory kinds: it spells out the
+ * path a directory or symlink target should report (for example `/proc/<pid>/fd`).
+ * `pid` is used only for the per-process kinds. The result is always
+ * NUL-terminated and never exceeds `cap` bytes; an unrecognized kind yields "/".
+ */
 void synth_dir_path(int kind, int pid, char *out, int cap)
 {
     int pos = 0;
@@ -152,6 +160,18 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
     out[pos] = '\0';
 }
 
+/**
+ * Classify a path against the synthetic /dev and /proc trees.
+ *
+ * Splits `path` into components and decides which synthetic vnode (if any) it
+ * names, filling `vp` with the kind and the coordinates the glue needs: `name`
+ * for a /dev node, `pts_index` for a pty slave, and `pid`, `procfd`, `procfile`
+ * for the /proc kinds. A path under neither tree, including the root, classifies
+ * as VNODE_KRFFS so the caller falls through to the real file system; a
+ * well-formed prefix with an unknown leaf classifies as VNODE_ENOENT so the
+ * caller reports the miss rather than leaking to KRFFS. `/proc/self` maps to
+ * SYNTH_PID_SELF. Returns the kind, also stored in `vp->kind`.
+ */
 int synth_classify(const char *path, struct vpath *vp)
 {
     struct comp c[SYNTH_MAXC];
@@ -170,7 +190,6 @@ int synth_classify(const char *path, struct vpath *vp)
         return vp->kind;
     }
 
-    /* ---- /dev ---- */
     if (comp_eq(c[0], "dev")) {
         if (n == 1) {
             vp->kind = VNODE_DEV_DIR;
@@ -202,7 +221,6 @@ int synth_classify(const char *path, struct vpath *vp)
         return vp->kind;
     }
 
-    /* ---- /proc ---- */
     if (comp_eq(c[0], "proc")) {
         int pid;
 

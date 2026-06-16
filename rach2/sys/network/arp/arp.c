@@ -28,11 +28,13 @@ static arp_entry_t arp_cache[ARP_CACHE_SIZE];
 static uint8_t arp_reply_buf[28];
 static uint8_t arp_req_buf[28];
 
-/*
- * Store or refresh an IP-to-MAC mapping. We learn from every ARP packet,
- * including unsolicited ones, which is a cache-poisoning surface; that is
- * acceptable on QEMU's SLIRP network. Entries do not age out, which is fine
- * for the handful of SLIRP peers (gateway, DNS, one client).
+/**
+ * Store or refresh an IP-to-MAC mapping.
+ *
+ * We learn from every ARP packet, including unsolicited ones, which is a
+ * cache-poisoning surface; that is acceptable on QEMU's SLIRP network.
+ * Entries do not age out, which is fine for the handful of SLIRP peers
+ * (gateway, DNS, one client).
  */
 static void arp_cache_update(uint32_t ip, const uint8_t *mac)
 {
@@ -57,8 +59,10 @@ static void arp_cache_update(uint32_t ip, const uint8_t *mac)
     /* Cache full: drop the mapping (will not happen with so few peers). */
 }
 
-/*
- * Send an ARP reply to a requester. The 28-byte ARP packet:
+/**
+ * Send an ARP reply to a requester.
+ *
+ * The 28-byte ARP packet:
  *   0  hw_type=1 (Ethernet)   2  proto_type=0x0800 (IPv4)
  *   4  hw_len=6   5  proto_len=4   6  op=2 (reply)
  *   8  sender_mac (ours)   14 sender_ip (ours)
@@ -79,6 +83,13 @@ static void arp_send_reply(const uint8_t *dst_mac, uint32_t dst_ip)
     ethernet_tx(dst_mac, ETH_TYPE_ARP, arp_reply_buf, 28);
 }
 
+/**
+ * Process a received ARP packet.
+ *
+ * Learn the sender's IP-to-MAC mapping from any well-formed Ethernet/IPv4
+ * ARP packet, then answer a request that targets our own IP. Short or
+ * non-Ethernet/IPv4 frames are dropped silently.
+ */
 void arp_rx(const uint8_t *data, uint16_t len)
 {
     uint16_t hw_type, proto_type, op;
@@ -110,6 +121,11 @@ void arp_rx(const uint8_t *data, uint16_t len)
     }
 }
 
+/**
+ * Look up the cached MAC for an IP.
+ *
+ * @return 1 and copies six bytes into `mac_out` on a hit, 0 on a miss.
+ */
 int arp_lookup(uint32_t ip, uint8_t *mac_out)
 {
     int i;
@@ -123,6 +139,12 @@ int arp_lookup(uint32_t ip, uint8_t *mac_out)
     return 0;
 }
 
+/**
+ * Broadcast an ARP request asking who owns `target_ip`.
+ *
+ * The sender fields carry our own MAC and IP; the target MAC is left zero,
+ * as the resolver does not yet know it.
+ */
 void arp_request(uint32_t target_ip)
 {
     static const uint8_t broadcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };

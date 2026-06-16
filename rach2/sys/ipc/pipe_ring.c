@@ -21,6 +21,15 @@ uint32_t pipe_free_space(const pipe_t *p)
     return PIPE_BUF_SIZE - (p->tail - p->head);
 }
 
+/**
+ * Copy up to `n` bytes from `src` into the ring, returning the count stored.
+ *
+ * The write is bounded by the free space, so it stores `min(n, free)` bytes and
+ * never overwrites unread data; a short return means the ring filled. Advances
+ * `tail` by the count, which is what makes the bytes visible to a reader.
+ *
+ * @return the number of bytes actually stored, in `[0, n]`.
+ */
 uint32_t pipe_ring_put(pipe_t *p, const uint8_t *src, uint32_t n)
 {
     uint32_t space = pipe_free_space(p);
@@ -34,6 +43,15 @@ uint32_t pipe_ring_put(pipe_t *p, const uint8_t *src, uint32_t n)
     return cnt;
 }
 
+/**
+ * Copy up to `n` bytes from the ring into `dst`, returning the count removed.
+ *
+ * The read is bounded by the available bytes, so it removes `min(n, avail)`; a
+ * short return means the ring drained. Advances `head` by the count, which is
+ * what frees the slots for a writer.
+ *
+ * @return the number of bytes actually copied out, in `[0, n]`.
+ */
 uint32_t pipe_ring_get(pipe_t *p, uint8_t *dst, uint32_t n)
 {
     uint32_t avail = pipe_available(p);

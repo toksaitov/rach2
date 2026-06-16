@@ -5,12 +5,11 @@
 /*
  * Save EFLAGS and disable interrupts; restore puts EFLAGS (hence IF) back. On a
  * single CPU this is the whole mutual-exclusion story between a sleeper editing
- * the queue and an IRQ-context waker walking it. (Same shape as the network
- * layer's net_lock/net_unlock, kept local so the wait queue does not depend on
- * the network module.)
+ * the queue and an IRQ-context waker walking it. Kept local so the wait queue
+ * does not depend on the network module's net_lock/net_unlock.
  *
  * Under the dual-target host test there is no interrupt to mask, so these are
- * no-ops -- the queue array logic exercised there is identical either way.
+ * no-ops; the queue array logic exercised there is identical either way.
  */
 #ifdef WAIT_QUEUE_HOSTTEST
 static uint32_t irq_save(void) { return 0; }
@@ -49,7 +48,7 @@ static void wq_enqueue(wait_queue_t *wq, process_t *p)
 
     for (i = 0; i < WQ_MAX_WAITERS; i++) {
         if (wq->waiters[i] == p) {
-            return; /* already queued */
+            return;
         }
         if (wq->waiters[i] == NULL && free_slot < 0) {
             free_slot = i;
@@ -73,6 +72,19 @@ static void wq_dequeue(wait_queue_t *wq, process_t *p)
     }
 }
 
+/**
+ * Block the current process on `wq` until `cond` holds or a signal arrives.
+ *
+ * Re-checks `cond(arg)` and re-enqueues on every wakeup, so it is robust to
+ * spurious wakes and to the condition flipping back before we run. Returns 0
+ * when the condition became true, `-EINTR` if a pending signal cut the wait
+ * short, `-EINVAL` on a bad argument or no current process.
+ *
+ * The sleep is interrupt-discipline critical: the condition test, the enqueue,
+ * and the transition to BLOCKED all happen with interrupts off, so a waker IRQ
+ * either ran before the test (and we saw the condition true) or after the
+ * enqueue (and finds us queued). See the in-body notes for the idle path.
+ */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     uint32_t flags;
@@ -82,17 +94,15 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         return -EINVAL;
     }
 
-    /* Hold interrupts off across the whole decision; we only re-enable them while
-     * actually yielding or idling, and re-disable immediately after. */
     flags = irq_save();
     for (;;) {
         if (cond(arg)) {
             rc = 0;
-            break; /* the event happened */
+            break;
         }
         if (signal_pending()) {
             rc = -EINTR;
-            break; /* a signal cuts the wait short */
+            break;
         }
 
         /*
@@ -106,7 +116,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         current_proc->state = PROC_BLOCKED;
         irq_restore(flags);
 
-        schedule(); /* yield; other READY processes run while we sleep */
+        schedule();
 
         /*
          * Re-acquire interrupts-off BEFORE inspecting our state, so the decision

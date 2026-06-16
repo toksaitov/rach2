@@ -1,12 +1,12 @@
 /*
- * pipe.c - anonymous pipes (the first real file_ops backing).
+ * pipe.c - anonymous pipes.
  *
- * A pipe is a bounded byte FIFO with a read end and a write end. It rides the
- * Phase-12 substrate: each end is a descriptor carrying pipe_ops + the struct
- * pipe as priv; read/write block on the pipe's wait queues (so other processes
- * run while a stage waits); dup/dup2/fork share an end through the refcounted
- * open-file description, and pipe_close fires (from fd_release_backing) only when
- * an end's LAST descriptor closes. See pipe.h for the EOF/SIGPIPE contract.
+ * A pipe is a bounded byte FIFO with a read end and a write end. Each end is a
+ * descriptor carrying pipe_ops + the struct pipe as priv; read/write block on
+ * the pipe's wait queues (so other processes run while a stage waits);
+ * dup/dup2/fork share an end through the refcounted open-file description, and
+ * pipe_close fires (from fd_release_backing) only when an end's LAST descriptor
+ * closes. See pipe.h for the EOF/SIGPIPE contract.
  */
 
 #include "pipe.h"
@@ -208,9 +208,9 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 }
 
 /*
- * Poll readiness for one end (consumed by Phase 14). POLLIN if the read end has
- * data or the writers are gone; POLLOUT if the write end has space or the
- * readers are gone; POLLHUP when the peer end is closed.
+ * Poll readiness for one end. POLLIN if the read end has data or the writers are
+ * gone; POLLOUT if the write end has space or the readers are gone; POLLHUP when
+ * the peer end is closed.
  */
 #define PIPE_POLLIN  0x001
 #define PIPE_POLLOUT 0x004

@@ -1,10 +1,10 @@
 /*
- * pty.c -- pseudo-terminals (Phase 19): the /dev/ptmx + /dev/pts/N master/slave
- * pairs a network login uses to hand a remote user a real terminal. See pty.h for
- * the data-flow model. The SLAVE is a full struct tty (the Phase-16 N_TTY
- * discipline + Phase-17 sessions/job-control), so it reuses every terminal
- * service; the MASTER is a byte ring (m_buf) carrying the slave's output and the
- * discipline's echo. Each endpoint rides the Phase-12 file_ops layer.
+ * pty.c: pseudo-terminals. The /dev/ptmx + /dev/pts/N master/slave pairs a
+ * network login uses to hand a remote user a real terminal. See pty.h for the
+ * data-flow model. The slave is a full struct tty (the N_TTY discipline plus
+ * sessions and job control), so it reuses every terminal service; the master is
+ * a byte ring (m_buf) carrying the slave's output and the discipline's echo.
+ * Each endpoint rides the file_ops layer.
  */
 
 #include "pty.h"
@@ -40,9 +40,13 @@ void pty_init_pool(void)
     }
 }
 
-/* Save EFLAGS and disable interrupts; restore puts IF back. Guards the m_buf ring
- * (two producers -- master-write echo and slave-write output -- can interleave
- * under preemption, so the head/tail updates are not lock-free). */
+/**
+ * Save EFLAGS and disable interrupts; pty_irq_restore puts IF back.
+ *
+ * Guards the m_buf ring. Two producers, the master-write echo and the
+ * slave-write output, can interleave under preemption, so the head and tail
+ * updates are not lock-free.
+ */
 static uint32_t pty_irq_save(void)
 {
     uint32_t flags;
@@ -60,11 +64,13 @@ static uint32_t pty_m_avail(struct pty *p)
     return p->m_tail - p->m_head;
 }
 
-/*
- * The slave's output SINK: push one byte into the master ring (drop it if the
- * master is not draining fast enough -- a real pty also bounds this). The waking
- * of master readers is done once per write op by the caller (ptm_write echo /
- * pts_write output), not per byte. Runs in thread context (no IRQ feeds a pty).
+/**
+ * Push one byte from the slave's output into the master ring.
+ *
+ * Drops the byte if the master is not draining fast enough; a real pty also
+ * bounds this. The caller wakes master readers once per write op (ptm_write
+ * echo, pts_write output), not per byte. Runs in thread context, since no IRQ
+ * feeds a pty.
  */
 static void pty_slave_sink(void *ctx, unsigned char c)
 {
@@ -217,7 +223,7 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (p->slave_opens == 0) {
         revents |= POLLHUP; /* every slave hung up */
     }
-    /* The master write is always accepted -- the slave discipline absorbs it. */
+    /* The master write is always accepted; the slave discipline absorbs it. */
     revents |= (short)(events & POLLOUT);
     return revents;
 }
@@ -327,7 +333,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     /* A session LEADER reading its pts with no controlling terminal claims it as
      * its SOLE ctty (dropping the console or any other pty it held), so a
      * job-control shell on the pty receives ^C and /dev/tty resolves to it; a
-     * background process is stopped with SIGTTIN below -- the same rules as the
+     * background process is stopped with SIGTTIN below, the same rules as the
      * console. An explicit TIOCSCTTY already claimed it, so this is then a no-op. */
     if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid,
@@ -537,9 +543,13 @@ int pty_open_slave(int index, int flags)
     return fd;
 }
 
-/* Index of the allocated pty whose slave is the controlling terminal of session
- * `sid` (slave.sid == sid), or -1. /dev/tty resolves through this to the caller's
- * controlling pty rather than unconditionally the console. */
+/**
+ * Return the index of the allocated pty whose slave is the controlling terminal
+ * of session `sid` (slave.sid == sid), or -1.
+ *
+ * /dev/tty resolves through this to the caller's controlling pty rather than
+ * unconditionally the console.
+ */
 int pty_session_slave(int sid)
 {
     int i;
@@ -555,17 +565,21 @@ int pty_session_slave(int sid)
     return -1;
 }
 
-/* Atomically make `keep` the SOLE controlling terminal of session `sid`: publish
- * `keep` as the session's terminal (sid + foreground group pgid) AND drop every
- * OTHER terminal the session controls -- the console and any other pty -- in one
- * interrupts-off region. The whole claim-and-release is atomic against the
- * timer-IRQ console drain, which gates on console_tty.sid: it must never observe
- * the new terminal claimed while the old console is still owned by the same
- * session (that transient would let it drain serial input or deliver ISIG for a
- * terminal the session no longer uses). Lives here because it must reach both
- * console_tty and the pty pool. The caller has already authorised the claim
- * (TIOCSCTTY checks leadership/ownership; the implicit read-claims require the
- * terminal to be free and the caller a session leader). */
+/**
+ * Atomically make `keep` the sole controlling terminal of session `sid`.
+ *
+ * In one interrupts-off region, publish `keep` as the session's terminal (sid
+ * and foreground group pgid) and drop every other terminal the session
+ * controls: the console and any other pty. The whole claim-and-release is
+ * atomic against the timer-IRQ console drain, which gates on console_tty.sid.
+ * That drain must never observe the new terminal claimed while the old console
+ * is still owned by the same session; the transient would let it drain serial
+ * input or deliver ISIG for a terminal the session no longer uses. Lives here
+ * because it must reach both console_tty and the pty pool. The caller has
+ * already authorized the claim: TIOCSCTTY checks leadership and ownership, and
+ * the implicit read-claims require the terminal to be free and the caller a
+ * session leader.
+ */
 void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
 {
     uint32_t flags;
@@ -617,16 +631,21 @@ int pty_slave_index(struct fd_entry *e)
     return ((struct pty *)e->priv)->index;
 }
 
+/**
+ * Disassociate any pty slave controlled by session leader `sid` on its death.
+ *
+ * Only a session leader (sid == pid) owns a controlling terminal. When that
+ * leader exits or dies, POSIX requires its controlling terminal be released, so
+ * a later session can claim the same /dev/pts/N via TIOCSCTTY instead of seeing
+ * a stale, dead owner. Called beside the console release on the leader-death
+ * paths (sys_exit, terminate, exec_fail). A pty has no timer-IRQ drain, so this
+ * is a correctness and reuse concern, not the byte-stealing hazard the console
+ * faced.
+ */
 void pty_release_leader(int sid, int pid)
 {
     int i;
 
-    /* Only a session leader (sid == pid) owns a controlling terminal. When that
-     * leader exits/dies, disassociate any pty slave it controlled (POSIX), so a
-     * later session can claim the same /dev/pts/N via TIOCSCTTY instead of seeing a
-     * stale, dead owner. Called beside the console release on the leader-death
-     * paths (sys_exit, terminate, exec_fail). A pty has no timer-IRQ drain, so this
-     * is a correctness/reuse fix, not the byte-stealing hazard the console faced. */
     if (!pty_pool || sid == 0 || sid != pid) {
         return;
     }

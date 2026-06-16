@@ -63,7 +63,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->fg_pgid = 0;
 }
 
-/* Post a signal to every (live, user) member of process group pgid. */
+/** Post a signal to every live, user member of process group `pgid`. */
 void tty_signal_group(int pgid, int signo)
 {
     int i;
@@ -80,50 +80,64 @@ void tty_signal_group(int pgid, int signo)
     }
 }
 
-/* Deliver an ISIG-recognized signal to the tty's FOREGROUND PROCESS GROUP -- NOT
- * to current_proc, which (when input is fed from an IRQ) may be an unrelated
- * process, and not to a single process: ^C reaches every member of the fg group. */
+/**
+ * Deliver an ISIG-recognized signal to the tty's foreground process group.
+ *
+ * The target is the foreground group, not current_proc, which (when input is
+ * fed from an IRQ) may be an unrelated process, and not a single process: a ^C
+ * reaches every member of the foreground group.
+ */
 static void tty_deliver_signal(struct tty *t, int signo)
 {
     tty_signal_group(t->fg_pgid, signo);
 }
 
+/**
+ * Report whether the caller is a background process on this tty.
+ *
+ * True when this tty is the caller's controlling terminal (same session) but the
+ * caller's group is not the foreground group: a background process whose tty I/O
+ * must be gated by SIGTTIN/SIGTTOU.
+ */
 int tty_is_background(struct tty *t, int sid, int pgid)
 {
-    /* True when this tty is the caller's controlling terminal (same session) but
-     * the caller's group is NOT the foreground group -- a background process whose
-     * tty I/O must be gated by SIGTTIN/SIGTTOU. */
     return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 && t->fg_pgid != pgid;
 }
 
+/**
+ * Publish the controlling session and foreground group as one indivisible step.
+ *
+ * The timer-IRQ drain (tty_console_poll) gates on sid != 0 and then delivers
+ * ISIG to fg_pgid by value, so a torn update (sid already set while fg_pgid is
+ * still the stale 0) would route a serial ^C/^Z to group 0 and drop it.
+ * Interrupts off makes the two stores atomic against that drain. Used both to
+ * claim the console (exec) and to release it (sid = pgid = 0).
+ */
 void tty_set_session(struct tty *t, int sid, int pgid)
 {
     uint32_t flags;
 
-    /* Publish the controlling session AND foreground group as one indivisible
-     * step. The timer-IRQ drain (tty_console_poll) gates on sid != 0 and then
-     * delivers ISIG to fg_pgid by value, so a torn update -- sid already set while
-     * fg_pgid is still the stale 0 -- would route a serial ^C/^Z to group 0 and
-     * drop it. Interrupts off makes the two stores atomic against that drain.
-     * Used both to claim the console (exec) and to release it (sid=pgid=0). */
     flags = tty_irq_save();
     t->sid = sid;
     t->fg_pgid = pgid;
     tty_irq_restore(flags);
 }
 
+/**
+ * Report whether (sid, pid) is the session leader that owns the console.
+ *
+ * True iff the session holds the controlling terminal (console_tty.sid == sid)
+ * and the process is that session's leader (sid == pid). This is the exact
+ * condition under which a process exiting, being killed, or replacing its image
+ * must release (and on a successful exec re-publish) the controlling terminal,
+ * so the timer-IRQ serial drain never targets a session that is vanishing. It is
+ * true for init (alloc_process makes every process its own session leader and
+ * exec_program publishes init's sid) and for any later leader that claimed the
+ * console via TIOCSCTTY; it is false for a mere job-group member of the owning
+ * session, whose exit must not pull the terminal out from under the shell.
+ */
 int tty_console_owned_by_leader(int sid, int pid)
 {
-    /* True iff the (sid, pid) process is the session leader that owns the console:
-     * its session holds the controlling terminal (console_tty.sid == sid) AND it
-     * is that session's leader (sid == pid). This is the exact condition under
-     * which a process exiting, being killed, or replacing its image must release
-     * (and on a successful exec re-publish) the controlling terminal, so the
-     * timer-IRQ serial drain never targets a session that is vanishing. It is true
-     * for init (alloc_process makes every process its own session leader and
-     * exec_program publishes init's sid) and for any later leader that claimed the
-     * console via TIOCSCTTY; it is FALSE for a mere job-group member of the owning
-     * session, whose exit must NOT pull the terminal out from under the shell. */
     return console_tty.sid != 0 && console_tty.sid == sid && sid == pid;
 }
 
@@ -154,6 +168,11 @@ static int tty_ready_cond(void *arg)
     return n_tty_readable(&t->ldisc);
 }
 
+/**
+ * Block until a line is readable, then copy up to `count` bytes into `kbuf`.
+ *
+ * Returns the byte count, 0 at EOF, or -EINTR if a signal cut the wait short.
+ */
 int tty_read(struct tty *t, unsigned char *kbuf, int count)
 {
     int rc;
@@ -362,8 +381,7 @@ void tty_console_poll(void)
     }
     if (wq_active(&console_tty.input_wq)) {
         /* A reader/poller is parked: wake it to drain (WITH echo) in its own
-         * thread context -- no draining/echo/signalling in this IRQ (the Phase 16
-         * discipline). */
+         * thread context. No draining, echo, or signalling in this IRQ. */
         wq_wake_all(&console_tty.input_wq);
     } else if (console_tty.sid != 0) {
         /* A session owns the console but nobody is parked reading it -- a

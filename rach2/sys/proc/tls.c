@@ -10,15 +10,18 @@
 typedef char tls_gdt_entry_matches_asm[(GDT_TLS_ENTRY == 6) ? 1 : -1];
 typedef char tls_gdt_selector_matches_asm[(GDT_TLS_SELECTOR == 0x33) ? 1 : -1];
 
-/*
- * Validate a Linux i386 struct user_desc against the one TLS slot we model -- a
- * present, 32-bit, writable data segment in GDT entry GDT_TLS_ENTRY -- and hand
- * back the base address to program. We reject anything we cannot represent
- * rather than silently misprogramming the descriptor.
+/**
+ * Validate a Linux i386 struct user_desc and return its base address.
+ *
+ * Checks the descriptor against the one TLS slot we model: a present, 32-bit,
+ * writable data segment in GDT entry GDT_TLS_ENTRY. Anything we cannot represent
+ * is rejected rather than silently misprogrammed.
  *
  * musl's __set_thread_area passes entry_number = -1 (allocate) with
- * flags = 0x51 (seg_32bit | limit_in_pages | useable); we also accept an
- * explicit GDT_TLS_ENTRY so a caller can reprogram the same slot.
+ * flags = 0x51 (seg_32bit | limit_in_pages | useable); an explicit
+ * GDT_TLS_ENTRY is also accepted so a caller can reprogram the same slot.
+ *
+ * @return 0 with `*base_out` set, or -1 if the descriptor is unrepresentable.
  */
 int tls_resolve_base(const user_desc_t *u, uint32_t *base_out)
 {
@@ -27,14 +30,12 @@ int tls_resolve_base(const user_desc_t *u, uint32_t *base_out)
         return -1;
     }
 
-    /* Single TLS slot: honor the allocate request (-1) or an explicit entry 6. */
     if (u->entry_number != (uint32_t)-1 &&
         u->entry_number != (uint32_t)GDT_TLS_ENTRY)
     {
         return -1;
     }
 
-    /* We model a 32-bit, writable, present data segment and nothing else. */
     if (!(u->flags & UD_SEG_32BIT))
     {
         return -1;
