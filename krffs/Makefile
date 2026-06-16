@@ -1,6 +1,6 @@
 # KRFFS host tools: the FUSE mount plus the mkfs/defrag/fsck/fsviz/edfs/stagetree
 # utilities. These run on the HOST, so they use the host compiler (cc), not the
-# cross toolchain -- only the shared header-dependency tracking (../mk/deps.mk)
+# cross toolchain; only the shared header-dependency tracking (../mk/deps.mk)
 # applies, so editing a krffs header rebuilds exactly the objects that include it.
 include ../mk/deps.mk
 
@@ -11,7 +11,7 @@ FUSE_CFLAGS += `pkg-config $(FUSE_PKG) --cflags` -DFUSE_USE_VERSION=26
 FUSE_LDLIBS += `pkg-config $(FUSE_PKG) --libs`
 
 # Out-of-tree intermediates under .build/ (git-ignored); the host-tool binaries stay
-# in place -- the RAM-disk scripts run ./mkfs.krffs, ./krffs, ./stagetree.krffs here.
+# in place; the RAM-disk scripts run ./mkfs.krffs, ./krffs, ./stagetree.krffs here.
 BUILD = .build
 
 # The four objects every tool shares.
@@ -20,7 +20,7 @@ CORE = $(addprefix $(BUILD)/, krffs_file_system.o krffs_node.o krffs_platform.o 
 
 # Objects compiled WITH the FUSE cflags: the mount tool and everything linked into
 # it, including the shared core. The standalone tool mains are compiled WITHOUT the
-# FUSE cflags -- exactly the split the previous per-target rules produced.
+# FUSE cflags, exactly the split the previous per-target rules produced.
 FUSE_OBJS = $(CORE) $(addprefix $(BUILD)/, krffs_allocator.o krffs_fuse_operations.o \
                                            krffs.o)
 TOOL_OBJS = $(addprefix $(BUILD)/, mkfs.krffs.o defrag.krffs.o fsck.krffs.o \

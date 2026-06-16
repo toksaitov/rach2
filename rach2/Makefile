@@ -94,7 +94,7 @@ include ../mk/toolchain.mk
 include ../mk/deps.mk
 CC := $(CROSS_CC)
 # LD comes from CROSS_LD (mk/toolchain.mk): it honors an explicit `CROSS_LD=...`
-# override and otherwise tracks CROSS_CC -- and CROSS_CC itself absorbs a
+# override and otherwise tracks CROSS_CC; and CROSS_CC itself absorbs a
 # command-line `make CC=...`, so both the CC and CROSS_LD knobs reach the linker.
 LD := $(CROSS_LD)
 
@@ -174,11 +174,11 @@ $(C_OBJECTS) : $(BUILD)/%.o : %.c
 
 # Pull in the per-object header dependencies GCC wrote (-MMD), so editing a header
 # rebuilds exactly the objects that include it. Missing on a first build (no .d
-# yet) -- the leading '-' makes that silent. They live beside the objects in .build/.
+# yet): the leading '-' makes that silent. They live beside the objects in .build/.
 -include $(C_OBJECTS:.o=.d)
 
-# Emit the explicit kernel source list (expanded), for tools/check_sources.sh -- the
-# source-list guard that fails if a rach2 .c on disk is missing from C_SRC. .PHONY so
+# Emit the explicit kernel source list (expanded), for tools/check_sources.sh (the
+# source-list guard that fails if a rach2 .c on disk is missing from C_SRC). .PHONY so
 # it always runs; prints nothing but the list.
 .PHONY : print-c-src
 print-c-src :

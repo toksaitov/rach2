@@ -1,12 +1,12 @@
 #!/usr/bin/env sh
 #
-# gen_compile_commands.sh -- generate compile_commands.json, the LSP compilation
+# gen_compile_commands.sh: generate compile_commands.json, the LSP compilation
 # database clangd reads for per-file flags (run via `make compile-commands`).
 #
 # GCC has no clang-style -MJ, so the database is generated FROM the build's own
 # commands: each in-house component is dry-run (`make -Bn`), and every i686-elf cross
 # GCC invocation that compiles a C source becomes one entry (directory + file + the
-# verbatim command). This covers the FREESTANDING / musl in-house code -- the kernel
+# verbatim command). This covers the FREESTANDING / musl in-house code: the kernel
 # (rach2) and the guest programs (tests, ish, utils). The host krffs FUSE tools (built
 # with the host `cc` and dynamic `pkg-config` flags), and the vendored musl/busybox/
 # dropbear and Doom trees, are intentionally excluded: clangd-on-the-kernel is the goal
@@ -38,7 +38,7 @@ for comp in rach2 tests ish utils; do
     dir="$REPO/$comp"
     [ -d "$dir" ] || continue
     # Dry-run an always-make build. Capture it to a file (a pipe would lose the exit
-    # status), so a toolchain/Make failure is a hard error -- not a silent empty DB.
+    # status), so a toolchain/Make failure is a hard error, not a silent empty DB.
     if ! ( cd "$dir" && make -Bn ) >"$dump" 2>/dev/null; then
         echo "error: 'make -Bn' failed in $comp/ -- cannot generate the database" >&2
         echo "       (is the i686-elf cross toolchain installed? try 'make doctor')" >&2
@@ -54,7 +54,7 @@ for comp in rach2 tests ish utils; do
         cmdj=$(json_escape "$line")
         # One entry per C source operand. The kernel compiles name exactly one source;
         # the tests/utils compile+link recipes (ping, nc, dnstest) name two, and the
-        # command is stored verbatim -- clangd keys on "file" and resolves just that
+        # command is stored verbatim; clangd keys on "file" and resolves just that
         # TU's flags (verified with clangd --check), so the extra inputs are harmless.
         printf '%s\n' "$line" | tr ' ' '\n' | grep -E '\.c$' | while IFS= read -r src; do
             filej=$(json_escape "$src")
@@ -74,8 +74,8 @@ done
 } >"$out_tmp"
 
 # Coverage assertion: every kernel source listed in C_SRC must have made it into the
-# database. Capture the list to a file FIRST -- a pipe would lose print-c-src's exit
-# status and an empty list would vacuously "pass" -- then require it to have succeeded
+# database. Capture the list to a file FIRST (a pipe would lose print-c-src's exit
+# status and an empty list would vacuously "pass"), then require it to have succeeded
 # and be non-empty before checking each source is present.
 if ! make --no-print-directory -C "$REPO/rach2" print-c-src >"$rawlist" 2>/dev/null; then
     echo "error: 'make -C rach2 print-c-src' failed -- cannot verify kernel coverage" >&2
@@ -95,7 +95,7 @@ if [ -s "$missing" ]; then
     exit 1
 fi
 
-# Coverage passed -- promote the temp DB into place (guarded: the script does not run
+# Coverage passed; promote the temp DB into place (guarded: the script does not run
 # under set -e, so an unchecked mv could fall through and falsely report success).
 if ! mv "$out_tmp" "$OUT"; then
     echo "error: failed to write $OUT" >&2

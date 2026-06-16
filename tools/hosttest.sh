@@ -1,12 +1,12 @@
 #!/usr/bin/env sh
 
 #
-# hosttest.sh -- run the dual-target seam tests (`make verify-host`).
+# hosttest.sh: run the dual-target seam tests (`make verify-host`).
 #
 # Each tests/host/*_hosttest.c is pure kernel/util logic compiled NATIVELY on
 # the host and run under AddressSanitizer + UndefinedBehaviorSanitizer. The same
-# .c files are also linked into the freestanding kernel -- one source, two
-# targets -- so a bounds or overflow bug surfaces here in milliseconds instead
+# .c files are also linked into the freestanding kernel (one source, two
+# targets), so a bounds or overflow bug surfaces here in milliseconds instead
 # of as a mystery fault in QEMU. A test names the kernel sources it links via a
 # "host-deps:" comment, and passes when it exits 0.
 #

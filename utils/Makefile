@@ -11,7 +11,7 @@
 
 # Shared header-dependency tracking + the toolchain guard (see ../mk/). The musl
 # utilities are special: they link the i686 libc AND a 32-bit libgcc that
-# build_libc.sh's i686-elf-gcc produced, so they need i686-elf-gcc specifically --
+# build_libc.sh's i686-elf-gcc produced, so they need i686-elf-gcc specifically:
 # a non-multilib x86_64-elf-gcc cannot supply a 32-bit libgcc (the freestanding
 # components link no libgcc, so they use the generic CROSS_CC, which may be
 # x86_64-elf-gcc). So prefer i686-elf-gcc, falling back to CROSS_CC; -m32 is then a
@@ -71,7 +71,7 @@ BUILD = .build
 	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
 # ping and nc link the shared stub resolver (resolv.c, declared in netdb.h). These
-# compile+link two sources in one step -- -MF records only the last source's headers --
+# compile+link two sources in one step (-MF records only the last source's headers),
 # so the inputs (the program source, resolv.c, netdb.h) are explicit prerequisites; the
 # .build/ .d adds the resolver's transitive headers.
 ping: ping.c resolv.c netdb.h

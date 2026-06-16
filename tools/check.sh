@@ -1,17 +1,17 @@
 #!/usr/bin/env sh
 
 #
-# check.sh -- Rach2 lightweight quality gate (`make verify-style`).
+# check.sh: Rach2 lightweight quality gate (`make verify-style`).
 #
 # Over IN-HOUSE code only (the kernel, the new probes/seam tests, the build
-# scripts -- never the vendored musl/ports trees), runs:
+# scripts; never the vendored musl/ports trees), runs:
 #
 #   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent skip)
 #   1. the kernel build with -Werror (the zero-warning policy as a hard gate)
 #   2. cppcheck (c89, warning+style) with tools/cppcheck.suppress (--error-exitcode)
 #   3. shellcheck on the in-house shell scripts
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
-#   5. clang-format -- HARD on new-code dirs (tools/ libc/ tests/host, *probe.c)
+#   5. clang-format: HARD on new-code dirs (tools/ libc/ tests/host, *probe.c)
 #      and on any files named as arguments; advisory across the legacy tree
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC)
@@ -39,13 +39,13 @@ inhouse_ch()
 {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
     # libc/ holds only the vendored musl tree (install/, musl-*/) plus any future
-    # in-house shim -- prune the vendored parts so they are never checked.
+    # in-house shim; prune the vendored parts so they are never checked.
     find libc -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     ls tests/host/*.c tests/host/*.h tests/*probe.c 2>/dev/null
 }
 
-# New code the port introduces -- must be clang-format clean (unlike the legacy
+# New code the port introduces; must be clang-format clean (unlike the legacy
 # tree, which we never reformat).
 newcode_ch()
 {
@@ -70,7 +70,7 @@ else
     echo "  FAIL -- see $VDIR/verify_build.log"; fail=1
 fi
 
-# 2. cppcheck -- --error-exitcode makes a finding a real non-zero exit, so a
+# 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
 #    crash or a finding both fail (a silent 0-count cannot mask either).
 hr "2/7 cppcheck (c89, warning+style)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
@@ -85,7 +85,7 @@ else
     echo "  FAIL -- see $VDIR/verify_cppcheck.log"; fail=1
 fi
 
-# 3. shellcheck. New in-house scripts (tools/, libc/) are STRICT -- SC2086 stays
+# 3. shellcheck. New in-house scripts (tools/, libc/) are STRICT; SC2086 stays
 #    active so an accidental unquoted expansion is caught. The legacy QEMU
 #    run/build scripts waive SC2086 (option word-splitting is intentional) and
 #    SC2034 (vars shared across sourced fragments); SC1091 covers the dynamic

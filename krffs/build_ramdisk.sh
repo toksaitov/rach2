@@ -25,7 +25,7 @@ MOUNT_POINT="mount_point"
 FS_FILE="file_system.krffs"
 
 # Build the guest programs, unless Make already built them (SKIP_BUILD=1, set by the
-# `make ramdisk` target so nothing is built twice) -- a standalone run still builds
+# `make ramdisk` target so nothing is built twice); a standalone run still builds
 # them for convenience.
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
     echo "=== Building ISH shell ==="
@@ -38,7 +38,7 @@ fi
 
 # Doom is a capstone (ports/), not part of the base teaching image, so this base build
 # neither builds nor stages it by default. The staging script deliberately does NOT
-# build Doom -- it only STAGES an already-built ../ports/doom/doom when
+# build Doom; it only STAGES an already-built ../ports/doom/doom when
 # RAMDISK_WITH_DOOM=1, so it can never stage a stale binary from a failed build. That
 # opt-in is for a STANDALONE `./build_ramdisk.sh` run after building the binary (`make
 # -C ../ports/doom`); the Make `ramdisk` target forces RAMDISK_WITH_DOOM=0, so `make`/

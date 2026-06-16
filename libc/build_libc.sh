@@ -4,8 +4,8 @@
 # build_libc.sh
 #
 # Builds musl libc for Rach2 from the pinned, vendored source tarball using the
-# stock i686-elf-gcc cross compiler -- no separate musl cross-toolchain is
-# needed (students already install i686-elf-gcc for the kernel). Produces a
+# stock i686-elf-gcc cross compiler (no separate musl cross-toolchain is
+# needed, since students already install i686-elf-gcc for the kernel). Produces a
 # static libc.a plus the crt1/crti/crtn startup objects and the musl headers
 # under install/, which Rach2 utilities link against (see Readme.md).
 #
@@ -26,7 +26,7 @@ SRC="musl-${MUSL_VERSION}"
 PREFIX="$SCRIPT_DIR/install"
 
 # Pinned sha256 of the vendored tarball (published on musl.libc.org). The build
-# refuses to proceed if the tarball does not match -- the version is locked.
+# refuses to proceed if the tarball does not match; the version is locked.
 SHA256="a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4"
 
 # sha256 helper that works on both macOS (shasum) and Linux (sha256sum).

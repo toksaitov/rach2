@@ -18,7 +18,7 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
         timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe \
         ttyprobe jobprobe miscprobe ptyprobe rngprobe
 
-# These compile+link in one step, so there are no .o intermediates -- only the
+# These compile+link in one step, so there are no .o intermediates; only the
 # GCC-written .d, which -MF redirects into .build/ to keep the source tree clean. The
 # final probe binaries stay in place for the RAM-disk staging.
 BUILD = .build

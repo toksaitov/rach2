@@ -27,7 +27,7 @@ $(TARGET): $(OBJECTS)
 	$(CC) $(LDFLAGS) -o $@ $(OBJECTS)
 
 # The `$(BUILD)/%.o: %.c` compile rule and `-include $(OBJECTS:.o=.d)` come from
-# ../mk/rules.mk -- a header edit now rebuilds exactly the objects that include it
+# ../mk/rules.mk; a header edit now rebuilds exactly the objects that include it
 # (the old hand-maintained $(HEADERS) prerequisite list is gone).
 include ../mk/rules.mk
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env sh
 
 #
-# build_dropbear.sh -- build a static-musl Dropbear SSH server for Rach2 from the
+# build_dropbear.sh: build a static-musl Dropbear SSH server for Rach2 from the
 # pinned, vendored tarball (Phase 23). Verifies the sha256, extracts, configures
 # against the ported musl via the muslgcc wrapper (bundled libtomcrypt/libtommath,
 # no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the binary links static
-# non-PIE -- Rach2's ELF loader does not relocate a PIE), applies the curated
+# non-PIE; Rach2's ELF loader does not relocate a PIE), applies the curated
 # localoptions.h, builds dropbearmulti (the dropbear server + dropbearkey), strips,
 # and stages it to ../tests/dropbearmulti (installed into the RAM disk as
 # /dropbearmulti). Run libc/build_libc.sh first.
@@ -63,8 +63,8 @@ cp localoptions.h "$SRC/localoptions.h"
 
 echo "=== Configuring (muslgcc, bundled libtom, static, hardening off) ==="
 # --build is THIS host's own triple. config.guess ships with dropbear (not +x in the
-# tarball, so run it through sh); computing the triple -- instead of hard-coding
-# x86_64-apple-darwin -- makes the cross-configure work on Linux and on Intel or
+# tarball, so run it through sh); computing the triple (instead of hard-coding
+# x86_64-apple-darwin) makes the cross-configure work on Linux and on Intel or
 # Apple-Silicon macOS alike. If config.guess fails, omit --build and let configure
 # infer it.
 BUILD_TRIPLE="$(sh "$SRC/config.guess" 2>/dev/null || true)"

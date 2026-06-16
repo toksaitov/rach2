@@ -153,17 +153,14 @@ To remove compiled files:
 
 ## Rach2 RAM Disk Creation
 
-The top-level Makefile drives this for you -- run from the repo root:
+The top-level Makefile drives this for you. Run from the repo root:
 
     make ramdisk        # base image: ISH shell + Unix utilities
     make test-ramdisk   # capstone image: busybox, dropbear, and the syscall probes
 
-Each target builds every component first, then runs the script below with `SKIP_BUILD=1`
-so the script only PACKAGES the already-built binaries -- no component is built twice.
-`make full` ends at the capstone image, the one the dropbear SSH login boots.
+Each target builds every component first, then runs the script below with `SKIP_BUILD=1` so the script only PACKAGES the already-built binaries (no component is built twice). `make full` ends at the capstone image, the one the dropbear SSH login boots.
 
-You can also run the scripts directly. On their own (no `SKIP_BUILD`) they build the
-guest programs first, for convenience:
+You can also run the scripts directly. On their own (no `SKIP_BUILD`) they build the guest programs first, for convenience:
 
     ./build_ramdisk.sh          # ISH shell + utilities
     ./build_test_ramdisk.sh     # syscall test programs (+ busybox/dropbear if built)

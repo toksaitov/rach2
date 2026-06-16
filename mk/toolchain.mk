@@ -1,4 +1,4 @@
-# mk/toolchain.mk -- shared cross-toolchain detection for Rach2's freestanding
+# mk/toolchain.mk: shared cross-toolchain detection for Rach2's freestanding
 # components (the kernel, the user-mode tests/ish/utils, the Doom port). Include
 # this once instead of re-deriving the compiler in every Makefile.
 #
@@ -16,7 +16,7 @@
 # CROSS_AR / CROSS_STRIP / CROSS_OBJCOPY : the matching binutils
 
 # $(or ...) returns the first non-empty: a caller-supplied CROSS_CC wins; then an
-# explicit command-line `make CC=...` (so the conventional knob works too -- but NOT
+# explicit command-line `make CC=...` (so the conventional knob works too, but NOT
 # an incidental environment CC=clang, which is not a cross GCC); then i686-elf-gcc,
 # then x86_64-elf-gcc. ($(or) short-circuits, so a later probe runs only if needed.)
 CROSS_CC := $(or $(CROSS_CC),\
@@ -26,7 +26,7 @@ CROSS_CC := $(or $(CROSS_CC),\
 
 # Fail fast with an actionable message rather than later running an empty compiler
 # as a command. Only `clean` needs no toolchain, so error for a default build (no
-# goal) or ANY goal other than clean -- but not when clean is the sole goal
+# goal) or ANY goal other than clean (but not when clean is the sole goal)
 # (`make clean` on a box without the cross GCC must work). `$(or $(MAKECMDGOALS),
 # build)` stands in a placeholder for the empty default-build goal list. `make
 # doctor` (Phase 26) explains how to install the toolchain.

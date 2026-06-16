@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 #
-# textcheck.sh -- mechanical text-style checks for the in-house files (see
+# textcheck.sh: mechanical text-style checks for the in-house files (see
 # text-standard-plan.md, and CLAUDE.md for the rules). It is called by tools/check.sh,
 # advisory at first and a hard gate from a later phase.
 #

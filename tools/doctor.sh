@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 #
-# tools/doctor.sh -- Rach2 build/run toolchain preflight (run via `make doctor`).
+# tools/doctor.sh: Rach2 build/run toolchain preflight (run via `make doctor`).
 #
 # Reports each tool as PASS / MISSING / OPTIONAL with an install hint, and exits
-# non-zero if a REQUIRED tool is absent (or present but broken) -- so a student or a
+# non-zero if a REQUIRED tool is absent (or present but broken), so a student or a
 # fresh CI box sees a clear checklist instead of a cryptic failure mid-build.
 #
 # ASCII-only output: the convention gate (tools/check.sh) forbids non-ASCII bytes in
@@ -16,7 +16,7 @@ case "$(uname -s)" in
     *)      MAC=0 ;;
 esac
 
-# hint KEY -- an OS-appropriate install suggestion. The i686-elf cross toolchain is
+# hint KEY: an OS-appropriate install suggestion. The i686-elf cross toolchain is
 # NOT a stock apt package on Linux, so its hint is spelled out rather than assuming
 # a package manager.
 hint() {
@@ -39,10 +39,10 @@ hint() {
 
 missing=0
 
-# row STATUS NAME DETAIL -- one aligned line.
+# row STATUS NAME DETAIL: one aligned line.
 row() { printf '  %-10s %-18s %s\n' "$1" "$2" "$3"; }
 
-# req NAME HINTKEY -- a tool the build/run needs. It must both EXIST and RUN (a bare
+# req NAME HINTKEY: a tool the build/run needs. It must both EXIST and RUN (a bare
 # `command -v` would PASS a broken Xcode shim that has no real Command Line Tools),
 # so it is probed with --version. Absence/breakage is a failure.
 req() {
@@ -54,7 +54,7 @@ req() {
     fi
 }
 
-# opt NAME WHAT HINTKEY -- a tool only some tasks need; absence is a note, not a
+# opt NAME WHAT HINTKEY: a tool only some tasks need; absence is a note, not a
 # failure (these are dev/quality tools, so a plain presence check is enough).
 opt() {
     if command -v "$1" >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ req cc               cc
 
 # FUSE for the krffs host tools (fuse-t on macOS, fuse on Linux), checked via
 # pkg-config. If pkg-config is missing OR broken (same probe req() uses for it),
-# FUSE is uncheckable -- report that without counting it a second time (pkg-config
+# FUSE is uncheckable; report that without counting it a second time (pkg-config
 # is already the failure above).
 if ! pkg-config --version >/dev/null 2>&1; then
     row "[SKIP]" "FUSE" "-- cannot check until pkg-config works"

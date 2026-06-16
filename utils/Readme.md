@@ -2,7 +2,7 @@
 
 ![List of Rach2 Utilities](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/utils.png)
 
-Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility is an ordinary hosted C program linked statically against the ported musl libc (see [libc/](../libc/)): it uses the real standard headers (`<stdio.h>`, `<unistd.h>`, `<fcntl.h>`, `<dirent.h>`, `<sys/socket.h>`, …), musl's `crt1` startup, and libc's syscall wrappers — the hand-rolled `int $0x80` stubs and `crt0.c` were dropped in the musl port. (`resolv.c`, the stub resolver shared by `ping` and `nc`, stays freestanding for now; a thin `getaddrinfo` shim is a documented follow-on.)
+Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility is an ordinary hosted C program linked statically against the ported musl libc (see [libc/](../libc/)): it uses the real standard headers (`<stdio.h>`, `<unistd.h>`, `<fcntl.h>`, `<dirent.h>`, `<sys/socket.h>`, ...), musl's `crt1` startup, and libc's syscall wrappers. The hand-rolled `int $0x80` stubs and `crt0.c` were dropped in the musl port. (`resolv.c`, the stub resolver shared by `ping` and `nc`, stays freestanding for now; a thin `getaddrinfo` shim is a documented follow-on.)
 
 Built for the Rach2 kernel with `make` against `../libc/install` (run `libc/build_libc.sh` once first). A separate `Makefile.linux` still builds them natively on Linux.
 
@@ -22,14 +22,9 @@ Built for the Rach2 kernel with `make` against `../libc/install` (run `libc/buil
 * `ls.c`: Lists directory entries with type and owner permissions
 * `ping.c`: Sends ICMP echo requests via the SC_PING socketcall (`ping [host]`, default gateway 10.0.2.2); `host` may be a dotted-quad or a name
 * `nc.c`: Minimal TCP client (`nc <host> <port>`); relays a line of input and prints the reply over the socket descriptor; `host` may be a dotted-quad or a name
-* `httpd.c`: Minimal HTTP/1.0 server serving a diagnostic status page — the client endpoint, the request line and User-Agent the stack decoded, uptime and per-connection counters (listen on port 80; reach it via QEMU hostfwd)
+* `httpd.c`: Minimal HTTP/1.0 server serving a diagnostic status page (the client endpoint, the request line and User-Agent the stack decoded, uptime and per-connection counters; listen on port 80, reach it via QEMU hostfwd)
 
-The network utilities use the `SYS_SOCKETCALL` interface and target QEMU's
-SLIRP network (gateway 10.0.2.2). `ping` and `nc` resolve a host argument
-through a small stub resolver (`resolv.c`, declared in `netdb.h`): a numeric
-literal, then the `/hosts` file, then a DNS query to the nameserver in
-`/resolv.conf` (SLIRP's forwarder 10.0.2.3). Both files live in the flat KRFFS
-root and are staged by `krffs/build_ramdisk.sh`.
+The network utilities use the `SYS_SOCKETCALL` interface and target QEMU's SLIRP network (gateway 10.0.2.2). `ping` and `nc` resolve a host argument through a small stub resolver (`resolv.c`, declared in `netdb.h`): a numeric literal, then the `/hosts` file, then a DNS query to the nameserver in `/resolv.conf` (SLIRP's forwarder 10.0.2.3). Both files live in the flat KRFFS root and are staged by `krffs/build_ramdisk.sh`.
 
 ## Required Syscalls
 
@@ -50,19 +45,13 @@ root and are staged by `krffs/build_ramdisk.sh`.
 
 ## Build for Rach2 (Default)
 
-Requires `i686-elf-gcc` specifically — the musl utilities link a 32-bit libgcc that a
-non-multilib `x86_64-elf-gcc` cannot supply — and the ported musl built once. The
-simplest path is the top-level `make` (it builds libc first, in order); to build just
-these utilities once libc exists:
+Requires `i686-elf-gcc` specifically (the musl utilities link a 32-bit libgcc that a non-multilib `x86_64-elf-gcc` cannot supply) and the ported musl built once. The simplest path is the top-level `make` (it builds libc first, in order); to build just these utilities once libc exists:
 
 ```
 make
 ```
 
-This links each utility statically against the ported musl (`../libc/install`: musl's
-`crt1/crti` + `libc.a` + `crtn`, no hand-rolled `crt0`) as a freestanding ELF32
-executable at `0x08048000`. The binaries are staged into a KRFFS RAM disk by
-`krffs/build_ramdisk.sh` (or `make ramdisk` from the repo root) and run on the kernel.
+This links each utility statically against the ported musl (`../libc/install`: musl's `crt1/crti` + `libc.a` + `crtn`, no hand-rolled `crt0`) as a freestanding ELF32 executable at `0x08048000`. The binaries are staged into a KRFFS RAM disk by `krffs/build_ramdisk.sh` (or `make ramdisk` from the repo root) and run on the kernel.
 
 ## Build for Linux
 

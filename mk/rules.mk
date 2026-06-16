@@ -1,15 +1,15 @@
-# mk/rules.mk -- the canonical OUT-OF-TREE compile rule + auto-dependency include for
+# mk/rules.mk: the canonical OUT-OF-TREE compile rule + auto-dependency include for
 # a component that compiles to .o and then links a final binary the plain way. A
 # component sets CC, CFLAGS (with $(DEPFLAGS) from mk/deps.mk), BUILD (the intermediates
 # dir, default .build), and OBJECTS as $(SRC:%.c=$(BUILD)/%.o), then
 # `include ../mk/rules.mk`. ish/ uses it directly.
 #
 # Two components keep their OWN compile rules instead of including this file, by
-# design: ports/doom (it compiles from two source dirs -- the local dir and
+# design: ports/doom (it compiles from two source dirs, the local dir and
 # src/) and the krffs host tools (the FUSE objects need extra cflags the standalone
 # tools do not). The single-source test/util programs build with a `%: %.c` rule
 # (compile+link in one step) and redirect their -MMD .d into $(BUILD) directly. All
-# shapes still share mk/toolchain.mk + mk/deps.mk and the .build/ convention -- this
+# shapes still share mk/toolchain.mk + mk/deps.mk and the .build/ convention; this
 # file is just the common compile-then-link case.
 
 BUILD ?= .build

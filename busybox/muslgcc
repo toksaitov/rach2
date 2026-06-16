@@ -1,5 +1,5 @@
 #!/bin/sh
-# muslgcc -- wrap the bare i686-elf-gcc cross compiler to build busybox against
+# muslgcc: wrap the bare i686-elf-gcc cross compiler to build busybox against
 # the ported musl (libc/install). Three modes: a compile (-c/-S/-E) just adds the
 # musl headers; a partial/relocatable link (-r, busybox's built-in.o merge) adds
 # the headers but NO crt/libs (else crt would be merged into built-in.o and then

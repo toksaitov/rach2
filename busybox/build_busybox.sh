@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 
 #
-# build_busybox.sh -- build a static musl BusyBox for Rach2 from the pinned,
+# build_busybox.sh: build a static musl BusyBox for Rach2 from the pinned,
 # vendored tarball (Phase 18). Verifies the sha256, extracts, applies the curated
 # rach2.config, builds against the ported musl via the muslgcc wrapper, strips,
 # and stages the binary to ../tests/busybox (installed into the RAM disk as
@@ -22,7 +22,7 @@ PREFIX="$SCRIPT_DIR/../libc/install"
 WRAP="$SCRIPT_DIR/muslgcc"
 
 # Pinned sha256 of the vendored tarball (published on busybox.net). The build
-# refuses to proceed if the tarball does not match -- the version is locked.
+# refuses to proceed if the tarball does not match; the version is locked.
 TARBALL_SHA256="b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314"
 
 sha256_of()

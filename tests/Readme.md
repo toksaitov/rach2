@@ -6,28 +6,25 @@ Freestanding ELF32 test programs for validating the Rach2 kernel's syscall imple
 
 ## Test Programs
 
-* `hello.c`: Basic test - prints "Hello from ELF!" using write syscall, then exits
+* `hello.c`: Basic test. Prints "Hello from ELF!" using write syscall, then exits
 * `filetest.c`: Tests file syscalls (open, read, write, close) by reading `hello.txt`
-* `forktest.c`: Tests process syscalls (fork, waitpid, exit) - parent forks child, child exits with status 42, parent waits and verifies
-* `shelltest.c`: Tests the fork+exec+waitpid chain - parent forks, child exec's "hello", parent waits and verifies exit status
-* `dirtest.c`: Tests directory syscalls (chdir, getcwd) - verifies "/" and "." work, other paths fail
-* `stattest.c`: Tests stat and stat64 syscalls - gets file metadata (size, mode) for existing and nonexistent files
-* `touchtest.c`: Tests creat and utimensat syscalls - creates files, updates timestamps
-* `rmtest.c`: Tests unlink syscall - deletes files, verifies deletion, tests error cases
-* `mvtest.c`: Tests rename syscall - renames files, verifies old name gone, tests error cases
-* `lstest.c`: Tests getdents64 syscall - opens "/" directory, reads and parses directory entries
-* `stdintest.c`: Tests stdin read syscall - verifies blocking behavior, character echo, and line buffering
-* `dup2test.c`: Tests dup2 syscall for I/O redirection - redirects stdout to file, verifies content
-* `pingtest.c`: Tests the SC_PING socketcall - pings the gateway (replies) and an unreachable host (clean timeout)
-* `udptest.c`: Tests UDP sockets - socket/bind, blocking and non-blocking (MSG_DONTWAIT) recvfrom, echo round-trip, bad-pointer rejection
-* `tcptest.c`: Tests TCP sockets - connect, write/read echo over the socket fd, graceful close, connect-to-closed-port refused
-* `sockettest.c`: Tests socket lifecycle - close/dup2/fork sharing and process-exit cleanup do not leak or double-free
-* `dnstest.c`: Tests the userspace stub resolver in `utils/resolv.c` - `inet_aton`, `/hosts` lookup, the DNS message parser against crafted responses (A record, CNAME chain, compression pointers, NXDOMAIN, malformed input), and live name resolution through SLIRP's DNS forwarder
+* `forktest.c`: Tests process syscalls (fork, waitpid, exit). Parent forks child, child exits with status 42, parent waits and verifies
+* `shelltest.c`: Tests the fork+exec+waitpid chain. Parent forks, child exec's "hello", parent waits and verifies exit status
+* `dirtest.c`: Tests directory syscalls (chdir, getcwd). Verifies "/" and "." work, other paths fail
+* `stattest.c`: Tests stat and stat64 syscalls. Gets file metadata (size, mode) for existing and nonexistent files
+* `touchtest.c`: Tests creat and utimensat syscalls. Creates files, updates timestamps
+* `rmtest.c`: Tests unlink syscall. Deletes files, verifies deletion, tests error cases
+* `mvtest.c`: Tests rename syscall. Renames files, verifies old name gone, tests error cases
+* `lstest.c`: Tests getdents64 syscall. Opens "/" directory, reads and parses directory entries
+* `stdintest.c`: Tests stdin read syscall. Verifies blocking behavior, character echo, and line buffering
+* `dup2test.c`: Tests dup2 syscall for I/O redirection. Redirects stdout to file, verifies content
+* `pingtest.c`: Tests the SC_PING socketcall. Pings the gateway (replies) and an unreachable host (clean timeout)
+* `udptest.c`: Tests UDP sockets: socket and bind, blocking and non-blocking (MSG_DONTWAIT) recvfrom, an echo round-trip, and rejection of a bad pointer.
+* `tcptest.c`: Tests TCP sockets: connect, a write and read echo over the socket fd, a graceful close, and a refused connect to a closed port.
+* `sockettest.c`: Tests the socket lifecycle, checking that close, dup2, and fork sharing and the process-exit cleanup neither leak nor double-free a socket.
+* `dnstest.c`: Tests the userspace stub resolver in `utils/resolv.c`: `inet_aton`, a `/hosts` lookup, the DNS message parser against crafted responses (A record, CNAME chain, compression pointers, NXDOMAIN, malformed input), and live name resolution through SLIRP's DNS forwarder.
 
-The network tests target QEMU's SLIRP gateway 10.0.2.2. `udptest` and `tcptest`
-expect a host echo server reachable at 10.0.2.2:7777 (UDP and TCP respectively).
-`dnstest` reads `/resolv.conf` and `/hosts` from the image root; its live cases
-resolve real names through SLIRP's DNS forwarder 10.0.2.3 and need host internet.
+The network tests target QEMU's SLIRP gateway 10.0.2.2. `udptest` and `tcptest` expect a host echo server reachable at 10.0.2.2:7777 (UDP and TCP respectively). `dnstest` reads `/resolv.conf` and `/hosts` from the image root; its live cases resolve real names through SLIRP's DNS forwarder 10.0.2.3 and need host internet.
 
 ## Build
 
@@ -97,21 +94,21 @@ make clean  # Remove compiled binaries
 
 ## Syscalls Tested
 
-| Program   | Syscalls                                                                               |
-|-----------|----------------------------------------------------------------------------------------|
-| hello     | write (4), exit (1)                                                                    |
-| filetest  | open (5), read (3), write (4), close (6), exit (1)                                     |
-| forktest  | fork (2), waitpid (7), write (4), exit (1)                                             |
-| shelltest | fork (2), execve (11), waitpid (7), write (4), exit (1)                                |
-| dirtest   | chdir (12), getcwd (183), write (4), exit (1)                                          |
-| stattest  | stat (106), stat64 (195), write (4), exit (1)                                          |
-| touchtest | creat (8), close (6), open (5), utimensat (320), unlink (10), write (4), exit (1)      |
-| rmtest    | creat (8), close (6), open (5), unlink (10), write (4), exit (1)                       |
-| mvtest    | creat (8), close (6), open (5), rename (38), unlink (10), write (4), exit (1)          |
-| lstest    | open (5), getdents64 (220), close (6), write (4), exit (1)                             |
-| stdintest | read (3), write (4), exit (1)                                                          |
-| dup2test  | creat (8), dup2 (63), write (4), read (3), open (5), close (6), unlink (10), exit (1)  |
-| pingtest  | socketcall (102: ping), write (4), exit (1)                                            |
-| udptest   | socketcall (102: socket/bind/sendto/recvfrom), gettimeofday (78), write (4), exit (1)  |
-| tcptest   | socketcall (102: socket/connect), read (3), write (4), close (6), exit (1)             |
-| sockettest| socketcall (102: socket), fork (2), waitpid (7), dup2 (63), close (6), write (4), exit (1) |
+| Program    | Syscalls                                                                                  |
+|------------|-------------------------------------------------------------------------------------------|
+| hello      | write (4), exit (1)                                                                        |
+| filetest   | open (5), read (3), write (4), close (6), exit (1)                                         |
+| forktest   | fork (2), waitpid (7), write (4), exit (1)                                                 |
+| shelltest  | fork (2), execve (11), waitpid (7), write (4), exit (1)                                    |
+| dirtest    | chdir (12), getcwd (183), write (4), exit (1)                                              |
+| stattest   | stat (106), stat64 (195), write (4), exit (1)                                              |
+| touchtest  | creat (8), close (6), open (5), utimensat (320), unlink (10), write (4), exit (1)          |
+| rmtest     | creat (8), close (6), open (5), unlink (10), write (4), exit (1)                           |
+| mvtest     | creat (8), close (6), open (5), rename (38), unlink (10), write (4), exit (1)              |
+| lstest     | open (5), getdents64 (220), close (6), write (4), exit (1)                                 |
+| stdintest  | read (3), write (4), exit (1)                                                              |
+| dup2test   | creat (8), dup2 (63), write (4), read (3), open (5), close (6), unlink (10), exit (1)      |
+| pingtest   | socketcall (102: ping), write (4), exit (1)                                                |
+| udptest    | socketcall (102: socket/bind/sendto/recvfrom), gettimeofday (78), write (4), exit (1)      |
+| tcptest    | socketcall (102: socket/connect), read (3), write (4), close (6), exit (1)                 |
+| sockettest | socketcall (102: socket), fork (2), waitpid (7), dup2 (63), close (6), write (4), exit (1) |

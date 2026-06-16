@@ -2,8 +2,8 @@
 #
 # Quick start (run `make doctor` first to check your toolchain):
 #   make            build the BASE teaching OS: libc, kernel, host tools, tests,
-#                   utils, and the RAM disk -- the everyday build, kept fast.
-#   make full       + the capstones (busybox, dropbear, Doom) -- ends at the bootable
+#                   utils, and the RAM disk: the everyday build, kept fast.
+#   make full       + the capstones (busybox, dropbear, Doom); ends at the bootable
 #                   capstone RAM-disk image the dropbear SSH login uses.
 #   make deps       build the vendored third-party (libc; DEPS=full adds bb+dropbear)
 #   make doctor     check the toolchain (PASS/MISSING with install hints)
@@ -11,7 +11,7 @@
 #   make clean      remove component build products (objects, .d, binaries, ramdisk)
 #   make distclean  + the vendored libc/busybox/dropbear builds (full from-scratch)
 #   make help       list every target
-# Run the built kernel with the scripts in rach2/ (run_with_ram_disk.sh, run.sh) --
+# Run the built kernel with the scripts in rach2/ (run_with_ram_disk.sh, run.sh);
 # see `make help`. The build system does not run QEMU; those scripts model the
 # disk/audio/network/-cpu option matrix far better than a `make run` could.
 
@@ -27,7 +27,7 @@ LIBC_STAMP     = libc/.stamp
 BUSYBOX_STAMP  = busybox/.stamp
 DROPBEAR_STAMP = dropbear/.stamp
 
-# The pinned vendored source tarballs -- the exact names the build_*.sh scripts
+# The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
 # silently drop the prereq and look up-to-date if a tarball were deleted) and to
 # derive the extracted source dirs that `distclean` removes.
@@ -109,7 +109,7 @@ ramdisk: $(BASE_DIRS)
 
 # The staged capstone binaries are the REAL prerequisites of the capstone image. A
 # stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards
-# while the stamp lingers, and the staging script treats it as optional -- so without
+# while the stamp lingers, and the staging script treats it as optional, so without
 # this the image could silently ship without /sh or the SSH server. These are PHONY
 # check targets (depending on the stamp so it builds first), so the `test -s` runs on
 # EVERY build and catches a missing OR zero-byte artifact, not only a missing one.
@@ -119,8 +119,8 @@ check-dropbearmulti: $(DROPBEAR_STAMP)
 	@test -s tests/dropbearmulti || { echo "tests/dropbearmulti missing/empty -- rm dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 
 # Capstone RAM disk: the busybox/dropbear/probe image the SSH login boots. Make builds
-# every component it stages -- the host krffs tools, the probe programs, the musl
-# utils, and the busybox+dropbear capstones (gated by the check targets above) -- and
+# every component it stages (the host krffs tools, the probe programs, the musl
+# utils, and the busybox+dropbear capstones, gated by the check targets above), and
 # SKIP_BUILD=1 tells the script to PACKAGE only, never to re-invoke a component build
 # (so nothing is built twice). The script auto-generates the demo SSH keypair and
 # stages /etc + /root/.ssh via stagetree. capstone-ramdisk is an alias.
@@ -160,7 +160,7 @@ compile-commands:
 check-sources:
 	@./tools/check_sources.sh
 
-# clean: the everyday reset -- component build products (each sub-make removes its
+# clean: the everyday reset; component build products (each sub-make removes its
 # own objects/.d/binaries) plus the generated RAM-disk image. The expensive vendored
 # third-party (libc/install, the busybox/dropbear builds) is LEFT in place so a
 # routine clean does not force a multi-minute musl rebuild; use distclean for that.
@@ -168,7 +168,7 @@ clean:
 	@for dir in $(BASE_DIRS) $(FULL_DIRS); do $(MAKE) -C $$dir clean; done
 	rm -f krffs/file_system.krffs
 
-# distclean: a full from-scratch reset -- clean plus every third-party build product:
+# distclean: a full from-scratch reset; clean plus every third-party build product:
 # the stamps, libc/install, the extracted vendored source trees, and the staged
 # capstone binaries. The next build rebuilds libc/busybox/dropbear from the tarballs.
 distclean: clean

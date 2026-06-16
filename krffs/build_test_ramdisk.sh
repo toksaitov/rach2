@@ -28,7 +28,7 @@ DEMO_KEY="rach2_demo_ed25519"
 # Provision a demo SSH keypair for the dropbear login (Phase 23) if the operator
 # has not supplied one. Only the PUBLIC half is staged (into
 # /root/.ssh/authorized_keys by stagetree below); the private half stays on the
-# host -- log in with `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost`.
+# host; log in with `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost`.
 # Both are git-ignored test credentials and are never committed.
 if [ ! -f authorized_keys ]; then
     if command -v ssh-keygen >/dev/null 2>&1; then
@@ -44,7 +44,7 @@ if [ ! -f authorized_keys ]; then
 fi
 
 # Build the test programs, unless Make already built them (SKIP_BUILD=1, set by the
-# `make test-ramdisk` target so nothing is built twice) -- a standalone run still
+# `make test-ramdisk` target so nothing is built twice); a standalone run still
 # builds them for convenience.
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
     echo "=== Building test programs ==="
@@ -254,7 +254,7 @@ fi
 
 # Stage a real directory tree (/etc) directly into the unmounted image, so the
 # guest boots with populated directories (not just a flat root). This writes v2
-# hierarchical nodes the kernel resolver reads -- proving the host tools speak the
+# hierarchical nodes the kernel resolver reads, proving the host tools speak the
 # directory format, the integration half of Phase 6.
 echo ""
 echo "=== Staging directory tree (/etc) ==="
