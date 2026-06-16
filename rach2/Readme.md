@@ -2,62 +2,72 @@
 
 ![Rach2 BSODing](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/bsod.png)
 
-Rach2 is an educational 32-bit x86 kernel that implements core operating system concepts from scratch. The kernel boots into a Unix-like shell (ISH) with standard utilities, supports preemptive multitasking with per-process memory isolation, and can run Doom. It demonstrates protected mode, paging, system calls, process management, context switching, and device drivers—all in clean, readable C and assembly.
+Rach2 is an educational 32-bit x86 kernel written from scratch in C and assembly. It boots into a Unix-like shell (ISH) with standard utilities, runs user processes under a preemptive scheduler with per-process memory isolation, and can run Doom. The kernel covers protected mode, paging, system calls, process management, context switching, and device drivers.
 
-**Highlights:**
-- Boots into ISH shell as init (PID 1) with cat, cp, echo, ls, mkdir, mv, pwd, rm, touch
-- 20 Linux-compatible system calls via `int 0x80`
-- Preemptive round-robin scheduler at 100 Hz
-- Per-process page directories with full memory isolation
-- KRFFS file system with read/write support
-- Doom port with VGA Mode 13h graphics and real audio (SB16/HDA) or PC speaker fallback
-- Audio drivers: Sound Blaster 16 (ISA), Intel HD Audio (PCI), PC speaker
-- Multiboot1 compliant: boots with GRUB or QEMU's `-kernel` flag
+This document covers the foundation kernel. The networking stack, the musl userland, and the later kernel subsystems (demand paging and copy-on-write fork, the hierarchical file system, signals, pipes, and I/O multiplexing) are documented in the [root Readme](../Readme.md) and the per-subsystem Readmes under [sys/](sys/).
+
+## Highlights
+
+* Boots into ISH shell as init (PID 1) with cat, cp, echo, ls, mkdir, mv, pwd, rm, touch
+* 20 Linux-compatible system calls via `int 0x80`
+* Preemptive round-robin scheduler at 100 Hz
+* Per-process page directories with full memory isolation
+* KRFFS file system with read/write support
+* Doom port with VGA Mode 13h graphics and real audio (SB16/HDA) or PC speaker fallback
+* Audio drivers: Sound Blaster 16 (ISA), Intel HD Audio (PCI), PC speaker
+* Multiboot1 compliant: boots with GRUB or QEMU's `-kernel` flag
 
 ## Features
 
-**Boot & CPU:**
+### Boot and CPU
+
 * Multiboot1 compliant: boots with GRUB or QEMU's `-kernel` flag
 * Protected mode with flat memory model (GDT with TSS for ring transitions)
 * Interrupt handling: IDT with 32 CPU exceptions and 16 IRQs
 * 8259 PIC initialization and EOI handling
 * Programmable Interval Timer (100 Hz tick)
 
-**Memory Management:**
+### Memory Management
+
 * Simple bump allocator for physical memory
 * Basic paging with identity mapping (32 MB limit)
 * Per-process page directories with CR3 switching for memory isolation
 * Kernel panic screen automatically triggered on page faults
 
-**Process Management:**
+### Process Management
+
 * Process control blocks (PCB) with process table (16 max) and file descriptors
 * User mode (ring 3) execution with privilege transitions
 * Context switching between processes with TSS stack management
 * Preemptive round-robin scheduler (timer-driven)
 * CTRL+C kills foreground user process (returns parent to shell, or kernel debug shell if init)
 
-**System Calls & I/O:**
+### System Calls and I/O
+
 * System call infrastructure (int 0x80) with 20 Linux-compatible syscalls
 * Console input with line buffering for userspace stdin reads
 * Serial port I/O (COM1) for debug logging and piped command input
 
-**File System & Executables:**
+### File System and Executables
+
 * Multiboot module loading (RAM disk support via `-initrd`)
 * KRFFS file system with read/write support loaded from RAM disk module
 * ELF32 header parsing for executable validation and loading
 * Boots directly into ISH shell as init process (PID 1)
 
-**Device Drivers:**
+### Device Drivers
+
 * PS/2 keyboard driver with US layout, shift key, and CTRL+C support
 * PS/2 mouse driver with IRQ12 handler and device file interface
 * VGA text mode display (80x25, 16 colors)
 * VGA Mode 13h graphics (320x200, 256 colors) via framebuffer device
 * Audio subsystem with automatic hardware detection:
-  - Sound Blaster 16 (ISA): 8/16-bit DMA, IRQ-driven playback
-  - Intel HD Audio (PCI): MMIO registers, CORB/RIRB codec communication
-  - PC speaker fallback via PIT channel 2
+  * Sound Blaster 16 (ISA): 8/16-bit DMA, IRQ-driven playback
+  * Intel HD Audio (PCI): MMIO registers, CORB/RIRB codec communication
+  * PC speaker fallback via PIT channel 2
 
-**Development & Testing:**
+### Development and Testing
+
 * Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF load)
 * Interactive kernel debug shell with commands: help, info, modules, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, audio, fault, halt
 * VGA text scrollback in the kernel debug shell via PageUp, PageDown, Home, and End
@@ -68,16 +78,14 @@ Rach2 is an educational 32-bit x86 kernel that implements core operating system 
 
 ### Prerequisites
 
-| Component        | macOS (Homebrew)               | Linux                                        |
-|------------------|--------------------------------|----------------------------------------------|
-| Cross-compiler   | `brew install i686-elf-gcc`    | build the OSDev `i686-elf` cross GCC (or Homebrew) |
-| Emulator         | `brew install qemu`            | `sudo apt install qemu-system-x86`           |
-| Debugger         | `brew install i686-elf-gdb`    | `sudo apt install gdb-multiarch`             |
-| ISO (optional)   | `brew install --cask docker`   | `sudo apt install docker.io`                 |
+| Component      | macOS (Homebrew)             | Linux                                              |
+|----------------|------------------------------|----------------------------------------------------|
+| Cross-compiler | `brew install i686-elf-gcc`  | build the OSDev `i686-elf` cross GCC (or Homebrew) |
+| Emulator       | `brew install qemu`          | `sudo apt install qemu-system-x86`                 |
+| Debugger       | `brew install i686-elf-gdb`  | `sudo apt install gdb-multiarch`                   |
+| ISO (optional) | `brew install --cask docker` | `sudo apt install docker.io`                       |
 
-`i686-elf-gcc` is the project default and what `make doctor` checks; the freestanding
-kernel by itself also links with `x86_64-elf-gcc`. To build the whole OS, prefer the
-top-level `make` / `make full` from the repo root (see the [root Readme](../Readme.md)).
+`i686-elf-gcc` is the project default and what `make doctor` checks; the freestanding kernel by itself also links with `x86_64-elf-gcc`. To build the whole OS, prefer the top-level `make` / `make full` from the repo root (see the [root Readme](../Readme.md)).
 
 ### Build and Run
 
@@ -108,61 +116,61 @@ The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 M
 
 ```
 .
-├── kernel.c               # Main entry point, shell, self-tests
-├── loader.s               # Multiboot header, stack setup, entry
-├── link.ld                # Linker script (executable at 0x100000)
-├── Makefile               # Build rules for the environment and ISO
-├── sys/
-│   ├── kio.c/h            # Console I/O, printf, port I/O
-│   ├── serial.c/h         # Serial port (COM1) debug output
-│   ├── syscall.c/h        # System call entry point (int 0x80)
-│   ├── module.c/h         # Multiboot module parsing and access
-│   ├── isr.c/h            # Interrupt service routine management
-│   ├── isr_handler.s      # ISR/IRQ stubs and common handlers
-│   ├── pic.c/h            # 8259 PIC initialization
-│   ├── pit.c/h            # Programmable Interval Timer
-│   ├── kbd.c/h            # PS/2 keyboard driver with shift key support
-│   ├── mouse.c/h          # PS/2 mouse driver (IRQ12)
-│   ├── panic.c/h          # Kernel panic with visual screen
-│   ├── display/
-│   │   ├── fb.h           # Common framebuffer interface (VBE-ready)
-│   │   ├── vga_text.c/h   # VGA text mode (Mode 3): colors, scrolling
-│   │   └── vga_gfx.c/h    # VGA graphics mode (Mode 13h): 320x200x256
-│   ├── audio/
-│   │   ├── audio.c/h      # Common audio interface, driver detection
-│   │   ├── dma.c/h        # ISA DMA controller (8237A) for SB16
-│   │   ├── sb16.c/h       # Sound Blaster 16 driver
-│   │   └── hda.c/h        # Intel HD Audio driver
-│   ├── pci.c/h            # PCI bus enumeration (for HDA detection)
-│   ├── speaker.c/h        # PC speaker driver (PIT channel 2)
-│   ├── tables/
-│   │   ├── gdt.c/h        # Global Descriptor Table setup
-│   │   ├── gdt_handler.s  # GDT and TSS loading routines
-│   │   ├── tss.c/h        # Task State Segment for ring transitions
-│   │   ├── idt.c/h        # Interrupt Descriptor Table setup
-│   │   └── idt_handler.s  # IDT loading routine
-│   ├── mm/
-│   │   ├── heap.c/h       # Simple bump allocator
-│   │   └── paging.c/h     # Page directory/table, identity mapping
-│   ├── proc/
-│   │   ├── process.c/h    # Process control block, process table
-│   │   ├── sched.c/h      # Round-robin preemptive scheduler
-│   │   ├── elf.c/h        # ELF32 header parsing
-│   │   └── switch.s       # Context switch assembly routine
-│   ├── fs/
-│   │   ├── krffs.c/h      # KRFFS file system (read/write)
-│   │   └── fd.c/h         # Per-process file descriptor table
-│   └── lib/
-│       ├── kdef.h         # NULL, bool, size_t definitions
-│       ├── kint.h         # Fixed-width integer types
-│       ├── kctypes.c/h    # toupper, tolower
-│       ├── kstd.c/h       # itoa (integer to string)
-│       └── kstring.c/h    # strlen, memset, strreverse
-├── vendor/
-│   └── multiboot.h        # Multiboot specification header
-├── iso/
-│   └── boot/grub/grub.cfg.template # GRUB2 config template (grub.cfg is generated)
-└── .gdbinit               # GDB initialization script
+|-- kernel.c               # Main entry point, shell, self-tests
+|-- loader.s               # Multiboot header, stack setup, entry
+|-- link.ld                # Linker script (executable at 0x100000)
+|-- Makefile               # Build rules for the environment and ISO
+|-- sys/
+|   |-- kio.c/h            # Console I/O, printf, port I/O
+|   |-- serial.c/h         # Serial port (COM1) debug output
+|   |-- syscall.c/h        # System call entry point (int 0x80)
+|   |-- module.c/h         # Multiboot module parsing and access
+|   |-- isr.c/h            # Interrupt service routine management
+|   |-- isr_handler.s      # ISR/IRQ stubs and common handlers
+|   |-- pic.c/h            # 8259 PIC initialization
+|   |-- pit.c/h            # Programmable Interval Timer
+|   |-- kbd.c/h            # PS/2 keyboard driver with shift key support
+|   |-- mouse.c/h          # PS/2 mouse driver (IRQ12)
+|   |-- panic.c/h          # Kernel panic with visual screen
+|   |-- display/
+|   |   |-- fb.h           # Common framebuffer interface (VBE-ready)
+|   |   |-- vga_text.c/h   # VGA text mode (Mode 3): colors, scrolling
+|   |   `-- vga_gfx.c/h    # VGA graphics mode (Mode 13h): 320x200x256
+|   |-- audio/
+|   |   |-- audio.c/h      # Common audio interface, driver detection
+|   |   |-- dma.c/h        # ISA DMA controller (8237A) for SB16
+|   |   |-- sb16.c/h       # Sound Blaster 16 driver
+|   |   `-- hda.c/h        # Intel HD Audio driver
+|   |-- pci.c/h            # PCI bus enumeration (for HDA detection)
+|   |-- speaker.c/h        # PC speaker driver (PIT channel 2)
+|   |-- tables/
+|   |   |-- gdt.c/h        # Global Descriptor Table setup
+|   |   |-- gdt_handler.s  # GDT and TSS loading routines
+|   |   |-- tss.c/h        # Task State Segment for ring transitions
+|   |   |-- idt.c/h        # Interrupt Descriptor Table setup
+|   |   `-- idt_handler.s  # IDT loading routine
+|   |-- mm/
+|   |   |-- heap.c/h       # Simple bump allocator
+|   |   `-- paging.c/h     # Page directory/table, identity mapping
+|   |-- proc/
+|   |   |-- process.c/h    # Process control block, process table
+|   |   |-- sched.c/h      # Round-robin preemptive scheduler
+|   |   |-- elf.c/h        # ELF32 header parsing
+|   |   `-- switch.s       # Context switch assembly routine
+|   |-- fs/
+|   |   |-- krffs.c/h      # KRFFS file system (read/write)
+|   |   `-- fd.c/h         # Per-process file descriptor table
+|   `-- lib/
+|       |-- kdef.h         # NULL, bool, size_t definitions
+|       |-- kint.h         # Fixed-width integer types
+|       |-- kctypes.c/h    # toupper, tolower
+|       |-- kstd.c/h       # itoa (integer to string)
+|       `-- kstring.c/h    # strlen, memset, strreverse
+|-- vendor/
+|   `-- multiboot.h        # Multiboot specification header
+|-- iso/
+|   `-- boot/grub/grub.cfg.template # GRUB2 config template (grub.cfg is generated)
+`-- .gdbinit               # GDB initialization script
 ```
 
 ---
@@ -173,14 +181,14 @@ The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 M
 
 The GDT contains 6 segment descriptors:
 
-| Index | Selector | Description         | DPL |
-|-------|----------|---------------------|-----|
-| 0     | 0x00     | Null descriptor     | -   |
-| 1     | 0x08     | Kernel code         | 0   |
-| 2     | 0x10     | Kernel data         | 0   |
-| 3     | 0x18     | User code           | 3   |
-| 4     | 0x20     | User data           | 3   |
-| 5     | 0x28     | TSS                 | 0   |
+| Index | Selector | Description     | DPL |
+|-------|----------|-----------------|-----|
+| 0     | 0x00     | Null descriptor | -   |
+| 1     | 0x08     | Kernel code     | 0   |
+| 2     | 0x10     | Kernel data     | 0   |
+| 3     | 0x18     | User code       | 3   |
+| 4     | 0x20     | User data       | 3   |
+| 5     | 0x28     | TSS             | 0   |
 
 ## Task State Segment (TSS)
 
@@ -243,28 +251,28 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 
 ### Implemented Syscalls
 
-| #   | Name         | Arguments                  | Description                   |
-|-----|--------------|----------------------------|-------------------------------|
-| 1   | exit         | status                     | Terminate current process     |
-| 2   | fork         | -                          | Create child process          |
-| 3   | read         | fd, buf, count             | Read from file descriptor     |
-| 4   | write        | fd, buf, count             | Write to file descriptor      |
-| 5   | open         | path, flags                | Open a file                   |
-| 6   | close        | fd                         | Close a file descriptor       |
-| 7   | waitpid      | pid, status, options       | Wait for child process        |
-| 8   | creat        | path, mode                 | Create a new file             |
-| 10  | unlink       | path                       | Delete a file                 |
-| 11  | execve       | path, argv, envp           | Replace process image         |
-| 12  | chdir        | path                       | Change directory              |
-| 38  | rename       | oldpath, newpath           | Rename a file                 |
-| 54  | ioctl        | fd, request, arg           | Device control                |
-| 63  | dup2         | oldfd, newfd               | Duplicate file descriptor     |
-| 78  | gettimeofday | tv, tz                     | Get time since boot           |
-| 106 | stat         | path, statbuf              | Get file status (32-bit)      |
-| 183 | getcwd       | buf, size                  | Get current working directory |
-| 195 | stat64       | path, statbuf              | Get file status (64-bit)      |
-| 220 | getdents64   | fd, dirp, count            | Read directory entries        |
-| 320 | utimensat    | dirfd, path, times, flags  | Update file timestamps        |
+| #   | Name         | Arguments                 | Description                   |
+|-----|--------------|---------------------------|-------------------------------|
+| 1   | exit         | status                    | Terminate current process     |
+| 2   | fork         | -                         | Create child process          |
+| 3   | read         | fd, buf, count            | Read from file descriptor     |
+| 4   | write        | fd, buf, count            | Write to file descriptor      |
+| 5   | open         | path, flags               | Open a file                   |
+| 6   | close        | fd                        | Close a file descriptor       |
+| 7   | waitpid      | pid, status, options      | Wait for child process        |
+| 8   | creat        | path, mode                | Create a new file             |
+| 10  | unlink       | path                      | Delete a file                 |
+| 11  | execve       | path, argv, envp          | Replace process image         |
+| 12  | chdir        | path                      | Change directory              |
+| 38  | rename       | oldpath, newpath          | Rename a file                 |
+| 54  | ioctl        | fd, request, arg          | Device control                |
+| 63  | dup2         | oldfd, newfd              | Duplicate file descriptor     |
+| 78  | gettimeofday | tv, tz                    | Get time since boot           |
+| 106 | stat         | path, statbuf             | Get file status (32-bit)      |
+| 183 | getcwd       | buf, size                 | Get current working directory |
+| 195 | stat64       | path, statbuf             | Get file status (64-bit)      |
+| 220 | getdents64   | fd, dirp, count           | Read directory entries        |
+| 320 | utimensat    | dirfd, path, times, flags | Update file timestamps        |
 
 ### exit (syscall 1)
 
@@ -355,7 +363,7 @@ Opens a file at `path` with the given `flags`:
 * 0100 (O_CREAT): Create file if it doesn't exist
 * 01000 (O_TRUNC): Truncate file to zero length if it exists
 
-Returns a new file descriptor number (≥3) on success, or -1 on error. Leading '/' in path is stripped (KRFFS has no directory hierarchy).
+Returns a new file descriptor number (>=3) on success, or -1 on error. Leading '/' in path is stripped (KRFFS has no directory hierarchy).
 
 ### close (syscall 6)
 
@@ -454,7 +462,7 @@ Arguments:
 * `path` - Path to the file to create (leading '/' is stripped)
 * `mode` - File permissions (currently ignored, uses default 0644)
 
-Returns a file descriptor for the newly created file (≥3), or -1 on error. The file is opened for writing.
+Returns a file descriptor for the newly created file (>=3), or -1 on error. The file is opened for writing.
 
 ### unlink (syscall 10)
 
@@ -507,7 +515,7 @@ Arguments:
 Supported request codes:
 
 For framebuffer device (fd from `open("fb")`):
-* `FB_SETPALETTE` (0x4603) - Set 256-color VGA palette. `arg` points to 768 bytes (256 colors × 3 RGB bytes)
+* `FB_SETPALETTE` (0x4603) - Set 256-color VGA palette. `arg` points to 768 bytes (256 colors x 3 RGB bytes)
 
 For console (fd 0):
 * `KIOCSOUND` (0x4B2F) - Set PC speaker frequency. `arg` is frequency in Hz (0 to turn off)
@@ -524,7 +532,7 @@ Arguments:
 
 The `timeval` structure contains:
 * `tv_sec` - Seconds since boot (kernel_ticks / 100)
-* `tv_usec` - Microseconds (kernel_ticks % 100 × 10000)
+* `tv_usec` - Microseconds (kernel_ticks % 100 x 10000)
 
 Time resolution is 10 milliseconds (100 Hz PIT timer). Returns 0 on success, -1 on error.
 
@@ -558,6 +566,7 @@ Returns:
 Since KRFFS is a flat file system, "/" contains all files directly.
 
 ### Files in `syscall.c`
+
 * `init_syscall()` - Initialize dispatch table and register syscall handler
 * `_syscall_table[]` - Dispatch table mapping syscall numbers to handler functions
 * `sys_exit()` - Terminate process, wake parent, reschedule
@@ -597,11 +606,11 @@ The `enter_usermode(eip, esp)` function in `loader.s` performs the transition fr
 
 1. Sets data segment registers (DS, ES, FS, GS) to user data segment (0x23)
 2. Builds an iret stack frame with:
-   - User stack segment (SS = 0x23)
-   - User stack pointer (ESP)
-   - EFLAGS with interrupts enabled
-   - User code segment (CS = 0x1B)
-   - Entry point address (EIP)
+   * User stack segment (SS = 0x23)
+   * User stack pointer (ESP)
+   * EFLAGS with interrupts enabled
+   * User code segment (CS = 0x1B)
+   * Entry point address (EIP)
 3. Executes `iret` to switch to ring 3
 
 ### Page Access Permissions
@@ -664,6 +673,7 @@ CTRL+C (keyboard interrupt) kills the currently running foreground user process:
 This provides a simple way to interrupt runaway processes (like `yes`) without full signal support.
 
 ### Files in `sys/proc/`
+
 * `process.h` - PCB structure, state definitions, function prototypes
 * `process.c` - Process table, `init_proc()`, `alloc_process()`, `free_process()`, `get_process()`, `setup_process_stack()`
 * `switch.s` - Context switch assembly routine
@@ -676,11 +686,11 @@ Each process has a file descriptor table with 16 entries. File descriptors are s
 
 When a process is created, three file descriptors are automatically initialized:
 
-| FD | Name   | Type    | Description                    |
-|----|--------|---------|--------------------------------|
-| 0  | stdin  | CONSOLE | Standard input (keyboard)      |
-| 1  | stdout | CONSOLE | Standard output (VGA + serial) |
-| 2  | stderr | CONSOLE | Standard error (VGA + serial)  |
+| FD  | Name   | Type    | Description                    |
+|-----|--------|---------|--------------------------------|
+| 0   | stdin  | CONSOLE | Standard input (keyboard)      |
+| 1   | stdout | CONSOLE | Standard output (VGA + serial) |
+| 2   | stderr | CONSOLE | Standard error (VGA + serial)  |
 
 ### File Descriptor Entry
 
@@ -700,6 +710,7 @@ Each entry in the fd table contains:
 * `fd_is_valid(table, fd)` - Check if fd is allocated
 
 ### Files in `sys/fs/`
+
 * `fd.h` - File descriptor types, constants, function prototypes
 * `fd.c` - File descriptor table management
 
@@ -709,12 +720,12 @@ The kernel supports cooperative context switching between processes using `switc
 
 ### How Context Switch Works
 
-1. **Save current state**: Push callee-saved registers (EBP, EBX, ESI, EDI) onto the current stack
-2. **Save stack pointer**: Store ESP in `old->regs.esp`
-3. **Update TSS**: Set TSS ESP0 to `new->kernel_stack` (for ring transitions)
-4. **Load new stack**: Load ESP from `new->regs.esp`
-5. **Restore state**: Pop callee-saved registers from the new stack
-6. **Return**: The `ret` instruction jumps to wherever the new process was
+1. Save current state: Push callee-saved registers (EBP, EBX, ESI, EDI) onto the current stack
+2. Save stack pointer: Store ESP in `old->regs.esp`
+3. Update TSS: Set TSS ESP0 to `new->kernel_stack` (for ring transitions)
+4. Load new stack: Load ESP from `new->regs.esp`
+5. Restore state: Pop callee-saved registers from the new stack
+6. Return: The `ret` instruction jumps to wherever the new process was
 
 ### Setting Up a New Process
 
@@ -749,18 +760,18 @@ The kernel includes a preemptive round-robin scheduler that automatically switch
 
 ### How Scheduling Works
 
-1. **Timer interrupt fires** (100 Hz)
-2. **schedule() is called** from timer handler
-3. **Find next READY process** using round-robin:
-   - Start searching from the index after the last scheduled process
-   - Wrap around the process table
-   - First READY process found becomes the next candidate
-4. **If a different process is found**:
-   - Mark current process as READY (unless blocked/zombie)
-   - Mark new process as RUNNING
-   - Update `current_proc` pointer
-   - Call `switch_context()` to perform the switch
-5. **If no switch needed**: Return and continue current process
+1. Timer interrupt fires (100 Hz)
+2. schedule() is called from timer handler
+3. Find next READY process using round-robin:
+   * Start searching from the index after the last scheduled process
+   * Wrap around the process table
+   * First READY process found becomes the next candidate
+4. If a different process is found:
+   * Mark current process as READY (unless blocked/zombie)
+   * Mark new process as RUNNING
+   * Update `current_proc` pointer
+   * Call `switch_context()` to perform the switch
+5. If no switch needed: Return and continue current process
 
 ### Important Notes
 
@@ -779,6 +790,7 @@ The shell command `preempt` demonstrates timer-driven scheduling:
 The self-tests include an automated scheduler test that verifies both processes get CPU time.
 
 ### Files in `sys/proc/sched.c`
+
 * `_sched_enabled` - Flag to enable/disable preemptive scheduling
 * `_last_sched_idx` - Index of last scheduled process (for round-robin fairness)
 * `schedule()` - Main scheduling function called from timer interrupt
@@ -841,6 +853,7 @@ To prevent memory exhaustion during repeated fork+exec cycles, page directories 
 * This allows unlimited fork+exec cycles without exhausting the bump allocator
 
 ### Files Modified for Per-Process Page Directories
+
 * `sys/mm/paging.c` - Added `clone_page_directory()`, `get_page_dir_phys()`, `switch_page_directory()`, `alloc_user_page()`, `free_user_pages()`, `free_page_directory()`, and free list allocators
 * `sys/mm/paging.h` - Function prototypes and exported `_kernel_dir`, `_curr_dir`
 * `sys/proc/switch.s` - CR3 switching with `_curr_dir` synchronization (updates global after every CR3 change)
@@ -897,9 +910,9 @@ The kernel includes full read/write support for KRFFS (K&R First-Fit File System
 ### KRFFS Overview
 
 KRFFS uses a circular linked list of nodes, where each node represents either:
-* **Root node** - File system header (magic 0x4B52)
-* **Free node** - Available space for allocation
-* **Reserved node** - A file (name, size, data)
+* Root node - File system header (magic 0x4B52)
+* Free node - Available space for allocation
+* Reserved node - A file (name, size, data)
 
 File lookup uses DJB hash of the filename for fast identification. The file system is designed for simplicity rather than performance.
 
@@ -974,25 +987,25 @@ ELF (Executable and Linkable Format) is the standard executable format for Unix-
 
 #### ELF Header (52 bytes)
 
-| Field     | Size | Description                                              |
-|-----------|------|----------------------------------------------------------|
-| e_ident   | 16   | Magic number (0x7F 'E' 'L' 'F'), class, encoding, version|
-| e_type    | 2    | Object file type (ET_EXEC = 2 for executables)           |
-| e_machine | 2    | Machine type (EM_386 = 3 for i386)                       |
-| e_entry   | 4    | Entry point virtual address                              |
-| e_phoff   | 4    | Program header table offset                              |
-| e_phnum   | 2    | Number of program headers                                |
+| Field     | Size | Description                                               |
+|-----------|------|-----------------------------------------------------------|
+| e_ident   | 16   | Magic number (0x7F 'E' 'L' 'F'), class, encoding, version |
+| e_type    | 2    | Object file type (ET_EXEC = 2 for executables)            |
+| e_machine | 2    | Machine type (EM_386 = 3 for i386)                        |
+| e_entry   | 4    | Entry point virtual address                               |
+| e_phoff   | 4    | Program header table offset                               |
+| e_phnum   | 2    | Number of program headers                                 |
 
 #### Program Header (32 bytes)
 
-| Field    | Size | Description                                    |
-|----------|------|------------------------------------------------|
-| p_type   | 4    | Segment type (PT_LOAD = 1 for loadable)        |
-| p_offset | 4    | Offset in file                                 |
-| p_vaddr  | 4    | Virtual address in memory                      |
-| p_filesz | 4    | Size in file                                   |
-| p_memsz  | 4    | Size in memory (may be larger for BSS)         |
-| p_flags  | 4    | Permissions (PF_R=4, PF_W=2, PF_X=1)           |
+| Field    | Size | Description                             |
+|----------|------|-----------------------------------------|
+| p_type   | 4    | Segment type (PT_LOAD = 1 for loadable) |
+| p_offset | 4    | Offset in file                          |
+| p_vaddr  | 4    | Virtual address in memory               |
+| p_filesz | 4    | Size in file                            |
+| p_memsz  | 4    | Size in memory (may be larger for BSS)  |
+| p_flags  | 4    | Permissions (PF_R=4, PF_W=2, PF_X=1)    |
 
 ### Validation Checks
 
@@ -1016,12 +1029,12 @@ ELF (Executable and Linkable Format) is the standard executable format for Unix-
 
 The `elf_load()` function loads an ELF executable into a process's address space:
 
-1. **Validate ELF header** - Check magic number, 32-bit class, executable type
-2. **Iterate PT_LOAD segments** - For each loadable segment:
-   - Allocate user pages at the segment's virtual address
-   - Copy segment data from file to physical memory
-   - Zero-fill any BSS region (memsz > filesz)
-3. **Return success** - Process is ready for execution
+1. Validate ELF header - Check magic number, 32-bit class, executable type
+2. Iterate PT_LOAD segments - For each loadable segment:
+   * Allocate user pages at the segment's virtual address
+   * Copy segment data from file to physical memory
+   * Zero-fill any BSS region (memsz > filesz)
+3. Return success - Process is ready for execution
 
 The `exec_program()` function orchestrates the complete loading:
 
@@ -1070,9 +1083,9 @@ close(mouse_fd);
 ### Hardware Details
 
 The PS/2 mouse driver uses:
-* **8042 Controller**: Ports 0x60 (data) and 0x64 (status/command)
-* **IRQ12**: Mouse interrupt (vector 44)
-* **Protocol**: Standard 3-byte PS/2 mouse packets
+* 8042 Controller: Ports 0x60 (data) and 0x64 (status/command)
+* IRQ12: Mouse interrupt (vector 44)
+* Protocol: Standard 3-byte PS/2 mouse packets
 
 The driver initializes the mouse via the 8042 controller auxiliary port, enables IRQ12, and stores incoming packets in a ring buffer. Userspace reads are non-blocking - if no packets are available, read() returns 0.
 
@@ -1085,7 +1098,7 @@ The Doom port uses the mouse device for turning and movement:
 
 ## VGA Mode 13h and Framebuffer Device
 
-The kernel supports VGA Mode 13h (320×200, 256 colors) for graphical applications like Doom. The framebuffer is accessed through a special device file.
+The kernel supports VGA Mode 13h (320x200, 256 colors) for graphical applications like Doom. The framebuffer is accessed through a special device file.
 
 ### Framebuffer Device
 
@@ -1093,7 +1106,7 @@ Opening the special file "fb" returns a framebuffer file descriptor and switches
 
 ```c
 int fb_fd = open("fb", O_RDWR);  /* Switches to Mode 13h */
-write(fb_fd, pixels, 64000);     /* Blit 320×200 pixels to screen */
+write(fb_fd, pixels, 64000);     /* Blit 320x200 pixels to screen */
 close(fb_fd);                    /* Restores text mode */
 ```
 
@@ -1104,7 +1117,7 @@ The framebuffer is at physical address 0xA0000 (64 KB). Each pixel is an 8-bit p
 The 256-color palette can be set via ioctl:
 
 ```c
-uint8_t palette[768];  /* 256 colors × 3 bytes (R, G, B) */
+uint8_t palette[768];  /* 256 colors x 3 bytes (R, G, B) */
 ioctl(fb_fd, FB_SETPALETTE, (unsigned long)palette);
 ```
 
@@ -1128,19 +1141,19 @@ The kernel provides a unified audio subsystem supporting multiple audio devices 
 ### Audio Driver Detection
 
 At boot, the kernel probes for audio hardware in this order:
-1. **Intel HD Audio** - PCI scan for class 0x04 subclass 0x03
-2. **Sound Blaster 16** - ISA probe at port 0x220
-3. **PC Speaker** - Always available as fallback
+1. Intel HD Audio - PCI scan for class 0x04 subclass 0x03
+2. Sound Blaster 16 - ISA probe at port 0x220
+3. PC Speaker - Always available as fallback
 
 ### Sound Blaster 16 (SB16)
 
 ISA sound card with 8/16-bit DMA playback:
 
-* **I/O Ports**: Base 0x220 (DSP, mixer)
-* **IRQ**: 5 (configurable)
-* **DMA**: Channel 1 (8-bit), Channel 5 (16-bit)
-* **Formats**: 8-bit unsigned, 16-bit signed little-endian
-* **Sample rates**: Up to 44.1 kHz
+* I/O Ports: Base 0x220 (DSP, mixer)
+* IRQ: 5 (configurable)
+* DMA: Channel 1 (8-bit), Channel 5 (16-bit)
+* Formats: 8-bit unsigned, 16-bit signed little-endian
+* Sample rates: Up to 44.1 kHz
 
 The driver in `sys/audio/sb16.c` programs the DSP for auto-init DMA mode with double-buffering for continuous playback.
 
@@ -1148,19 +1161,19 @@ The driver in `sys/audio/sb16.c` programs the DSP for auto-init DMA mode with do
 
 PCI audio controller with MMIO registers:
 
-* **PCI Class**: 0x0403 (multimedia audio controller)
-* **BAR0**: Memory-mapped registers (16KB)
-* **Communication**: CORB/RIRB ring buffers for codec verbs
-* **Streams**: Configurable BDL (Buffer Descriptor List) for DMA
+* PCI Class: 0x0403 (multimedia audio controller)
+* BAR0: Memory-mapped registers (16KB)
+* Communication: CORB/RIRB ring buffers for codec verbs
+* Streams: Configurable BDL (Buffer Descriptor List) for DMA
 
 The driver in `sys/audio/hda.c` uses PCI bus enumeration to find the controller, maps MMIO above 32MB using `map_mmio()`, and communicates with codecs via verb commands.
 
 For real hardware, the HDA path now also includes:
 
-* **Codec-aware output setup**: speaker and headphone pins, EAPD, GPIO, and connection selection
-* **DMA position tracking**: optional position buffer with automatic fallback to LPIB if the controller's position buffer is unreliable
-* **Write-path resampling**: write-based clients such as Doom can submit 11025 Hz 8-bit mono while the driver runs the hardware stream at a codec-supported format such as 48 kHz 16-bit stereo
-* **Bring-up diagnostics**: compact stats, codec dumps, pin-sense summaries, routing control, and DMA watch tools under the kernel shell's `audio` command
+* Codec-aware output setup: speaker and headphone pins, EAPD, GPIO, and connection selection
+* DMA position tracking: optional position buffer with automatic fallback to LPIB if the controller's position buffer is unreliable
+* Write-path resampling: write-based clients such as Doom can submit 11025 Hz 8-bit mono while the driver runs the hardware stream at a codec-supported format such as 48 kHz 16-bit stereo
+* Bring-up diagnostics: compact stats, codec dumps, pin-sense summaries, routing control, and DMA watch tools under the kernel shell's `audio` command
 
 ### PC Speaker (Fallback)
 
@@ -1179,13 +1192,13 @@ The speaker driver in `sys/speaker.c` programs:
 
 Audio is controlled via ioctl on the console (fd 0):
 
-| Request         | Code   | Argument                    | Description                    |
-|-----------------|--------|------------------------------|--------------------------------|
-| AUDIO_GET_INFO  | 0x4101 | `struct audio_info *`        | Get driver type and capability |
-| AUDIO_START     | 0x4102 | `struct audio_start_params *`| Start playback                 |
-| AUDIO_STOP      | 0x4103 | -                            | Stop playback                  |
-| AUDIO_WRITE     | 0x4104 | `struct audio_write_params *`| Write audio samples            |
-| AUDIO_SET_VOLUME| 0x4105 | volume (0-100)               | Set playback volume            |
+| Request          | Code   | Argument                      | Description                    |
+|------------------|--------|-------------------------------|--------------------------------|
+| AUDIO_GET_INFO   | 0x4101 | `struct audio_info *`         | Get driver type and capability |
+| AUDIO_START      | 0x4102 | `struct audio_start_params *` | Start playback                 |
+| AUDIO_STOP       | 0x4103 | -                             | Stop playback                  |
+| AUDIO_WRITE      | 0x4104 | `struct audio_write_params *` | Write audio samples            |
+| AUDIO_SET_VOLUME | 0x4105 | volume (0-100)                | Set playback volume            |
 
 ### Running with Audio in QEMU
 
@@ -1210,36 +1223,39 @@ qemu-system-i386 -kernel kernel -audiodev coreaudio,id=audio0 -device intel-hda 
 
 ### Scripts
 
-| Script                 | Description                                 |
-|------------------------|---------------------------------------------|
-| `run.sh`               | Quick QEMU test with serial output          |
-| `run_with_ram_disk.sh` | Run with KRFFS from `../krffs/`             |
-| `run_from_iso.sh`      | Boot ISO with GRUB                          |
-| `debug.sh`             | QEMU + GDB debugging                        |
+| Script                 | Description                        |
+|------------------------|------------------------------------|
+| `run.sh`               | Quick QEMU test with serial output |
+| `run_with_ram_disk.sh` | Run with KRFFS from `../krffs/`    |
+| `run_from_iso.sh`      | Boot ISO with GRUB                 |
+| `debug.sh`             | QEMU + GDB debugging               |
 
 ### Prerequisites
 
 Building requires a cross-compiler toolchain:
-* `x86_64-elf-gcc` (with `-m32` support)
-* `x86_64-elf-ld`
+* `i686-elf-gcc` (the project default; the freestanding kernel alone also links with `x86_64-elf-gcc`)
+* the matching binutils `ld` from the same toolchain (`i686-elf-ld`, or `x86_64-elf-ld` for the kernel-only fallback)
 * `make`
 
 For running and debugging:
 * `qemu-system-i386`
-* `x86_64-elf-gdb` or `gdb-multiarch`
+* `i686-elf-gdb` or `gdb-multiarch`
 
 For ISO creation (optional):
 * Docker (uses Ubuntu 24.04 image with `grub-mkrescue`)
 
-**Ubuntu 24.04:**
+#### Ubuntu 24.04
+
 ```bash
-sudo apt install gcc-multilib g++-multilib qemu-system-x86 gdb-multiarch docker.io
+# i686-elf-gcc is not a stock apt package; build the OSDev i686-elf cross GCC.
+sudo apt install qemu-system-x86 gdb-multiarch docker.io
 sudo usermod -aG docker $USER  # Log out and back in for group change
 ```
 
-**macOS (Homebrew):**
+#### macOS (Homebrew)
+
 ```bash
-brew install x86_64-elf-gcc x86_64-elf-gdb qemu
+brew install i686-elf-gcc i686-elf-gdb qemu
 brew install --cask docker
 ```
 
@@ -1253,12 +1269,14 @@ make iso       # Build bootable ISO (requires Docker)
 
 ### Running the Kernel
 
-**1. Quick test (fastest for development):**
+#### Quick test (fastest for development)
+
 ```bash
 make && ./run.sh
 ```
 
-**2. With KRFFS file system (for user programs):**
+#### With KRFFS file system (for user programs)
+
 ```bash
 cd ../krffs
 ./build_ramdisk.sh    # or ./build_test_ramdisk.sh for tests
@@ -1266,17 +1284,19 @@ cd ../rach2
 make && ./run_with_ram_disk.sh
 ```
 
-**3. From ISO with GRUB:**
+#### From ISO with GRUB
+
 ```bash
 make iso
 ./run_from_iso.sh
 ```
 
-**Note (real hardware / external GRUB):** If you load `kernel` and/or `file_system.krffs` from an existing GRUB install (or tools like Ventoy), make sure the files are **not sparse**. Some GRUB builds crash on sparse files with messages like `file.c:452: out of range pointer ...`.
+Note (real hardware / external GRUB): If you load `kernel` and/or `file_system.krffs` from an existing GRUB install (or tools like Ventoy), make sure the files are not sparse. Some GRUB builds crash on sparse files with messages like `file.c:452: out of range pointer ...`.
 
 Use `rach2/grub_install.sh` to copy the files densely (no holes), or on Linux: `cp --sparse=never ...`.
 
-**4. Debug with GDB:**
+#### Debug with GDB
+
 ```bash
 make && ./debug.sh
 ```
@@ -1286,31 +1306,31 @@ The `.gdbinit` file automatically loads symbols, connects to QEMU, and sets a br
 
 When the kernel boots (or when init exits), the debug shell is available:
 
-| Command          | Description                                 |
-|------------------|---------------------------------------------|
-| `help`           | Show available commands                     |
-| `info`           | Display memory pointer, ticks, module count |
-| `modules`        | List loaded multiboot modules               |
-| `ls`             | List files in KRFFS                         |
-| `cat <file>`     | Display file contents                       |
-| `elf <file>`     | Show ELF header information                 |
-| `exec <program>` | Run ELF program in user mode                |
-| `touch <file>`   | Create empty file                           |
-| `rm <file>`      | Delete file                                 |
-| `mv <old> <new>` | Rename file                                 |
-| `write <file>`   | Write to file                               |
-| `test`           | Run self-tests                              |
-| `clear`          | Clear the screen                            |
-| `switch`         | Test context switching (prints ABABABABAB)  |
-| `preempt`        | Test preemptive scheduler                   |
-| `isolate`        | Test memory isolation                       |
-| `usermode`       | Test ring 3 execution                       |
-| `audio`          | Show active audio driver and usage summary  |
-| `audio help`     | Show audio subcommand help                  |
+| Command          | Description                                  |
+|------------------|----------------------------------------------|
+| `help`           | Show available commands                      |
+| `info`           | Display memory pointer, ticks, module count  |
+| `modules`        | List loaded multiboot modules                |
+| `ls`             | List files in KRFFS                          |
+| `cat <file>`     | Display file contents                        |
+| `elf <file>`     | Show ELF header information                  |
+| `exec <program>` | Run ELF program in user mode                 |
+| `touch <file>`   | Create empty file                            |
+| `rm <file>`      | Delete file                                  |
+| `mv <old> <new>` | Rename file                                  |
+| `write <file>`   | Write to file                                |
+| `test`           | Run self-tests                               |
+| `clear`          | Clear the screen                             |
+| `switch`         | Test context switching (prints ABABABABAB)   |
+| `preempt`        | Test preemptive scheduler                    |
+| `isolate`        | Test memory isolation                        |
+| `usermode`       | Test ring 3 execution                        |
+| `audio`          | Show active audio driver and usage summary   |
+| `audio help`     | Show audio subcommand help                   |
 | `audio test ...` | Run callback, write-path, or HDA watch tests |
-| `audio hda ...`  | Dump HDA state or force HDA output routing  |
-| `fault`          | Trigger a page fault (demonstrates panic)   |
-| `halt`           | Stop the CPU                                |
+| `audio hda ...`  | Dump HDA state or force HDA output routing   |
+| `fault`          | Trigger a page fault (demonstrates panic)    |
+| `halt`           | Stop the CPU                                 |
 
 When the kernel debug shell is active in VGA text mode, `PageUp`, `PageDown`, `Home`, and `End` navigate scrollback. Typing a command snaps the view back to the live prompt automatically.
 
@@ -1318,12 +1338,12 @@ When the kernel debug shell is active in VGA text mode, `PageUp`, `PageDown`, `H
 
 ## Limitations
 
-| Category | Supported                                    | Not Supported                       |
-|----------|----------------------------------------------|-------------------------------------|
-| Boot     | Multiboot1, GRUB, QEMU `-kernel`             | UEFI, Multiboot2                    |
-| Memory   | 32 MB + MMIO mapping, 4 KB pages             | Demand paging, swap                 |
-| Storage  | KRFFS RAM disk                               | Persistent disk, real file systems  |
-| Input    | PS/2 keyboard, PS/2 mouse                    | USB                                 |
-| Display  | VGA text (80×25), Mode 13h (320×200)         | Higher resolutions, VESA            |
-| Sound    | SB16, Intel HDA, PC speaker                  | AC97, USB audio                     |
-| Processes| 16 concurrent, preemptive scheduling         | Threads, signals                    |
+| Category  | Supported                            | Not Supported                      |
+|-----------|--------------------------------------|------------------------------------|
+| Boot      | Multiboot1, GRUB, QEMU `-kernel`     | UEFI, Multiboot2                   |
+| Memory    | 32 MB + MMIO mapping, 4 KB pages     | Demand paging, swap                |
+| Storage   | KRFFS RAM disk                       | Persistent disk, real file systems |
+| Input     | PS/2 keyboard, PS/2 mouse            | USB                                |
+| Display   | VGA text (80x25), Mode 13h (320x200) | Higher resolutions, VESA           |
+| Sound     | SB16, Intel HDA, PC speaker          | AC97, USB audio                    |
+| Processes | 16 concurrent, preemptive scheduling | Threads, signals                   |
