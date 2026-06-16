@@ -2,7 +2,7 @@
 
 Per-process thread-local storage on i386, reached through the `%gs` segment.
 This is what lets a real C library keep `errno`, the stack-protector canary, and
-(later) `pthread_self()` at a fixed `%gs`-relative address. Phase 2 of `PLAN.md`.
+(later) `pthread_self()` at a fixed `%gs`-relative address.
 
 Real-OS analogue: this is exactly Linux's i386 TLS mechanism. The C library
 (musl, glibc) calls **`set_thread_area(2)`** with a `struct user_desc` to install

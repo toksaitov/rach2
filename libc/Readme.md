@@ -4,7 +4,7 @@ Rach2 links its userspace against [musl libc](https://musl.libc.org), a small,
 clean, MIT-licensed C library. musl is what turns Rach2 from "a kernel that runs
 a few hand-written freestanding programs" into "a kernel that runs real C
 programs built against a real libc" -- and porting it is the forcing function
-for the process ABI, TLS, virtual memory, and syscall work in `PLAN.md`.
+for the process ABI, TLS, virtual memory, and syscall work.
 
 Real-OS analogue: this is exactly how a static i386 Linux program is built and
 started -- musl is a drop-in libc on Linux, and the startup contract below is

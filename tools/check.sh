@@ -175,6 +175,17 @@ else
     echo "  FAIL -- see $VDIR/verify_sources.log"; fail=1
 fi
 
+# Text style (advisory): the mechanical natural-text checks (tools/textcheck.sh). It
+# does not gate the build yet; a later phase makes it hard once the tree is clean.
+hr "text style (advisory)"
+if "$REPO/tools/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
+    echo "  PASS"
+else
+    tc=$(sed -n 's/^textcheck: \([0-9]*\) finding.*/\1/p' "$VDIR/verify_text.log")
+    [ -n "$tc" ] || tc='?'
+    echo "  advisory: $tc text-style finding(s), not yet gating; see $VDIR/verify_text.log"
+fi
+
 hr "result"
 if [ "$fail" -eq 0 ]; then echo "verify-style: PASS"; else echo "verify-style: FAIL"; fi
 exit "$fail"
