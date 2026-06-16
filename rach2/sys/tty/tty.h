@@ -6,14 +6,14 @@
 #include "../proc/wait_queue.h"
 
 /*
- * A terminal -- the kernel object a console (and, in Phase 18, a pty) sits
- * behind. The N_TTY line discipline (see n_tty.h) does the cooked/raw editing,
- * echo, and ISIG recognition over an input ring; readers block on input_wq until
- * a line (or a raw byte) is ready; an input source -- the keyboard IRQ, the
- * serial poll -- feeds bytes in via tty_input_char, and write output and echo
- * leave through `sink`. `pump`, when set, is a polled input source (the
- * console's serial port) drained before each read-sleep, so a headless host with
- * no input IRQ still makes progress on each timer wake.
+ * A terminal: the kernel object a console (or a pty) sits behind. The N_TTY line
+ * discipline (see n_tty.h) does the cooked/raw editing, echo, and ISIG
+ * recognition over an input ring; readers block on input_wq until a line (or a
+ * raw byte) is ready; an input source (the keyboard IRQ, the serial poll) feeds
+ * bytes in via tty_input_char, and write output and echo leave through `sink`.
+ * `pump`, when set, is a polled input source (the console's serial port) drained
+ * before each read-sleep, so a headless host with no input IRQ still makes
+ * progress on each timer wake.
  */
 
 /* The TIOCGWINSZ/TIOCSWINSZ window size (Linux `struct winsize`). */
@@ -31,7 +31,7 @@ struct tty {
     n_tty_out_fn sink;           /* echo/output byte sink (NULL discards) */
     void *sink_ctx;              /* opaque context handed to sink */
     void (*pump)(struct tty *t); /* optional polled input drain (NULL = none) */
-    int sid;                     /* controlling session id (0 = none) (Phase 17) */
+    int sid;                     /* controlling session id (0 = none) */
     int fg_pgid;                 /* foreground process group (ISIG target); 0 = none */
 };
 
@@ -44,23 +44,16 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx);
 /* Bring up console_tty (sink = VGA + serial, pump = serial drain). Boot-time. */
 void tty_console_init(void);
 
-/* Post `signo` to every live member of process group `pgid` (job-control routing). */
+/** Post `signo` to every live member of process group `pgid`. */
 void tty_signal_group(int pgid, int signo);
 
-/* Set the controlling session and foreground group as one interrupts-off step,
- * so the timer-IRQ drain never sees a torn (sid set, fg_pgid stale) owner. Used
- * to hand the console to a launched program (exec) and to release it (0, 0). */
+/** Publish the controlling session and foreground group as one atomic step. */
 void tty_set_session(struct tty *t, int sid, int pgid);
 
-/* True iff (sid, pid) is the session leader that owns the console (console_tty.sid
- * == sid && sid == pid). The condition under which a process exiting/dying/exec'ing
- * must release (and a successful exec re-publish) the controlling terminal, so the
- * timer-IRQ serial drain never targets a vanishing session. False for a non-leader
- * member of the owning session. */
+/** True iff (sid, pid) is the session leader that owns the console. */
 int tty_console_owned_by_leader(int sid, int pid);
 
-/* True if the tty is the caller's controlling terminal but its group is not the
- * foreground -- a background process, whose read/write is gated by SIGTTIN/SIGTTOU. */
+/** True if the caller is a background process on this tty (gated by SIGTTIN/SIGTTOU). */
 int tty_is_background(struct tty *t, int sid, int pgid);
 
 /* Timer-tick hook: drain the console's (interrupt-less) serial port into the
@@ -76,11 +69,7 @@ void tty_console_poll(void);
  */
 void tty_input_char(struct tty *t, unsigned char c);
 
-/*
- * Blocking read into a kernel buffer: park on input_wq (lost-wakeup-safe, the
- * pump drained before each sleep) until a line or raw byte is ready, then return
- * up to count bytes. Returns the byte count, 0 at end-of-file, or -EINTR.
- */
+/** Blocking read into `kbuf`; returns the byte count, 0 at EOF, or -EINTR. */
 int tty_read(struct tty *t, unsigned char *kbuf, int count);
 
 /* Write count kernel bytes through output processing (OPOST/ONLCR) to the sink.
@@ -96,7 +85,7 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input);
 short tty_poll(struct tty *t, short events, wait_queue_t **wq);
 
 /* FIONREAD: bytes a read would return now. Drains the polled source (serial)
- * first, interrupts off, so input already arrived is counted -- matching tty_poll. */
+ * first, interrupts off, so input already arrived is counted (matching tty_poll). */
 int tty_inq(struct tty *t);
 
 /* TCFLSH / TCSETSF input flush: discard the cooked line under edit and every

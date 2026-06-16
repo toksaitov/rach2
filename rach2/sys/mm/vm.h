@@ -8,7 +8,7 @@
  * The address-space model: a process's memory is described by a small set of
  * virtual memory areas (VMAs), each a half-open page-aligned range with a
  * protection and a kind. This is the data structure real kernels (Linux
- * vm_area_struct, BSD vm_map_entry) are built on -- here a fixed array rather
+ * vm_area_struct, BSD vm_map_entry) are built on; here a fixed array rather
  * than a tree, since a teaching process has only a handful of regions. The
  * demand-paging fault handler consults it to decide whether a fault is a page
  * to lazily allocate, a stack to grow, or a segfault. See the Readme.
@@ -32,7 +32,7 @@
 #define VM_PROT_WRITE 0x2u
 #define VM_PROT_EXEC  0x4u
 
-/* Region kind -- drives both teaching clarity and fault policy. */
+/* Region kind; drives both teaching clarity and fault policy. */
 typedef enum {
     VM_NONE = 0,
     VM_CODE,  /* ELF text: read + execute */
@@ -69,28 +69,14 @@ vma_t *vm_find(vm_space_t *vm, uint32_t addr);
 /* Return 1 if any existing VMA intersects [start, end), else 0. */
 int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end);
 
-/*
- * Insert a region [start, end) with 'prot'/'type'. Returns 0 on success, or -1
- * if the range is empty/unaligned, overlaps an existing region, or no slot is
- * free.
- */
+/** Insert a region [start, end) with 'prot'/'type'; 0 ok, -1 on error. */
 int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type);
 
-/*
- * Remove the range [start, end) from the address space (munmap semantics): a
- * region fully covered is dropped, a partially overlapped one is trimmed, and a
- * range punched out of the middle splits its region in two. Returns 0 on
- * success, or -1 if the split would need more than VMA_MAX slots.
- */
+/** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no slot. */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end);
 
-/*
- * Stack-growth policy for the demand-paging fault handler. If the page-aligned
- * 'page' lies just below the stack VMA and at or above stack_limit, extend that
- * VMA's start down to 'page' and return 1; otherwise leave the map unchanged and
- * return 0. 'page' must already be page-aligned (the caller floors the fault
- * address). Pure: it only edits the VMA bookkeeping, never touches page tables.
- */
+/** Grow the stack VMA down to cover 'page' (page-aligned; the fault handler floors
+ *  the fault address); 1 if grown, 0 if not. */
 int vm_grow_stack(vm_space_t *vm, uint32_t page);
 
 #endif /* _VM_H_ */

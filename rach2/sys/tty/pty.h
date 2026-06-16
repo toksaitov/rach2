@@ -6,12 +6,12 @@
 #include "tty.h"
 
 /*
- * Pseudo-terminals (Phase 19): the mechanism a network login (dropbear) uses to
- * give a remote user a real terminal. A pty is a pair of endpoints:
+ * Pseudo-terminals: the mechanism a network login (dropbear) uses to give a
+ * remote user a real terminal. A pty is a pair of endpoints:
  *
- *   - the SLAVE is a full tty (a struct tty with the N_TTY line discipline from
- *     Phase 16): a process opens /dev/pts/N, makes it its controlling terminal,
- *     and reads cooked lines / writes output exactly as it would the console;
+ *   - the SLAVE is a full tty (a struct tty with the N_TTY line discipline): a
+ *     process opens /dev/pts/N, makes it its controlling terminal, and reads
+ *     cooked lines / writes output exactly as it would the console;
  *   - the MASTER is what the login server drives: it opens /dev/ptmx, writes the
  *     bytes the remote user typed (which the slave discipline cooks and echoes)
  *     and reads back the slave's output (and that echo).
@@ -23,13 +23,13 @@
  *   master read     <- the slave output + the echo (the m_buf ring below)
  * Both the slave's echo and its output leave through the slave's SINK, which
  * pushes into m_buf; the master reads m_buf. The slave has no polled input source
- * (pump == NULL) -- it is fed by master writes, not a serial port -- so the
- * Phase-18 timer-IRQ console drain never touches a pty.
+ * (pump == NULL); it is fed by master writes, not a serial port, so the
+ * timer-IRQ console drain never touches a pty.
  *
- * Each endpoint is an fd riding the Phase-12 file_ops layer (ops + priv = the
- * struct pty); read/write block on wait queues, and an endpoint is torn down only
- * when its last descriptor closes. The slave reuses every Phase-16/17 tty service
- * (termios, winsize, ISIG, sessions/job-control) on its struct tty.
+ * Each endpoint is an fd riding the file_ops layer (ops + priv = the struct
+ * pty); read/write block on wait queues, and an endpoint is torn down only when
+ * its last descriptor closes. The slave reuses every tty service (termios,
+ * winsize, ISIG, sessions/job-control) on its struct tty.
  */
 
 #define PTY_MAX      16   /* pty pairs (one per /dev/pts/N, N in 0..15) */
@@ -67,14 +67,10 @@ int pty_open_master(int flags);
  */
 int pty_open_slave(int index, int flags);
 
-/* Index of the allocated pty whose slave is the controlling terminal of session
- * `sid`, or -1. Lets /dev/tty resolve to the caller's controlling pty. */
+/** Index of the pty whose slave is session `sid`'s controlling terminal, or -1. */
 int pty_session_slave(int sid);
 
-/* Atomically claim `keep` as the SOLE controlling terminal of session `sid` (with
- * foreground group `pgid`): publish keep and release every other terminal (the
- * console and any other pty) the session controls, in one interrupts-off region.
- * Replaces the claim itself; the caller must have authorised it. */
+/** Atomically make `keep` the sole controlling terminal of session `sid`. */
 void tty_make_sole_ctty(struct tty *keep, int sid, int pgid);
 
 /* The slave tty behind a FD_TYPE_PTS descriptor (for the shared tty ioctls), or
@@ -82,15 +78,13 @@ void tty_make_sole_ctty(struct tty *keep, int sid, int pgid);
 struct tty *pty_slave_tty(struct fd_entry *e);
 
 /* The slave index N (in /dev/pts/N) behind a FD_TYPE_PTS descriptor, or -1 if e is
- * not a pty slave -- so /proc/<pid>/fd readlink and fstat report the right name. */
+ * not a pty slave; lets /proc/<pid>/fd readlink and fstat report the right name. */
 int pty_slave_index(struct fd_entry *e);
 
-/* Whether slot i is an allocated pty pair (for /dev/pts stat/getdents). */
+/* Whether slot `index` is an allocated pty pair (for /dev/pts stat/getdents). */
 int pty_is_allocated(int index);
 
-/* Disassociate any pty slave controlled by the dying session leader (sid == pid),
- * called beside the console release on the leader-death paths so a stale, dead
- * owner never blocks a later TIOCSCTTY on the same /dev/pts/N. */
+/** Release any pty slave controlled by dying session leader `sid` (sid == pid). */
 void pty_release_leader(int sid, int pid);
 
 #endif /* _PTY_H_ */

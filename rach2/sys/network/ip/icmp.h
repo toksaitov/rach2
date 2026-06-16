@@ -16,17 +16,10 @@
 #define ICMP_ECHO_REQUEST   8
 #define ICMP_ECHO_REPLY     0
 
-/*
- * Handle a received ICMP message (after the IP header is stripped). src_ip is
- * the sender, used as the reply destination and to match echo replies.
- */
+/** Handle one received ICMP datagram (IP header already stripped). */
 void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
 
-/*
- * Send an ICMP echo request to dst_ip and wait for the matching reply.
- * Returns the round-trip time in kernel ticks (100 Hz), or -1 on timeout.
- * Only one ping may be in flight at a time.
- */
+/** Send an echo request to `dst_ip` and wait; round-trip ticks, or -1. */
 int icmp_ping(uint32_t dst_ip);
 
 #endif /* _ICMP_H_ */

@@ -1,15 +1,13 @@
 /*
- * audio.h - Common audio driver interface for Rach2
+ * audio.h - common audio driver interface for Rach2.
  *
- * Provides an abstraction layer for different audio hardware:
- * - Intel HD Audio (HDA) - modern PCI-based audio
- * - Sound Blaster 16 (SB16) - classic ISA audio
- * - PC Speaker - simple beep fallback
+ * An abstraction layer over three audio backends: Intel HD Audio (HDA, a
+ * modern PCI device), Sound Blaster 16 (SB16, classic ISA), and the PC
+ * speaker, a beep-only fallback.
  *
- * Driver detection order at boot:
- * 1. Scan PCI for HDA (class 0x0403) -> use HDA driver
- * 2. Try SB16 reset at 0x220 -> if 0xAA response, use SB16
- * 3. Fall back to PC speaker beeps
+ * Detection order at boot: scan PCI for HDA (class 0x0403); else reset
+ * SB16 at 0x220 and accept it on a 0xAA response; else fall back to the
+ * PC speaker.
  */
 
 #ifndef _AUDIO_H_
@@ -18,17 +16,13 @@
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 
-/*
- * Audio sample formats
- */
+/* Audio sample formats. */
 typedef enum {
-    AUDIO_U8,       /* Unsigned 8-bit (SB16 8-bit mode, Doom native) */
-    AUDIO_S16LE     /* Signed 16-bit little-endian (SB16 16-bit, HDA) */
+    AUDIO_U8,       /* unsigned 8-bit (SB16 8-bit mode, Doom native) */
+    AUDIO_S16LE     /* signed 16-bit little-endian (SB16 16-bit, HDA) */
 } audio_format_t;
 
-/*
- * Audio driver type (for identification)
- */
+/* Audio driver identity. */
 typedef enum {
     AUDIO_DRIVER_NONE,
     AUDIO_DRIVER_SPEAKER,   /* PC speaker (beeps only) */
@@ -37,114 +31,70 @@ typedef enum {
 } audio_driver_type_t;
 
 /*
- * Audio callback function type
- * Called by driver when it needs more samples to play
- *
- * buffer: pointer to buffer to fill with audio samples
- * size:   number of bytes to fill
+ * Pull callback: the driver calls it when it needs more samples to play.
+ * `buffer` receives `size` bytes of audio samples to fill.
  */
 typedef void (*audio_callback_t)(uint8_t *buffer, size_t size);
 
-/*
- * Audio driver interface
- * Each hardware driver implements these functions
- */
+/* Audio driver interface; each hardware backend supplies these ops. */
 typedef struct audio_driver {
     const char *name;
     audio_driver_type_t type;
 
-    /*
-     * Initialize the driver hardware
-     * Returns 0 on success, -1 on failure
-     */
+    /* Initialize the hardware; 0 on success, -1 on failure. */
     int (*init)(void);
 
-    /*
-     * Shutdown the driver and release resources
-     */
+    /* Shut the driver down and release its resources. */
     void (*shutdown)(void);
 
     /*
-     * Start audio playback
-     * sample_rate: samples per second (e.g., 11025, 22050, 44100)
-     * format: AUDIO_U8 or AUDIO_S16LE
-     * channels: 1 (mono) or 2 (stereo)
-     * Returns 0 on success, -1 on failure
+     * Start playback. `sample_rate` is samples per second (e.g. 11025,
+     * 22050, 44100); `format` is AUDIO_U8 or AUDIO_S16LE; `channels` is
+     * 1 (mono) or 2 (stereo). Returns 0 on success, -1 on failure.
      */
     int (*start)(uint32_t sample_rate, audio_format_t format, int channels);
 
-    /*
-     * Stop audio playback
-     */
+    /* Stop playback. */
     void (*stop)(void);
 
-    /*
-     * Check if audio is currently playing
-     */
+    /* Report whether audio is currently playing. */
     bool (*is_playing)(void);
 
-    /*
-     * Set the audio callback function
-     * The callback is invoked when the driver needs more samples
-     * Set to NULL to disable callback
-     */
+    /* Set the pull callback; NULL disables callback-driven playback. */
     void (*set_callback)(audio_callback_t fn);
 
     /*
-     * Write samples directly to the audio buffer
-     * Alternative to callback-based playback
-     * Returns number of bytes written, or -1 on error
+     * Write samples straight to the audio buffer, an alternative to
+     * callback-driven playback. Returns the byte count written, -1 on error.
      */
     int (*write)(const uint8_t *buffer, size_t size);
 
-    /*
-     * Set master volume (0-100)
-     * Not all drivers support this
-     */
+    /* Set master volume, 0 to 100; not every driver honors it. */
     void (*set_volume)(int volume);
 
 } audio_driver_t;
 
-/*
- * Current active audio driver
- * NULL if no audio hardware detected or initialized
- */
+/* Active audio driver, NULL when no hardware was detected. */
 extern audio_driver_t *audio;
 
-/*
- * Available audio drivers (defined in respective driver files)
- */
+/* The available drivers, each defined in its own driver file. */
 extern audio_driver_t sb16_driver;
 extern audio_driver_t hda_driver;
 extern audio_driver_t speaker_driver;
 
-/*
- * Initialize audio subsystem
- * Detects available hardware and initializes the best driver
- * Called during kernel boot
- */
+/** Detect and initialize the best available audio driver. */
 void init_audio(void);
 
-/*
- * Shutdown audio subsystem
- * Called during kernel shutdown or when audio is no longer needed
- */
+/* Shut the active driver down and clear `audio`. */
 void shutdown_audio(void);
 
-/*
- * Get the name of the current audio driver
- * Returns "None" if no driver is active
- */
+/* Name of the active driver, or "None" when none is active. */
 const char *audio_get_driver_name(void);
 
-/*
- * Get a short boot-time audio probe summary.
- */
+/* Short boot-time audio probe summary. */
 const char *audio_get_boot_status(void);
 
-/*
- * Check if real audio (not PC speaker) is available
- */
+/** Report whether real audio (not the PC speaker) is available. */
 bool audio_has_real_output(void);
 
 #endif /* _AUDIO_H_ */

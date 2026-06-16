@@ -4,13 +4,13 @@
 #include "../lib/kint.h"
 
 /*
- * devfs -- a synthetic /dev. The device namespace is virtual (not KRFFS nodes): a
+ * devfs: a synthetic /dev. The device namespace is virtual (not KRFFS nodes): a
  * small registry maps a leaf name ("null", "zero", ...) to a character device
  * backed by a file_ops vtable and a {major,minor}. open() of a /dev path binds the
- * device's ops onto the descriptor (the Phase-12 ops dispatch then drives
+ * device's ops onto the descriptor (the ops dispatch then drives
  * read/write/close), exactly as pipes do; stat/getdents synthesize from the
- * registry. Two names -- "console" and "tty" -- resolve to the kernel console and
- * so open as FD_TYPE_CONSOLE, reusing the existing terminal path.
+ * registry. Two names ("console" and "tty") resolve to the kernel console and so
+ * open as FD_TYPE_CONSOLE, reusing the existing terminal path.
  */
 
 struct fd_entry;
@@ -18,23 +18,14 @@ struct fd_entry;
 /*
  * The synthetic device the namespace lives on. KRFFS files report st_dev 0, so a
  * distinct nonzero id keeps a device's identity from ever colliding with a real
- * file's -- which matters because ttyname compares (st_dev, st_ino).
+ * file's; this matters because ttyname compares (st_dev, st_ino).
  */
 #define DEVFS_FSID 5u
 
-/*
- * Open a /dev entry by leaf name (the part after "dev/", e.g. "null"). Allocates a
- * descriptor and binds the backing. Returns the fd (>= 0), or -errno (-ENOENT for
- * an unknown name, -EMFILE if the table is full).
- */
+/** Open a /dev leaf by name; the new fd, or a negative errno. */
 int devfs_open(const char *name, int flags);
 
-/*
- * Stat support for a /dev path component (leaf form, e.g. "" for /dev itself or
- * "null"). On a match fills *mode (S_IFDIR for /dev, S_IFCHR|0666 for a device)
- * and *rdev (major<<8 | minor; 0 for the directory) and returns 0; returns -1 if
- * the name is not a devfs entry.
- */
+/** Synthesize stat fields for /dev or a device leaf; 0 ok, -1 if no such leaf. */
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
 
 /*

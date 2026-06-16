@@ -131,33 +131,18 @@ typedef struct {
 } Elf32_Phdr;
 #pragma pack(pop)
 
-/*
- * Validate ELF header
- * Returns true if the data is a valid ELF32 executable for i386
- */
+/** True if `data` is a valid ELF32 executable for i386. */
 bool elf_check(const void *data, uint32_t size);
 
-/*
- * Get ELF entry point address
- * Returns the virtual address where execution should begin
- * Caller must verify the ELF is valid first using elf_check()
- */
+/** Entry point virtual address; valid only after `elf_check`. */
 uint32_t elf_entry_point(const void *data);
 
-/*
- * Get pointer to program header table
- * Returns NULL if invalid or no program headers
- */
+/** Pointer to the program header table, or NULL if there is none. */
 Elf32_Phdr *elf_program_headers(const void *data);
 
-/*
- * Get number of program headers
- */
+/** Number of program headers (`e_phnum`). */
 uint16_t elf_program_header_count(const void *data);
 
-/*
- * Forward declaration for page_dir_t
- */
 struct page_dir;
 typedef struct page_dir page_dir_t;
 
@@ -173,12 +158,11 @@ typedef struct page_dir page_dir_t;
  */
 typedef int (*elf_read_fn)(void *ctx, void *dst, uint32_t count, uint32_t off);
 
-/*
- * One loaded PT_LOAD segment, page-aligned, recorded so exec can build a VMA
- * per segment with the right protection.
- */
+/* Maximum PT_LOAD segments recorded per image. */
 #define ELF_MAX_SEGS 8
 
+/* One recorded PT_LOAD segment, page-aligned, so exec can build a VMA for it
+ * with the right protection. */
 typedef struct elf_seg {
     uint32_t start; /* page-aligned segment start (inclusive) */
     uint32_t end;   /* page-aligned segment end (exclusive)   */
@@ -190,63 +174,31 @@ typedef struct elf_seg {
  * address-space map (VMAs).
  */
 typedef struct {
-    uint32_t entry;      /* AT_ENTRY  - program entry point */
-    uint32_t phdr_vaddr; /* AT_PHDR   - vaddr of the program header table */
-    uint32_t phent;      /* AT_PHENT  - size in bytes of one program header */
-    uint32_t phnum;      /* AT_PHNUM  - number of program headers */
+    uint32_t entry;      /* AT_ENTRY: program entry point */
+    uint32_t phdr_vaddr; /* AT_PHDR: vaddr of the program header table */
+    uint32_t phent;      /* AT_PHENT: size in bytes of one program header */
+    uint32_t phnum;      /* AT_PHNUM: number of program headers */
     uint32_t image_end;  /* page-aligned end of all loaded segments (heap base) */
     int      nsegs;      /* number of recorded PT_LOAD segments */
     elf_seg_t segs[ELF_MAX_SEGS];
 } elf_image_t;
 
-/*
- * Validate an ELF header buffer (at least sizeof(Elf32_Ehdr) bytes) as a static
- * i386 executable. Pure; returns true if loadable.
- */
+/** Validate just the ELF header of a streamed image; true if loadable. */
 bool elf_valid_exec(const void *ehdr, uint32_t len);
 
-/*
- * Return the virtual address at which the program header table is mapped
- * (AT_PHDR) given the headers and e_phoff, or 0 if no PT_LOAD covers e_phoff.
- * Pure.
- */
+/** Run-time vaddr of the program header table (AT_PHDR), or 0 if none covers `phoff`. */
 uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff);
 
-/*
- * Stream a static i386 ELF into `dir` via `read`, recording the auxv metadata
- * in `out`. Replaces the whole-file-buffer loader: only the ELF header, the
- * program headers, and each PT_LOAD's bytes are read -- no file-size cap.
- * Returns 0 on success, -1 on error.
- */
+/** Stream an ELF into `dir` via `read`, recording layout in `out`; 0 ok, -1 on error. */
 int elf_load_image(elf_read_fn read, void *ctx, page_dir_t *dir, elf_image_t *out);
 
 struct vm_space; /* mm/vm.h */
 
-/*
- * Populate a process address-space map from a just-loaded image: one VMA per
- * recorded PT_LOAD segment (protection from p_flags), an empty heap at the top
- * of the image (brk = image_end), and a growable stack VMA of one page at
- * [stack_top, stack_top + PAGE_SIZE) whose lower growth limit is
- * stack_top - stack_growth. Both exec paths call this so every user process has
- * a map for the demand-paging fault handler to consult.
- */
+/** Build the VMA map of a fresh address space from a loaded image. */
 void elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
                     uint32_t stack_top, uint32_t stack_growth);
 
-/*
- * Load ELF segments into user memory
- *
- * Iterates over PT_LOAD segments and copies them to user pages in the
- * specified page directory. The physical addresses are within the
- * identity-mapped region, so data is copied via physical address.
- *
- * Parameters:
- *   data - pointer to ELF file in memory (must be validated with elf_check())
- *   size - size of ELF file in bytes
- *   dir  - page directory to allocate user pages in
- *
- * Returns: 0 on success, -1 on error
- */
+/** Load PT_LOAD segments of an in-memory image into `dir`; 0 ok, -1 on error. */
 int elf_load(const void *data, uint32_t size, page_dir_t *dir);
 
 #endif /* _ELF_H_ */

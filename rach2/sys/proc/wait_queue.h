@@ -5,14 +5,13 @@
 #include "process.h"
 
 /*
- * Wait queue: the set of processes blocked waiting for one condition -- data on
- * a pipe, a datagram on a socket, a tty line, a child to stop. It is the same
+ * Wait queue: the set of processes blocked waiting for one condition (data on a
+ * pipe, a datagram on a socket, a tty line, a child to stop). It is the same
  * idea as the Linux kernel wait queue: a sleeper enqueues itself, marks itself
- * BLOCKED, and yields the CPU; a waker (usually an IRQ handler -- a NIC packet,
+ * BLOCKED, and yields the CPU; a waker (usually an IRQ handler, a NIC packet, or
  * the timer) walks the queue and makes every sleeper READY again.
  *
- * Two properties the old single-waiter socket park lacked, and that pipes,
- * poll/select, ttys, and ptys all need:
+ * Two properties pipes, poll/select, ttys, and ptys all need:
  *   - multi-waiter: several processes can block on one object at once (poll
  *     parks one process per fd; two readers can share a pipe);
  *   - signal-interruptible: a pending signal breaks the sleep with -EINTR, so a
@@ -20,7 +19,7 @@
  *
  * At most MAX_PROCS processes exist, so a fixed array of that many slots can
  * never overflow. The single-CPU lock between a sleeper and an IRQ waker is just
- * "interrupts off" -- there is no second core to race.
+ * "interrupts off"; there is no second core to race.
  */
 #define WQ_MAX_WAITERS MAX_PROCS
 
@@ -29,8 +28,8 @@ typedef struct wait_queue {
 } wait_queue_t;
 
 /*
- * Wait condition predicate: returns non-zero when the wait should END (the
- * event the caller is waiting for has happened). wq_wait_event re-checks it with
+ * Wait condition predicate: returns non-zero when the wait should end (the event
+ * the caller is waiting for has happened). wq_wait_event re-checks it with
  * interrupts disabled before each sleep, which is what makes the sleep
  * lost-wakeup-safe.
  */
@@ -39,13 +38,7 @@ typedef int (*wq_cond_fn)(void *arg);
 /* Clear a wait queue to empty. Call once before first use. */
 void wait_queue_init(wait_queue_t *wq);
 
-/*
- * Block the current process on wq until cond(arg) is true or a signal is
- * pending. Returns 0 when cond became true, -EINTR when a signal interrupted the
- * wait. Other READY processes run while we sleep (it yields via schedule()
- * rather than spinning), and a wake delivered from IRQ context the instant
- * before we sleep is never lost.
- */
+/** Block the current process on wq until cond(arg) holds; 0, or -EINTR on signal. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /*
@@ -61,7 +54,7 @@ void wq_wake_all(wait_queue_t *wq);
  * polled object's queue, then sleeps once (with interrupts disciplined by the
  * caller), and any object's wq_wake_all wakes it; on wake it calls wq_poll_remove
  * on each. Both are idempotent (a wake already removed the waiter) and must be
- * called with interrupts off. They do NOT block or change process state -- the
+ * called with interrupts off. They do NOT block or change process state; the
  * poll core owns the BLOCKED/schedule()/RUNNING transitions, the same
  * lost-wakeup-safe way wq_wait_event does.
  */
@@ -70,9 +63,9 @@ void wq_poll_remove(wait_queue_t *wq, process_t *p);
 
 /*
  * Non-zero if any process is currently blocked on wq. Used to gate work that is
- * only worth doing while someone is waiting -- e.g. polling an interrupt-less
- * device (the console serial port) for input from the timer tick. Read it with
- * interrupts off if a concurrent waker could change it underneath you.
+ * only worth doing while someone is waiting; for example, polling an
+ * interrupt-less device (the console serial port) for input from the timer tick.
+ * Read it with interrupts off if a concurrent waker could change it under you.
  */
 int wq_active(const wait_queue_t *wq);
 

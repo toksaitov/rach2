@@ -107,32 +107,31 @@ struct tcb {
 /* Allocate the TCB pool; called once from init_network. */
 void tcp_init(void);
 
-/* Drive per-TCB timers; called from the timer handler at 100 Hz. */
+/** Drive the per-connection timers; called once per kernel tick. */
 void tcp_tick(void);
 
-/* Pool management. */
+/** Allocate a TCB from the shared pool, or NULL if none can be had. */
 struct tcb *tcb_alloc(void);
+
+/* Return a TCB to the pool. */
 void tcb_free(struct tcb *tcb);
 
-/* Process a received TCP segment (called by ip_rx for IP protocol 6). */
+/** Process an inbound TCP segment; called by ip_rx for IP protocol 6. */
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 
-/* Passive open: register sock as a listener on port. 0 on success, -1 on error. */
+/** Bind a socket to a port in LISTEN for passive opens; 0 ok, -1 on error. */
 int tcp_listen(struct socket *sock, uint16_t port);
 
-/* Active open: send a SYN to dst_ip:dst_port. The caller then blocks. */
+/** Begin an active open to dst_ip:dst_port; 0 ok, -1 on error. */
 int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port);
 
-/* Queue buf[0..len) for sending and transmit what the windows allow. */
+/** Queue up to len bytes for sending; returns the count accepted, -1 on error. */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 
-/* Begin a graceful close (FIN handshake); detaches the TCB from the socket. */
+/** Detach the socket and begin closing the connection. */
 void tcp_close(struct socket *sock);
 
-/* 1 if the socket has a peer connection past the handshake (ESTABLISHED through
- * the closing states) -- the condition getpeername/shutdown require. 0 for a
- * listener, a still-handshaking (SYN_SENT/RCVD), or closed/never-connected stream
- * (and for any non-stream socket). */
+/** Report whether a stream socket has a peer (ESTABLISHED or any later state). */
 int tcp_is_connected(struct socket *sock);
 
 #endif /* _TCP_H_ */

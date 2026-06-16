@@ -1,8 +1,6 @@
 /*
- * vga_text.h - VGA Text Mode (Mode 3) driver
- *
- * Provides text mode console operations for the 80x25 VGA display.
- * Handles colors, cursor positioning, scrolling, and screen clearing.
+ * VGA text mode (Mode 3) driver: text console operations for the 80x25
+ * display, with colors, cursor positioning, scrolling, and screen clearing.
  */
 
 #ifndef _VGA_TEXT_H_
@@ -22,7 +20,7 @@
 #define VGA_TEXT_DEFAULT_BG     0x00    /* Black */
 
 /*
- * Legacy macro names for compatibility
+ * Aliases for the constants above.
  */
 #define SCREEN_NUMBER_OF_COLUMNS VGA_TEXT_COLS
 #define SCREEN_NUMBER_OF_ROWS    VGA_TEXT_ROWS
@@ -58,27 +56,19 @@ typedef enum display_color {
 extern unsigned int x;
 extern unsigned int y;
 
-/*
- * Scroll the screen content up by one line.
- * Preserves scrollback history and advances the live viewport.
- */
+/** Scroll the live area down by one line. */
 void k_scroll_down(void);
 
 /*
- * Clear the entire screen with the current background color.
- * Resets cursor position to (0, 0).
+ * Clear the screen with the current background color and reset the cursor
+ * to (0, 0).
  */
 void k_cls(void);
 
-/*
- * Write a character cell into the live 80x25 text surface.
- * Coordinates are relative to the live screen, not scrollback history.
- */
+/** Write one character cell at (col, row) of the live area. */
 void vga_text_write_cell(unsigned int col, unsigned int row, char c, uint8_t attr);
 
-/*
- * Re-render the visible viewport and update the hardware cursor.
- */
+/** Blit the current viewport to the VGA text buffer and update the cursor. */
 void vga_text_sync(void);
 
 /*
@@ -92,8 +82,7 @@ void set_fore_color(display_color_t color);
 void set_back_color(display_color_t color);
 
 /*
- * Get the combined color attribute byte for VGA text mode.
- * Format: (background << 4) | foreground
+ * Return the combined color attribute byte: (background << 4) | foreground.
  */
 uint8_t get_curr_color_attr(void);
 

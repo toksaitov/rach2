@@ -195,21 +195,13 @@ typedef struct {
  */
 #define HDA_BDL_MAX_ENTRIES 256
 
-/*
- * Intel HD Audio driver
- */
+/* Intel HD Audio driver. */
 extern audio_driver_t hda_driver;
 
-/*
- * Periodic service hook (optional).
- *
- * Some real hardware may not deliver legacy PCI IRQs (e.g., MSI-only routing).
- * Calling this from the PIT tick lets the HDA driver refill DMA buffers even
- * when stream interrupts aren't available.
- */
+/** Periodic service hook; call from the timer tick. */
 void hda_tick(void);
 
-/* Debug helpers (safe to call even if HDA not active). */
+/* Debug helpers; safe to call even if HDA is not active. */
 void hda_debug_dump(void);
 void hda_debug_dump_codec(void);
 void hda_debug_dump_pins(void);

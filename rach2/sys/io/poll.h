@@ -9,13 +9,13 @@
  * {readable, writable, error/hangup} is true now" and names the wait queue whose
  * wake signals a change; the poll core scans all the descriptors, and if none is
  * ready, parks the process on every one of those queues until a wake or the
- * timeout, then re-scans (the Phase-12 lost-wakeup-safe way).
+ * timeout, then re-scans (lost-wakeup-safe).
  *
  * Linux i386 exposes the whole family and musl/busybox may use any of them, so
  * all route to one core: select(82), _newselect(142), poll(168), pselect6(308),
  * ppoll(309). The pselect6/ppoll "p" variants additionally carry a signal mask to
  * swap for the duration; Rach2 accepts that argument but does not apply it (a
- * documented limitation -- see the note in poll.c).
+ * documented limitation; see the note in poll.c).
  */
 
 /* poll(2) event bits (Linux values). POLLHUP/POLLERR/POLLNVAL are reported in

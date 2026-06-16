@@ -12,7 +12,7 @@
 
 #include "../lib/kstring.h"
 
-/* Increased from 16MB to 32MB to support Doom (needs ~5MB for BSS+heap) */
+/* Top of the direct-mapped physical window (32MB). */
 #define HARD_MEMORY_LIMIT 0x2000000
 
 #define PAGE_SIZE 0x1000
@@ -86,14 +86,12 @@ void paging_set_user(uintptr_t addr, bool user);
  * Set or clear the write permission (PTE bit 1) of an already-present page in
  * 'dir'. The ELF loader uses this to make read-only segments (text) read-only
  * after copying their bytes in via the physical alias, so a user write to text
- * faults as a protection violation -- the basis for the Phase 5 copy-on-write
- * write-fault/protection-fault distinction. No-op if the page is absent.
+ * faults as a protection violation; copy-on-write uses the same distinction
+ * between a write fault and a protection fault. No-op if the page is absent.
  */
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable);
 
-/*
- * Flush TLB entry for a specific address
- */
+/** Flush the TLB entry for 'addr'. */
 void paging_flush_tlb(uintptr_t addr);
 
 /*
@@ -126,7 +124,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr);
  * Map an already-owned physical frame 'phys' at user virtual address 'virt' in
  * 'dir' with the given low-12-bit PTE 'flags' (present/user/write/PTE_COW, etc.),
  * creating a private page table for the slot if needed. Unlike alloc_user_page it
- * neither allocates a frame nor changes any reference count -- the caller owns the
+ * neither allocates a frame nor changes any reference count: the caller owns the
  * frame lifecycle. Used by copy-on-write fork to share a frame read-only.
  * Returns 0 on success, -1 on failure.
  */
@@ -135,19 +133,15 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t fla
 /*
  * Pre-fault [addr, addr+len) in the current process's address space before the
  * kernel touches it (fault-aware usercopy). Each page in a valid VMA is backed
- * on demand -- growing the stack if needed -- exactly as a user-mode fault would;
+ * on demand (growing the stack if needed) exactly as a user-mode fault would;
  * 'write' requests write permission. Returns 1 if the whole range is now
  * accessible (an empty range vacuously so), or 0 if any page is outside every
- * VMA or lacks the permission -- so the caller can return -EFAULT instead of
- * faulting in kernel mode -- or 0 if there is no current user address space.
+ * VMA or lacks the permission (so the caller can return -EFAULT instead of
+ * faulting in kernel mode), or 0 if there is no current user address space.
  */
 int vm_prefault_range(uint32_t addr, uint32_t len, int write);
 
-/*
- * Free all user pages in a page directory.
- * Frees physical frames and clears page table entries for user-accessible
- * pages above the kernel region. Used by exec to replace process image.
- */
+/** Free all user pages in 'dir' (used by exec to replace the process image). */
 void free_user_pages(page_dir_t *dir);
 
 /*
@@ -158,20 +152,10 @@ void free_user_pages(page_dir_t *dir);
  */
 void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end);
 
-/*
- * Free a page directory and its private page tables.
- * Adds structures to free lists for reuse. Call after free_user_pages().
- * Must not be called on kernel directory or currently active directory.
- */
+/** Free a page directory and its private page tables; call after free_user_pages(). */
 void free_page_directory(page_dir_t *dir);
 
-/*
- * Map a physical MMIO region to the same virtual address (identity map).
- * Used for PCI device memory-mapped registers.
- * phys_addr: physical address to map
- * size: size of region in bytes
- * Returns virtual address (same as physical), or 0 on failure.
- */
+/** Identity-map an MMIO region; returns its virtual address (== physical), or 0. */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
 
 /*

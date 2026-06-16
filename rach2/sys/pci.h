@@ -1,7 +1,7 @@
 /*
  * pci.h - PCI bus enumeration for Rach2
  *
- * Provides functions to scan the PCI bus and find devices by class/subclass.
+ * Functions to scan the PCI bus and find devices by class/subclass.
  * Uses I/O ports 0xCF8 (config address) and 0xCFC (config data).
  */
 
@@ -66,84 +66,51 @@ typedef struct {
     uint32_t bar[6];        /* Base Address Registers */
 } pci_device_t;
 
-/*
- * Read 32-bit value from PCI configuration space
- */
+/** Read a 32-bit dword from PCI configuration space. */
 uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 
-/*
- * Read 16-bit value from PCI configuration space
- */
+/** Read a 16-bit word from PCI configuration space. */
 uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 
-/*
- * Read 8-bit value from PCI configuration space
- */
+/** Read an 8-bit byte from PCI configuration space. */
 uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 
-/*
- * Write 32-bit value to PCI configuration space
- */
+/** Write a 32-bit dword to PCI configuration space. */
 void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 
-/*
- * Write 16-bit value to PCI configuration space
- */
+/** Write a 16-bit word to PCI configuration space. */
 void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint16_t value);
 
-/*
- * Find a PCI device by class and subclass
- * Returns true if found, fills out the pci_device_t structure
- */
+/** Find the first device by class and subclass; true and fills `out` on a match. */
 bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out);
 
-/*
- * Find a PCI device by class and subclass, skipping past a previously found device
- * Pass skip_dev = NULL to find the first device, or pass a previously found device
- * to find the next one.
- */
+/** Find the next class/subclass match after `skip_dev`; NULL `skip_dev` starts from the first slot. */
 bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev, pci_device_t *out);
 
-/*
- * Find a PCI device by vendor and device ID
- * Returns true if found, fills out the pci_device_t structure
- */
+/** Find the first device by vendor and device ID; true and fills `out` on a match. */
 bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t *out);
 
-/*
- * Enable bus mastering for a PCI device (required for DMA)
- */
+/** Set the Bus Master bit so the device can drive DMA. */
 void pci_enable_bus_master(pci_device_t *dev);
 
-/*
- * Enable memory space access for a PCI device (required for MMIO)
- */
+/** Set the Memory Space bit so the device responds to its memory BARs (MMIO). */
 void pci_enable_memory_space(pci_device_t *dev);
 
-/*
- * Enable interrupts for a PCI device (clears Interrupt Disable bit)
- */
+/** Clear the Interrupt Disable bit to re-enable the device's legacy INTx line. */
 void pci_enable_interrupts(pci_device_t *dev);
 
-/*
- * Get the physical address from a BAR (handles memory vs I/O)
- * Returns the address with type bits masked off
- */
+/** Recover a BAR's base address by masking off its type bits. */
 uint32_t pci_bar_address(uint32_t bar);
 
-/*
- * Check if a BAR is memory-mapped (vs I/O port)
- */
+/** True if a BAR is memory-mapped (bit 0 clear), false if I/O space. */
 bool pci_bar_is_memory(uint32_t bar);
 
-/*
- * Check if a BAR is 64-bit (uses two consecutive BARs)
- */
+/** True if a BAR is a 64-bit memory BAR (uses two consecutive BARs). */
 bool pci_bar_is_64bit(uint32_t bar);
 
 /*
- * Initialize PCI subsystem and scan for devices
- * Prints discovered devices to serial for debugging
+ * Initialize the PCI subsystem and scan for devices, printing each
+ * discovered device to serial for debugging.
  */
 void init_pci(void);
 

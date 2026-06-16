@@ -9,123 +9,80 @@
 
 /* Printing */
 
-/*
- * Null character
- */
+/** Null character. */
 #define CHAR_NULL '\0'
 
-/*
- * Backspace
- */
+/** Backspace. */
 #define CHAR_BS '\b'
 
-/*
- * Horizontal tab
- */
+/** Horizontal tab. */
 #define CHAR_HT '\t'
 
-/*
- * Tab size in spaces
- */
+/** Tab width in spaces. */
 #define TAB_SIZE 4
 
-/*
- * Line feed
- */
+/** Line feed. */
 #define CHAR_LF 0x0A
 
-/*
- * Carriage return
- */
+/** Carriage return. */
 #define CHAR_CR 0x0D
 
-/*
- * Representation of any non-printable character
- */
+/** Stand-in glyph for any non-printable character. */
 #define CHAR_NON_PRINTABLE '?'
 
-/*
- * Put a single character on the screen.
- */
+/** Write one character to the screen. */
 void k_putc(char c);
 
-/*
- * Print a null-terminated string on the screen.
+/**
+ * Write a null-terminated string to the screen, then a newline.
+ *
+ * A NULL pointer is ignored.
  */
 void k_puts(const char *str);
 
-/*
- * The buffer size for arguments' interpolation in
- * 'k_printf' function
- */
+/** Buffer size for argument interpolation in `k_vprintf`. */
 #define _K_PRINTF_BUFFER_SIZE_ 128
 
-/*
- * Type definition for character output functions.
- */
+/** A character-output sink. */
 typedef void (*putc_fn_t)(char);
 
-/*
- * Generalized printf that outputs via the provided 'putc_fn'.
- * The 'args' parameter points to the variadic arguments on the stack.
- */
+/** Format `format` against `args`, emitting each byte through `putc_fn`. */
 void k_vprintf(putc_fn_t putc_fn, const char *format, char **args);
 
-/*
- * Prints output according to a format string.
+/**
+ * Format according to `format` and write the result to the screen.
+ *
+ * The variadic arguments supply the conversions; see `k_vprintf` for the
+ * supported set.
  */
 void k_printf(const char *format, ...);
 
 /* Processor I/O */
 
-/*
- * Copies the byte value from 'val' to the I/O
- * port specified by 'port'.
- */
+/** Write byte `val` to I/O port `port`. */
 void outb(uint16_t port, uint8_t  val);
 
 #ifdef RACH2_HARNESS
-/*
- * Harness build only: report a process exit status to QEMU's isa-debug-exit
- * device so the test harness reads a real exit code instead of scraping serial.
- * See kio.c.
- */
+/** Report a process exit status to QEMU's isa-debug-exit device (harness only). */
 void harness_exit(uint8_t status);
 #endif
 
-/*
- * Copies the word value from 'val' to the I/O
- * port specified by 'port'.
- */
+/** Write word `val` to I/O port `port`. */
 void outw(uint16_t port, uint16_t val);
 
-/*
- * Copies the double-word value from 'val' to the I/O
- * port specified by 'port'.
- */
+/** Write double-word `val` to I/O port `port`. */
 void outd(uint16_t port, uint32_t val);
 
-/*
- * Returns the byte value from the I/O
- * port specified by 'port'.
- */
+/** Read a byte from I/O port `port`. */
 uint8_t inb(uint16_t port);
 
-/*
- * Returns the word value from the I/O
- * port specified by 'port'.
- */
+/** Read a word from I/O port `port`. */
 uint16_t inw(uint16_t port);
 
-/*
- * Returns the double-word value from the I/O
- * port specified by 'port'.
- */
+/** Read a double-word from I/O port `port`. */
 uint32_t ind(uint16_t port);
 
-/*
- * Aliases for standard naming convention (outl/inl)
- */
+/** Aliases under the conventional outl/inl names. */
 #define outl outd
 #define inl  ind
 

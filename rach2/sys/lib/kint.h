@@ -1,27 +1,27 @@
 #ifndef _KINT_H_
 #define _KINT_H_
 
-/* A signed integer type to represent a byte value */
+/* Signed 8-bit byte. */
 typedef signed char int8_t;
-/* An unsigned integer type to represent a byte value */
+/* Unsigned 8-bit byte. */
 typedef unsigned char uint8_t;
 
-/* A signed integer type to represent a word value */
+/* Signed 16-bit word. */
 typedef signed short int16_t;
-/* An unsigned integer type to represent a word value */
+/* Unsigned 16-bit word. */
 typedef unsigned short uint16_t;
 
-/* A signed integer type to represent a double word value */
+/* Signed 32-bit double word. */
 typedef signed int int32_t;
-/* An unsigned integer type to represent a double word value */
+/* Unsigned 32-bit double word. */
 typedef unsigned int uint32_t;
 
-/* A signed integer type to represent a quad word value */
+/* Signed 64-bit quad word. */
 typedef signed long long int64_t;
-/* An unsigned integer type to represent a quad word value */
+/* Unsigned 64-bit quad word. */
 typedef unsigned long long uint64_t;
 
-/* An integer type to represent any address in memory */
+/* Unsigned integer wide enough to hold any memory address. */
 typedef unsigned int uintptr_t;
 
 #endif

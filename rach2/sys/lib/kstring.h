@@ -4,35 +4,27 @@
 #include "kdef.h"
 #include "kctypes.h"
 
-/*
- * Computes the length of the null-terminated string.
- */
+/** Returns the length of the null-terminated string `str`. */
 size_t k_strlen(const char *str);
 
-/*
- * Reverses characters in the null-terminated string.
- */
+/** Reverses the characters of the null-terminated string `str` in place. */
 void k_strreverse(char *str);
 
-/*
- * Converts lower case letters to upper case.
- */
+/** Upper-cases the letters of the null-terminated string `str` in place. */
 void k_strtoupper(char *str);
 
-/*
- * Writes 'n' bytes of 'c' to the byte string specified by 'ptr'.
- */
+/** Writes `n` bytes of `c` to `ptr` and returns `ptr`. */
 void* k_memset(void *ptr, char c, size_t n);
 
-/*
- * Copies 'n' bytes from memory area 'src' to memory area 'dest'.
- * The memory areas must not overlap.
+/**
+ * Copies `n` bytes from `src` to `dest` and returns `dest`. The regions
+ * must not overlap.
  */
 void* k_memcpy(void *dest, const void *src, size_t n);
 
-/*
- * Copies up to 'n' characters from 'src' to 'dest'.
- * If 'src' is shorter than 'n', 'dest' is padded with null bytes.
+/**
+ * Copies up to `n` characters from `src` to `dest` and returns `dest`.
+ * If `src` is shorter than `n`, the remainder of `dest` is null-padded.
  */
 char* k_strncpy(char *dest, const char *src, size_t n);
 

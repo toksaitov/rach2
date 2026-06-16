@@ -4,11 +4,11 @@
 #include "kint.h"
 
 /*
- * Linux i386 signals: numbers, the kernel-side sigaction, and the small policy
- * helpers (default action per signal). The delivery machinery -- per-process
- * disposition + pending/blocked masks, delivery on return-to-user via a signal
- * frame on the user stack, and rt_sigreturn -- lives in syscall.c and the ISR
- * return path. Standard signals only (1..64); no real-time queueing.
+ * Linux i386 signals: numbers, the kernel-side sigaction, and the per-signal
+ * default-action classes. The delivery machinery (per-process disposition,
+ * pending and blocked masks, delivery on return-to-user via a signal frame on
+ * the user stack, and rt_sigreturn) lives in syscall.c and the ISR return path.
+ * Standard signals only (1..64); no real-time queueing.
  */
 #define SIGHUP   1
 #define SIGINT   2  /* terminal interrupt (CTRL+C) */
@@ -57,9 +57,9 @@
 
 /*
  * The kernel-side sigaction as musl's rt_sigaction(174) passes it on i386:
- * handler, flags, the restorer trampoline (musl's __restore_rt -> rt_sigreturn),
- * and an 8-byte signal mask (signals 1..64). Byte-identical to musl's
- * `struct k_sigaction`.
+ * handler, flags, the restorer trampoline (musl's __restore_rt then
+ * rt_sigreturn), and an 8-byte signal mask (signals 1..64). Byte-identical to
+ * musl's `struct k_sigaction`.
  */
 struct k_sigaction {
     uint32_t handler;
@@ -74,13 +74,13 @@ struct k_sigaction {
 /* Signals that can never be caught, blocked, or ignored. */
 #define KSIG_UNCATCHABLE (KSIG_BIT(SIGKILL) | KSIG_BIT(SIGSTOP))
 
-/* Default-action classes (see ksig_default_action in syscall.c). The common
- * default is TERM; SIGCHLD/SIGURG/SIGWINCH/SIGCONT ignore; the job-control stop
- * signals are deferred to Part II-A (treated as ignore for now). */
+/* Default-action classes; ksig_default_action in syscall.c maps a signal to
+ * one. The common default is TERM; SIGCHLD/SIGURG/SIGWINCH/SIGCONT ignore; the
+ * job-control signals SIGSTOP/SIGTSTP/SIGTTIN/SIGTTOU stop. */
 enum ksig_default {
     KSIG_DEFAULT_TERM,   /* terminate (the common case, incl. core signals) */
     KSIG_DEFAULT_IGNORE, /* ignore */
-    KSIG_DEFAULT_STOP    /* stop (job control, deferred to Part II-A) */
+    KSIG_DEFAULT_STOP    /* stop (job control) */
 };
 
 #endif /* _KSIGNAL_H_ */

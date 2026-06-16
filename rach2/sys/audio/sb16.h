@@ -82,21 +82,13 @@
  */
 #define SB16_BUFFER_SIZE    160
 
-/*
- * Sound Blaster 16 driver (extern declaration)
- */
+/** The Sound Blaster 16 audio driver. */
 extern audio_driver_t sb16_driver;
 
-/*
- * Probe for SB16 at a specific base address
- * Returns true if SB16 is detected
- */
+/** Probe for an SB16 at base port `base`; true if detected. */
 bool sb16_probe(uint16_t base);
 
-/*
- * Get the DSP version
- * Returns version as (major << 8) | minor
- */
+/** Return the DSP version as (major << 8) | minor. */
 uint16_t sb16_get_version(void);
 
 #endif /* _SB16_H_ */

@@ -3,19 +3,13 @@
 
 #include "kio.h"
 
-/*
- * Initializes the Programmable Interrupt Controller (PIC).
- */
+/** Remaps the 8259 PIC IRQs to vectors 0x20 (master) and 0x28 (slave). */
 void init_pic(void);
 
-/*
- * Sends an EOI (End Of Interrupt) signal to the master PIC.
- */
+/** Sends End Of Interrupt to the master PIC. */
 void reset_master_pic(void);
 
-/*
- * Sends an EOI (End Of Interrupt) signal to the slave PIC.
- */
+/** Sends End Of Interrupt to the slave PIC. */
 void reset_slave_pic(void);
 
 #endif

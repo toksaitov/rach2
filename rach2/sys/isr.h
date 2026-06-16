@@ -8,7 +8,7 @@
 #include "lib/kstring.h"
 
 /*
- * Parameters pushed on the stack from the ISR common procedure
+ * Saved register frame pushed by the ISR common procedure.
  */
 struct isr_params {
     uint32_t gs, fs, es, ds;
@@ -18,14 +18,11 @@ struct isr_params {
     uint32_t eip, cs, eflags, user_esp, user_ss;
 };
 
-/*
- * Parameters pushed on the stack from the ISR common procedure (type)
- */
 typedef struct isr_params isr_params_t;
 
 /*
- * The type of the function prototype of the interrupt handler
- * Takes pointer to allow modifying saved registers (e.g., syscall return values)
+ * Interrupt handler prototype. The frame is passed by pointer so a handler can
+ * edit the saved registers (for example, a syscall return value).
  */
 typedef void (*isr_handler_t)(isr_params_t *);
 
@@ -90,21 +87,13 @@ extern void irq15(void);
  */
 extern void isr128(void);
 
-/*
- * Initializes interrupt handling structures.
- */
+/** Clear the handler table and enable interrupts. */
 void init_isr(void);
 
-/*
- * Registers a custom interrupt 'handler' for a specific interrupt 'vector'.
- * Handlers chain, so several devices sharing one PIC line each get called.
- */
+/** Append `handler` to a vector's chain. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler);
 
-/*
- * Replaces every handler on 'vector' with a single 'handler', dropping any
- * previously registered ones (for a deliberate override of a boot stub).
- */
+/** Replace a vector's entire chain with a single `handler`. */
 void set_isr_handler(uint8_t vector, isr_handler_t handler);
 
 #endif

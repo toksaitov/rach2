@@ -2,42 +2,34 @@
 #define _KRFFS_H_
 
 /*
- * KRFFS - K&R First-Fit File System
- * Ported from the educational FUSE file system project for use in Rach2 kernel.
- * Phase 11: Read-only operations
- * Phase 12: Write operations (create, write, truncate, unlink, rename)
+ * KRFFS: K&R first-fit file system.
+ *
+ * On-disk node layout, the file system handle, and the operation interface.
+ * The implementation and the full per-function contracts live in krffs.c.
  */
 
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 #include "../lib/kstring.h"
 
-/*
- * File system magic number: "KR" in little-endian
- */
+/* File system magic number: "KR" in little-endian. */
 #define KRFFS_FILE_SYSTEM_MAGIC 0x4B52
 
-/*
- * Maximum file name length (including null terminator)
- */
+/* Maximum file name length, including the NUL terminator. */
 #define KRFFS_FILE_NAME_BUFFER_SIZE 256
 
-/*
- * Root node name is empty string (represents "/" directory)
- */
+/* The root node's name is the empty string (it represents the "/" directory). */
 #define KRFFS_FILE_SYSTEM_ROOT_NODE_NAME ""
 
-/*
- * Default root node permissions (rwxr-xr-x)
- */
+/* Default root node permissions (rwxr-xr-x). */
 #define KRFFS_FILE_SYSTEM_ROOT_NODE_MODE 0755
 
 /*
  * Hierarchical KRFFS (v2): a node's directory membership is its parent
  * directory's unique id, and a directory is a reserved node whose mode carries
  * the S_IFDIR type bit. The root directory has a fixed id KRFFS_ROOT_ID. A
- * node's own id is mix(parent_id, name) -- unique because sibling names are
- * unique -- so parent_id references are unambiguous and survive node moves.
+ * node's own id is mix(parent_id, name), unique because sibling names are
+ * unique, so parent_id references are unambiguous and survive node moves.
  */
 #define KRFFS_S_IFMT  0170000u  /* file-type mask within mode */
 #define KRFFS_S_IFDIR 0040000u  /* directory */
@@ -50,19 +42,14 @@
  * v1 images that stored bare permission modes). */
 #define KRFFS_IS_DIR(mode) (((mode) & KRFFS_S_IFMT) == KRFFS_S_IFDIR)
 
-/*
- * Node types in the file system
- */
+/* Node types in the file system. */
 typedef enum {
     KRFFS_ROOT_NODE,      /* Root directory node */
     KRFFS_FREE_NODE,      /* Free block (available for allocation) */
     KRFFS_RESERVED_NODE   /* Reserved block (file data) */
 } krffs_node_type_t;
 
-/*
- * Time structure for node timestamps
- * Stored in packed format for disk compatibility
- */
+/* Node timestamp, packed for on-disk compatibility. */
 #pragma pack(push, 1)
 typedef struct {
     int64_t seconds;
@@ -71,11 +58,8 @@ typedef struct {
 #pragma pack(pop)
 
 /*
- * KRFFS node structure - stored on disk/RAM disk
- * All nodes have the same header structure.
- * File data immediately follows the header.
- *
- * Layout: [Node Header (344 bytes)][Data (variable)]
+ * On-disk KRFFS node. Every node shares this header; its data follows it
+ * immediately. Layout: [node header (344 bytes)][data (variable)].
  */
 #pragma pack(push, 1)
 typedef struct krffs_node {
@@ -96,106 +80,74 @@ typedef struct krffs_node {
 } krffs_node_t;
 #pragma pack(pop)
 
-/*
- * File system structure - points to the RAM disk in memory
- */
+/* Mounted file system: the in-memory image and its extent. */
 typedef struct krffs_file_system {
-    krffs_node_t *node;    /* Pointer to root node (start of file system) */
-    uint32_t size;         /* Total size of file system in bytes */
+    krffs_node_t *node;    /* root node, the start of the file system */
+    uint32_t size;         /* total size of the file system in bytes */
 } krffs_file_system_t;
 
-/*
- * Global file system instance
- */
+/* The mounted file system, or NULL before init_krffs. */
 extern krffs_file_system_t *krffs_fs;
 
-/*
- * Node traversal functions
- */
+/* Node traversal: the next, previous, and wrapped position in the circular list. */
 krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node);
 krffs_node_t *krffs_get_previous_node(krffs_file_system_t *fs, krffs_node_t *node);
 krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *node);
 
-/*
- * Node search functions
- */
+/* Flat-namespace lookup by name; the second variant also matches the root. */
 krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const char *name);
 krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, const char *name);
 
-/* Hierarchical path resolver (KRFFS v2): the node for `path`, or NULL if absent. */
+/** Resolve `path` to its node, or NULL if absent. */
 krffs_node_t *krffs_resolve(const char *path);
 
-/* As krffs_resolve, but *err distinguishes -ENOENT (missing) from -ENOTDIR (a
- * non-directory component); 0 on success. */
+/** As krffs_resolve, but *err reports -ENOENT or -ENOTDIR, 0 on success. */
 krffs_node_t *krffs_resolve_e(const char *path, int *err);
 
-/* Reconstruct the absolute, canonical path of `node` into buf (chdir/getcwd and
- * dirfd resolution use it). Returns 0 on success, -1 if it does not fit. */
+/** Build the absolute, canonical path of `node` into buf; 0 ok, -1 if it does not fit. */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
 
-/*
- * Read/write directly via a resolved node pointer (used by the fd layer so a file
- * descriptor need not re-resolve a path -- which fails for a file in a subdir,
- * whose node->name is only the basename). krffs_write_node updates *nodep if a
- * grow relocates the node.
- */
+/* Read and write through a resolved node pointer, for the fd layer.
+ * krffs_write_node updates *nodep if a grow relocates the node. */
 int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
                     uint32_t offset);
 int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
                      uint32_t offset);
 
-/*
- * File system operations - read
- */
+/* Read operations by path. */
 int krffs_open(const char *path);
 int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset);
 uint32_t krffs_get_file_size(const char *path);
 
-/*
- * File system operations - write (Phase 12)
- */
+/* Write operations by path. */
 int krffs_create(const char *path);
 int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t offset);
 int krffs_truncate(const char *path, uint32_t new_size);
 int krffs_unlink(const char *path);
 int krffs_rename(const char *old_path, const char *new_path);
 
-/*
- * Directory operations (KRFFS v2). mkdir/rmdir create/remove an (empty)
- * directory; readdir returns the index-th child name of a directory.
- */
+/* Directory operations: create, remove (must be empty), and enumerate children. */
 int krffs_mkdir(const char *path);
 int krffs_rmdir(const char *path);
 int krffs_readdir(const char *path, uint32_t index, char *name_out,
                   uint32_t buf_size, int *is_dir_out);
 
-/*
- * Node manipulation functions (internal, but exposed for testing)
- */
+/* Node primitives (internal, exposed for testing). */
 krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size, uint64_t previous_node_size);
 void krffs_set_reserved_node_name(krffs_node_t *node, const char *name);
 
-/*
- * K&R allocator functions
- */
+/* K&R first-fit allocator: allocate, resize, free a reserved node. */
 krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size, krffs_node_t *original);
 krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node, uint64_t size);
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node);
 
-/*
- * Utility functions
- */
+/* DJB hash of a NUL-terminated name; the legacy id of a regular file. */
 uint64_t krffs_calculate_djb_hash(const uint8_t *str);
 
-/*
- * File system initialization
- * Returns 0 on success, -1 on failure
- */
+/** Mount the image at ramdisk_base; 0 ok, -1 on failure. */
 int init_krffs(void *ramdisk_base, uint32_t ramdisk_size);
 
-/*
- * Count and list files
- */
+/* Count the reserved nodes, and list them to the serial console. */
 uint32_t krffs_count_files(void);
 void krffs_list_files(void);
 

@@ -4,12 +4,10 @@
 /*
  * Address-space annotations for user pointers, in the style of the Linux
  * kernel's __user. In a normal build they expand to nothing. Under sparse
- * (which defines __CHECKER__) a __user pointer is tagged noderef + a distinct
- * address space, so dereferencing one directly -- instead of going through the
- * copy_from_user/copy_to_user helpers -- becomes a sparse error. This is the
- * one-shot Phase 3 check that "every user access is routed through the copy
- * helpers" is a fact, not a hope. __force casts the annotation away inside the
- * helpers (the only place that is allowed).
+ * (which defines __CHECKER__) a __user pointer is tagged noderef and a distinct
+ * address space, so dereferencing one directly, instead of going through the
+ * copy_from_user/copy_to_user helpers, becomes a sparse error. __force casts
+ * the annotation away inside the helpers, the only place that is allowed.
  */
 #ifdef __CHECKER__
 # define __user   __attribute__((noderef, address_space(1)))

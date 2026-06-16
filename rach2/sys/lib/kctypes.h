@@ -1,14 +1,10 @@
 #ifndef _KCTYPES_H_
 #define _KCTYPES_H_
 
-/*
- * Converts the case of the letter 'c' from lower to upper. 
- */
+/** Returns `c` upcased if it is a lowercase letter, else `c` unchanged. */
 char k_toupper(char c);
 
-/*
- * Converts the case of the letter 'c' from upper to lower.
- */
+/** Returns `c` downcased if it is an uppercase letter, else `c` unchanged. */
 char k_tolower(char c);
 
 #endif

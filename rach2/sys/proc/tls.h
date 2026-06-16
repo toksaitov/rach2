@@ -6,7 +6,7 @@
 /*
  * Thread-local storage, the i386 way: a GDT descriptor whose base is the
  * thread control block, reached through %gs. This mirrors Linux's i386
- * set_thread_area(2) / struct user_desc mechanism -- the same syscall and ABI
+ * set_thread_area(2) and struct user_desc mechanism, the same syscall and ABI
  * musl's __set_thread_area calls from __init_tls. See Readme in this directory.
  */
 
@@ -34,14 +34,7 @@ typedef struct user_desc user_desc_t;
 #define UD_SEG_NOT_PRESENT 0x20u  /* bit 5    : descriptor not present     */
 #define UD_USEABLE         0x40u  /* bit 6    : AVL bit                    */
 
-/*
- * Validate a user_desc against the single 4 GB DPL-3 data slot we model for
- * TLS and output the base to program into the GDT entry. Returns 0 on success
- * or -1 if the request cannot be represented (wrong entry, not 32-bit, not a
- * writable data segment, or marked not-present). Pure logic with no kernel
- * state, so the dual-target host seam test exercises exactly this code. The
- * syscall glue (user copy, gdt_set_tls, PCB update) lives in sys/syscall.c.
- */
+/** Validate a user_desc and output its TLS base; 0 ok, -1 if unrepresentable. */
 int tls_resolve_base(const user_desc_t *u, uint32_t *base_out);
 
 #endif /* _TLS_H_ */

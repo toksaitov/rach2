@@ -3,34 +3,20 @@
 
 #include "process.h"
 
-/*
- * Initialize the scheduler
- */
+/** Reset the scheduler to its initial disabled state. */
 void init_sched(void);
 
-/*
- * Enable/disable preemptive scheduling
- * When disabled, schedule() does nothing
- */
+/** Enable or disable preemptive scheduling; while disabled schedule() is a no-op. */
 void sched_enable(void);
 void sched_disable(void);
 
-/*
- * Check if scheduler is enabled
- */
+/** Return nonzero while preemptive scheduling is enabled. */
 int sched_is_enabled(void);
 
-/*
- * Round-robin scheduler
- * Called from timer interrupt to switch to next ready process
- * Does nothing if scheduler is disabled or only one runnable process
- */
+/** Round-robin: switch to the next READY process; see sched.c for the contract. */
 void schedule(void);
 
-/*
- * Yield the CPU to the next ready process
- * Can be called voluntarily by a process
- */
+/** Voluntarily give up the CPU to the next READY process. */
 void sched_yield(void);
 
 #endif

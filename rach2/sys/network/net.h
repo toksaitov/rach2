@@ -39,17 +39,12 @@
 #define NET_IP_MASK     0xFFFFFF00UL  /* 255.255.255.0 */
 #define NET_IP_GATEWAY  0x0A000202UL  /* 10.0.2.2      */
 
-/*
- * Our hardware address, filled in by the RTL8139 driver at init.
- * Exposed so the Ethernet and ARP layers can read it.
- */
+/* Our hardware address, filled in by the RTL8139 driver at init; the Ethernet
+   and ARP layers read it. */
 extern uint8_t net_mac[6];
 
-/*
- * Bring up the network stack: driver, Ethernet, ARP, IP, ICMP, UDP, TCP, and
- * sockets. Called once at boot after interrupts and PCI are available.
- * Returns 1 if a NIC was found and the stack is up, 0 otherwise.
- */
+/** Bring the network stack up once at boot, after PCI enumeration and interrupts are
+ *  ready so the NIC can be probed; 1 if the NIC is up, 0 otherwise. */
 int init_network(void);
 
 /* One-line description of the running stack, for the boot banner. */

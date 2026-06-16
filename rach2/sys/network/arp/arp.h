@@ -19,16 +19,10 @@
 /* Number of cached IP-to-MAC mappings. */
 #define ARP_CACHE_SIZE  8
 
-/*
- * Handle a received ARP packet (the payload after the Ethernet header).
- * Called by ethernet_rx for EtherType 0x0806.
- */
+/** Handle a received ARP packet (the payload after the Ethernet header). */
 void arp_rx(const uint8_t *data, uint16_t len);
 
-/*
- * Look up the cached MAC for an IP. Fills mac_out and returns 1 on a hit,
- * 0 on a miss (the caller should arp_request() and retry later).
- */
+/** Look up the cached MAC for an IP; 1 on a hit, 0 on a miss. */
 int arp_lookup(uint32_t ip, uint8_t *mac_out);
 
 /* Broadcast "who has target_ip?" to learn its MAC. */

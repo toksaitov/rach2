@@ -7,14 +7,10 @@
 #include "../fs/fd.h"
 #include "../mm/vm.h"
 
-/*
- * Maximum number of processes
- */
+/* Maximum number of processes. */
 #define MAX_PROCS 16
 
-/*
- * Process states
- */
+/* Process states. */
 typedef enum {
     PROC_UNUSED,    /* Slot is free */
     PROC_READY,     /* Ready to run */
@@ -25,8 +21,8 @@ typedef enum {
 } proc_state_t;
 
 /*
- * Saved CPU registers for context switching
- * Layout matches what pushal/popal expect
+ * Saved CPU registers for context switching.
+ * Layout matches what pushal/popal expect.
  */
 struct cpu_regs {
     uint32_t edi;
@@ -44,14 +40,10 @@ struct cpu_regs {
 
 typedef struct cpu_regs cpu_regs_t;
 
-/*
- * Maximum length of current working directory path
- */
+/* Maximum length of current working directory path. */
 #define CWD_MAX 64
 
-/*
- * Process Control Block (PCB)
- */
+/* Process Control Block (PCB). */
 struct process {
     uint32_t pid;           /* Process ID */
     proc_state_t state;     /* Current state */
@@ -69,104 +61,80 @@ struct process {
     uint32_t tls_base;      /* Per-process %gs TLS base (set_thread_area) */
     vm_space_t vm;          /* Address-space map (VMAs + brk + stack limit) */
     uint32_t wakeup_tick;   /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
-    /* Signal state (Phase 8): per-signal disposition (sigacts[signo], index 0
-     * unused) plus 64-bit pending and blocked masks (bit signo-1). */
+    /* Signal state: per-signal disposition (sigacts[signo], index 0 unused)
+     * plus 64-bit pending and blocked masks (bit signo-1). */
     struct k_sigaction sigacts[KSIG_MAX + 1];
     uint64_t sig_pending;
     uint64_t sig_blocked;
     /* Program name (basename of the execve'd path, NUL-terminated, truncated):
      * the "comm" /proc/<pid>/stat reports and ps shows. Set at execve. */
     char comm[16];
-    /* Session + process-group identity (Phase 17). A process belongs to process
-     * group `pgid` within session `sid`; fork inherits both, setsid/setpgid change
+    /* Session + process-group identity. A process belongs to process group
+     * `pgid` within session `sid`; fork inherits both, setsid/setpgid change
      * them. The session leader has sid==pid; a group leader has pgid==pid. */
     uint32_t sid;
     uint32_t pgid;
-    /* Job-control status pending for the parent's wait4 (Phase 17): 0 = none, a
-     * Linux WIFSTOPPED value ((stopsig<<8)|0x7f) when stopped, or 0xffff when
+    /* Job-control status pending for the parent's wait4: 0 = none, a Linux
+     * WIFSTOPPED value ((stopsig<<8)|0x7f) when stopped, or 0xffff when
      * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED). */
     uint32_t jc_status;
-    /* File-creation mask (umask(2), Phase 18); inherited across fork, low 9 bits. */
+    /* File-creation mask (umask(2)); inherited across fork, low 9 bits. */
     uint32_t umask;
 };
 
 typedef struct process process_t;
 
-/*
- * Process table
- */
+/* Process table. */
 extern process_t proc_table[MAX_PROCS];
 
-/*
- * Currently running process
- */
+/* Currently running process. */
 extern process_t *current_proc;
 
-/*
- * Initialize the process subsystem
- */
+/** Reset the process table to its boot state and verify the PCB layout. */
 void init_proc(void);
 
-/*
- * Allocate a new process slot
- * Returns pointer to process, or NULL if table full
- */
+/** Claim the first unused process slot; returns it, or NULL if the table is full. */
 process_t *alloc_process(void);
 
-/*
- * Free a process slot
- */
+/** Mark a process slot unused. */
 void free_process(process_t *proc);
 
-/*
- * Get process by PID
- * Returns pointer to process, or NULL if not found
- */
+/** Get process by PID; returns the slot, or NULL if not found. */
 process_t *get_process(uint32_t pid);
 
-/*
- * Record a process's program name (the basename of `path`, truncated to fit) as
- * its comm, for /proc/<pid>/stat and ps. Called from both exec paths.
- */
+/** Set a process's `comm` name from the final component of `path`. */
 void proc_set_comm(process_t *p, const char *path);
 
-/*
- * Wake timed sleepers: any BLOCKED process whose wakeup_tick has reached `now`
- * (the current kernel tick) becomes READY. Called from the timer interrupt.
- */
+/** Wake timed sleepers whose deadline has reached `now`. */
 void proc_wake_sleepers(uint32_t now);
 
-/*
- * Post signal `signo` to `target` (set its pending bit; wake it if blocked).
+/**
+ * Post signal `signo` to `target`: set its pending bit and wake it if blocked.
  * Delivered on the target's next return to user mode. Defined in syscall.c.
  */
 void signal_post(process_t *target, int signo);
 
-/*
+/**
  * Non-zero if the current process has a deliverable (pending, unblocked) signal.
  * Blocking syscall loops poll it to break out so the signal is acted on. Defined
  * in syscall.c.
  */
 int signal_pending(void);
 
-/*
+/**
  * Deliver a pending signal to the current process on the way back to user mode.
  * Called from the ISR/IRQ return path with the trapframe. Defined in syscall.c.
  */
 struct isr_params;
 void deliver_signals(struct isr_params *tf);
 
-/*
- * Context switch between two processes
- * Saves current state to old, restores from new
+/**
+ * Context switch between two processes; saves current state to `old`, restores
+ * from `new_proc`. Defined in switch.s.
  */
 extern void switch_context(process_t *old, process_t *new_proc);
 
-/*
- * Set up a process's kernel stack for first context switch
- * entry_point: function to start executing
- * Returns: nothing, modifies proc->regs.esp
- */
+/** Prime a new process's kernel stack for its first context switch. */
 void setup_process_stack(process_t *proc, void (*entry_point)(void));
 
 #endif

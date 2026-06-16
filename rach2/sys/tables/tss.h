@@ -4,9 +4,8 @@
 #include "../lib/kint.h"
 
 /*
- * Task State Segment structure (104 bytes)
- * Used by CPU for ring transitions - ESP0/SS0 are loaded when
- * transitioning from ring 3 to ring 0 (e.g., syscall or interrupt)
+ * Task State Segment structure (104 bytes). The CPU loads esp0/ss0 from it
+ * on a privilege change from ring 3 to ring 0 (a syscall or interrupt).
  */
 struct tss {
     uint32_t prev_tss;   /* Previous TSS link (unused for software switching) */
@@ -40,28 +39,23 @@ struct tss {
 
 typedef struct tss tss_t;
 
-/*
- * TSS selector in GDT (index 5, so selector = 5 * 8 = 0x28)
- */
+/* TSS selector in the GDT (index 5, so selector = 5 * 8 = 0x28). */
 #define TSS_SELECTOR 0x28
 
-/*
- * Kernel data segment selector (for SS0)
- */
+/* Kernel data segment selector, installed in ss0. */
 #define KERNEL_DATA_SELECTOR 0x10
 
-/*
- * Global TSS instance
- */
+/* The single kernel TSS. */
 extern tss_t kernel_tss;
 
-/*
- * Initialize TSS with kernel stack pointer
- */
+/** Initialize the kernel TSS with the ring 0 stack top and load it. */
 void init_tss(uint32_t kernel_stack);
 
-/*
- * Update kernel stack in TSS (used during context switch)
+/**
+ * Update the ring 0 stack pointer in the kernel TSS.
+ *
+ * Called on each context switch so the next ring 3 to ring 0 crossing lands
+ * on the incoming task's kernel stack.
  */
 void tss_set_kernel_stack(uint32_t stack);
 

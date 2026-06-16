@@ -2,10 +2,10 @@
 #define _KERRNO_H_
 
 /*
- * Linux i386 errno values -- the kernel/libc error contract. A syscall returns
+ * Linux i386 errno values: the kernel/libc error contract. A syscall returns
  * the negative of one of these on failure (e.g. -ENOSYS, -EFAULT); musl negates
  * the return value back into its own errno. The names and numbers match musl's
- * arch/generic/bits/errno.h exactly so the ABI is real, not approximate.
+ * arch/generic/bits/errno.h exactly, so the ABI is real, not approximate.
  */
 #define EPERM            1
 #define ENOENT           2

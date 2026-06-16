@@ -55,39 +55,32 @@ typedef struct socket {
 
     /* Processes blocked waiting for data, a connection, or an accept. The
      * IRQ-side deliver/accept/connect/fin routines wake every waiter; each
-     * re-checks its own condition (Phase 12 replaced the single-waiter park). */
+     * re-checks its own condition. */
     wait_queue_t waiters;
 } socket_t;
 
-/* Allocate the socket pool; called once from init_network. */
+/** Reserve the socket pool; called once from init_network. */
 void socket_init(void);
 
-/* Allocate a socket from the pool with refcount 1. NULL if the pool is full. */
+/** Allocate a socket with refcount 1; NULL if the pool is full. */
 struct socket *socket_alloc(int type);
 
-/* Add a reference (fork/dup2 sharing). */
+/** Add a reference (fork/dup2 sharing). */
 void socket_ref(struct socket *sock);
 
-/* Drop a reference; tear down the protocol state and free at the last one. */
+/** Drop a reference; tear the socket down at the last one. */
 void socket_unref(struct socket *sock);
 
-/*
- * Copy an incoming UDP payload into sock and wake any blocked recvfrom.
- * Called from udp_rx in IRQ context, so it must not block.
- */
+/** Copy an incoming UDP payload into sock and wake any blocked recvfrom. */
 void socket_udp_deliver(struct socket *sock,
                         uint32_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len);
 
-/*
- * Blocking receive from a UDP socket. Halts until a datagram arrives, then
- * copies up to len bytes; fills src_ip/src_port if non-NULL. Returns the
- * byte count.
- */
+/** Blocking UDP receive; returns the byte count or a negative errno. */
 int socket_recv(struct socket *sock, uint8_t *buf, int len,
                 uint32_t *src_ip, uint16_t *src_port);
 
-/* Non-blocking variant: returns SOCK_EAGAIN if no datagram is waiting. */
+/** Non-blocking variant; SOCK_EAGAIN if no datagram is waiting. */
 int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
                     uint32_t *src_ip, uint16_t *src_port);
 
@@ -96,16 +89,11 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
 void socket_tcp_connected(struct socket *sock);
 void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len);
 int  socket_tcp_recv(struct socket *sock, uint8_t *buf, int len);
-/* Non-blocking variant: SOCK_EAGAIN if no data is buffered (for MSG_DONTWAIT). */
+/** Non-blocking variant; SOCK_EAGAIN if no data is buffered (MSG_DONTWAIT). */
 int  socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len);
 void socket_tcp_fin(struct socket *sock);
 
-/*
- * poll/select readiness for a socket: return the subset of `events`
- * ({POLLIN, POLLOUT}) ready now plus any POLLHUP/POLLERR, and set *wq to the
- * socket's wait queue (whose wake signals a readiness change). Defined in
- * socket.c; the POLL* bits live in io/poll.h.
- */
+/** Map socket state to poll revents; sets *wq to the wait queue if non-NULL. */
 short socket_poll(struct socket *sock, short events, struct wait_queue **wq);
 
 #endif /* _SOCKET_H_ */

@@ -74,24 +74,20 @@
 #define RTL_RX_PKT_MIN  18      /* Ethernet header (14) + CRC (4)        */
 #define RTL_RX_PKT_MAX  1518    /* max frame (1514) + CRC (4)            */
 
-/*
- * Detect the RTL8139 over PCI, set up DMA buffers, register the IRQ handler,
- * and bring the chip up. Returns 1 on success, 0 if no card is present.
- */
+/** Probe and bring up the card; 1 on success, 0 if absent or bring-up fails. */
 int rtl8139_init(void);
 
-/*
- * Transmit a raw Ethernet frame (destination MAC through payload, no FCS; the
- * chip appends the CRC). len must be <= RTL_TX_BUF_SIZE.
- */
+/** Transmit a raw Ethernet frame (destination MAC through payload, no FCS; the
+ *  chip appends the CRC). len must be <= RTL_TX_BUF_SIZE. */
 void rtl8139_tx(const uint8_t *data, uint16_t len);
 
-/*
- * Boot-summary accessors: the configured I/O base and IRQ line, and the reason
- * the most recent rtl8139_init() returned 0 (valid only after a 0 return).
- */
+/** Configured I/O base. */
 uint16_t rtl8139_iobase(void);
+
+/** Configured IRQ line. */
 uint8_t  rtl8139_irq_line(void);
+
+/** Reason the most recent rtl8139_init() returned 0; valid only after a 0 return. */
 const char *rtl8139_error(void);
 
 #endif /* _RTL8139_H_ */

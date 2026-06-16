@@ -30,12 +30,12 @@
 #define SYS_MKDIR   39
 #define SYS_RMDIR   40
 #define SYS_GETPID   20
-#define SYS_TIMES     43   /* busybox-required misc (Phase 18) */
+#define SYS_TIMES     43
 #define SYS_UMASK     60
 #define SYS_GETPPID   64
 #define SYS_SYSINFO  116
 #define SYS_VFORK    190
-#define SYS_PAUSE     29   /* sessions + job control (Phase 17) */
+#define SYS_PAUSE     29
 #define SYS_SETPGID   57
 #define SYS_GETPGRP   65
 #define SYS_SETSID    66
@@ -91,7 +91,7 @@
 #define SYS_TKILL 238
 #define SYS_TGKILL 270
 
-/* Phase 22: the auth/identity + resource + tail syscalls dropbear touches. */
+/* Auth/identity, resource, and tail syscalls a login server touches. */
 #define SYS_SETHOSTNAME 74
 #define SYS_GETRLIMIT   76
 #define SYS_UGETRLIMIT  191
@@ -101,13 +101,13 @@
 #define SYS_DUP3        330
 #define SYS_PRLIMIT64   340
 
-/* Phase 23: durability no-ops the dropbear host-key write needs (KRFFS is RAM). */
+/* Durability no-ops a host-key write needs; KRFFS is RAM, so they cannot fail. */
 #define SYS_FSYNC       118
 #define SYS_FDATASYNC   148
 /* KRFFS has no hard links; link/linkat return -EPERM (dropbear falls back). */
 #define SYS_LINK        9
 #define SYS_LINKAT      303
-/* The 2-/3-arg privilege drop+restore a login server uses (dropbear seteuid).
+/* The 2-/3-arg privilege drop and restore a login server uses (seteuid).
  * Both the legacy 16-bit-uid and the *32 variants, since musl issues the former
  * for seteuid/setegid on i386 and busybox may issue the latter. */
 #define SYS_SETREUID    70
@@ -137,15 +137,12 @@
  */
 #define SYSCALL_TABLE_SIZE 356
 
-/*
- * Initialize syscall handling by registering the syscall handler.
+/**
+ * Register the syscall handler and populate the dispatch table.
  */
 void init_syscall(void);
 
-/*
- * Release framebuffer if owned by specified PID.
- * Used when a process is killed to restore text mode.
- */
+/** Restore text mode if `pid` owns the framebuffer. */
 void fb_release_if_owner(uint32_t pid);
 
 #endif

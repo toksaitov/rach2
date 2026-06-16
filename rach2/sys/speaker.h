@@ -19,20 +19,13 @@
 #define PIT_CHANNEL2    0x42
 #define PIT_COMMAND     0x43
 
-/*
- * Turn on the PC speaker at the specified frequency (Hz).
- * frequency: Tone frequency in Hz (e.g., 440 for A4)
- */
+/** Drive the PC speaker at `frequency` Hz; 0 silences it. */
 void speaker_on(uint32_t frequency);
 
-/*
- * Turn off the PC speaker.
- */
+/** Silence the speaker. */
 void speaker_off(void);
 
-/*
- * Check if the speaker is currently on.
- */
+/** True while the speaker is gated on. */
 bool speaker_is_on(void);
 
 #endif /* _SPEAKER_H_ */

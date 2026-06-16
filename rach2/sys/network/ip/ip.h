@@ -17,25 +17,14 @@
 /* Fixed IPv4 header size (IHL = 5 words). */
 #define IP_HDR_SIZE     20
 
-/*
- * Handle a received IPv4 packet (header plus payload, after the Ethernet
- * header has been stripped). Dispatches by protocol to ICMP/UDP/TCP.
- */
+/** Validate one received IPv4 datagram and dispatch it by protocol. */
 void ip_rx(const uint8_t *data, uint16_t len);
 
-/*
- * Build and transmit an IPv4 packet. dst_ip is in host byte order. On a local
- * /24 destination we ARP for it directly, otherwise for the gateway. On an ARP
- * miss the packet is dropped after sending the request; the caller retries.
- */
+/** Build an IPv4 datagram around the payload and transmit it; dst_ip is host order. */
 void ip_tx(uint32_t dst_ip, uint8_t proto,
            const uint8_t *payload, uint16_t plen);
 
-/*
- * 16-bit one's complement checksum. Zero the checksum field and call this to
- * fill it; call it over a buffer with the field in place and a value of 0
- * means the checksum is valid.
- */
+/** 16-bit one's complement checksum over `len` bytes of `buf`. */
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len);
 
 #endif /* _IP_H_ */

@@ -10,19 +10,13 @@ typedef int bool;
 #define false 0
 #define true  1
 
-/*
- * An unsigned integer type to represent size values of data structures.
- */
+/* Unsigned size of an object, in bytes. */
 typedef unsigned int size_t;
 
-/*
- * A signed integer type to represent size values of data structures.
- */
+/* Signed size, for a byte count or a negative error return. */
 typedef signed int ssize_t;
 
-/*
- * A signed integer type to store the difference between two pointers.
- */
+/* Signed difference between two pointers. */
 typedef signed int ptrdiff_t;
 
 #endif

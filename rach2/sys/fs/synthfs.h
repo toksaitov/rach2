@@ -4,13 +4,13 @@
 #include "../lib/kint.h"
 
 /*
- * synthfs -- the one place that knows /dev and /proc are synthetic. Every
+ * synthfs: the one place that knows /dev and /proc are synthetic. Every
  * path-taking syscall classifies its (already absolute, leading-'/'-stripped) path
- * through synth_classify(); a VNODE_KRFFS result means "ordinary file -- resolve
+ * through synth_classify(); a VNODE_KRFFS result means "ordinary file, resolve
  * through KRFFS", anything else routes to the devfs/procfs glue. Keeping the
  * classification here (instead of scattering "does the path start with dev/?"
  * checks before each krffs_resolve) is what stops the two namespaces from rotting
- * into special cases. The classifier is pure string logic -- no kernel state -- so
+ * into special cases. The classifier is pure string logic with no kernel state, so
  * the fence-post-prone component parsing is exercised natively under ASan in
  * tests/host/synthfs_hosttest.c.
  */
@@ -19,14 +19,14 @@
 enum vnode_kind {
     VNODE_KRFFS = 0,    /* not synthetic: resolve through KRFFS */
     VNODE_DEV_DIR,      /* /dev */
-    VNODE_DEV,          /* /dev/<name> -- a character device */
-    VNODE_PTS_DIR,      /* /dev/pts -- the pty slave directory */
-    VNODE_PTS,          /* /dev/pts/N -- a pty slave (pts_index = N) */
+    VNODE_DEV,          /* /dev/<name>: a character device */
+    VNODE_PTS_DIR,      /* /dev/pts: the pty slave directory */
+    VNODE_PTS,          /* /dev/pts/N: a pty slave (pts_index = N) */
     VNODE_PROC_DIR,     /* /proc */
     VNODE_PROC_PID,     /* /proc/<pid> (or /proc/self) */
     VNODE_PROC_FD_DIR,  /* /proc/<pid>/fd */
     VNODE_PROC_FILE,    /* /proc/<pid>/{stat,cmdline} */
-    VNODE_PROC_FD_LINK, /* /proc/<pid>/fd/<n> -- a magic symlink */
+    VNODE_PROC_FD_LINK, /* /proc/<pid>/fd/<n>: a magic symlink */
     VNODE_ENOENT,       /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR       /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -51,11 +51,7 @@ struct vpath {
     int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
 };
 
-/*
- * Classify an absolute path with the leading '/' already stripped ("" is the
- * root, "dev/null", "proc/7/stat", "proc/self/fd/0"). Fills *vp and returns its
- * kind. Pure -- no kernel state, no allocation.
- */
+/** Classify a leading-'/'-stripped path; fills *vp and returns its kind. */
 int synth_classify(const char *path, struct vpath *vp);
 
 /*
@@ -69,11 +65,7 @@ struct synth_dir {
     int used;
 };
 
-/*
- * Reconstruct the absolute path of a synthetic directory ("/dev", "/proc",
- * "/proc/<pid>", "/proc/<pid>/fd") from its kind/pid into out (NUL-terminated).
- * Pure. Used to resolve a path relative to a synthetic directory fd.
- */
+/** Render a synthetic directory's absolute path from its kind/pid into out. */
 void synth_dir_path(int kind, int pid, char *out, int cap);
 
 /* True if a classified kind is one of the synthetic (non-KRFFS) namespaces. */
