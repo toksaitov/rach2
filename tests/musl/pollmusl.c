@@ -75,7 +75,7 @@ int main(void)
     check(n == 1 && FD_ISSET(p[0], &rset), "select finds the readable fd");
     read(p[0], buf, sizeof(buf)); /* drain the byte */
 
-    /* A child that writes after a delay wakes a parent blocked in poll() -- the
+    /* A child that writes after a delay wakes a parent blocked in poll(); the
      * return must come from the write, well under the 3s timeout. */
     pid = fork();
     if (pid < 0) {

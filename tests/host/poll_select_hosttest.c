@@ -94,7 +94,7 @@ int main(void)
     CHECK(n == 1 && fds[0].fd == 7);
 
     /* Word-boundary fds (31 = top bit of word 0, 32 = bit 0 of word 1, 33) each
-     * resolve to the right word -- the classic off-by-one in fd/32, fd%32. */
+     * resolve to the right word: the classic off-by-one in fd/32, fd%32. */
     zero(r);
     zero(w);
     zero(e);
@@ -139,7 +139,7 @@ int main(void)
     CHECK(get_bit(e, 4) && !get_bit(r, 4));
 
     /* An fd selected for both read and write that is ready for both contributes 2
-     * to the count -- select() counts each ready direction, not each fd. */
+     * to the count: select() counts each ready direction, not each fd. */
     zero(r);
     zero(w);
     zero(e);
@@ -149,7 +149,7 @@ int main(void)
     CHECK(pollfds_to_fdsets(fds, 1, r, w, e) == 2);
     CHECK(get_bit(r, 6) && get_bit(w, 6));
 
-    /* POLLHUP projects to readable; POLLERR to both readable and writable -- but
+    /* POLLHUP projects to readable; POLLERR to both readable and writable, but
      * only for the direction(s) the fd was selected for. fd 1 was in readfds (HUP
      * -> read, 1); fd 2 was in both (ERR -> read + write, 2). */
     zero(r);
@@ -166,7 +166,7 @@ int main(void)
     CHECK(get_bit(r, 2) && get_bit(w, 2));
 
     /* Direction gating (the crux): a hangup on an fd selected ONLY for write must
-     * not be invented into the read set -- that would inflate the count and set a
+     * not be invented into the read set; that would inflate the count and set a
      * bit in a set the caller may have passed as NULL. POLLHUP is not in the write
      * trigger, so a write-only fd reporting only POLLHUP yields nothing. */
     zero(r);
@@ -199,7 +199,7 @@ int main(void)
     CHECK(!get_bit(r, 0) && !get_bit(w, 0) && !get_bit(e, 0));
 
     /* Round-trip: build read-sets, translate out, mark each pollfd POLLIN, project
-     * back -- the same fds (including the word-boundary ones) come back readable. */
+     * back: the same fds (including the word-boundary ones) come back readable. */
     zero(r);
     zero(w);
     zero(e);

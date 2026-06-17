@@ -127,7 +127,7 @@ static int eqn(const char *a, const char *b, int n)
 }
 
 /* Read n bytes from fd into buf; returns the byte count. (Passing buf as a
- * char* -- not an inline int cast -- lets the analyzer see it written.) */
+ * char*, not an inline int cast, lets the analyzer see it written.) */
 static int rd(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (int)(size_t)buf, n);

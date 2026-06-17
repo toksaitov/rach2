@@ -61,7 +61,7 @@ int main(void)
     CHECK(synth_classify("proc/9/cmdline", &vp) == VNODE_PROC_FILE &&
           vp.procfile == SYNTH_PROC_CMDLINE);
 
-    /* /proc/<pid>/fd/<n> magic links -- the ttyname path. */
+    /* /proc/<pid>/fd/<n> magic links: the ttyname path. */
     CHECK(synth_classify("proc/self/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.pid == SYNTH_PID_SELF &&
           vp.procfd == 0);
     CHECK(synth_classify("proc/7/fd/3", &vp) == VNODE_PROC_FD_LINK && vp.pid == 7 &&

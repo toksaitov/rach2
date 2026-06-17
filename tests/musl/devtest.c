@@ -2,7 +2,7 @@
  * devtest.c - Phase 15 integration: the synthetic /dev and /proc through musl.
  *
  * Drives the real libc wrappers (not raw int 0x80): open/read/write on the char
- * devices, and ttyname(0) -- which exercises isatty (TIOCGWINSZ), readlink of
+ * devices, and ttyname(0), which exercises isatty (TIOCGWINSZ), readlink of
  * /proc/self/fd/0, and the stat/fstat identity match. Installed as "mdevtest".
  * Prints "DEVTEST OK".
  */

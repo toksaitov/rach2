@@ -8,7 +8,7 @@
  * the process before read() ever returns. The kernel then reports
  * "killed by signal 2" and returns to its shell.
  *
- * Success is the harness seeing the kill, NOT this program printing -- if Ctrl-C
+ * Success is the harness seeing the kill, NOT this program printing; if Ctrl-C
  * were ignored, read() would return and we would print "CTRLC NOT INTERRUPTED",
  * which the harness treats as failure. The default disposition is intentional
  * (no handler installed): "interrupting" a program means terminating it.

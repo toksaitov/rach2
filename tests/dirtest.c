@@ -67,7 +67,7 @@ static int sys_chdir(const char *path)
 /*
  * sys_getcwd - Get current working directory
  * Returns: the path length including the NUL on success (the path is written
- * into buf), or a negative errno on error -- the Linux getcwd(2) ABI.
+ * into buf), or a negative errno on error. This is the Linux getcwd(2) ABI.
  */
 static int sys_getcwd(char *buf, size_t size)
 {

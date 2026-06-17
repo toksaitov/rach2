@@ -328,7 +328,7 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
         /* Reject hostile or malformed segment geometry BEFORE allocating any
          * page: wrapping address/file ranges, anything outside the user image
          * window (so a hostile ELF cannot map kernel or stack range), and
-         * segments that overlap or precede an earlier one -- valid static ELFs
+         * segments that overlap or precede an earlier one; valid static ELFs
          * have ascending, disjoint PT_LOADs. The overlap test is page-granular:
          * two PT_LOADs that merely share a page would have their common page
          * allocated twice (leaking a frame and losing the first segment's bytes),

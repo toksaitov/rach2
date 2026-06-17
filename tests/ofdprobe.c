@@ -161,7 +161,7 @@ void _start(void)
 
     /* (c2) fork/waitpid cycles must not leak OFDs either (the child's inherited
      * descriptions are released on its exit). After many forks, open must still
-     * succeed -- a leak of even 3 OFDs per fork would exhaust the pool. */
+     * succeed: a leak of even 3 OFDs per fork would exhaust the pool. */
     for (i = 0; i < 100; i++) {
         int p = syscall1(SYS_FORK, 0);
         if (p == 0) {

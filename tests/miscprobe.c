@@ -4,7 +4,7 @@
  * Proves, from user space via raw int 0x80: getppid (a child sees the parent's
  * pid), umask (set returns the previous mask, inherited across fork), times (a
  * monotonic tick count + a zeroed tms), sysinfo (a live-process count, mem_unit
- * 1), and vfork (a fork alias -- parent gets a pid, child runs and exits).
+ * 1), and vfork (a fork alias: parent gets a pid, child runs and exits).
  *
  * Prints "MISCPROBE OK" / "MISCPROBE FAIL". Freestanding; direct int 0x80.
  */

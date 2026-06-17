@@ -4,8 +4,8 @@
  * host-deps:
  *
  * Dual-target seam test for the multi-waiter queue logic of proc/wait_queue.c.
- * The fixed-slot array ops -- enqueue (idempotent), dequeue, and wq_wake_all
- * (mark every BLOCKED waiter READY and empty the queue) -- are the part a
+ * The fixed-slot array ops, enqueue (idempotent), dequeue, and wq_wake_all
+ * (mark every BLOCKED waiter READY and empty the queue), are the part a
  * fence-post bug could break, so they run natively here under ASan/UBSan with a
  * stand-in PCB. The block/yield path (schedule + sti;hlt) is kernel-only and is
  * covered in-guest by waitprobe and by the live httpd accept/recv wake; here we

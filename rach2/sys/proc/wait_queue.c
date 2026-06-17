@@ -124,8 +124,8 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
          * returned because a waker made us READY (we ran again) we are no longer
          * BLOCKED and just re-loop. If we are still BLOCKED, nothing woke us and
          * nothing else was runnable: idle until an interrupt. `sti; hlt; cli`
-         * issued from IF=0 is atomic -- a wake that became pending during the
-         * check fires the instant after hlt, never before, so it is not lost --
+         * issued from IF=0 is atomic (a wake that became pending during the
+         * check fires the instant after hlt, never before, so it is not lost)
          * and leaves interrupts off again for the next iteration.
          */
         flags = irq_save();

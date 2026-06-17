@@ -77,7 +77,7 @@ int main(void)
     }
 
     /* seteuid/setegid/setresuid: the privilege drop+restore dropbear performs
-     * around reading authorized_keys -- root->root succeeds, ->nonzero is EPERM. */
+     * around reading authorized_keys: root->root succeeds, ->nonzero is EPERM. */
     if (seteuid(0) != 0 || setegid(0) != 0 || setresuid(0, 0, 0) != 0) {
         printf("PERMMUSL FAIL (seteuid/setegid/setresuid 0: %s)\n",
                strerror(errno));

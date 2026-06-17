@@ -45,7 +45,7 @@ int main(void)
     fclose(f);
 
     /* 1b. Read a HOST-staged nested file (/etc/motd, written into the image by
-     * stagetree.krffs) and list /etc -- proving musl navigates a pre-staged tree,
+     * stagetree.krffs) and list /etc, proving musl navigates a pre-staged tree,
      * not only one created at runtime. */
     buf[0] = '\0'; /* so a read failure does not print stale /hello.txt bytes */
     f = fopen("/etc/motd", "r");

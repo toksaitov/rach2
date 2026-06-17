@@ -7,7 +7,7 @@
 
 /*
  * Defined in kernel.c: tear the current user process down with a signal death
- * ('signo'; SIGSEGV here) -- free its pages, wake a waiting parent -- and either
+ * ('signo'; SIGSEGV here): free its pages, wake a waiting parent, and either
  * resume the kernel debug shell (if it was init) or schedule the parent (if it
  * was a child). Kills a process that faulted illegally without taking the machine
  * down. Mirrors the CTRL+C kill path.
@@ -253,8 +253,8 @@ static int pte_present(page_dir_t *dir, uint32_t addr)
  * Demand-paging resolver. Decide whether an access at the (not necessarily
  * aligned) 'addr' is legal for the current process and, if so, make sure the
  * page is backed. 'write' is 1 for a write. Returns 1 if the page is now mapped,
- * 0 if the access is illegal -- no VMA covers it (and it is not a valid stack
- * growth) or it writes a read-only region -- so the caller faults or segfaults.
+ * 0 if the access is illegal (no VMA covers it and it is not a valid stack
+ * growth, or it writes a read-only region); so the caller faults or segfaults.
  *
  * The current process always has a user address space here (the handler and the
  * pre-fault path both gate on current_proc->cr3 != 0).
@@ -275,7 +275,7 @@ static int vm_resolve(uint32_t addr, int write)
         /* The access must be permitted by the region's protection. A write to a
          * read-only region and any access to a PROT_NONE region are protection
          * violations the caller turns into a segfault (or -EFAULT for a kernel
-         * prefault) -- never silently backed. */
+         * prefault); never silently backed. */
         if (write) {
             if (!(vma->prot & VM_PROT_WRITE)) {
                 return 0;
@@ -284,7 +284,7 @@ static int vm_resolve(uint32_t addr, int write)
             return 0;
         }
         if (pte_present(_curr_dir, addr)) {
-            return 1; /* already backed -- nothing to do */
+            return 1; /* already backed; nothing to do */
         }
     }
 
@@ -302,7 +302,7 @@ static int vm_resolve(uint32_t addr, int write)
     k_memset((void *)phys, 0, PAGE_SIZE);
 
     /* Honor a read-only region's protection in the PTE, so a later write faults
-     * as a protection violation -- which the handler segfaults, and which Phase 5
+     * as a protection violation, which the handler segfaults, and which Phase 5
      * copy-on-write uses to tell a write fault from a demand fault. A grown stack
      * page (vma == NULL here) is left writable. */
     if (vma && !(vma->prot & VM_PROT_WRITE)) {
@@ -419,7 +419,7 @@ static void _page_fault_handler(isr_params_t *params)
     }
 
     /* Unrecoverable. A fault taken in user mode is the process's own bug: kill
-     * just that process and survive -- terminate_current_process returns to the
+     * just that process and survive; terminate_current_process returns to the
      * shell if it was init, or schedules the parent to collect the zombie. */
     if (user_mode && have_user_proc) {
         serial_printf("Page fault: killing pid %d -- bad %s at 0x%x (err 0x%x)\n",
@@ -607,7 +607,7 @@ uint32_t frame_unref(uintptr_t phys)
     }
     /* A frame whose count ever saturated (frame_ref caps at 0xFF) has lost its
      * exact share count, so decrementing it could drop below the real number of
-     * mappings and free a still-live frame. Pin it instead -- leaking a frame is
+     * mappings and free a still-live frame. Pin it instead; leaking a frame is
      * safe, a use-after-free is not. (Unreachable while MAX_PROCS <= 255 bounds
      * sharing far below the cap; this is a guard, not a hot path.) */
     if (_frames[frame] == 0xFF) {

@@ -107,7 +107,7 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
     {
         uint32_t a = addr + i;
 
-        /* Validate each byte's address before reading it -- a short string near
+        /* Validate each byte's address before reading it. A short string near
          * the top of user space stays valid while an unterminated one cannot
          * walk off the end. */
         if (!user_range_ok(a, 1))

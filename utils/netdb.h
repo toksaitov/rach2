@@ -4,7 +4,7 @@
  * A small userspace stub resolver: turn a host string into an IPv4 address by
  * trying, in order, a numeric dotted-quad literal, the /hosts file, then a DNS
  * "A" query to the nameserver listed in /resolv.conf. This mirrors how a libc
- * stub resolver works -- the kernel stays transport-only and naming lives here.
+ * stub resolver works: the kernel stays transport-only and naming lives here.
  * A future musl port would replace resolve_host() with getaddrinfo() and read
  * the same /resolv.conf and /hosts, so callers and config files do not change.
  *
@@ -20,7 +20,7 @@
  * Parse a dotted-quad "a.b.c.d" into a host-order IPv4 address. Returns 0 and
  * stores the address in *out_ip on success; -1 if the string is not a valid
  * numeric address. ("0.0.0.0" succeeds with *out_ip == 0, so a 0 return is the
- * only success signal -- callers must not treat a zero address as an error.)
+ * only success signal; callers must not treat a zero address as an error.)
  */
 int rach2_inet_aton(const char *s, unsigned int *out_ip);
 

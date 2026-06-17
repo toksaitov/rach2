@@ -155,7 +155,7 @@ static void check(int cond, const char *msg)
 }
 
 /* Run a forked child's body; its return value becomes the exit status, which the
- * parent decodes -- 0 means every in-child check passed. */
+ * parent decodes; 0 means every in-child check passed. */
 static int child_setpgid(void)
 {
     int me = getpid();
@@ -259,7 +259,7 @@ void _start(void)
 
     /* (17c+d) the stop / continue / kill cycle. A child loops in pause(); the
      * parent stops it, observes the stop, continues it, observes the continue,
-     * then kills it -- each transition reported through wait4. */
+     * then kills it; each transition reported through wait4. */
     {
         int cpid = fork();
         int st;

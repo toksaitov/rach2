@@ -9,7 +9,7 @@
  * round-trip time in kernel ticks (10 ms each) or a timeout.
  *
  * Ported to musl: <stdio.h> for output, the shared resolver, and the one
- * Rach2-specific operation (SC_PING -- there is no libc wrapper for it) via a
+ * Rach2-specific operation (SC_PING: there is no libc wrapper for it) via a
  * direct socketcall(2). No hand-rolled int-0x80 stubs or crt0.
  */
 

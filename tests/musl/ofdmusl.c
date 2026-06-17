@@ -4,7 +4,7 @@
  * Proves musl's dup2 + buffered stdio ride the kernel's refcounted open-file
  * description: it dup2's a writable file over stdout, writes "AAA" with printf
  * (through fd 1), then writes "BBB" through the ORIGINAL file descriptor. Because
- * the two descriptors share one seek offset, the second write APPENDS -- the file
+ * the two descriptors share one seek offset, the second write APPENDS: the file
  * reads back "AAABBB" (6 bytes). If each fd had its own offset (the old bug), the
  * second write would overwrite at offset 0 and the file would be just "BBB".
  * Printing "OFDMUSL OK" means dup2 shared the offset end to end through libc.

@@ -2,7 +2,7 @@
  * vmro.c - read-only protection probe for Rach2 OS (Phase 4)
  *
  * Maps an anonymous page with PROT_READ only, reads it (must succeed and read
- * zero), then writes to it -- which must fault as a protection violation, since
+ * zero), then writes to it, which must fault as a protection violation, since
  * the demand-paging handler honors the VMA's protection in the PTE. The process
  * must die and the kernel return to its shell; the "still alive" line must NEVER
  * appear. Companion to vmfault (which tests an address in no VMA at all).

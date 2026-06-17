@@ -6,7 +6,7 @@
  * and returns from main so musl's __libc_start_main runs its exit path. It is
  * linked statically against the ported musl (crt1 + libc.a + crtn). If it runs
  * in the guest, musl reached main, did TLS setup (set_thread_area), buffered
- * stdio, and exited cleanly through exit_group -- the whole Phase 3 contract.
+ * stdio, and exited cleanly through exit_group: the whole Phase 3 contract.
  */
 
 #include <stdio.h>

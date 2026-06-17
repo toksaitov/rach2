@@ -2,13 +2,13 @@
  * budgetmusl.c - Phase 19 live one-session budget probe.
  *
  * Stands up the exact resource footprint one remote-login session needs once the
- * Phase-19 pty layer exists -- the check the plan defers to here, before
+ * Phase-19 pty layer exists. The check the plan defers to here, before
  * committing to dropbear (Phase 23). A session is: a listening socket + an
  * accepted socket (modelled with a socketpair) + a pty master + the pty slave
  * handed to a forked child as its controlling-terminal stdio. It then confirms
  * there is headroom left under the fixed limits (MAX_FDS / MAX_PROCS / socket
- * pool = 16 each), so a real session -- which also forks pipeline children in the
- * shell -- fits.
+ * pool = 16 each), so a real session (which also forks pipeline children in the
+ * shell) fits.
  *
  * Prints the counts and "BUDGETMUSL OK" / "BUDGETMUSL FAIL". Linked against musl.
  */
@@ -52,7 +52,7 @@ int main(void)
     }
     if (pid == 0) {
         /* The session child: a new session leader with the slave as its
-         * controlling terminal and its stdin/out/err -- exactly what a login
+         * controlling terminal and its stdin/out/err: exactly what a login
          * server wires before exec'ing the shell. */
         close(master);
         setsid();

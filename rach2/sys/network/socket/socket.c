@@ -166,7 +166,7 @@ static int udp_recv_ready(void *arg)
 }
 
 /* Wait predicate: a stream socket has buffered data, saw a FIN (EOF), or its
- * connection has closed/reset -- any of which ends a blocking recv. */
+ * connection has closed/reset; any of which ends a blocking recv. */
 static int tcp_recv_ready(void *arg)
 {
     socket_t *sock = (socket_t *)arg;

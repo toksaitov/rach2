@@ -1,5 +1,5 @@
 /*
- * synthfs.c -- the pure path classifier for the synthetic /dev and /proc mounts.
+ * synthfs.c: the pure path classifier for the synthetic /dev and /proc mounts.
  *
  * No kernel dependencies: it turns a path string into a vnode kind plus the
  * coordinates the glue needs. The component splitting and the /proc/<pid>/fd/<n>
@@ -9,7 +9,7 @@
 
 #include "synthfs.h"
 
-/* A path component as a (pointer, length) slice -- the path is not modified. */
+/* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
     const char *s;
     int len;

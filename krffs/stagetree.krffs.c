@@ -24,9 +24,9 @@
 
     Stage a small SAMPLE directory tree (/etc, with motd and hostname) into an
     existing KRFFS image, so a booted image ships a populated directory rather
-    than only a flat root. It writes KRFFS v2 nodes directly -- a directory node
+    than only a flat root. It writes KRFFS v2 nodes directly: a directory node
     (parent_id 0, S_IFDIR) and its children (parent_id = the directory's id),
-    exactly as the kernel path resolver expects -- proving the host tools speak
+    exactly as the kernel path resolver expects, proving the host tools speak
     the hierarchical format.
 
     It is idempotent: if /etc already exists it does nothing, and it preflights
@@ -61,7 +61,7 @@ static const char STAGE_SHELLS[] =
     "/sh\n/bin/sh\n";
 
 /* Read a whole file into a malloc'd buffer (NUL-terminated, *len excludes the
- * terminator). Returns NULL if the file is absent/unreadable -- used to stage an
+ * terminator). Returns NULL if the file is absent/unreadable; used to stage an
  * optional authorized_keys (the pubkey the dropbear SSH login authenticates). */
 static char *read_whole_file(const char *path, size_t *len)
 {
@@ -219,7 +219,7 @@ static uint64_t stage_node(
 
 /* Idempotent stage: return the id of `name` inside directory `parent_id`,
    creating it (with `mode` and the optional `data` payload) only if it is absent.
-   Returns 0 only on a genuine allocation failure -- so a re-run completes a
+   Returns 0 only on a genuine allocation failure, so a re-run completes a
    partially staged tree instead of duplicating nodes or refusing to recover. */
 static uint64_t ensure_node(
                     struct krffs_file_system *file_system,
@@ -242,7 +242,7 @@ static uint64_t ensure_node(
 
 /* Free-space cost (one header plus payload) of staging `name` inside `parent_id`,
    or 0 if it already exists. The preflight sums this over the tree so it counts
-   only what a run will actually allocate -- an all-or-nothing guarantee that still
+   only what a run will actually allocate: an all-or-nothing guarantee that still
    holds on a re-run that needs to add just a missing node. */
 static uint64_t stage_cost(
                     struct krffs_file_system *file_system,

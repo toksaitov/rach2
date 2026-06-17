@@ -5,7 +5,7 @@
  *
  * Dual-target seam test for build_user_stack (proc/uimage.c): the SysV/i386
  * initial-stack layout is built into a plain buffer and verified natively under
- * ASan/UBSan -- argc, the argv/envp pointer arrays and their NULL terminators,
+ * ASan/UBSan: argc, the argv/envp pointer arrays and their NULL terminators,
  * the auxv pairs and AT_NULL, AT_RANDOM pointing at the supplied bytes, and
  * 16-byte ESP alignment. Returns the failed-check count (0 == all passed).
  */

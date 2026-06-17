@@ -1,11 +1,11 @@
 /*
- * n_tty.c -- the N_TTY line discipline (pure logic; host-tested).
+ * n_tty.c: the N_TTY line discipline (pure logic; host-tested).
  *
  * Input is cooked (ICANON: a line is assembled with ERASE/WERASE/KILL editing and
  * ECHO, and only becomes readable when terminated) or raw (each byte is readable at
  * once, gated by VMIN); ISIG control chars are recognized for signal delivery. Output
  * is post-processed (OPOST/ONLCR). Echo and output bytes leave through a caller sink,
- * so nothing here touches kernel I/O -- the kernel points the sink at the console, the
+ * so nothing here touches kernel I/O; the kernel points the sink at the console, the
  * host test at a buffer.
  */
 
@@ -190,8 +190,8 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
     if (tio->c_lflag & ISIG) {
         if (c == tio->c_cc[VINTR] || c == tio->c_cc[VQUIT] || c == tio->c_cc[VSUSP]) {
             echo(t, out, ctx, c);
-            /* Flush ALL unread input -- the edit line AND any committed-but-unread
-             * lines and a pending EOF -- so input typed before the signal does not
+            /* Flush ALL unread input (the edit line AND any committed-but-unread
+             * lines and a pending EOF) so input typed before the signal does not
              * survive it (the default !NOFLSH behaviour). */
             t->line_len = 0;
             t->rq_head = t->rq_tail;
@@ -302,7 +302,7 @@ int n_tty_read(struct n_tty *t, unsigned char *buf, int count)
     }
     if (canon) {
         /* A pending EOF is delivered (read returns 0) only once the read head has
-         * reached the position it was typed at -- so input committed before the
+         * reached the position it was typed at; so input committed before the
          * EOF is returned first, and input committed after is returned next. */
         if (t->eof && t->rq_head == t->eof_pos) {
             t->eof = 0;

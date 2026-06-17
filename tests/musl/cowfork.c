@@ -2,7 +2,7 @@
  * cowfork.c - Phase 5 integration milestone: fork/wait under musl.
  *
  * An ordinary hosted C program: it fork()s, both sides printf distinct state,
- * and the parent reaps the child with wait() -- which musl implements on top of
+ * and the parent reaps the child with wait(), which musl implements on top of
  * the new wait4(114) syscall and decodes with WIFEXITED/WEXITSTATUS. If it prints
  * "COWFORK OK" the whole Phase 5 path worked end to end: COW fork, the Linux
  * wait-status encoding, and musl's process-control wrappers.
@@ -26,7 +26,7 @@ int main(void)
 
     if (pid == 0)
     {
-        /* Child: its own copy of the address space (COW) -- a distinct pid. */
+        /* Child: its own copy of the address space (COW); a distinct pid. */
         printf("child: pid %d, exiting 7\n", (int)getpid());
         return 7;
     }

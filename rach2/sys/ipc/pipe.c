@@ -66,7 +66,7 @@ static pipe_t *pipe_alloc(void)
     return NULL;
 }
 
-/* Wait predicate: a reader can stop blocking -- data is available, or every
+/* Wait predicate: a reader can stop blocking; data is available, or every
  * writer has gone (EOF). */
 static int pipe_readable(void *arg)
 {
@@ -74,7 +74,7 @@ static int pipe_readable(void *arg)
     return pipe_available(p) != 0 || !p->write_open;
 }
 
-/* Wait predicate: a writer can stop blocking -- space is available, or every
+/* Wait predicate: a writer can stop blocking; space is available, or every
  * reader has gone (the write will fail with EPIPE). */
 static int pipe_writable(void *arg)
 {
@@ -122,7 +122,7 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
     }
 
-    /* Return what is available now, up to count (POSIX pipe read semantics --
+    /* Return what is available now, up to count (POSIX pipe read semantics:
      * a single batch, not a fill-to-count loop). */
     to_read = pipe_available(p);
     if (to_read > count) {

@@ -1,5 +1,5 @@
 /*
- * tty.c -- the terminal object: an N_TTY line discipline over a wait-queue of
+ * tty.c: the terminal object, an N_TTY line discipline over a wait-queue of
  * readers, plus the one console_tty wired to the VGA screen and the serial port.
  *
  * The discipline (n_tty.c) is pure and host-tested; this file is the kernel glue
@@ -221,7 +221,7 @@ short tty_poll(struct tty *t, short events, wait_queue_t **wq)
     /*
      * Only an input query touches the input side: park on input_wq, drain the
      * polled source (surfacing input that arrived but was not yet drained), and
-     * -- because draining claims foreground -- it must NOT run for a POLLOUT-only
+     * (because draining claims foreground) it must NOT run for a POLLOUT-only
      * poll on a write-only console fd, or that process would pull in serial input
      * and could be signalled by a serial ^C. The poll core calls this with
      * interrupts off.
@@ -316,7 +316,7 @@ static void console_sink(void *ctx, unsigned char c)
 
 /* The console's polled input source: COM1 is not wired to an IRQ here, so drain
  * the bytes that have arrived into the discipline. Drained (in thread context,
- * where current_proc is the reader/poller -- so an ISIG signal targets the right
+ * where current_proc is the reader/poller, so an ISIG signal targets the right
  * process) from tty_ready_cond before each read-sleep and from tty_poll; the
  * timer only wakes a waiter so this drain happens here, not in the IRQ. Bounded
  * per call so a flood cannot hold interrupts off indefinitely; the caller loops. */
@@ -334,7 +334,7 @@ static void console_pump(struct tty *t)
 }
 
 /* The timer-IRQ drain: like console_pump but with echo SUPPRESSED. Echo runs
- * through serial_putc, which busy-waits on the UART transmit-holding register --
+ * through serial_putc, which busy-waits on the UART transmit-holding register:
  * unacceptable in interrupt context, where a 64-byte burst could mask interrupts
  * for milliseconds. n_tty_receive still recognizes ISIG chars and queues
  * type-ahead independent of the (here null) sink, so a serial ^C/^Z reaches the
@@ -370,7 +370,7 @@ void tty_console_poll(void)
     /*
      * Called from the timer IRQ. COM1 has no receive interrupt here, so a reader
      * or poller parked on the console would never learn of serial input while
-     * another process runs -- the wait queue is its only waker. When someone is
+     * another process runs; the wait queue is its only waker. When someone is
      * waiting AND a byte has arrived, wake them; the woken thread drains and
      * echoes the port itself (console_pump in its own context), so no draining,
      * echoing, or signal delivery happens in this IRQ. Gated on a waiter so it
@@ -384,7 +384,7 @@ void tty_console_poll(void)
          * thread context. No draining, echo, or signalling in this IRQ. */
         wq_wake_all(&console_tty.input_wq);
     } else if (console_tty.sid != 0) {
-        /* A session owns the console but nobody is parked reading it -- a
+        /* A session owns the console but nobody is parked reading it: a
          * foreground job is running while the shell waits in wait4. Drain here,
          * echo suppressed (console_pump_irq avoids blocking serial TX in the IRQ),
          * so a serial ^C/^Z still reaches the foreground group; type-ahead is

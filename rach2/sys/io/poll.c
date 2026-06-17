@@ -28,7 +28,7 @@
 #include "../lib/kstring.h"
 #include "../network/socket/socket.h"
 
-/* At most this many descriptors can be polled at once -- a process has at most
+/* At most this many descriptors can be polled at once: a process has at most
  * MAX_FDS open, so this also caps the per-call stack arrays. */
 #define POLL_MAX_FDS MAX_FDS
 
@@ -177,8 +177,8 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
         schedule();
 
         /* Leave every queue and re-arm. If nothing woke us and nothing else ran
-         * (still BLOCKED), idle until the next interrupt -- a wake or the tick
-         * that advances the deadline. sti;hlt;cli is atomic from IF=0. */
+         * (still BLOCKED), idle until the next interrupt (a wake or the tick
+         * that advances the deadline). sti;hlt;cli is atomic from IF=0. */
         flags = irq_save();
         for (i = 0; i < nfds; i++) {
             wq_poll_remove(wqs[i], current_proc);
@@ -190,7 +190,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
     }
 
     /* On a break we still hold the loop's cli but may be enqueued (broke right
-     * after a scan that ran before any sleep this iteration -- in which case we
+     * after a scan that ran before any sleep this iteration, in which case we
      * never enqueued, so the removes are no-ops). Belt-and-suspenders dequeue. */
     for (i = 0; i < nfds; i++) {
         wq_poll_remove(wqs[i], current_proc);
@@ -366,7 +366,7 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
     }
     /* A large nfds is fine as long as no bit is set for an fd the kernel cannot
      * have: we scan the whole [0, nfds) range and only fail (below, -EBADF) if a
-     * selected bit names fd >= MAX_FDS -- never a silent truncation. */
+     * selected bit names fd >= MAX_FDS, never a silent truncation. */
     setbytes = (uint32_t)FDSET_WORDS * (uint32_t)sizeof(uint32_t);
 
     k_memset(rset, 0, setbytes);
@@ -395,7 +395,7 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
 
     /* select() fails wholesale if any selected fd is invalid. poll_scan flags such
      * an fd POLLNVAL (an in-range bit whose descriptor was closed), which has no
-     * fd_set projection, so surface it as -EBADF -- never a silent success. An
+     * fd_set projection, so surface it as -EBADF; never a silent success. An
      * invalid fd always makes the scan "ready", so this never masks a real block. */
     {
         int i;

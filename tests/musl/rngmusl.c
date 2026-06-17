@@ -2,7 +2,7 @@
  * rngmusl.c - Phase 20 integration: a musl getrandom() + /dev/urandom consumer in
  * the shape an SSH key generator (dropbear, Phase 23) uses.
  *
- * Generates two 32-byte "keys" -- one via getrandom(), one via /dev/urandom --
+ * Generates two 32-byte "keys" (one via getrandom(), one via /dev/urandom)
  * and confirms both are delivered, non-zero, and distinct (independent draws). On
  * a trusted-entropy boot (RDSEED/RDRAND, the run scripts' -cpu max) both succeed;
  * on a no-hardware boot they fail closed (the rngprobe covers that path).

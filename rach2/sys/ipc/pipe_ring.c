@@ -5,7 +5,7 @@
  * occupancy is `tail - head` (correct across wrap because the subtraction is
  * unsigned), and the physical slot for a logical position is `pos & (SIZE-1)`.
  * Kept free of any kernel dependency so tests/host/pipe_ring_hosttest.c can link
- * it natively under ASan/UBSan -- the wrap arithmetic is exactly the kind of
+ * it natively under ASan/UBSan: the wrap arithmetic is exactly the kind of
  * fence-post logic that is murder to debug in-guest.
  */
 

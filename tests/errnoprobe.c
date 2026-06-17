@@ -2,13 +2,13 @@
  * errnoprobe.c - Phase 3 probe: verify the kernel's -errno syscall contract.
  *
  * A freestanding program (no libc) that makes raw int 0x80 calls and checks the
- * returned value is the correct NEGATIVE Linux errno -- not a bare -1. An
+ * returned value is the correct NEGATIVE Linux errno, not a bare -1. An
  * unimplemented or out-of-range syscall number must return -ENOSYS (so musl's
  * feature-detection fallbacks work), and a deliberately failing real call must
  * return the specific errno Linux would (-ENOENT, -EBADF, -EFAULT). Prints
  * "All errno checks passed!" and exits 0 only if every check matches.
  *
- * Linux/BSD analogue: the kernel side of the errno contract -- the kernel
+ * Linux/BSD analogue: the kernel side of the errno contract; the kernel
  * returns -errno, the C library negates it into errno.
  */
 

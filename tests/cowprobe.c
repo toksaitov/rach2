@@ -7,7 +7,7 @@
  *   2. SPLIT: the child writing the page gets a private copy; the parent's copy
  *      is unchanged, and the parent can then write its own copy. Isolation both
  *      ways means the shared frame was split on write.
- *   3. NO LEAK: 64 fork/exit cycles do not exhaust frames -- each COW share is
+ *   3. NO LEAK: 64 fork/exit cycles do not exhaust frames: each COW share is
  *      reference-counted and freed when the last owner exits.
  *
  * Prints "COWPROBE OK". Freestanding; direct int 0x80 syscalls. Build:

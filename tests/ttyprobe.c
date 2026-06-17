@@ -2,7 +2,7 @@
  * ttyprobe.c - Phase 16 probe: the tty line discipline + termios ioctls.
  *
  * Proves, from user space via raw int 0x80, that the console fd is wired to the
- * kernel tty (n_tty discipline) -- not just that the discipline is correct (the
+ * kernel tty (n_tty discipline), not just that the discipline is correct (the
  * host seam test covers that), but that read/write/ioctl on fd 0/1/2 route
  * through it:
  *   (a) TIOCGWINSZ   - the console reports a 25x80 window;
@@ -132,7 +132,7 @@ void _start(void)
 
     puts("TTYPROBE START");
 
-    /* (a) window size -- all four fields are filled (xpixel/ypixel are 0). */
+    /* (a) window size: all four fields are filled (xpixel/ypixel are 0). */
     ws.ws_row = 0xFFFF;
     ws.ws_col = 0xFFFF;
     ws.ws_xpixel = 0xFFFF;
@@ -141,7 +141,7 @@ void _start(void)
     check(ws.ws_row == 25 && ws.ws_col == 80, "console window is 25x80");
     check(ws.ws_xpixel == 0 && ws.ws_ypixel == 0, "console window has no pixel size");
 
-    /* (b) default termios is cooked, echoing, with the usual in/out processing --
+    /* (b) default termios is cooked, echoing, with the usual in/out processing;
      * proving the whole 36-byte prefix (not just c_lflag) reads back sanely. */
     check(do_ioctl(0, TCGETS, &t) == 0, "TCGETS ok");
     check((t.c_lflag & ICANON) != 0, "default ICANON set");
@@ -163,7 +163,7 @@ void _start(void)
     check(do_ioctl(0, TCGETS, &t2) == 0, "TCGETS after TCSETS ok");
     check((t2.c_lflag & ICANON) == 0, "TCSETS cleared ICANON (round-trip)");
     check((t2.c_lflag & ECHO) == 0, "TCSETS cleared ECHO (round-trip)");
-    /* the fields we did not touch survive the round-trip unchanged -- the kernel
+    /* the fields we did not touch survive the round-trip unchanged; the kernel
      * stored exactly the 36-byte prefix we sent. */
     check(t2.c_iflag == t.c_iflag && t2.c_oflag == t.c_oflag, "TCSETS preserves c_iflag/c_oflag");
     check(t2.c_cflag == t.c_cflag && t2.c_line == t.c_line, "TCSETS preserves c_cflag/c_line");

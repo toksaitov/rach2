@@ -1,9 +1,9 @@
 /*
- * procfs.c -- the synthetic /proc, generated from the process table.
+ * procfs.c: the synthetic /proc, generated from the process table.
  *
  * A /proc text file is snapshotted into a small pooled buffer when opened and
  * served from there (so a read sees a consistent moment, and dup/fork share the
- * snapshot until the last descriptor closes -- the per-open-file-description
+ * snapshot until the last descriptor closes; the per-open-file-description
  * lifetime). The text is built with bounded append helpers and hand-rolled
  * integer formatting (the kernel has no snprintf and avoids 64-bit division).
  */

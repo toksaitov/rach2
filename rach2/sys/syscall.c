@@ -284,10 +284,10 @@ static int32_t sys_exit(isr_params_t *params)
     is_init = (exiting_pid == init_pid && init_pid != 0);
 
     /* If the dying process is the console-owning session leader (init, or a later
-     * leader that claimed the console via TIOCSCTTY -- NOT only init), release the
+     * leader that claimed the console via TIOCSCTTY, NOT only init), release the
      * controlling terminal NOW, before it zombifies and the teardown below runs
      * with interrupts on. Otherwise the timer-IRQ serial drain (tty_console_poll)
-     * keeps draining COM1 against this vanishing session -- dropping a ^C/^Z and
+     * keeps draining COM1 against this vanishing session, dropping a ^C/^Z and
      * stealing bytes the kernel debug shell should read. shell_reset_input on the
      * is_init path releases again (idempotent). */
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
@@ -299,7 +299,7 @@ static int32_t sys_exit(isr_params_t *params)
 
 #ifdef RACH2_HARNESS
     /* Harness build: the instant the probe (run as init) exits, report its status
-     * to QEMU's isa-debug-exit device and stop -- BEFORE schedule() can switch to
+     * to QEMU's isa-debug-exit device and stop, BEFORE schedule() can switch to
      * a still-READY child and bypass this path, so the runner always reads a real
      * exit code. */
     if (is_init) {
@@ -589,7 +589,7 @@ static int32_t sys_writev(isr_params_t *params)
         }
         total += r;
         if ((uint32_t)r < iov.iov_len) {
-            break;  /* short write -- stop, as writev does */
+            break;  /* short write; stop, as writev does */
         }
     }
 
@@ -863,7 +863,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     int fd;
     struct vpath vp;
 
-    /* /dev and /proc are synthetic -- classified in one place, never KRFFS. */
+    /* /dev and /proc are synthetic; classified in one place, never KRFFS. */
     if (synth_classify(name, &vp) != VNODE_KRFFS) {
         return synth_open(&vp, flags);
     }
@@ -983,7 +983,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     entry->ofd->offset = 0;
 
     /* Access mode is the low two bits (O_RDONLY=0/O_WRONLY=1/O_RDWR=2); create,
-     * trunc and cloexec live higher up, so mask before testing -- the legacy
+     * trunc and cloexec live higher up, so mask before testing; the legacy
      * `flags == 0` form misreads O_RDONLY|O_CREAT as not-readable. */
     if ((flags & 3) == 1) {
         entry->flags = FD_FLAG_WRITE;
@@ -1071,7 +1071,7 @@ static int32_t sys_close(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Closing stdin/stdout/stderr is legal -- a shell or daemon closes fd 0/1/2
+    /* Closing stdin/stdout/stderr is legal; a shell or daemon closes fd 0/1/2
      * and reopens onto the freed (lowest) number to redirect them. */
 
     /* Release the descriptor's backing (framebuffer/socket/ops object), then free
@@ -1196,8 +1196,8 @@ static int32_t sys_read(isr_params_t *params)
         return -EBADF;
     }
 
-    /* A zero-length read is a no-op that returns 0 -- even with a NULL buffer, per
-     * POSIX -- once the fd is known valid; do not touch buf. */
+    /* A zero-length read is a no-op that returns 0 (even with a NULL buffer, per
+     * POSIX) once the fd is known valid; do not touch buf. */
     if (count == 0) {
         return 0;
     }
@@ -1251,7 +1251,7 @@ static int32_t sys_read(isr_params_t *params)
 
         /*
          * If the process owns the framebuffer (graphics mode), use non-blocking
-         * raw scancode input for game controls -- bypassing the line discipline.
+         * raw scancode input for game controls, bypassing the line discipline.
          */
         if (fb_owner_pid == current_proc->pid) {
             /* Non-blocking raw scancode read for games. kbd_read_scancodes
@@ -1273,7 +1273,7 @@ static int32_t sys_read(isr_params_t *params)
          * stdin_waiting_proc tells the keyboard IRQ a user process owns the
          * console, so keystrokes are cooked into console_tty (which wakes us)
          * rather than the kernel shell; tty_read drains the serial port itself.
-         * The discipline echoes, edits, and recognizes ISIG -- so Ctrl-C on the
+         * The discipline echoes, edits, and recognizes ISIG, so Ctrl-C on the
          * console now arrives as a posted SIGINT, and a pending signal unwinds
          * the wait with -EINTR.
          */
@@ -1287,7 +1287,7 @@ static int32_t sys_read(isr_params_t *params)
                                (int)current_proc->pgid);
         }
         /* A BACKGROUND process reading its controlling terminal is stopped with
-         * SIGTTIN (POSIX) -- unless that would wedge it (SIGTTIN blocked or
+         * SIGTTIN (POSIX), unless that would wedge it (SIGTTIN blocked or
          * ignored), in which case the read fails with -EIO. Decided BEFORE marking
          * ourselves the console reader, so an early return leaves no stale flag. */
         if (tty_is_background(&console_tty, (int)current_proc->sid,
@@ -1349,7 +1349,7 @@ static int32_t sys_read(isr_params_t *params)
         if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
             return -EFAULT;
         }
-        /* Read via the resolved node (see the write path) -- the descriptor's
+        /* Read via the resolved node (see the write path); the descriptor's
          * node->name is only the basename for a file in a subdirectory. */
         bytes_read = krffs_read_node(entry->node, (char __force *)buf, count,
                                      entry->ofd->offset);
@@ -1494,8 +1494,8 @@ static int32_t sys_chdir(isr_params_t *params)
         return 0;
     }
 
-    /* A synthetic directory becomes the cwd (its canonical path -- self resolved to
-     * a real pid -- so later relative opens re-classify correctly); a synthetic
+    /* A synthetic directory becomes the cwd (its canonical path, self resolved to
+     * a real pid, so later relative opens re-classify correctly); a synthetic
      * leaf is ENOTDIR, a missing one ENOENT. */
     {
         struct vpath vp;
@@ -2130,7 +2130,7 @@ static int32_t sys_fstatat64(isr_params_t *params)
         if (name[0] == '/') {
             name++;
         }
-        /* /dev and /proc are synthetic -- classified before the KRFFS mount check,
+        /* /dev and /proc are synthetic; classified before the KRFFS mount check,
          * so they stat even on a kernel with no RAM disk. AT_SYMLINK_NOFOLLOW
          * (lstat) reports the magic symlinks; otherwise they are followed. */
         if (synth_classify(name, &vp) != VNODE_KRFFS) {
@@ -2964,7 +2964,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
              * the first write on either side faults into cow_fault (which makes a
              * private copy and re-grants write). A READ-ONLY page (ELF text,
              * PROT_READ, or an already-COW page from an earlier fork) is shared
-             * with its exact flags -- no copy; a write to genuine read-only text
+             * with its exact flags, no copy; a write to genuine read-only text
              * still segfaults because it carries no PTE_COW.
              */
             if (pte & 0x2) {
@@ -3037,7 +3037,7 @@ static void exec_fail_destroyed(void)
      * the controlling terminal before zombifying so the timer-IRQ serial drain
      * does not target this dead session during the teardown window (mirrors
      * sys_exit; usually a no-op here because sys_execve already released before
-     * free_user_pages -- kept as a defensive backstop). */
+     * free_user_pages; kept as a defensive backstop). */
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
         tty_set_session(&console_tty, 0, 0);
     }
@@ -3066,7 +3066,7 @@ static void exec_fail_destroyed(void)
     /* schedule() returned -> nothing else is runnable. The address space is
      * gone, so we cannot iret back. Tear the dead process down and resume the
      * kernel debug shell on a fresh kernel stack, exactly as the init-exit path
-     * does -- never deadlock, never return into freed userspace. */
+     * does: never deadlock, never return into freed userspace. */
     if (current_proc->pid == init_pid) {
         init_pid = 0;
     }
@@ -3302,8 +3302,8 @@ static int32_t sys_execve(isr_params_t *params)
      *   [argc]          <- ESP points here
      */
 
-    /* Build the SysV/i386 initial stack -- argc, the argv and real envp pointer
-     * arrays, and the auxv -- in the freshly zeroed page. build_user_stack copies
+    /* Build the SysV/i386 initial stack (argc, the argv and real envp pointer
+     * arrays, and the auxv) in the freshly zeroed page. build_user_stack copies
      * the strings in and 16-byte-aligns the entry ESP; the layout is verified
      * host-side (tests/host/uimage_hosttest.c). */
     krandom_bytes(random16, 16);
@@ -3399,8 +3399,8 @@ static int32_t sys_fork(isr_params_t *params)
     }
 
     /* Copy user pages from parent to child. On failure, release the frames
-     * copy_user_pages already allocated and the cloned directory -- not just the
-     * PCB -- or each failed fork leaks a directory and its private page tables.
+     * copy_user_pages already allocated and the cloned directory (not just the
+     * PCB) or each failed fork leaks a directory and its private page tables.
      * child_dir is never the running (parent) directory, so it frees cleanly. */
     if (copy_user_pages(parent, child_dir) != 0) {
         free_user_pages(child_dir);
@@ -3437,7 +3437,7 @@ static int32_t sys_fork(isr_params_t *params)
 
     /* The child's address space is a copy of the parent's at the same virtual
      * addresses (copy_user_pages duplicated the pages), so copy the VMA map too
-     * -- otherwise the child would have no regions and the first heap/stack
+     * otherwise the child would have no regions and the first heap/stack
      * fault would segfault it. (k_memcpy, not struct assignment, so the
      * freestanding kernel does not need a compiler-emitted memcpy.) */
     k_memcpy(&child->vm, &parent->vm, sizeof(child->vm));
@@ -3565,7 +3565,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
 
     /* Validate AND fault in the status (and rusage) pointers up front (a NULL
      * status means "don't report status"), so a bad or not-yet-present address is
-     * rejected before any child is reaped -- otherwise the copy_to_user below
+     * rejected before any child is reaped; otherwise the copy_to_user below
      * could fail after free_process() has destroyed the zombie, losing it.
      * Prefault for write, since that is how the results are delivered. */
     if (status &&
@@ -3798,7 +3798,7 @@ static int32_t sys_unlink(isr_params_t *params)
 
 /*
  * sys_mkdir - create a directory.
- * Args: EBX = path, ECX = mode (ignored -- no permission model). Returns 0 or
+ * Args: EBX = path, ECX = mode (ignored; no permission model). Returns 0 or
  * -errno (-EEXIST if it exists, -ENOENT if a parent is missing).
  */
 static int32_t sys_mkdir(isr_params_t *params)
@@ -4277,7 +4277,7 @@ static int32_t sys_getdents64(isr_params_t *params)
     }
 
     /* Records are packed straight into the user buffer below, so range-check AND
-     * fault in the whole [buf, buf+count) span once -- every record write then
+     * fault in the whole [buf, buf+count) span once; every record write then
      * stays inside present, validated user memory. */
     if (!user_buffer_ok((uint32_t)buf, count, 1)) {
         return -EFAULT;
@@ -5416,7 +5416,7 @@ static int32_t sys_ioctl(isr_params_t *params)
     }
 
     /* tty-family fds (the console and a pty slave) share the termios/session
-     * ioctls -- handled here, BEFORE the generic ops dispatch, so a pty slave's
+     * ioctls, handled here, BEFORE the generic ops dispatch, so a pty slave's
      * TCGETS/TIOCSCTTY reach the shared handler rather than its FIONBIO-only
      * ops->ioctl. On a non-terminal fd the terminal-only requests stay -ENOTTY
      * (the fallthrough below), as Linux reports. */
@@ -5433,7 +5433,7 @@ static int32_t sys_ioctl(isr_params_t *params)
         }
     }
 
-    /* A backing-ops object (pipe/pty/device) owns its remaining ioctls -- FIONBIO,
+    /* A backing-ops object (pipe/pty/device) owns its remaining ioctls: FIONBIO,
      * and (for the pty master) TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ. */
     if (entry->ops) {
         return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg)
@@ -5447,7 +5447,7 @@ static int32_t sys_ioctl(isr_params_t *params)
     }
 
     /* KIOCSOUND is handled by the console-type block below, keyed on the backing
-     * object's type -- not the fd number -- so it cannot fire on an fd 1/2 that
+     * object's type (not the fd number) so it cannot fire on an fd 1/2 that
      * has been closed and reopened onto a regular file (now that close(0/1/2) is
      * legal). */
 
@@ -5657,7 +5657,7 @@ static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
     }
 
     k_memset(sa, 0, sizeof(sa));
-    /* sin_family is in HOST byte order (little-endian on i386) -- NOT network
+    /* sin_family is in HOST byte order (little-endian on i386), NOT network
      * order: a big-endian AF_INET would read back as 0x0200 and a peer-address
      * consumer (dropbear's connection logging) rejects it as an unknown family.
      * Only sin_port and sin_addr are network (big-endian). */
@@ -5779,7 +5779,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     }
 
     /* On a connected stream socket, sendto with any (or no) destination behaves
-     * like send -- the connection's peer is the destination, so the sockaddr is
+     * like send; the connection's peer is the destination, so the sockaddr is
      * ignored (this is the path musl's send() takes: sendto with a NULL addr). */
     if (entry->sock->type == SOCK_STREAM) {
         return (int32_t)tcp_send(entry->sock,
@@ -5838,7 +5838,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
     nonblock = (flags & MSG_DONTWAIT) ||
                (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
-    /* On a connected stream socket, recvfrom behaves like recv -- the peer is the
+    /* On a connected stream socket, recvfrom behaves like recv; the peer is the
      * connection's, so the optional source-address writeback is skipped and a NULL
      * sockaddr is fine (this is the path musl's recv() takes: recvfrom with a NULL
      * addr). */
@@ -6093,7 +6093,7 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
                                     len);
 }
 
-/* getsockname: the socket's local address -- the single NIC IP (NET_IP_ADDR) plus
+/* getsockname: the socket's local address, the single NIC IP (NET_IP_ADDR) plus
  * its bound or ephemeral port. */
 static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
@@ -6148,7 +6148,7 @@ static int32_t do_shutdown(int fd, int how)
     if (how < SHUT_RD || how > SHUT_RDWR) {
         return -EINVAL;
     }
-    /* Only a connected stream socket can be shut down -- NOT a listener (which
+    /* Only a connected stream socket can be shut down, NOT a listener (which
      * would free its LISTEN TCB and silently stop accepting), an unconnected, or a
      * UDP socket. */
     if (!tcp_is_connected(entry->sock)) {
@@ -6195,7 +6195,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
     return 0;
 }
 
-/* getsockopt: report the integer options programs read at setup -- SO_ERROR (no
+/* getsockopt: report the integer options programs read at setup: SO_ERROR (no
  * async error is tracked, so 0), SO_TYPE (the real socket type), and the boolean
  * options as 0 (off). Always reports a 4-byte int result. */
 static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
@@ -6426,7 +6426,7 @@ static int32_t sys_setpgid(isr_params_t *params)
     /* The destination group must be in the target's session: either the target
      * creates its own group, or a process is ALREADY in group `pgid` within the
      * same session (an existing group, regardless of whether its leader is still
-     * alive -- not merely "a process whose pid == pgid"). */
+     * alive, not merely "a process whose pid == pgid"). */
     if ((uint32_t)pgid != target->pid && !pgrp_in_session(pgid, (int)target->sid)) {
         return -EPERM;
     }
@@ -6643,7 +6643,7 @@ struct kernel_utsname {
 };
 
 /* The mutable host name (uname's nodename, what gethostname reads, sethostname
- * sets). Single global -- Rach2 is one host. */
+ * sets). Single global; Rach2 is one host. */
 static char k_hostname[65] = "rach2";
 
 /* Copy a C string into a fixed 65-byte utsname field (always NUL-terminated). */
@@ -6701,7 +6701,7 @@ static int32_t sys_sethostname(isr_params_t *params)
  * Setting the id to 0 succeeds as a no-op (a login server's post-auth privilege
  * drop to the authenticated root must not fail); setting it to any OTHER id fails
  * with -EPERM rather than silently pretending to drop to a user that does not
- * exist -- so a caller is never fooled into believing it shed privilege. */
+ * exist, so a caller is never fooled into believing it shed privilege. */
 static int32_t sys_setuid(isr_params_t *params)
 {
     return (params->ebx == 0) ? 0 : -EPERM;
@@ -6738,7 +6738,7 @@ static int32_t sys_setresid(isr_params_t *params)
     return 0;
 }
 /* setgroups: the only group is root (gid 0). Clearing the list (size 0) succeeds;
- * a list is validated to be readable and to contain ONLY gid 0 -- any other gid is
+ * a list is validated to be readable and to contain ONLY gid 0; any other gid is
  * "no such group" (-EPERM), so a caller is never fooled into believing it set real
  * supplementary groups. */
 static int32_t sys_setgroups(isr_params_t *params)
@@ -6868,7 +6868,7 @@ static int32_t sys_dup3(isr_params_t *params)
 
 /*
  * mmap2 protection bits and flags (Linux i386 ABI). We support PROT_* as VMA
- * permissions and only anonymous private mappings -- file-backed mmap would need
+ * permissions and only anonymous private mappings; file-backed mmap would need
  * a page cache.
  */
 #define PROT_READ     0x1
@@ -6989,8 +6989,8 @@ static int32_t sys_mmap2(isr_params_t *params)
         vmprot |= VM_PROT_READ;
     }
     if (prot & PROT_WRITE) {
-        /* On i386 a present page is always readable -- there is no write-only
-         * PTE -- so writable implies readable. Record that in the VMA prot so the
+        /* On i386 a present page is always readable (there is no write-only
+         * PTE) so writable implies readable. Record that in the VMA prot so the
          * fault check agrees with the hardware (a read of a PROT_WRITE page does
          * not wrongly segfault). */
         vmprot |= VM_PROT_WRITE | VM_PROT_READ;
@@ -7077,7 +7077,7 @@ static void _syscall_handler(isr_params_t *params)
 
     /* Enable interrupts for the syscall body so the PIT/HDA keep ticking during
      * long syscalls (e.g. Doom's framebuffer writes); preemption stays disabled
-     * via in_syscall above. The stub no longer does sti -- iret restores IF. */
+     * via in_syscall above. The stub no longer does sti; iret restores IF. */
     __asm__ __volatile__("sti");
 
     if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {

@@ -6,7 +6,7 @@
  * the kernel must route to the TCP path on a connected stream socket (not the UDP
  * path). This connects out through the SLIRP gateway 10.0.2.2:PORT to a host echo
  * server, sends a known line with send(), reads the echo with recv(), and prints
- * "TCPSENDRECV OK" only if the echo matches -- locking the regression that broke
+ * "TCPSENDRECV OK" only if the echo matches, locking the regression that broke
  * the musl httpd.
  *
  * Needs a host echo server on 127.0.0.1:PORT (the test harness starts one).

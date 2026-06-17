@@ -3,7 +3,7 @@
  *
  * An ordinary hosted C program linked against the ported musl. It installs a
  * plain SIGUSR1 handler with sigaction (sa_flags=0, so musl wires up SA_RESTORER
- * -> __restore -> the legacy sigreturn(119) trampoline -- the common path for a
+ * -> __restore -> the legacy sigreturn(119) trampoline, the common path for a
  * handler that takes no siginfo), raises the signal to itself and confirms the
  * handler ran and control resumed after it; blocks SIGUSR1 with sigprocmask, raises it (it
  * must stay pending, not run), then unblocks and confirms the pending signal is

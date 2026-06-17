@@ -42,7 +42,7 @@ int tls_resolve_base(const user_desc_t *u, uint32_t *base_out)
     }
     if (u->flags & UD_CONTENTS_MASK)
     {
-        return -1;  /* code/stack segment requested -- not our data TLS slot */
+        return -1;  /* code/stack segment requested, not our data TLS slot */
     }
     if (u->flags & UD_READ_EXEC_ONLY)
     {

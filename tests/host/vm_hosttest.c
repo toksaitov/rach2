@@ -134,7 +134,7 @@ int main(void)
         s.stack_limit = 0xBF7FF000u;
         CHECK(vm_insert(&s, 0xBFFFF000u, 0xC0000000u, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
         CHECK(vm_insert(&s, 0xBF900000u, 0xBF901000u, VM_PROT_READ, VM_DATA) == 0);
-        /* One page down is still clear -- allowed. */
+        /* One page down is still clear: allowed. */
         CHECK(vm_grow_stack(&s, 0xBFFFE000u) == 1);
         /* Down to/over the planted region is refused, and the stack stays put. */
         CHECK(vm_grow_stack(&s, 0xBF900000u) == 0);

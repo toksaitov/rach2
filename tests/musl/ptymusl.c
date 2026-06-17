@@ -3,7 +3,7 @@
  * shape a login server (dropbear, Phase 23) uses to give a remote shell a tty.
  *
  * openpty() opens /dev/ptmx, unlockpt()s it (TIOCSPTLCK), resolves the slave name
- * via ptsname() (TIOCGPTN), and opens /dev/pts/N -- all against the Phase-19
+ * via ptsname() (TIOCGPTN), and opens /dev/pts/N, all against the Phase-19
  * kernel. A forked child reads the cooked line off the slave and replies; the
  * parent drives the master and checks the echo + reply it reads back.
  *

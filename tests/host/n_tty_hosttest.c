@@ -153,7 +153,7 @@ int main(void)
     CHECK(n == 2 && buf[0] == 'a' && buf[1] == 'b');
 
     /* EOF ordering: an empty-line ^D typed BEFORE a later line is read back first
-     * (read returns 0), then the line -- not the other way round. */
+     * (read returns 0), then the line, not the other way round. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, t.tio.c_cc[VEOF]);              /* ^D on empty line: EOF at this position */
@@ -162,7 +162,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'x' && buf[1] == '\n'); /* then the line */
 
-    /* The reverse: a committed line, then ^D -- the line comes first, then EOF. */
+    /* The reverse: a committed line, then ^D; the line comes first, then EOF. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "foo\n");
@@ -226,7 +226,7 @@ int main(void)
     CHECK(n == 3 && buf[0] == 'h' && buf[1] == 'i' && buf[2] == '\n');
 
     /* INLCR (with ICRNL off): NL becomes CR, which is an ordinary char, not a
-     * terminator -- so no line completes from a lone NL. */
+     * terminator. So no line completes from a lone NL. */
     n_tty_init(&t);
     cap_reset(&cp);
     t.tio.c_iflag &= ~ICRNL;

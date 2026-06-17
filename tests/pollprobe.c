@@ -183,7 +183,7 @@ void _start(void)
             rset[i] = 0;
         }
         rset[a[0] / 32] = 1u << (a[0] % 32);
-        /* select(nfds, &rset, NULL, NULL, NULL) -- NULL timeout, but a[0] is
+        /* select(nfds, &rset, NULL, NULL, NULL): NULL timeout, but a[0] is
          * already readable so it returns at once. */
         n = syscall5(SYS_NEWSELECT, a[0] + 1, (int)(size_t)rset, 0, 0, 0);
         check(n == 1, "select finds the readable fd");
@@ -213,7 +213,7 @@ void _start(void)
     syscall1(SYS_CLOSE, a[0]);
     syscall1(SYS_CLOSE, a[1]);
 
-    /* (f) the select fd contract -- never a silent truncation. */
+    /* (f) the select fd contract: never a silent truncation. */
     {
         unsigned int set[32];
         int i;

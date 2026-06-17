@@ -284,8 +284,8 @@ int dns_build_query(unsigned char *buf, int cap, const char *name,
 /*
  * Advance past a domain name at offset pos and return the position just after
  * it. Length-prefixed labels are walked; a 0x00 byte or a 0xC0 compression
- * pointer (two bytes) ends the name. Pointers are not followed -- skipping is
- * enough to reach the fixed fields -- so this cannot loop. Returns -1 on a
+ * pointer (two bytes) ends the name. Pointers are not followed (skipping is
+ * enough to reach the fixed fields), so this cannot loop. Returns -1 on a
  * truncated or reserved-type name.
  */
 static int dns_skip_name(const u8 *resp, int len, int pos)
