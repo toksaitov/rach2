@@ -4,3 +4,4 @@ The record of how each Rach2 milestone was planned and built, one subdirectory p
 
 * `01-foundation`: the boot, paging, system calls, shell, audio, and Doom of the first OS.
 * `02-networking-and-userland`: the TCP/IP stack, the ported musl libc, BusyBox, the Dropbear SSH server, and the build modernization.
+* `03-text-standard`: the text and documentation standard, the refactor that reached it, and the gate that keeps it.

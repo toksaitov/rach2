@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft for review. Items marked OPEN are still being decided. Nothing here is applied to the tree yet, and `prompts/` and `PLAN.md` have not been moved.
+Complete. Phases 0 through 8 were executed one at a time, each proved with `make verify-style` and `make verify-host` (plus a real boot and the SSH capstone where touched) and reviewed by an independent Codex pass with every finding fixed. The text-style check is now a hard gate (`8/8 text style`) in `tools/check.sh`. This file is the record of that refactor.
 
 ## Purpose
 
