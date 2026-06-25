@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft for review. This plan finishes what the text-standard refactor (dev-log/03-text-standard) started. That milestone brought the kernel (rach2/) and the high-traffic docs to the standard in CLAUDE.md and made the mechanical text checks a hard gate. It left the rest of the in-house tree (the tests, the krffs host tools, the utils, and the ish shell) with its original comment style, and a survey turned up a handful of consistency gaps in the work already done. This plan closes both.
+Complete. Phases 0 through 7 were executed one at a time under the `/goal` runner. Each was comment and documentation only, proved code-equal to HEAD with a comment-stripped token comparison, checked with `make verify-style` and `make verify-host` (plus the touched component's build and a real boot where the touched code runs), and reviewed by an independent Codex pass with every finding fixed before its one scoped commit. The in-house non-kernel tree (the tests, the krffs host tools, the utils, and the ish shell) now reads to the standard in CLAUDE.md, the missed Readmes are rewritten, and the mechanical gate is widened to the whole hand-written tree: it now catches a stray non-ASCII byte in any in-house C or header, an em-dash inside an echo or printf message, and a leftover Phase or Part diary tag in a comment. This file is the record of that work.
 
 ## Purpose
 
