@@ -25,7 +25,8 @@ typedef unsigned int size_t;
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
-/* A global lives in the writable data segment, so after fork it is a COW page. */
+/* A global lives in the writable data segment, so after fork it is a COW
+ * page. */
 static volatile unsigned shared_val;
 
 static int sys_write(int fd, const void *buf, size_t count)

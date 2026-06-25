@@ -159,7 +159,8 @@ void _start(void)
     pfd[1].revents = 0;
     check(do_poll(pfd, 2, 30) == 0, "poll of empty pipes times out -> 0");
 
-    /* (b) readiness: write one end, poll returns it with POLLIN, the other clear. */
+    /* (b) readiness: write one end, poll returns it with POLLIN, the other
+     * clear. */
     syscall3(SYS_WRITE, a[1], (int)(size_t)"x", 1);
     pfd[0].revents = 0;
     pfd[1].revents = 0;
@@ -178,7 +179,8 @@ void _start(void)
     check(n == 1 && (pfd[0].revents & POLLHUP) != 0, "closed writer -> POLLHUP");
     syscall1(SYS_CLOSE, b[0]);
 
-    /* (d) select via _newselect: a[0] is drained/empty, write then select it. */
+    /* (d) select via _newselect: a[0] is drained/empty, write then select
+     * it. */
     syscall3(SYS_WRITE, a[1], (int)(size_t)"y", 1);
     {
         unsigned int rset[32];
@@ -195,8 +197,9 @@ void _start(void)
     }
     do_read(a[0], buf, 1); /* drain */
 
-    /* (e) block + wake: child writes after a delay; the parent's poll must return
-     * woken (well under the 2s timeout), proving it blocked on the wait queue. */
+    /* (e) block + wake: child writes after a delay; the parent's poll must
+     * return woken (well under the 2s timeout), proving it blocked on the wait
+     * queue. */
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
@@ -223,7 +226,8 @@ void _start(void)
         int i;
 
         /* A large nfds is allowed when no bit names an out-of-range fd: fd 1
-         * (stdout) is writable, so a wide select that includes it returns it. */
+         * (stdout) is writable, so a wide select that includes it returns
+         * it. */
         for (i = 0; i < 32; i++) {
             set[i] = 0;
         }
@@ -231,7 +235,8 @@ void _start(void)
         n = syscall5(SYS_NEWSELECT, 64, 0, (int)(size_t)set, 0, 0);
         check(n == 1 && (set[0] & (1u << 1)) != 0, "wide select with an in-range bit works");
 
-        /* A bit for an fd >= MAX_FDS (16) is an impossible descriptor -> -EBADF. */
+        /* A bit for an fd >= MAX_FDS (16) is an impossible descriptor ->
+         * -EBADF. */
         for (i = 0; i < 32; i++) {
             set[i] = 0;
         }

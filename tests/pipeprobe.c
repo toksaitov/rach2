@@ -208,8 +208,9 @@ void _start(void)
     check(got_sigpipe == 1, "SIGPIPE was raised");
     syscall1(SYS_CLOSE, p[1]);
 
-    /* (d) blocking across a fork: the parent writes 5000 bytes (> one page) so it
-     * must block until the forked reader drains, and the reader gets every byte. */
+    /* (d) blocking across a fork: the parent writes 5000 bytes (> one page) so
+     * it must block until the forked reader drains, and the reader gets every
+     * byte. */
     check(do_pipe(p) == 0, "pipe() for blocking test");
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");

@@ -119,7 +119,8 @@ void _start(void)
             sys_exit(1);
         }
         /* Loose monobit over 512 bits (a + b): a uniform stream is ~256 ones; a
-         * stuck/zero stream is far off. Tolerate a wide band to avoid flakiness. */
+         * stuck/zero stream is far off. Tolerate a wide band to avoid
+         * flakiness. */
         bits = popcount_buf(a, (int)sizeof(a)) + popcount_buf(b, (int)sizeof(b));
         if (bits < 180 || bits > 332) {
             puts("RNGPROBE FAIL (monobit out of range)\n");
@@ -130,8 +131,8 @@ void _start(void)
     }
 
     if (g == -EIO) {
-        /* Fail-closed: /dev/urandom must ALSO refuse, and GRND_INSECURE must still
-         * deliver bytes (the best-effort escape hatch). */
+        /* Fail-closed: /dev/urandom must ALSO refuse, and GRND_INSECURE must
+         * still deliver bytes (the best-effort escape hatch). */
         fd = sys_open("/dev/urandom", O_RDONLY);
         if (fd >= 0) {
             int r = sys_read(fd, a, (int)sizeof(a));

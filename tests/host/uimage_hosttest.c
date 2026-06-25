@@ -127,7 +127,8 @@ int main(void)
         CHECK(ok);
     }
 
-    /* A request too big for the page is rejected (0), not allowed to overflow. */
+    /* A request too big for the page is rejected (0), not allowed to
+     * overflow. */
     {
         static char bigstr[5000];
         char *bigargv[2];

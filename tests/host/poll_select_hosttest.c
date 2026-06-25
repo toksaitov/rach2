@@ -106,8 +106,8 @@ int main(void)
     CHECK(n == 3);
     CHECK(fds[0].fd == 31 && fds[1].fd == 32 && fds[2].fd == 33);
 
-    /* More selected fds than max_pollfds -> -1 (select must reject as EBADF an fd
-     * larger than the kernel could ever hand out). */
+    /* More selected fds than max_pollfds -> -1 (select must reject as EBADF
+     * an fd larger than the kernel could ever hand out). */
     zero(r);
     zero(w);
     zero(e);
@@ -120,8 +120,8 @@ int main(void)
 
     /* --- pollfds_to_fdsets --- */
 
-    /* POLLIN -> readable, POLLOUT -> writable, POLLPRI -> except; each counts 1.
-     * The destination sets must be pre-zeroed (the projection ORs bits in). */
+    /* POLLIN -> readable, POLLOUT -> writable, POLLPRI -> except; each counts
+     * 1. The destination sets must be pre-zeroed (projection ORs bits in). */
     zero(r);
     zero(w);
     zero(e);
@@ -139,8 +139,9 @@ int main(void)
     CHECK(get_bit(w, 3) && !get_bit(r, 3));
     CHECK(get_bit(e, 4) && !get_bit(r, 4));
 
-    /* An fd selected for both read and write that is ready for both contributes 2
-     * to the count: select() counts each ready direction, not each fd. */
+    /* An fd selected for both read and write that is ready for both
+     * contributes 2 to the count: select() counts each ready direction, not
+     * each fd. */
     zero(r);
     zero(w);
     zero(e);
@@ -151,8 +152,8 @@ int main(void)
     CHECK(get_bit(r, 6) && get_bit(w, 6));
 
     /* POLLHUP projects to readable; POLLERR to both readable and writable, but
-     * only for the direction(s) the fd was selected for. fd 1 was in readfds (HUP
-     * -> read, 1); fd 2 was in both (ERR -> read + write, 2). */
+     * only for the direction(s) the fd was selected for. fd 1 was in readfds
+     * (HUP -> read, 1); fd 2 was in both (ERR -> read + write, 2). */
     zero(r);
     zero(w);
     zero(e);
@@ -166,10 +167,11 @@ int main(void)
     CHECK(get_bit(r, 1) && !get_bit(w, 1));
     CHECK(get_bit(r, 2) && get_bit(w, 2));
 
-    /* Direction gating (the crux): a hangup on an fd selected ONLY for write must
-     * not be invented into the read set; that would inflate the count and set a
-     * bit in a set the caller may have passed as NULL. POLLHUP is not in the write
-     * trigger, so a write-only fd reporting only POLLHUP yields nothing. */
+    /* Direction gating (the crux): a hangup on an fd selected ONLY for write
+     * must not be invented into the read set; that would inflate the count and
+     * set a bit in a set the caller may have passed as NULL. POLLHUP is not in
+     * the write trigger, so a write-only fd reporting only POLLHUP yields
+     * nothing. */
     zero(r);
     zero(w);
     zero(e);
@@ -178,8 +180,8 @@ int main(void)
     fds[0].revents = POLLHUP;
     CHECK(pollfds_to_fdsets(fds, 1, r, w, e) == 0);
     CHECK(!get_bit(r, 5) && !get_bit(w, 5));
-    /* POLLERR on the same write-only fd DOES project to write (ERR is in the write
-     * trigger) and still not to read. */
+    /* POLLERR on the same write-only fd DOES project to write (ERR is in the
+     * write trigger) and still not to read. */
     zero(r);
     zero(w);
     zero(e);
@@ -199,8 +201,9 @@ int main(void)
     CHECK(pollfds_to_fdsets(fds, 1, r, w, e) == 0);
     CHECK(!get_bit(r, 0) && !get_bit(w, 0) && !get_bit(e, 0));
 
-    /* Round-trip: build read-sets, translate out, mark each pollfd POLLIN, project
-     * back: the same fds (including the word-boundary ones) come back readable. */
+    /* Round-trip: build read-sets, translate out, mark each pollfd POLLIN,
+     * project back: the same fds (including the word-boundary ones) come back
+     * readable. */
     zero(r);
     zero(w);
     zero(e);

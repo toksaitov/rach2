@@ -36,8 +36,8 @@ static const char STAGE_PASSWD[] =
     "root:x:0:0:root:/root:/sh\n";
 /* The list of valid login shells. dropbear validates a user's /etc/passwd shell
  * against getusershell() (which reads this file) before allowing login; without
- * /sh listed here it rejects root with "invalid shell". /bin/sh is listed too so
- * a future /bin/sh login shell also passes. */
+ * /sh listed here it rejects root with "invalid shell". /bin/sh is listed too
+ * so a future /bin/sh login shell also passes. */
 static const char STAGE_SHELLS[] =
     "/sh\n/bin/sh\n";
 
@@ -370,10 +370,11 @@ int main(int argc, char **argv)
     ak =
         read_whole_file("authorized_keys", &ak_len);
 
-    /* Preflight: sum the cost of every node THIS run will allocate (stage_cost is
-       0 for a node that already exists, so a re-run adding only a missing piece is
-       not rejected for the space the existing nodes hold). The ids are recomputed
-       with krffs_mix_id, matching how staged children reference their parent. */
+    /* Preflight: sum the cost of every node THIS run will allocate (stage_cost
+       is 0 for a node that already exists, so a re-run adding only a missing
+       piece is not rejected for the space the existing nodes hold). The ids are
+       recomputed with krffs_mix_id, matching how staged children reference their
+       parent. */
     etc_pre =
         krffs_mix_id(0, "etc");
     needed =
@@ -405,10 +406,10 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /* /etc and its files, idempotently (find-or-create), so a re-run completes a
-       partially staged tree. /etc/dropbear is where dropbear -R writes its host
-       keys (0700); the dir must exist or the key create fails (krffs reports it as
-       ENOSPC). */
+    /* /etc and its files, idempotently (find-or-create), so a re-run completes
+       a partially staged tree. /etc/dropbear is where dropbear -R writes its
+       host keys (0700); the dir must exist or the key create fails (krffs
+       reports it as ENOSPC). */
     etc_id =
         ensure_node(&file_system, 0, "etc", (uint16_t) (KRFFS_MODE_IFDIR | 0755), NULL, 0);
 
@@ -433,10 +434,10 @@ int main(int argc, char **argv)
 
     printf("stagetree: staged /etc (motd, hostname, passwd, shells, dropbear) into '%s'.\n", argv[1]);
 
-    /* Stage /root/.ssh/authorized_keys for the dropbear SSH login when a pubkey was
-     * found (read above). The home dir + .ssh are 0700 and the key 0600 so
-     * dropbear's strict permission check accepts them; the krffs FUSE mount cannot
-     * mkdir, so this directory tree is written here as v2 nodes. */
+    /* Stage /root/.ssh/authorized_keys for the dropbear SSH login when a pubkey
+     * was found (read above). The home dir + .ssh are 0700 and the key 0600 so
+     * dropbear's strict permission check accepts them; the krffs FUSE mount
+     * cannot mkdir, so this directory tree is written here as v2 nodes. */
     if (ak) {
         uint64_t root_id = ensure_node(&file_system, 0, "root",
                                        (uint16_t) (KRFFS_MODE_IFDIR | 0755), NULL, 0);

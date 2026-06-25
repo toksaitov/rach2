@@ -56,7 +56,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* resolve_host yields a host-order address; htonl/htons put it on the wire. */
+    /* resolve_host yields a host-order address; htonl/htons put it on the
+     * wire. */
     sa.sin_family = AF_INET;
     sa.sin_port = htons((unsigned short)port);
     sa.sin_addr.s_addr = htonl(ip);

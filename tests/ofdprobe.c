@@ -126,7 +126,8 @@ void _start(void)
     n = rd(fd2, buf, 5); /* must continue from offset 5 */
     check(n == 5 && eqn(buf, ", wor", 5), "dup shares offset (reads ', wor')");
 
-    /* (c) closing the original leaves the dup working (the OFD is still ref'd). */
+    /* (c) closing the original leaves the dup working (the OFD is still
+     * ref'd). */
     syscall1(SYS_CLOSE, fd);
     n = rd(fd2, buf, 3); /* offset is now 10: "ld\n" */
     check(n == 3 && eqn(buf, "ld\n", 3), "dup works after original closed");
@@ -175,7 +176,8 @@ void _start(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* (d) FD_CLOEXEC is per-fd: it round-trips, and dup2 clears it on the new fd. */
+    /* (d) FD_CLOEXEC is per-fd: it round-trips, and dup2 clears it on the new
+     * fd. */
     fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open for cloexec test");
     syscall3(SYS_FCNTL64, fd, F_SETFD, FD_CLOEXEC);

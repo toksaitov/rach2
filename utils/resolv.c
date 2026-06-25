@@ -29,7 +29,8 @@ typedef unsigned int   usize;
 #define DNS_DEFAULT_NS 0x0A000203U   /* 10.0.2.3 */
 #define DNS_PORT       53
 
-/* socketcall sub-calls and socket constants (Linux i386, as in the other utils). */
+/* socketcall sub-calls and socket constants (Linux i386, as in the other
+ * utils). */
 #define SC_SOCKET     1
 #define SC_SENDTO    11
 #define SC_RECVFROM  12

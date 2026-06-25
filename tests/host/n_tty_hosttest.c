@@ -41,7 +41,8 @@ static void cap_reset(struct cap *cp)
     cp->len = 0;
 }
 
-/* The captured stream equals the first n bytes of expect (and is exactly n long). */
+/* The captured stream equals the first n bytes of expect (and is exactly n
+ * long). */
 static int cap_is(const struct cap *cp, const char *expect, int n)
 {
     int i;
@@ -79,7 +80,7 @@ int main(void)
     unsigned char buf[512];
     int n, i;
 
-    /* --- cooked: assemble a line, ERASE rubs out, ECHOE feedback is exact --- */
+    /* --- cooked: assemble a line, ERASE rubs out, exact ECHOE feedback --- */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, 'a');
@@ -97,7 +98,8 @@ int main(void)
     CHECK(cap_is(&cp, "ab\b \b\b \bcd\r\n", 12));
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* queue drained */
 
-    /* A canonical read returns at most one line; a second line waits its turn. */
+    /* A canonical read returns at most one line; a second line waits its
+     * turn. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "hi\nyo\n");
@@ -126,13 +128,14 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 3 && buf[0] == 'h' && buf[1] == 'i' && buf[2] == '\n');
 
-    /* ERASE on an empty line is a harmless no-op (no underflow, no stray echo). */
+    /* ERASE on an empty line is a harmless no-op (no underflow, no stray
+     * echo). */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, t.tio.c_cc[VERASE]);
     CHECK(cp.len == 0 && t.line_len == 0);
 
-    /* --- VEOF: empty line is end-of-file; mid-line delivers the partial line --- */
+    /* --- VEOF: empty line is EOF; mid-line delivers the partial line --- */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, t.tio.c_cc[VEOF]); /* ^D on an empty line */
@@ -151,8 +154,8 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'a' && buf[1] == 'b');
 
-    /* EOF ordering: an empty-line ^D typed BEFORE a later line is read back first
-     * (read returns 0), then the line, not the other way round. */
+    /* EOF ordering: an empty-line ^D typed BEFORE a later line is read back
+     * first (read returns 0), then the line, not the other way round. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, t.tio.c_cc[VEOF]);              /* ^D on empty line: EOF at this position */
@@ -161,7 +164,8 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'x' && buf[1] == '\n'); /* then the line */
 
-    /* The reverse: a committed line, then ^D; the line comes first, then EOF. */
+    /* The reverse: a committed line, then ^D; the line comes first, then
+     * EOF. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "foo\n");
@@ -170,7 +174,7 @@ int main(void)
     CHECK(n == 4 && buf[0] == 'f' && buf[3] == '\n');
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* then EOF */
 
-    /* --- ISIG: INTR/QUIT/SUSP are recognized, echoed ^X, and flush the line --- */
+    /* --- ISIG: INTR/QUIT/SUSP recognized, echoed ^X, flush the line --- */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "junk");
@@ -191,8 +195,8 @@ int main(void)
     CHECK(feed(&t, &cp, t.tio.c_cc[VSUSP]) == NTTY_SIGTSTP);
     CHECK(cap_is(&cp, "^Z", 2)); /* 0x1a | 0x40 == 'Z' */
 
-    /* ISIG flushes the WHOLE input queue, not just the edit line: a line committed
-     * (and unread) before ^C must not survive the signal. */
+    /* ISIG flushes the WHOLE input queue, not just the edit line: a line
+     * committed (and unread) before ^C must not survive the signal. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "old\n"); /* committed to the read queue, unread */
@@ -244,7 +248,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'A' && buf[1] == '\n');
 
-    /* --- raw mode: every byte is immediately readable, gated only by VMIN --- */
+    /* --- raw mode: every byte immediately readable, gated only by VMIN --- */
     n_tty_init(&t);
     cap_reset(&cp);
     t.tio.c_lflag &= ~(ICANON | ISIG | ECHO); /* cfmakeraw-like */
@@ -280,7 +284,7 @@ int main(void)
     CHECK(n_tty_readable(&t) == 1);
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* ...but nothing to return */
 
-    /* --- output processing (OPOST/ONLCR/OCRNL), driven through n_tty_output --- */
+    /* --- output processing (OPOST/ONLCR/OCRNL) via n_tty_output --- */
 
     /* OPOST|ONLCR: a write of NL goes out as CRLF. */
     n_tty_init(&t);
@@ -303,8 +307,8 @@ int main(void)
     n_tty_output(&t, 'q', sink, &cp);
     CHECK(cap_is(&cp, "\nq", 2));
 
-    /* --- buffer bounds: a canonical line longer than the buffer is capped, the
-     * terminator still lands, and read returns the whole capped line at once --- */
+    /* --- buffer bounds: a canonical line longer than the buffer is capped; the
+     * terminator still lands, and read returns the capped line at once --- */
     n_tty_init(&t);
     cap_reset(&cp);
     for (i = 0; i < 300; i++) {

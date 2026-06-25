@@ -236,7 +236,8 @@ void _start(void)
         check((STAT64_MODE(st) & S_IFMT) == S_IFREG, "fstat64 /g is regular");
         check(STAT64_SIZE_LO(st) == 5, "fstat64 /g size is 5");
 
-        /* _llseek SEEK_SET to offset 1; the result offset must come back as 1. */
+        /* _llseek SEEK_SET to offset 1; the result offset must come back
+         * as 1. */
         check(syscall5(SYS_LLSEEK, fd, 0, 1, (int)(size_t)&result, 0) == 0, "_llseek /g");
         check(result == 1, "_llseek result offset is 1");
         check(sys_read(fd, &c, 1) == 1 && c == 'e', "read byte after seek is 'e'");
@@ -248,7 +249,8 @@ void _start(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* 10. fstatat64 by path: the file is regular, a directory reports S_IFDIR. */
+    /* 10. fstatat64 by path: the file is regular, a directory reports
+     *     S_IFDIR. */
     {
         unsigned char st[STAT64_SIZE] = {0}; /* fstatat64 overwrites; init quiets cppcheck */
 
@@ -355,7 +357,8 @@ void _start(void)
             syscall1(SYS_CLOSE, dfd);
         }
 
-        /* A path that descends through a regular file is ENOTDIR, not ENOENT. */
+        /* A path that descends through a regular file is ENOTDIR, not
+         * ENOENT. */
         check(syscall1(SYS_CHDIR, (int)(size_t)"rel.txt/x") == -ENOTDIR,
               "chdir through a file is ENOTDIR");
 

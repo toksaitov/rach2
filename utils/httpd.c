@@ -508,8 +508,9 @@ int main(void)
 
         /* Log the connection before rendering so it appears in its own page.
          * The response size is not known mid-render (it is the size of the very
-         * reply being built), so it is recorded as 0 now and patched in once the
-         * reply has been sent; the in-flight row shows a blank byte count. */
+         * reply being built), so it is recorded as 0 now and patched in once
+         * the reply has been sent; the in-flight row shows a blank byte
+         * count. */
         record_peer(peer.sin_addr.s_addr, peer.sin_port, served, 0);
 
         total = build_response(uptime_s);

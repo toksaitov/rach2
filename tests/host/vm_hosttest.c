@@ -92,7 +92,8 @@ int main(void)
     CHECK(vm_remove(&vm, 0x80000, 0x81000) == 0);
     CHECK(vm.count == 3);
 
-    /* Stack growth: a one-page stack at the top, growable down to stack_limit. */
+    /* Stack growth: a one-page stack at the top, growable down to the
+     * stack_limit. */
     {
         vm_space_t s;
         vma_t *st;
@@ -107,8 +108,8 @@ int main(void)
         CHECK(st != NULL && st->start == 0xBFFFE000u && st->end == 0xC0000000u);
         CHECK(s.count == 1); /* grown in place, not a new region */
 
-        /* A page far below (but still at/above the limit) jumps start down to it;
-         * the gap pages are now inside the region and fault in lazily. */
+        /* A page far below (but still at/above the limit) jumps start down to
+         * it; the gap pages are now inside the region and fault in lazily. */
         CHECK(vm_grow_stack(&s, 0xBF800000u) == 1);
         CHECK(vm_find(&s, 0xBF800000u) != NULL);
         CHECK(vm_find(&s, 0xBFF00000u) != NULL); /* a gap page, now covered */
@@ -128,14 +129,15 @@ int main(void)
         CHECK(vm_grow_stack(&s, 0xBFFFE000u) == 0);
 
         /* Growth must not swallow another region sitting in the growth window:
-         * a (hostile) segment mapped just below the stack blocks growth past it. */
+         * a (hostile) segment mapped just below the stack blocks growth past
+         * it. */
         vm_init(&s);
         s.stack_limit = 0xBF7FF000u;
         CHECK(vm_insert(&s, 0xBFFFF000u, 0xC0000000u, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
         CHECK(vm_insert(&s, 0xBF900000u, 0xBF901000u, VM_PROT_READ, VM_DATA) == 0);
         /* One page down is still clear: allowed. */
         CHECK(vm_grow_stack(&s, 0xBFFFE000u) == 1);
-        /* Down to/over the planted region is refused, and the stack stays put. */
+        /* Down to/over the planted region is refused; the stack stays put. */
         CHECK(vm_grow_stack(&s, 0xBF900000u) == 0);
         CHECK(vm_grow_stack(&s, 0xBF8FF000u) == 0);
         CHECK(vm_find(&s, 0xBFFFE000u) != NULL && vm_find(&s, 0xBF900000u) != NULL);

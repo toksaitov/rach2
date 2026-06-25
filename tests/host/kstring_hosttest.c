@@ -48,6 +48,7 @@ int main(void)
     k_strncpy(dst, "ab", 8);
     CHECK(dst[0] == 'a' && dst[1] == 'b' && dst[2] == '\0');
 
-    /* Bounded so the count never wraps to 0 (a false pass) as an exit status. */
+    /* Bounded so the count never wraps to 0 (a false pass) as an exit
+     * status. */
     return (fails > 120) ? 120 : fails;
 }

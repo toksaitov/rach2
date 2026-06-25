@@ -136,11 +136,11 @@ static void check(int cond, const char *msg)
 }
 
 /**
- * Recurse 'n' deep with a 1 KB buffer per frame, touching every byte so each new
- * stack page must fault in. Crucially the buffer is re-checked AFTER the deeper
- * call returns, so a deeper stack fault that corrupted this frame would be caught
- * on the way back up. Returns 1 + 2 + ... + n if every frame stayed intact, else
- * a large negative value.
+ * Recurse 'n' deep with a 1 KB buffer per frame, touching every byte so each
+ * new stack page must fault in. Crucially the buffer is re-checked AFTER the
+ * deeper call returns, so a deeper stack fault that corrupted this frame would
+ * be caught on the way back up. Returns 1 + 2 + ... + n if every frame stayed
+ * intact, else a large negative value.
  */
 static int recurse(int n)
 {
@@ -210,8 +210,8 @@ void _start(void)
     }
 
     /* 3. brk must refuse to grow over an existing mmap region: map a page, then
-     * try to push the break up past it. brk returns the (unchanged) old break on
-     * refusal, never the requested value. */
+     * try to push the break up past it. brk returns the (unchanged) old break
+     * on refusal, never the requested value. */
     {
         unsigned p = sys_mmap2_anon(PAGE, PROT_READ | PROT_WRITE);
 
@@ -225,7 +225,8 @@ void _start(void)
         }
     }
 
-    /* 4. Stack growth via deep recursion (~64 KB, far past the initial page). */
+    /* 4. Stack growth via deep recursion (~64 KB, far past the initial
+     * page). */
     check(recurse(64) == 64 * 65 / 2, "stack grew under deep recursion");
 
     if (fails == 0) {

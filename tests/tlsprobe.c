@@ -279,7 +279,8 @@ void probe_main(u32 *sp)
          * from the parent across fork (fork copies tls_base and the trapframe
          * %gs). Its own copy of tcb_parent holds the parent's sentinels, so a
          * read through the inherited %gs must return them. If fork dropped
-         * tls_base the switch would reprogram base 0 and this would mismatch. */
+         * tls_base the switch would reprogram base 0 and this would
+         * mismatch. */
         if (tls_check(0xA5A50000u) != 0) {
             sys_exit(8);
         }

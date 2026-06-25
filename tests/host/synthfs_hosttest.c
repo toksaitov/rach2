@@ -67,7 +67,8 @@ int main(void)
     CHECK(synth_classify("proc/7/fd/3", &vp) == VNODE_PROC_FD_LINK && vp.pid == 7 &&
           vp.procfd == 3);
 
-    /* Bad /proc entries are ENOENT, never KRFFS (so they don't shadow-resolve). */
+    /* Bad /proc entries are ENOENT, never KRFFS (so they don't
+     * shadow-resolve). */
     CHECK(synth_classify("proc/abc", &vp) == VNODE_ENOENT);     /* not a pid */
     CHECK(synth_classify("proc/7/bogus", &vp) == VNODE_ENOENT); /* unknown file */
     CHECK(synth_classify("proc/7/fd/xy", &vp) == VNODE_ENOENT); /* not an fd number */

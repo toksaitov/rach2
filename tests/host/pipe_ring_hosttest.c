@@ -38,7 +38,8 @@ int main(void)
     CHECK(pipe_available(&p) == 0);
     CHECK(pipe_free_space(&p) == PIPE_BUF_SIZE);
 
-    /* A put is bounded by free space; a full page fits exactly (no lost slot). */
+    /* A put is bounded by free space; a full page fits exactly (no lost
+     * slot). */
     CHECK(pipe_ring_put(&p, src, PIPE_BUF_SIZE) == PIPE_BUF_SIZE);
     CHECK(pipe_available(&p) == PIPE_BUF_SIZE);
     CHECK(pipe_free_space(&p) == 0);
