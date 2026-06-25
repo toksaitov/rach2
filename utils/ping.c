@@ -1,16 +1,14 @@
-/*
- * ping.c - send ICMP echo requests through the Rach2 network stack.
+/**
+ * Send ICMP echo requests through the Rach2 network stack.
  *
- * Usage: ping [host]
- *   host: IPv4 address or name (default 10.0.2.2, the SLIRP gateway). Names are
- *   resolved through /hosts and DNS (see resolv.c).
+ * `ping [host]`, where `host` is an IPv4 address or name (default 10.0.2.2,
+ * the SLIRP gateway). Names are resolved through `/hosts` and DNS (see
+ * `resolv.c`).
  *
- * Sends a few echo requests via the SC_PING socketcall and reports the
- * round-trip time in kernel ticks (10 ms each) or a timeout.
- *
- * Ported to musl: <stdio.h> for output, the shared resolver, and the one
- * Rach2-specific operation (SC_PING: there is no libc wrapper for it) via a
- * direct socketcall(2). No hand-rolled int-0x80 stubs or crt0.
+ * Sends a few echo requests via the `SC_PING` socketcall and reports the
+ * round-trip time in kernel ticks (10 ms each) or a timeout. `SC_PING` is a
+ * Rach2-specific operation with no libc wrapper, so it is issued through a
+ * direct `socketcall(2)`.
  */
 
 #include <stdio.h>
@@ -23,7 +21,10 @@
 #define DEFAULT_IP 0x0A000202UL /* 10.0.2.2 */
 #define PING_COUNT 4
 
-/* One echo to ip (host byte order); returns the RTT in ticks, or < 0 on timeout. */
+/**
+ * Send one echo to `ip` (host byte order) and return the RTT in ticks, or a
+ * value `< 0` on timeout.
+ */
 static int ping_once(unsigned int ip)
 {
     unsigned int args[1];

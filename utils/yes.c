@@ -1,8 +1,4 @@
-/*
- * yes.c - repeatedly print a line forever: the joined arguments, or "y".
- *
- * Ported to musl: ordinary <stdio.h>, no hand-rolled int-0x80 stubs or crt0.
- */
+/** Print a line forever: the joined arguments, or `y`. */
 
 #include <stdio.h>
 

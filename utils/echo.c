@@ -1,8 +1,4 @@
-/*
- * echo.c - write the arguments separated by single spaces, then a newline.
- *
- * Ported to musl: ordinary <stdio.h>, no hand-rolled int-0x80 stubs or crt0.
- */
+/** Write the arguments separated by single spaces, then a newline. */
 
 #include <stdio.h>
 

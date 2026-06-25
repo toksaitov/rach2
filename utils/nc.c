@@ -1,17 +1,13 @@
-/*
- * nc.c - minimal TCP client (netcat-style) for Rach2.
+/**
+ * Minimal TCP client (netcat-style): `nc <host> <port>`.
  *
- * Usage: nc <host> <port>
- *
- * Connects to host:port over TCP, then relays a line of input to the socket
- * and prints the reply, using read()/write() on the socket descriptor so the
+ * Connects to `host:port` over TCP, then relays a line of input to the socket
+ * and prints the reply, using `read`/`write` on the socket descriptor so the
  * connection is just another file descriptor. Half-duplex (send a line, read a
  * reply), which suits line-oriented servers and the TCP echo server.
  *
- * The host argument may be an IPv4 address or a name resolved through /hosts and
- * DNS (see resolv.c).
- *
- * Ported to musl: <sys/socket.h> socket/connect + <unistd.h> read/write/close.
+ * The host argument may be an IPv4 address or a name resolved through `/hosts`
+ * and DNS (see `resolv.c`).
  */
 
 #include <stdio.h>

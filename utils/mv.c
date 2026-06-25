@@ -1,8 +1,4 @@
-/*
- * mv.c - rename a file (source -> destination).
- *
- * Ported to musl: <stdio.h> rename(), no int-0x80 stubs.
- */
+/** Rename a file from its source path to its destination path. */
 
 #include <stdio.h>
 

@@ -1,9 +1,4 @@
-/*
- * rm.c - remove files; with -r, remove directories and their contents.
- *
- * Ported to musl: <unistd.h> unlink/rmdir + <dirent.h> opendir/readdir for the
- * recursive walk (replacing the hand-rolled getdents64 loop), no int-0x80 stubs.
- */
+/** Remove files; with `-r`, remove directories and their contents. */
 
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +9,13 @@
 
 static int remove_recursive(const char *path);
 
+/**
+ * Removes every entry inside the directory `dir_path` (but not `dir_path`).
+ *
+ * Walks the directory, skips `.` and `..` and any child whose full path would
+ * reach `MAX_PATH`, and recurses into each with `remove_recursive`. Returns -1
+ * if the directory cannot be opened or any child removal fails.
+ */
 static int remove_dir_contents(const char *dir_path)
 {
     DIR *dir = opendir(dir_path);
@@ -34,12 +36,12 @@ static int remove_dir_contents(const char *dir_path)
         if (de->d_name[0] == '.' &&
             (de->d_name[1] == '\0' ||
              (de->d_name[1] == '.' && de->d_name[2] == '\0'))) {
-            continue; /* skip "." and ".." */
+            continue;
         }
 
         name_len = strlen(de->d_name);
         if (dir_len + 1 + name_len >= MAX_PATH) {
-            continue; /* path would overflow the buffer */
+            continue;
         }
 
         memcpy(full, dir_path, dir_len);
@@ -58,10 +60,16 @@ static int remove_dir_contents(const char *dir_path)
     return result;
 }
 
+/**
+ * Remove `path`, recursing into it if it is a non-empty directory.
+ *
+ * Tries `unlink` first, which removes a plain file in one step; on failure it
+ * falls back to emptying the directory and then `rmdir`.
+ */
 static int remove_recursive(const char *path)
 {
     if (unlink(path) == 0) {
-        return 0; /* it was a file */
+        return 0;
     }
     if (remove_dir_contents(path) < 0) {
         return -1;

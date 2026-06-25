@@ -1,8 +1,4 @@
-/*
- * mkdir.c - create each named directory.
- *
- * Ported to musl: <sys/stat.h> mkdir + <stdio.h> diagnostics, no int-0x80 stubs.
- */
+/** Create each named directory. */
 
 #include <stdio.h>
 #include <sys/stat.h>

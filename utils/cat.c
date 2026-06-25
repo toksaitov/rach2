@@ -1,8 +1,4 @@
-/*
- * cat.c - concatenate files (or stdin) to stdout.
- *
- * Ported to musl: <unistd.h>/<fcntl.h> read/write/open, no int-0x80 stubs.
- */
+/** Concatenate files (or stdin) to stdout. */
 
 #include <unistd.h>
 #include <fcntl.h>

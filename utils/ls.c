@@ -1,8 +1,6 @@
-/*
- * ls.c - list a directory (one entry per line, type flag + name).
- *
- * Ported to musl: <dirent.h> opendir/readdir (replacing the hand-rolled
- * getdents64 loop), no int-0x80 stubs. Dotfiles are hidden, as before.
+/**
+ * List a directory, one entry per line as a type flag plus the name.
+ * Dotfiles are hidden.
  */
 
 #include <stdio.h>

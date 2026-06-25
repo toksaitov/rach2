@@ -1,15 +1,16 @@
-/*
- * httpd.c - Minimal HTTP/1.0 server for Rach2.
+/**
+ * Minimal HTTP/1.0 server for Rach2.
  *
  * Serves a status page over the from-scratch TCP/IP stack. The page is a
- * diagnostic readout, not a brochure: it reports the parts of the request the
- * stack actually decoded - the client's IP:port from accept(), the request line
- * and User-Agent from recv() - alongside uptime and per-connection counters, so
- * a reload visibly proves a full SYN / ESTABLISHED / data / FIN / TIME_WAIT
- * cycle round-tripped. Anything reflected from the request is HTML-escaped.
+ * diagnostic readout: it reports the parts of the request the stack actually
+ * decoded (the client's `IP:port` from `accept()`, the request line and
+ * User-Agent from `recv()`) alongside uptime and per-connection counters, so a
+ * reload visibly proves a full SYN, ESTABLISHED, data, FIN, TIME_WAIT cycle
+ * round-tripped. Anything reflected from the request is HTML-escaped.
  *
- * It uses only the blocking socket calls (socket, bind, listen, accept, recv,
- * send, close).
+ * It binds port 80 (reachable at the SLIRP address `10.0.2.15:80`) and uses
+ * only the blocking socket calls (`socket`, `bind`, `listen`, `accept`, `recv`,
+ * `send`, `close`).
  *
  * Test from the host (with QEMU hostfwd tcp::8080-:80):
  *   curl http://127.0.0.1:8080/
@@ -71,7 +72,9 @@ static void print_port(uint16_t p)
     print_uint((unsigned int)b[0] * 256 + (unsigned int)b[1]);
 }
 
-/* Print "ip:port" (network byte order) to the log. */
+/**
+ * Print `ip:port` (network byte order) to the log.
+ */
 static void log_addr(uint32_t ip, uint16_t port)
 {
     print_ip(ip); print(":"); print_port(port);
@@ -108,9 +111,13 @@ static void put_port(char *buf, int *pos, uint16_t sin_port)
     put_u(buf, pos, (unsigned int)b[0] * 256u + (unsigned int)b[1]);
 }
 
-/* Append s with the four HTML-significant bytes escaped, copying at most max
- * source bytes and dropping anything outside printable ASCII. Every value taken
- * from the request passes through here before it reaches the page. */
+/**
+ * Append `s` with the four HTML-significant bytes escaped, copying at most
+ * `max` source bytes and dropping anything outside printable ASCII.
+ *
+ * Every value taken from the request passes through here before it reaches the
+ * page.
+ */
 static void put_esc(char *buf, int *pos, const char *s, int max)
 {
     int i;
@@ -124,8 +131,10 @@ static void put_esc(char *buf, int *pos, const char *s, int max)
     }
 }
 
-/* Append a request string with its leading method token highlighted in red
- * (e.g. the GET in "GET /path HTTP/1.1"); both parts are HTML-escaped. */
+/**
+ * Append a request string with its leading method token highlighted in red
+ * (the `GET` in `GET /path HTTP/1.1`); both parts are HTML-escaped.
+ */
 static void put_req(char *buf, int *pos, const char *s, int max)
 {
     int m = 0;
@@ -145,7 +154,9 @@ static int str_len(const char *s)
     return n;
 }
 
-/* Case-insensitive test of whether buf begins with the lowercase prefix. */
+/**
+ * Case-insensitive test of whether `buf` begins with the lowercase `lower`.
+ */
 static int ci_prefix(const char *buf, const char *lower)
 {
     int i;
@@ -157,8 +168,10 @@ static int ci_prefix(const char *buf, const char *lower)
     return 1;
 }
 
-/* Locate a header value by lowercase "name:" and copy it into dst (NUL
- * terminated, capped). Returns 1 if found. */
+/**
+ * Locate a header value by lowercase `"name:"` and copy it into `dst`, NUL
+ * terminated and capped at `cap`. Returns 1 if found, 0 otherwise.
+ */
 static int header_value(const char *buf, int len, const char *name,
                         char *dst, int cap)
 {
@@ -183,7 +196,10 @@ static int header_value(const char *buf, int len, const char *name,
     return 0;
 }
 
-/* Copy the request line, or just "METHOD path" when methpath is set, into dst. */
+/**
+ * Copy the request line into `dst`, or just `METHOD path` when `methpath` is
+ * set; printable ASCII only, capped at `cap`.
+ */
 static void copy_request(const char *buf, int len, char *dst, int cap,
                          int methpath)
 {
@@ -191,7 +207,7 @@ static void copy_request(const char *buf, int len, char *dst, int cap,
     while (i < len && n < cap - 1 && buf[i] != '\r' && buf[i] != '\n') {
         char ch = buf[i++];
         if (ch == ' ' && methpath && ++spaces == 2) break;
-        if (ch >= 32 && ch < 127) dst[n++] = ch;   /* printable ASCII only */
+        if (ch >= 32 && ch < 127) dst[n++] = ch;
     }
     dst[n] = '\0';
 }
@@ -234,6 +250,10 @@ static int32_t now_sec(void)
     return tv.tv_sec;
 }
 
+/**
+ * Push a connection onto the `peers` ring, overwriting the oldest slot once it
+ * is full. The `methpath` is copied from the current request.
+ */
 static void record_peer(uint32_t ip, uint16_t port,
                         unsigned int req_num, unsigned int bytes)
 {
@@ -248,7 +268,9 @@ static void record_peer(uint32_t ip, uint16_t port,
     if (peer_count < PEER_RING) peer_count++;
 }
 
-/* Append uptime as "Hh MMm SSs". */
+/**
+ * Append uptime as `Hh MMm SSs`.
+ */
 static void put_uptime(char *buf, int *pos, uint32_t s)
 {
     uint32_t h = s / 3600u, m = (s / 60u) % 60u, sec = s % 60u;
@@ -259,7 +281,9 @@ static void put_uptime(char *buf, int *pos, uint32_t s)
     put_u(buf, pos, sec); buf[(*pos)++] = 's';
 }
 
-/* Append a byte count as "N B" or "N.N KB". */
+/**
+ * Append a byte count as `N B` or `N.N KB`.
+ */
 static void put_bytes(char *buf, int *pos, unsigned int n)
 {
     if (n < 1024) {
@@ -273,7 +297,9 @@ static void put_bytes(char *buf, int *pos, unsigned int n)
     }
 }
 
-/* Build the live status page; returns its length in body[]. */
+/**
+ * Build the live status page into `body[]`; returns its length.
+ */
 static int build_body(uint32_t uptime_s)
 {
     int p = 0;
@@ -316,13 +342,11 @@ static int build_body(uint32_t uptime_s)
         "td.a{text-align:right;color:var(--faint);padding-left:14px}"
         "</style></head><body><main>");
 
-    /* Header: name, and the server's own endpoint plus how long it has been up. */
     put_s(body, &p, "<div class=top><h1>rach2</h1><div class=stat>"
                     SERVER_ADDR "<br>up ");
     put_uptime(body, &p, uptime_s);
     put_s(body, &p, "</div></div>");
 
-    /* What the stack decoded about this very request. */
     put_s(body, &p, "<div class=sec>this request</div>");
 
     put_s(body, &p, "<div class=r><i>client</i><b>");
@@ -351,7 +375,6 @@ static int build_body(uint32_t uptime_s)
     put_u(body, &p, cur_bytes_in);
     put_s(body, &p, "</b></div>");
 
-    /* Traffic counters since boot. */
     put_s(body, &p, "<div class=sec>traffic</div>");
 
     put_s(body, &p, "<div class=r><i>served</i><b>");
@@ -399,7 +422,10 @@ static int build_body(uint32_t uptime_s)
     return p;
 }
 
-/* Build the full HTTP/1.0 response (headers + body) into resp[]. */
+/**
+ * Build the full HTTP/1.0 response (headers plus body) into `resp[]`; returns
+ * its length.
+ */
 static int build_response(uint32_t uptime_s)
 {
     int blen = build_body(uptime_s);
@@ -417,6 +443,11 @@ static int build_response(uint32_t uptime_s)
     return p;
 }
 
+/**
+ * Bind port 80, then accept and serve one connection at a time: read the
+ * request, decode it into the `cur_*` readout, render and send the status
+ * page, then close and access-log the connection.
+ */
 int main(void)
 {
     int fd, conn;
@@ -460,7 +491,6 @@ int main(void)
             continue;
         }
 
-        /* Decode what we can of the request for the readout. */
         cur_client_ip   = peer.sin_addr.s_addr;
         cur_client_port = peer.sin_port;
         cur_bytes_in    = (unsigned int)rlen;

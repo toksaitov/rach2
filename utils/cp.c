@@ -1,8 +1,4 @@
-/*
- * cp.c - copy a file (source -> destination).
- *
- * Ported to musl: <unistd.h>/<fcntl.h> read/write/open, no int-0x80 stubs.
- */
+/** Copy a file from SOURCE to DEST. */
 
 #include <stdio.h>
 #include <unistd.h>

@@ -1,8 +1,4 @@
-/*
- * pwd.c - print the current working directory.
- *
- * Ported to musl: <unistd.h> getcwd + <stdio.h> puts, no int-0x80 stubs.
- */
+/** Print the current working directory. */
 
 #include <stdio.h>
 #include <unistd.h>
