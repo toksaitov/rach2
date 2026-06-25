@@ -1,34 +1,23 @@
 /*
- * crt0.c - C runtime startup for Rach2 user programs
- *
- * Provides _start entry point that extracts argc/argv from the stack
- * (as set up by the kernel's execve), calls main(), and exits.
+ * C runtime startup for Rach2 user programs: the `_start` entry, with no
+ * libc to set up the stack first.
  */
 
 #include "ish_syscalls.h"
 
-/* Forward declaration of main */
 int main(int argc, char **argv, char **envp);
 
-/*
- * _start - ELF entry point
+/**
+ * Freestanding ELF entry: read `argc`, `argv`, and `envp` off the initial
+ * stack, run `main`, and exit with its return value.
  *
- * Stack layout on entry (set up by kernel's execve):
- *   [ESP+0]          argc
- *   [ESP+4]          argv[0]
- *   [ESP+8]          argv[1]
- *   ...
- *   [ESP+4+argc*4]   NULL (argv terminator)
- *   [ESP+4+argc*4+4] NULL (envp terminator)
- *
- * After the compiler's function prologue (push %ebp; mov %esp,%ebp):
- *   [EBP+0]  = saved EBP
- *   [EBP+4]  = argc
- *   [EBP+8]  = argv[0]
- *   [EBP+12] = argv[1]
- *   ...
- *
- * We use EBP-relative addressing since the prologue modifies ESP.
+ * The kernel's `execve` hands a new process a stack whose top words are
+ * `argc`, then the `argc` pointers of `argv`, a NULL terminator, the `envp`
+ * pointers, and a final NULL. There is no libc startup, so this entry reads
+ * that layout directly. The compiler's prologue (`push %ebp; mov %esp,%ebp`)
+ * has already moved ESP, so the words are addressed EBP-relative: `argc` at
+ * `EBP+4`, just above the saved EBP, and `argv` at `EBP+8`. `envp` follows
+ * `argv` past its NULL terminator, at `argv + argc + 1`.
  */
 void _start(void)
 {
@@ -37,24 +26,19 @@ void _start(void)
     char **envp;
     int ret;
 
-    /* Get argc from stack (EBP+4, just above saved EBP) */
     __asm__ __volatile__ (
         "movl 4(%%ebp), %0"
         : "=r"(argc)
     );
 
-    /* argv is at EBP+8 (pointer to argv[0]) */
     __asm__ __volatile__ (
         "leal 8(%%ebp), %0"
         : "=r"(argv)
     );
 
-    /* envp is after argv's NULL terminator */
     envp = argv + argc + 1;
 
-    /* Call main */
     ret = main(argc, argv, envp);
 
-    /* Exit with main's return value */
     ish_exit(ret);
 }

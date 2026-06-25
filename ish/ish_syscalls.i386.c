@@ -1,3 +1,13 @@
+/**
+ * The i386 Linux system call wrappers for ish.
+ *
+ * Each wrapper issues `int $0x80` with the syscall number in `eax` and the
+ * arguments in `ebx`, `ecx`, `edx`, `esi`, `edi` in that order; the kernel
+ * returns the result in `eax`. The numbers are the Linux i386 ABI: `read` 3,
+ * `write` 4, `open` 5, `close` 6, `waitpid` 7, `creat` 8, `execve` 11,
+ * `chdir` 12, `stat` 106, `dup2` 63, `fork` 2, `exit` 1. The wrappers are thin
+ * and carry no libc dependency, so they stay bare below.
+ */
 long ish_read(int file_descriptor, void *buffer, unsigned long buffer_size)
 {
     long result;

@@ -2,7 +2,7 @@
 
 ![ISH Shell Running on Rach2](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/ish.png)
 
-A minimal educational shell written in C. The project demonstrates Unix shell internals by implementing core shell functionality from scratch, including command parsing, process creation, and program execution. A key aspect is the direct system call layer that bypasses the standard C library entirely, using inline assembly to invoke kernel syscalls on 32-bit x86 (i386). The shell intentionally avoids standard library string functions, providing custom implementations to illustrate low-level C programming without external dependencies.
+A small Unix shell in freestanding C. It reads a line, parses it, and runs a builtin (`cd`, `exit`) or forks and execs a program found on `PATH`, with `<` and `>` redirection. It links no C library: the system calls are inline `int $0x80` wrappers for 32-bit x86, and the string routines (length, compare, tokenize, path join) are hand-rolled, so the shell needs nothing but the kernel's syscall ABI.
 
 The shell can be built for both Linux (native) and the Rach2 kernel (freestanding ELF32).
 

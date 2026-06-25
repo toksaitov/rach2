@@ -26,6 +26,19 @@ static const unsigned short Standard_Output_File_Mode = 00644;
 
 static const char Fork_Error_Message[] = "fork failure\n";
 
+/**
+ * Read a line, parse it, and run it, until end of input.
+ *
+ * Each iteration reads one line from descriptor 0, splits it into an argument
+ * array, and either runs a builtin (`cd`, `exit`) in this process or resolves
+ * the command to an executable and runs it in a child. Resolution tries the
+ * name as given, then each `PATH` element joined with the name; a name that
+ * `stat` cannot find is skipped. Before the `execve`, `< file` and `> file`
+ * redirections recorded in the arguments are applied in the child by
+ * `dup2`-ing the opened descriptors over 0 and 1. The parent waits for the
+ * child. The crt0 entry hands `main` the initial-stack ABI directly: `argc`,
+ * the NULL-terminated `argv`, and the NULL-terminated `envp` that follows it.
+ */
 int main(int argc, char **argv, char **envp)
 {
     char *home = ish_get_first_environment_variable(Environment_Variable_Home, sizeof(Environment_Variable_Home), envp);
@@ -72,6 +85,7 @@ int main(int argc, char **argv, char **envp)
         struct stat stat_buffer;
         struct stat *stat_result = &stat_buffer;
 #else
+        /* Opaque scratch for the kernel's stat result; no libc struct stat. */
         char stat_result[256];
 #endif
         if (stat(executable, stat_result) != 0) {
