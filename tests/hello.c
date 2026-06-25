@@ -1,11 +1,8 @@
-/*
- * hello.c - Minimal ELF test program for Rach2 OS
+/**
+ * Minimal ELF probe: prints "Hello from ELF!" and exits.
  *
- * This is a freestanding program (no libc) that uses inline assembly
- * to make syscalls directly. It prints "Hello from ELF!" and exits.
- *
- * Compile with (on macOS with cross-compiler):
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o hello hello.c
+ * Exercises the ELF loader and the write and exit syscalls. Freestanding;
+ * direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -16,10 +13,6 @@ typedef unsigned int size_t;
 #define SYS_EXIT  1
 #define SYS_WRITE 4
 
-/*
- * sys_write - Write to a file descriptor
- * Uses int 0x80 with: EAX=4, EBX=fd, ECX=buf, EDX=count
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -32,10 +25,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- * Uses int 0x80 with: EAX=1, EBX=status
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -43,13 +32,9 @@ static void sys_exit(int status)
         :
         : "a"(SYS_EXIT), "b"(status)
     );
-    /* Should never return, but prevent compiler warning */
     __builtin_unreachable();
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -59,26 +44,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * _start - ELF entry point (no libc, no main)
+/**
+ * ELF entry point: the address the loader jumps to (no libc, no main).
  *
- * This is the actual entry point that the ELF loader jumps to.
- * The stack layout on entry (if argc/argv are passed) would be:
- *   [ESP+0]  argc
- *   [ESP+4]  argv[0]
- *   [ESP+8]  argv[1]
- *   ...
- *
- * Arguments are ignored; prints a fixed message.
+ * The stack on entry holds argc at `[ESP+0]`, then the argv pointers; this
+ * probe ignores them and prints a fixed message.
  */
 void _start(void)
 {

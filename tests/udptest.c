@@ -1,12 +1,10 @@
-/*
- * udptest.c - UDP socket test program for Rach2 OS
+/**
+ * Exercises the SYS_SOCKETCALL UDP path: socket, bind, sendto, and recvfrom
+ * in both blocking and non-blocking (MSG_DONTWAIT) forms. Acts as a UDP echo
+ * client against a host echo server reachable at the SLIRP gateway
+ * 10.0.2.2:7777.
  *
- * Exercises the SYS_SOCKETCALL UDP path: socket, bind, sendto, recvfrom
- * (blocking and non-blocking MSG_DONTWAIT). Acts as a UDP echo client against
- * a host echo server reachable at the SLIRP gateway 10.0.2.2:7777.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o udptest udptest.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int   size_t;
@@ -186,7 +184,7 @@ void _start(void)
         failed++;
     }
 
-    /* Test 5: a recvfrom into a kernel address must be rejected, not faulted. */
+    /* Test 5: recvfrom into a kernel address must be rejected, not faulted */
     print("Test 5: recvfrom into a kernel pointer is rejected... ");
     args[0] = (uint32_t)fd; args[1] = 0x00100000; args[2] = sizeof(buf);
     args[3] = MSG_DONTWAIT; args[4] = 0; args[5] = 0;

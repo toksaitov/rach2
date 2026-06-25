@@ -1,14 +1,9 @@
-/*
- * dup2test.c - File descriptor duplication test program for Rach2 OS
+/**
+ * Exercises dup2 for I/O redirection: create a file, dup2 it onto stdout,
+ * write through stdout, then read the file back and check the content.
+ * Also covers the identity case dup2(fd, fd) and failure on invalid fds.
  *
- * Tests sys_dup2 syscall for I/O redirection by:
- * 1. Creating a file
- * 2. Duplicating file fd to stdout (fd 1)
- * 3. Writing via stdout (should go to file)
- * 4. Reading file back to verify content
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o dup2test dup2test.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -32,9 +27,6 @@ typedef unsigned int size_t;
 #define O_WRONLY 1
 #define O_RDWR   2
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -47,9 +39,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_read - Read from a file descriptor
- */
 static int sys_read(int fd, void *buf, size_t count)
 {
     int result;
@@ -62,9 +51,6 @@ static int sys_read(int fd, void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_open - Open a file
- */
 static int sys_open(const char *path, int flags)
 {
     int result;
@@ -77,9 +63,6 @@ static int sys_open(const char *path, int flags)
     return result;
 }
 
-/*
- * sys_close - Close a file descriptor
- */
 static int sys_close(int fd)
 {
     int result;
@@ -91,9 +74,6 @@ static int sys_close(int fd)
     return result;
 }
 
-/*
- * sys_creat - Create a file
- */
 static int sys_creat(const char *path, unsigned int mode)
 {
     int result;
@@ -106,9 +86,6 @@ static int sys_creat(const char *path, unsigned int mode)
     return result;
 }
 
-/*
- * sys_unlink - Delete a file
- */
 static int sys_unlink(const char *path)
 {
     int result;
@@ -121,9 +98,6 @@ static int sys_unlink(const char *path)
     return result;
 }
 
-/*
- * sys_dup2 - Duplicate file descriptor
- */
 static int sys_dup2(int oldfd, int newfd)
 {
     int result;
@@ -136,9 +110,6 @@ static int sys_dup2(int oldfd, int newfd)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -149,9 +120,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -161,10 +129,6 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * strcmp - Compare two strings
- * Returns 0 if equal
- */
 static int strcmp(const char *s1, const char *s2)
 {
     while (*s1 && *s1 == *s2) {
@@ -174,9 +138,6 @@ static int strcmp(const char *s1, const char *s2)
     return *(unsigned char *)s1 - *(unsigned char *)s2;
 }
 
-/*
- * strncmp - Compare first n characters
- */
 static int strncmp(const char *s1, const char *s2, size_t n)
 {
     while (n > 0 && *s1 && *s1 == *s2) {
@@ -188,9 +149,7 @@ static int strncmp(const char *s1, const char *s2, size_t n)
     return *(unsigned char *)s1 - *(unsigned char *)s2;
 }
 
-/*
- * Macros for output to stderr (fd 2 is not affected by our dup2 tests)
- */
+/* Output goes to stderr, which the dup2 tests below leave untouched. */
 #define puts_stderr(s) do { \
     sys_write(STDERR_FILENO, s, strlen(s)); \
     sys_write(STDERR_FILENO, "\n", 1); \
@@ -198,9 +157,6 @@ static int strncmp(const char *s1, const char *s2, size_t n)
 
 #define print_stderr(s) sys_write(STDERR_FILENO, s, strlen(s))
 
-/*
- * print_num_stderr - Print a decimal number to stderr
- */
 static void print_num_stderr(int n)
 {
     char buf[12];
@@ -228,14 +184,10 @@ static void print_num_stderr(int n)
 static const char *test_file = "dup2test.tmp";
 static const char *test_content = "Hello from dup2!";
 
-/*
- * _start - ELF entry point
- *
- * Tests dup2 for I/O redirection:
- * 1. dup2(fd, fd) should return fd unchanged
- * 2. Create file, dup2 to stdout, write via stdout, verify in file
- * 3. dup2 to stdin, read via stdin from file
- * 4. Test error cases (invalid fd)
+/**
+ * ELF entry point. Runs the dup2 tests in order: the identity dup2(fd, fd),
+ * redirecting stdout onto a file and reading the bytes back, and the failure
+ * cases for an invalid oldfd and an invalid newfd. Exits 0 on all-pass.
  */
 void _start(void)
 {

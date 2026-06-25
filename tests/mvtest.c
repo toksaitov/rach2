@@ -1,10 +1,9 @@
-/*
- * mvtest.c - Rename file syscall test program for Rach2 OS
+/**
+ * Exercises the rename syscall: rename a file, confirm the old name is gone
+ * and the new name resolves, reject renaming a missing source, and overwrite an
+ * existing destination.
  *
- * Tests sys_rename syscall by renaming files.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o mvtest mvtest.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -27,9 +26,6 @@ typedef unsigned int size_t;
 #define S_IRUSR 0400
 #define S_IWUSR 0200
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -42,9 +38,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -55,9 +48,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * sys_creat - Create a new file
- */
 static int sys_creat(const char *path, unsigned int mode)
 {
     int result;
@@ -70,9 +60,6 @@ static int sys_creat(const char *path, unsigned int mode)
     return result;
 }
 
-/*
- * sys_open - Open a file
- */
 static int sys_open(const char *path, int flags)
 {
     int result;
@@ -85,9 +72,6 @@ static int sys_open(const char *path, int flags)
     return result;
 }
 
-/*
- * sys_close - Close a file descriptor
- */
 static int sys_close(int fd)
 {
     int result;
@@ -99,9 +83,6 @@ static int sys_close(int fd)
     return result;
 }
 
-/*
- * sys_unlink - Delete a file
- */
 static int sys_unlink(const char *path)
 {
     int result;
@@ -114,10 +95,6 @@ static int sys_unlink(const char *path)
     return result;
 }
 
-/*
- * sys_rename - Rename a file
- * Returns: 0 on success, -1 on error
- */
 static int sys_rename(const char *oldpath, const char *newpath)
 {
     int result;
@@ -130,9 +107,6 @@ static int sys_rename(const char *oldpath, const char *newpath)
     return result;
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -142,26 +116,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * print_num - Print a number (0-99)
- */
 static void print_num(int n)
 {
     if (n >= 10) {
@@ -172,16 +137,8 @@ static void print_num(int n)
     sys_write(STDOUT_FILENO, &ones, 1);
 }
 
-/*
- * _start - ELF entry point
- *
- * Tests rename syscall:
- * 1. Create a test file "mvtest_old.tmp"
- * 2. Rename it to "mvtest_new.tmp"
- * 3. Verify old name is gone
- * 4. Verify new name exists
- * 5. Try to rename nonexistent file (should fail)
- * 6. Clean up
+/**
+ * ELF entry point: run the rename tests and exit 0 only if all pass.
  */
 void _start(void)
 {

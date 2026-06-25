@@ -1,10 +1,6 @@
-/*
- * touchtest.c - Create file and update timestamp syscall test for Rach2 OS
- *
- * Tests sys_creat and sys_utimensat syscalls.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o touchtest touchtest.c
+/**
+ * Exercises file creation and timestamp updates through `creat` and
+ * `utimensat`. Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -45,9 +41,6 @@ struct timespec {
 #define S_IRGRP 0040
 #define S_IROTH 0004
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -60,9 +53,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -73,10 +63,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * sys_creat - Create a new file
- * Returns: file descriptor on success, -1 on error
- */
 static int sys_creat(const char *path, unsigned int mode)
 {
     int result;
@@ -89,9 +75,6 @@ static int sys_creat(const char *path, unsigned int mode)
     return result;
 }
 
-/*
- * sys_open - Open a file
- */
 static int sys_open(const char *path, int flags)
 {
     int result;
@@ -104,9 +87,6 @@ static int sys_open(const char *path, int flags)
     return result;
 }
 
-/*
- * sys_close - Close a file descriptor
- */
 static int sys_close(int fd)
 {
     int result;
@@ -118,9 +98,6 @@ static int sys_close(int fd)
     return result;
 }
 
-/*
- * sys_unlink - Delete a file
- */
 static int sys_unlink(const char *path)
 {
     int result;
@@ -133,13 +110,15 @@ static int sys_unlink(const char *path)
     return result;
 }
 
-/*
- * sys_utimensat - Update file timestamps
- * dirfd: AT_FDCWD for relative to cwd, or an open directory fd
- * pathname: path to file
- * times: array of 2 timespec structs [atime, mtime], or NULL for current time
- * flags: 0 or AT_SYMLINK_NOFOLLOW
- * Returns: 0 on success, -1 on error
+/**
+ * Updates a file's access and modification timestamps.
+ *
+ * @param dirfd `AT_FDCWD` to resolve `pathname` against the cwd, or an open
+ * directory fd to resolve it relative to that directory.
+ * @param pathname Path to the file.
+ * @param times Array of two `timespec` `[atime, mtime]`, or NULL for the
+ * current time.
+ * @param flags 0 or `AT_SYMLINK_NOFOLLOW`.
  */
 static int sys_utimensat(int dirfd, const char *pathname,
                          const struct timespec *times, int flags)
@@ -154,9 +133,6 @@ static int sys_utimensat(int dirfd, const char *pathname,
     return result;
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -166,26 +142,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * print_num - Print a number (0-99)
- */
 static void print_num(int n)
 {
     if (n >= 10) {
@@ -196,17 +163,9 @@ static void print_num(int n)
     sys_write(STDOUT_FILENO, &ones, 1);
 }
 
-/*
- * _start - ELF entry point
- *
- * Tests creat and utimensat syscalls:
- * 1. Create a new file "touchtest.tmp"
- * 2. Verify file exists (by opening it)
- * 3. Create file again (should succeed - file already exists)
- * 4. Update timestamps with utimensat (NULL = current time)
- * 5. Update timestamps with specific values
- * 6. utimensat on nonexistent file (should fail)
- * 7-9. Clean up
+/**
+ * ELF entry point: runs the creat and utimensat checks, then exits with the
+ * count of failures.
  */
 void _start(void)
 {

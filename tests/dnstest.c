@@ -1,15 +1,12 @@
-/*
- * dnstest.c - name resolver test program for Rach2 OS
+/**
+ * Exercises the userspace stub resolver in utils/resolv.c. The pure helpers run
+ * hermetically (no network): inet_aton on good and bad literals, hosts_find
+ * against a crafted /hosts buffer, resolve_host on literals and on names read
+ * from the real /hosts staged in the image root, and dns_parse_a and
+ * dns_build_query against crafted wire data. The final block does live
+ * resolution through SLIRP and needs host internet.
  *
- * Exercises the userspace stub resolver in utils/resolv.c. The pure helpers are
- * tested hermetically (no network): inet_aton on good and bad literals,
- * hosts_find against a crafted /hosts buffer, and resolve_host on literals and
- * names read from the real /hosts staged in the image root. The DNS wire parser
- * (dns_parse_a) and live resolution are added in later phases.
- *
- * Compile with the shared resolver:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *       -o dnstest dnstest.c ../utils/resolv.c
+ * Freestanding; direct int 0x80.
  */
 
 #include "../utils/netdb.h"
@@ -77,7 +74,8 @@ static void check(const char *desc, int ok)
 
 /*
  * Crafted DNS responses (RFC 1035) for hermetic parser tests. The question in
- * each is "example.com"; answers reference it with a 0xC00C compression pointer.
+ * each is "example.com"; answers reference it with a 0xC00C compression
+ * pointer.
  */
 
 /* Normal: one A record, 93.184.216.34. id 0x1234. */

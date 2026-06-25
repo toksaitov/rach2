@@ -1,11 +1,9 @@
-/*
- * lstest.c - Directory listing (getdents64) syscall test for Rach2 OS
+/**
+ * Exercises the getdents64 syscall: open "/", read directory entries, parse
+ * the linux_dirent64 stream, and confirm a second call reaches end-of-directory
+ * while a bad fd fails. KRFFS is flat, so every file appears in root "/".
  *
- * Tests sys_getdents64 syscall for listing directory entries.
- * Since KRFFS is a flat filesystem, all files appear in root "/".
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o lstest lstest.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int   uint32_t;
@@ -39,10 +37,7 @@ typedef unsigned int size_t;
 #define DT_SOCK    12
 #define DT_WHT     14
 
-/*
- * Linux dirent64 structure
- * This is the format returned by getdents64 syscall
- */
+/** The record format returned by getdents64. */
 struct linux_dirent64 {
     uint64_t       d_ino;     /* 64-bit inode number */
     int64_t        d_off;     /* 64-bit offset to next structure */
@@ -51,9 +46,6 @@ struct linux_dirent64 {
     char           d_name[];  /* Filename (null-terminated) */
 };
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -66,9 +58,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -79,9 +68,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * sys_open - Open a file
- */
 static int sys_open(const char *pathname, int flags)
 {
     int result;
@@ -94,9 +80,6 @@ static int sys_open(const char *pathname, int flags)
     return result;
 }
 
-/*
- * sys_close - Close a file descriptor
- */
 static int sys_close(int fd)
 {
     int result;
@@ -109,13 +92,6 @@ static int sys_close(int fd)
     return result;
 }
 
-/*
- * sys_getdents64 - Get directory entries
- * fd: file descriptor of opened directory
- * dirp: buffer to store directory entries
- * count: size of buffer in bytes
- * Returns: number of bytes read, 0 at end of directory, -1 on error
- */
 static int sys_getdents64(int fd, void *dirp, unsigned int count)
 {
     int result;
@@ -128,9 +104,6 @@ static int sys_getdents64(int fd, void *dirp, unsigned int count)
     return result;
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -140,26 +113,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * print_num - Print a number (simple version for small numbers)
- */
 static void print_num(int n)
 {
     if (n >= 10) {
@@ -169,9 +133,6 @@ static void print_num(int n)
     sys_write(STDOUT_FILENO, &c, 1);
 }
 
-/*
- * print_hex - Print a number in hex
- */
 static void print_hex(uint32_t n)
 {
     const char *hex = "0123456789abcdef";
@@ -187,9 +148,6 @@ static void print_hex(uint32_t n)
     print(buf);
 }
 
-/*
- * get_type_name - Return string name for d_type
- */
 static const char *get_type_name(uint8_t d_type)
 {
     switch (d_type) {
@@ -204,15 +162,10 @@ static const char *get_type_name(uint8_t d_type)
     }
 }
 
-/*
- * _start - ELF entry point
- *
- * Tests getdents64 syscall:
- * 1. Open "/" directory
- * 2. Call getdents64 to read entries
- * 3. Parse and print each entry
- * 4. Call getdents64 again to verify end-of-directory
- * 5. Close directory fd
+/**
+ * Entry point. Opens "/", reads its entries with getdents64, parses and prints
+ * each one, calls getdents64 again to verify end-of-directory, checks that a
+ * bad fd fails, then closes the directory.
  */
 void _start(void)
 {
@@ -307,7 +260,7 @@ void _start(void)
         passed++;
     }
 
-    /* Test 4: Call getdents64 again - should return 0 (end of dir) or more entries */
+    /* Test 4: getdents64 again returns 0 (end of dir) or more entries */
     print("Test 4: getdents64 again... ");
     nread = sys_getdents64(fd, buf, sizeof(buf));
     if (nread >= 0) {

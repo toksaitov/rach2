@@ -1,12 +1,9 @@
-/*
- * pingtest.c - ICMP ping test program for Rach2 OS
+/**
+ * Drives the kernel ICMP path through the SC_PING socketcall. Three pings to
+ * the SLIRP gateway 10.0.2.2 must get replies; one to an unreachable host must
+ * time out cleanly rather than hang.
  *
- * Uses the SC_PING socketcall to send ICMP echo requests through the kernel's
- * network stack: a few pings to the SLIRP gateway 10.0.2.2 (expecting replies)
- * and one to an unreachable host (expecting a clean timeout, not a hang).
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o pingtest pingtest.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;

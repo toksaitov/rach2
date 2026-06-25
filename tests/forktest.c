@@ -1,12 +1,8 @@
-/*
- * forktest.c - Process lifecycle syscall test for Rach2 OS
+/**
+ * Exercises the process-lifecycle syscalls: fork a child that exits with a
+ * known status, then confirm the parent reads back that status through waitpid.
  *
- * Tests sys_fork, sys_waitpid, and sys_exit syscalls by forking
- * a child process that exits with a known status, then verifying
- * the parent receives the correct exit status via waitpid.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o forktest forktest.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -26,9 +22,6 @@ typedef unsigned int size_t;
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -41,9 +34,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -54,10 +44,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * sys_fork - Create a child process
- * Returns: 0 to child, child's PID to parent, -1 on error
- */
 static int sys_fork(void)
 {
     int result;
@@ -69,11 +55,6 @@ static int sys_fork(void)
     return result;
 }
 
-/*
- * sys_waitpid - Wait for child process to exit
- * Args: pid (-1 for any child), status pointer, options (0)
- * Returns: PID of exited child, or -1 on error
- */
 static int sys_waitpid(int pid, int *status, int options)
 {
     int result;
@@ -86,9 +67,6 @@ static int sys_waitpid(int pid, int *status, int options)
     return result;
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -98,26 +76,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * print_num - Print a decimal number
- */
 static void print_num(int n)
 {
     char buf[12];
@@ -140,19 +109,16 @@ static void print_num(int n)
         buf[i++] = '-';
     }
 
-    /* Reverse and print */
     while (i > 0) {
         sys_write(STDOUT_FILENO, &buf[--i], 1);
     }
 }
 
-/*
- * _start - ELF entry point
+/**
+ * ELF entry point and the test driver.
  *
- * Tests fork/waitpid:
- * 1. Parent forks a child
- * 2. Child prints message and exits with status 42
- * 3. Parent waits for child and verifies exit status
+ * The parent forks a child that exits with `CHILD_EXIT_STATUS`, then waits and
+ * checks that `WIFEXITED` and `WEXITSTATUS` report that status back.
  */
 void _start(void)
 {
@@ -171,16 +137,13 @@ void _start(void)
     }
 
     if (pid == 0) {
-        /* Child process */
         puts("OK (child)");
         print("Child: PID is 0 (as expected), exiting with status ");
         print_num(CHILD_EXIT_STATUS);
         puts("");
         sys_exit(CHILD_EXIT_STATUS);
-        /* Never reached */
     }
 
-    /* Parent process */
     print("OK (parent, child PID=");
     print_num(pid);
     puts(")");

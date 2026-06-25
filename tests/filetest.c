@@ -1,11 +1,8 @@
-/*
- * filetest.c - File syscall test program for Rach2 OS
+/**
+ * Exercises the file syscalls by opening `hello.txt`, reading it, and
+ * echoing the contents to stdout, closing the descriptor at the end.
  *
- * Tests sys_open, sys_read, sys_write, and sys_close syscalls
- * by opening a file, reading its contents, and printing to stdout.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o filetest filetest.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -24,9 +21,6 @@ typedef unsigned int size_t;
 /* Open flags */
 #define O_RDONLY 0
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -39,9 +33,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_read - Read from a file descriptor
- */
 static int sys_read(int fd, void *buf, size_t count)
 {
     int result;
@@ -54,9 +45,6 @@ static int sys_read(int fd, void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_open - Open a file
- */
 static int sys_open(const char *path, int flags)
 {
     int result;
@@ -69,9 +57,6 @@ static int sys_open(const char *path, int flags)
     return result;
 }
 
-/*
- * sys_close - Close a file descriptor
- */
 static int sys_close(int fd)
 {
     int result;
@@ -83,9 +68,6 @@ static int sys_close(int fd)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -96,9 +78,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -108,29 +87,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * _start - ELF entry point
- *
- * Opens "hello.txt", reads its contents, and prints them.
- * This tests the file syscalls: open, read, write, close.
- */
 void _start(void)
 {
     char buf[256];

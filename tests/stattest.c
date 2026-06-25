@@ -1,12 +1,9 @@
-/*
- * stattest.c - File stat syscall test program for Rach2 OS
+/**
+ * Exercises the file stat syscalls: sys_stat (106) and sys_stat64 (195).
  *
- * Tests both sys_stat (syscall 106) and sys_stat64 (syscall 195) by checking
- * file metadata. Verifies that both work on existing files and fail on
- * nonexistent ones.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o stattest stattest.c
+ * Each is checked against an existing file, the root directory, and a
+ * nonexistent path, so both the success and the failure path are covered.
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -35,10 +32,7 @@ typedef unsigned long long ino64_t;
 #define S_IFREG  0100000
 #define S_IFDIR  0040000
 
-/*
- * stat structure - 32-bit Linux stat (used by ISH)
- * This is the structure filled by sys_stat (syscall 106)
- */
+/* 32-bit Linux stat (used by ISH), filled by sys_stat (syscall 106). */
 struct stat {
     unsigned long  st_dev;
     unsigned long  st_ino;
@@ -60,10 +54,7 @@ struct stat {
     unsigned long  __unused5;
 };
 
-/*
- * stat64 structure - matches 32-bit Linux stat64
- * This is the structure filled by sys_stat64 (syscall 195)
- */
+/* 32-bit Linux stat64, filled by sys_stat64 (syscall 195). */
 struct stat64 {
     unsigned long long st_dev;
     unsigned char      __pad0[4];
@@ -86,9 +77,6 @@ struct stat64 {
     unsigned long long st_ino;
 };
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -101,9 +89,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -114,10 +99,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * sys_stat - Get file status (32-bit structure)
- * Returns: 0 on success, -1 on error
- */
 static int sys_stat(const char *path, struct stat *buf)
 {
     int result;
@@ -130,10 +111,6 @@ static int sys_stat(const char *path, struct stat *buf)
     return result;
 }
 
-/*
- * sys_stat64 - Get file status (64-bit structure)
- * Returns: 0 on success, -1 on error
- */
 static int sys_stat64(const char *path, struct stat64 *buf)
 {
     int result;
@@ -146,9 +123,6 @@ static int sys_stat64(const char *path, struct stat64 *buf)
     return result;
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -158,26 +132,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * print_num - Print a decimal number (unsigned, up to 32-bit)
- */
 static void print_num(unsigned int n)
 {
     char buf[12];
@@ -192,15 +157,11 @@ static void print_num(unsigned int n)
         }
     }
 
-    /* Reverse and print */
     while (i > 0) {
         sys_write(STDOUT_FILENO, &buf[--i], 1);
     }
 }
 
-/*
- * print_octal - Print number in octal
- */
 static void print_octal(unsigned int m)
 {
     char octal[12];
@@ -221,12 +182,9 @@ static void print_octal(unsigned int m)
     }
 }
 
-/*
- * _start - ELF entry point
- *
- * Tests both stat (106) and stat64 (195):
- * Part A: stat64 tests (existing tests)
- * Part B: stat tests (new tests for ISH compatibility)
+/**
+ * Entry point: runs the stat64 (195) probes in part A, then the stat (106)
+ * probes in part B, and exits 0 only if every probe passed.
  */
 void _start(void)
 {

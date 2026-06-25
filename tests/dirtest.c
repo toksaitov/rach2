@@ -1,13 +1,7 @@
-/*
- * dirtest.c - Directory syscall test program for Rach2 OS
- *
- * Tests sys_getcwd and sys_chdir syscalls.
- * Since KRFFS has no directories, only "/" exists.
- * chdir("/"), chdir("."), and chdir("..") should succeed.
- * All other paths should fail.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o dirtest dirtest.c
+/**
+ * Exercises the getcwd and chdir syscalls. KRFFS has no directories, so only
+ * "/" exists: chdir("/"), chdir("."), and chdir("..") succeed, and every other
+ * path fails. Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -20,9 +14,6 @@ typedef unsigned int size_t;
 #define SYS_CHDIR  12
 #define SYS_GETCWD 183
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -35,9 +26,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -48,10 +36,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * sys_chdir - Change current working directory
- * Returns: 0 on success, -1 on error
- */
 static int sys_chdir(const char *path)
 {
     int result;
@@ -64,10 +48,9 @@ static int sys_chdir(const char *path)
     return result;
 }
 
-/*
- * sys_getcwd - Get current working directory
- * Returns: the path length including the NUL on success (the path is written
- * into buf), or a negative errno on error. This is the Linux getcwd(2) ABI.
+/**
+ * Returns the path length including the NUL on success (the path is written
+ * into `buf`), or a negative errno on error. This is the Linux getcwd(2) ABI.
  */
 static int sys_getcwd(char *buf, size_t size)
 {
@@ -81,9 +64,6 @@ static int sys_getcwd(char *buf, size_t size)
     return result;
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -93,33 +73,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * _start - ELF entry point
- *
- * Tests getcwd and chdir:
- * 1. Get initial cwd (should be "/")
- * 2. Test chdir(".") - should succeed
- * 3. Test chdir("/") - should succeed
- * 4. Test chdir("..") - should succeed (parent of / is /)
- * 5. Test chdir("nonexistent") - should fail
- * 6. Test chdir("hello.txt") - should fail (it's a file, not a dir)
+/**
+ * ELF entry point. Runs the getcwd and chdir cases, tallies passes and
+ * failures, prints the count, and exits 0 only if all pass.
  */
 void _start(void)
 {

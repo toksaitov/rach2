@@ -1,11 +1,8 @@
-/*
- * shelltest.c - Shell-like exec syscall test for Rach2 OS
+/**
+ * Exercises the fork+exec+waitpid chain that a shell uses to run a program.
  *
- * Tests the fork+exec+waitpid chain that shells use to run programs.
- * Forks a child that exec's "hello", parent waits and verifies exit status.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o shelltest shelltest.c
+ * The child exec's `hello`; the parent waits and checks its exit status.
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -19,9 +16,6 @@ typedef unsigned int size_t;
 #define SYS_WAITPID 7
 #define SYS_EXECVE  11
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -34,9 +28,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -47,10 +38,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * sys_fork - Create a child process
- * Returns: 0 to child, child's PID to parent, -1 on error
- */
 static int sys_fork(void)
 {
     int result;
@@ -62,11 +49,6 @@ static int sys_fork(void)
     return result;
 }
 
-/*
- * sys_waitpid - Wait for child process to exit
- * Args: pid (-1 for any child), status pointer, options (0)
- * Returns: PID of exited child, or -1 on error
- */
 static int sys_waitpid(int pid, int *status, int options)
 {
     int result;
@@ -79,11 +61,6 @@ static int sys_waitpid(int pid, int *status, int options)
     return result;
 }
 
-/*
- * sys_execve - Replace process image with new program
- * Args: path to executable, argv array (NULL-terminated), envp array (NULL-terminated)
- * Returns: only on error (-1), otherwise doesn't return
- */
 static int sys_execve(const char *path, char *const argv[], char *const envp[])
 {
     int result;
@@ -96,9 +73,6 @@ static int sys_execve(const char *path, char *const argv[], char *const envp[])
     return result;
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -108,26 +82,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * print_num - Print a decimal number
- */
 static void print_num(int n)
 {
     char buf[12];
@@ -150,19 +115,16 @@ static void print_num(int n)
         buf[i++] = '-';
     }
 
-    /* Reverse and print */
     while (i > 0) {
         sys_write(STDOUT_FILENO, &buf[--i], 1);
     }
 }
 
-/*
- * _start - ELF entry point
+/**
+ * ELF entry point: runs the fork+exec+waitpid shell pattern.
  *
- * Tests fork+exec+waitpid (shell pattern):
- * 1. Parent forks a child
- * 2. Child exec's "hello" program
- * 3. Parent waits for child and verifies exit status (hello exits with 0)
+ * The parent forks; the child exec's `hello`; the parent waits and verifies the
+ * child exited with status 0.
  */
 void _start(void)
 {
@@ -171,7 +133,6 @@ void _start(void)
     int child_pid;
     int exec_result;
 
-    /* Program to execute - "hello" should print message and exit(0) */
     const char *program = "hello";
     char *const argv[] = { "hello", (char *)0 };
     char *const envp[] = { (char *)0 };
@@ -187,7 +148,6 @@ void _start(void)
     }
 
     if (pid == 0) {
-        /* Child process - exec the program */
         print("OK (child)\n");
         print("Child: Calling execve(\"");
         print(program);
@@ -195,15 +155,12 @@ void _start(void)
 
         exec_result = sys_execve(program, argv, envp);
 
-        /* If we get here, exec failed */
         print("FAILED (exec returned ");
         print_num(exec_result);
         puts(")");
         sys_exit(1);
-        /* Never reached if exec succeeds */
     }
 
-    /* Parent process */
     print("OK (parent, child PID=");
     print_num(pid);
     puts(")");
@@ -223,7 +180,6 @@ void _start(void)
     print_num(status);
     puts("");
 
-    /* "hello" program should exit with status 0 */
     if (status == 0) {
         puts("All exec syscalls passed!");
         sys_exit(0);

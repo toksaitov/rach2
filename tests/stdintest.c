@@ -1,11 +1,9 @@
-/*
- * stdintest.c - Stdin read syscall test program for Rach2 OS
+/**
+ * Exercises sys_read from stdin (fd 0): blocking, line buffering, and a
+ * short-count read into a small buffer. Each test prompts, reads a line,
+ * and echoes it back.
  *
- * Tests sys_read from stdin (fd 0) with blocking and line buffering.
- * Prompts user for input, reads it, and echoes it back.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o stdintest stdintest.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -18,9 +16,6 @@ typedef unsigned int size_t;
 #define SYS_READ  3
 #define SYS_WRITE 4
 
-/*
- * sys_write - Write to a file descriptor
- */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
@@ -33,9 +28,6 @@ static int sys_write(int fd, const void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_read - Read from a file descriptor
- */
 static int sys_read(int fd, void *buf, size_t count)
 {
     int result;
@@ -48,9 +40,6 @@ static int sys_read(int fd, void *buf, size_t count)
     return result;
 }
 
-/*
- * sys_exit - Terminate the process
- */
 static void sys_exit(int status)
 {
     __asm__ __volatile__ (
@@ -61,9 +50,6 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/*
- * strlen - Calculate string length
- */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -73,26 +59,17 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/*
- * puts - Print string followed by newline
- */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/*
- * print - Print string without newline
- */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/*
- * print_num - Print a decimal number
- */
 static void print_num(int n)
 {
     char buf[12];
@@ -117,21 +94,11 @@ static void print_num(int n)
         sys_write(STDOUT_FILENO, "-", 1);
     }
 
-    /* Reverse and print */
     while (i > 0) {
         sys_write(STDOUT_FILENO, &buf[--i], 1);
     }
 }
 
-/*
- * _start - ELF entry point
- *
- * Tests stdin reading:
- * 1. Prompt user for input
- * 2. Read from stdin (should block until Enter)
- * 3. Echo back what was read
- * 4. Test reading multiple times
- */
 void _start(void)
 {
     char buf[128];
@@ -148,7 +115,6 @@ void _start(void)
     n = sys_read(STDIN_FILENO, buf, sizeof(buf) - 1);
     if (n > 0) {
         buf[n] = '\0';
-        /* Remove trailing newline if present */
         if (n > 0 && buf[n-1] == '\n') {
             buf[n-1] = '\0';
             n--;

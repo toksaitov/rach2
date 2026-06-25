@@ -1,13 +1,12 @@
-/*
- * tcptest.c - TCP socket test program for Rach2 OS
+/**
+ * Exercises the TCP socket path against a host echo server at the SLIRP
+ * gateway 10.0.2.2:7777.
  *
- * Connects to a host TCP echo server at the SLIRP gateway 10.0.2.2:7777,
- * sends data and reads it back through read()/write() on the socket fd (the
- * unified descriptor path), closes gracefully, then verifies that connecting
- * to a closed port fails instead of hanging.
+ * Connects, sends data and reads it back through `read()`/`write()` on the
+ * socket fd (the unified descriptor path), closes gracefully, then verifies
+ * that connecting to a closed port fails instead of hanging.
  *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o tcptest tcptest.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int   size_t;

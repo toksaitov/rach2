@@ -1,13 +1,8 @@
-/*
- * sockettest.c - Socket lifecycle test program for Rach2 OS
- *
- * Verifies that sockets are first-class file descriptors with a correct
- * reference count: close releases them, dup2 shares them, fork shares them,
- * and process exit releases any still open. A leak or double-free would show
- * up as the socket pool exhausting or the kernel faulting.
- *
- * Compile with:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -o sockettest sockettest.c
+/**
+ * Exercises the socket reference count: sockets are first-class file
+ * descriptors, so close releases them, dup2 and fork share them, and process
+ * exit releases any still open. A leak or double-free shows up as the socket
+ * pool exhausting or the kernel faulting. Freestanding; direct int 0x80.
  */
 
 typedef unsigned int   size_t;
