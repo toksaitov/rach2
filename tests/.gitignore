@@ -59,7 +59,7 @@ miscprobe
 ptyprobe
 rngprobe
 
-# The Phase 18 busybox capstone binary (built by busybox/build_busybox.sh)
+# The busybox and dropbear capstone binaries (built by their build_*.sh)
 busybox
 dropbearmulti
 

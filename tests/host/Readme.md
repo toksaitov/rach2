@@ -19,8 +19,9 @@ make verify-host          # from the repo root
 Name the file `*_hosttest.c` in this directory and declare the kernel sources it links with a `host-deps:` comment:
 
 ```c
-/*
- * foo_hosttest.c
+/**
+ * One line on what this seam exercises.
+ *
  * host-deps: rach2/sys/lib/foo.c rach2/sys/lib/bar.c
  */
 #include "foo.h"          /* kernel prototypes; use kernel types, not host libc */
@@ -29,8 +30,20 @@ static int fails;
 int main(void) { /* ... CHECK(...) ... */ return fails; }
 ```
 
+The `host-deps:` line is a build contract: `tools/hosttest.sh` reads the paths after it and hands them to the compiler, so the list names every kernel source the seam links separately. A test that pulls its source in with a direct `#include` (to reach the file's `static` routines) leaves the line empty.
+
 Keep the test free of host `<stdio.h>`/`<string.h>` so kernel and host type definitions never collide; assert via the return code; let the sanitizers do the rest.
 
 Current tests:
 
-* `kstring_hosttest.c`: the kernel's `sys/lib/kstring.c` string/memory routines (the first seam already in the tree). Later phases add tests for the VMA tree, path resolution, dirent parsing, and the CSPRNG core.
+* `kstring_hosttest.c`: the string and memory routines (`sys/lib/kstring.c`, with `sys/lib/kctypes.c`).
+* `krandom_hosttest.c`: the ChaCha20 keystream CSPRNG (`sys/lib/krandom.c`).
+* `vm_hosttest.c`: the VMA interval tree, its overlap search and split logic (`sys/mm/vm.c`).
+* `frame_hosttest.c`: the physical-frame pool sizing from the multiboot memory map (`sys/mm/frame.c`).
+* `synthfs_hosttest.c`: the synthetic `/dev` and `/proc` path classifier (`sys/fs/synthfs.c`).
+* `poll_select_hosttest.c`: the `fd_set` and `pollfd` translation and the readable/writable/except projection (`sys/io/poll_select.c`).
+* `pipe_ring_hosttest.c`: the pipe ring-buffer arithmetic (`sys/ipc/pipe_ring.c`).
+* `n_tty_hosttest.c`: the N_TTY line discipline's input editing and echo (`sys/tty/n_tty.c`).
+* `tls_hosttest.c`: the `set_thread_area` user_desc validation (`sys/proc/tls.c`).
+* `wait_queue_hosttest.c`: the wait-queue enqueue and wake logic (`sys/proc/wait_queue.c`, included directly under a build flag so its static routines are reachable, hence the empty `host-deps:`).
+* `uimage_hosttest.c`: the initial-process stack and auxv builder (`sys/proc/uimage.c`, with `sys/lib/kstring.c` and `sys/lib/kctypes.c`).

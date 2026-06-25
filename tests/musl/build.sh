@@ -1,14 +1,14 @@
 #!/usr/bin/env sh
 
 #
-# build.sh - build the musl-linked test programs in this directory.
+# Build the musl-linked test programs in this directory.
 #
 # These differ from the freestanding probes in tests/: they are ordinary hosted
 # C programs linked statically against the ported musl (see libc/build_libc.sh).
 # Each <name>.c here becomes a guest binary <name>, installed into the RAM disk
 # with an "m" prefix by krffs/build_test_ramdisk.sh (e.g. hello -> mhello).
 #
-# Usage: ./build.sh        (run libc/build_libc.sh first if install/ is absent)
+# Run libc/build_libc.sh first if install/ is absent.
 #
 
 set -e
@@ -34,5 +34,3 @@ for src in *.c; do
         "$PREFIX/lib/libc.a" "$LIBGCC" "$PREFIX/lib/crtn.o" \
         -Wl,-z,noexecstack
 done
-
-echo "Done."
