@@ -1,15 +1,13 @@
-/*
- * vmfault.c - wild-pointer segfault probe for Rach2 OS (Phase 4)
+/**
+ * Probes that a write through a wild pointer is killed by the fault handler.
  *
- * Deliberately writes through a pointer into an unmapped gap of the address
- * space (no VMA covers it), which the demand-paging fault handler must treat as
- * an illegal access: the process is killed and the kernel returns to its shell.
- * It prints a line before the fault; the "still alive" line must NEVER appear.
+ * The write targets an unmapped gap of the address space (no VMA covers it),
+ * which the demand-paging fault handler must treat as an illegal access: it
+ * kills the process and returns to the shell. The probe prints a line before
+ * the fault; the "still alive" line must NEVER appear.
  *
  * Run as a standalone boot (it kills itself); the harness then checks that the
- * kernel survived and the shell came back. Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o vmfault vmfault.c
+ * kernel survived and the shell came back. Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;

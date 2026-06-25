@@ -1,13 +1,16 @@
-/*
- * rngmusl.c - Phase 20 integration: a musl getrandom() + /dev/urandom consumer in
- * the shape an SSH key generator (dropbear, Phase 23) uses.
+/**
+ * Draws random bytes through the ported musl, in the shape an SSH key generator
+ * uses, and checks the kernel CSPRNG against it.
  *
- * Generates two 32-byte "keys" (one via getrandom(), one via /dev/urandom)
- * and confirms both are delivered, non-zero, and distinct (independent draws). On
- * a trusted-entropy boot (RDSEED/RDRAND, the run scripts' -cpu max) both succeed;
- * on a no-hardware boot they fail closed (the rngprobe covers that path).
+ * Fills two 32-byte buffers, one through musl's `getrandom()` and one by
+ * reading `/dev/urandom`, then confirms both calls deliver the full request,
+ * neither buffer is all zero, and the two draws differ (so the source is not a
+ * constant). On a trusted-entropy boot (RDSEED or RDRAND, the run scripts'
+ * `-cpu max`) both paths succeed; on a no-hardware boot the kernel fails them
+ * closed and the rngprobe covers that path.
  *
- * Prints "RNGMUSL OK" / "RNGMUSL FAIL". Linked against the ported musl.
+ * Prints "RNGMUSL OK" on success or an "RNGMUSL FAIL" line naming the failing
+ * step. Linked against the ported musl.
  */
 
 #include <sys/random.h>

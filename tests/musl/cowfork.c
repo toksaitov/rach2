@@ -1,13 +1,16 @@
-/*
- * cowfork.c - Phase 5 integration milestone: fork/wait under musl.
+/**
+ * Exercises fork/wait through real musl: COW fork, the Linux wait-status
+ * encoding, and musl's process-control wrappers.
  *
- * An ordinary hosted C program: it fork()s, both sides printf distinct state,
+ * An ordinary hosted C program. It fork()s, both sides printf distinct state,
  * and the parent reaps the child with wait(), which musl implements on top of
- * the new wait4(114) syscall and decodes with WIFEXITED/WEXITSTATUS. If it prints
- * "COWFORK OK" the whole Phase 5 path worked end to end: COW fork, the Linux
- * wait-status encoding, and musl's process-control wrappers.
+ * the wait4(114) syscall and decodes with WIFEXITED/WEXITSTATUS. The child runs
+ * in its own copy of the address space (COW) with a distinct pid and exits 7;
+ * the parent must reap exactly that child and read back exit status 7.
  *
- * Linked statically against the ported musl; see tests/musl/build.sh.
+ * "COWFORK OK" means the whole path worked end to end; any "COWFORK FAIL" line
+ * names the step that broke. Linked statically against the ported musl; see
+ * tests/musl/build.sh.
  */
 
 #include <stdio.h>
@@ -26,14 +29,15 @@ int main(void)
 
     if (pid == 0)
     {
-        /* Child: its own copy of the address space (COW); a distinct pid. */
+        /* Child. */
         printf("child: pid %d, exiting 7\n", (int)getpid());
         return 7;
     }
 
     {
         int status = 0;
-        pid_t reaped = wait(&status); /* musl wait() -> wait4(-1, &status, 0, 0) */
+        /* musl wait() -> wait4(-1, &status, 0, 0). */
+        pid_t reaped = wait(&status);
 
         if (reaped == pid && WIFEXITED(status) && WEXITSTATUS(status) == 7)
         {

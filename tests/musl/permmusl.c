@@ -1,17 +1,21 @@
-/*
- * permmusl.c - Phase 23 integration: the permission/identity syscalls dropbear's
- * pty session and host-key write exercise, driven through the ported musl so the
- * exact i386 syscall numbers musl emits are pinned by a real binary.
+/**
+ * Exercises the permission and identity syscalls through the ported musl.
  *
- *   - fsync(fd) on a real file returns 0 (KRFFS is RAM; durability is a no-op);
- *     fsync(bad) is -1/EBADF;
- *   - link(a, b) is -1/EPERM (KRFFS has no hard links, so dropbear falls back to
- *     a direct host-key write);
- *   - chmod(path, mode) updates a KRFFS file's permission bits (stat reflects it);
- *     chmod(missing) is -1/ENOENT;
- *   - chown(path, 0, 0) succeeds (only root exists); chown(path, 1, 0) is -1/EPERM;
- *   - seteuid(0)/setegid(0)/setresuid(0,0,0) succeed (the login-server privilege
- *     drop+restore around reading authorized_keys); seteuid(1) is -1/EPERM.
+ * These are the calls a dropbear pty session and host-key write make, driven
+ * by a real musl binary so the exact i386 syscall numbers musl emits are
+ * pinned. The expected contracts:
+ *
+ * * `fsync(fd)` on a real file returns 0 (KRFFS is RAM, so durability is a
+ *   no-op); `fsync` of a bad descriptor is -1 with EBADF.
+ * * `link(a, b)` is -1 with EPERM: KRFFS has no hard links, so dropbear falls
+ *   back to a direct host-key write.
+ * * `chmod(path, mode)` updates a KRFFS file's permission bits and `stat`
+ *   reflects them; `chmod` of a missing path is -1 with ENOENT.
+ * * `chown(path, 0, 0)` succeeds because only root exists; a nonzero owner is
+ *   -1 with EPERM.
+ * * `seteuid(0)`, `setegid(0)`, and `setresuid(0,0,0)` succeed (the
+ *   login-server privilege drop and restore around reading authorized_keys);
+ *   `seteuid(1)` is -1 with EPERM.
  *
  * Prints "PERMMUSL OK" or "PERMMUSL FAIL ...". Linked against the ported musl.
  */
@@ -29,7 +33,7 @@ int main(void)
     int fd;
     struct stat st;
 
-    /* fsync: a valid descriptor flushes to 0; a bad one is EBADF. */
+    /* fsync */
     fd = open("/etc/motd", O_RDONLY);
     if (fd < 0) {
         printf("PERMMUSL FAIL (open motd: %s)\n", strerror(errno));
@@ -45,13 +49,13 @@ int main(void)
         return 1;
     }
 
-    /* link: unsupported on KRFFS -> EPERM (the fallback dropbear depends on). */
+    /* link */
     if (link("/etc/motd", "/etc/motd.link") != -1 || errno != EPERM) {
         printf("PERMMUSL FAIL (link not EPERM: %s)\n", strerror(errno));
         return 1;
     }
 
-    /* chmod: changes a KRFFS file's permission bits; stat must reflect them. */
+    /* chmod */
     if (chmod("/hello.txt", 0600) != 0) {
         printf("PERMMUSL FAIL (chmod: %s)\n", strerror(errno));
         return 1;
@@ -66,7 +70,7 @@ int main(void)
         return 1;
     }
 
-    /* chown: only root (0) exists; 0:0 is a no-op success, nonzero is EPERM. */
+    /* chown */
     if (chown("/hello.txt", 0, 0) != 0) {
         printf("PERMMUSL FAIL (chown 0:0: %s)\n", strerror(errno));
         return 1;
@@ -76,8 +80,7 @@ int main(void)
         return 1;
     }
 
-    /* seteuid/setegid/setresuid: the privilege drop+restore dropbear performs
-     * around reading authorized_keys: root->root succeeds, ->nonzero is EPERM. */
+    /* seteuid/setegid/setresuid */
     if (seteuid(0) != 0 || setegid(0) != 0 || setresuid(0, 0, 0) != 0) {
         printf("PERMMUSL FAIL (seteuid/setegid/setresuid 0: %s)\n",
                strerror(errno));

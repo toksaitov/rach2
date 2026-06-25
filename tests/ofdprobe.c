@@ -1,22 +1,22 @@
-/*
- * ofdprobe.c - Phase 11 probe: refcounted open-file descriptions.
+/**
+ * Probe for refcounted open-file descriptions, from user space.
  *
- * Proves, from user space via direct int 0x80 syscalls, that a duplicated or
- * forked descriptor SHARES one open-file description (and its seek offset), the
- * Unix way, rather than each carrying its own:
- *   (a) dup2 shares the offset  - a read through the dup continues where the
+ * Proves that a duplicated or forked descriptor shares one open-file
+ * description (and its seek offset), the Unix way, rather than each carrying
+ * its own:
+ *
+ *   (a) dup2 shares the offset: a read through the dup continues where the
  *       original left off, not from 0;
- *   (b) fork shares the offset  - a child advances the offset and the parent's
+ *   (b) fork shares the offset: a child advances the offset and the parent's
  *       next read sees the advance;
- *   (c) refcount/no-leak        - closing one fd leaves the dup working, and many
+ *   (c) refcount/no-leak: closing one fd leaves the dup working, and many
  *       open/close cycles do not exhaust the OFD pool;
- *   (d) FD_CLOEXEC is per-fd    - it round-trips through fcntl, and dup2 leaves
+ *   (d) FD_CLOEXEC is per-fd: it round-trips through fcntl, and dup2 leaves
  *       the new fd's flag clear.
- * Prints "OFDPROBE OK".
  *
- * Freestanding; direct int 0x80. Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o ofdprobe ofdprobe.c
+ * Prints "OFDPROBE OK" on success.
+ *
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -94,7 +94,7 @@ static void check(int cond, const char *msg)
     }
 }
 
-/* Read n bytes from fd into buf; returns the byte count. */
+/** Read `n` bytes from `fd` into `buf`; returns the byte count. */
 static int rd(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (int)(size_t)buf, n);

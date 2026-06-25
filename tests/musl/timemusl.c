@@ -1,17 +1,21 @@
-/*
- * timemusl.c - Phase 7 integration milestone: time, sleep, and randomness via musl.
+/**
+ * Exercises time, sleep, and randomness through the ported musl.
  *
- * An ordinary hosted C program linked against the ported musl. It reads a
- * monotonic timestamp, sleeps with nanosleep, confirms the clock advanced by at
- * least the sleep, then draws bytes from getrandom and two words from arc4random
- * (which musl seeds from getrandom(355)). Printing "TIMEMUSL OK" means the whole
- * Phase 7 path worked through libc: clock_gettime, nanosleep's block-and-schedule
- * sleep, and the getrandom-backed CSPRNG.
+ * An ordinary hosted C program. It reads a monotonic timestamp with
+ * `clock_gettime(CLOCK_MONOTONIC)`, sleeps 120 ms with `nanosleep`, then
+ * confirms the clock advanced by at least 100 ms, so the block-and-schedule
+ * sleep really suspended the thread rather than returning early. It then draws
+ * two 16-byte buffers from `getrandom` (the CSPRNG behind syscall 355) and
+ * requires them to differ. musl 1.2.5 has no arc4random, so getrandom is the
+ * integration point.
+ *
+ * Prints "TIMEMUSL OK" with the slept milliseconds and a few random bytes when
+ * the whole libc path works, or "TIMEMUSL FAIL: <reason>" on the first failure.
  *
  * Linked statically against the ported musl; see tests/musl/build.sh.
  */
 
-#define _GNU_SOURCE /* expose arc4random and getrandom */
+#define _GNU_SOURCE /* expose getrandom */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,8 +52,7 @@ int main(void)
         return 1;
     }
 
-    /* Two getrandom draws through libc must differ (the CSPRNG behind syscall
-     * 355). musl 1.2.5 has no arc4random, so getrandom is the integration point. */
+    /* Two draws through libc must differ. */
     if (getrandom(rb, sizeof rb, 0) != (ssize_t)sizeof rb ||
         getrandom(rb2, sizeof rb2, 0) != (ssize_t)sizeof rb2) {
         printf("TIMEMUSL FAIL: getrandom\n");

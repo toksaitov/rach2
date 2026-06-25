@@ -1,18 +1,20 @@
-/*
- * jobprobe.c - Phase 17 probe: sessions + process groups (increment a).
+/**
+ * Exercises the session and process-group identity model from user space.
  *
- * Proves, from user space via raw int 0x80, the session/process-group identity
- * model:
- *   - a process is its own session + group leader by default (getpgrp==getsid==
- *     getpid for the init process);
- *   - fork inherits the parent's session and group;
- *   - setpgid(0,0) moves a (non-leader) child into its own group;
- *   - setsid on a non-group-leader child opens a new session (sid==pgid==pid);
- *   - the error contract: setsid by a group leader is -EPERM, getpgid of a
- *     missing pid is -ESRCH, setpgid with a negative pgid is -EINVAL.
+ * The probe establishes, through raw `int 0x80`, that:
+ *   * a process is its own session and group leader by default (getpgrp ==
+ *     getsid == getpid for the init process);
+ *   * fork inherits the parent's session and group;
+ *   * setpgid(0,0) moves a non-leader child into its own group;
+ *   * setsid on a non-group-leader child opens a new session (sid == pgid ==
+ *     pid);
+ *   * the controlling terminal, stop/continue/kill cycle, group signals, and
+ *     background-read SIGTTIN all behave;
+ *   * the error contract holds: setsid by a group leader is -EPERM, getpgid of
+ *     a missing pid is -ESRCH, setpgid with a negative pgid is -EINVAL.
  *
  * Children report each check via exit status; the parent decodes WEXITSTATUS.
- * Prints "JOBPROBE OK" / "JOBPROBE FAIL". Freestanding; direct int 0x80.
+ * Prints "JOBPROBE OK" or "JOBPROBE FAIL". Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -154,8 +156,10 @@ static void check(int cond, const char *msg)
     }
 }
 
-/* Run a forked child's body; its return value becomes the exit status, which the
- * parent decodes; 0 means every in-child check passed. */
+/**
+ * Runs a forked child's body; its return value becomes the exit status, which
+ * the parent decodes. A return of 0 means every in-child check passed.
+ */
 static int child_setpgid(void)
 {
     int me = getpid();
@@ -186,8 +190,8 @@ static int child_setsid(void)
 {
     int me = getpid();
 
-    /* Not a group leader yet (inherited the parent's group), so setsid is allowed
-     * and opens a new session led by us. */
+    /* Not a group leader yet (inherited the parent's group), so setsid is
+     * allowed and opens a new session led by us. */
     if (setsid() != me) {
         return 20;
     }
@@ -234,14 +238,14 @@ void _start(void)
     /* setsid from a non-leader child opens a new session. */
     check(run_child(child_setsid) == 0, "child: setsid -> new session (sid==pgid==pid)");
 
-    /* (17b) controlling terminal on fd 0. We are a session leader, so we may claim
-     * the console; the foreground group then round-trips through TIOCG/SPGRP. */
+    /* Controlling terminal on fd 0. We are a session leader, so we may claim
+     * the console; the foreground group round-trips through TIOCG/SPGRP. */
     {
         int pgrp = -1;
         check(ioctl(0, TIOCSCTTY, 0) == 0, "TIOCSCTTY claims the console");
         check(ioctl(0, TIOCGPGRP, &pgrp) == 0 && pgrp == getpgrp(),
               "TIOCGPGRP == our process group");
-        /* Set our own group as foreground (it is in our controlling session). */
+        /* Set our own group as foreground (it is in our session). */
         pgrp = getpgrp();
         check(ioctl(0, TIOCSPGRP, &pgrp) == 0, "TIOCSPGRP to our own group");
         /* A group not in the session is rejected; a bad pgrp is -EINVAL. */
@@ -257,9 +261,9 @@ void _start(void)
         check(ioctl(0, TIOCSPGRP, &pgrp) == -ENOTTY, "TIOCSPGRP with no ctty -> -ENOTTY");
     }
 
-    /* (17c+d) the stop / continue / kill cycle. A child loops in pause(); the
-     * parent stops it, observes the stop, continues it, observes the continue,
-     * then kills it; each transition reported through wait4. */
+    /* The stop / continue / kill cycle. A child loops in pause(); the parent
+     * stops it, observes the stop, continues it, observes the continue, then
+     * kills it; each transition reported through wait4. */
     {
         int cpid = fork();
         int st;
@@ -291,7 +295,7 @@ void _start(void)
         }
     }
 
-    /* (17d) kill(-pgid): a child in its own group is reached by a group signal. */
+    /* kill(-pgid): a child in its own group is reached by a group signal. */
     {
         int cpid = fork();
         int st;
@@ -304,8 +308,8 @@ void _start(void)
             sys_exit(0);
         }
         if (cpid > 0) {
-            /* Set the child's group from the parent too, so the signal below cannot
-             * race the child's own setpgid (the standard fork/setpgid idiom). */
+            /* Set the child's group from the parent too, so the signal below
+             * cannot race the child's own setpgid (the fork/setpgid idiom). */
             setpgid(cpid, cpid);
             /* The child's group id equals its pid; signal the whole group. */
             check(kill(-cpid, SIGTERM) == 0, "kill(-pgid, SIGTERM) reaches the group");
@@ -316,9 +320,9 @@ void _start(void)
         }
     }
 
-    /* (17e) a background process reading its controlling terminal is stopped with
-     * SIGTTIN. Re-claim the console (detached above) so our group is foreground,
-     * then a child that moves itself to the background and reads gets SIGTTIN. */
+    /* A background process reading its controlling terminal is stopped with
+     * SIGTTIN. Re-claim the console (detached above) so our group is in front,
+     * then a child that backgrounds itself and reads gets SIGTTIN. */
     {
         int cpid, st, r;
 
@@ -326,8 +330,8 @@ void _start(void)
         cpid = fork();
         if (cpid == 0) {
             char b[4];
-            setpgid(0, 0);              /* background: our group is not the foreground */
-            read(0, b, (int)sizeof(b)); /* background read -> SIGTTIN stops us */
+            setpgid(0, 0);              /* background: not the fg group */
+            read(0, b, (int)sizeof(b)); /* background read -> SIGTTIN stop */
             sys_exit(0);
         }
         if (cpid > 0) {

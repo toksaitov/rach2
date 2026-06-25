@@ -1,16 +1,19 @@
-/*
- * budgetmusl.c - Phase 19 live one-session budget probe.
+/**
+ * Stands up the exact resource footprint one remote-login session needs, then
+ * confirms the kernel has headroom to spare, all through real musl.
  *
- * Stands up the exact resource footprint one remote-login session needs once the
- * Phase-19 pty layer exists. The check the plan defers to here, before
- * committing to dropbear (Phase 23). A session is: a listening socket + an
- * accepted socket (modelled with a socketpair) + a pty master + the pty slave
- * handed to a forked child as its controlling-terminal stdio. It then confirms
- * there is headroom left under the fixed limits (MAX_FDS / MAX_PROCS / socket
- * pool = 16 each), so a real session (which also forks pipeline children in the
- * shell) fits.
+ * A session is modelled as a connected socket pair (the listening socket plus
+ * the accepted socket), a pty master, and the pty slave handed to a forked
+ * child as its controlling-terminal stdio. The child becomes a session leader
+ * (`setsid`), claims the slave as its controlling terminal (`TIOCSCTTY`), and
+ * dups it onto stdin, stdout, and stderr, exactly as a login server wires a
+ * shell before exec. With that set held, the probe counts how many more fds it
+ * can open against `/dev/null`: spare capacity beyond the session set proves a
+ * real session (which also forks pipeline children in the shell) fits under the
+ * fixed limits (`MAX_FDS`, `MAX_PROCS`, and the socket pool, 16 each).
  *
- * Prints the counts and "BUDGETMUSL OK" / "BUDGETMUSL FAIL". Linked against musl.
+ * Prints the spare-fd count, then "BUDGETMUSL OK" on success or a
+ * "BUDGETMUSL FAIL (...)" line naming the failed step. Linked against musl.
  */
 
 #include <pty.h>
@@ -32,10 +35,9 @@ int main(void)
     int extra = 0;
     int i;
 
-    /* The two sockets a connection occupies (listen + accepted): a socketpair is
-     * the closest hermetic stand-in (no external peer needed). */
+    /* Model listen + accepted as one hermetic socketpair (no external peer). */
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) != 0) {
-        /* Fall back: a single stream socket still exercises the socket pool. */
+        /* Fall back to two plain stream sockets; same socket-pool draw. */
         sp[0] = socket(AF_INET, SOCK_STREAM, 0);
         sp[1] = socket(AF_INET, SOCK_STREAM, 0);
     }
@@ -51,9 +53,7 @@ int main(void)
         return 1;
     }
     if (pid == 0) {
-        /* The session child: a new session leader with the slave as its
-         * controlling terminal and its stdin/out/err: exactly what a login
-         * server wires before exec'ing the shell. */
+        /* Session child: leader, slave as controlling terminal and stdio. */
         close(master);
         setsid();
         ioctl(slave, TIOCSCTTY, 0);
@@ -69,8 +69,7 @@ int main(void)
     close(slave);
     waitpid(pid, &status, 0);
 
-    /* Headroom: how many more fds can this process open beyond the session set it
-     * already holds (sp[0], sp[1], master, stdio)? Several => a real session fits. */
+    /* Spare fds beyond the held session set (sp[0], sp[1], master, stdio). */
     for (i = 0; i < 8; i++) {
         extra_fds[i] = open("/dev/null", O_RDWR);
         if (extra_fds[i] < 0) {

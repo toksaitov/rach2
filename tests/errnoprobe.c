@@ -1,15 +1,14 @@
-/*
- * errnoprobe.c - Phase 3 probe: verify the kernel's -errno syscall contract.
+/**
+ * Verify the kernel's negative-errno syscall return contract.
  *
- * A freestanding program (no libc) that makes raw int 0x80 calls and checks the
- * returned value is the correct NEGATIVE Linux errno, not a bare -1. An
- * unimplemented or out-of-range syscall number must return -ENOSYS (so musl's
- * feature-detection fallbacks work), and a deliberately failing real call must
- * return the specific errno Linux would (-ENOENT, -EBADF, -EFAULT). Prints
+ * Raw int 0x80 calls must return the correct negative Linux errno, not a bare
+ * -1. An unimplemented or out-of-range syscall number returns -ENOSYS so musl's
+ * feature-detection fallbacks work, and a deliberately failing real call
+ * returns the specific errno Linux would (-ENOENT, -EBADF, -EFAULT). Prints
  * "All errno checks passed!" and exits 0 only if every check matches.
  *
- * Linux/BSD analogue: the kernel side of the errno contract; the kernel
- * returns -errno, the C library negates it into errno.
+ * Freestanding; direct int 0x80, so the test sees the raw -errno the kernel
+ * returns (a libc caller would negate it into a positive errno).
  */
 
 typedef unsigned int u32;
@@ -79,7 +78,7 @@ static void put_int(int v)
 
 static int fails;
 
-/* Check that syscall 'got' equals the expected negative errno. */
+/** Check that syscall result `got` equals the expected negative errno. */
 static void expect(int got, int want_errno, const char *label)
 {
     if (got != -want_errno) {

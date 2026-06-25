@@ -1,19 +1,21 @@
-/*
- * catfile.c - Phase 6 integration milestone: directories and files under musl.
+/**
+ * Drives the ported musl file layer over the hierarchical KRFFS, end to end
+ * in-guest, the way a real file utility would.
  *
- * An ordinary hosted C program linked against the ported musl. It proves the
- * libc file layer drives the hierarchical KRFFS end to end in-guest, exactly as
- * a real file utility would:
- *   1. read a pre-staged root file (/hello.txt) through <stdio.h>,
- *   2. mkdir a fresh directory and create+write a file INSIDE it,
- *   3. read that nested file back and verify its bytes,
- *   4. stat the nested file (a regular file of the right size),
- *   5. opendir the directory and confirm readdir lists the file,
- *   6. unlink the file and rmdir the now-empty directory.
- * musl routes these through open/read/write/mkdir/rmdir/unlink and the 64-bit
- * stat64/getdents64 syscalls. Prints "CATFILE OK" only if every step matched.
+ * The program reads a pre-staged root file (`/hello.txt`) through `<stdio.h>`,
+ * then a host-staged nested file (`/etc/motd`, written into the image by
+ * stagetree.krffs) and lists `/etc` for `motd` and `hostname`, proving musl
+ * navigates a tree staged before boot rather than only one built at runtime.
+ * It then makes a fresh directory and creates and writes a file inside it,
+ * reads that nested file back and verifies its bytes, stats it as a regular
+ * file of exactly the bytes written, opendirs the directory and confirms
+ * readdir lists the file, and finally unlinks the file and rmdirs the
+ * now-empty directory. musl routes these through open, read, write, mkdir,
+ * rmdir, and unlink and the 64-bit stat64 and getdents64 syscalls.
  *
- * Linked statically against the ported musl; see tests/musl/build.sh.
+ * Prints "CATFILE OK" only if every step matched, otherwise a "CATFILE FAIL"
+ * line naming the step. Linked statically against the ported musl; see
+ * tests/musl/build.sh.
  */
 
 #include <stdio.h>
@@ -34,7 +36,7 @@ int main(void)
     struct dirent *de;
     int saw_data = 0;
 
-    /* 1. Read a pre-staged root file through stdio. */
+    /* Pre-staged root file through stdio. */
     f = fopen("/hello.txt", "r");
     if (!f) { printf("CATFILE FAIL: open /hello.txt\n"); return 1; }
     if (!fgets(buf, sizeof buf, f) || strncmp(buf, "hello, world", 12) != 0) {
@@ -44,9 +46,7 @@ int main(void)
     }
     fclose(f);
 
-    /* 1b. Read a HOST-staged nested file (/etc/motd, written into the image by
-     * stagetree.krffs) and list /etc, proving musl navigates a pre-staged tree,
-     * not only one created at runtime. */
+    /* Host-staged nested file, then list /etc. */
     buf[0] = '\0'; /* so a read failure does not print stale /hello.txt bytes */
     f = fopen("/etc/motd", "r");
     if (!f) { printf("CATFILE FAIL: open /etc/motd\n"); return 1; }
@@ -73,7 +73,7 @@ int main(void)
         }
     }
 
-    /* 2. Make a directory and create+write a file inside it. */
+    /* Make a directory and create+write a file inside it. */
     if (mkdir("/cf", 0755) != 0) { printf("CATFILE FAIL: mkdir /cf\n"); return 1; }
     f = fopen("/cf/data", "w");
     if (!f) { printf("CATFILE FAIL: create /cf/data\n"); return 1; }
@@ -84,7 +84,7 @@ int main(void)
     }
     fclose(f);
 
-    /* 3. Read the nested file back and verify its contents. */
+    /* Read the nested file back and verify its contents. */
     f = fopen("/cf/data", "r");
     if (!f) { printf("CATFILE FAIL: reopen /cf/data\n"); return 1; }
     if (!fgets(buf, sizeof buf, f) || strcmp(buf, PAYLOAD) != 0) {
@@ -94,14 +94,14 @@ int main(void)
     }
     fclose(f);
 
-    /* 4. stat the nested file: a regular file of exactly the bytes we wrote. */
+    /* stat the nested file: a regular file of exactly the bytes we wrote. */
     if (stat("/cf/data", &st) != 0 || !S_ISREG(st.st_mode) ||
         st.st_size != (off_t)strlen(PAYLOAD)) {
         printf("CATFILE FAIL: stat /cf/data\n");
         return 1;
     }
 
-    /* 5. opendir/readdir the directory and confirm it lists the file. */
+    /* opendir/readdir the directory and confirm it lists the file. */
     d = opendir("/cf");
     if (!d) { printf("CATFILE FAIL: opendir /cf\n"); return 1; }
     while ((de = readdir(d)) != NULL) {
@@ -112,7 +112,7 @@ int main(void)
     closedir(d);
     if (!saw_data) { printf("CATFILE FAIL: readdir /cf missing data\n"); return 1; }
 
-    /* 6. Clean up: the file, then the now-empty directory. */
+    /* Clean up: the file, then the now-empty directory. */
     if (unlink("/cf/data") != 0) { printf("CATFILE FAIL: unlink /cf/data\n"); return 1; }
     if (rmdir("/cf") != 0) { printf("CATFILE FAIL: rmdir /cf\n"); return 1; }
 

@@ -1,17 +1,17 @@
-/*
- * rngprobe.c - Phase 20 probe: trusted entropy + the fail-closed policy.
+/**
+ * Exercises trusted entropy and the fail-closed RNG policy.
  *
- * Self-adapting to the boot's entropy source (so it passes on BOTH a CPU with
- * RDSEED/RDRAND and one without):
- *   - it asks getrandom() for bytes. If that SUCCEEDS the source is trusted, and
- *     the probe verifies /dev/urandom returns bytes that VARY across reads and
- *     pass a loose monobit sanity (a stuck/zero stream fails);
- *   - if getrandom() returns -EIO the source is untrusted, and the probe verifies
- *     the FAIL-CLOSED policy is consistent: /dev/urandom also returns -EIO, while
- *     getrandom(GRND_INSECURE) still returns bytes (the best-effort escape hatch).
+ * The probe adapts to the boot's entropy source, so it passes on both a CPU
+ * with RDSEED/RDRAND and one without. It asks getrandom() for bytes. If that
+ * succeeds the source is trusted, and the probe verifies that /dev/urandom
+ * returns bytes that vary across reads and pass a loose monobit sanity (a
+ * stuck/zero stream fails). If getrandom() returns -EIO the source is
+ * untrusted, and the probe verifies the fail-closed policy is consistent:
+ * /dev/urandom also returns -EIO, while getrandom(GRND_INSECURE) still returns
+ * bytes (the best-effort escape hatch).
  *
- * Prints "RNGPROBE OK (trusted)" / "RNGPROBE OK (fail-closed)" / "RNGPROBE FAIL".
- * Freestanding; direct int 0x80.
+ * Prints "RNGPROBE OK (trusted)" / "RNGPROBE OK (fail-closed)" /
+ * "RNGPROBE FAIL". Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;

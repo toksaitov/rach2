@@ -1,16 +1,17 @@
-/*
- * poll_select_hosttest.c
+/**
+ * Dual-target seam test for the fd_set <-> pollfd translation behind select()
+ * (io/poll_select.c).
  *
  * host-deps: rach2/sys/io/poll_select.c
  *
- * Dual-target seam test for the fd_set <-> pollfd translation behind select()
- * (io/poll_select.c). The bit/word arithmetic (word = fd/32, bit = 1u<<(fd%32))
- * and the readable/writable/except event projection are the fence-post-prone
- * part select() is built on, so they run natively here under ASan/UBSan: a set
- * bit becomes a pollfd with the right events, fds that straddle a 32-bit word
+ * The bit/word arithmetic (word = fd/32, bit = 1u<<(fd%32)) and the
+ * readable/writable/except event projection are the fence-post-prone part
+ * select() is built on, so they run natively here under ASan/UBSan: a set bit
+ * becomes a pollfd with the right events, fds that straddle a 32-bit word
  * boundary land in the correct word, an fd selected past what the kernel can
- * hold is rejected, and revents project back onto the three sets with select()'s
- * count-each-ready-direction rule. Returns the failed-check count (0 == pass).
+ * hold is rejected, and revents project back onto the three sets with the
+ * count-each-ready-direction rule of select(). Returns the failed-check count
+ * (0 == pass).
  */
 
 #include "io/poll_select.h"

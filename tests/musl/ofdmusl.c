@@ -1,15 +1,17 @@
-/*
- * ofdmusl.c - Phase 11 integration milestone: shared open-file offset via musl.
+/**
+ * Exercises a shared open-file offset through real musl dup2 and stdio.
  *
- * Proves musl's dup2 + buffered stdio ride the kernel's refcounted open-file
- * description: it dup2's a writable file over stdout, writes "AAA" with printf
- * (through fd 1), then writes "BBB" through the ORIGINAL file descriptor. Because
- * the two descriptors share one seek offset, the second write APPENDS: the file
- * reads back "AAABBB" (6 bytes). If each fd had its own offset (the old bug), the
- * second write would overwrite at offset 0 and the file would be just "BBB".
- * Printing "OFDMUSL OK" means dup2 shared the offset end to end through libc.
+ * The kernel keeps one refcounted open-file description per open, and dup2
+ * makes a second descriptor alias it. This test opens a writable file, dup2's
+ * it over stdout, writes "AAA" with printf through fd 1, then writes "BBB"
+ * through the original descriptor. The two descriptors share one seek offset,
+ * so the second write appends rather than overwriting: read back, the file is
+ * "AAABBB" (6 bytes). If each descriptor had its own offset (the old bug), the
+ * second write would land at offset 0 and the file would read just "BBB".
  *
- * Linked statically against the ported musl; see tests/musl/build.sh.
+ * Prints "OFDMUSL OK" when dup2 carried the offset end to end through libc, or
+ * an "OFDMUSL FAIL: ..." line naming the step that broke. Linked statically
+ * against the ported musl; see tests/musl/build.sh.
  */
 
 #include <stdio.h>
@@ -31,14 +33,14 @@ int main(void)
         return 1;
     }
 
-    /* Redirect stdout to the file, keeping a saved copy to restore afterwards. */
+    /* Redirect stdout to the file, saving a copy to restore afterwards. */
     savedout = dup(STDOUT_FILENO);
     if (savedout < 0 || dup2(filefd, STDOUT_FILENO) != STDOUT_FILENO) {
         fputs("OFDMUSL FAIL: dup2\n", stderr);
         return 1;
     }
 
-    /* Write through stdout (fd 1, sharing filefd's offset), then through filefd. */
+    /* Write through stdout (fd 1, aliasing filefd), then through filefd. */
     fputs("AAA", stdout);
     fflush(stdout);
     if (write(filefd, "BBB", 3) != 3) {
@@ -52,7 +54,7 @@ int main(void)
     close(savedout);
     close(filefd);
 
-    /* Read the file back: a shared offset gives "AAABBB"; an unshared one "BBB". */
+    /* Read it back: a shared offset gives "AAABBB"; an unshared one "BBB". */
     rfd = open(PATH, O_RDONLY);
     if (rfd < 0) {
         fputs("OFDMUSL FAIL: reopen\n", stderr);

@@ -1,14 +1,14 @@
-/*
- * frame_hosttest.c
+/**
+ * Dual-target seam test for the physical-frame-pool sizing (mm/frame.c).
  *
  * host-deps: rach2/sys/mm/frame.c
  *
- * Dual-target seam test for the physical-frame-pool sizing (mm/frame.c). The
- * fallible part is frame_top_available()'s walk of a multiboot memory map (the
- * "next = entry + entry->size + 4" arithmetic and bounds checks), so a crafted
- * map is fed to it natively under ASan/UBSan: it must return the top of the
- * highest AVAILABLE region, ignore reserved regions, and not read past the
- * buffer on a short/garbage entry. Returns the failed-check count (0 == pass).
+ * The fallible part is frame_top_available()'s walk of a multiboot memory map
+ * (the "next = entry + entry->size + 4" arithmetic and bounds checks), so a
+ * crafted map is fed to it natively under ASan/UBSan: it must return the top
+ * of the highest AVAILABLE region, ignore reserved regions, and not read past
+ * the buffer on a short/garbage entry. Returns the failed-check count
+ * (0 == pass).
  */
 
 #include "mm/frame.h"
@@ -22,8 +22,11 @@ static int fails;
         }              \
     } while (0)
 
-/* Build one multiboot mmap entry into buf at offset, return bytes written (24).
- * 'size' is the standard 20 (entry size excluding the size field itself). */
+/**
+ * Build one multiboot mmap entry into buf at offset, return bytes written (24).
+ *
+ * 'size' is the standard 20 (entry size excluding the size field itself).
+ */
 static uint32_t put_entry(uint8_t *buf, uint32_t off, uint64_t addr, uint64_t len, uint32_t type)
 {
     multiboot_memory_map_t e;

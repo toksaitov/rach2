@@ -1,16 +1,18 @@
-/*
- * mallocqsort.c - Phase 4 integration milestone: a malloc-using musl program.
+/**
+ * Exercises the demand-paged address space through real musl malloc and qsort.
  *
- * Where Phase 3's hello.c only proved musl could reach main and use buffered
- * stdio, this proves the demand-paged address space works under a real libc
- * allocator: malloc() pulls heap pages via brk and a large request via mmap2,
- * all backed lazily and zero-filled by the Phase 4 fault handler. It fills an
- * array with an LCG sequence, qsort()s it, checks the order, then makes a
- * 256 KB allocation (the mallocng mmap path) and writes across it. Prints
- * "MALLOC QSORT OK" on success.
+ * The allocator drives both paging paths: a small array fills heap pages via
+ * `brk`, and a large request is serviced straight from `mmap2`, with every page
+ * backed lazily and zero-filled by the fault handler. The program fills an
+ * array of `N` ints with an LCG sequence, `qsort()`s it, and confirms the
+ * result is non-decreasing. It then makes a 256 KB allocation (the mallocng
+ * mmap path) and writes a byte pattern across it, checking the first and last
+ * bytes so the anonymous-mapping path is exercised end to end (map, write,
+ * free/munmap).
  *
- * Linked statically against the ported musl (crt1 + libc.a + crtn); see
- * tests/musl/build.sh.
+ * Prints "MALLOC QSORT OK" on success, or a "MALLOC QSORT FAIL: ..." line that
+ * names the failed step. Linked statically against the ported musl (crt1 +
+ * libc.a + crtn); see tests/musl/build.sh.
  */
 
 #include <stdio.h>
@@ -62,8 +64,7 @@ int main(void)
     hi = a[N - 1];
     free(a);
 
-    /* 256 KB: large enough that mallocng services it straight from mmap, so the
-     * anonymous-mapping path is exercised end to end (map, write, free/munmap). */
+    /* 256 KB: large enough that mallocng services it straight from mmap. */
     {
         size_t big = 256u * 1024u;
         unsigned char *p = malloc(big);

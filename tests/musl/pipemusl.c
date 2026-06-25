@@ -1,10 +1,13 @@
-/*
- * pipemusl.c - Phase 13 integration: a real musl pipe + fork round-trip.
+/**
+ * Drives a real musl pipe and fork round-trip through the kernel.
  *
- * Proves musl's pipe()/fork()/read()/write()/close()/waitpid() wrappers drive
- * the kernel pipe end to end (not just the freestanding probe): the parent writes
- * a line into the pipe, the forked child reads it back and exits 0 only if it
- * matches. Installed as "mpipe" by krffs/build_test_ramdisk.sh.
+ * Exercises musl's `pipe`, `fork`, `read`, `write`, `close`, and `waitpid`
+ * wrappers end to end, not just the freestanding probe. The parent writes a
+ * line into the pipe and closes the write end; the forked child reads it back
+ * and exits 0 only if the eleven bytes match "hello, pipe". The child's exit
+ * status decides the result token.
+ *
+ * Installed as "mpipe" by krffs/build_test_ramdisk.sh.
  */
 #include <unistd.h>
 #include <stdio.h>

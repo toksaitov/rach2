@@ -1,18 +1,17 @@
-/*
- * ptyprobe.c - Phase 19 probe: pseudo-terminals (/dev/ptmx + /dev/pts/N).
+/**
+ * Exercises the pseudo-terminal pair (/dev/ptmx + /dev/pts/N) from user space,
+ * the way a network login drives it.
  *
- * Proves, from user space via raw int 0x80, the master/slave pair the way a
- * network login uses it:
- *   - open("/dev/ptmx") returns a master; TIOCGPTN reports the slave index N
- *     (exact request 0x80045430); TIOCSPTLCK(0) unlocks the pair;
- *   - open("/dev/pts/N") returns the slave; a forked child setsid()s and
- *     TIOCSCTTYs it as its controlling terminal;
- *   - master write -> the slave reads the COOKED line, and the echo comes back
- *     on the master; slave write -> the master reads the (ONLCR) output.
+ * * open("/dev/ptmx") returns a master; TIOCGPTN reports the slave index N
+ *   (exact request 0x80045430); TIOCSPTLCK(0) unlocks the pair.
+ * * open("/dev/pts/N") returns the slave; a forked child setsid()s and
+ *   TIOCSCTTYs it as its controlling terminal.
+ * * master write -> the slave reads the cooked line, and the echo comes back
+ *   on the master; slave write -> the master reads the ONLCR output.
  *
  * The child verifies the cooked read and reports via exit status; the parent
- * verifies the echo + output it reads back on the master. Prints "PTYPROBE OK" /
- * "PTYPROBE FAIL". Freestanding; direct int 0x80.
+ * verifies the echo and output it reads back on the master. Prints
+ * "PTYPROBE OK" or "PTYPROBE FAIL". Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -101,7 +100,7 @@ static void puts(const char *s)
     sys_write(1, s, (int)strlen(s));
 }
 
-/* Substring search: 1 if needle occurs in haystack[0..len). */
+/** Substring search: 1 if `needle` occurs in `hay[0..len)`, else 0. */
 static int contains(const char *hay, int len, const char *needle)
 {
     int nl = (int)strlen(needle);
@@ -191,8 +190,8 @@ void _start(void)
     }
 
     /* Parent: drive the master. Writing the line cooks it into the slave (and
-     * echoes it back to us); the child then writes "world" on the slave, which we
-     * read back here. */
+     * echoes it back to us); the child then writes "world" on the slave, which
+     * we read back here. */
     sys_write(master, "hello\n", 6);
     sys_waitpid(pid, &status, 0);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {

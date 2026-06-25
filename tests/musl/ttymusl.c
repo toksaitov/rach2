@@ -1,20 +1,21 @@
-/*
- * ttymusl.c - Phase 16 musl integration: termios through the real ported libc.
+/**
+ * Exercises the kernel termios layer through musl's own termios API.
  *
- * The freestanding ttyprobe drives the kernel termios ioctls with hand-built
- * structs; this proves the SAME kernel layer satisfies musl's own termios API,
- * whose `struct termios` is wider (NCCS=32 + speeds) than the 36-byte prefix the
- * kernel exchanges. If the prefix layout (flags, c_line, the c_cc indices) were
- * off, cfmakeraw's effect would be misread here.
+ * The freestanding ttyprobe drives the kernel ioctls with hand-built structs;
+ * this proves the same kernel layer satisfies musl's API, whose termios struct
+ * is wider (NCCS=32 plus speeds) than the 36-byte prefix the kernel exchanges.
+ * If the prefix layout (flags, c_line, the c_cc indices) were off, cfmakeraw's
+ * effect would be misread here.
  *
- *   - isatty(0)          - the console is a terminal (musl probes TIOCGWINSZ);
- *   - tcgetattr          - the inherited mode is cooked with echo (ICANON|ECHO);
- *   - cfmakeraw+tcsetattr- raw mode takes, confirmed by reading it back;
- *   - one raw getch      - read() returns a single byte with no line/echo (the
- *                          driver sends "Z" right after the exec line);
- *   - restore            - the original mode is put back.
+ * The checks are: isatty(0) reports the console is a terminal (musl probes it
+ * with TIOCGWINSZ); tcgetattr shows the inherited mode cooked with echo
+ * (ICANON|ECHO); cfmakeraw plus tcsetattr puts the terminal in raw mode,
+ * confirmed by reading it back; one read() returns a single byte with no line
+ * editing or echo (the driver sends "Z" right after the exec line); and a final
+ * tcsetattr restores the original mode.
  *
- * Prints "MTTY OK" / "MTTY FAIL <n>". Installed as "mtty" by build_test_ramdisk.sh.
+ * Prints "MTTY OK" or "MTTY FAIL <n>". Installed as "mtty" by
+ * build_test_ramdisk.sh.
  */
 
 #include <termios.h>

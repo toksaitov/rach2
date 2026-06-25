@@ -1,13 +1,16 @@
-/*
- * ptymusl.c - Phase 19 integration: musl openpty() + fork round-trip, the exact
- * shape a login server (dropbear, Phase 23) uses to give a remote shell a tty.
+/**
+ * Exercises a musl pseudo-terminal round-trip, the exact shape a login server
+ * uses to hand a remote shell a tty.
  *
- * openpty() opens /dev/ptmx, unlockpt()s it (TIOCSPTLCK), resolves the slave name
- * via ptsname() (TIOCGPTN), and opens /dev/pts/N, all against the Phase-19
- * kernel. A forked child reads the cooked line off the slave and replies; the
- * parent drives the master and checks the echo + reply it reads back.
+ * `openpty()` opens `/dev/ptmx`, unlocks it (`TIOCSPTLCK`), resolves the slave
+ * name via `ptsname()` (`TIOCGPTN`), and opens `/dev/pts/N`. The test then
+ * forks: the child confirms `ttyname(slave)` resolves to `/dev/pts/N` (the
+ * `isatty` plus `/proc/self/fd` readlink plus `stat`/`fstat` identity match),
+ * reads the cooked line off the slave, and replies on it; the parent drives the
+ * master and checks the echo and reply it reads back.
  *
- * Prints "PTYMUSL OK" / "PTYMUSL FAIL". Linked against the ported musl.
+ * Prints "PTYMUSL OK" on success and "PTYMUSL FAIL" otherwise. Linked against
+ * the ported musl.
  */
 
 #include <pty.h>
@@ -35,16 +38,15 @@ int main(void)
         return 1;
     }
     if (pid == 0) {
-        /* Child: confirm ttyname(slave) resolves to /dev/pts/N (the isatty +
-         * /proc/self/fd readlink + stat/fstat identity match), then read the
-         * cooked line off the slave and reply on it. */
+        /* Child: read the cooked line off the slave and reply on it. */
         char sbuf[64];
         char *tn;
         int n;
         close(master);
         tn = ttyname(slave);
         if (!tn || strncmp(tn, "/dev/pts/", 9) != 0) {
-            _exit(7); /* ttyname failed -> the parent's round-trip + status catch it */
+            /* ttyname failed: the parent's round-trip and status catch it. */
+            _exit(7);
         }
         n = (int)read(slave, sbuf, sizeof(sbuf));
         if (n >= 4 && memchr(sbuf, 'p', (size_t)n)) {

@@ -1,15 +1,14 @@
-/*
- * n_tty_hosttest.c
+/**
+ * Dual-target seam test for the N_TTY line discipline (tty/n_tty.c).
  *
  * host-deps: rach2/sys/tty/n_tty.c
  *
- * Dual-target seam test for the N_TTY line discipline (tty/n_tty.c). The cooked
- * line editor (ERASE/WERASE/KILL with ECHOE rub-out, the VEOF/newline commit
- * rules), the raw VMIN gating, the ISIG control-char recognition, and the
- * OPOST/ONLCR output mapping are pure state-machine logic every console read
- * leans on, so they run natively here under ASan/UBSan with echo and output
- * captured into a buffer instead of a screen. Returns the failed-check count
- * (0 == pass).
+ * The cooked line editor (ERASE/WERASE/KILL with ECHOE rub-out, the VEOF and
+ * newline commit rules), the raw VMIN gating, the ISIG control-char
+ * recognition, and the OPOST/ONLCR output mapping are pure state-machine logic
+ * every console read leans on, so they run natively here under ASan/UBSan with
+ * echo and output captured into a buffer instead of a screen. Returns the
+ * failed-check count (0 == pass).
  */
 
 #include "tty/n_tty.h"

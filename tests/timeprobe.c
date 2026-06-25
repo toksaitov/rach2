@@ -1,17 +1,17 @@
-/*
- * timeprobe.c - Phase 7 probe: time, sleep-with-yield, and entropy for Rach2.
+/**
+ * Exercises the kernel's time, sleep-with-yield, and entropy paths from user
+ * space, then prints "TIMEPROBE OK".
  *
- * Checks, from user space via direct int 0x80 syscalls:
- *   - clock_gettime(CLOCK_MONOTONIC) never goes backwards;
- *   - getrandom returns the requested count and varying bytes;
- *   - nanosleep(N) waits about N AND yields: a child forked just before the sleep
- *     runs *during* it (it creates a marker file the parent finds on waking),
+ * Three checks run through direct int 0x80 syscalls:
+ *
+ *   * clock_gettime(CLOCK_MONOTONIC) never goes backwards;
+ *   * getrandom returns the requested count and varying bytes;
+ *   * nanosleep(N) waits about N AND yields: a child forked just before the
+ *     sleep runs during it, creating a marker file the parent finds on waking,
  *     which only happens if the sleeping parent gives up the CPU.
- * Prints "TIMEPROBE OK".
  *
- * Freestanding; no 64-bit division (the user image has no libgcc either). Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o timeprobe timeprobe.c
+ * Freestanding; direct int 0x80. No 64-bit division (the user image has no
+ * libgcc either).
  */
 
 typedef unsigned int size_t;
@@ -91,7 +91,7 @@ static void check(int cond, const char *msg)
     }
 }
 
-/* Milliseconds between two timespecs, all in 32-bit math. */
+/** Milliseconds between two timespecs, all in 32-bit math. */
 static int elapsed_ms(const struct timespec *a, const struct timespec *b)
 {
     return (b->tv_sec - a->tv_sec) * 1000 + (b->tv_nsec - a->tv_nsec) / 1000000;
@@ -110,9 +110,9 @@ void _start(void)
           "monotonic clock does not go backwards");
     check(t0.tv_nsec >= 0 && t0.tv_nsec < 1000000000, "tv_nsec in range");
 
-    /* 2. getrandom returns the count and varying bytes. Pre-zero both buffers so
-     * the difference test is honest (a broken getrandom that writes nothing leaves
-     * them equal) and so they are visibly written. */
+    /* 2. getrandom returns the count and varying bytes. Pre-zero both buffers
+     * so the difference test is honest (a broken getrandom that writes nothing
+     * leaves them equal) and so they are visibly written. */
     for (i = 0; i < 16; i++) {
         r1[i] = 0;
         r2[i] = 0;
@@ -128,14 +128,15 @@ void _start(void)
     check(differ, "two getrandom draws differ");
 
     /* 3. nanosleep waits ~N AND yields: a child forked right before the sleep
-     *    creates /childran while the parent sleeps; the parent finds it on waking. */
+     *    creates /childran while the parent sleeps; the parent finds it on
+     *    waking. */
     syscall1(SYS_UNLINK, (int)(size_t)"/childran");
 
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
-        /* Child: its first act is to drop the marker, then exit. If the parent's
-         * sleep yields, this runs during the parent's nanosleep. */
+        /* Child: its first act is to drop the marker, then exit. If the
+         * parent's sleep yields, this runs during the parent's nanosleep. */
         int fd = syscall2(SYS_CREAT, (int)(size_t)"/childran", 0644);
         if (fd >= 0) {
             syscall3(SYS_WRITE, fd, (int)(size_t)"x", 1);

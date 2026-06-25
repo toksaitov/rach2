@@ -1,20 +1,20 @@
-/*
- * pollprobe.c - Phase 14 probe: I/O multiplexing (poll + select).
+/**
+ * Exercises I/O multiplexing (poll and select) over pipes from user space.
  *
- * Proves, over pipes (Phase 13), from user space via raw int 0x80:
- *   (a) timeout      - poll of two empty pipes returns 0 when nothing is ready;
- *   (b) readiness    - after a write, poll returns that fd with POLLIN and leaves
- *                      the other fd's revents clear;
- *   (c) hangup       - polling a read end whose writer has closed reports POLLHUP;
- *   (d) select       - the same readable fd is found through an fd_set (proving the
- *                      fd_set<->pollfd translation and the _newselect path);
- *   (e) block + wake - a parent that polls with a long timeout is woken the moment
- *                      a forked child writes (it does NOT wait out the timeout),
- *                      proving poll truly blocks on the pipe wait queue;
- *   (f) fd contract  - a wide nfds with only in-range bits works; a bit naming an
- *                      fd >= MAX_FDS or a closed fd is -EBADF; nfds past the
- *                      fd_set width is -EINVAL (never a silent truncation);
- *   (g) bad timeout  - an out-of-range timeval (tv_usec >= 1e6) is -EINVAL.
+ * Each case runs against pipes:
+ *   (a) timeout: poll of two empty pipes returns 0 when nothing is ready;
+ *   (b) readiness: after a write, poll returns that fd with POLLIN and leaves
+ *       the other fd's revents clear;
+ *   (c) hangup: polling a read end whose writer has closed reports POLLHUP;
+ *   (d) select: the same readable fd is found through an fd_set (proving the
+ *       fd_set<->pollfd translation and the _newselect path);
+ *   (e) block + wake: a parent that polls with a long timeout is woken the
+ *       moment a forked child writes (it does NOT wait out the timeout),
+ *       proving poll truly blocks on the pipe wait queue;
+ *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
+ *       an fd >= MAX_FDS or a closed fd is -EBADF; nfds past the fd_set width
+ *       is -EINVAL (never a silent truncation);
+ *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL.
  *
  * Prints "POLLPROBE OK". Freestanding; direct int 0x80.
  */
@@ -120,8 +120,12 @@ static int do_poll(struct pollfd *fds, int nfds, int timeout_ms)
     return syscall3(SYS_POLL, (int)(size_t)fds, nfds, timeout_ms);
 }
 
-/* Drain helper: passing buf as char * keeps the static checker from mistaking the
- * read target (written only through an int-cast syscall arg) for an unused const. */
+/**
+ * Drains `n` bytes from `fd` into `buf`.
+ *
+ * Passing buf as char * keeps the static checker from mistaking the read target
+ * (written only through an int-cast syscall arg) for an unused const.
+ */
 static int do_read(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (int)(size_t)buf, n);

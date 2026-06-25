@@ -1,10 +1,9 @@
-/*
- * krandom_hosttest.c
+/**
+ * Dual-target seam test for the kernel's ChaCha20 keystream CSPRNG.
  *
  * host-deps: rach2/sys/lib/krandom.c
  *
- * Dual-target seam test for the kernel's pure xorshift128 PRNG
- * (sys/lib/krandom.c), compiled and run natively under ASan/UBSan. Returns the
+ * Compiles and runs `sys/lib/krandom.c` natively under ASan/UBSan. Returns the
  * failed-check count (0 == all passed), capped so it cannot wrap to a false 0.
  */
 
@@ -76,9 +75,9 @@ int main(void)
     }
     CHECK(nonzero);
 
-    /* Monobit sanity (the Phase-20 fail-closed gate trusts this stream for keys):
-     * over 4096 ChaCha-keystream bits the set-bit count must be near half (2048).
-     * A stuck/biased generator lands far outside; a uniform one is comfortably
+    /* Monobit sanity (the fail-closed gate trusts this stream for keys): over
+     * 4096 ChaCha keystream bits the set-bit count must be near half (2048). A
+     * stuck or biased generator lands far outside; a uniform one is comfortably
      * within +/-205 (~5%), wide enough that a healthy stream never flakes. */
     {
         uint8_t big[512];

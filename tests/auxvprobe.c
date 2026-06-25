@@ -1,16 +1,14 @@
-/*
- * auxvprobe.c - Phase 1 probe: verify the SysV/i386 initial process stack.
+/**
+ * Verifies the SysV/i386 initial process stack the kernel hands a new program.
  *
- * A freestanding program (no libc) that walks its OWN initial stack exactly as
- * a C runtime would: argc, the argv[] pointers + NULL, the envp[] pointers +
- * NULL, then the auxv {type,value} pairs terminated by AT_NULL. It prints what
- * it finds (including the 16 AT_RANDOM bytes, so the harness can confirm they
- * differ across two boots) and asserts the layout is correct, exiting 0 only if
- * every check passes.
+ * Walks its own initial stack exactly as a C runtime would: argc, the argv[]
+ * pointers and their NULL, the envp[] pointers and their NULL, then the auxv
+ * {type,value} pairs terminated by AT_NULL. It prints what it finds, including
+ * the 16 AT_RANDOM bytes so the harness can confirm they differ across two
+ * boots, and asserts the layout is correct, exiting 0 only if every check
+ * passes. This is the same stack the dynamic loader and crt1 read on Linux.
  *
- * Linux/BSD analogue: the initial process stack the dynamic loader / crt1 reads.
- *
- * Build: i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int u32;

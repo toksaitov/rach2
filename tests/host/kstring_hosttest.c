@@ -1,15 +1,15 @@
-/*
- * kstring_hosttest.c
+/**
+ * Dual-target seam test for the kernel's pure string and memory routines.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * Dual-target seam test. The kernel's pure string/memory routines in
- * sys/lib/kstring.c are compiled and run NATIVELY on the host under
- * AddressSanitizer + UndefinedBehaviorSanitizer, and vector-tested. The same
- * .c file is linked into the freestanding kernel (one source, two targets),
- * so a bounds bug surfaces here, in milliseconds, instead of as a mystery fault
- * in QEMU. The test prints nothing; it returns the number of failed checks as
- * its exit status (0 == all passed), which is what tools/hosttest.sh asserts.
+ * The routines in `sys/lib/kstring.c` are compiled and run NATIVELY on the
+ * host under AddressSanitizer + UndefinedBehaviorSanitizer, and vector-tested.
+ * The same .c file is linked into the freestanding kernel (one source, two
+ * targets), so a bounds bug surfaces here, in milliseconds, instead of as a
+ * mystery fault in QEMU. The test prints nothing; it returns the number of
+ * failed checks as its exit status (0 == all passed), which is what
+ * tools/hosttest.sh asserts.
  */
 
 #include "kstring.h"

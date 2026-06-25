@@ -1,14 +1,14 @@
-/*
- * tls_hosttest.c
+/**
+ * Seam test for tls_resolve_base (proc/tls.c): the user_desc validation that
+ * backs set_thread_area(2).
  *
  * host-deps: rach2/sys/proc/tls.c
  *
- * Dual-target seam test for tls_resolve_base (proc/tls.c): the user_desc
- * validation that backs set_thread_area(2). The bit decoding is the fallible
- * part, so it is exercised natively under ASan/UBSan: a musl-style request is
- * accepted and its base returned, while every malformed request (wrong entry,
- * not 32-bit, code segment, read-only, not-present, NULL args) is rejected.
- * Returns the failed-check count (0 == all passed).
+ * The bit decoding is the fallible part, so it is exercised natively under
+ * ASan/UBSan: a musl-style request is accepted and its base returned, while
+ * every malformed request (wrong entry, not 32-bit, code segment, read-only,
+ * not-present, NULL args) is rejected. Returns the failed-check count
+ * (0 == all passed).
  */
 
 #include "tls.h"

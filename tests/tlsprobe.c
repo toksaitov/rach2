@@ -1,29 +1,29 @@
-/*
- * tlsprobe.c - Phase 2 probe: verify %gs thread-local storage survives
- * syscalls, IRQs, and context switches, with per-process isolation.
+/**
+ * Verify that %gs thread-local storage survives syscalls, IRQs, and context
+ * switches, with per-process isolation.
  *
- * A freestanding program (no libc) that drives the kernel's set_thread_area(2)
- * exactly as musl's __init_tls does: it points a GDT TLS descriptor at a thread
- * control block (TCB) and loads the returned selector into %gs. It then writes
- * sentinel words through %gs and re-reads them while hammering the kernel:
+ * Drives the kernel's set_thread_area(2) exactly as musl's __init_tls does: it
+ * points a GDT TLS descriptor at a thread control block (TCB) and loads the
+ * returned selector into %gs. It then writes sentinel words through %gs and
+ * re-reads them while hammering the kernel:
  *
- *   1. Solo phase  - thousands of int 0x80 syscalls plus busy-waits across many
+ *   1. Solo phase: thousands of int 0x80 syscalls plus busy-waits across many
  *      100 Hz timer IRQs. Every %gs:off read must still equal the sentinel, so
  *      the syscall AND IRQ entry/exit paths must save and restore %gs (the old
  *      bug smeared %gs from the saved %ds, which this would catch immediately).
  *
- *   2. Isolation phase - fork a child that points its OWN TLS descriptor at a
- *      DIFFERENT TCB with different sentinels. Parent and child then spin so the
- *      round-robin scheduler switches between them hundreds of times; each must
- *      always read back its own sentinels. This only holds if the context
+ *   2. Isolation phase: fork a child that points its OWN TLS descriptor at a
+ *      DIFFERENT TCB with different sentinels. Parent and child then spin so
+ *      the round-robin scheduler switches between them hundreds of times; each
+ *      must always read back its own sentinels. This only holds if the context
  *      switch reprograms the shared TLS GDT descriptor per process.
  *
  * Prints "All TLS checks passed!" and exits 0 only if every check passes.
  *
- * Linux/BSD analogue: set_thread_area(2) + the i386 %gs thread pointer that
- * glibc/musl, the stack-protector canary, and pthread_self() all rely on.
+ * The Linux/BSD analogue is set_thread_area(2) plus the i386 %gs thread pointer
+ * that glibc/musl, the stack-protector canary, and pthread_self() all rely on.
  *
- * Build: i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int u32;
@@ -81,17 +81,17 @@ static int sys_waitpid(int pid, int *status, int options)
     return r;
 }
 
-/* A cheap, side-effect-free syscall used to exercise the int 0x80 path. */
+/** A cheap, side-effect-free syscall used to exercise the int 0x80 path. */
 static void sys_gettimeofday(u32 *tv2)
 {
     int r;
     __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_GETTIMEOFDAY), "b"(tv2) : "memory");
 }
 
-/*
- * set_thread_area: program the TLS descriptor to 'base' and return the GDT
- * entry number the kernel chose, or -1 on failure. Mirrors the user_desc musl
- * builds (entry_number = -1 to allocate, 4 GB limit in pages).
+/**
+ * Program the TLS descriptor to `base` and return the GDT entry number the
+ * kernel chose, or -1 on failure. Mirrors the user_desc musl builds
+ * (entry_number = -1 to allocate, 4 GB limit in pages).
  */
 static int set_thread_area(void *base)
 {
@@ -110,7 +110,7 @@ static int set_thread_area(void *base)
     return (int)desc[0]; /* entry_number written back by the kernel */
 }
 
-/* Load the TLS selector (entry << 3) | 3 into %gs, as the C library does. */
+/** Load the TLS selector (entry << 3) | 3 into %gs, as the C library does. */
 static void load_gs(int entry)
 {
     u32 sel = ((u32)entry << 3) | 3u;
@@ -118,7 +118,7 @@ static void load_gs(int entry)
     __asm__ __volatile__("movw %w0, %%gs" : : "r"(sel));
 }
 
-/* Read/write a 32-bit word at %gs:off (off is a byte offset into the TCB). */
+/** Read/write a 32-bit word at %gs:off (off is a byte offset into the TCB). */
 static u32 gs_read(u32 off)
 {
     u32 v;
@@ -166,7 +166,7 @@ static void put_u32(u32 v)
 static u32 tcb_parent[NUM_SLOTS];
 static u32 tcb_child[NUM_SLOTS];
 
-/* Write magic^slot to every slot through %gs. */
+/** Write magic^slot to every slot through %gs. */
 static void tls_fill(u32 magic)
 {
     int i;
@@ -176,7 +176,7 @@ static void tls_fill(u32 magic)
     }
 }
 
-/*
+/**
  * Re-read every slot through %gs and confirm it still holds magic^slot.
  * Returns the number of mismatches (0 == intact).
  */
@@ -193,7 +193,7 @@ static int tls_check(u32 magic)
     return bad;
 }
 
-/* Burn cycles in user mode so timer IRQs (and, with a peer, switches) occur. */
+/** Burn cycles in user mode so timer IRQs (and, with a peer, switches) fire. */
 static void busy(u32 spins)
 {
     volatile u32 x = 0;

@@ -1,21 +1,19 @@
-/*
- * waitprobe.c - Phase 12 probe: the blocking & dispatch substrate.
+/**
+ * Exercises the fd-layer blocking and dispatch substrate from user space.
  *
- * Exercises, from user space via raw int 0x80, the fd-layer pieces Phase 12 adds
- * and the wait-queue's interruptible block:
- *   (a) O_NONBLOCK is a real, settable OFD status flag    - F_SETFL sets it and
- *       F_GETFL reads it back, and clearing it sticks;
- *   (b) close(0/1/2) is legal and the freed number reopens - closing stdin then
- *       opening a file hands back fd 0; closing stderr returns 0, not -EBADF;
- *   (c) a blocking wait is signal-interruptible (-EINTR)  - a child blocks in a
- *       recvfrom() on the migrated socket wait queue, the parent signals it, and
- *       the recvfrom unwinds with -EINTR (it does NOT hang or die).
+ * Three things are checked: (a) O_NONBLOCK is a real, settable OFD status flag,
+ * so F_SETFL sets it, F_GETFL reads it back, and clearing it sticks; (b) close
+ * of 0, 1, or 2 is legal and the freed number reopens, so closing stdin then
+ * opening a file hands back fd 0, and closing stderr returns 0, not -EBADF;
+ * (c) a blocking wait is signal-interruptible, so a child blocked in a
+ * recvfrom() on the socket wait queue unwinds with -EINTR when the parent
+ * signals it, rather than hanging or dying.
  *
- * The multi-waiter wake (wq_wake_all makes every blocked waiter runnable) and the
- * lost-wakeup safety are covered by the host-seam unit test (tests/host/
- * wait_queue_hosttest.c) and the live network suite (httpd's accept/recv block on
- * the wait queue and are woken by NIC IRQs), since a datagram cannot be delivered
- * hermetically here.
+ * The multi-waiter wake (wq_wake_all makes every blocked waiter runnable) and
+ * the lost-wakeup safety live in the host-seam unit test (tests/host/
+ * wait_queue_hosttest.c) and the live network suite (httpd's accept and recv
+ * block on the wait queue and are woken by NIC IRQs), since a datagram cannot
+ * be delivered hermetically here.
  *
  * Prints "WAITPROBE OK". Freestanding; direct int 0x80.
  */
@@ -126,15 +124,19 @@ static int eqn(const char *a, const char *b, int n)
     return 1;
 }
 
-/* Read n bytes from fd into buf; returns the byte count. (Passing buf as a
- * char*, not an inline int cast, lets the analyzer see it written.) */
+/**
+ * Reads n bytes from fd into buf; returns the byte count. Passing buf as a
+ * char*, not an inline int cast, lets the analyzer see it written.
+ */
 static int rd(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
 }
 
-/* Signal restorer trampoline: the handler returns here, which invokes
- * rt_sigreturn (173) to restore the interrupted context (musl's __restore_rt). */
+/**
+ * Signal restorer trampoline: the handler returns here, which invokes
+ * rt_sigreturn (173) to restore the interrupted context (musl's __restore_rt).
+ */
 extern void sig_restorer(void);
 __asm__(".globl sig_restorer\n"
         "sig_restorer:\n"
@@ -158,8 +160,10 @@ static void usr1_handler(int sig)
 
 #define SA_RESTORER 0x04000000
 
-/* The child: install a SIGUSR1 handler, block in a recvfrom() on a UDP socket
- * that never receives, and assert the parent's signal unwinds it with -EINTR. */
+/**
+ * The child: install a SIGUSR1 handler, block in a recvfrom() on a UDP socket
+ * that never receives, and assert the parent's signal unwinds it with -EINTR.
+ */
 static void eintr_child(void)
 {
     struct k_sigaction ka;
@@ -211,8 +215,8 @@ void _start(void)
           "F_GETFL no longer O_NONBLOCK");
     syscall1(SYS_CLOSE, fd);
 
-    /* (b) close(2) is legal (was -EBADF before Phase 12). fd 0/1 stay open, so
-     * the freed lowest number is 2 and the reopen lands there. */
+    /* (b) close(2) is legal. fd 0/1 stay open, so the freed lowest number is
+     * 2 and the reopen lands there. */
     r = syscall1(SYS_CLOSE, STDERR_FILENO);
     check(r == 0, "close(stderr) is legal");
     fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
@@ -227,13 +231,15 @@ void _start(void)
     check(n == 5 && eqn(buf, "hello", 5), "read through reopened fd 0");
     syscall1(SYS_CLOSE, fd);
 
-    /* (c) a blocking recvfrom is interruptible: the child unwinds with -EINTR. */
+    /* (c) a blocking recvfrom is interruptible: the child unwinds with
+     * -EINTR. */
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
         eintr_child();
     } else {
-        /* Give the child time to reach the blocking recvfrom, then signal it. */
+        /* Give the child time to reach the blocking recvfrom, then signal
+         * it. */
         struct {
             int tv_sec;
             int tv_nsec;

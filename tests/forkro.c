@@ -1,17 +1,15 @@
-/*
- * forkro.c - fork preserves read-only protection probe for Rach2 OS (Phase 4)
+/**
+ * Probe that fork copies a read-only page with its protection intact.
  *
  * The parent maps an anonymous PROT_READ page, faults it in (reads zero), then
  * forks. The child writes to that read-only page: because fork must copy the
  * page into the child with the SAME (read-only) protection, the write is a
- * protection violation and the kernel kills the child. The parent reaps it and
- * checks the wait status is a SIGSEGV death (WIFSIGNALED + WTERMSIG == SIGSEGV).
- * If fork wrongly made the child's copy writable, the child would survive and
- * exit 0, which this probe reports as a failure.
+ * protection violation and the kernel kills the child. The parent reaps it
+ * and checks the wait status is a SIGSEGV death (WIFSIGNALED and WTERMSIG
+ * == SIGSEGV). If fork wrongly made the child's copy writable, the child
+ * would survive and exit 0, which this probe reports as a failure.
  *
- * Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o forkro forkro.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -124,7 +122,8 @@ void _start(void)
     }
 
     if (pid == 0) {
-        /* Child: writing the inherited read-only page must fault and kill us. */
+        /* Child: writing the inherited read-only page must fault and kill it.
+         */
         ro[0] = 0xFF;
         /* Reached only if fork wrongly gave the child a writable copy. */
         puts("forkro: ERROR child wrote a read-only page and survived");

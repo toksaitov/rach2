@@ -1,13 +1,12 @@
-/*
- * vm_hosttest.c
+/**
+ * Dual-target seam test for the VMA address-space operations (mm/vm.c).
  *
  * host-deps: rach2/sys/mm/vm.c
  *
- * Dual-target seam test for the VMA address-space operations (mm/vm.c): insert
- * with overlap/alignment/slot rejection, find by address, overlap detection,
- * and the four munmap cases (full cover, left trim, right trim, middle split).
- * Returns the failed-check count (0 == all passed). Run natively under
- * AddressSanitizer/UBSan.
+ * Exercises insert with overlap/alignment/slot rejection, find by address,
+ * overlap detection, and the four munmap cases (full cover, left trim, right
+ * trim, middle split). Returns the failed-check count (0 == all passed). Run
+ * natively under AddressSanitizer/UBSan.
  */
 
 #include "mm/vm.h"

@@ -1,14 +1,13 @@
-/*
- * pipe_ring_hosttest.c
+/**
+ * Dual-target seam test for the pipe byte-FIFO ring (ipc/pipe_ring.c).
  *
  * host-deps: rach2/sys/ipc/pipe_ring.c
  *
- * Dual-target seam test for the pipe byte-FIFO ring (ipc/pipe_ring.c). The wrap
- * arithmetic (occupancy = tail - head, slot = pos & (SIZE-1)) is the fence-post
- * logic a one-off bug hides in, so it runs natively under ASan/UBSan: put never
- * overruns free space, get never reads past occupancy, a transfer that straddles
- * the physical end of the buffer stays byte-correct, and a full page round-trips.
- * Returns the failed-check count (0 == pass).
+ * The wrap arithmetic (occupancy = tail - head, slot = pos & (SIZE-1)) is the
+ * fence-post logic a one-off bug hides in, so it runs natively under
+ * ASan/UBSan: put never overruns free space, get never reads past occupancy, a
+ * transfer that straddles the physical end of the buffer stays byte-correct,
+ * and a full page round-trips. Returns the failed-check count (0 == pass).
  */
 
 #include "ipc/pipe.h"

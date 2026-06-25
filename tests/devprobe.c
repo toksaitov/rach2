@@ -1,13 +1,12 @@
-/*
- * devprobe.c - Phase 15 probe: the synthetic /dev character devices.
+/**
+ * Exercises the synthetic /dev character devices and the /proc self views.
  *
- * Proves, from user space via raw int 0x80:
- *   (a) /dev/zero    - reads back all-zero bytes;
- *   (b) /dev/null    - read returns 0 (EOF), write is accepted and discarded;
- *   (c) /dev/full    - write fails with -ENOSPC;
- *   (d) /dev/urandom - two reads differ (the stream varies).
+ * From user space, proves that /dev/zero reads back all-zero bytes; /dev/null
+ * reads as immediate EOF and sinks writes; /dev/full fails a write with
+ * -ENOSPC; and /dev/urandom yields a varying stream. It then reads
+ * /proc/self/stat for our pid and comm and resolves /proc/self/fd/0 to the
+ * console. Prints "DEVPROBE OK" when every check passes.
  *
- * The /proc half of Phase 15 is exercised separately. Prints "DEVPROBE OK".
  * Freestanding; direct int 0x80.
  */
 
@@ -87,7 +86,7 @@ static int do_readlink(const char *path, char *buf, int n)
     return syscall3(SYS_READLINK, (int)(size_t)path, (int)(size_t)buf, n);
 }
 
-/* Parse the leading decimal of s. */
+/** Parse the leading decimal of s. */
 static int atoin(const char *s)
 {
     int v = 0;
@@ -98,7 +97,7 @@ static int atoin(const char *s)
     return v;
 }
 
-/* Does haystack contain needle? */
+/** Does haystack contain needle? */
 static int contains(const char *h, const char *n)
 {
     int i, j;

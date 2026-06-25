@@ -1,15 +1,15 @@
-/*
- * pipeprobe.c - Phase 13 probe: anonymous pipes.
+/**
+ * Exercises the anonymous-pipe contract from user space.
  *
- * Proves the pipe contract from user space via raw int 0x80:
- *   (a) round-trip + EOF       - bytes written at one end read in order at the
- *       other; once the write end closes, the drained read end returns 0 (EOF);
- *   (b) O_NONBLOCK             - a read of an empty pipe and a write to a full one
- *       return -EAGAIN instead of blocking, and the FIFO holds a full page;
- *   (c) SIGPIPE / -EPIPE       - a write with the read end closed raises SIGPIPE
- *       and (with the signal caught) returns -EPIPE;
- *   (d) blocking across a fork - a writer of more than one buffer blocks until the
- *       forked reader drains it, and every byte arrives intact.
+ * Each case checks one guarantee:
+ *   (a) round-trip + EOF: bytes written at one end read back in order at the
+ *       other, and once the write end closes the drained read end returns 0;
+ *   (b) O_NONBLOCK: a read of an empty pipe and a write to a full one return
+ *       -EAGAIN instead of blocking, and the FIFO holds a full page;
+ *   (c) SIGPIPE / -EPIPE: a write with the read end closed raises SIGPIPE and
+ *       (with the signal caught) returns -EPIPE;
+ *   (d) blocking across a fork: a writer of more than one buffer blocks until
+ *       the forked reader drains it, and every byte arrives intact.
  *
  * Prints "PIPEPROBE OK". Freestanding; direct int 0x80.
  */
@@ -106,8 +106,10 @@ static int eqn(const char *a, const char *b, int n)
     return 1;
 }
 
-/* Read n bytes from fd into buf; returns the byte count (char* lets the analyzer
- * see buf written). */
+/**
+ * Reads n bytes from fd into buf and returns the byte count. The char* lets
+ * the analyzer see buf written.
+ */
 static int rd(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
@@ -118,9 +120,11 @@ static int wr(int fd, const char *buf, int n)
     return syscall3(SYS_WRITE, fd, (int)(size_t)buf, n);
 }
 
-/* pipe()/pipe2() into the two-element fds array. fds is pre-cleared so the
+/**
+ * Calls pipe() into the two-element fds array. fds is pre-cleared so the
  * analyzer sees the output written even though the kernel fills it through the
- * cast-to-int address. */
+ * cast-to-int address.
+ */
 static int do_pipe(int fds[2])
 {
     fds[0] = -1;
@@ -135,7 +139,7 @@ static int do_pipe2(int fds[2], int flags)
     return syscall2(SYS_PIPE2, (int)(size_t)fds, flags);
 }
 
-/* Signal restorer trampoline (musl-style): invoke rt_sigreturn (173). */
+/* Signal restorer trampoline (musl-style): invokes rt_sigreturn (173). */
 extern void sig_restorer(void);
 __asm__(".globl sig_restorer\n"
         "sig_restorer:\n"
@@ -157,7 +161,7 @@ static void sigpipe_handler(int sig)
     got_sigpipe = 1;
 }
 
-/* A 5 KB pattern buffer (> one pipe page) for the fill / blocking tests. */
+/* A 5 KB pattern buffer (> one pipe page) for the fill and blocking tests. */
 #define BIG 5000
 static char big[BIG];
 

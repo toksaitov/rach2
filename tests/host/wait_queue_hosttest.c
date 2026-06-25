@@ -1,9 +1,8 @@
-/*
- * wait_queue_hosttest.c
+/**
+ * Dual-target seam test for the multi-waiter queue logic of proc/wait_queue.c.
  *
  * host-deps:
  *
- * Dual-target seam test for the multi-waiter queue logic of proc/wait_queue.c.
  * The fixed-slot array ops, enqueue (idempotent), dequeue, and wq_wake_all
  * (mark every BLOCKED waiter READY and empty the queue), are the part a
  * fence-post bug could break, so they run natively here under ASan/UBSan with a

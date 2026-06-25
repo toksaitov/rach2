@@ -1,14 +1,14 @@
-/*
- * synthfs_hosttest.c
+/**
+ * Dual-target seam test for the synthetic-path classifier (fs/synthfs.c).
  *
  * host-deps: rach2/sys/fs/synthfs.c
  *
- * Dual-target seam test for the synthetic-path classifier (fs/synthfs.c). The
- * component splitting and the /proc/<pid>/fd/<n> parsing are the fence-post-prone
- * part every path syscall leans on, so they run natively here under ASan/UBSan: a
- * path resolves to the right vnode kind with the right pid/fd, leading/trailing/
- * doubled slashes are tolerated, a non-pid or unknown /proc entry is ENOENT, and
- * an ordinary name stays KRFFS-bound. Returns the failed-check count (0 == pass).
+ * The component splitting and the /proc/<pid>/fd/<n> parsing are the
+ * fence-post-prone part every path syscall leans on, so they run natively here
+ * under ASan/UBSan: a path resolves to the right vnode kind with the right
+ * pid/fd, leading/trailing/doubled slashes are tolerated, a non-pid or unknown
+ * /proc entry is ENOENT, and an ordinary name stays KRFFS-bound. Returns the
+ * failed-check count (0 == pass).
  */
 
 #include "fs/synthfs.h"

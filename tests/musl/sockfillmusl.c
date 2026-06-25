@@ -1,18 +1,19 @@
-/*
- * sockfillmusl.c - Phase 21 probe: the server-side socket fill-out a forking sshd
- * needs (getsockname/getpeername/setsockopt/getsockopt/shutdown).
+/**
+ * Exercises the server-side socket fill-out a forking sshd needs, through real
+ * musl: getsockname, getpeername, setsockopt, getsockopt, and shutdown.
  *
- * Hermetic (no peer needed): it exercises the new socketcall sub-calls on a TCP
- * listening socket and checks the error contract:
- *   - setsockopt(SO_REUSEADDR / TCP_NODELAY) succeed;
- *   - bind + listen succeed; getsockname() reports the bound port;
- *   - getsockopt(SO_TYPE) reports SOCK_STREAM;
- *   - getpeername() on an unconnected socket is -ENOTCONN;
- *   - getsockname() on a non-socket fd (stdin) is -ENOTSOCK.
- * The CONNECTED getpeername + shutdown(FIN) paths are proven by the httpd
- * integration (accept yields a connected socket) and reviewed in the kernel.
+ * The test is hermetic, needing no peer. It drives the socketcall sub-calls on
+ * a TCP listening socket and checks the success and error contract:
+ * setsockopt(SO_REUSEADDR) and setsockopt(TCP_NODELAY) succeed; bind and listen
+ * succeed and getsockname reports the bound port; getsockopt(SO_TYPE) reports
+ * SOCK_STREAM; getpeername on an unconnected socket fails with ENOTCONN; and
+ * getsockname on a non-socket fd (stdin) fails with ENOTSOCK. The connected
+ * getpeername and shutdown(FIN) paths are not driven here: they are proven by
+ * the httpd integration, where accept yields a connected socket, and reviewed
+ * in the kernel.
  *
- * Prints "SOCKFILLMUSL OK" / "SOCKFILLMUSL FAIL". Linked against the ported musl.
+ * Prints "SOCKFILLMUSL OK" on success or "SOCKFILLMUSL FAIL" on failure. Linked
+ * against the ported musl.
  */
 
 #include <sys/socket.h>
@@ -50,7 +51,7 @@ int main(void)
         return 1;
     }
 
-    /* getsockname reports the bound port. */
+    /* bound port */
     memset(&sa, 0, sizeof(sa));
     len = sizeof(sa);
     if (getsockname(s, (struct sockaddr *)&sa, &len) != 0 || ntohs(sa.sin_port) != 7000) {
@@ -58,7 +59,7 @@ int main(void)
         return 1;
     }
 
-    /* getsockopt(SO_TYPE) reports the real type. */
+    /* socket type */
     val = 0;
     len = sizeof(val);
     if (getsockopt(s, SOL_SOCKET, SO_TYPE, &val, &len) != 0 || val != SOCK_STREAM) {
@@ -66,14 +67,14 @@ int main(void)
         return 1;
     }
 
-    /* getpeername on an unconnected socket -> ENOTCONN. */
+    /* unconnected: ENOTCONN */
     len = sizeof(sa);
     if (getpeername(s, (struct sockaddr *)&sa, &len) == 0 || errno != ENOTCONN) {
         printf("SOCKFILLMUSL FAIL (getpeername not ENOTCONN)\n");
         return 1;
     }
 
-    /* getsockname on a non-socket fd (stdin) -> ENOTSOCK. */
+    /* non-socket: ENOTSOCK */
     len = sizeof(sa);
     if (getsockname(0, (struct sockaddr *)&sa, &len) == 0 || errno != ENOTSOCK) {
         printf("SOCKFILLMUSL FAIL (non-socket not ENOTSOCK)\n");

@@ -1,15 +1,14 @@
-/*
- * vmro.c - read-only protection probe for Rach2 OS (Phase 4)
+/**
+ * Probes that a PROT_READ-only page faults on write.
  *
  * Maps an anonymous page with PROT_READ only, reads it (must succeed and read
  * zero), then writes to it, which must fault as a protection violation, since
- * the demand-paging handler honors the VMA's protection in the PTE. The process
- * must die and the kernel return to its shell; the "still alive" line must NEVER
- * appear. Companion to vmfault (which tests an address in no VMA at all).
+ * the demand-paging handler honors the VMA's protection in the PTE. The
+ * process must die and the kernel return to its shell; the "still alive" line
+ * must NEVER appear. Companion to vmfault (an address in no VMA at all).
  *
- * Run as a standalone boot; the harness then checks the kernel survived. Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o vmro vmro.c
+ * Run as a standalone boot; the harness then checks the kernel survived.
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -42,7 +41,7 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/* mmap2 anonymous; addr=0, fd=-1, pgoffset=0 (in %ebp, saved/restored). */
+/** mmap2 anonymous; addr=0, fd=-1, pgoffset=0 (in %ebp, saved/restored). */
 static unsigned sys_mmap2_anon(unsigned len, int prot)
 {
     unsigned result;

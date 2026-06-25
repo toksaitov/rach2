@@ -1,10 +1,21 @@
-/*
- * devtest.c - Phase 15 integration: the synthetic /dev and /proc through musl.
+/**
+ * Exercises the synthetic /dev and /proc file systems through real musl.
  *
- * Drives the real libc wrappers (not raw int 0x80): open/read/write on the char
- * devices, and ttyname(0), which exercises isatty (TIOCGWINSZ), readlink of
- * /proc/self/fd/0, and the stat/fstat identity match. Installed as "mdevtest".
- * Prints "DEVTEST OK".
+ * Drives the libc wrappers (not raw int 0x80) so the call path that the shell
+ * and its utilities take is the one under test. The char devices carry their
+ * contracts: /dev/zero reads zeros, /dev/null reads EOF, /dev/full fails writes
+ * with ENOSPC, a read-only device rejects writes with EBADF (access mode is
+ * checked before the device op runs), and O_DIRECTORY on a char device is
+ * ENOTDIR. ttyname(0) exercises isatty (TIOCGWINSZ), the readlink of
+ * /proc/self/fd/0, and the stat/fstat identity match. opendir lists /dev (the
+ * "null" entry) and /proc (the "self" entry and the caller's numeric pid, what
+ * ps enumerates); openat resolves a name relative to a synthetic directory fd.
+ * access(2) reports F_OK and R_OK hits, EACCES on a write to a read-only proc
+ * file, ENOENT for a missing device, and EINVAL for a bad mode. /proc/self is a
+ * magic symlink to the numeric pid: lstat sees the link, stat follows it to the
+ * directory, and /proc/self/fd/0 follows through to the console char device.
+ *
+ * Installed as "mdevtest". Prints "DEVTEST OK" when every check passes.
  */
 #include <fcntl.h>
 #include <unistd.h>
@@ -59,14 +70,14 @@ int main(void)
     check(n < 0 && errno == ENOSPC, "/dev/full write -> ENOSPC");
     close(fd);
 
-    /* ttyname(0): exercises isatty + /proc/self/fd readlink + stat/fstat match. */
+    /* ttyname(0). */
     tn = ttyname(0);
     check(tn != NULL && strncmp(tn, "/dev/", 5) == 0, "ttyname(0) is a /dev name");
     if (tn) {
         printf("  ttyname(0) = %s\n", tn);
     }
 
-    /* opendir("/dev") lists the devices (synthetic directory getdents). */
+    /* opendir("/dev"). */
     {
         DIR *d = opendir("/dev");
         struct dirent *de;
@@ -83,7 +94,7 @@ int main(void)
         check(found_null, "/dev lists null");
     }
 
-    /* opendir("/proc") lists "self" and our pid (what ps enumerates). */
+    /* opendir("/proc"). */
     {
         DIR *d = opendir("/proc");
         struct dirent *de;
@@ -106,7 +117,7 @@ int main(void)
         check(found_pid, "/proc lists our pid");
     }
 
-    /* openat relative to a synthetic directory fd (the dir-fd fix). */
+    /* openat relative to a synthetic directory fd. */
     {
         int dfd = open("/dev", O_RDONLY | O_DIRECTORY);
         check(dfd >= 0, "open /dev O_DIRECTORY");
@@ -120,7 +131,7 @@ int main(void)
         }
     }
 
-    /* A read-only device rejects writes (access mode is enforced before dispatch). */
+    /* A read-only device rejects writes. */
     {
         int z = open("/dev/zero", O_RDONLY);
         check(z >= 0, "open /dev/zero O_RDONLY");
@@ -132,14 +143,14 @@ int main(void)
         }
     }
 
-    /* O_DIRECTORY on a character device is ENOTDIR. */
+    /* O_DIRECTORY on a char device. */
     {
         errno = 0;
         check(open("/dev/null", O_RDONLY | O_DIRECTORY) < 0 && errno == ENOTDIR,
               "open /dev/null O_DIRECTORY -> ENOTDIR");
     }
 
-    /* access(2) on synthetic paths (the new syscall the shell's `test` uses). */
+    /* access(2) on synthetic paths. */
     check(access("/dev/null", F_OK) == 0, "access(/dev/null, F_OK)");
     check(access("/proc/self/stat", R_OK) == 0, "access(/proc/self/stat, R_OK)");
     errno = 0;
@@ -152,7 +163,7 @@ int main(void)
     check(access("/proc", 8) < 0 && errno == EINVAL,
           "access(/proc, bad mode) -> EINVAL");
 
-    /* /proc/self is a symlink to our numeric pid. */
+    /* readlink("/proc/self"). */
     {
         char lbuf[16];
         char pidstr[16];
@@ -164,7 +175,7 @@ int main(void)
         check(ln > 0 && strcmp(lbuf, pidstr) == 0, "readlink /proc/self -> our pid");
     }
 
-    /* Symlink follow semantics: lstat sees the magic link, stat follows it. */
+    /* Symlink follow semantics. */
     {
         struct stat ls, fs;
         check(lstat("/proc/self", &ls) == 0 && S_ISLNK(ls.st_mode),

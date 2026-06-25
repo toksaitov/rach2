@@ -1,18 +1,15 @@
-/*
- * sigprobe.c - Phase 8 signal probe for Rach2 OS.
+/**
+ * Exercises signal delivery from user space via direct int 0x80 syscalls.
  *
- * From user space via direct int 0x80 syscalls:
- *   - install a SIGUSR1 handler (with a tiny rt_sigreturn restorer), raise it to
- *     ourselves, and confirm the handler runs and execution resumes after it;
- *   - block SIGUSR1, raise it (stays pending, handler must NOT run), then unblock
- *     and confirm the now-pending signal is delivered;
- *   - fork a child that ignores SIGTERM and spins; SIGTERM it and confirm the
- *     default action terminates it (parent reaps WTERMSIG == SIGTERM).
- * Prints "SIGPROBE OK".
+ * Three checks:
+ *   * install a SIGUSR1 handler (with a tiny rt_sigreturn restorer), raise it
+ *     to ourselves, and confirm the handler runs and resumes after it;
+ *   * block SIGUSR1, raise it (stays pending, handler must NOT run), then
+ *     unblock and confirm the now-pending signal is delivered;
+ *   * fork a child that spins; SIGTERM it and confirm the default action
+ *     terminates it (parent reaps WTERMSIG == SIGTERM).
  *
- * Freestanding; direct int 0x80. Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o sigprobe sigprobe.c
+ * Prints "SIGPROBE OK" on success. Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -103,8 +100,10 @@ static void check(int cond, const char *msg)
     }
 }
 
-/* The restorer trampoline musl-style: when the handler returns to it, invoke
- * rt_sigreturn (173) to restore the interrupted context. */
+/**
+ * The restorer trampoline, musl-style: when the handler returns to it, invoke
+ * rt_sigreturn (173) to restore the interrupted context.
+ */
 extern void sig_restorer(void);
 __asm__(".globl sig_restorer\n"
         "sig_restorer:\n"
@@ -156,7 +155,7 @@ void _start(void)
           "sigprocmask unblock");
     check(handler_ran == 1, "unblocking delivers the pending signal");
 
-    /* 3. Default action terminates a process that does not handle the signal. */
+    /* 3. Default action terminates a process that does not handle it. */
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {

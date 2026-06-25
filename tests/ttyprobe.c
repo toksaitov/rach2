@@ -1,22 +1,21 @@
-/*
- * ttyprobe.c - Phase 16 probe: the tty line discipline + termios ioctls.
+/**
+ * Exercises the tty line discipline and termios ioctls from user space.
  *
- * Proves, from user space via raw int 0x80, that the console fd is wired to the
- * kernel tty (n_tty discipline), not just that the discipline is correct (the
- * host seam test covers that), but that read/write/ioctl on fd 0/1/2 route
- * through it:
- *   (a) TIOCGWINSZ   - the console reports a 25x80 window;
- *   (b) TCGETS       - the default is cooked with echo (ICANON|ECHO set);
- *   (c) cooked read  - a line typed with DEL erases is delivered edited: the
- *                      driver sends "ab<DEL><DEL>cd\n", read() returns "cd\n";
- *   (d) TCSETS round - clearing ICANON|ECHO and reading it back through TCGETS
- *                      shows the kernel actually applied the new termios;
- *   (e) raw read     - in raw mode (VMIN=1) a byte is delivered with no newline
- *                      and no echo: the driver sends "X", read() returns it.
+ * Proves that the console fd is wired to the kernel tty (the n_tty
+ * discipline), not just that the discipline is correct (the host seam test
+ * covers that), but that read/write/ioctl on fd 0/1/2 route through it:
+ *   (a) TIOCGWINSZ: the console reports a 25x80 window;
+ *   (b) TCGETS: the default is cooked with echo (ICANON|ECHO set);
+ *   (c) cooked read: a line typed with DEL erases is delivered edited. The
+ *       driver sends "ab<DEL><DEL>cd\n", read() returns "cd\n";
+ *   (d) TCSETS round-trip: clearing ICANON|ECHO and reading it back through
+ *       TCGETS shows the kernel actually applied the new termios;
+ *   (e) raw read: in raw mode (VMIN=1) a byte is delivered with no newline
+ *       and no echo. The driver sends "X", read() returns it.
  *
- * Prints "TTYPROBE OK" / "TTYPROBE FAIL". Freestanding; direct int 0x80. Driven
- * by drive_tty.py, which sends the cooked line, then (after the raw switch) the
- * raw byte.
+ * Prints "TTYPROBE OK" or "TTYPROBE FAIL". Freestanding; direct int 0x80.
+ * Driven by drive_tty.py, which sends the cooked line, then (after the raw
+ * switch) the raw byte.
  */
 
 typedef unsigned int size_t;
@@ -32,7 +31,8 @@ typedef unsigned int size_t;
 #define FIONREAD   0x541B
 #define TIOCGWINSZ 0x5413
 
-/* termios flag bits / c_cc indices (the i386 kernel termios; see sys/tty/n_tty.h). */
+/* termios flag bits / c_cc indices (the i386 kernel termios; see */
+/* sys/tty/n_tty.h). */
 #define ICRNL  0000400 /* c_iflag: map CR to NL on input */
 #define OPOST  0000001 /* c_oflag: enable output processing */
 #define ICANON 0000002 /* c_lflag: canonical (cooked) input */
@@ -111,7 +111,7 @@ static void check(int cond, const char *msg)
     }
 }
 
-/* Echo back what a read returned, framed, so the serial log shows it. */
+/** Echo back what a read returned, framed, so the serial log shows it. */
 static void show(const char *tag, const char *buf, int n)
 {
     out(tag, (int)strlen(tag));
@@ -149,13 +149,15 @@ void _start(void)
     check((t.c_iflag & ICRNL) != 0, "default ICRNL set");
     check((t.c_oflag & OPOST) != 0, "default OPOST set");
 
-    /* (c) cooked read: the driver sends "ab<DEL><DEL>cd\n"; erasing leaves "cd\n". */
+    /* (c) cooked read: the driver sends "ab<DEL><DEL>cd\n"; erasing leaves */
+    /* "cd\n". */
     n = do_read(0, buf, (int)sizeof(buf));
     show("COOKED:", buf, n);
     check(n == 3 && buf[0] == 'c' && buf[1] == 'd' && buf[2] == '\n',
           "cooked DEL erase -> \"cd\\n\"");
 
-    /* (d) switch to raw and confirm the kernel applied it (TCGETS round-trip). */
+    /* (d) switch to raw and confirm the kernel applied it (TCGETS */
+    /* round-trip). */
     t.c_lflag &= ~(unsigned int)(ICANON | ECHO);
     t.c_cc[VMIN] = 1;
     t.c_cc[VTIME] = 0;
@@ -168,7 +170,8 @@ void _start(void)
     check(t2.c_iflag == t.c_iflag && t2.c_oflag == t.c_oflag, "TCSETS preserves c_iflag/c_oflag");
     check(t2.c_cflag == t.c_cflag && t2.c_line == t.c_line, "TCSETS preserves c_cflag/c_line");
 
-    /* (e) raw read: the driver sends "X"; it arrives with no newline, unechoed. */
+    /* (e) raw read: the driver sends "X"; it arrives with no newline, */
+    /* unechoed. */
     n = do_read(0, buf, (int)sizeof(buf));
     show("RAW:", buf, n);
     check(n >= 1 && buf[0] == 'X', "raw read delivers a byte without a newline");

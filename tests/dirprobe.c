@@ -1,14 +1,15 @@
-/*
- * dirprobe.c - hierarchical KRFFS probe for Rach2 OS (Phase 6)
+/**
+ * Exercises hierarchical KRFFS directories from user space.
  *
- * Exercises real directories from user space: mkdir a directory, create/write a
- * file INSIDE it, read it back, reject duplicate mkdir and create-in-missing-dir,
- * refuse rmdir on a non-empty directory, then unlink the file and rmdir the now
- * empty directory and confirm the file is gone. Prints "DIRPROBE OK".
+ * Makes a directory, creates and writes a file inside it, and reads it back;
+ * rejects a duplicate mkdir and a create in a missing directory; refuses rmdir
+ * on a non-empty directory; then unlinks the file, rmdirs the now-empty
+ * directory, and confirms the file is gone. Goes on to test getdents on a
+ * subdirectory, the *at API (openat, fstat64, fstatat64, _llseek, fcntl64),
+ * O_APPEND and O_CREAT mode, and chdir/getcwd with relative-name resolution.
+ * Prints "DIRPROBE OK" when every check passes, else "DIRPROBE FAIL".
  *
- * Freestanding; direct int 0x80 syscalls. Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o dirprobe dirprobe.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;

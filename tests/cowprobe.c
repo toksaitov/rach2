@@ -1,7 +1,7 @@
-/*
- * cowprobe.c - copy-on-write fork probe for Rach2 OS (Phase 5)
+/**
+ * Exercises copy-on-write fork semantics from user space.
  *
- * Proves the COW fork semantics from user space:
+ * Three properties are checked:
  *   1. SHARE: a value written before fork is visible to the child (the page is
  *      shared, not re-zeroed).
  *   2. SPLIT: the child writing the page gets a private copy; the parent's copy
@@ -10,9 +10,7 @@
  *   3. NO LEAK: 64 fork/exit cycles do not exhaust frames: each COW share is
  *      reference-counted and freed when the last owner exits.
  *
- * Prints "COWPROBE OK". Freestanding; direct int 0x80 syscalls. Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o cowprobe cowprobe.c
+ * Prints "COWPROBE OK" on success. Freestanding; direct int 0x80 syscalls.
  */
 
 typedef unsigned int size_t;

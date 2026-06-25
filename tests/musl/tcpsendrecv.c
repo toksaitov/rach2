@@ -1,13 +1,15 @@
-/*
- * tcpsendrecv.c - Phase 10: round-trip a line over a connected TCP socket using
- * send()/recv() (NOT read()/write()).
+/**
+ * Round-trip a line over a connected TCP socket through real musl
+ * send()/recv(), not read()/write().
  *
- * musl's send()/recv() compile to sendto()/recvfrom() with a NULL address, which
- * the kernel must route to the TCP path on a connected stream socket (not the UDP
- * path). This connects out through the SLIRP gateway 10.0.2.2:PORT to a host echo
- * server, sends a known line with send(), reads the echo with recv(), and prints
- * "TCPSENDRECV OK" only if the echo matches, locking the regression that broke
- * the musl httpd.
+ * musl's send()/recv() compile to sendto()/recvfrom() with a NULL address,
+ * which the kernel must route to the TCP path on a connected stream socket, not
+ * the UDP path. The test connects out through the SLIRP gateway 10.0.2.2:PORT
+ * to a host echo server, then exercises the path in order: a non-blocking recv
+ * before any data must fail with EAGAIN rather than block or read (the server
+ * echoes only after it receives the line); send() must write the whole known
+ * line; recv() must read it back. It prints "TCPSENDRECV OK" only when the echo
+ * matches, locking the regression that broke the musl httpd.
  *
  * Needs a host echo server on 127.0.0.1:PORT (the test harness starts one).
  * Linked statically against the ported musl; see tests/musl/build.sh.
@@ -47,8 +49,7 @@ int main(void)
         return 1;
     }
 
-    /* Nothing sent yet, so a non-blocking recv must return EAGAIN, not block or
-     * read (the server only echoes after it receives our line). */
+    /* Non-blocking recv before any data: EAGAIN, not a block or a read. */
     errno = 0;
     if (recv(fd, buf, sizeof buf - 1, MSG_DONTWAIT) != -1 || errno != EAGAIN) {
         printf("TCPSENDRECV FAIL: nonblocking recv (errno=%d)\n", errno);

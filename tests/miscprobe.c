@@ -1,10 +1,10 @@
-/*
- * miscprobe.c - Phase 18 probe: the busybox-required misc syscalls.
+/**
+ * Exercises the misc syscalls busybox needs, from user space.
  *
- * Proves, from user space via raw int 0x80: getppid (a child sees the parent's
- * pid), umask (set returns the previous mask, inherited across fork), times (a
- * monotonic tick count + a zeroed tms), sysinfo (a live-process count, mem_unit
- * 1), and vfork (a fork alias: parent gets a pid, child runs and exits).
+ * Proves getppid (a child sees the parent's pid), umask (set returns the
+ * previous mask, inherited across fork), times (a monotonic tick count plus a
+ * zeroed tms), sysinfo (a live-process count, mem_unit 1), and vfork (a fork
+ * alias: parent gets a pid, child runs and exits).
  *
  * Prints "MISCPROBE OK" / "MISCPROBE FAIL". Freestanding; direct int 0x80.
  */
@@ -137,14 +137,14 @@ void _start(void)
         unsigned short procs;
         unsigned int mem_unit;
         check(sysinfo(si) == 0, "sysinfo() ok");
-        procs = (unsigned short)(si[40] | (si[41] << 8)); /* offset of `procs` */
+        procs = (unsigned short)(si[40] | (si[41] << 8)); /* `procs` offset */
         mem_unit = (unsigned int)si[52] | ((unsigned int)si[53] << 8) |
                    ((unsigned int)si[54] << 16) | ((unsigned int)si[55] << 24);
         check(procs >= 1, "sysinfo() counts at least one process");
         check(mem_unit == 1, "sysinfo() mem_unit == 1");
     }
 
-    /* vfork: behaves as a fork alias (parent gets a pid, child runs + exits). */
+    /* vfork: a fork alias (parent gets a pid, child runs and exits). */
     pid = vfork();
     if (pid == 0) {
         sys_exit(7);

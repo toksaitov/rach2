@@ -1,19 +1,14 @@
-/*
- * vmprobe.c - Phase 4 demand-paging probe for Rach2 OS
+/**
+ * Exercises the VMA and demand-paging machinery end to end from user space:
+ * brk() (query, grow, lazy-zero, read/write, shrink), anonymous mmap2() (map,
+ * lazy-zero, read/write, munmap), brk refusing to grow over an mmap region, and
+ * stack growth by deep recursion that faults pages well past the initial one.
  *
- * Exercises the VMA + demand-paging machinery end to end from user space:
- *   1. brk(): query, grow, lazy pages read zero, read/write, shrink back.
- *   2. mmap2() anonymous: map, lazy pages read zero, read/write, munmap.
- *   3. Stack growth: recurse deep with a per-frame buffer so the stack faults
- *      well past its initial single page, then check the unwound checksum.
- *
- * Prints "VMPROBE OK" and exits 0 if every check passes, otherwise the failed
- * count. The wild-pointer / segfault case is a separate program (vmfault) since
+ * Prints "VMPROBE OK" and exits 0 when every check passes, otherwise the failed
+ * count. The wild-pointer/segfault case is a separate program (vmfault) since
  * it deliberately kills the process.
  *
- * Freestanding (no libc); direct int 0x80 syscalls. Build:
- *   i686-elf-gcc -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
- *                -o vmprobe vmprobe.c
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
@@ -50,7 +45,7 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/* brk(addr): returns the resulting break (new on success, old on failure). */
+/** brk(addr): returns the resulting break (new on success, old on failure). */
 static unsigned sys_brk(unsigned addr)
 {
     unsigned result;
@@ -58,7 +53,7 @@ static unsigned sys_brk(unsigned addr)
     return result;
 }
 
-/*
+/**
  * mmap2 anonymous private. addr hint is 0, fd is -1, pgoffset is 0 (passed in
  * %ebp, which is saved/restored around the call). Returns the mapped address or
  * a small negative errno.
@@ -140,7 +135,7 @@ static void check(int cond, const char *msg)
     }
 }
 
-/*
+/**
  * Recurse 'n' deep with a 1 KB buffer per frame, touching every byte so each new
  * stack page must fault in. Crucially the buffer is re-checked AFTER the deeper
  * call returns, so a deeper stack fault that corrupted this frame would be caught

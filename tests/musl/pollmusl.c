@@ -1,15 +1,19 @@
-/*
- * pollmusl.c - Phase 14 integration: real musl poll() and select() over a pipe.
+/**
+ * Exercises poll() and select() over a pipe through musl's own wrappers.
  *
- * Unlike the freestanding pollprobe (which issues int 0x80 directly), this drives
- * the kernel through musl's own wrappers, so it pins the actual ABI musl emits on
- * i386: poll() -> SYS_poll (168), and select() -> SYS_pselect6_time64 (413, which
- * the kernel answers -ENOSYS) falling back to SYS__newselect (142). It proves the
- * whole family works end to end:
- *   - poll() of an empty pipe with a short timeout returns 0;
- *   - after a write, poll() reports the read end POLLIN;
- *   - select() (FD_SET/FD_ISSET, with a timeout) finds that same fd readable;
- *   - a child that writes after a delay wakes a parent blocked in poll().
+ * The freestanding pollprobe issues `int 0x80` directly; this test instead
+ * goes through musl, so it pins the actual ABI musl emits on i386: poll()
+ * becomes SYS_poll (168), and select() becomes SYS_pselect6_time64 (413,
+ * which the kernel answers -ENOSYS) falling back to SYS__newselect (142).
+ *
+ * It covers the family end to end. poll() of an empty pipe with a short
+ * timeout returns 0. After a write, poll() reports the read end POLLIN.
+ * select() with FD_SET/FD_ISSET and a timeout finds that same fd readable,
+ * which also exercises the fd_set translation and the pselect6_time64 to
+ * _newselect fallback. Finally a child that writes after a delay wakes a
+ * parent blocked in poll(), so the return comes from the write, well under
+ * the 3s timeout.
+ *
  * Installed as "mpoll" by krffs/build_test_ramdisk.sh. Prints "POLLMUSL OK".
  */
 #include <unistd.h>
@@ -53,20 +57,19 @@ int main(void)
         return 1;
     }
 
-    /* poll() of an empty pipe times out to 0 (no descriptor ready). */
+    /* empty pipe: poll times out to 0 */
     pfd.fd = p[0];
     pfd.events = POLLIN;
     pfd.revents = 0;
     check(poll(&pfd, 1, 30) == 0, "poll empty pipe -> 0 (timeout)");
 
-    /* After a write, poll() reports the read end readable. */
+    /* after a write: poll reports POLLIN */
     write(p[1], "x", 1);
     pfd.revents = 0;
     n = poll(&pfd, 1, 1000);
     check(n == 1 && (pfd.revents & POLLIN), "poll reports POLLIN after write");
 
-    /* select() must find the same readable fd (exercises the fd_set translation
-     * and musl's pselect6_time64 -> _newselect fallback). Data is still buffered. */
+    /* select finds the same fd (data still buffered) */
     FD_ZERO(&rset);
     FD_SET(p[0], &rset);
     tv.tv_sec = 1;
@@ -75,8 +78,7 @@ int main(void)
     check(n == 1 && FD_ISSET(p[0], &rset), "select finds the readable fd");
     read(p[0], buf, sizeof(buf)); /* drain the byte */
 
-    /* A child that writes after a delay wakes a parent blocked in poll(); the
-     * return must come from the write, well under the 3s timeout. */
+    /* child write wakes a parent blocked in poll */
     pid = fork();
     if (pid < 0) {
         printf("POLLMUSL FAIL: fork\n");
