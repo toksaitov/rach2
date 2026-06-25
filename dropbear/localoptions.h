@@ -1,5 +1,5 @@
-/* Rach2 dropbear feature selection (Phase 23). A compact, self-contained modern
- * set that fits the bundled libtomcrypt and Rach2's entropy/pty stack. */
+/* Rach2 dropbear feature selection. A compact, self-contained modern set that
+ * fits the bundled libtomcrypt and Rach2's entropy/pty stack. */
 #define DROPBEAR_CURVE25519 1
 #define DROPBEAR_ECDH 1
 #define DROPBEAR_CHACHA20POLY1305 1

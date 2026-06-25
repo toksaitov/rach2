@@ -5,9 +5,11 @@
 # `make verify-style`.
 #
 # It checks only objective things that cannot misfire: non-ASCII bytes (which kills
-# Unicode dashes, smart quotes, and the ellipsis character), the em-dash written as a
-# spaced "--" in prose, and Markdown bullets that use "-". Voice and vocabulary are
-# judged in review, not here. It uses grep, find, awk, sed, and perl; rg is gone.
+# Unicode dashes, smart quotes, and the ellipsis character) across the in-house C,
+# headers, Markdown, shell, and make; the em-dash written as a spaced "--" in a C or
+# H comment, in an echo or printf message, or in Markdown prose; Markdown bullets that
+# use "-"; and a leftover "Phase N" or "Part N" diary tag in a C or H comment. Voice
+# and vocabulary are judged in review, not here. It uses grep, find, awk, sed, perl.
 #
 set -u
 
@@ -47,9 +49,10 @@ ch_files() {
 }
 
 {
-    # Non-ASCII bytes in Markdown, shell, and make files. The kernel C and H are
-    # already checked by tools/check.sh.
-    { md_files; script_files; } | sort -u | while IFS= read -r f; do
+    # Non-ASCII bytes in every in-house file: Markdown, shell and make, and the C
+    # and headers (the convention check in tools/check.sh also covers the C/H, so
+    # this is a second line of defense for a stray Unicode dash or smart quote).
+    { md_files; script_files; ch_files; } | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         perl -ne 'print "$ARGV:$.: non-ASCII byte\n" if /[^\x09\x0a\x0d\x20-\x7e]/' "$f"
     done
@@ -60,6 +63,25 @@ ch_files() {
     ch_files | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         sed 's/"[^"]*"//g' "$f" | grep -n ' -- ' | sed "s|^|$f:|; s|\$|  [prose em-dash]|"
+    done
+
+    # A spaced "--" used as an em-dash inside an echo or printf message in shell and
+    # make files. The check is anchored to a command-position echo or printf, so the
+    # end-of-options "set -- ..." and a "--flag" in bare code are not flagged.
+    script_files | sort -u | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        grep -nE '^[[:space:]]*@?(echo|printf).*"[^"]* -- ' "$f" \
+            | sed "s|^|$f:|; s|\$|  [prose em-dash in a message]|"
+    done
+
+    # A "Phase N" or "Part N" development-diary tag in a C or H comment. Strings are
+    # stripped first, so a capitalized "Phase" or "Part" followed by a number in what
+    # remains is a comment marker (the legitimate place to record phases is the commit
+    # message and the dev-log, not the source).
+    ch_files | sort -u | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        sed 's/"[^"]*"//g' "$f" | grep -nE '\b(Phase|Part) [0-9]' \
+            | sed "s|^|$f:|; s|\$|  [Phase/Part diary tag]|"
     done
 
     # In Markdown, flag a spaced "--" and a "-" bullet, skipping fenced and indented

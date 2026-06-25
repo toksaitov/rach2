@@ -3,8 +3,9 @@
 #
 # check.sh: Rach2 lightweight quality gate (`make verify-style`).
 #
-# Over IN-HOUSE code only (the kernel, the new probes/seam tests, the build
-# scripts; never the vendored musl/ports trees), runs:
+# Over IN-HOUSE code only (the kernel, the krffs host tools, the utils, the ish
+# shell, the tests, and the build scripts; never the vendored musl/ports trees),
+# runs:
 #
 #   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent skip)
 #   1. the kernel build with -Werror (the zero-warning policy as a hard gate)
@@ -34,8 +35,10 @@ fail=0
 
 hr() { printf -- '---- %s ----\n' "$*"; }
 
-# In-house C/H: the kernel, the new tools/libc C (if any), and the host/probe
-# tests. Excludes the vendored musl tree, ports/doom, and the legacy utils/ish.
+# In-house C/H: the kernel, any in-house libc shim, the krffs host tools, the
+# utils, the ish shell, and every test. Excludes the vendored trees (the musl
+# source and install, the termbox2 under krffs/vendor, and krffs/vs-dokany);
+# ports/doom is not a root here.
 inhouse_ch()
 {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
@@ -43,7 +46,11 @@ inhouse_ch()
     # in-house shim; prune the vendored parts so they are never checked.
     find libc -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
-    ls tests/host/*.c tests/host/*.h tests/*probe.c 2>/dev/null
+    # The other hand-written programs: the krffs host tools (minus the vendored
+    # termbox2 and vs-dokany), the utils, the ish shell, and every test (the
+    # probes, the vm family, the musl integration tests, and the host seam tests).
+    find krffs utils ish tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
+         -o \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
 }
 
 # New code the port introduces; must be clang-format clean (unlike the legacy
