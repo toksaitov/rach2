@@ -1,16 +1,10 @@
 /*
- * sb16.h - Sound Blaster 16 driver interface
+ * Sound Blaster 16 driver interface.
  *
- * The Sound Blaster 16 is a classic ISA sound card that supports:
- * - 8-bit and 16-bit PCM audio
- * - Sample rates from 5000 to 44100 Hz
- * - Mono and stereo playback
- *
- * Default configuration:
- * - Base I/O port: 0x220
- * - IRQ: 5
- * - 8-bit DMA: channel 1
- * - 16-bit DMA: channel 5
+ * The Sound Blaster 16 is a classic ISA sound card. It plays 8-bit and
+ * 16-bit PCM audio, mono or stereo, at sample rates from 5000 to 44100 Hz.
+ * The card sits at base I/O port 0x220 on IRQ 5, with 8-bit transfers on
+ * DMA channel 1 and 16-bit transfers on DMA channel 5.
  */
 
 #ifndef _SB16_H_

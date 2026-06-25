@@ -19,7 +19,7 @@
 AUDIO_DEVICE="${1:-speaker}"
 . "$(dirname "$0")/qemu_devices.sh"
 
-# -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG is trusted (Phase 20);
+# -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG is trusted;
 # without it getrandom + /dev/[u]random fail closed. Override with CPU=... to test.
 CPU="${CPU:-max}"
 

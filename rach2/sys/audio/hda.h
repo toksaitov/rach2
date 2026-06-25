@@ -1,11 +1,10 @@
 /*
- * hda.h - Intel HD Audio driver interface
+ * Intel High Definition Audio (HDA) driver interface.
  *
- * Intel High Definition Audio is a modern audio standard using:
- * - PCI device class 0x0403
- * - Memory-mapped I/O for controller registers
- * - CORB/RIRB for codec communication
- * - DMA-based audio streaming
+ * HDA is the modern PC audio controller, a PCI device of class 0x0403.
+ * Its registers are reached through memory-mapped I/O. The driver sets up
+ * the CORB and RIRB ring buffers, but sends codec verbs through the
+ * Immediate Command Interface (ICI); sample data moves by DMA streaming.
  */
 
 #ifndef _HDA_H_

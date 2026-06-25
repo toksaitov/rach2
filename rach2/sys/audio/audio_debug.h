@@ -1,5 +1,6 @@
 /*
- * audio_debug.h - Kernel shell audio debug helpers
+ * Kernel shell commands that exercise the audio path and report device
+ * state, such as the HDA stream's LPIB link-position and DMA frame counts.
  */
 
 #ifndef _AUDIO_DEBUG_H_

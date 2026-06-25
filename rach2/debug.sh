@@ -25,6 +25,6 @@ elif command -v gdb-multiarch >/dev/null 2>&1; then
 elif command -v gdb >/dev/null 2>&1; then
     gdb
 else
-    echo "Please install a GDB that can debug x86 binaries (e.g., x86_64-elf-gdb)."
+    echo "debug: install a GDB that can debug x86 binaries (try x86_64-elf-gdb)" >&2
     exit 1
 fi

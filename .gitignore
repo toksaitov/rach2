@@ -1,11 +1,14 @@
-# clangd compilation database -- generated from the build by `make compile-commands`
+# clangd compilation database, generated from the build by `make compile-commands`
 # (see tools/gen_compile_commands.sh); regenerable, never committed.
 compile_commands.json
 
 # clangd's per-project index cache.
 .cache/
 
-# Out-of-tree build intermediates (objects + .d) -- each component builds into its own
+# Out-of-tree build intermediates (objects + .d); each component builds into its own
 # .build/; final artifacts (rach2/kernel, the host tools, the guest binaries) stay in
 # place. Matches .build/ at any depth.
 .build/
+
+# macOS
+.DS_Store

@@ -1,5 +1,5 @@
-/*
- * pipe.c - anonymous pipes.
+/**
+ * Anonymous pipes.
  *
  * A pipe is a bounded byte FIFO with a read end and a write end. Each end is a
  * descriptor carrying pipe_ops + the struct pipe as priv; read/write block on
@@ -66,16 +66,20 @@ static pipe_t *pipe_alloc(void)
     return NULL;
 }
 
-/* Wait predicate: a reader can stop blocking; data is available, or every
- * writer has gone (EOF). */
+/**
+ * Wait predicate: a reader can stop blocking; data is available, or every
+ * writer has gone (EOF).
+ */
 static int pipe_readable(void *arg)
 {
     pipe_t *p = (pipe_t *)arg;
     return pipe_available(p) != 0 || !p->write_open;
 }
 
-/* Wait predicate: a writer can stop blocking; space is available, or every
- * reader has gone (the write will fail with EPIPE). */
+/**
+ * Wait predicate: a writer can stop blocking; space is available, or every
+ * reader has gone (the write will fail with EPIPE).
+ */
 static int pipe_writable(void *arg)
 {
     pipe_t *p = (pipe_t *)arg;
@@ -87,7 +91,7 @@ static int fd_is_nonblock(fd_entry_t *e)
     return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
 }
 
-/*
+/**
  * Read from the read end. Blocks until at least one byte is available or every
  * writer has closed (EOF -> 0). Returns the byte count read (may be < count),
  * -EAGAIN if O_NONBLOCK and empty, -EINTR if a signal interrupts the wait.
@@ -147,7 +151,7 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/*
+/**
  * Write to the write end. Blocks while the FIFO is full (until space frees or
  * every reader closes). A write with no readers raises SIGPIPE and returns
  * -EPIPE. Returns the byte count written, -EAGAIN if O_NONBLOCK and full.
@@ -207,7 +211,7 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/*
+/**
  * Poll readiness for one end. POLLIN if the read end has data or the writers are
  * gone; POLLOUT if the write end has space or the readers are gone; POLLHUP when
  * the peer end is closed.
@@ -285,7 +289,7 @@ static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     }
 }
 
-/*
+/**
  * Release one end when its last descriptor closes (called from
  * fd_release_backing at OFD refcount 1). Mark the end closed, wake the peer so a
  * blocked reader sees EOF or a blocked writer sees the broken pipe, and return
@@ -312,7 +316,7 @@ static void pipe_close(fd_entry_t *e)
 
 static const struct file_ops pipe_ops = {pipe_read, pipe_write, pipe_poll, pipe_ioctl, pipe_close};
 
-/* Install a pipe end onto a freshly allocated descriptor. */
+/** Install a pipe end onto a freshly allocated descriptor. */
 static void pipe_setup_end(int fd, pipe_t *p, uint32_t access, int flags)
 {
     fd_entry_t *e = &current_proc->fds.entries[fd];

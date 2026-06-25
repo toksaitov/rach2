@@ -30,7 +30,7 @@ set -e
 
 DEST_DIR="$1"
 if [ -z "$DEST_DIR" ]; then
-    echo "Usage: $0 /path/to/grub/boot" >&2
+    echo "grub_install: usage: $0 /path/to/grub/boot" >&2
     exit 2
 fi
 
@@ -39,7 +39,7 @@ copy_dense() {
     DST="$2"
 
     if [ ! -f "$SRC" ]; then
-        echo "Missing source file: $SRC" >&2
+        echo "grub_install: missing source file $SRC" >&2
         exit 1
     fi
 
@@ -49,15 +49,15 @@ copy_dense() {
 
 mkdir -p "$DEST_DIR"
 
-echo "Copying kernel -> $DEST_DIR/kernel"
+echo "grub_install: copying kernel to $DEST_DIR/kernel"
 copy_dense "kernel" "$DEST_DIR/kernel"
 
 if [ -f "../krffs/file_system.krffs" ]; then
-    echo "Copying RAM disk -> $DEST_DIR/file_system.krffs"
+    echo "grub_install: copying RAM disk to $DEST_DIR/file_system.krffs"
     copy_dense "../krffs/file_system.krffs" "$DEST_DIR/file_system.krffs"
 else
-    echo "Note: ../krffs/file_system.krffs not found; skipping RAM disk copy"
+    echo "grub_install: ../krffs/file_system.krffs not found; skipping RAM disk copy"
 fi
 
-echo "Done."
+echo "grub_install: done"
 

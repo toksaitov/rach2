@@ -78,7 +78,7 @@ static void puts(const char *s)
  *   [ESP+8]  argv[1]
  *   ...
  *
- * For now, we ignore arguments and just print a message.
+ * Arguments are ignored; prints a fixed message.
  */
 void _start(void)
 {

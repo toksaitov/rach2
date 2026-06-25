@@ -1,6 +1,5 @@
 /**
- * @file hda.c
- * @brief Intel HD Audio (HDA) playback driver.
+ * Intel HD Audio (HDA) playback driver.
  *
  * Drives audio output on an Intel HDA controller: codec verbs go over the
  * Immediate Command Interface (CORB/RIRB are set up but enumeration uses ICI),
@@ -2318,8 +2317,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     /*
      * Decide hardware format.
      *
-     * - Callback mode: honor requested format/rate/channels.
-     * - Write mode (Doom): run hardware at a codec-supported rate (usually 48k)
+     * * Callback mode: honor requested format/rate/channels.
+     * * Write mode (Doom): run hardware at a codec-supported rate (usually 48k)
      *   and convert/resample in the driver. Many real codecs do NOT support
      *   11025Hz even though QEMU does.
      */

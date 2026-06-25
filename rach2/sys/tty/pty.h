@@ -9,10 +9,10 @@
  * Pseudo-terminals: the mechanism a network login (dropbear) uses to give a
  * remote user a real terminal. A pty is a pair of endpoints:
  *
- *   - the SLAVE is a full tty (a struct tty with the N_TTY line discipline): a
+ *   * the SLAVE is a full tty (a struct tty with the N_TTY line discipline): a
  *     process opens /dev/pts/N, makes it its controlling terminal, and reads
  *     cooked lines / writes output exactly as it would the console;
- *   - the MASTER is what the login server drives: it opens /dev/ptmx, writes the
+ *   * the MASTER is what the login server drives: it opens /dev/ptmx, writes the
  *     bytes the remote user typed (which the slave discipline cooks and echoes)
  *     and reads back the slave's output (and that echo).
  *

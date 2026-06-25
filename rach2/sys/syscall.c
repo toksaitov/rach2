@@ -402,8 +402,8 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 
     /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable, but
      * only if the descriptor was opened for writing (a read-only fd -> -EBADF, as
-     * Linux reports). The Part I types below have no ops and fall through to the
-     * enum dispatch. */
+     * Linux reports). The plain file and enum types below have no ops and fall
+     * through to the enum dispatch. */
     if (entry->ops) {
         if (!(entry->flags & FD_FLAG_WRITE)) {
             return -EBADF;
@@ -1207,7 +1207,8 @@ static int32_t sys_read(isr_params_t *params)
 
     /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable, but
      * only if the descriptor was opened for reading (a write-only fd -> -EBADF).
-     * The Part I types below have no ops and fall through to the enum dispatch. */
+     * The plain file and enum types below have no ops and fall through to the
+     * enum dispatch. */
     if (entry->ops) {
         if (!(entry->flags & FD_FLAG_READ)) {
             return -EBADF;

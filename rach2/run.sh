@@ -11,7 +11,7 @@ AUDIO_DEVICE="${1:-speaker}"
 . "$(dirname "$0")/qemu_devices.sh"
 
 # -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG seeds from trusted hardware
-# entropy (Phase 20); without it getrandom + /dev/[u]random fail closed and SSH
+# entropy; without it getrandom + /dev/[u]random fail closed and SSH
 # key generation (dropbear) cannot run. Override with CPU=... to test fail-closed.
 CPU="${CPU:-max}"
 

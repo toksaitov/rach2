@@ -12,9 +12,9 @@
  * the timer) walks the queue and makes every sleeper READY again.
  *
  * Two properties pipes, poll/select, ttys, and ptys all need:
- *   - multi-waiter: several processes can block on one object at once (poll
+ *   * multi-waiter: several processes can block on one object at once (poll
  *     parks one process per fd; two readers can share a pipe);
- *   - signal-interruptible: a pending signal breaks the sleep with -EINTR, so a
+ *   * signal-interruptible: a pending signal breaks the sleep with -EINTR, so a
  *     blocked read/recv unwinds to deliver the signal instead of hanging.
  *
  * At most MAX_PROCS processes exist, so a fixed array of that many slots can

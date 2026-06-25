@@ -113,9 +113,9 @@ ramdisk: $(BASE_DIRS)
 # check targets (depending on the stamp so it builds first), so the `test -s` runs on
 # EVERY build and catches a missing OR zero-byte artifact, not only a missing one.
 check-busybox: $(BUSYBOX_STAMP)
-	@test -s tests/busybox || { echo "tests/busybox missing/empty -- rm busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
+	@test -s tests/busybox || { echo "busybox: tests/busybox missing or empty; rm busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
 check-dropbearmulti: $(DROPBEAR_STAMP)
-	@test -s tests/dropbearmulti || { echo "tests/dropbearmulti missing/empty -- rm dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
+	@test -s tests/dropbearmulti || { echo "dropbear: tests/dropbearmulti missing or empty; rm dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 
 # Capstone RAM disk: the busybox/dropbear/probe image the SSH login boots. Make builds
 # every component it stages (the host krffs tools, the probe programs, the musl

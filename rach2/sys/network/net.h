@@ -17,10 +17,10 @@
  * descriptors, and the TCB pool, socket pool and ARP cache are all shared. None
  * of it is locked, so it is only safe when no two accesses interleave:
  *
- *   - IRQ-context senders (the NIC RX handler replying with ACK/RST/ARP/ICMP,
+ *   * IRQ-context senders (the NIC RX handler replying with ACK/RST/ARP/ICMP,
  *     and the timer driving tcp_tick retransmissions) run inside IRQ handlers,
  *     which clear IF on entry and do not nest, so they never interleave.
- *   - Syscall-context senders (sendto, tcp_send, connect, listen, ping) run with
+ *   * Syscall-context senders (sendto, tcp_send, connect, listen, ping) run with
  *     interrupts ENABLED: the syscall stub re-enables IF so the timer and audio
  *     keep running through long syscalls. A NIC or timer IRQ can therefore fire
  *     mid-build and re-enter the stack, corrupting the shared buffers and pools.
