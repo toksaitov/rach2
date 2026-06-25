@@ -92,7 +92,7 @@ exit 0
 
 ## Usage (Rach2)
 
-Add the compiled `ish` binary to a KRFFS filesystem image, boot Rach2, and run from the kernel shell:
+Add the compiled `ish` binary to a KRFFS file system image, boot Rach2, and run from the kernel shell:
 
 ```
 > exec ish

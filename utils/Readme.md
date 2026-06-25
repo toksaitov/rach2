@@ -86,7 +86,7 @@ make clean
 
 ## Usage (Rach2)
 
-Add compiled binaries to a KRFFS filesystem image, boot Rach2, and run from the shell:
+Add compiled binaries to a KRFFS file system image, boot Rach2, and run from the shell:
 
 ```
 > exec echo hello world

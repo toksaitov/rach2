@@ -1,28 +1,5 @@
-# Milestone 1: Foundation
+# Milestone 1: the foundation OS
 
-This milestone covers the foundational development of Rach2 OS, from initial bootloader to running Doom with audio.
+This milestone grew Rach2 from a bare-metal protected-mode kernel into a bootable 32-bit OS that runs Doom: physical and virtual memory with paging and a heap, kernel and user processes with syscalls and ELF loading, the KRFFS RAM disk file system, the device drivers (VGA Mode 13h, the PS/2 keyboard and mouse, the PIT timer, the PC speaker, and Sound Blaster 16 and Intel HDA audio with OPL3 music, including real-hardware HDA bring-up for Doom), the ish shell with Ctrl-C process control, and the Doom port through doomgeneric and Chocolate Doom.
 
-## Scope
-
-- **Phases 1-28**: 34 development prompts
-- **Duration**: Initial development cycle
-- **Result**: Bootable 32-bit OS running Doom with VGA graphics, PC speaker audio, SB16/HDA sound, OPL3 music, keyboard, and mouse support
-
-## Key Accomplishments
-
-1. **Boot Infrastructure**: Custom bootloader, GDT, protected mode, multiboot
-2. **Memory Management**: Physical/virtual memory, paging, heap allocator
-3. **Process Management**: Kernel threads, user processes, syscalls, ELF loading
-4. **File System**: KRFFS RAM disk filesystem with read/write operations
-5. **Device Drivers**: VGA Mode 13h, PS/2 keyboard/mouse, PIT timer, PC speaker, Sound Blaster 16 and Intel HDA audio support (including real-hardware HDA bring-up for Doom)
-6. **Shell**: Basic `ish` shell with process control (Ctrl+C)
-7. **Application**: Doom port via doomgeneric and Chocolate Doom with audio/music support
-
-## Contents
-
-- `Plan.md` - Detailed development plan and progress log
-- `01.md` - `35.md` - Individual development prompts for each phase
-
-## Next Milestone
-
-Milestone 2 will focus on expanding the OS capabilities beyond Doom support.
+It was driven by 35 development prompts, recorded here as `01.md` through `35.md`, with `Plan.md` as the plan and progress log. Milestone 2 grew it into a networked system running a musl userland.

@@ -40,7 +40,7 @@ Letting the real binary be the judge exposed, in order:
 
 * `copy_sockaddr_to_user` wrote `sin_family` big-endian, so `getpeername` and `accept` reported family `0x0200` and dropbear rejected it ("Unrecognized address family"). Fixed to host byte order (only `sin_port` and `sin_addr` are network order).
 * `fsync` and `fdatasync` were unimplemented (`-ENOSYS`), and dropbear's host-key write (open, write, fsync, rename) treats any fsync error as fatal. KRFFS is RAM, so they are validating no-ops.
-* `link` was unimplemented. Dropbear moves the key with `link(tmp, final)` and falls back to a direct write on `EPERM` or `EACCES`. KRFFS has no hard links, so `link` and `linkat` return `-EPERM` (the POSIX errno for a filesystem that does not support hard links), which takes dropbear's fallback.
+* `link` was unimplemented. Dropbear moves the key with `link(tmp, final)` and falls back to a direct write on `EPERM` or `EACCES`. KRFFS has no hard links, so `link` and `linkat` return `-EPERM` (the POSIX errno for a file system that does not support hard links), which takes dropbear's fallback.
 * `seteuid`, `setegid`, and `setresuid` were unimplemented. Dropbear drops to the user's euid to read `authorized_keys`, then restores root. The single-root identity policy: id 0 or `(id_t)-1` succeeds, anything else is `-EPERM`, never a silent fake privilege drop. This covers `setre{u,g}id` and `setres{u,g}id`, 16- and 32-bit.
 * `chmod` and `chown` were unimplemented. Dropbear chmods and chowns the session pty to root before it execs the shell. `chmod` updates a KRFFS file's permission bits (a synthetic /dev or /proc node is a no-op); `chown` accepts only root (0 or -1), else `-EPERM`. This covers the `f*`, `*at`, and `l*` variants.
 
