@@ -6,26 +6,21 @@
 
 struct krffs_node;
 
-/*
-    The magic value at the beginning of each metadata node. Magic values can be
-    used to identify and check file system consistency.
-
-    Should be equal to ASCII codes of characters K and R.
+/**
+ * Magic value at the start of each metadata node, used to identify the file
+ * system and check its consistency. The bytes are the ASCII codes of `K` and
+ * `R`.
  */
 static const uint16_t KRFFS_File_System_Magic = 0x4B52;
 
-/*
-    The file system's root node name.
- */
+/** Name of the file system's root node. */
 static const char KRFFS_File_System_Root_Node_Name[] = "";
 
-/*
-    The file system's root node mode.
- */
+/** Mode of the file system's root node. */
 static const uint16_t KRFFS_File_System_Root_Node_Mode = 0755;
 
-/*
-    General file system data. Nodes point to memory pages mapped to a file.
+/**
+ * File system handle. Nodes point into the pages mapped from the backing file.
  */
 struct krffs_file_system
 {
@@ -33,9 +28,9 @@ struct krffs_file_system
     off_t size;
 };
 
-/*
-    Initializes the file system by creating a root metadata node and a free
-    space node after it.
+/**
+ * Initializes the file system, writing a root metadata node followed by a
+ * free-space node that spans the rest of the mapping.
  */
 struct krffs_file_system *krffs_initialize_file_system(
                               struct krffs_file_system *file_system

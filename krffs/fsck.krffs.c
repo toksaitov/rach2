@@ -23,17 +23,20 @@ static const int KRFFS_Invalid_Link_Error            = -10,
                  KRFFS_Invalid_Magic_Signature_Error = -12,
                  KRFFS_Unknown_Node_Type_Error       = -13;
 
-/*
-    fsck.krffs
-
-    Checks the consistency of a KRFFS file system in a file.
-
-    Usage:
-        fsck.krffs -h
-        fsck.krffs <file>
-
-    Options:
-        -h    show help and exit
+/**
+ * Checks the consistency of a KRFFS file system stored in a file.
+ *
+ * Usage: `fsck.krffs <file>`, or `fsck.krffs -h` for help. The check maps the
+ * file, validates the file system magic and root node, then walks the node
+ * list once, verifying that links are consecutive, stay within the file system
+ * space, carry a valid signature, and name a known node type, and that the last
+ * node links back to the first.
+ *
+ * Returns `EXIT_SUCCESS` on a clean file system and `EXIT_FAILURE` for a usage
+ * or I/O error. A structural fault yields a specific negative status: `-10` for
+ * a nonconsecutive link, `-11` for a link outside the file system space, `-12`
+ * for an invalid signature, and `-13` for an unknown node type. Per-node debug
+ * output goes to stdout and can be silenced with `> /dev/null`.
  */
 int main(int argc, char **argv)
 {
@@ -81,9 +84,6 @@ int main(int argc, char **argv)
     char *path =
         argv[1];
 
-    /*
-        Open the file with the file system.
-     */
     if ((file_descriptor = PLATFORM_PREFIX(open(path, O_RDWR))) == -1) {
         fprintf(
             stderr,
@@ -97,9 +97,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Get file information.
-     */
     struct stat file_info;
     if (fstat(file_descriptor, &file_info) == -1) {
         fprintf(
@@ -114,9 +111,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that we have a regular file (not a directory or a socket).
-     */
     if (!S_ISREG(file_info.st_mode)) {
         fprintf(
             stderr,
@@ -130,9 +124,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that the file is big enough to contain a file system.
-     */
     if (file_info.st_size < sizeof(*file_system.node) * 2) {
         fprintf(
             stderr,
@@ -146,20 +137,13 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Save the size of the file.
-     */
     file_system.size =
         file_info.st_size;
 
     /*
-        Map the file system file into memory. Changes to memory at
-        `file_system.node` after a successful call to `krffs_map_file` will be
-        written directly to a file (right away or after calls to
-        `krffs_unmap_file` or `krffs_sync_mapping`).
-
-        The kernel uses its virtual memory system to implement the memory
-        mapping.
+        Map the file into memory through the kernel's virtual memory system.
+        Writes to `file_system.node` reach the file directly, either right away
+        or at `krffs_unmap_file` or `krffs_sync_mapping`.
      */
     if ((file_system.node =
              krffs_map_file(
@@ -180,8 +164,8 @@ int main(int argc, char **argv)
     }
 
     /*
-        It's possible to close the file after a call to `krffs_map_file`. Memory
-        pages will still be mapped to the file.
+        The mapping outlives the descriptor, so close the file now; the pages
+        stay mapped to it.
      */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(
@@ -197,10 +181,6 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /*
-       Check that we have a KRFFS file system by checking the signature at the
-       beginning of the file.
-     */
     if (file_system.node->magic != KRFFS_File_System_Magic) {
         fprintf(
             stderr,
@@ -217,9 +197,6 @@ int main(int argc, char **argv)
 
     puts("The filesystem signature is correct.");
 
-    /*
-        Check that we have a root node at the beginning of the file.
-     */
     if (file_system.node->type != KRFFS_Root_Node) {
         fprintf(
             stderr,
@@ -236,31 +213,6 @@ int main(int argc, char **argv)
 
     puts("The filesystem has a correct root node.");
 
-    /*
-       Perform file system checks by going through each metadata node and
-       analyzing it.
-
-       The following checks are performed
-
-           * Nodes' links are consecutive.
-           * Nodes' links are in the range of the file system space.
-           * Nodes' signatures are valid.
-           * Nodes' types are either 'Reserved' or 'Free'.
-           * The last node links to the first node.
-
-       The process prints debug information for each node. It can be silenced
-       by redirecting the output to `> /dev/null`.
-
-       Parent programs can get result of the analysis by reading the exit
-       status.
-
-       The following status codes are returned on error
-
-           * Found a nonconsecutive link:                        -10
-           * Found a link leading outside the file system space: -11
-           * Found a node with an invalid signature:             -12
-           * Found a node of an unknown type:                    -13
-     */
     struct krffs_node *previous_node =
         file_system.node;
     struct krffs_node *node =

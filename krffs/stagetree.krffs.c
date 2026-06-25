@@ -19,38 +19,19 @@
 #include <unistd.h>
 #endif
 
-/*
-    stagetree.krffs
-
-    Stage a small SAMPLE directory tree (/etc, with motd and hostname) into an
-    existing KRFFS image, so a booted image ships a populated directory rather
-    than only a flat root. It writes KRFFS v2 nodes directly: a directory node
-    (parent_id 0, S_IFDIR) and its children (parent_id = the directory's id),
-    exactly as the kernel path resolver expects, proving the host tools speak
-    the hierarchical format.
-
-    It is idempotent: if /etc already exists it does nothing, and it preflights
-    free space so a run either stages the whole tree or leaves the image
-    untouched. This is a fixed demonstration stager, not a general host-to-image
-    copy; staging an arbitrary host directory recursively is future (Part II) work.
-
-    Usage:
-        stagetree.krffs <image>
- */
-
 /* The KRFFS v2 directory type bit (mode & S_IFMT == S_IFDIR marks a directory).
-   The host stat.h S_IFDIR may differ, so define the on-disk value explicitly. */
+   The host stat.h S_IFDIR may differ, so the on-disk value is spelled out. */
 #define KRFFS_MODE_IFDIR 0040000u
 
 static const char STAGE_MOTD[] =
     "Welcome to Rach2.\n";
 static const char STAGE_HOSTNAME[] =
     "rach2\n";
-/* The root identity a login server (dropbear, Phase 23) reads via getpwnam. The
- * auth policy is PUBLIC KEY (authorized_keys, staged with the dropbear build):
- * Rach2 has no /etc/shadow and no password hashing, so the password field is "x"
- * and login is by key, not password. uid/gid 0, home /root, shell /bin/sh (which
- * Phase 23 points at busybox). */
+/* The root identity a login server (dropbear) reads via getpwnam. The auth
+ * policy is PUBLIC KEY (authorized_keys, staged with the dropbear build): Rach2
+ * has no /etc/shadow and no password hashing, so the password field is "x" and
+ * login is by key, not password. uid/gid 0, home /root, shell /sh (which
+ * points at busybox). */
 static const char STAGE_PASSWD[] =
     "root:x:0:0:root:/root:/sh\n";
 /* The list of valid login shells. dropbear validates a user's /etc/passwd shell
@@ -60,9 +41,14 @@ static const char STAGE_PASSWD[] =
 static const char STAGE_SHELLS[] =
     "/sh\n/bin/sh\n";
 
-/* Read a whole file into a malloc'd buffer (NUL-terminated, *len excludes the
- * terminator). Returns NULL if the file is absent/unreadable; used to stage an
- * optional authorized_keys (the pubkey the dropbear SSH login authenticates). */
+/**
+ * Read a whole file into a `malloc`'d buffer.
+ *
+ * The buffer is NUL-terminated and `*len` excludes the terminator. Returns NULL
+ * if the file is absent or unreadable, which lets the caller stage an optional
+ * `authorized_keys` (the pubkey the dropbear SSH login authenticates) only when
+ * one is present.
+ */
 static char *read_whole_file(const char *path, size_t *len)
 {
     FILE *f = fopen(path, "rb");
@@ -92,9 +78,12 @@ static char *read_whole_file(const char *path, size_t *len)
     return buf;
 }
 
-/* Match the kernel's krffs_mix_id (rach2/sys/fs/krffs.c) so a host-staged node
-   and the same node created in-guest get the same id: a stable mix of the
-   parent's id and the node's name. */
+/**
+ * Mix a parent id and a node name into a stable node id.
+ *
+ * This matches the kernel's `krffs_mix_id` (rach2/sys/fs/krffs.c) so a
+ * host-staged node and the same node created in-guest get the same id.
+ */
 static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
 {
     uint64_t h =
@@ -106,8 +95,11 @@ static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
     return h ? h : 1;
 }
 
-/* Find a child named `name` directly inside directory `parent_id` (mirrors the
-   kernel's krffs_find_child), or NULL. Used to keep staging idempotent. */
+/**
+ * Find a child named `name` directly inside directory `parent_id`, or NULL.
+ *
+ * Mirrors the kernel's `krffs_find_child` and is what keeps staging idempotent.
+ */
 static struct krffs_node *find_child(
                               struct krffs_file_system *file_system,
                               uint64_t parent_id,
@@ -128,8 +120,12 @@ static struct krffs_node *find_child(
     return NULL;
 }
 
-/* Largest free block, in bytes (header included). The nodes are first-fit from a
-   single big free block on a freshly-made image, so this bounds what will fit. */
+/**
+ * Largest free block, in bytes (header included).
+ *
+ * Nodes are first-fit from a single big free block on a freshly made image, so
+ * this bounds what will fit.
+ */
 static uint64_t largest_free_block(struct krffs_file_system *file_system)
 {
     struct krffs_node *node =
@@ -147,8 +143,12 @@ static uint64_t largest_free_block(struct krffs_file_system *file_system)
     return largest;
 }
 
-/* Reserve one node named `name` inside directory `parent_id`, with `mode` and an
-   optional `data` payload. Returns the new node's id, or 0 on failure. */
+/**
+ * Reserve one node named `name` inside directory `parent_id`.
+ *
+ * The node gets `mode` and an optional `data` payload. Returns the new node's
+ * id, or 0 on failure.
+ */
 static uint64_t stage_node(
                     struct krffs_file_system *file_system,
                     uint64_t parent_id,
@@ -217,10 +217,14 @@ static uint64_t stage_node(
     return node->id;
 }
 
-/* Idempotent stage: return the id of `name` inside directory `parent_id`,
-   creating it (with `mode` and the optional `data` payload) only if it is absent.
-   Returns 0 only on a genuine allocation failure, so a re-run completes a
-   partially staged tree instead of duplicating nodes or refusing to recover. */
+/**
+ * Idempotent stage: return the id of `name` inside directory `parent_id`,
+ * creating it only if it is absent.
+ *
+ * A created node gets `mode` and the optional `data` payload. The function
+ * returns 0 only on a genuine allocation failure, so a re-run completes a
+ * partially staged tree instead of duplicating nodes or refusing to recover.
+ */
 static uint64_t ensure_node(
                     struct krffs_file_system *file_system,
                     uint64_t parent_id,
@@ -240,10 +244,14 @@ static uint64_t ensure_node(
     return stage_node(file_system, parent_id, name, mode, data, data_size);
 }
 
-/* Free-space cost (one header plus payload) of staging `name` inside `parent_id`,
-   or 0 if it already exists. The preflight sums this over the tree so it counts
-   only what a run will actually allocate: an all-or-nothing guarantee that still
-   holds on a re-run that needs to add just a missing node. */
+/**
+ * Free-space cost (one header plus payload) of staging `name` inside
+ * `parent_id`, or 0 if it already exists.
+ *
+ * The preflight sums this over the tree so it counts only what a run will
+ * actually allocate: an all-or-nothing guarantee that still holds on a re-run
+ * that needs to add just a missing node.
+ */
 static uint64_t stage_cost(
                     struct krffs_file_system *file_system,
                     uint64_t parent_id,
@@ -258,6 +266,22 @@ static uint64_t stage_cost(
     return (uint64_t) sizeof(struct krffs_node) + payload;
 }
 
+/**
+ * Stages a fixed demonstration tree into an existing KRFFS image.
+ *
+ * Writes `/etc` with its `motd`, `hostname`, `passwd`, and `shells` files and a
+ * `dropbear` directory, plus `/root/.ssh/authorized_keys` when an
+ * `authorized_keys` file is present in the working directory. They are written
+ * as KRFFS v2 nodes directly: directory nodes (`S_IFDIR`, `parent_id` of the
+ * containing directory) and file children (`parent_id` set to their directory's
+ * id), the shape the kernel path resolver expects. Each node is created only if
+ * absent (find-or-create), so a re-run completes a partially staged tree
+ * without duplicating. The tree is staged all-or-nothing: a free-space
+ * preflight either passes or leaves the image untouched. This is not a general
+ * host-to-image copy.
+ *
+ * Usage: `stagetree.krffs <image>`.
+ */
 int main(int argc, char **argv)
 {
     int exit_status =

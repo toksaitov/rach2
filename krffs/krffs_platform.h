@@ -26,8 +26,11 @@
 #include <sys/time.h>
 #endif
 
-/*
-    Platform specific function prefix
+/**
+ * Prefixes a POSIX call name with the platform's spelling.
+ *
+ * Windows names the POSIX functions with a leading underscore (`_stat64`);
+ * Unix uses the bare name.
  */
 #ifdef WINDOWS
 #define PLATFORM_PREFIX(CALL) _ ## CALL
@@ -35,8 +38,8 @@
 #define PLATFORM_PREFIX(CALL) CALL
 #endif
 
-/*
-    Platform specific file information data types.
+/**
+ * File-information types that differ by platform.
  */
 #ifdef WINDOWS
 #ifdef FUSE_OFF_T
@@ -54,31 +57,31 @@
 #define PLATFORM_STAT stat
 #endif
 
-/*
-    Platform specific file system information data types.
+/**
+ * File-system-information count types that differ by platform.
  */
 #ifdef WINDOWS
 #define fsblkcnt_t fsblkcnt64_t
 #define fsfilcnt_t fsfilcnt64_t
 #endif
 
-/*
-    Windows specific file mode checks
+/**
+ * Defines `S_ISREG` on Windows, which lacks it.
  */
 #ifdef WINDOWS
 #define S_ISREG(MODE) (((MODE) & S_IFMT) == S_IFREG)
 #endif
 
-/*
-    Get time of day with a microsecond precision.
+/**
+ * Reads the current wall-clock time with microsecond precision.
  */
 void krffs_get_time_of_day(struct timeval *time_of_day);
 
-/*
-    Maps file contents to pages of virtual memory. Reads or writes to reserved
-    pages results in reads or writes to a file.
-
-    Uses `mmap` on Unix/Unix-like systems and `MapViewOfFile` on Windows.
+/**
+ * Maps a region of a file into virtual memory.
+ *
+ * Reads and writes through the returned pages read and write the file. Uses
+ * `mmap` on Unix and `MapViewOfFile` on Windows.
  */
 void *krffs_map_file(
           int file_descriptor,
@@ -86,23 +89,21 @@ void *krffs_map_file(
           size_t size
       );
 
-/*
-    Tells the kernel to sync data from memory into a mapped file.
-
-    Uses `msync` on Unix/Unix-like systems and `FlushViewOfFile` on Windows.
+/**
+ * Flushes a mapped region back to its backing file.
+ *
+ * Uses `msync` on Unix and `FlushViewOfFile` on Windows.
  */
 int krffs_sync_mapping(
         void *address,
         size_t size
     );
 
-/*
-    Unmaps pages mapped by a call to `krffs_map_file`.
-
-    On windows, the size parameter is ignored and the address must point to the
-    first mapped page.
-
-    Uses `munmap` on Unix/Unix-like systems and `UnmapViewOfFile` on Windows.
+/**
+ * Unmaps a region previously mapped by `krffs_map_file`.
+ *
+ * On Windows the size is ignored and `address` must point to the first mapped
+ * page. Uses `munmap` on Unix and `UnmapViewOfFile` on Windows.
  */
 int krffs_unmap_file(
         void *address,

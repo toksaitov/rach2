@@ -666,7 +666,7 @@ int krffs_fsync(
                 -ENOENT;
         }
 
-        /* Do nothing... We don't buffer data. */
+        /* Writes go straight to the mapping; there is no buffer to flush. */
     }
 
     return result;

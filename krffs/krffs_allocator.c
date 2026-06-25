@@ -29,40 +29,34 @@ struct krffs_node *krffs_allocate_reserved_node(
     do {
         if (node->type == KRFFS_Free_Node && node->size >= size_with_header) {
             if (node->size > size_with_header) {
-                /* found a larger block, splitting it in half */
                 uint64_t total_size =
                     node->size;
                 uint64_t second_half_size =
                     total_size - size_with_header;
 
-                /* the second part should be big enough to contain a header */
+                /* The remainder must hold a node header to stay a block. */
                 if (second_half_size >= sizeof(*node)) {
-                    /* mark the first half as a used block */
                     node->size =
                         size_with_header;
 
-                    /* move to the second half */
                     struct krffs_node *next_node =
                         krffs_get_next_node(
                             file_system,
                             node
                         );
 
-                    /* mark the second half as a free block */
                     krffs_initialize_free_node(
                         next_node,
                         second_half_size,
                         size_with_header
                     );
 
-                    /* move to the next block */
                     next_node =
                         krffs_get_next_node(
                             file_system,
                             next_node
                         );
 
-                    /* update the size of the previous block */
                     next_node->previous_node_size =
                         second_half_size;
 
@@ -73,14 +67,12 @@ struct krffs_node *krffs_allocate_reserved_node(
                 }
             }
 
-            /* initialize a new reserved node */
             node->type =
                 KRFFS_Reserved_Node;
             node->data_size =
                 size;
 
             if (original_node) {
-                /* copy data from the original node */
                 strncpy(
                     (char *) node->name,
                     (char *) original_node->name,
@@ -160,28 +152,24 @@ struct krffs_node *krffs_resize_reserved_node(
     uint64_t size_with_header =
         sizeof(struct krffs_node) + size;
 
-    /* node has the same size, nothing to do here */
     if (node->size == size_with_header) {
         return node;
     }
 
-    /* get the next node */
     struct krffs_node *next_node =
         krffs_get_next_node(
             file_system,
             node
         );
 
-    /* attempt to increase or decrease the size of the block */
     if (size_with_header > node->size) {
-        /* increase the block size */
         uint64_t difference =
             size_with_header - node->size;
 
         if (next_node != file_system->node &&
                 next_node->type == KRFFS_Free_Node &&
                     next_node->size >= difference) {
-            /* extend the block by using empty space from the next free block */
+            /* Grow into the trailing free block. */
             node->size +=
                 difference;
             node->data_size =
@@ -202,8 +190,7 @@ struct krffs_node *krffs_resize_reserved_node(
 
             if (next_node_size > 0) {
                 if (next_node_size < sizeof(*node)) {
-                    /* not enough space for a header, extend the reserved
-                       node */
+                    /* Too little for a header, so absorb it into the node. */
                     node->size +=
                         next_node_size;
 
@@ -212,8 +199,6 @@ struct krffs_node *krffs_resize_reserved_node(
                         sizeof(*node)
                     );
                 } else {
-                    /* if the next block is larger than the required new space,
-                     * resize it */
                     node =
                         krffs_get_next_node(
                             file_system,
@@ -242,7 +227,7 @@ struct krffs_node *krffs_resize_reserved_node(
                 sizeof(*next_node)
             );
         } else {
-            /* if not enough space, attempt to relocate the block */
+            /* No adjacent room, so relocate to a fresh block. */
             result =
                 krffs_allocate_reserved_node(
                     file_system,
@@ -250,7 +235,6 @@ struct krffs_node *krffs_resize_reserved_node(
                     node
                 );
 
-            /* remove the old block on success */
             if (result) {
                 krffs_remove_reserved_node(
                     file_system,
@@ -259,7 +243,6 @@ struct krffs_node *krffs_resize_reserved_node(
             }
         }
     } else if (size_with_header < node->size) {
-        /* decrease the block size */
         uint64_t difference =
             node->size - size_with_header;
 
@@ -277,7 +260,7 @@ struct krffs_node *krffs_resize_reserved_node(
             node;
 
         if (next_node->type == KRFFS_Free_Node) {
-            /* combine the new empty space with the free block next to it */
+            /* Merge the freed tail into the adjacent free block. */
             node =
                 krffs_get_next_node(
                     file_system,
@@ -297,8 +280,7 @@ struct krffs_node *krffs_resize_reserved_node(
                 );
         } else {
             if (difference < sizeof(*node)) {
-                /* not enough space for a header, extend the reserved node
-                   back */
+                /* Too little for a header, so keep it in the node. */
                 node->size +=
                     difference;
 
@@ -307,8 +289,6 @@ struct krffs_node *krffs_resize_reserved_node(
                     sizeof(*node)
                 );
             } else {
-                /* next block is used, create a free block from the empty
-                   space */
                 node =
                     krffs_get_next_node(
                         file_system,
@@ -348,7 +328,6 @@ void krffs_remove_reserved_node(
         return;
     }
 
-    /* get the previous node */
     struct krffs_node *previous_node = NULL;
     if (node != file_system->node) {
         previous_node =
@@ -358,7 +337,6 @@ void krffs_remove_reserved_node(
             );
     }
 
-    /* get the next node */
     struct krffs_node *next_node =
         krffs_get_next_node(
             file_system,
@@ -369,7 +347,6 @@ void krffs_remove_reserved_node(
         next_node = NULL;
     }
 
-    /* mark the block as free */
     node->type =
         KRFFS_Free_Node;
 
@@ -380,7 +357,6 @@ void krffs_remove_reserved_node(
 
     bool size_was_changed = false;
 
-    /* attempt to combine with the next free block */
     if (next_node && next_node->type == KRFFS_Free_Node) {
         node->size +=
             next_node->size;
@@ -393,7 +369,6 @@ void krffs_remove_reserved_node(
         size_was_changed = true;
     }
 
-    /* attempt to combine with the previous free block */
     if (previous_node && previous_node->type == KRFFS_Free_Node) {
         previous_node->size +=
             node->size;
@@ -408,7 +383,6 @@ void krffs_remove_reserved_node(
         size_was_changed = true;
     }
 
-    /* if necessary, update the previous size for the next block */
     if (size_was_changed) {
         next_node =
             krffs_get_next_node(

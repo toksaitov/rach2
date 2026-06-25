@@ -16,27 +16,26 @@
 #include <unistd.h>
 #endif
 
-/*
-    Name of the program to check the file system.
- */
+/* Name of the file system check utility, invoked before defragmenting. */
 #define KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME "./fsck.krffs "
 
-/*
-    The size of buffer to store a command.
- */
+/* Size of the buffer that holds the `fsck.krffs` command line. */
 #define KRFFS_COMMAND_BUFFER_LENGTH 1024
 
-/*
-    defrag.krffs
-
-    Defragments a KRFFS FUSE file system in a file.
-
-    Usage:
-        defrag.krffs -h
-        defrag.krffs <file>
-
-    Options:
-        -h    show help and exit
+/**
+ * Defragments a KRFFS FUSE file system stored in a file.
+ *
+ * Runs `fsck.krffs` first and refuses to proceed unless it reports the file
+ * system as valid. Maps the file, then slides every free block toward the end
+ * by relocating the reserved blocks that follow it, coalescing free blocks as
+ * it goes; the order of the reserved blocks is preserved.
+ *
+ * Usage:
+ *     defrag.krffs -h
+ *     defrag.krffs <file>
+ *
+ * Options:
+ *     -h    show help and exit
  */
 int main(int argc, char **argv)
 {
@@ -84,11 +83,7 @@ int main(int argc, char **argv)
     char *path =
         argv[1];
 
-    /*
-        Ensure that the file system is valid by calling the file
-        system check utility.
-     */
-
+    /* Refuse to defragment a file system that fails `fsck.krffs`. */
     char command_buffer[KRFFS_COMMAND_BUFFER_LENGTH + 1];
     command_buffer[KRFFS_COMMAND_BUFFER_LENGTH] = '\0';
 
@@ -143,9 +138,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Open the file with the file system.
-     */
     if ((file_descriptor = PLATFORM_PREFIX(open(path, O_RDWR))) == -1) {
         fprintf(
             stderr,
@@ -159,9 +151,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Get file information.
-     */
     struct stat file_info;
     if (fstat(file_descriptor, &file_info) == -1) {
         fprintf(
@@ -176,9 +165,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that we have a regular file (not a directory or a socket).
-     */
+    /* The file system lives in a regular file, not a directory or socket. */
     if (!S_ISREG(file_info.st_mode)) {
         fprintf(
             stderr,
@@ -192,9 +179,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that the file is big enough to contain a file system.
-     */
+    /* A file system needs at least two nodes: one used and a trailing free. */
     if (file_info.st_size < sizeof(*file_system.node) * 2) {
         fprintf(
             stderr,
@@ -208,20 +193,14 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Save the size of the file.
-     */
     file_system.size =
         file_info.st_size;
 
     /*
-        Map the file system file into memory. Changes to memory at
-        `file_system.node` after a successful call to `krffs_map_file` will be
-        written directly to a file (right away or after calls to
-        `krffs_unmap_file` or `krffs_sync_mapping`).
-
-        The kernel uses its virtual memory system to implement the memory
-        mapping.
+        Map the file into memory. After a successful `krffs_map_file`, writes
+        to memory at `file_system.node` reach the file directly, either right
+        away or at `krffs_unmap_file` or `krffs_sync_mapping`. The kernel backs
+        the mapping with its virtual memory system.
      */
     if ((file_system.node =
              krffs_map_file(
@@ -241,10 +220,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        It's possible to close the file after a call to `krffs_map_file`. Memory
-        pages will still be mapped to the file.
-     */
+    /* The mapping outlives the descriptor, so the file can be closed now. */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(
             stderr,
@@ -259,10 +235,7 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /*
-        Check that we have a KRFFS file system by checking the signature at the
-        beginning of the file.
-     */
+    /* The KRFFS magic signature heads the file when one is present. */
     if (file_system.node->magic != KRFFS_File_System_Magic) {
         fprintf(
             stderr,

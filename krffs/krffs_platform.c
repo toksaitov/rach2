@@ -8,6 +8,13 @@
 
 #include <stdint.h>
 
+/**
+ * Reads the wall-clock time with microsecond precision.
+ *
+ * Uses `gettimeofday` on Unix; on Windows the FILETIME 100-nanosecond ticks
+ * are rebased from the 1601 epoch to the Unix epoch and split into seconds
+ * and microseconds.
+ */
 void krffs_get_time_of_day(struct timeval *time_of_day)
 {
 #ifdef WINDOWS
@@ -35,6 +42,14 @@ void krffs_get_time_of_day(struct timeval *time_of_day)
 #endif
 }
 
+/**
+ * Maps `size` bytes of the file at `file_descriptor`, starting at `offset`,
+ * into shared read/write memory.
+ *
+ * Reads and writes through the returned pages read and write the file. Uses
+ * `mmap` on Unix and `MapViewOfFile` on Windows. Returns `(void *) -1` on
+ * failure.
+ */
 void *krffs_map_file(
           int file_descriptor,
           off_t offset,
@@ -96,6 +111,12 @@ void *krffs_map_file(
 #endif
 }
 
+/**
+ * Flushes `size` bytes of a mapping at `address` back to its file.
+ *
+ * Uses a synchronous `msync` (`MS_SYNC`) on Unix and `FlushViewOfFile` on
+ * Windows. Returns 0 on success and -1 on failure.
+ */
 int krffs_sync_mapping(
         void *address,
         size_t size
@@ -115,6 +136,13 @@ int krffs_sync_mapping(
 #endif
 }
 
+/**
+ * Unmaps a region returned by `krffs_map_file`.
+ *
+ * Uses `munmap` on Unix and `UnmapViewOfFile` on Windows. On Windows `size`
+ * is ignored and `address` must be the first mapped page. Returns 0 on
+ * success and -1 on failure.
+ */
 int krffs_unmap_file(
         void *address,
         size_t size

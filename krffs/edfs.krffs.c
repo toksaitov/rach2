@@ -20,31 +20,34 @@
 #include <unistd.h>
 #endif
 
-/*
-    edfs.krffs
-
-    Edits a node of a KRFFS FUSE file system in a file.
-
-    Usage:
-        edfs.krffs -h
-        edfs.krffs <file> <node position> \
-            [--set-magic <magic>]
-            [--set-type root|free|reserved]
-            [--set-id <id>]
-            [--set-name <name>]
-            [--set-size <size>]
-            [--set-prev-size <size>]
-            [--set-data-size <size>]
-
-    Options:
-        -h              show help and exit
-        --set-magic     set the node's signature to a 16-bit unsigned number
-        --set-type      set the node's type to 'root', 'free', or 'reserved' type
-        --set-id        set the node's id to a 64-bit unsigned number
-        --set-name      set the node's name to a string of up to 255 bytes in size
-        --set-size      set the node's size field to a 64-bit unsigned number
-        --set-prev-size set the node's field 'previous node size' to a 64-bit unsigned number
-        --set-data-size set the node's data size field to a 64-bit unsigned number
+/**
+ * Edits one node of a KRFFS file system held in a file.
+ *
+ * The node is located by its byte position relative to the start of the file
+ * system, then each `--set-*` option overwrites a field of the on-disk node
+ * record in place. The file is mapped writable, so the edit is committed by a
+ * `krffs_sync_mapping` of the touched node. `--set-name` also recomputes the
+ * node's `id` from the name via the djb hash, matching how the file system
+ * derives ids.
+ *
+ * Usage:
+ *
+ *     edfs.krffs -h
+ *     edfs.krffs <file> <node position> \
+ *         [--set-magic <magic>]
+ *         [--set-type root|free|reserved]
+ *         [--set-id <id>]
+ *         [--set-name <name>]
+ *         [--set-size <size>]
+ *         [--set-prev-size <size>]
+ *         [--set-data-size <size>]
+ *
+ * `--set-magic` sets the node signature to a 16-bit unsigned number,
+ * `--set-type` sets the type to `root`, `free`, or `reserved`, `--set-id` sets
+ * the id to a 64-bit unsigned number, `--set-name` sets the name to a string of
+ * up to 255 bytes, `--set-size`, `--set-prev-size`, and `--set-data-size` set
+ * the size, previous-node-size, and data-size fields to 64-bit unsigned
+ * numbers, and `-h` prints help and exits.
  */
 int main(int argc, char **argv)
 {
@@ -219,9 +222,6 @@ int main(int argc, char **argv)
     char *path =
         argv[1];
 
-    /*
-        Open the file with the file system.
-     */
     if ((file_descriptor = PLATFORM_PREFIX(open(path, O_RDWR))) == -1) {
         fprintf(
             stderr,
@@ -235,9 +235,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Get file information.
-     */
     struct stat file_info;
     if (fstat(file_descriptor, &file_info) == -1) {
         fprintf(
@@ -252,9 +249,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that we have a regular file (not a directory or a socket).
-     */
     if (!S_ISREG(file_info.st_mode)) {
         fprintf(
             stderr,
@@ -268,9 +262,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that the file is big enough to initialize a file system.
-     */
     if (file_info.st_size < sizeof(*file_system.node) * 2) {
         fprintf(
             stderr,
@@ -284,20 +275,13 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Save the size of the file.
-     */
     file_system.size =
         file_info.st_size;
 
     /*
-        Map the file system file into memory. Changes to memory at
-        `file_system.node` after a successful call to `krffs_map_file` will be
-        written directly to a file (right away or after calls to
-        `krffs_unmap_file` or `krffs_sync_mapping`).
-
-        The kernel uses its virtual memory system to implement the memory
-        mapping.
+        Writes to memory at `file_system.node` after a successful
+        `krffs_map_file` reach the file directly, either at once or at
+        `krffs_unmap_file` or `krffs_sync_mapping`.
      */
     if ((file_system.node =
              krffs_map_file(
@@ -318,8 +302,7 @@ int main(int argc, char **argv)
     }
 
     /*
-        It's possible to close the file after a call to `krffs_map_file`. Memory
-        pages will still be mapped to the file.
+        The mapping survives closing the file; the pages stay backed by it.
      */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(
@@ -335,9 +318,6 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /*
-        Try to find and edit the node.
-     */
     struct krffs_node *node = file_system.node;
     do {
         if (krffs_get_node_relative_position(&file_system, node) == pos) {

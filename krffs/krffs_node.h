@@ -8,16 +8,16 @@
 
 struct krffs_file_system;
 
-/*
-    The maximum size of a file name buffer in a metadata node.
- */
+/** Maximum size of a file name buffer in a metadata node. */
 #define KRFFS_FILE_NAME_BUFFER_SIZE 256
 
-/*
-    Types of metadata nodes which represent the file system.
-
-        * KRFFS_Free_Node: a free, unused node
-        * KRFFS_Reserved_Node: a reserved node which represents a file
+/**
+ * Types of metadata node that make up the file system.
+ *
+ * The value is stored in each node's `type` byte on disk, so the order is
+ * fixed: `KRFFS_Root_Node` (0) is the root directory, `KRFFS_Free_Node` (1) is
+ * a free, unused block, and `KRFFS_Reserved_Node` (2) is a reserved block that
+ * represents a file.
  */
 enum krffs_node_type {
     KRFFS_Root_Node,
@@ -25,9 +25,7 @@ enum krffs_node_type {
     KRFFS_Reserved_Node,
 };
 
-/*
-    Time specification for metadatа node fields
- */
+/** A node timestamp, byte-packed as part of the on-disk node record. */
 #pragma pack(push,1)
 struct krffs_node_time {
     int64_t seconds;
@@ -35,27 +33,23 @@ struct krffs_node_time {
 };
 #pragma pack(pop)
 
-/*
-    Gets the current time.
- */
+/** Reads the wall clock as a `krffs_node_time`. */
 struct krffs_node_time krffs_get_current_node_time();
 
-/*
-    Gets the node time as a number of seconds.
- */
+/** Returns the seconds field of `node_time` as a `time_t`. */
 time_t krffs_get_time_from_node_time(
            const struct krffs_node_time *node_time
        );
 
-/*
-    Gets the node time as a number of seconds and nanoseconds.
- */
+/** Converts `node_time` to a `struct timespec`. */
 struct timespec krffs_get_timespec_from_node_time(
            const struct krffs_node_time *node_time
        );
 
-/*
-    The metadata node used to describe blocks of the KRFFS file system.
+/**
+ * Metadata node describing one block of the file system. This is the on-disk
+ * record: `#pragma pack(1)` removes padding, so the field order and widths here
+ * are the KRFFS v2 ABI, shared byte-for-byte with the kernel.
  */
 #pragma pack(push,1)
 struct krffs_node {
@@ -76,122 +70,84 @@ struct krffs_node {
 };
 #pragma pack(pop)
 
-/*
-    Initializes a free node.
- */
+/** Stamps `node` as a free node and flushes its header. */
 struct krffs_node *krffs_initialize_free_node(
                        struct krffs_node *node,
                        uint64_t size,
                        uint64_t previous_node_size
                    );
 
-/*
-    Initializes a root node.
- */
+/** Stamps `node` as the root node of the file system. */
 struct krffs_node *krffs_initialize_root_node(
                        struct krffs_node *node,
                        uint64_t size,
                        uint64_t previous_node_size
                    );
 
-/*
-    Sets the name of the node and updates the hash for the `id` field from the
-    name.
- */
+/** Copies `name` into `node->name` and refreshes the `id` hash from it. */
 void krffs_set_reserved_node_name(
          struct krffs_node *node,
          const char *name
      );
 
-/*
-    Wraps around pointers to memory positions used by the `file_system`.
- */
+/** Folds a node pointer back into the file system's address range. */
 struct krffs_node *krffs_wrap_node_position(
                        struct krffs_file_system *file_system,
                        struct krffs_node *node
                    );
 
-/*
-    Get the previous metadata node.
-
-    Doesn't check node signatures.
- */
+/** Returns the node preceding `node` in the ring. */
 struct krffs_node *krffs_get_previous_node(
                        struct krffs_file_system *file_system,
                        struct krffs_node *node
                    );
 
-/*
-    Gets the next metadata node.
-
-    Doesn't check node signatures.
- */
+/** Returns the node following `node` in the ring. */
 struct krffs_node *krffs_get_next_node(
                        struct krffs_file_system *file_system,
                        struct krffs_node *node
                    );
 
-/*
-    Gets the node relative position in the file system.
- */
+/** Returns the byte offset of `node` from the start of the mapping. */
 uint64_t krffs_get_node_relative_position(
              struct krffs_file_system *file_system,
              struct krffs_node *node
          );
 
-/*
-    Checks that node is in range of addresses of a specified file system.
- */
+/** Reports whether `node` lies within the file system's mapping. */
 bool krffs_is_node_in_file_system(
          struct krffs_file_system *file_system,
          struct krffs_node *node
      );
 
-/*
-    Searches the file system for a first node with a specified name. Uses a hash
-    formed from the `name` to compare with the `id` field of each node. Returns
-    the found node, or a `NULL` value otherwise.
- */
+/** Returns the first reserved node named `name`, or `NULL` if none. */
 struct krffs_node *krffs_find_reserved_node_by_name(
                        struct krffs_file_system *file_system,
                        const char *name
                    );
 
-/*
-    Searches the file system for a first node with a specified name. Uses a hash
-    formed from the `name` to compare with the `id` field of each node. Returns
-    the found node, or a `NULL` value otherwise. Includes the root node in the
-    search.
- */
+/** Like `krffs_find_reserved_node_by_name`, but also matches the root node. */
 struct krffs_node *krffs_find_reserved_or_root_node_by_name(
                        struct krffs_file_system *file_system,
                        const char *name
                    );
 
-/*
-    Count the number of free nodes.
- */
+/** Counts the free nodes in the file system. */
 size_t krffs_count_free_nodes(
            struct krffs_file_system *file_system
        );
 
-/*
-    Calculate the total free space available in all free nodes.
- */
+/** Sums the payload space available across all free nodes. */
 uint64_t krffs_calculate_total_free_space(
              struct krffs_file_system *file_system
          );
 
-/*
-    Count the number of reserved nodes.
- */
+/** Counts the reserved nodes in the file system. */
 size_t krffs_count_reserved_nodes(
            struct krffs_file_system *file_system
        );
 
-/*
-    Calculate the total used space allocated by all reserved nodes.
- */
+/** Sums the payload space allocated across all reserved nodes. */
 uint64_t krffs_calculate_total_reserved_space(
              struct krffs_file_system *file_system
          );

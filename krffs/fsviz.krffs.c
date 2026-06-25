@@ -134,18 +134,14 @@ static void tb_print_string(
     }
 }
 
-/*
-    fsviz.krffs
-
-    Visualize the KRFFS filesystem for debugging or educational purposes.
-
-    Usage:
-        fsviz.krffs -h
-        fsviz.krffs <file> [-t]
-
-    Options:
-        -h    show help and exit
-        -t    output text visualization to stdout instead of interactive mode
+/**
+ * Visualizes a KRFFS file system image for debugging and teaching.
+ *
+ * Maps the image at `argv[1]` and draws its node chain (root, free, and
+ * reserved nodes) as a horizontal ribbon of labelled bars. With `-h` it
+ * prints usage and exits; with `-t` it emits one static text frame to
+ * stdout instead of running the interactive termbox view, where the arrow
+ * keys (or `h`/`l`) scroll and `+`/`_` rescale the bytes-per-character.
  */
 int main(int argc, char **argv)
 {
@@ -203,9 +199,6 @@ int main(int argc, char **argv)
     char *path =
         argv[1];
 
-    /*
-        Open the file with the file system.
-     */
     if ((file_descriptor = PLATFORM_PREFIX(open(path, O_RDWR))) == -1) {
         fprintf(
             stderr,
@@ -219,9 +212,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Get file information.
-     */
     struct stat file_info;
     if (fstat(file_descriptor, &file_info) == -1) {
         fprintf(
@@ -236,9 +226,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that we have a regular file (not a directory or a socket).
-     */
     if (!S_ISREG(file_info.st_mode)) {
         fprintf(
             stderr,
@@ -252,9 +239,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that the file is big enough to contain a file system.
-     */
     if (file_info.st_size < (PLATFORM_OFF_T)(sizeof(*file_system.node) * 2)) {
         fprintf(
             stderr,
@@ -268,15 +252,9 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Save the size of the file.
-     */
     file_system.size =
         file_info.st_size;
 
-    /*
-        Map the file system file into memory.
-     */
     if ((file_system.node =
              krffs_map_file(
                  file_descriptor,
@@ -296,8 +274,8 @@ int main(int argc, char **argv)
     }
 
     /*
-        It's possible to close the file after a call to `krffs_map_file`. Memory
-        pages will still be mapped to the file.
+        The mapping outlives the descriptor: the pages stay backed by the file
+        after `krffs_map_file`, so the descriptor can be closed here.
      */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(
@@ -313,9 +291,6 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /*
-        Try to visualize the file system.
-     */
     if (!has_text_option) {
         if (tb_init() != 0) {
             fprintf(

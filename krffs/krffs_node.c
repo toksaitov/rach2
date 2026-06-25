@@ -7,6 +7,12 @@
 #include <assert.h>
 #include <string.h>
 
+/**
+ * Reads the wall clock as a `krffs_node_time`.
+ *
+ * The seconds and nanoseconds are taken from `gettimeofday`, whose
+ * microseconds are scaled to nanoseconds.
+ */
 struct krffs_node_time krffs_get_current_node_time()
 {
     struct timeval time_of_day;
@@ -45,6 +51,14 @@ struct timespec krffs_get_timespec_from_node_time(
     return time;
 }
 
+/**
+ * Stamps `node` as a free node of the given `size` and `previous_node_size`,
+ * then flushes the node header to the backing store.
+ *
+ * The KRFFS magic and the `KRFFS_Free_Node` type are written so the block can
+ * be walked as part of the on-disk ring; `data_size` is cleared because a free
+ * node holds no payload. Returns `node`.
+ */
 struct krffs_node *krffs_initialize_free_node(
                        struct krffs_node *node,
                        uint64_t size,
@@ -72,6 +86,14 @@ struct krffs_node *krffs_initialize_free_node(
     return node;
 }
 
+/**
+ * Folds a node pointer back into the file system's address range.
+ *
+ * The nodes form a ring over the mapping `[base, base + size)`. A pointer that
+ * has run off the end is brought back by subtracting `size`, and one that has
+ * run off the front by adding `size`, so node walks wrap instead of leaving the
+ * mapping. Returns the wrapped pointer.
+ */
 struct krffs_node *krffs_wrap_node_position(
                        struct krffs_file_system *file_system,
                        struct krffs_node *node
@@ -99,6 +121,16 @@ struct krffs_node *krffs_wrap_node_position(
     return (struct krffs_node *) position;
 }
 
+/**
+ * Stamps `node` as the root node of the file system.
+ *
+ * The root carries the reserved root name and the djb2 hash of that name as its
+ * `id`, the root mode, and the owning uid and gid (zero on Windows, the
+ * effective ids of the host process otherwise). All three timestamps are set to
+ * the current time, `data_size` is cleared, and `size` and `previous_node_size`
+ * place the node in the ring. Unlike the other initializers this one does not
+ * flush; the caller syncs the mapping. Returns `node`.
+ */
 struct krffs_node *krffs_initialize_root_node(
                        struct krffs_node *node,
                        uint64_t size,
@@ -156,6 +188,13 @@ struct krffs_node *krffs_initialize_root_node(
     return node;
 }
 
+/**
+ * Copies `name` into `node->name` and refreshes the `id` hash from it.
+ *
+ * The name is truncated to the name buffer and forced NUL-terminated, then
+ * `id` is set to the djb2 hash of the stored name so name lookups match. The
+ * node header is flushed to the backing store.
+ */
 void krffs_set_reserved_node_name(
          struct krffs_node *node,
          const char *name
@@ -181,6 +220,12 @@ void krffs_set_reserved_node_name(
     );
 }
 
+/**
+ * Returns the node preceding `node` in the ring.
+ *
+ * The previous node is found by stepping back `previous_node_size` bytes and
+ * wrapping into the file system range. The node signatures are not checked.
+ */
 struct krffs_node *krffs_get_previous_node(
                        struct krffs_file_system *file_system,
                        struct krffs_node *node
@@ -200,6 +245,12 @@ struct krffs_node *krffs_get_previous_node(
     return previous_node;
 }
 
+/**
+ * Returns the node following `node` in the ring.
+ *
+ * The next node is found by stepping forward `size` bytes and wrapping into the
+ * file system range. The node signatures are not checked.
+ */
 struct krffs_node *krffs_get_next_node(
                        struct krffs_file_system *file_system,
                        struct krffs_node *node
@@ -219,6 +270,9 @@ struct krffs_node *krffs_get_next_node(
     return next_node;
 }
 
+/**
+ * Returns the byte offset of `node` from the start of the file system mapping.
+ */
 uint64_t krffs_get_node_relative_position(
              struct krffs_file_system *file_system,
              struct krffs_node *node
@@ -236,6 +290,10 @@ uint64_t krffs_get_node_relative_position(
     return relative_position;
 }
 
+/**
+ * Reports whether `node` lies within the file system's mapping `[base, base +
+ * size)`.
+ */
 bool krffs_is_node_in_file_system(
          struct krffs_file_system *file_system,
          struct krffs_node *node
@@ -259,6 +317,13 @@ bool krffs_is_node_in_file_system(
     return is_inside;
 }
 
+/**
+ * Finds the first reserved node whose name matches `name`.
+ *
+ * The walk hashes `name` with djb2 and compares it against each node's `id`,
+ * matching only `KRFFS_Reserved_Node` blocks. Returns the matching node, or
+ * `NULL` if the ring holds no such node.
+ */
 struct krffs_node *krffs_find_reserved_node_by_name(
                        struct krffs_file_system *file_system,
                        const char *name
@@ -289,6 +354,13 @@ struct krffs_node *krffs_find_reserved_node_by_name(
     return result;
 }
 
+/**
+ * Like `krffs_find_reserved_node_by_name`, but the root node is eligible too.
+ *
+ * The walk hashes `name` with djb2 and compares it against each node's `id`,
+ * matching `KRFFS_Reserved_Node` and `KRFFS_Root_Node` blocks. Returns the
+ * matching node, or `NULL` if the ring holds no such node.
+ */
 struct krffs_node *krffs_find_reserved_or_root_node_by_name(
                        struct krffs_file_system *file_system,
                        const char *name
@@ -320,6 +392,9 @@ struct krffs_node *krffs_find_reserved_or_root_node_by_name(
     return result;
 }
 
+/**
+ * Returns the number of free nodes in the ring.
+ */
 size_t krffs_count_free_nodes(
            struct krffs_file_system *file_system
        )
@@ -340,6 +415,12 @@ size_t krffs_count_free_nodes(
     return result;
 }
 
+/**
+ * Returns the total payload bytes available across all free nodes.
+ *
+ * Each free node contributes its `size` minus the node header, so the result
+ * counts usable space, not the raw block sizes.
+ */
 uint64_t krffs_calculate_total_free_space(
              struct krffs_file_system *file_system
          )
@@ -362,6 +443,9 @@ uint64_t krffs_calculate_total_free_space(
     return result;
 }
 
+/**
+ * Returns the number of reserved nodes in the ring.
+ */
 size_t krffs_count_reserved_nodes(
            struct krffs_file_system *file_system
        )
@@ -382,6 +466,12 @@ size_t krffs_count_reserved_nodes(
     return result;
 }
 
+/**
+ * Returns the total payload bytes held by all reserved nodes.
+ *
+ * Each reserved node contributes its `size` minus the node header, so the
+ * result counts used space, not the raw block sizes.
+ */
 uint64_t krffs_calculate_total_reserved_space(
              struct krffs_file_system *file_system
          )

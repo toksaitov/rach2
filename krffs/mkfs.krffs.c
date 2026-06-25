@@ -16,18 +16,21 @@
 #include <unistd.h>
 #endif
 
-/*
-    mkfs.krffs
-
-    Creates a KRFFS FUSE file system in a file.
-
-    Usage:
-        mkfs.krffs -h
-        mkfs.krffs <file> [-f]
-
-    Options:
-        -h    show help and exit
-        -f    force file system creation
+/**
+ * Writes a fresh KRFFS file system into an existing file.
+ *
+ * The target file must already exist and be a regular file at least two
+ * `struct krffs_node` records long. Its contents are mapped, initialized as an
+ * empty file system, and synced back through the mapping.
+ *
+ * Refuses to overwrite a file that already holds a valid KRFFS unless the force
+ * (`-f`) option is given. With `-h`, or no arguments, it prints usage and
+ * exits successfully.
+ *
+ * Usage:
+ *
+ *     mkfs.krffs -h
+ *     mkfs.krffs <file> [-f]
  */
 int main(int argc, char **argv)
 {
@@ -77,9 +80,6 @@ int main(int argc, char **argv)
     char *path =
         argv[1];
 
-    /*
-        Open the file with the file system.
-     */
     if ((file_descriptor = PLATFORM_PREFIX(open(path, O_RDWR))) == -1) {
         fprintf(
             stderr,
@@ -93,9 +93,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Get file information.
-     */
     struct stat file_info;
     if (fstat(file_descriptor, &file_info) == -1) {
         fprintf(
@@ -110,9 +107,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that we have a regular file (not a directory or a socket).
-     */
     if (!S_ISREG(file_info.st_mode)) {
         fprintf(
             stderr,
@@ -126,9 +120,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Check that the file is big enough to initialize a file system.
-     */
     if (file_info.st_size < sizeof(*file_system.node) * 2) {
         fprintf(
             stderr,
@@ -142,20 +133,14 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        Save the size of the file.
-     */
     file_system.size =
         file_info.st_size;
 
     /*
-        Map the file system file into memory. Changes to memory at
-        `file_system.node` after a successful call to `krffs_map_file` will be
-        written directly to a file (right away or after calls to
-        `krffs_unmap_file` or `krffs_sync_mapping`).
-
-        The kernel uses its virtual memory system to implement the memory
-        mapping.
+        Map the file into memory. After a successful `krffs_map_file`, writes
+        to `file_system.node` reach the file directly, either right away or on
+        `krffs_unmap_file` or `krffs_sync_mapping`. The kernel backs the mapping
+        with its virtual memory system.
      */
     if ((file_system.node =
              krffs_map_file(
@@ -176,8 +161,8 @@ int main(int argc, char **argv)
     }
 
     /*
-        It's possible to close the file after a call to `krffs_map_file`. Memory
-        pages will still be mapped to the file.
+        The descriptor may be closed once the mapping exists; the pages stay
+        mapped to the file.
      */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(
@@ -193,9 +178,6 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /*
-        Try to create a file system.
-     */
     struct krffs_node *node = file_system.node;
     if (node->magic == KRFFS_File_System_Magic && !has_force_option) {
         fprintf(
