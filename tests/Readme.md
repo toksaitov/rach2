@@ -2,7 +2,7 @@
 
 ![List of Rach2 Test Programs](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/tests.png)
 
-The kernel's tests come in three tiers. Freestanding ELF32 programs (this directory) run as guest programs under the kernel: the original syscall tests and the subsystem probes. The musl integration programs (`musl/`) link against the ported musl libc and exercise the kernel through a real C library. The host seam tests (`host/`) compile pure kernel logic natively and run it under the sanitizers; see [host/Readme.md](host/Readme.md).
+The kernel's tests come in three tiers. Freestanding ELF32 programs (this directory) run as guest programs under the kernel: the original syscall tests and the subsystem probes, all but `dnstest` built without a libc (`dnstest` links the ported musl because it shares `utils/resolv.c` with the musl-linked `ping` and `nc`). The musl integration programs (`musl/`) link against the ported musl libc and exercise the kernel through a real C library. The host seam tests (`host/`) compile pure kernel logic natively and run it under the sanitizers; see [host/Readme.md](host/Readme.md).
 
 ## Syscall tests
 
@@ -24,7 +24,7 @@ The original tests, each driving a few syscalls and printing a human-readable pa
 * `udptest.c`: UDP sockets: bind, blocking and non-blocking recvfrom, an echo round-trip, and rejection of a bad pointer.
 * `tcptest.c`: TCP sockets: connect, a write-and-read echo, a graceful close, and a refused connect.
 * `sockettest.c`: the socket lifecycle, so close, dup2, fork sharing, and process-exit cleanup neither leak nor double-free a socket.
-* `dnstest.c`: the userspace stub resolver in `utils/resolv.c`: `inet_aton`, a `/hosts` lookup, the DNS message parser against crafted responses (A record, CNAME chain, compression pointers, NXDOMAIN, malformed input), and live resolution through SLIRP's forwarder.
+* `dnstest.c`: the userspace stub resolver in `utils/resolv.c`: `inet_aton`, a `/hosts` lookup, the DNS message parser against crafted responses (A record, CNAME chain, compression pointers, NXDOMAIN, malformed input), and live resolution through SLIRP's forwarder. It links the ported musl, the one program here that does.
 
 ## Subsystem probes
 

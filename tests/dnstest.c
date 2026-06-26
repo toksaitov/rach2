@@ -6,70 +6,31 @@
  * dns_build_query against crafted wire data. The final block does live
  * resolution through SLIRP and needs host internet.
  *
- * Freestanding; direct int 0x80.
+ * Linked against the ported musl, the same libc utils/resolv.c uses.
  */
 
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+
 #include "../utils/netdb.h"
-
-typedef unsigned int   size_t;
-typedef unsigned int   uint32_t;
-
-#define STDOUT_FILENO 1
-
-#define SYS_EXIT  1
-#define SYS_WRITE 4
-
-static int sys_write(int fd, const void *buf, size_t count)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count) : "memory");
-    return r;
-}
-
-static void sys_exit(int status)
-{
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
-    __builtin_unreachable();
-}
-
-static size_t strlen(const char *s)
-{
-    size_t n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
-static void print(const char *s) { sys_write(STDOUT_FILENO, s, strlen(s)); }
-static void puts(const char *s)  { print(s); sys_write(STDOUT_FILENO, "\n", 1); }
-
-static void print_num(int n);
-
-static void print_ip(uint32_t ip)
-{
-    print_num((int)((ip >> 24) & 0xFF)); print(".");
-    print_num((int)((ip >> 16) & 0xFF)); print(".");
-    print_num((int)((ip >>  8) & 0xFF)); print(".");
-    print_num((int)( ip        & 0xFF));
-}
-
-static void print_num(int n)
-{
-    char buf[12];
-    int i = 0;
-    if (n < 0) { sys_write(STDOUT_FILENO, "-", 1); n = -n; }
-    if (n == 0) buf[i++] = '0';
-    while (n > 0) { buf[i++] = (char)('0' + n % 10); n /= 10; }
-    while (i > 0) sys_write(STDOUT_FILENO, &buf[--i], 1);
-}
 
 static int passed = 0, failed = 0;
 
 static void check(const char *desc, int ok)
 {
-    print("  "); print(desc); print(": ");
-    if (ok) { puts("OK"); passed++; }
-    else    { puts("FAILED"); failed++; }
+    printf("  %s: %s\n", desc, ok ? "OK" : "FAILED");
+    if (ok) {
+        passed++;
+    } else {
+        failed++;
+    }
+}
+
+static void print_ip(const char *label, uint32_t ip)
+{
+    printf("    %s -> %u.%u.%u.%u\n", label, (ip >> 24) & 0xFF,
+           (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
 }
 
 /*
@@ -120,7 +81,7 @@ static const unsigned char v_badname[] = {
     0x40, 0x00,0x01
 };
 
-void _start(void)
+int main(void)
 {
     uint32_t ip = 0;
     unsigned char qb[64];
@@ -191,20 +152,23 @@ void _start(void)
     puts("live DNS (via SLIRP 10.0.2.3, needs host internet):");
     r = resolve_host("one.one.one.one", &ip);
     check("one.one.one.one resolves", r == 0);
-    if (r == 0) { print("    one.one.one.one -> "); print_ip(ip); puts(""); }
+    if (r == 0) {
+        print_ip("one.one.one.one", ip);
+    }
     r = resolve_host("dns.google", &ip);
     check("dns.google resolves", r == 0);
-    if (r == 0) { print("    dns.google -> "); print_ip(ip); puts(""); }
+    if (r == 0) {
+        print_ip("dns.google", ip);
+    }
     check("nxdomain.invalid fails cleanly", resolve_host("nxdomain.invalid", &ip) != 0);
 
     puts("");
-    print("Results: "); print_num(passed); print(" passed, ");
-    print_num(failed); puts(" failed");
+    printf("Results: %d passed, %d failed\n", passed, failed);
 
     if (failed == 0) {
         puts("All DNS tests passed!");
-        sys_exit(0);
+        return 0;
     }
     puts("Some tests failed!");
-    sys_exit(1);
+    return 1;
 }

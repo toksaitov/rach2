@@ -8,20 +8,24 @@
  * buffers and touch no syscalls, so the `dnstest` program can exercise them
  * directly; only `resolve_host` does file and socket I/O.
  *
- * This one source is compiled two ways: against the ported musl into the `ping`
- * and `nc` utilities, and freestanding (`-nostdlib`, no libc) into the
- * `dnstest` test. To link in both, its own file and socket I/O issues `int
- * 0x80` directly rather than calling the libc wrappers, and every symbol but
- * the `netdb.h` entry points is static, so it never collides with a host
- * program's own helpers. The musl utilities that link it use musl elsewhere.
+ * Only the functions declared in `netdb.h` are external; every other symbol is
+ * static, so this object links cleanly into each program that needs it (ping,
+ * nc, and the dnstest test). Its file and socket I/O goes through the ported
+ * musl, the same libc the rest of the utilities link.
  */
 
 #include "netdb.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
+
 typedef unsigned int   u32;
 typedef unsigned short u16;
 typedef unsigned char  u8;
-typedef unsigned int   usize;
 
 /* Read from the KRFFS root (not /etc), where the build scripts stage them. */
 #define RESOLV_CONF "/resolv.conf"
@@ -30,56 +34,6 @@ typedef unsigned int   usize;
 /* SLIRP's built-in DNS forwarder, used when /resolv.conf names no server. */
 #define DNS_DEFAULT_NS 0x0A000203U   /* 10.0.2.3 */
 #define DNS_PORT       53
-
-/* socketcall sub-calls and socket constants (Linux i386, as in the other
- * utils). */
-#define SC_SOCKET     1
-#define SC_SENDTO    11
-#define SC_RECVFROM  12
-#define AF_INET       2
-#define SOCK_DGRAM    2
-#define MSG_DONTWAIT  0x40
-
-struct timeval { long tv_sec; long tv_usec; };
-
-static int sys_open(const char *path, int flags, int mode)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(5), "b"(path), "c"(flags), "d"(mode) : "memory");
-    return r;
-}
-
-static int sys_read(int fd, void *buf, usize count)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(3), "b"(fd), "c"(buf), "d"(count) : "memory");
-    return r;
-}
-
-static int sys_close(int fd)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(6), "b"(fd));
-    return r;
-}
-
-static int sys_socketcall(int call, u32 *args)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(102), "b"(call), "c"(args) : "memory");
-    return r;
-}
-
-static int sys_gettimeofday(struct timeval *tv)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(78), "b"(tv), "c"(0) : "memory");
-    return r;
-}
 
 /** Case-insensitive equality of two NUL-terminated strings. */
 static int ci_eq(const char *a, const char *b)
@@ -116,18 +70,18 @@ static int read_file(const char *path, char *buf, int cap)
 {
     int fd, n, total = 0;
 
-    fd = sys_open(path, 0 /* O_RDONLY */, 0);
+    fd = open(path, O_RDONLY);
     if (fd < 0) {
         return -1;
     }
     while (total < cap) {
-        n = sys_read(fd, buf + total, (usize)(cap - total));
+        n = (int)read(fd, buf + total, (size_t)(cap - total));
         if (n <= 0) {
             break;
         }
         total += n;
     }
-    sys_close(fd);
+    close(fd);
     return total;
 }
 
@@ -139,9 +93,9 @@ static void delay_ms(int ms)
     struct timeval start, now;
     long elapsed;
 
-    sys_gettimeofday(&start);
+    gettimeofday(&start, NULL);
     do {
-        sys_gettimeofday(&now);
+        gettimeofday(&now, NULL);
         elapsed = (now.tv_sec - start.tv_sec) * 1000 +
                   (now.tv_usec - start.tv_usec) / 1000;
     } while (elapsed < ms);
@@ -456,13 +410,13 @@ static u32 read_nameserver(void)
  */
 static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
 {
-    u8 query[300], resp[512], sa[16];
-    u32 args[6];
+    u8 query[300], resp[512];
+    struct sockaddr_in sa = {0};
     struct timeval tv;
-    int fd, qlen, attempt, poll, n, i, rc = -1, got = 0;
+    int fd, qlen, attempt, poll, n, rc = -1, got = 0;
     u16 id;
 
-    sys_gettimeofday(&tv);
+    gettimeofday(&tv, NULL);
     id = (u16)(((u32)tv.tv_usec ^ ((u32)tv.tv_usec >> 7) ^ (u32)tv.tv_sec) & 0xFFFF);
 
     qlen = dns_build_query(query, (int)sizeof(query), name, id);
@@ -470,30 +424,21 @@ static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
         return -1;
     }
 
-    args[0] = AF_INET; args[1] = SOCK_DGRAM; args[2] = 0;
-    fd = sys_socketcall(SC_SOCKET, args);
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
         return -1;
     }
 
-    for (i = 0; i < 16; i++) {
-        sa[i] = 0;
-    }
-    sa[0] = AF_INET;
-    sa[2] = (u8)(DNS_PORT >> 8); sa[3] = (u8)DNS_PORT;
-    sa[4] = (u8)(ns >> 24); sa[5] = (u8)(ns >> 16);
-    sa[6] = (u8)(ns >> 8);  sa[7] = (u8)ns;
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(DNS_PORT);
+    sa.sin_addr.s_addr = htonl(ns);
 
     for (attempt = 0; attempt < 30 && !got; attempt++) {
-        args[0] = (u32)fd; args[1] = (u32)query; args[2] = (u32)qlen;
-        args[3] = 0; args[4] = (u32)sa; args[5] = 16;
-        sys_socketcall(SC_SENDTO, args);
+        sendto(fd, query, (size_t)qlen, 0, (struct sockaddr *)&sa, sizeof(sa));
 
         for (poll = 0; poll < 4 && !got; poll++) {
             delay_ms(50);
-            args[0] = (u32)fd; args[1] = (u32)resp; args[2] = (u32)sizeof(resp);
-            args[3] = MSG_DONTWAIT; args[4] = 0; args[5] = 0;
-            n = sys_socketcall(SC_RECVFROM, args);
+            n = (int)recvfrom(fd, resp, sizeof(resp), MSG_DONTWAIT, NULL, NULL);
             if (n >= 12 && ((resp[0] << 8) | resp[1]) == (int)id &&
                 (resp[2] & 0x80)) {
                 rc = dns_parse_a(resp, n, id, out_ip);
@@ -502,7 +447,7 @@ static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
         }
     }
 
-    sys_close(fd);
+    close(fd);
     return got ? rc : -1;
 }
 
