@@ -9,7 +9,7 @@
 #   make doctor     check the toolchain (PASS/MISSING with install hints)
 #   make verify-style / verify-host   the quality gates
 #   make clean      remove component build products (objects, .d, binaries, ramdisk)
-#   make distclean  + the vendored libc/busybox/dropbear builds (full from-scratch)
+#   make distclean  + the vendored musl/busybox/dropbear builds (full from-scratch)
 #   make help       list every target
 # Run the built kernel with the scripts in rach2/ (run_with_ram_disk.sh, run.sh);
 # see `make help`. The build system does not run QEMU; those scripts model the
@@ -23,17 +23,17 @@ FULL_DIRS = ports/doom
 #     and busybox/dropbear's kbuild), tracked with stamp files so a clean clone
 #     "just works" without running the build_*.sh by hand, and each rebuilds only
 #     when its real inputs (tarball, build script, config) change. ---
-LIBC_STAMP     = libc/.stamp
-BUSYBOX_STAMP  = busybox/.stamp
-DROPBEAR_STAMP = dropbear/.stamp
+LIBC_STAMP     = vendor/musl/.stamp
+BUSYBOX_STAMP  = vendor/busybox/.stamp
+DROPBEAR_STAMP = vendor/dropbear/.stamp
 
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
 # silently drop the prereq and look up-to-date if a tarball were deleted) and to
 # derive the extracted source dirs that `distclean` removes.
-LIBC_TARBALL     = libc/musl-1.2.5.tar.gz
-BUSYBOX_TARBALL  = busybox/busybox-1.36.1.tar.bz2
-DROPBEAR_TARBALL = dropbear/dropbear-2022.83.tar.bz2
+LIBC_TARBALL     = vendor/musl/musl-1.2.5.tar.gz
+BUSYBOX_TARBALL  = vendor/busybox/busybox-1.36.1.tar.bz2
+DROPBEAR_TARBALL = vendor/dropbear/dropbear-2022.83.tar.bz2
 
 .PHONY: all full deps clean distclean ramdisk test-ramdisk capstone-ramdisk \
         check-busybox check-dropbearmulti compile-commands check-sources \
@@ -69,23 +69,23 @@ dropbear: $(DROPBEAR_STAMP)
 #     belt-and-suspenders backstop on the final touch. ---
 .DELETE_ON_ERROR:
 
-$(LIBC_STAMP): libc/build_libc.sh $(LIBC_TARBALL)
-	@rm -f $@ libc/install/lib/libc.a
-	./libc/build_libc.sh
-	@test -s libc/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }
+$(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL)
+	@rm -f $@ vendor/musl/install/lib/libc.a
+	./vendor/musl/build_libc.sh
+	@test -s vendor/musl/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }
 	@touch $@
 
-$(BUSYBOX_STAMP): busybox/build_busybox.sh busybox/rach2.config busybox/muslgcc \
+$(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config vendor/busybox/muslgcc \
                   $(BUSYBOX_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ tests/busybox
-	./busybox/build_busybox.sh
+	./vendor/busybox/build_busybox.sh
 	@test -s tests/busybox || { echo "busybox: build produced no tests/busybox" >&2; exit 1; }
 	@touch $@
 
-$(DROPBEAR_STAMP): dropbear/build_dropbear.sh dropbear/localoptions.h dropbear/muslgcc \
+$(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h vendor/dropbear/muslgcc \
                    $(DROPBEAR_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ tests/dropbearmulti
-	./dropbear/build_dropbear.sh
+	./vendor/dropbear/build_dropbear.sh
 	@test -s tests/dropbearmulti || { echo "dropbear: build produced no tests/dropbearmulti" >&2; exit 1; }
 	@touch $@
 
@@ -94,7 +94,7 @@ $(BASE_DIRS) $(FULL_DIRS):
 	$(MAKE) -C $@
 
 rach2: krffs
-tests: rach2
+tests: rach2 $(LIBC_STAMP)
 ish: rach2
 utils: rach2 $(LIBC_STAMP)
 ports/doom: rach2
@@ -113,9 +113,9 @@ ramdisk: $(BASE_DIRS)
 # check targets (depending on the stamp so it builds first), so the `test -s` runs on
 # EVERY build and catches a missing OR zero-byte artifact, not only a missing one.
 check-busybox: $(BUSYBOX_STAMP)
-	@test -s tests/busybox || { echo "busybox: tests/busybox missing or empty; rm busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
+	@test -s tests/busybox || { echo "busybox: tests/busybox missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
 check-dropbearmulti: $(DROPBEAR_STAMP)
-	@test -s tests/dropbearmulti || { echo "dropbear: tests/dropbearmulti missing or empty; rm dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
+	@test -s tests/dropbearmulti || { echo "dropbear: tests/dropbearmulti missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 
 # Capstone RAM disk: the busybox/dropbear/probe image the SSH login boots. Make builds
 # every component it stages (the host krffs tools, the probe programs, the musl
@@ -161,18 +161,18 @@ check-sources:
 
 # clean: the everyday reset; component build products (each sub-make removes its
 # own objects/.d/binaries) plus the generated RAM-disk image. The expensive vendored
-# third-party (libc/install, the busybox/dropbear builds) is LEFT in place so a
+# third-party (vendor/musl/install, the busybox/dropbear builds) is LEFT in place so a
 # routine clean does not force a multi-minute musl rebuild; use distclean for that.
 clean:
 	@for dir in $(BASE_DIRS) $(FULL_DIRS); do $(MAKE) -C $$dir clean; done
 	rm -f krffs/file_system.krffs
 
 # distclean: a full from-scratch reset; clean plus every third-party build product:
-# the stamps, libc/install, the extracted vendored source trees, and the staged
-# capstone binaries. The next build rebuilds libc/busybox/dropbear from the tarballs.
+# the stamps, vendor/musl/install, the extracted vendored source trees, and the staged
+# capstone binaries. The next build rebuilds musl/busybox/dropbear from the tarballs.
 distclean: clean
 	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP)
-	rm -rf libc/install \
+	rm -rf vendor/musl/install \
 	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) $(DROPBEAR_TARBALL:.tar.bz2=)
 	rm -f tests/busybox tests/dropbearmulti
 
@@ -189,7 +189,7 @@ help:
 	@echo "  make compile-commands   regenerate compile_commands.json for clangd (IDE)"
 	@echo "  make check-sources      verify the kernel C_SRC list matches the sources on disk"
 	@echo "  make clean      remove component build products (objects, .d, binaries, ramdisk)"
-	@echo "  make distclean  + the vendored libc/busybox/dropbear builds (full from-scratch)"
+	@echo "  make distclean  + the vendored musl/busybox/dropbear builds (full from-scratch)"
 	@echo ""
 	@echo "Run the kernel (the build system does not run QEMU):"
 	@echo "  cd rach2 && ./run_with_ram_disk.sh        # boot with the RAM disk"

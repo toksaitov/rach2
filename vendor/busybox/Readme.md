@@ -1,6 +1,6 @@
 # BusyBox for Rach2
 
-A static BusyBox 1.36.1 linked against the ported musl (`libc/install`), run as the interactive job-control shell (`ash`) on the console tty.
+A static BusyBox 1.36.1 linked against the ported musl (`vendor/musl/install`), run as the interactive job-control shell (`ash`) on the console tty.
 
 ## Build
 
@@ -9,6 +9,17 @@ A static BusyBox 1.36.1 linked against the ported musl (`libc/install`), run as 
 Or build it through the top level (`make full`, or `make deps DEPS=full`); either builds BusyBox on demand behind a stamp file (it relinks only when the tarball, `rach2.config`, the `muslgcc` wrapper, or libc changes).
 
 It verifies the pinned tarball (`busybox-1.36.1.tar.bz2`, sha256 gated), extracts it, applies `rach2.config`, and builds with `muslgcc` (the wrapper that bridges the bare `i686-elf-gcc` cross compiler to the ported musl: musl headers on compile, musl crt1/crti/crtn + `libc.a` + libgcc on the final link, and `-nostdlib` without crt on busybox's `ld -r` partial links). GNU binutils come from `CROSS_COMPILE=i686-elf-`; `HOSTCC=cc` builds the host-side kconfig tools. The stripped binary is staged to `tests/busybox` (installed into the RAM disk as `/busybox`).
+
+## Updating from upstream
+
+The only Rach2-owned files here are this Readme, `build_busybox.sh`, the `muslgcc` wrapper, and `rach2.config`; BusyBox itself is the pinned, unmodified tarball. To move to a new release:
+
+1. Download the new `busybox-X.Y.Z.tar.bz2` from https://busybox.net and replace the tarball here.
+2. Set `VERSION` and `TARBALL_SHA256` in `build_busybox.sh` to the new release and its sha256.
+3. Rebuild with `make full` (or `./build_busybox.sh`), then re-run a boot and the SSH capstone.
+4. If the new release renamed or dropped a config symbol, adjust `rach2.config` (it is an `allnoconfig` plus a curated enable list, so a `make oldconfig` against the new tree shows what changed).
+
+There are no source patches; all customization is `rach2.config`. If a patch ever becomes unavoidable, add `patches/NNNN-reason.patch` (applied after extraction by `build_busybox.sh`) and explain it here.
 
 ## Config rationale (`rach2.config`, from `allnoconfig` + a curated enable list)
 

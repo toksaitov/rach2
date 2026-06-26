@@ -16,7 +16,7 @@ CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 $(DEPFLAGS)
 # The musl link for dnstest: i686-elf-gcc specifically (for the 32-bit libgcc),
 # the ported musl headers and crt objects, exactly as utils/Makefile links.
 MUSL_CC     := $(or $(shell command -v i686-elf-gcc 2>/dev/null),$(CROSS_CC))
-MUSL_PREFIX := ../libc/install
+MUSL_PREFIX := ../vendor/musl/install
 MUSL_LIBGCC := $(shell $(MUSL_CC) -m32 -print-libgcc-file-name)
 MUSL_CFLAGS  = -m32 -static -nostdlib -nostartfiles -isystem $(MUSL_PREFIX)/include \
                -O2 -Wall -Wextra $(DEPFLAGS)

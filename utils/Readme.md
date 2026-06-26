@@ -2,9 +2,9 @@
 
 ![List of Rach2 Utilities](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/utils.png)
 
-Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility is an ordinary hosted C program linked statically against the ported musl libc (see [libc/](../libc/)): it uses the real standard headers (`<stdio.h>`, `<unistd.h>`, `<fcntl.h>`, `<dirent.h>`, `<sys/socket.h>`, ...), musl's `crt1` startup, and libc's syscall wrappers. The hand-rolled `int $0x80` stubs and `crt0.c` were dropped in the musl port. (`resolv.c`, the stub resolver shared by `ping` and `nc`, stays freestanding for now; a thin `getaddrinfo` shim is a documented follow-on.)
+Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility is an ordinary hosted C program linked statically against the ported musl libc (see [vendor/musl/](../vendor/musl/)): it uses the real standard headers (`<stdio.h>`, `<unistd.h>`, `<fcntl.h>`, `<dirent.h>`, `<sys/socket.h>`, ...), musl's `crt1` startup, and libc's syscall wrappers. The hand-rolled `int $0x80` stubs and `crt0.c` were dropped in the musl port. (`resolv.c`, the stub resolver, is shared by `ping`, `nc`, and the `dnstest` test, all linked against the same musl.)
 
-Built for the Rach2 kernel with `make` against `../libc/install` (run `libc/build_libc.sh` once first). A separate `Makefile.linux` still builds them natively on Linux.
+Built for the Rach2 kernel with `make` against `../vendor/musl/install` (run `vendor/musl/build_libc.sh` once first). A separate `Makefile.linux` still builds them natively on Linux.
 
 ## Utilities
 
@@ -51,7 +51,7 @@ Requires `i686-elf-gcc` specifically (the musl utilities link a 32-bit libgcc th
 make
 ```
 
-This links each utility statically against the ported musl (`../libc/install`: musl's `crt1/crti` + `libc.a` + `crtn`, no hand-rolled `crt0`) as a freestanding ELF32 executable at `0x08048000`. The binaries are staged into a KRFFS RAM disk by `krffs/build_ramdisk.sh` (or `make ramdisk` from the repo root) and run on the kernel.
+This links each utility statically against the ported musl (`../vendor/musl/install`: musl's `crt1/crti` + `libc.a` + `crtn`, no hand-rolled `crt0`) as a freestanding ELF32 executable at `0x08048000`. The binaries are staged into a KRFFS RAM disk by `krffs/build_ramdisk.sh` (or `make ramdisk` from the repo root) and run on the kernel.
 
 ## Build for Linux
 

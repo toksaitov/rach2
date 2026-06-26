@@ -1,4 +1,4 @@
-# libc: musl for Rach2
+# musl: the C library for Rach2
 
 Rach2 links its userspace against [musl libc](https://musl.libc.org), a small, clean, MIT-licensed C library. musl is what lets Rach2 run real C programs built against a real libc, rather than a handful of hand-written freestanding ones, and porting it drives the process ABI, TLS, virtual memory, and syscall work.
 
@@ -20,15 +20,26 @@ Outputs (under `install/`):
 * `lib/crt1.o`, `lib/crti.o`, `lib/crtn.o`, the C runtime startup and teardown objects
 * `include/`, the musl headers
 
+## Updating from upstream
+
+musl is vendored as the pinned source tarball beside this Readme and built unmodified; the only Rach2-owned files here are this Readme and `build_libc.sh`. To move to a new musl release:
+
+1. Download the new `musl-X.Y.Z.tar.gz` from https://musl.libc.org and replace the tarball here.
+2. Set `MUSL_VERSION` and `SHA256` in `build_libc.sh` to the new release and its published sha256.
+3. Rebuild with `make` (or `./build_libc.sh`), then run `make verify-host` and a boot.
+4. musl is used as-is. If a new release expects a syscall the kernel does not implement, add it in `rach2/sys`, not here; the adaptation belongs in the kernel, not the dependency.
+
+There are no source patches. If one ever becomes unavoidable, add `patches/NNNN-reason.patch` (applied right after extraction by `build_libc.sh`) and explain it here; keep it the rare exception, not a fork.
+
 ## Linking a program against musl
 
 ```
-i686-elf-gcc -static -nostdlib -nostartfiles -isystem libc/install/include \
+i686-elf-gcc -static -nostdlib -nostartfiles -isystem vendor/musl/install/include \
   -o prog \
-  libc/install/lib/crt1.o libc/install/lib/crti.o \
+  vendor/musl/install/lib/crt1.o vendor/musl/install/lib/crti.o \
   prog.c \
-  libc/install/lib/libc.a $(i686-elf-gcc -print-libgcc-file-name) \
-  libc/install/lib/crtn.o \
+  vendor/musl/install/lib/libc.a $(i686-elf-gcc -print-libgcc-file-name) \
+  vendor/musl/install/lib/crtn.o \
   -Wl,-z,noexecstack
 ```
 

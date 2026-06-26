@@ -1,12 +1,12 @@
 # Unix Utilities Makefile (Rach2)
 #
 # Builds the utilities as ordinary hosted C programs linked statically against
-# the ported musl (see libc/build_libc.sh), the same way tests/musl/build.sh
+# the ported musl (see vendor/musl/build_libc.sh), the same way tests/musl/build.sh
 # links its programs: musl's crt1/crti + libc.a + crtn via the cross compiler,
 # with the freestanding crt0.c and hand-rolled int-0x80 stubs dropped. Each
 # program now uses the real libc headers (<stdio.h>, <unistd.h>, <dirent.h>, ...).
 #
-# Requires libc/install (run libc/build_libc.sh once first). For Linux host
+# Requires vendor/musl/install (run vendor/musl/build_libc.sh once first). For Linux host
 # builds, use: make -f Makefile.linux
 
 # Shared header-dependency tracking + the toolchain guard (see ../mk/). The musl
@@ -21,7 +21,7 @@ include ../mk/deps.mk
 CC := $(or $(shell command -v i686-elf-gcc 2>/dev/null),$(CROSS_CC))
 
 # Ported musl install tree (headers + static libc.a + crt objects).
-PREFIX  := ../libc/install
+PREFIX  := ../vendor/musl/install
 LIBGCC  := $(shell $(CC) -m32 -print-libgcc-file-name)
 CRT1    := $(PREFIX)/lib/crt1.o
 CRTI    := $(PREFIX)/lib/crti.o
@@ -58,7 +58,7 @@ $(UTILITIES): | libc-check
 # Fail early with a clear message if the ported libc has not been built.
 libc-check:
 	@test -f "$(PREFIX)/lib/libc.a" || { \
-	    echo "error: $(PREFIX)/lib/libc.a not found; run libc/build_libc.sh first" >&2; \
+	    echo "error: $(PREFIX)/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2; \
 	    exit 1; }
 
 # These compile+link in one step (no .o intermediates); -MF redirects the GCC-written

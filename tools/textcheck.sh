@@ -20,16 +20,16 @@ findings=$(mktemp)
 trap 'rm -f "$findings"' EXIT INT TERM
 
 # Find in-house files under the source roots. The vendored extracted trees and their
-# built output (libc/install, libc/musl-*, busybox/busybox-*, dropbear/dropbear-*) and
+# built output (vendor/musl/install and the vendor/*/{musl,busybox,dropbear}-* trees) and
 # the out-of-tree .build/ are pruned. ports/doom and the dev-log records are not roots,
 # so they are skipped. The caller appends the name filter and -print.
 prune_find() {
-    find rach2 ish utils tests krffs tools mk libc busybox dropbear \
+    find rach2 ish utils tests krffs tools mk vendor \
         -path '*/.build' -prune -o \
-        -path 'libc/install' -prune -o \
-        -path 'libc/musl-*' -prune -o \
-        -path 'busybox/busybox-*' -prune -o \
-        -path 'dropbear/dropbear-*' -prune -o \
+        -path 'vendor/musl/install' -prune -o \
+        -path 'vendor/musl/musl-*' -prune -o \
+        -path 'vendor/busybox/busybox-*' -prune -o \
+        -path 'vendor/dropbear/dropbear-*' -prune -o \
         "$@" 2>/dev/null
 }
 
@@ -40,7 +40,7 @@ md_files() {
 
 # Shell, make, and the two extensionless muslgcc wrappers.
 script_files() {
-    ls ./Makefile busybox/muslgcc dropbear/muslgcc 2>/dev/null
+    ls ./Makefile vendor/busybox/muslgcc vendor/dropbear/muslgcc 2>/dev/null
     prune_find '(' -name '*.sh' -o -name '*.mk' -o -name 'Makefile' ')' -print
 }
 

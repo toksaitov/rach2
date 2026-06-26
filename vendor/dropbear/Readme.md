@@ -1,6 +1,6 @@
 # Dropbear SSH for Rach2
 
-A static Dropbear 2022.83 SSH server linked against the ported musl (`libc/install`). A real OpenSSH client does
+A static Dropbear 2022.83 SSH server linked against the ported musl (`vendor/musl/install`). A real OpenSSH client does
 
     ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 
@@ -12,11 +12,22 @@ and lands in an interactive BusyBox `ash` shell over an SSH-driven pty.
 
 Or build it through the top level (`make full`, or `make deps DEPS=full`); either builds Dropbear on demand behind a stamp file (it relinks only when the tarball, `localoptions.h`, the `muslgcc` wrapper, or libc changes).
 
-It verifies the pinned tarball (`dropbear-2022.83.tar.bz2`, sha256 gated), extracts it, applies the curated `localoptions.h`, and configures against the ported musl with the `muslgcc` wrapper (shared with busybox), bundled libtomcrypt/libtommath, and `CROSS_COMPILE=i686-elf-`. It builds `dropbearmulti` (the `dropbear` server + `dropbearkey`, MULTI=1 dispatching on `argv[1]`), strips it, and stages it to `tests/dropbearmulti` (installed into the RAM disk as `/dropbearmulti`). Run `libc/build_libc.sh` and `busybox/build_busybox.sh` first.
+It verifies the pinned tarball (`dropbear-2022.83.tar.bz2`, sha256 gated), extracts it, applies the curated `localoptions.h`, and configures against the ported musl with the `muslgcc` wrapper (shared with busybox), bundled libtomcrypt/libtommath, and `CROSS_COMPILE=i686-elf-`. It builds `dropbearmulti` (the `dropbear` server + `dropbearkey`, MULTI=1 dispatching on `argv[1]`), strips it, and stages it to `tests/dropbearmulti` (installed into the RAM disk as `/dropbearmulti`). Run `vendor/musl/build_libc.sh` and `vendor/busybox/build_busybox.sh` first.
 
 * `--disable-harden` is REQUIRED. With hardening on, configure adds `-Wl,-pie` and the link is a dynamic PIE (interpreter `/usr/lib/libc.so.1`) that Rach2's ELF loader cannot relocate or run. With it off the binary is static non-PIE i686.
 * `localoptions.h` curates the crypto: curve25519 + ECDH, chacha20-poly1305, aes128/256-ctr, hmac-sha256, ed25519, RSA (signkey.c needs `DROPBEAR_SIGNKEY_RSA`), pubkey + password auth, MOTD off.
 * Disabled: zlib, syslog, utmp/wtmp/lastlog, loginrec, pututline (none exist here).
+
+## Updating from upstream
+
+The only Rach2-owned files here are this Readme, `build_dropbear.sh`, the `muslgcc` wrapper (shared with busybox), and `localoptions.h`; Dropbear itself is the pinned, unmodified tarball. To move to a new release:
+
+1. Download the new `dropbear-X.Y.Z.tar.bz2` from https://matt.ucc.asn.au/dropbear/ and replace the tarball here.
+2. Set `VERSION` and `TARBALL_SHA256` in `build_dropbear.sh` to the new release and its sha256.
+3. Rebuild with `make full` (or `./build_dropbear.sh`), then re-run a boot and the SSH capstone.
+4. If the new release changed an option, adjust `localoptions.h` (Dropbear's own local-options header) and keep `--disable-harden` in the configure flags.
+
+There are no source patches; all customization is `localoptions.h`. If a patch ever becomes unavoidable, add `patches/NNNN-reason.patch` (applied after extraction by `build_dropbear.sh`) and explain it here.
 
 ## Run
 

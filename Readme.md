@@ -16,11 +16,13 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [krffs/](krffs/)                         | K&R First-Fit File System tools and RAM disk builder                                                                   | [Readme](krffs/Readme.md)             |
 | [ish/](ish/)                             | Minimal Unix shell with I/O redirection and process management                                                         | [Readme](ish/Readme.md)               |
 | [utils/](utils/)                         | Core Unix utilities (`echo`, `cat`, `ls`, `mv`, `rm`, `ping`, `nc`, `httpd`, and more), linked against the ported musl | [Readme](utils/Readme.md)             |
-| [libc/](libc/)                           | The ported musl libc: reproducible build, the SysV/auxv startup contract                                               | [Readme](libc/Readme.md)              |
-| [busybox/](busybox/)                     | Static-musl BusyBox build: the interactive `ash` login shell                                                           | [Readme](busybox/Readme.md)           |
-| [dropbear/](dropbear/)                   | Static-musl Dropbear SSH server: the remote-login capstone                                                             | [Readme](dropbear/Readme.md)          |
+| [vendor/musl/](vendor/musl/)             | The ported musl libc: reproducible build, the SysV/auxv startup contract                                               | [Readme](vendor/musl/Readme.md)       |
+| [vendor/busybox/](vendor/busybox/)       | Static-musl BusyBox build: the interactive `ash` login shell                                                           | [Readme](vendor/busybox/Readme.md)    |
+| [vendor/dropbear/](vendor/dropbear/)     | Static-musl Dropbear SSH server: the remote-login capstone                                                             | [Readme](vendor/dropbear/Readme.md)   |
 | [ports/doom/](ports/doom/)               | Doom port with VGA graphics, mouse, and audio                                                                          | [Readme](ports/doom/Readme.md)        |
 | [mk/](mk/)                               | Shared GNU-Make building blocks: toolchain, header-deps, `.build/`, clangd/IDE setup                                   | [Readme](mk/Readme.md)                |
+
+Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
 
 ## Kernel subsystems
 
@@ -58,7 +60,7 @@ make full      # + the capstones (BusyBox, Dropbear SSH, Doom); ends at the caps
 make deps      # just the vendored third-party (libc; DEPS=full adds busybox+dropbear)
 make help      # list every target
 make clean     # remove component build products
-make distclean # + the vendored libc/busybox/dropbear builds (a full from-scratch reset)
+make distclean # + the vendored musl/busybox/dropbear builds (a full from-scratch reset)
 ```
 
 `make` builds everything the everyday workflow needs, in dependency order, with no manual `build_*.sh` and no `make clean` rituals. A header edit rebuilds only the objects that include it. The ported musl libc and the BusyBox/Dropbear capstones are vendored as pinned tarballs and built on demand behind stamp files; build intermediates live out-of-tree under `.build/`, so the source tree stays clean. The build system does not run QEMU; the run scripts in `rach2/` do that.

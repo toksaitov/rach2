@@ -64,7 +64,7 @@ make        # build all freestanding test programs
 make clean  # remove the compiled binaries
 ```
 
-The musl programs build separately with `musl/build.sh` (after `libc/build_libc.sh`); the host seam tests build and run through `make verify-host`.
+The musl programs build separately with `musl/build.sh` (after `vendor/musl/build_libc.sh`); the host seam tests build and run through `make verify-host`.
 
 ## Running in Rach2
 

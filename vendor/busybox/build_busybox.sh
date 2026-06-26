@@ -4,8 +4,8 @@
 # build_busybox.sh: build a static musl BusyBox for Rach2 from the pinned,
 # vendored tarball. Verifies the sha256, extracts, applies the curated
 # rach2.config, builds against the ported musl via the muslgcc wrapper, strips,
-# and stages the binary to ../tests/busybox (installed into the RAM disk as
-# /busybox by krffs/build_test_ramdisk.sh). Run libc/build_libc.sh first.
+# and stages the binary to ../../tests/busybox (installed into the RAM disk as
+# /busybox by krffs/build_test_ramdisk.sh). Run vendor/musl/build_libc.sh first.
 #
 # Usage: ./build_busybox.sh
 #
@@ -18,7 +18,7 @@ cd "$SCRIPT_DIR"
 VERSION="1.36.1"
 TARBALL="busybox-${VERSION}.tar.bz2"
 SRC="busybox-${VERSION}"
-PREFIX="$SCRIPT_DIR/../libc/install"
+PREFIX="$SCRIPT_DIR/../musl/install"
 WRAP="$SCRIPT_DIR/muslgcc"
 
 # Pinned sha256 of the vendored tarball (published on busybox.net). The build
@@ -35,7 +35,7 @@ sha256_of()
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "busybox: $PREFIX/lib/libc.a not found; run libc/build_libc.sh first" >&2
+    echo "busybox: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
     exit 1
 fi
 if [ ! -f "$TARBALL" ]; then
@@ -65,9 +65,9 @@ echo "busybox: building (CC=muslgcc, CROSS_COMPILE=i686-elf-, HOSTCC=cc)"
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
     CROSS_COMPILE=i686-elf- CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
 
-echo "busybox: staging the stripped binary to ../tests/busybox"
-i686-elf-strip "$SRC/busybox" -o ../tests/busybox
-ls -l ../tests/busybox
+echo "busybox: staging the stripped binary to ../../tests/busybox"
+i686-elf-strip "$SRC/busybox" -o ../../tests/busybox
+ls -l ../../tests/busybox
 
-echo "busybox: built $VERSION ($(wc -c < ../tests/busybox) bytes, static, musl, i686)"
+echo "busybox: built $VERSION ($(wc -c < ../../tests/busybox) bytes, static, musl, i686)"
 echo "busybox: rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /busybox"

@@ -30,7 +30,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO" || exit 1
 VDIR=/tmp/rach2_verify
 mkdir -p "$VDIR"
-LIBC="$REPO/libc/install"
+LIBC="$REPO/vendor/musl/install"
 fail=0
 
 hr() { printf -- '---- %s ----\n' "$*"; }
@@ -42,9 +42,9 @@ hr() { printf -- '---- %s ----\n' "$*"; }
 inhouse_ch()
 {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
-    # libc/ holds only the vendored musl tree (install/, musl-*/) plus any future
-    # in-house shim; prune the vendored parts so they are never checked.
-    find libc -path '*/install' -prune -o -path '*/musl-*' -prune -o \
+    # vendor/musl/ holds only the vendored musl tree (install/, musl-*/) plus any
+    # future in-house shim; prune the vendored parts so they are never checked.
+    find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     # The other hand-written programs: the krffs host tools (minus the vendored
     # termbox2 and vs-dokany), the utils, the ish shell, and every test (the
@@ -57,7 +57,7 @@ inhouse_ch()
 # tree, which we never reformat).
 newcode_ch()
 {
-    find libc -path '*/install' -prune -o -path '*/musl-*' -prune -o \
+    find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     ls tests/host/*.c tests/host/*.h tests/*probe.c 2>/dev/null
 }
@@ -93,7 +93,7 @@ else
     echo "  FAIL: see $VDIR/verify_cppcheck.log"; fail=1
 fi
 
-# 3. shellcheck. New in-house scripts (tools/, libc/) are STRICT; SC2086 stays
+# 3. shellcheck. New in-house scripts (tools/, vendor/musl/) are STRICT; SC2086 stays
 #    active so an accidental unquoted expansion is caught. The legacy QEMU
 #    run/build scripts waive SC2086 (option word-splitting is intentional) and
 #    SC2034 (vars shared across sourced fragments); SC1091 covers the dynamic
@@ -101,7 +101,7 @@ fi
 hr "3/8 shellcheck"
 sc=0
 # shellcheck disable=SC2046
-shellcheck -x -e SC1091 $(ls tools/*.sh libc/*.sh 2>/dev/null) \
+shellcheck -x -e SC1091 $(ls tools/*.sh vendor/musl/*.sh 2>/dev/null) \
     >"$VDIR/verify_shellcheck.log" 2>&1 || sc=1
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
@@ -169,7 +169,7 @@ if [ -f "$LIBC/lib/libc.a" ]; then
         echo "  FAIL: musl link failed; see $VDIR/_abi.log"; fail=1
     fi
 else
-    echo "  FAIL: libc not built; run libc/build_libc.sh first (the ABI gate"
+    echo "  FAIL: libc not built; run vendor/musl/build_libc.sh first (the ABI gate"
     echo "          cannot verify the musl ABI without it, so it does not pass)"
     fail=1
 fi

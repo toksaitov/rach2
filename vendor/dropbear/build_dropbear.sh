@@ -7,8 +7,8 @@
 # no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the binary links static
 # non-PIE; Rach2's ELF loader does not relocate a PIE), applies the curated
 # localoptions.h, builds dropbearmulti (the dropbear server + dropbearkey), strips,
-# and stages it to ../tests/dropbearmulti (installed into the RAM disk as
-# /dropbearmulti). Run libc/build_libc.sh first.
+# and stages it to ../../tests/dropbearmulti (installed into the RAM disk as
+# /dropbearmulti). Run vendor/musl/build_libc.sh first.
 #
 # Usage: ./build_dropbear.sh
 #
@@ -21,7 +21,7 @@ cd "$SCRIPT_DIR"
 VERSION="2022.83"
 TARBALL="dropbear-${VERSION}.tar.bz2"
 SRC="dropbear-${VERSION}"
-PREFIX="$SCRIPT_DIR/../libc/install"
+PREFIX="$SCRIPT_DIR/../musl/install"
 WRAP="$SCRIPT_DIR/muslgcc"
 
 # Pinned sha256 of the vendored tarball (published on matt.ucc.asn.au/dropbear).
@@ -37,7 +37,7 @@ sha256_of()
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "dropbear: $PREFIX/lib/libc.a not found; run libc/build_libc.sh first" >&2
+    echo "dropbear: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
     exit 1
 fi
 if [ ! -f "$TARBALL" ]; then
@@ -84,9 +84,9 @@ echo "dropbear: building dropbearmulti (dropbear server + dropbearkey, static)"
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
     PROGRAMS="dropbear dropbearkey" MULTI=1 STATIC=1 SKIP_STRIP=y dropbearmulti
 
-echo "dropbear: staging the stripped binary to ../tests/dropbearmulti"
-i686-elf-strip "$SRC/dropbearmulti" -o ../tests/dropbearmulti
-ls -l ../tests/dropbearmulti
+echo "dropbear: staging the stripped binary to ../../tests/dropbearmulti"
+i686-elf-strip "$SRC/dropbearmulti" -o ../../tests/dropbearmulti
+ls -l ../../tests/dropbearmulti
 
-echo "dropbear: built $VERSION ($(wc -c < ../tests/dropbearmulti) bytes, static, musl, i686)"
+echo "dropbear: built $VERSION ($(wc -c < ../../tests/dropbearmulti) bytes, static, musl, i686)"
 echo "dropbear: rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /dropbearmulti"
