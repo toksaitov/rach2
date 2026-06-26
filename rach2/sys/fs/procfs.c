@@ -35,7 +35,7 @@ struct procfs_file {
     int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
 };
 
-/* ---- bounded text builders (no snprintf; cap leaves room for a NUL) ---- */
+/* bounded text builders (no snprintf; cap leaves room for a NUL) */
 
 static void ap_ch(char *buf, int cap, int *len, char c)
 {
@@ -78,7 +78,7 @@ static void ap_int(char *buf, int cap, int *len, int v)
     }
 }
 
-/* ---- queries over the process table ---- */
+/* queries over the process table */
 
 /**
  * Resolve a /proc pid token to a live pid, or -1.
@@ -315,7 +315,7 @@ uint32_t procfs_ino_pid(int pid)
     return PROCFS_INO_PID_BASE + (uint32_t)(pid & 0xffff);
 }
 
-/* ---- the /proc file backing: a snapshot served through file_ops ---- */
+/* the /proc file backing: a snapshot served through file_ops */
 
 static struct procfs_file proc_files[8];
 

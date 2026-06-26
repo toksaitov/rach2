@@ -50,7 +50,7 @@ int main(void)
     struct kernel_pollfd fds[64];
     int n;
 
-    /* --- fdsets_to_pollfds --- */
+    /* fdsets_to_pollfds */
 
     /* Empty sets produce no pollfds. */
     zero(r);
@@ -118,7 +118,7 @@ int main(void)
     /* Exactly max_pollfds fits (boundary, not past it). */
     CHECK(fdsets_to_pollfds(64, r, w, e, fds, 3) == 3);
 
-    /* --- pollfds_to_fdsets --- */
+    /* pollfds_to_fdsets */
 
     /* POLLIN -> readable, POLLOUT -> writable, POLLPRI -> except; each counts
      * 1. The destination sets must be pre-zeroed (projection ORs bits in). */

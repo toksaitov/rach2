@@ -8,9 +8,12 @@
  * buffers and touch no syscalls, so the `dnstest` program can exercise them
  * directly; only `resolve_host` does file and socket I/O.
  *
- * Only the functions declared in `netdb.h` are external; every other symbol is
- * static, so this object links cleanly beside programs that define their own
- * print, strlen, and syscall helpers (ping, nc, dnstest).
+ * This one source is compiled two ways: against the ported musl into the `ping`
+ * and `nc` utilities, and freestanding (`-nostdlib`, no libc) into the
+ * `dnstest` test. To link in both, its own file and socket I/O issues `int
+ * 0x80` directly rather than calling the libc wrappers, and every symbol but
+ * the `netdb.h` entry points is static, so it never collides with a host
+ * program's own helpers. The musl utilities that link it use musl elsewhere.
  */
 
 #include "netdb.h"
@@ -20,8 +23,7 @@ typedef unsigned short u16;
 typedef unsigned char  u8;
 typedef unsigned int   usize;
 
-/* Files are read from the flat KRFFS root (no directories; see the build
- * scripts that stage them). A future musl port expects /etc/... instead. */
+/* Read from the KRFFS root (not /etc), where the build scripts stage them. */
 #define RESOLV_CONF "/resolv.conf"
 #define HOSTS_PATH  "/hosts"
 
@@ -39,8 +41,6 @@ typedef unsigned int   usize;
 #define MSG_DONTWAIT  0x40
 
 struct timeval { long tv_sec; long tv_usec; };
-
-/* --- syscalls (Linux i386 numbers, matching the other utils) ------------- */
 
 static int sys_open(const char *path, int flags, int mode)
 {
@@ -80,8 +80,6 @@ static int sys_gettimeofday(struct timeval *tv)
         : "=a"(r) : "0"(78), "b"(tv), "c"(0) : "memory");
     return r;
 }
-
-/* --- small helpers ------------------------------------------------------- */
 
 /** Case-insensitive equality of two NUL-terminated strings. */
 static int ci_eq(const char *a, const char *b)
@@ -149,8 +147,6 @@ static void delay_ms(int ms)
     } while (elapsed < ms);
 }
 
-/* --- public: numeric literal --------------------------------------------- */
-
 /**
  * Parse a dotted-quad literal in `s` into the host-order IPv4 address `out_ip`.
  *
@@ -190,8 +186,6 @@ int rach2_inet_aton(const char *s, unsigned int *out_ip)
     *out_ip = (ip << 8) | (u32)octet;
     return 0;
 }
-
-/* --- public: /hosts lookup ----------------------------------------------- */
 
 /**
  * Look `name` up in the `/hosts` text held in `buf[0:len]`, returning its
@@ -250,10 +244,9 @@ int hosts_find(const char *buf, int len, const char *name, unsigned int *out_ip)
     return -1;
 }
 
-/* --- public: DNS wire format (RFC 1035) ---------------------------------- */
-
 /**
- * Encode an A-record query for `name` with transaction `id` into `buf[0:cap]`.
+ * Encode an A-record query for `name` with transaction `id` into `buf[0:cap]`,
+ * in the DNS wire format (RFC 1035).
  *
  * Writes the 12-byte header (RD set, one question) followed by the QNAME as
  * length-prefixed labels and the QTYPE/QCLASS trailer. Returns the byte length
@@ -400,8 +393,6 @@ int dns_parse_a(const unsigned char *resp, int len, unsigned short id,
     return -1;                               /* no A record present */
 }
 
-/* --- DNS transport -------------------------------------------------------- */
-
 /**
  * Return the first `nameserver <ip>` from `/resolv.conf`, or `DNS_DEFAULT_NS`
  * (SLIRP's built-in forwarder) when the file names none.
@@ -514,8 +505,6 @@ static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
     sys_close(fd);
     return got ? rc : -1;
 }
-
-/* --- public: full resolution --------------------------------------------- */
 
 /**
  * Resolve `host` to a host-order IPv4 address in `out_ip`.

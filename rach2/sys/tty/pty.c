@@ -112,7 +112,7 @@ static int fd_is_nonblock(fd_entry_t *e)
     return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
 }
 
-/* ---- the MASTER endpoint ---- */
+/* the MASTER endpoint */
 
 /* A master reader can stop blocking: the slave produced output, or every slave
  * descriptor has closed (EOF). */
@@ -311,7 +311,7 @@ static void ptm_close(fd_entry_t *e)
 
 static const struct file_ops ptm_ops = {ptm_read, ptm_write, ptm_poll, ptm_ioctl, ptm_close};
 
-/* ---- the SLAVE endpoint ---- */
+/* the SLAVE endpoint */
 
 static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -458,7 +458,7 @@ static void pts_close(fd_entry_t *e)
 
 static const struct file_ops pts_ops = {pts_read, pts_write, pts_poll, pts_ioctl, pts_close};
 
-/* ---- open paths ---- */
+/* open paths */
 
 int pty_open_master(int flags)
 {

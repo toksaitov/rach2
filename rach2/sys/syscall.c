@@ -5555,7 +5555,7 @@ static int32_t sys_ioctl(isr_params_t *params)
     return -ENOTTY;
 }
 
-/* --- Network socketcall (SYS_SOCKETCALL = 102) ---------------------------
+/* Network socketcall (SYS_SOCKETCALL = 102).
  *
  * Linux i386 convention: EBX is the sub-call number, ECX points to an array of
  * 32-bit arguments in user memory. Pointer arguments index into user memory,

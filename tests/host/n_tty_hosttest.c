@@ -80,7 +80,7 @@ int main(void)
     unsigned char buf[512];
     int n, i;
 
-    /* --- cooked: assemble a line, ERASE rubs out, exact ECHOE feedback --- */
+    /* cooked: assemble a line, ERASE rubs out, exact ECHOE feedback */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, 'a');
@@ -135,7 +135,7 @@ int main(void)
     feed(&t, &cp, t.tio.c_cc[VERASE]);
     CHECK(cp.len == 0 && t.line_len == 0);
 
-    /* --- VEOF: empty line is EOF; mid-line delivers the partial line --- */
+    /* VEOF: empty line is EOF; mid-line delivers the partial line */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, t.tio.c_cc[VEOF]); /* ^D on an empty line */
@@ -174,7 +174,7 @@ int main(void)
     CHECK(n == 4 && buf[0] == 'f' && buf[3] == '\n');
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* then EOF */
 
-    /* --- ISIG: INTR/QUIT/SUSP recognized, echoed ^X, flush the line --- */
+    /* ISIG: INTR/QUIT/SUSP recognized, echoed ^X, flush the line */
     n_tty_init(&t);
     cap_reset(&cp);
     feed_str(&t, &cp, "junk");
@@ -207,7 +207,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 4 && buf[0] == 'n' && buf[3] == '\n'); /* only post-signal input */
 
-    /* --- input flag mapping: ICRNL, IGNCR, INLCR, ISTRIP --- */
+    /* input flag mapping: ICRNL, IGNCR, INLCR, ISTRIP */
 
     /* ICRNL (default): a bare CR terminates the line as if it were NL. */
     n_tty_init(&t);
@@ -248,7 +248,7 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'A' && buf[1] == '\n');
 
-    /* --- raw mode: every byte immediately readable, gated only by VMIN --- */
+    /* raw mode: every byte immediately readable, gated only by VMIN */
     n_tty_init(&t);
     cap_reset(&cp);
     t.tio.c_lflag &= ~(ICANON | ISIG | ECHO); /* cfmakeraw-like */
@@ -284,7 +284,7 @@ int main(void)
     CHECK(n_tty_readable(&t) == 1);
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* ...but nothing to return */
 
-    /* --- output processing (OPOST/ONLCR/OCRNL) via n_tty_output --- */
+    /* output processing (OPOST/ONLCR/OCRNL) via n_tty_output */
 
     /* OPOST|ONLCR: a write of NL goes out as CRLF. */
     n_tty_init(&t);
@@ -307,8 +307,8 @@ int main(void)
     n_tty_output(&t, 'q', sink, &cp);
     CHECK(cap_is(&cp, "\nq", 2));
 
-    /* --- buffer bounds: a canonical line longer than the buffer is capped; the
-     * terminator still lands, and read returns the capped line at once --- */
+    /* buffer bounds: a canonical line longer than the buffer is capped; the
+     * terminator still lands, and read returns the capped line at once */
     n_tty_init(&t);
     cap_reset(&cp);
     for (i = 0; i < 300; i++) {

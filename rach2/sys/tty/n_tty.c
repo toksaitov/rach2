@@ -11,7 +11,7 @@
 
 #include "n_tty.h"
 
-/* --- the readable-byte ring (monotonic head/tail, slot = pos & (SIZE-1)) --- */
+/* the readable-byte ring (monotonic head/tail, slot = pos & (SIZE-1)) */
 
 static unsigned int rq_count(const struct n_tty *t)
 {
@@ -33,7 +33,7 @@ static unsigned char rq_pop(struct n_tty *t)
     return c;
 }
 
-/* --- output + echo --- */
+/* output + echo */
 
 /**
  * Emit one output byte through OPOST processing.
@@ -76,7 +76,7 @@ static void echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c)
     }
 }
 
-/* --- canonical-mode line editing --- */
+/* canonical-mode line editing */
 
 static void erase_one(struct n_tty *t, n_tty_out_fn out, void *ctx)
 {

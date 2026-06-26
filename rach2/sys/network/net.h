@@ -11,7 +11,6 @@
  * they build packets.
  *
  * Concurrency invariant (transmit path and shared state)
- * ------------------------------------------------------
  * Every layer assembles outgoing packets in a file-static buffer (eth_tx_frame,
  * ip_tx_buf, tcp_tx_buf, the ARP/ICMP/UDP buffers), the driver shares four TX
  * descriptors, and the TCB pool, socket pool and ARP cache are all shared. None

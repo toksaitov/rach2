@@ -302,7 +302,7 @@ void tty_hangup(struct tty *t)
     wq_wake_all(&t->input_wq);
 }
 
-/* --- the system console: VGA screen + COM1 serial --- */
+/* the system console: VGA screen + COM1 serial */
 
 /* Echo and output bytes go to both the screen and the serial line, so a serial
  * terminal mirrors what is on the VGA console. OPOST/ONLCR in the discipline has

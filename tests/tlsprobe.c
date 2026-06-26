@@ -224,7 +224,7 @@ void probe_main(u32 *sp)
 
     puts_("tlsprobe: starting\n");
 
-    /* --- Establish this process's TLS pointing at tcb_parent. --- */
+    /* Establish this process's TLS pointing at tcb_parent. */
     entry = set_thread_area(tcb_parent);
     if (entry < 0) {
         puts_("FAIL: set_thread_area\n");
@@ -242,7 +242,7 @@ void probe_main(u32 *sp)
         fails++;
     }
 
-    /* --- Solo phase: sentinels survive syscalls + timer IRQs. --- */
+    /* Solo phase: sentinels survive syscalls + timer IRQs. */
     tls_fill(0xA5A50000u);
     for (i = 0; i < SOLO_ITERS; i++) {
         sys_gettimeofday(tv2); /* int 0x80: tests syscall %gs save */
@@ -263,7 +263,7 @@ void probe_main(u32 *sp)
         puts_("solo phase OK\n");
     }
 
-    /* --- Isolation phase: a second process with a DIFFERENT TCB. --- */
+    /* Isolation phase: a second process with a DIFFERENT TCB. */
     pid = sys_fork();
     if (pid < 0) {
         puts_("FAIL: fork\n");
