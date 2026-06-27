@@ -25,8 +25,10 @@ The code in the `krffs` directory HERE is for generating RAM disk images for Rac
 
 ## Rach2 Build Scripts
 
-* `build_ramdisk.sh [size_mb]`: Builds ISH shell and Unix utilities, creates KRFFS image with all binaries
-* `build_test_ramdisk.sh [size_mb]`: Builds syscall test programs, creates KRFFS image with all test binaries
+* `mkimage.sh <manifest> <output.krffs> [size_mb]`: Builds one RAM-disk image out of tree from a manifest (dd + mkfs.krffs + stageimage.krffs, no FUSE mount)
+* `manifests/<image>.manifest`: The build recipe for each image (test, os-simple, os-real): the dirs and files to stage and their host sources
+* `stageimage.krffs <manifest> <image>`: Writes the whole tree (dirs and files) into a KRFFS image directly as v2 nodes
+* `gen_demo_key.sh`: Provisions the os-real SSH demo key (`rach2_demo_ed25519`) when none exists
 * `create_file_system.krffs.sh [size_mb]`: Creates an empty KRFFS file system (helper script)
 
 ## Structure
@@ -86,27 +88,27 @@ Build the host tools first (`make` from the repo root, or `make -C krffs`); they
 
     cd build/krffs
 
-1. Create an empty 10-megabyte file `file_system.krffs` and initialize a new KRFFS file system on it with the compiled `mkfs.krffs` utility. You can also change the size to anything else reasonable. Remember that on the server you are using a shared environment.
+1. Create an empty 10-megabyte file `my.krffs` and initialize a new KRFFS file system on it with the compiled `mkfs.krffs` utility. You can also change the size to anything else reasonable. Remember that on the server you are using a shared environment.
 
-        dd if=/dev/zero of=file_system.krffs bs=1048576 count=1
-        ./mkfs.krffs file_system.krffs
+        dd if=/dev/zero of=my.krffs bs=1048576 count=1
+        ./mkfs.krffs my.krffs
 
    You can do the same by calling the helper script. It lives in the krffs source dir and writes the image into `build/krffs/` no matter where you run it from.
 
         ../../krffs/create_file_system.krffs.sh
 
-2. Mount the file system from the `file_system.krffs` file into an empty directory `mount_point`.
+2. Mount the file system from the `my.krffs` file into an empty directory `mount_point`.
 
-        ./krffs file_system.krffs mount_point
+        ./krffs my.krffs mount_point
 
    If the `mount_point` directory is not empty, remove the files from it.
 
         rm -rf mount_point/*
-        ./krffs file_system.krffs mount_point
+        ./krffs my.krffs mount_point
 
    One useful option is to tell the program to print debug information for each file system operation with the `-d` flag.
 
-        ./krffs file_system.krffs mount_point -d
+        ./krffs my.krffs mount_point -d
 
    You can also check the list of all FUSE options by passing just the `-h` flag.
 
@@ -151,26 +153,28 @@ Build the host tools first (`make` from the repo root, or `make -C krffs`); they
 
 5. Visualize the file system structure with the `fsviz.krffs` program. The program uses the termbox2 [library](https://github.com/termbox/termbox2) to create an interactive interface. You can scroll with arrow keys if the visualization is too wide. Press CTRL+C to exit the program.
 
-        ./fsviz.krffs file_system.krffs
+        ./fsviz.krffs my.krffs
 
 ## Rach2 RAM Disk Creation
 
-The top-level Makefile drives this for you. Run from the repo root:
+Rach2 ships three purpose-built RAM-disk images, each its own file under `build/images/`. They coexist; there is no single shared image.
 
-    make ramdisk        # base image: ISH shell + Unix utilities
-    make test-ramdisk   # capstone image: busybox, dropbear, and the syscall probes
+* `test.krffs`: the freestanding syscall probes plus the musl integration programs. `make test` boots it headless and checks every probe exits 0.
+* `os-simple.krffs`: the ISH shell (booted as init) and the hand-written Unix utilities. The small, readable teaching image.
+* `os-real.krffs`: a real Unix-like environment: busybox (shell + coreutils), dropbear (SSH server and client), Doom, and an `/etc` + `/root` tree. The kernel boots `/bin/sh` as init; the SSH capstone lives here.
 
-Each target builds every component first, then runs the script below with `SKIP_BUILD=1` so the script only PACKAGES the already-built binaries (no component is built twice). `make full` ends at the capstone image, the one the dropbear SSH login boots.
+The top-level Makefile drives the build. Run from the repo root:
 
-You can also run the scripts directly. On their own (no `SKIP_BUILD`) they build the guest programs first, for convenience:
+    make os-simple-image   # the ISH shell + utilities (this is what plain `make` builds)
+    make test-image        # the syscall probes + musl programs
+    make os-real-image     # the busybox/dropbear/Doom environment
+    make images            # all three
+    make full              # all three (ends at the os-real image the SSH login boots)
 
-    ./build_ramdisk.sh          # ISH shell + utilities
-    ./build_test_ramdisk.sh     # syscall test programs (+ busybox/dropbear if built)
+Each target builds its inputs through the component sub-makes, then stages the image from its manifest. The staging is manifest-driven: `mkimage.sh` zeroes a file of the requested size, lays down a fresh KRFFS with `mkfs.krffs`, then runs `stageimage.krffs <manifest> <image>` to write the whole tree (directories and files) directly as v2 nodes. There is no FUSE mount, so it works the same on macOS and Linux.
 
-Both scripts create `file_system.krffs` (10 MB by default). Specify a different size:
+A manifest lives in `manifests/<image>.manifest` and lists the dirs and files to stage and their host sources. `os-real` also runs `gen_demo_key.sh` first to provision the SSH demo key when none exists.
 
-    ./build_ramdisk.sh 5
+Boot an image with the run script (it resolves `build/images/<image>.krffs`):
 
-Boot Rach2 with the RAM disk:
-
-    qemu-system-i386 -kernel build/rach2/kernel -initrd build/krffs/file_system.krffs -serial stdio
+    cd ../rach2 && ./run.sh os-simple

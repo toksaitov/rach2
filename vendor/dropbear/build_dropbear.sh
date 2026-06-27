@@ -7,7 +7,8 @@
 # no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the binary links static
 # non-PIE; Rach2's ELF loader does not relocate a PIE), applies the curated
 # localoptions.h, builds dropbearmulti (the dropbear server, the dbclient SSH
-# client, and dropbearkey, dispatched on argv[0]), strips, and stages it out of tree
+# client, and dropbearkey, dispatched on argv[1], so `dropbearmulti dropbear`),
+# strips, and stages it out of tree
 # to build/vendor/dropbear/dropbearmulti (staged at /bin/dropbearmulti in the os-real
 # image by its manifest). Run vendor/musl/build_libc.sh first.
 #

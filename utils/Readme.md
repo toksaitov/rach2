@@ -24,7 +24,7 @@ Built for the Rach2 kernel with `make` against `../vendor/musl/install` (run `ve
 * `nc.c`: Minimal TCP client (`nc <host> <port>`); relays a line of input and prints the reply over the socket descriptor; `host` may be a dotted-quad or a name
 * `httpd.c`: Minimal HTTP/1.0 server serving a diagnostic status page (the client endpoint, the request line and User-Agent the stack decoded, uptime and per-connection counters; listen on port 80, reach it via QEMU hostfwd)
 
-The network utilities use the `SYS_SOCKETCALL` interface and target QEMU's SLIRP network (gateway 10.0.2.2). `ping` and `nc` resolve a host argument through a small stub resolver (`resolv.c`, declared in `netdb.h`): a numeric literal, then the `/hosts` file, then a DNS query to the nameserver in `/resolv.conf` (SLIRP's forwarder 10.0.2.3). Both files live in the flat KRFFS root and are staged by `krffs/build_ramdisk.sh`.
+The network utilities use the `SYS_SOCKETCALL` interface and target QEMU's SLIRP network (gateway 10.0.2.2). `ping` and `nc` resolve a host argument through a small stub resolver (`resolv.c`, declared in `netdb.h`): a numeric literal, then the `/hosts` file, then a DNS query to the nameserver in `/resolv.conf` (SLIRP's forwarder 10.0.2.3). Both files live in the flat KRFFS root and are staged by the os-simple image manifest.
 
 ## Required Syscalls
 
@@ -51,7 +51,7 @@ Requires `i686-elf-gcc` specifically (the musl utilities link a 32-bit libgcc th
 make
 ```
 
-This links each utility statically against the ported musl (`../vendor/musl/install`: musl's `crt1/crti` + `libc.a` + `crtn`, no hand-rolled `crt0`) as a freestanding ELF32 executable at `0x08048000`. The binaries are staged into a KRFFS RAM disk by `krffs/build_ramdisk.sh` (or `make ramdisk` from the repo root) and run on the kernel.
+This links each utility statically against the ported musl (`../vendor/musl/install`: musl's `crt1/crti` + `libc.a` + `crtn`, no hand-rolled `crt0`) as a freestanding ELF32 executable at `0x08048000`. The binaries are staged into the os-simple image by its manifest (`make os-simple-image` from the repo root) and run on the kernel.
 
 ## Build for Linux
 

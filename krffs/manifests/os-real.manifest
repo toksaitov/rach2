@@ -9,7 +9,7 @@
 # /bin: the shell and the programs. busybox is staged at /bin/busybox (its compiled
 # exec path, which standalone ash re-execs) and at /bin/sh (the login shell the
 # kernel boots as init and dropbear runs). dropbearmulti dispatches the server, the
-# client, and keygen on argv[0] (dropbear / dbclient / dropbearkey).
+# client, and keygen on argv[1]: dropbearmulti {dropbear,dbclient,dropbearkey}.
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox

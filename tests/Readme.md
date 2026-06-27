@@ -68,19 +68,19 @@ The musl programs build separately with `musl/build.sh` (after `vendor/musl/buil
 
 ## Running in Rach2
 
-1. Build the test programs:
+The probes are staged into the test image (`build/images/test.krffs`), which `make test` builds and boots headless to assert every probe exits 0. To drive them by hand instead:
+
+1. Build the test image:
    ```sh
-   make
+   make test-image
    ```
 
-2. Add the compiled binaries to a KRFFS file system image.
-
-3. Boot Rach2 with the KRFFS image as a module:
+2. Boot Rach2 with the test image as a module:
    ```sh
-   qemu-system-i386 -kernel build/rach2/kernel -initrd build/krffs/file_system.krffs -serial stdio
+   qemu-system-i386 -kernel build/rach2/kernel -initrd build/images/test.krffs -serial stdio
    ```
 
-4. Execute from the Rach2 shell:
+3. Execute from the Rach2 shell:
    ```
    > exec hello
    Hello from ELF!

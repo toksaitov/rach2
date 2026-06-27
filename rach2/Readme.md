@@ -91,9 +91,9 @@ This document covers the foundation kernel. The networking stack, the musl userl
 
 ```bash
 make                        # Compile the kernel (out of tree: ../build/rach2/kernel)
-./run.sh                    # Quick test with QEMU
-./run_with_ram_disk.sh      # Run with file system and shell
-./run_from_iso.sh           # Boot from ISO with GRUB
+./run.sh                    # Boot the kernel alone, into the kernel debug shell
+./run.sh os-simple          # Boot a RAM-disk image (test, os-simple, or os-real)
+./run_from_iso.sh os-simple # Boot from ISO with GRUB
 ./debug.sh                  # Debug with GDB
 ```
 
@@ -955,7 +955,7 @@ The write operations use the K&R first-fit allocator to manage free space. When 
 
 To boot with a KRFFS RAM disk:
 
-    qemu-system-i386 -kernel ../build/rach2/kernel -initrd /path/to/file_system.krffs -serial stdio
+    qemu-system-i386 -kernel ../build/rach2/kernel -initrd ../build/images/os-simple.krffs -serial stdio
 
 The kernel will display:
 
@@ -1203,9 +1203,9 @@ Audio is controlled via ioctl on the console (fd 0):
 ### Running with Audio in QEMU
 
 ```bash
-./run_with_ram_disk.sh           # PC speaker only (default)
-./run_with_ram_disk.sh sb16      # Sound Blaster 16
-./run_with_ram_disk.sh hda       # Intel HD Audio
+./run.sh os-simple               # PC speaker only (default)
+./run.sh os-simple sb16          # Sound Blaster 16
+./run.sh os-simple hda           # Intel HD Audio
 ```
 
 For manual QEMU invocation:
@@ -1223,12 +1223,12 @@ qemu-system-i386 -kernel ../build/rach2/kernel -audiodev coreaudio,id=audio0 -de
 
 ### Scripts
 
-| Script                 | Description                        |
-|------------------------|------------------------------------|
-| `run.sh`               | Quick QEMU test with serial output |
-| `run_with_ram_disk.sh` | Run with the KRFFS RAM disk        |
-| `run_from_iso.sh`      | Boot ISO with GRUB                 |
-| `debug.sh`             | QEMU + GDB debugging               |
+| Script            | Description                        |
+|-------------------|------------------------------------|
+| `run.sh`          | Quick QEMU test with serial output |
+| `run.sh <image>`  | Boot a RAM-disk image in QEMU      |
+| `run_from_iso.sh` | Boot ISO with GRUB                 |
+| `debug.sh`        | QEMU + GDB debugging               |
 
 ### Prerequisites
 
@@ -1262,9 +1262,9 @@ brew install --cask docker
 ### Build Commands
 
 ```bash
-make           # Compile the kernel
-make clean     # Remove compiled files
-make iso       # Build bootable ISO (requires Docker)
+make                  # Compile the kernel
+make clean            # Remove compiled files
+make os-simple-iso    # Build a bootable ISO for one image (requires Docker)
 ```
 
 ### Running the Kernel
@@ -1275,23 +1275,21 @@ make iso       # Build bootable ISO (requires Docker)
 make && ./run.sh
 ```
 
-#### With KRFFS file system (for user programs)
+#### With a RAM-disk image (for user programs)
 
 ```bash
-cd ../krffs
-./build_ramdisk.sh    # or ./build_test_ramdisk.sh for tests
-cd ../rach2
-make && ./run_with_ram_disk.sh
+make os-simple-image     # or test-image / os-real-image; `make full` builds all three
+./run.sh os-simple       # boots ../build/images/os-simple.krffs
 ```
 
 #### From ISO with GRUB
 
 ```bash
-make iso
-./run_from_iso.sh
+make os-simple-iso
+./run_from_iso.sh os-simple
 ```
 
-Note (real hardware / external GRUB): If you load `kernel` and/or `file_system.krffs` from an existing GRUB install (or tools like Ventoy), make sure the files are not sparse. Some GRUB builds crash on sparse files with messages like `file.c:452: out of range pointer ...`.
+Note (real hardware / external GRUB): If you load `kernel` and/or a `.krffs` image from an existing GRUB install (or tools like Ventoy), make sure the files are not sparse. Some GRUB builds crash on sparse files with messages like `file.c:452: out of range pointer ...`.
 
 Use `rach2/grub_install.sh` to copy the files densely (no holes), or on Linux: `cp --sparse=never ...`.
 

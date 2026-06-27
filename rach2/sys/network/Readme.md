@@ -42,7 +42,7 @@ Userspace programs exercise the stack:
 The UDP and TCP tests expect a host echo server at `10.0.2.2:7777`. Boot with a NIC and (for inbound servers like `httpd`) a host forward:
 
 ```sh
-qemu-system-i386 -kernel ../build/rach2/kernel -initrd ../build/krffs/file_system.krffs -serial stdio \
+qemu-system-i386 -kernel ../build/rach2/kernel -initrd ../build/images/os-simple.krffs -serial stdio \
     -netdev user,id=net0,hostfwd=tcp::8080-:80 -device rtl8139,netdev=net0
 ```
 

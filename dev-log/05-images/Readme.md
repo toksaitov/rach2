@@ -1,0 +1,11 @@
+# Milestone 5: three purpose-built RAM-disk images
+
+The build made one RAM disk two overlapping ways, both writing the same krffs/file_system.krffs: a base image (the ish shell and the utils) and a capstone image (the syscall probes plus busybox and dropbear), each by a near-duplicate shell script that FUSE-mounted the image, copied flat files in, then ran a fixed-tree stager. This milestone replaced that with three images, each its own file under build/images/ so they coexist, each built for one purpose:
+
+* test: the freestanding syscall probes and the musl integration programs, nothing else. `make test` boots it headless and asserts every probe exits 0.
+* os-simple: our own ish shell (booted as init) and the hand-written Unix utilities. The small, readable image that shows how simple Unix tools are built.
+* os-real: a real Unix-like environment. busybox is the shell and the coreutils (its standalone ash dispatches the applets in-process, since KRFFS has no symlinks), dropbear is the SSH server and client, Doom is along for the ride, and /etc and /root are a real login and name-resolution config. The kernel boots /bin/sh as init; the SSH capstone lives here.
+
+The mechanism is a manifest-driven builder. The old fixed-tree stager became krffs/stageimage.krffs: it reads a line-oriented manifest (dir, file, optional-file, text, exec-dir directives) and writes the whole tree, directories and files alike, directly as KRFFS v2 nodes. There is no FUSE mount, so an image builds the same on macOS and Linux, and one builder plus three checked-in manifests replaced the two near-duplicate scripts. The kernel learned a real init (it tries /sbin/init, then /bin/sh, then ish), busybox moved its exec path to /bin/busybox, dropbear gained the dbclient client, and each image also produces a bootable ISO (make isos) for real hardware.
+
+The design was settled with a harsh Codex discussion (the image set, the manifest format, the no-symlink busybox handling, the ISO approach) and the owner's decisions (the names test/os-simple/os-real, a real kernel init, build it all). It was built in reviewed phases, each Codex-reviewed and verified by a real boot and, for os-real, the SSH capstone, then committed: the builder with the test and os-simple images, then `make test`, then os-real with the kernel init, then the per-image ISOs, then this documentation.

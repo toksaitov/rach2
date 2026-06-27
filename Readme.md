@@ -54,44 +54,47 @@ The kernel is freestanding and links no libgcc, so it alone also builds with `x8
 
 ```sh
 make doctor    # check your toolchain (PASS/MISSING with install hints)
-make           # the BASE teaching OS: libc, kernel, host tools, tests, utils, RAM disk
-make full      # + the capstones (BusyBox, Dropbear SSH, Doom); ends at the capstone
-               #   RAM-disk image the SSH login boots
+make           # the kernel + the os-simple image (the ISH shell + our Unix utilities)
+make full      # all three images: test, os-simple, and the os-real (BusyBox, Dropbear
+               #   SSH, Doom) capstone the SSH login boots
+make test      # boot the test image headless and assert every probe exits 0
+make images    # build all three images without the test run
+make isos      # a bootable ISO per image, for real hardware (Docker grub-mkrescue)
 make deps      # just the vendored third-party (libc; DEPS=full adds busybox+dropbear)
 make help      # list every target
 make clean     # remove component build products
 make distclean # + the vendored musl/busybox/dropbear builds (a full from-scratch reset)
 ```
 
-`make` builds everything the everyday workflow needs, in dependency order, with no manual `build_*.sh` and no `make clean` rituals. A header edit rebuilds only the objects that include it. The ported musl libc and the BusyBox/Dropbear capstones are vendored as pinned tarballs and built on demand behind stamp files; all build output lives out of tree under a single repo-root `build/` directory that mirrors the source tree, so the source tree stays clean. The build system does not run QEMU; the run scripts in `rach2/` do that.
+`make` builds everything the everyday workflow needs, in dependency order, with no manual `build_*.sh` and no `make clean` rituals. A header edit rebuilds only the objects that include it. The ported musl libc and the BusyBox/Dropbear capstones are vendored as pinned tarballs and built on demand behind stamp files; all build output lives out of tree under a single repo-root `build/` directory that mirrors the source tree, so the source tree stays clean. The three RAM-disk images build out of tree to `build/images/` from manifests in `krffs/manifests/`. The build system does not run QEMU; the run scripts in `rach2/` do that.
 
 ## Quick Start
 
 ```sh
 make doctor                                 # check the toolchain
-make                                        # build the base OS
-cd rach2 && ./run_with_ram_disk.sh          # boot into the ISH shell
+make                                        # build the kernel + the os-simple image
+cd rach2 && ./run.sh os-simple              # boot into the ISH shell
 
 # With audio:
-cd rach2 && ./run_with_ram_disk.sh sb16     # Sound Blaster 16
-cd rach2 && ./run_with_ram_disk.sh hda      # Intel HD Audio
+cd rach2 && ./run.sh os-simple sb16         # Sound Blaster 16
+cd rach2 && ./run.sh os-simple hda          # Intel HD Audio
 ```
 
 ### The SSH capstone: log into Rach2 with a real client
 
 ```sh
-make full                                   # build busybox + dropbear + the capstone image
+make full                                   # build the os-real image (busybox + dropbear + Doom)
 
-# Terminal 1: boot with SSH port-forwarding (the run scripts default to -cpu max,
-# which Dropbear needs for trusted entropy to generate a host key):
-cd rach2 && NET_HOSTFWD=hostfwd=tcp::2222-:22 ./run_with_ram_disk.sh
+# Terminal 1: boot the os-real image with SSH port-forwarding (the run scripts
+# default to -cpu max, which Dropbear needs for trusted entropy to generate a host key):
+cd rach2 && NET_HOSTFWD=hostfwd=tcp::2222-:22 ./run.sh os-real
 #   then, at the guest shell:  exec dropbearmulti dropbear -F -R -p 22
 
 # Terminal 2: from the repo root, log in with the auto-generated demo key:
 ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 ```
 
-From the ISH shell prompt:
+From the shell prompt:
 
 ```
 > ls                    # List files

@@ -12,7 +12,7 @@ and lands in an interactive BusyBox `ash` shell over an SSH-driven pty.
 
 Or build it through the top level (`make full`, or `make deps DEPS=full`); either builds Dropbear on demand behind a stamp file (it relinks only when the tarball, `localoptions.h`, the `muslgcc` wrapper, or libc changes).
 
-It verifies the pinned tarball (`dropbear-2022.83.tar.bz2`, sha256 gated), extracts it, applies the curated `localoptions.h`, and configures against the ported musl with the `muslgcc` wrapper (shared with busybox), bundled libtomcrypt/libtommath, and `CROSS_COMPILE=i686-elf-`. It builds `dropbearmulti` (the `dropbear` server + `dropbearkey`, MULTI=1 dispatching on `argv[1]`), strips it, and stages it out of tree to `build/vendor/dropbear/dropbearmulti` (installed into the RAM disk as `/dropbearmulti`). Run `vendor/musl/build_libc.sh` and `vendor/busybox/build_busybox.sh` first.
+It verifies the pinned tarball (`dropbear-2022.83.tar.bz2`, sha256 gated), extracts it, applies the curated `localoptions.h`, and configures against the ported musl with the `muslgcc` wrapper (shared with busybox), bundled libtomcrypt/libtommath, and `CROSS_COMPILE=i686-elf-`. It builds `dropbearmulti` (the `dropbear` server, the `dbclient` client, and `dropbearkey`, MULTI=1 dispatching on `argv[1]`, so `dropbearmulti dropbear`), strips it, and stages it out of tree to `build/vendor/dropbear/dropbearmulti` (staged into the os-real image as `/bin/dropbearmulti`). Run `vendor/musl/build_libc.sh` and `vendor/busybox/build_busybox.sh` first.
 
 * `--disable-harden` is REQUIRED. With hardening on, configure adds `-Wl,-pie` and the link is a dynamic PIE (interpreter `/usr/lib/libc.so.1`) that Rach2's ELF loader cannot relocate or run. With it off the binary is static non-PIE i686.
 * `localoptions.h` curates the crypto: curve25519 + ECDH, chacha20-poly1305, aes128/256-ctr, hmac-sha256, ed25519, RSA (signkey.c needs `DROPBEAR_SIGNKEY_RSA`), pubkey + password auth, MOTD off.
@@ -31,19 +31,19 @@ There are no source patches; all customization is `localoptions.h`. If a patch e
 
 ## Run
 
-From the kernel debug shell, with the RAM disk attached:
+Boot the os-real image (`run.sh os-real`) and, from its busybox shell, start the server:
 
-    exec dropbearmulti dropbear -F -R -p 22
+    dropbearmulti dropbear -F -R -p 22
 
 * `-cpu max` (the default in `run*.sh`) is mandatory. Dropbear seeds its CSPRNG from the kernel's trusted entropy; the default QEMU i386 CPU exposes no RDRAND/RDSEED, so `getrandom`/`/dev/urandom` fail closed and key generation cannot run.
-* `-R` auto-generates the host key on first connection into `/etc/dropbear/` (staged as an empty dir by `krffs/stagetree.krffs.c`).
+* `-R` auto-generates the host key on first connection into `/etc/dropbear/` (staged as an empty dir by the os-real manifest).
 * `-F` keeps it in the foreground. Do NOT pass `-E`; it is invalid without syslog (stderr is already the default log sink).
 
 The test harness boots qemu with `-cpu max -netdev user,hostfwd=tcp::2222-:22 -device rtl8139,netdev=net0`, starts the server, then runs a host `ssh` against `localhost:2222`.
 
 ## Login provisioning
 
-`krffs/build_test_ramdisk.sh` generates a demo keypair (`krffs/rach2_demo_ed25519`, git-ignored) if no `authorized_keys` is present and `krffs/stagetree.krffs.c` stages the public half into `/root/.ssh/authorized_keys` (0600, under `/root` 0755 and `/root/.ssh` 0700 so dropbear's strict permission check accepts it). `/etc/passwd` is `root:x:0:0:root:/root:/sh`; `/etc/shells` lists `/sh` so dropbear's `getusershell()` shell check passes; `/sh` is a flat-root copy of busybox (invoked as `sh` it runs `ash`).
+`krffs/gen_demo_key.sh` generates a demo keypair (`krffs/rach2_demo_ed25519`, git-ignored) if no `authorized_keys` is present, and the os-real manifest stages the public half into `/root/.ssh/authorized_keys` (0600, under `/root` 0755 and `/root/.ssh` 0700 so dropbear's strict permission check accepts it). `/etc/passwd` is `root:x:0:0:root:/root:/bin/sh`; `/etc/shells` lists `/bin/sh` so dropbear's `getusershell()` shell check passes; `/bin/sh` is busybox (invoked as `sh` it runs `ash`).
 
 ## Kernel gaps this integration surfaced (and how they were closed)
 

@@ -111,18 +111,16 @@ This produces a ~390KB freestanding ELF32 executable.
    make
    ```
 
-2. Build the RAM disk with Doom included (Doom is opt-in; the script stages it only
-   when `RAMDISK_WITH_DOOM=1`):
+2. Build the os-real image, which stages Doom at `/bin/doom` (from the repo root):
    ```sh
-   cd krffs
-   RAMDISK_WITH_DOOM=1 ./build_ramdisk.sh
+   make os-real-image
    ```
 
 3. Boot Rach2:
    ```sh
    cd rach2
-   ./run_with_ram_disk.sh sb16   # Sound Blaster 16
-   ./run_with_ram_disk.sh hda    # Intel HD Audio
+   ./run.sh os-real sb16   # Sound Blaster 16
+   ./run.sh os-real hda    # Intel HD Audio
    ```
 
 4. Run from the shell:
