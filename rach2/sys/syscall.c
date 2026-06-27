@@ -3173,6 +3173,18 @@ static int32_t sys_execve(isr_params_t *params)
             }
             argv_offset += (uint32_t)r + 1;
         }
+        /* The 16-slot bufs array holds at most 15 args plus a NULL terminator;
+         * a 16th non-NULL pointer is too many args, not a silent truncation. */
+        if (argc == 15) {
+            uint32_t arg_ptr = 0;
+            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[15],
+                               sizeof(arg_ptr)) != 0) {
+                return -EFAULT;
+            }
+            if (arg_ptr != 0) {
+                return -E2BIG;
+            }
+        }
     }
     _exec_argv_bufs[argc] = NULL;
 
@@ -3203,6 +3215,18 @@ static int32_t sys_execve(isr_params_t *params)
                 return -E2BIG; /* did not fit */
             }
             envp_offset += (uint32_t)r + 1;
+        }
+        /* As with argv: a 16th non-NULL envp pointer overflows the bufs array;
+         * fail rather than silently drop the tail of the environment. */
+        if (envc == 15) {
+            uint32_t env_ptr = 0;
+            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[15],
+                               sizeof(env_ptr)) != 0) {
+                return -EFAULT;
+            }
+            if (env_ptr != 0) {
+                return -E2BIG;
+            }
         }
     }
     _exec_envp_bufs[envc] = NULL;
