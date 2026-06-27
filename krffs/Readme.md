@@ -82,15 +82,18 @@ To remove compiled files:
 
 ## Usage
 
+Build the host tools first (`make` from the repo root, or `make -C krffs`); they land out of tree in `build/krffs/`. The steps below run in that directory, so the tools and the scratch image and mount point you create all stay in one git-ignored place:
+
+    cd build/krffs
+
 1. Create an empty 10-megabyte file `file_system.krffs` and initialize a new KRFFS file system on it with the compiled `mkfs.krffs` utility. You can also change the size to anything else reasonable. Remember that on the server you are using a shared environment.
 
         dd if=/dev/zero of=file_system.krffs bs=1048576 count=1
         ./mkfs.krffs file_system.krffs
 
-   You can do the same by calling a helper script.
+   You can do the same by calling the helper script. It lives in the krffs source dir and writes the image into `build/krffs/` no matter where you run it from.
 
-        chmod +x create_file_system.krffs.sh
-        ./create_file_system.krffs.sh
+        ../../krffs/create_file_system.krffs.sh
 
 2. Mount the file system from the `file_system.krffs` file into an empty directory `mount_point`.
 
@@ -99,7 +102,6 @@ To remove compiled files:
    If the `mount_point` directory is not empty, remove the files from it.
 
         rm -rf mount_point/*
-        rm mount_point/.gitignore
         ./krffs file_system.krffs mount_point
 
    One useful option is to tell the program to print debug information for each file system operation with the `-d` flag.
@@ -171,4 +173,4 @@ Both scripts create `file_system.krffs` (10 MB by default). Specify a different 
 
 Boot Rach2 with the RAM disk:
 
-    qemu-system-i386 -kernel ../rach2/kernel -initrd file_system.krffs -serial stdio
+    qemu-system-i386 -kernel build/rach2/kernel -initrd build/krffs/file_system.krffs -serial stdio

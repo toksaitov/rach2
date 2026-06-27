@@ -23,4 +23,4 @@ AUDIO_DEVICE="${1:-speaker}"
 # without it getrandom + /dev/[u]random fail closed. Override with CPU=... to test.
 CPU="${CPU:-max}"
 
-qemu-system-i386 -cpu "$CPU" -kernel kernel -initrd ../krffs/file_system.krffs -serial stdio $AUDIO_OPTS $NET_OPTS
+qemu-system-i386 -cpu "$CPU" -kernel ../build/rach2/kernel -initrd ../build/krffs/file_system.krffs -serial stdio $AUDIO_OPTS $NET_OPTS

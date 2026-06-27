@@ -7,8 +7,8 @@
 # no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the binary links static
 # non-PIE; Rach2's ELF loader does not relocate a PIE), applies the curated
 # localoptions.h, builds dropbearmulti (the dropbear server + dropbearkey), strips,
-# and stages it to ../../tests/dropbearmulti (installed into the RAM disk as
-# /dropbearmulti). Run vendor/musl/build_libc.sh first.
+# and stages it out of tree to build/vendor/dropbear/dropbearmulti (installed into
+# the RAM disk as /dropbearmulti). Run vendor/musl/build_libc.sh first.
 #
 # Usage: ./build_dropbear.sh
 #
@@ -23,6 +23,10 @@ TARBALL="dropbear-${VERSION}.tar.bz2"
 SRC="dropbear-${VERSION}"
 PREFIX="$SCRIPT_DIR/../musl/install"
 WRAP="$SCRIPT_DIR/muslgcc"
+# Out-of-tree staging dir, mirroring the source path vendor/dropbear/ (mk/build.mk).
+# It lives under build/ so a routine `make clean` never reaches it; only `make
+# distclean` (which removes build/vendor) forces this multi-minute rebuild.
+STAGE="$(cd "$SCRIPT_DIR/../.." && pwd)/build/vendor/dropbear"
 
 # Pinned sha256 of the vendored tarball (published on matt.ucc.asn.au/dropbear).
 TARBALL_SHA256="bc5a121ffbc94b5171ad5ebe01be42746d50aa797c9549a4639894a16749443b"
@@ -84,9 +88,10 @@ echo "dropbear: building dropbearmulti (dropbear server + dropbearkey, static)"
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
     PROGRAMS="dropbear dropbearkey" MULTI=1 STATIC=1 SKIP_STRIP=y dropbearmulti
 
-echo "dropbear: staging the stripped binary to ../../tests/dropbearmulti"
-i686-elf-strip "$SRC/dropbearmulti" -o ../../tests/dropbearmulti
-ls -l ../../tests/dropbearmulti
+echo "dropbear: staging the stripped binary to build/vendor/dropbear/dropbearmulti"
+mkdir -p "$STAGE"
+i686-elf-strip "$SRC/dropbearmulti" -o "$STAGE/dropbearmulti"
+ls -l "$STAGE/dropbearmulti"
 
-echo "dropbear: built $VERSION ($(wc -c < ../../tests/dropbearmulti) bytes, static, musl, i686)"
+echo "dropbear: built $VERSION ($(wc -c < "$STAGE/dropbearmulti") bytes, static, musl, i686)"
 echo "dropbear: rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /dropbearmulti"

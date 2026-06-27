@@ -50,13 +50,13 @@ copy_dense() {
 mkdir -p "$DEST_DIR"
 
 echo "grub_install: copying kernel to $DEST_DIR/kernel"
-copy_dense "kernel" "$DEST_DIR/kernel"
+copy_dense "../build/rach2/kernel" "$DEST_DIR/kernel"
 
-if [ -f "../krffs/file_system.krffs" ]; then
+if [ -f "../build/krffs/file_system.krffs" ]; then
     echo "grub_install: copying RAM disk to $DEST_DIR/file_system.krffs"
-    copy_dense "../krffs/file_system.krffs" "$DEST_DIR/file_system.krffs"
+    copy_dense "../build/krffs/file_system.krffs" "$DEST_DIR/file_system.krffs"
 else
-    echo "grub_install: ../krffs/file_system.krffs not found; skipping RAM disk copy"
+    echo "grub_install: ../build/krffs/file_system.krffs not found; skipping RAM disk copy"
 fi
 
 echo "grub_install: done"

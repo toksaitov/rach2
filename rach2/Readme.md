@@ -90,7 +90,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 ### Build and Run
 
 ```bash
-make                        # Compile the kernel (objects land in .build/; binary: ./kernel)
+make                        # Compile the kernel (out of tree: ../build/rach2/kernel)
 ./run.sh                    # Quick test with QEMU
 ./run_with_ram_disk.sh      # Run with file system and shell
 ./run_from_iso.sh           # Boot from ISO with GRUB
@@ -883,7 +883,7 @@ Each module provides:
 
 To load a RAM disk as a multiboot module:
 
-    qemu-system-i386 -kernel kernel -initrd /path/to/ramdisk.bin -serial stdio
+    qemu-system-i386 -kernel ../build/rach2/kernel -initrd /path/to/ramdisk.bin -serial stdio
 
 The kernel will display the module at boot:
 
@@ -955,7 +955,7 @@ The write operations use the K&R first-fit allocator to manage free space. When 
 
 To boot with a KRFFS RAM disk:
 
-    qemu-system-i386 -kernel kernel -initrd /path/to/file_system.krffs -serial stdio
+    qemu-system-i386 -kernel ../build/rach2/kernel -initrd /path/to/file_system.krffs -serial stdio
 
 The kernel will display:
 
@@ -1211,10 +1211,10 @@ Audio is controlled via ioctl on the console (fd 0):
 For manual QEMU invocation:
 ```bash
 # SB16
-qemu-system-i386 -kernel kernel -audiodev coreaudio,id=audio0 -device sb16,audiodev=audio0
+qemu-system-i386 -kernel ../build/rach2/kernel -audiodev coreaudio,id=audio0 -device sb16,audiodev=audio0
 
 # HDA
-qemu-system-i386 -kernel kernel -audiodev coreaudio,id=audio0 -device intel-hda -device hda-duplex,audiodev=audio0
+qemu-system-i386 -kernel ../build/rach2/kernel -audiodev coreaudio,id=audio0 -device intel-hda -device hda-duplex,audiodev=audio0
 ```
 
 ---
@@ -1226,7 +1226,7 @@ qemu-system-i386 -kernel kernel -audiodev coreaudio,id=audio0 -device intel-hda 
 | Script                 | Description                        |
 |------------------------|------------------------------------|
 | `run.sh`               | Quick QEMU test with serial output |
-| `run_with_ram_disk.sh` | Run with KRFFS from `../krffs/`    |
+| `run_with_ram_disk.sh` | Run with the KRFFS RAM disk        |
 | `run_from_iso.sh`      | Boot ISO with GRUB                 |
 | `debug.sh`             | QEMU + GDB debugging               |
 

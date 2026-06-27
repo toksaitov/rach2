@@ -20,9 +20,15 @@ export COPYFILE_DISABLE=1
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Everything builds out of tree under build/ at the repo root (mk/build.mk): the host
+# krffs tools, the guest binaries, and the image this script writes. Nothing is read
+# from or written to the source tree.
+BUILD="$(cd "$SCRIPT_DIR/.." && pwd)/build"
+TOOLS="$BUILD/krffs"
+
 SIZE=${1:-10}
-MOUNT_POINT="mount_point"
-FS_FILE="file_system.krffs"
+MOUNT_POINT="$BUILD/krffs/mount_point"
+FS_FILE="$BUILD/krffs/file_system.krffs"
 
 # Build the guest programs, unless Make already built them (SKIP_BUILD=1, set by the
 # `make ramdisk` target so nothing is built twice); a standalone run still builds
@@ -37,7 +43,7 @@ fi
 
 # Doom is a capstone (ports/), not part of the base teaching image, so this base build
 # neither builds nor stages it by default. The staging script deliberately does NOT
-# build Doom; it only STAGES an already-built ../ports/doom/doom when
+# build Doom; it only STAGES an already-built build/ports/doom/doom when
 # RAMDISK_WITH_DOOM=1, so it can never stage a stale binary from a failed build. That
 # opt-in is for a STANDALONE `./build_ramdisk.sh` run after building the binary (`make
 # -C ../ports/doom`); the Make `ramdisk` target forces RAMDISK_WITH_DOOM=0, so `make`/
@@ -46,26 +52,31 @@ fi
 RAMDISK_WITH_DOOM=${RAMDISK_WITH_DOOM:-0}
 
 echo "ramdisk: creating a $SIZE MB image"
+mkdir -p "$BUILD/krffs"
 rm -f "$FS_FILE"
 dd if=/dev/zero of="$FS_FILE" bs=1048576 count=$SIZE
-./mkfs.krffs "$FS_FILE"
+"$TOOLS/mkfs.krffs" "$FS_FILE"
 
 echo "ramdisk: mounting"
 mkdir -p "$MOUNT_POINT"
 # Clear mount point if not empty
 rm -rf "${MOUNT_POINT:?}"/*
-./krffs "$FS_FILE" "$MOUNT_POINT"
+"$TOOLS/krffs" "$FS_FILE" "$MOUNT_POINT"
+
+# Always unmount on exit, so a crash between here and the explicit unmount below never
+# leaves a live FUSE mount for `make clean` (which removes build/krffs) to recurse into.
+trap 'fusermount -u "$MOUNT_POINT" 2>/dev/null || umount "$MOUNT_POINT" 2>/dev/null || true' EXIT INT TERM
 
 echo "ramdisk: staging binaries"
 
 # Copy ISH shell
-cp ../ish/ish "$MOUNT_POINT/"
+cp "$BUILD/ish/ish" "$MOUNT_POINT/"
 echo "  ish"
 
 # Copy utilities
 for util in true false echo yes cat pwd touch mkdir rm mv cp ls ping nc httpd; do
-    if [ -f "../utils/$util" ]; then
-        cp "../utils/$util" "$MOUNT_POINT/"
+    if [ -f "$BUILD/utils/$util" ]; then
+        cp "$BUILD/utils/$util" "$MOUNT_POINT/"
         echo "  $util"
     fi
 done
@@ -74,15 +85,15 @@ done
 # The script never builds Doom, so it cannot stage a stale binary from a failed build;
 # the WAD is not vendored, so the operator supplies ../ports/doom/doom1.wad.
 if [ "$RAMDISK_WITH_DOOM" = 1 ]; then
-    if [ -f "../ports/doom/doom" ]; then
-        cp "../ports/doom/doom" "$MOUNT_POINT/"
+    if [ -f "$BUILD/ports/doom/doom" ]; then
+        cp "$BUILD/ports/doom/doom" "$MOUNT_POINT/"
         echo "  doom"
         if [ -f "../ports/doom/doom1.wad" ]; then
             cp "../ports/doom/doom1.wad" "$MOUNT_POINT/"
             echo "  doom1.wad"
         fi
     else
-        echo "ramdisk: RAMDISK_WITH_DOOM=1 but ../ports/doom/doom is not built (run 'make full' first); skipping" >&2
+        echo "ramdisk: RAMDISK_WITH_DOOM=1 but $BUILD/ports/doom/doom is not built (run 'make full' first); skipping" >&2
     fi
 fi
 
@@ -113,4 +124,4 @@ else
 fi
 
 echo "ramdisk: wrote $FS_FILE"
-echo "ramdisk: boot with qemu-system-i386 -kernel ../rach2/kernel -initrd $FS_FILE -serial stdio"
+echo "ramdisk: boot with qemu-system-i386 -kernel $BUILD/rach2/kernel -initrd $FS_FILE -serial stdio"

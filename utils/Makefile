@@ -18,6 +18,7 @@
 # no-op but keeps the i686 ABI explicit.
 include ../mk/toolchain.mk
 include ../mk/deps.mk
+include ../mk/build.mk
 CC := $(or $(shell command -v i686-elf-gcc 2>/dev/null),$(CROSS_CC))
 
 # Ported musl install tree (headers + static libc.a + crt objects).
@@ -49,11 +50,13 @@ UTILITIES = true  \
             nc    \
             httpd
 
+TARGETS = $(addprefix $(BUILD)/, $(UTILITIES))
+
 .PHONY: all clean libc-check
 
-all: $(UTILITIES)
+all: $(TARGETS)
 
-$(UTILITIES): | libc-check
+$(TARGETS): | libc-check
 
 # Fail early with a clear message if the ported libc has not been built.
 libc-check:
@@ -61,30 +64,26 @@ libc-check:
 	    echo "error: $(PREFIX)/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2; \
 	    exit 1; }
 
-# These compile+link in one step (no .o intermediates); -MF redirects the GCC-written
-# .d into .build/ to keep the source tree clean. The musl util binaries stay in place.
-BUILD = .build
-
-# Each <name>.c links into a static musl guest binary <name>.
-%: %.c
-	@mkdir -p $(BUILD)
+# Each <name>.c compiles+links in one step into a static musl guest binary under
+# $(BUILD) (build/utils/, from mk/build.mk); -MF puts the GCC-written .d there too.
+# There are no .o intermediates and nothing lands in the source tree.
+$(BUILD)/%: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
 # ping and nc link the shared stub resolver (resolv.c, declared in netdb.h). These
 # compile+link two sources in one step (-MF records only the last source's headers),
 # so the inputs (the program source, resolv.c, netdb.h) are explicit prerequisites; the
-# .build/ .d adds the resolver's transitive headers.
-ping: ping.c resolv.c netdb.h
-	@mkdir -p $(BUILD)
+# $(BUILD) .d adds the resolver's transitive headers.
+$(BUILD)/ping: ping.c resolv.c netdb.h
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/ping.d -o $@ $(LINK_PRE) ping.c resolv.c $(LINK_POST)
 
-nc: nc.c resolv.c netdb.h
-	@mkdir -p $(BUILD)
+$(BUILD)/nc: nc.c resolv.c netdb.h
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/nc.d -o $@ $(LINK_PRE) nc.c resolv.c $(LINK_POST)
 
 -include $(addprefix $(BUILD)/, $(UTILITIES:=.d))
 
 clean:
 	rm -rf $(BUILD)
-	rm -f $(UTILITIES)
-	@find . \( -name '*.o' -o -name '*.d' \) -type f -exec rm -f {} +

@@ -111,10 +111,11 @@ This produces a ~390KB freestanding ELF32 executable.
    make
    ```
 
-2. Build the RAM disk with Doom included:
+2. Build the RAM disk with Doom included (Doom is opt-in; the script stages it only
+   when `RAMDISK_WITH_DOOM=1`):
    ```sh
    cd krffs
-   ./build_ramdisk.sh
+   RAMDISK_WITH_DOOM=1 ./build_ramdisk.sh
    ```
 
 3. Boot Rach2:

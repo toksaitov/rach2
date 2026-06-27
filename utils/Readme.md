@@ -4,7 +4,7 @@
 
 Minimal implementations of core Unix utilities in C for 32-bit x86. Each utility is an ordinary hosted C program linked statically against the ported musl libc (see [vendor/musl/](../vendor/musl/)): it uses the real standard headers (`<stdio.h>`, `<unistd.h>`, `<fcntl.h>`, `<dirent.h>`, `<sys/socket.h>`, ...), musl's `crt1` startup, and libc's syscall wrappers. The hand-rolled `int $0x80` stubs and `crt0.c` were dropped in the musl port. (`resolv.c`, the stub resolver, is shared by `ping`, `nc`, and the `dnstest` test, all linked against the same musl.)
 
-Built for the Rach2 kernel with `make` against `../vendor/musl/install` (run `vendor/musl/build_libc.sh` once first). A separate `Makefile.linux` still builds them natively on Linux.
+Built for the Rach2 kernel with `make` against `../vendor/musl/install` (run `vendor/musl/build_libc.sh` once first). A separate `Makefile.linux` builds them natively on Linux, out of tree into `build/utils/linux/`.
 
 ## Utilities
 
@@ -71,7 +71,10 @@ make clean
 
 ## Usage (Linux)
 
+`make -f Makefile.linux` builds the native utilities out of tree into `build/utils/linux/`. Run them from there:
+
 ```
+cd build/utils/linux
 ./true && echo "success"
 ./false || echo "failed"
 ./echo hello world

@@ -9,6 +9,7 @@
 # Shared cross toolchain + automatic header-dependency tracking (see ../mk/).
 include ../mk/toolchain.mk
 include ../mk/deps.mk
+include ../mk/build.mk
 CC := $(CROSS_CC)
 
 CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 $(DEPFLAGS)
@@ -33,29 +34,29 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
         ttyprobe jobprobe miscprobe ptyprobe rngprobe
 
 # These compile+link in one step, so there are no .o intermediates; only the
-# GCC-written .d, which -MF redirects into .build/ to keep the source tree clean. The
-# final probe binaries stay in place for the RAM-disk staging.
-BUILD = .build
+# GCC-written .d, which -MF puts under $(BUILD) (build/tests/, from mk/build.mk), so
+# the source tree stays clean and the RAM-disk staging picks the binaries up there.
+TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 
 .PHONY: all clean
 
-all: $(PROGS)
+all: $(TARGETS)
 
 # Each probe is a single freestanding source compiled+linked in one step; -MMD (from
-# $(DEPFLAGS)) writes the deps, -MF puts that .d under .build/, so editing a shared
+# $(DEPFLAGS)) writes the deps, -MF puts that .d under $(BUILD), so editing a shared
 # header rebuilds it.
-%: %.c
-	@mkdir -p $(BUILD)
+$(BUILD)/%: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $<
 
 # dnstest links the shared stub resolver from utils/ so it can exercise both the pure
 # parser (crafted vectors) and resolve_host() (live), and it links the ported musl so
 # both it and resolv.c use the real libc. It compiles+links two sources in one step,
 # where -MF records only the last source's headers, so the build inputs (dnstest.c,
-# resolv.c, netdb.h) are declared as explicit prerequisites; the .build/ .d adds the
+# resolv.c, netdb.h) are declared as explicit prerequisites; the $(BUILD) .d adds the
 # resolver's transitive headers on top.
-dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h
-	@mkdir -p $(BUILD)
+$(BUILD)/dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h
+	@mkdir -p $(dir $@)
 	$(MUSL_CC) $(MUSL_CFLAGS) -MF $(BUILD)/dnstest.d -o $@ \
 	    $(MUSL_PRE) dnstest.c ../utils/resolv.c $(MUSL_POST)
 
@@ -63,5 +64,3 @@ dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h
 
 clean:
 	rm -rf $(BUILD)
-	rm -f $(PROGS)
-	@find . \( -name '*.o' -o -name '*.d' \) -type f -exec rm -f {} +

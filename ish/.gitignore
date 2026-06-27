@@ -1,7 +1,0 @@
-*.a
-*.o
-*.exe
-ish
-
-# Auto-generated header-dependency files (-MMD)
-*.d

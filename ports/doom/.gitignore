@@ -1,11 +1,4 @@
-# Compiled binary
-doom
-
-# Object files
-*.o
-
-# WAD files (game data)
+# Doom game data (WAD): supplied by the operator, not built, never committed
+# (shareware or commercial data). The Doom binary and every build product go out of
+# tree to build/ports/doom/ (mk/build.mk), covered by the repo-root build/ ignore.
 *.wad
-
-# Auto-generated header-dependency files (-MMD)
-*.d

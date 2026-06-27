@@ -4,26 +4,28 @@ Small, readable includes that every Rach2 component's Makefile shares, so the bu
 
 * `toolchain.mk` detects the freestanding cross GCC (`i686-elf-gcc`, else `x86_64-elf-gcc`) once and derives `CROSS_LD`, `CROSS_AR`, `CROSS_STRIP`, and `CROSS_OBJCOPY`. It fails with an actionable message if none is found; override with `make CROSS_CC=...`.
 * `deps.mk` sets `DEPFLAGS = -MMD -MP` for automatic header-dependency tracking.
-* `rules.mk` holds the canonical out-of-tree `$(BUILD)/%.o: %.c` compile rule (`mkdir -p` then compile) and the `-include $(OBJECTS:.o=.d)` line, for a component that compiles to objects and then links the plain way (`ish/`). Components with a special compile shape (`ports/doom`, the krffs FUSE tools) keep their own rules but still share the `.build/` convention and `toolchain.mk` and `deps.mk`.
+* `build.mk` puts every component's output out of tree under one repo-root `build/` directory that mirrors the source tree. A component includes it and gets `BUILD` (its own `build/<component>/`, an absolute path), plus `BUILDROOT`, `TOP`, and `COMPONENT`; the objects, the `.d` files, and the final binaries all land under `BUILD`.
+* `rules.mk` holds the canonical out-of-tree `$(BUILD)/%.o: %.c` compile rule (`mkdir -p` then compile) and the `-include $(OBJECTS:.o=.d)` line, for a component that compiles to objects and then links the plain way (`ish/`). Components with a special compile shape (`ports/doom`, the krffs FUSE tools) keep their own rules but still share the `build/` convention and `toolchain.mk` and `deps.mk`.
 
-## Out-of-tree intermediates (`.build/`)
+## Out-of-tree build (`build/`)
 
-Each in-house component compiles into its own `.build/` directory. The objects and the GCC-written `.d` files live there, never beside the sources, so the source tree stays clean. The final artifacts stay in place (`rach2/kernel`, the krffs host tools, the guest binaries) where the run scripts, the ISO step, and the RAM-disk steps expect them. A component sets `BUILD = .build`, names its `OBJECTS` as `$(SRC:%.c=$(BUILD)/%.o)`, and either includes `rules.mk` or carries the same `mkdir -p $(dir $@)` compile shape. The single-source test and util programs (compile and link in one step, no `.o`) redirect their `.d` with `-MF $(BUILD)/...`. `.build/` is git-ignored (one root `.gitignore` entry covers every component's), and `make clean` removes it. The vendored `ports/doom`, like the vendored musl, busybox, and dropbear trees, keeps its own intermediates.
+Every in-house component builds out of tree into one repo-root `build/` directory whose layout mirrors the source tree: the kernel objects under `build/rach2/sys/...` and the kernel at `build/rach2/kernel`, the utils in `build/utils/`, the tests in `build/tests/`, the krffs host tools and the RAM-disk image in `build/krffs/`, Doom in `build/ports/doom/`, and the staged BusyBox and Dropbear capstones in `build/vendor/`. The objects, the GCC-written `.d` files, and the final binaries all live there, never beside the sources, so the source tree never holds a build product. A component includes `../mk/build.mk`, which sets `BUILD` to its own `build/<component>/` (an absolute path, so it survives `make -C`); it then names its `OBJECTS` as `$(SRC:%.c=$(BUILD)/%.o)` and either includes `rules.mk` or carries the same `mkdir -p $(dir $@)` compile shape. The single-source test and util programs (compile and link in one step, no `.o`) redirect their `.d` with `-MF $(BUILD)/...`. One root `.gitignore` entry (`build/`) covers it all, and each component's `make clean` removes its own `build/<component>` tree. The vendored musl, busybox, and dropbear trees are built by their own upstream build systems inside `vendor/` (musl installs to `vendor/musl/install`); only their final staged binaries are redirected into `build/vendor/`.
 
 ## Automatic header dependencies (no more `make clean`)
 
-With `$(DEPFLAGS)` on each C compile and `-include $(OBJECTS:.o=.d)` near the end of a Makefile, GCC writes a `.d` beside each `.o` (under `.build/`) recording the headers that object actually included. Make then rebuilds exactly the objects a header edit affects. Editing a `.h` no longer needs a full `make clean && make`. The `.d` files are build artifacts (git-ignored) and `make clean` removes them.
+With `$(DEPFLAGS)` on each C compile and `-include $(OBJECTS:.o=.d)` near the end of a Makefile, GCC writes a `.d` beside each `.o` (under `build/<component>/`) recording the headers that object actually included. Make then rebuilds exactly the objects a header edit affects. Editing a `.h` no longer needs a full `make clean && make`. The `.d` files are build artifacts (git-ignored) and `make clean` removes them.
 
-A component Makefile uses both like this:
+A component Makefile uses these like this:
 
     include ../mk/toolchain.mk
     include ../mk/deps.mk
+    include ../mk/build.mk
     CC := $(CROSS_CC)
     CFLAGS += $(DEPFLAGS)
     ...
     -include $(OBJECTS:.o=.d)
 
-The host-side krffs FUSE tools build with the host compiler, so they include `deps.mk` only, not `toolchain.mk`.
+The host-side krffs FUSE tools build with the host compiler, so they include `deps.mk` and `build.mk` only, not `toolchain.mk`.
 
 ## IDE support (clangd): `compile_commands.json` and `.clangd`
 

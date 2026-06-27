@@ -4,8 +4,9 @@
 # build_busybox.sh: build a static musl BusyBox for Rach2 from the pinned,
 # vendored tarball. Verifies the sha256, extracts, applies the curated
 # rach2.config, builds against the ported musl via the muslgcc wrapper, strips,
-# and stages the binary to ../../tests/busybox (installed into the RAM disk as
-# /busybox by krffs/build_test_ramdisk.sh). Run vendor/musl/build_libc.sh first.
+# and stages the binary out of tree to build/vendor/busybox/busybox (installed into
+# the RAM disk as /busybox by krffs/build_test_ramdisk.sh). Run
+# vendor/musl/build_libc.sh first.
 #
 # Usage: ./build_busybox.sh
 #
@@ -20,6 +21,10 @@ TARBALL="busybox-${VERSION}.tar.bz2"
 SRC="busybox-${VERSION}"
 PREFIX="$SCRIPT_DIR/../musl/install"
 WRAP="$SCRIPT_DIR/muslgcc"
+# Out-of-tree staging dir, mirroring the source path vendor/busybox/ (mk/build.mk).
+# It lives under build/ so a routine `make clean` never reaches it; only `make
+# distclean` (which removes build/vendor) forces this multi-minute rebuild.
+STAGE="$(cd "$SCRIPT_DIR/../.." && pwd)/build/vendor/busybox"
 
 # Pinned sha256 of the vendored tarball (published on busybox.net). The build
 # refuses to proceed if the tarball does not match; the version is locked.
@@ -65,9 +70,10 @@ echo "busybox: building (CC=muslgcc, CROSS_COMPILE=i686-elf-, HOSTCC=cc)"
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
     CROSS_COMPILE=i686-elf- CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
 
-echo "busybox: staging the stripped binary to ../../tests/busybox"
-i686-elf-strip "$SRC/busybox" -o ../../tests/busybox
-ls -l ../../tests/busybox
+echo "busybox: staging the stripped binary to build/vendor/busybox/busybox"
+mkdir -p "$STAGE"
+i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox"
+ls -l "$STAGE/busybox"
 
-echo "busybox: built $VERSION ($(wc -c < ../../tests/busybox) bytes, static, musl, i686)"
+echo "busybox: built $VERSION ($(wc -c < "$STAGE/busybox") bytes, static, musl, i686)"
 echo "busybox: rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /busybox"

@@ -20,12 +20,12 @@ findings=$(mktemp)
 trap 'rm -f "$findings"' EXIT INT TERM
 
 # Find in-house files under the source roots. The vendored extracted trees and their
-# built output (vendor/musl/install and the vendor/*/{musl,busybox,dropbear}-* trees) and
-# the out-of-tree .build/ are pruned. ports/doom and the dev-log records are not roots,
-# so they are skipped. The caller appends the name filter and -print.
+# built output (vendor/musl/install and the vendor/*/{musl,busybox,dropbear}-* trees) are
+# pruned; the out-of-tree build/ at the repo root is not a search root, so it is never
+# descended into. ports/doom and the dev-log records are not roots, so they are skipped.
+# The caller appends the name filter and -print.
 prune_find() {
     find rach2 ish utils tests krffs tools mk vendor \
-        -path '*/.build' -prune -o \
         -path 'vendor/musl/install' -prune -o \
         -path 'vendor/musl/musl-*' -prune -o \
         -path 'vendor/busybox/busybox-*' -prune -o \

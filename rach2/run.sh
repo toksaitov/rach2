@@ -15,4 +15,4 @@ AUDIO_DEVICE="${1:-speaker}"
 # key generation (dropbear) cannot run. Override with CPU=... to test fail-closed.
 CPU="${CPU:-max}"
 
-qemu-system-i386 -cpu "$CPU" -kernel kernel -serial stdio $AUDIO_OPTS $NET_OPTS
+qemu-system-i386 -cpu "$CPU" -kernel ../build/rach2/kernel -serial stdio $AUDIO_OPTS $NET_OPTS

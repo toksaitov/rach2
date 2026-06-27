@@ -77,7 +77,7 @@ The musl programs build separately with `musl/build.sh` (after `vendor/musl/buil
 
 3. Boot Rach2 with the KRFFS image as a module:
    ```sh
-   qemu-system-i386 -kernel rach2/kernel -initrd krffs/file_system.krffs -serial stdio
+   qemu-system-i386 -kernel build/rach2/kernel -initrd build/krffs/file_system.krffs -serial stdio
    ```
 
 4. Execute from the Rach2 shell:

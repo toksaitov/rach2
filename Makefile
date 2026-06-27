@@ -27,6 +27,14 @@ LIBC_STAMP     = vendor/musl/.stamp
 BUSYBOX_STAMP  = vendor/busybox/.stamp
 DROPBEAR_STAMP = vendor/dropbear/.stamp
 
+# The staged capstone binaries the build_*.sh scripts produce, out of tree under
+# build/vendor/ (mirroring their vendor/<name>/ sources). A routine `make clean` never
+# reaches build/vendor, so these expensive artifacts survive it; only `make distclean`
+# removes them. They are the REAL prerequisites of the capstone image (see the check
+# targets below): a stamp only proves its build RAN.
+BUSYBOX_BIN  = build/vendor/busybox/busybox
+DROPBEAR_BIN = build/vendor/dropbear/dropbearmulti
+
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
 # silently drop the prereq and look up-to-date if a tarball were deleted) and to
@@ -77,16 +85,16 @@ $(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL)
 
 $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config vendor/busybox/muslgcc \
                   $(BUSYBOX_TARBALL) $(LIBC_STAMP)
-	@rm -f $@ tests/busybox
+	@rm -f $@ $(BUSYBOX_BIN)
 	./vendor/busybox/build_busybox.sh
-	@test -s tests/busybox || { echo "busybox: build produced no tests/busybox" >&2; exit 1; }
+	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
 	@touch $@
 
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h vendor/dropbear/muslgcc \
                    $(DROPBEAR_TARBALL) $(LIBC_STAMP)
-	@rm -f $@ tests/dropbearmulti
+	@rm -f $@ $(DROPBEAR_BIN)
 	./vendor/dropbear/build_dropbear.sh
-	@test -s tests/dropbearmulti || { echo "dropbear: build produced no tests/dropbearmulti" >&2; exit 1; }
+	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
 	@touch $@
 
 # --- component sub-makes + the build-order DAG ---
@@ -101,7 +109,7 @@ ports/doom: rach2
 
 # Base RAM disk. Force RAMDISK_WITH_DOOM=0 so the Make-driven build is always
 # capstone-free: a stray `RAMDISK_WITH_DOOM=1 make -j full` can then never make the
-# staging script copy ../ports/doom/doom while the sibling ports/doom target is
+# staging script copy build/ports/doom/doom while the sibling ports/doom target is
 # rebuilding it. (The env var is honored only for a standalone `./build_ramdisk.sh`.)
 ramdisk: $(BASE_DIRS)
 	cd krffs && RAMDISK_WITH_DOOM=0 SKIP_BUILD=1 ./build_ramdisk.sh
@@ -113,9 +121,9 @@ ramdisk: $(BASE_DIRS)
 # check targets (depending on the stamp so it builds first), so the `test -s` runs on
 # EVERY build and catches a missing OR zero-byte artifact, not only a missing one.
 check-busybox: $(BUSYBOX_STAMP)
-	@test -s tests/busybox || { echo "busybox: tests/busybox missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
+	@test -s $(BUSYBOX_BIN) || { echo "busybox: $(BUSYBOX_BIN) missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
 check-dropbearmulti: $(DROPBEAR_STAMP)
-	@test -s tests/dropbearmulti || { echo "dropbear: tests/dropbearmulti missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
+	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 
 # Capstone RAM disk: the busybox/dropbear/probe image the SSH login boots. Make builds
 # every component it stages (the host krffs tools, the probe programs, the musl
@@ -159,22 +167,23 @@ compile-commands:
 check-sources:
 	@./tools/check_sources.sh
 
-# clean: the everyday reset; component build products (each sub-make removes its
-# own objects/.d/binaries) plus the generated RAM-disk image. The expensive vendored
-# third-party (vendor/musl/install, the busybox/dropbear builds) is LEFT in place so a
-# routine clean does not force a multi-minute musl rebuild; use distclean for that.
+# clean: the everyday reset. Each sub-make removes its own build/<component> tree
+# (objects, .d, binaries; for krffs also the RAM-disk image and mount point), so the
+# whole in-house build/ is cleared. The expensive vendored third-party is LEFT in
+# place: vendor/musl/install, the extracted busybox/dropbear trees, and the staged
+# capstones under build/vendor (which no sub-make owns). Use distclean for those.
 clean:
 	@for dir in $(BASE_DIRS) $(FULL_DIRS); do $(MAKE) -C $$dir clean; done
-	rm -f krffs/file_system.krffs
 
-# distclean: a full from-scratch reset; clean plus every third-party build product:
-# the stamps, vendor/musl/install, the extracted vendored source trees, and the staged
-# capstone binaries. The next build rebuilds musl/busybox/dropbear from the tarballs.
+# distclean: a full from-scratch reset; clean plus every third-party build product: the
+# stamps, vendor/musl/install, the extracted vendored source trees, and the entire
+# out-of-tree build/ (including the staged capstones under build/vendor that a routine
+# clean leaves in place). The next build rebuilds musl/busybox/dropbear from the tarballs.
 distclean: clean
 	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP)
 	rm -rf vendor/musl/install \
 	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) $(DROPBEAR_TARBALL:.tar.bz2=)
-	rm -f tests/busybox tests/dropbearmulti
+	rm -rf build
 
 help:
 	@echo "Rach2 build targets:"

@@ -6,6 +6,13 @@
 # Only the portable file utilities are built here; the network utilities
 # (ping/nc/httpd) target the Rach2 kernel's sockets and stay with the main
 # musl-linked Makefile.
+#
+# Like the main build, this builds out of tree, into build/utils/linux/ (its own
+# subdir so the native binaries never collide with the Rach2 musl binaries of the
+# same name under build/utils/). See ../mk/build.mk.
+
+COMPONENT = utils/linux
+include ../mk/build.mk
 
 CC ?= cc
 CFLAGS = -O2 -Wall -Wextra
@@ -23,12 +30,15 @@ UTILITIES = true  \
             cp    \
             ls
 
+TARGETS = $(addprefix $(BUILD)/, $(UTILITIES))
+
 .PHONY: all clean
 
-all: $(UTILITIES)
+all: $(TARGETS)
 
-%: %.c
+$(BUILD)/%: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -o $@ $<
 
 clean:
-	rm -f $(UTILITIES)
+	rm -rf $(BUILD)

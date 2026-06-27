@@ -9,7 +9,7 @@
 AUDIO_DEVICE="${1:-speaker}"
 . "$(dirname "$0")/qemu_devices.sh"
 
-qemu-system-i386 -s -S -kernel kernel $AUDIO_OPTS $NET_OPTS &
+qemu-system-i386 -s -S -kernel ../build/rach2/kernel $AUDIO_OPTS $NET_OPTS &
 QEMU_PID=$!
 
 # Ensure QEMU is killed when this script exits

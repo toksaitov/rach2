@@ -5,10 +5,13 @@ compile_commands.json
 # clangd's per-project index cache.
 .cache/
 
-# Out-of-tree build intermediates (objects + .d); each component builds into its own
-# .build/; final artifacts (rach2/kernel, the host tools, the guest binaries) stay in
-# place. Matches .build/ at any depth.
-.build/
+# All build output. Every in-house component builds out of tree into one repo-root
+# build/ directory whose layout mirrors the source tree (mk/build.mk): the objects, the
+# GCC-written .d files, the final binaries, the kernel, the RAM-disk image and mount
+# point, the ISO staging, and the staged capstones under build/vendor/. Nothing
+# build-related lands in the source tree, so this one entry replaces the former
+# per-component ignores.
+build/
 
 # macOS
 .DS_Store

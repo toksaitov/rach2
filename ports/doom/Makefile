@@ -5,6 +5,9 @@
 # Shared cross toolchain + automatic header-dependency tracking (see ../../mk/).
 include ../../mk/toolchain.mk
 include ../../mk/deps.mk
+TOP = ../..
+COMPONENT = ports/doom
+include ../../mk/build.mk
 CC := $(CROSS_CC)
 
 # Doomgeneric source directory (self-contained in src/)
@@ -26,8 +29,8 @@ CFLAGS += -DSNDSERV=0 -D_DEFAULT_SOURCE
 # Automatic header-dependency tracking (see ../../mk/deps.mk).
 CFLAGS += $(DEPFLAGS)
 
-# Output binary
-OUTPUT = doom
+# Output binary (under $(BUILD) = build/ports/doom/, from mk/build.mk)
+OUTPUT = $(BUILD)/doom
 
 # Doom source files (from doomgeneric)
 DOOM_SRC = \
@@ -44,15 +47,15 @@ DOOM_SRC = \
 	w_checksum.c w_file.c w_main.c w_wad.c z_zone.c w_file_stdc.c \
 	i_input.c i_video.c doomgeneric.c
 
-# Object files
-DOOM_OBJS = $(DOOM_SRC:.c=.o)
+# Object files (under $(BUILD), mirroring the source tree)
+DOOM_OBJS = $(addprefix $(BUILD)/, $(DOOM_SRC:.c=.o))
 
 # Local source files
 LOCAL_SRC = doomgeneric_rach2.c i_pcsound.c opl3.c mus2mid.c midifile.c i_oplmusic.c
-LOCAL_OBJS = $(LOCAL_SRC:.c=.o)
+LOCAL_OBJS = $(addprefix $(BUILD)/, $(LOCAL_SRC:.c=.o))
 
 # All objects
-OBJS = crt0.o $(LOCAL_OBJS) $(DOOM_OBJS)
+OBJS = $(BUILD)/crt0.o $(LOCAL_OBJS) $(DOOM_OBJS)
 
 .PHONY: all clean
 
@@ -60,22 +63,26 @@ all: $(OUTPUT)
 
 # Build output
 $(OUTPUT): $(OBJS)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -o $@ $^
 
 # Compile crt0
-crt0.o: crt0.c
+$(BUILD)/crt0.o: crt0.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Compile local sources
-%.o: %.c
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Compile doom sources from doomgeneric directory
-%.o: $(DOOMGENERIC_DIR)/%.c
+$(BUILD)/%.o: $(DOOMGENERIC_DIR)/%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Header-dependency files GCC wrote (-MMD); a header edit rebuilds its includers.
 -include $(OBJS:.o=.d)
 
 clean:
-	rm -f $(OUTPUT) $(OBJS) $(OBJS:.o=.d)
+	rm -rf $(BUILD)

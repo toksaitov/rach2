@@ -1,17 +1,18 @@
 # Constants
 
-BIN_DIR = bin
-ISO_DIR = iso
+BIN_DIR = $(BUILD)/bin
+ISO_DIR = $(BUILD)/iso
 
 LOADER = loader
 KERNEL = kernel
+KERNEL_BIN = $(BUILD)/$(KERNEL)
 
 LINKER_SCRIPT = link
 
 ISO_IMAGE = $(BIN_DIR)/boot.iso
 
-# RAM disk (optional, from krffs/)
-RAMDISK_SRC = ../krffs/file_system.krffs
+# RAM disk (optional); the RAM-disk scripts write it under build/krffs/.
+RAMDISK_SRC = $(BUILDROOT)/krffs/file_system.krffs
 RAMDISK_DST = $(ISO_DIR)/boot/file_system.krffs
 GRUB_CFG = $(ISO_DIR)/boot/grub/grub.cfg
 
@@ -81,17 +82,16 @@ C_SRC   = $(KERNEL).c \
 	  sys/lib/kstring.c     \
 	  sys/lib/krandom.c
 
-# Out-of-tree intermediates: objects + the GCC-written .d files live under .build/
-# (git-ignored), so the source tree stays clean. The final kernel binary stays in
-# place (rach2/kernel) for the run scripts and the ISO/RAM-disk steps.
-BUILD = .build
-
+# Everything builds out of tree under $(BUILD) (build/rach2/, from mk/build.mk): the
+# objects, the GCC-written .d files, the kernel binary, and the ISO staging, so the
+# source tree never holds a build product.
 ASM_OBJECTS = $(ASM_SRC:%.s=$(BUILD)/%.o)
 C_OBJECTS   = $(C_SRC:%.c=$(BUILD)/%.o)
 
 # Cross toolchain + automatic header-dependency tracking (shared; see ../mk/).
 include ../mk/toolchain.mk
 include ../mk/deps.mk
+include ../mk/build.mk
 CC := $(CROSS_CC)
 # LD comes from CROSS_LD (mk/toolchain.mk): it honors an explicit `CROSS_LD=...`
 # override and otherwise tracks CROSS_CC; and CROSS_CC itself absorbs a
@@ -114,17 +114,17 @@ endif
 # General Rules
 
 .PHONY : all
-all : $(KERNEL)
+all : $(KERNEL_BIN)
 
 # ISO Image Creation (requires Docker)
 
 .PHONY : iso
 iso : $(ISO_IMAGE)
 
-$(ISO_IMAGE) : $(KERNEL)
-	@mkdir -p $(BIN_DIR)
+$(ISO_IMAGE) : $(KERNEL_BIN)
+	@mkdir -p $(BIN_DIR) $(ISO_DIR)/boot/grub
 	@# Copy without creating sparse files (some GRUB setups crash on sparse modules)
-	@cat $(KERNEL) > $(ISO_DIR)/boot/$(KERNEL)
+	@cat $(KERNEL_BIN) > $(ISO_DIR)/boot/$(KERNEL)
 	@# Generate grub.cfg with or without ramdisk module
 	@if [ -f $(RAMDISK_SRC) ]; then \
 		cat $(RAMDISK_SRC) > $(RAMDISK_DST); \
@@ -152,16 +152,21 @@ $(ISO_IMAGE) : $(KERNEL)
 		echo "}" >> $(GRUB_CFG); \
 		echo "No RAM disk found (build with krffs/build_ramdisk.sh first)"; \
 	fi
-	@docker run --rm --platform linux/amd64 -v "$(CURDIR)":/work -w /work ubuntu:24.04 sh -c \
+	@# A Docker bind-mount needs an absolute host path, so mount the repo root at its
+	@# own absolute path (quoted, so a space in the path is safe) and hand grub-mkrescue
+	@# the absolute build/ paths; they then resolve unchanged inside the container. This
+	@# is the one recipe that must be absolute: the staging above it is all relative.
+	@docker run --rm --platform linux/amd64 -v "$(abspath $(TOP))":"$(abspath $(TOP))" -w "$(abspath $(TOP))" ubuntu:24.04 sh -c \
 		"apt-get update -qq && \
 		 apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && \
-		 grub-mkrescue -o $(ISO_IMAGE) $(ISO_DIR) 2>/dev/null"
+		 grub-mkrescue -o '$(abspath $(ISO_IMAGE))' '$(abspath $(ISO_DIR))' 2>/dev/null"
 	@rm -f $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST)
 	@echo "Created $(ISO_IMAGE)"
 
 # Kernel
 
-$(KERNEL) : $(ASM_OBJECTS) $(C_OBJECTS)
+$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
+	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $^
 
 $(ASM_OBJECTS) : $(BUILD)/%.o : %.s
@@ -174,7 +179,7 @@ $(C_OBJECTS) : $(BUILD)/%.o : %.c
 
 # Pull in the per-object header dependencies GCC wrote (-MMD), so editing a header
 # rebuilds exactly the objects that include it. Missing on a first build (no .d
-# yet): the leading '-' makes that silent. They live beside the objects in .build/.
+# yet): the leading '-' makes that silent. They live beside the objects in $(BUILD).
 -include $(C_OBJECTS:.o=.d)
 
 # Emit the explicit kernel source list (expanded), for tools/check_sources.sh (the
@@ -187,6 +192,3 @@ print-c-src :
 .PHONY : clean
 clean :
 	rm -rf $(BUILD)
-	rm -f $(KERNEL) $(ISO_IMAGE) $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST) $(GRUB_CFG)
-	@# Belt-and-suspenders: drop any stray in-tree objects/deps from an older build.
-	@find . \( -name '*.o' -o -name '*.d' \) -type f -exec rm -f {} +

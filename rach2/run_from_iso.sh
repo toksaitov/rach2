@@ -21,4 +21,4 @@
 AUDIO_DEVICE="${1:-speaker}"
 . "$(dirname "$0")/qemu_devices.sh"
 
-qemu-system-i386 -cdrom bin/boot.iso -serial stdio $AUDIO_OPTS $NET_OPTS
+qemu-system-i386 -cdrom ../build/rach2/bin/boot.iso -serial stdio $AUDIO_OPTS $NET_OPTS

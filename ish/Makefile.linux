@@ -2,19 +2,26 @@
 #
 # Builds shell for Linux using cross-compiler.
 # Usage: make -f Makefile.linux
+#
+# Builds out of tree, into build/ish/linux/ (its own subdir, distinct from the main
+# build's build/ish/). See ../mk/build.mk.
+
+COMPONENT = ish/linux
+include ../mk/build.mk
 
 # Cross-compiler detection
 CC := $(shell command -v i686-elf-gcc 2>/dev/null)
 ifeq ($(CC),)
-	CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
+CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
 endif
 
 CFLAGS = -m32 -ffreestanding
 LDFLAGS = -m32 -nostdlib -static
 
-TARGET = ish
+TARGET = $(BUILD)/ish
 
-OBJECTS = crt0.o ish.o ish_shell_utilities.o ish_cstring_utilities.o ish_syscalls.o
+OBJECTS = $(addprefix $(BUILD)/, crt0.o ish.o ish_shell_utilities.o \
+                                 ish_cstring_utilities.o ish_syscalls.o)
 HEADERS = ish_common.h ish_syscalls.h ish_shell_utilities.h ish_cstring_utilities.h
 
 .PHONY: all clean
@@ -22,10 +29,12 @@ HEADERS = ish_common.h ish_syscalls.h ish_shell_utilities.h ish_cstring_utilitie
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
+	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $(OBJECTS)
 
-%.o: %.c $(HEADERS)
+$(BUILD)/%.o: %.c $(HEADERS)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(TARGET) $(OBJECTS)
+	rm -rf $(BUILD)
