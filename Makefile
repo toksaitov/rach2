@@ -8,7 +8,7 @@
 # Quick start (run `make doctor` first to check your toolchain):
 #   make            build the kernel + the os-simple image: the everyday teaching
 #                   build, kept fast.
-#   make full       all the RAM-disk images (test and os-simple).
+#   make full       all the RAM-disk images (test, os-simple, os-real).
 #   make images     the RAM-disk images.
 #   make test       boot the test image and check every probe passes.
 #   make deps       build the vendored third-party (libc; DEPS=full adds bb+dropbear)
@@ -55,10 +55,11 @@ DROPBEAR_TARBALL = vendor/dropbear/dropbear-2022.83.tar.bz2
 IMAGES_DIR      = build/images
 TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
 OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
+OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
 MKIMAGE         = krffs/mkimage.sh
 
 .PHONY: all full deps clean distclean images musl-programs test \
-        test-image os-simple-image \
+        test-image os-simple-image os-real-image \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
@@ -125,8 +126,7 @@ ports/doom: rach2
 #     (dd + mkfs.krffs + stageimage.krffs), out of tree into build/images/. The
 #     image targets are .PHONY: a re-stage is sub-second, so they always refresh. ---
 
-# All the images (os-real, with the busybox/dropbear/Doom capstones, is added later).
-images: test-image os-simple-image
+images: test-image os-simple-image os-real-image
 
 # The musl integration programs (tests/musl/*.c -> build/tests/musl/), built by
 # their own script. They are end-to-end libc tests staged into the test image.
@@ -141,6 +141,16 @@ test-image: krffs rach2 tests musl-programs
 # The os-simple image: our ish shell (booted as init) and the hand-written utils.
 os-simple-image: krffs rach2 ish utils
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
+
+# The os-real image: a real Unix-like environment (busybox shell + coreutils,
+# dropbear SSH server and client, Doom, and an /etc + /root tree). 16 MB: enough for
+# the capstones and the shareware Doom WAD, and it still fits under the kernel's
+# 32 MB physical-RAM cap once the kernel and its frames are accounted for (the module
+# is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login key when
+# absent; the check targets ensure the busybox/dropbear binaries are real.
+os-real-image: krffs rach2 check-busybox check-dropbearmulti ports/doom
+	sh krffs/gen_demo_key.sh
+	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
 # (-cpu max) and runs every probe, failing if any does not exit 0. The few probes
@@ -207,8 +217,8 @@ help:
 	@echo "Rach2 build targets:"
 	@echo "  make            kernel + the os-simple image (ish shell + simple Unix tools)"
 	@echo "  make full       all the RAM-disk images"
-	@echo "  make images     the RAM-disk images (test, os-simple)"
-	@echo "  make test-image / os-simple-image   one image"
+	@echo "  make images     the RAM-disk images (test, os-simple, os-real)"
+	@echo "  make test-image / os-simple-image / os-real-image   one image"
 	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
 	@echo "  make busybox / make dropbear   one capstone's third-party build"

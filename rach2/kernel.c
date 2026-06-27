@@ -1068,7 +1068,7 @@ static void exec_program(int argc, char *argv[])
     uint32_t user_stack_vaddr;
     uint32_t user_esp;
     uint8_t random16[16];
-    static char *default_envp[] = {"PATH=/", "HOME=/", "TERM=rach2", 0};
+    static char *default_envp[] = {"PATH=/bin:/usr/bin:/", "HOME=/", "TERM=rach2", 0};
 
     if (argc < 1 || !argv || !argv[0]) {
         k_puts("exec: No program specified");
@@ -1174,31 +1174,44 @@ static void exec_program(int argc, char *argv[])
 }
 
 /**
- * Boot the first user process, the ISH shell, as init.
+ * Boot the first user process (init), then return to the kernel debug shell.
  *
- * Execs "ish" through exec_program. Returns to the caller (the kernel debug
- * shell) when the RAM disk lacks ish, or when init later exits and control
- * comes back here.
+ * Tries a real init in order: `/sbin/init`, then `/bin/sh` (the os-real image,
+ * where the shell is busybox), then `ish` (the os-simple image's shell, at the
+ * root). Execs the first the RAM disk holds, through exec_program. Control comes
+ * back here only when the RAM disk holds none of them, or when init later exits.
  */
 static void boot_init_process(void)
 {
-    static char *init_argv[] = { "ish", NULL };
+    static const char *const candidates[] = { "/sbin/init", "/bin/sh", "ish" };
+    char *init_argv[2];
+    unsigned int i;
 
-    if (!krffs_fs || krffs_open("ish") != 0) {
-        k_puts("boot: ISH shell not found in RAM disk");
-        k_puts("boot: Falling back to kernel debug shell");
+    if (!krffs_fs) {
+        k_puts("boot: no RAM disk; falling back to kernel debug shell");
         return;
     }
 
-    k_cls();
+    for (i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        if (krffs_open(candidates[i]) != 0) {
+            continue;
+        }
 
-    k_puts("Booting into ISH shell...");
-    k_puts("Type 'exit' to return to kernel debug shell.");
-    k_puts("");
+        k_cls();
+        k_printf("Booting into %s...\n", candidates[i]);
+        k_puts("Type 'exit' to return to the kernel debug shell.");
+        k_puts("");
 
-    exec_program(1, init_argv);
+        init_argv[0] = (char *) candidates[i];
+        init_argv[1] = NULL;
+        exec_program(1, init_argv);
 
-    k_puts("boot: Failed to start ISH shell");
+        k_printf("boot: failed to start %s\n", candidates[i]);
+        return;
+    }
+
+    k_puts("boot: no init (/sbin/init, /bin/sh, or ish) in RAM disk");
+    k_puts("boot: falling back to kernel debug shell");
 }
 
 static void run_self_tests(void)

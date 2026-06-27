@@ -6,9 +6,10 @@
 # against the ported musl via the muslgcc wrapper (bundled libtomcrypt/libtommath,
 # no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the binary links static
 # non-PIE; Rach2's ELF loader does not relocate a PIE), applies the curated
-# localoptions.h, builds dropbearmulti (the dropbear server + dropbearkey), strips,
-# and stages it out of tree to build/vendor/dropbear/dropbearmulti (installed into
-# the RAM disk as /dropbearmulti). Run vendor/musl/build_libc.sh first.
+# localoptions.h, builds dropbearmulti (the dropbear server, the dbclient SSH
+# client, and dropbearkey, dispatched on argv[0]), strips, and stages it out of tree
+# to build/vendor/dropbear/dropbearmulti (staged at /bin/dropbearmulti in the os-real
+# image by its manifest). Run vendor/musl/build_libc.sh first.
 #
 # Usage: ./build_dropbear.sh
 #
@@ -86,7 +87,7 @@ BUILD_TRIPLE="$(sh "$SRC/config.guess" 2>/dev/null || true)"
 
 echo "dropbear: building dropbearmulti (dropbear server + dropbearkey, static)"
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
-    PROGRAMS="dropbear dropbearkey" MULTI=1 STATIC=1 SKIP_STRIP=y dropbearmulti
+    PROGRAMS="dropbear dbclient dropbearkey" MULTI=1 STATIC=1 SKIP_STRIP=y dropbearmulti
 
 echo "dropbear: staging the stripped binary to build/vendor/dropbear/dropbearmulti"
 mkdir -p "$STAGE"
