@@ -60,6 +60,17 @@ echo "busybox: extracting"
 rm -rf "$SRC"
 tar xjf "$TARBALL"
 
+# Apply any curated patches, in order, before configuring. The vendored tree is
+# otherwise pristine; this is the escape hatch for the rare fix the config cannot
+# express. With no patches/ directory the loop does nothing.
+if [ -d patches ]; then
+    for p in patches/*.patch; do
+        [ -e "$p" ] || break
+        echo "busybox: applying $p"
+        patch -p1 -d "$SRC" < "$p"
+    done
+fi
+
 echo "busybox: configuring (rach2.config: static musl ash + coreutils)"
 cp rach2.config "$SRC/.config"
 # Resolve any new/derived symbols against the pinned config, taking defaults.

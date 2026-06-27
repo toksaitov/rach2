@@ -57,6 +57,17 @@ echo "libc: extracting"
 rm -rf "$SRC"
 tar xzf "$TARBALL"
 
+# Apply any curated patches, in order, before configuring. The vendored tree is
+# otherwise pristine; this is the escape hatch for the rare fix that cannot be
+# made any other way. With no patches/ directory the loop does nothing.
+if [ -d patches ]; then
+    for p in patches/*.patch; do
+        [ -e "$p" ] || break
+        echo "libc: applying $p"
+        patch -p1 -d "$SRC" < "$p"
+    done
+fi
+
 echo "libc: configuring (CROSS_COMPILE=i686-elf-, static, target i686)"
 cd "$SRC"
 CROSS_COMPILE=i686-elf- ./configure --target=i686 --disable-shared --prefix="$PREFIX"

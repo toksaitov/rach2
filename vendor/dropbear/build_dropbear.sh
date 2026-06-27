@@ -64,6 +64,17 @@ echo "dropbear: extracting"
 rm -rf "$SRC"
 tar xjf "$TARBALL"
 
+# Apply any curated patches, in order, before building. The vendored tree is
+# otherwise pristine; this is the escape hatch for the rare fix localoptions.h
+# cannot express. With no patches/ directory the loop does nothing.
+if [ -d patches ]; then
+    for p in patches/*.patch; do
+        [ -e "$p" ] || break
+        echo "dropbear: applying $p"
+        patch -p1 -d "$SRC" < "$p"
+    done
+fi
+
 echo "dropbear: installing the curated localoptions.h"
 cp localoptions.h "$SRC/localoptions.h"
 
