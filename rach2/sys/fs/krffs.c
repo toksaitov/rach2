@@ -1090,9 +1090,11 @@ int krffs_unlink(const char *path)
 /**
  * Rename or move the regular file `old_path` to `new_path`.
  *
- * The destination directory must exist; an existing destination file is
- * replaced. Renaming a directory is rejected (see below). Returns 0 on success,
- * -1 on error.
+ * The destination directory must exist; an existing destination *file* is
+ * replaced. Renaming a directory source is rejected, and so is overwriting a
+ * directory destination: a directory's children reference its id, so removing
+ * it to make room would orphan the whole subtree. Returns 0 on success, -1 on
+ * error.
  */
 int krffs_rename(const char *old_path, const char *new_path)
 {
@@ -1126,9 +1128,13 @@ int krffs_rename(const char *old_path, const char *new_path)
         return -1;
     }
 
-    /* Replace any existing destination (but not the source itself). */
+    /* Replace any existing destination (but not the source itself), but never
+     * clobber a directory: freeing it would orphan its children. */
     existing = krffs_walk(krffs_fs, new_path);
     if (existing && existing != node) {
+        if (KRFFS_IS_DIR(existing->mode)) {
+            return -1;
+        }
         krffs_remove_reserved_node(krffs_fs, existing);
     }
 
