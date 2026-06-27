@@ -1,14 +1,22 @@
 # test.manifest: the automated end-to-end test image.
 #
 # The freestanding syscall probes (build/tests) at the root, the musl integration
-# programs (build/tests/musl) under /musl, and the small name-resolution config
-# the network probes read. `make test` boots this image and asserts every probe's
-# success token. Host paths are relative to the repo root (mkimage.sh cd's there).
+# programs (build/tests/musl) under /musl, a minimal /etc the musl file and auth
+# probes read, and the small name-resolution config the network probes read.
+# `make test` boots this image and asserts every probe's success token. Host
+# paths are relative to the repo root (mkimage.sh cd's there).
 
 exec-dir 0755 / build/tests
 
 dir 0755 /musl
 exec-dir 0755 /musl build/tests/musl
+
+# A minimal /etc: catfile reads motd and lists the directory, permmusl opens
+# motd, and authmusl resolves root through passwd to uid 0.
+dir 0755 /etc
+text 0644 /etc/motd Welcome to Rach2 (test image).\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\n
 
 text 0644 /hello.txt hello, world\n
 text 0644 /resolv.conf nameserver 10.0.2.3\n

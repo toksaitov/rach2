@@ -3,9 +3,9 @@
  * in-guest, the way a real file utility would.
  *
  * The program reads a pre-staged root file (`/hello.txt`) through `<stdio.h>`,
- * then a host-staged nested file (`/etc/motd`, written into the image by
- * stagetree.krffs) and lists `/etc` for `motd` and `hostname`, proving musl
- * navigates a tree staged before boot rather than only one built at runtime.
+ * then a host-staged nested file (`/etc/motd`, written into the image by the
+ * manifest) and lists `/etc` for `motd` and `hostname`, proving musl navigates
+ * a tree staged before boot rather than only one built at runtime.
  * It then makes a fresh directory and creates and writes a file inside it,
  * reads that nested file back and verifies its bytes, stats it as a regular
  * file of exactly the bytes written, opendirs the directory and confirms
