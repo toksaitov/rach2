@@ -809,8 +809,16 @@ void *malloc(size_t size)
 
 void *calloc(size_t nmemb, size_t size)
 {
-    size_t total = nmemb * size;
-    void *ptr = malloc(total);
+    size_t total;
+    void *ptr;
+
+    /* Reject a product that would wrap size_t and hand back a buffer smaller
+     * than the caller asked for. */
+    if (size != 0 && nmemb > (size_t)-1 / size) {
+        return NULL;
+    }
+    total = nmemb * size;
+    ptr = malloc(total);
     if (ptr) {
         memset(ptr, 0, total);
     }
@@ -1064,15 +1072,17 @@ double atof(const char *s)
 long long __divdi3(long long a, long long b)
 {
     int neg = 0;
-    long long result = 0;
-    long long bit = 1;
+    unsigned long long result = 0;
+    unsigned long long bit = 1;
     unsigned long long ua, ub;
 
     if (b == 0) return 0;  /* Avoid divide by zero */
 
-    /* Handle signs */
-    if (a < 0) { neg = !neg; ua = -a; } else { ua = a; }
-    if (b < 0) { neg = !neg; ub = -b; } else { ub = b; }
+    /* Magnitudes via unsigned negation, well defined even for the INT64_MIN
+     * input where signed negation would overflow. `bit` must be unsigned too,
+     * or its >>= 1 sign-extends from bit 63 and the loop never terminates. */
+    if (a < 0) { neg = !neg; ua = -(unsigned long long)a; } else { ua = a; }
+    if (b < 0) { neg = !neg; ub = -(unsigned long long)b; } else { ub = b; }
 
     /* Find highest bit in divisor */
     while (ub < ua && !(ub & (1ULL << 63))) {
@@ -1090,7 +1100,7 @@ long long __divdi3(long long a, long long b)
         bit >>= 1;
     }
 
-    return neg ? -result : result;
+    return neg ? (long long)(0ULL - result) : (long long)result;
 }
 
 /* Unsigned version */

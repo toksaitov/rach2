@@ -530,9 +530,14 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
             return -1;
         }
 
-        /* Set up channel to play this sound */
+        /* Set up channel to play this sound. The header's sample count is
+         * untrusted; clamp it to the bytes that follow the 8-byte header so a
+         * corrupt or crafted lump cannot make playback read past the cache. */
         channels[channel].data = lumpdata + 8;  /* Skip 8-byte header */
         channels[channel].length = header->num_samples;
+        if (channels[channel].length > (uint32_t)(lumplen - 8)) {
+            channels[channel].length = (uint32_t)(lumplen - 8);
+        }
         channels[channel].position = 0;
         channels[channel].volume = vol * 2;  /* Doom: 0-127, we use 0-255 */
         channels[channel].active = true;
@@ -580,9 +585,18 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
             stop_tone();
         }
 
-        /* Set up DP playback state */
+        /* Set up DP playback state. As above, clamp the untrusted sample count
+         * to the bytes that follow the 4-byte header. */
         dp_state.data = lumpdata + 4;  /* Skip 4-byte header */
         dp_state.length = header->num_samples;
+        if (dp_state.length > (uint32_t)(lumplen - 4)) {
+            dp_state.length = (uint16_t)(lumplen - 4);
+        }
+        if (dp_state.length == 0) {
+            /* Header only, no tone bytes: nothing to play, and the first-tone
+             * read below would step past the lump. */
+            return -1;
+        }
         dp_state.position = 0;
         dp_state.last_update = DG_GetTicksMs();
         dp_state.active = true;
