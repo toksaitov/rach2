@@ -14,14 +14,15 @@
 #   ./grub_install.sh /path/to/grub/boot
 #
 # Example (Linux, mounted USB at /mnt/usb):
-#   cd rach2
-#   make
+#   make os-simple-image              # from the repo root: build the image to copy
+#   cd rach2 && make                  # build the kernel
 #   ./grub_install.sh /mnt/usb/boot
 #
+# It copies the os-simple image by default; set RACH2_IMAGE=os-real for another.
 # Then add a GRUB menu entry pointing at those files, e.g.:
 #   menuentry "Rach2" {
 #       multiboot /boot/kernel
-#       module /boot/file_system.krffs
+#       module /boot/os-simple.krffs
 #       boot
 #   }
 #
@@ -52,11 +53,12 @@ mkdir -p "$DEST_DIR"
 echo "grub_install: copying kernel to $DEST_DIR/kernel"
 copy_dense "../build/rach2/kernel" "$DEST_DIR/kernel"
 
-if [ -f "../build/krffs/file_system.krffs" ]; then
-    echo "grub_install: copying RAM disk to $DEST_DIR/file_system.krffs"
-    copy_dense "../build/krffs/file_system.krffs" "$DEST_DIR/file_system.krffs"
+IMAGE="${RACH2_IMAGE:-os-simple}"
+if [ -f "../build/images/$IMAGE.krffs" ]; then
+    echo "grub_install: copying RAM disk to $DEST_DIR/$IMAGE.krffs"
+    copy_dense "../build/images/$IMAGE.krffs" "$DEST_DIR/$IMAGE.krffs"
 else
-    echo "grub_install: ../build/krffs/file_system.krffs not found; skipping RAM disk copy"
+    echo "grub_install: ../build/images/$IMAGE.krffs not found; build it (make $IMAGE-image) or set RACH2_IMAGE; skipping RAM disk copy"
 fi
 
 echo "grub_install: done"

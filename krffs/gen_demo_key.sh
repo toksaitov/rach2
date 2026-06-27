@@ -22,8 +22,10 @@ if [ -f authorized_keys ]; then
     exit 0
 fi
 if ! command -v ssh-keygen >/dev/null 2>&1; then
-    echo "gen_demo_key: no ssh-keygen; the os-real SSH login will lack a key" >&2
-    exit 0
+    echo "gen_demo_key: no krffs/authorized_keys and no ssh-keygen to make one." >&2
+    echo "gen_demo_key: the os-real image is the SSH capstone, so this is fatal." >&2
+    echo "gen_demo_key: install openssh, or drop a public key at krffs/authorized_keys." >&2
+    exit 1
 fi
 
 rm -f "$KEY" "$KEY.pub"

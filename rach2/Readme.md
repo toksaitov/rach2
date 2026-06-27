@@ -90,10 +90,10 @@ This document covers the foundation kernel. The networking stack, the musl userl
 ### Build and Run
 
 ```bash
-make                        # Compile the kernel (out of tree: ../build/rach2/kernel)
+make                        # Compile the kernel only (../build/rach2/kernel)
 ./run.sh                    # Boot the kernel alone, into the kernel debug shell
-./run.sh os-simple          # Boot a RAM-disk image (test, os-simple, or os-real)
-./run_from_iso.sh os-simple # Boot from ISO with GRUB
+./run.sh os-simple          # Boot an image (build it from the repo root: make os-simple-image)
+./run_from_iso.sh os-simple # Boot an image's ISO (build it: make os-simple-iso)
 ./debug.sh                  # Debug with GDB
 ```
 

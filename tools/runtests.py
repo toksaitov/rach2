@@ -12,10 +12,10 @@ without RDSEED/RDRAND. Exit code: 0 if every probe exited 0, else 1.
 This is the automated end-to-end pass over the test image. A handful of probes are
 exercised by hand under tools/harness.py instead, because each needs a contract a
 single shared boot does not set up: forktest and cowprobe exit with the child's
-own status (not 0); stdintest blocks on real keyboard input; vmfault and vmro fault
-on purpose (harness.py runs each in its own boot, where the fault cleanly ends that
-boot); and pingtest, udptest, tcptest, sockettest, and dnstest need a host echo
-server or live DNS.
+own status (not 0); stdintest and ttyprobe block on real terminal input; vmfault
+and vmro fault on purpose (harness.py runs each in its own boot, where the fault
+cleanly ends that boot); and pingtest, udptest, tcptest, sockettest, and dnstest
+need a host echo server or live DNS.
 
 Usage: runtests.py --kernel K --initrd I [--cpu max] [--timeout S]
 """
@@ -27,7 +27,7 @@ PROBES = [
     "hello", "filetest", "shelltest", "dirtest", "stattest", "touchtest",
     "rmtest", "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe",
     "errnoprobe", "vmprobe", "forkro", "dirprobe", "timeprobe", "sigprobe",
-    "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe", "ttyprobe",
+    "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
     "jobprobe", "miscprobe", "ptyprobe", "rngprobe",
 ]
 
@@ -96,12 +96,25 @@ def main():
 
     results = []
     for name in PROBES:
+        start = len(buf)
         send("exec " + name)
-        m = expect(r"Process exited with status (-?\d+)")
+        # The probe runs AS the init process; the kernel prints "Init process ...
+        # returning to kernel shell" (on serial, so it survives a probe that left the
+        # console tty in raw mode, e.g. ttyprobe) only when the probe itself exits,
+        # after any children it forked. The kernel prints "Process exited with status
+        # N" for EVERY process exit (a forked child too), so the probe's own status is
+        # the LAST such line before that marker, not the first. Anchoring on the marker
+        # also keeps us from sending the next exec while a forked parent still runs.
+        m = expect(r"returning to kernel shell")
         if m is None:
-            results.append((name, "no exit (hang?)", False))
+            results.append((name, "no shell return (hang?)", False))
+            break
+        window = bytes(buf[start:m.start()])
+        statuses = re.findall(rb"Process exited with status (-?\d+)", window)
+        if not statuses:
+            results.append((name, "no exit reported", False))
             continue
-        status = int(m.group(1))
+        status = int(statuses[-1])
         results.append((name, "status=%d" % status, status == 0))
 
     pump(time.time() + 1.0)

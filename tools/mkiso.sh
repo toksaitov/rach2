@@ -17,10 +17,14 @@
 set -e
 
 IMAGE="$1"
-if [ -z "$IMAGE" ]; then
-    echo "usage: mkiso.sh <test|os-simple|os-real>" >&2
-    exit 2
-fi
+# Allowlist the image name before it reaches the destructive rm -rf below.
+case "$IMAGE" in
+    test|os-simple|os-real) ;;
+    *)
+        echo "usage: mkiso.sh <test|os-simple|os-real>" >&2
+        exit 2
+        ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"

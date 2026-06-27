@@ -34,7 +34,7 @@ text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns
 # 0755/0700/0600 dropbear's pubkey check insists on).
 dir 0755 /root
 dir 0700 /root/.ssh
-optional-file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
+file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 
 # A couple of empty directories for a real feel; the Doom WAD (operator-supplied) if
 # present.

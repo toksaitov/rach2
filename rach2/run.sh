@@ -21,17 +21,18 @@
 
 IMAGE="$1"
 AUDIO_DEVICE="${2:-speaker}"
-. "$(dirname "$0")/qemu_devices.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/qemu_devices.sh"
 
 # -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG seeds from trusted hardware
 # entropy; without it getrandom + /dev/[u]random fail closed and SSH key
 # generation (dropbear, in the os-real image) cannot run. Override CPU=... to test.
 CPU="${CPU:-max}"
 
-KERNEL=../build/rach2/kernel
+KERNEL="$SCRIPT_DIR/../build/rach2/kernel"
 
 if [ -n "$IMAGE" ]; then
-    INITRD="../build/images/$IMAGE.krffs"
+    INITRD="$SCRIPT_DIR/../build/images/$IMAGE.krffs"
     if [ ! -f "$INITRD" ]; then
         echo "run: image '$INITRD' not found; build it with 'make $IMAGE-image'" >&2
         exit 1

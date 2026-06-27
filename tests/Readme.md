@@ -53,7 +53,7 @@ The memory-protection probes provoke a deliberate fault. `forkro` forks a child 
 
 ## musl integration tests
 
-`musl/` holds programs linked against the ported musl libc (built by `musl/build.sh` and staged into the RAM disk under short names like `mhello` and `mqsort`). They prove the kernel hosts a real C library end to end, each printing a success line that begins with its token (some append run detail in parentheses): `MALLOC QSORT OK` (`mallocqsort`: malloc, qsort, a 256 KB mmap allocation), `CATFILE OK`, `DEVTEST OK`, `OFDMUSL OK`, `PIPEMUSL OK`, `POLLMUSL OK`, `PTYMUSL OK`, `MTTY OK`, `SIGMUSL OK`, `RNGMUSL OK`, `TIMEMUSL OK`, `COWFORK OK`, `PERMMUSL OK`, `AUTHMUSL OK`, `BUDGETMUSL OK`, `SOCKFILLMUSL OK`, and `TCPSENDRECV OK`, plus `hello` and `ctrlcmusl` (which prints its result inline).
+`musl/` holds programs linked against the ported musl libc (built by `musl/build.sh`, or `make musl-programs`, and staged into the test image under `/musl`, so `/musl/hello` and `/musl/mallocqsort`). They prove the kernel hosts a real C library end to end, each printing a success line that begins with its token (some append run detail in parentheses): `MALLOC QSORT OK` (`mallocqsort`: malloc, qsort, a 256 KB mmap allocation), `CATFILE OK`, `DEVTEST OK`, `OFDMUSL OK`, `PIPEMUSL OK`, `POLLMUSL OK`, `PTYMUSL OK`, `MTTY OK`, `SIGMUSL OK`, `RNGMUSL OK`, `TIMEMUSL OK`, `COWFORK OK`, `PERMMUSL OK`, `AUTHMUSL OK`, `BUDGETMUSL OK`, `SOCKFILLMUSL OK`, and `TCPSENDRECV OK`, plus `hello` and `ctrlcmusl` (which prints its result inline).
 
 ## Build
 

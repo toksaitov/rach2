@@ -8,7 +8,7 @@ The code in the `krffs` directory HERE is for generating RAM disk images for Rac
 
 ## Features
 
-* Flat file system: files only, no subdirectories
+* Hierarchical v2 directories (parent-id nodes) the kernel and the `stageimage` builder read and write; the interactive FUSE mount itself stays flat (one root)
 * K&R first-fit allocator: block splitting, coalescing adjacent free blocks
 * Memory-mapped I/O: changes written directly to backing file
 * Packed metadata nodes with magic signatures for consistency checks
@@ -65,7 +65,7 @@ Nodes form a circular linked list via size/previous_node_size fields.
 
 ## Limitations
 
-* No subdirectories (flat namespace)
+* The interactive FUSE mount is flat (no `mkdir`); v2 directories are written by `stageimage`, not through the mount
 * No hard links or symbolic links
 * Single-threaded FUSE operation
 * File names limited to 255 bytes

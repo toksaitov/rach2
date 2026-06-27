@@ -17,7 +17,8 @@
 
 IMAGE="$1"
 AUDIO_DEVICE="${2:-speaker}"
-. "$(dirname "$0")/qemu_devices.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/qemu_devices.sh"
 
 # -cpu max for trusted entropy (the os-real SSH login needs it; see run.sh).
 CPU="${CPU:-max}"
@@ -26,7 +27,7 @@ if [ -z "$IMAGE" ]; then
     echo "usage: ./run_from_iso.sh <test|os-simple|os-real> [audio]" >&2
     exit 2
 fi
-ISO="../build/images/$IMAGE.iso"
+ISO="$SCRIPT_DIR/../build/images/$IMAGE.iso"
 if [ ! -f "$ISO" ]; then
     echo "run_from_iso: $ISO not found; build it with 'make $IMAGE-iso'" >&2
     exit 1
