@@ -82,33 +82,51 @@ static void log_addr(uint32_t ip, uint16_t port)
 
 /* Buffer-append helpers (no libc). */
 
-static void put_s(char *buf, int *pos, const char *s)
+/**
+ * A bounded output cursor over a fixed buffer. Every byte the page is built
+ * from is stored through `put_c`, which refuses to write at or past `cap`, so
+ * a maximal, attacker-shaped request truncates the page instead of overflowing
+ * the buffer. The reflected request fields are individually capped, so a normal
+ * page fits with room to spare; the bound only ever clips a crafted worst case.
+ */
+struct out {
+    char *buf;
+    int   pos;
+    int   cap;
+};
+
+static void put_c(struct out *o, char c)
 {
-    while (*s) buf[(*pos)++] = *s++;
+    if (o->pos < o->cap - 1) o->buf[o->pos++] = c;
 }
 
-static void put_u(char *buf, int *pos, unsigned int v)
+static void put_s(struct out *o, const char *s)
+{
+    while (*s) put_c(o, *s++);
+}
+
+static void put_u(struct out *o, unsigned int v)
 {
     char t[12];
     int i = 0;
-    if (v == 0) { buf[(*pos)++] = '0'; return; }
+    if (v == 0) { put_c(o, '0'); return; }
     while (v > 0) { t[i++] = (char)('0' + v % 10); v /= 10; }
-    while (i > 0) buf[(*pos)++] = t[--i];
+    while (i > 0) put_c(o, t[--i]);
 }
 
-static void put_ip(char *buf, int *pos, uint32_t sin_addr)
+static void put_ip(struct out *o, uint32_t sin_addr)
 {
     uint8_t *b = (uint8_t *)&sin_addr;
-    put_u(buf, pos, b[0]); buf[(*pos)++] = '.';
-    put_u(buf, pos, b[1]); buf[(*pos)++] = '.';
-    put_u(buf, pos, b[2]); buf[(*pos)++] = '.';
-    put_u(buf, pos, b[3]);
+    put_u(o, b[0]); put_c(o, '.');
+    put_u(o, b[1]); put_c(o, '.');
+    put_u(o, b[2]); put_c(o, '.');
+    put_u(o, b[3]);
 }
 
-static void put_port(char *buf, int *pos, uint16_t sin_port)
+static void put_port(struct out *o, uint16_t sin_port)
 {
     uint8_t *b = (uint8_t *)&sin_port;
-    put_u(buf, pos, (unsigned int)b[0] * 256u + (unsigned int)b[1]);
+    put_u(o, (unsigned int)b[0] * 256u + (unsigned int)b[1]);
 }
 
 /**
@@ -118,16 +136,16 @@ static void put_port(char *buf, int *pos, uint16_t sin_port)
  * Every value taken from the request passes through here before it reaches the
  * page.
  */
-static void put_esc(char *buf, int *pos, const char *s, int max)
+static void put_esc(struct out *o, const char *s, int max)
 {
     int i;
     for (i = 0; i < max && s[i]; i++) {
         char c = s[i];
-        if      (c == '<') put_s(buf, pos, "&lt;");
-        else if (c == '>') put_s(buf, pos, "&gt;");
-        else if (c == '&') put_s(buf, pos, "&amp;");
-        else if (c == '"') put_s(buf, pos, "&quot;");
-        else if (c >= 32 && c < 127) buf[(*pos)++] = c;
+        if      (c == '<') put_s(o, "&lt;");
+        else if (c == '>') put_s(o, "&gt;");
+        else if (c == '&') put_s(o, "&amp;");
+        else if (c == '"') put_s(o, "&quot;");
+        else if (c >= 32 && c < 127) put_c(o, c);
     }
 }
 
@@ -135,14 +153,14 @@ static void put_esc(char *buf, int *pos, const char *s, int max)
  * Append a request string with its leading method token highlighted in red
  * (the `GET` in `GET /path HTTP/1.1`); both parts are HTML-escaped.
  */
-static void put_req(char *buf, int *pos, const char *s, int max)
+static void put_req(struct out *o, const char *s, int max)
 {
     int m = 0;
     while (m < max && s[m] && s[m] != ' ') m++;
-    put_s(buf, pos, "<em>");
-    put_esc(buf, pos, s, m);
-    put_s(buf, pos, "</em>");
-    put_esc(buf, pos, s + m, max - m);
+    put_s(o, "<em>");
+    put_esc(o, s, m);
+    put_s(o, "</em>");
+    put_esc(o, s + m, max - m);
 }
 
 /* Request parsing (operates on the raw bytes recv() delivered). */
@@ -271,29 +289,29 @@ static void record_peer(uint32_t ip, uint16_t port,
 /**
  * Append uptime as `Hh MMm SSs`.
  */
-static void put_uptime(char *buf, int *pos, uint32_t s)
+static void put_uptime(struct out *o, uint32_t s)
 {
     uint32_t h = s / 3600u, m = (s / 60u) % 60u, sec = s % 60u;
-    put_u(buf, pos, h);   buf[(*pos)++] = 'h'; buf[(*pos)++] = ' ';
-    if (m < 10) buf[(*pos)++] = '0';
-    put_u(buf, pos, m);   buf[(*pos)++] = 'm'; buf[(*pos)++] = ' ';
-    if (sec < 10) buf[(*pos)++] = '0';
-    put_u(buf, pos, sec); buf[(*pos)++] = 's';
+    put_u(o, h);   put_c(o, 'h'); put_c(o, ' ');
+    if (m < 10) put_c(o, '0');
+    put_u(o, m);   put_c(o, 'm'); put_c(o, ' ');
+    if (sec < 10) put_c(o, '0');
+    put_u(o, sec); put_c(o, 's');
 }
 
 /**
  * Append a byte count as `N B` or `N.N KB`.
  */
-static void put_bytes(char *buf, int *pos, unsigned int n)
+static void put_bytes(struct out *o, unsigned int n)
 {
     if (n < 1024) {
-        put_u(buf, pos, n);
-        put_s(buf, pos, " B");
+        put_u(o, n);
+        put_s(o, " B");
     } else {
-        put_u(buf, pos, n / 1024u);
-        buf[(*pos)++] = '.';
-        put_u(buf, pos, ((n % 1024u) * 10u) / 1024u);
-        put_s(buf, pos, " KB");
+        put_u(o, n / 1024u);
+        put_c(o, '.');
+        put_u(o, ((n % 1024u) * 10u) / 1024u);
+        put_s(o, " KB");
     }
 }
 
@@ -302,11 +320,11 @@ static void put_bytes(char *buf, int *pos, unsigned int n)
  */
 static int build_body(uint32_t uptime_s)
 {
-    int p = 0;
+    struct out o = { body, 0, (int)sizeof(body) };
     int i, idx;
     uint32_t now;
 
-    put_s(body, &p,
+    put_s(&o,
         "<!DOCTYPE html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
         "<title>rach2</title><style>"
@@ -342,84 +360,84 @@ static int build_body(uint32_t uptime_s)
         "td.a{text-align:right;color:var(--faint);padding-left:14px}"
         "</style></head><body><main>");
 
-    put_s(body, &p, "<div class=top><h1>rach2</h1><div class=stat>"
+    put_s(&o, "<div class=top><h1>rach2</h1><div class=stat>"
                     SERVER_ADDR "<br>up ");
-    put_uptime(body, &p, uptime_s);
-    put_s(body, &p, "</div></div>");
+    put_uptime(&o, uptime_s);
+    put_s(&o, "</div></div>");
 
-    put_s(body, &p, "<div class=sec>this request</div>");
+    put_s(&o, "<div class=sec>this request</div>");
 
-    put_s(body, &p, "<div class=r><i>client</i><b>");
-    put_ip(body, &p, cur_client_ip);
-    body[p++] = ':';
-    put_port(body, &p, cur_client_port);
-    put_s(body, &p, "</b></div>");
+    put_s(&o, "<div class=r><i>client</i><b>");
+    put_ip(&o, cur_client_ip);
+    put_c(&o, ':');
+    put_port(&o, cur_client_port);
+    put_s(&o, "</b></div>");
 
     if (cur_host[0]) {
-        put_s(body, &p, "<div class=r><i>host</i><b>");
-        put_esc(body, &p, cur_host, HOST_MAX);
-        put_s(body, &p, "</b></div>");
+        put_s(&o, "<div class=r><i>host</i><b>");
+        put_esc(&o, cur_host, HOST_MAX);
+        put_s(&o, "</b></div>");
     }
 
-    put_s(body, &p, "<div class=r><i>request</i><b>");
-    put_req(body, &p, cur_reqline, REQLINE_MAX);
-    put_s(body, &p, "</b></div>");
+    put_s(&o, "<div class=r><i>request</i><b>");
+    put_req(&o, cur_reqline, REQLINE_MAX);
+    put_s(&o, "</b></div>");
 
     if (cur_agent[0]) {
-        put_s(body, &p, "<div class=r><i>agent</i><b>");
-        put_esc(body, &p, cur_agent, AGENT_MAX);
-        put_s(body, &p, "</b></div>");
+        put_s(&o, "<div class=r><i>agent</i><b>");
+        put_esc(&o, cur_agent, AGENT_MAX);
+        put_s(&o, "</b></div>");
     }
 
-    put_s(body, &p, "<div class=r><i>bytes in</i><b>");
-    put_u(body, &p, cur_bytes_in);
-    put_s(body, &p, "</b></div>");
+    put_s(&o, "<div class=r><i>bytes in</i><b>");
+    put_u(&o, cur_bytes_in);
+    put_s(&o, "</b></div>");
 
-    put_s(body, &p, "<div class=sec>traffic</div>");
+    put_s(&o, "<div class=sec>traffic</div>");
 
-    put_s(body, &p, "<div class=r><i>served</i><b>");
-    put_u(body, &p, served);
-    put_s(body, &p, served == 1 ? " request" : " requests");
-    put_s(body, &p, "</b></div>");
+    put_s(&o, "<div class=r><i>served</i><b>");
+    put_u(&o, served);
+    put_s(&o, served == 1 ? " request" : " requests");
+    put_s(&o, "</b></div>");
 
-    put_s(body, &p, "<div class=r><i>sent</i><b>");
-    put_bytes(body, &p, total_bytes);
-    put_s(body, &p, "</b></div>");
+    put_s(&o, "<div class=r><i>sent</i><b>");
+    put_bytes(&o, total_bytes);
+    put_s(&o, "</b></div>");
 
     /* Recent connections: source ports vary per connection, so this doubles as
      * proof the stack opens, serves and reclaims many distinct TCBs. */
-    put_s(body, &p, "<div class=sec>recent connections</div><table>");
+    put_s(&o, "<div class=sec>recent connections</div><table>");
     now = (uint32_t)now_sec();
     for (i = 0; i < peer_count; i++) {
         idx = (peer_head - peer_count + i + PEER_RING) % PEER_RING;
-        put_s(body, &p, "<tr><td class=n>");
-        put_u(body, &p, peers[idx].req_num);
-        put_s(body, &p, "</td><td class=p>");
-        put_ip(body, &p, peers[idx].ip);
-        body[p++] = ':';
-        put_port(body, &p, peers[idx].port);
-        put_s(body, &p, "</td><td class=m>");
-        put_req(body, &p, peers[idx].methpath, METHPATH_MAX);
-        put_s(body, &p, "</td><td class=a>");
+        put_s(&o, "<tr><td class=n>");
+        put_u(&o, peers[idx].req_num);
+        put_s(&o, "</td><td class=p>");
+        put_ip(&o, peers[idx].ip);
+        put_c(&o, ':');
+        put_port(&o, peers[idx].port);
+        put_s(&o, "</td><td class=m>");
+        put_req(&o, peers[idx].methpath, METHPATH_MAX);
+        put_s(&o, "</td><td class=a>");
         if (i == peer_count - 1) {
             /* The newest row is the request being served right now; its size is
              * not known until the reply finishes (it is this very page). */
-            put_s(body, &p, "<em>live</em>");
+            put_s(&o, "<em>live</em>");
         } else {
-            put_bytes(body, &p, peers[idx].bytes);
+            put_bytes(&o, peers[idx].bytes);
         }
-        put_s(body, &p, "</td><td class=a>");
-        put_u(body, &p, now - peers[idx].ts_sec);
-        put_s(body, &p, "s</td></tr>");
+        put_s(&o, "</td><td class=a>");
+        put_u(&o, now - peers[idx].ts_sec);
+        put_s(&o, "s</td></tr>");
     }
     if (peer_count == 0) {
-        put_s(body, &p, "<tr><td colspan=5 style=color:var(--faint)>"
+        put_s(&o, "<tr><td colspan=5 style=color:var(--faint)>"
                         "awaiting the first connection</td></tr>");
     }
-    put_s(body, &p, "</table>");
+    put_s(&o, "</table>");
 
-    put_s(body, &p, "</main></body></html>");
-    return p;
+    put_s(&o, "</main></body></html>");
+    return o.pos;
 }
 
 /**
@@ -429,18 +447,18 @@ static int build_body(uint32_t uptime_s)
 static int build_response(uint32_t uptime_s)
 {
     int blen = build_body(uptime_s);
-    int p = 0;
+    struct out o = { resp, 0, (int)sizeof(resp) };
     int i;
 
-    put_s(resp, &p, "HTTP/1.0 200 OK\r\n");
-    put_s(resp, &p, "Content-Type: text/html; charset=utf-8\r\n");
-    put_s(resp, &p, "Connection: close\r\n");
-    put_s(resp, &p, "Cache-Control: no-store\r\n");
-    put_s(resp, &p, "Content-Length: ");
-    put_u(resp, &p, (unsigned int)blen);
-    put_s(resp, &p, "\r\n\r\n");
-    for (i = 0; i < blen; i++) resp[p++] = body[i];
-    return p;
+    put_s(&o, "HTTP/1.0 200 OK\r\n");
+    put_s(&o, "Content-Type: text/html; charset=utf-8\r\n");
+    put_s(&o, "Connection: close\r\n");
+    put_s(&o, "Cache-Control: no-store\r\n");
+    put_s(&o, "Content-Length: ");
+    put_u(&o, (unsigned int)blen);
+    put_s(&o, "\r\n\r\n");
+    for (i = 0; i < blen; i++) put_c(&o, body[i]);
+    return o.pos;
 }
 
 /**
