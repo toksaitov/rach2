@@ -152,10 +152,10 @@ static int procfs_gen_stat(int pid, char *buf, int cap)
     ap_ch(buf, cap, &len, ' ');
     ap_int(buf, cap, &len, (int)p->parent_pid); /* 4 ppid */
     ap_ch(buf, cap, &len, ' ');
-    ap_int(buf, cap, &len, pid); /* 5 pgrp (no job control yet: self) */
+    ap_int(buf, cap, &len, (int)p->pgid); /* 5 pgrp */
     ap_ch(buf, cap, &len, ' ');
-    ap_int(buf, cap, &len, pid); /* 6 session */
-    ap_str(buf, cap, &len, " 0 -1"); /* 7 tty_nr, 8 tpgid */
+    ap_int(buf, cap, &len, (int)p->sid); /* 6 session */
+    ap_str(buf, cap, &len, " 0 -1"); /* 7 tty_nr, 8 tpgid (not modeled) */
     /* 9..13 flags,minflt,cminflt,majflt,cmajflt; 14..17 utime,stime,cutime,cstime */
     ap_str(buf, cap, &len, " 0 0 0 0 0 0 0 0 0");
     ap_str(buf, cap, &len, " 20 0"); /* 18 priority, 19 nice */
