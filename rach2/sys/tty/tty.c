@@ -131,10 +131,12 @@ void tty_set_session(struct tty *t, int sid, int pgid)
  * condition under which a process exiting, being killed, or replacing its image
  * must release (and on a successful exec re-publish) the controlling terminal,
  * so the timer-IRQ serial drain never targets a session that is vanishing. It is
- * true for init (alloc_process makes every process its own session leader and
- * exec_program publishes init's sid) and for any later leader that claimed the
- * console via TIOCSCTTY; it is false for a mere job-group member of the owning
- * session, whose exit must not pull the terminal out from under the shell.
+ * true for the session leader that owns the console: the login shell a real init
+ * spawned (which `setsid`s and claims the console via TIOCSCTTY), a program the
+ * kernel debug shell exec'd (for which `exec_program` publishes the sid), or any
+ * later leader that claimed it via TIOCSCTTY; it is false for a mere job-group
+ * member of the owning session, whose exit must not pull the terminal out from
+ * under the shell.
  */
 int tty_console_owned_by_leader(int sid, int pid)
 {

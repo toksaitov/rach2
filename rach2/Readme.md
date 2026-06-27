@@ -40,7 +40,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 * User mode (ring 3) execution with privilege transitions
 * Context switching between processes with TSS stack management
 * Preemptive round-robin scheduler (timer-driven)
-* CTRL+C kills foreground user process (returns parent to shell, or kernel debug shell if init)
+* CTRL+C kills the foreground user process (the parent reaps the zombie; killing a real init panics, a rescue/no-init debug shell regains control)
 
 ### System Calls and I/O
 

@@ -7,10 +7,11 @@
 
 /**
  * Defined in kernel.c: tear the current user process down with a signal death
- * (`signo`; SIGSEGV here): free its pages, wake a waiting parent, and either
- * resume the kernel debug shell (if it was init) or schedule the parent (if it
- * was a child). Kills a process that faulted illegally without taking the machine
- * down. Mirrors the CTRL+C kill path.
+ * (`signo`; SIGSEGV here): free its pages, wake a waiting parent, reparent its
+ * children to init, and schedule the parent to collect the zombie. A real init's
+ * death panics instead (a rescue/no-init debug shell regains control). Kills a
+ * process that faulted illegally without taking the machine down. Mirrors the
+ * CTRL+C kill path.
  */
 extern void terminate_current_process(int32_t signo);
 
@@ -413,8 +414,8 @@ static void _page_fault_handler(isr_params_t *params)
     }
 
     /* Unrecoverable. A fault taken in user mode is the process's own bug: kill
-     * just that process and survive; terminate_current_process returns to the
-     * shell if it was init, or schedules the parent to collect the zombie. */
+     * just that process and survive; terminate_current_process schedules the
+     * parent to collect the zombie, or panics if the dier was a real init. */
     if (user_mode && have_user_proc) {
         serial_printf("Page fault: killing pid %d: bad %s at 0x%x (err 0x%x)\n",
                       current_proc->pid, write ? "write" : "read", fault_address,

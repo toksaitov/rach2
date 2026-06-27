@@ -27,7 +27,7 @@ ELF code and data segments are loaded eagerly at `exec` (their pages are mapped 
 `_page_fault_handler` (vector 14) reads `CR2` and the error code, then handles three cases.
 
 * A fault on a user-space address of a live process goes to `vm_resolve`. If a VMA covers it (or it is a legal one-page-or-more stack growth below the stack VMA and at or above `stack_limit`), a fresh frame is allocated, zero-filled, and mapped; a write to a read-only region or an address in no VMA fails. This keys on the faulting address being in user space, not on the CPU mode, so a kernel touch of a lazy user page resolves here too.
-* An unrecoverable fault taken in user mode segfaults the process. `terminate_current_process` (in `kernel.c`, shared with the CTRL+C path) tears it down and either returns to the kernel shell (if it was init) or schedules the parent to collect the zombie. The machine survives.
+* An unrecoverable fault taken in user mode segfaults the process. `terminate_current_process` (in `kernel.c`, shared with the CTRL+C path) tears it down and schedules the parent to collect the zombie; if the dier was a real init it panics instead (a rescue/no-init debug shell regains control). The machine survives.
 * A fault in kernel mode with no valid user cause is a genuine kernel bug, and panics loudly.
 
 Newly demand-paged pages are always zeroed, so heap, stack, and `mmap` memory reads as zero and a recycled frame never leaks a previous process's data.
