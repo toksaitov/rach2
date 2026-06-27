@@ -15,7 +15,8 @@
  * magic symlink to the numeric pid: lstat sees the link, stat follows it to the
  * directory, and /proc/self/fd/0 follows through to the console char device.
  *
- * Installed as "mdevtest". Prints "DEVTEST OK" when every check passes.
+ * Staged into test.krffs as /musl/devtest. Prints "DEVTEST OK" when every
+ * check passes.
  */
 #include <fcntl.h>
 #include <unistd.h>

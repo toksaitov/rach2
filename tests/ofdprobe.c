@@ -39,7 +39,8 @@ typedef unsigned int size_t;
 #define F_SETFD    2
 #define FD_CLOEXEC 1
 
-#define HELLO "/hello.txt" /* "hello, world\n": 0-4 hello, 5 ',', 6 ' ', 7 w... */
+/* "hello, world\n": 0-4 hello, 5 ',', 6 ' ', 7 w... */
+#define HELLO "/hello.txt"
 
 static int syscall1(int n, int a)
 {

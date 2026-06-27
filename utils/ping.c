@@ -17,7 +17,8 @@
 
 #include "netdb.h" /* resolve_host */
 
-#define SC_PING    0x1000       /* Rach2 socketcall extension: ICMP echo (renumbered off Linux getsockopt=15) */
+/* Rach2 socketcall extension: ICMP echo (renumbered off getsockopt=15). */
+#define SC_PING    0x1000
 #define DEFAULT_IP 0x0A000202UL /* 10.0.2.2 */
 #define PING_COUNT 4
 

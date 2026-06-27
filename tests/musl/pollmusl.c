@@ -14,7 +14,7 @@
  * parent blocked in poll(), so the return comes from the write, well under
  * the 3s timeout.
  *
- * Installed as "mpoll" by krffs/build_test_ramdisk.sh. Prints "POLLMUSL OK".
+ * Staged into test.krffs as /musl/pollmusl. Prints "POLLMUSL OK".
  */
 #include <unistd.h>
 #include <stdio.h>

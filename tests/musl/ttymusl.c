@@ -14,8 +14,7 @@
  * editing or echo (the driver sends "Z" right after the exec line); and a final
  * tcsetattr restores the original mode.
  *
- * Prints "MTTY OK" or "MTTY FAIL <n>". Installed as "mtty" by
- * build_test_ramdisk.sh.
+ * Prints "MTTY OK" or "MTTY FAIL <n>". Staged into test.krffs as /musl/ttymusl.
  */
 
 #include <termios.h>

@@ -36,10 +36,11 @@ static bool is_dir_node(const struct krffs_node *node)
 /**
  * Reject a guest path that is not clean and absolute.
  *
- * A clean path is absolute, has no empty component (which a doubled slash would
- * create, letting a doubled-slash form of /dev slip past the synthetic-namespace
- * check), no `.` or `..` component, and no trailing slash (except the root "/").
- * The manifest names every path literally, so anything else is an authoring error.
+ * A clean path is absolute, has no empty component (a doubled slash would
+ * create one, letting a doubled-slash form of /dev slip past the synthetic
+ * namespace check), no `.` or `..` component, and no trailing slash (except
+ * the root "/"). The manifest names every path literally, so anything that is
+ * not clean is an authoring error.
  */
 static bool is_valid_guest_path(const char *path)
 {
@@ -727,9 +728,7 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
  *
  * Reads the line-oriented manifest and stages each entry directly into an
  * already-`mkfs`'d image as v2 nodes (the krffs FUSE mount cannot mkdir, so the
- * whole tree, directories and files alike, is written here). This replaces both
- * the old `stagetree.krffs`, which staged a fixed /etc tree, and the
- * FUSE-mount + cp step the RAM-disk scripts used for flat files. Staging is
+ * whole tree, directories and files alike, is written here). Staging is
  * find-or-create, so a re-run completes a partial image. On a full image the
  * failing node is reported and the build fails; the caller raises the size.
  *

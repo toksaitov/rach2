@@ -66,7 +66,7 @@ struct krffs_node {
     uint64_t size;
     uint64_t previous_node_size;
     uint64_t data_size;
-    uint64_t parent_id;  /* id of the containing directory (KRFFS v2 hierarchy) */
+    uint64_t parent_id;  /* id of the containing directory (v2 hierarchy) */
 };
 #pragma pack(pop)
 

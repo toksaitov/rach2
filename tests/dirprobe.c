@@ -227,7 +227,8 @@ void _start(void)
     fd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/g", O_RDONLY);
     check(fd >= 0, "openat /g");
     if (fd >= 0) {
-        unsigned char st[STAT64_SIZE] = {0}; /* fstat64 overwrites; init quiets cppcheck */
+        /* fstat64 overwrites st; the initializer just quiets cppcheck. */
+        unsigned char st[STAT64_SIZE] = {0};
         long long result = 0;
         char c = 0;
 
@@ -269,7 +270,8 @@ void _start(void)
     /* 11. O_APPEND forces writes to EOF; F_DUPFD honors its minimum fd; O_CREAT
      *     stamps the requested mode. */
     {
-        unsigned char st[STAT64_SIZE] = {0}; /* fstat64 overwrites; init quiets cppcheck */
+        /* fstat64 overwrites st; the initializer just quiets cppcheck. */
+        unsigned char st[STAT64_SIZE] = {0};
         long long result = 0;
         char rb[8];
         int dupfd, r;

@@ -7,7 +7,7 @@
  * and exits 0 only if the eleven bytes match "hello, pipe". The child's exit
  * status decides the result token.
  *
- * Installed as "mpipe" by krffs/build_test_ramdisk.sh.
+ * Staged into test.krffs as /musl/pipemusl.
  */
 #include <unistd.h>
 #include <stdio.h>

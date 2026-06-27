@@ -231,11 +231,8 @@ void _start(void)
     print_num_stderr(fd);
     puts_stderr(")");
 
-    /* Save current stdout by dup2 to a high fd */
-    /* Note: In Rach2, we can't easily save/restore stdout, so we'll just
-     * verify the write went to the file by reading it back */
-
-    /* Redirect stdout to our file */
+    /* Redirect stdout to the file, then read it back to confirm the write
+     * landed there; stdout is not restored afterward. */
     print_stderr("  dup2(");
     print_num_stderr(fd);
     print_stderr(", 1)... ");
