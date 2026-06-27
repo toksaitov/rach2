@@ -5748,13 +5748,28 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
     }
 
     port = SC_BE16(sa + 2);
-    entry->sock->local_port = port;
 
     if (entry->sock->type == SOCK_DGRAM) {
+        /* A datagram send before bind auto-binds an ephemeral source port; drop
+         * that registration before claiming the requested one, or its port-table
+         * slot leaks for the socket's life. */
+        if (entry->sock->local_port != 0) {
+            udp_unbind(entry->sock->local_port);
+            entry->sock->local_port = 0;
+        }
+        if (port == 0) {
+            /* Port 0 means "any port": let the stack pick a free ephemeral and
+             * record it, the same path a send before bind takes. */
+            if (udp_bind_ephemeral(entry->sock) == 0) {
+                return -EADDRINUSE;
+            }
+            return 0;
+        }
         if (udp_bind(port, entry->sock) < 0) {
             return -EADDRINUSE;
         }
     }
+    entry->sock->local_port = port;
     return 0;
 }
 
