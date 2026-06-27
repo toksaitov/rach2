@@ -129,6 +129,18 @@ int main(int argc, char **argv, char **envp)
         } else {
             write(2, Fork_Error_Message, sizeof(Fork_Error_Message) - 1);
         }
+
+        /* Only the parent reaches here (the child exec'd or exited). Close the
+         * redirection descriptors it opened, or the shell, which runs as init,
+         * leaks one descriptor per redirected command. The same guards as the
+         * child's dup2 skip the standard fds, which open never returns since the
+         * shell holds them. */
+        if (stdin_descriptor > 0) {
+            close(stdin_descriptor);
+        }
+        if (stdout_descriptor > 1) {
+            close(stdout_descriptor);
+        }
     }
 
     return 0;
