@@ -160,9 +160,9 @@ Build the host tools first (`make` from the repo root, or `make -C krffs`); they
 
 Rach2 ships three purpose-built RAM-disk images, each its own file under `build/images/`. They coexist; there is no single shared image.
 
-* `test.krffs`: the freestanding syscall probes plus the musl integration programs. `make test` boots it headless and checks every probe exits 0.
-* `os-simple.krffs`: the ISH shell (booted as init) and the hand-written Unix utilities. The small, readable teaching image.
-* `os-real.krffs`: a real Unix-like environment: busybox (shell + coreutils), dropbear (SSH server and client), Doom, and an `/etc` + `/root` tree. The kernel boots `/bin/sh` as init; the SSH capstone lives here.
+* `test.krffs`: the freestanding syscall probes plus the musl integration programs. It stages no init, so the kernel falls to the debug shell, which `make test` drives to boot it headless and check every probe exits 0.
+* `os-simple.krffs`: `/sbin/init` (which forks the ISH shell) and the hand-written Unix utilities. The small, readable teaching image.
+* `os-real.krffs`: a real Unix-like environment: busybox (shell + coreutils), dropbear (SSH server and client), Doom, and an `/etc` + `/root` tree. The kernel boots `/sbin/init`, which forks busybox `/bin/sh`; the SSH capstone lives here.
 
 The top-level Makefile drives the build. Run from the repo root:
 

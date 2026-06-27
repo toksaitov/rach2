@@ -200,14 +200,21 @@ extern volatile bool stdin_ready;
 extern volatile process_t *stdin_waiting_proc;
 
 /*
- * Init process tracking from kernel.c.
- * When init exits, we return to the kernel debug shell.
+ * Init process tracking from kernel.c. A real init's death is fatal
+ * (panic_init_died); an init exiting under the debug shell returns to it.
  */
 extern volatile uint32_t init_pid;
 
-/* Shell loop from kernel.c - called when init exits */
+/* Shell loop from kernel.c - the debug shell, reached when an init exits while
+ * the debug shell is the supervisor (rescue mode or the no-init test image). */
 extern void shell_loop(void);
 extern void shell_reset_input(void);
+
+/* Boot-home policy from kernel.c. debug_shell_is_home is true when the debug
+ * shell supervises (an exited init returns to it); false when a real /sbin/init
+ * is PID 1, in which case its death is fatal (panic_init_died, never returns). */
+extern bool debug_shell_is_home;
+extern void panic_init_died(uint32_t pid);
 
 /* Kernel stack from loader.s */
 extern char stack[];
@@ -252,9 +259,9 @@ void release_fd_table(fd_table_t *table)
 /**
  * Terminate the current process (exit(2)/exit_group(2)). Does not return.
  *
- * EBX holds the exit status. Marks the process a zombie, wakes the parent if it
- * waits, and reschedules. If init exits, control returns to the kernel debug
- * shell.
+ * EBX holds the exit status. Marks the process a zombie, reparents its children
+ * to init, wakes the parent if it waits, and reschedules. A real init's exit is
+ * fatal (panic_init_died); an init exiting under the debug shell returns to it.
  */
 static int32_t sys_exit(isr_params_t *params)
 {
@@ -324,10 +331,23 @@ static int32_t sys_exit(isr_params_t *params)
         }
     }
 
+    /* Hand any surviving children to init before this slot is reaped, so an exit
+     * never strands an orphan on a dead parent (the MAX_PROCS zombie leak). */
+    reparent_children(exiting_pid);
+
+    /* A real /sbin/init must never exit; if it does there is no reaper, so the
+     * kernel panics. Halt BEFORE schedule(), or a still-READY process would take
+     * the CPU and the system would run on with a dead PID 1. Only when the debug
+     * shell is the supervisor (rescue, or the no-init test image) does an exited
+     * init instead return to it, below. */
+    if (is_init && !debug_shell_is_home) {
+        panic_init_died(exiting_pid);   /* never returns */
+    }
+
     schedule();
 
-    /* No other process is READY. If init exited, return to the kernel debug
-     * shell; otherwise halt. */
+    /* No other process is READY. The init that exited ran under the debug shell
+     * (a real init would have panicked above), so return to it. */
     if (is_init) {
         serial_printf("sys_exit: Init process %d exited, returning to kernel shell\n",
                       exiting_pid);
@@ -3033,6 +3053,7 @@ static void exec_fail_destroyed(void)
 {
     process_t *parent;
     page_dir_t *dir;
+    int was_init = (current_proc->pid == init_pid && init_pid != 0);
 
     /* If the console-owning session leader is the one whose exec failed, release
      * the controlling terminal before zombifying so the timer-IRQ serial drain
@@ -3058,16 +3079,28 @@ static void exec_fail_destroyed(void)
         parent->state = PROC_READY;
     }
 
+    /* Hand any surviving children to init, as the other death paths do. */
+    reparent_children(current_proc->pid);
+
     /* Release the descriptor table (socket refs + open-file descriptions), the
      * same teardown sys_exit and terminate do, so a failed-exec death leaks no
      * sockets or OFDs. */
     release_fd_table(&current_proc->fds);
+
+    /* A real /sbin/init whose exec failed is a fatal init death; halt BEFORE
+     * schedule(), or a still-READY process would mask the panic and run on with
+     * a dead PID 1. Only when the debug shell is the supervisor does it return
+     * to the shell, below. */
+    if (was_init && !debug_shell_is_home) {
+        panic_init_died(current_proc->pid);   /* never returns */
+    }
+
     schedule();
 
-    /* schedule() returned -> nothing else is runnable. The address space is
-     * gone, so we cannot iret back. Tear the dead process down and resume the
-     * kernel debug shell on a fresh kernel stack, exactly as the init-exit path
-     * does: never deadlock, never return into freed userspace. */
+    /* schedule() returned -> nothing else is runnable. Reparenting guarantees
+     * every process has a live parent (init at worst), and a blocked parent was
+     * woken above, so the scheduler always has the parent as a target: this point
+     * is reached only for the init-role process itself, under the debug shell. */
     if (current_proc->pid == init_pid) {
         init_pid = 0;
     }
@@ -3085,6 +3118,14 @@ static void exec_fail_destroyed(void)
     current_proc->state = PROC_RUNNING;
     /* Fresh command line + drop stdin-wait state before re-enabling IRQs. */
     shell_reset_input();
+    /* Return to the debug shell only when it is the supervisor; on a normal boot
+     * (which the reasoning above makes unreachable here) halt rather than expose
+     * the shell. */
+    if (!debug_shell_is_home) {
+        for (;;) {
+            __asm__ __volatile__("cli; hlt");
+        }
+    }
     __asm__ __volatile__("movl %0, %%esp\n\t"
                          "sti\n\t"
                          "jmp *%1\n\t"
@@ -5200,10 +5241,17 @@ void deliver_signals(isr_params_t *tf)
                 return;
             }
             if (def == KSIG_DEFAULT_STOP) {
+                process_t *parent;
+                /* The real init (PID 1) is unstoppable, like Unix init: stopping
+                 * it would freeze the system with no reaper and no way back. Drop
+                 * a job-control stop aimed at it. */
+                if (current_proc->pid == init_pid && !debug_shell_is_home) {
+                    continue;
+                }
                 /* Job-control stop: park as PROC_STOPPED until a SIGCONT (or a
                  * SIGKILL, to die) flips us back to READY. Record the stop for the
                  * parent's wait4(WUNTRACED) and nudge it with SIGCHLD. */
-                process_t *parent = get_process(current_proc->parent_pid);
+                parent = get_process(current_proc->parent_pid);
                 current_proc->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
                 current_proc->state = PROC_STOPPED;
                 if (parent) {

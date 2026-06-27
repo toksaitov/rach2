@@ -7,14 +7,20 @@
 # paths are relative to the repo root (mkimage.sh cd's there).
 
 # /bin: the shell and the programs. busybox is staged at /bin/busybox (its compiled
-# exec path, which standalone ash re-execs) and at /bin/sh (the login shell the
-# kernel boots as init and dropbear runs). dropbearmulti dispatches the server, the
+# exec path, which standalone ash re-execs) and at /bin/sh (the login shell that
+# /sbin/init forks and dropbear runs). dropbearmulti dispatches the server, the
 # client, and keygen on argv[1]: dropbearmulti {dropbear,dbclient,dropbearkey}.
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
+
+# /sbin/init (PID 1): the kernel boots it; it forks the busybox login shell
+# (/bin/sh) and reaps orphans, so the shells dropbear forks per SSH session never
+# leak once the session closes.
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init
 
 # /etc: a real login + name-resolution config. dropbear reads passwd and validates
 # the login shell against shells; busybox ash reads profile on a login shell.

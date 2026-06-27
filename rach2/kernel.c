@@ -4,6 +4,7 @@
 #include "sys/serial.h"
 #include "sys/syscall.h"
 #include "sys/module.h"
+#include "sys/cmdline.h"
 #include "sys/tables/gdt.h"
 #include "sys/tables/tss.h"
 #include "sys/tables/idt.h"
@@ -51,9 +52,20 @@ static volatile bool kernel_shell_active = false;
 /* Free-running tick counter, bumped at 100 Hz by the timer IRQ. */
 volatile uint32_t kernel_ticks = 0;
 
-/* PID of the init process, or 0 when none runs. When init exits, control
- * returns to the kernel debug shell. */
+/* PID of the init process, or 0 when none runs. */
 volatile uint32_t init_pid = 0;
+
+/* Set once from the multiboot kernel command line (rach2.rescue / init=rescue).
+ * Rescue mode skips the persistent init and boots straight to the kernel debug
+ * shell, the developer/test home; a normal boot runs /sbin/init instead. */
+static bool rescue_mode = false;
+
+/* True once the kernel debug shell becomes the supervisor: rescue mode, or a
+ * normal boot whose image holds no init (the test image). It decides what the
+ * death of an init-role process MEANS: when the debug shell is home, an exited
+ * init returns to it (today's behavior, which the test harness drives); when a
+ * real /sbin/init is PID 1 (debug shell NOT home), init's death is a panic. */
+bool debug_shell_is_home = false;
 
 /* Line buffer the keyboard handler fills for a userspace stdin read; the
  * reader blocks until Enter completes a line. */
@@ -66,6 +78,7 @@ volatile process_t *stdin_waiting_proc = NULL;
 static void run_self_tests(void);
 void shell_loop(void);
 void shell_reset_input(void);
+void panic_init_died(uint32_t pid);  /* called from syscall.c too; never returns */
 void release_fd_table(fd_table_t *table);  /* defined in syscall.c */
 static void process_command(const char *cmd);
 static void timer_handler(isr_params_t *params);
@@ -185,6 +198,10 @@ void terminate_current_process(int32_t signo)
         }
     }
 
+    /* Hand any surviving children to init before this slot is reaped, so a
+     * signal-killed parent never strands an orphan on a dead pid. */
+    reparent_children(pid);
+
     /* Same descriptor-table teardown sys_exit does, so a signal-killed process
      * leaks no sockets or open-file descriptions. */
     release_fd_table(&current_proc->fds);
@@ -205,6 +222,12 @@ void terminate_current_process(int32_t signo)
     }
 
     if (is_init) {
+        /* A real /sbin/init killed by a signal is a fatal init death; only when
+         * the debug shell is the supervisor (rescue, or the no-init test image)
+         * does an exited init return to it. */
+        if (!debug_shell_is_home) {
+            panic_init_died(pid);   /* never returns */
+        }
         /* Same resume path as when init exits normally; see sys_exit. */
         serial_printf("terminate: init process %d killed by signal %d, "
                       "returning to kernel shell\n", pid, signo);
@@ -1068,6 +1091,7 @@ static void exec_program(int argc, char *argv[])
     uint32_t user_stack_vaddr;
     uint32_t user_esp;
     uint8_t random16[16];
+    int init_is_starting;
     static char *default_envp[] = {"PATH=/bin:/usr/bin:/", "HOME=/", "TERM=rach2", 0};
 
     if (argc < 1 || !argv || !argv[0]) {
@@ -1138,6 +1162,11 @@ static void exec_program(int argc, char *argv[])
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
     elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH);
 
+    /* The first user process of a normal boot is the persistent /sbin/init.
+     * Capture that before claiming init_pid, because a real init must NOT own the
+     * console (see the gated publish below). */
+    init_is_starting = (init_pid == 0 && !debug_shell_is_home);
+
     if (init_pid == 0) {
         init_pid = user_proc->pid;
     }
@@ -1151,8 +1180,16 @@ static void exec_program(int argc, char *argv[])
      * interrupts-off update so the timer-IRQ serial drain never sees sid set
      * while fg_pgid is still the stale 0, which would route a serial ^C/^Z to
      * group 0 and drop it.
+     *
+     * The exception is a real /sbin/init: it must not own the console, so that
+     * each login shell it spawns can `setsid` and claim the (still leaderless)
+     * console itself, the way getty hands a terminal to a login session. Skip
+     * the publish for init; every other program (including the debug shell's
+     * own `exec`) still gets it.
      */
-    tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
+    if (!init_is_starting) {
+        tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
+    }
 
     switch_page_directory(user_dir);
 
@@ -1174,44 +1211,71 @@ static void exec_program(int argc, char *argv[])
 }
 
 /**
- * Boot the first user process (init), then return to the kernel debug shell.
+ * Halt the machine because init died. Never returns.
  *
- * Tries a real init in order: `/sbin/init`, then `/bin/sh` (the os-real image,
- * where the shell is busybox), then `ish` (the os-simple image's shell, at the
- * root). Execs the first the RAM disk holds, through exec_program. Control comes
- * back here only when the RAM disk holds none of them, or when init later exits.
+ * On a normal boot /sbin/init is PID 1 and must run forever; if it exits or is
+ * killed there is no reaper and no login shell left, so the kernel stops here
+ * rather than fall to an unauthenticated debug shell. Boot `rach2.rescue` to get
+ * the debug shell deliberately. Called from the is-init branch of every death
+ * path (here and in syscall.c) when the debug shell is not the supervisor.
+ */
+void panic_init_died(uint32_t pid)
+{
+    k_puts("");
+    k_puts("kernel panic: init died");
+    serial_printf("panic: init (pid %u) exited; halting "
+                  "(boot rach2.rescue for the debug shell)\n", (unsigned)pid);
+    sched_disable();
+    for (;;) {
+        __asm__ __volatile__("cli; hlt");
+    }
+}
+
+/**
+ * Boot `/sbin/init` as PID 1.
+ *
+ * `/sbin/init` is the only program the kernel starts as a real init: it does the
+ * getty dance (a real init must own no controlling terminal, and a bare shell
+ * launched here would neither claim the console nor survive its own exit, which
+ * would panic). Execs it through exec_program, which does not return on success.
+ * Returns here only when the RAM disk holds no `/sbin/init` (the test image), so
+ * the caller can fall to the debug shell.
  */
 static void boot_init_process(void)
 {
-    static const char *const candidates[] = { "/sbin/init", "/bin/sh", "ish" };
+    static const char *const init_path = "/sbin/init";
     char *init_argv[2];
-    unsigned int i;
 
     if (!krffs_fs) {
         k_puts("boot: no RAM disk; falling back to kernel debug shell");
         return;
     }
 
-    for (i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-        if (krffs_open(candidates[i]) != 0) {
-            continue;
-        }
-
-        k_cls();
-        k_printf("Booting into %s...\n", candidates[i]);
-        k_puts("Type 'exit' to return to the kernel debug shell.");
-        k_puts("");
-
-        init_argv[0] = (char *) candidates[i];
-        init_argv[1] = NULL;
-        exec_program(1, init_argv);
-
-        k_printf("boot: failed to start %s\n", candidates[i]);
+    if (krffs_open(init_path) != 0) {
+        k_puts("boot: no /sbin/init in RAM disk; falling back to kernel debug shell");
         return;
     }
 
-    k_puts("boot: no init (/sbin/init, /bin/sh, or ish) in RAM disk");
-    k_puts("boot: falling back to kernel debug shell");
+    k_cls();
+    k_puts("boot: starting /sbin/init");
+    k_puts("");
+
+    init_argv[0] = (char *) init_path;
+    init_argv[1] = NULL;
+    exec_program(1, init_argv);
+
+    /* exec_program returned: /sbin/init is present but failed to load (a bad ELF,
+     * or out of memory). There is no init and no login shell, and falling to an
+     * unauthenticated debug shell would hide the failure, so halt. A genuinely
+     * init-less image (the test one) took the early return above instead. */
+    k_puts("");
+    k_puts("kernel panic: init failed to start");
+    serial_printf("panic: %s present but failed to load; halting "
+                  "(boot rach2.rescue for the debug shell)\n", init_path);
+    sched_disable();
+    for (;;) {
+        __asm__ __volatile__("cli; hlt");
+    }
 }
 
 static void run_self_tests(void)
@@ -1853,8 +1917,9 @@ void shell_loop(void)
  * Initializes every subsystem in order (serial, GDT/TSS/IDT/ISR, memory and
  * paging, timer, entropy, keyboard and console tty, mouse, syscalls, the
  * process table and scheduler, audio, the RAM disk and KRFFS, the pipe and pty
- * pools, and the network), runs the self-tests, then loops booting ISH as init
- * and dropping to the kernel debug shell each time init exits. Does not return.
+ * pools, and the network), runs the self-tests, then runs `/sbin/init` as PID 1
+ * (or, in rescue mode or on an init-less image, the kernel debug shell). Does not
+ * return.
  */
 void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 {
@@ -1874,6 +1939,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         if (last_module && last_module->end > mem_reserved_ptr) {
             mem_reserved_ptr = (last_module->end + 0xFFF) & ~0xFFF;
         }
+    }
+
+    /* Capture the kernel command line now, before paging remaps low memory and
+     * before the bump allocator can carve over the string the bootloader left. */
+    if ((info->flags & MULTIBOOT_INFO_CMDLINE) && info->cmdline != 0) {
+        kcmdline_capture((const char *)info->cmdline);
     }
 
     k_cls();
@@ -2117,17 +2188,27 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     serial_printf("\n---\n\n");
 
     /*
-     * Boot into ISH as init. boot_init_process returns when ISH is missing or
-     * fails, or when init later exits, so each pass drops to the kernel debug
-     * shell until a new exec restarts the cycle.
+     * Decide the boot home. A normal boot runs the persistent /sbin/init as PID
+     * 1: boot_init_process execs it and does not return while it runs, and init's
+     * later death is a panic (panic_init_died), so a normal box never falls to
+     * the debug shell. boot_init_process returns here only when the image holds
+     * no init (the test image); that case, like an explicit `rach2.rescue` boot,
+     * makes the kernel debug shell the supervisor. The shell loops reading
+     * commands and `exec`s programs as transient inits that return to it on exit
+     * (an is-init death path jmps back to shell_loop while the debug shell is
+     * home), which is the contract the test harness drives.
      */
-    while (1) {
-        init_pid = 0;
+    rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 
+    if (!rescue_mode) {
         boot_init_process();
+    }
 
+    debug_shell_is_home = true;
+    while (1) {
         k_puts("");
-        k_puts("Kernel debug shell active.");
+        k_puts(rescue_mode ? "Kernel debug shell active (rescue mode)."
+                           : "Kernel debug shell active.");
         shell_loop();
     }
 }

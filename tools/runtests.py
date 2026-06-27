@@ -6,6 +6,13 @@ Boots qemu-system-i386 headless with the kernel and the test RAM disk, waits for
 the kernel shell, then `exec`s each probe in turn and reads the kernel's
 "Process exited with status N" line for it. A probe passes when it exits 0.
 
+This depends on the test image holding no /sbin/init: without it the kernel falls
+to the debug shell, which `exec`s each probe as a transient init that returns here
+on exit (no `rach2.rescue` is needed, and none is passed). A real image instead
+boots /sbin/init and never reaches this shell. Do not stage a /sbin/init in the
+test image, or it would boot that and the harness would hang waiting for a prompt
+that never comes.
+
 -cpu max is always passed: the entropy-dependent probe (rngprobe) fails closed
 without RDSEED/RDRAND. Exit code: 0 if every probe exited 0, else 1.
 
@@ -28,7 +35,7 @@ PROBES = [
     "rmtest", "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe",
     "errnoprobe", "vmprobe", "forkro", "dirprobe", "timeprobe", "sigprobe",
     "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
-    "jobprobe", "miscprobe", "ptyprobe", "rngprobe",
+    "jobprobe", "miscprobe", "ptyprobe", "rngprobe", "orphanprobe",
 ]
 
 

@@ -18,11 +18,22 @@
 # Networking (RTL8139 on QEMU's SLIRP user network) is enabled by default:
 #   NET=off ./run.sh os-real                              # disable it
 #   NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real  # forward SSH to :2222
+#
+# RESCUE=1 boots into the kernel debug shell instead of the image's /sbin/init,
+# for developing and debugging (a normal boot runs init and never drops there):
+#   RESCUE=1 ./run.sh os-real
 
 IMAGE="$1"
 AUDIO_DEVICE="${2:-speaker}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/qemu_devices.sh"
+
+# Pass the kernel a rach2.rescue command line when RESCUE is set, so it boots the
+# debug shell rather than the persistent init.
+APPEND=""
+if [ -n "$RESCUE" ]; then
+    APPEND="-append rach2.rescue"
+fi
 
 # -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG seeds from trusted hardware
 # entropy; without it getrandom + /dev/[u]random fail closed and SSH key
@@ -42,4 +53,4 @@ else
     set --
 fi
 
-qemu-system-i386 -cpu "$CPU" -kernel "$KERNEL" "$@" -serial stdio $AUDIO_OPTS $NET_OPTS
+qemu-system-i386 -cpu "$CPU" -kernel "$KERNEL" $APPEND "$@" -serial stdio $AUDIO_OPTS $NET_OPTS

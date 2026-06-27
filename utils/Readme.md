@@ -23,6 +23,7 @@ Built for the Rach2 kernel with `make` against `../vendor/musl/install` (run `ve
 * `ping.c`: Sends ICMP echo requests via the SC_PING socketcall (`ping [host]`, default gateway 10.0.2.2); `host` may be a dotted-quad or a name
 * `nc.c`: Minimal TCP client (`nc <host> <port>`); relays a line of input and prints the reply over the socket descriptor; `host` may be a dotted-quad or a name
 * `httpd.c`: Minimal HTTP/1.0 server serving a diagnostic status page (the client endpoint, the request line and User-Agent the stack decoded, uptime and per-connection counters; listen on port 80, reach it via QEMU hostfwd)
+* `init.c`: PID 1, staged at `/sbin/init` (it builds into `build/utils/sbin/`, not at the image root, so the os-simple `exec-dir` sweep does not also drop it at `/init`). The kernel boots it; it forks the login shell (`/bin/sh`, then `/ish`) in a new session that claims the console as its controlling terminal, reaps every orphan the kernel reparents onto it, and respawns the shell when it exits. It never exits; the kernel panics if it does.
 
 The network utilities use the `SYS_SOCKETCALL` interface and target QEMU's SLIRP network (gateway 10.0.2.2). `ping` and `nc` resolve a host argument through a small stub resolver (`resolv.c`, declared in `netdb.h`): a numeric literal, then the `/hosts` file, then a DNS query to the nameserver in `/resolv.conf` (SLIRP's forwarder 10.0.2.3). Both files live in the flat KRFFS root and are staged by the os-simple image manifest.
 

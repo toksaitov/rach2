@@ -140,7 +140,7 @@ musl-programs: $(LIBC_STAMP)
 test-image: krffs rach2 tests musl-programs
 	$(MKIMAGE) krffs/manifests/test.manifest $(TEST_IMAGE) 10
 
-# The os-simple image: our ish shell (booted as init) and the hand-written utils.
+# The os-simple image: /sbin/init (which forks the ish shell) and the hand-written utils.
 os-simple-image: krffs rach2 ish utils
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
 
@@ -150,7 +150,7 @@ os-simple-image: krffs rach2 ish utils
 # 32 MB physical-RAM cap once the kernel and its frames are accounted for (the module
 # is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login key when
 # absent; the check targets ensure the busybox/dropbear binaries are real.
-os-real-image: krffs rach2 check-busybox check-dropbearmulti ports/doom
+os-real-image: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
 

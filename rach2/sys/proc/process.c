@@ -13,6 +13,9 @@ process_t proc_table[MAX_PROCS];
 
 process_t *current_proc = NULL;
 
+/* The pid of init, owned by kernel.c; reparent_children adopts orphans onto it. */
+extern volatile uint32_t init_pid;
+
 static uint32_t next_pid = 0;
 
 /**
@@ -128,6 +131,44 @@ process_t *get_process(uint32_t pid)
     }
 
     return NULL;
+}
+
+/**
+ * Reparent every child of `dead_pid` onto init.
+ *
+ * Called from a process's death path before its slot is reclaimed, so a dying
+ * process never strands a child on a parent pid about to be freed (that orphan
+ * would otherwise leak its frames, page directory, and zombie slot, since no
+ * live process would ever match it in `do_wait`). A child that is already a
+ * zombie has no future exit event to wake init, so init is signalled now to
+ * reap it; `signal_post` flips a blocked init to ready itself. A no-op when
+ * there is no init yet (`init_pid == 0`, the debug-shell-only boot) or when init
+ * itself is the one dying (it has no surviving init to adopt to, and the kernel
+ * panics on init's death anyway).
+ */
+void reparent_children(uint32_t dead_pid)
+{
+    process_t *init;
+    uint32_t i;
+
+    if (init_pid == 0 || dead_pid == init_pid) {
+        return;
+    }
+    init = get_process(init_pid);
+    if (init == NULL) {
+        return;
+    }
+    for (i = 0; i < MAX_PROCS; i++) {
+        process_t *p = &proc_table[i];
+
+        if (p->state == PROC_UNUSED || p->parent_pid != dead_pid) {
+            continue;
+        }
+        p->parent_pid = init_pid;
+        if (p->state == PROC_ZOMBIE) {
+            signal_post(init, SIGCHLD);
+        }
+    }
 }
 
 /**

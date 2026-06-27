@@ -8,7 +8,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 
 ## Highlights
 
-* Boots into ISH shell as init (PID 1) with cat, cp, echo, ls, mkdir, mv, pwd, rm, touch
+* Boots a persistent /sbin/init (PID 1) that forks the ISH shell and reaps orphans, with cat, cp, echo, ls, mkdir, mv, pwd, rm, touch
 * Over 100 Linux-compatible system calls via `int 0x80`
 * Preemptive round-robin scheduler at 100 Hz
 * Per-process page directories with full memory isolation
@@ -53,7 +53,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 * Multiboot module loading (RAM disk support via `-initrd`)
 * KRFFS file system with read/write support loaded from RAM disk module
 * ELF32 header parsing for executable validation and loading
-* Boots directly into ISH shell as init process (PID 1)
+* Boots a persistent init (PID 1) that reaps orphans and respawns the login shell; a `rach2.rescue` command line boots the kernel debug shell instead
 
 ### Device Drivers
 
@@ -652,20 +652,21 @@ Each process is represented by a `process_t` structure containing:
 
 The kernel maintains a fixed-size process table (`MAX_PROCS = 16`). At boot, process 0 (the idle/kernel process) is created and set as the current process.
 
-### Init Process and CTRL+C
+### Init, the rescue shell, and CTRL+C
 
-After boot and self-tests, the kernel automatically boots into ISH shell as the init process (PID 1). The init process is special:
+After boot and self-tests, the kernel runs a real init as PID 1. `boot_init_process` execs `/sbin/init` if the RAM disk holds it (the os-simple and os-real images do). That init is a small userland program, `utils/init.c`: it forks the login shell, reaps every orphan the kernel reparents onto it, and respawns the shell when it exits, so the shell never disappears and an exited login leaves you at a fresh prompt rather than at a kernel shell.
 
-* When init exits normally (via `exit` command), control returns to the kernel debug shell
-* When init is killed by CTRL+C, control also returns to the kernel debug shell
-* From the kernel debug shell, you can run `exec ish` to restart the shell
+Because init is persistent, the kernel's built-in debug shell is no longer the home you land in. It is the rescue/developer environment, reached two ways:
+
+* Boot with the `rach2.rescue` kernel command line (the run scripts take `RESCUE=1`, and each ISO has a rescue menu entry). The kernel then skips init and runs the debug shell directly; `exec <name>` launches a program, which returns to the shell on exit.
+* Boot an image that holds no init at all (the test image). With nothing to exec, the kernel falls to the debug shell unconditionally; this is what the automated test harness drives.
+
+If a real `/sbin/init` ever exits or is killed, there is no reaper or login shell left, so the kernel halts with `kernel panic: init died` rather than fall to an unauthenticated shell (boot `rach2.rescue` to get the debug shell deliberately).
 
 CTRL+C (keyboard interrupt) kills the currently running foreground user process:
 
-* If the process is init: Cleans up the process, resets stdin/command buffers, and returns to kernel debug shell
-* If the process is a child (e.g., `yes` running under ISH): Marks the child as ZOMBIE, wakes the parent, and the parent collects it via `waitpid`
-
-This provides a simple way to interrupt runaway processes (like `yes`) without full signal support.
+* A child (e.g., `yes` running under the shell): marked ZOMBIE; the parent is woken and collects it via `waitpid`. The kernel reparents the dying process's own children onto init first, so an interrupted process never strands an orphan.
+* The init process: a real `/sbin/init` death panics as above; under the rescue/no-init debug shell, the exited program returns to the shell as before.
 
 ### Files in `sys/proc/`
 
@@ -1297,7 +1298,7 @@ The `.gdbinit` file automatically loads symbols, connects to QEMU, and sets a br
 
 ### Debug Shell Commands
 
-When the kernel boots (or when init exits), the debug shell is available:
+In rescue mode (the `rach2.rescue` command line) or on an image with no init, the debug shell is the supervisor and these commands are available:
 
 | Command          | Description                                  |
 |------------------|----------------------------------------------|

@@ -2,7 +2,9 @@
 #
 # Reference only. The actual grub.cfg for a bootable ISO is generated per image by
 # tools/mkiso.sh (run `make <image>-iso` or `make isos`), which stages the kernel and
-# the image module and writes a grub.cfg like the entry below.
+# the image module and writes the two entries below: a normal boot, and a rescue
+# boot that passes the kernel `rach2.rescue` to land in the debug shell instead of
+# the image's /sbin/init.
 #
 #   multiboot /boot/kernel
 #   module /boot/<image>.krffs
@@ -12,6 +14,12 @@ set default=0
 
 menuentry "Rach2 (os-simple)" {
     multiboot /boot/kernel
+    module /boot/os-simple.krffs
+    boot
+}
+
+menuentry "Rach2 (os-simple) - rescue (kernel debug shell)" {
+    multiboot /boot/kernel rach2.rescue
     module /boot/os-simple.krffs
     boot
 }

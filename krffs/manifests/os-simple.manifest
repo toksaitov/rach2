@@ -1,9 +1,13 @@
 # os-simple.manifest: our own simple Unix tools, to show how they are built.
 #
-# The ish shell (the kernel boots /ish as init) and the hand-written utilities at
-# the root, plus the name-resolution config ping and nc read. A flat root on
-# purpose: this image is the small, readable counterpart to os-real. Host paths
-# are relative to the repo root (mkimage.sh cd's there).
+# /sbin/init (PID 1) forks the ish shell and reaps orphans; the kernel boots it.
+# The ish shell and the hand-written utilities sit at the root, plus the
+# name-resolution config ping and nc read. A flat root on purpose: this image is
+# the small, readable counterpart to os-real. Host paths are relative to the repo
+# root (mkimage.sh cd's there).
+
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init
 
 file 0755 /ish build/ish/ish
 

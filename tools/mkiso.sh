@@ -61,6 +61,12 @@ menuentry "Rach2 ($IMAGE)" {
     module /boot/$IMAGE.krffs
     boot
 }
+
+menuentry "Rach2 ($IMAGE) - rescue (kernel debug shell)" {
+    multiboot /boot/kernel rach2.rescue
+    module /boot/$IMAGE.krffs
+    boot
+}
 CFG
 
 # Mount the repo at its own absolute path so the absolute build/ paths resolve in

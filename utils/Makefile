@@ -50,13 +50,24 @@ UTILITIES = true  \
             nc    \
             httpd
 
+# init is PID 1, staged at /sbin/init, not a user tool. It builds into a sbin/
+# subdir so the os-simple `exec-dir / build/utils` sweep (which stages only the
+# regular files directly in build/utils, skipping subdirs) does not also drop it
+# at the image root as /init.
+SBIN_INIT = $(BUILD)/sbin/init
+
 TARGETS = $(addprefix $(BUILD)/, $(UTILITIES))
 
 .PHONY: all clean libc-check
 
-all: $(TARGETS)
+all: $(TARGETS) $(SBIN_INIT)
 
-$(TARGETS): | libc-check
+$(TARGETS) $(SBIN_INIT): | libc-check
+
+# init: the same musl link as the utils, but staged at /sbin/init (see above).
+$(SBIN_INIT): init.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/init.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
 # Fail early with a clear message if the ported libc has not been built.
 libc-check:
@@ -83,7 +94,7 @@ $(BUILD)/nc: nc.c resolv.c netdb.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/nc.d -o $@ $(LINK_PRE) nc.c resolv.c $(LINK_POST)
 
--include $(addprefix $(BUILD)/, $(UTILITIES:=.d))
+-include $(addprefix $(BUILD)/, $(UTILITIES:=.d)) $(BUILD)/sbin/init.d
 
 clean:
 	rm -rf $(BUILD)
