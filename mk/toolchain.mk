@@ -32,7 +32,7 @@ CROSS_CC := $(or $(CROSS_CC),\
 # doctor` explains how to install the toolchain.
 ifeq ($(strip $(CROSS_CC)),)
 ifneq ($(filter-out clean,$(or $(MAKECMDGOALS),build)),)
-$(error no cross compiler found: install i686-elf-gcc (or x86_64-elf-gcc), or pass CROSS_CC=/path/to/gcc -- see `make doctor`)
+$(error no cross compiler found: install i686-elf-gcc (or x86_64-elf-gcc), or pass CROSS_CC=/path/to/gcc; see `make doctor`)
 endif
 endif
 

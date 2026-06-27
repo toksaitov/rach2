@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-harness.py -- Rach2's tracked QEMU serial harness for probe/test runs.
+harness.py: Rach2's tracked QEMU serial harness for probe/test runs.
 
 Boots qemu-system-i386 headless with the kernel and a KRFFS initrd, attaches
 QEMU's isa-debug-exit device (iobase 0xF4), and drives the guest with an
@@ -25,7 +25,7 @@ Usage:
 
 Exit code: 0 if the guest process exited 0 (QEMU returned 1 via isa-debug-exit);
 1 if it exited non-zero; 2 if QEMU failed to launch; 3 on timeout/hang (QEMU
-never self-exited) -- an unambiguous failure.
+never self-exited), an unambiguous failure.
 """
 import argparse, os, re, select, subprocess, sys, time
 
@@ -165,11 +165,11 @@ def main():
         logf.close()
 
     if qemu_rc is None:
-        sys.stderr.write("HARNESS: timeout/hang -- QEMU never self-exited\n")
+        sys.stderr.write("HARNESS: timeout/hang: QEMU never self-exited\n")
         return 3
     # Decode the result from the kernel's SERIAL status print, not from QEMU's
     # exit code: the host truncates exit codes to 8 bits, so ((status<<1)|1)
-    # aliases (e.g. status 128 -> host 1) and a QEMU launch error also yields 1 --
+    # aliases (e.g. status 128 -> host 1) and a QEMU launch error also yields 1;
     # either would false-PASS. The serial line is the true, untruncated status and
     # also proves the guest actually ran. The exit code is used only to confirm
     # QEMU stopped via isa-debug-exit (an odd code) rather than hanging or crashing.
@@ -181,7 +181,7 @@ def main():
     sys.stderr.write("HARNESS: qemu_exit=%d via_debug_exit=%s guest_status=%s\n"
                      % (qemu_rc, via_debug_exit, "?" if status is None else status))
     if status is None or not via_debug_exit:
-        sys.stderr.write("HARNESS: no clean guest exit reported -- failing\n")
+        sys.stderr.write("HARNESS: no clean guest exit reported, failing\n")
         return 1
     return 0 if status == 0 else 1
 

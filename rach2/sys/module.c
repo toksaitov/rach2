@@ -66,7 +66,7 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
     }
 
     if (info->mods_count > MAX_MODULES) {
-        serial_printf("Module: Warning - %d modules ignored (max %d)\n",
+        serial_printf("Module: %d modules ignored (max %d)\n",
                       info->mods_count - MAX_MODULES, MAX_MODULES);
     }
 

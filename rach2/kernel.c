@@ -1170,7 +1170,7 @@ static void exec_program(int argc, char *argv[])
 
     enter_usermode(entry_point, user_esp);
 
-    k_puts("exec: ERROR - returned from user mode!");
+    k_puts("exec: returned from user mode");
 }
 
 /**
@@ -1958,7 +1958,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         int src = krandom_source();
         const char *desc = (src == KRANDOM_SRC_RDSEED)   ? " OK (RDSEED, trusted)"
                            : (src == KRANDOM_SRC_RDRAND) ? " OK (RDRAND, trusted)"
-                                                         : " OK (jitter, best-effort -- "
+                                                         : " OK (jitter, best-effort; "
                                                            "crypto RNG fails closed)";
         set_fore_color(src == KRANDOM_SRC_JITTER ? light_brown : light_green);
         k_puts(desc);
