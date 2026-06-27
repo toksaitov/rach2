@@ -105,7 +105,7 @@ shellcheck -x -e SC1091 $(ls tools/*.sh vendor/musl/*.sh 2>/dev/null) \
     >"$VDIR/verify_shellcheck.log" 2>&1 || sc=1
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
-    $(ls rach2/*.sh krffs/build_*.sh krffs/create_*.sh 2>/dev/null) \
+    $(ls rach2/*.sh krffs/*.sh 2>/dev/null) \
     >>"$VDIR/verify_shellcheck.log" 2>&1 || sc=1
 if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 

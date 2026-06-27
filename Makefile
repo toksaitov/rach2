@@ -1,19 +1,23 @@
 # Rach2 root Makefile.
 #
+# The build produces purpose-built RAM-disk images, each its own file under
+# build/images/ so they coexist: `test` (the automated end-to-end test binaries),
+# `os-simple` (our own shell and simple Unix tools, for teaching), and `os-real`
+# (a real Unix-like environment: busybox, dropbear, Doom).
+#
 # Quick start (run `make doctor` first to check your toolchain):
-#   make            build the BASE teaching OS: libc, kernel, host tools, tests,
-#                   utils, and the RAM disk: the everyday build, kept fast.
-#   make full       + the capstones (busybox, dropbear, Doom); ends at the bootable
-#                   capstone RAM-disk image the dropbear SSH login uses.
+#   make            build the kernel + the os-simple image: the everyday teaching
+#                   build, kept fast.
+#   make full       all the RAM-disk images (test and os-simple).
+#   make images     the RAM-disk images.
 #   make deps       build the vendored third-party (libc; DEPS=full adds bb+dropbear)
 #   make doctor     check the toolchain (PASS/MISSING with install hints)
 #   make verify-style / verify-host   the quality gates
-#   make clean      remove component build products (objects, .d, binaries, ramdisk)
+#   make clean      remove the in-house build products and the images
 #   make distclean  + the vendored musl/busybox/dropbear builds (full from-scratch)
 #   make help       list every target
-# Run the built kernel with the scripts in rach2/ (run_with_ram_disk.sh, run.sh);
-# see `make help`. The build system does not run QEMU; those scripts model the
-# disk/audio/network/-cpu option matrix far better than a `make run` could.
+# Run a built image with rach2/run.sh <test|os-simple|os-real>; the build system
+# does not run QEMU (that script models the disk/audio/network/-cpu matrix).
 
 # --- components (each builds via its own sub-make) ---
 BASE_DIRS = krffs rach2 tests ish utils
@@ -43,19 +47,27 @@ LIBC_TARBALL     = vendor/musl/musl-1.2.5.tar.gz
 BUSYBOX_TARBALL  = vendor/busybox/busybox-1.36.1.tar.bz2
 DROPBEAR_TARBALL = vendor/dropbear/dropbear-2022.83.tar.bz2
 
-.PHONY: all full deps clean distclean ramdisk test-ramdisk capstone-ramdisk \
+# --- RAM-disk images. Each is built out of tree from a checked-in manifest by the
+#     manifest-driven stageimage.krffs (see krffs/mkimage.sh and krffs/manifests/),
+#     which writes the whole tree directly as KRFFS v2 nodes (no FUSE mount). Each
+#     image is its own file, so they coexist. ---
+IMAGES_DIR      = build/images
+TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
+OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
+MKIMAGE         = krffs/mkimage.sh
+
+.PHONY: all full deps clean distclean images musl-programs \
+        test-image os-simple-image \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
 
-# Default: the base teaching OS.
-all: ramdisk
+# Default: the kernel and the os-simple image (our shell + simple Unix tools).
+all: os-simple-image
 
-# Everything: the base components, the slow capstones (busybox, dropbear, Doom), and
-# the capstone RAM-disk image the SSH login boots (test-ramdisk). `make full` ENDS at
-# that image; it does not also build the lighter base image (`make` alone does that),
-# since both write krffs/file_system.krffs.
-full: $(BASE_DIRS) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) ports/doom test-ramdisk
+# Everything: all the RAM-disk images. Each is its own file under build/images/, so
+# they coexist instead of overwriting one shared image.
+full: images
 
 # Build the vendored third-party. libc is built by default (utils link it); busybox
 # and dropbear are added with DEPS=full (they are slow capstones).
@@ -107,39 +119,36 @@ ish: rach2
 utils: rach2 $(LIBC_STAMP)
 ports/doom: rach2
 
-# Base RAM disk. Force RAMDISK_WITH_DOOM=0 so the Make-driven build is always
-# capstone-free: a stray `RAMDISK_WITH_DOOM=1 make -j full` can then never make the
-# staging script copy build/ports/doom/doom while the sibling ports/doom target is
-# rebuilding it. (The env var is honored only for a standalone `./build_ramdisk.sh`.)
-ramdisk: $(BASE_DIRS)
-	cd krffs && RAMDISK_WITH_DOOM=0 SKIP_BUILD=1 ./build_ramdisk.sh
+# --- the RAM-disk images. Each target builds its inputs (via the component
+#     sub-makes), then stages the image from its manifest with mkimage.sh
+#     (dd + mkfs.krffs + stageimage.krffs), out of tree into build/images/. The
+#     image targets are .PHONY: a re-stage is sub-second, so they always refresh. ---
 
-# The staged capstone binaries are the REAL prerequisites of the capstone image. A
+# All the images (os-real, with the busybox/dropbear/Doom capstones, is added later).
+images: test-image os-simple-image
+
+# The musl integration programs (tests/musl/*.c -> build/tests/musl/), built by
+# their own script. They are end-to-end libc tests staged into the test image.
+musl-programs: $(LIBC_STAMP)
+	sh tests/musl/build.sh
+
+# The test image: the freestanding syscall probes plus the musl integration
+# programs. `make test` boots it and asserts every probe's success token.
+test-image: krffs rach2 tests musl-programs
+	$(MKIMAGE) krffs/manifests/test.manifest $(TEST_IMAGE) 10
+
+# The os-simple image: our ish shell (booted as init) and the hand-written utils.
+os-simple-image: krffs rach2 ish utils
+	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
+
+# The staged capstone binaries are the REAL prerequisites of the os-real image. A
 # stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards
-# while the stamp lingers, and the staging script treats it as optional, so without
-# this the image could silently ship without /sh or the SSH server. These are PHONY
-# check targets (depending on the stamp so it builds first), so the `test -s` runs on
-# EVERY build and catches a missing OR zero-byte artifact, not only a missing one.
+# while the stamp lingers, so these PHONY check targets (depending on the stamp so it
+# builds first) run `test -s` on EVERY build and catch a missing OR zero-byte artifact.
 check-busybox: $(BUSYBOX_STAMP)
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: $(BUSYBOX_BIN) missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
 check-dropbearmulti: $(DROPBEAR_STAMP)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
-
-# Capstone RAM disk: the busybox/dropbear/probe image the SSH login boots. Make builds
-# every component it stages (the host krffs tools, the probe programs, the musl
-# utils, and the busybox+dropbear capstones, gated by the check targets above), and
-# SKIP_BUILD=1 tells the script to PACKAGE only, never to re-invoke a component build
-# (so nothing is built twice). The script auto-generates the demo SSH keypair and
-# stages /etc + /root/.ssh via stagetree. capstone-ramdisk is an alias.
-#
-# `ramdisk` and `test-ramdisk` both write krffs/file_system.krffs (and use
-# krffs/mount_point), so they are mutually exclusive; if a base-image goal (`ramdisk`,
-# or `all` which builds it) is requested alongside test-ramdisk, depend on it so they
-# serialize (base first, then overwritten by the capstone) instead of racing under -j.
-test-ramdisk: krffs tests utils check-busybox check-dropbearmulti $(filter ramdisk all,$(MAKECMDGOALS))
-	cd krffs && SKIP_BUILD=1 ./build_test_ramdisk.sh
-
-capstone-ramdisk: test-ramdisk
 
 # --- toolchain preflight + quality gates ---
 doctor:
@@ -168,12 +177,13 @@ check-sources:
 	@./tools/check_sources.sh
 
 # clean: the everyday reset. Each sub-make removes its own build/<component> tree
-# (objects, .d, binaries; for krffs also the RAM-disk image and mount point), so the
-# whole in-house build/ is cleared. The expensive vendored third-party is LEFT in
-# place: vendor/musl/install, the extracted busybox/dropbear trees, and the staged
-# capstones under build/vendor (which no sub-make owns). Use distclean for those.
+# (objects, .d, binaries), and the RAM-disk images under build/images go too. The
+# expensive vendored third-party is LEFT in place: vendor/musl/install, the extracted
+# busybox/dropbear trees, and the staged capstones under build/vendor (which no
+# sub-make owns). Use distclean for those.
 clean:
 	@for dir in $(BASE_DIRS) $(FULL_DIRS); do $(MAKE) -C $$dir clean; done
+	rm -rf build/images
 
 # distclean: a full from-scratch reset; clean plus every third-party build product: the
 # stamps, vendor/musl/install, the extracted vendored source trees, and the entire
@@ -187,19 +197,19 @@ distclean: clean
 
 help:
 	@echo "Rach2 build targets:"
-	@echo "  make            base teaching OS (libc, kernel, host tools, tests, utils, ramdisk)"
-	@echo "  make full       + capstones (busybox, dropbear, Doom) + the capstone SSH image"
+	@echo "  make            kernel + the os-simple image (ish shell + simple Unix tools)"
+	@echo "  make full       all the RAM-disk images"
+	@echo "  make images     the RAM-disk images (test, os-simple)"
+	@echo "  make test-image / os-simple-image   one image"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
 	@echo "  make busybox / make dropbear   one capstone's third-party build"
-	@echo "  make ramdisk        rebuild the base RAM disk image"
-	@echo "  make test-ramdisk   build the capstone image (busybox/dropbear/probes; the SSH login)"
 	@echo "  make doctor     check the toolchain (PASS/MISSING with install hints)"
 	@echo "  make verify-style / verify-host   quality gates"
 	@echo "  make compile-commands   regenerate compile_commands.json for clangd (IDE)"
 	@echo "  make check-sources      verify the kernel C_SRC list matches the sources on disk"
-	@echo "  make clean      remove component build products (objects, .d, binaries, ramdisk)"
+	@echo "  make clean      remove the in-house build products and the images"
 	@echo "  make distclean  + the vendored musl/busybox/dropbear builds (full from-scratch)"
 	@echo ""
-	@echo "Run the kernel (the build system does not run QEMU):"
-	@echo "  cd rach2 && ./run_with_ram_disk.sh        # boot with the RAM disk"
-	@echo "  NET_HOSTFWD=hostfwd=tcp::2222-:22 ./run_with_ram_disk.sh   # + SSH forward"
+	@echo "Run an image (the build system does not run QEMU):"
+	@echo "  cd rach2 && ./run.sh os-simple              # boot the os-simple image"
+	@echo "  cd rach2 && ./run.sh test                   # boot the test image"

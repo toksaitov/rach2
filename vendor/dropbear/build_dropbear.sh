@@ -94,4 +94,4 @@ i686-elf-strip "$SRC/dropbearmulti" -o "$STAGE/dropbearmulti"
 ls -l "$STAGE/dropbearmulti"
 
 echo "dropbear: built $VERSION ($(wc -c < "$STAGE/dropbearmulti") bytes, static, musl, i686)"
-echo "dropbear: rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /dropbearmulti"
+echo "dropbear: rebuild the os-real image (make os-real-image) to install it"

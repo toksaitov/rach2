@@ -1,4 +1,4 @@
-# KRFFS host tools: the FUSE mount plus the mkfs/defrag/fsck/fsviz/edfs/stagetree
+# KRFFS host tools: the FUSE mount plus the mkfs/defrag/fsck/fsviz/edfs/stageimage
 # utilities. These run on the HOST, so they use the host compiler (cc), not the
 # cross toolchain; only the shared header-dependency tracking (../mk/deps.mk)
 # applies, so editing a krffs header rebuilds exactly the objects that include it.
@@ -24,11 +24,11 @@ CORE = $(addprefix $(BUILD)/, krffs_file_system.o krffs_node.o krffs_platform.o 
 FUSE_OBJS = $(CORE) $(addprefix $(BUILD)/, krffs_allocator.o krffs_fuse_operations.o \
                                            krffs.o)
 TOOL_OBJS = $(addprefix $(BUILD)/, mkfs.krffs.o defrag.krffs.o fsck.krffs.o \
-                                   fsviz.krffs.o edfs.krffs.o stagetree.krffs.o)
+                                   fsviz.krffs.o edfs.krffs.o stageimage.krffs.o)
 
 OBJECTS = $(FUSE_OBJS) $(TOOL_OBJS)
 TARGETS = $(addprefix $(BUILD)/, krffs mkfs.krffs defrag.krffs fsck.krffs \
-                                 fsviz.krffs edfs.krffs stagetree.krffs)
+                                 fsviz.krffs edfs.krffs stageimage.krffs)
 
 .PHONY : all
 all : $(TARGETS)
@@ -38,8 +38,8 @@ $(BUILD)/krffs : $(FUSE_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(FUSE_LDLIBS)
 
-# stagetree also needs the allocator (it writes KRFFS nodes directly).
-$(BUILD)/stagetree.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/stagetree.krffs.o
+# stageimage also needs the allocator (it writes KRFFS nodes directly).
+$(BUILD)/stageimage.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/stageimage.krffs.o
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 

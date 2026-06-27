@@ -150,7 +150,7 @@ $(ISO_IMAGE) : $(KERNEL_BIN)
 		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
 		echo "    boot" >> $(GRUB_CFG); \
 		echo "}" >> $(GRUB_CFG); \
-		echo "No RAM disk found (build with krffs/build_ramdisk.sh first)"; \
+		echo "No RAM disk found (build an image first, e.g. make os-simple-image)"; \
 	fi
 	@# A Docker bind-mount needs an absolute host path, so mount the repo root at its
 	@# own absolute path (quoted, so a space in the path is safe) and hand grub-mkrescue

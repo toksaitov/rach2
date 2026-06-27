@@ -6,8 +6,8 @@
 # These differ from the freestanding probes in tests/: they are ordinary hosted
 # C programs linked statically against the ported musl (see vendor/musl/build_libc.sh).
 # Each <name>.c here becomes a guest binary build/tests/musl/<name> (out of tree, like
-# every other component), installed into the RAM disk with an "m" prefix by
-# krffs/build_test_ramdisk.sh (e.g. hello -> mhello).
+# every other component), staged into the test image under /musl by its manifest (so
+# /musl/hello, /musl/mallocqsort, ...). `make musl-programs` runs this.
 #
 # Run vendor/musl/build_libc.sh first if install/ is absent.
 #

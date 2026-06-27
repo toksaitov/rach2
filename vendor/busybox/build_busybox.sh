@@ -4,9 +4,8 @@
 # build_busybox.sh: build a static musl BusyBox for Rach2 from the pinned,
 # vendored tarball. Verifies the sha256, extracts, applies the curated
 # rach2.config, builds against the ported musl via the muslgcc wrapper, strips,
-# and stages the binary out of tree to build/vendor/busybox/busybox (installed into
-# the RAM disk as /busybox by krffs/build_test_ramdisk.sh). Run
-# vendor/musl/build_libc.sh first.
+# and stages the binary out of tree to build/vendor/busybox/busybox (staged into the
+# os-real RAM-disk image by its manifest). Run vendor/musl/build_libc.sh first.
 #
 # Usage: ./build_busybox.sh
 #
@@ -76,4 +75,4 @@ i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox"
 ls -l "$STAGE/busybox"
 
 echo "busybox: built $VERSION ($(wc -c < "$STAGE/busybox") bytes, static, musl, i686)"
-echo "busybox: rebuild the RAM disk (krffs/build_test_ramdisk.sh) to install it as /busybox"
+echo "busybox: rebuild the os-real image (make os-real-image) to install it"
