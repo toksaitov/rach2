@@ -337,7 +337,12 @@ int main(int argc, char **argv)
             );
     } while (node != file_system.node);
 
-    puts("The filesystem check has been completed successfully. There are no errors found.");
+    if (exit_status == EXIT_SUCCESS) {
+        puts("The filesystem check has been completed "
+             "successfully. There are no errors found.");
+    } else {
+        fprintf(stderr, "The file system check found errors.\n");
+    }
 
 cleanup:
     if (file_descriptor != -1) {
