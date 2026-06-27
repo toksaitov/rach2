@@ -10,6 +10,7 @@
 #                   build, kept fast.
 #   make full       all the RAM-disk images (test and os-simple).
 #   make images     the RAM-disk images.
+#   make test       boot the test image and check every probe passes.
 #   make deps       build the vendored third-party (libc; DEPS=full adds bb+dropbear)
 #   make doctor     check the toolchain (PASS/MISSING with install hints)
 #   make verify-style / verify-host   the quality gates
@@ -56,7 +57,7 @@ TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
 OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
 MKIMAGE         = krffs/mkimage.sh
 
-.PHONY: all full deps clean distclean images musl-programs \
+.PHONY: all full deps clean distclean images musl-programs test \
         test-image os-simple-image \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
@@ -141,6 +142,13 @@ test-image: krffs rach2 tests musl-programs
 os-simple-image: krffs rach2 ish utils
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
 
+# `make test`: the automated end-to-end pass over the test image. Boots it headless
+# (-cpu max) and runs every probe, failing if any does not exit 0. The few probes
+# with a special contract (fork-exit-code, stdin, faults, network) are run by hand
+# under tools/harness.py; see tools/runtests.py.
+test: test-image
+	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE)
+
 # The staged capstone binaries are the REAL prerequisites of the os-real image. A
 # stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards
 # while the stamp lingers, so these PHONY check targets (depending on the stamp so it
@@ -201,6 +209,7 @@ help:
 	@echo "  make full       all the RAM-disk images"
 	@echo "  make images     the RAM-disk images (test, os-simple)"
 	@echo "  make test-image / os-simple-image   one image"
+	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
 	@echo "  make busybox / make dropbear   one capstone's third-party build"
 	@echo "  make doctor     check the toolchain (PASS/MISSING with install hints)"
