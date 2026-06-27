@@ -18,26 +18,26 @@ A port of Doom to the Rach2 kernel using [doomgeneric](https://github.com/ozkl/d
 
 ```
 ports/doom/
-├── Makefile              # Build configuration
-├── crt0.c                # C runtime: _start, syscalls, 4MB heap
-├── doomgeneric_rach2.c   # Platform layer for Rach2
-├── i_pcsound.c           # PC speaker and audio driver interface
-├── i_oplmusic.c/h        # OPL3 music driver (9-voice FM synthesis)
-├── midifile.c/h          # MIDI file parser (from Chocolate Doom)
-├── mus2mid.c/h           # MUS to MIDI converter (from Chocolate Doom)
-├── opl3.c/h              # Nuked-OPL3 FM synthesizer emulator
-├── include/              # Freestanding libc stubs
-│   ├── stdio.h           # printf, FILE, fopen/fread/fclose
-│   ├── stdlib.h          # malloc, free, atoi, rand
-│   ├── string.h          # memcpy, memset, strlen, strcmp
-│   └── ...               # Other standard headers
-├── src/                  # doomgeneric engine (from ozkl/doomgeneric)
-│   ├── d_main.c          # Doom main loop
-│   ├── r_*.c             # Rendering engine
-│   ├── p_*.c             # Game physics and logic
-│   ├── s_sound.c         # Sound subsystem
-│   └── ...               # 80 source files, 97 headers
-└── doom1.wad             # Shareware Doom WAD file
+    Makefile              # Build configuration
+    crt0.c                # C runtime: _start, syscalls, 8MB heap
+    doomgeneric_rach2.c   # Platform layer for Rach2
+    i_pcsound.c           # PC speaker and audio driver interface
+    i_oplmusic.c/h        # OPL3 music driver (9-voice FM synthesis)
+    midifile.c/h          # MIDI file parser (from Chocolate Doom)
+    mus2mid.c/h           # MUS to MIDI converter (from Chocolate Doom)
+    opl3.c/h              # Nuked-OPL3 FM synthesizer emulator
+    include/              # Freestanding libc stubs
+        stdio.h           # printf, FILE, fopen/fread/fclose
+        stdlib.h          # malloc, free, atoi, rand
+        string.h          # memcpy, memset, strlen, strcmp
+        ...               # Other standard headers
+    src/                  # doomgeneric engine (from ozkl/doomgeneric)
+        d_main.c          # Doom main loop
+        r_*.c             # Rendering engine
+        p_*.c             # Game physics and logic
+        s_sound.c         # Sound subsystem
+        ...               # 80 source files, 97 headers
+    doom1.wad             # Shareware Doom WAD file
 ```
 
 ## Platform Layer
@@ -61,9 +61,9 @@ Mouse input is polled from the `mouse` device file, posting `ev_mouse` events fo
 
 The port uses a layered audio system with automatic hardware detection:
 
-1. **Intel HD Audio** (PCI): MMIO registers, CORB/RIRB codec communication
-2. **Sound Blaster 16** (ISA): 8-bit DMA, IRQ-driven double-buffering
-3. **PC Speaker** (fallback): PIT channel 2 frequency control
+1. Intel HD Audio (PCI): MMIO registers, CORB/RIRB codec communication
+2. Sound Blaster 16 (ISA): 8-bit DMA, IRQ-driven double-buffering
+3. PC Speaker (fallback): PIT channel 2 frequency control
 
 Doom itself mixes sound effects and music into 11025 Hz, 8-bit mono chunks and submits them through `AUDIO_WRITE`.
 
@@ -73,10 +73,10 @@ On SB16 this format is consumed directly. On Intel HDA, the kernel may resample 
 
 OPL3 FM synthesis provides the classic Doom music:
 
-* **Nuked-OPL3**: Cycle-accurate OPL3 emulator generating audio samples
-* **GENMIDI**: General MIDI instrument definitions from the WAD
-* **MIDI/MUS**: Music format parsing from Chocolate Doom
-* **9-voice polyphony**: Full OPL3 voice management with pitch bend and modulation
+* Nuked-OPL3: Cycle-accurate OPL3 emulator generating audio samples
+* GENMIDI: General MIDI instrument definitions from the WAD
+* MIDI/MUS: Music format parsing from Chocolate Doom
+* 9-voice polyphony: Full OPL3 voice management with pitch bend and modulation
 
 The OPL emulator runs at 49716 Hz and is downsampled into Doom's 11025 Hz mono mixer before the mixed stream is handed to the kernel audio layer. On HDA, the kernel may resample that stream again to match the hardware codec.
 
@@ -149,12 +149,12 @@ On supported real hardware, the same `doom` binary uses the kernel's HDA driver 
 
 ## Memory Requirements
 
-* **WAD file**: ~4MB (doom1.wad)
-* **Heap**: 4MB bump allocator in crt0.c
-* **Framebuffer**: 64KB at 0xA0000
-* **Audio buffers**: Doom mixes in small 11025 Hz chunks; the kernel provides the larger DMA/ring buffers (for HDA this is roughly 32 KB of DMA plus an 8 KB write ring)
+* WAD file: ~4MB (doom1.wad)
+* Heap: 8MB bump allocator in crt0.c (Doom needs about 6MB for its zone)
+* Framebuffer: 64KB at 0xA0000
+* Audio buffers: Doom mixes in small 11025 Hz chunks; the kernel provides the larger DMA/ring buffers (for HDA this is roughly 32 KB of DMA plus an 8 KB write ring)
 
-Total: Requires at least 10MB of available memory.
+Total: Requires at least 14MB of available memory.
 
 ## Credits
 

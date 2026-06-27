@@ -53,13 +53,14 @@ The code in the `krffs` directory HERE is for generating RAM disk images for Rac
 Each node contains:
 * `magic` (2 bytes): 0x4B52 ("KR")
 * `type` (1 byte): Root=0, Free=1, Reserved=2
-* `id` (8 bytes): DJB hash of filename
+* `id` (8 bytes): name hash. In a v2 directory it mixes the containing directory's id with the name, so the same name under two directories hashes apart; the flat FUSE mount uses the plain djb2 hash of the name
 * `name` (256 bytes): null-terminated filename
 * `mode`, `uid`, `gid`: permissions/ownership
 * `access_time`, `modification_time`, `attribute_change_time`: timestamps
 * `size` (8 bytes): total node size (header + data)
 * `previous_node_size` (8 bytes): enables backward traversal
 * `data_size` (8 bytes): actual file content size
+* `parent_id` (8 bytes): id of the containing directory (the KRFFS v2 hierarchy)
 
 Nodes form a circular linked list via size/previous_node_size fields.
 

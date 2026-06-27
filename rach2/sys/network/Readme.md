@@ -36,13 +36,13 @@ The shared TX assembly buffers, the TCB and socket pools, and the ARP cache are 
 
 Userspace programs exercise the stack:
 
-* `tests/pingtest`, `tests/udptest`, `tests/tcptest`, `tests/sockettest`, `tests/dnstest`
-* `utils/ping`, `utils/nc`, `utils/httpd`
+* The freestanding probes `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged into `test.krffs`. `make test` boots it headless and runs them, or boot it by hand and `exec` each from the kernel debug shell.
+* The hand-written utilities `ping`, `nc`, and `httpd` are staged into `os-simple.krffs`. Run them from the ISH shell. (os-real carries busybox, whose own `ping`/`nc` applets exercise the same stack.)
 
-The UDP and TCP tests expect a host echo server at `10.0.2.2:7777`. Boot with a NIC and (for inbound servers like `httpd`) a host forward:
+The UDP and TCP tests expect a host echo server at `10.0.2.2:7777`. Boot the image that carries the program you want with a NIC, and (for an inbound server like `httpd`) a host forward. The probes need `test.krffs`, the utilities `os-simple.krffs`:
 
 ```sh
-qemu-system-i386 -kernel ../build/rach2/kernel -initrd ../build/images/os-simple.krffs -serial stdio \
+qemu-system-i386 -cpu max -kernel ../build/rach2/kernel -initrd ../build/images/test.krffs -serial stdio \
     -netdev user,id=net0,hostfwd=tcp::8080-:80 -device rtl8139,netdev=net0
 ```
 

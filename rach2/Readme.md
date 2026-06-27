@@ -9,7 +9,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 ## Highlights
 
 * Boots into ISH shell as init (PID 1) with cat, cp, echo, ls, mkdir, mv, pwd, rm, touch
-* 20 Linux-compatible system calls via `int 0x80`
+* Over 100 Linux-compatible system calls via `int 0x80`
 * Preemptive round-robin scheduler at 100 Hz
 * Per-process page directories with full memory isolation
 * KRFFS file system with read/write support
@@ -44,7 +44,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 
 ### System Calls and I/O
 
-* System call infrastructure (int 0x80) with 20 Linux-compatible syscalls
+* System call infrastructure (int 0x80) with over 100 Linux-compatible syscalls
 * Console input with line buffering for userspace stdin reads
 * Serial port I/O (COM1) for debug logging and piped command input
 
@@ -363,7 +363,7 @@ Opens a file at `path` with the given `flags`:
 * 0100 (O_CREAT): Create file if it doesn't exist
 * 01000 (O_TRUNC): Truncate file to zero length if it exists
 
-Returns a new file descriptor number (>=3) on success, or -1 on error. Leading '/' in path is stripped (KRFFS has no directory hierarchy).
+Returns a new file descriptor number (>=3) on success, or -1 on error. The path is resolved through the KRFFS directory hierarchy, absolute or relative to the current directory.
 
 ### close (syscall 6)
 
@@ -381,12 +381,7 @@ Returns `newfd` on success, or -1 on error.
 
 ### chdir (syscall 12)
 
-Changes the current working directory of the calling process. Since KRFFS is a flat file system with no directory hierarchy, only the following paths are valid:
-* `/` - Root directory (always succeeds)
-* `.` - Current directory (always succeeds, stays in root)
-* `..` - Parent directory (always succeeds, parent of root is root)
-
-Any other path fails:
+Changes the current working directory of the calling process. KRFFS is hierarchical: the path is resolved (absolute, or relative to the current directory, with `.` and `..` collapsed against real parent links) and must name an existing directory.
 * If the path refers to a file, returns -1 (ENOTDIR)
 * If the path doesn't exist, returns -1 (ENOENT)
 
@@ -402,7 +397,7 @@ Arguments:
 
 Returns the buffer pointer on success, or NULL (0) if the buffer is too small or invalid.
 
-For KRFFS, getcwd always returns "/" since there is only the root directory.
+The current directory is tracked as a canonical absolute path and returned verbatim.
 
 ### stat (syscall 106)
 
@@ -563,7 +558,7 @@ Returns:
 * 0 when end of directory is reached
 * -1 on error (invalid fd, not a directory fd, buffer too small)
 
-Since KRFFS is a flat file system, "/" contains all files directly.
+KRFFS is hierarchical, so a directory fd reads the entries of that directory.
 
 ### Files in `syscall.c`
 
@@ -905,16 +900,16 @@ The kernel will display the module at boot:
 
 ## File System (KRFFS)
 
-The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a simple flat file system with no directory hierarchy. KRFFS is loaded from a RAM disk module passed via multiboot.
+The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a hierarchical file system whose v2 directories are written by the image builder and read and written by the kernel. KRFFS is loaded from a RAM disk module passed via multiboot.
 
 ### KRFFS Overview
 
 KRFFS uses a circular linked list of nodes, where each node represents either:
 * Root node - File system header (magic 0x4B52)
 * Free node - Available space for allocation
-* Reserved node - A file (name, size, data)
+* Reserved node - A file or directory (name, size, data, and the id of its parent directory)
 
-File lookup uses DJB hash of the filename for fast identification. The file system is designed for simplicity rather than performance.
+File lookup hashes the parent directory's id together with the name, so the same name under two directories resolves apart; the v2 hierarchy is walked component by component. The file system is designed for simplicity rather than performance.
 
 ### Initialization
 
@@ -1339,9 +1334,9 @@ When the kernel debug shell is active in VGA text mode, `PageUp`, `PageDown`, `H
 | Category  | Supported                            | Not Supported                      |
 |-----------|--------------------------------------|------------------------------------|
 | Boot      | Multiboot1, GRUB, QEMU `-kernel`     | UEFI, Multiboot2                   |
-| Memory    | 32 MB + MMIO mapping, 4 KB pages     | Demand paging, swap                |
+| Memory    | 4 KB pages, demand paging, COW fork  | Swap                               |
 | Storage   | KRFFS RAM disk                       | Persistent disk, real file systems |
 | Input     | PS/2 keyboard, PS/2 mouse            | USB                                |
 | Display   | VGA text (80x25), Mode 13h (320x200) | Higher resolutions, VESA           |
 | Sound     | SB16, Intel HDA, PC speaker          | AC97, USB audio                    |
-| Processes | 16 concurrent, preemptive scheduling | Threads, signals                   |
+| Processes | 16 concurrent, preemptive, signals   | Threads                            |
