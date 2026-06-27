@@ -1,20 +1,10 @@
 # Constants
 
-BIN_DIR = $(BUILD)/bin
-ISO_DIR = $(BUILD)/iso
-
 LOADER = loader
 KERNEL = kernel
 KERNEL_BIN = $(BUILD)/$(KERNEL)
 
 LINKER_SCRIPT = link
-
-ISO_IMAGE = $(BIN_DIR)/boot.iso
-
-# RAM disk (optional); the RAM-disk scripts write it under build/krffs/.
-RAMDISK_SRC = $(BUILDROOT)/krffs/file_system.krffs
-RAMDISK_DST = $(ISO_DIR)/boot/file_system.krffs
-GRUB_CFG = $(ISO_DIR)/boot/grub/grub.cfg
 
 ASM_SRC = $(LOADER).s          \
 	  sys/isr_handler.s        \
@@ -116,52 +106,8 @@ endif
 .PHONY : all
 all : $(KERNEL_BIN)
 
-# ISO Image Creation (requires Docker)
-
-.PHONY : iso
-iso : $(ISO_IMAGE)
-
-$(ISO_IMAGE) : $(KERNEL_BIN)
-	@mkdir -p $(BIN_DIR) $(ISO_DIR)/boot/grub
-	@# Copy without creating sparse files (some GRUB setups crash on sparse modules)
-	@cat $(KERNEL_BIN) > $(ISO_DIR)/boot/$(KERNEL)
-	@# Generate grub.cfg with or without ramdisk module
-	@if [ -f $(RAMDISK_SRC) ]; then \
-		cat $(RAMDISK_SRC) > $(RAMDISK_DST); \
-		echo "set timeout=3" > $(GRUB_CFG); \
-		echo "set default=0" >> $(GRUB_CFG); \
-		echo "" >> $(GRUB_CFG); \
-		echo "menuentry \"Rach2 Kernel (RAM disk)\" {" >> $(GRUB_CFG); \
-		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
-		echo "    module /boot/file_system.krffs" >> $(GRUB_CFG); \
-		echo "    boot" >> $(GRUB_CFG); \
-		echo "}" >> $(GRUB_CFG); \
-		echo "" >> $(GRUB_CFG); \
-		echo "menuentry \"Rach2 Kernel (no RAM disk)\" {" >> $(GRUB_CFG); \
-		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
-		echo "    boot" >> $(GRUB_CFG); \
-		echo "}" >> $(GRUB_CFG); \
-		echo "Including RAM disk: $(RAMDISK_SRC)"; \
-	else \
-		echo "set timeout=3" > $(GRUB_CFG); \
-		echo "set default=0" >> $(GRUB_CFG); \
-		echo "" >> $(GRUB_CFG); \
-		echo "menuentry \"Rach2 Kernel\" {" >> $(GRUB_CFG); \
-		echo "    multiboot /boot/kernel" >> $(GRUB_CFG); \
-		echo "    boot" >> $(GRUB_CFG); \
-		echo "}" >> $(GRUB_CFG); \
-		echo "No RAM disk found (build an image first, e.g. make os-simple-image)"; \
-	fi
-	@# A Docker bind-mount needs an absolute host path, so mount the repo root at its
-	@# own absolute path (quoted, so a space in the path is safe) and hand grub-mkrescue
-	@# the absolute build/ paths; they then resolve unchanged inside the container. This
-	@# is the one recipe that must be absolute: the staging above it is all relative.
-	@docker run --rm --platform linux/amd64 -v "$(abspath $(TOP))":"$(abspath $(TOP))" -w "$(abspath $(TOP))" ubuntu:24.04 sh -c \
-		"apt-get update -qq && \
-		 apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && \
-		 grub-mkrescue -o '$(abspath $(ISO_IMAGE))' '$(abspath $(ISO_DIR))' 2>/dev/null"
-	@rm -f $(ISO_DIR)/boot/$(KERNEL) $(RAMDISK_DST)
-	@echo "Created $(ISO_IMAGE)"
+# Bootable ISO images are built per RAM-disk image at the top level (make isos; see
+# tools/mkiso.sh), so this Makefile only builds the kernel.
 
 # Kernel
 

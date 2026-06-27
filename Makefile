@@ -11,6 +11,7 @@
 #   make full       all the RAM-disk images (test, os-simple, os-real).
 #   make images     the RAM-disk images.
 #   make test       boot the test image and check every probe passes.
+#   make isos       a bootable ISO per image, for real hardware (needs Docker).
 #   make deps       build the vendored third-party (libc; DEPS=full adds bb+dropbear)
 #   make doctor     check the toolchain (PASS/MISSING with install hints)
 #   make verify-style / verify-host   the quality gates
@@ -60,6 +61,7 @@ MKIMAGE         = krffs/mkimage.sh
 
 .PHONY: all full deps clean distclean images musl-programs test \
         test-image os-simple-image os-real-image \
+        isos test-iso os-simple-iso os-real-iso \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
@@ -159,6 +161,17 @@ os-real-image: krffs rach2 check-busybox check-dropbearmulti ports/doom
 test: test-image
 	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE)
 
+# Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
+# image as GRUB multiboot modules, built by grub-mkrescue in a throwaway Docker
+# container (see tools/mkiso.sh). Output: build/images/<image>.iso.
+isos: test-iso os-simple-iso os-real-iso
+test-iso: test-image
+	sh tools/mkiso.sh test
+os-simple-iso: os-simple-image
+	sh tools/mkiso.sh os-simple
+os-real-iso: os-real-image
+	sh tools/mkiso.sh os-real
+
 # The staged capstone binaries are the REAL prerequisites of the os-real image. A
 # stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards
 # while the stamp lingers, so these PHONY check targets (depending on the stamp so it
@@ -201,7 +214,7 @@ check-sources:
 # sub-make owns). Use distclean for those.
 clean:
 	@for dir in $(BASE_DIRS) $(FULL_DIRS); do $(MAKE) -C $$dir clean; done
-	rm -rf build/images
+	rm -rf build/images build/iso
 
 # distclean: a full from-scratch reset; clean plus every third-party build product: the
 # stamps, vendor/musl/install, the extracted vendored source trees, and the entire
@@ -220,6 +233,7 @@ help:
 	@echo "  make images     the RAM-disk images (test, os-simple, os-real)"
 	@echo "  make test-image / os-simple-image / os-real-image   one image"
 	@echo "  make test       boot the test image and check every probe passes"
+	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
 	@echo "  make busybox / make dropbear   one capstone's third-party build"
 	@echo "  make doctor     check the toolchain (PASS/MISSING with install hints)"
