@@ -33,7 +33,13 @@ import argparse, os, re, select, subprocess, sys, time
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--kernel", required=True)
-    ap.add_argument("--initrd", required=True)
+    # --initrd is optional: a disk-only boot (--drive + rach2.fsdisk) needs no
+    # RAM-disk module.
+    ap.add_argument("--initrd", default=None)
+    ap.add_argument("--append", default=None)
+    # --drive may repeat; each value is passed verbatim to a QEMU -drive (e.g.
+    # file=disk.img,format=raw,if=ide,index=0,media=disk).
+    ap.add_argument("--drive", action="append", default=[])
     ap.add_argument("--net", default="user,id=net0")
     ap.add_argument("--device", default="rtl8139,netdev=net0")
     ap.add_argument("--timeout", type=float, default=60.0)
@@ -42,15 +48,26 @@ def main():
     ap.add_argument("--bootwait", type=float, default=9.0)
     ap.add_argument("--log", default=None)
     ap.add_argument("--no-debug-exit", action="store_true")
+    # --ok PATTERN passes iff PATTERN appears in the serial output, regardless of
+    # the QEMU exit code. For a probe run in the debug shell (which returns to the
+    # shell rather than stopping QEMU via isa-debug-exit), the printed success
+    # token is the result.
+    ap.add_argument("--ok", default=None)
     ap.add_argument("steps", nargs="*")
     a = ap.parse_args()
 
     # -no-reboot so a triple-fault exits QEMU (the harness reads it as failure)
     # rather than looping; NOT -no-shutdown, which would block the isa-debug-exit
     # device from actually stopping the VM.
-    cmd = ["qemu-system-i386", "-kernel", a.kernel, "-initrd", a.initrd,
+    cmd = ["qemu-system-i386", "-kernel", a.kernel,
            "-serial", "stdio", "-display", "none", "-no-reboot",
            "-netdev", a.net, "-device", a.device]
+    if a.initrd:
+        cmd += ["-initrd", a.initrd]
+    if a.append:
+        cmd += ["-append", a.append]
+    for d in a.drive:
+        cmd += ["-drive", d]
     if not a.no_debug_exit:
         cmd += ["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
 
@@ -163,6 +180,15 @@ def main():
     pump(time.time() + 0.5)
     if logf:
         logf.close()
+
+    # A serial-token check passes on the printed token alone, for a probe run in
+    # the debug shell that never stops QEMU itself.
+    if a.ok is not None:
+        if a.ok.encode() in buf:
+            sys.stderr.write("HARNESS: saw %r\n" % a.ok)
+            return 0
+        sys.stderr.write("HARNESS: pattern %r not seen\n" % a.ok)
+        return 1
 
     if qemu_rc is None:
         sys.stderr.write("HARNESS: timeout/hang: QEMU never self-exited\n")

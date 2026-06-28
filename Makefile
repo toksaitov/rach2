@@ -61,7 +61,7 @@ OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
 MKDISK          = krffs/mkdisk.sh
 
-.PHONY: all full deps clean distclean images musl-programs test \
+.PHONY: all full deps clean distclean images musl-programs test test-disk \
         test-image os-simple-image os-real-image os-real-disk \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-dropbearmulti compile-commands check-sources \
@@ -170,6 +170,20 @@ os-real-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 # under tools/harness.py; see tools/runtests.py.
 test: test-image
 	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE)
+
+# `make test-disk`: the disk-backed page-cache integrity check. Builds a disk
+# image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
+# through the cache (rach2.fsdisk), and runs blockprobe from the debug shell,
+# passing on its "BLOCKPROBE OK" serial token. blockprobe writes more than the
+# resident cache, so it exercises real eviction and writeback and fails on any
+# dropped or corrupted page.
+DISK_TEST_IMAGE = $(IMAGES_DIR)/disk-test.disk
+test-disk: rach2 tests krffs
+	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
 
 # Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
 # image as GRUB multiboot modules, built by grub-mkrescue in a throwaway Docker

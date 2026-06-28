@@ -1,0 +1,8 @@
+# Disk-integrity test image: the blockprobe on a real-disk KRFFS.
+#
+# Built into a partitioned disk by mkdisk.sh and booted with rach2.fsdisk +
+# rach2.rescue, so the kernel mounts KRFFS from the disk through the page cache
+# and the debug shell runs `exec /blockprobe`. blockprobe writes several files
+# whose combined size exceeds the resident cache, fsyncs, reads them back, and
+# checks every byte; its "BLOCKPROBE OK" token on the serial is the test result.
+file 0755 /blockprobe build/tests/blockprobe
