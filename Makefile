@@ -63,7 +63,7 @@ MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test test-disk \
         test-image os-simple-image os-real-image os-real-disk persist-test \
-        crash-test stress-test \
+        crash-test stress-test os-real-grub-disk \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
@@ -164,6 +164,14 @@ os-real-image: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 os-real-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
+
+# A BIOS-bootable disk: GRUB in the MBR and a FAT boot partition holding the
+# kernel, plus a KRFFS partition with the os-real tree. It boots a real machine
+# (or QEMU with no -kernel/-initrd) BIOS -> MBR -> GRUB -> kernel -> KRFFS on the
+# disk. Built in a throwaway Docker container (needs Docker).
+os-real-grub-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
+	sh krffs/gen_demo_key.sh
+	sh tools/mkdisk_grub.sh
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
 # (-cpu max) and runs every probe, failing if any does not exit 0. The few probes
@@ -294,6 +302,7 @@ help:
 	@echo "  make images     the RAM-disk images (test, os-simple, os-real)"
 	@echo "  make test-image / os-simple-image / os-real-image   one image"
 	@echo "  make os-real-disk   the os-real tree on a partitioned ATA disk image"
+	@echo "  make os-real-grub-disk   a BIOS-bootable GRUB disk (needs Docker)"
 	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
@@ -308,3 +317,4 @@ help:
 	@echo "Run an image (the build system does not run QEMU):"
 	@echo "  cd rach2 && ./run.sh os-simple              # boot the os-simple image"
 	@echo "  cd rach2 && ./run.sh test                   # boot the test image"
+	@echo "  cd rach2 && ./run_from_disk.sh              # boot the GRUB disk (no -kernel)"
