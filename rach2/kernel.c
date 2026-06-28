@@ -1425,6 +1425,103 @@ static int init_krffs_window(uint8_t *disk_base, uint32_t disk_size)
     return 0;
 }
 
+/* The KRFFS partition on the real disk, sliced out of the whole-disk device. */
+static block_partition_t _krffs_disk_part;
+
+static int krffs_disk_read(uint32_t off, void *page)
+{
+    return _krffs_disk_part.device.read(
+               &_krffs_disk_part.device, off / BLOCK_SECTOR_SIZE,
+               PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
+}
+
+static int krffs_disk_write(uint32_t off, const void *page)
+{
+    return _krffs_disk_part.device.write(
+               &_krffs_disk_part.device, off / BLOCK_SECTOR_SIZE,
+               PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
+}
+
+/**
+ * Mounts KRFFS from the real ATA disk through the page-cache window.
+ *
+ * Probes the primary disk, reads its MBR, slices out the first KRFFS partition
+ * (type 0x7F), and points the cache at that partition through `block0` so the
+ * window is backed by real sectors. KRFFS then mounts at PCWIN_BASE exactly as
+ * over the RAM stub. Rejects a partition larger than the window (which also
+ * keeps the byte size within 32 bits). Returns 0 on a valid mount, -1 otherwise.
+ */
+static int init_krffs_disk(void)
+{
+    static uint8_t mbr[BLOCK_SECTOR_SIZE];
+    uint32_t start_lba = 0;
+    uint32_t sector_count = 0;
+    uint32_t part_bytes;
+    int i;
+    int found = 0;
+
+    if (ata_init() != 0 || !block0) {
+        serial_printf("KRFFS: no ATA disk on the primary channel\n");
+        return -1;
+    }
+    if (block0->read(block0, 0, 1, mbr) != 0) {
+        serial_printf("KRFFS: MBR read failed\n");
+        return -1;
+    }
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
+        serial_printf("KRFFS: no MBR signature\n");
+        return -1;
+    }
+
+    /* Find the first KRFFS (type 0x7F) partition entry in the table. */
+    for (i = 0; i < 4; ++i) {
+        uint8_t *e = mbr + 446 + i * 16;
+        if (e[4] == 0x7F) {
+            start_lba = (uint32_t) e[8] | ((uint32_t) e[9] << 8) |
+                        ((uint32_t) e[10] << 16) | ((uint32_t) e[11] << 24);
+            sector_count = (uint32_t) e[12] | ((uint32_t) e[13] << 8) |
+                           ((uint32_t) e[14] << 16) | ((uint32_t) e[15] << 24);
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        serial_printf("KRFFS: no KRFFS partition in the MBR\n");
+        return -1;
+    }
+
+    /* Reject a malformed partition before mounting, so a bad MBR fails cleanly
+       rather than faulting past the disk or the window later: it must be
+       non-empty, a whole number of pages (the cache transfers a page at a time),
+       lie within the disk, and fit the window (which also keeps sectors * 512
+       inside 32 bits, since the window is capped well below). */
+    if (sector_count == 0 ||
+        sector_count % (PAGE_SIZE / BLOCK_SECTOR_SIZE) != 0) {
+        serial_printf("KRFFS: partition is empty or not page-aligned (%d sectors)\n",
+                      sector_count);
+        return -1;
+    }
+    if (start_lba > block0->sector_count ||
+        sector_count > block0->sector_count - start_lba) {
+        serial_printf("KRFFS: partition runs past the disk\n");
+        return -1;
+    }
+    if (sector_count > pc_window_size() / BLOCK_SECTOR_SIZE) {
+        serial_printf("KRFFS: partition %d sectors exceeds the window\n",
+                      sector_count);
+        return -1;
+    }
+    part_bytes = sector_count * BLOCK_SECTOR_SIZE;
+
+    block_partition_init(&_krffs_disk_part, block0, start_lba, sector_count);
+    pc_set_backing(krffs_disk_read, krffs_disk_write, part_bytes);
+    if (init_krffs((void *) PCWIN_BASE, part_bytes) != 0) {
+        pc_set_backing(0, 0, 0);
+        return -1;
+    }
+    return 0;
+}
+
 static void run_self_tests(void)
 {
     k_puts("======= System Self-Test =======");
@@ -2366,35 +2463,41 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_printf("  File system...");
     serial_printf("  File system...");
-    if (num_modules > 0) {
-        module_info_t *ramdisk = get_ramdisk();
+    {
         int mounted = -1;
+        const char *via = "";
 
-        /* rach2.fswindow mounts KRFFS on the demand-paged cache window over the
-         * module instead of directly on the module, to exercise the disk path;
-         * the default mounts the module in place. */
-        if (ramdisk && kcmdline_has("rach2.fswindow")) {
-            mounted = init_krffs_window((uint8_t *) ramdisk->start,
-                                        ramdisk->size);
-        } else if (ramdisk) {
-            mounted = init_krffs((void *) ramdisk->start, ramdisk->size);
+        /* rach2.fsdisk mounts KRFFS from the real ATA disk through the cache
+         * (and needs no module); rach2.fswindow mounts the module through the
+         * cache window; the default mounts the module in place. */
+        if (kcmdline_has("rach2.fsdisk")) {
+            mounted = init_krffs_disk();
+            via = " (disk)";
+        } else if (num_modules > 0) {
+            module_info_t *ramdisk = get_ramdisk();
+            if (ramdisk && kcmdline_has("rach2.fswindow")) {
+                mounted = init_krffs_window((uint8_t *) ramdisk->start,
+                                            ramdisk->size);
+                via = " (window)";
+            } else if (ramdisk) {
+                mounted = init_krffs((void *) ramdisk->start, ramdisk->size);
+            }
         }
 
         if (mounted == 0) {
-            const char *via = kcmdline_has("rach2.fswindow") ? " (window)" : "";
             set_fore_color(light_green);
             k_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
             serial_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
             set_fore_color(light_grey);
-        } else {
+        } else if (kcmdline_has("rach2.fsdisk") || num_modules > 0) {
             set_fore_color(light_red);
             k_puts(" FAIL (invalid KRFFS)");
             serial_printf(" FAIL (invalid KRFFS)\n");
+        } else {
+            set_fore_color(light_brown);
+            k_puts(" None (no ramdisk)");
+            serial_printf(" None (no ramdisk)\n");
         }
-    } else {
-        set_fore_color(light_brown);
-        k_puts(" None (no ramdisk)");
-        serial_printf(" None (no ramdisk)\n");
     }
     set_fore_color(light_grey);
 
