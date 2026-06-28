@@ -1,0 +1,7 @@
+# fsync durability test image: persistprobe on a real-disk KRFFS.
+#
+# Built into a partitioned disk by mkdisk.sh and booted twice against one scratch
+# copy with rach2.fsdisk + rach2.rescue. The first boot writes and fsyncs
+# /persist.txt; the second reads it back, proving fsync pushed the write through
+# the page cache to the disk.
+file 0755 /persistprobe build/tests/persistprobe

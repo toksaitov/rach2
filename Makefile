@@ -62,7 +62,7 @@ MKIMAGE         = krffs/mkimage.sh
 MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test test-disk \
-        test-image os-simple-image os-real-image os-real-disk \
+        test-image os-simple-image os-real-image os-real-disk persist-test \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
@@ -184,6 +184,23 @@ test-disk: rach2 tests krffs
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
+
+# `make persist-test`: fsync durability across a reboot. Builds a disk holding
+# persistprobe, boots it twice against the SAME image: the first boot writes and
+# fsyncs /persist.txt, the second reads it back. The second boot passes only if
+# fsync pushed the write through the cache to the disk, since the file would
+# otherwise be gone.
+PERSIST_DISK = $(IMAGES_DIR)/persist-test.disk
+persist-test: rach2 tests krffs
+	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_DISK) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
 
 # Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
 # image as GRUB multiboot modules, built by grub-mkrescue in a throwaway Docker

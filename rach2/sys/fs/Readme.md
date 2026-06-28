@@ -21,6 +21,12 @@ v2 added one field, `parent_id`, at the end of the header (so `sizeof` propagate
 * Every node has a unique id `mix(parent_id, name)`, an FNV-style mix of the parent's id and the name, never zero. Siblings have unique names, so the id is unambiguous and survives a move (it depends on name and parent, not offset).
 * The root has the reserved id `KRFFS_ROOT_ID == 0`. Host-created nodes leave `parent_id` zero, so they resolve as root's children with no host change; the root node itself is matched by pointer (`node == fs->node`) since `krffs_find_node_by_id` deliberately never hands back id 0.
 
+## On a real disk
+
+KRFFS mounts three ways, chosen at boot: the RAM-disk multiboot module in place (the default), the same module through the page-cache window (`rach2.fswindow`), or a real ATA disk partition through that window (`rach2.fsdisk`). The file system code is identical in all three; it only ever pointer-walks its node list, and on the window paths that walk is demand-paged.
+
+On the disk path the kernel slices the first KRFFS (MBR type `0x7F`) partition out of the disk and maps it into a fixed kernel-virtual window (`PCWIN_BASE == 0xC0000000`, sized to the partition and capped at 256 MiB) backed by a fixed-size page cache (`../mm/pagecache.c`). A fault in the window polls the missing page in from the disk through the polled ATA driver (`../block/ata.c`); a write dirties it; eviction and `fsync`/`sync` write dirty pages back with a FLUSH CACHE. So `fsync` is honestly durable on the disk path: a written-and-synced file survives a reboot, proved by the two-boot `tests/persistprobe`. On the RAM-module path the image is already as durable as memory, so `fsync` is a no-op. A disk KRFFS must fit the window and KRFFS's 32-bit size, so the host tools cap a partition at 256 MiB and any KRFFS at just under 4 GiB.
+
 ## Path resolution
 
 `krffs_walk` is the resolver. It splits a path on `/` and, starting at the root (or a given directory id), matches each component by `name` and `parent_id`, descending only into directories. `.` keeps the current directory; `..` follows the directory's own `parent_id` (and resolves a root parent back to the root rather than to NULL). `krffs_resolve_e` reports whether a failure was a missing component (`-ENOENT`) or a non-directory in the middle of the path (`-ENOTDIR`), which the syscall layer returns verbatim. `krffs_node_path` walks `parent_id` upward to rebuild a node's absolute, canonical path (used by `getcwd`, `chdir`, and dirfd resolution; `..` and `.` collapse for free because it follows real links).
