@@ -82,6 +82,12 @@ uint16_t inw(uint16_t port);
 /** Read a double-word from I/O port `port`. */
 uint32_t ind(uint16_t port);
 
+/** Read `count` 16-bit words from I/O port `port` into `buffer`. */
+void insw(uint16_t port, void *buffer, uint32_t count);
+
+/** Write `count` 16-bit words from `buffer` to I/O port `port`. */
+void outsw(uint16_t port, const void *buffer, uint32_t count);
+
 /** Aliases under the conventional outl/inl names. */
 #define outl outd
 #define inl  ind

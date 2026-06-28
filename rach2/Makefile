@@ -26,6 +26,8 @@ C_SRC   = $(KERNEL).c \
 	  sys/panic.c     \
 	  sys/speaker.c   \
 	  sys/pci.c       \
+	  sys/block/block.c     \
+	  sys/block/ata.c       \
 	  sys/display/vga_text.c \
 	  sys/display/vga_gfx.c  \
 	  sys/audio/audio.c     \

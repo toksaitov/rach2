@@ -184,3 +184,25 @@ uint32_t ind(uint16_t port)
 
     return result;
 }
+
+void insw(uint16_t port, void *buffer, uint32_t count)
+{
+    __asm__ __volatile__ (
+        "cld\n\t"
+        "rep insw"
+        : "+D" (buffer), "+c" (count)
+        : "d" (port)
+        : "memory", "cc"
+    );
+}
+
+void outsw(uint16_t port, const void *buffer, uint32_t count)
+{
+    __asm__ __volatile__ (
+        "cld\n\t"
+        "rep outsw"
+        : "+S" (buffer), "+c" (count)
+        : "d" (port)
+        : "memory", "cc"
+    );
+}
