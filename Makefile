@@ -63,7 +63,7 @@ MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test test-disk \
         test-image os-simple-image os-real-image os-real-disk persist-test \
-        crash-test \
+        crash-test stress-test \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
@@ -209,6 +209,18 @@ persist-test: rach2 tests krffs
 crash-test: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
 	sh tools/crash_test.sh build/rach2/kernel $(DISK_TEST_IMAGE) build/krffs/fsck.krffs
+
+# `make stress-test`: prove an on-disk KRFFS larger than physical RAM works. Boots
+# a 64 MB disk with a 48 MB partition and runs stressprobe, which writes and
+# re-reads 33 MiB (past the 32 MiB RAM cap) through the 1 MiB cache.
+STRESS_DISK = $(IMAGES_DIR)/stress-test.disk
+stress-test: rach2 tests krffs
+	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(STRESS_DISK),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 150 --ok "STRESSPROBE OK" \
+	    "expect=Type 'help'" "send=exec /stressprobe" wait=130
 
 # Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
 # image as GRUB multiboot modules, built by grub-mkrescue in a throwaway Docker

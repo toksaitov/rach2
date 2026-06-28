@@ -32,7 +32,7 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
         tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe dirprobe \
         timeprobe sigprobe ofdprobe waitprobe pipeprobe pollprobe devprobe \
         ttyprobe jobprobe miscprobe ptyprobe rngprobe orphanprobe blockprobe \
-        persistprobe
+        persistprobe stressprobe
 
 # These compile+link in one step, so there are no .o intermediates; only the
 # GCC-written .d, which -MF puts under $(BUILD) (build/tests/, from mk/build.mk), so
