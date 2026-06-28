@@ -1,6 +1,7 @@
 # Path B: KRFFS on a disk-backed page cache
 
-Status: draft.
+Status: complete. All eight phases built, gated, and committed; see `Readme.md`
+for the milestone record.
 
 ## The goal
 

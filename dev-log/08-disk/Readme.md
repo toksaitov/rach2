@@ -1,17 +1,26 @@
-# 08-disk
+# Milestone 8: KRFFS on a disk-backed page cache
 
-Path B: lifting KRFFS off the 32 MB RAM-disk module and onto a real block device
-through a kernel page cache and a disk-backed kernel-virtual window. KRFFS keeps
-pointer-walking one contiguous window; an absent page faults, the handler polls the
-sectors in from an ATA disk into a cached frame and maps it, dirty pages write back,
-and pages evict under pressure, so only the working set is resident. Then the system
-boots from that disk through GRUB.
+KRFFS lived in a RAM-disk module that the bootloader loaded whole, so the file system could be no larger than the 32 MB of physical memory the kernel manages, and nothing it held survived a reboot. This milestone, Path B of the plan, lifts KRFFS onto a real ATA disk of arbitrary size, keeps it pointer-walking one contiguous virtual window, and boots the whole system from that disk through GRUB. The file system code barely moves: it still walks a `krffs_node_t *` ring; what changes is that the window under it becomes demand-paged out of a disk.
 
-`plan.md` is the sequenced, multiphase plan: the two load-bearing decisions (the
-fault polls rather than sleeps, because it runs with interrupts off; the window's
-page tables are pre-mapped supervisor-only in the kernel directory before the first
-fork, because clone copies PDE pointers by value), the milestone scope decisions
-(polled PIO ATA not AHCI, write-back with a real fsync, dirty-flag plus offline fsck
-not a journal, the 4 GiB cap stays, no VFS rewrite, the module path stays the
-default), and eight phases from the host-tool offset work through the GRUB disk boot,
-each independently buildable and gated by a concrete probe.
+## The design
+
+The plan was explored and reviewed with independent Codex passes; the hard, novel phase (the page cache and its fault path) was designed against the two invariants below before any code, and every phase was gated by a concrete in-guest probe so a regression shows as a failed checksum, not a vague hang.
+
+* **A fixed page cache behind a demand-paged window.** KRFFS is mounted at `PCWIN_BASE` (`0xC0000000`), and the cache is `PC_SLOTS` (256) page frames, one mebibyte, no matter how large the disk. A reference to an absent window page faults; the handler finds or evicts a frame, fills it from the disk, and maps it. Eviction is a clock sweep that writes a dirty victim back before reuse; the page-to-slot map is an open-addressed hash with tombstones. Only the working set is resident, so a file system far larger than RAM is readable through a small, bounded cache.
+* **The fault polls; it does not sleep.** The page-fault vector is an interrupt gate, so the handler runs with interrupts off. It cannot block on a disk IRQ and reschedule, so the ATA driver is polled PIO and the fill is a busy `insw`/`outsw` loop. This is the one decision the whole cache is shaped around: the fault is the single entry, and it completes synchronously.
+* **The window is pre-mapped supervisor-only before the first fork.** `clone` copies page-directory entries by value, so a window mapping installed after a fork would be invisible to the child. The window's page tables are allocated and linked into the kernel directory once, before proc0 forks, so every address space shares them and a fault anywhere services the same cache.
+* **Write-back, a real fsync, a dirty-mount flag, and offline fsck.** A read maps a frame read-only; the first write faults again, flips it read-write, and marks the slot dirty, so `pc_sync` (behind `sync`/`fsync`) writes back exactly the pages that changed and re-protects them. The mount sets a dirty bit in the KRFFS root, `KRFFS_MODE_DIRTY` (`0004000`, chosen to fall outside both `mode & 0777` and the `0170000` type mask so it is invisible to stat and to the directory test); a clean `halt` clears it, so a mount that still finds it set knows the previous boot did not shut down cleanly, and the host `fsck` repairs and clears it.
+* **Three mount modes, the RAM module still the default.** A whole-token command-line flag selects where KRFFS lives: nothing (the RAM module, unchanged) is the default so every existing image and the test harness boot byte-identically; `rach2.fswindow` runs the module through the window to exercise the cache without a disk; `rach2.fsdisk` / `rach2.root=disk` mounts a real partition. The kernel finds that partition with a small MBR parser that reads each non-empty entry's first sector and accepts the first that holds a KRFFS root.
+
+## The bug the caution was for
+
+The page cache tracks dirty pages by mapping clean frames read-only and catching the write fault. On the first integrity probe (`blockprobe`: eight 256 KB files, two megabytes through a one-megabyte cache, so eviction is forced) the data came back corrupt over both the disk and the stub backing. The cause was that the kernel ran with `CR0.WP` clear, so a ring-0 write to a read-only page does not fault; the dirty bit was never set, eviction dropped the changes, and the corruption was silent. Setting `CR0.WP` alongside `CR0.PG` when paging is enabled is the fix, and it is the reason the milestone insisted on checksums rather than absence-of-crash: this class of bug is invisible to a probe that only asks whether the kernel survived.
+
+## The other hard parts
+
+* **A KRFFS ring has no zero-length previous node.** The first MBR probe rejected the valid partition: it tested `previous_node_size == 0`, which is true for a fresh image but false for a ring, where the root's previous pointer names the trailing free node. The probe now validates the 16-bit magic, the root node type, and a size that is non-zero and fits the partition, which is the signature that actually holds.
+* **grub-bios-setup cannot run on Docker's overlay filesystem.** The bootable disk is assembled in a throwaway container, but `grub-bios-setup` fails to canonicalize the disk file's host device on an overlay mount. `tools/grub_embed.py` performs the same install by hand: it writes `boot.img` (keeping the partition table) and a contiguous `core.img` in the post-MBR gap, patches the two pointers `grub-bios-setup` would patch, and refuses a `core.img` that would overrun the gap into the first partition.
+
+## Verification
+
+Every phase is proven by a freestanding probe staged onto a disk and checked for a serial token. `blockprobe` round-trips a pattern through forced eviction; `persistprobe` writes and `fsync`s a file on one boot and reads it back on the next, proving durability across a power cycle; `crash_test.sh` shows a killed boot leaves the dirty flag set and `fsck` clears it while a clean `halt` does not; `stressprobe` writes and re-reads 33 MB of files through the 1 MB cache with every checksum intact, proving the 32 MB physical cap is lifted while the resident set stays bounded. End to end, the system boots BIOS to MBR to GRUB to the Multiboot kernel off a disk partition, mounts KRFFS from the second partition (`File system... OK (KRFFS, 23 files) (disk)`), runs `/sbin/init`, reaches busybox ash, and the SSH capstone logs in over pubkey. The gate stays green throughout: `make verify-style` 8/8, `make verify-host` (including a host seam test of the cache bookkeeping under ASan/UBSan), the module-path `make test` at 28/28, and the module boot and SSH capstone unchanged.
