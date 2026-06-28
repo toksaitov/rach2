@@ -37,6 +37,11 @@ PART_OFFSET=$((PART_LBA * SECTOR))
 PART_SIZE=$((PART_MB * 1048576))
 DISK_SIZE=$((DISK_MB * 1048576))
 
+# The kernel maps the KRFFS partition through a fixed virtual window; a partition
+# larger than that window cannot be mounted from disk. The window is capped at
+# 256 MiB (PC_WINDOW_CAP in sys/mm/pagecache.c), so cap the partition to match.
+WINDOW_MB=256
+
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
     echo "usage: mkdisk.sh <manifest> <output.disk> [disk_mb] [partition_mb]" >&2
     exit 2
@@ -54,6 +59,10 @@ if [ ! -f "$TOOLS/mkfs.krffs" ] || [ ! -f "$TOOLS/stageimage.krffs" ]; then
 fi
 if [ $((PART_OFFSET + PART_SIZE)) -gt "$DISK_SIZE" ]; then
     echo "mkdisk: a ${PART_MB} MiB partition at 1 MiB does not fit a ${DISK_MB} MiB disk" >&2
+    exit 1
+fi
+if [ "$PART_MB" -gt "$WINDOW_MB" ]; then
+    echo "mkdisk: a ${PART_MB} MiB partition exceeds the ${WINDOW_MB} MiB mount window" >&2
     exit 1
 fi
 
