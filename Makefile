@@ -57,10 +57,12 @@ IMAGES_DIR      = build/images
 TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
 OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
 OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
+OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
+MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test \
-        test-image os-simple-image os-real-image \
+        test-image os-simple-image os-real-image os-real-disk \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
@@ -154,6 +156,14 @@ os-real-image: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
 
+# The os-real disk: the same os-real tree, but on a real disk image instead of a
+# RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
+# partition is larger than the 32 MB resident page-cache cap on purpose, so it can
+# later prove an on-disk file system bigger than what fits in RAM at once.
+os-real-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
+	sh krffs/gen_demo_key.sh
+	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
+
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
 # (-cpu max) and runs every probe, failing if any does not exit 0. The few probes
 # with a special contract (fork-exit-code, stdin, faults, network) are run by hand
@@ -232,6 +242,7 @@ help:
 	@echo "  make full       all the RAM-disk images"
 	@echo "  make images     the RAM-disk images (test, os-simple, os-real)"
 	@echo "  make test-image / os-simple-image / os-real-image   one image"
+	@echo "  make os-real-disk   the os-real tree on a partitioned ATA disk image"
 	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
