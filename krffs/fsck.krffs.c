@@ -211,6 +211,11 @@ int main(int argc, char **argv)
 
     puts("The filesystem has a correct root node.");
 
+    if (file_system.node->mode & KRFFS_MODE_DIRTY) {
+        puts("The filesystem was not cleanly unmounted. Clearing the dirty flag.");
+        file_system.node->mode &= (uint16_t) ~KRFFS_MODE_DIRTY;
+    }
+
     struct krffs_node *previous_node =
         file_system.node;
     struct krffs_node *node =

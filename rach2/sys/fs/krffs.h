@@ -34,6 +34,12 @@
 #define KRFFS_S_IFMT  0170000u  /* file-type mask within mode */
 #define KRFFS_S_IFDIR 0040000u  /* directory */
 #define KRFFS_S_IFREG 0100000u  /* regular file */
+
+/* Reserved bit in the root node's mode flagging an unclean mount. Set
+ * write-through when the file system is mounted for writing, cleared on a clean
+ * sync or unmount. It sits above the 0777 perms the kernel keeps and below the
+ * 0170000 type field KRFFS_IS_DIR tests, so no masked mode comparison sees it. */
+#define KRFFS_MODE_DIRTY 0004000u
 #define KRFFS_ROOT_ID 0u        /* logical id of the root directory (host nodes zero parent_id) */
 #define KRFFS_PATH_MAX_DEPTH 64 /* max directory nesting krffs_node_path reconstructs */
 

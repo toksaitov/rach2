@@ -23,8 +23,11 @@ static inline void fill_stat_buffer_for_node(
         hard_links_count;
     stat_buffer->st_size =
         node->data_size;
+    /* Take the type from `file_type` and only the permission bits from the node,
+       so neither the on-disk type bits nor the reserved dirty-mount bit (which
+       overlaps the setuid bit) leak into or corrupt the user-visible mode. */
     stat_buffer->st_mode =
-        file_type | node->mode;
+        file_type | (node->mode & 0777);
     stat_buffer->st_uid =
         node->uid;
     stat_buffer->st_gid =
@@ -981,13 +984,11 @@ int krffs_chmod(
             result =
                 -ENOENT;
         } else {
-            if (node->type == KRFFS_Root_Node) {
-                node->mode =
-                    S_IFDIR | mode;
-            } else {
-                node->mode =
-                    S_IFREG | mode;
-            }
+            /* Update only the permission bits, as the kernel's chmod does, so the
+               node's type bits and the reserved dirty-mount bit (which a chmod
+               must neither forge nor clear) are preserved. */
+            node->mode =
+                (uint16_t) ((node->mode & ~0777u) | (mode & 0777u));
             node->attribute_change_time =
                 krffs_get_current_node_time();
 

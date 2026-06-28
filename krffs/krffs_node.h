@@ -25,6 +25,18 @@ enum krffs_node_type {
     KRFFS_Reserved_Node,
 };
 
+/**
+ * Reserved bit in the root node's `mode` that flags an unclean mount.
+ *
+ * The kernel sets it (write-through) when it mounts the file system for writing
+ * and clears it on a clean sync or unmount, so a set bit found at mount time, or
+ * by `fsck.krffs`, means the file system was not unmounted cleanly. It lives in
+ * the root node's `mode` at bit `0004000`, which sits above the `0777`
+ * permission bits the kernel keeps and below the `0170000` file-type field that
+ * `KRFFS_IS_DIR` tests, so no reader's masked comparison of `mode` ever sees it.
+ */
+#define KRFFS_MODE_DIRTY 0004000u
+
 /** A node timestamp, byte-packed as part of the on-disk node record. */
 #pragma pack(push,1)
 struct krffs_node_time {
