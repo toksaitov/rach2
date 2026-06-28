@@ -1367,6 +1367,64 @@ static bool test_pagecache(void)
     return ok;
 }
 
+/* RAM-disk stub backing for the page cache: with KRFFS mounted on the window,
+   the file system reads and writes the module image through these page-grained
+   callbacks instead of touching it directly, exercising the whole cache path
+   before a real disk exists. */
+static uint8_t *_krffs_stub_base;
+static uint32_t _krffs_stub_size;
+
+static int krffs_stub_read(uint32_t off, void *page)
+{
+    uint32_t i;
+    for (i = 0; i < PAGE_SIZE; ++i) {
+        ((uint8_t *) page)[i] =
+            (off + i < _krffs_stub_size) ? _krffs_stub_base[off + i] : 0;
+    }
+    return 0;
+}
+
+static int krffs_stub_write(uint32_t off, const void *page)
+{
+    uint32_t i;
+    for (i = 0; i < PAGE_SIZE; ++i) {
+        if (off + i < _krffs_stub_size) {
+            _krffs_stub_base[off + i] = ((const uint8_t *) page)[i];
+        }
+    }
+    return 0;
+}
+
+/**
+ * Mounts KRFFS on the demand-paged window, backed by the RAM-disk module.
+ *
+ * Points the page cache at the module through the stub, then mounts KRFFS at
+ * PCWIN_BASE: `init_krffs`'s first read of the root node is the first window
+ * fault, served by the cache. Rejects a disk larger than the window. The file
+ * system code is unchanged; it just pointer-walks the window instead of the
+ * module. Returns 0 on a valid mount, -1 otherwise.
+ */
+static int init_krffs_window(uint8_t *disk_base, uint32_t disk_size)
+{
+    if (disk_size > pc_window_size()) {
+        serial_printf("KRFFS: disk size %d exceeds window %d\n",
+                      disk_size, pc_window_size());
+        return -1;
+    }
+    _krffs_stub_base = disk_base;
+    _krffs_stub_size = disk_size;
+    pc_set_backing(krffs_stub_read, krffs_stub_write, disk_size);
+    if (init_krffs((void *) PCWIN_BASE, disk_size) != 0) {
+        /* Roll the backing back so a later fault cannot read stub data for a file
+           system that never mounted. */
+        pc_set_backing(0, 0, 0);
+        _krffs_stub_base = 0;
+        _krffs_stub_size = 0;
+        return -1;
+    }
+    return 0;
+}
+
 static void run_self_tests(void)
 {
     k_puts("======= System Self-Test =======");
@@ -2310,10 +2368,23 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     serial_printf("  File system...");
     if (num_modules > 0) {
         module_info_t *ramdisk = get_ramdisk();
-        if (ramdisk && init_krffs((void *)ramdisk->start, ramdisk->size) == 0) {
+        int mounted = -1;
+
+        /* rach2.fswindow mounts KRFFS on the demand-paged cache window over the
+         * module instead of directly on the module, to exercise the disk path;
+         * the default mounts the module in place. */
+        if (ramdisk && kcmdline_has("rach2.fswindow")) {
+            mounted = init_krffs_window((uint8_t *) ramdisk->start,
+                                        ramdisk->size);
+        } else if (ramdisk) {
+            mounted = init_krffs((void *) ramdisk->start, ramdisk->size);
+        }
+
+        if (mounted == 0) {
+            const char *via = kcmdline_has("rach2.fswindow") ? " (window)" : "";
             set_fore_color(light_green);
-            k_printf(" OK (KRFFS, %d files)\n", krffs_count_files());
-            serial_printf(" OK (KRFFS, %d files)\n", krffs_count_files());
+            k_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
+            serial_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
             set_fore_color(light_grey);
         } else {
             set_fore_color(light_red);
