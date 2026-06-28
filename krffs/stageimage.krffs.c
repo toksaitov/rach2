@@ -750,10 +750,10 @@ int main(int argc, char **argv)
     char line[2048];
     uint64_t free_after;
 
-    if (argc < 3 || argv[1][0] == '-') {
+    if (argc < 3 || argv[1][0] == '-' || argv[2][0] == '-') {
         fprintf(
             stderr,
-            "Usage: %s <manifest> <image>\n",
+            "Usage: %s <manifest> <image> [--offset BYTES --size BYTES]\n",
             argc >= 1 ? argv[0] : "stageimage.krffs"
         );
 
@@ -775,9 +775,11 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    if (file_info.st_size < (off_t) (sizeof(struct krffs_node) * 2)) {
-        fprintf(stderr, "stageimage: '%s' is too small to hold a file system.\n", argv[2]);
-
+    off_t region_offset;
+    size_t region_size;
+    if (krffs_parse_region_args(
+            argc, argv, (uint64_t) file_info.st_size,
+            sizeof(struct krffs_node) * 2, &region_offset, &region_size) != 0) {
         exit_status =
             EXIT_FAILURE;
 
@@ -785,12 +787,12 @@ int main(int argc, char **argv)
     }
 
     file_system.size =
-        file_info.st_size;
+        region_size;
 
     if ((file_system.node =
              krffs_map_file(
                  file_descriptor,
-                 0,
+                 region_offset,
                  file_system.size
              )) == (void *) -1) {
         fprintf(stderr, "stageimage: cannot map '%s'.\n", argv[2]);

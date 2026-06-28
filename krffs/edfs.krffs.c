@@ -262,13 +262,11 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    if (file_info.st_size < sizeof(*file_system.node) * 2) {
-        fprintf(
-            stderr,
-            "The file at '%s' is not big enough to initialize a file system.\n",
-            path
-        );
-
+    off_t region_offset;
+    size_t region_size;
+    if (krffs_parse_region_args(
+            argc, argv, (uint64_t) file_info.st_size,
+            sizeof(*file_system.node) * 2, &region_offset, &region_size) != 0) {
         exit_status =
             EXIT_FAILURE;
 
@@ -276,7 +274,7 @@ int main(int argc, char **argv)
     }
 
     file_system.size =
-        file_info.st_size;
+        region_size;
 
     /*
         Writes to memory at `file_system.node` after a successful
@@ -286,7 +284,7 @@ int main(int argc, char **argv)
     if ((file_system.node =
              krffs_map_file(
                  file_descriptor,
-                 0,
+                 region_offset,
                  file_system.size
              )) == (void *) -1) {
         fprintf(

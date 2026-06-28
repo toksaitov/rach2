@@ -2,6 +2,7 @@
 #define KRFFS_PLATFORM_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -76,6 +77,37 @@
  * Reads the current wall-clock time with microsecond precision.
  */
 void krffs_get_time_of_day(struct timeval *time_of_day);
+
+/* The alignment a KRFFS region's byte offset must satisfy: 1 MiB. It is the
+ * coarsest mmap granularity across hosts (Windows MapViewOfFile needs 64 KiB,
+ * Unix a page) and keeps a partition both sector- and page-aligned. */
+#define KRFFS_REGION_ALIGN (1024 * 1024)
+
+/**
+ * Parse the shared `--offset BYTES` and `--size BYTES` region arguments and
+ * validate them against a backing file of `file_size` bytes.
+ *
+ * A region lets a tool target a KRFFS that lives inside a partition of a larger
+ * disk image rather than at the start of a whole file. `--offset` defaults to 0
+ * and must be a multiple of `KRFFS_REGION_ALIGN`. `--size` defaults to the rest
+ * of the file after the offset, but a nonzero `--offset` names a partition that
+ * does not extend to the end of the disk, so it requires an explicit `--size`.
+ * The region must fit in the file and be at least `min_size` bytes (the caller
+ * passes the smallest file system it can hold). A flag with no following value is
+ * an error rather than a silent default. Other arguments are ignored, so each
+ * tool keeps its own option parsing.
+ *
+ * On success returns 0 and writes `*out_offset` and `*out_size`; on a bad or out
+ * of range region returns -1 with a `krffs: detail` message on stderr.
+ */
+int krffs_parse_region_args(
+        int argc,
+        char **argv,
+        uint64_t file_size,
+        uint64_t min_size,
+        off_t *out_offset,
+        size_t *out_size
+    );
 
 /**
  * Maps a region of a file into virtual memory.

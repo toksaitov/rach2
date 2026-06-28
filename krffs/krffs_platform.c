@@ -6,7 +6,95 @@
 #include <sys/mman.h>
 #endif
 
+#include <errno.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/**
+ * Parse one `unsigned long long` from `s` in any C base; -1 on trailing junk or
+ * a value that overflows the type.
+ */
+static int krffs_parse_u64(const char *s, uint64_t *out)
+{
+    char *end;
+    unsigned long long value;
+
+    errno = 0;
+    value = strtoull(s, &end, 0);
+    if (end == s || *end != '\0' || errno != 0) {
+        return -1;
+    }
+    *out = (uint64_t) value;
+
+    return 0;
+}
+
+int krffs_parse_region_args(
+        int argc,
+        char **argv,
+        uint64_t file_size,
+        uint64_t min_size,
+        off_t *out_offset,
+        size_t *out_size
+    )
+{
+    uint64_t offset = 0;
+    uint64_t size = 0;
+    int have_size = 0;
+    int i;
+
+    for (i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--offset") == 0) {
+            if (i + 1 >= argc || krffs_parse_u64(argv[++i], &offset) != 0) {
+                fprintf(stderr, "krffs: --offset needs a numeric argument\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--size") == 0) {
+            if (i + 1 >= argc || krffs_parse_u64(argv[++i], &size) != 0) {
+                fprintf(stderr, "krffs: --size needs a numeric argument\n");
+                return -1;
+            }
+            have_size = 1;
+        }
+    }
+
+    if (offset % KRFFS_REGION_ALIGN != 0) {
+        fprintf(stderr, "krffs: --offset %llu is not %d-aligned\n",
+                (unsigned long long) offset, KRFFS_REGION_ALIGN);
+        return -1;
+    }
+    if (offset > file_size) {
+        fprintf(stderr, "krffs: --offset %llu is past the file end (%llu)\n",
+                (unsigned long long) offset, (unsigned long long) file_size);
+        return -1;
+    }
+    /* A nonzero offset means a partition, which does not extend to the end of the
+       disk, so its size must be given rather than defaulted to the rest of the
+       file. The size defaults to the rest of the file only for a whole-file FS. */
+    if (offset > 0 && !have_size) {
+        fprintf(stderr, "krffs: --offset requires an explicit --size\n");
+        return -1;
+    }
+    if (!have_size) {
+        size = file_size - offset;
+    }
+    /* file_size - offset cannot underflow: offset <= file_size above. */
+    if (size < min_size || size > file_size - offset || size > (uint64_t) SIZE_MAX) {
+        fprintf(stderr,
+                "krffs: region (offset %llu, size %llu) does not fit a %llu-byte "
+                "file system in a %llu-byte file\n",
+                (unsigned long long) offset, (unsigned long long) size,
+                (unsigned long long) min_size, (unsigned long long) file_size);
+        return -1;
+    }
+
+    *out_offset = (off_t) offset;
+    *out_size = (size_t) size;
+
+    return 0;
+}
 
 /**
  * Reads the wall-clock time with microsecond precision.
