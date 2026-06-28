@@ -1474,6 +1474,7 @@ static int krffs_disk_write(uint32_t off, const void *page)
 static int init_krffs_disk(void)
 {
     static uint8_t mbr[BLOCK_SECTOR_SIZE];
+    static uint8_t part0[BLOCK_SECTOR_SIZE];
     uint32_t start_lba = 0;
     uint32_t sector_count = 0;
     uint32_t part_bytes;
@@ -1493,20 +1494,38 @@ static int init_krffs_disk(void)
         return -1;
     }
 
-    /* Find the first KRFFS (type 0x7F) partition entry in the table. */
+    /* Find the KRFFS partition by reading each non-empty entry's first sector and
+       accepting the first that holds a real KRFFS root: the 16-bit magic, the
+       root type, and a size that is non-zero and fits the partition. Checking the
+       actual root tightens the weak 16-bit magic and works whatever the MBR type
+       byte says, so a GRUB-partitioned disk (boot partition first, KRFFS second)
+       still mounts. LBA 0 is never probed; it holds the boot code. */
     for (i = 0; i < 4; ++i) {
         uint8_t *e = mbr + 446 + i * 16;
-        if (e[4] == 0x7F) {
-            start_lba = (uint32_t) e[8] | ((uint32_t) e[9] << 8) |
-                        ((uint32_t) e[10] << 16) | ((uint32_t) e[11] << 24);
-            sector_count = (uint32_t) e[12] | ((uint32_t) e[13] << 8) |
-                           ((uint32_t) e[14] << 16) | ((uint32_t) e[15] << 24);
+        uint32_t lba = (uint32_t) e[8] | ((uint32_t) e[9] << 8) |
+                       ((uint32_t) e[10] << 16) | ((uint32_t) e[11] << 24);
+        uint32_t count = (uint32_t) e[12] | ((uint32_t) e[13] << 8) |
+                         ((uint32_t) e[14] << 16) | ((uint32_t) e[15] << 24);
+        krffs_node_t *root;
+
+        if (count == 0 || lba == 0) {
+            continue;
+        }
+        if (block0->read(block0, lba, 1, part0) != 0) {
+            continue;
+        }
+        root = (krffs_node_t *) part0;
+        if (root->magic == KRFFS_FILE_SYSTEM_MAGIC &&
+            root->type == KRFFS_ROOT_NODE && root->size != 0 &&
+            root->size <= (uint64_t) count * BLOCK_SECTOR_SIZE) {
+            start_lba = lba;
+            sector_count = count;
             found = 1;
             break;
         }
     }
     if (!found) {
-        serial_printf("KRFFS: no KRFFS partition in the MBR\n");
+        serial_printf("KRFFS: no KRFFS partition on the disk\n");
         return -1;
     }
 
@@ -2501,10 +2520,11 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         int mounted = -1;
         const char *via = "";
 
-        /* rach2.fsdisk mounts KRFFS from the real ATA disk through the cache
-         * (and needs no module); rach2.fswindow mounts the module through the
-         * cache window; the default mounts the module in place. */
-        if (kcmdline_has("rach2.fsdisk")) {
+        /* rach2.fsdisk (or rach2.root=disk) mounts KRFFS from the real ATA disk
+         * through the cache (and needs no module); rach2.fswindow mounts the
+         * module through the cache window; the default mounts the module in
+         * place. */
+        if (kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk")) {
             mounted = init_krffs_disk();
             via = " (disk)";
         } else if (num_modules > 0) {
@@ -2523,7 +2543,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             k_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
             serial_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
             set_fore_color(light_grey);
-        } else if (kcmdline_has("rach2.fsdisk") || num_modules > 0) {
+        } else if (kcmdline_has("rach2.fsdisk") ||
+                   kcmdline_has("rach2.root=disk") || num_modules > 0) {
             set_fore_color(light_red);
             k_puts(" FAIL (invalid KRFFS)");
             serial_printf(" FAIL (invalid KRFFS)\n");
