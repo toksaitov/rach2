@@ -224,10 +224,14 @@ Deliverables:
   void *drvdata; }`, returning 0 or `-EIO`, plus `extern block_device_t *block0`. A
   thin partition view whose `read`/`write` add `start_lba` and forward to the
   whole-disk device is the offset+length slice.
-* `sys/block/ata.c`: `ata_init` does IDENTIFY (capacity from words 60-61, or 100-103
-  if word 83 bit 10 is set), `ata_read`/`ata_write` program LBA28 + READ/WRITE SECTORS
-  (0x20/0x30), poll BSY/DRQ on the alt-status port (0x3F6), copy 256 words per sector
-  with `insw`/`outsw`, and a WRITE issues FLUSH CACHE (0xE7). All polled, no `sti`.
+* `sys/block/ata.c`: `ata_init` sets nIEN (the channel raises no IRQ for the poll-only
+  driver) and does IDENTIFY; capacity is the 28-bit user-addressable count in words
+  60-61, since the driver issues only LBA28 commands and so advertises exactly what
+  those can address. `ata_read`/`ata_write` program LBA28 + READ/WRITE SECTORS
+  (0x20/0x30), poll BSY then ERR/DF/DRQ (status is valid only once BSY clears) on the
+  status port, copy 256 words per sector with `insw`/`outsw`, and a WRITE issues FLUSH
+  CACHE (0xE7) with the post-write and post-flush waits checking ERR/DF. All polled, no
+  `sti`.
 * `insw`/`outsw` added beside `inw`/`outw` in `kio` (a two-instruction
   `rep insw`/`rep outsw` wrapper; no string-port primitive exists today).
 
@@ -248,13 +252,15 @@ Hard parts and mitigations:
 Dependencies: none in-kernel. Builds on `inb`/`outb`/`inw`/`outw` (`kio`), nothing
 else.
 
-Verification: add the disk to `run.sh`'s QEMU line and a `disk` command to the debug
-shell that calls `ata_read(0, 1, buf)` and hexdumps 512 bytes; the 0x55AA signature at
-offset 510 and the partition entry at 0x1BE must match `fdisk -l` of the image. Then
-`ata_write(100, ...)` + `ata_read(100, ...)` round-trips, proving WRITE + FLUSH.
-`block0->sector_count` must equal image size / 512, proving the IDENTIFY parse. Run
-this **before** `init_sched` with `current_proc == proc0` to prove the polled path
-needs no scheduler. `make verify-style`, `make verify-host`, and a module-path
+Verification: a `DISK=` option on `run.sh` attaches the disk, and a `disk` command in
+the debug shell calls `ata_read(0, 1, buf)` and hexdumps 512 bytes; the 0x55AA
+signature at offset 510 and the partition entry at 0x1BE must match `fdisk -l` of the
+image. A separate, explicit `disk write` round-trips the disk's **last** sector (past
+the partition and the boot gap, so it disturbs neither a mounted file system nor a
+future bootloader), proving WRITE + FLUSH + READ. `block0->sector_count` must equal
+image size / 512, proving the IDENTIFY parse. The debug shell runs with
+`current_proc == proc0` and no other process scheduled, so a green probe there proves
+the polled path needs no scheduler. `make verify-style`, `make verify-host`, and a module-path
 `make test` stay green (the driver is dead code until Phase 3 calls it).
 
 ### Phase 2: the kernel page cache and the disk-backed window (the hard, novel phase)

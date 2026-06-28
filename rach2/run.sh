@@ -22,6 +22,11 @@
 # RESCUE=1 boots into the kernel debug shell instead of the image's /sbin/init,
 # for developing and debugging (a normal boot runs init and never drops there):
 #   RESCUE=1 ./run.sh os-real
+#
+# DISK=<file> attaches a raw image as the primary master ATA disk (if=ide,
+# index=0), so the kernel debug shell's `disk` command can probe it:
+#   make os-real-disk
+#   DISK=../build/images/os-real.disk RESCUE=1 ./run.sh
 
 IMAGE="$1"
 AUDIO_DEVICE="${2:-speaker}"
@@ -51,6 +56,16 @@ if [ -n "$IMAGE" ]; then
     set -- -initrd "$INITRD"
 else
     set --
+fi
+
+# A real ATA disk on the primary channel: index=0,media=disk lands a plain
+# READ/WRITE SECTORS drive at 0x1F0, which the polled ATA driver speaks.
+if [ -n "$DISK" ]; then
+    if [ ! -f "$DISK" ]; then
+        echo "run: disk image '$DISK' not found; build it with 'make os-real-disk'" >&2
+        exit 1
+    fi
+    set -- "$@" -drive "file=$DISK,format=raw,if=ide,index=0,media=disk"
 fi
 
 qemu-system-i386 -cpu "$CPU" -kernel "$KERNEL" $APPEND "$@" -serial stdio $AUDIO_OPTS $NET_OPTS

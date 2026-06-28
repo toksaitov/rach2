@@ -25,6 +25,8 @@
 #include "sys/pit.h"
 #include "sys/kbd.h"
 #include "sys/mouse.h"
+#include "sys/block/block.h"
+#include "sys/block/ata.h"
 #include "sys/display/vga_text.h"
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
@@ -1483,6 +1485,8 @@ static void process_command(const char *cmd)
         k_puts("  info                - Display system information");
         serial_puts("  info                - Display system information\n");
         k_puts("  modules             - List loaded multiboot modules");
+        k_puts("  disk                - Probe the ATA disk and dump sector 0");
+        k_puts("  disk write          - Round-trip the last sector (destructive)");
         k_puts("  ls                  - List files on RAM disk");
         k_puts("  cat <file>          - Display file contents");
         k_puts("  elf <file>          - Display ELF header info");
@@ -1518,6 +1522,69 @@ static void process_command(const char *cmd)
                 module_info_t *m = get_module(i);
                 k_printf("  [%d] 0x%X - 0x%X (%d bytes)\n",
                          i, m->start, m->end, m->size);
+            }
+        }
+    } else if (str_equal(cmd, "disk")) {
+        static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
+
+        if (ata_init() != 0 || !block0) {
+            serial_printf("disk: no ATA disk on the primary channel\n");
+        } else {
+            serial_printf("disk: primary master: %d sectors, %d MiB\n",
+                          (uint32_t) block0->sector_count,
+                          (uint32_t) (block0->sector_count / 2048));
+
+            if (block0->read(block0, 0, 1, disk_sector) != 0) {
+                serial_printf("disk: read of sector 0 failed\n");
+            } else {
+                uint32_t i;
+                for (i = 0; i < BLOCK_SECTOR_SIZE; i += 16) {
+                    uint32_t j;
+                    serial_printf("%X:", i);
+                    for (j = 0; j < 16; ++j) {
+                        uint8_t b = disk_sector[i + j];
+                        serial_putc(' ');
+                        if (b < 0x10) {
+                            serial_putc('0');
+                        }
+                        serial_printf("%X", b);
+                    }
+                    serial_putc('\n');
+                }
+                serial_printf("disk: MBR signature %X%X (expect 55AA)\n",
+                              disk_sector[510], disk_sector[511]);
+            }
+        }
+    } else if (str_equal(cmd, "disk write")) {
+        static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
+        static uint8_t disk_scratch[BLOCK_SECTOR_SIZE];
+
+        if (ata_init() != 0 || !block0) {
+            serial_printf("disk: no ATA disk on the primary channel\n");
+        } else {
+            /* The last sector lies past the partition and the boot gap, so the
+               round-trip that proves WRITE + FLUSH + READ disturbs neither a
+               mounted file system nor a future bootloader. */
+            uint64_t lba = block0->sector_count - 1;
+            uint32_t i;
+
+            for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
+                disk_scratch[i] = (uint8_t) (i ^ 0x5A);
+            }
+            if (block0->write(block0, lba, 1, disk_scratch) != 0) {
+                serial_printf("disk: write of the last sector failed\n");
+            } else if (block0->read(block0, lba, 1, disk_sector) != 0) {
+                serial_printf("disk: read-back of the last sector failed\n");
+            } else {
+                int ok = 1;
+                for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
+                    if (disk_sector[i] != disk_scratch[i]) {
+                        ok = 0;
+                        break;
+                    }
+                }
+                serial_printf("disk: last-sector round-trip %s\n",
+                              ok ? "OK" : "MISMATCH");
             }
         }
     } else if (str_equal(cmd, "ls")) {
