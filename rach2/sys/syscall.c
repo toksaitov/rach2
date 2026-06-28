@@ -23,6 +23,7 @@
 #include "fs/synthfs.h"
 #include "fs/procfs.h"
 #include "mm/paging.h"
+#include "mm/pagecache.h"
 #include "mm/heap.h"
 #include "mm/usercopy.h"
 #include "mm/vm.h"
@@ -1108,11 +1109,12 @@ static int32_t sys_close(isr_params_t *params)
 /**
  * Flush a file's data to stable storage (fsync(2); also serves fdatasync).
  *
- * EBX = fd. Returns 0, or -EBADF for a bad descriptor. KRFFS lives in RAM, so a
- * write is already as durable as the medium gets: fsync is a no-op that only
- * validates the fd. dropbear writes its host key with the open/write/fsync/rename
- * idiom and treats any fsync error (including -ENOSYS) as fatal, aborting key
- * generation, so this must succeed.
+ * EBX = fd. Returns 0, or -EBADF for a bad descriptor. Writes back every dirty
+ * page of the disk-backed window via `pc_sync`; when KRFFS is the RAM module the
+ * cache is empty, so this only validates the fd. The flush is whole-cache rather
+ * than per-file, a safe superset of the contract. dropbear writes its host key
+ * with the open/write/fsync/rename idiom and treats any fsync error as fatal, so
+ * this must succeed.
  */
 static int32_t sys_fsync(isr_params_t *params)
 {
@@ -1124,6 +1126,23 @@ static int32_t sys_fsync(isr_params_t *params)
     if (!fd_get(&current_proc->fds, fd)) {
         return -EBADF;
     }
+    if (pc_sync() != 0) {
+        return -EIO;
+    }
+    return 0;
+}
+
+/**
+ * Flush all buffered file-system writes to stable storage (sync(2)).
+ *
+ * Takes no argument. Writes back every dirty page of the disk-backed window via
+ * `pc_sync` (a no-op when KRFFS is the RAM module). Like Linux's sync(2), it
+ * returns 0 even if a writeback failed; the dirty pages stay for a later retry.
+ */
+static int32_t sys_sync(isr_params_t *params)
+{
+    (void) params;
+    pc_sync();
     return 0;
 }
 
@@ -7278,6 +7297,7 @@ void init_syscall(void)
     _syscall_table[SYS_UGETRLIMIT] = sys_getrlimit;
     _syscall_table[SYS_PRLIMIT64] = sys_prlimit64;
     _syscall_table[SYS_DUP3] = sys_dup3;
+    _syscall_table[SYS_SYNC] = sys_sync;
     _syscall_table[SYS_FSYNC] = sys_fsync;
     _syscall_table[SYS_FDATASYNC] = sys_fsync;
     _syscall_table[SYS_LINK] = sys_link;

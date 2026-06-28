@@ -101,7 +101,9 @@
 #define SYS_DUP3        330
 #define SYS_PRLIMIT64   340
 
-/* Durability no-ops a host-key write needs; KRFFS is RAM, so they cannot fail. */
+/* Durability: flush the disk-backed page cache (a no-op when KRFFS is the RAM
+   module). fsync/fdatasync flush per the open fd; sync flushes everything. */
+#define SYS_SYNC        36
 #define SYS_FSYNC       118
 #define SYS_FDATASYNC   148
 /* KRFFS has no hard links; link/linkat return -EPERM (dropbear falls back). */
