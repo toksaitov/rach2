@@ -211,7 +211,14 @@ static void _load_page_dir(page_dir_t *dir)
     __asm__ __volatile__ ("mov %0, %%cr3" :: "r"(&dir->phys_page_tables));
     __asm__ __volatile__ ("mov %%cr0, %0" : "=r"(cr0));
 
-    cr0 |= 0x80000000;
+    /* Enable paging (PG, bit 31) and supervisor write-protect (WP, bit 16). WP
+     * makes a ring-0 write to a read-only page fault instead of silently
+     * succeeding; the page cache's dirty tracking depends on it, mapping a clean
+     * frame read-only so the next write re-faults and re-marks it dirty. The
+     * kernel never writes a user text or copy-on-write page through its
+     * read-only mapping (it uses the physical alias or pre-faults first), so WP
+     * changes nothing else. */
+    cr0 |= 0x80000000u | 0x00010000u;
 
     __asm__ __volatile__ ("mov %0, %%cr0" :: "r"(cr0));
 }
