@@ -63,6 +63,7 @@ MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test test-disk \
         test-image os-simple-image os-real-image os-real-disk persist-test \
+        crash-test \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
@@ -201,6 +202,13 @@ persist-test: rach2 tests krffs
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
+
+# `make crash-test`: prove the dirty-mount flag detects an unclean shutdown. A
+# crashed boot (killed after mounting) leaves the on-disk dirty bit set for
+# fsck.krffs to report; a clean halt clears it.
+crash-test: rach2 tests krffs
+	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
+	sh tools/crash_test.sh build/rach2/kernel $(DISK_TEST_IMAGE) build/krffs/fsck.krffs
 
 # Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
 # image as GRUB multiboot modules, built by grub-mkrescue in a throwaway Docker

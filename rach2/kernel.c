@@ -1428,6 +1428,26 @@ static int init_krffs_window(uint8_t *disk_base, uint32_t disk_size)
 /* The KRFFS partition on the real disk, sliced out of the whole-disk device. */
 static block_partition_t _krffs_disk_part;
 
+/* Set once KRFFS is mounted from a real disk, so the dirty-mount flag is managed
+   only on the persistent path (the RAM paths have no on-disk dirty state). */
+static int _krffs_on_disk;
+
+/**
+ * Clears the dirty-mount flag and flushes, for a clean shutdown.
+ *
+ * The kernel sets the root node's dirty bit on a disk mount and only this clears
+ * it, write-through, so a crash that never reaches here leaves the bit set on the
+ * device for `fsck.krffs` to find. A no-op unless KRFFS is mounted from a disk.
+ */
+static void krffs_disk_mark_clean(void)
+{
+    if (_krffs_on_disk) {
+        krffs_node_t *root = (krffs_node_t *) PCWIN_BASE;
+        root->mode &= (uint16_t) ~KRFFS_MODE_DIRTY;
+        pc_sync();
+    }
+}
+
 static int krffs_disk_read(uint32_t off, void *page)
 {
     return _krffs_disk_part.device.read(
@@ -1519,6 +1539,19 @@ static int init_krffs_disk(void)
         pc_set_backing(0, 0, 0);
         return -1;
     }
+
+    /* Observe the previous mount state, then mark this mount dirty and write the
+       flag straight through to the disk (pc_sync), so a crash before the clean
+       shutdown clears it leaves the evidence on the device for fsck.krffs. */
+    {
+        krffs_node_t *root = (krffs_node_t *) PCWIN_BASE;
+        if (root->mode & KRFFS_MODE_DIRTY) {
+            serial_printf("KRFFS: not cleanly unmounted last time; run fsck.krffs\n");
+        }
+        root->mode |= KRFFS_MODE_DIRTY;
+        pc_sync();
+    }
+    _krffs_on_disk = 1;
     return 0;
 }
 
@@ -2120,6 +2153,7 @@ static void process_command(const char *cmd)
         k_puts("Triggering page fault at 0xA0000000...");
         *bad_ptr = 0xDEADBEEF;
     } else if (str_equal(cmd, "halt")) {
+        krffs_disk_mark_clean();
         k_puts("Halting system. Goodbye!");
         __asm__ __volatile__("cli; hlt");
     } else if (str_equal(cmd, "usermode")) {
