@@ -1,4 +1,5 @@
 #include "paging.h"
+#include "pagecache.h"
 #include "frame.h"
 #include "usercopy.h"
 #include "../serial.h"
@@ -413,6 +414,23 @@ static void _page_fault_handler(isr_params_t *params)
         }
     }
 
+    /* Page cache: a fault inside the demand-paged disk window is serviced by
+     * polling the backing sectors into a cache frame and mapping it. Keyed on the
+     * faulting address, not the CPU mode: the window is a kernel address the file
+     * system touches, so the fault arrives in supervisor mode and would otherwise
+     * hit the kernel-fault panic below. The poll-only fill is safe with IF=0. A
+     * fault past the backed size, or one the fill cannot serve, is a real bug. */
+    if (fault_address >= PCWIN_BASE &&
+        fault_address < PCWIN_BASE + pc_window_size()) {
+        if (!current_proc) {
+            k_panic("pagecache: window fault with no current process");
+        }
+        if (pc_fault(fault_address, write)) {
+            return;
+        }
+        k_panic("pagecache: unrecoverable disk fault");
+    }
+
     /* Unrecoverable. A fault taken in user mode is the process's own bug: kill
      * just that process and survive; terminate_current_process schedules the
      * parent to collect the zombie, or panics if the dier was a real init. */
@@ -479,6 +497,117 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     );
 
     return phys_addr;
+}
+
+/**
+ * Reserve one free physical frame for kernel-internal use and return its
+ * physical address, or 0 if none is free.
+ *
+ * The frame is marked used at reference count 1 and never carries the user bit,
+ * so `alloc_user_page` and `free_user_pages` skip it; the caller owns it for the
+ * life of the kernel. The scan runs from the top of the pool down, away from the
+ * bottom-up user-page scan, so a kernel reservation and user pages rarely
+ * contend. The returned address is also the frame's identity-mapped virtual
+ * address, since the kernel identity-maps the whole pool.
+ */
+uintptr_t alloc_kernel_frame(void)
+{
+    uintptr_t frame = _frames_number;
+
+    while (frame-- > _user_frames_start) {
+        if (_frames[frame] == 0) {
+            _frames[frame] = 1;
+            return frame * PAGE_SIZE;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * Pre-allocate every page table spanning [`va_start`, `va_start` + `size`) in
+ * the kernel directory, leaving all of their PTEs not-present.
+ *
+ * `clone_page_directory` copies the kernel PDEs by value into each new process,
+ * so a window page table first installed after a fork would be invisible to that
+ * process. Installing them all up front, before the first fork, lets
+ * `map_kernel_frame` later write a leaf PTE into a table every directory already
+ * shares. `va_start` must be 4 MiB-aligned. Returns 0, or -1 if a page table
+ * could not be allocated or the range runs past the address space.
+ */
+int premap_kernel_window(uintptr_t va_start, size_t size)
+{
+    uintptr_t addr;
+    uintptr_t end = va_start + size;
+
+    for (addr = va_start; addr < end; addr += PAGE_SIZE * 1024) {
+        uintptr_t table_index = (addr / PAGE_SIZE) / 1024;
+        page_table_t *table;
+
+        if (table_index >= 1024) {
+            return -1;
+        }
+        if (!_kernel_dir->logical_page_tables[table_index]) {
+            table = alloc_page_table();
+            if (!table) {
+                return -1;
+            }
+            _kernel_dir->logical_page_tables[table_index] = table;
+            _kernel_dir->phys_page_tables[table_index] = (uintptr_t)table | 0x3;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * Map physical frame `phys` at the page-aligned kernel virtual address `va` with
+ * a supervisor-only leaf PTE: present, no user bit, writable iff `writable`.
+ *
+ * The page table for `va` must already exist (see `premap_kernel_window`). The
+ * page cache maps a frame read-only on a read fault so the first write faults
+ * again and can be recorded dirty, and read-write on a write fault. No-op if the
+ * table is somehow absent.
+ */
+void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
+{
+    uintptr_t page_num = va / PAGE_SIZE;
+    uintptr_t table_index = page_num / 1024;
+    uintptr_t page_index = page_num % 1024;
+    page_table_t *table;
+
+    if (table_index >= 1024) {
+        return;
+    }
+    table = _kernel_dir->logical_page_tables[table_index];
+    if (!table) {
+        return;
+    }
+    table->pages[page_index] =
+        (phys & ~(PAGE_SIZE - 1)) | (writable ? 0x3u : 0x1u);
+    paging_flush_tlb(va);
+}
+
+/**
+ * Clear the leaf PTE for the page-aligned kernel virtual address `va` and flush
+ * its TLB entry. No-op if the page table is absent. Used by page-cache eviction.
+ */
+void unmap_kernel_frame(uintptr_t va)
+{
+    uintptr_t page_num = va / PAGE_SIZE;
+    uintptr_t table_index = page_num / 1024;
+    uintptr_t page_index = page_num % 1024;
+    page_table_t *table;
+
+    if (table_index >= 1024) {
+        return;
+    }
+    table = _kernel_dir->logical_page_tables[table_index];
+    if (!table) {
+        return;
+    }
+    table->pages[page_index] = 0;
+    paging_flush_tlb(va);
 }
 
 void paging_set_user(uintptr_t addr, bool user)

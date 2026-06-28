@@ -12,6 +12,7 @@
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
 #include "sys/mm/frame.h"
+#include "sys/mm/pagecache.h"
 #include "sys/proc/process.h"
 #include "sys/tty/tty.h"
 #include "sys/tty/pty.h"
@@ -99,6 +100,7 @@ static void test_preempt(void);
 static bool test_isolation(void);
 static bool test_krffs_write(void);
 static bool test_elf(void);
+static bool test_pagecache(void);
 static void exec_program(int argc, char *argv[]);
 
 /* Top of the user stack; it grows down from here. */
@@ -1280,6 +1282,91 @@ static void boot_init_process(void)
     }
 }
 
+/* A small RAM stand-in disk for the page-cache self-test. */
+#define PC_TEST_PAGES 16u
+static uint8_t pc_test_disk[PC_TEST_PAGES][PAGE_SIZE];
+
+static int pc_test_backing_read(uint32_t off, void *page)
+{
+    uint32_t p = off / PAGE_SIZE;
+    if (p >= PC_TEST_PAGES) {
+        return -1;
+    }
+    k_memcpy(page, pc_test_disk[p], PAGE_SIZE);
+    return 0;
+}
+
+static int pc_test_backing_write(uint32_t off, const void *page)
+{
+    uint32_t p = off / PAGE_SIZE;
+    if (p >= PC_TEST_PAGES) {
+        return -1;
+    }
+    k_memcpy(pc_test_disk[p], page, PAGE_SIZE);
+    return 0;
+}
+
+/**
+ * Exercises the page cache over a RAM stub through the real window and fault
+ * handler: reads every stub page back, writes a distinct marker to each, flushes,
+ * and confirms each marker survives a real fault, eviction, writeback, and
+ * re-read. A capacity of four frames forces eviction; a misaligned store crosses
+ * a page boundary to fault two adjacent pages. Prints the VMPROBE token, then
+ * restores the cache so the default module path never faults the window.
+ */
+static bool test_pagecache(void)
+{
+    volatile uint8_t *win = (volatile uint8_t *) PCWIN_BASE;
+    uint32_t i;
+    bool ok = true;
+
+    /* Skip when the window is too small for the probe, or already backs a live
+       file system (driving the stub through it would clobber that mount). */
+    if (pc_window_size() < PC_TEST_PAGES * PAGE_SIZE || pc_has_backing()) {
+        serial_printf("VMPROBE PAGECACHE OK n=0 evict=0 wb=0 (skipped)\n");
+        return true;
+    }
+
+    for (i = 0; i < PC_TEST_PAGES; ++i) {
+        k_memset(pc_test_disk[i], 0, PAGE_SIZE);
+        pc_test_disk[i][0] = (uint8_t) i;
+    }
+
+    pc_set_backing(pc_test_backing_read, pc_test_backing_write,
+                   PC_TEST_PAGES * PAGE_SIZE);
+    pc_set_capacity(4);
+
+    for (i = 0; i < PC_TEST_PAGES; ++i) {
+        if (win[i * PAGE_SIZE] != (uint8_t) i) {
+            ok = false;
+        }
+    }
+    for (i = 0; i < PC_TEST_PAGES; ++i) {
+        win[i * PAGE_SIZE] = (uint8_t) (0x80u + i);
+    }
+    pc_sync();
+    for (i = 0; i < PC_TEST_PAGES; ++i) {
+        if (win[i * PAGE_SIZE] != (uint8_t) (0x80u + i)) {
+            ok = false;
+        }
+    }
+
+    /* A misaligned store across the page-0/page-1 boundary faults both pages. */
+    *(volatile uint32_t *) (win + PAGE_SIZE - 2) = 0x44443333u;
+    pc_sync();
+    if (win[PAGE_SIZE - 1] != 0x33u || win[PAGE_SIZE] != 0x44u) {
+        ok = false;
+    }
+
+    serial_printf("VMPROBE PAGECACHE %s n=%d evict=%d wb=%d\n",
+                  ok ? "OK" : "FAIL", (int) pc_stat_reads(),
+                  (int) pc_stat_evictions(), (int) pc_stat_writebacks());
+
+    pc_set_backing(0, 0, 0);
+    pc_set_capacity(PC_SLOTS);
+    return ok;
+}
+
 static void run_self_tests(void)
 {
     k_puts("======= System Self-Test =======");
@@ -1467,6 +1554,19 @@ static void run_self_tests(void)
         }
         set_fore_color(light_grey);
     }
+
+    k_printf("  Page cache:         ");
+    serial_printf("  Page cache:         ");
+    if (test_pagecache()) {
+        set_fore_color(light_green);
+        k_puts("[PASS]");
+        serial_printf("[PASS]\n");
+    } else {
+        set_fore_color(light_red);
+        k_puts("[FAIL]");
+        serial_printf("[FAIL]\n");
+    }
+    set_fore_color(light_grey);
 
     test_display();
 
@@ -2070,6 +2170,16 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     /* Size the physical frame pool from the multiboot memory map, capped to the
      * direct-mapped window (frame_usable_count). */
     init_paging(frame_usable_count(info));
+    set_fore_color(light_green);
+    k_puts(" OK");
+    serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  Page cache...");
+    serial_printf("  Page cache...");
+    /* Reserve the cache frames and pre-map the disk window in the kernel
+     * directory, before the first fork copies the kernel PDEs. */
+    init_pagecache();
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");

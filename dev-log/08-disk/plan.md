@@ -286,9 +286,11 @@ Sub-steps, in order:
   at init out of the `_frames[]` pool (marked used, never `U`-bit, so
   `alloc_user_page` and `free_user_pages` never touch them), so a cold-cache fault
   always has a frame and the handler never panics on transient memory pressure. Size
-  `PC_SLOTS` small and fixed (e.g. 1024 = 4 MiB) so user pages, page tables, and the
-  cache coexist under the 32 MB pool. This is the fix for the OOM-to-panic hole: the
-  resident cache is a fixed reservation, not a borrow that can be starved.
+  `PC_SLOTS` small and fixed (256 = 1 MiB) so user pages, page tables, and the cache
+  coexist under the 32 MB pool with room for the os-real capstone, even though the
+  reservation stands in the inert module path too. This is the fix for the
+  OOM-to-panic hole: the resident cache is a fixed reservation, not a borrow that can
+  be starved.
 * **2c. The cache table and lookup.** `pc_entry { uint32_t disk_off; uintptr_t phys;
   uint8_t valid, dirty, accessed, pinned; }`, a fixed `pc_slots[PC_SLOTS]`, and a
   clock hand. One device, so the key is `disk_off`; an open-addressed hash on

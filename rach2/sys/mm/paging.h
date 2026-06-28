@@ -158,6 +158,25 @@ void free_page_directory(page_dir_t *dir);
 /** Identity-map an MMIO region; returns its virtual address (== physical), or 0. */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
 
+/** Reserve one free physical frame for kernel use (never user); 0 if none. */
+uintptr_t alloc_kernel_frame(void);
+
+/*
+ * Pre-allocate the kernel page tables spanning [va_start, va_start+size) with
+ * not-present PTEs, before the first fork copies the kernel PDEs. va_start must
+ * be 4 MiB-aligned. Returns 0, or -1 on allocation failure or range overflow.
+ */
+int premap_kernel_window(uintptr_t va_start, size_t size);
+
+/*
+ * Map physical frame 'phys' at page-aligned kernel VA 'va' (supervisor-only,
+ * present, writable iff 'writable'); the page table must already exist.
+ */
+void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable);
+
+/** Clear the leaf PTE for kernel VA 'va' and flush its TLB entry. */
+void unmap_kernel_frame(uintptr_t va);
+
 /*
  * Kernel page directory (shared by all processes for kernel mappings)
  */
