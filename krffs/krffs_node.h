@@ -28,11 +28,13 @@ enum krffs_node_type {
 /**
  * Reserved bit in the root node's `mode` that flags an unclean mount.
  *
- * The kernel sets it (write-through) when it mounts the file system for writing
- * and clears it on a clean sync or unmount, so a set bit found at mount time, or
- * by `fsck.krffs`, means the file system was not unmounted cleanly. It lives in
- * the root node's `mode` at bit `0004000`, which sits above the `0777`
- * permission bits the kernel keeps and below the `0170000` file-type field that
+ * The kernel sets it (write-through) when it mounts a disk file system for
+ * writing. A normal boot has no clean-unmount path (init runs forever and
+ * power-off is external), so it is cleared only by the debug-shell `halt` or
+ * offline by `fsck.krffs`; a normal boot leaves it set across power-off, which
+ * `fsck.krffs` reads as a file system that may not have flushed. It lives in the
+ * root node's `mode` at bit `0004000`, which sits above the `0777` permission
+ * bits the kernel keeps and below the `0170000` file-type field that
  * `KRFFS_IS_DIR` tests, so no reader's masked comparison of `mode` ever sees it.
  */
 #define KRFFS_MODE_DIRTY 0004000u

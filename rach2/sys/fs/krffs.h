@@ -35,10 +35,14 @@
 #define KRFFS_S_IFDIR 0040000u  /* directory */
 #define KRFFS_S_IFREG 0100000u  /* regular file */
 
-/* Reserved bit in the root node's mode flagging an unclean mount. Set
- * write-through when the file system is mounted for writing, cleared on a clean
- * sync or unmount. It sits above the 0777 perms the kernel keeps and below the
- * 0170000 type field KRFFS_IS_DIR tests, so no masked mode comparison sees it. */
+/* Reserved bit in the root node's mode flagging a possibly-unclean mount. Set
+ * write-through when a disk file system is mounted for writing. A normal boot has
+ * no clean-unmount path (init runs forever and power-off is external), so the bit
+ * is cleared only by the debug-shell `halt` or offline by `fsck.krffs`; a normal
+ * boot therefore leaves it set across power-off, which fsck reads as a mount that
+ * may not have flushed. `sync` flushes the cache but does not clear it. It sits
+ * above the 0777 perms the kernel keeps and below the 0170000 type field
+ * KRFFS_IS_DIR tests, so no masked mode comparison sees it. */
 #define KRFFS_MODE_DIRTY 0004000u
 #define KRFFS_ROOT_ID 0u        /* logical id of the root directory (host nodes zero parent_id) */
 #define KRFFS_PATH_MAX_DEPTH 64 /* max directory nesting krffs_node_path reconstructs */

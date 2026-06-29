@@ -1441,8 +1441,10 @@ static int _krffs_on_disk;
  * Clears the dirty-mount flag and flushes, for a clean shutdown.
  *
  * The kernel sets the root node's dirty bit on a disk mount and only this clears
- * it, write-through, so a crash that never reaches here leaves the bit set on the
- * device for `fsck.krffs` to find. A no-op unless KRFFS is mounted from a disk.
+ * it, write-through. The sole caller is the debug-shell `halt`, so a normal
+ * `/sbin/init` boot (which runs forever and is powered off externally) never
+ * reaches here and leaves the bit set on the device, the same as a crash, for
+ * `fsck.krffs` to find. A no-op unless KRFFS is mounted from a disk.
  */
 static void krffs_disk_mark_clean(void)
 {
