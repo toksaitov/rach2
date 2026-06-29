@@ -12,17 +12,20 @@
  * bit. See `sys/block/Readme.md` for the rationale and the polled-vs-IRQ-vs-async
  * trade-off.
  *
- * `ahci_init` finds and maps the HBA, takes ownership, and brings up the first
- * present port's command engine. A later phase publishes `block0`.
+ * `ahci_init` finds and maps the HBA, takes ownership, brings up the first
+ * present port's command engine, sizes the disk with IDENTIFY, and publishes it
+ * as `block0`. `block_probe` calls it when the `rach2.disk=ahci` boot flag is
+ * set; otherwise the ATA driver wins `block0`.
  */
 
 /**
- * Discover the first AHCI HBA, map its register block (ABAR), and bring up the
- * first present port for polled command issue.
+ * Discover the first AHCI HBA, bring up its first present port, and publish the
+ * disk as `block0` for the polled read/write path.
  *
- * Returns 0 when an AHCI controller answered, its ABAR is mapped, and a port
- * with a device came up, or -1 otherwise. Polled and IRQ-free, so it is safe to
- * call before the scheduler runs.
+ * Maps the register block (ABAR), takes ownership, starts the port engine,
+ * sizes the device with IDENTIFY, and points `block0` at the AHCI backend.
+ * Returns 0 when a disk came up and `block0` is set, or -1 otherwise. Polled and
+ * IRQ-free, so it is safe to call before the scheduler runs.
  */
 int ahci_init(void);
 

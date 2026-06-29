@@ -1,6 +1,7 @@
 # Milestone 10: AHCI, the modern SATA half of the block interface
 
-Status: draft.
+Status: complete. The driver, the probe seam, the test targets, and the
+capstones over AHCI all landed; see `Readme.md` for the build record.
 
 ## The goal
 
