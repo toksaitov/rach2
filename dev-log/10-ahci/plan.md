@@ -37,7 +37,7 @@ The two ways out:
 
 Recommendation: keep the IF=0 polled-fault model unchanged and drive AHCI by polled `PxCI`/`PxIS`/`PxTFD` completion. Trade-off owned and not hidden: a cache miss stalls the whole machine for the duration of one 4 KiB transfer (the HBA's DMA, not 256 `insw` per sector as PIO did, so AHCI is actually faster on the stall), the bounded watchdog returns `-EIO` on a wedged port rather than hanging, and the fault handler then panics fail-closed exactly as it does for ATA today. This supersedes `08-disk/plan.md:530-531`, whose deferral reasoning ("AHCI needs the completion IRQ the fault cannot service") is inverted by the polled-completion realization: the HBA does not need its IRQ serviced if the CPU polls the same completion bit.
 
-Confirm this choice before code. The phases below assume polled completion.
+This choice is confirmed. The phases below build the polled path, and Phase 6 records the decision and the polled-vs-IRQ-vs-async trade-off in a durable place a future kernel contributor would consult (a new `sys/block/Readme.md` and the `ahci.c` file header), so weighing IRQ completion later starts from the analysis rather than rediscovering it.
 
 ## The phases, and why they are ordered this way
 
@@ -161,6 +161,7 @@ Work:
 * The SSH capstone (`ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost`) and Doom, run with the root FS mounted from the AHCI disk, to prove the page-cache window and KRFFS work under real userland load over AHCI.
 * GRUB boot: the BIOS/GRUB stage uses INT13 and is unrelated to the in-kernel block driver. SeaBIOS can boot from ich9-ahci, but `mkdisk_grub.sh`/`run_from_disk.sh` hardcode `if=ide` and the GRUB chain is orthogonal. Decide: either keep the boot disk on legacy IDE (GRUB + BIOS) and attach the AHCI disk as the post-boot KRFFS data disk, or prove a full ich9-ahci BIOS boot. Recommend the former for the milestone (smaller, the kernel block driver is what is under test), and document it.
 * `crash-test` coverage of AHCI is optional this milestone; if wanted, `crash_test.sh`'s inline `qemu_disk()` (`crash_test.sh:37-41`) grows an AHCI variant.
+* Documentation of the design choices, for future reference. Add `sys/block/Readme.md` (the block layer has no Readme yet, though CLAUDE.md asks for one per component) covering the block-device interface and its two drivers (ATA PIO and AHCI behind one `block0`, the SB16-then-HDA parallel), and recording the polled-completion decision in full: why the I/O path polls (the IF=0 page-fault model that forbids sleeping), the polled-vs-IRQ-vs-async trade-off, and that IRQ-driven completion is a deliberate deferral, not an oversight, because it would force the fault path to become sleepable and KRFFS to take a real lock. The `ahci.c` file header carries the one-paragraph why-polled rationale at the point of use, and the retired milestone `Readme.md` records the decision too. This is the appropriate home so a future contributor weighing the async path finds the reasoning where the driver lives, not only in this plan.
 
 Hard parts: the GRUB/BIOS-vs-AHCI boot path (the open question every storage map raises). Mitigation: scope GRUB boot to legacy IDE, AHCI to the in-kernel-driven data/root disk reached via `-kernel`/harness, and state it.
 
@@ -184,7 +185,7 @@ Substantial work gets a harsh independent Codex review with every finding fixed 
 
 ## What stays deferred
 
-* IRQ-driven completion. If polled is confirmed (recommended), the completion IRQ + `wq_wait_event` sleeping path stays out; it would force the IF=0 fault model to change.
+* IRQ-driven completion. Polled is confirmed, so the completion IRQ plus the `wq_wait_event` sleeping path stays out. It would force the page-fault path to become sleepable and KRFFS to take a real FS lock (the fault never yields today, so metadata mutations are atomic for free, and legacy PCI IRQ delivery here is unreliable, which is why even the HDA audio driver polls). That is a separate, larger effort, essentially "make the kernel's disk I/O asynchronous", best done as its own milestone after a VFS/locking layer rather than smuggled into the driver bring-up. The trade-off is documented in `sys/block/Readme.md` (Phase 6) for whoever picks it up.
 * NCQ. One command slot, polled, is all the page-cache fault path issues.
 * Hot-plug and port multipliers. Single boot/data disk, first-present-port only.
 * ATAPI. The ATA driver already refuses packet signatures; AHCI scopes to disks.
