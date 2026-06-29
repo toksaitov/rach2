@@ -1821,7 +1821,7 @@ static void process_command(const char *cmd)
         k_puts("  isolate             - Test memory isolation");
         k_puts("  usermode            - Test ring 3 execution");
         k_puts("  audio ...           - Audio tests, routing, and HDA diagnostics");
-        k_puts("  ahci                - Probe the AHCI/SATA HBA and dump its registers");
+        k_puts("  ahci                - Probe the AHCI/SATA HBA, dump registers, read LBA 0");
         k_puts("  netping             - Ping the gateway (10.0.2.2)");
         k_puts("  netbad              - Ping an unreachable host (timeout demo)");
         k_puts("  fault               - Trigger page fault (panic)");
@@ -1912,6 +1912,7 @@ static void process_command(const char *cmd)
             serial_printf("ahci: no AHCI HBA on the PCI bus\n");
         } else {
             ahci_dump();
+            ahci_selftest();
         }
     } else if (str_equal(cmd, "ls")) {
         if (!krffs_fs) {

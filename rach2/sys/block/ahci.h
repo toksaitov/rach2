@@ -12,21 +12,27 @@
  * bit. See `sys/block/Readme.md` for the rationale and the polled-vs-IRQ-vs-async
  * trade-off.
  *
- * This phase is discovery only: it finds and maps the HBA and dumps its
- * registers. Later phases bring up a port, issue polled DMA, and publish
- * `block0`.
+ * `ahci_init` finds and maps the HBA, takes ownership, and brings up the first
+ * present port's command engine. A later phase publishes `block0`.
  */
 
 /**
- * Discover the first AHCI HBA on the PCI bus and map its register block (ABAR).
+ * Discover the first AHCI HBA, map its register block (ABAR), and bring up the
+ * first present port for polled command issue.
  *
- * Returns 0 when an AHCI controller answered and its ABAR is mapped, or -1 when
- * none is present. Polled and IRQ-free, so it is safe to call before the
- * scheduler runs.
+ * Returns 0 when an AHCI controller answered, its ABAR is mapped, and a port
+ * with a device came up, or -1 otherwise. Polled and IRQ-free, so it is safe to
+ * call before the scheduler runs.
  */
 int ahci_init(void);
 
 /** Dump the discovered HBA's global and per-port registers to serial. */
 void ahci_dump(void);
+
+/**
+ * Self-test the polled path: IDENTIFY the device, then read LBA 0 and report its
+ * MBR signature. Requires a prior successful `ahci_init`.
+ */
+void ahci_selftest(void);
 
 #endif
