@@ -3407,6 +3407,17 @@ static int32_t sys_execve(isr_params_t *params)
         params->eip = entry_point;
         params->user_esp = user_esp;
 
+        /* SysV i386 process entry gives argc/argv on the stack and %edx as an
+         * atexit hook or zero. %ebp marks the outermost frame. Clear the GP
+         * registers inherited across exec so startup code cannot read stale
+         * state from the old image. */
+        params->ebp = 0;
+        params->edx = 0;
+        params->ebx = 0;
+        params->ecx = 0;
+        params->esi = 0;
+        params->edi = 0;
+
         /* Reset thread-local storage for the new image. exec replaces the
          * program in place, so the trapframe still holds the old program's
          * segment selectors (its %gs may be the 0x33 TLS selector) and the PCB
