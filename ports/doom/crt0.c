@@ -1140,24 +1140,27 @@ unsigned long long __umoddi3(unsigned long long a, unsigned long long b)
 }
 
 /*
- * _start - ELF entry point
+ * _start - ELF entry point.
+ *
+ * The SysV i386 ABI hands control here with argc at 0(%esp) and the argv vector
+ * at 4(%esp); %ebp is undefined. This is raw assembly because a C function would
+ * run a prologue that moves %esp before any statement could read the arguments.
+ * The previous version read them through %ebp and survived only when the %ebp
+ * left over from the preceding exec happened to address mapped memory; the
+ * kernel does not reset it, and Doom is built -fomit-frame-pointer, so _start
+ * never established it.
  */
-void _start(void)
-{
-    int argc;
-    char **argv;
-    int ret;
-
-    __asm__ __volatile__ (
-        "movl 4(%%ebp), %0"
-        : "=r"(argc)
-    );
-
-    __asm__ __volatile__ (
-        "leal 8(%%ebp), %0"
-        : "=r"(argv)
-    );
-
-    ret = main(argc, argv);
-    _exit(ret);
-}
+__asm__(
+    ".text\n\t"
+    ".globl _start\n"
+    "_start:\n\t"
+    "xorl %ebp, %ebp\n\t"      /* mark the outermost stack frame (ABI) */
+    "movl (%esp), %eax\n\t"    /* argc */
+    "leal 4(%esp), %edx\n\t"   /* argv */
+    "andl $-16, %esp\n\t"      /* keep the entry stack 16-byte aligned */
+    "pushl %edx\n\t"           /* main's second argument: argv */
+    "pushl %eax\n\t"           /* main's first argument: argc */
+    "call main\n\t"
+    "pushl %eax\n\t"           /* exit status from main */
+    "call _exit\n"
+);
