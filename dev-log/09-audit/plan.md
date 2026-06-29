@@ -1,6 +1,7 @@
 # Milestone 9: the post-disk audit
 
-Status: draft.
+Status: complete. All ten phases executed and gated; see `Readme.md` for the
+milestone record.
 
 ## The goal
 
