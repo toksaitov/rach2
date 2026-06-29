@@ -294,11 +294,12 @@ static void kill_foreground_process(void)
  * scancode ring before any early return. Tracks the 0xE0 extended prefix and
  * the shift/ctrl modifier keys, swallows key-release events, and intercepts
  * Ctrl+C to signal the foreground group. A live keystroke routes one of three
- * ways: to the tty line discipline when a user process waits on the console, to
- * the shell's command buffer when the debug shell is active, or to scrollback
- * navigation for the extended arrow/page keys. Runs in interrupt context with
- * an arbitrary process's page directory loaded, so it switches to the kernel
- * directory around any access to kernel data and restores CR3 on exit.
+ * ways: to the tty line discipline when a user process waits on the console or
+ * a session owns it, to the shell's command buffer when the debug shell is
+ * active, or to scrollback navigation for the extended arrow/page keys. Runs in
+ * interrupt context with an arbitrary process's page directory loaded, so it
+ * switches to the kernel directory around any access to kernel data and restores
+ * CR3 on exit.
  */
 static void keyboard_handler(isr_params_t *params)
 {
@@ -387,16 +388,20 @@ static void keyboard_handler(isr_params_t *params)
 
     c = _kbd_shift ? EN_us_shift[scancode & 0x7F] : EN_us[scancode & 0x7F];
 
-    if (wq_active(&console_tty.input_wq)) {
+    if (wq_active(&console_tty.input_wq) || console_tty.sid != 0) {
         /*
-         * A user process waits on the console (a blocked reader or a poller):
-         * cook the keystroke through the tty line discipline, which echoes it
-         * and wakes every waiter, so pollers and a second reader are not missed
-         * the way the single-reader stdin_waiting_proc flag would drop them. The
-         * PS/2 keyboard sends '\b' for Backspace; map it to the discipline's
-         * ERASE (DEL), and turn Ctrl+letter into its control byte so line
-         * editing (^U/^W) and EOF (^D) reach the discipline like a real
-         * terminal. Ctrl+C is intercepted earlier.
+         * A session owns the console: feed the keystroke to the line discipline
+         * whether or not a reader is parked. tty_input_char queues the byte,
+         * echoes it, and wakes any waiter; with nobody parked the wake is a
+         * no-op and the byte waits as type-ahead for the next read, the way the
+         * serial drain (console_pump_irq) queues input that arrives un-parked.
+         * Without the sid arm a keystroke is lost whenever no reader sits on the
+         * console, as when busybox ash waits at its prompt, so the QEMU-window
+         * keyboard goes dead while the serial console still works. The PS/2
+         * keyboard sends '\b' for Backspace; map it to the discipline's ERASE
+         * (DEL), and turn Ctrl+letter into its control byte so line editing
+         * (^U/^W) and EOF (^D) reach the discipline like a real terminal. Ctrl+C
+         * is intercepted earlier.
          */
         if (c != 0) {
             unsigned char tc = (unsigned char)c;
