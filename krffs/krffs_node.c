@@ -126,10 +126,14 @@ struct krffs_node *krffs_wrap_node_position(
  *
  * The root carries the reserved root name and the djb2 hash of that name as its
  * `id`, the root mode, and the owning uid and gid (zero on Windows, the
- * effective ids of the host process otherwise). All three timestamps are set to
- * the current time, `data_size` is cleared, and `size` and `previous_node_size`
- * place the node in the ring. Unlike the other initializers this one does not
- * flush; the caller syncs the mapping. Returns `node`.
+ * effective ids of the host process otherwise). `parent_id` is stamped to the
+ * reserved root id (0): the kernel resolves ".." from the root by reading this
+ * field (krffs.c), so it must be zero rather than left to whatever the backing
+ * held, which a forced re-mkfs over a non-zeroed file would otherwise leave
+ * stale. All three timestamps are set to the current time, `data_size` is
+ * cleared, and `size` and `previous_node_size` place the node in the ring.
+ * Unlike the other initializers this one does not flush; the caller syncs the
+ * mapping. Returns `node`.
  */
 struct krffs_node *krffs_initialize_root_node(
                        struct krffs_node *node,
@@ -184,6 +188,8 @@ struct krffs_node *krffs_initialize_root_node(
         previous_node_size;
     node->data_size =
         0;
+    node->parent_id =
+        0; /* reserved root id; the kernel reads it to resolve ".." from root */
 
     return node;
 }
