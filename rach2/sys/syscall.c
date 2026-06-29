@@ -1310,12 +1310,14 @@ static int32_t sys_read(isr_params_t *params)
 
         /*
          * Park on console_tty until a line (cooked) or VMIN bytes (raw) arrive.
-         * stdin_waiting_proc tells the keyboard IRQ a user process owns the
-         * console, so keystrokes are cooked into console_tty (which wakes us)
-         * rather than the kernel shell; tty_read drains the serial port itself.
-         * The discipline echoes, edits, and recognizes ISIG, so Ctrl-C on the
-         * console now arrives as a posted SIGINT, and a pending signal unwinds
-         * the wait with -EINTR.
+         * Parking marks input_wq active, and once a session owns the console its
+         * sid is nonzero; either condition tells the keyboard IRQ to cook
+         * keystrokes into console_tty rather than the kernel shell, so the byte
+         * wakes us (or waits as type-ahead). stdin_waiting_proc, set across the
+         * read below, only suppresses the scrollback hotkeys while we are parked;
+         * tty_read drains the serial port itself. The discipline echoes, edits,
+         * and recognizes ISIG, so Ctrl-C on the console now arrives as a posted
+         * SIGINT, and a pending signal unwinds the wait with -EINTR.
          */
         /* A SESSION LEADER reading the console with no controlling terminal claims
          * it as its SOLE ctty (its group becomes the foreground, and any pty it held

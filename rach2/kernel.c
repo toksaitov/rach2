@@ -395,6 +395,10 @@ static void keyboard_handler(isr_params_t *params)
          * echoes it, and wakes any waiter; with nobody parked the wake is a
          * no-op and the byte waits as type-ahead for the next read, the way the
          * serial drain (console_pump_irq) queues input that arrives un-parked.
+         * Unlike that drain, which suppresses echo (null_sink) to keep
+         * serial_putc's busy-wait out of the serial RX IRQ, this echoes through
+         * the sink here: a keypress is one byte (a single line edit at worst, ^U
+         * erasing a line), not a UART-driven burst, so the in-IRQ wait is bounded.
          * Without the sid arm a keystroke is lost whenever no reader sits on the
          * console, as when busybox ash waits at its prompt, so the QEMU-window
          * keyboard goes dead while the serial console still works. The PS/2

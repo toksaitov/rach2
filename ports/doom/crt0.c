@@ -1146,9 +1146,9 @@ unsigned long long __umoddi3(unsigned long long a, unsigned long long b)
  * at 4(%esp); %ebp is undefined. This is raw assembly because a C function would
  * run a prologue that moves %esp before any statement could read the arguments.
  * The previous version read them through %ebp and survived only when the %ebp
- * left over from the preceding exec happened to address mapped memory; the
- * kernel does not reset it, and Doom is built -fomit-frame-pointer, so _start
- * never established it.
+ * left over from the preceding exec happened to address mapped memory; the ABI
+ * does not hand the arguments through %ebp, and Doom is built
+ * -fomit-frame-pointer, so _start never established it either.
  */
 __asm__(
     ".text\n\t"
