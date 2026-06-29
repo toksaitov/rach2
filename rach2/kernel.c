@@ -28,6 +28,7 @@
 #include "sys/mouse.h"
 #include "sys/block/block.h"
 #include "sys/block/ata.h"
+#include "sys/block/ahci.h"
 #include "sys/display/vga_text.h"
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
@@ -1820,6 +1821,7 @@ static void process_command(const char *cmd)
         k_puts("  isolate             - Test memory isolation");
         k_puts("  usermode            - Test ring 3 execution");
         k_puts("  audio ...           - Audio tests, routing, and HDA diagnostics");
+        k_puts("  ahci                - Probe the AHCI/SATA HBA and dump its registers");
         k_puts("  netping             - Ping the gateway (10.0.2.2)");
         k_puts("  netbad              - Ping an unreachable host (timeout demo)");
         k_puts("  fault               - Trigger page fault (panic)");
@@ -1904,6 +1906,12 @@ static void process_command(const char *cmd)
                 serial_printf("disk: last-sector round-trip %s\n",
                               ok ? "OK" : "MISMATCH");
             }
+        }
+    } else if (str_equal(cmd, "ahci")) {
+        if (ahci_init() != 0) {
+            serial_printf("ahci: no AHCI HBA on the PCI bus\n");
+        } else {
+            ahci_dump();
         }
     } else if (str_equal(cmd, "ls")) {
         if (!krffs_fs) {

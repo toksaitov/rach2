@@ -40,6 +40,8 @@
  */
 #define PCI_CLASS_MULTIMEDIA    0x04
 #define PCI_SUBCLASS_AUDIO      0x03    /* HD Audio */
+#define PCI_CLASS_MASS_STORAGE  0x01
+#define PCI_SUBCLASS_SATA       0x06    /* AHCI when prog-if is 0x01 */
 
 /*
  * PCI command register bits
