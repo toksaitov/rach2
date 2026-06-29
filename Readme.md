@@ -4,7 +4,7 @@
 
 An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), and can run Doom.
 
-Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements a broad set of Linux-compatible syscalls, enough to host a ported musl libc, a static BusyBox `ash`, and a Dropbear SSH server. It has a custom file system (KRFFS), audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
+Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements a broad set of Linux-compatible syscalls, enough to host a ported musl libc, a static BusyBox `ash`, and a Dropbear SSH server. It has a custom file system (KRFFS), which runs from a RAM module or persists on a real ATA disk through a kernel page cache, audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
 
 ## Components
 
@@ -13,7 +13,7 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [rach2/](rach2/)                         | 32-bit x86 kernel with syscalls, paging, preemptive scheduling                                                         | [Readme](rach2/Readme.md)             |
 | [rach2/sys/network/](rach2/sys/network/) | TCP/IP stack: RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets                                                    | [Readme](rach2/sys/network/Readme.md) |
 | [tests/](tests/)                         | Syscall test programs for kernel validation                                                                            | [Readme](tests/Readme.md)             |
-| [krffs/](krffs/)                         | K&R First-Fit File System tools and RAM disk builder                                                                   | [Readme](krffs/Readme.md)             |
+| [krffs/](krffs/)                         | K&R First-Fit File System tools and image builder (RAM disks and bootable ATA disks)                                   | [Readme](krffs/Readme.md)             |
 | [ish/](ish/)                             | Minimal Unix shell with I/O redirection and process management                                                         | [Readme](ish/Readme.md)               |
 | [utils/](utils/)                         | Core Unix utilities (`echo`, `cat`, `ls`, `mv`, `rm`, `ping`, `nc`, `httpd`, and more), linked against the ported musl | [Readme](utils/Readme.md)             |
 | [vendor/musl/](vendor/musl/)             | The ported musl libc: reproducible build, the SysV/auxv startup contract                                               | [Readme](vendor/musl/Readme.md)       |

@@ -304,6 +304,7 @@ help:
 	@echo "  make os-real-disk   the os-real tree on a partitioned ATA disk image"
 	@echo "  make os-real-grub-disk   a BIOS-bootable GRUB disk (needs Docker)"
 	@echo "  make test       boot the test image and check every probe passes"
+	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
 	@echo "  make busybox / make dropbear   one capstone's third-party build"

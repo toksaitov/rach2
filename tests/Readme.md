@@ -49,7 +49,9 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `timeprobe` (`TIMEPROBE OK`): time, sleep-with-yield, and the entropy path.
 * `miscprobe` (`MISCPROBE OK`): the miscellaneous syscalls busybox needs.
 
-The memory-protection probes provoke a deliberate fault. `forkro` forks a child that writes a read-only page, confirms the child is killed by SIGSEGV while the page's protection survived the fork, and prints `FORKRO OK`. `vmro` (a read-only page faulting on write) and `vmfault` (a wild-pointer write) are themselves killed by the fault they trigger, so the kernel surviving a faulting user process is the pass.
+The memory-protection probes provoke a deliberate fault. `forkro` forks a child that writes a read-only page, confirms the child is killed by SIGSEGV while the page's protection survived the fork, and prints `FORKRO OK`. `vmro` (a read-only page faulting on write) and `vmfault` (a wild-pointer write) are themselves killed by the fault they trigger, so the kernel surviving a faulting user process is the pass. `winprobe` (run by hand as a standalone boot) reads the kernel-only page-cache window at `0xC0000000` from ring 3; the window fault branch is for the supervisor faults the file system raises, not for user code, so the read must segfault the process. Its `winprobe: ERROR still alive` line must never appear; the kernel surviving and the shell returning is the pass.
+
+The disk probes need a real ATA disk, so they are disk-only: boot disk-backed (`rach2.fsdisk`) with a scratch image attached, never the default RAM-module test image. `blockprobe` (`BLOCKPROBE OK`) writes a working set larger than the 1 MiB resident cache, fsyncs, and reads it back byte for byte, so a dropped-dirty or mis-mapped page shows up as a mismatch rather than a crash. `persistprobe` (`PERSISTPROBE OK (wrote)` then `PERSISTPROBE OK (read back)`) runs twice against the same image: the first boot writes and fsyncs `/persist.txt`, the second reads the marker back, proving fsync pushed the write through the cache to the disk. `stressprobe` (`STRESSPROBE OK n=132 bytes=34603008`) writes and re-reads 33 MiB, past the 32 MiB physical-RAM cap, proving a file system larger than memory round-trips through the cache. `make test-disk`, `make persist-test`, and `make stress-test` build the scratch image and run each under the harness.
 
 ## musl integration tests
 
@@ -100,6 +102,8 @@ The probes are staged into the test image (`build/images/test.krffs`), which `ma
    ```
 
 The network tests target QEMU's SLIRP gateway 10.0.2.2. `udptest` and `tcptest` expect a host echo server reachable at 10.0.2.2:7777 (UDP and TCP respectively). `dnstest` reads `/resolv.conf` and `/hosts` from the image root; its live cases resolve real names through SLIRP's forwarder 10.0.2.3 and need host internet.
+
+The disk probes boot disk-only instead of from a RAM module: `tools/harness.py` attaches the scratch image with `--drive` (no `--initrd`) and the kernel mounts KRFFS off the real ATA disk under `rach2.fsdisk`. `make test-disk`, `make persist-test`, and `make stress-test` do this; to drive one by hand, build a disk with `tools/mkdisk.sh` and boot it the same way (see the disk make targets for the exact `--drive` and `--append` strings). `winprobe` instead boots from the test image and faults on purpose; the harness passes it when the kernel survives.
 
 ## Syscalls the original tests cover
 

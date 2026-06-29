@@ -19,7 +19,7 @@ A port of Doom to the Rach2 kernel using [doomgeneric](https://github.com/ozkl/d
 ```
 ports/doom/
     Makefile              # Build configuration
-    crt0.c                # C runtime: _start, syscalls, 8MB heap
+    crt0.c                # C runtime: asm _start, syscalls, 8MB heap
     doomgeneric_rach2.c   # Platform layer for Rach2
     i_pcsound.c           # PC speaker and audio driver interface
     i_oplmusic.c/h        # OPL3 music driver (9-voice FM synthesis)

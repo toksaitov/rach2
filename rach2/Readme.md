@@ -51,7 +51,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 ### File System and Executables
 
 * Multiboot module loading (RAM disk support via `-initrd`)
-* KRFFS file system with read/write support loaded from RAM disk module
+* KRFFS file system with read/write support, mounted from a RAM disk module or, through the page-cache window, from a real ATA disk (persistent, bootable via GRUB)
 * ELF32 header parsing for executable validation and loading
 * Boots a persistent init (PID 1) that reaps orphans and respawns the login shell; a `rach2.rescue` command line boots the kernel debug shell instead
 
@@ -69,7 +69,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 ### Development and Testing
 
 * Built-in self-tests (memory, strings, timer, paging, syscall, context switch, scheduler, isolation, KRFFS write, ELF load)
-* Interactive kernel debug shell with commands: help, info, modules, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, audio, fault, halt
+* Interactive kernel debug shell with commands: help, info, modules, disk, ls, cat, elf, exec, touch, rm, mv, write, test, clear, switch, preempt, isolate, usermode, audio, fault, halt
 * VGA text scrollback in the kernel debug shell via PageUp, PageDown, Home, and End
 
 ---
@@ -108,9 +108,12 @@ For detailed build instructions, see [Building and Usage](#building-and-usage) a
 0x00100000 - kernel_end    Kernel code, data, BSS
 kernel_end - 0x01FFFFFF    Frame bitmap, page tables, user pages (up to 32 MB)
 0xBFFFF000 - 0xBFFFFFFF    User stack (per-process, 4 KB)
+0xC0000000 - window_end    Demand-paged page-cache window (kernel-only, supervisor)
 ```
 
 The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 MB (HARD_MEMORY_LIMIT). Frames below `mem_reserved_ptr` are marked as used; frames above are available for user page allocation. Paging uses 4 KB pages.
+
+The window at 0xC0000000 (PCWIN_BASE, the same address as USER_ADDR_MAX, just above user space) is the page cache's view of a disk-backed KRFFS: it is supervisor-only and shared across every process's page directory. The fault handler demand-maps backing pages into the cache's reserved frames (PC_SLOTS, a fixed 1 MiB) and writes dirty ones back on eviction and fsync. The window span is the partition size capped at the lowest device MMIO BAR (and at PC_WINDOW_CAP, 256 MiB), so it never overlaps the PCI MMIO hole. It is inert on the default RAM-disk mount.
 
 ## Source Structure
 
@@ -149,9 +152,16 @@ The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 M
 |   |   |-- tss.c/h        # Task State Segment for ring transitions
 |   |   |-- idt.c/h        # Interrupt Descriptor Table setup
 |   |   `-- idt_handler.s  # IDT loading routine
+|   |-- block/
+|   |   |-- block.c/h      # Block-device layer (registers the primary disk)
+|   |   `-- ata.c/h        # Polled PIO ATA driver
 |   |-- mm/
 |   |   |-- heap.c/h       # Simple bump allocator
-|   |   `-- paging.c/h     # Page directory/table, identity mapping
+|   |   |-- frame.c/h      # Physical frame bitmap allocator
+|   |   |-- paging.c/h     # Page directory/table, identity mapping, faults
+|   |   |-- pagecache.c/h  # Demand-paged page-cache window (disk-backed KRFFS)
+|   |   |-- usercopy.c/h   # Checked copy to/from user space
+|   |   `-- vm.c/h         # Per-process virtual-memory areas (VMAs)
 |   |-- proc/
 |   |   |-- process.c/h    # Process control block, process table
 |   |   |-- sched.c/h      # Round-robin preemptive scheduler
@@ -323,7 +333,7 @@ The syscall:
 5. Loads ELF segments into freshly allocated user pages
 6. Allocates a new user stack at USER_STACK_BASE (0xBFFFF000)
 7. Sets up the stack with argc, argv pointers, and argument strings
-8. Modifies the saved ISR frame (EIP and ESP) to "return" to the new program
+8. Modifies the saved ISR frame to "return" to the new program: sets EIP and ESP, zeroes the general-purpose registers inherited from the old image (EBP, EDX, EBX, ECX, ESI, EDI) so startup code reads no stale state, and resets the segment selectors and TLS
 
 On success, does not return - execution continues at the new program's entry point. On failure, returns -1 (though this may leave the process in an inconsistent state).
 
@@ -901,7 +911,7 @@ The kernel will display the module at boot:
 
 ## File System (KRFFS)
 
-The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a hierarchical file system whose v2 directories are written by the image builder and read and written by the kernel. KRFFS is loaded from a RAM disk module passed via multiboot.
+The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a hierarchical file system whose v2 directories are written by the image builder and read and written by the kernel. KRFFS mounts one of three ways: from a RAM disk module passed via multiboot (the default); from the page-cache window over the disk image embedded behind the module (`rach2.fswindow`); or from a real ATA disk through that same window (`rach2.fsdisk`, or `rach2.root=disk`, which probes the MBR for the root partition). The disk mount is persistent: a clean shutdown clears the root node's dirty-mount flag, an unclean one leaves it set for `fsck.krffs` to find.
 
 ### KRFFS Overview
 
@@ -1305,6 +1315,8 @@ In rescue mode (the `rach2.rescue` command line) or on an image with no init, th
 | `help`           | Show available commands                      |
 | `info`           | Display memory pointer, ticks, module count  |
 | `modules`        | List loaded multiboot modules                |
+| `disk`           | Probe the ATA disk and dump sector 0         |
+| `disk write`     | Round-trip the last sector (destructive)     |
 | `ls`             | List files in KRFFS                          |
 | `cat <file>`     | Display file contents                        |
 | `elf <file>`     | Show ELF header information                  |
@@ -1324,7 +1336,7 @@ In rescue mode (the `rach2.rescue` command line) or on an image with no init, th
 | `audio test ...` | Run callback, write-path, or HDA watch tests |
 | `audio hda ...`  | Dump HDA state or force HDA output routing   |
 | `fault`          | Trigger a page fault (demonstrates panic)    |
-| `halt`           | Stop the CPU                                 |
+| `halt`           | Clear the dirty-mount flag (disk mount) and stop the CPU |
 
 When the kernel debug shell is active in VGA text mode, `PageUp`, `PageDown`, `Home`, and `End` navigate scrollback. Typing a command snaps the view back to the live prompt automatically.
 
@@ -1336,7 +1348,7 @@ When the kernel debug shell is active in VGA text mode, `PageUp`, `PageDown`, `H
 |-----------|--------------------------------------|------------------------------------|
 | Boot      | Multiboot1, GRUB, QEMU `-kernel`     | UEFI, Multiboot2                   |
 | Memory    | 4 KB pages, demand paging, COW fork  | Swap                               |
-| Storage   | KRFFS RAM disk                       | Persistent disk, real file systems |
+| Storage   | KRFFS RAM disk or a real ATA disk    | Other on-disk file systems         |
 | Input     | PS/2 keyboard, PS/2 mouse            | USB                                |
 | Display   | VGA text (80x25), Mode 13h (320x200) | Higher resolutions, VESA           |
 | Sound     | SB16, Intel HDA, PC speaker          | AC97, USB audio                    |

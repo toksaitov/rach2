@@ -4,7 +4,7 @@
 
 A minimal educational FUSE file system in C. The project stores files inside a regular file using a flat structure inspired by the K&R first-fit memory allocator from "The C Programming Language." Files are memory-mapped via `mmap`/`MapViewOfFile`, allowing direct read/write access through virtual memory. The codebase uses a platform abstraction layer to support Unix, Linux, macOS, and Windows, making it suitable for porting to custom OS environments.
 
-The code in the `krffs` directory HERE is for generating RAM disk images for Rach2 development and testing on host environments running the latest macOS, Ubuntu, or Windows.
+The code in the `krffs` directory HERE generates the file-system images Rach2 boots, both the RAM-disk modules and the partitioned disk images mounted from a real ATA disk, on host environments running the latest macOS, Ubuntu, or Windows.
 
 ## Features
 
@@ -23,13 +23,21 @@ The code in the `krffs` directory HERE is for generating RAM disk images for Rac
 * `fsviz.krffs`: interactive terminal visualizer (termbox2)
 * `edfs.krffs`: low-level node field editor for debugging/repair
 
+Every tool that opens a backing file (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`, `fsviz.krffs`, `edfs.krffs`, `stageimage.krffs`) accepts `--offset N --size N` to operate on a region inside a larger file rather than the whole file. This is how the tools reach a KRFFS partition inside a disk image: the offset is the partition's byte offset (page-aligned), the size its byte length. A nonzero offset requires an explicit size; with no flags the file system spans the whole file, the RAM-disk case.
+
 ## Rach2 Build Scripts
 
-* `mkimage.sh <manifest> <output.krffs> [size_mb]`: Builds one RAM-disk image out of tree from a manifest (dd + mkfs.krffs + stageimage.krffs, no FUSE mount)
-* `manifests/<image>.manifest`: The build recipe for each image (test, os-simple, os-real): the dirs and files to stage and their host sources
-* `stageimage.krffs <manifest> <image>`: Writes the whole tree (dirs and files) into a KRFFS image directly as v2 nodes
+* `mkimage.sh <manifest> <output.krffs> [size_mb]`: Builds one RAM-disk module image out of tree from a manifest (dd + mkfs.krffs + stageimage.krffs, no FUSE mount)
+* `mkdisk.sh <manifest> <output.disk> [disk_mb] [partition_mb]`: Builds one bootable-layout disk image: a 512-byte MBR with one primary KRFFS partition (type 0x7F) at LBA 2048, then a fresh KRFFS laid down inside that partition with `mkfs.krffs --offset --size` and staged from the manifest. `disk_mb` defaults to 64 and `partition_mb` to 48, matching `make os-real-disk`. The partition is capped at 256 MiB, the kernel mount window (`PC_WINDOW_CAP` in `sys/mm/pagecache.c`)
+* `manifests/<image>.manifest`: The build recipe for each image (test, os-simple, os-real, disk-test, persist-test, stress-test): the dirs and files to stage and their host sources
+* `stageimage.krffs <manifest> <image> [--offset N --size N]`: Writes the whole tree (dirs and files) into a KRFFS image directly as v2 nodes
 * `gen_demo_key.sh`: Provisions the os-real SSH demo key (`rach2_demo_ed25519`) when none exists
 * `create_file_system.krffs.sh [size_mb]`: Creates an empty KRFFS file system (helper script)
+
+The GRUB-bootable disk lives one level up, in `tools/`, because it leans on the kernel and a Docker container rather than on the KRFFS tools alone:
+
+* `tools/mkdisk_grub.sh`: Builds a BIOS-bootable disk: a FAT boot partition holding the kernel and GRUB, plus a KRFFS partition with the os-real tree, assembled in a throwaway Docker container (`make os-real-grub-disk`)
+* `tools/grub_embed.py`: Writes GRUB's `boot.img` into the MBR and `core.img` into the post-MBR gap and patches their pointers, the install `grub-bios-setup` would do but cannot on a Docker overlay filesystem
 
 ## Structure
 
@@ -156,9 +164,9 @@ Build the host tools first (`make` from the repo root, or `make -C krffs`); they
 
         ./fsviz.krffs my.krffs
 
-## Rach2 RAM Disk Creation
+## Rach2 Image Creation
 
-Rach2 ships three purpose-built RAM-disk images, each its own file under `build/images/`. They coexist; there is no single shared image.
+Rach2 ships three purpose-built RAM-disk module images, each its own file under `build/images/`. They coexist; there is no single shared image.
 
 * `test.krffs`: the freestanding syscall probes plus the musl integration programs. It stages no init, so the kernel falls to the debug shell, which `make test` drives to boot it headless and check every probe exits 0.
 * `os-simple.krffs`: `/sbin/init` (which forks the ISH shell) and the hand-written Unix utilities. The small, readable teaching image.
@@ -176,6 +184,23 @@ Each target builds its inputs through the component sub-makes, then stages the i
 
 A manifest lives in `manifests/<image>.manifest` and lists the dirs and files to stage and their host sources. `os-real` also runs `gen_demo_key.sh` first to provision the SSH demo key when none exists.
 
-Boot an image with the run script (it resolves `build/images/<image>.krffs`):
+Boot a module image with the run script (it resolves `build/images/<image>.krffs`):
 
     cd ../rach2 && ./run.sh os-simple
+
+### Disk Images
+
+The same os-real tree also goes onto a real disk image, which the kernel mounts from a polled-PIO ATA disk through its page cache rather than from a RAM module. `mkdisk.sh` builds the layout (an MBR with one KRFFS partition); the KRFFS bytes inside the partition are byte-identical to a module image.
+
+    make os-real-disk        # build/images/os-real.disk: MBR + a 48 MiB KRFFS partition
+    make os-real-grub-disk   # build/images/os-real-grub.disk: BIOS-bootable, GRUB + a FAT boot partition + KRFFS (needs Docker)
+
+Attach the `os-real-disk` image as the primary ATA disk and drop to the debug shell, where the `disk` command probes it:
+
+    cd ../rach2 && DISK=../build/images/os-real.disk RESCUE=1 ./run.sh
+
+The `os-real-grub-disk` image carries its own kernel and GRUB, so it boots with no `-kernel`, the way a real machine would, BIOS to MBR to GRUB to kernel to KRFFS:
+
+    cd ../rach2 && ./run_from_disk.sh
+
+The disk targets also back the integrity gate: `make test-disk`, `make persist-test`, `make crash-test`, and `make stress-test` build disk images from their own manifests and boot them headless to prove cache eviction, fsync durability, and the dirty-mount flag.
