@@ -1109,12 +1109,13 @@ static int32_t sys_close(isr_params_t *params)
 /**
  * Flush a file's data to stable storage (fsync(2); also serves fdatasync).
  *
- * EBX = fd. Returns 0, or -EBADF for a bad descriptor. Writes back every dirty
- * page of the disk-backed window via `pc_sync`; when KRFFS is the RAM module the
- * cache is empty, so this only validates the fd. The flush is whole-cache rather
- * than per-file, a safe superset of the contract. dropbear writes its host key
- * with the open/write/fsync/rename idiom and treats any fsync error as fatal, so
- * this must succeed.
+ * EBX = fd. Validates the descriptor (any open fd; the type is not checked), then
+ * writes back every dirty page of the disk-backed window via `pc_sync`. The flush
+ * is whole-cache rather than per-file, a safe superset of the contract. When KRFFS
+ * is the RAM module the cache is empty, so the flush is a no-op and the call only
+ * validates the fd. Returns 0, -EBADF for a bad descriptor, or -EIO when a disk
+ * writeback fails. dropbear writes its host key with the open/write/fsync/rename
+ * idiom and treats an fsync error as fatal, so the -EIO is real backpressure.
  */
 static int32_t sys_fsync(isr_params_t *params)
 {

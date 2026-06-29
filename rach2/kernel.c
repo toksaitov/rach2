@@ -1251,8 +1251,8 @@ void panic_init_died(uint32_t pid)
  * getty dance (a real init must own no controlling terminal, and a bare shell
  * launched here would neither claim the console nor survive its own exit, which
  * would panic). Execs it through exec_program, which does not return on success.
- * Returns here only when the RAM disk holds no `/sbin/init` (the test image), so
- * the caller can fall to the debug shell.
+ * Returns here only when the mounted file system holds no `/sbin/init` (the test
+ * image), so the caller can fall to the debug shell.
  */
 static void boot_init_process(void)
 {
@@ -1805,7 +1805,7 @@ static void process_command(const char *cmd)
         k_puts("  modules             - List loaded multiboot modules");
         k_puts("  disk                - Probe the ATA disk and dump sector 0");
         k_puts("  disk write          - Round-trip the last sector (destructive)");
-        k_puts("  ls                  - List files on RAM disk");
+        k_puts("  ls                  - List files in the mounted file system");
         k_puts("  cat <file>          - Display file contents");
         k_puts("  elf <file>          - Display ELF header info");
         k_puts("  exec <file>         - Execute ELF program");
@@ -1912,7 +1912,7 @@ static void process_command(const char *cmd)
             krffs_node_t *node;
             uint32_t count = 0;
 
-            k_puts("Files on RAM disk:");
+            k_puts("Files in the file system:");
             node = krffs_fs->node;
             do {
                 if (node->type == KRFFS_RESERVED_NODE) {

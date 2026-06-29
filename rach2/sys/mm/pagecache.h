@@ -69,8 +69,10 @@ int pc_sync(void);
 uint32_t pc_window_size(void);
 
 /*
- * Cap the live cache to `slots` frames (1..PC_SLOTS); for the eviction self-test,
- * which calls it on a quiescent cache (no resident page above the new capacity).
+ * Cap the live cache to `slots` frames (clamped to 1..PC_SLOTS) for the eviction
+ * self-test, writing back then dropping each resident frame at or above the new
+ * capacity. The test calls it on a quiescent cache, with no window fault in
+ * flight, so reclaiming those frames races nothing.
  */
 void pc_set_capacity(uint32_t slots);
 

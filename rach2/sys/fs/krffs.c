@@ -1275,11 +1275,16 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out,
 }
 
 /**
- * Mount a KRFFS image laid out at `ramdisk_base` of `ramdisk_size` bytes.
+ * Mount a KRFFS image of `ramdisk_size` bytes whose first byte is at
+ * `ramdisk_base`.
  *
- * The first node is the root: it must carry KRFFS_FILE_SYSTEM_MAGIC and be of
- * type KRFFS_ROOT_NODE. On success the global krffs_fs points at the mounted
- * file system. Returns 0 on success, -1 if the image is too small or malformed.
+ * The base is wherever the image is addressable: the RAM-disk module in place, or
+ * PCWIN_BASE when the page cache demand-maps the module stub (rach2.fswindow) or a
+ * real ATA partition (rach2.fsdisk). The parameter names are historical; the
+ * file-system code just pointer-walks the base it is handed. The first node is the
+ * root: it must carry KRFFS_FILE_SYSTEM_MAGIC and be of type KRFFS_ROOT_NODE. On
+ * success the global krffs_fs points at the mounted file system. Returns 0 on
+ * success, -1 if the image is too small or malformed.
  */
 int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
 {
