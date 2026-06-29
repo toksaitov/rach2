@@ -16,8 +16,12 @@ set -e
 KERNEL="$1"
 DISK="$2"
 FSCK="$3"
-OFFSET=1048576
-SIZE=50331648
+# The KRFFS partition geometry, which must match the disk the Makefile crash-test
+# target builds with `mkdisk.sh ... 64 48`: krffs/mkdisk.sh places the partition at
+# LBA 2048 (1 MiB) and sizes it at 48 MiB. fsck.krffs reads the partition at this
+# offset/size; a drift here silently misreads the dirty byte.
+OFFSET=$((2048 * 512))
+SIZE=$((48 * 1024 * 1024))
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$FSCK" ]; then
     echo "usage: crash_test.sh <kernel> <disk> <fsck.krffs>" >&2
@@ -36,7 +40,10 @@ qemu_disk() {
         -drive "file=$1,format=raw,if=ide,index=0,media=disk" -serial stdio
 }
 
-# Crash: boot, let it mount, then kill before any clean halt.
+# Crash: boot, let it mount, then kill before any clean halt. The fixed waits here
+# and below are heuristics (boot-to-mount is about a second), generous enough on a
+# normal host; a badly overloaded host could in principle kill before the mount
+# sets the dirty bit (or before the clean halt clears it), the script's flake point.
 qemu_disk "$CRASH" >/dev/null 2>&1 &
 QPID=$!
 sleep 10
