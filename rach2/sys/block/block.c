@@ -1,6 +1,12 @@
 #include "block.h"
+#include "ata.h"
+#include "ahci.h"
 
+#include "../cmdline.h"
 #include "../lib/kerrno.h"
+
+/* The whole-disk boot device, NULL until block_probe brings a driver up. */
+block_device_t *block0 = 0;
 
 /**
  * Forwards a partition-relative read to the backing device, with the partition
@@ -73,4 +79,16 @@ void block_partition_init(
     partition->device.read = block_partition_read;
     partition->device.write = block_partition_write;
     partition->device.drvdata = partition;
+}
+
+int block_probe(void)
+{
+    /* With rach2.disk=ahci, prefer the AHCI HBA and fall back to ATA if none
+       answered; otherwise use ATA, so every existing IDE image boots exactly as
+       before. kcmdline_has matches whole tokens, so the flag never collides with
+       rach2.fsdisk. Both drivers publish block0 themselves. */
+    if (kcmdline_has("rach2.disk=ahci") && ahci_init() == 0) {
+        return 0;
+    }
+    return ata_init();
 }

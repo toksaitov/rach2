@@ -90,10 +90,17 @@ static volatile uint8_t ahci_cmdtable[AHCI_CMDTABLE_SIZE]
 
 /* The H2D Register FIS and the ATA commands the polled path issues. */
 #define AHCI_FIS_H2D 0x27u
-#define AHCI_FIS_H2D_C   0x80u /* C bit: this FIS carries a command */
-#define ATA_READ_DMA_EXT 0x25u
-#define ATA_IDENTIFY     0xECu
-#define ATA_DEV_LBA      0x40u  /* device register: LBA mode */
+#define AHCI_FIS_H2D_C    0x80u /* C bit: this FIS carries a command */
+#define ATA_READ_DMA_EXT  0x25u
+#define ATA_WRITE_DMA_EXT 0x35u
+#define ATA_FLUSH_EXT     0xEAu /* FLUSH CACHE EXT, durability after a write */
+#define ATA_IDENTIFY      0xECu
+#define ATA_DEV_LBA       0x40u /* device register: LBA mode */
+
+/* One PRDT entry transfers up to 4 MiB, so cap a single command there; every
+   exercised caller (the page cache, 8 sectors) is far under it, and a larger
+   request fails closed rather than silently truncating the byte count. */
+#define AHCI_MAX_SECTORS_PER_CMD 8192u
 
 /* The single polled command slot, its 5-dword H2D FIS, and the PRDT offset
    (after CFIS 64 + ACMD 16 + reserved 48) inside the command table. */
@@ -429,6 +436,7 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
     uint32_t ci_off = ahci_port_off(ahci_port, AHCI_PxCI);
     uint32_t tfd_off = ahci_port_off(ahci_port, AHCI_PxTFD);
     uint32_t is_off = ahci_port_off(ahci_port, AHCI_PxIS);
+    uint32_t prdtl = (bytes > 0) ? AHCI_PRDTL_ONE : 0u;
     uint32_t spin;
 
     ahci_zero(ahci_cmdtable, AHCI_CMDTABLE_SIZE);
@@ -451,19 +459,21 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
     fis->control = 0;
     fis->aux = 0;
 
-    prdt->dba = (uint32_t) (uintptr_t) buf;
-    prdt->dbau = 0;
-    prdt->reserved = 0;
-    prdt->dbc = (bytes - 1) & AHCI_DBC_MASK;
+    if (bytes > 0) {
+        prdt->dba = (uint32_t) (uintptr_t) buf;
+        prdt->dbau = 0;
+        prdt->reserved = 0;
+        prdt->dbc = (bytes - 1) & AHCI_DBC_MASK;
+    }
 
-    hdr->dw0 = AHCI_CFL_DWORDS | (write ? AHCI_CMD_W : 0u) | AHCI_PRDTL_ONE;
+    hdr->dw0 = AHCI_CFL_DWORDS | (write ? AHCI_CMD_W : 0u) | prdtl;
     hdr->prdbc = 0;
     hdr->ctba = (uint32_t) (uintptr_t) ahci_cmdtable;
     hdr->ctbau = 0;
 
     ahci_dma_sync(ahci_cmdtable, AHCI_CMDTABLE_SIZE);
     ahci_dma_sync(ahci_cmdlist, sizeof(ahci_cmd_header_t));
-    if (write) {
+    if (write && bytes > 0) {
         ahci_dma_sync(buf, bytes);
     }
 
@@ -491,7 +501,7 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
         return -EIO;
     }
 
-    if (!write) {
+    if (!write && bytes > 0) {
         ahci_dma_sync(buf, bytes); /* evict stale lines; CPU reads fresh */
     }
     return 0;
@@ -518,6 +528,49 @@ static int ahci_identify(void)
     return 0;
 }
 
+/* Flush the device write cache so a completed write reaches durable media,
+   the durability the dirty-flag and pc_sync write-back contract relies on. */
+static int ahci_flush(void)
+{
+    return ahci_run_command(ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
+}
+
+/* block0->read: a polled READ DMA EXT of `count` sectors from `lba`. */
+static int ahci_read(block_device_t *device, uint64_t lba, uint32_t count,
+                     void *buffer)
+{
+    if (count == 0 || lba > device->sector_count ||
+        count > device->sector_count - lba ||
+        count > AHCI_MAX_SECTORS_PER_CMD) {
+        return -EIO;
+    }
+    return ahci_run_command(ATA_READ_DMA_EXT, lba, count,
+                            (volatile uint8_t *) buffer,
+                            count * BLOCK_SECTOR_SIZE, 0);
+}
+
+/* block0->write: a polled WRITE DMA EXT, then FLUSH CACHE EXT for durability. */
+static int ahci_write(block_device_t *device, uint64_t lba, uint32_t count,
+                      const void *buffer)
+{
+    int rc;
+
+    if (count == 0 || lba > device->sector_count ||
+        count > device->sector_count - lba ||
+        count > AHCI_MAX_SECTORS_PER_CMD) {
+        return -EIO;
+    }
+    rc = ahci_run_command(ATA_WRITE_DMA_EXT, lba, count,
+                          (volatile uint8_t *) (uintptr_t) buffer,
+                          count * BLOCK_SECTOR_SIZE, 1);
+    if (rc != 0) {
+        return rc;
+    }
+    return ahci_flush();
+}
+
+static block_device_t ahci_device;
+
 int ahci_init(void)
 {
     ahci_base = 0;
@@ -539,6 +592,20 @@ int ahci_init(void)
     if (ahci_port_start() != 0) {
         return -1;
     }
+    if (ahci_identify() != 0) {
+        return -1;
+    }
+
+    ahci_device.sector_size = BLOCK_SECTOR_SIZE;
+    ahci_device.sector_count = ahci_sector_count;
+    ahci_device.read = ahci_read;
+    ahci_device.write = ahci_write;
+    ahci_device.drvdata = 0;
+    block0 = &ahci_device;
+
+    serial_printf("ahci: port %d: %d sectors, %d MiB\n", ahci_port,
+                  (uint32_t) ahci_sector_count,
+                  (uint32_t) (ahci_sector_count / 2048));
     return 0;
 }
 
@@ -582,22 +649,13 @@ void ahci_dump(void)
 
 void ahci_selftest(void)
 {
-    static volatile uint8_t buf[BLOCK_SECTOR_SIZE] __attribute__((aligned(2)));
+    static uint8_t buf[BLOCK_SECTOR_SIZE] __attribute__((aligned(2)));
 
-    if (!ahci_base || ahci_port < 0) {
+    if (!block0) {
         serial_printf("ahci: selftest: not initialized\n");
         return;
     }
-    if (ahci_identify() != 0) {
-        serial_printf("ahci: selftest: identify failed\n");
-        return;
-    }
-    serial_printf("ahci: identify: %d sectors, %d MiB\n",
-                  (uint32_t) ahci_sector_count,
-                  (uint32_t) (ahci_sector_count / 2048));
-
-    if (ahci_run_command(ATA_READ_DMA_EXT, 0, 1, buf, BLOCK_SECTOR_SIZE, 0)
-            != 0) {
+    if (block0->read(block0, 0, 1, buf) != 0) {
         serial_printf("ahci: selftest: lba 0 read failed\n");
         return;
     }

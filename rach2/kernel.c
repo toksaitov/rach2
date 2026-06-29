@@ -1475,7 +1475,7 @@ static int krffs_disk_write(uint32_t off, const void *page)
 }
 
 /**
- * Mounts KRFFS from the real ATA disk through the page-cache window.
+ * Mounts KRFFS from the real disk through the page-cache window.
  *
  * Probes the primary disk, reads its MBR, slices out the first KRFFS partition
  * (type 0x7F), and points the cache at that partition through `block0` so the
@@ -1493,8 +1493,8 @@ static int init_krffs_disk(void)
     int i;
     int found = 0;
 
-    if (ata_init() != 0 || !block0) {
-        serial_printf("KRFFS: no ATA disk on the primary channel\n");
+    if (block_probe() != 0 || !block0) {
+        serial_printf("KRFFS: no boot disk\n");
         return -1;
     }
     if (block0->read(block0, 0, 1, mbr) != 0) {
@@ -1804,7 +1804,7 @@ static void process_command(const char *cmd)
         k_puts("  info                - Display system information");
         serial_puts("  info                - Display system information\n");
         k_puts("  modules             - List loaded multiboot modules");
-        k_puts("  disk                - Probe the ATA disk and dump sector 0");
+        k_puts("  disk                - Probe the boot disk and dump sector 0");
         k_puts("  disk write          - Round-trip the last sector (destructive)");
         k_puts("  ls                  - List files in the mounted file system");
         k_puts("  cat <file>          - Display file contents");
@@ -1847,10 +1847,10 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "disk")) {
         static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
 
-        if (ata_init() != 0 || !block0) {
-            serial_printf("disk: no ATA disk on the primary channel\n");
+        if (block_probe() != 0 || !block0) {
+            serial_printf("disk: no boot disk\n");
         } else {
-            serial_printf("disk: primary master: %d sectors, %d MiB\n",
+            serial_printf("disk: block0: %d sectors, %d MiB\n",
                           (uint32_t) block0->sector_count,
                           (uint32_t) (block0->sector_count / 2048));
 
@@ -1879,8 +1879,8 @@ static void process_command(const char *cmd)
         static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
         static uint8_t disk_scratch[BLOCK_SECTOR_SIZE];
 
-        if (ata_init() != 0 || !block0) {
-            serial_printf("disk: no ATA disk on the primary channel\n");
+        if (block_probe() != 0 || !block0) {
+            serial_printf("disk: no boot disk\n");
         } else {
             /* The last sector lies past the partition and the boot gap, so the
                round-trip that proves WRITE + FLUSH + READ disturbs neither a
@@ -2540,7 +2540,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         int mounted = -1;
         const char *via = "";
 
-        /* rach2.fsdisk (or rach2.root=disk) mounts KRFFS from the real ATA disk
+        /* rach2.fsdisk (or rach2.root=disk) mounts KRFFS from the real disk
          * through the cache (and needs no module); rach2.fswindow mounts the
          * module through the cache window; the default mounts the module in
          * place. */

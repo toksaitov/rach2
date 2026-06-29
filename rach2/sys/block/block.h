@@ -28,9 +28,19 @@ struct block_device {
 };
 
 /**
- * The whole-disk primary ATA device, or `NULL` until `ata_init` finds a disk.
+ * The whole-disk boot device, or `NULL` until `block_probe` finds a disk.
  */
 extern block_device_t *block0;
+
+/**
+ * Bring up the boot block device and publish it as `block0`.
+ *
+ * Selects the AHCI driver when `rach2.disk=ahci` is on the kernel command line
+ * (falling back to ATA if no AHCI HBA is present), and the ATA driver otherwise.
+ * Returns 0 when a device answered and `block0` is set, or -1 when none did.
+ * Polled and IRQ-free, so it is safe to call before the scheduler runs.
+ */
+int block_probe(void);
 
 /**
  * A partition: the sector range `[start_lba, start_lba + sector_count)` of a

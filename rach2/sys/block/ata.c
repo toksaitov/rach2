@@ -61,7 +61,6 @@ static int ata_write(
            );
 
 static block_device_t ata_device;
-block_device_t *block0 = NULL;
 
 /**
  * Wastes the roughly 400 ns the drive needs to settle after a command before
