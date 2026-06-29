@@ -64,6 +64,7 @@ MKDISK          = krffs/mkdisk.sh
 .PHONY: all full deps clean distclean images musl-programs test test-disk \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         crash-test stress-test os-real-grub-disk \
+        test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
@@ -230,6 +231,44 @@ stress-test: rach2 tests krffs
 	    --timeout 150 --ok "STRESSPROBE OK" \
 	    "expect=Type 'help'" "send=exec /stressprobe" wait=130
 
+# The AHCI variants of the disk tests: identical images and probes, but the disk
+# rides an ich9-ahci HBA (if=none + ide-hd) and rach2.disk=ahci selects the AHCI
+# backend, exercising the same page-cache/KRFFS path through ahci_read/ahci_write.
+# The --qemu-arg passthrough adds the two -device lines without disturbing the
+# fixed NIC. The ATA test-disk/persist-test/stress-test stay on if=ide.
+AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
+              --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0
+
+test-disk-ahci: rach2 tests krffs
+	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=none,id=drv0" \
+	    $(AHCI_ATTACH) \
+	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
+
+persist-test-ahci: rach2 tests krffs
+	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_DISK) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(PERSIST_DISK),format=raw,if=none,id=drv0" \
+	    $(AHCI_ATTACH) \
+	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(PERSIST_DISK),format=raw,if=none,id=drv0" \
+	    $(AHCI_ATTACH) \
+	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
+
+stress-test-ahci: rach2 tests krffs
+	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(STRESS_DISK),format=raw,if=none,id=drv0" \
+	    $(AHCI_ATTACH) \
+	    --timeout 150 --ok "STRESSPROBE OK" \
+	    "expect=Type 'help'" "send=exec /stressprobe" wait=130
+
 # Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
 # image as GRUB multiboot modules, built by grub-mkrescue in a throwaway Docker
 # container (see tools/mkiso.sh). Output: build/images/<image>.iso.
@@ -305,6 +344,7 @@ help:
 	@echo "  make os-real-grub-disk   a BIOS-bootable GRUB disk (needs Docker)"
 	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
+	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
 	@echo "  make busybox / make dropbear   one capstone's third-party build"

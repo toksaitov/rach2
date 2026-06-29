@@ -42,6 +42,11 @@ def main():
     ap.add_argument("--drive", action="append", default=[])
     ap.add_argument("--net", default="user,id=net0")
     ap.add_argument("--device", default="rtl8139,netdev=net0")
+    # --qemu-arg may repeat; each value is one token appended verbatim to the
+    # QEMU command line, for topology the fixed flags do not cover (e.g. the
+    # AHCI pair: --qemu-arg -device --qemu-arg ich9-ahci,id=ahci0). The NIC
+    # --device stays wired, so a passthrough never disturbs it.
+    ap.add_argument("--qemu-arg", action="append", default=[], dest="qemu_arg")
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--steptmo", type=float, default=15.0)
     ap.add_argument("--grace", type=float, default=3.0)
@@ -68,6 +73,7 @@ def main():
         cmd += ["-append", a.append]
     for d in a.drive:
         cmd += ["-drive", d]
+    cmd += a.qemu_arg
     if not a.no_debug_exit:
         cmd += ["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
 
