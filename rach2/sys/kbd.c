@@ -1,5 +1,4 @@
 #include "kbd.h"
-#include "serial.h"
 
 /*
  * Raw scancode ring buffer. The IRQ handler is the sole producer (tail) and
@@ -119,8 +118,6 @@ uint8_t EN_us_shift[128] = {
     /* All others are undefined... */
 };
 
-bool _shift = false;
-
 static void _keyboard_test(isr_params_t *params);
 
 void init_keyboard(void)
@@ -129,43 +126,17 @@ void init_keyboard(void)
 }
 
 /**
- * IRQ 1 handler: read one byte from the i8042 and dispatch it.
+ * IRQ 1 handler: read one byte from the i8042 and queue it.
  *
- * Reading port 0x60 acknowledges the controller's output buffer. Every raw
- * code is pushed to the ring for graphics-mode readers; in addition this
- * tracks the shift state (make 0x2A/0x36, break 0xAA/0xB6) and echoes printable
- * make codes to the console. Bit 7 of a scancode marks a break (key release).
+ * Reading port 0x60 acknowledges the controller's output buffer. Every raw code
+ * is pushed to the ring for graphics-mode readers. `k_main` replaces this boot
+ * stub with the real console-routing handler before user input is expected.
  */
 static void _keyboard_test(isr_params_t *params)
 {
-    (void) params;
-
     uint8_t scancode = inb(0x60);
 
-    serial_printf("KBD: sc=0x%x h=%d t=%d\n", scancode, scancode_head, scancode_tail);
+    (void) params;
 
     kbd_push_scancode(scancode);
-
-    switch (scancode) {
-        case 0x2A:
-        case 0x36:
-            _shift = true;
-            break;
-
-        case 0xAA:
-        case 0xB6:
-            _shift = false;
-            break;
-
-        default:
-            if (!(scancode & 0x80)) {
-                if (_shift) {
-                    k_putc(EN_us[scancode] -  ('a' - 'A'));
-                } else {
-                    k_putc(EN_us[scancode]);
-                }
-            }
-
-            break;
-    }
 }
