@@ -422,12 +422,16 @@ static void _page_fault_handler(isr_params_t *params)
     }
 
     /* Page cache: a fault inside the demand-paged disk window is serviced by
-     * polling the backing sectors into a cache frame and mapping it. Keyed on the
-     * faulting address, not the CPU mode: the window is a kernel address the file
-     * system touches, so the fault arrives in supervisor mode and would otherwise
-     * hit the kernel-fault panic below. The poll-only fill is safe with IF=0. A
-     * fault past the backed size, or one the fill cannot serve, is a real bug. */
-    if (fault_address >= PCWIN_BASE &&
+     * polling the backing sectors into a cache frame and mapping it. The window
+     * is a kernel-only mapping the file system touches in supervisor mode, so
+     * this serves supervisor faults only: a user-mode fault at a window address
+     * is a wild ring-3 access that falls through to the segfault below. Without
+     * the `!user_mode` gate a ring-3 touch would loop on the supervisor-only page
+     * the fill maps, or, with no disk backing, panic the kernel. The poll-only
+     * fill is safe with IF=0. A fault past the backed size, or one the fill
+     * cannot serve, is a real bug. */
+    if (!user_mode &&
+        fault_address >= PCWIN_BASE &&
         fault_address < PCWIN_BASE + pc_window_size()) {
         if (!current_proc) {
             k_panic("pagecache: window fault with no current process");
