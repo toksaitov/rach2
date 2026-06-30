@@ -351,9 +351,11 @@ int pc_has_backing(void)
     return pc_read != 0;
 }
 
-void pc_set_capacity(uint32_t slots)
+int pc_set_capacity(uint32_t slots)
 {
     uint32_t i;
+    uint32_t stuck = 0;
+    int rc = 0;
 
     if (slots < 1u) {
         slots = 1u;
@@ -362,12 +364,20 @@ void pc_set_capacity(uint32_t slots)
         slots = PC_SLOTS;
     }
     for (i = slots; i < PC_SLOTS; ++i) {
-        if (pc_slots[i].valid) {
-            pc_evict(i);
+        if (pc_slots[i].valid && pc_evict(i) != 0) {
+            /* The writeback failed, so this slot is still dirty. Note it: the
+             * capacity must keep covering it, or the reclaim scan would never
+             * revisit it and its dirty page would be stranded above capacity. */
+            stuck = i + 1;
+            rc = -1;
         }
+    }
+    if (stuck > slots) {
+        slots = stuck;
     }
     pc_capacity = slots;
     pc_clock = 0;
+    return rc;
 }
 
 uint32_t pc_window_size(void)

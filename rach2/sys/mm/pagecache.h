@@ -71,10 +71,12 @@ uint32_t pc_window_size(void);
 /*
  * Cap the live cache to `slots` frames (clamped to 1..PC_SLOTS) for the eviction
  * self-test, writing back then dropping each resident frame at or above the new
- * capacity. The test calls it on a quiescent cache, with no window fault in
- * flight, so reclaiming those frames races nothing.
+ * capacity. Returns 0, or -1 if a frame's writeback failed: that frame is left
+ * dirty and the capacity is held high enough to keep it reclaimable, so a later
+ * sync still flushes it. The test calls it on a quiescent cache, with no window
+ * fault in flight, so reclaiming those frames races nothing.
  */
-void pc_set_capacity(uint32_t slots);
+int pc_set_capacity(uint32_t slots);
 
 /* Cumulative counters for the boot self-test's VMPROBE line. */
 uint32_t pc_stat_reads(void);
