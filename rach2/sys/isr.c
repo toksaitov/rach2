@@ -149,9 +149,8 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler)
 /**
  * Replace a vector's entire chain with a single `handler`.
  *
- * For a deliberate override: swapping a boot self-test stub (the keyboard
- * probe) for the real driver handler, where the stub must not keep running
- * alongside it.
+ * For a deliberate sole owner of a vector, where no other handler must share it:
+ * the keyboard IRQ installs its handler this way rather than chaining.
  */
 void set_isr_handler(uint8_t vector, isr_handler_t handler)
 {

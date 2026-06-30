@@ -2489,7 +2489,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_printf("  Keyboard...");
     serial_printf("  Keyboard...");
-    set_isr_handler(33, &keyboard_handler); /* swap the keyboard boot stub for the real handler */
+    set_isr_handler(33, &keyboard_handler); /* install the IRQ 1 keyboard handler */
     tty_console_init(); /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
     set_fore_color(light_green);
     k_puts(" OK");

@@ -11,8 +11,6 @@
 extern uint8_t EN_us[128];
 extern uint8_t EN_us_shift[128];
 
-void init_keyboard(void);
-
 /*
  * Raw scancode ring for graphics-mode readers, filled by the IRQ handler.
  */

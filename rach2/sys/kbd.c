@@ -117,26 +117,3 @@ uint8_t EN_us_shift[128] = {
 
     /* All others are undefined... */
 };
-
-static void _keyboard_test(isr_params_t *params);
-
-void init_keyboard(void)
-{
-    register_isr_handler(33, &_keyboard_test);
-}
-
-/**
- * IRQ 1 handler: read one byte from the i8042 and queue it.
- *
- * Reading port 0x60 acknowledges the controller's output buffer. Every raw code
- * is pushed to the ring for graphics-mode readers. `k_main` replaces this boot
- * stub with the real console-routing handler before user input is expected.
- */
-static void _keyboard_test(isr_params_t *params)
-{
-    uint8_t scancode = inb(0x60);
-
-    (void) params;
-
-    kbd_push_scancode(scancode);
-}
