@@ -464,9 +464,9 @@ static void _page_fault_handler(isr_params_t *params)
 }
 
 /**
- * Map a physical MMIO region to the same virtual address (identity map). Creates
- * the page table entries for accessing device registers above
- * `HARD_MEMORY_LIMIT`.
+ * Map a physical MMIO region to the same virtual address (identity map),
+ * creating or rewriting its page table entries cache-disabled (PCD|PWT) so a
+ * device-register read is never stale, whatever the region's address.
  */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 {

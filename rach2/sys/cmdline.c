@@ -20,10 +20,10 @@ void kcmdline_capture(const char *cmdline)
     }
     kcmdline[i] = '\0';
 
-    /* If the source was longer than the buffer, the final token may have been cut
-       mid-word, and a partial token must not spuriously match a flag (a truncated
-       `rach2.disk=ahcix` would otherwise match `rach2.disk=ahci`). Drop the torn
-       trailing token by terminating at the last delimiter. */
+    /* If the source was longer than the buffer, the final token may have been
+       cut mid-word, and a partial token must not spuriously match a flag (a
+       truncated `rach2.disk=ahcix` would otherwise match `rach2.disk=ahci`).
+       Drop the torn trailing token by terminating at the last delimiter. */
     if (cmdline[i] != '\0') {
         while (i > 0 && kcmdline[i - 1] != ' ' && kcmdline[i - 1] != '\t') {
             i--;
