@@ -30,7 +30,7 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
         touchtest rmtest mvtest lstest stdintest dup2test \
         pingtest udptest tcptest sockettest dnstest auxvprobe \
         tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe cowregrant \
-        usercopyfault forkleak dirprobe timeprobe sigprobe trapprobe ofdprobe \
+        usercopyfault forkleak fdstale dirprobe timeprobe sigprobe trapprobe ofdprobe \
         waitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe blockprobe persistprobe stressprobe winprobe
 
