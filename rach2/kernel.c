@@ -274,15 +274,17 @@ void terminate_current_process(int32_t signo)
  * The target is the controlling terminal's foreground process group, the same
  * one the serial ^C reaches through the line discipline, not current_proc:
  * inside this keyboard IRQ the running process may be unrelated. With no
- * foreground group yet, falls back to the running user process so a lone
- * program is still interruptible.
+ * foreground group yet, falls back to the running user process only when it
+ * belongs to the console's session, so a lone program is still interruptible
+ * while a stray ^C never signals an unrelated daemon that happened to be running.
  */
 static void kill_foreground_process(void)
 {
     k_puts("^C");
     if (console_tty.fg_pgid != 0) {
         tty_signal_group(console_tty.fg_pgid, SIGINT);
-    } else if (current_proc && current_proc->cr3 != 0) {
+    } else if (current_proc && current_proc->cr3 != 0 &&
+               (int) current_proc->sid == console_tty.sid) {
         signal_post(current_proc, SIGINT);
     }
 }
