@@ -728,6 +728,61 @@ static int join_abs(char *pathbuf, uint32_t size, const char *base,
 }
 
 /**
+ * Collapse '.', '..', and doubled slashes in the absolute path `path` in place.
+ *
+ * Resolution and the synthetic-mount classifier must see the same spelling of a
+ * path, or a '..' that lexically lands on /dev or /proc could classify as a real
+ * KRFFS path and shadow the synthetic mount (or a '..' transiting a synthetic
+ * prefix would wrongly miss). Normalizing once, before classification, removes
+ * that ambiguity. `path` must start with '/'. A '..' at the root stays at the
+ * root. The output never grows, so the rewrite is safe in place. Returns the new
+ * length.
+ */
+static int canonicalize_abs(char *path)
+{
+    int out = 1; /* path[0] is '/'; out is the current length */
+    const char *p = path + 1;
+
+    while (*p) {
+        const char *comp;
+        int clen, i;
+
+        while (*p == '/') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        comp = p;
+        while (*p && *p != '/') {
+            p++;
+        }
+        clen = (int)(p - comp);
+
+        if (clen == 1 && comp[0] == '.') {
+            continue;
+        }
+        if (clen == 2 && comp[0] == '.' && comp[1] == '.') {
+            while (out > 1 && path[out - 1] != '/') {
+                out--;
+            }
+            if (out > 1) {
+                out--; /* drop the separating '/' too */
+            }
+            continue;
+        }
+        if (out > 1) {
+            path[out++] = '/';
+        }
+        for (i = 0; i < clen; i++) {
+            path[out++] = comp[i];
+        }
+    }
+    path[out] = '\0';
+    return out;
+}
+
+/**
  * Copy a user path into pathbuf as an ABSOLUTE path.
  *
  * An absolute user path is taken verbatim; a relative one is joined onto the
@@ -755,9 +810,13 @@ static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
             return -ENAMETOOLONG;
         }
         k_memcpy(pathbuf, tmp, (uint32_t)len + 1);
-        return len;
+    } else {
+        int r = join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
+        if (r < 0) {
+            return r;
+        }
     }
-    return join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
+    return canonicalize_abs(pathbuf);
 }
 
 /**
@@ -822,10 +881,11 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
             return -ENAMETOOLONG;
         }
         k_memcpy(pathbuf, tmp, (uint32_t)len + 1);
-        return len;
+        return canonicalize_abs(pathbuf);
     }
     if (dirfd == AT_FDCWD) {
-        return join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
+        int r = join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
+        return r < 0 ? r : canonicalize_abs(pathbuf);
     }
 
     /* A real dirfd must be an open directory; resolve relative to its path. */
@@ -841,7 +901,10 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
             return -EBADF;
         }
         synth_dir_path(sd->kind, sd->pid, dirpath, (int)sizeof(dirpath));
-        return join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
+        {
+            int r = join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
+            return r < 0 ? r : canonicalize_abs(pathbuf);
+        }
     }
     if (entry->type != FD_TYPE_DIR) {
         return -ENOTDIR;
@@ -865,7 +928,10 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
         dirpath[0] = '/';
         dirpath[1] = '\0';
     }
-    return join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
+    {
+        int r = join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
+        return r < 0 ? r : canonicalize_abs(pathbuf);
+    }
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
