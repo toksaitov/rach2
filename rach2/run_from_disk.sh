@@ -13,6 +13,12 @@
 
 AUDIO_DEVICE="${1:-speaker}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# This image carries the SSH capstone, so forward host port 2222 to guest port
+# 22 by default. NET_HOSTFWD must be set before sourcing qemu_devices.sh, whose
+# own default (8080 -> 80) would otherwise win; an exported NET_HOSTFWD still
+# overrides.
+NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::2222-:22}"
 . "$SCRIPT_DIR/qemu_devices.sh"
 
 DISK="$SCRIPT_DIR/../build/images/os-real-grub.disk"
@@ -30,14 +36,8 @@ if [ -f "$KERNEL" ] && [ "$KERNEL" -nt "$DISK" ]; then
 fi
 
 # -cpu max exposes RDSEED/RDRAND so the CSPRNG seeds from trusted hardware
-# entropy (dropbear key generation needs it). SSH forwards to host port 2222.
+# entropy (dropbear key generation needs it).
 CPU="${CPU:-max}"
-NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::2222-:22}"
-if [ "${NET:-on}" = "off" ]; then
-    NET_OPTS=""
-else
-    NET_OPTS="-netdev user,id=net0,$NET_HOSTFWD -device rtl8139,netdev=net0"
-fi
 
 qemu-system-i386 -cpu "$CPU" \
     -drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
