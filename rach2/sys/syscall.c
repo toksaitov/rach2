@@ -6339,9 +6339,17 @@ static int32_t do_listen(int fd, int backlog)
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
+    if (entry->sock->tcb || entry->sock->listening) {
+        return -EINVAL; /* already listening or connected: a fresh TCB would leak the old one */
+    }
 
-    entry->sock->listening = 1;
-    return tcp_listen(entry->sock, entry->sock->local_port);
+    {
+        int rc = tcp_listen(entry->sock, entry->sock->local_port);
+        if (rc == 0) {
+            entry->sock->listening = 1;
+        }
+        return rc;
+    }
 }
 
 /* accept(2): dequeue a completed connection (blocking, or -EAGAIN on a
