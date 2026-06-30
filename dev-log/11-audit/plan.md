@@ -1,6 +1,7 @@
 # Milestone 11: the post-AHCI audit
 
-Status: draft.
+Status: complete. All eight phases executed and gated; eleven real defects fixed
+and the rest refuted. See `Readme.md` for the milestone record.
 
 ## The goal
 
