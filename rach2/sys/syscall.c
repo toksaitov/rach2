@@ -1037,6 +1037,14 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     if (name[0] == '\0' ||
         (name[0] == '.' && name[1] == '\0') ||
         (name[0] == '.' && name[1] == '.' && name[2] == '\0')) {
+        /* The root is a directory: it cannot be created exclusively, opened for
+         * writing, or truncated, the same as any other directory below. */
+        if ((flags & O_CREAT) && (flags & O_EXCL)) {
+            return -EEXIST;
+        }
+        if (((unsigned)flags & 3u) != 0 || (flags & O_TRUNC)) {
+            return -EISDIR;
+        }
         fd = fd_alloc(&current_proc->fds);
         if (fd < 0) {
             return -EMFILE;
