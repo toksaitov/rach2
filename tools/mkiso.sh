@@ -70,11 +70,17 @@ menuentry "Rach2 ($IMAGE) - rescue (kernel debug shell)" {
 CFG
 
 # Mount the repo at its own absolute path so the absolute build/ paths resolve in
-# the container; grub-mkrescue gets absolute, quoted paths.
-docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" ubuntu:24.04 sh -c \
+# the container; grub-mkrescue gets absolute, quoted paths. grub-mkrescue's stderr
+# is kept (its diagnostics name a missing module or a broken layout), and a build
+# failure is fatal rather than a silent "wrote" line over a missing or stale ISO.
+if ! docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" ubuntu:24.04 sh -c \
     "apt-get update -qq && \
      apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && \
-     grub-mkrescue -o '$ISO_OUT' '$ISODIR' 2>/dev/null"
+     grub-mkrescue -o '$ISO_OUT' '$ISODIR'"; then
+    echo "mkiso: the ISO build failed in the container (see the diagnostics above)" >&2
+    rm -rf "$ISODIR"
+    exit 1
+fi
 
 rm -rf "$ISODIR"
 echo "mkiso: wrote $ISO_OUT"
