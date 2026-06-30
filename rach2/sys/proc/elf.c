@@ -114,6 +114,12 @@ uint16_t elf_program_header_count(const void *data)
  * zero for the BSS. `alloc_user_page` returns a physical address inside the
  * identity-mapped region, so the copy writes through it directly.
  *
+ * This is a self-test helper for a trusted, project-built image: it does not
+ * apply the full hostile-image hardening (user-window bounds, segment overlap,
+ * `p_filesz <= p_memsz`, protect-after-copy) that `elf_load_image` carries. The
+ * real `execve` path streams through `elf_load_image`; an untrusted image must
+ * never be loaded here.
+ *
  * @return 0 on success, -1 on a bad directory, a segment that runs past the
  *         image, or an allocation failure.
  */
@@ -145,7 +151,10 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
             continue;
         }
 
-        if (phdr->p_offset + phdr->p_filesz > size) {
+        /* Reject a segment that runs past the image, rejecting the wrap first so
+         * a crafted p_offset cannot pass the bound by overflowing. */
+        if (phdr->p_offset + phdr->p_filesz < phdr->p_offset ||
+            phdr->p_offset + phdr->p_filesz > size) {
             return -1;
         }
 
