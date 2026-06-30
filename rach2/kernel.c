@@ -1847,7 +1847,9 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "disk")) {
         static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
 
-        if (block_probe() != 0 || !block0) {
+        if (_krffs_on_disk) {
+            serial_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
+        } else if (block_probe() != 0 || !block0) {
             serial_printf("disk: no boot disk\n");
         } else {
             serial_printf("disk: block0: %d sectors, %d MiB\n",
@@ -1879,7 +1881,9 @@ static void process_command(const char *cmd)
         static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
         static uint8_t disk_scratch[BLOCK_SECTOR_SIZE];
 
-        if (block_probe() != 0 || !block0) {
+        if (_krffs_on_disk) {
+            serial_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
+        } else if (block_probe() != 0 || !block0) {
             serial_printf("disk: no boot disk\n");
         } else {
             /* The last sector lies past the partition and the boot gap, so the
@@ -1908,7 +1912,9 @@ static void process_command(const char *cmd)
             }
         }
     } else if (str_equal(cmd, "ahci")) {
-        if (ahci_init() != 0) {
+        if (_krffs_on_disk) {
+            serial_printf("ahci: re-probe refused while KRFFS is mounted from disk\n");
+        } else if (ahci_init() != 0) {
             serial_printf("ahci: no AHCI HBA on the PCI bus\n");
         } else {
             ahci_dump();
