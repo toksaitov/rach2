@@ -130,9 +130,15 @@ void init_paging(size_t usable_frames)
      * back to the full window if the bootloader gave us nothing usable. */
     _frames_number = usable_frames ? usable_frames : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _frames = (uint8_t *) mem_reserve(_frames_number, true);
+    if (_frames == NULL) {
+        k_panic("init_paging: no reserved memory for the frame bitmap");
+    }
     k_memset(_frames, 0, _frames_number);
 
     _kernel_dir = (page_dir_t *) mem_reserve(sizeof(page_dir_t), true);
+    if (_kernel_dir == NULL) {
+        k_panic("init_paging: no reserved memory for the kernel page directory");
+    }
     k_memset(_kernel_dir, 0, sizeof(page_dir_t));
     _curr_dir = _kernel_dir;
 
@@ -151,6 +157,10 @@ void init_paging(size_t usable_frames)
 
         if (!(table = _curr_dir->logical_page_tables[table_index])) {
             tmp = mem_reserve(sizeof(page_table_t), true);
+            if (tmp == 0) {
+                k_panic("init_paging: no reserved memory for an identity-map "
+                        "page table");
+            }
             table = (page_table_t *) tmp;
 
             k_memset(table, 0, sizeof(page_table_t));

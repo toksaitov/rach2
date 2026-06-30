@@ -2333,10 +2333,17 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     num_modules = init_modules(magic, info);
 
     /* Push the bump allocator past the modules so it does not overwrite their
-     * data when it carves out page tables and other structures. */
+     * data when it carves out page tables and other structures. A module that
+     * ends above the 32 MiB direct-mapped limit cannot be addressed or managed
+     * and would drive the reservation break past the limit, so fail the boot
+     * closed with a clear diagnostic rather than let init_paging corrupt low
+     * memory when its first reservation comes back empty. */
     if (num_modules > 0) {
         module_info_t *last_module = get_module(num_modules - 1);
         if (last_module && last_module->end > mem_reserved_ptr) {
+            if (last_module->end > HARD_MEMORY_LIMIT) {
+                k_panic("k_main: a boot module exceeds the 32 MiB memory limit");
+            }
             mem_reserved_ptr = (last_module->end + 0xFFF) & ~0xFFF;
         }
     }
