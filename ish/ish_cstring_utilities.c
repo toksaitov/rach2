@@ -220,7 +220,7 @@ int ish_get_integer_from_cstring(const char *string)
 {
     ish_check(string);
 
-    int result = 0;
+    unsigned int magnitude = 0;
     while (ish_is_space(*string)) {
         ++string;
     }
@@ -233,15 +233,15 @@ int ish_get_integer_from_cstring(const char *string)
             ++string;
     }
 
+    /* Accumulate the magnitude in unsigned arithmetic so a value beyond INT_MAX
+     * wraps (defined) instead of overflowing a signed int; the sign is applied in
+     * unsigned form too, so no step is undefined. Callers use only the low bits
+     * (an exit status is taken modulo 256). */
     while (ish_is_digit(*string)) {
-        result = result * 10 + (*string++ - '0');
+        magnitude = magnitude * 10u + (unsigned int)(*string++ - '0');
     }
 
-    if (negative) {
-        result = -result;
-    }
-
-    return result;
+    return (int)(negative ? 0u - magnitude : magnitude);
 }
 
 /**
