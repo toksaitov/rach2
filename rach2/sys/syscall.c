@@ -1077,8 +1077,23 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
             } else {
                 return -ENOENT;  /* File not found and O_CREAT not set */
             }
-        } else if (flags & O_TRUNC) {
-            krffs_truncate(name, 0);
+        } else {
+            int is_dir = (node == krffs_fs->node) || KRFFS_IS_DIR(node->mode);
+            /* O_CREAT|O_EXCL requires the file not already exist. */
+            if ((flags & O_CREAT) && (flags & O_EXCL)) {
+                return -EEXIST;
+            }
+            /* A directory cannot be opened for writing or truncated into a file
+             * (the access mode is the low two bits); O_DIRECTORY requires one. */
+            if (is_dir && (((unsigned)flags & 3u) != 0 || (flags & O_TRUNC))) {
+                return -EISDIR;
+            }
+            if (!is_dir && (flags & O_DIRECTORY)) {
+                return -ENOTDIR;
+            }
+            if (flags & O_TRUNC) {
+                krffs_truncate(name, 0);
+            }
         }
     }
 
@@ -3943,6 +3958,13 @@ static int32_t sys_creat(isr_params_t *params)
 
     if (!krffs_fs) {
         return -ENOENT;
+    }
+
+    /* creat on an existing directory must fail with -EISDIR, not fall through to
+     * overwrite the directory node's mode and corrupt it into a file. */
+    node = krffs_resolve(name);
+    if (node && (node == krffs_fs->node || KRFFS_IS_DIR(node->mode))) {
+        return -EISDIR;
     }
 
     if (krffs_create(name) != 0) {
