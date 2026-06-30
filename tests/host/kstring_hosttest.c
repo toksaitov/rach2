@@ -13,6 +13,7 @@
  */
 
 #include "kstring.h"
+#include "kctypes.h"
 
 static int fails;
 
@@ -47,6 +48,39 @@ int main(void)
     k_memset(dst, 'Z', sizeof(dst));
     k_strncpy(dst, "ab", 8);
     CHECK(dst[0] == 'a' && dst[1] == 'b' && dst[2] == '\0');
+
+    /* k_strreverse: the empty string must be a no-op (the length-1 upper index
+     * would otherwise wrap to SIZE_MAX and walk off the buffer), then single,
+     * even, and odd lengths reverse correctly. */
+    {
+        char r[16];
+        k_strncpy(r, "", 16);
+        k_strreverse(r);
+        CHECK(r[0] == '\0');
+        k_strncpy(r, "x", 16);
+        k_strreverse(r);
+        CHECK(r[0] == 'x' && r[1] == '\0');
+        k_strncpy(r, "ab", 16);
+        k_strreverse(r);
+        CHECK(r[0] == 'b' && r[1] == 'a' && r[2] == '\0');
+        k_strncpy(r, "abcde", 16);
+        k_strreverse(r);
+        CHECK(r[0] == 'e' && r[1] == 'd' && r[2] == 'c' && r[3] == 'b' && r[4] == 'a');
+    }
+
+    /* case fold: k_toupper/k_tolower change only their own case; k_strtoupper
+     * folds a whole string and leaves digits and punctuation alone. */
+    CHECK(k_toupper('a') == 'A' && k_toupper('z') == 'Z');
+    CHECK(k_toupper('A') == 'A' && k_toupper('5') == '5' && k_toupper('!') == '!');
+    CHECK(k_tolower('A') == 'a' && k_tolower('Z') == 'z');
+    CHECK(k_tolower('a') == 'a' && k_tolower('5') == '5');
+    {
+        char u[16];
+        k_strncpy(u, "aBc1!", 16);
+        k_strtoupper(u);
+        CHECK(u[0] == 'A' && u[1] == 'B' && u[2] == 'C' && u[3] == '1' && u[4] == '!' &&
+              u[5] == '\0');
+    }
 
     /* Bounded so the count never wraps to 0 (a false pass) as an exit
      * status. */

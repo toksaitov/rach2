@@ -5,12 +5,22 @@ size_t k_strlen(const char *str)
     const char *end; for (end = str; *end; ++end); return end - str;
 }
 
+/**
+ * Reverse the NUL-terminated string `str` in place.
+ *
+ * An empty string is left untouched; without that guard the length-minus-one
+ * upper index would wrap to SIZE_MAX and walk off the buffer.
+ */
 void k_strreverse(char *str)
 {
-    size_t i, j;
+    size_t i, j, len;
     char c;
 
-    for (i = 0, j = k_strlen(str) - 1; i < j; ++i, --j) {
+    len = k_strlen(str);
+    if (len == 0) {
+        return;
+    }
+    for (i = 0, j = len - 1; i < j; ++i, --j) {
         c = str[i]; str[i] = str[j]; str[j] = c;
     }
 }
