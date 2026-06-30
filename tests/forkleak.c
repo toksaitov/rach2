@@ -1,0 +1,163 @@
+/**
+ * Probes that fork()/exit()/wait() does not leak physical memory.
+ *
+ * Each fork gives the child a kernel stack. Before this milestone that stack
+ * came from the never-freed bump allocator, so every fork/exit/reap cycle lost
+ * four frames for good and the pool drained across the kernel's own respawn
+ * churn (a steady, unbounded leak that eventually denies fork). The stacks now
+ * come from a fixed arena the reap returns to the pool, so the free-frame count
+ * is flat across churn. The probe reads sysinfo's freeram after a warm-up, runs
+ * many fork/exit/wait cycles, and asserts the free count did not fall.
+ *
+ * Prints "FORKLEAK OK". Freestanding; direct int 0x80.
+ */
+
+typedef unsigned int size_t;
+
+#define STDOUT_FILENO 1
+
+#define SYS_EXIT    1
+#define SYS_FORK    2
+#define SYS_WRITE   4
+#define SYS_WAITPID 7
+#define SYS_SYSINFO 116
+
+#define WARMUP 8
+#define CYCLES 120
+/* Tolerance (bytes): far below the ~1.6 MB a 120-cycle leak would cost, far
+ * above any free-list jitter, so a real leak is unmistakable. */
+#define SLACK (64u * 1024u)
+
+/* The Linux i386 sysinfo struct, sized so the kernel's copy_to_user fits. */
+struct sysinfo {
+    int uptime;
+    unsigned loads[3];
+    unsigned totalram;
+    unsigned freeram;
+    unsigned sharedram;
+    unsigned bufferram;
+    unsigned totalswap;
+    unsigned freeswap;
+    unsigned short procs;
+    unsigned short pad;
+    unsigned totalhigh;
+    unsigned freehigh;
+    unsigned mem_unit;
+    char _f[8];
+};
+
+static int sys_write(int fd, const void *buf, size_t count)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
+    return r;
+}
+
+static void sys_exit(int status)
+{
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    __builtin_unreachable();
+}
+
+static int sys_fork(void)
+{
+    int r;
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK));
+    return r;
+}
+
+static int sys_waitpid(int pid, int *status, int options)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
+                         : "memory");
+    return r;
+}
+
+static int sys_sysinfo(struct sysinfo *si)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(SYS_SYSINFO), "b"(si)
+                         : "memory");
+    return r;
+}
+
+static size_t strlen(const char *s)
+{
+    size_t n = 0;
+    while (s[n]) {
+        n++;
+    }
+    return n;
+}
+
+static void puts(const char *s)
+{
+    sys_write(STDOUT_FILENO, s, strlen(s));
+    sys_write(STDOUT_FILENO, "\n", 1);
+}
+
+static void fail(const char *why)
+{
+    sys_write(STDOUT_FILENO, "FORKLEAK FAIL: ", 15);
+    puts(why);
+    sys_exit(1);
+}
+
+/* One fork/exit(0)/wait cycle; fails the probe if fork ran out of memory. */
+static void churn(void)
+{
+    int pid, status;
+
+    pid = sys_fork();
+    if (pid < 0) {
+        fail("fork ran out of memory: the pool is leaking");
+    }
+    if (pid == 0) {
+        sys_exit(0);
+    }
+    if (sys_waitpid(pid, &status, 0) != pid) {
+        fail("waitpid");
+    }
+}
+
+void _start(void)
+{
+    struct sysinfo si;
+    unsigned base_free, end_free;
+    int i;
+
+    /* Warm the page-table and page-directory free lists so the only frames that
+     * move during the measured loop are the ones a leak would strand. */
+    for (i = 0; i < WARMUP; i++) {
+        churn();
+    }
+
+    if (sys_sysinfo(&si) != 0) {
+        fail("sysinfo");
+    }
+    base_free = si.freeram;
+
+    for (i = 0; i < CYCLES; i++) {
+        churn();
+    }
+
+    if (sys_sysinfo(&si) != 0) {
+        fail("sysinfo");
+    }
+    end_free = si.freeram;
+
+    if (base_free > end_free && base_free - end_free > SLACK) {
+        fail("free memory fell across fork churn: a per-fork resource leaks");
+    }
+
+    puts("FORKLEAK OK");
+    sys_exit(0);
+}
