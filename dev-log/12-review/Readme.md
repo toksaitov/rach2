@@ -33,9 +33,13 @@ transition. More striking, in the peripherals phase it overturned a refutation. 
 fan-out's adversarial verifier had looked at the 8259 bring-up and declared the
 early-unmask concern unreachable; Codex, re-auditing the same code, constructed the
 reachable case and proved it real. An audit that trusted its own refutations would
-have shipped that bug. And in the TCP phase Codex found two regressions in the
-review's own retransmit fix, the same lesson the last audit closed on: keep a reader
-who did not write the fix.
+have shipped that bug. And the lesson the last audit closed on, keep a reader who
+did not write the fix, held twice over here: Codex caught two regressions in the
+review's own retransmit fix during the TCP phase, and the closing retirement review
+held the milestone three rounds on the same code, each round naming a real residual
+the per-phase passes had missed. A close detaches the socket before the FIN is even
+sent, so the receive states could acknowledge nothing and stall, and a simultaneous
+close could land in the wrong state; only with those closed did it retire.
 
 ## What it found
 
