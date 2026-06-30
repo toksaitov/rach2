@@ -47,5 +47,10 @@ for t in tests/host/*_hosttest.c; do
     fi
 done
 
-[ "$any" -eq 0 ] && echo "  (no host seam tests yet)"
+# Zero discovered tests is a failure, not a quiet pass: the glob breaking or the
+# directory moving would otherwise turn verify-host into a silent green.
+if [ "$any" -eq 0 ]; then
+    echo "hosttest: no host seam tests discovered under tests/host/" >&2
+    exit 1
+fi
 exit "$fail"
