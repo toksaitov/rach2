@@ -1,18 +1,19 @@
 /**
- * Isolates the copy-on-write sole-owner re-grant arm from the shared-copy arm.
+ * Stresses the copy-on-write sole-owner re-grant arm for leaks and corruption.
  *
  * When a write faults on a COW page the kernel takes one of two paths: if this
  * process is the frame's last owner (refcount 1) the page is made writable in
  * place with no copy (the re-grant arm); otherwise a private copy is allocated
- * and the shared frame's reference dropped (the shared-copy arm). `cowprobe`
- * proves a single split is isolated, but a regression that always copied, or one
- * that re-granted a still-shared frame, would pass it too. This probe drives
- * both arms every iteration: the child writes first (its write takes the
- * shared-copy arm and drops the parent to sole owner), the parent reaps it and
- * then writes the same page (that write must take the re-grant arm). It repeats
- * for many cycles, so a re-grant arm that leaked or double-freed the frame shows
- * up as a fork that runs out of frames, and a re-grant of a still-shared frame
- * shows up as the parent's bytes changing under the child.
+ * and the shared frame's reference dropped (the shared-copy arm). This probe
+ * drives the re-grant arm every iteration: the child writes first (its write
+ * takes the shared-copy arm and drops the parent to sole owner), the parent
+ * reaps it and then writes the same page (that write must take the re-grant
+ * arm). Over many cycles it catches the bugs that arm can have: a leak or
+ * double-free of the re-granted frame shows up as a fork that runs out of
+ * frames, and a re-grant of a still-shared frame shows up as the parent's bytes
+ * changing under the child. It cannot tell a correct in-place re-grant from a
+ * correct but wasteful always-copy, since the two are identical from user space;
+ * pinning that distinction needs a host seam test or a kernel copy counter.
  *
  * Prints "COWREGRANT OK" on success. Freestanding; direct int 0x80 syscalls.
  */
