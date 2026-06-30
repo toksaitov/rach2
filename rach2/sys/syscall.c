@@ -4893,7 +4893,12 @@ static int32_t sys_kill(isr_params_t *params)
 
 static int32_t sys_tkill(isr_params_t *params)
 {
-    /* tkill(tid, sig): tid == pid here. */
+    /* tkill(tid, sig): tid == pid here. A tid must be a positive thread id;
+     * unlike kill(2), a zero or negative value is an error, not a group
+     * selector, so reject it before do_kill would read it as one. */
+    if ((int)params->ebx <= 0) {
+        return -EINVAL;
+    }
     return do_kill((int)params->ebx, (int)params->ecx);
 }
 
