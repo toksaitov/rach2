@@ -1455,7 +1455,12 @@ static void krffs_disk_mark_clean(void)
     if (_krffs_on_disk) {
         krffs_node_t *root = (krffs_node_t *) PCWIN_BASE;
         root->mode &= (uint16_t) ~KRFFS_MODE_DIRTY;
-        pc_sync();
+        if (pc_sync() != 0) {
+            /* The cleared flag did not reach the disk: report it rather than
+               claim a clean unmount. The image stays marked dirty, so the next
+               boot conservatively invites fsck.krffs. */
+            serial_printf("KRFFS: clean-unmount flush failed; image stays dirty\n");
+        }
     }
 }
 
@@ -1579,7 +1584,14 @@ static int init_krffs_disk(void)
             serial_printf("KRFFS: not cleanly unmounted last time; run fsck.krffs\n");
         }
         root->mode |= KRFFS_MODE_DIRTY;
-        pc_sync();
+        if (pc_sync() != 0) {
+            /* The dirty flag never reached the platter, so a later crash would
+               leave an image fsck.krffs reads as clean. Fail the mount closed
+               rather than run on a filesystem whose crash evidence is missing. */
+            serial_printf("KRFFS: dirty flag did not reach the disk; mount aborted\n");
+            pc_set_backing(0, 0, 0);
+            return -1;
+        }
     }
     _krffs_on_disk = 1;
     return 0;
