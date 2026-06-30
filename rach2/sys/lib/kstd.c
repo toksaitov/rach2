@@ -49,7 +49,7 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
     if (radix < 2 || radix > 36) return 0;
 
     if (is_signed && input < 0) {
-        uinput = (unsigned int)(-input);
+        uinput = -(unsigned int)input; /* unsigned negation: defined even for INT_MIN */
         ++num_of_chars;
     } else if (is_signed) {
         uinput = (unsigned int)input;
