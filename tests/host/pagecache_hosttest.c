@@ -32,6 +32,12 @@ static uint8_t fake_disk[FAKE_PAGES][PC_PAGE_SIZE];
 static uint32_t fake_reads[FAKE_PAGES];
 static uint32_t fake_writes[FAKE_PAGES];
 
+/* Fault injection for the writeback paths: fail one page's writes, or all of
+   them, so the retain-on-failure machinery can be exercised. */
+#define FAKE_NO_FAIL 0xFFFFFFFFu
+static uint32_t fake_write_fail = FAKE_NO_FAIL;
+static int fake_write_fail_all;
+
 static int fake_read(uint32_t disk_off, void *page)
 {
     uint32_t p = disk_off / PC_PAGE_SIZE;
@@ -51,6 +57,9 @@ static int fake_write(uint32_t disk_off, const void *page)
     uint32_t p = disk_off / PC_PAGE_SIZE;
     uint32_t i;
     if (p >= FAKE_PAGES) {
+        return -1;
+    }
+    if (fake_write_fail_all || p == fake_write_fail) {
         return -1;
     }
     for (i = 0; i < PC_PAGE_SIZE; ++i) {
@@ -150,6 +159,45 @@ int main(void)
         uint32_t wb = pc_stat_writebacks();
         pc_sync();
         CHECK(pc_stat_writebacks() == wb);
+    }
+
+    /* Writeback-failure paths: a failed disk write must never drop a dirty page.
+       A failed writeback on sync is reported and the page stays dirty; once the
+       disk recovers, a later sync flushes it with its bytes intact. */
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    touch(20, 1, 0xC0u);
+    fake_write_fail = 20;
+    CHECK(pc_sync() == -1);
+    CHECK(fake_disk[20][0] != 0xC0u);
+    fake_write_fail = FAKE_NO_FAIL;
+    CHECK(pc_sync() == 0);
+    CHECK(fake_disk[20][0] == 0xC0u);
+
+    /* A shrink whose writebacks all fail is reported by pc_set_capacity, which
+       must keep the capacity covering the stuck dirty frames so the RECLAIM path
+       (not just sync, which scans every slot) can still reach them. Four dirty
+       pages fill the four-frame cache with no eviction. */
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    touch(21, 1, 0xC1u);
+    touch(22, 1, 0xC2u);
+    touch(23, 1, 0xC3u);
+    touch(24, 1, 0xC4u);
+    fake_write_fail_all = 1;
+    CHECK(pc_set_capacity(1) == -1);
+    CHECK(fake_writes[21] == 0 && fake_writes[24] == 0); /* the failed writes did not land */
+    fake_write_fail_all = 0;
+    /* Drive a working set far past one frame: only if the four stuck frames
+       stayed inside the capacity can eviction reach and flush them. Had capacity
+       collapsed to 1, slots 1..3 would be unreachable here and never written. No
+       pc_sync: this proves the retain invariant through the reclaim path alone. */
+    for (p = 30; p < 40; ++p) {
+        touch(p, 0, 0);
+    }
+    for (p = 21; p <= 24; ++p) {
+        CHECK(fake_writes[p] == 1);
+        CHECK(fake_disk[p][0] == (uint8_t)(0xC0u + (p - 20u)));
     }
 
     return (fails > 100) ? 100 : fails;
