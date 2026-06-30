@@ -459,6 +459,10 @@ static int32_t sys_exit(isr_params_t *params)
     return 0;
 }
 
+/* Re-validate a descriptor's cached KRFFS node before a file op (defined below
+ * near the other path helpers); 0 if live, -EBADF if the fd has gone stale. */
+static int fd_node_check(fd_entry_t *entry);
+
 /**
  * Write `count` bytes of user buffer `buf` to descriptor `fd`.
  *
@@ -559,6 +563,9 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 
         if (!entry->node) {
             return -EBADF;
+        }
+        if (fd_node_check(entry) != 0) {
+            return -EBADF;  /* the file was unlinked or relocated out from under us */
         }
 
         /* krffs_write reads the user buffer directly, so range-check AND fault
@@ -751,6 +758,38 @@ static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
         return len;
     }
     return join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
+}
+
+/**
+ * Re-validate a descriptor's cached KRFFS node before a file operation.
+ *
+ * KRFFS nodes are not refcounted, so an `unlink`, an `O_TRUNC`, or a write that
+ * grows and relocates a file through another descriptor (or another process, on
+ * the one shared image) can free or move the node a still-open fd points at. A
+ * later read/write/seek/stat through the stale `entry->node` would touch freed
+ * free-list metadata. Defend like the directory-fd path (`build_dirfd_path`):
+ * the node must still be a live reserved node whose reconstructed path resolves
+ * back to it. A NULL node is the root directory and needs no check. Returns 0
+ * when the node is live, or -EBADF when the fd has gone stale.
+ */
+static int fd_node_check(fd_entry_t *entry)
+{
+    char path[256];
+    krffs_node_t *node = entry->node;
+
+    if (node == NULL) {
+        return 0;
+    }
+    if (node->type != KRFFS_RESERVED_NODE) {
+        return -EBADF;
+    }
+    if (krffs_node_path(node, path, sizeof(path)) != 0) {
+        return -EBADF;
+    }
+    if (krffs_resolve(path) != node) {
+        return -EBADF;
+    }
+    return 0;
 }
 
 /**
@@ -1247,6 +1286,9 @@ static int32_t sys_lseek(isr_params_t *params)
     if (!entry->node) {
         return -EBADF;
     }
+    if (fd_node_check(entry) != 0) {
+        return -EBADF;  /* the file was unlinked or relocated out from under us */
+    }
     file_size = (uint32_t)entry->node->data_size;
 
     switch (whence) {
@@ -1444,6 +1486,9 @@ static int32_t sys_read(isr_params_t *params)
 
         if (!entry->node) {
             return -EBADF;
+        }
+        if (fd_node_check(entry) != 0) {
+            return -EBADF;  /* the file was unlinked or relocated out from under us */
         }
 
         /* krffs_read writes straight into the user buffer, so range-check AND
@@ -2093,7 +2138,12 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
     } else if (entry->node) {
-        krffs_fill_stat64(kst, entry->node);
+        /* A stale fd (its node was unlinked or relocated) would leak freed
+         * free-list bytes through the stat fields; leave the zeroed stat rather
+         * than read a node that is no longer live. */
+        if (fd_node_check(entry) == 0) {
+            krffs_fill_stat64(kst, entry->node);
+        }
     } else if (entry->type == FD_TYPE_SOCKET) {
         /* A socket fd: programs classify these with S_ISSOCK. */
         kst->st_mode = 0140666; /* S_IFSOCK | 0666 */
@@ -2525,6 +2575,9 @@ static int32_t sys_fchmod(isr_params_t *params)
     }
     if (entry->type == FD_TYPE_FILE && entry->node &&
         entry->node != krffs_fs->node) {
+        if (fd_node_check(entry) != 0) {
+            return -EBADF;  /* never write mode through a stale (freed) node */
+        }
         entry->node->mode = (uint16_t) ((entry->node->mode & ~0777u) | (mode & 0777u));
     }
     return 0;
@@ -4463,6 +4516,9 @@ static int32_t sys_getdents64(isr_params_t *params)
 
     if (!krffs_fs) {
         return -EIO;
+    }
+    if (fd_node_check(entry) != 0) {
+        return -EBADF;  /* the directory was removed out from under this fd */
     }
 
     target_index = entry->ofd->offset; /* the file index reached so far */
