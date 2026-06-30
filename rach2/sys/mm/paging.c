@@ -348,9 +348,14 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
         return 1; /* an empty range touches nothing */
     }
 
-    /* Callers range-check with user_range_ok first, so addr + len does not
-     * overflow past USER_ADDR_MAX. */
+    /* Callers range-check with user_range_ok first, but self-defend anyway: an
+     * addr + len that wraps the 32-bit address space would make `page < end`
+     * terminate early and leave the tail unfaulted (and the caller copying it
+     * would then fault unhandled). A wrap is rejected outright. */
     end = addr + len;
+    if (end < addr) {
+        return 0;
+    }
     for (page = addr & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
         if (!vm_resolve(page, write)) {
             return 0;
