@@ -502,6 +502,13 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     uintptr_t end_addr = phys_addr + size;
     uintptr_t addr;
 
+    /* Reject an empty or wrapping region: a `phys_addr + size` that overflowed
+     * would leave end_addr below start_page, map nothing, and falsely succeed. */
+    if (size == 0 || end_addr < phys_addr) {
+        serial_printf("map_mmio: bad region 0x%x size 0x%x\n", phys_addr, size);
+        return 0;
+    }
+
     for (addr = start_page; addr < end_addr; addr += PAGE_SIZE) {
         uintptr_t page_num = addr / PAGE_SIZE;
         uintptr_t table_index = page_num / 1024;
