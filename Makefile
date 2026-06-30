@@ -239,32 +239,38 @@ stress-test: rach2 tests krffs
 AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
               --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0
 
+# Per-bus image names so an ATA target and its AHCI twin can run under `make -j`
+# without racing on a shared file (each recipe re-stages its image first).
+DISK_TEST_AHCI_IMAGE = $(IMAGES_DIR)/disk-test-ahci.disk
+PERSIST_AHCI_DISK    = $(IMAGES_DIR)/persist-test-ahci.disk
+STRESS_AHCI_DISK     = $(IMAGES_DIR)/stress-test-ahci.disk
+
 test-disk-ahci: rach2 tests krffs
-	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
+	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
 	python3 tools/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=none,id=drv0" \
+	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
 
 persist-test-ahci: rach2 tests krffs
-	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_DISK) 64 48
+	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
 	python3 tools/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(PERSIST_DISK),format=raw,if=none,id=drv0" \
+	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
 	python3 tools/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(PERSIST_DISK),format=raw,if=none,id=drv0" \
+	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
 
 stress-test-ahci: rach2 tests krffs
-	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
+	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_AHCI_DISK) 64 48
 	python3 tools/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(STRESS_DISK),format=raw,if=none,id=drv0" \
+	    --drive "file=$(STRESS_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 150 --ok "STRESSPROBE OK" \
 	    "expect=Type 'help'" "send=exec /stressprobe" wait=130
