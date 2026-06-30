@@ -1323,7 +1323,10 @@ static int krffs_chain_is_valid(krffs_node_t *root, uint32_t size)
         if (++count > max_nodes) {
             return 0; /* a cyclic or non-closing chain */
         }
-        if (pos + sizeof(krffs_node_t) > limit) {
+        /* pos stays in [base, limit] (it starts at base and only advances by a
+         * size already bounded below), so limit - pos never underflows. Compare
+         * by subtraction so a hostile 64-bit size cannot wrap pos past limit. */
+        if (limit - pos < sizeof(krffs_node_t)) {
             return 0;
         }
         if (n->magic != KRFFS_FILE_SYSTEM_MAGIC) {
@@ -1333,7 +1336,7 @@ static int krffs_chain_is_valid(krffs_node_t *root, uint32_t size)
             n->type != KRFFS_RESERVED_NODE) {
             return 0;
         }
-        if (n->size < sizeof(krffs_node_t) || pos + n->size > limit) {
+        if (n->size < sizeof(krffs_node_t) || n->size > limit - pos) {
             return 0;
         }
         if (count > 1 && n->previous_node_size != prev_size) {
