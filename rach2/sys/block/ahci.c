@@ -619,6 +619,9 @@ static block_device_t ahci_device;
 
 int ahci_init(void)
 {
+    /* Leave the published device unset until bring-up succeeds, so a failed
+     * probe fails closed regardless of caller (mirrors ata_init). */
+    block0 = 0;
     ahci_base = 0;
     ahci_port = -1;
     ahci_sector_count = 0;
