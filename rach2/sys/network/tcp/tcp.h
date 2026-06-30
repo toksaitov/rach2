@@ -84,6 +84,8 @@ struct tcb {
     int fin_received;   /* a FIN was received: signals EOF to recv */
     int fin_pending;    /* close() requested: send FIN once data drains */
 
+    uint32_t so_error;  /* pending SO_ERROR (positive errno); 0 = none */
+
     /* Retransmission and congestion control (RFC 6298 / RFC 5681). */
     uint32_t rto;          /* current retransmit timeout (ticks)     */
     uint32_t rto_timer;    /* countdown to next retransmit; 0 = off  */

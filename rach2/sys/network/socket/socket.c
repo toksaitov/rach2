@@ -456,6 +456,12 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
         if (tcb->state == TCP_ESTABLISHED) {
             revents |= (short)(events & POLLOUT); /* connected -> writable */
         }
+        if (tcb->so_error != 0) {
+            /* A failed connection: report the error, and POLLOUT so a poll(POLLOUT)
+             * on a non-blocking connect wakes and the caller then reads SO_ERROR. */
+            revents |= POLLERR;
+            revents |= (short)(events & POLLOUT);
+        }
         if (tcb->state == TCP_CLOSED) {
             revents |= POLLHUP;                  /* reset / fully closed */
             revents |= (short)(events & POLLIN); /* a recv will return 0/-1 at once */

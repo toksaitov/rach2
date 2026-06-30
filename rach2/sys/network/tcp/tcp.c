@@ -25,6 +25,7 @@
 #include "../net.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
+#include "../../lib/kerrno.h"
 #include "../../mm/heap.h"
 
 /*
@@ -462,6 +463,7 @@ static void tcp_giveup(struct tcb *tcb)
 {
     serial_printf("TCP: connection timed out, giving up\n");
     tcb->state      = TCP_CLOSED;
+    tcb->so_error   = ETIMEDOUT; /* surfaced by SO_ERROR and POLLERR */
     tcb->retx_flags = 0;
     tcb->rto_timer  = 0;
     tcb->zwp_timer  = 0;
@@ -761,6 +763,9 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
         default:
             serial_printf("TCP: reset, connection closed\n");
+            /* A reset during the active open is a refused connect; later it is a
+             * reset connection. Either is surfaced by SO_ERROR and POLLERR. */
+            tcb->so_error   = (tcb->state == TCP_SYN_SENT) ? ECONNREFUSED : ECONNRESET;
             tcb->state      = TCP_CLOSED;
             tcb->retx_flags = 0;
             tcb->rto_timer  = 0;

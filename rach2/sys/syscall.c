@@ -6599,8 +6599,18 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
     }
     if (level == SOL_SOCKET && optname == SO_TYPE) {
         val = entry->sock->type;
+    } else if (level == SOL_SOCKET && optname == SO_ERROR) {
+        /* Report and clear the connection's pending async error (the standard
+         * non-blocking-connect completion check). Read-and-clear under net_lock
+         * so the IRQ that sets it cannot race the clear. */
+        uint32_t flags = net_lock();
+        if (entry->sock->tcb) {
+            val = (int)entry->sock->tcb->so_error;
+            entry->sock->tcb->so_error = 0;
+        }
+        net_unlock(flags);
     } else {
-        val = 0; /* SO_ERROR / SO_REUSEADDR / SO_KEEPALIVE / TCP_NODELAY: off/none */
+        val = 0; /* SO_REUSEADDR / SO_KEEPALIVE / TCP_NODELAY: off/none */
     }
     if (!optval_ptr || !optlen_ptr) {
         return -EFAULT;
