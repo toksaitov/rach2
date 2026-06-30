@@ -5998,9 +5998,13 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
         return -EFAULT;
     }
 
-    /* A datagram socket needs a source port so replies can come back. */
+    /* A datagram socket needs a source port so replies can come back. The
+     * binding table is smaller than the socket table, so the ephemeral bind can
+     * fail; report it rather than send from port 0 and claim success. */
     if (entry->sock->local_port == 0) {
-        udp_bind_ephemeral(entry->sock);
+        if (udp_bind_ephemeral(entry->sock) == 0) {
+            return -EAGAIN;
+        }
     }
 
     dst_port = SC_BE16(sa + 2);
