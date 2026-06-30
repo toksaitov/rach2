@@ -69,8 +69,9 @@ void tty_console_poll(void);
  */
 void tty_input_char(struct tty *t, unsigned char c);
 
-/** Blocking read into `kbuf`; returns the byte count, 0 at EOF, or -EINTR. */
-int tty_read(struct tty *t, unsigned char *kbuf, int count);
+/** Read into `kbuf`; returns the byte count, 0 at EOF, -EINTR, or (when
+ * `nonblock` is set and nothing is ready) -EAGAIN. */
+int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock);
 
 /* Write count kernel bytes through output processing (OPOST/ONLCR) to the sink.
  * Returns count (a console write never blocks or fails). */

@@ -13,6 +13,7 @@
 #include "../serial.h"
 #include "../kio.h"
 #include "../lib/kstring.h"
+#include "../lib/kerrno.h"
 
 /* Most serial bytes drained into the discipline per pump call, so a flood cannot
  * hold interrupts off (the drain runs under cli) for an unbounded stretch; a
@@ -174,8 +175,11 @@ static int tty_ready_cond(void *arg)
  * Block until a line is readable, then copy up to `count` bytes into `kbuf`.
  *
  * Returns the byte count, 0 at EOF, or -EINTR if a signal cut the wait short.
+ * When `nonblock` is set the read never parks: it drains the polled source and,
+ * if nothing is ready (and the discipline is not at EOF, which reads as ready),
+ * returns -EAGAIN instead of waiting.
  */
-int tty_read(struct tty *t, unsigned char *kbuf, int count)
+int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
 {
     int rc;
     int n;
@@ -183,6 +187,16 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count)
 
     if (count <= 0) {
         return 0;
+    }
+    if (nonblock) {
+        flags = tty_irq_save();
+        if (tty_ready_cond(t)) {
+            n = n_tty_read(&t->ldisc, kbuf, count);
+            tty_irq_restore(flags);
+            return n;
+        }
+        tty_irq_restore(flags);
+        return -EAGAIN;
     }
     for (;;) {
         rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);

@@ -1533,7 +1533,8 @@ static int32_t sys_read(isr_params_t *params)
             return -EINTR; /* the SIGTTIN stops us; the read is retried when fg */
         }
         stdin_waiting_proc = current_proc;
-        n = tty_read(&console_tty, kbuf, (int)want);
+        n = tty_read(&console_tty, kbuf, (int)want,
+                     entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
         stdin_waiting_proc = NULL;
         if (n < 0) {
             return n;  /* -EINTR: a signal cut the wait short */

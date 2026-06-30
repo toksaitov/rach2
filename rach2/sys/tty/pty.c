@@ -347,9 +347,11 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
         tty_signal_group((int)current_proc->pgid, SIGTTIN);
         return -EINTR;
     }
-    /* Blocks until a line/byte is ready; tty_hangup (master close) makes this
-     * return 0 (EOF). */
-    n = tty_read(&p->slave, kbuf, (int)want);
+    /* Blocks until a line/byte is ready unless the fd is nonblocking, in which
+     * case an empty queue returns -EAGAIN; tty_hangup (master close) makes a
+     * blocking read return 0 (EOF). */
+    n = tty_read(&p->slave, kbuf, (int)want,
+                 e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
     if (n < 0) {
         return n;
     }
