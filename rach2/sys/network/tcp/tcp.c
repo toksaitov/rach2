@@ -301,10 +301,12 @@ static void tcp_retransmit(struct tcb *tcb)
     uint32_t data_len, send_len, i;
     uint16_t seg_len;
 
-    /* Bound by the unacknowledged DATA still in the ring, not snd_nxt - snd_una,
-     * which also counts an outstanding FIN's sequence; resending that phantom byte
-     * would corrupt the stream when a FIN is queued behind unacked data. */
-    data_len = tcb->send_tail - tcb->send_ack;
+    /* Bound by the SENT-but-unacknowledged data, [send_ack, send_head): not
+     * snd_nxt - snd_una (which also counts an outstanding FIN's sequence) and not
+     * send_tail - send_ack (which also counts queued-but-unsent data past snd_nxt).
+     * Either would transmit bytes the peer could ACK beyond snd_nxt, wedging the
+     * stream. */
+    data_len = tcb->send_head - tcb->send_ack;
     if (data_len == 0) {
         return;
     }
@@ -534,20 +536,16 @@ void tcp_tick(void)
                 serial_printf("TCP: retransmit (RTO %d, try %d)\n",
                               (unsigned)tcb->rto, (int)tcb->rto_backoff);
 
-                if (tcb->retx_flags && tcb->send_ack == tcb->send_tail) {
-                    /* A control segment (SYN/SYN-ACK/FIN) with no data outstanding. */
-                    tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq);
-                    tcb->rto_timer = tcb->rto;
-                } else {
+                if (tcb->send_head != tcb->send_ack) {
                     /*
-                     * Unacked data (with or without a FIN queued behind it):
-                     * collapse the window (RFC 5681) and resend the oldest
-                     * unacknowledged data segment. A FIN sent by close() must not
-                     * preempt this, or a lost data segment is never retransmitted
-                     * and the teardown stalls; the FIN's own retransmit resumes once
-                     * the data is acknowledged (send_ack catches up to send_tail).
-                     * snd_nxt is left untouched so it stays the high-water mark and
-                     * ACKs for data already in flight still validate.
+                     * Sent-but-unacknowledged data (with or without a FIN queued
+                     * behind it): collapse the window (RFC 5681) and resend the
+                     * oldest unacknowledged data segment. A FIN sent by close() must
+                     * not preempt this, or a lost data segment is never
+                     * retransmitted and the teardown stalls; the FIN's own
+                     * retransmit resumes once the data is acknowledged (send_ack
+                     * reaches send_head). snd_nxt is left untouched so it stays the
+                     * high-water mark and ACKs for data in flight still validate.
                      */
                     uint32_t new_ss = tcb->cwnd >> 1;
                     if (new_ss < 2u * TCP_MSS) new_ss = 2u * TCP_MSS;
@@ -555,6 +553,10 @@ void tcp_tick(void)
                     tcb->cwnd      = TCP_MSS;
                     tcb->rtt_start = 0;   /* Karn: no RTT sample on a retransmit */
                     tcp_retransmit(tcb);
+                } else if (tcb->retx_flags) {
+                    /* No data in flight; a control segment (SYN/SYN-ACK/FIN). */
+                    tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq);
+                    tcb->rto_timer = tcb->rto;
                 }
             }
         }
@@ -699,6 +701,22 @@ int tcp_is_connected(struct socket *sock)
      * states (SYN_SENT/RCVD), LISTEN, and CLOSED have no peer to name. The state
      * enum is ordered so ESTABLISHED and later compare >= TCP_ESTABLISHED. */
     return tcb->state >= TCP_ESTABLISHED;
+}
+
+/*
+ * Advance snd_una and send_ack for an in-window ACK in a state where our own FIN
+ * may be outstanding. The FIN's sequence is not data in the ring, so send_ack is
+ * advanced by the acknowledged data only (capped at the ring's sent bytes); this
+ * keeps the retransmit timer from resending already-acknowledged data after the
+ * FIN is sent. The caller has already checked snd_una < ack_num <= snd_nxt.
+ */
+static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
+{
+    uint32_t acked = ack_num - tcb->snd_una;
+    uint32_t ring  = tcb->send_head - tcb->send_ack;
+
+    tcb->send_ack += (acked < ring) ? acked : ring;
+    tcb->snd_una   = ack_num;
 }
 
 /**
@@ -955,11 +973,13 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         int            needs_ack   = 0;
 
         /* Accept only an ACK within the window (snd_una < ack <= snd_nxt); a higher
-         * ack_num would push snd_una past the transmit high-water mark. */
+         * ack_num would push snd_una past the transmit high-water mark. Advance
+         * send_ack by the acknowledged DATA only (capped at the ring's sent bytes),
+         * so a lost FIN does not leave RTO retransmitting already-acked data. */
         if ((flags & TCP_ACK) &&
             (int32_t)(ack_num - tcb->snd_una) > 0 &&
             (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
-            tcb->snd_una = ack_num;
+            tcp_ack_data(tcb, ack_num);
             if (ack_num == tcb->snd_nxt) {
                 tcb->state          = TCP_FIN_WAIT_2;
                 tcb->retx_flags     = 0;
@@ -1032,16 +1052,30 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             tcb->rto_timer      = 0;
             tcb->state          = TCP_TIME_WAIT;
             tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
-        } else if (flags & TCP_FIN) {
-            tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
+        } else {
+            if ((flags & TCP_ACK) &&
+                (int32_t)(ack_num - tcb->snd_una) > 0 &&
+                (int32_t)(ack_num - tcb->snd_nxt) < 0) {
+                tcp_ack_data(tcb, ack_num); /* a data-only ACK frees the ring */
+            }
+            if (flags & TCP_FIN) {
+                tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
+            }
         }
         break;
 
     case TCP_LAST_ACK:
         if ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) {
             tcb_free(tcb);
-        } else if (flags & TCP_FIN) {
-            tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
+        } else {
+            if ((flags & TCP_ACK) &&
+                (int32_t)(ack_num - tcb->snd_una) > 0 &&
+                (int32_t)(ack_num - tcb->snd_nxt) < 0) {
+                tcp_ack_data(tcb, ack_num); /* a data-only ACK frees the ring */
+            }
+            if (flags & TCP_FIN) {
+                tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
+            }
         }
         break;
 
