@@ -351,8 +351,14 @@ static void keyboard_handler(isr_params_t *params)
         return;
     }
 
-    /* 'C' is scancode 0x2E. */
-    if (_kbd_ctrl && scancode == 0x2E) {
+    /* 'C' is scancode 0x2E. When a session owns the console (a reader is parked or
+     * a session holds it), let ^C flow through the line discipline below like every
+     * other key: n_tty's ISIG path posts SIGINT to the foreground group AND flushes
+     * pending input, matching a serial ^C, so the two console input sources agree.
+     * Only with no session (the kernel debug shell, which reads through its own
+     * buffer, not the discipline) is the signal delivered out of band. */
+    if (_kbd_ctrl && scancode == 0x2E &&
+        !(wq_active(&console_tty.input_wq) || console_tty.sid != 0)) {
         kill_foreground_process();
         return;
     }
