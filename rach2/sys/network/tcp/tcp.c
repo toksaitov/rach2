@@ -971,7 +971,13 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             seq + payload_len == tcb->rcv_nxt) {
             tcb->rcv_nxt++;
             tcb->fin_received = 1;
-            tcb->state = TCP_CLOSE_WAIT;
+            /* The ACK handling above may have already drained a close's queued data
+             * and let tcp_pump send our own FIN, moving us to FIN_WAIT_1 within this
+             * same segment; the peer's FIN then completes a simultaneous close into
+             * CLOSING, not CLOSE_WAIT, so the later ACK of our FIN is handled in the
+             * state that expects it. */
+            tcb->state = (tcb->state == TCP_FIN_WAIT_1) ? TCP_CLOSING
+                                                        : TCP_CLOSE_WAIT;
             socket_tcp_fin(tcb->sock);
             needs_ack = 1;
         }
