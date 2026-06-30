@@ -174,9 +174,18 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
         }
 
         /* Park on every polled object's wait queue, then yield. Done under the
-         * same cli as the scan, so a readiness change cannot be lost. */
+         * same cli as the scan, so a readiness change cannot be lost. A finite
+         * timeout also arms the timer wake (the nanosleep mechanism): with another
+         * process runnable, schedule() switches away and never returns here on its
+         * own, and a poll on no ready queue (nfds == 0) or one whose objects never
+         * fire would otherwise sleep past its deadline forever. proc_wake_sleepers
+         * makes us READY at the deadline. A computed tick of 0 maps to 1, the
+         * value 0 being the "not sleeping" sentinel. */
         for (i = 0; i < nfds; i++) {
             wq_poll_add(wqs[i], current_proc);
+        }
+        if (has_deadline) {
+            current_proc->wakeup_tick = deadline ? deadline : 1;
         }
         current_proc->state = PROC_BLOCKED;
         irq_restore(flags);
@@ -199,6 +208,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
     /* On a break we still hold the loop's cli but may be enqueued (broke right
      * after a scan that ran before any sleep this iteration, in which case we
      * never enqueued, so the removes are no-ops). Belt-and-suspenders dequeue. */
+    current_proc->wakeup_tick = 0; /* disarm the timer wake */
     for (i = 0; i < nfds; i++) {
         wq_poll_remove(wqs[i], current_proc);
     }
