@@ -99,6 +99,14 @@ krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node)
         return NULL;
     }
 
+    /* A node smaller than its own header would not advance (an unbounded walk)
+     * or fold to a bad address. The mount-time pass rejects such an image, so
+     * this is a runtime backstop: report the root so a `!= fs->node` walk stops
+     * cleanly instead of looping or reading out of bounds. */
+    if (node->size < sizeof(krffs_node_t)) {
+        return fs->node;
+    }
+
     next = krffs_wrap_node_position(
         fs,
         (krffs_node_t *)(((char *)node) + node->size)
@@ -1286,6 +1294,63 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out,
  * success the global krffs_fs points at the mounted file system. Returns 0 on
  * success, -1 if the image is too small or malformed.
  */
+/**
+ * Walk the whole circular node chain once, bounding every step.
+ *
+ * The walkers trust each node's `size` to advance, so a malformed or partially
+ * written image (a node whose size overshoots the region, is below a header, or
+ * a chain that never closes) would drive them out of bounds or into an infinite
+ * loop. Validate the structure before publishing it: each node sits within the
+ * region with a header that fits, carries the magic and a known type, has a size
+ * of at least one header that does not run past the end, and a backward link
+ * consistent with the previous node; the sizes must tile the region exactly and
+ * the chain must close back on the root. Returns 1 if sound, 0 if not.
+ */
+static int krffs_chain_is_valid(krffs_node_t *root, uint32_t size)
+{
+    uint64_t base = (uint64_t)(uintptr_t)root;
+    uint64_t limit = base + size;
+    uint64_t pos = base;
+    uint64_t prev_size = 0;
+    uint64_t total = 0;
+    uint32_t max_nodes = size / (uint32_t)sizeof(krffs_node_t) + 1;
+    uint32_t count = 0;
+
+    for (;;) {
+        krffs_node_t *n = (krffs_node_t *)(uintptr_t)pos;
+
+        if (++count > max_nodes) {
+            return 0; /* a cyclic or non-closing chain */
+        }
+        if (pos + sizeof(krffs_node_t) > limit) {
+            return 0;
+        }
+        if (n->magic != KRFFS_FILE_SYSTEM_MAGIC) {
+            return 0;
+        }
+        if (n->type != KRFFS_ROOT_NODE && n->type != KRFFS_FREE_NODE &&
+            n->type != KRFFS_RESERVED_NODE) {
+            return 0;
+        }
+        if (n->size < sizeof(krffs_node_t) || pos + n->size > limit) {
+            return 0;
+        }
+        if (count > 1 && n->previous_node_size != prev_size) {
+            return 0;
+        }
+        total += n->size;
+        prev_size = n->size;
+        pos += n->size;
+        if (pos == limit) {
+            break; /* the last node ends at the region edge; the list wraps here */
+        }
+    }
+    if (total != (uint64_t)size || root->previous_node_size != prev_size) {
+        return 0;
+    }
+    return 1;
+}
+
 int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
 {
     krffs_node_t *root;
@@ -1305,6 +1370,10 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
     }
     if (root->type != KRFFS_ROOT_NODE) {
         serial_printf("KRFFS: First node is not root (type=%d)\n", root->type);
+        return -1;
+    }
+    if (!krffs_chain_is_valid(root, ramdisk_size)) {
+        serial_printf("KRFFS: node chain is malformed; refusing to mount\n");
         return -1;
     }
 
