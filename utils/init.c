@@ -12,6 +12,7 @@
  * and staged at /sbin/init by the os-simple and os-real image manifests.
  */
 #include <unistd.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 
@@ -59,6 +60,7 @@ static pid_t spawn_shell(void)
 int main(void)
 {
     pid_t shell = -1;
+    time_t spawned = 0;
 
     for (;;) {
         int status;
@@ -74,6 +76,7 @@ int main(void)
                 sleep(1);
                 continue;
             }
+            spawned = time(0);
         }
 
         /* The shell is a live child, so wait() blocks until it or a reparented
@@ -81,6 +84,14 @@ int main(void)
         reaped = wait(&status);
         if (reaped == shell) {
             shell = -1;
+            /* A shell that dies almost as soon as it starts (a missing or
+             * crash-looping binary in a misbuilt image) would otherwise be
+             * reforked at full CPU. Pause before respawning so the loop cannot
+             * hot-spin; a real interactive session outlives this window, so an
+             * ordinary `exit` still brings the prompt back promptly. */
+            if (time(0) - spawned < 2) {
+                sleep(1);
+            }
         }
     }
     return 0;                           /* unreachable */
