@@ -34,7 +34,7 @@ PROBES = [
     "hello", "filetest", "shelltest", "dirtest", "stattest", "touchtest",
     "rmtest", "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe",
     "errnoprobe", "vmprobe", "forkro", "dirprobe", "timeprobe", "sigprobe",
-    "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
+    "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
     "jobprobe", "miscprobe", "ptyprobe", "rngprobe", "orphanprobe",
 ]
 
