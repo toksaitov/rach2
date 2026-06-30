@@ -259,8 +259,11 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
  * Report how many bytes a read could return now, or 0 if it would block.
  *
  * In canonical mode any queued byte means a completed line is ready, and a
- * pending EOF counts as readable (the read returns 0). In raw mode VMIN 0 never
- * blocks; otherwise the queue must hold at least VMIN bytes.
+ * pending EOF counts as readable (the read returns 0). In raw mode a pending EOF
+ * (a hangup: the master closed) is readable too, so a blocked reader drains the
+ * queue and then returns 0 rather than waiting forever for VMIN bytes that will
+ * never arrive; otherwise VMIN 0 never blocks and a VMIN > 0 read waits until the
+ * queue holds at least VMIN bytes.
  */
 int n_tty_readable(const struct n_tty *t)
 {
@@ -273,6 +276,9 @@ int n_tty_readable(const struct n_tty *t)
         return t->eof ? 1 : 0;
     } else {
         unsigned int vmin = t->tio.c_cc[VMIN];
+        if (t->eof) {
+            return rq_count(t) > 0 ? (int)rq_count(t) : 1; /* hangup: drain, then 0 */
+        }
         if (vmin == 0) {
             return 1; /* a polling read never blocks */
         }

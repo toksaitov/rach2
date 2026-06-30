@@ -332,6 +332,30 @@ int main(void)
     feed(&t, &cp, 0);
     CHECK(t.line_len == 3); /* 'a', 'b', and the NUL, nothing erased */
 
+    /* raw mode: a hangup (the master closed) sets EOF, which must read as
+     * readable so a blocked reader returns 0 instead of waiting for VMIN bytes
+     * that will never arrive. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    t.tio.c_lflag &= ~(ICANON | ISIG | ECHO);
+    t.tio.c_cc[VMIN] = 1;
+    CHECK(n_tty_readable(&t) == 0);               /* empty, no hangup: blocks */
+    t.eof = 1;                                    /* tty_hangup marks EOF */
+    CHECK(n_tty_readable(&t) == 1);               /* now readable... */
+    CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* ...and reads as EOF */
+
+    /* A hangup with bytes still queued drains them first, then reads 0. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    t.tio.c_lflag &= ~(ICANON | ISIG | ECHO);
+    t.tio.c_cc[VMIN] = 3; /* would otherwise wait for 3 bytes */
+    feed(&t, &cp, 'a');
+    t.eof = 1;
+    CHECK(n_tty_readable(&t) == 1); /* the queued byte, despite VMIN 3 */
+    n = n_tty_read(&t, buf, sizeof(buf));
+    CHECK(n == 1 && buf[0] == 'a');
+    CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* then persistent EOF */
+
     /* buffer bounds: a canonical line longer than the buffer is capped; the
      * terminator still lands, and read returns the capped line at once */
     n_tty_init(&t);
