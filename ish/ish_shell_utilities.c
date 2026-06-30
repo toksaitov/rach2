@@ -14,9 +14,14 @@
 unsigned long ish_build_argument_array_from_input(char *input, char **arguments, unsigned long max_argument_count)
 {
     unsigned long argument_index = 0;
+    char *cursor = input;
 
-    for (char *cursor = input; cursor && argument_index < max_argument_count; ++argument_index) {
-        arguments[argument_index] = ish_carve_token_in_cstring(cursor, ish_is_space, &cursor);
+    while (cursor && argument_index < max_argument_count) {
+        char *token = ish_carve_token_in_cstring(cursor, ish_is_space, &cursor);
+        if (token == 0) {
+            break; /* only trailing separators remain: do not count a NULL token */
+        }
+        arguments[argument_index++] = token;
     }
     arguments[argument_index] = 0;
 
