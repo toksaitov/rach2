@@ -5,7 +5,6 @@
 
 #include "pci.h"
 #include "kio.h"
-#include "serial.h"
 
 #define PCI_CONFIG_ADDRESS  0xCF8
 #define PCI_CONFIG_DATA     0xCFC
@@ -361,9 +360,4 @@ bool pci_bar_is_memory(uint32_t bar)
 bool pci_bar_is_64bit(uint32_t bar)
 {
     return pci_bar_is_memory(bar) && ((bar & 0x06) == 0x04);
-}
-
-void init_pci(void)
-{
-    serial_printf("PCI: Bus scan complete\n");
 }

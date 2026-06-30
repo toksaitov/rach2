@@ -110,10 +110,4 @@ bool pci_bar_is_memory(uint32_t bar);
 /** True if a BAR is a 64-bit memory BAR (uses two consecutive BARs). */
 bool pci_bar_is_64bit(uint32_t bar);
 
-/*
- * Initialize the PCI subsystem and scan for devices, printing each
- * discovered device to serial for debugging.
- */
-void init_pci(void);
-
 #endif /* _PCI_H_ */
