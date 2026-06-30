@@ -289,6 +289,25 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
+    /* Validate the file system before walking it: without a correct signature and
+     * root node the node-size fields are garbage, and the chain walk below would
+     * follow them out of the mapping. The size check guards the magic read itself. */
+    if (file_system.size < sizeof(struct krffs_node) ||
+            file_system.node->magic != KRFFS_File_System_Magic ||
+            file_system.node->type != KRFFS_Root_Node) {
+        fprintf(
+            stderr,
+            "fsviz.krffs: '%s' is not a KRFFS file system "
+            "(bad signature or root node).\n",
+            path
+        );
+
+        exit_status =
+            EXIT_FAILURE;
+
+        goto cleanup;
+    }
+
     if (!has_text_option) {
         if (tb_init() != 0) {
             fprintf(
