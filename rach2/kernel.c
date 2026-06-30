@@ -2422,7 +2422,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     serial_printf("  Timer (100 Hz)...");
     __asm__ __volatile__("cli");
     init_pit(100);
-    set_isr_handler(32, &timer_handler); /* swap the PIT boot stub for the real handler */
+    set_isr_handler(32, &timer_handler); /* install the timer handler on IRQ0 */
     __asm__ __volatile__("sti");
     set_fore_color(light_green);
     k_puts(" OK");
