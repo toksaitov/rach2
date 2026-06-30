@@ -288,28 +288,27 @@ static void sb16_start_auto_init(void)
     int dma_channel;
     uint8_t dsp_cmd;
 
+    /*
+     * The DSP block-size register counts transfer units per IRQ (one byte for
+     * 8-bit DMA, one 16-bit word for 16-bit DMA), set to one DMA half. Stereo only
+     * interleaves L/R into consecutive units (signalled by the mode bit), so it
+     * does NOT change the unit count: halving block_size again for stereo would
+     * fire the DSP IRQ twice per half, out of phase with the DMA, and the handler
+     * would refill the half the DAC is still reading.
+     */
     if (is_16bit) {
         dma_channel = SB16_DMA_16BIT;
         dsp_cmd = DSP_16BIT_OUT_AI;
         mode = 0x10;  /* signed */
-        if (current_channels == 2) {
-            mode |= 0x20;  /* stereo */
-        }
-        block_size = (SB16_BUFFER_SIZE / 2) - 1;
-        if (current_channels == 2) {
-            block_size = (SB16_BUFFER_SIZE / 4) - 1;  /* two words per stereo frame */
-        }
+        block_size = (SB16_BUFFER_SIZE / 2) - 1;  /* one half, in 16-bit words */
     } else {
         dma_channel = SB16_DMA_8BIT;
         dsp_cmd = DSP_8BIT_OUT_AI;
         mode = 0x00;  /* unsigned */
-        if (current_channels == 2) {
-            mode |= 0x20;  /* stereo */
-        }
-        block_size = SB16_BUFFER_SIZE - 1;
-        if (current_channels == 2) {
-            block_size = (SB16_BUFFER_SIZE / 2) - 1;  /* two bytes per stereo frame */
-        }
+        block_size = SB16_BUFFER_SIZE - 1;  /* one half, in bytes */
+    }
+    if (current_channels == 2) {
+        mode |= 0x20;  /* stereo */
     }
 
     dma_start(dma_channel, addr, SB16_BUFFER_SIZE * 2,
