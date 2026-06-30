@@ -129,6 +129,18 @@ void socket_unref(struct socket *sock)
         tcp_close(sock);
     }
 
+    /* A listener still owns every connection queued for accept but never picked
+     * up; release each so its socket slot and TCB are not leaked for the life of
+     * the system. Each queued conn_sock is an established (non-listening) socket,
+     * so this recurses at most one level, and net_lock is save/restore reentrant. */
+    if (sock->type == SOCK_STREAM && sock->listening) {
+        while (sock->accept_head != sock->accept_tail) {
+            struct socket *conn = sock->accept_queue[sock->accept_head];
+            sock->accept_head = (sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+            socket_unref(conn);
+        }
+    }
+
     sock->in_use = 0;
     net_unlock(flags);
 }
