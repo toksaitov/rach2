@@ -262,10 +262,11 @@ static int ahci_discover(void)
     if (abar == 0) {
         return -1;
     }
-    if (abar >= HARD_MEMORY_LIMIT) {
-        if (map_mmio(abar, AHCI_ABAR_MAP_SIZE) == 0) {
-            return -1;
-        }
+    /* Map the ABAR cache-disabled (PCD|PWT) whatever its address. A low ABAR is
+       already identity-mapped but cacheable, so a status poll could read stale;
+       map_mmio rewrites the PTE cache-disabled either way. */
+    if (map_mmio(abar, AHCI_ABAR_MAP_SIZE) == 0) {
+        return -1;
     }
     ahci_base = (volatile uint8_t *) (uintptr_t) abar;
 
