@@ -125,6 +125,11 @@ static void commit_line(struct n_tty *t)
  * Defaults match a standard tty: ICRNL input, OPOST|ONLCR output, and
  * ISIG|ICANON with ECHO editing, plus the conventional control chars (^C, ^\,
  * DEL, ^U, ^D, ^Z, ^W) and VMIN 1.
+ *
+ * A raw read is gated by VMIN alone: VTIME is not implemented, so it is accepted
+ * (a TCSETS storing it does not fail) but ignored. A program that sets VMIN > 0
+ * with VTIME > 0 gets a plain blocking read for VMIN bytes, not an inter-byte
+ * timeout; one that relies on the timeout to return short does not get it.
  */
 void n_tty_init(struct n_tty *t)
 {
