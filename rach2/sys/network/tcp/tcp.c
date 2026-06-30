@@ -911,16 +911,18 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
 
         /* Deliver in-order data; a gap is dropped but still acknowledged so
-         * the sender retransmits. */
+         * the sender retransmits. Only the bytes that fit the recv ring advance
+         * rcv_nxt, so a truncated tail is not acknowledged and is retransmitted. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
-                socket_tcp_deliver(tcb->sock, payload, payload_len);
-                tcb->rcv_nxt += payload_len;
+                tcb->rcv_nxt += socket_tcp_deliver(tcb->sock, payload, payload_len);
             }
             needs_ack = 1;
         }
 
-        /* A FIN is honored only in order and only once. */
+        /* A FIN is honored only in order and only once. seq + payload_len ==
+         * rcv_nxt holds only when the whole payload was accepted, so a FIN riding
+         * a truncated segment does not signal EOF before its data is delivered. */
         if ((flags & TCP_FIN) && !tcb->fin_received &&
             seq + payload_len == tcb->rcv_nxt) {
             tcb->rcv_nxt++;
@@ -939,7 +941,16 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     }
 
     case TCP_FIN_WAIT_1:
-        if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0) {
+    {
+        uint16_t       payload_len = (uint16_t)(len - hdr_len);
+        const uint8_t *payload     = data + hdr_len;
+        int            needs_ack   = 0;
+
+        /* Accept only an ACK within the window (snd_una < ack <= snd_nxt); a higher
+         * ack_num would push snd_una past the transmit high-water mark. */
+        if ((flags & TCP_ACK) &&
+            (int32_t)(ack_num - tcb->snd_una) > 0 &&
+            (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
             tcb->snd_una = ack_num;
             if (ack_num == tcb->snd_nxt) {
                 tcb->state          = TCP_FIN_WAIT_2;
@@ -948,25 +959,64 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
                 tcb->timewait_until = kernel_ticks + TCP_FIN_WAIT2_TICKS;
             }
         }
-        if (flags & TCP_FIN) {
-            tcb->rcv_nxt++;
-            tcp_send_flags(tcb, TCP_ACK);
-            tcb->state = (tcb->state == TCP_FIN_WAIT_2)
-                         ? TCP_TIME_WAIT : TCP_CLOSING;
-            if (tcb->state == TCP_TIME_WAIT) {
-                tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+
+        /* The peer may keep sending after our close; deliver it in order and ACK. */
+        if (payload_len > 0) {
+            if (seq == tcb->rcv_nxt) {
+                tcb->rcv_nxt += socket_tcp_deliver(tcb->sock, payload, payload_len);
             }
+            needs_ack = 1;
+        }
+
+        /* Consume the peer's FIN only in order; a duplicate or early FIN is just
+         * re-acknowledged so the peer stops retransmitting it. */
+        if (flags & TCP_FIN) {
+            if (seq + payload_len == tcb->rcv_nxt) {
+                tcb->rcv_nxt++;
+                tcb->state = (tcb->state == TCP_FIN_WAIT_2) ? TCP_TIME_WAIT
+                                                            : TCP_CLOSING;
+                if (tcb->state == TCP_TIME_WAIT) {
+                    tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+                }
+            }
+            needs_ack = 1;
+        }
+
+        if (needs_ack) {
+            tcb->rcv_wnd = (uint16_t)(TCP_RING_SIZE -
+                           (tcb->recv_tail - tcb->recv_head));
+            tcp_send_flags(tcb, TCP_ACK);
         }
         break;
+    }
 
     case TCP_FIN_WAIT_2:
+    {
+        uint16_t       payload_len = (uint16_t)(len - hdr_len);
+        const uint8_t *payload     = data + hdr_len;
+        int            needs_ack   = 0;
+
+        if (payload_len > 0) {
+            if (seq == tcb->rcv_nxt) {
+                tcb->rcv_nxt += socket_tcp_deliver(tcb->sock, payload, payload_len);
+            }
+            needs_ack = 1;
+        }
         if (flags & TCP_FIN) {
-            tcb->rcv_nxt++;
+            if (seq + payload_len == tcb->rcv_nxt) {
+                tcb->rcv_nxt++;
+                tcb->state          = TCP_TIME_WAIT;
+                tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+            }
+            needs_ack = 1;
+        }
+        if (needs_ack) {
+            tcb->rcv_wnd = (uint16_t)(TCP_RING_SIZE -
+                           (tcb->recv_tail - tcb->recv_head));
             tcp_send_flags(tcb, TCP_ACK);
-            tcb->state          = TCP_TIME_WAIT;
-            tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
         }
         break;
+    }
 
     case TCP_CLOSING:
         if ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) {
@@ -974,12 +1024,16 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             tcb->rto_timer      = 0;
             tcb->state          = TCP_TIME_WAIT;
             tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+        } else if (flags & TCP_FIN) {
+            tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
         }
         break;
 
     case TCP_LAST_ACK:
         if ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) {
             tcb_free(tcb);
+        } else if (flags & TCP_FIN) {
+            tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
         }
         break;
 
@@ -994,11 +1048,19 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             if (tcb->snd_una == tcb->snd_nxt) {
                 tcb->rto_timer = 0;
             }
+        } else if ((flags & TCP_ACK) && window != tcb->snd_wnd) {
+            tcb->snd_wnd = window; /* a pure window update reopens a closed window */
         }
         tcp_pump(tcb);
         break;
 
     case TCP_TIME_WAIT:
+        if (flags & TCP_FIN) {
+            /* The peer retransmits its FIN because our ACK of it was lost; re-ACK
+             * and restart the 2MSL quarantine. */
+            tcp_send_flags(tcb, TCP_ACK);
+            tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+        }
         break;
 
     default:

@@ -312,16 +312,17 @@ void socket_tcp_connected(struct socket *sock)
 /**
  * Copy received stream bytes into the TCB receive ring and wake a reader.
  *
- * Called from tcp_rx in IRQ context. Copies at most the ring's free space;
- * surplus bytes are dropped here, leaving the peer to retransmit them once the
- * window reopens. recv_head/recv_tail are free-running indices masked to size.
+ * Called from tcp_rx in IRQ context. Copies at most the ring's free space and
+ * returns the count accepted; the caller advances rcv_nxt by that, so surplus
+ * bytes are neither stored nor acknowledged and the peer retransmits them once
+ * the window reopens. recv_head/recv_tail are free-running indices masked to size.
  */
-void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
+uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
 {
     struct tcb *tcb;
     uint32_t free_space, copy_len, i;
 
-    if (!sock || !sock->tcb) return;
+    if (!sock || !sock->tcb) return 0;
     tcb = sock->tcb;
 
     free_space = TCP_RING_SIZE - (tcb->recv_tail - tcb->recv_head);
@@ -334,6 +335,7 @@ void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
     tcb->recv_tail += copy_len;
 
     wq_wake_all(&sock->waiters);
+    return (uint16_t)copy_len;
 }
 
 /**

@@ -87,7 +87,10 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
 /* TCP-side helpers, implemented with the TCP layer. */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
 void socket_tcp_connected(struct socket *sock);
-void socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len);
+/** Copy in-order stream bytes into the recv ring; returns the count accepted
+ * (less than `len` if the ring was nearly full, so the caller advances rcv_nxt
+ * by only what fit and the peer retransmits the rest). */
+uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len);
 int  socket_tcp_recv(struct socket *sock, uint8_t *buf, int len);
 /** Non-blocking variant; SOCK_EAGAIN if no data is buffered (MSG_DONTWAIT). */
 int  socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len);
