@@ -503,9 +503,12 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             if (!user_buffer_ok((uint32_t)buf, count, 0)) {
                 return -EFAULT;
             }
-            /* tcp_send copies the user buffer into socket send buffers itself;
+            /* socket_tcp_send copies the user buffer into the socket send ring
+             * itself, blocking on send-ring space unless the fd is non-blocking;
              * __force strips the __user tag at this boundary. */
-            return tcp_send(entry->sock, (const uint8_t __force *)buf, (int)count);
+            return socket_tcp_send(entry->sock, (const uint8_t __force *)buf,
+                                   (int)count,
+                                   entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
         }
         /* Datagram sockets send via sendto(). */
         return -EOPNOTSUPP;
@@ -6128,8 +6131,6 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     uint32_t    dst_ip;
     uint8_t     sa[SOCKADDR_MIN];
 
-    (void)flags;
-
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
         return -EFAULT;
     }
@@ -6143,9 +6144,11 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
      * like send; the connection's peer is the destination, so the sockaddr is
      * ignored (this is the path musl's send() takes: sendto with a NULL addr). */
     if (entry->sock->type == SOCK_STREAM) {
-        return (int32_t)tcp_send(entry->sock,
-                                 (const uint8_t __force *)(const void __user *)buf_ptr,
-                                 len);
+        int nonblock = (flags & MSG_DONTWAIT) ||
+                       (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+        return (int32_t)socket_tcp_send(
+            entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len,
+            nonblock);
     }
 
     /* The payload must fit one unfragmented UDP packet (this stack does not
@@ -6428,8 +6431,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
-
-    (void)flags;
+    int         nonblock;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
         return -EFAULT;
@@ -6443,10 +6445,13 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
         return -EOPNOTSUPP;
     }
 
-    /* tcp_send copies the payload itself; __force strips __user at the boundary. */
-    return (int32_t)tcp_send(entry->sock,
-                             (const uint8_t __force *)(const void __user *)buf_ptr,
-                             len);
+    /* socket_tcp_send copies the payload itself, blocking on send-ring space
+     * unless asked not to; __force strips __user at the boundary. */
+    nonblock = (flags & MSG_DONTWAIT) ||
+               (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    return (int32_t)socket_tcp_send(
+        entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len,
+        nonblock);
 }
 
 /* recv(2): read from a connected stream socket. Honors MSG_DONTWAIT and

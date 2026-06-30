@@ -87,6 +87,9 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
 /* TCP-side helpers, implemented with the TCP layer. */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
 void socket_tcp_connected(struct socket *sock);
+void socket_tcp_writable(struct socket *sock);
+/** Blocking stream send; SOCK_EAGAIN when nonblock and the send ring is full. */
+int  socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock);
 /** Copy in-order stream bytes into the recv ring; returns the count accepted
  * (less than `len` if the ring was nearly full, so the caller advances rcv_nxt
  * by only what fit and the peer retransmits the rest). */

@@ -903,6 +903,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
                 }
 
                 tcp_pump(tcb);
+                socket_tcp_writable(tcb->sock); /* freed send-ring space */
             } else if (window != tcb->snd_wnd) {
                 /* Pure window update. */
                 tcb->snd_wnd = window;
@@ -1048,6 +1049,9 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             if (tcb->snd_una == tcb->snd_nxt) {
                 tcb->rto_timer = 0;
             }
+            tcp_pump(tcb);
+            socket_tcp_writable(tcb->sock); /* freed send-ring space */
+            break;
         } else if ((flags & TCP_ACK) && window != tcb->snd_wnd) {
             tcb->snd_wnd = window; /* a pure window update reopens a closed window */
         }

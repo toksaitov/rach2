@@ -309,6 +309,64 @@ void socket_tcp_connected(struct socket *sock)
     wq_wake_all(&sock->waiters);
 }
 
+/* Wake a writer or POLLOUT poller after an ACK frees send-ring space. */
+void socket_tcp_writable(struct socket *sock)
+{
+    if (!sock) return;
+
+    wq_wake_all(&sock->waiters);
+}
+
+/* Wait predicate: the send ring has room, or the connection left a sending state
+ * (so a blocked sender stops waiting and reports the result). */
+static int send_space_ready(void *arg)
+{
+    struct socket *sock = (struct socket *)arg;
+    struct tcb    *tcb  = sock->tcb;
+
+    if (!tcb || (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT)) {
+        return 1;
+    }
+    return (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0;
+}
+
+/**
+ * Blocking stream send: queue bytes, waiting for send-ring space if needed.
+ *
+ * tcp_send is the non-blocking primitive (it copies what fits and returns 0 when
+ * the ring is full). This wraps it so a blocking socket sleeps on send-ring space
+ * (woken by socket_tcp_writable when an ACK frees room) and a non-blocking one
+ * returns -EAGAIN. A nonzero request thus never returns 0, which a caller would
+ * misread as EOF. Returns the bytes queued, SOCK_EAGAIN, -EINTR, or -1 on a
+ * connection that is no longer in a sending state.
+ */
+int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
+{
+    if (!sock) {
+        return -1;
+    }
+    for (;;) {
+        int sent = tcp_send(sock, buf, len);
+        if (sent != 0 || len == 0) {
+            return sent; /* queued some, an error (< 0), or a 0-length request */
+        }
+        /* The ring is full and the request is nonzero. */
+        if (!sock->tcb || (sock->tcb->state != TCP_ESTABLISHED &&
+                           sock->tcb->state != TCP_CLOSE_WAIT)) {
+            return -1;
+        }
+        if (nonblock) {
+            return SOCK_EAGAIN;
+        }
+        {
+            int rc = wq_wait_event(&sock->waiters, send_space_ready, sock);
+            if (rc < 0) {
+                return rc; /* -EINTR */
+            }
+        }
+    }
+}
+
 /**
  * Copy received stream bytes into the TCB receive ring and wake a reader.
  *
@@ -455,8 +513,11 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
         if ((tcb->recv_tail - tcb->recv_head) != 0 || tcb->fin_received) {
             revents |= (short)(events & POLLIN); /* buffered data, or EOF (FIN) */
         }
-        if (tcb->state == TCP_ESTABLISHED) {
-            revents |= (short)(events & POLLOUT); /* connected -> writable */
+        /* Writable only in a sending state AND with send-ring space free, so a
+         * poll-then-send loop blocks instead of spinning when the ring is full. */
+        if ((tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
+            (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0) {
+            revents |= (short)(events & POLLOUT);
         }
         if (tcb->so_error != 0) {
             /* A failed connection: report the error, and POLLOUT so a poll(POLLOUT)
