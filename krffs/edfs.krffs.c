@@ -101,7 +101,7 @@ int main(int argc, char **argv)
     if (argc > 2) {
         errno = 0;
         pos = (uint64_t) strtoll(argv[2], &end_ptr, base);
-        if (argv[2] == end_ptr || errno != 0) {
+        if (argv[2] == end_ptr || *end_ptr != '\0' || errno != 0) {
             failed_to_parse_options = true;
         }
     }
@@ -115,7 +115,8 @@ int main(int argc, char **argv)
                 unsigned long long magic_value;
                 errno = 0;
                 magic_value = strtoull(argv[i + 1], &end_ptr, base);
-                if (argv[i + 1] == end_ptr || errno != 0 || magic_value > 0xFFFFu) {
+                if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0 ||
+                        magic_value > 0xFFFFu) {
                     failed_to_parse_options = true; /* not a 16-bit magic */
                 } else {
                     magic = (uint16_t) magic_value;
@@ -148,7 +149,7 @@ int main(int argc, char **argv)
             if (i + 1 < argc) {
                 errno = 0;
                 new_id = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
-                if (argv[i + 1] == end_ptr || errno != 0) {
+                if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0) {
                     failed_to_parse_options = true;
                 }
             } else {
@@ -173,7 +174,7 @@ int main(int argc, char **argv)
             if (i + 1 < argc) {
                 errno = 0;
                 size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
-                if (argv[i + 1] == end_ptr || errno != 0) {
+                if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0) {
                     failed_to_parse_options = true;
                 }
             } else {
@@ -185,7 +186,7 @@ int main(int argc, char **argv)
             if (i + 1 < argc) {
                 errno = 0;
                 previous_node_size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
-                if (argv[i + 1] == end_ptr || errno != 0) {
+                if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0) {
                     failed_to_parse_options = true;
                 }
             } else {
@@ -197,7 +198,7 @@ int main(int argc, char **argv)
             if (i + 1 < argc) {
                 errno = 0;
                 data_size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
-                if (argv[i + 1] == end_ptr || errno != 0) {
+                if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0) {
                     failed_to_parse_options = true;
                 }
             } else {
