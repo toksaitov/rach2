@@ -5918,6 +5918,14 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
                                  len);
     }
 
+    /* The payload must fit one unfragmented UDP packet (this stack does not
+     * fragment; udp_tx caps it at 1500). Reject an oversize datagram with
+     * -EMSGSIZE rather than truncate it through the uint16_t wire length or let
+     * udp_tx silently drop it while this call reports a full send. */
+    if (len > 1500) {
+        return -EMSGSIZE;
+    }
+
     /* Datagram path: a real destination address is required. */
     if (addrlen < SOCKADDR_MIN) {
         return -EINVAL;  /* declared sockaddr shorter than the header we read */
