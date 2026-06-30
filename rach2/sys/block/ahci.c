@@ -431,14 +431,17 @@ static void ahci_zero(volatile uint8_t *p, uint32_t n)
  * leave a command outstanding, so without recovery the next command would issue
  * on a stopped engine and wedge the port until a fresh `ahci_init`. Clearing
  * `PxCMD.ST` resets `PxCI`; once `CR` is clear the latched errors clear and the
- * engine restarts, leaving the port able to serve the next command. All bounded
- * MMIO, so it is safe on the IF=0 path. */
+ * engine restarts, leaving the port able to serve the next command. If the
+ * engine will not stop, the port stays down and recovery fails closed rather
+ * than restart a wedged engine. All bounded MMIO, so it is safe at IF=0. */
 static int ahci_io_error(void)
 {
     uint32_t cmd_off = ahci_port_off(ahci_port, AHCI_PxCMD);
 
     ahci_write32(cmd_off, ahci_read32(cmd_off) & ~AHCI_PxCMD_ST);
-    (void) ahci_wait_clear(cmd_off, AHCI_PxCMD_CR);
+    if (ahci_wait_clear(cmd_off, AHCI_PxCMD_CR) != 0) {
+        return -EIO;
+    }
     ahci_write32(ahci_port_off(ahci_port, AHCI_PxSERR), 0xFFFFFFFFu);
     ahci_write32(ahci_port_off(ahci_port, AHCI_PxIS), 0xFFFFFFFFu);
     ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_ST);
@@ -541,9 +544,10 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
     return 0;
 }
 
-/** IDENTIFY DEVICE and record the 48-bit logical sector count (words 100-103).
-   Clamped to 512-byte sectors, which KRFFS sector math assumes. Returns 0 on
-   success, -1 on a failed IDENTIFY or an empty device. */
+/** IDENTIFY the device and record the 48-bit sector count (words 100-103).
+   Rejects a device whose logical sector is not 512 bytes (IDENTIFY word 106
+   bit 14 valid, bit 12 set), which the block math needs. Returns 0 on success,
+   -1 on a failed IDENTIFY or a bad device. */
 static int ahci_identify(void)
 {
     static volatile uint8_t idbuf[BLOCK_SECTOR_SIZE]
@@ -552,6 +556,9 @@ static int ahci_identify(void)
 
     if (ahci_run_command(ATA_IDENTIFY, 0, 0, idbuf, BLOCK_SECTOR_SIZE, 0)
             != 0) {
+        return -1;
+    }
+    if ((w[106] & 0x4000u) != 0 && (w[106] & 0x1000u) != 0) {
         return -1;
     }
     ahci_sector_count = (uint64_t) w[100] |
