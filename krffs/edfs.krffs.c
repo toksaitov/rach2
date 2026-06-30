@@ -204,6 +204,8 @@ int main(int argc, char **argv)
                 failed_to_parse_options = true;
             }
             ++i;
+        } else if (strcmp(argv[i], "--offset") == 0 || strcmp(argv[i], "--size") == 0) {
+            ++i; /* a shared region option; krffs_parse_region_args consumes it below */
         } else {
             failed_to_parse_options = true; /* an unknown or duplicate option */
         }
