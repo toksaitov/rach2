@@ -27,7 +27,6 @@
 #include "sys/kbd.h"
 #include "sys/mouse.h"
 #include "sys/block/block.h"
-#include "sys/block/ata.h"
 #include "sys/block/ahci.h"
 #include "sys/display/vga_text.h"
 #include "sys/audio/audio.h"
