@@ -221,9 +221,30 @@ int main(int argc, char **argv)
     struct krffs_node *node =
         previous_node;
 
+    /* A node whose size is zero (or too small) does not advance the walk, so cap
+     * the iterations at the most nodes the mapping could hold; a chain that does
+     * not return to the root within that bound is corrupt, not endless. */
+    uint64_t steps =
+        0;
+    uint64_t max_steps =
+        file_system.size / sizeof(struct krffs_node) + 1;
+
     puts("Checking the filesystem structure...");
 
     do {
+        if (++steps > max_steps) {
+            fprintf(
+                stderr,
+                "The node chain does not return to the root within the file "
+                "system bound. The file is corrupt. Won't proceed.\n"
+            );
+
+            exit_status =
+                KRFFS_Invalid_Link_Error;
+
+            break;
+        }
+
         if (previous_node > node) {
             printf(
                 "- invalid link to %"PRIu64" "
