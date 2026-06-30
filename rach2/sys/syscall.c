@@ -4909,11 +4909,16 @@ static int32_t sys_tgkill(isr_params_t *params)
     int sig = (int)params->edx;
     process_t *target;
 
-    /* tgkill(tgid, tid, sig): tid is the process; the tgid must match it (one
-     * thread per process here). */
+    /* tgkill(tgid, tid, sig): both ids must be positive (a tid is never a
+     * kill(2) group selector, so a zero or negative one is an error, not a
+     * group), and the tgid must name the same single process as the tid, one
+     * thread per process here. */
+    if (tgid <= 0 || tid <= 0) {
+        return -EINVAL;
+    }
     target = get_process((uint32_t)tid);
     if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE ||
-        tgid < 0 || (uint32_t)tgid != target->pid) {
+        (uint32_t)tgid != target->pid) {
         return -ESRCH;
     }
     return do_kill(tid, sig);
