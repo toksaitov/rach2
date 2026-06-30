@@ -407,8 +407,15 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct pty *p = (struct pty *)e->priv;
-    short revents = tty_poll(&p->slave, events, wq); /* parks on slave.input_wq */
+    short revents = tty_poll(&p->slave, events, wq);
 
+    /* tty_poll registers the wait queue only for a POLLIN query, but a master
+     * close wakes that same input queue (tty_hangup). A poller waiting only for
+     * the hangup (events without POLLIN, e.g. a bare POLLHUP wait) must park on it
+     * too, or it would sleep through ptm_close and never see POLLHUP. */
+    if (!*wq) {
+        *wq = &p->slave.input_wq;
+    }
     if (!p->master_open) {
         revents |= POLLHUP; /* the master hung up */
     }
