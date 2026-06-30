@@ -20,6 +20,9 @@
 int fdsets_to_pollfds(uint32_t nfds, const uint32_t *r, const uint32_t *w,
                       const uint32_t *e, struct kernel_pollfd *fds, int max_pollfds);
 
+/** Whether select() counts one scanned pollfd ready (the per-fd projection rule). */
+int pollfd_select_ready(short events, short revents);
+
 /** Project poll results back into select()'s three fd_sets; returns the ready count. */
 int pollfds_to_fdsets(const struct kernel_pollfd *fds, int n, uint32_t *r,
                       uint32_t *w, uint32_t *e);

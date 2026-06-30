@@ -225,5 +225,27 @@ int main(void)
         CHECK(get_bit(r2, 0) && get_bit(r2, 31) && get_bit(r2, 32));
     }
 
+    /* pollfd_select_ready is the per-fd form of the projection rule, so the poll
+     * core's readiness test agrees with what pollfds_to_fdsets scatters. The crux
+     * case: a write- or except-only fd reporting only POLLHUP is NOT ready (so
+     * select blocks rather than returning 0 with empty sets and busy-spinning). */
+    CHECK(pollfd_select_ready(POLLOUT, POLLHUP) == 0); /* HUP does not satisfy write */
+    CHECK(pollfd_select_ready(POLLPRI, POLLHUP) == 0); /* nor except */
+    CHECK(pollfd_select_ready(POLLIN, POLLHUP) != 0);  /* but HUP reads as readable */
+    CHECK(pollfd_select_ready(POLLIN, POLLERR) != 0);  /* ERR reads as readable */
+    CHECK(pollfd_select_ready(POLLOUT, POLLERR) != 0); /* and ERR as writable */
+    CHECK(pollfd_select_ready(POLLOUT, POLLOUT) != 0); /* the plain writable case */
+    CHECK(pollfd_select_ready(POLLPRI, POLLPRI) != 0);
+    CHECK(pollfd_select_ready(POLLIN, POLLOUT) == 0); /* wrong direction: not ready */
+    CHECK(pollfd_select_ready(POLLIN, 0) == 0);       /* nothing ready */
+    /* It must agree with pollfds_to_fdsets on the HUP-only-write case. */
+    zero(r);
+    zero(w);
+    zero(e);
+    fds[0].fd = 7;
+    fds[0].events = POLLOUT;
+    fds[0].revents = POLLHUP;
+    CHECK((pollfds_to_fdsets(fds, 1, r, w, e) > 0) == (pollfd_select_ready(POLLOUT, POLLHUP) != 0));
+
     return fails;
 }

@@ -67,6 +67,32 @@ int fdsets_to_pollfds(uint32_t nfds, const uint32_t *r, const uint32_t *w,
  * @return select()'s ready count: each direction set counts once, so an fd
  *         ready for both read and write contributes 2.
  */
+/**
+ * Whether select() counts one already-scanned pollfd as ready.
+ *
+ * The per-fd form of `pollfds_to_fdsets`'s rule, so the poll core's readiness
+ * test agrees with the projection: an fd is ready only on a revent that lands in
+ * a direction it was selected in (POLLIN/POLLHUP/POLLERR read as readable,
+ * POLLOUT/POLLERR as writable, POLLPRI as except). Without this the poll core
+ * would count a write- or except-only fd reporting only POLLHUP as ready while
+ * the projection clears every set, so select() would return 0 with empty sets
+ * and a caller waiting forever would busy-spin. POLLNVAL (a closed fd) is handled
+ * separately by the scan, so it is not considered here.
+ */
+int pollfd_select_ready(short events, short revents)
+{
+    if ((events & POLLIN) && (revents & (POLLIN | POLLHUP | POLLERR))) {
+        return 1;
+    }
+    if ((events & POLLOUT) && (revents & (POLLOUT | POLLERR))) {
+        return 1;
+    }
+    if ((events & POLLPRI) && (revents & POLLPRI)) {
+        return 1;
+    }
+    return 0;
+}
+
 int pollfds_to_fdsets(const struct kernel_pollfd *fds, int n, uint32_t *r,
                       uint32_t *w, uint32_t *e)
 {

@@ -101,10 +101,14 @@ static short fd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
  * Scan all pollfds once.
  *
  * Fills revents for each entry, records each one's wait queue in `wqs[]`, and
- * returns the number with non-zero revents. Called with interrupts off so the
- * readiness reads and the enqueue that follows cannot be split by a waker.
+ * returns the number that are ready. `sel` selects the readiness rule: poll()
+ * counts any non-zero revents, while select() counts an fd only on a revent that
+ * projects onto a direction it was selected in (so a write- or except-only fd
+ * reporting only POLLHUP is not "ready", matching the fd_set projection and not
+ * busy-spinning). Called with interrupts off so the readiness reads and the
+ * enqueue that follows cannot be split by a waker.
  */
-static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue **wqs)
+static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue **wqs, int sel)
 {
     uint32_t i;
     int ready = 0;
@@ -127,7 +131,7 @@ static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue
         revents = fd_poll(e, (short)(fds[i].events | POLLERR | POLLHUP), &wqs[i]);
         revents &= (short)(fds[i].events | POLLERR | POLLHUP | POLLNVAL);
         fds[i].revents = revents;
-        if (revents) {
+        if (sel ? pollfd_select_ready(fds[i].events, revents) : (revents != 0)) {
             ready++;
         }
     }
@@ -141,9 +145,12 @@ static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue
  * `has_deadline` == 0 means wait forever. nfds is already bounded to POLL_MAX_FDS
  * by the callers.
  *
+ * `sel` selects the select() per-direction readiness rule over poll()'s.
+ *
  * @return the ready count (>= 0), or -EINTR.
  */
-static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, uint32_t deadline)
+static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, uint32_t deadline,
+                   int sel)
 {
     struct wait_queue *wqs[POLL_MAX_FDS];
     uint32_t flags;
@@ -152,7 +159,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
 
     flags = irq_save();
     for (;;) {
-        int ready = poll_scan(fds, nfds, wqs);
+        int ready = poll_scan(fds, nfds, wqs, sel);
         if (ready > 0) {
             rc = ready;
             break;
@@ -301,7 +308,7 @@ static int32_t poll_common(uint32_t ufds, uint32_t nfds, int has_deadline, uint3
         return -EFAULT;
     }
 
-    ready = do_poll(fds, nfds, has_deadline, deadline);
+    ready = do_poll(fds, nfds, has_deadline, deadline, 0);
     if (ready < 0) {
         return ready;
     }
@@ -388,7 +395,7 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
         return -EBADF; /* a selected bit named an fd the kernel can never have */
     }
 
-    ready = do_poll(fds, (uint32_t)npoll, has_deadline, deadline);
+    ready = do_poll(fds, (uint32_t)npoll, has_deadline, deadline, 1);
     if (ready < 0) {
         return ready;
     }
