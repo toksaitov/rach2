@@ -161,6 +161,12 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
 /** Reserve one free physical frame for kernel use (never user); 0 if none. */
 uintptr_t alloc_kernel_frame(void);
 
+/** Total physical frames the pool manages. */
+uint32_t frame_total_count(void);
+
+/** Physical frames currently free (a linear bitmap scan). */
+uint32_t frame_free_count(void);
+
 /*
  * Pre-allocate the kernel page tables spanning [va_start, va_start+size) with
  * not-present PTEs, before the first fork copies the kernel PDEs. va_start must

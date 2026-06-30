@@ -581,6 +581,32 @@ uintptr_t alloc_kernel_frame(void)
 }
 
 /**
+ * Return the number of physical frames the pool manages.
+ */
+uint32_t frame_total_count(void)
+{
+    return (uint32_t)_frames_number;
+}
+
+/**
+ * Return the number of physical frames currently free.
+ *
+ * A linear scan of the allocation bitmap. The caller (sysinfo, the leak probe)
+ * wants a point-in-time count, so no locking is needed under the IF discipline.
+ */
+uint32_t frame_free_count(void)
+{
+    uint32_t i, free_count = 0;
+
+    for (i = 0; i < (uint32_t)_frames_number; i++) {
+        if (_frames[i] == 0) {
+            free_count++;
+        }
+    }
+    return free_count;
+}
+
+/**
  * Pre-allocate every page table spanning [`va_start`, `va_start` + `size`) in
  * the kernel directory, leaving all of their PTEs not-present.
  *

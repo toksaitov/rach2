@@ -6789,14 +6789,14 @@ static int32_t sys_sysinfo(isr_params_t *params)
         }
     }
     /* Fill every field of the ABI struct explicitly: uptime, the process count,
-     * and mem_unit are real; load average and memory/swap are not tracked, so
-     * they are reported as zero. */
+     * mem_unit, and physical RAM (from the frame bitmap) are real; load average
+     * and swap are not tracked, so they are reported as zero. */
     si.uptime = (int32_t)(kernel_ticks / 100);
     si.loads[0] = 0;
     si.loads[1] = 0;
     si.loads[2] = 0;
-    si.totalram = 0;
-    si.freeram = 0;
+    si.totalram = frame_total_count() * PAGE_SIZE;
+    si.freeram = frame_free_count() * PAGE_SIZE;
     si.sharedram = 0;
     si.bufferram = 0;
     si.totalswap = 0;
