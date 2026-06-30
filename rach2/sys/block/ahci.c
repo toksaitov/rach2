@@ -82,11 +82,19 @@ static volatile uint8_t ahci_recv_fis[AHCI_RECV_FIS_SIZE]
 static volatile uint8_t ahci_cmdtable[AHCI_CMDTABLE_SIZE]
     __attribute__((aligned(128)));
 
-/* Task-file status bits (PxTFD low byte) and the port's error interrupt bit. */
+/* Task-file status bits (PxTFD low byte) and the fatal port-interrupt bits. A
+   command fails on a device error (PxTFD ERR or DF) or on a fatal PxIS bit (the
+   task-file error or a host-bus or interface fault PxTFD never reflects). */
 #define AHCI_PxTFD_BSY 0x80u
 #define AHCI_PxTFD_DRQ 0x08u
+#define AHCI_PxTFD_DF  0x20u /* device fault, independent of ERR */
 #define AHCI_PxTFD_ERR 0x01u
 #define AHCI_PxIS_TFES 0x40000000u /* task file error status */
+#define AHCI_PxIS_HBFS 0x20000000u /* host bus fatal error */
+#define AHCI_PxIS_HBDS 0x10000000u /* host bus data error */
+#define AHCI_PxIS_IFS  0x08000000u /* interface fatal error */
+#define AHCI_PxIS_FATAL (AHCI_PxIS_TFES | AHCI_PxIS_HBFS | AHCI_PxIS_HBDS | \
+                         AHCI_PxIS_IFS)
 
 /* The H2D Register FIS and the ATA commands the polled path issues. */
 #define AHCI_FIS_H2D 0x27u
@@ -415,13 +423,33 @@ static void ahci_zero(volatile uint8_t *p, uint32_t n)
     }
 }
 
+/* Recover the port after a failed or timed-out command, then report `-EIO`.
+ *
+ * AHCI 6.2.2 error recovery: a fatal error stops the command engine and may
+ * leave a command outstanding, so without recovery the next command would issue
+ * on a stopped engine and wedge the port until a fresh `ahci_init`. Clearing
+ * `PxCMD.ST` resets `PxCI`; once `CR` is clear the latched errors clear and the
+ * engine restarts, leaving the port able to serve the next command. All bounded
+ * MMIO, so it is safe on the IF=0 path. */
+static int ahci_io_error(void)
+{
+    uint32_t cmd_off = ahci_port_off(ahci_port, AHCI_PxCMD);
+
+    ahci_write32(cmd_off, ahci_read32(cmd_off) & ~AHCI_PxCMD_ST);
+    (void) ahci_wait_clear(cmd_off, AHCI_PxCMD_CR);
+    ahci_write32(ahci_port_off(ahci_port, AHCI_PxSERR), 0xFFFFFFFFu);
+    ahci_write32(ahci_port_off(ahci_port, AHCI_PxIS), 0xFFFFFFFFu);
+    ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_ST);
+    return -EIO;
+}
+
 /* Issue one polled command on the selected port and spin to completion.
  *
  * Builds the command-list header, a Register H2D FIS, and a single PRDT entry
  * over the static DMA regions, waits for the task file to go idle, sets the
- * slot's `PxCI` bit, and busy-polls it clear while watching `PxIS.TFES` and
- * `PxTFD.STS.ERR` for a device error. The HBA performs the DMA; the CPU only
- * spins on memory-mapped status, bounded by the iteration watchdog. So it
+ * slot's `PxCI` bit, and busy-polls it clear, watching the fatal `PxIS` bits
+ * and `PxTFD` ERR/DF for failure. The HBA performs the DMA; the CPU only spins
+ * on memory-mapped status, bounded by the iteration watchdog. So it
  * sleeps and allocates nothing and is callable with interrupts off, the
  * contract the page-cache window fault needs. `buf` must be physically
  * contiguous and below 4 GiB, which every identity-mapped buffer below
@@ -482,7 +510,7 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
     spin = AHCI_SPIN_LIMIT;
     while (ahci_read32(tfd_off) & (AHCI_PxTFD_BSY | AHCI_PxTFD_DRQ)) {
         if (--spin == 0) {
-            return -EIO;
+            return ahci_io_error();
         }
     }
 
@@ -491,15 +519,18 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
 
     spin = AHCI_SPIN_LIMIT;
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
-        if (ahci_read32(is_off) & AHCI_PxIS_TFES) {
-            return -EIO;
+        if (ahci_read32(is_off) & AHCI_PxIS_FATAL) {
+            return ahci_io_error();
         }
         if (--spin == 0) {
-            return -EIO;
+            return ahci_io_error();
         }
     }
-    if (ahci_read32(tfd_off) & AHCI_PxTFD_ERR) {
-        return -EIO;
+    /* A fatal PxIS error can clear PxCI without setting PxTFD.ERR, so the
+       post-loop check tests both: a fatal interrupt or a task-file ERR/DF. */
+    if ((ahci_read32(is_off) & AHCI_PxIS_FATAL) ||
+        (ahci_read32(tfd_off) & (AHCI_PxTFD_ERR | AHCI_PxTFD_DF))) {
+        return ahci_io_error();
     }
 
     if (!write && bytes > 0) {
