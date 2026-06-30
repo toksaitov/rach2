@@ -12,15 +12,67 @@
 
 #ifdef WINDOWS
 #include <io.h>
+#include <process.h>
 #else
 #include <unistd.h>
+#include <sys/wait.h>
 #endif
 
 /* Name of the file system check utility, invoked before defragmenting. */
-#define KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME "./fsck.krffs "
+#define KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME "fsck.krffs"
 
-/* Size of the buffer that holds the `fsck.krffs` command line. */
-#define KRFFS_COMMAND_BUFFER_LENGTH 1024
+/**
+ * Run `program` on `path` without a shell and return its exit status.
+ *
+ * The path is passed as a distinct argv element, so no byte of it is ever
+ * interpreted by a shell: this is what closes the command injection a `system()`
+ * with the path concatenated into the command string would open. Returns the
+ * utility's exit status, or 127 when it could not be launched (so the caller can
+ * fall back to a `./`-prefixed name), or -1 on a fork/wait failure.
+ */
+static int krffs_run_check_utility(const char *program, const char *path)
+{
+    const char *argv[3];
+
+    argv[0] = program;
+    argv[1] = path;
+    argv[2] = NULL;
+
+#ifdef WINDOWS
+    {
+        intptr_t result =
+            _spawnvp(_P_WAIT, program, argv);
+
+        return result < 0 ?
+            127 : (int) result;
+    }
+#else
+    {
+        pid_t pid =
+            fork();
+
+        if (pid < 0) {
+            return -1;
+        }
+
+        if (pid == 0) {
+            execvp(program, (char *const *) argv);
+            _exit(127);
+        }
+
+        {
+            int status = 0;
+
+            if (waitpid(pid, &status, 0) < 0) {
+                return -1;
+            }
+
+            return WIFEXITED(status) ?
+                WEXITSTATUS(status) : -1;
+        }
+    }
+#endif
+}
 
 /**
  * Defragments a KRFFS FUSE file system stored in a file.
@@ -83,46 +135,16 @@ int main(int argc, char **argv)
     char *path =
         argv[1];
 
-    /* Refuse to defragment a file system that fails `fsck.krffs`. */
-    char command_buffer[KRFFS_COMMAND_BUFFER_LENGTH + 1];
-    command_buffer[KRFFS_COMMAND_BUFFER_LENGTH] = '\0';
-
-    size_t command_length =
-        strlen(KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME);
-
-    strncpy(
-        command_buffer,
-        KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME,
-        KRFFS_COMMAND_BUFFER_LENGTH
-    );
-    strncat(
-        command_buffer,
-        path,
-        KRFFS_COMMAND_BUFFER_LENGTH -
-            command_length
-    );
-
+    /* Refuse to defragment a file system that fails `fsck.krffs`. Try the utility
+     * by name first (a PATH lookup), then the `./`-prefixed form for a build that
+     * runs the tools out of the current directory. */
     int fsck_result =
-        system(command_buffer);
+        krffs_run_check_utility(KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path);
 
     if (fsck_result == -1 ||
             fsck_result == 127) {
-        command_length =
-            strlen("./"KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME);
-
-        strncpy(
-            command_buffer,
-            "./"KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME,
-            KRFFS_COMMAND_BUFFER_LENGTH
-        );
-        strncat(
-            command_buffer,
-            path,
-            KRFFS_COMMAND_BUFFER_LENGTH -
-                command_length
-        );
         fsck_result =
-            system(command_buffer);
+            krffs_run_check_utility("./" KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path);
     }
 
     if (fsck_result != 0) {
