@@ -17,14 +17,17 @@ typedef unsigned int size_t;
 
 #define STDOUT_FILENO 1
 
-#define SYS_EXIT  1
-#define SYS_WRITE 4
-#define SYS_OPEN  5
-#define SYS_CLOSE 6
-#define SYS_MKDIR 39
+#define SYS_EXIT   1
+#define SYS_WRITE  4
+#define SYS_OPEN   5
+#define SYS_CLOSE  6
+#define SYS_EXECVE 11
+#define SYS_MKDIR  39
 
 #define O_RDONLY 0
 #define O_RDWR   2
+
+#define EACCES 13
 
 static int sys2(int n, int a, int b)
 {
@@ -101,6 +104,18 @@ void _start(void)
         fail("/cx/../cx did not resolve to the real directory");
     }
     sys2(SYS_CLOSE, fd, 0);
+
+    /* execve classifies the canonical path like open: a synthetic path is
+     * refused with -EACCES before it can reach KRFFS, so a file a hostile image
+     * placed below the synthetic prefix could never be executed. Reaching KRFFS
+     * instead would fail with -ENOENT, so the errno distinguishes the guard. */
+    {
+        char *av[1];
+        av[0] = 0;
+        if (sys3(SYS_EXECVE, (int)"/cx/../dev/null", (int)av, (int)av) != -EACCES) {
+            fail("execve of a synthetic path was not refused with EACCES");
+        }
+    }
 
     puts("PATHCANON OK");
     sys_exit(0);

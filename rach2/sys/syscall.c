@@ -3503,6 +3503,17 @@ static int32_t sys_execve(isr_params_t *params)
         name++;
     }
 
+    /* The synthetic /dev and /proc mounts hold no executables. Classify the
+     * canonicalized path the way open does and refuse a synthetic-classified
+     * name, so execve sees the same mount boundary and cannot reach a KRFFS file
+     * that a hostile image placed below the synthetic prefix. */
+    {
+        struct vpath vp;
+        if (synth_classify(name, &vp) != VNODE_KRFFS) {
+            return -EACCES;
+        }
+    }
+
     if (!krffs_fs) {
         return -ENOENT;
     }
