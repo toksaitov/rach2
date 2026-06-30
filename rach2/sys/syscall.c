@@ -6295,6 +6295,14 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
+    if (entry->sock->listening || entry->sock->tcb) {
+        /* A socket that is already listening, connecting, or connected keeps its
+         * TCB; a second tcp_connect would allocate another and leak the first,
+         * whose stale delivery could reach a since-reused socket. */
+        return (entry->sock->tcb && entry->sock->tcb->state == TCP_SYN_SENT)
+                   ? -EALREADY
+                   : -EISCONN;
+    }
 
     dst_port = SC_BE16(sa + 2);
     dst_ip   = SC_BE32(sa + 4);
