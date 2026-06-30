@@ -26,6 +26,12 @@
  * sizes the device with IDENTIFY, and points `block0` at the AHCI backend.
  * Returns 0 when a disk came up and `block0` is set, or -1 otherwise. Polled and
  * IRQ-free, so it is safe to call before the scheduler runs.
+ *
+ * A failure after the port engine starts (a failed IDENTIFY) leaves that port
+ * started but idle and `block0` unset, so `block_probe` falls back to ATA. The
+ * idle port issues no DMA without a queued command (`PxCI` stays clear) and the
+ * HBA's MMIO does not overlap the legacy ATA ports, so the inert HBA needs no
+ * cleanup.
  */
 int ahci_init(void);
 
