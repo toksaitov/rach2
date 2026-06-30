@@ -758,6 +758,7 @@ krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t siz
                 _krffs_strncpy((char *)node->name, (char *)original->name, KRFFS_FILE_NAME_BUFFER_SIZE);
                 node->name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
                 node->id = original->id;
+                node->parent_id = original->parent_id; /* keep its directory membership */
                 node->mode = original->mode;
                 node->uid = original->uid;
                 node->gid = original->gid;
