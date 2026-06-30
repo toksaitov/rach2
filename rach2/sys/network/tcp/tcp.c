@@ -988,10 +988,16 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             }
         }
 
-        /* The peer may keep sending after our close; deliver it in order and ACK. */
+        /* The peer may keep sending after our close. The application is usually
+         * gone by now (close detached tcb->sock), so accept and discard its
+         * in-order data, advancing rcv_nxt to acknowledge it so the peer stops
+         * retransmitting and the FIN below is consumed in order; a still-attached
+         * socket gets it delivered. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
-                tcb->rcv_nxt += socket_tcp_deliver(tcb->sock, payload, payload_len);
+                tcb->rcv_nxt += tcb->sock
+                                    ? socket_tcp_deliver(tcb->sock, payload, payload_len)
+                                    : payload_len;
             }
             needs_ack = 1;
         }
@@ -1024,9 +1030,14 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         const uint8_t *payload     = data + hdr_len;
         int            needs_ack   = 0;
 
+        /* As in FIN_WAIT_1, the application is usually gone, so accept and discard
+         * in-order data (advancing rcv_nxt to acknowledge it); a still-attached
+         * socket gets it delivered. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
-                tcb->rcv_nxt += socket_tcp_deliver(tcb->sock, payload, payload_len);
+                tcb->rcv_nxt += tcb->sock
+                                    ? socket_tcp_deliver(tcb->sock, payload, payload_len)
+                                    : payload_len;
             }
             needs_ack = 1;
         }
