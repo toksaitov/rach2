@@ -1587,8 +1587,12 @@ static int init_krffs_disk(void)
         if (pc_sync() != 0) {
             /* The dirty flag never reached the platter, so a later crash would
                leave an image fsck.krffs reads as clean. Fail the mount closed
-               rather than run on a filesystem whose crash evidence is missing. */
+               rather than run on a filesystem whose crash evidence is missing.
+               init_krffs already published krffs_fs at the window, so unpublish
+               it before dropping the backing or a later path would dereference
+               the now-unbacked window. */
             serial_printf("KRFFS: dirty flag did not reach the disk; mount aborted\n");
+            krffs_fs = 0;
             pc_set_backing(0, 0, 0);
             return -1;
         }
