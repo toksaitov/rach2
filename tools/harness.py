@@ -146,11 +146,16 @@ def main():
         except (BrokenPipeError, OSError):
             pass
 
+    # A step that does not do what it asked (an unseen expect= pattern, an exec=
+    # whose marker never appears, an unknown step) is a real failure: without this
+    # an --ok token matching coincidentally would turn a broken run green.
+    step_failures = 0
     for step in steps:
         if p.poll() is not None:
             break
         if step.startswith("expect="):
-            expect(step[len("expect="):])
+            if expect(step[len("expect="):]) is None:
+                step_failures += 1
         elif step.startswith("send="):
             send(step[len("send="):])
         elif step.startswith("wait="):
@@ -158,11 +163,15 @@ def main():
         elif step.startswith("exec="):
             name, _, marker = step[len("exec="):].partition("|")
             tries = 0
+            seen = False
             while tries < 4 and p.poll() is None:
                 send("exec " + name)
                 if expect(marker):
+                    seen = True
                     break
                 tries += 1
+            if not seen:
+                step_failures += 1
         elif step.startswith("execq="):
             # Run a probe, re-sending if the kernel shell drops the command, and
             # stop as soon as the kernel's harness_exit stops QEMU.
@@ -174,6 +183,7 @@ def main():
                 tries += 1
         else:
             sys.stderr.write("unknown step: %s\n" % step)
+            step_failures += 1
 
     pump(time.time() + a.grace)
     qemu_rc = p.poll()
@@ -191,10 +201,13 @@ def main():
     # A serial-token check passes on the printed token alone, for a probe run in
     # the debug shell that never stops QEMU itself.
     if a.ok is not None:
-        if a.ok.encode() in buf:
+        if a.ok.encode() in buf and step_failures == 0:
             sys.stderr.write("HARNESS: saw %r\n" % a.ok)
             return 0
-        sys.stderr.write("HARNESS: pattern %r not seen\n" % a.ok)
+        if step_failures:
+            sys.stderr.write("HARNESS: %d step(s) failed\n" % step_failures)
+        else:
+            sys.stderr.write("HARNESS: pattern %r not seen\n" % a.ok)
         return 1
 
     if qemu_rc is None:
