@@ -195,26 +195,32 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len,
 {
     int copy_len;
     int rc;
+    uint32_t flags;
 
     rc = wq_wait_event(&sock->waiters, udp_recv_ready, sock);
     if (rc < 0) {
         return rc;
     }
 
+    /* Consume the single-datagram slot under net_lock so the RX IRQ producer
+     * (socket_udp_deliver) cannot overwrite it mid-readout, which would tear the
+     * payload, mismatch the recorded source, or let the trailing recv_len = 0 drop
+     * a datagram the IRQ just delivered. The caller prefaulted the user buffer, so
+     * the copy cannot fault with interrupts off. */
+    flags = net_lock();
     copy_len = (int)sock->recv_len;
     if (copy_len > len) {
         copy_len = len;
     }
     k_memcpy(buf, sock->recv_buf, (uint32_t)copy_len);
-
     if (src_ip) {
         *src_ip = sock->last_src_ip;
     }
     if (src_port) {
         *src_port = sock->last_src_port;
     }
-
     sock->recv_len = 0;
+    net_unlock(flags);
     return copy_len;
 }
 
@@ -227,25 +233,28 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
                     uint32_t *src_ip, uint16_t *src_port)
 {
     int copy_len;
+    uint32_t flags;
 
+    /* Same atomic read-out as socket_recv: snapshot and clear the slot under
+     * net_lock so the RX IRQ cannot interleave. */
+    flags = net_lock();
     if (sock->recv_len == 0) {
+        net_unlock(flags);
         return SOCK_EAGAIN;
     }
-
     copy_len = (int)sock->recv_len;
     if (copy_len > len) {
         copy_len = len;
     }
     k_memcpy(buf, sock->recv_buf, (uint32_t)copy_len);
-
     if (src_ip) {
         *src_ip = sock->last_src_ip;
     }
     if (src_port) {
         *src_port = sock->last_src_port;
     }
-
     sock->recv_len = 0;
+    net_unlock(flags);
     return copy_len;
 }
 
