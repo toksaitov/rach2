@@ -27,7 +27,6 @@
 
 #define AHCI_GHC_AE 0x80000000u /* AHCI enable */
 #define AHCI_GHC_IE 0x00000002u /* global interrupt enable */
-#define AHCI_GHC_HR 0x00000001u /* HBA reset (self-clears when done) */
 #define AHCI_CAP2_BOH 0x1u      /* BIOS/OS handoff supported */
 #define AHCI_BOHC_BOS 0x1u      /* BIOS owned */
 #define AHCI_BOHC_OOS 0x2u      /* OS ownership request */
@@ -121,7 +120,8 @@ static volatile uint8_t ahci_cmdtable[AHCI_CMDTABLE_SIZE]
 
 /* Typed overlays on the DMA byte regions: one command-list header (the HBA
    reads 32 bytes per slot, of which only the first 16 are software-set; the
-   rest stay zero), the H2D FIS at the command-table head, and one PRDT entry. */
+   rest stay zero), the H2D FIS at the command-table head, and one PRDT
+   entry. */
 typedef struct {
     uint32_t dw0;   /* CFL[4:0], W[6], PRDTL[31:16] */
     uint32_t prdbc; /* byte count the HBA writes back */
@@ -160,17 +160,19 @@ static pci_device_t ahci_pci;
 static volatile uint8_t *ahci_base;
 static int ahci_port = -1;
 
+/** Read the 32-bit ABAR register at `offset`. */
 static uint32_t ahci_read32(uint32_t offset)
 {
     return *(volatile uint32_t *)(ahci_base + offset);
 }
 
+/** Write `value` to the 32-bit ABAR register at `offset`. */
 static void ahci_write32(uint32_t offset, uint32_t value)
 {
     *(volatile uint32_t *)(ahci_base + offset) = value;
 }
 
-/* The register offset of port `port`'s register `reg`. */
+/** The register offset of port `port`'s register `reg`. */
 static uint32_t ahci_port_off(int port, uint32_t reg)
 {
     return AHCI_PORT_BASE + (uint32_t) port * AHCI_PORT_STRIDE + reg;
@@ -182,7 +184,7 @@ static uint32_t ahci_port_off(int port, uint32_t reg)
 static bool ahci_have_clflush = false;
 static uint32_t ahci_clflush_size = 64;
 
-/* Record whether CLFLUSH is available and its line size (CPUID leaf 1). */
+/** Record whether CLFLUSH is available and its line size (CPUID leaf 1). */
 static void ahci_detect_cache(void)
 {
     uint32_t eax, ebx, ecx, edx;
@@ -202,7 +204,7 @@ static void ahci_detect_cache(void)
     ahci_clflush_size = sz;
 }
 
-/* Evict [addr, addr+size) so a DMA write the CPU is about to read, or a
+/** Evict [addr, addr+size) so a DMA write the CPU is about to read, or a
    descriptor the HBA is about to read, crosses the cache a line at a time. */
 static void ahci_dma_sync(const volatile void *addr, uint32_t size)
 {
@@ -225,7 +227,7 @@ static void ahci_dma_sync(const volatile void *addr, uint32_t size)
     }
 }
 
-/* Poll until every bit of `mask` at `offset` reads 0. Returns 0 on success, -1
+/** Poll until every bit of `mask` at `offset` reads 0. Returns 0 on success, -1
    when the iteration watchdog expires (a wedged HBA). */
 static int ahci_wait_clear(uint32_t offset, uint32_t mask)
 {
@@ -239,7 +241,7 @@ static int ahci_wait_clear(uint32_t offset, uint32_t mask)
     return 0;
 }
 
-/* Find and map the AHCI HBA on the PCI bus. Discovery only, no transfer. */
+/** Find and map the AHCI HBA on the PCI bus. Discovery only, no transfer. */
 static int ahci_discover(void)
 {
     pci_device_t dev;
@@ -254,7 +256,7 @@ static int ahci_discover(void)
             found = 1;
             break;
         }
-        skip = dev; /* persistent storage for the next skip */
+        skip = dev;
         skip_dev = &skip;
     }
     if (!found) {
@@ -286,7 +288,7 @@ static int ahci_discover(void)
     return 0;
 }
 
-/* Take ownership of the HBA and ensure AHCI mode.
+/** Take ownership of the HBA and ensure AHCI mode.
  *
  * The HBA-wide reset (GHC.HR) is deliberately skipped. Without the full
  * per-port COMRESET handshake (deferred this milestone), an HR leaves the SATA
@@ -309,7 +311,7 @@ static int ahci_hba_own(void)
     return 0;
 }
 
-/* Stop one port and verify that no old command issue state remains. */
+/** Stop one port and verify that no old command issue state remains. */
 static int ahci_port_stop(int port)
 {
     uint32_t cmd_off = ahci_port_off(port, AHCI_PxCMD);
@@ -336,7 +338,7 @@ static int ahci_port_stop(int port)
     return 0;
 }
 
-/* Mask AHCI interrupts and quiesce every implemented port before reuse. */
+/** Mask AHCI interrupts and quiesce every implemented port before reuse. */
 static int ahci_quiesce_ports(void)
 {
     uint32_t pi = ahci_read32(AHCI_PI);
@@ -356,7 +358,7 @@ static int ahci_quiesce_ports(void)
     return 0;
 }
 
-/* Select the first implemented port with a device present and the link up. */
+/** Select the first implemented port with a device present and the link up. */
 static int ahci_select_port(void)
 {
     uint32_t pi = ahci_read32(AHCI_PI);
@@ -369,7 +371,7 @@ static int ahci_select_port(void)
         if (!(pi & (1u << p))) {
             continue;
         }
-        do { /* let the link settle while scanning */
+        do {
             ssts = ahci_read32(ahci_port_off(p, AHCI_PxSSTS));
             if ((ssts & AHCI_DET_MASK) == AHCI_DET_PRESENT) {
                 break;
@@ -384,7 +386,7 @@ static int ahci_select_port(void)
     return -1;
 }
 
-/* Stop the port engine, program the DMA bases, and restart it. */
+/** Stop the port engine, program the DMA bases, and restart it. */
 static int ahci_port_start(void)
 {
     uint32_t cmd_off = ahci_port_off(ahci_port, AHCI_PxCMD);
@@ -413,7 +415,7 @@ static int ahci_port_start(void)
     return 0;
 }
 
-/* Zero `n` bytes of a DMA region. */
+/** Zero `n` bytes of a DMA region. */
 static void ahci_zero(volatile uint8_t *p, uint32_t n)
 {
     uint32_t i;
@@ -423,7 +425,7 @@ static void ahci_zero(volatile uint8_t *p, uint32_t n)
     }
 }
 
-/* Recover the port after a failed or timed-out command, then report `-EIO`.
+/** Recover the port after a failed or timed-out command, then report `-EIO`.
  *
  * AHCI 6.2.2 error recovery: a fatal error stops the command engine and may
  * leave a command outstanding, so without recovery the next command would issue
@@ -443,14 +445,14 @@ static int ahci_io_error(void)
     return -EIO;
 }
 
-/* Issue one polled command on the selected port and spin to completion.
+/** Issue one polled command on the selected port and spin to completion.
  *
  * Builds the command-list header, a Register H2D FIS, and a single PRDT entry
  * over the static DMA regions, waits for the task file to go idle, sets the
  * slot's `PxCI` bit, and busy-polls it clear, watching the fatal `PxIS` bits
  * and `PxTFD` ERR/DF for failure. The HBA performs the DMA; the CPU only spins
  * on memory-mapped status, bounded by the iteration watchdog. So it
- * sleeps and allocates nothing and is callable with interrupts off, the
+ * neither sleeps nor allocates and is callable with interrupts off, the
  * contract the page-cache window fault needs. `buf` must be physically
  * contiguous and below 4 GiB, which every identity-mapped buffer below
  * HARD_MEMORY_LIMIT is. Returns 0 on success, `-EIO` on error or expiry. */
@@ -539,15 +541,17 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
     return 0;
 }
 
-/* IDENTIFY DEVICE and record the 48-bit logical sector count (words 100-103).
+/** IDENTIFY DEVICE and record the 48-bit logical sector count (words 100-103).
    Clamped to 512-byte sectors, which KRFFS sector math assumes. Returns 0 on
    success, -1 on a failed IDENTIFY or an empty device. */
 static int ahci_identify(void)
 {
-    static volatile uint8_t idbuf[BLOCK_SECTOR_SIZE] __attribute__((aligned(2)));
+    static volatile uint8_t idbuf[BLOCK_SECTOR_SIZE]
+        __attribute__((aligned(2)));
     volatile uint16_t *w = (volatile uint16_t *) idbuf;
 
-    if (ahci_run_command(ATA_IDENTIFY, 0, 0, idbuf, BLOCK_SECTOR_SIZE, 0) != 0) {
+    if (ahci_run_command(ATA_IDENTIFY, 0, 0, idbuf, BLOCK_SECTOR_SIZE, 0)
+            != 0) {
         return -1;
     }
     ahci_sector_count = (uint64_t) w[100] |
@@ -560,14 +564,14 @@ static int ahci_identify(void)
     return 0;
 }
 
-/* Flush the device write cache so a completed write reaches durable media,
+/** Flush the device write cache so a completed write reaches durable media,
    the durability the dirty-flag and pc_sync write-back contract relies on. */
 static int ahci_flush(void)
 {
     return ahci_run_command(ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
 }
 
-/* block0->read: a polled READ DMA EXT of `count` sectors from `lba`. */
+/** block0->read: a polled READ DMA EXT of `count` sectors from `lba`. */
 static int ahci_read(block_device_t *device, uint64_t lba, uint32_t count,
                      void *buffer)
 {
@@ -581,7 +585,10 @@ static int ahci_read(block_device_t *device, uint64_t lba, uint32_t count,
                             count * BLOCK_SECTOR_SIZE, 0);
 }
 
-/* block0->write: a polled WRITE DMA EXT, then FLUSH CACHE EXT for durability. */
+/**
+ * `block0->write`: a polled `WRITE DMA EXT`, then `FLUSH CACHE EXT` for
+ * durability.
+ */
 static int ahci_write(block_device_t *device, uint64_t lba, uint32_t count,
                       const void *buffer)
 {
@@ -674,8 +681,10 @@ void ahci_dump(void)
         tfd = ahci_read32(ahci_port_off(port, AHCI_PxTFD));
         cmd = ahci_read32(ahci_port_off(port, AHCI_PxCMD));
         clb = ahci_read32(ahci_port_off(port, AHCI_PxCLB));
-        serial_printf("ahci:  port %d: SSTS=%X (DET=%d) SIG=%X TFD=%X CMD=%X CLB=%X\n",
-                      port, ssts, (int) (ssts & AHCI_DET_MASK), sig, tfd, cmd, clb);
+        serial_printf("ahci:  port %d: SSTS=%X (DET=%d) "
+                      "SIG=%X TFD=%X CMD=%X CLB=%X\n",
+                      port, ssts, (int) (ssts & AHCI_DET_MASK), sig, tfd, cmd,
+                      clb);
     }
 }
 

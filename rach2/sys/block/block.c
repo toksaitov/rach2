@@ -85,8 +85,8 @@ int block_probe(void)
 {
     /* With rach2.disk=ahci, prefer the AHCI HBA and fall back to ATA if none
        answered; otherwise use ATA, so every existing IDE image boots exactly as
-       before. kcmdline_has matches whole tokens, so the flag never collides with
-       rach2.fsdisk. Both drivers publish block0 themselves. */
+       before. kcmdline_has matches whole tokens, so the flag never collides
+       with rach2.fsdisk. Both drivers publish block0 themselves. */
     if (kcmdline_has("rach2.disk=ahci") && ahci_init() == 0) {
         return 0;
     }
