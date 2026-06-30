@@ -87,6 +87,16 @@ int main(int argc, char **argv)
     char *end_ptr = NULL;
     int base = 10;
 
+    /* `-h` anywhere requests help, even on its own without a file and position. */
+    {
+        int i;
+        for (i = 1; i < argc; ++i) {
+            if (strncmp(argv[i], "-h", 2) == 0) {
+                has_help_option = true;
+            }
+        }
+    }
+
     uint64_t pos;
     if (argc > 2) {
         errno = 0;
@@ -97,7 +107,7 @@ int main(int argc, char **argv)
     }
 
     for (int i = 3; !failed_to_parse_options && i < argc; ++i) {
-        if (!has_help_option && strncmp(argv[i], "-h", 2) == 0) {
+        if (strncmp(argv[i], "-h", 2) == 0) {
             has_help_option = true;
         } else if (!has_set_magic_option && strncmp(argv[i], "--set-magic", 11) == 0) {
             has_set_magic_option = true;
@@ -194,6 +204,8 @@ int main(int argc, char **argv)
                 failed_to_parse_options = true;
             }
             ++i;
+        } else {
+            failed_to_parse_options = true; /* an unknown or duplicate option */
         }
     }
 
