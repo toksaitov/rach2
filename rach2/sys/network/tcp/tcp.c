@@ -719,6 +719,24 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
     tcb->snd_una   = ack_num;
 }
 
+/*
+ * Accept `len` bytes of in-order received data and report how many to advance
+ * rcv_nxt by. A live socket gets the data delivered (and may take less than `len`
+ * when its receive ring is nearly full, so the peer retransmits the rest). Once
+ * the socket is detached, which `tcp_close` does before the FIN is even sent, so
+ * it holds in ESTABLISHED while queued data drains as well as in the FIN_WAIT
+ * states, there is no reader: the data is accepted in full and discarded, which
+ * still acknowledges it so the peer stops retransmitting and the stream stays in
+ * sequence for the FIN.
+ */
+static uint16_t tcp_accept_data(struct tcb *tcb, const uint8_t *payload, uint16_t len)
+{
+    if (tcb->sock) {
+        return socket_tcp_deliver(tcb->sock, payload, len);
+    }
+    return len;
+}
+
 /**
  * Process an inbound segment, driving the state machine for its connection.
  *
@@ -941,7 +959,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
          * rcv_nxt, so a truncated tail is not acknowledged and is retransmitted. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
-                tcb->rcv_nxt += socket_tcp_deliver(tcb->sock, payload, payload_len);
+                tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
             }
             needs_ack = 1;
         }
@@ -995,9 +1013,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
          * socket gets it delivered. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
-                tcb->rcv_nxt += tcb->sock
-                                    ? socket_tcp_deliver(tcb->sock, payload, payload_len)
-                                    : payload_len;
+                tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
             }
             needs_ack = 1;
         }
@@ -1035,9 +1051,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
          * socket gets it delivered. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
-                tcb->rcv_nxt += tcb->sock
-                                    ? socket_tcp_deliver(tcb->sock, payload, payload_len)
-                                    : payload_len;
+                tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
             }
             needs_ack = 1;
         }
