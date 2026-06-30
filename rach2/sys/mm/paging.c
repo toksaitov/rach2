@@ -37,6 +37,15 @@ static page_table_t *_free_page_tables = NULL;
  */
 static uintptr_t _user_frames_start = 0;
 
+/*
+ * Set once the first address space has cloned the kernel page-directory
+ * entries. `clone_page_directory` copies the kernel PDEs by value, so a kernel
+ * page table first installed after that point is invisible to every directory
+ * already cloned. `map_mmio` consults this to refuse installing a new PDE after
+ * the first fork; every real device mapping runs at boot, before any fork.
+ */
+static int _kernel_pdes_cloned = 0;
+
 /**
  * Allocate a page table from the free list, or fresh via `mem_reserve`.
  */
@@ -480,6 +489,12 @@ static void _page_fault_handler(isr_params_t *params)
  * Map a physical MMIO region to the same virtual address (identity map),
  * creating or rewriting its page table entries cache-disabled (PCD|PWT) so a
  * device-register read is never stale, whatever the region's address.
+ *
+ * This is a boot-time operation. Device MMIO above the identity-mapped window
+ * needs a fresh kernel page table, and a kernel PDE installed after the first
+ * fork would not reach the address spaces already cloned from `_kernel_dir`, so
+ * a call that would add a new PDE after that point is refused (returns 0).
+ * Rewriting a leaf PTE in a table every directory already shares stays legal.
  */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 {
@@ -498,9 +513,18 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
             return 0;
         }
 
-        /* Get or create page table */
+        /* Get or create the page table. A new kernel PDE installed after the
+         * first fork would be invisible to every already-cloned address space,
+         * so refuse it: every real device mapping runs at boot, before any
+         * fork, and a runtime probe of a not-yet-mapped band must fail loudly
+         * rather than install a PDE only `_kernel_dir` can see. */
         table = _kernel_dir->logical_page_tables[table_index];
         if (!table) {
+            if (_kernel_pdes_cloned) {
+                serial_printf("map_mmio: refusing a new kernel PDE after fork "
+                              "(0x%x)\n", addr);
+                return 0;
+            }
             table = alloc_page_table();
             if (!table) {
                 serial_printf("map_mmio: failed to allocate page table\n");
@@ -705,11 +729,13 @@ page_dir_t *clone_page_directory(void)
 
     /* Copy kernel page table references. Kernel page tables are shared across
      * all processes, so copy only the pointers, not the tables themselves; this
-     * keeps kernel memory reachable from any process. */
+     * keeps kernel memory reachable from any process. After this snapshot a new
+     * kernel PDE would not reach this clone, so map_mmio must not add one. */
     for (i = 0; i < 1024; i++) {
         new_dir->phys_page_tables[i] = _kernel_dir->phys_page_tables[i];
         new_dir->logical_page_tables[i] = _kernel_dir->logical_page_tables[i];
     }
+    _kernel_pdes_cloned = 1;
 
     return new_dir;
 }
