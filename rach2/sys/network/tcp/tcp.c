@@ -298,15 +298,18 @@ static void tcp_output(struct tcb *tcb)
  */
 static void tcp_retransmit(struct tcb *tcb)
 {
-    uint32_t in_flight, send_len, i;
+    uint32_t data_len, send_len, i;
     uint16_t seg_len;
 
-    in_flight = tcb->snd_nxt - tcb->snd_una;
-    if (in_flight == 0) {
+    /* Bound by the unacknowledged DATA still in the ring, not snd_nxt - snd_una,
+     * which also counts an outstanding FIN's sequence; resending that phantom byte
+     * would corrupt the stream when a FIN is queued behind unacked data. */
+    data_len = tcb->send_tail - tcb->send_ack;
+    if (data_len == 0) {
         return;
     }
 
-    send_len = in_flight;
+    send_len = data_len;
     if (send_len > TCP_MSS) send_len = TCP_MSS;
 
     write16be(tcp_tx_buf + 0,  tcb->local_port);
@@ -531,16 +534,20 @@ void tcp_tick(void)
                 serial_printf("TCP: retransmit (RTO %d, try %d)\n",
                               (unsigned)tcb->rto, (int)tcb->rto_backoff);
 
-                if (tcb->retx_flags) {
-                    /* Outstanding control segment (SYN/SYN-ACK/FIN). */
+                if (tcb->retx_flags && tcb->send_ack == tcb->send_tail) {
+                    /* A control segment (SYN/SYN-ACK/FIN) with no data outstanding. */
                     tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq);
                     tcb->rto_timer = tcb->rto;
                 } else {
                     /*
-                     * Data: collapse the window (RFC 5681) and resend the
-                     * oldest unacknowledged segment. snd_nxt is left untouched
-                     * so it remains the high-water mark and ACKs for data
-                     * already in flight still validate.
+                     * Unacked data (with or without a FIN queued behind it):
+                     * collapse the window (RFC 5681) and resend the oldest
+                     * unacknowledged data segment. A FIN sent by close() must not
+                     * preempt this, or a lost data segment is never retransmitted
+                     * and the teardown stalls; the FIN's own retransmit resumes once
+                     * the data is acknowledged (send_ack catches up to send_tail).
+                     * snd_nxt is left untouched so it stays the high-water mark and
+                     * ACKs for data already in flight still validate.
                      */
                     uint32_t new_ss = tcb->cwnd >> 1;
                     if (new_ss < 2u * TCP_MSS) new_ss = 2u * TCP_MSS;
