@@ -214,10 +214,12 @@ persist-test: rach2 tests krffs
 
 # `make crash-test`: prove the dirty-mount flag detects an unclean shutdown. A
 # crashed boot (killed after mounting) leaves the on-disk dirty bit set for
-# fsck.krffs to report; a clean halt clears it.
+# fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
+# test-disk on a shared file under `make -j`.
+CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 crash-test: rach2 tests krffs
-	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
-	sh tools/crash_test.sh build/rach2/kernel $(DISK_TEST_IMAGE) build/krffs/fsck.krffs
+	$(MKDISK) krffs/manifests/disk-test.manifest $(CRASH_TEST_IMAGE) 64 48
+	sh tools/crash_test.sh build/rach2/kernel $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
 
 # `make stress-test`: prove an on-disk KRFFS larger than physical RAM works. Boots
 # a 64 MB disk with a 48 MB partition and runs stressprobe, which writes and
