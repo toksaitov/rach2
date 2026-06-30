@@ -307,6 +307,31 @@ int main(void)
     n_tty_output(&t, 'q', sink, &cp);
     CHECK(cap_is(&cp, "\nq", 2));
 
+    /* A control char set to 0 is disabled (the _POSIX_VDISABLE convention): an
+     * incoming NUL must not be read as that special. With VINTR disabled, a NUL
+     * raises no signal and joins the line as ordinary data. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    t.tio.c_cc[VINTR] = 0;
+    CHECK(feed(&t, &cp, 0) == 0); /* NUL is not INTR */
+    CHECK(t.line_len == 1);       /* it is ordinary data */
+
+    /* With VEOF disabled, a NUL on an empty line is not end-of-file. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    t.tio.c_cc[VEOF] = 0;
+    feed(&t, &cp, 0);
+    CHECK(t.eof == 0);              /* NUL did not signal EOF */
+    CHECK(n_tty_readable(&t) == 0); /* and no line completed */
+
+    /* With VERASE disabled, a NUL does not rub out the last char. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    t.tio.c_cc[VERASE] = 0;
+    feed_str(&t, &cp, "ab");
+    feed(&t, &cp, 0);
+    CHECK(t.line_len == 3); /* 'a', 'b', and the NUL, nothing erased */
+
     /* buffer bounds: a canonical line longer than the buffer is capped; the
      * terminator still lands, and read returns the capped line at once */
     n_tty_init(&t);

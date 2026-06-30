@@ -188,7 +188,12 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
     /* ISIG: an INTR/QUIT/SUSP char is recognized, echoed, flushes the line, and is
      * reported for delivery to the foreground group. */
     if (tio->c_lflag & ISIG) {
-        if (c == tio->c_cc[VINTR] || c == tio->c_cc[VQUIT] || c == tio->c_cc[VSUSP]) {
+        /* A control char set to 0 is disabled (the _POSIX_VDISABLE convention), so
+         * it must not match an incoming NUL; guard each comparison against the
+         * disabled value the way the VEOL match below does. */
+        if ((tio->c_cc[VINTR] && c == tio->c_cc[VINTR]) ||
+            (tio->c_cc[VQUIT] && c == tio->c_cc[VQUIT]) ||
+            (tio->c_cc[VSUSP] && c == tio->c_cc[VSUSP])) {
             echo(t, out, ctx, c);
             /* Flush ALL unread input (the edit line AND any committed-but-unread
              * lines and a pending EOF) so input typed before the signal does not
@@ -203,19 +208,21 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
     }
 
     if (tio->c_lflag & ICANON) {
-        if (c == tio->c_cc[VERASE]) {
+        /* As with the ISIG chars, a c_cc of 0 disables the editing function, so a
+         * NUL byte must not trigger it. */
+        if (tio->c_cc[VERASE] && c == tio->c_cc[VERASE]) {
             erase_one(t, out, ctx);
             return;
         }
-        if (c == tio->c_cc[VWERASE]) {
+        if (tio->c_cc[VWERASE] && c == tio->c_cc[VWERASE]) {
             erase_word(t, out, ctx);
             return;
         }
-        if (c == tio->c_cc[VKILL]) {
+        if (tio->c_cc[VKILL] && c == tio->c_cc[VKILL]) {
             erase_line(t, out, ctx);
             return;
         }
-        if (c == tio->c_cc[VEOF]) {
+        if (tio->c_cc[VEOF] && c == tio->c_cc[VEOF]) {
             /* ^D delivers the line so far; on an empty line it is end-of-file,
              * marked at the current stream position so it is read back in order
              * relative to any input that follows it. */
