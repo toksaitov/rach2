@@ -24,8 +24,10 @@ listed=$(make --no-print-directory -C "$K" print-c-src 2>/dev/null \
 # Every C source actually on disk in the kernel tree.
 ondisk=$(cd "$K" && find kernel.c sys -name '*.c' 2>/dev/null | sed 's#^\./##' | sort -u)
 
-lf=$(mktemp)
-df=$(mktemp)
+# Fail closed if mktemp cannot give us scratch files: without these the
+# comparison below would find nothing and the gate would falsely print OK.
+lf=$(mktemp) || { echo "check-sources: mktemp failed" >&2; exit 2; }
+df=$(mktemp) || { echo "check-sources: mktemp failed" >&2; rm -f "$lf"; exit 2; }
 trap 'rm -f "$lf" "$df"' EXIT INT TERM
 printf '%s\n' "$listed" >"$lf"
 printf '%s\n' "$ondisk" >"$df"
