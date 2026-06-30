@@ -172,8 +172,11 @@ void init_paging(size_t usable_frames)
             _curr_dir->logical_page_tables[table_index] = table;
         }
 
-        /* Mark frames below mem_reserved_ptr as used (kernel, heap, modules) */
-        if (phys_address < mem_reserved_ptr) {
+        /* Mark frames below mem_reserved_ptr as used (kernel, heap, modules).
+         * The `frame < _frames_number` bound matches the final pass and the
+         * other bitmap writes; it only matters when real RAM is smaller than the
+         * direct-mapped window, but the guard keeps every write in range. */
+        if (phys_address < mem_reserved_ptr && frame < _frames_number) {
             _frames[frame] = 1;
         }
         frame++;
