@@ -2779,6 +2779,9 @@ static int32_t sys__llseek(isr_params_t *params)
     if (!entry || entry->type != FD_TYPE_FILE || !entry->node) {
         return -EBADF;
     }
+    if (fd_node_check(entry) != 0) {
+        return -EBADF;  /* the file was unlinked or relocated out from under us */
+    }
 
     off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
     switch (whence) {
