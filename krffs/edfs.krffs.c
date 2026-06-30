@@ -91,7 +91,7 @@ int main(int argc, char **argv)
     {
         int i;
         for (i = 1; i < argc; ++i) {
-            if (strncmp(argv[i], "-h", 2) == 0) {
+            if (strcmp(argv[i], "-h") == 0) {
                 has_help_option = true;
             }
         }
@@ -107,9 +107,9 @@ int main(int argc, char **argv)
     }
 
     for (int i = 3; !failed_to_parse_options && i < argc; ++i) {
-        if (strncmp(argv[i], "-h", 2) == 0) {
+        if (strcmp(argv[i], "-h") == 0) {
             has_help_option = true;
-        } else if (!has_set_magic_option && strncmp(argv[i], "--set-magic", 11) == 0) {
+        } else if (!has_set_magic_option && strcmp(argv[i], "--set-magic") == 0) {
             has_set_magic_option = true;
             if (i + 1 < argc) {
                 unsigned long long magic_value;
@@ -124,17 +124,17 @@ int main(int argc, char **argv)
                 failed_to_parse_options = true;
             }
             ++i;
-        } else if (!has_set_type_option && strncmp(argv[i], "--set-type", 10) == 0) {
+        } else if (!has_set_type_option && strcmp(argv[i], "--set-type") == 0) {
             has_set_type_option = true;
             if (i + 1 < argc) {
                 for (char *curs = argv[i + 1]; *curs; ++curs) {
                     *curs = tolower(*curs);
                 }
-                if (strncmp(argv[i + 1], "root", 4) == 0) {
+                if (strcmp(argv[i + 1], "root") == 0) {
                     type = KRFFS_Root_Node;
-                } else if (strncmp(argv[i + 1], "reserved", 8) == 0) {
+                } else if (strcmp(argv[i + 1], "reserved") == 0) {
                     type = KRFFS_Reserved_Node;
-                } else if (strncmp(argv[i + 1], "free", 4) == 0) {
+                } else if (strcmp(argv[i + 1], "free") == 0) {
                     type = KRFFS_Free_Node;
                 } else {
                     failed_to_parse_options = true;
@@ -143,7 +143,7 @@ int main(int argc, char **argv)
                 failed_to_parse_options = true;
             }
             ++i;
-        } else if (!has_set_id_option && strncmp(argv[i], "--set-id", 8) == 0) {
+        } else if (!has_set_id_option && strcmp(argv[i], "--set-id") == 0) {
             has_set_id_option = true;
             if (i + 1 < argc) {
                 errno = 0;
@@ -155,7 +155,7 @@ int main(int argc, char **argv)
                 failed_to_parse_options = true;
             }
             ++i;
-        } else if (!has_set_name_option && strncmp(argv[i], "--set-name", 10) == 0) {
+        } else if (!has_set_name_option && strcmp(argv[i], "--set-name") == 0) {
             has_set_name_option = true;
             if (i + 1 < argc) {
                 strncpy(
@@ -168,7 +168,7 @@ int main(int argc, char **argv)
                 failed_to_parse_options = true;
             }
             ++i;
-        } else if (!has_set_size_option && strncmp(argv[i], "--set-size", 10) == 0) {
+        } else if (!has_set_size_option && strcmp(argv[i], "--set-size") == 0) {
             has_set_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
                 failed_to_parse_options = true;
             }
             ++i;
-        } else if (!has_set_prev_size_option && strncmp(argv[i], "--set-prev-size", 15) == 0) {
+        } else if (!has_set_prev_size_option && strcmp(argv[i], "--set-prev-size") == 0) {
             has_set_prev_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
@@ -192,7 +192,7 @@ int main(int argc, char **argv)
                 failed_to_parse_options = true;
             }
             ++i;
-        } else if (!has_set_data_size_option && strncmp(argv[i], "--set-data-size", 15) == 0) {
+        } else if (!has_set_data_size_option && strcmp(argv[i], "--set-data-size") == 0) {
             has_set_data_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
