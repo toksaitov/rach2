@@ -102,10 +102,13 @@ int main(int argc, char **argv)
         } else if (!has_set_magic_option && strncmp(argv[i], "--set-magic", 11) == 0) {
             has_set_magic_option = true;
             if (i + 1 < argc) {
+                unsigned long long magic_value;
                 errno = 0;
-                magic = (uint16_t) strtol(argv[i + 1], &end_ptr, base);
-                if (argv[i + 1] == end_ptr || errno != 0) {
-                    failed_to_parse_options = true;
+                magic_value = strtoull(argv[i + 1], &end_ptr, base);
+                if (argv[i + 1] == end_ptr || errno != 0 || magic_value > 0xFFFFu) {
+                    failed_to_parse_options = true; /* not a 16-bit magic */
+                } else {
+                    magic = (uint16_t) magic_value;
                 }
             } else {
                 failed_to_parse_options = true;
@@ -134,7 +137,7 @@ int main(int argc, char **argv)
             has_set_id_option = true;
             if (i + 1 < argc) {
                 errno = 0;
-                new_id = (uint64_t) strtol(argv[i + 1], &end_ptr, base);
+                new_id = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || errno != 0) {
                     failed_to_parse_options = true;
                 }
@@ -159,7 +162,7 @@ int main(int argc, char **argv)
             has_set_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
-                size = (uint64_t) strtol(argv[i + 1], &end_ptr, base);
+                size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || errno != 0) {
                     failed_to_parse_options = true;
                 }
@@ -171,7 +174,7 @@ int main(int argc, char **argv)
             has_set_prev_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
-                previous_node_size = (uint64_t) strtol(argv[i + 1], &end_ptr, base);
+                previous_node_size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || errno != 0) {
                     failed_to_parse_options = true;
                 }
@@ -183,7 +186,7 @@ int main(int argc, char **argv)
             has_set_data_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
-                data_size = (uint64_t) strtol(argv[i + 1], &end_ptr, base);
+                data_size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || errno != 0) {
                     failed_to_parse_options = true;
                 }
@@ -194,13 +197,28 @@ int main(int argc, char **argv)
         }
     }
 
-    if (argc <= 2 || has_help_option || failed_to_parse_options) {
+    if (has_help_option) {
         fprintf(
             stderr,
             "Usage: %s <file> <node position> <options>\n",
             argc >= 1 ?
                 argv[0] : "edfs.krffs"
         );
+
+        goto cleanup;  /* help requested: a success exit */
+    } else if (argc <= 2 || failed_to_parse_options) {
+        /* A missing or unparseable argument must report failure, not exit 0 as if
+         * the edit succeeded; a calling script relies on the status. */
+        fprintf(
+            stderr,
+            "edfs.krffs: an option or its argument was missing or invalid\n"
+            "Usage: %s <file> <node position> <options>\n",
+            argc >= 1 ?
+                argv[0] : "edfs.krffs"
+        );
+
+        exit_status =
+            EXIT_FAILURE;
 
         goto cleanup;
     } else if (argv[1][0] == '-' || argv[2][0] == '-') {
