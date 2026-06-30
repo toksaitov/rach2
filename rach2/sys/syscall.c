@@ -119,7 +119,7 @@ static void fd_release_backing(fd_entry_t *e)
      * fork child that merely inherited the fb descriptor cannot clear the
      * parent's graphics mode when the child closes the fd or exits. */
     if (e->type == FD_TYPE_FRAMEBUFFER && current_proc &&
-        fb_owner_pid == current_proc->pid) {
+        fb_owner_pid == current_proc->pid && e->ofd && e->ofd->refcount == 1) {
         vga_mode13h_exit();
         fb_owner_pid = 0;
     }
