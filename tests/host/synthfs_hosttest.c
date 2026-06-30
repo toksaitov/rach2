@@ -82,5 +82,28 @@ int main(void)
                          &vp) == VNODE_PROC_FILE &&
           vp.pid == 7);
 
+    /* The classifier requires a lexically pre-normalized path: a '.' or '..'
+     * component is NOT collapsed here (only the KRFFS resolver does that), so a
+     * dot path transiting a synthetic prefix deliberately fails closed rather
+     * than reaching the wrong object. */
+    CHECK(synth_classify("proc/7/../9/stat", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/../etc/passwd", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("dev/../dev/null", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/.", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("dev/./null", &vp) == VNODE_ENOENT);
+
+    /* A pid that would overflow or wrap a 32-bit int is rejected, never folded to
+     * a small pid another process might own; the boundary is 2147483639. */
+    CHECK(synth_classify("proc/99999999999", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/4294967297", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/2147483639", &vp) == VNODE_PROC_PID && vp.pid == 2147483639);
+    CHECK(synth_classify("proc/2147483640", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/fd/99999999999", &vp) == VNODE_ENOENT);
+
+    /* A leading '-' is not a digit, so a negative token cannot be read as the
+     * SYNTH_PID_SELF (-1) sentinel. */
+    CHECK(synth_classify("proc/-1", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/-1/stat", &vp) == VNODE_ENOENT);
+
     return fails;
 }
