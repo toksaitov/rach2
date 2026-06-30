@@ -699,16 +699,25 @@ static void hda_delay(int count)
     }
 }
 
+/* Consecutive non-advancing WALCLK reads after which it is judged dead. A live
+ * 24MHz clock changes between reads (one MMIO read is slower than a 41ns tick), so
+ * this many identical reads means the wall clock is stuck. */
+#define HDA_WALCLK_STUCK_READS 100000u
+
 /**
  * Busy-wait `us` microseconds against the 24MHz HDA wall clock.
  *
  * Unlike a timer-driven sleep this works with interrupts disabled (for example
- * inside a syscall), since it only reads the WALCLK register.
+ * inside a syscall), since it only reads the WALCLK register. A controller whose
+ * wall clock never advances (a dead or partially powered HBA) would otherwise spin
+ * here forever; if it stops ticking, fall back to the POST-port busy-wait so a
+ * syscall caller cannot hang.
  */
 static void hda_delay_walclk_us(uint32_t us)
 {
-    uint32_t start;
+    uint32_t start, now, prev;
     uint32_t delta_ticks;
+    uint32_t stalled = 0;
 
     if (!hda_base || us == 0) {
         return;
@@ -717,7 +726,21 @@ static void hda_delay_walclk_us(uint32_t us)
     /* 24 ticks per microsecond. */
     delta_ticks = us * 24u;
     start = hda_read32(HDA_WALCLK);
-    while ((uint32_t)(hda_read32(HDA_WALCLK) - start) < delta_ticks) {
+    prev  = start;
+    for (;;) {
+        now = hda_read32(HDA_WALCLK);
+        if ((uint32_t)(now - start) >= delta_ticks) {
+            return;
+        }
+        if (now == prev) {
+            if (++stalled >= HDA_WALCLK_STUCK_READS) {
+                hda_delay((int)us); /* wall clock is dead: approximate the delay */
+                return;
+            }
+        } else {
+            stalled = 0;
+            prev    = now;
+        }
     }
 }
 
