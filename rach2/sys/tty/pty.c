@@ -347,11 +347,22 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
         tty_signal_group((int)current_proc->pgid, SIGTTIN);
         return -EINTR;
     }
-    /* Blocks until a line/byte is ready unless the fd is nonblocking, in which
-     * case an empty queue returns -EAGAIN; tty_hangup (master close) makes a
-     * blocking read return 0 (EOF). */
-    n = tty_read(&p->slave, kbuf, (int)want,
-                 e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
+    /* A slave whose master has closed is permanently at end of file: drain any
+     * cooked input still buffered, then read 0 on every call. The discipline's
+     * hangup EOF is one-shot in canonical mode (n_tty_read clears it after the
+     * first zero-length read), so once the master is gone read without blocking
+     * and report an empty result as EOF rather than parking forever (no waker
+     * remains) or returning -EAGAIN. A normal read parks unless the fd is
+     * nonblocking. */
+    {
+        int master_gone = !p->master_open;
+        int nonblock = master_gone || (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
+
+        n = tty_read(&p->slave, kbuf, (int)want, nonblock);
+        if (n == -EAGAIN && master_gone) {
+            return 0; /* master closed, nothing buffered: persistent EOF */
+        }
+    }
     if (n < 0) {
         return n;
     }
