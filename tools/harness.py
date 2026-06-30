@@ -43,8 +43,9 @@ def main():
     ap.add_argument("--net", default="user,id=net0")
     ap.add_argument("--device", default="rtl8139,netdev=net0")
     # --qemu-arg may repeat; each value is one token appended verbatim to the
-    # QEMU command line, for topology the fixed flags do not cover (e.g. the
-    # AHCI pair: --qemu-arg -device --qemu-arg ich9-ahci,id=ahci0). The NIC
+    # QEMU command line, for topology the fixed flags do not cover. Use the
+    # =value form so a leading-dash token is not parsed as an option (e.g. the
+    # AHCI pair: --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0). The NIC
     # --device stays wired, so a passthrough never disturbs it.
     ap.add_argument("--qemu-arg", action="append", default=[], dest="qemu_arg")
     ap.add_argument("--timeout", type=float, default=60.0)
