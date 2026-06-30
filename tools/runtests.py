@@ -33,7 +33,8 @@ import argparse, os, re, select, subprocess, sys, time
 PROBES = [
     "hello", "filetest", "shelltest", "dirtest", "stattest", "touchtest",
     "rmtest", "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe",
-    "errnoprobe", "vmprobe", "forkro", "dirprobe", "timeprobe", "sigprobe",
+    "errnoprobe", "vmprobe", "forkro", "cowregrant", "usercopyfault",
+    "dirprobe", "timeprobe", "sigprobe",
     "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
     "jobprobe", "miscprobe", "ptyprobe", "rngprobe", "orphanprobe",
 ]
