@@ -1,5 +1,6 @@
 #include "syscall.h"
 #include "serial.h"
+#include "panic.h"
 #include "kio.h"
 #include "kbd.h"
 #include "mouse.h"
@@ -186,6 +187,64 @@ struct audio_write_params {
 
 /* Kernel stack size (16KB) */
 #define KERNEL_STACK_SIZE 0x4000
+
+/*
+ * Per-process kernel stacks come from a fixed arena of MAX_PROCS slots, not from
+ * the never-freed bump allocator, so a fork/exit/reap cycle returns the stack to
+ * the pool instead of leaking four frames each time. The arena is reserved once
+ * at init; a slot is claimed on fork and released when the zombie is reaped.
+ */
+static uintptr_t kstack_arena;
+static uint8_t kstack_in_use[MAX_PROCS];
+
+/**
+ * Reserve the kernel-stack arena. Called once at init, before the first fork.
+ */
+static void init_kstacks(void)
+{
+    kstack_arena = mem_reserve((size_t)MAX_PROCS * KERNEL_STACK_SIZE, true);
+    if (kstack_arena == 0) {
+        k_panic("kstack: cannot reserve the kernel-stack arena");
+    }
+}
+
+/**
+ * Claim a kernel stack, returning its base, or 0 if the arena is full.
+ *
+ * The caller uses `base + KERNEL_STACK_SIZE` as the stack top.
+ */
+static uintptr_t kstack_alloc(void)
+{
+    uint32_t i;
+
+    if (kstack_arena == 0) {
+        return 0;
+    }
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (!kstack_in_use[i]) {
+            kstack_in_use[i] = 1;
+            return kstack_arena + (uintptr_t)i * KERNEL_STACK_SIZE;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Release the kernel stack whose top is `top`.
+ *
+ * A top outside the arena (the boot stack of the init-role process) is ignored,
+ * so this is safe to call on any reaped process. Only a zombie may be freed: the
+ * dying process is still executing on its own stack until the parent reaps it.
+ */
+static void kstack_free(uintptr_t top)
+{
+    uintptr_t base = top - KERNEL_STACK_SIZE;
+
+    if (kstack_arena != 0 && base >= kstack_arena &&
+        base < kstack_arena + (uintptr_t)MAX_PROCS * KERNEL_STACK_SIZE) {
+        kstack_in_use[(base - kstack_arena) / KERNEL_STACK_SIZE] = 0;
+    }
+}
 
 /* Fork child return point in isr_handler.s */
 extern void isr_return(void);
@@ -3508,7 +3567,7 @@ static int32_t sys_fork(isr_params_t *params)
         return -ENOMEM;
     }
 
-    child_kstack_base = mem_reserve(KERNEL_STACK_SIZE, true);
+    child_kstack_base = kstack_alloc();
     if (!child_kstack_base) {
         free_user_pages(child_dir);
         free_page_directory(child_dir);
@@ -3701,6 +3760,10 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
                     free_user_pages(child_dir);
                     free_page_directory(child_dir);
                 }
+                /* The zombie no longer runs on its kernel stack, so return it to
+                 * the arena for the next fork; this is the single release point
+                 * for a per-fork stack. */
+                kstack_free(p->kernel_stack);
                 free_process(p);
                 if (status) {
                     copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
@@ -7238,6 +7301,8 @@ static void _syscall_handler(isr_params_t *params)
 void init_syscall(void)
 {
     uint32_t i;
+
+    init_kstacks();
 
     for (i = 0; i < SYSCALL_TABLE_SIZE; i++) {
         _syscall_table[i] = NULL;
