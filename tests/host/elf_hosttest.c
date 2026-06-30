@@ -162,10 +162,14 @@ int main(void)
     ((Elf32_Ehdr *)img_buf)->e_ident[EI_MAG0] = 0;
     CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
 
-    /* More program headers than the loader will hold. */
+    /* More program headers than the loader will hold. img_size covers the whole
+       claimed table and phdr[0] is a valid PT_LOAD, so the e_phnum cap is the
+       only thing that rejects this image: were the cap removed, the loader would
+       read past its phdr array and reach allocation, which alloc_reached catches. */
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x10u, 0x10u, 5u);
     ((Elf32_Ehdr *)img_buf)->e_phnum = ELF_MAX_PHNUM + 1;
+    img_size = sizeof(Elf32_Ehdr) + (uint32_t)(ELF_MAX_PHNUM + 1) * sizeof(Elf32_Phdr) + 0x100u;
     CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
 
     /* A program-header table that runs past the image. */

@@ -257,14 +257,20 @@ bool elf_valid_exec(const void *ehdr, uint32_t len)
  */
 uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
 {
+    uint32_t table_bytes = (uint32_t)phnum * (uint32_t)sizeof(Elf32_Phdr);
     uint16_t i;
 
     for (i = 0; i < phnum; i++) {
         const Elf32_Phdr *p = &phdrs[i];
 
-        /* phoff - p_offset avoids the p_offset + p_filesz overflow. */
+        /* The WHOLE program header table, not just its first byte, must lie
+         * within one PT_LOAD, so AT_PHDR names a real, complete table the loader
+         * can read. The subtractions run only after the bounds that keep them
+         * from underflowing; `table_bytes` cannot overflow because `phnum` is
+         * already capped at ELF_MAX_PHNUM. */
         if (p->p_type == PT_LOAD && phoff >= p->p_offset &&
-            phoff - p->p_offset < p->p_filesz) {
+            p->p_filesz >= table_bytes &&
+            phoff - p->p_offset <= p->p_filesz - table_bytes) {
             return p->p_vaddr + (phoff - p->p_offset);
         }
     }
