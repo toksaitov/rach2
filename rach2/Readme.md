@@ -59,7 +59,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 
 * PS/2 keyboard driver with US layout, shift key, and CTRL+C support
 * PS/2 mouse driver with IRQ12 handler and device file interface
-* VGA text mode display (80x25, 16 colors)
+* VGA text mode display (80x25, 16 colors) with a VT100/ANSI escape interpreter (cursor motion, erase, SGR color) so line editing and vi render in the QEMU window
 * VGA Mode 13h graphics (320x200, 256 colors) via framebuffer device
 * Audio subsystem with automatic hardware detection:
   * Sound Blaster 16 (ISA): 8/16-bit DMA, IRQ-driven playback
