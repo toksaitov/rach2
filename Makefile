@@ -366,4 +366,4 @@ help:
 	@echo "Run an image (the build system does not run QEMU):"
 	@echo "  cd rach2 && ./run.sh os-simple              # boot the os-simple image"
 	@echo "  cd rach2 && ./run.sh test                   # boot the test image"
-	@echo "  cd rach2 && ./run_from_disk.sh              # boot the GRUB disk (no -kernel)"
+	@echo "  cd rach2 && ./run_from_disk.sh              # boot the GRUB disk (no -kernel; SSH on host 2222)"

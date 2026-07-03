@@ -49,6 +49,17 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `timeprobe` (`TIMEPROBE OK`): time, sleep-with-yield, and the entropy path.
 * `miscprobe` (`MISCPROBE OK`): the miscellaneous syscalls busybox needs.
 
+The milestone-9 through -12 audits added focused regression probes that boot the same way (they do not all follow the `*probe` name):
+
+* `cowregrant` (`COWREGRANT OK`): the copy-on-write re-grant path after fork.
+* `usercopyfault` (`USERCOPYFAULT OK`): the user-copy helpers rejecting a bad or window-crossing user pointer.
+* `forkleak` (`FORKLEAK OK`): no kernel-stack leak across repeated fork and exit.
+* `fdstale` (`FDSTALE OK`): a closed-and-reused fd is not used after free across the fd operations.
+* `dirgrow` (`DIRGROW OK`): a KRFFS directory growing past its first block, with the parent stamp preserved on relocate.
+* `pathcanon` (`PATHCANON OK`): absolute-path canonicalization before the synthetic `/dev` and `/proc` classifier.
+* `trapprobe` (`TRAPPROBE OK`): the default handler for the CPU exceptions.
+* `orphanprobe` (`ORPHANPROBE OK`): orphan reparenting to `/sbin/init`.
+
 The memory-protection probes provoke a deliberate fault. `forkro` forks a child that writes a read-only page, confirms the child is killed by SIGSEGV while the page's protection survived the fork, and prints `FORKRO OK`. `vmro` (a read-only page faulting on write) and `vmfault` (a wild-pointer write) are themselves killed by the fault they trigger, so the kernel surviving a faulting user process is the pass. `winprobe` (run by hand as a standalone boot) reads the kernel-only page-cache window at `0xC0000000` from ring 3; the window fault branch is for the supervisor faults the file system raises, not for user code, so the read must segfault the process. Its `winprobe: ERROR still alive` line must never appear; the kernel surviving and the shell returning is the pass.
 
 The disk probes need a real disk, so they are disk-only: boot disk-backed (`rach2.fsdisk`) with a scratch image attached, never the default RAM-module test image. `blockprobe` (`BLOCKPROBE OK`) writes a working set larger than the 1 MiB resident cache, fsyncs, and reads it back byte for byte, so a dropped-dirty or mis-mapped page shows up as a mismatch rather than a crash. `persistprobe` (`PERSISTPROBE OK (wrote)` then `PERSISTPROBE OK (read back)`) runs twice against the same image: the first boot writes and fsyncs `/persist.txt`, the second reads the marker back, proving fsync pushed the write through the cache to the disk. `stressprobe` (`STRESSPROBE OK n=132 bytes=34603008`) writes and re-reads 33 MiB, past the 32 MiB physical-RAM cap, proving a file system larger than memory round-trips through the cache. `make test-disk`, `make persist-test`, and `make stress-test` build the scratch image and run each under the harness. Each probe also has an AHCI twin that runs the identical token over an `ich9-ahci` SATA HBA selected by `rach2.disk=ahci`: `make test-disk-ahci`, `make persist-test-ahci`, and `make stress-test-ahci` attach the same scratch image as an `if=none` drive plus an `ide-hd` behind the HBA and assert the same `BLOCKPROBE OK` / `PERSISTPROBE OK` / `STRESSPROBE OK` lines.

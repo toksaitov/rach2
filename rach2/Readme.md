@@ -153,8 +153,9 @@ The window at 0xC0000000 (PCWIN_BASE, the same address as USER_ADDR_MAX, just ab
 |   |   |-- idt.c/h        # Interrupt Descriptor Table setup
 |   |   `-- idt_handler.s  # IDT loading routine
 |   |-- block/
-|   |   |-- block.c/h      # Block-device layer (registers the primary disk)
-|   |   `-- ata.c/h        # Polled PIO ATA driver
+|   |   |-- block.c/h      # Block-device layer (probes the backend behind block0)
+|   |   |-- ata.c/h        # Polled PIO ATA driver (default)
+|   |   `-- ahci.c/h       # Polled AHCI/SATA driver (rach2.disk=ahci)
 |   |-- mm/
 |   |   |-- heap.c/h       # Simple bump allocator
 |   |   |-- frame.c/h      # Physical frame bitmap allocator
