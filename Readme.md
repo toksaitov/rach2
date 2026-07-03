@@ -21,6 +21,8 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [vendor/dropbear/](vendor/dropbear/)     | Static-musl Dropbear SSH server: the remote-login capstone                                                             | [Readme](vendor/dropbear/Readme.md)   |
 | [ports/doom/](ports/doom/)               | Doom port with VGA graphics, mouse, and audio                                                                          | [Readme](ports/doom/Readme.md)        |
 | [mk/](mk/)                               | Shared GNU-Make building blocks: toolchain, header-deps, `build/`, clangd/IDE setup                                    | [Readme](mk/Readme.md)                |
+| [tools/](tools/)                         | Build, verify, and test scripts behind the make targets (doctor, the gates, the boot harness, image builders)          | [Readme](tools/Readme.md)             |
+| [dev-log/](dev-log/)                     | How each milestone was planned and built, and where the tree stands now                                                | [Readme](dev-log/Readme.md)           |
 
 Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
 
@@ -45,7 +47,7 @@ Run `make doctor` at any time to check your toolchain. It reports each tool as P
 |----------------|------------------------------|------------------------------------------------------------------------------------|
 | Cross-compiler | `brew install i686-elf-gcc`  | build the OSDev `i686-elf` cross GCC (or `brew install i686-elf-gcc` via Homebrew) |
 | Emulator       | `brew install qemu`          | `sudo apt install qemu-system-x86`                                                 |
-| FUSE (krffs)   | `brew install --cask fuse-t` | `sudo apt install libfuse-dev`                                                     |
+| FUSE           | `brew install --cask fuse-t` | `sudo apt install libfuse-dev`                                                     |
 | pkg-config     | `brew install pkg-config`    | `sudo apt install pkg-config`                                                      |
 
 The kernel is freestanding and links no libgcc, so it alone also builds with `x86_64-elf-gcc`; the musl-linked utilities need a 32-bit libgcc, which only `i686-elf-gcc` supplies, so `i686-elf-gcc` is the project default.
@@ -103,4 +105,17 @@ From the shell prompt:
 > doom                  # Play Doom
 ```
 
+`doom` needs a game-data file (an IWAD), which is not committed. Put one at `ports/doom/doom1.wad` before `make full` (the Doom shareware WAD, or a license-clean `freedoom1.wad`; see [ports/doom/Readme.md](ports/doom/Readme.md) and run `ports/doom/fetch_wad.sh` to verify it). Without it, `doom` builds but starts and exits with "IWAD not found".
+
 If you fall back to the kernel debug shell, use `audio help` for the audio test and HDA diagnostic commands. In VGA text mode, `PageUp`, `PageDown`, `Home`, and `End` provide scrollback through boot logs and shell output.
+
+## Where to go next
+
+* `CLAUDE.md` is the normative project policy (build, writing, comments, verification, git); `AGENTS.md` points a coding agent to it.
+* `dev-log/` records how each milestone was planned and built; `dev-log/Readme.md` indexes them and its last entry is where the tree stands now.
+* Each component and kernel subsystem has its own Readme, linked in the tables above.
+* `make verify-style` and `make verify-host` are the quality gates every change must pass; `make help` lists all targets.
+
+## Moving to another machine
+
+Use a clone, not a copy: `git clone` gives a ~34M tree that rebuilds from scratch. The vendored source tarballs are committed, so the build is offline; `build/` (hundreds of MB) is git-ignored and regenerable. If you must copy the working tree instead, exclude `build/` and delete the vendored build stamps (`vendor/*/.stamp`), or run `make distclean`, first: a stamp left behind without its (deleted) `build/` output makes `make full` skip rebuilding that capstone. The demo SSH key (`krffs/rach2_demo_ed25519`) is git-ignored; a fresh build mints a new one, or copy the existing key out of band to keep it. On the new machine run `make doctor`, then `make` and `make full`.

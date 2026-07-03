@@ -33,6 +33,11 @@ hint() {
                              || echo "apt install libfuse-dev" ;;
     openssh)  [ "$MAC" = 1 ] && echo "preinstalled with macOS (or brew install openssh)" \
                              || echo "apt install openssh-client" ;;
+    python3)  [ "$MAC" = 1 ] && echo "xcode-select --install (or brew install python3)" \
+                             || echo "apt install python3" ;;
+    perl)     [ "$MAC" = 1 ] && echo "preinstalled with macOS" || echo "apt install perl" ;;
+    docker)   [ "$MAC" = 1 ] && echo "brew install --cask docker (Docker Desktop)" \
+                             || echo "apt install docker.io" ;;
     *)        [ "$MAC" = 1 ] && echo "brew install $1" || echo "apt install $1" ;;
     esac
 }
@@ -70,10 +75,12 @@ echo "Required (build + run the OS):"
 req i686-elf-gcc     cross
 req i686-elf-ld      binutils
 req i686-elf-strip   binutils
+req i686-elf-readelf binutils
 req qemu-system-i386 qemu
 req pkg-config       pkgconf
 req make             make
 req cc               cc
+req python3          python3
 
 # FUSE for the krffs host tools (fuse-t on macOS, fuse on Linux), checked via
 # pkg-config. If pkg-config is missing OR broken (same probe req() uses for it),
@@ -95,6 +102,8 @@ echo "Optional (only some tasks need these):"
 opt cppcheck     "make verify-style" cppcheck
 opt shellcheck   "make verify-style" shellcheck
 opt clang-format "make verify-style" clang-format
+opt perl         "make verify-style" perl
+opt docker       "make isos / os-real-grub-disk" docker
 opt ssh-keygen   "the SSH capstone demo key" openssh
 
 echo
