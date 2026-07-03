@@ -94,7 +94,7 @@ The OPL emulator runs at 49716 Hz and is downsampled into Doom's 11025 Hz mono m
 
 ## Build
 
-Requires a cross-compiler (`i686-elf-gcc` or `x86_64-elf-gcc`):
+Requires the `i686-elf-gcc` cross-compiler:
 
 ```sh
 make        # Build doom executable
@@ -111,19 +111,33 @@ This produces a ~390KB freestanding ELF32 executable.
    make
    ```
 
-2. Build the os-real image, which stages Doom at `/bin/doom` (from the repo root):
+2. Provide the game data. Doom needs an IWAD, which is operator-supplied and
+   never committed (game content, git-ignored via `ports/doom/.gitignore`). Put
+   one at `ports/doom/doom1.wad`: either the id Software Doom shareware
+   `doom1.wad` (freely redistributable, sha256
+   `1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`) or the
+   license-clean `freedoom1.wad` (https://freedoom.github.io) saved under that
+   name. Verify it is in place:
+   ```sh
+   ./ports/doom/fetch_wad.sh
+   ```
+
+3. Build the os-real image, which stages Doom at `/bin/doom` and the WAD at
+   `/doom1.wad` (from the repo root):
    ```sh
    make os-real-image
    ```
+   Both are staged as `optional-file`: a missing WAD is skipped silently, and
+   `doom` then starts and exits with "IWAD not found".
 
-3. Boot Rach2:
+4. Boot Rach2:
    ```sh
    cd rach2
    ./run.sh os-real sb16   # Sound Blaster 16
    ./run.sh os-real hda    # Intel HD Audio
    ```
 
-4. Run from the shell:
+5. Run from the shell:
    ```
    > doom
    ```
