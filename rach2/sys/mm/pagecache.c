@@ -433,40 +433,49 @@ void *pc_test_page(uint32_t disk_off)
 /**
  * Sizes the window from PCWIN_BASE to the lowest device memory BAR that lands in
  * it, capped at PC_WINDOW_CAP, so the window never overlaps device MMIO.
+ *
+ * Walks every bus the driver discovery walks (`pci_find_device_skip` scans
+ * buses 0 to 255), not bus 0 alone: a BAR behind a bridge that landed in the
+ * window would otherwise share virtual addresses with the cache, and a later
+ * `map_mmio` of it would trade PTEs with the window's fills.
  */
 static uint32_t pc_probe_window_size(void)
 {
     uint32_t limit = PCWIN_BASE + PC_WINDOW_CAP;
-    uint8_t dev;
+    uint16_t bus;
 
-    for (dev = 0; dev < 32; ++dev) {
-        uint8_t fn;
-        for (fn = 0; fn < 8; ++fn) {
-            uint8_t bari;
-            if (pci_read_config16(0, dev, fn, 0) == 0xFFFF) {
-                if (fn == 0) {
-                    break;
-                }
-                continue;
-            }
-            for (bari = 0; bari < 6; ++bari) {
-                uint32_t bar = pci_read_config32(0, dev, fn, 0x10 + bari * 4u);
-                uint32_t base;
-                int above_4g = 0;
-                if (!pci_bar_is_memory(bar)) {
+    for (bus = 0; bus < 256; ++bus) {
+        uint8_t dev;
+        for (dev = 0; dev < 32; ++dev) {
+            uint8_t fn;
+            for (fn = 0; fn < 8; ++fn) {
+                uint8_t bari;
+                if (pci_read_config16((uint8_t) bus, dev, fn, 0) == 0xFFFF) {
+                    if (fn == 0) {
+                        break;
+                    }
                     continue;
                 }
-                base = pci_bar_address(bar);
-                if (pci_bar_is_64bit(bar)) {
-                    /* The high dword is the next BAR slot; a non-zero high puts
-                       the BAR above 4 GiB, entirely past the 32-bit window. */
-                    uint32_t high =
-                        pci_read_config32(0, dev, fn, 0x10 + (bari + 1u) * 4u);
-                    above_4g = (high != 0);
-                    ++bari;
-                }
-                if (!above_4g && base >= PCWIN_BASE && base < limit) {
-                    limit = base;
+                for (bari = 0; bari < 6; ++bari) {
+                    uint32_t bar = pci_read_config32((uint8_t) bus, dev, fn,
+                                                     0x10 + bari * 4u);
+                    uint32_t base;
+                    int above_4g = 0;
+                    if (!pci_bar_is_memory(bar)) {
+                        continue;
+                    }
+                    base = pci_bar_address(bar);
+                    if (pci_bar_is_64bit(bar)) {
+                        /* The high dword is the next BAR slot; a non-zero high
+                           puts the BAR above 4 GiB, past the 32-bit window. */
+                        uint32_t high = pci_read_config32(
+                            (uint8_t) bus, dev, fn, 0x10 + (bari + 1u) * 4u);
+                        above_4g = (high != 0);
+                        ++bari;
+                    }
+                    if (!above_4g && base >= PCWIN_BASE && base < limit) {
+                        limit = base;
+                    }
                 }
             }
         }
