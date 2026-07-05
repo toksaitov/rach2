@@ -170,14 +170,17 @@ static uint64_t total_free_space(struct krffs_file_system *file_system)
 /**
  * Reserve one node named `name` inside directory `parent_id`.
  *
- * The node gets `mode` and an optional `data` payload. Returns the new node's
- * id, or 0 on failure (a full image).
+ * The node gets `mode`, the owner `uid`:`gid` (0:0 unless the manifest says
+ * otherwise), and an optional `data` payload. Returns the new node's id, or 0
+ * on failure (a full image).
  */
 static uint64_t stage_node(
                     struct krffs_file_system *file_system,
                     uint64_t parent_id,
                     const char *name,
                     uint16_t mode,
+                    uint32_t uid,
+                    uint32_t gid,
                     const char *data,
                     uint64_t data_size
                 )
@@ -217,9 +220,9 @@ static uint64_t stage_node(
     node->mode =
         mode;
     node->uid =
-        0;
+        uid;
     node->gid =
-        0;
+        gid;
     node->data_size =
         data_size;
 
@@ -294,7 +297,7 @@ static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *p
         } else {
             id =
                 stage_node(file_system, parent, p,
-                           (uint16_t) (KRFFS_MODE_IFDIR | 0755), NULL, 0);
+                           (uint16_t) (KRFFS_MODE_IFDIR | 0755), 0, 0, NULL, 0);
             if (id == 0) {
                 return (uint64_t) -1;
             }
@@ -360,14 +363,17 @@ static bool is_synthetic_path(const char *path)
 }
 
 /**
- * Stage a directory `path` with `mode`, creating any missing parent as 0755.
+ * Stage a directory `path` with `mode` and owner, creating any missing parent
+ * as root-owned 0755.
  *
  * Unlike the implicit 0755 directories that `resolve_dir` makes for a file's
- * parents, this sets an explicit mode, and updates the mode if the directory
- * already exists (so a `dir 0700 /etc/dropbear` line wins whether it is declared
- * before or after something is placed inside). Returns false on any failure.
+ * parents, this sets an explicit mode and owner, and updates both if the
+ * directory already exists (so a `dir 0700:1000:1000 /home/student` line wins
+ * whether it is declared before or after something is placed inside). Returns
+ * false on any failure.
  */
-static bool stage_dir(struct krffs_file_system *file_system, const char *path, uint16_t mode)
+static bool stage_dir(struct krffs_file_system *file_system, const char *path,
+                      uint16_t mode, uint32_t uid, uint32_t gid)
 {
     char path_buf[256];
     char dir_buf[256];
@@ -413,13 +419,18 @@ static bool stage_dir(struct krffs_file_system *file_system, const char *path, u
         }
         node->mode =
             (uint16_t) (KRFFS_MODE_IFDIR | mode);
+        node->uid =
+            uid;
+        node->gid =
+            gid;
         krffs_sync_mapping(node, sizeof(*node));
 
         return true;
     }
 
     return stage_node(file_system, parent_id, name,
-                      (uint16_t) (KRFFS_MODE_IFDIR | mode), NULL, 0) != 0;
+                      (uint16_t) (KRFFS_MODE_IFDIR | mode), uid, gid,
+                      NULL, 0) != 0;
 }
 
 /**
@@ -431,6 +442,8 @@ static bool stage_file(
                 struct krffs_file_system *file_system,
                 const char *path,
                 uint16_t mode,
+                uint32_t uid,
+                uint32_t gid,
                 const char *data,
                 uint64_t data_size
             )
@@ -473,23 +486,56 @@ static bool stage_file(
         return false;
     }
 
-    return stage_node(file_system, dir_id, name, mode, data, data_size) != 0;
+    return stage_node(file_system, dir_id, name, mode, uid, gid,
+                      data, data_size) != 0;
 }
 
 /**
- * Parse an octal mode field (e.g. "0755"). Returns false on a non-octal token.
+ * Parse a mode field: octal permissions with an optional owner, `0755` or
+ * `0700:1000:1000`. The owner defaults to root (0:0), so every existing
+ * manifest reads unchanged. Returns false on a malformed token.
  */
-static bool parse_mode(const char *s, uint16_t *out)
+static bool parse_mode(const char *s, uint16_t *out, uint32_t *uid, uint32_t *gid)
 {
     char *end;
     unsigned long v =
         strtoul(s, &end, 8);
 
-    if (*s == '\0' || *end != '\0' || v > 07777u) {
+    if (*s == '\0' || v > 07777u || (*end != '\0' && *end != ':')) {
         return false;
     }
     *out =
         (uint16_t) v;
+    *uid =
+        0;
+    *gid =
+        0;
+
+    if (*end == ':') {
+        const char *start;
+        unsigned long u;
+        unsigned long g;
+
+        start =
+            end + 1;
+        u =
+            strtoul(start, &end, 10);
+        if (end == start || *end != ':') {
+            return false;
+        }
+        start =
+            end + 1;
+        g =
+            strtoul(start, &end, 10);
+        if (end == start || *end != '\0' ||
+            u > 0xFFFFFFFFul || g > 0xFFFFFFFFul) {
+            return false;
+        }
+        *uid =
+            (uint32_t) u;
+        *gid =
+            (uint32_t) g;
+    }
 
     return true;
 }
@@ -541,7 +587,9 @@ static bool stage_exec_dir(
                 struct krffs_file_system *file_system,
                 const char *guestdir,
                 const char *hostdir,
-                uint16_t mode
+                uint16_t mode,
+                uint32_t uid,
+                uint32_t gid
             )
 {
     DIR *d =
@@ -604,7 +652,7 @@ static bool stage_exec_dir(
             break;
         }
         ok =
-            stage_file(file_system, guestpath, mode, data, len);
+            stage_file(file_system, guestpath, mode, uid, gid, data, len);
         free(data);
     }
 
@@ -617,7 +665,9 @@ static bool stage_exec_dir(
  * Apply one manifest line. Returns false on a hard error (a syntax error or a
  * staging failure), true on success or a skipped `optional-file`.
  *
- * Directives (the leading token), with octal MODE and absolute guest paths:
+ * Directives (the leading token), with MODE an octal permission set carrying
+ * an optional owner (`0755` or `0700:1000:1000`, root-owned by default) and
+ * absolute guest paths:
  *   dir   MODE PATH               a directory
  *   file  MODE PATH HOSTPATH      a file copied from the host
  *   optional-file MODE PATH HOST  like file, but skipped if HOST is absent
@@ -632,6 +682,8 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
     char *mode_s;
     char *path;
     uint16_t mode;
+    uint32_t uid;
+    uint32_t gid;
 
     if (verb == NULL || verb[0] == '#') {
         return true;
@@ -641,14 +693,15 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         strtok_r(NULL, " \t", &save);
     path =
         strtok_r(NULL, " \t", &save);
-    if (mode_s == NULL || path == NULL || !parse_mode(mode_s, &mode)) {
+    if (mode_s == NULL || path == NULL ||
+        !parse_mode(mode_s, &mode, &uid, &gid)) {
         fprintf(stderr, "stageimage: malformed '%s' directive.\n", verb);
 
         return false;
     }
 
     if (strcmp(verb, "dir") == 0) {
-        return stage_dir(file_system, path, mode);
+        return stage_dir(file_system, path, mode, uid, gid);
     }
     if (strcmp(verb, "text") == 0) {
         char *text =
@@ -665,7 +718,7 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         len =
             unescape_text(text);
 
-        return stage_file(file_system, path, mode, text, len);
+        return stage_file(file_system, path, mode, uid, gid, text, len);
     }
     if (strcmp(verb, "file") == 0 || strcmp(verb, "optional-file") == 0) {
         char *hostpath =
@@ -700,7 +753,7 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
             return false;
         }
         ok =
-            stage_file(file_system, path, mode, data, len);
+            stage_file(file_system, path, mode, uid, gid, data, len);
         free(data);
 
         return ok;
@@ -715,7 +768,7 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
             return false;
         }
 
-        return stage_exec_dir(file_system, path, hostdir, mode);
+        return stage_exec_dir(file_system, path, hostdir, mode, uid, gid);
     }
 
     fprintf(stderr, "stageimage: unknown directive '%s'.\n", verb);
@@ -817,6 +870,15 @@ int main(int argc, char **argv)
 
         goto cleanup;
     }
+
+    /* mkfs stamps the root node with the building host's ids (the course
+       tool's contract); a kernel-bound image boots multi-user, so its root
+       directory belongs to root, whoever built it. */
+    file_system.node->uid =
+        0;
+    file_system.node->gid =
+        0;
+    krffs_sync_mapping(file_system.node, sizeof(*file_system.node));
 
     manifest =
         fopen(argv[1], "r");

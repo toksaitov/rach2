@@ -182,7 +182,7 @@ The top-level Makefile drives the build. Run from the repo root:
 
 Each target builds its inputs through the component sub-makes, then stages the image from its manifest. The staging is manifest-driven: `mkimage.sh` zeroes a file of the requested size, lays down a fresh KRFFS with `mkfs.krffs`, then runs `stageimage.krffs <manifest> <image>` to write the whole tree (directories and files) directly as v2 nodes. There is no FUSE mount, so it works the same on macOS and Linux.
 
-A manifest lives in `manifests/<image>.manifest` and lists the dirs and files to stage and their host sources. `os-real` also runs `gen_demo_key.sh` first to provision the SSH demo key when none exists.
+A manifest lives in `manifests/<image>.manifest` and lists the dirs and files to stage and their host sources. Each entry's mode field is octal permissions with an optional owner, `0755` or `0700:1000:1000`; without one the entry is root-owned (0:0), and `stageimage` also forces the root node itself to 0:0, whoever built the image. `os-real` also runs `gen_demo_key.sh` first to provision the SSH demo key when none exists.
 
 Boot a module image with the run script (it resolves `build/images/<image>.krffs`):
 

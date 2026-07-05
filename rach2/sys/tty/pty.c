@@ -99,6 +99,9 @@ static struct pty *pty_alloc(void)
             p->in_use = 1;
             p->index = i;
             p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
+            p->uid = current_proc ? current_proc->euid : 0;
+            p->gid = current_proc ? current_proc->egid : 0;
+            p->mode = 0620; /* crw--w----, the Unix98 slave default */
             tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
             wait_queue_init(&p->m_read_wq);
             return p;
@@ -641,6 +644,11 @@ int pty_is_allocated(int index)
         return 0;
     }
     return pty_pool[index].in_use && pty_pool[index].master_open;
+}
+
+struct pty *pty_get(int index)
+{
+    return pty_is_allocated(index) ? &pty_pool[index] : NULL;
 }
 
 int pty_slave_index(struct fd_entry *e)

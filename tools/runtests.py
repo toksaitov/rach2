@@ -35,7 +35,7 @@ PROBES = [
     "rmtest", "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe",
     "errnoprobe", "vmprobe", "forkro", "cowregrant", "usercopyfault",
     "forkleak", "fdstale", "dirgrow", "dirprobe", "pathcanon", "timeprobe",
-    "sigprobe", "credprobe",
+    "sigprobe", "credprobe", "ownprobe",
     "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
     "jobprobe", "miscprobe", "ptyprobe", "rngprobe", "orphanprobe",
     # The musl-linked identity walk: proves the id family through the real

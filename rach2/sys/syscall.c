@@ -1044,6 +1044,20 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
  * KRFFS path and installs a descriptor. Returns the fd or -errno. Opening "/"
  * opens the root directory for getdents64.
  */
+/**
+ * Stamps a newly created KRFFS node with the creating process's identity:
+ * owner and group from the effective ids, permission bits from `mode` with
+ * the file-creation mask applied, the type bits kept. The V7 creation rule:
+ * who you effectively are is whose the file is.
+ */
+static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
+{
+    node->uid = current_proc->euid;
+    node->gid = current_proc->egid;
+    node->mode = (uint16_t) ((node->mode & ~0777u) |
+                             (mode & 0777u & ~current_proc->umask));
+}
+
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     fd_entry_t *entry;
@@ -1149,8 +1163,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
                 if (!node) {
                     return -EIO;  /* Shouldn't happen, but check anyway */
                 }
-                /* Stamp the caller's requested permission bits on the new file. */
-                node->mode = (uint16_t)(mode & 0777);
+                krffs_stamp_new_node(node, mode);
             } else {
                 return -ENOENT;  /* File not found and O_CREAT not set */
             }
@@ -2002,17 +2015,22 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_mode = S_IFDIR | 0755;
             kst->st_ino = PTS_INO_DIR;
             return 0;
-        case VNODE_PTS:
+        case VNODE_PTS: {
             /* /dev/pts/N: a slave terminal (S_IFCHR), only if pty N is allocated.
-             * The rdev is the Linux Unix98 pty slave major 136. */
-            if (!pty_is_allocated(vp->pts_index)) {
+             * The rdev is the Linux Unix98 pty slave major 136. Ownership lives
+             * on the pty, where the login server's chown/chmod put it. */
+            struct pty *pt = pty_get(vp->pts_index);
+            if (!pt) {
                 return -ENOENT;
             }
             kst->st_dev = DEVFS_FSID;
-            kst->st_mode = 0020620; /* S_IFCHR | 0620 (crw--w----) */
+            kst->st_mode = 0020000u | (uint32_t)(pt->mode & 0777u);
+            kst->st_uid = pt->uid;
+            kst->st_gid = pt->gid;
             kst->st_rdev = (136u << 8) | (uint32_t)vp->pts_index;
             kst->st_ino = PTS_INO_BASE + (uint32_t)vp->pts_index;
             return 0;
+        }
         case VNODE_ENOTDIR:
             return -ENOTDIR;
         default:
@@ -2508,11 +2526,72 @@ static int32_t sys_faccessat(isr_params_t *params)
     return do_access(name, mode);
 }
 
-/* An owner/group argument is acceptable iff it names root (0) or is (id_t)-1
- * ("leave unchanged"); see do_chown. */
-static int sc_id_is_root_or_keep(uint32_t id)
+/** Non-zero when the caller holds appropriate privilege (effective uid 0). */
+static int cred_privileged(void)
 {
-    return id == 0 || id == (uint32_t) -1;
+    return current_proc->euid == 0;
+}
+
+/** Non-zero when `gid` is the caller's effective gid or in its supplementary
+ * list: the set a file owner may chgrp to. */
+static int cred_in_group(uint32_t gid)
+{
+    uint32_t i;
+
+    if (gid == current_proc->egid) {
+        return 1;
+    }
+    for (i = 0; i < current_proc->ngroups; i++) {
+        if (current_proc->groups[i] == gid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The chmod rule over a resolved KRFFS node: the owner or root replaces the
+ * permission bits; anyone else is refused. The root node's mode is never
+ * touched (its spare bits carry the dirty-mount flag), but the rule still
+ * answers, so a non-owner probing `/` gets the honest -EPERM.
+ */
+static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
+{
+    if (!cred_privileged() && current_proc->euid != node->uid) {
+        return -EPERM;
+    }
+    if (node != krffs_fs->node) {
+        node->mode = (uint16_t) ((node->mode & ~0777u) | (mode & 0777u));
+    }
+    return 0;
+}
+
+/**
+ * The chown rule over a resolved KRFFS node, the POSIX split: changing the
+ * owner takes root; changing the group takes root, or being the owner and
+ * naming one of your own groups. `(id_t)-1` keeps a field, and a no-change
+ * value needs no right at all, so `chown(path, -1, -1)` always succeeds on an
+ * existing file.
+ */
+static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
+{
+    int uid_changes = (uid != (uint32_t) -1 && uid != node->uid);
+    int gid_changes = (gid != (uint32_t) -1 && gid != node->gid);
+
+    if (uid_changes && !cred_privileged()) {
+        return -EPERM;
+    }
+    if (gid_changes && !cred_privileged() &&
+        (current_proc->euid != node->uid || !cred_in_group(gid))) {
+        return -EPERM;
+    }
+    if (uid != (uint32_t) -1) {
+        node->uid = uid;
+    }
+    if (gid != (uint32_t) -1) {
+        node->gid = gid;
+    }
+    return 0;
 }
 
 /* Does an object exist at `name` (absolute, leading '/' stripped)? 0 if so, else
@@ -2543,15 +2622,12 @@ static int32_t path_exists(const char *name)
 /**
  * chmod core for the chmod/chown family.
  *
- * Rach2 has a single (root, id 0) identity over a RAM file system, so these keep
- * just enough state to satisfy a login server and a shell. chmod updates a KRFFS
- * file's stored permission bits; a synthetic /dev or /proc object has a fixed
- * mode, so chmod there is a no-op that only validates the path exists. chown only
- * ever (re)assigns root (no other user or group exists), so uid/gid 0 (or -1)
- * succeeds and anything else is -EPERM. dropbear chmod/chowns the session pty (a
- * /dev/pts node) to root before running the shell; busybox chmod/chown drive the
- * KRFFS path. `name` is absolute with the leading '/' stripped, matching
- * do_access.
+ * A KRFFS path stores through `krffs_chmod_node` under the owner-or-root rule.
+ * A pty slave (`/dev/pts/N`) stores on the pty, the state dropbear moves
+ * before handing the terminal to the user. Every other synthetic /dev or
+ * /proc object has fixed root-owned metadata: a no-change request validates
+ * and succeeds, a change is refused. `name` is absolute with the leading '/'
+ * stripped, matching do_access.
  */
 static int32_t do_chmod(const char *name, uint32_t mode)
 {
@@ -2559,50 +2635,82 @@ static int32_t do_chmod(const char *name, uint32_t mode)
     krffs_node_t *node;
     int rerr = 0;
 
-    if (name[0] == '\0') {
-        return 0; /* the root directory: fixed perms, no-op success */
-    }
-    if (synth_classify(name, &vp) != VNODE_KRFFS) {
+    if (name[0] != '\0' && synth_classify(name, &vp) != VNODE_KRFFS) {
         struct linux_stat64 s;
         int32_t rc = synth_stat(&vp, &s, 1);
-        return (rc != 0) ? rc : 0; /* synthetic node: validate, then no-op */
+        if (rc != 0) {
+            return rc;
+        }
+        if (vp.kind == VNODE_PTS) {
+            struct pty *pt = pty_get(vp.pts_index);
+            if (!pt) {
+                return -ENOENT;
+            }
+            if (!cred_privileged() && current_proc->euid != pt->uid) {
+                return -EPERM;
+            }
+            pt->mode = (uint16_t) (mode & 0777u);
+            return 0;
+        }
+        return cred_privileged() ? 0 : -EPERM; /* fixed root-owned metadata */
     }
     if (!krffs_fs) {
         return -ENOENT;
     }
-    node = krffs_resolve_e(name, &rerr);
+    node = (name[0] == '\0') ? krffs_fs->node : krffs_resolve_e(name, &rerr);
     if (!node) {
         return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
     }
-    if (node != krffs_fs->node) {
-        /* keep the type bits (e.g. the directory bit), replace the perm bits */
-        node->mode = (uint16_t) ((node->mode & ~0777u) | (mode & 0777u));
-    }
-    return 0;
+    return krffs_chmod_node(node, mode);
 }
 
 static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
 {
     struct vpath vp;
+    krffs_node_t *node;
     int rerr = 0;
 
-    if (!sc_id_is_root_or_keep(uid) || !sc_id_is_root_or_keep(gid)) {
-        return -EPERM; /* no such user/group: only root exists */
-    }
-    if (name[0] == '\0') {
-        return 0; /* the root directory is already root-owned */
-    }
-    if (synth_classify(name, &vp) != VNODE_KRFFS) {
+    if (name[0] != '\0' && synth_classify(name, &vp) != VNODE_KRFFS) {
         struct linux_stat64 s;
-        return synth_stat(&vp, &s, 1); /* validate existence; ownership is fixed */
+        int32_t rc = synth_stat(&vp, &s, 1);
+        if (rc != 0) {
+            return rc;
+        }
+        if (vp.kind == VNODE_PTS) {
+            struct pty *pt = pty_get(vp.pts_index);
+            int uid_changes;
+            int gid_changes;
+            if (!pt) {
+                return -ENOENT;
+            }
+            uid_changes = (uid != (uint32_t) -1 && uid != pt->uid);
+            gid_changes = (gid != (uint32_t) -1 && gid != pt->gid);
+            if ((uid_changes || gid_changes) && !cred_privileged()) {
+                return -EPERM; /* the login server that chowns a pty is root */
+            }
+            if (uid != (uint32_t) -1) {
+                pt->uid = uid;
+            }
+            if (gid != (uint32_t) -1) {
+                pt->gid = gid;
+            }
+            return 0;
+        }
+        /* Fixed root-owned metadata: a no-change request succeeds. */
+        if ((uid != (uint32_t) -1 && uid != 0) ||
+            (gid != (uint32_t) -1 && gid != 0)) {
+            return -EPERM;
+        }
+        return 0;
     }
     if (!krffs_fs) {
         return -ENOENT;
     }
-    if (!krffs_resolve_e(name, &rerr)) {
+    node = (name[0] == '\0') ? krffs_fs->node : krffs_resolve_e(name, &rerr);
+    if (!node) {
         return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
     }
-    return 0; /* already uid/gid 0; nothing to store */
+    return krffs_chown_node(node, uid, gid);
 }
 
 /* chmod(path, mode) and fchmodat(dirfd, path, mode[, flags]) share do_chmod. */
@@ -2666,14 +2774,26 @@ static int32_t sys_fchmod(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-    if (entry->type == FD_TYPE_FILE && entry->node &&
-        entry->node != krffs_fs->node) {
+    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) &&
+        entry->node) {
         if (fd_node_check(entry) != 0) {
             return -EBADF;  /* never write mode through a stale (freed) node */
         }
-        entry->node->mode = (uint16_t) ((entry->node->mode & ~0777u) | (mode & 0777u));
+        return krffs_chmod_node(entry->node, mode);
     }
-    return 0;
+    if (entry->type == FD_TYPE_PTS) {
+        struct pty *pt = pty_get(pty_slave_index(entry));
+        if (!pt) {
+            return -EBADF;
+        }
+        if (!cred_privileged() && current_proc->euid != pt->uid) {
+            return -EPERM;
+        }
+        pt->mode = (uint16_t) (mode & 0777u);
+        return 0;
+    }
+    /* Every other descriptor has fixed root-owned metadata, like its path. */
+    return cred_privileged() ? 0 : -EPERM;
 }
 
 /* chown/lchown/fchownat share do_chown; both the 16-bit and *32 numbers route
@@ -2732,14 +2852,46 @@ static int32_t sys_fchown(isr_params_t *params)
     int fd = (int) params->ebx;
     uint32_t uid = params->ecx;
     uint32_t gid = params->edx;
+    fd_entry_t *entry;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    if (!fd_get(&current_proc->fds, fd)) {
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry) {
         return -EBADF;
     }
-    if (!sc_id_is_root_or_keep(uid) || !sc_id_is_root_or_keep(gid)) {
+    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) &&
+        entry->node) {
+        if (fd_node_check(entry) != 0) {
+            return -EBADF; /* never store through a stale (freed) node */
+        }
+        return krffs_chown_node(entry->node, uid, gid);
+    }
+    if (entry->type == FD_TYPE_PTS) {
+        struct pty *pt = pty_get(pty_slave_index(entry));
+        int uid_changes;
+        int gid_changes;
+        if (!pt) {
+            return -EBADF;
+        }
+        uid_changes = (uid != (uint32_t) -1 && uid != pt->uid);
+        gid_changes = (gid != (uint32_t) -1 && gid != pt->gid);
+        if ((uid_changes || gid_changes) && !cred_privileged()) {
+            return -EPERM;
+        }
+        if (uid != (uint32_t) -1) {
+            pt->uid = uid;
+        }
+        if (gid != (uint32_t) -1) {
+            pt->gid = gid;
+        }
+        return 0;
+    }
+    /* Every other descriptor has fixed root-owned metadata, like its path:
+     * a no-change request succeeds, a change is refused. */
+    if ((uid != (uint32_t) -1 && uid != 0) ||
+        (gid != (uint32_t) -1 && gid != 0)) {
         return -EPERM;
     }
     return 0;
@@ -4064,16 +4216,18 @@ static int32_t sys_creat(isr_params_t *params)
         return -EISDIR;
     }
 
-    if (krffs_create(name) != 0) {
-        return -ENOSPC;
-    }
-
-    node = krffs_resolve(name);
     if (!node) {
-        return -EIO;
+        if (krffs_create(name) != 0) {
+            return -ENOSPC;
+        }
+        node = krffs_resolve(name);
+        if (!node) {
+            return -EIO;
+        }
+        /* Only a genuinely new file is stamped: creat of an existing file
+         * keeps its owner and mode, so it can never take a file over. */
+        krffs_stamp_new_node(node, mode);
     }
-
-    node->mode = (uint16_t)(mode & 0777);
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
@@ -4135,12 +4289,13 @@ static int32_t sys_unlink(isr_params_t *params)
 
 /*
  * sys_mkdir - create a directory.
- * Args: EBX = path, ECX = mode (ignored; no permission model). Returns 0 or
- * -errno (-EEXIST if it exists, -ENOENT if a parent is missing).
+ * Args: EBX = path, ECX = mode (masked by umask, like any creation). Returns 0
+ * or -errno (-EEXIST if it exists, -ENOENT if a parent is missing).
  */
 static int32_t sys_mkdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
+    krffs_node_t *node;
     char pathbuf[256];
     int len;
 
@@ -4162,6 +4317,10 @@ static int32_t sys_mkdir(isr_params_t *params)
     }
     if (krffs_mkdir(pathbuf) != 0) {
         return -ENOENT; /* a parent directory does not exist */
+    }
+    node = krffs_resolve(pathbuf);
+    if (node) {
+        krffs_stamp_new_node(node, params->ecx);
     }
     return 0;
 }
@@ -5086,12 +5245,27 @@ int signal_pending(void)
     return 0;
 }
 
+/**
+ * The signal-permission rule (kill(2)): root may signal anything; anyone else
+ * only a process whose real uid matches the sender's real or effective uid.
+ * Applied per target, including the signo 0 existence probe, so an identity
+ * cannot scan or stop processes it does not own.
+ */
+static int cred_may_signal(const process_t *target)
+{
+    return current_proc->euid == 0 ||
+           current_proc->ruid == target->ruid ||
+           current_proc->euid == target->ruid;
+}
+
 /* Post signo to a process group: pid==0 is the caller's group, pid<-1 the group
- * (-pid). Returns 0 if at least one process was signalled, -ESRCH if the group is
- * empty. signo 0 only probes for a member. */
+ * (-pid). Signals every member the caller may signal; the POSIX outcome: 0 if
+ * any member took it, -EPERM if members exist but none may be signalled,
+ * -ESRCH if the group is empty. signo 0 only probes. */
 static int32_t kill_group(int pgid, int signo)
 {
     int found = 0;
+    int allowed = 0;
     int i;
 
     for (i = 0; i < MAX_PROCS; i++) {
@@ -5103,16 +5277,23 @@ static int32_t kill_group(int pgid, int signo)
             continue;
         }
         found = 1;
+        if (!cred_may_signal(p)) {
+            continue;
+        }
+        allowed = 1;
         if (signo != 0) {
             signal_post(p, signo);
         }
     }
-    return found ? 0 : -ESRCH;
+    if (!found) {
+        return -ESRCH;
+    }
+    return allowed ? 0 : -EPERM;
 }
 
 /* kill(2): pid > 0 a single process; pid == 0 the caller's process group; pid < -1
  * the group (-pid). (pid == -1 "all processes" is not supported here.) signo 0
- * just probes existence. */
+ * just probes existence and permission. */
 static int32_t do_kill(int pid, int signo)
 {
     process_t *target;
@@ -5136,8 +5317,11 @@ static int32_t do_kill(int pid, int signo)
     if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE) {
         return -ESRCH;
     }
+    if (!cred_may_signal(target)) {
+        return -EPERM;
+    }
     if (signo == 0) {
-        return 0; /* existence check only */
+        return 0; /* existence and permission check only */
     }
     signal_post(target, signo);
     return 0;
@@ -7133,12 +7317,6 @@ static int32_t sys_sethostname(isr_params_t *params)
  * id away from the pre-call real id, also saves the new effective id. `KEEP`
  * ((id_t)-1) leaves a field unchanged. */
 #define SC_ID_KEEP 0xFFFFFFFFu
-
-/** Non-zero when the caller holds appropriate privilege (effective uid 0). */
-static int cred_privileged(void)
-{
-    return current_proc->euid == 0;
-}
 
 static int32_t sys_setuid(isr_params_t *params)
 {

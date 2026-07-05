@@ -315,17 +315,21 @@ int main(int argc, char **argv)
 
         if (node->type == KRFFS_Root_Node) {
             printf(
-                "* root node at position %"PRIu64"\n",
-                krffs_get_node_relative_position(&file_system, node)
+                "* root node at position %"PRIu64" (owner %u:%u)\n",
+                krffs_get_node_relative_position(&file_system, node),
+                (unsigned) node->uid,
+                (unsigned) node->gid
             );
         } else if (node->type == KRFFS_Reserved_Node) {
             printf(
                 "+ reserved node with ID %"PRIu64" at position %"PRIu64": "
-                "%"PRIu64" bytes (%"PRIu64" bytes for data) - [%s]\n",
+                "%"PRIu64" bytes (%"PRIu64" bytes for data, owner %u:%u) - [%s]\n",
                 node->id,
                 krffs_get_node_relative_position(&file_system, node),
                 node->size,
                 node->data_size,
+                (unsigned) node->uid,
+                (unsigned) node->gid,
                 node->name
             );
         } else if (node->type == KRFFS_Free_Node) {

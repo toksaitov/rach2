@@ -11,8 +11,8 @@
  *   back to a direct host-key write.
  * * `chmod(path, mode)` updates a KRFFS file's permission bits and `stat`
  *   reflects them; `chmod` of a missing path is -1 with ENOENT.
- * * `chown(path, 0, 0)` succeeds because only root exists; a nonzero owner is
- *   -1 with EPERM.
+ * * `chown(path, uid, gid)` as root stores the owner and `stat` reflects it
+ *   (the deeper rules are ownprobe's to pin).
  * * `seteuid(0)`, `setegid(0)`, and `setresuid(0,0,0)` succeed, and a root
  *   caller's effective-id excursion (`seteuid(1)` out, `seteuid(0)` back, the
  *   idiom around reading authorized_keys) works both ways; the identity rules
@@ -76,8 +76,13 @@ int main(void)
         printf("PERMMUSL FAIL (chown 0:0: %s)\n", strerror(errno));
         return 1;
     }
-    if (chown("/hello.txt", 1, 0) != -1 || errno != EPERM) {
-        printf("PERMMUSL FAIL (chown nonzero not EPERM)\n");
+    if (chown("/hello.txt", 1000, 1000) != 0 || stat("/hello.txt", &st) != 0 ||
+        st.st_uid != 1000 || st.st_gid != 1000) {
+        printf("PERMMUSL FAIL (chown 1000:1000 round trip)\n");
+        return 1;
+    }
+    if (chown("/hello.txt", 0, 0) != 0) {
+        printf("PERMMUSL FAIL (chown back to root)\n");
         return 1;
     }
 

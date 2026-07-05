@@ -37,6 +37,8 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `pipeprobe` (`PIPEPROBE OK`): the anonymous-pipe contract.
 * `pollprobe` (`POLLPROBE OK`): I/O multiplexing (poll and select).
 * `sigprobe` (`SIGPROBE OK`): signal delivery and the sigreturn frame.
+* `credprobe` (`CREDPROBE OK`): the process credential model (V7 with POSIX saved IDs): inheritance, the drop, the saved-id rules, no regain.
+* `ownprobe` (`OWNPROBE OK`): file ownership: creation stamping under the umask, the chmod/chown and fchmod/fchown rules, kill permission.
 * `waitprobe` (`WAITPROBE OK`): the fd-layer blocking and dispatch substrate.
 * `jobprobe` (`JOBPROBE OK`): the session and process-group identity model.
 * `ttyprobe` (`TTYPROBE OK`): the tty line discipline and termios ioctls.

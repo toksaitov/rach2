@@ -48,6 +48,13 @@ struct pty {
     int master_open;            /* the master descriptor is open */
     int slave_opens;            /* count of open slave descriptions (distinct OFDs) */
     int locked;                 /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
+
+    /* Ownership of the slave (/dev/pts/N), the state a login server moves
+     * with chown/chmod before handing the terminal to the user. Stamped from
+     * the opener's effective ids at allocation; stat reports it. */
+    uint32_t uid;
+    uint32_t gid;
+    uint16_t mode;              /* permission bits only; the type is S_IFCHR */
 };
 
 /* Allocate the pty pool from kernel memory; called once from init. */
@@ -83,6 +90,10 @@ int pty_slave_index(struct fd_entry *e);
 
 /* Whether slot `index` is an allocated pty pair (for /dev/pts stat/getdents). */
 int pty_is_allocated(int index);
+
+/* The allocated pty behind /dev/pts/N, or NULL: the ownership fields for the
+ * stat/chown/chmod paths. */
+struct pty *pty_get(int index);
 
 /** Release any pty slave controlled by dying session leader `sid` (sid == pid). */
 void pty_release_leader(int sid, int pid);
