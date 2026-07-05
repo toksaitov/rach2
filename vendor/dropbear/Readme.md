@@ -43,7 +43,7 @@ The test harness boots qemu with `-cpu max -netdev user,hostfwd=tcp::2222-:22 -d
 
 ## Login provisioning
 
-`krffs/gen_demo_key.sh` generates a demo keypair (`krffs/rach2_demo_ed25519`, git-ignored) if no `authorized_keys` is present, and the os-real manifest stages the public half into `/root/.ssh/authorized_keys` (0600, under `/root` 0755 and `/root/.ssh` 0700 so dropbear's strict permission check accepts it). `/etc/passwd` is `root:x:0:0:root:/root:/bin/sh`; `/etc/shells` lists `/bin/sh` so dropbear's `getusershell()` shell check passes; `/bin/sh` is busybox (invoked as `sh` it runs `ash`).
+`krffs/gen_demo_key.sh` generates two demo keypairs (`krffs/rach2_demo_ed25519` for root and `krffs/rach2_student_ed25519` for the unprivileged student, git-ignored) when their public halves are absent, and the os-real manifest stages each into its account's `~/.ssh/authorized_keys` (0600, under a 0755 `/root` or 0700 `/home/student` and a 0700 `.ssh` so dropbear's strict permission check accepts it). `/etc/passwd` holds `root:x:0:0:root:/root:/bin/sh` and `student:x:1000:1000:student:/home/student:/bin/sh`; `/etc/shells` lists `/bin/sh` so dropbear's `getusershell()` shell check passes; `/bin/sh` is busybox (invoked as `sh` it runs `ash`). Start the server with `dropbearmulti dropbear -R -s -p 22`: the `-s` turns password auth off, so the pubkey demo accounts are the only way in. Now that the kernel enforces the permission bits, the two accounts are genuinely separated: student lands in a 0700 home root can still administer, and cannot touch root's files.
 
 ## Kernel gaps this integration surfaced (and how they were closed)
 

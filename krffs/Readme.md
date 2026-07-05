@@ -31,7 +31,7 @@ Every tool that opens a backing file (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`
 * `mkdisk.sh <manifest> <output.disk> [disk_mb] [partition_mb]`: Builds one bootable-layout disk image: a 512-byte MBR with one primary KRFFS partition (type 0x7F) at LBA 2048, then a fresh KRFFS laid down inside that partition with `mkfs.krffs --offset --size` and staged from the manifest. `disk_mb` defaults to 64 and `partition_mb` to 48, matching `make os-real-disk`. The partition is capped at 256 MiB, the kernel mount window (`PC_WINDOW_CAP` in `sys/mm/pagecache.c`)
 * `manifests/<image>.manifest`: The build recipe for each image (test, os-simple, os-real, disk-test, persist-test, stress-test): the dirs and files to stage and their host sources
 * `stageimage.krffs <manifest> <image> [--offset N --size N]`: Writes the whole tree (dirs and files) into a KRFFS image directly as v2 nodes
-* `gen_demo_key.sh`: Provisions the os-real SSH demo key (`rach2_demo_ed25519`) when none exists
+* `gen_demo_key.sh`: Provisions the os-real SSH demo keys when they are absent: `rach2_demo_ed25519` for root and `rach2_student_ed25519` for the unprivileged student account
 * `create_file_system.krffs.sh [size_mb]`: Creates an empty KRFFS file system (helper script)
 
 The GRUB-bootable disk lives one level up, in `tools/`, because it leans on the kernel and a Docker container rather than on the KRFFS tools alone:
@@ -203,6 +203,6 @@ The `os-real-grub-disk` image carries its own kernel and GRUB, so it boots with 
 
     cd ../rach2 && ./run_from_disk.sh
 
-`run_from_disk.sh` forwards host port 2222 to the guest's SSH server by default (override with `NET_HOSTFWD`), so the SSH capstone reaches Dropbear over the disk boot: start `dropbearmulti dropbear -R -p 22` at the guest shell, then `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` from the host.
+`run_from_disk.sh` forwards host port 2222 to the guest's SSH server by default (override with `NET_HOSTFWD`), so the SSH capstone reaches Dropbear over the disk boot: start `dropbearmulti dropbear -R -s -p 22` at the guest shell (the `-s` turns password auth off, leaving the pubkey demo accounts), then `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` (or `-i krffs/rach2_student_ed25519 student@localhost`) from the host.
 
 The disk targets also back the integrity gate: `make test-disk`, `make persist-test`, `make crash-test`, and `make stress-test` build disk images from their own manifests and boot them headless to prove cache eviction, fsync durability, and the dirty-mount flag.

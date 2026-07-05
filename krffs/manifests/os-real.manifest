@@ -26,10 +26,10 @@ file 0755 /sbin/init build/utils/sbin/init
 # the login shell against shells; busybox ash reads profile on a login shell.
 dir 0755 /etc
 dir 0700 /etc/dropbear
-text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root.\n
+text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root or student.\n
 text 0644 /etc/hostname rach2\n
-text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\n
-text 0644 /etc/group root:x:0:\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\nstudent:x:1000:1000:student:/home/student:/bin/sh\n
+text 0644 /etc/group root:x:0:\nstudent:x:1000:\n
 text 0644 /etc/shells /bin/sh\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME=/root\ncd /root\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
@@ -42,8 +42,13 @@ dir 0755 /root
 dir 0700 /root/.ssh
 file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 
-# A couple of empty directories for a real feel; the Doom WAD (operator-supplied) if
-# present.
+# /home/student: the unprivileged demo user's home and SSH login. Owned by
+# 1000:1000 with the strict 0700/0600 dropbear's pubkey check insists on, so the
+# permission bits protect it from root-owned files and vice versa. The kernel now
+# enforces those bits, so this is a real second account, not a label.
 dir 1777 /tmp
 dir 0755 /home
+dir 0700:1000:1000 /home/student
+dir 0700:1000:1000 /home/student/.ssh
+file 0600:1000:1000 /home/student/.ssh/authorized_keys krffs/student_authorized_keys
 optional-file 0644 /doom1.wad ports/doom/doom1.wad

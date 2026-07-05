@@ -6,3 +6,6 @@
 authorized_keys
 rach2_demo_ed25519
 rach2_demo_ed25519.pub
+student_authorized_keys
+rach2_student_ed25519
+rach2_student_ed25519.pub
