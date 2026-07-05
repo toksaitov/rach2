@@ -453,7 +453,9 @@ static int ahci_io_error(void)
  * Builds the command-list header, a Register H2D FIS, and a single PRDT entry
  * over the static DMA regions, waits for the task file to go idle, sets the
  * slot's `PxCI` bit, and busy-polls it clear, watching the fatal `PxIS` bits
- * and `PxTFD` ERR/DF for failure. The HBA performs the DMA; the CPU only spins
+ * and `PxTFD` ERR/DF for failure, then verifies the byte count the HBA reports
+ * so a short transfer fails rather than passing. The HBA performs the DMA; the
+ * CPU only spins
  * on memory-mapped status, bounded by the iteration watchdog. So it
  * neither sleeps nor allocates and is callable with interrupts off, the
  * contract the page-cache window fault needs. `buf` must be physically
@@ -536,6 +538,16 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
     if ((ahci_read32(is_off) & AHCI_PxIS_FATAL) ||
         (ahci_read32(tfd_off) & (AHCI_PxTFD_ERR | AHCI_PxTFD_DF))) {
         return ahci_io_error();
+    }
+
+    /* The HBA counts the bytes it moved into `prdbc`. A completion that moved
+       fewer than requested without raising an error would otherwise pass, and a
+       short write that pc_sync then marks clean is silent data loss. */
+    if (bytes > 0) {
+        ahci_dma_sync(ahci_cmdlist, sizeof(ahci_cmd_header_t));
+        if (hdr->prdbc != bytes) {
+            return ahci_io_error();
+        }
     }
 
     if (!write && bytes > 0) {
