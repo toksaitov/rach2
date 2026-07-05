@@ -288,9 +288,14 @@ int ata_init(void)
     outb(ATA_IO_BASE + ATA_REG_STATUS, ATA_CMD_IDENTIFY);
     ata_settle();
 
-    if (inb(ATA_IO_BASE + ATA_REG_STATUS) == 0) {
-        /* The floating bus reads back 0 when no drive is present. */
-        return -1;
+    {
+        /* No drive leaves the bus floating: 0 on emulators, 0xFF on most real
+           hardware (pulled-up lines). 0xFF also has BSY set, so without this
+           check an absent drive would spin out the whole watchdog below. */
+        uint8_t status = inb(ATA_IO_BASE + ATA_REG_STATUS);
+        if (status == 0 || status == 0xFF) {
+            return -1;
+        }
     }
     if (ata_wait_not_busy() != 0) {
         return -1;
