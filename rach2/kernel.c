@@ -2223,6 +2223,9 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "halt")) {
         krffs_disk_mark_clean();
         k_puts("Halting system. Goodbye!");
+        /* On serial as well: the crash test waits for this token instead of
+           guessing how long the flush above takes. */
+        serial_printf("halt: system halted\n");
         __asm__ __volatile__("cli; hlt");
     } else if (str_equal(cmd, "usermode")) {
         k_puts("Testing user mode (ring 3) transition...");

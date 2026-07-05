@@ -32,7 +32,7 @@ CRASH="$DISK.crash"
 CLEAN="$DISK.clean"
 cp "$DISK" "$CRASH"
 cp "$DISK" "$CLEAN"
-trap 'rm -f "$CRASH" "$CLEAN"' EXIT INT TERM
+trap 'rm -f "$CRASH" "$CLEAN" "$CRASH.log" "$CLEAN.log"' EXIT INT TERM
 
 qemu_disk() {
     qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
@@ -40,13 +40,32 @@ qemu_disk() {
         -drive "file=$1,format=raw,if=ide,index=0,media=disk" -serial stdio
 }
 
-# Crash: boot, let it mount, then kill before any clean halt. The fixed waits here
-# and below are heuristics (boot-to-mount is about a second), generous enough on a
-# normal host; a badly overloaded host could in principle kill before the mount
-# sets the dirty bit (or before the clean halt clears it), the script's flake point.
-qemu_disk "$CRASH" >/dev/null 2>&1 &
+# Wait until the serial log $1 contains the token $2, then return 0; give up
+# after 60 seconds and return 1. Gating each phase on the token the kernel
+# prints, rather than on a fixed sleep, keeps a loaded or slow host from
+# killing QEMU before the phase's disk state has actually been written.
+wait_serial() {
+    i=0
+    while [ "$i" -lt 60 ]; do
+        if grep -q "$2" "$1" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+# Crash: boot, wait for the mount (which sets the dirty bit write-through
+# before the kernel reports the file system), then kill before any clean halt.
+qemu_disk "$CRASH" >"$CRASH.log" 2>&1 &
 QPID=$!
-sleep 10
+if ! wait_serial "$CRASH.log" "(disk)"; then
+    kill "$QPID" 2>/dev/null || true
+    wait "$QPID" 2>/dev/null || true
+    echo "crash-test: FAIL: disk mount never reported on serial" >&2
+    exit 1
+fi
 kill "$QPID" 2>/dev/null || true
 wait "$QPID" 2>/dev/null || true
 if "$FSCK" "$CRASH" --offset "$OFFSET" --size "$SIZE" 2>&1 \
@@ -57,10 +76,16 @@ else
     exit 1
 fi
 
-# Clean: boot and halt from the debug shell, which clears the bit.
-printf '\nhalt\n' | qemu_disk "$CLEAN" >/dev/null 2>&1 &
+# Clean: boot and halt from the debug shell, which clears the bit. The kernel
+# prints "halt: system halted" on serial only after the clean-unmount flush.
+printf '\nhalt\n' | qemu_disk "$CLEAN" >"$CLEAN.log" 2>&1 &
 QPID=$!
-sleep 14
+if ! wait_serial "$CLEAN.log" "halt: system halted"; then
+    kill "$QPID" 2>/dev/null || true
+    wait "$QPID" 2>/dev/null || true
+    echo "crash-test: FAIL: clean halt never reported on serial" >&2
+    exit 1
+fi
 kill "$QPID" 2>/dev/null || true
 wait "$QPID" 2>/dev/null || true
 if "$FSCK" "$CLEAN" --offset "$OFFSET" --size "$SIZE" 2>&1 \
