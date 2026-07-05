@@ -31,7 +31,7 @@ text 0644 /etc/hostname rach2\n
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\nstudent:x:1000:1000:student:/home/student:/bin/sh\n
 text 0644 /etc/group root:x:0:\nstudent:x:1000:\n
 text 0644 /etc/shells /bin/sh\n
-text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME=/root\ncd /root\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
 text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
 
