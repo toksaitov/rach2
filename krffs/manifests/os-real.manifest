@@ -43,9 +43,11 @@ dir 0700 /root/.ssh
 file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 
 # /home/student: the unprivileged demo user's home and SSH login. Owned by
-# 1000:1000 with the strict 0700/0600 dropbear's pubkey check insists on, so the
-# permission bits protect it from root-owned files and vice versa. The kernel now
-# enforces those bits, so this is a real second account, not a label.
+# 1000:1000 with 0700/0600 modes, deliberately stricter than dropbear's pubkey
+# check requires (it only insists the files be owned by the user or root and not
+# group- or other-writable), so the permission bits protect it from root-owned
+# files and vice versa. The kernel now enforces those bits, so this is a real
+# second account, not a label.
 dir 1777 /tmp
 dir 0755 /home
 dir 0700:1000:1000 /home/student

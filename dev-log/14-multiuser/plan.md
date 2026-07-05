@@ -1,6 +1,8 @@
 # Milestone 14: multi-user, the classic Unix credential and permission model
 
-Status: plan; not yet built.
+Status: complete. All five phases built, gated, independently reviewed, and
+committed (`ae13e66`, `ad2dd5a`, `2af416a`, `c16f105`, and the record); see
+`Readme.md` for the milestone record and the capstone.
 
 ## The goal
 

@@ -4,7 +4,10 @@ A static Dropbear 2022.83 SSH server linked against the ported musl (`vendor/mus
 
     ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 
-and lands in an interactive BusyBox `ash` shell over an SSH-driven pty.
+and lands in an interactive BusyBox `ash` shell over an SSH-driven pty. Start the
+server with `dropbearmulti dropbear -R -s -p 22` (the `-s` disables password
+auth, so the pubkey demo accounts are the only way in); log in as `root` with the
+key above, or as the unprivileged `student` with `krffs/rach2_student_ed25519`.
 
 ## Build
 

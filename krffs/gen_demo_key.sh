@@ -38,7 +38,11 @@ gen_key() {
     fi
     rm -f "$key" "$key.pub"
     ssh-keygen -t ed25519 -N "" -C "rach2-$user" -f "$key" >/dev/null
-    cp "$key.pub" "$pub"
+    # Stage the public half atomically: a temp copy renamed into place, so an
+    # interrupted run never leaves a partial $pub that a later run trusts.
+    cp "$key.pub" "$pub.tmp"
+    [ -s "$pub.tmp" ] || { echo "gen_demo_key: empty public key for $user." >&2; exit 1; }
+    mv "$pub.tmp" "$pub"
     echo "gen_demo_key: wrote krffs/$key"
     echo "gen_demo_key: log in with ssh -i krffs/$key -p 2222 $user@localhost"
 }
