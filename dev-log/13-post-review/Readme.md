@@ -2,10 +2,11 @@
 
 Milestone 12 retired the whole-system production-readiness review. The changes
 since are small, self-contained follow-ups made directly on `master`, not a new
-milestone: a build change, a console feature, and a run-script fix. This record
-is the in-repo anchor for where the tree stands now, so a fresh reader or agent
-picking up the directory (with no access to the previous machine's notes) can
-tell what changed after milestone 12 and why.
+milestone: a build change, a console feature, a run-script fix, and the fixes
+from an independent review of the disk layer. This record is the in-repo anchor
+for where the tree stands now, so a fresh reader or agent picking up the
+directory (with no access to the previous machine's notes) can tell what
+changed after milestone 12 and why.
 
 ## The changes
 
@@ -36,6 +37,26 @@ tell what changed after milestone 12 and why.
   took effect and SSH to port 2222 was refused. The default now runs before the
   source. `run_from_disk.sh` forwards host 2222 to guest 22; override with
   `NET_HOSTFWD`.
+
+* Disk-layer hardening from an independent review, ahead of a real-hardware
+  deployment. The AHCI command path now checks the byte count the HBA reports
+  (`prdbc`) against the request, so a transfer that completes short without an
+  error status fails instead of passing; unchecked, a short write that
+  `pc_sync` then marked clean was silent data loss. The page-cache window
+  probe scans every PCI bus the driver discovery scans, not bus 0 alone, so a
+  memory BAR behind a bridge cannot share addresses with the window. The ATA
+  probe fast-fails a floating bus reading 0xFF (an absent drive on most real
+  hardware) instead of spinning out the watchdog. All three are invisible on
+  QEMU, the same class the milestone 11 audit hunted.
+
+* Machine-speed calibration in the test tooling, found when the tree moved to
+  a slower host. `crash_test.sh` gates each phase on a serial token instead of
+  a fixed sleep (the kernel's `halt` now prints `halt: system halted` on
+  serial after the clean-unmount flush, so the script waits for evidence, not
+  time), and `runtests.py` gives boot-to-shell its own `--boottmo` window
+  (60 s) separate from the per-probe step timeout. Both scripts previously
+  raced the host: red on a loaded or slow machine, green on the machine the
+  timings were written on.
 
 ## Current state
 
