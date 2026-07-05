@@ -939,6 +939,119 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
 
+/** Non-zero when the caller holds appropriate privilege (effective uid 0). */
+static int cred_privileged(void)
+{
+    return current_proc->euid == 0;
+}
+
+/** Non-zero when `gid` is in the caller's supplementary list. */
+static int cred_in_suppl(uint32_t gid)
+{
+    uint32_t i;
+
+    for (i = 0; i < current_proc->ngroups; i++) {
+        if (current_proc->groups[i] == gid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Non-zero when `gid` is the caller's effective gid or in its supplementary
+ * list: the set a file owner may chgrp to, and the group the access check
+ * matches. */
+static int cred_in_group(uint32_t gid)
+{
+    return gid == current_proc->egid || cred_in_suppl(gid);
+}
+
+/* Access-check `want` bits, matching an octal permission digit. */
+#define CRED_R 4
+#define CRED_W 2
+#define CRED_X 1
+
+/**
+ * The nine-bit permission check over explicit metadata: one identity class is
+ * chosen and judged alone, the classic rule. The owner is judged by the owner
+ * bits, else a group match (primary or supplementary) by the group bits, else
+ * the other bits; an effective uid of 0 passes everything. `use_real` judges
+ * by the real ids instead, for access(2), the one call that asks who the
+ * process really is rather than who it is acting as.
+ */
+static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode,
+                                int want, int use_real)
+{
+    process_t *p = current_proc;
+    uint32_t uid = use_real ? p->ruid : p->euid;
+    uint32_t bits;
+
+    if (uid == 0) {
+        return 0;
+    }
+    if (uid == owner) {
+        bits = mode >> 6;
+    } else if ((use_real ? p->rgid : p->egid) == group ||
+               cred_in_suppl(group)) {
+        bits = mode >> 3;
+    } else {
+        bits = mode;
+    }
+    return ((uint32_t) want & ~bits & 7u) ? -EACCES : 0;
+}
+
+/**
+ * The permission check over a KRFFS node. The root directory reads as 0755,
+ * the fixed identity stat reports (its stored mode carries the dirty-mount
+ * flag). Executing a regular file demands an execute bit somewhere even for
+ * root: root runs programs, not data.
+ */
+static int32_t cred_access_node(const krffs_node_t *node, int want,
+                                int use_real)
+{
+    uint32_t mode = (node == krffs_fs->node)
+                        ? 0755u
+                        : (uint32_t) (node->mode & 0777u);
+
+    if ((want & CRED_X) && !KRFFS_IS_DIR(node->mode) &&
+        node != krffs_fs->node && !(mode & 0111u)) {
+        return -EACCES;
+    }
+    return cred_access_bits(node->uid, node->gid, mode, want, use_real);
+}
+
+/**
+ * Write permission on the directory holding path `name`: the right that
+ * creating, unlinking, or renaming an entry needs. `name` is absolute with
+ * the leading '/' stripped; a top-level name's parent is the root node.
+ */
+static int32_t cred_parent_writable(const char *name)
+{
+    char parent[256];
+    krffs_node_t *dir;
+    int last = -1;
+    int i;
+
+    for (i = 0; i < (int) sizeof(parent) && name[i] != '\0'; i++) {
+        if (name[i] == '/') {
+            last = i;
+        }
+    }
+    if (last < 0) {
+        dir = krffs_fs->node;
+    } else {
+        for (i = 0; i < last; i++) {
+            parent[i] = name[i];
+        }
+        parent[last] = '\0';
+        dir = krffs_resolve(parent);
+        if (!dir) {
+            return -ENOENT;
+        }
+    }
+    return cred_access_node(dir, CRED_W, 0);
+}
+
 /**
  * Open a path that classified as synthetic (/dev or /proc).
  *
@@ -953,9 +1066,26 @@ static int32_t synth_open(const struct vpath *vp, int flags)
             return devfs_open(vp->name, flags);
         case VNODE_PTS:
             /* /dev/pts/N: the slave end of pty N (pty_open_slave does its own fd
-             * allocation, and rejects an unallocated/locked pair). */
+             * allocation, and rejects an unallocated/locked pair). The open is
+             * permission-checked against the pty's ownership, so one user
+             * cannot open another's terminal. */
             if (flags & O_DIRECTORY) {
                 return -ENOTDIR;
+            }
+            {
+                struct pty *pt = pty_get(vp->pts_index);
+                if (pt) {
+                    unsigned acc = (unsigned) flags & 3u;
+                    int want = (acc == 0) ? CRED_R
+                                          : (acc == 1) ? CRED_W
+                                                       : (CRED_R | CRED_W);
+                    int32_t rc = cred_access_bits(pt->uid, pt->gid,
+                                                  (uint32_t) (pt->mode & 0777u),
+                                                  want, 0);
+                    if (rc != 0) {
+                        return rc;
+                    }
+                }
             }
             return pty_open_slave(vp->pts_index, flags);
         case VNODE_PROC_FILE:
@@ -1156,6 +1286,10 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
                 return -ENOTDIR;
             }
             if (flags & O_CREAT) {
+                int32_t rc = cred_parent_writable(name);
+                if (rc != 0) {
+                    return rc;
+                }
                 if (krffs_create(name) != 0) {
                     return -ENOSPC;  /* Failed to create file */
                 }
@@ -1180,6 +1314,27 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
             }
             if (!is_dir && (flags & O_DIRECTORY)) {
                 return -ENOTDIR;
+            }
+            /* The open itself is permission-checked: the access mode asks for
+             * read, write, or both, and truncation is a write. */
+            {
+                int want = 0;
+                unsigned acc = (unsigned) flags & 3u;
+                int32_t rc;
+                if (acc == 0) {
+                    want = CRED_R;
+                } else if (acc == 1) {
+                    want = CRED_W;
+                } else {
+                    want = CRED_R | CRED_W;
+                }
+                if (flags & O_TRUNC) {
+                    want |= CRED_W;
+                }
+                rc = cred_access_node(node, want, 0);
+                if (rc != 0) {
+                    return rc;
+                }
             }
             if (flags & O_TRUNC) {
                 krffs_truncate(name, 0);
@@ -1786,6 +1941,12 @@ static int32_t sys_chdir(isr_params_t *params)
      * file as the final component is ENOTDIR. */
     if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
         return -ENOTDIR;
+    }
+    {
+        int32_t rc = cred_access_node(node, CRED_X, 0);
+        if (rc != 0) {
+            return rc; /* entering a directory is the search (x) right */
+        }
     }
 
     /* Store the canonical absolute path (krffs_node_path follows real parent
@@ -2442,43 +2603,37 @@ static int32_t sys_fstatat64(isr_params_t *params)
 static int32_t do_access(const char *name, int mode)
 {
     struct vpath vp;
-    uint32_t fmode;
 
     if (mode & ~(R_OK | W_OK | X_OK)) {
         return -EINVAL; /* undefined access-mode bits */
     }
-    if (name[0] == '\0') {
-        fmode = S_IFDIR | 0755; /* the root directory; falls through to the checks */
-    } else if (synth_classify(name, &vp) != VNODE_KRFFS) {
+    if (name[0] != '\0' && synth_classify(name, &vp) != VNODE_KRFFS) {
         struct linux_stat64 s;
         int32_t rc = synth_stat(&vp, &s, 1); /* access follows symlinks */
         if (rc != 0) {
             return rc; /* -ENOENT / -ENOTDIR */
         }
-        fmode = s.st_mode;
-    } else {
+        /* Synthetic metadata is fixed and root-owned; judge it by the real
+         * ids like any other access(2) answer. */
+        return cred_access_bits(s.st_uid, s.st_gid, s.st_mode & 0777u,
+                                mode, 1);
+    }
+    {
         krffs_node_t *node;
         int rerr = 0;
         if (!krffs_fs) {
             return -ENOENT;
         }
-        node = krffs_resolve_e(name, &rerr);
+        node = (name[0] == '\0') ? krffs_fs->node
+                                 : krffs_resolve_e(name, &rerr);
         if (!node) {
             return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
         }
-        fmode = (node == krffs_fs->node) ? (uint32_t)(S_IFDIR | 0755)
-                                         : (uint32_t)(S_IFREG | (node->mode & 0777));
+        /* access(2) is the one caller judged by the REAL ids: it exists so a
+         * set-id program can ask what its invoker could do. R_OK/W_OK/X_OK
+         * are the same octal digits the checker takes. */
+        return cred_access_node(node, mode, 1);
     }
-    if ((mode & R_OK) && !(fmode & 0444u)) {
-        return -EACCES;
-    }
-    if ((mode & W_OK) && !(fmode & 0222u)) {
-        return -EACCES;
-    }
-    if ((mode & X_OK) && !(fmode & 0111u)) {
-        return -EACCES;
-    }
-    return 0;
 }
 
 static int32_t sys_access(isr_params_t *params)
@@ -2524,29 +2679,6 @@ static int32_t sys_faccessat(isr_params_t *params)
         name++;
     }
     return do_access(name, mode);
-}
-
-/** Non-zero when the caller holds appropriate privilege (effective uid 0). */
-static int cred_privileged(void)
-{
-    return current_proc->euid == 0;
-}
-
-/** Non-zero when `gid` is the caller's effective gid or in its supplementary
- * list: the set a file owner may chgrp to. */
-static int cred_in_group(uint32_t gid)
-{
-    uint32_t i;
-
-    if (gid == current_proc->egid) {
-        return 1;
-    }
-    for (i = 0; i < current_proc->ngroups; i++) {
-        if (current_proc->groups[i] == gid) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /**
@@ -3678,6 +3810,18 @@ static int32_t sys_execve(isr_params_t *params)
         return -ENOENT; /* the file does not exist */
     }
 
+    {
+        krffs_node_t *prog = krffs_resolve(name);
+        int32_t rc;
+        if (!prog) {
+            return -ENOENT;
+        }
+        rc = cred_access_node(prog, CRED_X, 0);
+        if (rc != 0) {
+            return rc; /* exec is the execute bit, for root too */
+        }
+    }
+
     if (current_proc->cr3 == 0) {
         proc_dir = _kernel_dir;
     } else {
@@ -4216,7 +4360,17 @@ static int32_t sys_creat(isr_params_t *params)
         return -EISDIR;
     }
 
+    if (node) {
+        int32_t rc = cred_access_node(node, CRED_W, 0);
+        if (rc != 0) {
+            return rc; /* creat hands back a writable descriptor */
+        }
+    }
     if (!node) {
+        int32_t rc = cred_parent_writable(name);
+        if (rc != 0) {
+            return rc;
+        }
         if (krffs_create(name) != 0) {
             return -ENOSPC;
         }
@@ -4238,7 +4392,9 @@ static int32_t sys_creat(isr_params_t *params)
     entry->type = FD_TYPE_FILE;
     entry->node = node;
     entry->ofd->offset = 0;
-    entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    /* creat is open(O_WRONLY|O_CREAT|O_TRUNC): write-only, so a caller with
+     * write but not read permission cannot read back through this fd. */
+    entry->flags = FD_FLAG_WRITE;
 
     return fd;
 }
@@ -4284,6 +4440,12 @@ static int32_t sys_unlink(isr_params_t *params)
         return -ENOENT;
     }
 
+    {
+        int32_t rc = cred_parent_writable(name);
+        if (rc != 0) {
+            return rc; /* removing an entry writes its directory */
+        }
+    }
     return krffs_unlink(name);
 }
 
@@ -4314,6 +4476,13 @@ static int32_t sys_mkdir(isr_params_t *params)
     }
     if (krffs_resolve(pathbuf)) {
         return -EEXIST;
+    }
+    {
+        const char *name = (pathbuf[0] == '/') ? pathbuf + 1 : pathbuf;
+        int32_t rc = cred_parent_writable(name);
+        if (rc != 0) {
+            return rc;
+        }
     }
     if (krffs_mkdir(pathbuf) != 0) {
         return -ENOENT; /* a parent directory does not exist */
@@ -4355,6 +4524,13 @@ static int32_t sys_rmdir(isr_params_t *params)
     }
     if (!KRFFS_IS_DIR(node->mode)) {
         return -ENOTDIR;
+    }
+    {
+        const char *name = (pathbuf[0] == '/') ? pathbuf + 1 : pathbuf;
+        int32_t rc = cred_parent_writable(name);
+        if (rc != 0) {
+            return rc; /* removing an entry writes its directory */
+        }
     }
     if (krffs_rmdir(pathbuf) != 0) {
         return -ENOTEMPTY; /* still has children */
@@ -4409,6 +4585,17 @@ static int32_t sys_rename(isr_params_t *params)
         return -ENOENT;
     }
 
+    {
+        /* A rename writes both directories: the entry leaves one and lands in
+         * the other. */
+        int32_t rc = cred_parent_writable(old_name);
+        if (rc == 0) {
+            rc = cred_parent_writable(new_name);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+    }
     return krffs_rename(old_name, new_name);
 }
 
@@ -4505,6 +4692,24 @@ static int32_t sys_utimensat(isr_params_t *params)
         if (!node) {
             return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT; /* missing vs not-a-dir */
         }
+    }
+
+    /* The POSIX permission split. Both UTIME_OMIT changes nothing, so it
+     * needs no right and touches no timestamp (not even ctime). Setting both
+     * to "now" (times NULL, or both UTIME_NOW) is the owner's, or anyone with
+     * write, or root. Any explicit time is the owner's or root's alone. */
+    if (times != NULL &&
+        times[0].tv_nsec == UTIME_OMIT && times[1].tv_nsec == UTIME_OMIT) {
+        return 0;
+    }
+    if (times == NULL ||
+        (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW)) {
+        if (!cred_privileged() && current_proc->euid != node->uid &&
+            cred_access_node(node, CRED_W, 0) != 0) {
+            return -EACCES;
+        }
+    } else if (!cred_privileged() && current_proc->euid != node->uid) {
+        return -EPERM;
     }
 
     get_current_time(&now_sec, &now_nsec);

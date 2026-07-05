@@ -17,6 +17,9 @@
  *   caller's effective-id excursion (`seteuid(1)` out, `seteuid(0)` back, the
  *   idiom around reading authorized_keys) works both ways; the identity rules
  *   themselves are authmusl's to pin.
+ * * After a real drop to uid 1000, the nine-bit check answers through libc: a
+ *   0644 root file opens for read but not write, and creating in the root
+ *   directory is EACCES (the full deny matrix is permprobe's to pin).
  *
  * Prints "PERMMUSL OK" or "PERMMUSL FAIL ...". Linked against the ported musl.
  */
@@ -85,6 +88,11 @@ int main(void)
         printf("PERMMUSL FAIL (chown back to root)\n");
         return 1;
     }
+    /* Restore the staged 0644 before the drop below counts on it. */
+    if (chmod("/hello.txt", 0644) != 0) {
+        printf("PERMMUSL FAIL (restore 0644)\n");
+        return 1;
+    }
 
     /* seteuid/setegid/setresuid: the identity rules themselves are authmusl's
      * to pin; here just prove the excursion a file server runs under works
@@ -96,6 +104,29 @@ int main(void)
     }
     if (seteuid(1) != 0 || geteuid() != 1 || seteuid(0) != 0) {
         printf("PERMMUSL FAIL (seteuid excursion)\n");
+        return 1;
+    }
+
+    /* The deny paths through libc, last: the drop is for good. A 0644 root
+     * file reads but does not write for uid 1000, and the root directory
+     * refuses a creation. */
+    if (setgid(1000) != 0 || setuid(1000) != 0) {
+        printf("PERMMUSL FAIL (drop to 1000)\n");
+        return 1;
+    }
+    fd = open("/hello.txt", O_RDONLY);
+    if (fd < 0) {
+        printf("PERMMUSL FAIL (read 0644 as other)\n");
+        return 1;
+    }
+    close(fd);
+    if (open("/hello.txt", O_WRONLY) != -1 || errno != EACCES) {
+        printf("PERMMUSL FAIL (write 0644 as other not EACCES)\n");
+        return 1;
+    }
+    if (open("/denied.musl", O_CREAT | O_WRONLY, 0644) != -1 ||
+        errno != EACCES) {
+        printf("PERMMUSL FAIL (create in / not EACCES)\n");
         return 1;
     }
 
