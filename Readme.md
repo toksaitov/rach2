@@ -94,11 +94,11 @@ cd rach2 && NET_HOSTFWD=hostfwd=tcp::2222-:22 ./run.sh os-real
 #   (-s turns password auth off, so the demo accounts are pubkey-only)
 
 # Terminal 2: from the repo root, log in with either auto-generated demo key.
-# root is the administrator; student is an unprivileged uid-1000 account whose
-# home the kernel's permission bits actually protect (try writing /etc/motd as
-# student: it is denied; as root it succeeds).
-ssh -i krffs/rach2_demo_ed25519    -p 2222 root@localhost
-ssh -i krffs/rach2_student_ed25519 -p 2222 student@localhost
+# root is the administrator; test is an unprivileged uid-1000 account whose home
+# the kernel's permission bits actually protect (try writing /etc/motd as test:
+# it is denied; as root it succeeds).
+ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
+ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
 ```
 
 From the shell prompt:
@@ -123,4 +123,4 @@ If you fall back to the kernel debug shell, use `audio help` for the audio test 
 
 ## Moving to another machine
 
-Use a clone, not a copy: `git clone` gives a ~34M tree that rebuilds from scratch. The vendored source tarballs are committed, so the build is offline; `build/` (hundreds of MB) is git-ignored and regenerable. If you must copy the working tree instead, exclude `build/` and delete the vendored build stamps (`vendor/*/.stamp`), or run `make distclean`, first: a stamp left behind without its (deleted) `build/` output makes `make full` skip rebuilding that capstone. The demo SSH keys (`krffs/rach2_demo_ed25519` for root, `krffs/rach2_student_ed25519` for student) are git-ignored; a fresh build mints new ones, or copy the existing keys out of band to keep them. On the new machine run `make doctor`, then `make` and `make full`.
+Use a clone, not a copy: `git clone` gives a ~34M tree that rebuilds from scratch. The vendored source tarballs are committed, so the build is offline; `build/` (hundreds of MB) is git-ignored and regenerable. If you must copy the working tree instead, exclude `build/` and delete the vendored build stamps (`vendor/*/.stamp`), or run `make distclean`, first: a stamp left behind without its (deleted) `build/` output makes `make full` skip rebuilding that capstone. The demo SSH keys (`krffs/rach2_demo_ed25519` for root, `krffs/rach2_test_ed25519` for the test account) are git-ignored; a fresh build mints new ones, or copy the existing keys out of band to keep them. On the new machine run `make doctor`, then `make` and `make full`.

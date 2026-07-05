@@ -48,11 +48,12 @@ and committed as one scoped change.
   runs as root and passes through the override, so the boot is unchanged. Proven
   by `permprobe` and a grown musl `permmusl`.
 
-* The second user (`c16f105`). The os-real image gained `student:x:1000:1000`
-  with a `0700` home the permission bits protect, its own SSH key, and a motd
-  that says who you can be. `gen_demo_key.sh` now mints a keypair per account.
-  The server starts with `dropbear -s` (password auth off), so the pubkey demo
-  accounts are the only way in.
+* The second user (`c16f105`, renamed from `student` to `test` in a later
+  commit). The os-real image gained `test:x:1000:1000` with a `0700` home the
+  permission bits protect, its own SSH key, and a motd that says who you can be.
+  `gen_demo_key.sh` now mints a keypair per account. The server starts with
+  `dropbear -s` (password auth off), so the pubkey demo accounts are the only
+  way in.
 
 * The record and the gate (this commit). This Readme, the deferrals below, the
   owning-Readme updates carried in each phase, and a final clean-tree gate.
@@ -64,21 +65,21 @@ the guest shell, both accounts log in over their own keys in one boot, and the
 kernel keeps them apart in both directions:
 
 ```
-$ ssh -i krffs/rach2_student_ed25519 -p 2222 student@localhost
-  whoami            -> student
+$ ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
+  whoami            -> test
   id                -> uid=1000 gid=1000
-  pwd               -> /home/student
-  echo hi > mine.txt        (ok: student owns its home)
+  pwd               -> /home/test
+  echo hi > mine.txt        (ok: test owns its home)
   echo x > /etc/motd        -> Permission denied
-  ls -ld /home/student      -> drwx------ student student
+  ls -ld /home/test         -> drwx------ test test
 
 $ ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost      (same boot)
-  echo root-was-here >> /etc/motd            (ok: the root override)
-  cat /home/student/.ssh/authorized_keys     (ok: the root override)
+  echo root-was-here >> /etc/motd         (ok: the root override)
+  cat /home/test/.ssh/authorized_keys     (ok: the root override)
 
-$ back as student
-  cat /root/.ssh/authorized_keys             -> Permission denied
-  cat /etc/motd                              (ok: 0644, world-readable)
+$ back as test
+  cat /root/.ssh/authorized_keys          -> Permission denied
+  cat /etc/motd                           (ok: 0644, world-readable)
 ```
 
 ## What stays deferred
@@ -121,4 +122,4 @@ were load-bearing, catching a `creat` descriptor that handed back read access
 after a write-only check, an existing-file ownership takeover through `creat`,
 and the fd-variant metadata paths that had to converge on the path policy. The
 default RAM-module boot and the legacy `if=ide` and AHCI disk boots stay green,
-and the SSH-as-root capstone is unchanged: the student account is additive.
+and the SSH-as-root capstone is unchanged: the test account is additive.

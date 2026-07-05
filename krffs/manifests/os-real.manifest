@@ -26,10 +26,10 @@ file 0755 /sbin/init build/utils/sbin/init
 # the login shell against shells; busybox ash reads profile on a login shell.
 dir 0755 /etc
 dir 0700 /etc/dropbear
-text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root or student.\n
+text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root or test.\n
 text 0644 /etc/hostname rach2\n
-text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\nstudent:x:1000:1000:student:/home/student:/bin/sh\n
-text 0644 /etc/group root:x:0:\nstudent:x:1000:\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
+text 0644 /etc/group root:x:0:\ntest:x:1000:\n
 text 0644 /etc/shells /bin/sh\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
@@ -42,7 +42,7 @@ dir 0755 /root
 dir 0700 /root/.ssh
 file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 
-# /home/student: the unprivileged demo user's home and SSH login. Owned by
+# /home/test: the unprivileged demo user's home and SSH login. Owned by
 # 1000:1000 with 0700/0600 modes, deliberately stricter than dropbear's pubkey
 # check requires (it only insists the files be owned by the user or root and not
 # group- or other-writable), so the permission bits protect it from root-owned
@@ -50,7 +50,7 @@ file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 # second account, not a label.
 dir 1777 /tmp
 dir 0755 /home
-dir 0700:1000:1000 /home/student
-dir 0700:1000:1000 /home/student/.ssh
-file 0600:1000:1000 /home/student/.ssh/authorized_keys krffs/student_authorized_keys
+dir 0700:1000:1000 /home/test
+dir 0700:1000:1000 /home/test/.ssh
+file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
 optional-file 0644 /doom1.wad ports/doom/doom1.wad

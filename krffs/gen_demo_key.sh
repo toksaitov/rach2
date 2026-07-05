@@ -5,14 +5,14 @@
 # dropbear logins.
 #
 # Generates two keypairs, one per demo account: rach2_demo_ed25519 for root and
-# rach2_student_ed25519 for the unprivileged student user. The private halves are
+# rach2_test_ed25519 for the unprivileged test user. The private halves are
 # git-ignored host-side test credentials; the public halves (authorized_keys and
-# student_authorized_keys) the os-real manifest stages into each account's
-# ~/.ssh. Each keypair is generated only when its public half is absent, so a
-# present key is left as is (idempotent).
+# test_authorized_keys) the os-real manifest stages into each account's ~/.ssh.
+# Each keypair is generated only when its public half is absent, so a present
+# key is left as is (idempotent).
 #
-#   ssh -i krffs/rach2_demo_ed25519    -p 2222 root@localhost
-#   ssh -i krffs/rach2_student_ed25519 -p 2222 student@localhost
+#   ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
+#   ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
 #
 
 set -e
@@ -47,5 +47,5 @@ gen_key() {
     echo "gen_demo_key: log in with ssh -i krffs/$key -p 2222 $user@localhost"
 }
 
-gen_key rach2_demo_ed25519    authorized_keys         root
-gen_key rach2_student_ed25519 student_authorized_keys student
+gen_key rach2_demo_ed25519 authorized_keys      root
+gen_key rach2_test_ed25519 test_authorized_keys test
