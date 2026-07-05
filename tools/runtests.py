@@ -46,8 +46,16 @@ def main():
     ap.add_argument("--kernel", required=True)
     ap.add_argument("--initrd", required=True)
     ap.add_argument("--cpu", default="max")
+    # The step window is generous because only a failing probe ever waits it
+    # out: a passing probe returns on its serial match, so the green path costs
+    # nothing, and the overall --timeout still bounds a run full of hangs. A
+    # tight window read as speed was really a bet on the host: 8 s was calibrated
+    # on one machine and flaked on a slower one.
     ap.add_argument("--timeout", type=float, default=180.0)
-    ap.add_argument("--steptmo", type=float, default=8.0)
+    ap.add_argument("--steptmo", type=float, default=20.0)
+    # Boot-to-shell gets its own window: the whole self-test sequence runs
+    # before the prompt, and on a slow host it alone can exceed a probe step.
+    ap.add_argument("--boottmo", type=float, default=60.0)
     ap.add_argument("--log", default=None)
     a = ap.parse_args()
 
@@ -82,9 +90,9 @@ def main():
                 if logf:
                     logf.write(chunk); logf.flush()
 
-    def expect(rx):
+    def expect(rx, window=None):
         pat = re.compile(rx.encode())
-        stop = min(deadline, time.time() + a.steptmo)
+        stop = min(deadline, time.time() + (window or a.steptmo))
         while time.time() < stop and p.poll() is None:
             m = pat.search(buf, consumed[0])
             if m:
@@ -99,7 +107,7 @@ def main():
         except (BrokenPipeError, OSError):
             pass
 
-    if not expect(r"Type 'help'"):
+    if not expect(r"Type 'help'", window=a.boottmo):
         sys.stderr.write("runtests: kernel shell never appeared\n")
         return 3
 
