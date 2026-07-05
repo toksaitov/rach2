@@ -95,7 +95,10 @@
 #define SYS_SETHOSTNAME 74
 #define SYS_GETRLIMIT   76
 #define SYS_UGETRLIMIT  191
+#define SYS_GETGROUPS32 205
 #define SYS_SETGROUPS32 206
+#define SYS_GETRESUID32 209
+#define SYS_GETRESGID32 211
 #define SYS_SETUID32    213
 #define SYS_SETGID32    214
 #define SYS_DUP3        330
@@ -110,12 +113,9 @@
 #define SYS_LINK        9
 #define SYS_LINKAT      303
 /* The 2-/3-arg privilege drop and restore a login server uses (seteuid).
- * Both the legacy 16-bit-uid and the *32 variants, since musl issues the former
- * for seteuid/setegid on i386 and busybox may issue the latter. */
-#define SYS_SETREUID    70
-#define SYS_SETREGID    71
-#define SYS_SETRESUID   164
-#define SYS_SETRESGID   170
+ * musl remaps the whole legacy 16-bit id family to the *32 forms on i386
+ * (src/internal/syscall.h), so only the *32 numbers are wired; the 16-bit
+ * ABI (narrower ids, 0xFFFF keep-sentinel) is left to ENOSYS. */
 #define SYS_SETREUID32  203
 #define SYS_SETREGID32  204
 #define SYS_SETRESUID32 208

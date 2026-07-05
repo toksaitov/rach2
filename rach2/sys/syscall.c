@@ -2509,7 +2509,7 @@ static int32_t sys_faccessat(isr_params_t *params)
 }
 
 /* An owner/group argument is acceptable iff it names root (0) or is (id_t)-1
- * ("leave unchanged"); see do_chown and the setre/setres handlers. */
+ * ("leave unchanged"); see do_chown. */
 static int sc_id_is_root_or_keep(uint32_t id)
 {
     return id == 0 || id == (uint32_t) -1;
@@ -3745,6 +3745,14 @@ static int32_t sys_fork(isr_params_t *params)
     child->sid = parent->sid;
     child->pgid = parent->pgid;
     child->umask = parent->umask; /* the file-creation mask is inherited */
+    child->ruid = parent->ruid;   /* credentials: the child is who the parent was */
+    child->euid = parent->euid;
+    child->suid = parent->suid;
+    child->rgid = parent->rgid;
+    child->egid = parent->egid;
+    child->sgid = parent->sgid;
+    child->ngroups = parent->ngroups;
+    k_memcpy(child->groups, parent->groups, sizeof(child->groups));
 
     /* Inherit the parent's TLS base: the child's copied trapframe keeps the
      * parent's %gs selector, and its address space is a copy at the same
@@ -4848,13 +4856,29 @@ static int32_t sys_nanosleep(isr_params_t *params)
 }
 
 /*
- * Identity: Rach2 is single-user, so every process is root. getuid/geteuid/
- * getgid/getegid (the i386 *32 variants, 199-202) all report 0.
+ * Identity (the i386 *32 variants, 199-202): the four getters read the PCB
+ * credentials, all zero (root) until a login server drops them. The setters
+ * and the group list live with the rest of the id family near do_chown.
  */
 static int32_t sys_getuid(isr_params_t *params)
 {
     (void)params;
-    return 0;
+    return (int32_t) current_proc->ruid;
+}
+static int32_t sys_geteuid(isr_params_t *params)
+{
+    (void)params;
+    return (int32_t) current_proc->euid;
+}
+static int32_t sys_getgid(isr_params_t *params)
+{
+    (void)params;
+    return (int32_t) current_proc->rgid;
+}
+static int32_t sys_getegid(isr_params_t *params)
+{
+    (void)params;
+    return (int32_t) current_proc->egid;
 }
 
 /* getrandom flag bits (Linux). We never block and have one source, so they only
@@ -7101,71 +7125,248 @@ static int32_t sys_sethostname(isr_params_t *params)
     return 0;
 }
 
-/* setuid/setgid: Rach2 has a single (root, id 0) identity and no user database.
- * Setting the id to 0 succeeds as a no-op (a login server's post-auth privilege
- * drop to the authenticated root must not fail); setting it to any OTHER id fails
- * with -EPERM rather than silently pretending to drop to a user that does not
- * exist, so a caller is never fooled into believing it shed privilege. */
+/* The id setters: the V7 rule with POSIX saved IDs, over the PCB credentials.
+ * Privilege is effective uid 0 for the uid and gid families alike. A privileged
+ * caller sets anything; an unprivileged one only swaps among its own real,
+ * effective, and saved ids, so a shed identity cannot be regained. The saved id
+ * follows POSIX: a 2-argument call that sets the real id, or sets the effective
+ * id away from the pre-call real id, also saves the new effective id. `KEEP`
+ * ((id_t)-1) leaves a field unchanged. */
+#define SC_ID_KEEP 0xFFFFFFFFu
+
+/** Non-zero when the caller holds appropriate privilege (effective uid 0). */
+static int cred_privileged(void)
+{
+    return current_proc->euid == 0;
+}
+
 static int32_t sys_setuid(isr_params_t *params)
 {
-    return (params->ebx == 0) ? 0 : -EPERM;
+    process_t *p = current_proc;
+    uint32_t uid = params->ebx;
+
+    if (cred_privileged()) {
+        p->ruid = uid;
+        p->euid = uid;
+        p->suid = uid;
+        return 0;
+    }
+    if (uid == p->ruid || uid == p->suid) {
+        p->euid = uid;
+        return 0;
+    }
+    return -EPERM;
 }
 static int32_t sys_setgid(isr_params_t *params)
 {
-    return (params->ebx == 0) ? 0 : -EPERM;
-}
-/* setreuid/setregid/setresuid/setresgid: the same single-root-identity policy in
- * the 2- and 3-argument forms a login server uses to drop and restore privilege
- * around an unprivileged step (dropbear reads authorized_keys under
- * setegid(pw_gid)/seteuid(pw_uid), then reverts). Each id argument is either
- * (id_t)-1 ("leave unchanged") or 0 (root, the only identity); any other value is
- * -EPERM, so a caller is never fooled into believing it became a user that does
- * not exist. uid and gid share these handlers because both are 0-only.
- * (sc_id_is_root_or_keep is defined earlier, near do_chown.) */
-static int32_t sys_setreid(isr_params_t *params)
-{
-    /* setreuid(ruid, euid) / setregid(rgid, egid) */
-    if (!sc_id_is_root_or_keep(params->ebx) ||
-        !sc_id_is_root_or_keep(params->ecx)) {
-        return -EPERM;
-    }
-    return 0;
-}
-static int32_t sys_setresid(isr_params_t *params)
-{
-    /* setresuid(ruid, euid, suid) / setresgid(rgid, egid, sgid) */
-    if (!sc_id_is_root_or_keep(params->ebx) ||
-        !sc_id_is_root_or_keep(params->ecx) ||
-        !sc_id_is_root_or_keep(params->edx)) {
-        return -EPERM;
-    }
-    return 0;
-}
-/* setgroups: the only group is root (gid 0). Clearing the list (size 0) succeeds;
- * a list is validated to be readable and to contain ONLY gid 0; any other gid is
- * "no such group" (-EPERM), so a caller is never fooled into believing it set real
- * supplementary groups. */
-static int32_t sys_setgroups(isr_params_t *params)
-{
-    int size = (int)params->ebx;
-    uint32_t list_ptr = params->ecx;
-    uint32_t g;
-    int i;
+    process_t *p = current_proc;
+    uint32_t gid = params->ebx;
 
-    if (size < 0 || size > 256) {
-        return -EINVAL; /* a single-group OS never has a long supplementary list */
+    if (cred_privileged()) {
+        p->rgid = gid;
+        p->egid = gid;
+        p->sgid = gid;
+        return 0;
     }
-    for (i = 0; i < size; i++) {
-        if (!list_ptr ||
-            copy_from_user(&g, (const void __user *)(list_ptr + (uint32_t)i * 4),
-                           sizeof(g)) != 0) {
-            return -EFAULT;
+    if (gid == p->rgid || gid == p->sgid) {
+        p->egid = gid;
+        return 0;
+    }
+    return -EPERM;
+}
+static int32_t sys_setreuid(isr_params_t *params)
+{
+    process_t *p = current_proc;
+    uint32_t r = params->ebx;
+    uint32_t e = params->ecx;
+    uint32_t new_r = (r == SC_ID_KEEP) ? p->ruid : r;
+    uint32_t new_e = (e == SC_ID_KEEP) ? p->euid : e;
+
+    if (!cred_privileged()) {
+        if (r != SC_ID_KEEP && new_r != p->ruid && new_r != p->euid) {
+            return -EPERM;
         }
-        if (g != 0) {
+        if (e != SC_ID_KEEP && new_e != p->ruid && new_e != p->euid &&
+            new_e != p->suid) {
             return -EPERM;
         }
     }
+    if (r != SC_ID_KEEP || (e != SC_ID_KEEP && new_e != p->ruid)) {
+        p->suid = new_e;
+    }
+    p->ruid = new_r;
+    p->euid = new_e;
     return 0;
+}
+static int32_t sys_setregid(isr_params_t *params)
+{
+    process_t *p = current_proc;
+    uint32_t r = params->ebx;
+    uint32_t e = params->ecx;
+    uint32_t new_r = (r == SC_ID_KEEP) ? p->rgid : r;
+    uint32_t new_e = (e == SC_ID_KEEP) ? p->egid : e;
+
+    if (!cred_privileged()) {
+        if (r != SC_ID_KEEP && new_r != p->rgid && new_r != p->egid) {
+            return -EPERM;
+        }
+        if (e != SC_ID_KEEP && new_e != p->rgid && new_e != p->egid &&
+            new_e != p->sgid) {
+            return -EPERM;
+        }
+    }
+    if (r != SC_ID_KEEP || (e != SC_ID_KEEP && new_e != p->rgid)) {
+        p->sgid = new_e;
+    }
+    p->rgid = new_r;
+    p->egid = new_e;
+    return 0;
+}
+static int32_t sys_setresuid(isr_params_t *params)
+{
+    process_t *p = current_proc;
+    uint32_t r = params->ebx;
+    uint32_t e = params->ecx;
+    uint32_t s = params->edx;
+
+    if (!cred_privileged()) {
+        uint32_t v[3];
+        int i;
+        v[0] = r;
+        v[1] = e;
+        v[2] = s;
+        for (i = 0; i < 3; i++) {
+            if (v[i] != SC_ID_KEEP && v[i] != p->ruid && v[i] != p->euid &&
+                v[i] != p->suid) {
+                return -EPERM;
+            }
+        }
+    }
+    if (r != SC_ID_KEEP) {
+        p->ruid = r;
+    }
+    if (e != SC_ID_KEEP) {
+        p->euid = e;
+    }
+    if (s != SC_ID_KEEP) {
+        p->suid = s;
+    }
+    return 0;
+}
+static int32_t sys_setresgid(isr_params_t *params)
+{
+    process_t *p = current_proc;
+    uint32_t r = params->ebx;
+    uint32_t e = params->ecx;
+    uint32_t s = params->edx;
+
+    if (!cred_privileged()) {
+        uint32_t v[3];
+        int i;
+        v[0] = r;
+        v[1] = e;
+        v[2] = s;
+        for (i = 0; i < 3; i++) {
+            if (v[i] != SC_ID_KEEP && v[i] != p->rgid && v[i] != p->egid &&
+                v[i] != p->sgid) {
+                return -EPERM;
+            }
+        }
+    }
+    if (r != SC_ID_KEEP) {
+        p->rgid = r;
+    }
+    if (e != SC_ID_KEEP) {
+        p->egid = e;
+    }
+    if (s != SC_ID_KEEP) {
+        p->sgid = s;
+    }
+    return 0;
+}
+/* getresuid/getresgid (the *32 forms): report all three ids through the three
+ * user pointers, the introspection half of the saved-id model. */
+static int32_t sys_getresuid(isr_params_t *params)
+{
+    process_t *p = current_proc;
+
+    if (copy_to_user((void __user *) params->ebx, &p->ruid,
+                     sizeof(p->ruid)) != 0 ||
+        copy_to_user((void __user *) params->ecx, &p->euid,
+                     sizeof(p->euid)) != 0 ||
+        copy_to_user((void __user *) params->edx, &p->suid,
+                     sizeof(p->suid)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+static int32_t sys_getresgid(isr_params_t *params)
+{
+    process_t *p = current_proc;
+
+    if (copy_to_user((void __user *) params->ebx, &p->rgid,
+                     sizeof(p->rgid)) != 0 ||
+        copy_to_user((void __user *) params->ecx, &p->egid,
+                     sizeof(p->egid)) != 0 ||
+        copy_to_user((void __user *) params->edx, &p->sgid,
+                     sizeof(p->sgid)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+/* setgroups/getgroups (the *32 forms): the supplementary list, privileged to
+ * set (effective uid 0), NGROUPS_MAX entries. getgroups with size 0 reports the
+ * count, the POSIX sizing idiom. */
+static int32_t sys_setgroups(isr_params_t *params)
+{
+    process_t *p = current_proc;
+    uint32_t size = params->ebx;
+    uint32_t list_ptr = params->ecx;
+    uint32_t tmp[NGROUPS_MAX];
+    uint32_t i;
+
+    if (size > NGROUPS_MAX) {
+        return -EINVAL; /* sized before privilege, the order Linux reports */
+    }
+    if (!cred_privileged()) {
+        return -EPERM;
+    }
+    for (i = 0; i < size; i++) {
+        if (copy_from_user(&tmp[i],
+                           (const void __user *)(list_ptr + i * 4),
+                           sizeof(tmp[i])) != 0) {
+            return -EFAULT;
+        }
+    }
+    for (i = 0; i < size; i++) {
+        p->groups[i] = tmp[i];
+    }
+    p->ngroups = size;
+    return 0;
+}
+static int32_t sys_getgroups(isr_params_t *params)
+{
+    process_t *p = current_proc;
+    uint32_t size = params->ebx;
+    uint32_t list_ptr = params->ecx;
+    uint32_t i;
+
+    if ((int32_t) size < 0) {
+        return -EINVAL; /* the ABI size is signed; a negative is not a count */
+    }
+    if (size == 0) {
+        return (int32_t) p->ngroups;
+    }
+    if (size < p->ngroups) {
+        return -EINVAL;
+    }
+    for (i = 0; i < p->ngroups; i++) {
+        if (copy_to_user((void __user *)(list_ptr + i * 4), &p->groups[i],
+                         sizeof(p->groups[i])) != 0) {
+            return -EFAULT;
+        }
+    }
+    return (int32_t) p->ngroups;
 }
 
 /* The honest resource caps: RLIMIT_NOFILE/NPROC mirror the kernel's fixed pools,
@@ -7566,11 +7767,14 @@ void init_syscall(void)
     _syscall_table[SYS_RT_SIGPROCMASK] = sys_rt_sigprocmask;
     _syscall_table[SYS_RT_SIGRETURN] = sys_rt_sigreturn;
     _syscall_table[SYS_SIGRETURN] = sys_sigreturn;
-    /* Single-user: all four identity calls report root (uid/gid 0). */
+    /* Identity: the four getters read the PCB credentials. */
     _syscall_table[SYS_GETUID32] = sys_getuid;
-    _syscall_table[SYS_GETGID32] = sys_getuid;
-    _syscall_table[SYS_GETEUID32] = sys_getuid;
-    _syscall_table[SYS_GETEGID32] = sys_getuid;
+    _syscall_table[SYS_GETGID32] = sys_getgid;
+    _syscall_table[SYS_GETEUID32] = sys_geteuid;
+    _syscall_table[SYS_GETEGID32] = sys_getegid;
+    _syscall_table[SYS_GETRESUID32] = sys_getresuid;
+    _syscall_table[SYS_GETRESGID32] = sys_getresgid;
+    _syscall_table[SYS_GETGROUPS32] = sys_getgroups;
     _syscall_table[SYS_SOCKETCALL] = sys_socketcall;
     _syscall_table[SYS_SET_THREAD_AREA] = sys_set_thread_area;
     _syscall_table[SYS_GETPID] = sys_getpid;
@@ -7601,14 +7805,14 @@ void init_syscall(void)
     _syscall_table[SYS_FDATASYNC] = sys_fsync;
     _syscall_table[SYS_LINK] = sys_link;
     _syscall_table[SYS_LINKAT] = sys_linkat;
-    _syscall_table[SYS_SETREUID] = sys_setreid;
-    _syscall_table[SYS_SETREGID] = sys_setreid;
-    _syscall_table[SYS_SETREUID32] = sys_setreid;
-    _syscall_table[SYS_SETREGID32] = sys_setreid;
-    _syscall_table[SYS_SETRESUID] = sys_setresid;
-    _syscall_table[SYS_SETRESGID] = sys_setresid;
-    _syscall_table[SYS_SETRESUID32] = sys_setresid;
-    _syscall_table[SYS_SETRESGID32] = sys_setresid;
+    /* Only the *32 id forms are wired: musl remaps the whole legacy 16-bit
+     * family to them on i386, and the 16-bit ABI's narrower ids and 0xFFFF
+     * keep-sentinel differ, so serving those numbers with 32-bit semantics
+     * would lie to a raw caller. They fall to ENOSYS instead. */
+    _syscall_table[SYS_SETREUID32] = sys_setreuid;
+    _syscall_table[SYS_SETREGID32] = sys_setregid;
+    _syscall_table[SYS_SETRESUID32] = sys_setresuid;
+    _syscall_table[SYS_SETRESGID32] = sys_setresgid;
     _syscall_table[SYS_CHMOD] = sys_chmod;
     _syscall_table[SYS_FCHMODAT] = sys_fchmodat;
     _syscall_table[SYS_FCHMOD] = sys_fchmod;

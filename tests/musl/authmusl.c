@@ -6,9 +6,9 @@
  * and gid 0; getrlimit(RLIMIT_NOFILE) reports the honest cap (MAX_FDS == 16);
  * gethostname() round-trips with sethostname(); dup3 onto an explicit high fd
  * with O_CLOEXEC dups and sets close-on-exec; an advisory fcntl(F_SETLK) is
- * granted with no conflict (single-user locks); setuid(0)/setgid(0) succeed as
- * a no-op privilege drop, while a drop to a nonexistent user must fail rather
- * than silently leave us root.
+ * granted with no conflict (single-user locks); and the credential walk a
+ * login server performs works through libc: the seteuid excursion and return,
+ * the real drop (gid first, then uid), and no way back up afterward.
  *
  * Prints "AUTHMUSL OK" on success, "AUTHMUSL FAIL" otherwise. Linked against
  * the ported musl.
@@ -28,6 +28,7 @@ int main(void)
     struct rlimit rl;
     char host[64];
     int fd, nfd, fl;
+    uid_t ru, eu, su;
     struct flock lk;
 
     pw = getpwnam("root");
@@ -75,13 +76,34 @@ int main(void)
     close(fd);
     close(nfd);
 
-    if (setuid(0) != 0 || setgid(0) != 0) {
-        printf("AUTHMUSL FAIL (setuid/setgid 0)\n");
+    /* The credential walk, last: it sheds root for good. The excursion out
+     * and back is legal while the real and saved uids stay 0; the drop goes
+     * gid first (setgid needs privilege, which setuid removes); and after the
+     * drop every way back up must fail. */
+    if (seteuid(1000) != 0 || geteuid() != 1000 || getuid() != 0) {
+        printf("AUTHMUSL FAIL (seteuid excursion out)\n");
         return 1;
     }
-    /* Drop to a nonexistent user must fail. */
-    if (setuid(1000) == 0 || setgid(1000) == 0) {
-        printf("AUTHMUSL FAIL (setuid 1000 wrongly succeeded)\n");
+    /* musl's seteuid is setresuid(-1, e, -1), so the saved uid must ride
+     * through the excursion untouched: that is what makes the return legal. */
+    if (getresuid(&ru, &eu, &su) != 0 || ru != 0 || eu != 1000 || su != 0) {
+        printf("AUTHMUSL FAIL (saved uid during excursion)\n");
+        return 1;
+    }
+    if (seteuid(0) != 0 || geteuid() != 0) {
+        printf("AUTHMUSL FAIL (seteuid excursion back)\n");
+        return 1;
+    }
+    if (setgid(1000) != 0 || setuid(1000) != 0) {
+        printf("AUTHMUSL FAIL (drop to 1000)\n");
+        return 1;
+    }
+    if (getuid() != 1000 || geteuid() != 1000 || getgid() != 1000) {
+        printf("AUTHMUSL FAIL (identity after drop)\n");
+        return 1;
+    }
+    if (setuid(0) == 0 || seteuid(0) == 0 || setgid(0) == 0) {
+        printf("AUTHMUSL FAIL (regained root after drop)\n");
         return 1;
     }
 

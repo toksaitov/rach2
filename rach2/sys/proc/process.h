@@ -43,6 +43,9 @@ typedef struct cpu_regs cpu_regs_t;
 /* Maximum length of current working directory path. */
 #define CWD_MAX 64
 
+/* Supplementary group slots per process (the 4.2BSD number). */
+#define NGROUPS_MAX 8
+
 /* Process Control Block (PCB). */
 struct process {
     uint32_t pid;           /* Process ID */
@@ -83,6 +86,20 @@ struct process {
     uint32_t jc_status;
     /* File-creation mask (umask(2)); inherited across fork, low 9 bits. */
     uint32_t umask;
+    /* Credentials: the V7 model with POSIX saved IDs. Real, effective, and
+     * saved uid and gid plus the supplementary groups; fork copies them, exec
+     * keeps them (no setuid bit), and the id syscalls move them under the
+     * textbook rules: effective uid 0 sets anything, anyone else only swaps
+     * among its own three. All zero (root) at boot until a login server
+     * drops. */
+    uint32_t ruid;
+    uint32_t euid;
+    uint32_t suid;
+    uint32_t rgid;
+    uint32_t egid;
+    uint32_t sgid;
+    uint32_t ngroups;               /* live entries in groups[] */
+    uint32_t groups[NGROUPS_MAX];   /* supplementary gids */
 };
 
 typedef struct process process_t;

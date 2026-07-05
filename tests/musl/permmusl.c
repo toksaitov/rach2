@@ -13,9 +13,10 @@
  *   reflects them; `chmod` of a missing path is -1 with ENOENT.
  * * `chown(path, 0, 0)` succeeds because only root exists; a nonzero owner is
  *   -1 with EPERM.
- * * `seteuid(0)`, `setegid(0)`, and `setresuid(0,0,0)` succeed (the
- *   login-server privilege drop and restore around reading authorized_keys);
- *   `seteuid(1)` is -1 with EPERM.
+ * * `seteuid(0)`, `setegid(0)`, and `setresuid(0,0,0)` succeed, and a root
+ *   caller's effective-id excursion (`seteuid(1)` out, `seteuid(0)` back, the
+ *   idiom around reading authorized_keys) works both ways; the identity rules
+ *   themselves are authmusl's to pin.
  *
  * Prints "PERMMUSL OK" or "PERMMUSL FAIL ...". Linked against the ported musl.
  */
@@ -80,14 +81,16 @@ int main(void)
         return 1;
     }
 
-    /* seteuid/setegid/setresuid */
+    /* seteuid/setegid/setresuid: the identity rules themselves are authmusl's
+     * to pin; here just prove the excursion a file server runs under works
+     * both ways for a root caller. */
     if (seteuid(0) != 0 || setegid(0) != 0 || setresuid(0, 0, 0) != 0) {
         printf("PERMMUSL FAIL (seteuid/setegid/setresuid 0: %s)\n",
                strerror(errno));
         return 1;
     }
-    if (seteuid(1) != -1 || errno != EPERM) {
-        printf("PERMMUSL FAIL (seteuid nonzero not EPERM)\n");
+    if (seteuid(1) != 0 || geteuid() != 1 || seteuid(0) != 0) {
+        printf("PERMMUSL FAIL (seteuid excursion)\n");
         return 1;
     }
 
