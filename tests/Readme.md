@@ -39,7 +39,7 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `sigprobe` (`SIGPROBE OK`): signal delivery and the sigreturn frame.
 * `credprobe` (`CREDPROBE OK`): the process credential model (V7 with POSIX saved IDs): inheritance, the drop, the saved-id rules, no regain.
 * `ownprobe` (`OWNPROBE OK`): file ownership: creation stamping under the umask, the chmod/chown and fchmod/fchown rules, kill permission.
-* `permprobe` (`PERMPROBE OK`): permission enforcement: the nine-bit access check at open, create, unlink, rename, mkdir, chdir, exec, and access(2), with the root override.
+* `permprobe` (`PERMPROBE OK`): permission enforcement: the nine-bit access check at open, create, unlink, rename, mkdir, chdir, exec, utimensat (the touch-versus-set split), and access(2), with the root override.
 * `waitprobe` (`WAITPROBE OK`): the fd-layer blocking and dispatch substrate.
 * `jobprobe` (`JOBPROBE OK`): the session and process-group identity model.
 * `ttyprobe` (`TTYPROBE OK`): the tty line discipline and termios ioctls.

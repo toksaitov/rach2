@@ -2,14 +2,16 @@
  * Verify permission enforcement: the nine-bit access check at every wired
  * site.
  *
- * A root parent stages the fixtures (a 0600 root file, a 0700 root directory,
- * a 0700 directory owned by uid 1000), then a child drops to 1000 and must be
- * denied everything the bits deny: writing a 0644 root file, reading a 0600
- * root file, creating or unlinking or renaming in the root directory, chdir
- * into a 0700 root directory, and exec of a file with no execute bit; while
- * its own directory grants creation and entry, and access(2) answers with the
- * real ids. The root parent then removes every fixture through its override,
- * which is itself the override's proof.
+ * A root parent stages the fixtures (a 0600 root file, a 0666 root file, a
+ * 0700 root directory, a 0700 directory owned by uid 1000), then a child
+ * drops to 1000 and must be denied everything the bits deny: writing a 0644
+ * root file, reading a 0600 root file, creating or unlinking or renaming in
+ * the root directory, chdir into a 0700 root directory, exec of a file with
+ * no execute bit, and setting explicit utimensat times on a root file it can
+ * merely write; while its own directory grants creation and entry, the
+ * other-write bit grants the utimensat touch to "now", and access(2) answers
+ * with the real ids. The root parent then removes every fixture through its
+ * override, which is itself the override's proof.
  *
  * Prints "PERMPROBE OK" and exits 0 on success; prints the failing step and
  * exits 1 otherwise. Freestanding; direct int 0x80.
@@ -36,19 +38,36 @@ typedef unsigned int u32;
 #define SYS_SETRESGID32 210
 #define SYS_SETRESUID32 208
 #define SYS_CHOWN32     212
+#define SYS_UTIMENSAT   320
 
 #define STDOUT   1
+#define EPERM    1
 #define EACCES   13
 #define EBADF    9
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define R_OK     4
 #define W_OK     2
+#define AT_FDCWD (-100)
+
+/* utimensat tv_nsec sentinels (each timespec is {sec, nsec}, [atime, mtime]). */
+#define UTIME_NOW  ((1 << 30) - 1)
+#define UTIME_OMIT ((1 << 30) - 2)
 
 static int syscall3(int num, int a, int b, int c)
 {
     int r;
     __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
+
+static int syscall4(int num, int a, int b, int c, int d)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d)
+                         : "memory");
     return r;
 }
 
@@ -133,6 +152,34 @@ static void child_main(void)
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
 
+    /* The utimensat split: write grants the touch to "now"; an explicit time,
+     * or any pair not both UTIME_NOW, is the owner's or root's alone; a
+     * both-OMIT request changes nothing and needs no right at all. */
+    {
+        static const int expl[4] = {5, 0, 5, 0};
+        static const int mixed[4] = {0, UTIME_NOW, 0, UTIME_OMIT};
+        static const int omit[4] = {0, UTIME_OMIT, 0, UTIME_OMIT};
+
+        if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (int)"/perm.rw", 0, 0) != 0) {
+            fail("touch through other-write");
+        }
+        if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (int)"/perm.rw", (int)expl, 0) != -EPERM) {
+            fail("explicit times as non-owner not EPERM");
+        }
+        if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (int)"/perm.rw", (int)mixed, 0) != -EPERM) {
+            fail("mixed NOW/OMIT as non-owner not EPERM");
+        }
+        if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (int)"/hello.txt", 0, 0) != -EACCES) {
+            fail("touch without write not EACCES");
+        }
+        if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (int)"/hello.txt", (int)omit, 0) != 0) {
+            fail("both-OMIT needs no right");
+        }
+        if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (int)"/perm.own/mine.txt", (int)expl, 0) != 0) {
+            fail("explicit times as owner");
+        }
+    }
+
     /* access(2) answers with the real ids. */
     if (syscall3(SYS_ACCESS, (int)"/hello.txt", R_OK, 0) != 0 ||
         syscall3(SYS_ACCESS, (int)"/hello.txt", W_OK, 0) != -EACCES) {
@@ -182,6 +229,14 @@ void _start(void)
         syscall3(SYS_CHOWN32, (int)"/perm.own", 1000, 1000) != 0) {
         fail("stage directories");
     }
+    /* The 0666 fixture: world-writable, so the child holds write but not
+     * ownership, the pair the utimensat split judges apart. chmod pins the
+     * mode against whatever umask the boot shell carries. */
+    fd = syscall3(SYS_CREAT, (int)"/perm.rw", 0666, 0);
+    if (fd < 0 || syscall3(SYS_CLOSE, fd, 0, 0) != 0 ||
+        syscall3(SYS_CHMOD, (int)"/perm.rw", 0666, 0) != 0) {
+        fail("stage perm.rw");
+    }
 
     pid = syscall3(SYS_FORK, 0, 0, 0);
     if (pid < 0) {
@@ -198,7 +253,8 @@ void _start(void)
     if (syscall3(SYS_UNLINK, (int)"/perm.own/mine.txt", 0, 0) != 0 ||
         syscall3(SYS_RMDIR, (int)"/perm.own", 0, 0) != 0 ||
         syscall3(SYS_RMDIR, (int)"/perm.priv", 0, 0) != 0 ||
-        syscall3(SYS_UNLINK, (int)"/perm600", 0, 0) != 0) {
+        syscall3(SYS_UNLINK, (int)"/perm600", 0, 0) != 0 ||
+        syscall3(SYS_UNLINK, (int)"/perm.rw", 0, 0) != 0) {
         fail("root override cleanup");
     }
 
