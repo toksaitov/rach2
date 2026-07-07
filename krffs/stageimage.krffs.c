@@ -513,22 +513,22 @@ static bool parse_mode(const char *s, uint16_t *out, uint32_t *uid, uint32_t *gi
 
     if (*end == ':') {
         const char *start;
-        unsigned long u;
-        unsigned long g;
+        unsigned long long u;
+        unsigned long long g;
 
         start =
             end + 1;
         u =
-            strtoul(start, &end, 10);
+            strtoull(start, &end, 10);
         if (end == start || *end != ':') {
             return false;
         }
         start =
             end + 1;
         g =
-            strtoul(start, &end, 10);
+            strtoull(start, &end, 10);
         if (end == start || *end != '\0' ||
-            u > 0xFFFFFFFFul || g > 0xFFFFFFFFul) {
+            u > 0xFFFFFFFFull || g > 0xFFFFFFFFull) {
             return false;
         }
         *uid =
