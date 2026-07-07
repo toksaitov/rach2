@@ -35,7 +35,10 @@ and committed as one scoped change.
   ids under the umask; `chmod`/`chown` and the fd forms `fchmod`/`fchown` follow
   the owner-or-root and POSIX chown-split rules through single helpers; the pty
   slave (`/dev/pts/N`) carries its own ownership, the state a login server moves
-  to the authenticated user. The host image tools gained an optional
+  to the authenticated user. Kill permission landed beside it: root, or the
+  sender's real or effective uid against the target's real uid, applied by
+  kill, the group broadcast, tkill, and tgkill, the signo 0 probe included.
+  The host image tools gained an optional
   `MODE:UID:GID` owner column, with the root node forced to `0:0` whoever built
   the image, and `fsck.krffs` prints owners. Proven by `ownprobe`.
 
@@ -103,6 +106,11 @@ simplifications; collected here:
   laxity, not escalation (a permissive leaf under a non-searchable ancestor is
   still reachable), and closing it needs a resolver that checks each component,
   a larger change than the model needs to teach.
+
+* The kill-rule refinements. POSIX also matches the sender against the target's
+  saved uid and exempts SIGCONT within a session; the shipped rule is the
+  sender's real or effective uid against the target's real uid, or root.
+  Strictly tighter, and enough for the job control the image ships.
 
 * A getty and login console. The console stays the root rescue path
   (`rach2.rescue`); converting it to a real login is a recorded exercise.

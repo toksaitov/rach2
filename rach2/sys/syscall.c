@@ -5454,7 +5454,9 @@ int signal_pending(void)
  * The signal-permission rule (kill(2)): root may signal anything; anyone else
  * only a process whose real uid matches the sender's real or effective uid.
  * Applied per target, including the signo 0 existence probe, so an identity
- * cannot scan or stop processes it does not own.
+ * cannot scan or stop processes it does not own. POSIX would also match the
+ * target's saved uid and exempt SIGCONT within a session; both are dropped, a
+ * strictly tighter rule that covers the job control the image ships.
  */
 static int cred_may_signal(const process_t *target)
 {
