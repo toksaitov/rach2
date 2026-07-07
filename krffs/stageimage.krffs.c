@@ -368,7 +368,7 @@ static bool is_synthetic_path(const char *path)
  *
  * Unlike the implicit 0755 directories that `resolve_dir` makes for a file's
  * parents, this sets an explicit mode and owner, and updates both if the
- * directory already exists (so a `dir 0700:1000:1000 /home/student` line wins
+ * directory already exists (so a `dir 0700:1000:1000 /home/test` line wins
  * whether it is declared before or after something is placed inside). Returns
  * false on any failure.
  */
