@@ -401,6 +401,61 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
     return (int)copy_len;
 }
 
+/* True if any connection, listener included, occupies this local port. */
+static int tcp_local_port_in_use(uint16_t port)
+{
+    int i;
+
+    for (i = 0; i < MAX_TCP_CONNS; i++) {
+        if (tcp_table[i].in_use && tcp_table[i].local_port == port) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Answer a segment that matches no connection with the RFC 793 reset.
+ *
+ * Without this, a SYN to a closed port simply vanishes and the peer's connect
+ * hangs until its retransmissions give up; over loopback there is no other
+ * host to say no. If the offending segment carried an ACK, the reset claims
+ * that acknowledged sequence; otherwise it acknowledges everything the
+ * segment occupied (SYN and FIN each count one) so the peer accepts it. A
+ * reset is never answered with a reset.
+ */
+static void tcp_send_rst_unmatched(uint32_t remote_ip, uint16_t local_port,
+                                   uint16_t remote_port, uint8_t seg_flags,
+                                   uint32_t seg_seq, uint32_t seg_ack,
+                                   uint32_t seg_occupied)
+{
+    uint8_t  flags;
+    uint32_t seq, ack;
+
+    if (seg_flags & TCP_ACK) {
+        flags = TCP_RST;
+        seq   = seg_ack;
+        ack   = 0;
+    } else {
+        flags = TCP_RST | TCP_ACK;
+        seq   = 0;
+        ack   = seg_seq + seg_occupied;
+    }
+
+    write16be(tcp_tx_buf + 0,  local_port);
+    write16be(tcp_tx_buf + 2,  remote_port);
+    write32be(tcp_tx_buf + 4,  seq);
+    write32be(tcp_tx_buf + 8,  ack);
+    tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
+    tcp_tx_buf[13] = flags;
+    write16be(tcp_tx_buf + 14, 0);
+    write16be(tcp_tx_buf + 16, 0);
+    write16be(tcp_tx_buf + 18, 0);
+    write16be(tcp_tx_buf + 16,
+              tcp_checksum(NET_IP_ADDR, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
+    ip_tx(remote_ip, IP_PROTO_TCP, tcp_tx_buf, TCP_HDR_SIZE);
+}
+
 /* Find the TCB for an incoming segment: an exact tuple match in a non-LISTEN
  * state, else the LISTEN TCB for the port. */
 static struct tcb *tcp_find(uint16_t local_port,
@@ -608,6 +663,7 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 {
     struct tcb *tcb;
     uint32_t flags;
+    uint16_t eph;
 
     /* Allocate from the shared pool and send the SYN atomically. */
     flags = net_lock();
@@ -618,9 +674,18 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
         return -1;
     }
 
+    /* Skip local ports already spoken for, listeners included: over loopback
+     * an ephemeral that collides with the listener being dialed would give the
+     * looped SYN src == dst port, match the caller's own TCB, and hang the
+     * handshake. The fresh TCB holds port 0, so it never matches a candidate,
+     * and the pool bounds the loop at MAX_TCP_CONNS + 1 increments. */
+    do {
+        eph = next_ephemeral++;
+        if (next_ephemeral < 49152) next_ephemeral = 49152;
+    } while (tcp_local_port_in_use(eph));
+
     tcb->local_ip    = NET_IP_ADDR;
-    tcb->local_port  = next_ephemeral++;
-    if (next_ephemeral < 49152) next_ephemeral = 49152;
+    tcb->local_port  = eph;
     tcb->remote_ip   = dst_ip;
     tcb->remote_port = dst_port;
     tcb->iss         = tcp_isn(tcb->local_port, dst_port);
@@ -784,6 +849,14 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
     tcb = tcp_find(dst_port, src_ip, src_port);
     if (!tcb) {
+        if (!(flags & TCP_RST)) {
+            uint32_t occupied = (uint32_t)(len - hdr_len);
+
+            if (flags & TCP_SYN) occupied++;
+            if (flags & TCP_FIN) occupied++;
+            tcp_send_rst_unmatched(src_ip, dst_port, src_port,
+                                   flags, seq, ack_num, occupied);
+        }
         return;
     }
 

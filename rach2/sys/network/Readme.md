@@ -9,7 +9,7 @@ A from-scratch TCP/IP stack for the Rach2 kernel, targeting QEMU's RTL8139 NIC o
 | `driver/rtl8139.*` | PCI NIC driver: RX ring, four TX descriptors, IRQ-driven receive            |
 | `ethernet/`        | Frame parse and build; dispatch by EtherType to ARP or IP                   |
 | `arp/`             | IP-to-MAC resolution with an 8-entry cache                                  |
-| `ip/ip.*`          | IPv4 header build/parse, checksum, routing, fragment drop                   |
+| `ip/ip.*`          | IPv4 header build/parse, checksum, routing, fragment drop, loopback ring    |
 | `ip/icmp.*`        | Echo (ping): replies to requests, sends our own with a timeout              |
 | `udp/`             | Datagrams, a port-to-socket table, length validation                        |
 | `tcp/`             | RFC 793 state machine with RFC 6298 RTT/RTO and RFC 5681 congestion control |
@@ -19,6 +19,10 @@ A from-scratch TCP/IP stack for the Rach2 kernel, targeting QEMU's RTL8139 NIC o
 ## Configuration
 
 The stack is configured for QEMU SLIRP in `net.h`: guest `10.0.2.15/24`, gateway `10.0.2.2`. The MAC address is read from the NIC at init.
+
+## Loopback
+
+The stack knows exactly one local address, and `127/8` is an alias for it: `connect`, `sendto`, and the `ping` sub-call canonicalize a `127/8` destination to `10.0.2.15` at the socket boundary, before any connection state exists, so no lower layer ever carries a second local address and `getsockname`/`getpeername` report the canonical one. A datagram addressed to ourselves then never touches ARP or the wire: `ip_tx` copies it onto a small loopback ring, and the 100 Hz timer delivers the queued datagrams to `ip_rx` (`ip_loop_drain`), under the same interrupts-off discipline as NIC delivery; delivering inline would reenter TCP under the sender's own call frame. A full ring drops the datagram, exactly as a full NIC ring would. There is no loopback interface proper (no routes, no `lo` device): the alias is the whole feature, and `loopprobe` proves it end to end.
 
 ## Socket interface
 
@@ -36,7 +40,7 @@ The shared TX assembly buffers, the TCB and socket pools, and the ARP cache are 
 
 Userspace programs exercise the stack:
 
-* The freestanding probes `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged into `test.krffs`. `make test` boots it headless and runs them, or boot it by hand and `exec` each from the kernel debug shell.
+* The freestanding probes `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged into `test.krffs`. `make test` boots it headless and runs them, or boot it by hand and `exec` each from the kernel debug shell. `loopprobe` (in the `make test` pass) needs no host at all: it exercises the UDP and TCP paths against the machine itself over `127.0.0.1`.
 * The hand-written utilities `ping`, `nc`, and `httpd` are staged into `os-simple.krffs`. Run them from the ISH shell. (os-real carries busybox, whose own `ping`/`nc` applets exercise the same stack.)
 
 The UDP and TCP tests expect a host echo server at `10.0.2.2:7777`. Boot the image that carries the program you want with a NIC, and (for an inbound server like `httpd`) a host forward. The probes need `test.krffs`, the utilities `os-simple.krffs`:

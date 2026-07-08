@@ -6391,6 +6391,20 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
  * callers (utils/ping.c, tests/pingtest.c) use the same value. */
 #define SC_PING     0x1000
 
+/**
+ * Canonicalize a destination address at the socket boundary.
+ *
+ * The stack below the socket layer knows exactly one local address
+ * (`NET_IP_ADDR`): every TCB stamps it, checksums verify against it, and
+ * `getsockname` reports it. 127/8 is therefore an alias for that one address,
+ * rewritten here before any connection state exists, so no lower layer ever
+ * sees a second local address and `getpeername` stays truthful.
+ */
+static uint32_t canonical_dst_ip(uint32_t ip)
+{
+    return (ip & 0xFF000000UL) == 0x7F000000UL ? NET_IP_ADDR : ip;
+}
+
 /* recv flags: only MSG_DONTWAIT is honored. */
 #define MSG_DONTWAIT 0x40
 
@@ -6593,7 +6607,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     }
 
     dst_port = SC_BE16(sa + 2);
-    dst_ip   = SC_BE32(sa + 4);
+    dst_ip   = canonical_dst_ip(SC_BE32(sa + 4));
 
     /* udp_tx reads the payload itself; __force strips __user at the boundary. */
     udp_tx(entry->sock->local_port, dst_ip, dst_port,
@@ -6667,7 +6681,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
 
 static int32_t do_ping(uint32_t dst_ip)
 {
-    return (int32_t)icmp_ping(dst_ip);
+    return (int32_t)icmp_ping(canonical_dst_ip(dst_ip));
 }
 
 /* Wait predicate: a stream connect has finished its handshake one way or the
@@ -6723,7 +6737,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     }
 
     dst_port = SC_BE16(sa + 2);
-    dst_ip   = SC_BE32(sa + 4);
+    dst_ip   = canonical_dst_ip(SC_BE32(sa + 4));
 
     if (tcp_connect(entry->sock, dst_ip, dst_port) < 0) {
         return -ECONNREFUSED;

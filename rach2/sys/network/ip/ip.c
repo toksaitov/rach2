@@ -127,14 +127,32 @@ static uint16_t ip_id_counter = 0;
 /* TX assembly buffer at file scope. */
 static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
 
+/* The loopback ring: datagrams addressed to ourselves, copied whole and
+ * delivered by the timer tick. head is the next slot to fill, tail the next to
+ * deliver; both only grow, so head - tail is the queue depth and the indices
+ * wrap through the modulo. A full ring drops the datagram, exactly as a full
+ * NIC ring would. */
+#define LOOP_RING_SLOTS 8
+static uint8_t  loop_ring[LOOP_RING_SLOTS][IP_HDR_SIZE + 1500];
+static uint16_t loop_ring_len[LOOP_RING_SLOTS];
+static uint32_t loop_head, loop_tail;
+
 /**
  * Build an IPv4 datagram around `payload` and hand it to the link layer.
  *
- * Routes on-subnet destinations directly and everything else through the
- * gateway, then resolves the next hop's MAC by ARP. On an ARP miss it sends a
- * request and drops this packet; the caller retries once the cache is warm.
- * The header is emitted with DF set and no fragmentation, so payloads over the
- * 1500-byte MTU are dropped rather than split.
+ * A datagram addressed to ourselves never touches ARP or the wire: it is
+ * copied onto the loopback ring for the timer tick to deliver (the socket
+ * layer canonicalizes 127/8 to our one address, so the self test is exact).
+ * Delivery is deferred because the stack's shared transmit buffers and
+ * protocol state are single-threaded by the interrupt discipline (net.h);
+ * handing the datagram straight back to ip_rx here would reenter TCP under
+ * the sender's own call frame.
+ *
+ * Everything else routes on-subnet destinations directly and through the
+ * gateway otherwise, then resolves the next hop's MAC by ARP. On an ARP miss
+ * it sends a request and drops this packet; the caller retries once the cache
+ * is warm. The header is emitted with DF set and no fragmentation, so payloads
+ * over the 1500-byte MTU are dropped rather than split.
  */
 void ip_tx(uint32_t dst_ip, uint8_t proto,
            const uint8_t *payload, uint16_t plen)
@@ -150,18 +168,6 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
 
     total_len = (uint16_t)(IP_HDR_SIZE + plen);
 
-    /* On-subnet destinations resolve directly; otherwise via the gateway. */
-    if ((dst_ip & NET_IP_MASK) == (NET_IP_ADDR & NET_IP_MASK)) {
-        route_ip = dst_ip;
-    } else {
-        route_ip = NET_IP_GATEWAY;
-    }
-
-    if (!arp_lookup(route_ip, dst_mac)) {
-        arp_request(route_ip);
-        return;
-    }
-
     ip_tx_buf[0] = 0x45;                         /* version 4, IHL 5 */
     ip_tx_buf[1] = 0x00;                         /* DSCP/ECN */
     write16be(ip_tx_buf + 2,  total_len);
@@ -176,5 +182,54 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
 
     k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
 
+    if (dst_ip == NET_IP_ADDR) {
+        uint32_t slot;
+
+        if (loop_head - loop_tail == LOOP_RING_SLOTS) {
+            serial_printf("IP: loopback ring full, dropped\n");
+            return;
+        }
+        slot = loop_head % LOOP_RING_SLOTS;
+        k_memcpy(loop_ring[slot], ip_tx_buf, total_len);
+        loop_ring_len[slot] = total_len;
+        loop_head++;
+        return;
+    }
+
+    /* On-subnet destinations resolve directly; otherwise via the gateway. */
+    if ((dst_ip & NET_IP_MASK) == (NET_IP_ADDR & NET_IP_MASK)) {
+        route_ip = dst_ip;
+    } else {
+        route_ip = NET_IP_GATEWAY;
+    }
+
+    if (!arp_lookup(route_ip, dst_mac)) {
+        arp_request(route_ip);
+        return;
+    }
+
     ethernet_tx(dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len);
+}
+
+/**
+ * Deliver queued loopback datagrams, called from the 100 Hz timer IRQ.
+ *
+ * Runs with interrupts off, after any syscall-context sender has left its
+ * net_lock critical section, so every delivery sees quiescent stack state:
+ * the same discipline under which the NIC hands frames up. A delivery may
+ * itself transmit (an ACK, an echo reply) and enqueue onto this ring; the
+ * tail advances only after ip_rx returns, so such an enqueue can never
+ * overwrite the datagram being read, and the budget bounds one tick's work
+ * so a reply chain cannot starve the timer.
+ */
+void ip_loop_drain(void)
+{
+    unsigned budget = LOOP_RING_SLOTS * 4;
+
+    while (loop_tail != loop_head && budget--) {
+        uint32_t slot = loop_tail % LOOP_RING_SLOTS;
+
+        ip_rx(loop_ring[slot], loop_ring_len[slot]);
+        loop_tail++;
+    }
 }

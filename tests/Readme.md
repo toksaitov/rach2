@@ -51,6 +51,7 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `rngprobe` (`RNGPROBE OK (trusted)` or `RNGPROBE OK (fail-closed)`): trusted entropy and the fail-closed RNG policy.
 * `timeprobe` (`TIMEPROBE OK`): time, sleep-with-yield, and the entropy path.
 * `miscprobe` (`MISCPROBE OK`): the miscellaneous syscalls busybox needs.
+* `loopprobe` (`LOOPPROBE OK`): loopback: a UDP echo and a TCP connect/accept round trip against the machine itself over `127.0.0.1`, with the peer reading back as the canonical address.
 
 The milestone-9 through -12 audits added focused regression probes that boot the same way (they do not all follow the `*probe` name):
 

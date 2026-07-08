@@ -34,6 +34,7 @@
 #include "sys/audio/hda.h"
 #include "sys/network/net.h"
 #include "sys/network/ip/icmp.h"
+#include "sys/network/ip/ip.h"
 #include "sys/network/tcp/tcp.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
@@ -111,8 +112,9 @@ static void exec_program(int argc, char *argv[]);
  *
  * Bumps the global tick, then runs the periodic kernel work that the timer
  * drives: waking expired nanosleep sleepers, the HDA audio tick (needed when
- * legacy IRQs are not delivered on MSI-only setups), the TCP timers, and the
- * interrupt-less console serial drain. Finally reschedules, but only when the
+ * legacy IRQs are not delivered on MSI-only setups), the TCP timers, the
+ * loopback delivery, and the interrupt-less console serial drain. Finally
+ * reschedules, but only when the
  * current process is not inside kernel syscall code: timer IRQs stay enabled
  * during syscalls so HDA streaming keeps running, yet preempting a process mid
  * syscall is unsafe. Kernel threads (no current_proc, or one not in_syscall)
@@ -130,6 +132,7 @@ static void timer_handler(isr_params_t *params)
 
     hda_tick();
     tcp_tick();
+    ip_loop_drain();
     tty_console_poll();
 
     if (!current_proc || !current_proc->in_syscall) {
