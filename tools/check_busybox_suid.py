@@ -18,6 +18,10 @@ unless su is granted and every other such applet is present and dropped. The
 os-real image targets depend on it, so an incomplete confinement fails the
 build rather than shipping.
 
+The check also fails if the staged conf would be unusable by BusyBox at all
+(a mode/owner it refuses, or a mode string it cannot parse), since an ignored
+conf confines nobody.
+
 Usage: check_busybox_suid.py <busybox-src-dir> <rach2.config> <manifest>
 """
 import re
@@ -74,19 +78,49 @@ def applet_suid_classes(src_dir, on, desktop):
             if n.upper().replace("-", "_") in on}
 
 
-def conf_suid_section(manifest_path):
-    """Parse the [SUID] lines of the /etc/busybox.conf entry staged by the
-    manifest into {applet: mode_string}. The manifest stores the file as one
-    `text 0644 /etc/busybox.conf <body>` line with \\n escapes."""
-    body = None
+def staged_busybox_conf(manifest_path):
+    """Find the manifest entry that stages /etc/busybox.conf and return its
+    (mode_field, body). The entry is `text <mode> /etc/busybox.conf <body>`,
+    where <mode> is octal permissions with an optional :uid:gid."""
     for line in open(manifest_path):
         s = line.strip()
-        if s.startswith("text ") and "/etc/busybox.conf " in s:
-            body = s.split("/etc/busybox.conf ", 1)[1]
-            break
-    if body is None:
-        sys.exit("check_busybox_suid: no /etc/busybox.conf entry in the manifest")
+        parts = s.split(None, 3)
+        if len(parts) == 4 and parts[0] in ("text", "file") \
+                and parts[2] == "/etc/busybox.conf":
+            return parts[1], parts[3]
+    sys.exit("check_busybox_suid: no /etc/busybox.conf entry in the manifest")
 
+
+def conf_usable(mode_field):
+    """BusyBox ignores /etc/busybox.conf unless it is a regular file owned by
+    root and not group- or other-writable (appletlib.c). A conf it ignores
+    drops nobody, so the whole confinement silently fails. Confirm the staged
+    mode and owner satisfy that, returning a list of problems."""
+    problems = []
+    bits, _, owner = mode_field.partition(":")
+    try:
+        m = int(bits, 8)
+    except ValueError:
+        return ["/etc/busybox.conf mode %r is not octal" % bits]
+    if m & 0o022:
+        problems.append("/etc/busybox.conf mode %s is group- or other-writable; "
+                        "busybox would ignore it" % bits)
+    if owner and owner != "0:0":
+        problems.append("/etc/busybox.conf owner %s is not root; busybox would "
+                        "ignore it" % owner)
+    return problems
+
+
+def mode_syntax_ok(mode):
+    """A [SUID] value is exactly three characters busybox accepts: user and
+    group from {S,s,x,-}, other from {x,-}. A stray character is a parse error
+    that makes busybox reject the entire file, not just the line."""
+    return (len(mode) == 3 and mode[0] in "Ssx-"
+            and mode[1] in "Ssx-" and mode[2] in "x-")
+
+
+def conf_suid_section(body):
+    """Parse the [SUID] lines of the conf body into {applet: mode_string}."""
     entries = {}
     in_suid = False
     for raw in body.split("\\n"):
@@ -109,12 +143,20 @@ def main():
 
     on, desktop = enabled_applets(config_path)
     classes = applet_suid_classes(src_dir, on, desktop)
-    conf = conf_suid_section(manifest_path)
+    mode_field, body = staged_busybox_conf(manifest_path)
+    conf = conf_suid_section(body)
 
     # Every enabled REQUIRE or MAYBE applet is one a setuid busybox would run
     # with root unless the config drops it. su is the sanctioned exception.
     privileged = {n for n, c in classes.items() if c in ("REQUIRE", "MAYBE")}
-    problems = []
+
+    # A conf busybox refuses (bad mode/owner) or cannot parse (bad mode syntax)
+    # confines nobody, so check those before trusting the listed entries.
+    problems = conf_usable(mode_field)
+    for name, mode in sorted(conf.items()):
+        if not mode_syntax_ok(mode):
+            problems.append("%s mode %r is not a valid busybox SUID spec; the "
+                            "whole conf would be rejected" % (name, mode))
 
     if "su" not in conf:
         problems.append("su is not granted the setuid bit in /etc/busybox.conf")
