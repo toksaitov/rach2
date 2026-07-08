@@ -113,27 +113,50 @@ def conf_usable(mode_field):
 
 def mode_syntax_ok(mode):
     """A [SUID] value is exactly three characters busybox accepts: user and
-    group from {S,s,x,-}, other from {x,-}. A stray character is a parse error
-    that makes busybox reject the entire file, not just the line."""
+    group from {S,s,x,-}, other from {x,-}. This is deliberately tighter than
+    busybox, which also allows a trailing `USER.GROUP` and inline comments; the
+    staged conf uses the bare three-char form, and rejecting anything else fails
+    the build (safe) rather than passing a conf we did not mean to write."""
     return (len(mode) == 3 and mode[0] in "Ssx-"
             and mode[1] in "Ssx-" and mode[2] in "x-")
 
 
 def conf_suid_section(body):
-    """Parse the [SUID] lines of the conf body into {applet: mode_string}."""
+    """Parse the conf body into ({applet: mode_string}, problems).
+
+    Fail-closed: every non-blank, non-comment line must be a well-formed section
+    header or, inside `[SUID]`, a clean `applet = mode` entry. Any other line is
+    reported, because busybox treats a malformed header or keyword as a fatal
+    error and discards the WHOLE config, falling back to keeping root for its
+    BB_SUID_REQUIRE applets. Silently skipping such a line would let the guard
+    pass a conf busybox actually ignores."""
     entries = {}
-    in_suid = False
+    problems = []
+    section = None
     for raw in body.split("\\n"):
         t = raw.strip()
         if not t or t.startswith("#"):
             continue
         if t.startswith("["):
-            in_suid = (t.lower() == "[suid]")
+            if not (t.endswith("]") and len(t) > 2):
+                problems.append("malformed section header %r; busybox rejects "
+                                "the whole conf" % t)
+                section = None
+                continue
+            section = t[1:-1].strip().lower()
             continue
-        if in_suid and "=" in t:
-            key, val = t.split("=", 1)
-            entries[key.strip()] = val.strip()
-    return entries
+        if section is None:
+            problems.append("line %r is outside any section; busybox rejects "
+                            "the whole conf" % t)
+            continue
+        if section != "suid":
+            continue  # busybox skips unknown sections; so do we
+        if "=" not in t:
+            problems.append("line %r in [SUID] is not applet = mode" % t)
+            continue
+        key, val = t.split("=", 1)
+        entries[key.strip()] = val.strip()
+    return entries, problems
 
 
 def main():
@@ -144,15 +167,15 @@ def main():
     on, desktop = enabled_applets(config_path)
     classes = applet_suid_classes(src_dir, on, desktop)
     mode_field, body = staged_busybox_conf(manifest_path)
-    conf = conf_suid_section(body)
+    conf, parse_problems = conf_suid_section(body)
 
     # Every enabled REQUIRE or MAYBE applet is one a setuid busybox would run
     # with root unless the config drops it. su is the sanctioned exception.
     privileged = {n for n, c in classes.items() if c in ("REQUIRE", "MAYBE")}
 
-    # A conf busybox refuses (bad mode/owner) or cannot parse (bad mode syntax)
-    # confines nobody, so check those before trusting the listed entries.
-    problems = conf_usable(mode_field)
+    # A conf busybox refuses (bad mode/owner) or cannot parse (a malformed line
+    # or mode) confines nobody, so check those before trusting the entries.
+    problems = conf_usable(mode_field) + parse_problems
     for name, mode in sorted(conf.items()):
         if not mode_syntax_ok(mode):
             problems.append("%s mode %r is not a valid busybox SUID spec; the "
