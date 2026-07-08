@@ -87,7 +87,7 @@ musl consults these `AT_` entries (each is a `{type, value}` pair); the kernel p
 | `AT_PHDR/PHENT/PHNUM` (3/4/5) | program headers | `__init_tls` locates `PT_TLS` here                 |
 | `AT_ENTRY` (9)                | ELF entry       | informational                                      |
 | `AT_RANDOM` (25)              | ptr to 16 bytes | seeds the stack canary and malloc secret           |
-| `AT_SECURE` (23)              | 0               | not a setuid or secure exec                        |
+| `AT_SECURE` (23)              | 0 or 1          | 1 when the effective id differs from the real one  |
 | `AT_NULL` (0)                 | none            | terminates the vector                              |
 
 `AT_PHDR/PHENT/PHNUM/ENTRY` are recorded by the kernel's `elf_load`. `AT_RANDOM` points at 16 bytes from the kernel CSPRNG (`krandom`), seeding the stack canary and malloc secret; it is best-effort and always provided, since a canary only needs to be unpredictable. Crypto-grade randomness goes through `getrandom` and `/dev/urandom`, which draw from the same CSPRNG but fail closed (`-EIO`) until it is seeded from a trusted hardware source (`RDSEED`/`RDRAND`). See the krandom Readme.

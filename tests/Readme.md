@@ -52,6 +52,7 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `timeprobe` (`TIMEPROBE OK`): time, sleep-with-yield, and the entropy path.
 * `miscprobe` (`MISCPROBE OK`): the miscellaneous syscalls busybox needs.
 * `loopprobe` (`LOOPPROBE OK`): loopback: a UDP echo and a TCP connect/accept round trip against the machine itself over `127.0.0.1`, with the peer reading back as the canonical address.
+* `suidprobe` (`SUIDPROBE OK`): the setuid and setgid bits on exec, driving the staged `suidhelper` at four modes and owners: a 04755 root-owned helper runs a uid-1000 caller with effective and saved uid 0 (gids untouched) and AT_SECURE 1 and can shed and regain root through the saved id; a 04755 helper owned by uid 5 grants euid and suid 5, proving the bit grants the file owner's identity whoever that is; a 02755 helper owned by group 5 moves the effective and saved gid to 5 while the uids stay 1000; a 0755 helper leaves every id at 1000 with AT_SECURE 0; and a 04644 helper (setuid, no execute bit) is refused, so the bit without execute grants nothing. It also asserts stat reports the full 07777 mode.
 
 The milestone-9 through -12 audits added focused regression probes that boot the same way (they do not all follow the `*probe` name):
 
@@ -70,7 +71,7 @@ The disk probes need a real disk, so they are disk-only: boot disk-backed (`rach
 
 ## musl integration tests
 
-`musl/` holds programs linked against the ported musl libc (built by `musl/build.sh`, or `make musl-programs`, and staged into the test image under `/musl`, so `/musl/hello` and `/musl/mallocqsort`). They prove the kernel hosts a real C library end to end, each printing a success line that begins with its token (some append run detail in parentheses): `MALLOC QSORT OK` (`mallocqsort`: malloc, qsort, a 256 KB mmap allocation), `CATFILE OK`, `DEVTEST OK`, `OFDMUSL OK`, `PIPEMUSL OK`, `POLLMUSL OK`, `PTYMUSL OK`, `MTTY OK`, `SIGMUSL OK`, `RNGMUSL OK`, `TIMEMUSL OK`, `COWFORK OK`, `PERMMUSL OK`, `AUTHMUSL OK`, `BUDGETMUSL OK`, `SOCKFILLMUSL OK`, and `TCPSENDRECV OK`, plus `hello` and `ctrlcmusl` (which prints its result inline).
+`musl/` holds programs linked against the ported musl libc (built by `musl/build.sh`, or `make musl-programs`, and staged into the test image under `/musl`, so `/musl/hello` and `/musl/mallocqsort`). They prove the kernel hosts a real C library end to end, each printing a success line that begins with its token (some append run detail in parentheses): `MALLOC QSORT OK` (`mallocqsort`: malloc, qsort, a 256 KB mmap allocation), `CATFILE OK`, `DEVTEST OK`, `OFDMUSL OK`, `PIPEMUSL OK`, `POLLMUSL OK`, `PTYMUSL OK`, `MTTY OK`, `SIGMUSL OK`, `RNGMUSL OK`, `TIMEMUSL OK`, `COWFORK OK`, `PERMMUSL OK`, `AUTHMUSL OK`, `SUIDMUSL OK` (a setuid-root exec seen through libc: `getresuid`, `getauxval(AT_SECURE)`, and the saved-id dance), `BUDGETMUSL OK`, `SOCKFILLMUSL OK`, and `TCPSENDRECV OK`, plus `hello` and `ctrlcmusl` (which prints its result inline).
 
 ## Build
 

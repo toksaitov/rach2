@@ -41,9 +41,20 @@
  * is cleared only by the debug-shell `halt` or offline by `fsck.krffs`; a normal
  * boot therefore leaves it set across power-off, which fsck reads as a mount that
  * may not have flushed. `sync` flushes the cache but does not clear it. It sits
- * above the 0777 perms the kernel keeps and below the 0170000 type field
- * KRFFS_IS_DIR tests, so no masked mode comparison sees it. */
+ * above the nine permission bits and below the 0170000 type field KRFFS_IS_DIR
+ * tests. On the root node it is safe from every masked mode comparison: stat
+ * reports the root with a fixed mode, chmod never touches it, and the access
+ * check uses a fixed 0755 there. */
 #define KRFFS_MODE_DIRTY 0004000u
+
+/* The set-id and sticky bits on ordinary nodes, stored and reported through
+ * the 07777 mode width; exec applies the set-id bits. KRFFS_MODE_SUID shares
+ * the dirty flag's position by design: the dirty flag lives only on the root
+ * node, a directory nobody can exec whose mode the fixed-identity paths above
+ * never expose. The sticky bit is stored and reported, not enforced. */
+#define KRFFS_MODE_SUID   0004000u
+#define KRFFS_MODE_SGID   0002000u
+#define KRFFS_MODE_STICKY 0001000u
 #define KRFFS_ROOT_ID 0u        /* logical id of the root directory (host nodes zero parent_id) */
 #define KRFFS_PATH_MAX_DEPTH 64 /* max directory nesting krffs_node_path reconstructs */
 

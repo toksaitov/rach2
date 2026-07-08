@@ -15,11 +15,13 @@
  * @param page mapped backing store for the topmost stack page.
  * @param base_vaddr virtual address at which `page` is mapped in the new image.
  * @param random16 16 bytes published to the program through AT_RANDOM.
+ * @param secure published as AT_SECURE: nonzero when the new image's
+ *        effective id differs from its real id.
  * @return the initial ESP, or 0 if the arguments are rejected or do not fit.
  */
 uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, int argc,
                           char *const argv[], char *const envp[], const elf_image_t *img,
-                          const uint8_t random16[16])
+                          const uint8_t random16[16], int secure)
 {
     uint8_t *mem = (uint8_t *)page;
     uint32_t top = base_vaddr + page_size;
@@ -101,7 +103,7 @@ uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, i
     aux[naux].a_val = 100;
     naux++;
     aux[naux].a_type = AT_SECURE;
-    aux[naux].a_val = 0;
+    aux[naux].a_val = secure ? 1u : 0u;
     naux++;
     aux[naux].a_type = AT_RANDOM;
     aux[naux].a_val = random_v;

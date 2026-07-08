@@ -1184,8 +1184,8 @@ static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
 {
     node->uid = current_proc->euid;
     node->gid = current_proc->egid;
-    node->mode = (uint16_t) ((node->mode & ~0777u) |
-                             (mode & 0777u & ~current_proc->umask));
+    node->mode = (uint16_t) ((node->mode & ~07777u) |
+                             (mode & 07777u & ~current_proc->umask));
 }
 
 static int32_t do_open(const char *name, int flags, uint32_t mode)
@@ -2061,7 +2061,7 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
         kst->st_mode = S_IFDIR | 0755;
     } else {
         kst->st_mode = (KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
-                       (node->mode & 0777);
+                       (node->mode & 07777);
     }
     kst->st_nlink = 1; /* KRFFS has no hard links */
     kst->st_uid = node->uid;
@@ -2693,7 +2693,7 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
         return -EPERM;
     }
     if (node != krffs_fs->node) {
-        node->mode = (uint16_t) ((node->mode & ~0777u) | (mode & 0777u));
+        node->mode = (uint16_t) ((node->mode & ~07777u) | (mode & 07777u));
     }
     return 0;
 }
@@ -3412,7 +3412,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         }
     }
 
-    kst.st_mode = S_IFREG | (node->mode & 0777);
+    kst.st_mode = S_IFREG | (node->mode & 07777);
     kst.st_nlink = 1;                              /* Always 1 for KRFFS */
     kst.st_uid = (unsigned short)node->uid;
     kst.st_gid = (unsigned short)node->gid;
@@ -3670,6 +3670,10 @@ static int32_t sys_execve(isr_params_t *params)
     uint32_t argv_offset = 0;
     uint32_t envp_offset = 0;
     int owned_console = 0;
+    uint32_t setid_mode = 0;
+    uint32_t file_uid = 0;
+    uint32_t file_gid = 0;
+    int secure = 0;
 
     uint32_t entry_point;
     elf_image_t img;
@@ -3820,6 +3824,13 @@ static int32_t sys_execve(isr_params_t *params)
         if (rc != 0) {
             return rc; /* exec is the execute bit, for root too */
         }
+        /* Capture the set-id facts while the node is at hand; they apply only
+         * once the exec commits, so a rejected image changes nothing. The
+         * root node cannot reach here (a directory fails the execute check),
+         * so the dirty flag can never read as a set-id bit. */
+        setid_mode = (uint32_t) (prog->mode & (KRFFS_MODE_SUID | KRFFS_MODE_SGID));
+        file_uid   = prog->uid;
+        file_gid   = prog->gid;
     }
 
     if (current_proc->cr3 == 0) {
@@ -3842,6 +3853,26 @@ static int32_t sys_execve(isr_params_t *params)
     /* The exec is now committed (the image is valid). Drop close-on-exec
      * descriptors before the old address space goes away. */
     close_cloexec_fds();
+
+    /* The set-id bits, the way privilege is regained: the new image runs with
+     * the file owner's effective ids while the real ids still say who is
+     * asking. Then the POSIX exec rule for every exec, set-id or not: the
+     * saved ids take the new effective ids, which is what lets the image shed
+     * the acquired authority and take it back. AT_SECURE then reports whether
+     * the image runs with authority its invoker lacks, the effective id
+     * differing from the real one either way, so libc distrusts the
+     * caller-supplied environment; it is the only such signal, since the
+     * stack carries no AT_UID/AT_EUID for libc to compare. */
+    if (setid_mode & KRFFS_MODE_SUID) {
+        current_proc->euid = file_uid;
+    }
+    if (setid_mode & KRFFS_MODE_SGID) {
+        current_proc->egid = file_gid;
+    }
+    current_proc->suid = current_proc->euid;
+    current_proc->sgid = current_proc->egid;
+    secure = (current_proc->euid != current_proc->ruid) ||
+             (current_proc->egid != current_proc->rgid);
 
     /* Record the program's basename as comm for /proc/<pid>/stat and ps. */
     proc_set_comm(current_proc, name);
@@ -3913,7 +3944,8 @@ static int32_t sys_execve(isr_params_t *params)
     {
         uint32_t user_esp = build_user_stack((void *)stack_phys, USER_STACK_BASE,
                                              PAGE_SIZE, argc, _exec_argv_bufs,
-                                             _exec_envp_bufs, &img, random16);
+                                             _exec_envp_bufs, &img, random16,
+                                             secure);
 
         if (user_esp == 0) {
             exec_fail_destroyed();

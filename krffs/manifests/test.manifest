@@ -8,8 +8,24 @@
 
 exec-dir 0755 / build/tests
 
+# suidprobe's fixtures: the same helper binary staged at several modes and
+# owners. exec-dir above already placed a plain 0755 /suidhelper (the "plain"
+# control); these add the setuid-root copy suidprobe execs to gain root, a
+# setuid copy owned by a non-root uid (the bit grants that owner's identity), a
+# setgid copy owned by a non-root group, and a setuid-but-no-x copy the execute
+# check must still refuse. Explicit modes and owners override the exec-dir
+# default for these paths.
+file 04755:0:0 /suidhelper.suid build/tests/suidhelper
+file 04755:5:0 /suidhelper.u5   build/tests/suidhelper
+file 02755:0:5 /suidhelper.sgid build/tests/suidhelper
+file 04644:0:0 /suidhelper.nox  build/tests/suidhelper
+
 dir 0755 /musl
 exec-dir 0755 /musl build/tests/musl
+# suidmusl's setuid-root copy: the plain 0755 /musl/suidmusl above is the
+# parent that drops to 1000 and execs this to prove libc's view of a set-id
+# exec (getresuid, getauxval(AT_SECURE), the saved-id dance).
+file 04755:0:0 /musl/suidmusl.suid build/tests/musl/suidmusl
 
 # A minimal /etc: catfile reads motd and lists the directory, permmusl opens
 # motd, and authmusl resolves root through passwd to uid 0. The shadow line is a

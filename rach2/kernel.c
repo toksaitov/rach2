@@ -1163,7 +1163,7 @@ static void exec_program(int argc, char *argv[])
      * The layout is verified host-side (tests/host/uimage_hosttest.c). */
     krandom_bytes(random16, 16);
     user_esp = build_user_stack((void *)user_stack_phys, user_stack_vaddr, PAGE_SIZE,
-                                argc, argv, default_envp, &img, random16);
+                                argc, argv, default_envp, &img, random16, 0);
     if (user_esp == 0) {
         k_puts("exec: argv/env too large for the initial stack");
         return;

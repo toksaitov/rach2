@@ -35,7 +35,7 @@
 #define AT_GID    13
 #define AT_EGID   14
 #define AT_CLKTCK 17 /* Clock ticks per second (our PIT: 100)  (populated) */
-#define AT_SECURE 23 /* Not a setuid/secure exec (0)           (populated) */
+#define AT_SECURE 23 /* 1 when euid != ruid or egid != rgid    (populated) */
 #define AT_RANDOM 25 /* Address of 16 random bytes             (populated) */
 #define AT_EXECFN 31
 
