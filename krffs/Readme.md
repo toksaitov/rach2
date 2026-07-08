@@ -205,6 +205,6 @@ The `os-real-grub-disk` image carries its own kernel and GRUB, so it boots with 
 
     cd ../rach2 && ./run_from_disk.sh
 
-`run_from_disk.sh` forwards host port 2222 to the guest's SSH server by default (override with `NET_HOSTFWD`), so the SSH capstone reaches Dropbear over the disk boot: start `dropbearmulti dropbear -R -s -p 22` at the guest shell (the `-s` turns password auth off, leaving the pubkey demo accounts), then `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` (or `-i krffs/rach2_test_ed25519 test@localhost`) from the host.
+`run_from_disk.sh` forwards host port 2222 to the guest's SSH server by default (override with `NET_HOSTFWD`), so the SSH capstone reaches Dropbear over the disk boot: start `dropbearmulti dropbear -R -g -p 22` at the guest shell (the `-g` keeps root pubkey-only; test also takes its generated password), then `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` (or `-i krffs/rach2_test_ed25519 test@localhost`, or `test@localhost` with the password in `rach2_test_password`) from the host.
 
 The disk targets also back the integrity gate: `make test-disk`, `make persist-test`, `make crash-test`, and `make stress-test` build disk images from their own manifests and boot them headless to prove cache eviction, fsync durability, and the dirty-mount flag.

@@ -5,9 +5,11 @@ A static Dropbear 2022.83 SSH server linked against the ported musl (`vendor/mus
     ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 
 and lands in an interactive BusyBox `ash` shell over an SSH-driven pty. Start the
-server with `dropbearmulti dropbear -R -s -p 22` (the `-s` disables password
-auth, so the pubkey demo accounts are the only way in); log in as `root` with the
-key above, or as the unprivileged `test` account with `krffs/rach2_test_ed25519`.
+server with `dropbearmulti dropbear -R -g -p 22`: log in as `root` with the key
+above (the `-g` disables password auth for root, so the administrator takes no
+password over the network), or as the unprivileged `test` account with
+`krffs/rach2_test_ed25519` or its generated password (`krffs/rach2_test_password`),
+verified against the SHA-512 crypt hash staged in `/etc/shadow`.
 
 ## Build
 
@@ -36,7 +38,7 @@ There are no source patches; all customization is `localoptions.h`. If a patch e
 
 Boot the os-real image (`run.sh os-real`) and, from its busybox shell, start the server:
 
-    dropbearmulti dropbear -F -R -p 22
+    dropbearmulti dropbear -F -R -g -p 22
 
 * `-cpu max` (the default in `run*.sh`) is mandatory. Dropbear seeds its CSPRNG from the kernel's trusted entropy; the default QEMU i386 CPU exposes no RDRAND/RDSEED, so `getrandom`/`/dev/urandom` fail closed and key generation cannot run.
 * `-R` auto-generates the host key on first connection into `/etc/dropbear/` (staged as an empty dir by the os-real manifest).
@@ -46,7 +48,7 @@ The test harness boots qemu with `-cpu max -netdev user,hostfwd=tcp::2222-:22 -d
 
 ## Login provisioning
 
-`krffs/gen_demo_key.sh` generates two demo keypairs (`krffs/rach2_demo_ed25519` for root and `krffs/rach2_test_ed25519` for the unprivileged test account, git-ignored) when their public halves are absent, and the os-real manifest stages each into its account's `~/.ssh/authorized_keys` (0600, under a 0755 `/root` or 0700 `/home/test` and a 0700 `.ssh` so dropbear's strict permission check accepts it). `/etc/passwd` holds `root:x:0:0:root:/root:/bin/sh` and `test:x:1000:1000:test:/home/test:/bin/sh`; `/etc/shells` lists `/bin/sh` so dropbear's `getusershell()` shell check passes; `/bin/sh` is busybox (invoked as `sh` it runs `ash`). Start the server with `dropbearmulti dropbear -R -s -p 22`: the `-s` turns password auth off, so the pubkey demo accounts are the only way in. Now that the kernel enforces the permission bits, the two accounts are genuinely separated: the test account lands in a 0700 home root can still administer, and cannot touch root's files.
+`krffs/gen_demo_key.sh` generates two demo keypairs (`krffs/rach2_demo_ed25519` for root and `krffs/rach2_test_ed25519` for the unprivileged test account, git-ignored) when their public halves are absent, and the os-real manifest stages each into its account's `~/.ssh/authorized_keys` (0600, under a 0755 `/root` or 0700 `/home/test` and a 0700 `.ssh` so dropbear's strict permission check accepts it). `krffs/gen_demo_password.sh` mints each account's password beside them and stages the `$6$` hashes as `/etc/shadow` (0600 root); dropbear resolves the account through `getpwnam`, prefers the shadow entry whenever `getspnam` returns one (the staged passwd fields are `x` placeholders), and musl's `crypt` verifies it. `/etc/passwd` holds `root:x:0:0:root:/root:/bin/sh` and `test:x:1000:1000:test:/home/test:/bin/sh`; `/etc/shells` lists `/bin/sh` so dropbear's `getusershell()` shell check passes; `/bin/sh` is busybox (invoked as `sh` it runs `ash`). Start the server with `dropbearmulti dropbear -R -g -p 22`: password auth is on for the test account, `-g` keeps root pubkey-only, and blank passwords stay rejected (`-B` is never passed). Now that the kernel enforces the permission bits, the two accounts are genuinely separated: the test account lands in a 0700 home that root can still administer, and cannot touch root's files, `/etc/shadow` included.
 
 ## Kernel gaps this integration surfaced (and how they were closed)
 

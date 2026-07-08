@@ -74,3 +74,4 @@ mint root rach2_demo_password
 mint test rach2_test_password
 mv shadow.tmp shadow
 echo "gen_demo_password: wrote krffs/shadow"
+echo "gen_demo_password: ssh -p 2222 test@localhost takes krffs/rach2_test_password"

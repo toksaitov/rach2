@@ -90,15 +90,18 @@ make full                                   # build the os-real image (busybox +
 # Terminal 1: boot the os-real image with SSH port-forwarding (the run scripts
 # default to -cpu max, which Dropbear needs for trusted entropy to generate a host key):
 cd rach2 && NET_HOSTFWD=hostfwd=tcp::2222-:22 ./run.sh os-real
-#   then, at the guest shell:  dropbearmulti dropbear -R -s -p 22
-#   (-s turns password auth off, so the demo accounts are pubkey-only)
+#   then, at the guest shell:  dropbearmulti dropbear -R -g -p 22
+#   (-g keeps root pubkey-only; test also takes its generated password)
 
-# Terminal 2: from the repo root, log in with either auto-generated demo key.
+# Terminal 2: from the repo root, log in with either auto-generated demo key,
+# or as test with the password in krffs/rach2_test_password (verified against
+# the real SHA-512 crypt hashes staged in /etc/shadow, 0600 root).
 # root is the administrator; test is an unprivileged uid-1000 account whose home
 # the kernel's permission bits actually protect (try writing /etc/motd as test:
 # it is denied; as root it succeeds).
 ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
+ssh -p 2222 test@localhost                  # password: cat krffs/rach2_test_password
 ```
 
 From the shell prompt:
