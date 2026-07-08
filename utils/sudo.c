@@ -28,6 +28,10 @@
 
 #define SUDOERS "/etc/sudoers"
 
+/* Above the kernel's per-process descriptor cap (MAX_FDS is 16); closing up to
+ * here covers every descriptor the caller could have left open. */
+#define MAX_FD 64
+
 /* A fixed, minimal environment for the command: never the caller's, which a
  * setuid program cannot trust. */
 static char *const clean_env[] = {(char *)"PATH=/bin:/usr/bin", (char *)"HOME=/root", NULL};
@@ -70,6 +74,7 @@ static int permitted(unsigned long uid)
 int main(int argc, char **argv)
 {
     unsigned long ruid = (unsigned long)getuid();
+    int fd;
 
     if (argc < 2) {
         fprintf(stderr, "usage: sudo <command> [args...]\n");
@@ -81,8 +86,13 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Become root outright: the saved uid is 0 (the setuid exec set it), so
-     * this also fixes the real uid, and the command cannot swing back. */
+    /* Nothing the caller left open should reach the root command; close every
+     * descriptor above the standard three. */
+    for (fd = 3; fd < MAX_FD; fd++) {
+        close(fd);
+    }
+
+    /* Assume root fully; the saved uid is already 0, so the real uid moves too. */
     if (setresuid(0, 0, 0) != 0 || setresgid(0, 0, 0) != 0) {
         fprintf(stderr, "sudo: could not assume root\n");
         return 1;

@@ -66,7 +66,7 @@ MKDISK          = krffs/mkdisk.sh
         crash-test stress-test os-real-grub-disk \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
-        check-busybox check-dropbearmulti compile-commands check-sources \
+        check-busybox check-busybox-suid check-dropbearmulti compile-commands check-sources \
         verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
 
@@ -155,7 +155,7 @@ os-simple-image: krffs rach2 ish utils
 # is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when absent;
 # the check targets ensure the busybox/dropbear binaries are real.
-os-real-image: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
+os-real-image: krffs rach2 utils check-busybox check-busybox-suid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
@@ -164,7 +164,7 @@ os-real-image: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
 # partition is larger than the 32 MB resident page-cache cap on purpose, so it can
 # later prove an on-disk file system bigger than what fits in RAM at once.
-os-real-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
+os-real-disk: krffs rach2 utils check-busybox check-busybox-suid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
@@ -173,7 +173,7 @@ os-real-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 # kernel, plus a KRFFS partition with the os-real tree. It boots a real machine
 # (or QEMU with no -kernel/-initrd) BIOS -> MBR -> GRUB -> kernel -> KRFFS on the
 # disk. Built in a throwaway Docker container (needs Docker).
-os-real-grub-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
+os-real-grub-disk: krffs rach2 utils check-busybox check-busybox-suid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	sh tools/mkdisk_grub.sh
@@ -298,6 +298,16 @@ os-real-iso: os-real-image
 # builds first) run `test -s` on EVERY build and catch a missing OR zero-byte artifact.
 check-busybox: $(BUSYBOX_STAMP)
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: $(BUSYBOX_BIN) missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
+
+# The os-real image ships /bin/busybox setuid root, so /etc/busybox.conf must
+# confine that privilege to su and drop every other applet a non-root caller
+# could otherwise enter with root. This recomputes the privileged-applet set
+# from the config and source and fails if the staged conf leaves any unconfined,
+# so enabling an applet without confining it fails the build, not a boot.
+check-busybox-suid: check-busybox
+	@python3 tools/check_busybox_suid.py \
+	    vendor/busybox/busybox-1.36.1 vendor/busybox/rach2.config \
+	    krffs/manifests/os-real.manifest
 check-dropbearmulti: $(DROPBEAR_STAMP)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 

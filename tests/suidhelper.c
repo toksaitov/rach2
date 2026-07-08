@@ -166,13 +166,25 @@ void probe_main(u32 *sp)
     }
 
     if (streq(argv[1], "root")) {
-        /* Reached through the reference sudo: full root, every uid 0. */
+        /* Reached through the reference sudo: full root and its clean
+         * environment. Every uid and gid must read 0, and envp must be exactly
+         * sudo's fixed pair, proving it cleared the caller's environment. */
+        char **envp = (char **)(sp + 1 + argc + 1);
+
         if (ruid != 0)
             done(50);
         if (euid != 0)
             done(51);
         if (suid != 0)
             done(52);
+        if (rgid != 0 || egid != 0 || sgid != 0)
+            done(53);
+        if (!envp[0] || !streq(envp[0], "PATH=/bin:/usr/bin"))
+            done(54);
+        if (!envp[1] || !streq(envp[1], "HOME=/root"))
+            done(55);
+        if (envp[2] != (char *)0)
+            done(56);
         done(0);
     }
 

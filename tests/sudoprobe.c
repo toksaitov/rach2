@@ -4,9 +4,10 @@
  *
  * A root parent runs the staged setuid-root `/sudo` two ways. As uid 1000
  * (listed in `/etc/sudoers`), `sudo /suidhelper root` must reach the helper as
- * full root, every uid 0, which the helper checks and reports by exiting 0. As
- * uid 1001 (not listed), sudo must refuse before executing anything, so the
- * helper never runs and the child sees sudo's own nonzero exit.
+ * full root, every uid and gid 0 and the environment cleared to sudo's fixed
+ * pair, which the helper checks and reports by exiting 0. As uid 1001 (not
+ * listed), sudo must refuse before executing anything, so the helper never
+ * runs and the child sees sudo's own refusal exit of 1.
  *
  * This gates the coursework: a student's own sudo passes the same probe the
  * reference does. Prints "SUDOPROBE OK" and exits 0 on success. Freestanding;
@@ -101,10 +102,8 @@ void _start(void)
         fail("permitted uid did not reach root through sudo");
     }
 
-    /* A uid absent from sudoers is refused; sudo exits 1 without execing the
-     * helper, so a helper step code (which would be small and nonzero too)
-     * cannot be mistaken for this: sudo's refusal is exit 1 and the helper
-     * never runs. */
+    /* A uid absent from sudoers is refused with sudo's own exit of 1, before
+     * the helper is execed. */
     if (run_sudo(1001) != 1) {
         fail("unlisted uid was not refused");
     }
