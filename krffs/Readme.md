@@ -22,6 +22,7 @@ The code in the `krffs` directory HERE generates the file-system images Rach2 bo
 * `defrag.krffs`: defragment by moving free blocks to end
 * `fsviz.krffs`: interactive terminal visualizer (termbox2)
 * `edfs.krffs`: low-level node field editor for debugging/repair
+* `mkhash.krffs`: mint a SHA-512 crypt (`$6$`) password hash for `/etc/shadow`; the password comes on stdin, the `$6$salt` setting as the argument, and the crypt is the vendored musl implementation, so the host mints exactly what the guest's libc verifies
 
 Every tool that opens a backing file (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`, `fsviz.krffs`, `edfs.krffs`, `stageimage.krffs`) accepts `--offset N --size N` to operate on a region inside a larger file rather than the whole file. This is how the tools reach a KRFFS partition inside a disk image: the offset is the partition's byte offset (page-aligned), the size its byte length. A nonzero offset requires an explicit size; with no flags the file system spans the whole file, the RAM-disk case.
 
@@ -32,6 +33,7 @@ Every tool that opens a backing file (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`
 * `manifests/<image>.manifest`: The build recipe for each image (test, os-simple, os-real, disk-test, persist-test, stress-test): the dirs and files to stage and their host sources
 * `stageimage.krffs <manifest> <image> [--offset N --size N]`: Writes the whole tree (dirs and files) into a KRFFS image directly as v2 nodes
 * `gen_demo_key.sh`: Provisions the os-real SSH demo keys when they are absent: `rach2_demo_ed25519` for root and `rach2_test_ed25519` for the unprivileged test account
+* `gen_demo_password.sh`: Provisions the os-real account passwords when `shadow` is absent: a random password per account into the git-ignored `rach2_demo_password` (root, for `su`) and `rach2_test_password` (the SSH password login), hashed by `mkhash.krffs` into the git-ignored `shadow` the manifest stages as `/etc/shadow`
 * `create_file_system.krffs.sh [size_mb]`: Creates an empty KRFFS file system (helper script)
 
 The GRUB-bootable disk lives one level up, in `tools/`, because it leans on the kernel and a Docker container rather than on the KRFFS tools alone:
@@ -182,7 +184,7 @@ The top-level Makefile drives the build. Run from the repo root:
 
 Each target builds its inputs through the component sub-makes, then stages the image from its manifest. The staging is manifest-driven: `mkimage.sh` zeroes a file of the requested size, lays down a fresh KRFFS with `mkfs.krffs`, then runs `stageimage.krffs <manifest> <image>` to write the whole tree (directories and files) directly as v2 nodes. There is no FUSE mount, so it works the same on macOS and Linux.
 
-A manifest lives in `manifests/<image>.manifest` and lists the dirs and files to stage and their host sources. Each entry's mode field is octal permissions with an optional owner, `0755` or `0700:1000:1000`; without one the entry is root-owned (0:0), and `stageimage` also forces the root node itself to 0:0, whoever built the image. `os-real` also runs `gen_demo_key.sh` first to provision the SSH demo keys (root's and the test account's) when they do not exist.
+A manifest lives in `manifests/<image>.manifest` and lists the dirs and files to stage and their host sources. Each entry's mode field is octal permissions with an optional owner, `0755` or `0700:1000:1000`; without one the entry is root-owned (0:0), and `stageimage` also forces the root node itself to 0:0, whoever built the image. `os-real` also runs `gen_demo_key.sh` and `gen_demo_password.sh` first to provision the demo credentials (the SSH keys and the account passwords with their `/etc/shadow`) when they do not exist.
 
 Boot a module image with the run script (it resolves `build/images/<image>.krffs`):
 

@@ -1,7 +1,8 @@
 # KRFFS host tools: the FUSE mount plus the mkfs/defrag/fsck/fsviz/edfs/stageimage
-# utilities. These run on the HOST, so they use the host compiler (cc), not the
-# cross toolchain; only the shared header-dependency tracking (../mk/deps.mk)
-# applies, so editing a krffs header rebuilds exactly the objects that include it.
+# utilities and the mkhash password hasher. These run on the HOST, so they use
+# the host compiler (cc), not the cross toolchain; only the shared
+# header-dependency tracking (../mk/deps.mk) applies, so editing a krffs header
+# rebuilds exactly the objects that include it.
 include ../mk/deps.mk
 include ../mk/build.mk
 
@@ -24,11 +25,19 @@ CORE = $(addprefix $(BUILD)/, krffs_file_system.o krffs_node.o krffs_platform.o 
 FUSE_OBJS = $(CORE) $(addprefix $(BUILD)/, krffs_allocator.o krffs_fuse_operations.o \
                                            krffs.o)
 TOOL_OBJS = $(addprefix $(BUILD)/, mkfs.krffs.o defrag.krffs.o fsck.krffs.o \
-                                   fsviz.krffs.o edfs.krffs.o stageimage.krffs.o)
+                                   fsviz.krffs.o edfs.krffs.o stageimage.krffs.o \
+                                   mkhash.krffs.o)
 
-OBJECTS = $(FUSE_OBJS) $(TOOL_OBJS)
+OBJECTS = $(FUSE_OBJS) $(TOOL_OBJS) $(BUILD)/crypt_sha512.o
 TARGETS = $(addprefix $(BUILD)/, krffs mkfs.krffs defrag.krffs fsck.krffs \
-                                 fsviz.krffs edfs.krffs stageimage.krffs)
+                                 fsviz.krffs edfs.krffs stageimage.krffs \
+                                 mkhash.krffs)
+
+# mkhash's crypt is the vendored musl SHA-512 implementation, compiled from the
+# pinned tarball's tree into build/ beside the tool, so the host mints exactly
+# the hash the guest's libc verifies. The vendored source is used in place,
+# never modified.
+MUSL_CRYPT = $(TOP)/vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
 
 .PHONY : all
 all : $(TARGETS)
@@ -47,6 +56,15 @@ $(BUILD)/stageimage.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/stageima
 $(addprefix $(BUILD)/, mkfs.krffs defrag.krffs fsck.krffs fsviz.krffs edfs.krffs) : $(BUILD)/%.krffs : $(CORE) $(BUILD)/%.krffs.o
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# mkhash stands alone: its own main plus the vendored crypt, no KRFFS core.
+$(BUILD)/mkhash.krffs : $(BUILD)/mkhash.krffs.o $(BUILD)/crypt_sha512.o
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/crypt_sha512.o : $(MUSL_CRYPT)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile rules: FUSE objects get the FUSE cflags, tool mains do not. Each makes its
 # $(BUILD) output dir first.

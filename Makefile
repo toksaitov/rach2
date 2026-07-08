@@ -152,10 +152,12 @@ os-simple-image: krffs rach2 ish utils
 # dropbear SSH server and client, Doom, and an /etc + /root tree). 16 MB: enough for
 # the capstones and the shareware Doom WAD, and it still fits under the kernel's
 # 32 MB physical-RAM cap once the kernel and its frames are accounted for (the module
-# is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login key when
-# absent; the check targets ensure the busybox/dropbear binaries are real.
+# is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login keys and
+# gen_demo_password.sh the account passwords and /etc/shadow, each when absent;
+# the check targets ensure the busybox/dropbear binaries are real.
 os-real-image: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
 
 # The os-real disk: the same os-real tree, but on a real disk image instead of a
@@ -164,6 +166,7 @@ os-real-image: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 # later prove an on-disk file system bigger than what fits in RAM at once.
 os-real-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
 
 # A BIOS-bootable disk: GRUB in the MBR and a FAT boot partition holding the
@@ -172,6 +175,7 @@ os-real-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 # disk. Built in a throwaway Docker container (needs Docker).
 os-real-grub-disk: krffs rach2 utils check-busybox check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
 	sh tools/mkdisk_grub.sh
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless

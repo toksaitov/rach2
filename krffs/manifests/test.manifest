@@ -12,11 +12,14 @@ dir 0755 /musl
 exec-dir 0755 /musl build/tests/musl
 
 # A minimal /etc: catfile reads motd and lists the directory, permmusl opens
-# motd, and authmusl resolves root through passwd to uid 0.
+# motd, and authmusl resolves root through passwd to uid 0. The shadow line is a
+# fixed, committed test credential (the password is "rach2"), not a secret: the
+# probes need a known hash to verify against.
 dir 0755 /etc
 text 0644 /etc/motd Welcome to Rach2 (test image).\n
 text 0644 /etc/hostname rach2\n
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\n
+text 0600 /etc/shadow root:$6$rach2test$br2Wb86wTtgiPWLN2WQoPqu69kGMNLnIQj3eaZLhG6sNTm9sN6ny.2af9tuaB/2HTw86.N3ZZN585IBoPgi0w/:0:0:99999:7:::\n
 
 text 0644 /hello.txt hello, world\n
 text 0644 /resolv.conf nameserver 10.0.2.3\n
