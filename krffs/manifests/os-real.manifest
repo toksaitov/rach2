@@ -40,10 +40,13 @@ file 0600 /etc/shadow krffs/shadow
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
 # busybox reads this (root-owned, non-writable, as its check demands) to decide
 # which of its BB_SUID_REQUIRE applets keep the setuid-root bit. su gets it
-# (sxx: setuid, executable by all); passwd, login, and vlock are listed with no
-# set bit (--x), so busybox drops privilege for them, and an applet absent from
-# the list would keep root through the fallback. su is the only way up.
-text 0644 /etc/busybox.conf [SUID]\nsu = sxx\npasswd = --x\nlogin = --x\nvlock = --x\n
+# (sxx: setuid, executable by all); every other such applet enabled in
+# rach2.config (crontab, login, passwd, vlock, wall) is listed with no set bit
+# (--x) so busybox drops privilege for it. This list must name every enabled
+# BB_SUID_REQUIRE applet: one left off would keep root through busybox's
+# fallback path, so a busybox config change that adds one must add it here too.
+# su is the only way up.
+text 0644 /etc/busybox.conf [SUID]\nsu = sxx\ncrontab = --x\nlogin = --x\npasswd = --x\nvlock = --x\nwall = --x\n
 text 0644 /etc/shells /bin/sh\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
