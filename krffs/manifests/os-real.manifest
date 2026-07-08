@@ -11,7 +11,11 @@
 # /sbin/init forks and dropbear runs). dropbearmulti dispatches the server, the
 # client, and keygen on argv[1]: dropbearmulti {dropbear,dbclient,dropbearkey}.
 dir 0755 /bin
-file 0755 /bin/busybox build/vendor/busybox/busybox
+# /bin/busybox is the one setuid-root binary: standalone ash re-execs it for a
+# BB_SUID_REQUIRE applet (su), which needs the bit to gain root. /etc/busybox.conf
+# below confines that privilege to su alone and forces passwd/login/vlock to drop.
+# The /bin/sh copy stays 0755: the login shell dropbear execs never needs the bit.
+file 04755:0:0 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
@@ -29,11 +33,17 @@ file 0755 /sbin/init build/utils/sbin/init
 # passwd keeps world-readable x fields, the split shadow exists for.
 dir 0755 /etc
 dir 0700 /etc/dropbear
-text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root or test.\n
+text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root or test; su for root.\n
 text 0644 /etc/hostname rach2\n
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
 file 0600 /etc/shadow krffs/shadow
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
+# busybox reads this (root-owned, non-writable, as its check demands) to decide
+# which of its BB_SUID_REQUIRE applets keep the setuid-root bit. su gets it
+# (sxx: setuid, executable by all); passwd, login, and vlock are listed with no
+# set bit (--x), so busybox drops privilege for them, and an applet absent from
+# the list would keep root through the fallback. su is the only way up.
+text 0644 /etc/busybox.conf [SUID]\nsu = sxx\npasswd = --x\nlogin = --x\nvlock = --x\n
 text 0644 /etc/shells /bin/sh\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n

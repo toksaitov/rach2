@@ -13,8 +13,10 @@
  * `sgid`: a setgid exec whose owner group is 5: the effective and saved gid
  * become 5, all three uids stay 1000, and AT_SECURE is 1.
  * `plain`: an ordinary exec by the same caller. All ids stay 1000 and
- * AT_SECURE is 0. Any mismatch exits with the failing step number, so the
- * parent probe sees exactly what broke.
+ * AT_SECURE is 0.
+ * `root`: reached through the reference sudo, which made the caller fully
+ * root; every uid must read 0. Any mismatch exits with the failing step
+ * number, so the parent probe sees exactly what broke.
  *
  * Freestanding; direct int 0x80. Staged into the test image at several modes
  * and owners (04755:0, 04755:5, 02755::5, 0755, 04644) by suidprobe's fixtures.
@@ -160,6 +162,17 @@ void probe_main(u32 *sp)
             done(33); /* a setgid bit must not disturb the uids */
         if (secure != 1)
             done(34);
+        done(0);
+    }
+
+    if (streq(argv[1], "root")) {
+        /* Reached through the reference sudo: full root, every uid 0. */
+        if (ruid != 0)
+            done(50);
+        if (euid != 0)
+            done(51);
+        if (suid != 0)
+            done(52);
         done(0);
     }
 

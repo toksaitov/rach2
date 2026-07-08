@@ -141,7 +141,7 @@ musl-programs: $(LIBC_STAMP)
 
 # The test image: the freestanding syscall probes plus the musl integration
 # programs. `make test` boots it and asserts every probe's success token.
-test-image: krffs rach2 tests musl-programs
+test-image: krffs rach2 tests musl-programs utils
 	$(MKIMAGE) krffs/manifests/test.manifest $(TEST_IMAGE) 10
 
 # The os-simple image: /sbin/init (which forks the ish shell) and the hand-written utils.
