@@ -11,12 +11,16 @@
 # /sbin/init forks and dropbear runs). dropbearmulti dispatches the server, the
 # client, and keygen on argv[1]: dropbearmulti {dropbear,dbclient,dropbearkey}.
 dir 0755 /bin
-# /bin/busybox is the one setuid-root binary: standalone ash re-execs it for a
-# BB_SUID_REQUIRE applet (su), which needs the bit to gain root. /etc/busybox.conf
-# below confines that privilege to su alone and forces passwd/login/vlock to drop.
-# The /bin/sh copy stays 0755: the login shell dropbear execs never needs the bit.
-file 04755:0:0 /bin/busybox build/vendor/busybox/busybox
+# busybox stays unprivileged. A setuid busybox would run every one of its
+# BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a config file
+# confined it, and that config path tripped a busybox use-after-free the
+# kernel's strict munmap faults (dev-log/15-privilege has the story). Privilege
+# climbs through /bin/su alone: a small setuid-root program (utils/su.c) that
+# authenticates against /etc/shadow. busybox's own su applet is compiled out
+# (CONFIG_SU off) so a bare `su` resolves to /bin/su.
+file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
+file 04755:0:0 /bin/su build/utils/su
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
 
@@ -38,16 +42,6 @@ text 0644 /etc/hostname rach2\n
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
 file 0600 /etc/shadow krffs/shadow
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
-# busybox reads this (root-owned, non-writable, as its check demands) to decide
-# which applets keep the setuid-root bit. su gets it (sxx: setuid, executable by
-# all); every other applet a setuid busybox would run as root is listed with no
-# set bit (--x) so busybox drops privilege for it. That means every enabled
-# BB_SUID_REQUIRE applet (its fallback keeps root) and every enabled
-# BB_SUID_MAYBE applet (it has no drop path at all). The list must be complete:
-# one left off keeps root, so tools/check_busybox_suid.py recomputes the set
-# from the config and source and fails the os-real build if this drifts. su is
-# the only way up.
-text 0644 /etc/busybox.conf [SUID]\nsu = sxx\nbusybox = --x\ncrontab = --x\nfindfs = --x\nlogin = --x\nmount = --x\npasswd = --x\nping = --x\nping6 = --x\ntraceroute = --x\ntraceroute6 = --x\nvlock = --x\nwall = --x\n
 text 0644 /etc/shells /bin/sh\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n

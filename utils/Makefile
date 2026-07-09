@@ -49,7 +49,8 @@ UTILITIES = true  \
             ping  \
             nc    \
             httpd \
-            sudo
+            sudo  \
+            su
 
 # init is PID 1, staged at /sbin/init, not a user tool. It builds into a sbin/
 # subdir so the os-simple `exec-dir / build/utils` sweep (which stages only the

@@ -299,15 +299,12 @@ os-real-iso: os-real-image
 check-busybox: $(BUSYBOX_STAMP)
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: $(BUSYBOX_BIN) missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
 
-# The os-real image ships /bin/busybox setuid root, so /etc/busybox.conf must
-# confine that privilege to su and drop every other applet a non-root caller
-# could otherwise enter with root. This recomputes the privileged-applet set
-# from the config and source and fails if the staged conf leaves any unconfined,
-# so enabling an applet without confining it fails the build, not a boot.
-check-busybox-suid: check-busybox
-	@python3 tools/check_busybox_suid.py \
-	    vendor/busybox/busybox-1.36.1 vendor/busybox/rach2.config \
-	    krffs/manifests/os-real.manifest
+# Privilege in the os-real image climbs through /bin/su alone; busybox must stay
+# unprivileged (a setuid busybox would run its BB_SUID_REQUIRE/MAYBE applets as
+# root). This asserts the staged modes hold that invariant, so making busybox
+# setuid without a confining config fails the build, not a boot.
+check-busybox-suid:
+	@python3 tools/check_busybox_suid.py krffs/manifests/os-real.manifest
 check-dropbearmulti: $(DROPBEAR_STAMP)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 
