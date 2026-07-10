@@ -113,21 +113,26 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Give the target a safe environment, not the caller's: a hostile PATH or a
-     * shell-startup variable would otherwise run the caller's code as the
-     * target. */
-    setenv("PATH", "/bin:/usr/bin", 1);
-    setenv("HOME", pw->pw_dir, 1);
-    setenv("SHELL", pw->pw_shell, 1);
-    setenv("USER", pw->pw_name, 1);
-    setenv("LOGNAME", pw->pw_name, 1);
-    unsetenv("ENV");
-    unsetenv("IFS");
+    /* Build the target's environment from nothing rather than inherit and patch
+     * the caller's: the shell expands variables like PATH and PS1, so any one
+     * left from the caller could run the caller's code as the target. Only
+     * these five reach the target's shell. */
+    {
+        static char home[128], shell[128], usr[96], logname[96];
+        char *const env[] = {
+            (char *) "PATH=/bin:/usr/bin", home, shell, usr, logname, NULL
+        };
 
-    if (command) {
-        execl(pw->pw_shell, pw->pw_shell, "-c", command, (char *) 0);
-    } else {
-        execl(pw->pw_shell, pw->pw_shell, (char *) 0);
+        snprintf(home, sizeof(home), "HOME=%s", pw->pw_dir);
+        snprintf(shell, sizeof(shell), "SHELL=%s", pw->pw_shell);
+        snprintf(usr, sizeof(usr), "USER=%s", pw->pw_name);
+        snprintf(logname, sizeof(logname), "LOGNAME=%s", pw->pw_name);
+
+        if (command) {
+            execle(pw->pw_shell, pw->pw_shell, "-c", command, (char *) 0, env);
+        } else {
+            execle(pw->pw_shell, pw->pw_shell, (char *) 0, env);
+        }
     }
     fprintf(stderr, "su: cannot exec %s\n", pw->pw_shell);
     return 1;
