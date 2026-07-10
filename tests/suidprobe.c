@@ -35,6 +35,11 @@ typedef unsigned int u32;
 /* i386 struct stat64: the mode is a 32-bit field at offset 16. */
 #define ST_MODE 16
 
+/* Linux wait-status decode: a normal exit has the low 7 bits clear and the
+ * code in bits 8-15; a signal death carries the signal in the low 7 bits. A
+ * probe that read WEXITSTATUS without WIFEXITED would decode a SIGSEGV (11) as
+ * exit 0 and pass on a crash, exactly the failure it exists to catch. */
+#define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
 static int syscall1(int num, int a)
@@ -102,6 +107,9 @@ static int run_helper(const char *path, const char *arg)
     }
     if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid) {
         fail("waitpid");
+    }
+    if (!WIFEXITED(status)) {
+        fail("helper died by signal (the mechanism crashed)");
     }
     return WEXITSTATUS(status);
 }

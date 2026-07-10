@@ -12,3 +12,8 @@ rach2_test_ed25519.pub
 rach2_demo_password
 rach2_test_password
 shadow
+# gen_demo_password.sh transients: the lock dir and the pre-rename shadow, left
+# behind only if the script is killed mid-run, ignored so a kill cannot dirty
+# the tree.
+shadow.tmp
+.gen_demo_password.lock

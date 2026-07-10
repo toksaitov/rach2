@@ -26,6 +26,9 @@ typedef unsigned int u32;
 
 #define STDOUT 1
 
+/* Linux wait-status decode: WIFEXITED guards WEXITSTATUS so a signal-killed
+ * child (its signal in the low 7 bits) is not decoded as a clean exit 0. */
+#define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
 static int syscall1(int num, int a)
@@ -91,6 +94,9 @@ static int run_sudo(int uid)
     }
     if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid) {
         fail("waitpid");
+    }
+    if (!WIFEXITED(status)) {
+        fail("sudo or helper died by signal (a crash, not a clean refusal)");
     }
     return WEXITSTATUS(status);
 }
