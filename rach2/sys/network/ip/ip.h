@@ -17,8 +17,10 @@
 /* Fixed IPv4 header size (IHL = 5 words). */
 #define IP_HDR_SIZE     20
 
-/** Validate one received IPv4 datagram and dispatch it by protocol. */
-void ip_rx(const uint8_t *data, uint16_t len);
+/** Validate one received IPv4 datagram and dispatch it by protocol.
+ *  `from_loopback` is nonzero only for the loopback ring; a wire packet with a
+ *  martian source (our own address or 127/8) is dropped. */
+void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
 
 /** Build an IPv4 datagram around the payload and transmit it; dst_ip is host order. */
 void ip_tx(uint32_t dst_ip, uint8_t proto,

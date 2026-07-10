@@ -59,8 +59,15 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
  * reassembly), a bad header checksum, or a destination that is not our address.
  * Options are skipped using IHL; the payload handed to the upper layer starts
  * at the header end and runs to `total_len`.
+ *
+ * `from_loopback` is nonzero only for the ring `ip_loop_drain` feeds; a packet
+ * off the wire (`from_loopback == 0`) whose source is our own address or a
+ * `127/8` loopback address is a martian, a spoof no honest peer sends, and is
+ * dropped before any reply can be steered onto the loopback ring or emitted
+ * carrying a loopback source. A genuine loopback datagram carries our own
+ * source by design, so the check is gated on the delivery path, not the value.
  */
-void ip_rx(const uint8_t *data, uint16_t len)
+void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
 {
     uint8_t  ihl, proto;
     uint16_t total_len, hdr_len, frag;
@@ -104,6 +111,14 @@ void ip_rx(const uint8_t *data, uint16_t len)
     }
 
     src_ip = read32be(data + 12);
+
+    /* Reject a martian source off the wire: our own address, or 127/8, from a
+     * peer is a spoof (only a loopback delivery legitimately carries these). */
+    if (!from_loopback &&
+        (src_ip == NET_IP_ADDR || (src_ip & 0xFF000000u) == 0x7F000000u)) {
+        return;
+    }
+
     proto  = data[9];
 
     switch (proto) {
@@ -229,7 +244,7 @@ void ip_loop_drain(void)
     while (loop_tail != loop_head && budget--) {
         uint32_t slot = loop_tail % LOOP_RING_SLOTS;
 
-        ip_rx(loop_ring[slot], loop_ring_len[slot]);
+        ip_rx(loop_ring[slot], loop_ring_len[slot], 1);
         loop_tail++;
     }
 }

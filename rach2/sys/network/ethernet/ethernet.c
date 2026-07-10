@@ -39,7 +39,7 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
         arp_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
         break;
     case ETH_TYPE_IP:
-        ip_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
+        ip_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE), 0);
         break;
     default:
         break;
