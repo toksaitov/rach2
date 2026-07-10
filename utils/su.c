@@ -13,8 +13,10 @@
  * the target's password (root is exempt, as always), read from standard input;
  * su resolves the target through `getpwnam`, verifies the `/etc/shadow` hash
  * with `crypt`, drops to the target's group and then user (the order matters:
- * privilege to set the gid is gone once the uid drops), sets a minimal
- * environment, and execs the target's shell.
+ * privilege to set the gid is gone once the uid drops), builds the target's
+ * environment from nothing rather than inherit the caller's (the shell expands
+ * variables like `PATH` and `PS1`, so a carried-over one could run the caller's
+ * code as the target), and execs the target's shell.
  *
  * Deliberately left for the exercise: reading the password from the controlling
  * terminal with echo disabled (it is read from stdin here, so it echoes and can
@@ -113,10 +115,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Build the target's environment from nothing rather than inherit and patch
-     * the caller's: the shell expands variables like PATH and PS1, so any one
-     * left from the caller could run the caller's code as the target. Only
-     * these five reach the target's shell. */
+    /* Only these five reach the target's shell (see the header on why the
+     * caller's environment is discarded, not patched). */
     {
         static char home[128], shell[128], usr[96], logname[96];
         char *const env[] = {

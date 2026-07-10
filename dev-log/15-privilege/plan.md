@@ -1,6 +1,14 @@
 # Milestone 15: privilege regained: passwords, the setuid bit, and su
 
-Status: reviewed. The independent Codex review of the draft returned eight findings (four blockers); every one was verified against the tree and confirmed, none refuted, and this plan carries the fixes: the 127/8 canonicalization and the explicit loopback queue, the full inventory of kernel and FUSE mode-mask sites, the BusyBox suid confinement to `su` alone, the BusyBox internal-shadow correction, the named git-ignored secret files, and the negative authentication gates. No code yet.
+Status: built, with one phase changed under it. This is the plan as drafted and
+reviewed; the milestone record (`Readme.md`) is what shipped. Phase 5 in
+particular changed during the build: the setuid-BusyBox-confined-by-`/etc/busybox.conf`
+design described below tripped a BusyBox use-after-free the kernel's strict
+`munmap` faults, so privilege instead climbs through a small setuid-root `su`
+(`utils/su.c`) and BusyBox stays unprivileged. Read the record for the design
+that shipped; this plan is kept as the historical as-drafted plan.
+
+The independent Codex review of the draft returned eight findings (four blockers); every one was verified against the tree and confirmed, none refuted, and this plan carries the fixes: the 127/8 canonicalization and the explicit loopback queue, the full inventory of kernel and FUSE mode-mask sites, the BusyBox suid confinement to `su` alone, the BusyBox internal-shadow correction, the named git-ignored secret files, and the negative authentication gates.
 
 ## The goal
 
