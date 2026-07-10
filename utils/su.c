@@ -22,14 +22,18 @@
  * PAM/login.defs policy layer.
  */
 
-#define _GNU_SOURCE /* crypt, getspnam */
+#define _GNU_SOURCE /* crypt, getspnam, setgroups */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <grp.h>
 #include <pwd.h>
 #include <shadow.h>
 #include <crypt.h>
+
+/* Above the kernel's per-process descriptor cap (MAX_FDS is 16). */
+#define MAX_FD 64
 
 /* Read one line from stdin into `buf`, stripping the newline. Returns 0 on
  * success, -1 on end of input. */
@@ -64,14 +68,16 @@ int main(int argc, char **argv)
     struct passwd *pw;
     int i;
 
+    int fd;
+
+    /* A bare "-" and other options are accepted and ignored; implementing the
+     * login semantics is part of the exercise. */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
             command = argv[++i];
         } else if (argv[i][0] != '-') {
             user = argv[i];
         }
-        /* A bare "-" (login shell) and other options are accepted and ignored;
-         * implementing them is part of the exercise. */
     }
 
     pw = getpwnam(user);
@@ -80,7 +86,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Root may become anyone without proof; everyone else proves the target's
+    /* Root becomes anyone without proof; everyone else proves the target's
      * password, read from stdin. */
     if (getuid() != 0) {
         char password[256];
@@ -92,17 +98,31 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Drop to the target: the group before the user, since setting the gid
-     * needs a privilege that dropping the uid removes. */
-    if (setgid(pw->pw_gid) != 0 || setuid(pw->pw_uid) != 0) {
+    /* Nothing the caller left open should reach the target's shell. */
+    for (fd = 3; fd < MAX_FD; fd++) {
+        close(fd);
+    }
+
+    /* Shed the caller's supplementary groups, then take the target's group and
+     * user. The order is forced: each step needs a privilege the uid drop
+     * removes, and the image's accounts carry no supplementary groups, so
+     * clearing the list is the whole of it. */
+    if (setgroups(0, NULL) != 0 ||
+        setgid(pw->pw_gid) != 0 || setuid(pw->pw_uid) != 0) {
         fprintf(stderr, "su: cannot assume the target identity\n");
         return 1;
     }
 
+    /* Give the target a safe environment, not the caller's: a hostile PATH or a
+     * shell-startup variable would otherwise run the caller's code as the
+     * target. */
+    setenv("PATH", "/bin:/usr/bin", 1);
     setenv("HOME", pw->pw_dir, 1);
     setenv("SHELL", pw->pw_shell, 1);
     setenv("USER", pw->pw_name, 1);
     setenv("LOGNAME", pw->pw_name, 1);
+    unsetenv("ENV");
+    unsetenv("IFS");
 
     if (command) {
         execl(pw->pw_shell, pw->pw_shell, "-c", command, (char *) 0);

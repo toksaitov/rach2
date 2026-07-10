@@ -18,20 +18,20 @@ Usage: check_busybox_suid.py <manifest>
 import sys
 
 
-def staged_mode(manifest_path, path):
-    """The octal mode (an int) the manifest stages `path` with, or None if the
-    manifest does not stage it. The entry is `<file|text> <mode> <path> ...`,
-    where <mode> is octal permissions with an optional :uid:gid."""
+def staged(manifest_path, path):
+    """The (mode, owner) the manifest stages `path` with, or (None, None) if it
+    does not. The entry is `<file|text> <mode> <path> ...`, where <mode> is
+    octal permissions with an optional :uid:gid (owner "0:0" when omitted)."""
     for line in open(manifest_path):
         s = line.strip()
         parts = s.split(None, 3)
         if len(parts) >= 3 and parts[0] in ("file", "text") and parts[2] == path:
-            bits = parts[1].split(":", 1)[0]
+            bits, _, owner = parts[1].partition(":")
             try:
-                return int(bits, 8)
+                return int(bits, 8), (owner or "0:0")
             except ValueError:
-                return None
-    return None
+                return None, None
+    return None, None
 
 
 def main():
@@ -41,7 +41,7 @@ def main():
 
     problems = []
 
-    bb = staged_mode(manifest_path, "/bin/busybox")
+    bb, _ = staged(manifest_path, "/bin/busybox")
     if bb is None:
         problems.append("/bin/busybox is not staged by the manifest")
     elif bb & 0o6000:
@@ -50,12 +50,16 @@ def main():
                         "applets as root. Privilege must climb through /bin/su "
                         "only." % bb)
 
-    su = staged_mode(manifest_path, "/bin/su")
+    su, su_owner = staged(manifest_path, "/bin/su")
     if su is None:
         problems.append("/bin/su is not staged; nothing lets a user become root")
-    elif not (su & 0o4000):
-        problems.append("/bin/su is staged without the setuid bit (mode %o); it "
-                        "cannot grant root" % su)
+    else:
+        if not (su & 0o4000):
+            problems.append("/bin/su is staged without the setuid bit (mode %o); "
+                            "it cannot grant root" % su)
+        if su_owner != "0:0":
+            problems.append("/bin/su is owned %s, not root; a setuid bit there "
+                            "grants that owner, not root" % su_owner)
 
     if problems:
         sys.stderr.write("check_busybox_suid: FAIL\n")
