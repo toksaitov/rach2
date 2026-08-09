@@ -70,6 +70,14 @@ fi
 
 echo "libc: configuring (CROSS_COMPILE=i686-elf-, static, target i686)"
 cd "$SRC"
+# This is always the i686 cross build, so no caller's compiler choice may reach
+# it. Two channels carry one in. musl's configure keeps an inherited CC and
+# never tries the CROSS_COMPILE candidates (its trycc is a no-op once CC is
+# set), and a `make CC=... ` above us records the override in MAKEFLAGS, which
+# the musl make below would re-import even after CC itself is cleared. Clear
+# both; the CROSS_COMPILE prefix alone selects the compiler.
+unset CC
+unset MAKEFLAGS MFLAGS
 CROSS_COMPILE=i686-elf- ./configure --target=i686 --disable-shared --prefix="$PREFIX"
 
 echo "libc: building"
