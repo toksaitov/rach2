@@ -409,8 +409,8 @@ static int32_t sys_exit(isr_params_t *params)
     /* No other process is READY. The init that exited ran under the debug shell
      * (a real init would have panicked above), so return to it. */
     if (is_init) {
-        serial_printf("sys_exit: Init process %d exited, returning to kernel shell\n",
-                      exiting_pid);
+        serial_printf("sys_exit: init process %d exited with status %d, returning to kernel shell\n",
+                      exiting_pid, status);
         k_puts("");
         k_puts("Init process exited. Returning to kernel debug shell.");
 

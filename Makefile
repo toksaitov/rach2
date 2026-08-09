@@ -195,8 +195,12 @@ os-real-grub-disk: krffs rach2 utils check-busybox check-busybox-suid check-drop
 # (-cpu max) and runs every probe, failing if any does not exit 0. The few probes
 # with a special contract (fork-exit-code, stdin, faults, network) are run by hand
 # under tools/harness.py; see tools/runtests.py.
+# --timeout is one deadline for the whole run, not per probe, so it is stated here
+# rather than left at the default: the suite grows every milestone, and a default
+# sized for an older, shorter suite fails the tail as a hang on a slow host.
 test: test-image
-	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE)
+	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --timeout 300
 
 # `make test-disk`: the disk-backed page-cache integrity check. Builds a disk
 # image holding blockprobe, boots disk-only with KRFFS on the real ATA disk

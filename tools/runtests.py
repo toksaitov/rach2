@@ -47,11 +47,105 @@ PROBES = [
     "musl/suidmusl",
 ]
 
+# The marker every probe's window ends on. Both kernel paths that hand the debug
+# shell back carry their own outcome on this line: sys_exit its exit status,
+# terminate_current_process the signal that killed the process.
+#
+# Matched from the start of the line through the whole kernel diagnostic, not on
+# the trailing phrase alone. A probe writes to the same serial console the kernel
+# does, so a pattern that accepts the suffix anywhere lets a probe print
+# "exited with status 0, returning to kernel shell" itself and be credited before
+# it then crashes or hangs. Requiring the component prefix and the pid keeps the
+# verdict the kernel's to give.
+EXIT_RE = (r"^sys_exit: init process \d+ exited with status (-?\d+), "
+           r"returning to kernel shell")
+KILL_RE = (r"^terminate: init process \d+ killed by signal (\d+), "
+           r"returning to kernel shell")
+SHELL_RETURN = "(%s|%s)" % (EXIT_RE[1:], KILL_RE[1:])
+
+
+def score_window(window):
+    """Decide one probe's result from the serial bytes its marker bounds.
+
+    Scores the status the marker line itself carries, never a bare "Process
+    exited with status N": the kernel prints that for every process exit, a
+    forked child's included, so neither the first nor the last of them is
+    reliably the probe's own. A child that outlives its parent prints after it,
+    and a probe that reaps a clean child and then dies on a signal prints no
+    status of its own at all, which is how a crash used to score as a pass.
+
+    Returns a (detail, ok) pair.
+    """
+    killed = re.search(KILL_RE.encode(), window, re.M)
+    if killed:
+        return ("killed by signal %s" % killed.group(1).decode(), False)
+    own = re.search(EXIT_RE.encode(), window, re.M)
+    if not own:
+        return ("no exit reported", False)
+    status = int(own.group(1))
+    return ("status=%d" % status, status == 0)
+
+
+def selftest():
+    """Check score_window against the serial shapes that fooled the old rule.
+
+    Needs no QEMU, so the scoring rule is gated by `make verify-style` rather
+    than only by a boot. Each case is the window a probe's marker would bound.
+    """
+    cases = [
+        ("clean",
+         b"\nProcess exited with status 0\n"
+         b"sys_exit: init process 4 exited with status 0, "
+         b"returning to kernel shell\n",
+         ("status=0", True)),
+        ("clean child then signal death",
+         b"\nProcess exited with status 0\n"
+         b"terminate: init process 4 killed by signal 11, "
+         b"returning to kernel shell\n",
+         ("killed by signal 11", False)),
+        ("orphan exits after the parent",
+         b"\nProcess exited with status 3\n"
+         b"sys_exit: init process 4 exited with status 3, "
+         b"returning to kernel shell\n"
+         b"\nProcess exited with status 0\n",
+         ("status=3", False)),
+        ("no status at all",
+         b"some unrelated serial chatter\n",
+         ("no exit reported", False)),
+        ("nonzero probe status",
+         b"sys_exit: init process 4 exited with status 7, "
+         b"returning to kernel shell\n",
+         ("status=7", False)),
+        # A probe shares the serial console with the kernel, so the phrase alone
+        # must not be a verdict: this one prints it and then dies.
+        ("probe forges the marker text, then is killed",
+         b"probe: exited with status 0, returning to kernel shell\n"
+         b"terminate: init process 4 killed by signal 11, "
+         b"returning to kernel shell\n",
+         ("killed by signal 11", False)),
+        ("probe forges the marker text and nothing else happens",
+         b"probe: exited with status 0, returning to kernel shell\n",
+         ("no exit reported", False)),
+    ]
+    bad = 0
+    for name, window, want in cases:
+        got = score_window(window)
+        if got != want:
+            print("  FAIL: %s: expected %r, got %r" % (name, want, got))
+            bad += 1
+    if bad:
+        print("runtests: selftest: %d of %d cases failed" % (bad, len(cases)))
+        return 1
+    print("runtests: selftest: %d cases PASS" % len(cases))
+    return 0
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--kernel", required=True)
-    ap.add_argument("--initrd", required=True)
+    # Not required, because --selftest boots nothing; checked below instead.
+    ap.add_argument("--kernel")
+    ap.add_argument("--initrd")
+    ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--cpu", default="max")
     # The step window is generous because only a failing probe ever waits it
     # out: a passing probe returns on its serial match, so the green path costs
@@ -65,6 +159,12 @@ def main():
     ap.add_argument("--boottmo", type=float, default=60.0)
     ap.add_argument("--log", default=None)
     a = ap.parse_args()
+
+    if a.selftest:
+        return selftest()
+    if not a.kernel or not a.initrd:
+        sys.stderr.write("runtests: --kernel and --initrd are required\n")
+        return 2
 
     cmd = ["qemu-system-i386", "-cpu", a.cpu, "-kernel", a.kernel,
            "-initrd", a.initrd, "-serial", "stdio", "-display", "none",
@@ -122,24 +222,20 @@ def main():
     for name in PROBES:
         start = len(buf)
         send("exec " + name)
-        # The probe runs AS the init process; the kernel prints "Init process ...
-        # returning to kernel shell" (on serial, so it survives a probe that left the
-        # console tty in raw mode, e.g. ttyprobe) only when the probe itself exits,
-        # after any children it forked. The kernel prints "Process exited with status
-        # N" for EVERY process exit (a forked child too), so the probe's own status is
-        # the LAST such line before that marker, not the first. Anchoring on the marker
-        # also keeps us from sending the next exec while a forked parent still runs.
-        m = expect(r"returning to kernel shell")
+        # The probe runs AS the init process, and only its own exit returns the
+        # kernel shell, so that marker bounds the window. Score the status the
+        # marker itself carries: "Process exited with status N" is printed for
+        # EVERY process exit, a forked child's included, and neither the first nor
+        # the last of them is reliably the probe's own. A child that outlives its
+        # parent prints after it, and a probe that reaps a clean child and then dies
+        # on a signal prints no status of its own at all. The marker is on serial,
+        # so it survives a probe that left the console tty in raw mode (ttyprobe).
+        m = expect(SHELL_RETURN)
         if m is None:
             results.append((name, "no shell return (hang?)", False))
             break
-        window = bytes(buf[start:m.start()])
-        statuses = re.findall(rb"Process exited with status (-?\d+)", window)
-        if not statuses:
-            results.append((name, "no exit reported", False))
-            continue
-        status = int(statuses[-1])
-        results.append((name, "status=%d" % status, status == 0))
+        detail, ok = score_window(bytes(buf[start:m.end()]))
+        results.append((name, detail, ok))
 
     pump(time.time() + 1.0)
     for fn in (p.terminate, p.kill):
@@ -158,7 +254,18 @@ def main():
             fails += 1
         print("  %-12s %-18s %s" % (name, detail, "PASS" if ok else "FAIL"))
 
-    print("runtests: %d probes, %d failures" % (len(results), fails))
+    # A hang breaks the loop, so a short run is a failure in its own right and
+    # names what never ran. Printing the smaller count alone would read as a
+    # complete suite that happened to be smaller today.
+    ran = [r[0] for r in results]
+    missing = [n for n in PROBES if n not in ran]
+    if missing:
+        fails += len(missing)
+        print("runtests: %d probe(s) never ran: %s"
+              % (len(missing), " ".join(missing)))
+
+    print("runtests: %d of %d probes, %d failures"
+          % (len(results), len(PROBES), fails))
     return 0 if fails == 0 else 1
 
 

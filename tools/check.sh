@@ -17,6 +17,7 @@
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC)
 #   8. the text-style check (no non-ASCII, no faked em-dashes, no `-` bullets)
+#   9. the probe runner's scoring rule (tools/runtests.py --selftest)
 #
 # Usage:
 #     ./check.sh [file.c ...]      # extra files to hard clang-format check
@@ -55,6 +56,13 @@ inhouse_ch()
 
 # New code the port introduces; must be clang-format clean (unlike the legacy
 # tree, which we never reformat).
+#
+# The globs do not reach tests/musl/ or utils/, and must not be widened to: those
+# are legacy trees the gate deliberately leaves unformatted, and a wholesale
+# extension fails today on files nobody is asking to reformat. So a new source
+# under either is listed here BY NAME, in the commit that creates it. Adding the
+# file without adding it here leaves it ungated, which is the failure this comment
+# exists to prevent.
 newcode_ch()
 {
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
@@ -63,7 +71,7 @@ newcode_ch()
 }
 
 # 0. required tools
-hr "0/8 tools present"
+hr "0/9 tools present"
 miss=0
 for t in i686-elf-gcc i686-elf-readelf cppcheck shellcheck clang-format perl; do
     command -v "$t" >/dev/null 2>&1 || { echo "  MISSING: $t"; miss=1; }
@@ -71,7 +79,7 @@ done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
 
 # 1. kernel build (-Werror)
-hr "1/8 kernel build (-Werror)"
+hr "1/9 kernel build (-Werror)"
 if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
     echo "  PASS (0 warnings/errors)"
 else
@@ -80,7 +88,7 @@ fi
 
 # 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
 #    crash or a finding both fail (a silent 0-count cannot mask either).
-hr "2/8 cppcheck (c89, warning+style)"
+hr "2/9 cppcheck (c89, warning+style)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
@@ -98,7 +106,7 @@ fi
 #    run/build scripts waive SC2086 (option word-splitting is intentional) and
 #    SC2034 (vars shared across sourced fragments); SC1091 covers the dynamic
 #    source path in both.
-hr "3/8 shellcheck"
+hr "3/9 shellcheck"
 sc=0
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 $(ls tools/*.sh vendor/musl/*.sh 2>/dev/null) \
@@ -110,7 +118,7 @@ shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
 if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
-hr "4/8 conventions (no //, ASCII, header guards)"
+hr "4/9 conventions (no //, ASCII, header guards)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
@@ -127,7 +135,7 @@ if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 
 # 5. clang-format. HARD on new-code dirs + named args; advisory on the legacy
 #    tree. Uses --Werror so a real run failure is a real failure (not a 0 count).
-hr "5/8 clang-format"
+hr "5/9 clang-format"
 strict_fail=0
 # shellcheck disable=SC2046
 for f in $(newcode_ch) "$@"; do
@@ -145,7 +153,7 @@ done
 echo "  advisory: $drift in-house files differ from .clang-format (legacy not reformatted)"
 
 # 6. readelf ABI on a freshly linked musl binary (no stale-artifact dependency).
-hr "6/8 readelf ABI (fresh musl link)"
+hr "6/9 readelf ABI (fresh musl link)"
 if [ -f "$LIBC/lib/libc.a" ]; then
     printf 'int main(void){return 0;}\n' >"$VDIR/_abi.c"
     if i686-elf-gcc -static -nostdlib -nostartfiles -isystem "$LIBC/include" \
@@ -176,7 +184,7 @@ fi
 
 # 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC, so a
 #    newly added kernel source cannot be silently dropped from the build.
-hr "7/8 kernel source list (C_SRC vs disk)"
+hr "7/9 kernel source list (C_SRC vs disk)"
 if "$REPO/tools/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
 else
@@ -185,13 +193,23 @@ fi
 
 # Text style: the mechanical natural-text checks (tools/textcheck.sh). It catches
 # non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house tree.
-hr "8/8 text style"
+hr "8/9 text style"
 if "$REPO/tools/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS"
 else
     tc=$(sed -n 's/^textcheck: \([0-9]*\) finding.*/\1/p' "$VDIR/verify_text.log")
     [ -n "$tc" ] || tc='?'
     echo "  FAIL: $tc text-style finding(s); see $VDIR/verify_text.log"; fail=1
+fi
+
+# The probe runner's scoring rule, checked against recorded serial shapes rather
+# than a boot: it decides every probe's PASS or FAIL, so a regression in it is
+# invisible in the one place that would otherwise catch it.
+hr "9/9 probe scoring rule (runtests selftest)"
+if python3 "$REPO/tools/runtests.py" --selftest >"$VDIR/verify_score.log" 2>&1; then
+    echo "  PASS"
+else
+    echo "  FAIL: see $VDIR/verify_score.log"; fail=1
 fi
 
 hr "result"

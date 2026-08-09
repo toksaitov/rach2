@@ -53,6 +53,9 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `miscprobe` (`MISCPROBE OK`): the miscellaneous syscalls busybox needs.
 * `loopprobe` (`LOOPPROBE OK`): loopback: a UDP echo and a TCP connect/accept round trip against the machine itself over `127.0.0.1`, with the peer reading back as the canonical address.
 * `suidprobe` (`SUIDPROBE OK`): the setuid and setgid bits on exec, driving the staged `suidhelper` at four modes and owners: a 04755 root-owned helper runs a uid-1000 caller with effective and saved uid 0 (gids untouched) and AT_SECURE 1 and can shed and regain root through the saved id; a 04755 helper owned by uid 5 grants euid and suid 5, proving the bit grants the file owner's identity whoever that is; a 02755 helper owned by group 5 moves the effective and saved gid to 5 while the uids stay 1000; a 0755 helper leaves every id at 1000 with AT_SECURE 0; and a 04644 helper (setuid, no execute bit) is refused, so the bit without execute grants nothing. It also asserts stat reports the full 07777 mode.
+* `sudoprobe` (`SUDOPROBE OK`): the reference `sudo`, staged setuid root in the test image beside an `/etc/sudoers` listing uid 1000. A permitted real uid reaches root, an unlisted one (1001) is refused, and the target runs with a cleared environment. `sudo` is coursework and ships in no other image; the shipped os-real carries `su` alone.
+
+The set-id fixtures both probes drive are staged by `krffs/manifests/test.manifest`, not minted at runtime: a probe cannot create the very bit it is testing through, since only root may chown a file to root.
 
 The milestone-9 through -12 audits added focused regression probes that boot the same way (they do not all follow the `*probe` name):
 
@@ -87,6 +90,10 @@ The musl programs build separately with `musl/build.sh` (after `vendor/musl/buil
 ## Running in Rach2
 
 The probes are staged into the test image (`build/images/test.krffs`), which `make test` builds and boots headless to assert every probe exits 0. To drive them by hand instead:
+
+A probe passes only by exiting 0 itself. The runner reads the status off the line that hands the debug shell back, which carries the probe's own outcome: `sys_exit` prints the exit status there and the signal path prints the signal, so a probe killed by a signal fails whatever its children did. It is not scored on a bare `Process exited with status N`, which the kernel prints for every process exit, a forked child's included. A run that ends early fails and names the probes it never reached, and `tools/runtests.py --selftest` checks that scoring rule against recorded serial shapes from `make verify-style`, without a boot.
+
+A new probe is registered in three places, all of them by hand: `tests/Makefile`'s `PROGS`, `tools/runtests.py`'s `PROBES`, and an entry here. A probe named `*probe.c` is also picked up by the style gate's hard clang-format and cppcheck lists; one under `tests/musl/`, and any new source under `utils/`, is not, and must be added to `tools/check.sh`'s `newcode_ch` and cppcheck list by name in the same commit. The gate's globs are deliberately not widened to those trees, which are legacy and unformatted.
 
 1. Build the test image:
    ```sh

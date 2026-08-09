@@ -154,7 +154,7 @@ def main():
         if p.poll() is not None:
             break
         if step.startswith("expect="):
-            if expect(step[len("expect="):]) is None:
+            if not expect(step[len("expect="):]):
                 step_failures += 1
         elif step.startswith("send="):
             send(step[len("send="):])

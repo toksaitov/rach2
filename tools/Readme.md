@@ -33,10 +33,19 @@ the supporting scripts.
 ## Boot, probe, and disk tests
 
 * `harness.py`: boots a kernel image in QEMU and matches probe success tokens on
-  the serial log within a wall-clock timeout. The engine behind `make test` and
-  the disk tests.
-* `runtests.py`: the `PROBES` list and driver that `make test` runs through
-  `harness.py`.
+  the serial log within a wall-clock timeout. The engine behind the disk tests.
+  A step that does not do what it asked is a failure in its own right, so an
+  `--ok` token cannot turn a broken run green by matching coincidentally.
+* `runtests.py`: the `PROBES` list and driver behind `make test`. It boots the
+  test image once and scores each probe on the line that hands the debug shell
+  back, which carries that probe's own outcome: an exit status from `sys_exit`,
+  or a signal from the kill path, in which case the probe fails whatever its
+  children did. It is deliberately not scored on a bare `Process exited with
+  status N`, printed for every process exit including a forked child's, where
+  neither the first nor the last is reliably the probe's own. A run cut short by
+  a hang fails and names the probes it never reached. `--selftest` checks that
+  scoring rule against recorded serial shapes and needs no QEMU; `check.sh` runs
+  it, so the rule that decides every probe's verdict is itself gated.
 * `crash_test.sh` (`make crash-test`): the disk crash-consistency probe (write,
   interrupt mid-write, fsck, verify).
 
