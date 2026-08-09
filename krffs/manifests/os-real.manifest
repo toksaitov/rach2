@@ -60,6 +60,10 @@ file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 # group- or other-writable), so the permission bits protect it from root-owned
 # files and vice versa. The kernel now enforces those bits, so this is a real
 # second account, not a label.
+
+# The one sticky directory the tree ships. The bit is enforced: any account may
+# create in /tmp, and only the file's owner (or root) may remove or rename what
+# is there, which is what makes it shareable between root and test.
 dir 1777 /tmp
 dir 0755 /home
 dir 0700:1000:1000 /home/test

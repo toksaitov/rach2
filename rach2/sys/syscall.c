@@ -1089,7 +1089,7 @@ static int cred_may_search_real(krffs_node_t *dir)
  * creating, unlinking, or renaming an entry needs. `name` is absolute with
  * the leading '/' stripped; a top-level name's parent is the root node.
  */
-static int32_t cred_parent_writable(const char *name)
+static int32_t cred_parent_dir(const char *name, krffs_node_t **out)
 {
     char parent[256];
     krffs_node_t *dir;
@@ -1114,7 +1114,46 @@ static int32_t cred_parent_writable(const char *name)
             return rerr;
         }
     }
+    *out = dir;
     return cred_access_node(dir, CRED_W, 0);
+}
+
+/**
+ * The write check on a path's parent directory, for the paths that create.
+ */
+static int32_t cred_parent_writable(const char *name)
+{
+    krffs_node_t *dir = NULL;
+
+    return cred_parent_dir(name, &dir);
+}
+
+/**
+ * The sticky rule on removing or renaming `victim` out of directory `dir`.
+ *
+ * With the directory's sticky bit set, write permission on it is no longer
+ * enough: only the entry's owner, the directory's owner, or a privileged caller
+ * may take an entry out. That is what makes a shared 1777 directory usable, and
+ * `-EPERM` is the errno POSIX names for it, not `EACCES`.
+ *
+ * The SVR4 relaxation that also permits it when the caller can write the file
+ * is not POSIX and is not adopted here: it would let a mode a victim chose for
+ * their own file decide who may delete it.
+ *
+ * The root is non-sticky by node identity rather than by reading its mode, the
+ * same fixed-mode rule `cred_access_node` uses, so `KRFFS_MODE_DIRTY` never
+ * enters a permission answer.
+ */
+static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victim)
+{
+    if (!dir || dir == krffs_fs->node || !(dir->mode & KRFFS_MODE_STICKY)) {
+        return 0;
+    }
+    if (cred_privileged() || current_proc->euid == dir->uid ||
+        (victim && current_proc->euid == victim->uid)) {
+        return 0;
+    }
+    return -EPERM;
 }
 
 /**
@@ -4636,6 +4675,7 @@ static int32_t sys_unlink(isr_params_t *params)
 
     {
         krffs_node_t *node;
+        krffs_node_t *dir = NULL;
         int rerr = 0;
 
         node = krffs_resolve_x(name, &rerr, cred_may_search);
@@ -4644,6 +4684,16 @@ static int32_t sys_unlink(isr_params_t *params)
         }
         if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
             return -EISDIR;
+        }
+        /* After the directory's write check above, never before it: a caller
+         * with no write permission there must still see -EACCES. */
+        rerr = cred_parent_dir(name, &dir);
+        if (rerr != 0) {
+            return rerr;
+        }
+        rerr = cred_sticky_ok(dir, node);
+        if (rerr != 0) {
+            return rerr;
         }
     }
     return krffs_unlink(name) == 0 ? 0 : -EIO;
@@ -4738,9 +4788,14 @@ static int32_t sys_rmdir(isr_params_t *params)
     }
     {
         const char *name = (pathbuf[0] == '/') ? pathbuf + 1 : pathbuf;
-        int32_t rc = cred_parent_writable(name);
+        krffs_node_t *dir = NULL;
+        int32_t rc = cred_parent_dir(name, &dir);
         if (rc != 0) {
             return rc; /* removing an entry writes its directory */
+        }
+        rc = cred_sticky_ok(dir, node);
+        if (rc != 0) {
+            return rc;
         }
     }
     if (krffs_rmdir(pathbuf) != 0) {
@@ -4779,6 +4834,8 @@ static int32_t sys_rename(isr_params_t *params)
     char new_buf[256];
     const char *old_name;
     const char *new_name;
+    krffs_node_t *old_dir = NULL;
+    krffs_node_t *new_dir = NULL;
     int len;
 
     if (!current_proc || !old_path || !new_path) {
@@ -4820,9 +4877,9 @@ static int32_t sys_rename(isr_params_t *params)
     {
         /* A rename writes both directories: the entry leaves one and lands in
          * the other. */
-        int32_t rc = cred_parent_writable(old_name);
+        int32_t rc = cred_parent_dir(old_name, &old_dir);
         if (rc == 0) {
-            rc = cred_parent_writable(new_name);
+            rc = cred_parent_dir(new_name, &new_dir);
         }
         if (rc != 0) {
             return rc;
@@ -4838,6 +4895,12 @@ static int32_t sys_rename(isr_params_t *params)
 
         node = krffs_resolve_x(old_name, &rerr, cred_may_search);
         if (!node) {
+            return rerr;
+        }
+        /* The sticky rule on the SOURCE: taking the entry out of its directory
+         * is a removal, whatever it is called. */
+        rerr = cred_sticky_ok(old_dir, node);
+        if (rerr != 0) {
             return rerr;
         }
         if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
@@ -4872,6 +4935,17 @@ static int32_t sys_rename(isr_params_t *params)
         existing = krffs_resolve_x(new_name, &rerr, cred_may_search);
         if (!existing && rerr == -EACCES) {
             return rerr;
+        }
+        /* The sticky rule on the DESTINATION, which is the half whose omission
+         * leaves the attack open while a probe that only tries unlink goes
+         * green: renaming over an entry removes it just as surely, so a caller
+         * who may not delete another user's file in a sticky directory may not
+         * clobber it either. */
+        if (existing && existing != node) {
+            rerr = cred_sticky_ok(new_dir, existing);
+            if (rerr != 0) {
+                return rerr;
+            }
         }
         if (existing && existing != node &&
             (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode))) {

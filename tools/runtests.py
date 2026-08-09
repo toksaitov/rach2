@@ -49,6 +49,10 @@ PROBES = [
     # It puts every one back, but a probe that mutates shared state belongs
     # where a failure part-way through cannot be another probe's premise.
     "searchprobe",
+    # Beside it for the same reason: it mints a tree of its own inside the two
+    # staged directories of its sticky pair, and two more directories at the
+    # image root, and removes every one of them again.
+    "stickyprobe",
 ]
 
 # The marker every probe's window ends on. Both kernel paths that hand the debug

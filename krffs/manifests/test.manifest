@@ -45,6 +45,17 @@ text 0644 /sp_denied/leaf.txt one level down\n
 text 0644 /sp_denied/deep/leaf.txt two levels down\n
 file 0755 /sp_denied/prog build/tests/hello
 
+# stickyprobe's pair: one sticky directory and one plain one, differing in the
+# single bit whose enforcement the probe tests, so that a denial in the first
+# cannot be ownership or a missing write bit talking. They are staged rather
+# than minted for the one reason minting cannot cover: `dir 1777` is how the
+# shipped /tmp gets its bit, and nothing else in the tree reads that bit back,
+# so the probe asserts both of these modes before it does anything. Everything
+# the probe's cases aim at, and the two further sticky directories the
+# directory-owner and write-check clauses need, it mints and removes itself.
+dir 1777 /st_sticky
+dir 0777 /st_plain
+
 dir 0755 /musl
 exec-dir 0755 /musl build/tests/musl
 # suidmusl's setuid-root copy: the plain 0755 /musl/suidmusl above is the

@@ -48,10 +48,14 @@
 #define KRFFS_MODE_DIRTY 0004000u
 
 /* The set-id and sticky bits on ordinary nodes, stored and reported through
- * the 07777 mode width; exec applies the set-id bits. KRFFS_MODE_SUID shares
- * the dirty flag's position by design: the dirty flag lives only on the root
- * node, a directory nobody can exec whose mode the fixed-identity paths above
- * never expose. The sticky bit is stored and reported, not enforced. */
+ * the 07777 mode width. Exec applies the set-id bits, and a modification takes
+ * them away again (the syscall layer owns both rules, since neither is the file
+ * system's business). KRFFS_MODE_SUID shares the dirty flag's position by
+ * design: the dirty flag lives only on the root node, which every permission
+ * answer and every set-id clear excludes by node identity rather than by
+ * reading its mode, so the two can never be confused. The sticky bit is
+ * enforced on a directory: with it set, only an entry's owner, the directory's
+ * owner, or a privileged caller may remove or rename that entry away. */
 #define KRFFS_MODE_SUID   0004000u
 #define KRFFS_MODE_SGID   0002000u
 #define KRFFS_MODE_STICKY 0001000u
