@@ -1247,8 +1247,8 @@ void panic_init_died(uint32_t pid)
 {
     k_puts("");
     k_puts("kernel panic: init died");
-    serial_printf("panic: init (pid %u) exited; halting "
-                  "(boot rach2.rescue for the debug shell)\n", (unsigned)pid);
+    serial_printf("panic: init (pid %d) exited; halting "
+                  "(boot rach2.rescue for the debug shell)\n", (int)pid);
     sched_disable();
     for (;;) {
         __asm__ __volatile__("cli; hlt");
