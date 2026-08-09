@@ -256,8 +256,15 @@ static krffs_node_t *krffs_find_child(krffs_file_system_t *fs, uint64_t dir_id,
  * receives -ENOENT for a missing component or -ENOTDIR for a non-directory in a
  * non-final position. The thin krffs_walk wrapper below serves the common
  * callers that do not care which.
+ *
+ * `may_search`, when non-NULL, is asked about every directory the walk enters,
+ * before the component inside it is matched, and its refusal becomes the walk's
+ * error. It is charged on the root and on the '.' and '..' arms too: traversing a
+ * directory is what the search bit governs, whichever component names it. The
+ * target itself is never charged, since reaching a name is not reading it.
  */
-static krffs_node_t *krffs_walk_e(krffs_file_system_t *fs, const char *path, int *err)
+static krffs_node_t *krffs_walk_x(krffs_file_system_t *fs, const char *path, int *err,
+                                  krffs_search_fn may_search)
 {
     uint64_t cur_id = KRFFS_ROOT_ID;
     krffs_node_t *node = fs->node; /* current directory's node; root == fs->node */
@@ -278,6 +285,16 @@ static krffs_node_t *krffs_walk_e(krffs_file_system_t *fs, const char *path, int
         const char *start = p;
         uint32_t len = 0;
         int last;
+
+        if (may_search && node) {
+            int srch = may_search(node);
+            if (srch != 0) {
+                if (err) {
+                    *err = srch;
+                }
+                return NULL;
+            }
+        }
 
         while (start[len] != '\0' && start[len] != '/') {
             len++;
@@ -331,7 +348,7 @@ static krffs_node_t *krffs_walk_e(krffs_file_system_t *fs, const char *path, int
  */
 static krffs_node_t *krffs_walk(krffs_file_system_t *fs, const char *path)
 {
-    return krffs_walk_e(fs, path, (int *)0);
+    return krffs_walk_x(fs, path, (int *)0, (krffs_search_fn)0);
 }
 
 /**
@@ -435,13 +452,24 @@ krffs_node_t *krffs_resolve(const char *path)
  */
 krffs_node_t *krffs_resolve_e(const char *path, int *err)
 {
+    return krffs_resolve_x(path, err, (krffs_search_fn)0);
+}
+
+/**
+ * Resolve `path`, charging `may_search` on every directory the walk enters.
+ *
+ * The predicate reads the calling process's credentials, so this is only valid
+ * from syscall context. With a NULL predicate it is exactly krffs_resolve_e.
+ */
+krffs_node_t *krffs_resolve_x(const char *path, int *err, krffs_search_fn may_search)
+{
     if (!krffs_fs) {
         if (err) {
             *err = -ENOENT;
         }
         return NULL;
     }
-    return krffs_walk_e(krffs_fs, path, err);
+    return krffs_walk_x(krffs_fs, path, err, may_search);
 }
 
 /**

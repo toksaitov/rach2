@@ -1021,6 +1021,30 @@ static int32_t cred_access_node(const krffs_node_t *node, int want,
 }
 
 /**
+ * Whether the caller may search `dir`, by effective ids, for the path resolver.
+ *
+ * Installed as the resolver's `may_search` on every path a syscall resolves, so
+ * traversing a directory costs its execute bit the way POSIX requires. It reads
+ * `current_proc`, so it is only valid from syscall context.
+ */
+static int cred_may_search(krffs_node_t *dir)
+{
+    return (int) cred_access_node(dir, CRED_X, 0);
+}
+
+/**
+ * As cred_may_search, but by real ids, for access(2).
+ *
+ * access(2) answers for the real user, so the prefix it walks must be charged
+ * the same way as the target it reports on; charging the prefix by the effective
+ * ids would let a set-id program report reachability its caller does not have.
+ */
+static int cred_may_search_real(krffs_node_t *dir)
+{
+    return (int) cred_access_node(dir, CRED_X, 1);
+}
+
+/**
  * Write permission on the directory holding path `name`: the right that
  * creating, unlinking, or renaming an entry needs. `name` is absolute with
  * the leading '/' stripped; a top-level name's parent is the root node.
@@ -1029,6 +1053,7 @@ static int32_t cred_parent_writable(const char *name)
 {
     char parent[256];
     krffs_node_t *dir;
+    int rerr = 0;
     int last = -1;
     int i;
 
@@ -1044,9 +1069,9 @@ static int32_t cred_parent_writable(const char *name)
             parent[i] = name[i];
         }
         parent[last] = '\0';
-        dir = krffs_resolve(parent);
+        dir = krffs_resolve_x(parent, &rerr, cred_may_search);
         if (!dir) {
-            return -ENOENT;
+            return rerr;
         }
     }
     return cred_access_node(dir, CRED_W, 0);
@@ -1280,10 +1305,17 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
      * Linux errno; only a genuine ENOENT continues to the O_CREAT path. */
     {
         int rerr = 0;
-        node = krffs_resolve_e(name, &rerr);
+        node = krffs_resolve_x(name, &rerr, cred_may_search);
         if (!node) {
             if (rerr == -ENOTDIR) {
                 return -ENOTDIR;
+            }
+            /* A denied ancestor is answered before O_CREAT is considered: the
+             * create path below reaches krffs_create, which walks the prefix
+             * unchecked, so a caller who may not search the directory could
+             * otherwise create inside it. */
+            if (rerr == -EACCES) {
+                return rerr;
             }
             if (flags & O_CREAT) {
                 int32_t rc = cred_parent_writable(name);
@@ -1931,9 +1963,9 @@ static int32_t sys_chdir(isr_params_t *params)
     }
     {
         int rerr = 0;
-        node = krffs_resolve_e(name, &rerr);
+        node = krffs_resolve_x(name, &rerr, cred_may_search);
         if (!node) {
-            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+            return rerr;
         }
     }
     /* The root node is always a directory even if its on-disk mode lacks the
@@ -2366,9 +2398,9 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
 
     {
         int rerr = 0;
-        node = krffs_resolve_e(name, &rerr);
+        node = krffs_resolve_x(name, &rerr, cred_may_search);
         if (!node) {
-            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT; /* missing vs not-a-dir */
+            return rerr; /* missing, not-a-dir, or a denied ancestor */
         }
     }
 
@@ -2573,9 +2605,9 @@ static int32_t sys_fstatat64(isr_params_t *params)
         }
         {
             int rerr = 0;
-            node = krffs_resolve_e(name, &rerr);
+            node = krffs_resolve_x(name, &rerr, cred_may_search);
             if (!node) {
-                return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+                return rerr;
             }
         }
         krffs_fill_stat64(&kst, node);
@@ -2625,9 +2657,9 @@ static int32_t do_access(const char *name, int mode)
             return -ENOENT;
         }
         node = (name[0] == '\0') ? krffs_fs->node
-                                 : krffs_resolve_e(name, &rerr);
+                                 : krffs_resolve_x(name, &rerr, cred_may_search_real);
         if (!node) {
-            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+            return rerr;
         }
         /* access(2) is the one caller judged by the REAL ids: it exists so a
          * set-id program can ask what its invoker could do. R_OK/W_OK/X_OK
@@ -2745,8 +2777,8 @@ static int32_t path_exists(const char *name)
     if (!krffs_fs) {
         return -ENOENT;
     }
-    if (!krffs_resolve_e(name, &rerr)) {
-        return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+    if (!krffs_resolve_x(name, &rerr, cred_may_search)) {
+        return rerr;
     }
     return 0;
 }
@@ -2789,9 +2821,9 @@ static int32_t do_chmod(const char *name, uint32_t mode)
     if (!krffs_fs) {
         return -ENOENT;
     }
-    node = (name[0] == '\0') ? krffs_fs->node : krffs_resolve_e(name, &rerr);
+    node = (name[0] == '\0') ? krffs_fs->node : krffs_resolve_x(name, &rerr, cred_may_search);
     if (!node) {
-        return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+        return rerr;
     }
     return krffs_chmod_node(node, mode);
 }
@@ -2838,9 +2870,9 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
     if (!krffs_fs) {
         return -ENOENT;
     }
-    node = (name[0] == '\0') ? krffs_fs->node : krffs_resolve_e(name, &rerr);
+    node = (name[0] == '\0') ? krffs_fs->node : krffs_resolve_x(name, &rerr, cred_may_search);
     if (!node) {
-        return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT;
+        return rerr;
     }
     return krffs_chown_node(node, uid, gid);
 }
@@ -3406,9 +3438,9 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
 
     {
         int rerr = 0;
-        node = krffs_resolve_e(name, &rerr);
+        node = krffs_resolve_x(name, &rerr, cred_may_search);
         if (!node) {
-            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT; /* missing vs not-a-dir */
+            return rerr; /* missing, not-a-dir, or a denied ancestor */
         }
     }
 
@@ -3810,15 +3842,20 @@ static int32_t sys_execve(isr_params_t *params)
         return -ENOENT;
     }
 
-    if (krffs_open(name) != 0) {
-        return -ENOENT; /* the file does not exist */
-    }
-
     {
-        krffs_node_t *prog = krffs_resolve(name);
+        int perr = 0;
+        /* Resolved before the existence probe below, not after: krffs_open walks
+         * with no predicate, so asking it first would answer -ENOENT for a
+         * missing program under a directory the caller may not search, telling
+         * that caller the name is absent. The denied ancestor outranks the
+         * question. */
+        krffs_node_t *prog = krffs_resolve_x(name, &perr, cred_may_search);
         int32_t rc;
         if (!prog) {
-            return -ENOENT;
+            return perr;
+        }
+        if (krffs_open(name) != 0) {
+            return -ENOENT; /* the file does not exist */
         }
         rc = cred_access_node(prog, CRED_X, 0);
         if (rc != 0) {
@@ -4386,8 +4423,16 @@ static int32_t sys_creat(isr_params_t *params)
     }
 
     /* creat on an existing directory must fail with -EISDIR, not fall through to
-     * overwrite the directory node's mode and corrupt it into a file. */
-    node = krffs_resolve(name);
+     * overwrite the directory node's mode and corrupt it into a file. A denied
+     * ancestor outranks both: the caller may not learn what is in there. */
+    {
+        int rerr = 0;
+
+        node = krffs_resolve_x(name, &rerr, cred_may_search);
+        if (!node && rerr == -EACCES) {
+            return rerr;
+        }
+    }
     if (node && (node == krffs_fs->node || KRFFS_IS_DIR(node->mode))) {
         return -EISDIR;
     }
@@ -4493,7 +4538,7 @@ static int32_t sys_unlink(isr_params_t *params)
         krffs_node_t *node;
         int rerr = 0;
 
-        node = krffs_resolve_e(name, &rerr);
+        node = krffs_resolve_x(name, &rerr, cred_may_search);
         if (!node) {
             return rerr;
         }
@@ -4529,8 +4574,15 @@ static int32_t sys_mkdir(isr_params_t *params)
     if (synth_is_synth(pathbuf[0] == '/' ? pathbuf + 1 : pathbuf)) {
         return -EROFS; /* cannot create under (or shadow) /dev or /proc */
     }
-    if (krffs_resolve(pathbuf)) {
-        return -EEXIST;
+    {
+        int rerr = 0;
+
+        if (krffs_resolve_x(pathbuf, &rerr, cred_may_search)) {
+            return -EEXIST;
+        }
+        if (rerr == -EACCES) {
+            return rerr;
+        }
     }
     {
         const char *name = (pathbuf[0] == '/') ? pathbuf + 1 : pathbuf;
@@ -4573,9 +4625,13 @@ static int32_t sys_rmdir(isr_params_t *params)
     if (synth_is_synth(pathbuf[0] == '/' ? pathbuf + 1 : pathbuf)) {
         return -EROFS; /* /dev and /proc are not removable */
     }
-    node = krffs_resolve(pathbuf);
-    if (!node) {
-        return -ENOENT;
+    {
+        int rerr = 0;
+
+        node = krffs_resolve_x(pathbuf, &rerr, cred_may_search);
+        if (!node) {
+            return rerr;
+        }
     }
     if (!KRFFS_IS_DIR(node->mode)) {
         return -ENOTDIR;
@@ -4680,7 +4736,7 @@ static int32_t sys_rename(isr_params_t *params)
         int last = -1;
         int i;
 
-        node = krffs_resolve_e(old_name, &rerr);
+        node = krffs_resolve_x(old_name, &rerr, cred_may_search);
         if (!node) {
             return rerr;
         }
@@ -4704,7 +4760,7 @@ static int32_t sys_rename(isr_params_t *params)
                 parent[i] = new_name[i];
             }
             parent[last] = '\0';
-            dir = krffs_resolve_e(parent, &rerr);
+            dir = krffs_resolve_x(parent, &rerr, cred_may_search);
             if (!dir) {
                 return rerr;
             }
@@ -4713,7 +4769,10 @@ static int32_t sys_rename(isr_params_t *params)
             }
         }
 
-        existing = krffs_resolve(new_name);
+        existing = krffs_resolve_x(new_name, &rerr, cred_may_search);
+        if (!existing && rerr == -EACCES) {
+            return rerr;
+        }
         if (existing && existing != node &&
             (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode))) {
             return -EISDIR;
@@ -4811,9 +4870,9 @@ static int32_t sys_utimensat(isr_params_t *params)
 
     {
         int rerr = 0;
-        node = krffs_resolve_e(name, &rerr);
+        node = krffs_resolve_x(name, &rerr, cred_may_search);
         if (!node) {
-            return (rerr == -ENOTDIR) ? -ENOTDIR : -ENOENT; /* missing vs not-a-dir */
+            return rerr; /* missing, not-a-dir, or a denied ancestor */
         }
     }
 

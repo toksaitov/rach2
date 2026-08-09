@@ -119,11 +119,31 @@ krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *no
 krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const char *name);
 krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, const char *name);
 
+/**
+ * Predicate asked whether the caller may search one directory of a path.
+ *
+ * Called for every directory the resolver enters, the root included, before the
+ * component inside it is matched. Returns 0 to allow, or a negative errno the
+ * resolver reports as the walk's failure. The file system knows nothing about
+ * credentials, so the rule lives in the caller that installs this.
+ */
+typedef int (*krffs_search_fn)(krffs_node_t *dir);
+
 /** Resolve `path` to its node, or NULL if absent. */
 krffs_node_t *krffs_resolve(const char *path);
 
 /** As krffs_resolve, but *err reports -ENOENT or -ENOTDIR, 0 on success. */
 krffs_node_t *krffs_resolve_e(const char *path, int *err);
+
+/**
+ * As krffs_resolve_e, but charging `may_search` on every directory entered.
+ *
+ * The predicate dereferences the calling process's credentials, so this may only
+ * be installed from syscall context. A NULL predicate is exactly krffs_resolve_e,
+ * which is what the boot self-test, the debug shell, and the three re-resolves
+ * that must not re-charge rely on.
+ */
+krffs_node_t *krffs_resolve_x(const char *path, int *err, krffs_search_fn may_search);
 
 /** Build the absolute, canonical path of `node` into buf; 0 ok, -1 if it does not fit. */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);

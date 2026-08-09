@@ -27,6 +27,21 @@ file 04644:0:0 /suidhelper.nox  build/tests/suidhelper
 file 04755:0:0 /sudo build/utils/sbin/sudo
 text 0644 /etc/sudoers # uids permitted to run sudo\n1000\n
 
+# searchprobe's fixtures: a root-owned tree whose modes the probe flips to prove
+# search is charged on every directory a path enters. Staged rather than minted
+# because the execve cases need a real program under the denied ancestor and a
+# freestanding probe cannot mint an ELF; the directories that hold it come with
+# it, and the probe asserts these modes before it flips anything. Everything the
+# probe's mutations aim at it mints and removes itself, so this tree is what it
+# finds on every run. /sp_denied/shared is 0777 so that a denial there can only
+# be an ancestor's search bit.
+dir  0755 /sp_denied
+dir  0755 /sp_denied/deep
+dir  0777 /sp_denied/shared
+text 0644 /sp_denied/leaf.txt one level down\n
+text 0644 /sp_denied/deep/leaf.txt two levels down\n
+file 0755 /sp_denied/prog build/tests/hello
+
 dir 0755 /musl
 exec-dir 0755 /musl build/tests/musl
 # suidmusl's setuid-root copy: the plain 0755 /musl/suidmusl above is the

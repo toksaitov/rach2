@@ -45,6 +45,10 @@ PROBES = [
     "musl/authmusl",
     "musl/permmusl",
     "musl/suidmusl",
+    # Last: it flips the modes of a staged tree and mints fixtures outside it.
+    # It puts every one back, but a probe that mutates shared state belongs
+    # where a failure part-way through cannot be another probe's premise.
+    "searchprobe",
 ]
 
 # The marker every probe's window ends on. Both kernel paths that hand the debug
