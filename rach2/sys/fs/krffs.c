@@ -639,7 +639,9 @@ uint32_t krffs_count_files(void)
 
     node = krffs_fs->node;
     do {
-        if (node->type == KRFFS_RESERVED_NODE) {
+        /* An orphan is not a file any more: no path names it, so counting it
+         * would report a file the boot banner's reader cannot find. */
+        if (node->type == KRFFS_RESERVED_NODE && node->name[0] != '\0') {
             count++;
         }
     } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
@@ -664,7 +666,7 @@ void krffs_list_files(void)
 
     node = krffs_fs->node;
     do {
-        if (node->type == KRFFS_RESERVED_NODE) {
+        if (node->type == KRFFS_RESERVED_NODE && node->name[0] != '\0') {
             serial_printf("  [%d] %s (%d bytes)\n",
                          count, node->name, (uint32_t)node->data_size);
             count++;
@@ -1066,6 +1068,13 @@ int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t of
  *
  * Returns 0 on success, -1 if the path is not a regular file or there is no
  * space to grow it.
+ *
+ * A relocation cannot reach a descriptor through this call: growth is the only
+ * thing `krffs_resize_reserved_node` ever moves a node for, and every caller in
+ * the tree truncates to zero (the O_TRUNC and creat paths, and the debug
+ * shell). A shrink returns the same node, so the holders the syscall layer
+ * tracks stay valid. A future caller that grows a file here would have to
+ * repoint them, the way the write path does.
  */
 int krffs_truncate(const char *path, uint32_t new_size)
 {
@@ -1122,6 +1131,83 @@ int krffs_unlink(const char *path)
 
     krffs_remove_reserved_node(krffs_fs, node);
     return 0;
+}
+
+/**
+ * Take `node` out of the namespace without freeing it.
+ *
+ * Clears the name, which is what makes it unreachable: `krffs_walk` never hands
+ * `krffs_find_child` a component shorter than one character, so a node with an
+ * empty name cannot be matched by any path. That is a property of the parser
+ * rather than of a hash, which is why an empty name is used and not a sentinel
+ * `parent_id`: `krffs_mix_id` may return any nonzero value, so a reserved id
+ * would rest on a collision that cannot be ruled out. The node keeps its type,
+ * its data and its parent id, so it is still a live file for whoever holds a
+ * descriptor on it, and still an ordinary reserved node to the allocator.
+ *
+ * The scans that enumerate by `parent_id` rather than by name skip an empty name
+ * for the same reason, since being unmatchable covers the resolver and nothing
+ * else. The caller frees the node when the last descriptor closes.
+ */
+void krffs_orphan_node(krffs_node_t *node)
+{
+    if (node && node != krffs_fs->node) {
+        node->name[0] = '\0';
+    }
+}
+
+/**
+ * Free every orphan left on the medium by a crash. Returns how many it reaped.
+ *
+ * An orphan is a reserved node no path names, kept alive only by the descriptors
+ * holding it, and freed by the last close. A crash between the two leaves one on
+ * a persistent image with nobody left to free it: the descriptors died with the
+ * machine. At mount there are no descriptors at all, so a nameless reserved node
+ * is unambiguously garbage and reaping it needs no bookkeeping to consult.
+ *
+ * Without this the space is lost for good, since nothing else in the tree looks
+ * for a node with no name, and a machine that crashed often enough during a
+ * credential rewrite would fill its disk with files no path could reach.
+ */
+uint32_t krffs_reap_orphans(void)
+{
+    krffs_node_t *node;
+    krffs_node_t *previous;
+    uint32_t reaped = 0;
+    uint64_t steps = 0;
+    uint64_t max_steps;
+
+    if (!krffs_fs) {
+        return 0;
+    }
+    /* Bounded so a malformed chain cannot spin, and derived from the image the
+     * way the mount validator derives its own: a fixed cap would silently stop
+     * short of an orphan on a large disk (the shipped 48 MB partition holds far
+     * more than any round number one would pick) and leak it on every boot. */
+    max_steps = krffs_fs->size / sizeof(krffs_node_t) + 1;
+    /* One bounded pass. Removing a node coalesces it with whichever of its
+     * neighbours are free, so the merged region begins at the previous node
+     * when that was free and at this node otherwise; either way it is a free
+     * node, which the next iteration steps over by its (now larger) size. That
+     * is what lets this resume in place instead of restarting at the root after
+     * each removal, which would be a scan per orphan and, on a disk larger than
+     * the page cache, a great many polled reads at boot. */
+    previous = krffs_fs->node;
+    node = krffs_get_next_node(krffs_fs, previous);
+    while (node && node != krffs_fs->node && steps < max_steps) {
+        steps++;
+        if (node->type == KRFFS_RESERVED_NODE && node->name[0] == '\0') {
+            krffs_node_t *merged =
+                (previous->type == KRFFS_FREE_NODE) ? previous : node;
+
+            krffs_remove_reserved_node(krffs_fs, node);
+            reaped++;
+            node = merged;          /* free; the step below advances past it */
+        }
+        previous = node;
+        node = krffs_get_next_node(krffs_fs, node);
+    }
+    return reaped;
 }
 
 /**
@@ -1250,10 +1336,14 @@ int krffs_rmdir(const char *path)
         return -1;
     }
 
-    /* A directory is empty only if no node names it as a parent. */
+    /* A directory is empty only if no node names it as a parent. An orphan does
+     * not count: it keeps the parent id it had, but no path reaches it, so a
+     * directory holding only orphans is empty as far as any caller can tell and
+     * rmdir must succeed the way POSIX says. */
     scan = krffs_fs->node;
     do {
-        if (scan->type == KRFFS_RESERVED_NODE && scan->parent_id == node->id) {
+        if (scan->type == KRFFS_RESERVED_NODE && scan->parent_id == node->id &&
+            scan->name[0] != '\0') {
             return -1;
         }
     } while ((scan = krffs_get_next_node(krffs_fs, scan)) != krffs_fs->node);
@@ -1292,7 +1382,8 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out,
 
     scan = krffs_fs->node;
     do {
-        if (scan->type == KRFFS_RESERVED_NODE && scan->parent_id == dir_id) {
+        if (scan->type == KRFFS_RESERVED_NODE && scan->parent_id == dir_id &&
+            scan->name[0] != '\0') {
             if (seen == index) {
                 uint32_t i;
                 for (i = 0; i + 1 < buf_size && scan->name[i] != '\0'; i++) {

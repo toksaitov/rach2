@@ -58,13 +58,18 @@ $(BUILD)/krffs : $(FUSE_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(FUSE_LDLIBS)
 
-# stageimage also needs the allocator (it writes KRFFS nodes directly).
+# stageimage and fsck also need the allocator: one writes KRFFS nodes directly,
+# the other frees the orphans a crash left behind.
+$(BUILD)/fsck.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/fsck.krffs.o
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 $(BUILD)/stageimage.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/stageimage.krffs.o
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # The remaining standalone tools: the shared core + the tool's own object.
-$(addprefix $(BUILD)/, mkfs.krffs defrag.krffs fsck.krffs fsviz.krffs edfs.krffs) : $(BUILD)/%.krffs : $(CORE) $(BUILD)/%.krffs.o
+$(addprefix $(BUILD)/, mkfs.krffs defrag.krffs fsviz.krffs edfs.krffs) : $(BUILD)/%.krffs : $(CORE) $(BUILD)/%.krffs.o
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 

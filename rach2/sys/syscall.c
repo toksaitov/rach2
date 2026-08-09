@@ -90,6 +90,94 @@ static struct synth_dir *synth_dir_alloc(int kind, int pid)
 }
 
 /**
+ * How many descriptors other than `except` hold `node` as their backing file.
+ *
+ * A scan of every process's descriptor table, and deliberately not a counter on
+ * the node. A counter would have to be incremented in `fork`'s table copy, in
+ * `dup`, in `dup2`, and in every future path that copies an `fd_entry_t`, and one
+ * missed increment is a use-after-free that no test would show. The tables are
+ * the count, so there is nothing to keep in step.
+ *
+ * MAX_PROCS and MAX_FDS are both 16, so this is at most 256 pointer compares of
+ * kernel memory; it never touches the page-cache window.
+ */
+static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
+{
+    int held = 0;
+    int p;
+    int i;
+
+    if (!node) {
+        return 0;
+    }
+    for (p = 0; p < MAX_PROCS; p++) {
+        if (proc_table[p].state == PROC_UNUSED) {
+            continue;
+        }
+        for (i = 0; i < MAX_FDS; i++) {
+            fd_entry_t *e = &proc_table[p].fds.entries[i];
+
+            if (e != except && e->type == FD_TYPE_FILE && e->node == node) {
+                held++;
+            }
+        }
+    }
+    return held;
+}
+
+/**
+ * Whether any descriptor anywhere holds `node`. For callers outside this file.
+ *
+ * The debug shell removes and renames through the file system directly, below
+ * the syscall layer that owns the holder rule, so it asks here rather than
+ * carrying its own copy of the answer.
+ */
+int fs_node_is_held(const krffs_node_t *node)
+{
+    return fd_node_holders(node, NULL) > 0;
+}
+
+
+/**
+ * Repoint every descriptor on `from` at `to`, after a resize relocated the file.
+ *
+ * The writer's own descriptor is updated by the write path; every other holder
+ * would otherwise be left pointing at a node the allocator has already freed.
+ * Without this the contract would read "a descriptor names one file, unless
+ * another descriptor grows it", which is the same defect in a second place.
+ */
+static void fd_node_moved(const krffs_node_t *from, krffs_node_t *to)
+{
+    int p;
+    int i;
+
+    if (!from || from == to) {
+        return;
+    }
+    for (p = 0; p < MAX_PROCS; p++) {
+        if (proc_table[p].state == PROC_UNUSED) {
+            continue;
+        }
+        for (i = 0; i < MAX_FDS; i++) {
+            fd_entry_t *e = &proc_table[p].fds.entries[i];
+
+            if (e->type == FD_TYPE_FILE && e->node == from) {
+                e->node = to;
+            }
+        }
+    }
+}
+/**
+ * Repoint every descriptor from one node to another, for callers outside this
+ * file. The debug shell writes through the file system directly, and a write
+ * that grows a file past its extent relocates it.
+ */
+void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
+{
+    fd_node_moved(from, to);
+}
+
+/**
  * Release every backing reference a descriptor holds before its slot is freed.
  *
  * Drops framebuffer ownership, the per-fd socket reference, and an ops-backed
@@ -109,6 +197,17 @@ static void fd_release_backing(fd_entry_t *e)
 {
     if (!e) {
         return;
+    }
+    /* A KRFFS node is a backing kind like any other here. An orphan (a reserved
+     * node no path names) is freed by its LAST holder, and this runs while the
+     * closing slot is still populated, which is what `except` is for: the
+     * closing descriptor is skipped rather than cleared first, so "last holder"
+     * needs no ordering rule between two functions. */
+    if (e->type == FD_TYPE_FILE && e->node && krffs_fs &&
+        e->node != krffs_fs->node && e->node->name[0] == '\0' &&
+        fd_node_holders(e->node, e) == 0) {
+        krffs_remove_reserved_node(krffs_fs, e->node);
+        e->node = NULL;
     }
     /* A synthetic directory fd's pooled cookie is freed when its last descriptor
      * closes (dup/fork share it via the OFD refcount, like an ops backing). */
@@ -591,10 +690,18 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         /* Write via the node the descriptor already resolved (a subdir file's
          * node->name is only its basename, so re-resolving by name would fail).
          * krffs_write_node updates entry->node if a grow relocates the file. */
-        written = krffs_write_node(&entry->node, (const char __force *)buf, count,
-                                   entry->ofd->offset);
-        if (written < 0) {
-            return -EIO;  /* krffs reports failure with a bare -1 */
+        {
+            krffs_node_t *before = entry->node;
+
+            written = krffs_write_node(&entry->node, (const char __force *)buf,
+                                       count, entry->ofd->offset);
+            if (written < 0) {
+                return -EIO;  /* krffs reports failure with a bare -1 */
+            }
+            /* A grow relocates the file, and krffs_write_node updates only the
+             * writer's own descriptor; every other holder would be left on the
+             * node the allocator just freed. */
+            fd_node_moved(before, entry->node);
         }
         /* Through the UPDATED node pointer, since a grow relocates the file and
          * a clear applied to the old one would write into freed space. Only a
@@ -838,14 +945,21 @@ static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
 /**
  * Re-validate a descriptor's cached KRFFS node before a file operation.
  *
- * KRFFS nodes are not refcounted, so an `unlink`, an `O_TRUNC`, or a write that
- * grows and relocates a file through another descriptor (or another process, on
- * the one shared image) can free or move the node a still-open fd points at. A
- * later read/write/seek/stat through the stale `entry->node` would touch freed
- * free-list metadata. Defend like the directory-fd path (`build_dirfd_path`):
- * the node must still be a live reserved node whose reconstructed path resolves
- * back to it. A NULL node is the root directory and needs no check. Returns 0
- * when the node is live, or -EBADF when the fd has gone stale.
+ * A held node is never freed now, so this stops being an identity test and
+ * becomes what it always was in fact, a resolution. Two shapes are live: an
+ * orphan, which no path names and which nothing will free while this descriptor
+ * holds it; and a named node, which must still resolve back to itself. Anything
+ * else is a descriptor whose file went away by a route that did not consult the
+ * holders, and stays -EBADF.
+ *
+ * The old round-trip could not tell a freed node from a different file the
+ * allocator later placed at the same address. That hole is closed for every
+ * regular-file descriptor by the lifetime rather than by this check: no address
+ * a descriptor holds is handed out while it holds it.
+ *
+ * A NULL node is the root directory and needs no check. Directories are
+ * deliberately out of scope: `rmdir` still frees the node under an open
+ * directory descriptor, so a relative path through one still answers -EBADF.
  */
 static int fd_node_check(fd_entry_t *entry)
 {
@@ -857,6 +971,9 @@ static int fd_node_check(fd_entry_t *entry)
     }
     if (node->type != KRFFS_RESERVED_NODE) {
         return -EBADF;
+    }
+    if (node->name[0] == '\0') {
+        return 0; /* an orphan: unreachable by name, live for its holders */
     }
     if (krffs_node_path(node, path, sizeof(path)) != 0) {
         return -EBADF;
@@ -4695,6 +4812,16 @@ static int32_t sys_unlink(isr_params_t *params)
         if (rerr != 0) {
             return rerr;
         }
+        /* The last decision, never the first: orphaning bypasses the refusals
+         * krffs_unlink would have made, so every one of them is decided above.
+         * With a holder the node stays live and nameless until the last close;
+         * with none it is freed now, because the release lives at that close and
+         * an unconditional orphan would leak an extent on every removal made
+         * while nothing happened to be reading. */
+        if (fd_node_holders(node, NULL) > 0) {
+            krffs_orphan_node(node);
+            return 0;
+        }
     }
     return krffs_unlink(name) == 0 ? 0 : -EIO;
 }
@@ -4946,6 +5073,14 @@ static int32_t sys_rename(isr_params_t *params)
             if (rerr != 0) {
                 return rerr;
             }
+        }
+        /* Orphan the destination the rename is about to replace, so a reader
+         * holding it keeps reading the file it opened whole. Last again, after
+         * every refusal above: otherwise a rename that then fails would have
+         * destroyed the very file it refused to touch. With no holder, leave it
+         * for krffs_rename to free exactly as before. */
+        if (existing && existing != node && fd_node_holders(existing, NULL) > 0) {
+            krffs_orphan_node(existing);
         }
         if (existing && existing != node &&
             (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode))) {
@@ -5371,7 +5506,10 @@ static int32_t sys_getdents64(isr_params_t *params)
 
     node = krffs_fs->node;
     do {
-        if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id) {
+        /* An orphan keeps its parent id but has no name, and a caller that
+         * cannot reach it by path must not see it in a listing either. */
+        if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id &&
+            node->name[0] != '\0') {
             if (file_index >= target_index) {
                 /* Staging buffer for one record (a KRFFS name is at most
                  * KRFFS_FILE_NAME_BUFFER_SIZE bytes, so this always fits). */

@@ -18,7 +18,7 @@ The code in the `krffs` directory HERE generates the file-system images Rach2 bo
 ## Utilities
 
 * `mkfs.krffs`: create new file system
-* `fsck.krffs`: check file system consistency (links, signatures, node types)
+* `fsck.krffs`: check file system consistency (links, signatures, node types), and repair two things it finds. It writes to the image: it clears the dirty-mount flag a crash left set, and it frees every orphan, a reserved node whose name was cleared when the kernel took it out of the namespace while a descriptor still held it, which a shutdown that closed no descriptors can strand with nothing left to free it. Both repairs happen only after the structural walk has validated the chain end to end, so an image it reports as corrupt is left exactly as it was found. The kernel reaps orphans at mount as well, so running this is not required to recover the space, only to recover it offline
 * `defrag.krffs`: defragment by moving free blocks to end
 * `fsviz.krffs`: interactive terminal visualizer (termbox2)
 * `edfs.krffs`: low-level node field editor for debugging/repair

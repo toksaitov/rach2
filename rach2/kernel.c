@@ -1591,6 +1591,8 @@ static int init_krffs_disk(void)
        shutdown clears it leaves the evidence on the device for fsck.krffs. */
     {
         krffs_node_t *root = (krffs_node_t *) PCWIN_BASE;
+        uint32_t reaped;
+
         if (root->mode & KRFFS_MODE_DIRTY) {
             serial_printf("KRFFS: not cleanly unmounted last time; run fsck.krffs\n");
         }
@@ -1606,6 +1608,29 @@ static int init_krffs_disk(void)
             krffs_fs = 0;
             pc_set_backing(0, 0, 0);
             return -1;
+        }
+
+        /* Only now, with the dirty flag on the platter, reclaim the orphans a
+           previous shutdown stranded: nodes kept alive by descriptors alone,
+           with nothing left to free them once those descriptors died. No
+           descriptor exists yet at mount, so any nameless reserved node is
+           garbage and this is the one safe moment.
+
+           After the flag and not before, because the reap rewrites allocator
+           metadata: on an image larger than the cache those pages can be
+           evicted mid-repair, and a reset in that window would leave a partial
+           repair under a root that still read as cleanly unmounted. With the
+           flag down first, such an image is recognisably dirty and fsck.krffs
+           finishes the job. Not gated on that flag either: a clean halt closes
+           no descriptors, so a cleanly unmounted image can carry an orphan too,
+           and gating would strand it the moment fsck.krffs cleared the flag. */
+        reaped = krffs_reap_orphans();
+        if (reaped != 0) {
+            serial_printf("KRFFS: reaped %d orphan(s) with no descriptor left\n",
+                          (int) reaped);
+            if (pc_sync() != 0) {
+                serial_printf("KRFFS: the orphan repair did not reach the disk\n");
+            }
         }
     }
     _krffs_on_disk = 1;
@@ -1956,7 +1981,10 @@ static void process_command(const char *cmd)
             k_puts("Files in the file system:");
             node = krffs_fs->node;
             do {
-                if (node->type == KRFFS_RESERVED_NODE) {
+                /* Skip an orphan: a node whose name was cleared when it was
+                   taken out of the namespace while a descriptor still held it.
+                   No path reaches it, so no listing shows it either. */
+                if (node->type == KRFFS_RESERVED_NODE && node->name[0] != '\0') {
                     k_printf("  %s  (%d bytes)\n",
                              node->name, (uint32_t)node->data_size);
                     count++;
@@ -2104,7 +2132,18 @@ static void process_command(const char *cmd)
         } else if (filename[0] == '\0') {
             k_puts("Usage: rm <filename>");
         } else {
-            if (krffs_unlink(filename) == 0) {
+            /* Orphan a node some descriptor still holds rather than free it,
+               the same rule the unlink syscall follows. The rescue shell runs
+               with no process of its own, but a transient init can be blocked
+               holding a file when the shell resumes, and freeing that node
+               would hand its address back to the allocator while a descriptor
+               still names it. */
+            krffs_node_t *victim = krffs_resolve(filename);
+
+            if (victim && fs_node_is_held(victim)) {
+                krffs_orphan_node(victim);
+                k_printf("Deleted file (still open elsewhere): %s\n", filename);
+            } else if (krffs_unlink(filename) == 0) {
                 k_printf("Deleted file: %s\n", filename);
             } else {
                 k_printf("Failed to delete file: %s\n", filename);
@@ -2131,7 +2170,21 @@ static void process_command(const char *cmd)
         } else if (old_buf[0] == '\0' || !new_name || new_name[0] == '\0') {
             k_puts("Usage: mv <oldname> <newname>");
         } else {
-            if (krffs_rename(old_buf, new_name) == 0) {
+            /* Same rule at the destination: renaming over a name some
+               descriptor still holds orphans the node it replaces instead of
+               freeing it. Last, and only once the source is known good: an
+               orphan taken before the rename could fail is a refusal that
+               destroyed the file it refused to touch, so `mv missing held`
+               would report failure having already unnamed the destination. */
+            krffs_node_t *source = krffs_resolve(old_buf);
+            krffs_node_t *victim = krffs_resolve(new_name);
+
+            if (source && source != krffs_fs->node &&
+                !KRFFS_IS_DIR(source->mode) &&
+                victim && victim != source && fs_node_is_held(victim)) {
+                krffs_orphan_node(victim);
+            }
+            if (source && krffs_rename(old_buf, new_name) == 0) {
                 k_printf("Renamed '%s' to '%s'\n", old_buf, new_name);
             } else {
                 k_printf("Failed to rename file\n");
@@ -2165,7 +2218,19 @@ static void process_command(const char *cmd)
             krffs_truncate(file_buf, 0);
             {
                 uint32_t len = k_strlen(data);
+                /* A write past the old extent relocates the file and frees the
+                   node it moved from, so any descriptor still on it must be
+                   repointed, the same as on the write syscall's path. Captured
+                   before, compared after: krffs_write resolves by name and the
+                   name is unchanged, so the node pointer is the only witness
+                   that a move happened. */
+                krffs_node_t *before = krffs_resolve(file_buf);
                 int written = krffs_write(file_buf, data, len, 0);
+                krffs_node_t *after = krffs_resolve(file_buf);
+
+                if (before && after && before != after) {
+                    fs_node_moved(before, after);
+                }
                 if (written > 0) {
                     k_printf("Wrote %d bytes to %s\n", written, file_buf);
                 } else {

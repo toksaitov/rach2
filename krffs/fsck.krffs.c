@@ -11,6 +11,7 @@
 #include "krffs_node.h"
 #include "krffs_platform.h"
 #include "krffs_utilities.h"
+#include "krffs_allocator.h"
 
 #ifdef WINDOWS
 #include <io.h>
@@ -216,6 +217,8 @@ int main(int argc, char **argv)
         file_system.node->mode &= (uint16_t) ~KRFFS_MODE_DIRTY;
     }
 
+    uint64_t orphans = 0;
+
     struct krffs_node *previous_node =
         file_system.node;
     struct krffs_node *node =
@@ -320,6 +323,23 @@ int main(int argc, char **argv)
                 (unsigned) node->uid,
                 (unsigned) node->gid
             );
+        } else if (node->type == KRFFS_Reserved_Node &&
+                   node->name[0] == '\0') {
+            /* An orphan: a reserved node no path names, left by a crash between
+               the last unlink or rename and the last close. The kernel reaps
+               these when it mounts a dirty image; report them here so an
+               operator reading fsck's output is not left wondering what the
+               space is. */
+            orphans++;
+            printf(
+                "+ orphan node at position %"PRIu64": %"PRIu64" bytes "
+                "(%"PRIu64" bytes for data, owner %u:%u), reclaimed below\n",
+                krffs_get_node_relative_position(&file_system, node),
+                node->size,
+                node->data_size,
+                (unsigned) node->uid,
+                (unsigned) node->gid
+            );
         } else if (node->type == KRFFS_Reserved_Node) {
             printf(
                 "+ reserved node with ID %"PRIu64" at position %"PRIu64": "
@@ -364,6 +384,46 @@ int main(int argc, char **argv)
                 node
             );
     } while (node != file_system.node);
+
+    /* Reclaim every orphan: a reserved node with no name, kept alive in a
+       running system by the descriptors holding it and freed by the last close.
+       A shutdown that closed none of them leaves one here with nothing left to
+       do the freeing. The kernel reaps them at mount; doing it here as well is
+       what makes the offline repair a repair.
+
+       Only after the walk above has validated the chain end to end. Following
+       node->size and calling into the allocator on an image whose links are
+       corrupt is how a checker hangs, reads outside its mapping, or damages the
+       thing it was asked to inspect; a structurally bad image is reported and
+       left exactly as it was found. One bounded pass: a removal coalesces with
+       whichever neighbours are free, and the merged region begins at the
+       previous node when that was free and at this one otherwise, so the walk
+       resumes there and steps over it by its new size. */
+    if (exit_status == EXIT_SUCCESS) {
+        uint64_t reclaimed = 0;
+        uint64_t walked = 0;
+        struct krffs_node *scan = krffs_get_next_node(&file_system,
+                                                      file_system.node);
+        struct krffs_node *prev = file_system.node;
+
+        while (scan != file_system.node && walked <= max_steps) {
+            walked++;
+            if (scan->type == KRFFS_Reserved_Node && scan->name[0] == '\0') {
+                struct krffs_node *merged =
+                    (prev->type == KRFFS_Free_Node) ? prev : scan;
+
+                krffs_remove_reserved_node(&file_system, scan);
+                reclaimed++;
+                scan = merged;
+            }
+            prev = scan;
+            scan = krffs_get_next_node(&file_system, scan);
+        }
+        if (reclaimed != 0) {
+            printf("Reclaimed %"PRIu64" orphan node(s) no path could reach.\n",
+                   reclaimed);
+        }
+    }
 
     if (exit_status == EXIT_SUCCESS) {
         puts("The filesystem check has been completed "

@@ -149,6 +149,12 @@ krffs_node_t *krffs_resolve_e(const char *path, int *err);
  */
 krffs_node_t *krffs_resolve_x(const char *path, int *err, krffs_search_fn may_search);
 
+/** Free every orphan a crash left behind; call at mount. Returns the count. */
+uint32_t krffs_reap_orphans(void);
+
+/** Take `node` out of the namespace without freeing it (see the definition). */
+void krffs_orphan_node(krffs_node_t *node);
+
 /** Build the absolute, canonical path of `node` into buf; 0 ok, -1 if it does not fit. */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
 

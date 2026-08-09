@@ -198,7 +198,13 @@ int krffs_readdir(
 
                 struct krffs_node *node = KRFFS_File_System->node;
                 do {
-                    if (node->type == KRFFS_Reserved_Node) {
+                    /* Skip an orphan: a node the kernel took out of the
+                       namespace by clearing its name while a descriptor still
+                       held it, which a shutdown can leave behind. It is
+                       unreachable by lookup here too, so it must not appear in
+                       a listing as a blank entry. */
+                    if (node->type == KRFFS_Reserved_Node &&
+                            node->name[0] != '\0') {
                         filler(
                             buffer,
                             (const char *) node->name,

@@ -350,7 +350,13 @@ struct krffs_node *krffs_find_reserved_node_by_name(
 
     struct krffs_node *node = file_system->node;
     do {
+        /* An orphan (a reserved node whose name was cleared when the kernel
+           took it out of the namespace) keeps the DJB id it was created with,
+           so an id match alone would still find it under its deleted name.
+           Require the name too: unreachable must mean unreachable here as
+           well, not only in the kernel's hierarchical resolver. */
         if (node->type == KRFFS_Reserved_Node &&
+                node->name[0] != '\0' &&
                 node->id == hash) {
             result =
                 node;
@@ -387,8 +393,10 @@ struct krffs_node *krffs_find_reserved_or_root_node_by_name(
 
     struct krffs_node *node = file_system->node;
     do {
-        if ((node->type == KRFFS_Reserved_Node ||
-             node->type == KRFFS_Root_Node) &&
+        /* Same orphan rule as above. The root is exempt from the name test:
+           it carries no name and is matched by its own type. */
+        if ((node->type == KRFFS_Root_Node ||
+             (node->type == KRFFS_Reserved_Node && node->name[0] != '\0')) &&
                 node->id == hash) {
             result =
                 node;

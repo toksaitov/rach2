@@ -69,6 +69,9 @@ newcode_ch()
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     ls tests/host/*.c tests/host/*.h tests/*probe.c 2>/dev/null
+    # By name, per the rule above: fdstale is a probe in everything but its
+    # name, and the *probe.c glob does not reach it.
+    ls tests/fdstale.c 2>/dev/null
 }
 
 # 0. required tools
@@ -93,6 +96,7 @@ hr "2/10 cppcheck (c89, warning+style)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
+ls "$REPO"/tests/fdstale.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/cppcheck.suppress" \
