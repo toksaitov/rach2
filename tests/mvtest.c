@@ -3,6 +3,14 @@
  * and the new name resolves, reject renaming a missing source, and overwrite an
  * existing destination.
  *
+ * The negative cases assert the exact errno, not the sign. The file system
+ * reports every refusal as a bare -1, which userspace decodes as EPERM whatever
+ * went wrong, so the two directory cases are the ones that matter: a
+ * directory SOURCE is -EPERM, the errno POSIX reserves for a rename the file
+ * system cannot perform, while a directory DESTINATION under a plain source
+ * is -EISDIR. A test
+ * that accepted any negative return could not tell them apart.
+ *
  * Freestanding; direct int 0x80.
  */
 
@@ -18,6 +26,14 @@ typedef unsigned int size_t;
 #define SYS_CREAT  8
 #define SYS_UNLINK 10
 #define SYS_RENAME 38
+#define SYS_MKDIR  39
+#define SYS_RMDIR  40
+
+/* The errno values the negative cases name. */
+#define ENOENT  2
+#define EPERM   1
+#define EISDIR 21
+#define EINVAL 22
 
 /* Open flags */
 #define O_RDONLY 0
@@ -90,6 +106,30 @@ static int sys_unlink(const char *path)
         "int $0x80"
         : "=a"(result)
         : "0"(SYS_UNLINK), "b"(path)
+        : "memory"
+    );
+    return result;
+}
+
+static int sys_mkdir(const char *path, int mode)
+{
+    int result;
+    __asm__ __volatile__ (
+        "int $0x80"
+        : "=a"(result)
+        : "0"(SYS_MKDIR), "b"(path), "c"(mode)
+        : "memory"
+    );
+    return result;
+}
+
+static int sys_rmdir(const char *path)
+{
+    int result;
+    __asm__ __volatile__ (
+        "int $0x80"
+        : "=a"(result)
+        : "0"(SYS_RMDIR), "b"(path)
         : "memory"
     );
     return result;
@@ -210,16 +250,75 @@ void _start(void)
         failed++;
     }
 
-    /* Test 6: Try to rename nonexistent file (should fail) */
-    print("Test 6: rename(\"nonexistent\", \"other\")... ");
+    /* Test 6: Rename a missing source: -ENOENT */
+    print("Test 6: rename(\"nonexistent\", \"other\") == -ENOENT... ");
     result = sys_rename("nonexistent", "other");
-    if (result < 0) {
-        puts("OK (failed as expected)");
+    if (result == -ENOENT) {
+        puts("OK");
         passed++;
     } else {
-        puts("FAILED (should have failed)");
+        puts("FAILED (wrong errno)");
         /* Clean up the accidentally created file */
         sys_unlink("other");
+        failed++;
+    }
+
+    /* Test 6b: A directory source is -EPERM. Its children reference its id, so
+     * moving it would orphan them; the file system cannot perform the rename at
+     * all, which is what EPERM says here. */
+    print("Test 6b: rename(a directory, ...) == -EPERM... ");
+    if (sys_mkdir("mvtest.dir", 0755) == 0) {
+        result = sys_rename("mvtest.dir", "mvtest.dir2");
+        if (result == -EPERM) {
+            puts("OK");
+            passed++;
+        } else {
+            puts("FAILED (wrong errno)");
+            failed++;
+        }
+        sys_rmdir("mvtest.dir");
+        sys_rmdir("mvtest.dir2");
+    } else {
+        puts("FAILED (mkdir fixture failed)");
+        failed++;
+    }
+
+    /* Test 6c: A directory destination under a plain source is -EISDIR, the
+     * other half of the pair, and the case that separates the two errnos. */
+    print("Test 6c: rename(file, a directory) == -EISDIR... ");
+    if (sys_mkdir("mvtest.dst", 0755) == 0) {
+        fd = sys_creat("mvtest.src", S_IRUSR | S_IWUSR);
+        if (fd >= 0) {
+            sys_close(fd);
+            result = sys_rename("mvtest.src", "mvtest.dst");
+            if (result == -EISDIR) {
+                puts("OK");
+                passed++;
+            } else {
+                puts("FAILED (wrong errno)");
+                failed++;
+            }
+            sys_unlink("mvtest.src");
+        } else {
+            puts("FAILED (creat fixture failed)");
+            failed++;
+        }
+        sys_rmdir("mvtest.dst");
+    } else {
+        puts("FAILED (mkdir fixture failed)");
+        failed++;
+    }
+
+    /* Test 6d: The root as a source is -EINVAL, not -ENOENT: the root exists,
+     * so "no such file" would be false, and canonicalizing "/" leaves no
+     * component to name. */
+    print("Test 6d: rename(\"/\", \"mvtest.x\") == -EINVAL... ");
+    result = sys_rename("/", "mvtest.x");
+    if (result == -EINVAL) {
+        puts("OK");
+        passed++;
+    } else {
+        puts("FAILED (wrong errno)");
         failed++;
     }
 

@@ -15,8 +15,8 @@ The original tests, each driving a few syscalls and printing a human-readable pa
 * `dirtest.c`: chdir and getcwd; "/" and "." succeed, other paths fail.
 * `stattest.c`: stat and stat64, for existing and missing files.
 * `touchtest.c`: creat and utimensat.
-* `rmtest.c`: unlink, with the error cases.
-* `mvtest.c`: rename, with the error cases.
+* `rmtest.c`: unlink, with the exact errno for each refusal.
+* `mvtest.c`: rename, with the exact errno for each refusal, including the directory source and destination that separate EPERM from EISDIR.
 * `lstest.c`: getdents64, parsing the entries of "/".
 * `stdintest.c`: the stdin read path: blocking, character echo, and line buffering.
 * `dup2test.c`: dup2 for I/O redirection.
@@ -139,8 +139,8 @@ The disk probes boot disk-only instead of from a RAM module: `tools/harness.py` 
 | dirtest    | chdir (12), getcwd (183), write (4), exit (1)                                                                   |
 | stattest   | stat (106), stat64 (195), write (4), exit (1)                                                                   |
 | touchtest  | creat (8), close (6), open (5), utimensat (320), unlink (10), write (4), exit (1)                               |
-| rmtest     | creat (8), close (6), open (5), unlink (10), write (4), exit (1)                                                |
-| mvtest     | creat (8), close (6), open (5), rename (38), unlink (10), write (4), exit (1)                                   |
+| rmtest     | creat (8), close (6), open (5), unlink (10), mkdir (39), rmdir (40), write (4), exit (1)                        |
+| mvtest     | creat (8), close (6), open (5), rename (38), unlink (10), mkdir (39), rmdir (40), write (4), exit (1)           |
 | lstest     | open (5), getdents64 (220), close (6), write (4), exit (1)                                                      |
 | stdintest  | read (3), write (4), exit (1)                                                                                   |
 | dup2test   | creat (8), dup2 (63), write (4), read (3), open (5), close (6), unlink (10), exit (1)                           |

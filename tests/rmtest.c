@@ -1,6 +1,12 @@
 /**
  * Exercises the `unlink` syscall: create, verify, and delete files, then
- * confirm that deleting a missing file and the root directory both fail.
+ * confirm that deleting a missing file, a directory, and the root all fail with
+ * the errno POSIX names for each.
+ *
+ * The exact errno is the point of the negative cases, not the sign. The file
+ * system reports every refusal as a bare -1, which userspace decodes as EPERM,
+ * so a test that accepted any negative return could not tell "no such file"
+ * from "is a directory" from a permission denial.
  *
  * Freestanding; direct int 0x80.
  */
@@ -16,6 +22,13 @@ typedef unsigned int size_t;
 #define SYS_CLOSE  6
 #define SYS_CREAT  8
 #define SYS_UNLINK 10
+#define SYS_MKDIR  39
+#define SYS_RMDIR  40
+
+/* The errno values the negative cases name. */
+#define ENOENT  2
+#define EISDIR 21
+#define ENOTDIR 20
 
 /* Open flags */
 #define O_RDONLY 0
@@ -88,6 +101,30 @@ static int sys_unlink(const char *path)
         "int $0x80"
         : "=a"(result)
         : "0"(SYS_UNLINK), "b"(path)
+        : "memory"
+    );
+    return result;
+}
+
+static int sys_mkdir(const char *path, int mode)
+{
+    int result;
+    __asm__ __volatile__ (
+        "int $0x80"
+        : "=a"(result)
+        : "0"(SYS_MKDIR), "b"(path), "c"(mode)
+        : "memory"
+    );
+    return result;
+}
+
+static int sys_rmdir(const char *path)
+{
+    int result;
+    __asm__ __volatile__ (
+        "int $0x80"
+        : "=a"(result)
+        : "0"(SYS_RMDIR), "b"(path)
         : "memory"
     );
     return result;
@@ -187,25 +224,65 @@ void _start(void)
         failed++;
     }
 
-    /* Test 5: Unlink nonexistent file (should fail) */
-    print("Test 5: unlink(\"nonexistent.tmp\")... ");
+    /* Test 5: Unlink nonexistent file: -ENOENT, not a blanket failure */
+    print("Test 5: unlink(\"nonexistent.tmp\") == -ENOENT... ");
     result = sys_unlink("nonexistent.tmp");
-    if (result < 0) {
-        puts("OK (failed as expected)");
+    if (result == -ENOENT) {
+        puts("OK");
         passed++;
     } else {
-        puts("FAILED (should have failed)");
+        puts("FAILED (wrong errno)");
         failed++;
     }
 
-    /* Test 6: Unlink "/" (should fail - it's a directory) */
-    print("Test 6: unlink(\"/\")... ");
+    /* Test 6: Unlink "/": -EISDIR. The root has no type bits in its mode, so it
+     * is refused by identity rather than by KRFFS_IS_DIR. */
+    print("Test 6: unlink(\"/\") == -EISDIR... ");
     result = sys_unlink("/");
-    if (result < 0) {
-        puts("OK (failed as expected - directory)");
+    if (result == -EISDIR) {
+        puts("OK");
         passed++;
     } else {
-        puts("FAILED (should have failed)");
+        puts("FAILED (wrong errno)");
+        failed++;
+    }
+
+    /* Test 6b: Unlink an ordinary directory: -EISDIR, which is what tells a
+     * caller to use rmdir. Its own fixture, created and destroyed here. */
+    print("Test 6b: unlink(a directory) == -EISDIR... ");
+    if (sys_mkdir("rmtest.dir", 0755) == 0) {
+        result = sys_unlink("rmtest.dir");
+        if (result == -EISDIR) {
+            puts("OK");
+            passed++;
+        } else {
+            puts("FAILED (wrong errno)");
+            failed++;
+        }
+        sys_rmdir("rmtest.dir");
+    } else {
+        puts("FAILED (mkdir fixture failed)");
+        failed++;
+    }
+
+    /* Test 6c: A plain file in the middle of the path is -ENOTDIR, not
+     * -ENOENT. The resolver reports the two separately and unlink must not
+     * flatten them. */
+    print("Test 6c: unlink(\"rmtest.plain/child\") == -ENOTDIR... ");
+    fd = sys_creat("rmtest.plain", S_IRUSR | S_IWUSR);
+    if (fd >= 0) {
+        sys_close(fd);
+        result = sys_unlink("rmtest.plain/child");
+        if (result == -ENOTDIR) {
+            puts("OK");
+            passed++;
+        } else {
+            puts("FAILED (wrong errno)");
+            failed++;
+        }
+        sys_unlink("rmtest.plain");
+    } else {
+        puts("FAILED (creat fixture failed)");
         failed++;
     }
 

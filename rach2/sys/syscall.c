@@ -4431,7 +4431,17 @@ static int32_t sys_creat(isr_params_t *params)
     return fd;
 }
 
-/* unlink(2): EBX = path. Returns 0 or -errno. */
+/**
+ * unlink(2): EBX = path. Returns 0 or -errno.
+ *
+ * Every refusal is decided here rather than below, because `krffs_unlink`
+ * answers all of them with a bare -1 that userspace decodes as `EPERM`
+ * whatever went wrong. A missing component gives `-ENOENT` and a plain file
+ * in the middle of the path `-ENOTDIR`, both from the reporting resolver;
+ * the root and any directory give `-EISDIR`, which is what tells a caller
+ * to use `rmdir`. The root is tested by node identity because it carries
+ * 0755 with no type bits and would otherwise read as a plain file.
+ */
 static int32_t sys_unlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
@@ -4478,7 +4488,20 @@ static int32_t sys_unlink(isr_params_t *params)
             return rc; /* removing an entry writes its directory */
         }
     }
-    return krffs_unlink(name);
+
+    {
+        krffs_node_t *node;
+        int rerr = 0;
+
+        node = krffs_resolve_e(name, &rerr);
+        if (!node) {
+            return rerr;
+        }
+        if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+            return -EISDIR;
+        }
+    }
+    return krffs_unlink(name) == 0 ? 0 : -EIO;
 }
 
 /*
@@ -4570,7 +4593,28 @@ static int32_t sys_rmdir(isr_params_t *params)
     return 0;
 }
 
-/* rename(2): EBX = old path, ECX = new path. Returns 0 or -errno. */
+/**
+ * rename(2): EBX = old path, ECX = new path. Returns 0 or -errno.
+ *
+ * As in `unlink`, every refusal is decided here, because `krffs_rename`
+ * answers all of them with a bare -1 that userspace reads as `EPERM`. The
+ * two directory cases are the ones POSIX separates and this file system
+ * does not: a directory SOURCE is `-EPERM`, since a directory's children
+ * reference its id and a move would orphan them, so the rename cannot be
+ * performed at all; a directory DESTINATION under a plain source is
+ * `-EISDIR`, the case that errno is reserved for. The rest follow the
+ * reporting resolver: `-ENOENT` for a missing source or destination parent,
+ * `-ENOTDIR` for a plain file used as a path component, `-EINVAL` for a
+ * destination naming no entry.
+ *
+ * Either path naming the root is `-EINVAL`, from the empty-name check above:
+ * `copy_path_cwd` canonicalizes it to "/", which loses its only component.
+ * `-ENOENT` would be a lie, since the root exists, and POSIX names `EINVAL`
+ * for a pathname that is the root. The identity tests below are therefore
+ * unreachable today and are kept as defence: freeing the root as a replaced
+ * destination would take the file system with it, and that guarantee should
+ * not rest on a canonicalizer in another function.
+ */
 static int32_t sys_rename(isr_params_t *params)
 {
     const char __user *old_path = (const char __user *)params->ebx;
@@ -4628,7 +4672,54 @@ static int32_t sys_rename(isr_params_t *params)
             return rc;
         }
     }
-    return krffs_rename(old_name, new_name);
+
+    {
+        krffs_node_t *node;
+        krffs_node_t *existing;
+        int rerr = 0;
+        int last = -1;
+        int i;
+
+        node = krffs_resolve_e(old_name, &rerr);
+        if (!node) {
+            return rerr;
+        }
+        if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+            return -EPERM;
+        }
+
+        for (i = 0; new_name[i] != '\0'; i++) {
+            if (new_name[i] == '/') {
+                last = i;
+            }
+        }
+        if (new_name[last + 1] == '\0') {
+            return -EINVAL;
+        }
+        if (last >= 0) {
+            char parent[256];
+            krffs_node_t *dir;
+
+            for (i = 0; i < last; i++) {
+                parent[i] = new_name[i];
+            }
+            parent[last] = '\0';
+            dir = krffs_resolve_e(parent, &rerr);
+            if (!dir) {
+                return rerr;
+            }
+            if (dir != krffs_fs->node && !KRFFS_IS_DIR(dir->mode)) {
+                return -ENOTDIR;
+            }
+        }
+
+        existing = krffs_resolve(new_name);
+        if (existing && existing != node &&
+            (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode))) {
+            return -EISDIR;
+        }
+    }
+    return krffs_rename(old_name, new_name) == 0 ? 0 : -EIO;
 }
 
 /*
