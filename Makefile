@@ -73,7 +73,7 @@ MKDISK          = krffs/mkdisk.sh
         crash-test stress-test os-real-grub-disk \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
-        check-busybox check-busybox-suid check-dropbearmulti check-libc \
+        check-busybox check-setid check-dropbearmulti check-libc \
         compile-commands check-sources \
         verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
@@ -168,7 +168,7 @@ os-simple-image: krffs rach2 ish utils
 # is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when absent;
 # the check targets ensure the busybox/dropbear binaries are real.
-os-real-image: krffs rach2 utils check-busybox check-busybox-suid check-dropbearmulti ports/doom
+os-real-image: krffs rach2 utils check-busybox check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
@@ -177,7 +177,7 @@ os-real-image: krffs rach2 utils check-busybox check-busybox-suid check-dropbear
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
 # partition is larger than the 32 MB resident page-cache cap on purpose, so it can
 # later prove an on-disk file system bigger than what fits in RAM at once.
-os-real-disk: krffs rach2 utils check-busybox check-busybox-suid check-dropbearmulti ports/doom
+os-real-disk: krffs rach2 utils check-busybox check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
@@ -186,7 +186,7 @@ os-real-disk: krffs rach2 utils check-busybox check-busybox-suid check-dropbearm
 # kernel, plus a KRFFS partition with the os-real tree. It boots a real machine
 # (or QEMU with no -kernel/-initrd) BIOS -> MBR -> GRUB -> kernel -> KRFFS on the
 # disk. Built in a throwaway Docker container (needs Docker).
-os-real-grub-disk: krffs rach2 utils check-busybox check-busybox-suid check-dropbearmulti ports/doom
+os-real-grub-disk: krffs rach2 utils check-busybox check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	sh tools/mkdisk_grub.sh
@@ -316,12 +316,13 @@ os-real-iso: os-real-image
 check-busybox: $(BUSYBOX_STAMP)
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: $(BUSYBOX_BIN) missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
 
-# Privilege in the os-real image climbs through /bin/su alone; busybox must stay
-# unprivileged (a setuid busybox would run its BB_SUID_REQUIRE/MAYBE applets as
-# root). This asserts the staged modes hold that invariant, so making busybox
-# setuid without a confining config fails the build, not a boot.
-check-busybox-suid:
-	@python3 tools/check_busybox_suid.py krffs/manifests/os-real.manifest
+# Privilege climbs through a declared set of paths and no others. The sweep reads
+# every manifest against a per-image allowlist, so a set-id line anywhere, under any
+# of the five mode-bearing directives, fails the build rather than a boot. Every
+# artifact a check reads becomes a prerequisite here, in the phase that adds the
+# check, because make does not order the siblings of a prerequisite list.
+check-setid:
+	@python3 tools/check_setid.py
 check-dropbearmulti: $(DROPBEAR_STAMP)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 

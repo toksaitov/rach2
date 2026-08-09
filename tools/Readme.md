@@ -27,6 +27,32 @@ the supporting scripts.
 * `gen_compile_commands.sh` (`make compile-commands`): writes
   `compile_commands.json` (git-ignored) from the build's own commands so clangd
   can index the kernel through the i686-elf cross GCC (see `mk/Readme.md`).
+* `check_setid.py`: the set-id guard, in two halves that check each other.
+  The MANIFEST SWEEP (run inside the gate) parses every
+  `krffs/manifests/*.manifest` and compares its set-id lines against a
+  per-image allowlist naming each path's exact mode and owner, failing on an
+  undeclared entry, a declared entry nothing stages, a mode or owner mismatch,
+  a malformed mode, or a manifest the table does not name. It parses the
+  grammar rather than searching the text, because all five mode-bearing
+  directives can grant privilege and `exec-dir` grants it to a set of paths the
+  manifest never names: `dir` and `exec-dir` may carry no set-id bit at all,
+  since KRFFS has no setgid-directory inheritance and an `exec-dir` set is a
+  property of what happened to be built, not of the manifest. Its tokenizing
+  follows `stageimage.krffs`'s `apply_line` exactly, down to reading bytes
+  rather than text (a lone carriage return ends a line for Python and not for
+  `fgets`, which is enough to hide a privileged path behind a declared one) and
+  to the line-length limit and arity the stager enforces.
+  The IMAGE INVENTORY (`--image FILE --manifest PATH [--offset] [--size]`, run
+  from `mkimage.sh` and `mkdisk.sh` before the image is moved into place) walks
+  the staged artifact's node chain, rebuilds each path from `parent_id`, and
+  compares the set-id nodes it actually finds against the same allowlist. It
+  exists because the sweep cannot see either `exec-dir`'s expansion or a
+  divergence between its own parser and the stager's. A walk that finds nothing
+  cannot report a clean image: every declared entry must be found, an allowlist
+  declaring none must name an ordinary sentinel node instead, and the ring
+  closure of the node chain is checked so a truncated region fails rather than
+  reading clean. `--selftest` (run inside the gate) covers every directive form
+  and failure mode, including each hole the guard has had.
 * `cppcheck.suppress`: the cppcheck suppression list `check.sh` reads (a data
   file, not a script).
 

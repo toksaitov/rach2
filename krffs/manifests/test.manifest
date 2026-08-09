@@ -24,7 +24,7 @@ file 04644:0:0 /suidhelper.nox  build/tests/suidhelper
 # key) staged setuid root, and a sudoers listing uid 1000. sudoprobe drops to
 # 1000, runs sudo to become root, and to 1001 to be refused. Shipped only here;
 # the os-real image deliberately carries su and no sudo.
-file 04755:0:0 /sudo build/utils/sudo
+file 04755:0:0 /sudo build/utils/sbin/sudo
 text 0644 /etc/sudoers # uids permitted to run sudo\n1000\n
 
 dir 0755 /musl

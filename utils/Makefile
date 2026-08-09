@@ -48,28 +48,43 @@ UTILITIES = true  \
             ls    \
             ping  \
             nc    \
-            httpd \
-            sudo  \
-            su
+            httpd
 
-# init is PID 1, staged at /sbin/init, not a user tool. It builds into a sbin/
-# subdir so the os-simple `exec-dir / build/utils` sweep (which stages only the
-# regular files directly in build/utils, skipping subdirs) does not also drop it
-# at the image root as /init.
-SBIN_INIT = $(BUILD)/sbin/init
+# init is PID 1, and su and sudo climb privilege; none of the three is a user tool
+# to be swept into an image root. They build into a sbin/ subdir so the os-simple
+# `exec-dir / build/utils` sweep (which stages only the regular files directly in
+# build/utils, skipping subdirs) cannot stage them at all. Every image that wants
+# one names it explicitly, which is also what makes the set-id allowlist in
+# tools/check_setid.py a complete list rather than a sample: a privileged program
+# reaches an image only through a `file` line naming it.
+SBIN_PROGS = init su sudo
 
-TARGETS = $(addprefix $(BUILD)/, $(UTILITIES))
+TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
+SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
 
-.PHONY: all clean libc-check
+.PHONY: all clean libc-check prune-stale
 
-all: $(TARGETS) $(SBIN_INIT)
+all: prune-stale $(TARGETS) $(SBIN_TARGETS)
 
-$(TARGETS) $(SBIN_INIT): | libc-check
+$(TARGETS) $(SBIN_TARGETS): | libc-check
 
-# init: the same musl link as the utils, but staged at /sbin/init (see above).
-$(SBIN_INIT): init.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/init.d -o $@ $(LINK_PRE) $< $(LINK_POST)
+# `exec-dir` stages every regular file directly in build/utils, so a binary an
+# earlier build left there (one since renamed, dropped from UTILITIES, or moved
+# into sbin/) would go on being staged from a tree that no longer builds it. The
+# build is out of tree and incremental, so nothing else removes it. Sweep the top
+# level down to the current targets first; the sbin/ subdirectory is untouched,
+# and its contents are staged by name rather than by sweep.
+prune-stale:
+	@keep=" $(UTILITIES) "; \
+	for f in $(BUILD)/*; do \
+	    [ -f "$$f" ] || continue; \
+	    b=`basename "$$f"`; \
+	    case "$$b" in *.d) b=`echo "$$b" | sed 's/\.d$$//'`;; esac; \
+	    case "$$keep" in \
+	        *" $$b "*) ;; \
+	        *) echo "utils: removing stale $$f"; rm -f "$$f";; \
+	    esac; \
+	done
 
 # Fail early with a clear message if the ported libc has not been built.
 libc-check:
@@ -96,7 +111,13 @@ $(BUILD)/nc: nc.c resolv.c netdb.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/nc.d -o $@ $(LINK_PRE) nc.c resolv.c $(LINK_POST)
 
--include $(addprefix $(BUILD)/, $(UTILITIES:=.d)) $(BUILD)/sbin/init.d
+# The sbin family: the same musl link, into build/utils/sbin/ (see above).
+$(BUILD)/sbin/%: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/$*.d -o $@ $(LINK_PRE) $< $(LINK_POST)
+
+-include $(addprefix $(BUILD)/, $(UTILITIES:=.d)) \
+        $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS:=.d))
 
 clean:
 	rm -rf $(BUILD)

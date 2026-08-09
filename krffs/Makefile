@@ -39,8 +39,19 @@ TARGETS = $(addprefix $(BUILD)/, krffs mkfs.krffs defrag.krffs fsck.krffs \
 # never modified.
 MUSL_CRYPT = $(TOP)/vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
 
-.PHONY : all
+.PHONY : all libc-check
 all : $(TARGETS)
+
+$(TARGETS) : | libc-check
+
+# mkhash compiles the vendored musl crypt, which exists only once the pinned
+# tarball has been extracted. Say so, rather than letting make report "No rule to
+# make target" for a source nobody wrote by hand. The top-level build orders this
+# behind check-libc; this is for a standalone `make -C krffs` in a clean tree.
+libc-check :
+	@test -f "$(MUSL_CRYPT)" || { \
+	    echo "krffs: vendored musl source not extracted; run make deps first" >&2; \
+	    exit 1; }
 
 # The FUSE mount tool: the FUSE objects + the FUSE libraries.
 $(BUILD)/krffs : $(FUSE_OBJS)
