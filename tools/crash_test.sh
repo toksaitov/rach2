@@ -3,10 +3,15 @@
 #
 # crash_test.sh: prove KRFFS's dirty-mount flag detects an unclean shutdown.
 #
-# Boots a disk-backed KRFFS twice against scratch copies. The first boot is
+# Boots a disk-backed KRFFS three times against scratch copies. The first boot is
 # killed after the mount (which sets the dirty bit write-through to the disk),
 # simulating a crash; offline fsck must then report "not cleanly unmounted". The
 # second boot halts cleanly (clearing the bit); offline fsck must find it clean.
+# The third runs dirtyprobe, which attacks the root node with every operation
+# that could clear a mode bit, and the flag must survive: KRFFS_MODE_DIRTY and
+# KRFFS_MODE_SUID are the same bit, so a set-id clear that reached the root would
+# report an unclean image as cleanly unmounted. That claim needs a disk, since
+# the RAM mount never sets the flag.
 #
 # Usage: crash_test.sh <kernel> <disk> <fsck.krffs>
 #
@@ -30,9 +35,11 @@ fi
 
 CRASH="$DISK.crash"
 CLEAN="$DISK.clean"
+DIRTY="$DISK.dirty"
 cp "$DISK" "$CRASH"
 cp "$DISK" "$CLEAN"
-trap 'rm -f "$CRASH" "$CLEAN" "$CRASH.log" "$CLEAN.log"' EXIT INT TERM
+cp "$DISK" "$DIRTY"
+trap 'rm -f "$CRASH" "$CLEAN" "$DIRTY" "$CRASH.log" "$CLEAN.log" "$DIRTY.log"' EXIT INT TERM
 
 qemu_disk() {
     qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
@@ -94,4 +101,25 @@ if "$FSCK" "$CLEAN" --offset "$OFFSET" --size "$SIZE" 2>&1 \
     exit 1
 else
     echo "crash-test: cleanly-halted image is clean: OK"
+fi
+
+# The root node under attack: boot dirty, run dirtyprobe, kill without a halt.
+# The probe syncs after every attempt, so a spurious clear reaches the platter
+# rather than sitting in a write-back frame where this check could not see it.
+printf '\nexec /dirtyprobe\n' | qemu_disk "$DIRTY" >"$DIRTY.log" 2>&1 &
+QPID=$!
+if ! wait_serial "$DIRTY.log" "DIRTYPROBE OK"; then
+    kill "$QPID" 2>/dev/null || true
+    wait "$QPID" 2>/dev/null || true
+    echo "crash-test: FAIL: dirtyprobe never reported OK" >&2
+    exit 1
+fi
+kill "$QPID" 2>/dev/null || true
+wait "$QPID" 2>/dev/null || true
+if "$FSCK" "$DIRTY" --offset "$OFFSET" --size "$SIZE" 2>&1 \
+        | grep -q "not cleanly unmounted"; then
+    echo "crash-test: root node survived the set-id clears: OK"
+else
+    echo "crash-test: FAIL: the dirty flag was cleared off the root node" >&2
+    exit 1
 fi

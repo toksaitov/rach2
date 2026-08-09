@@ -6,3 +6,11 @@
 # whose combined size exceeds the resident cache, fsyncs, reads them back, and
 # checks every byte; its "BLOCKPROBE OK" token on the serial is the test result.
 file 0755 /blockprobe build/tests/blockprobe
+
+# The same disk carries dirtyprobe, which `make crash-test` runs from the same
+# rescue shell. It proves no set-id clear reaches the root node, whose spare
+# mode bit is the dirty-mount flag, and that claim needs a disk: the flag is
+# never set on the RAM mount, and stat reports the root with a fixed mode. The
+# probe syncs after every attempt so a spurious clear reaches the platter, and
+# the offline fsck after the kill is what reads the verdict.
+file 0755 /dirtyprobe build/tests/dirtyprobe

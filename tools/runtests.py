@@ -38,7 +38,7 @@ PROBES = [
     "sigprobe", "credprobe", "ownprobe", "permprobe",
     "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
     "jobprobe", "miscprobe", "ptyprobe", "rngprobe", "orphanprobe", "loopprobe",
-    "suidprobe", "sudoprobe",
+    "suidprobe", "sudoprobe", "modeprobe",
     # The musl-linked identity and permission walks: prove the id family and
     # the deny paths through the real libc syscall selection, not just raw
     # int 0x80.

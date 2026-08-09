@@ -463,6 +463,11 @@ static int32_t sys_exit(isr_params_t *params)
  * near the other path helpers); 0 if live, -EBADF if the fd has gone stale. */
 static int fd_node_check(fd_entry_t *entry);
 
+/* The credential helpers the write path needs, defined with the rest of the
+ * credential model below. */
+static int cred_privileged(void);
+static void cred_kill_setid(krffs_node_t *node);
+
 /**
  * Write `count` bytes of user buffer `buf` to descriptor `fd`.
  *
@@ -590,6 +595,14 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
                                    entry->ofd->offset);
         if (written < 0) {
             return -EIO;  /* krffs reports failure with a bare -1 */
+        }
+        /* Through the UPDATED node pointer, since a grow relocates the file and
+         * a clear applied to the old one would write into freed space. Only a
+         * write that moved bytes disarms, and a privileged writer is exempt:
+         * that is the CAP_FSETID analogue, and without it any root process
+         * silently disarms /bin/su by rewriting it. */
+        if (written > 0 && !cred_privileged()) {
+            cred_kill_setid(entry->node);
         }
         entry->ofd->offset += (uint32_t)written;
         return written;
@@ -943,6 +956,33 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags);
 static int cred_privileged(void)
 {
     return current_proc->euid == 0;
+}
+
+/**
+ * Drop the set-id bits a modification must not leave standing on `node`.
+ *
+ * Setuid always goes: a file whose contents or owner just changed no longer
+ * grants what its owner meant it to grant. Setgid goes only when the
+ * group-execute bit is set with it, matching the grant rule in `execve`: without
+ * that bit the file cannot hand out a gid, and the pair means the mandatory-lock
+ * mark elsewhere in Unix.
+ *
+ * The root node returns untouched, and by node identity rather than by
+ * `KRFFS_IS_DIR`: `mkfs` stamps the root a bare 0755 with no type bits, so the
+ * directory test reads false on it, and `KRFFS_MODE_DIRTY` shares the setuid
+ * position. A clear that reached the root would report an unclean image as
+ * cleanly unmounted, which is file-system corruption rather than a permission
+ * bug, and `chown(path, -1, -1)` is permitted to every caller.
+ */
+static void cred_kill_setid(krffs_node_t *node)
+{
+    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+        return;
+    }
+    node->mode &= (uint16_t) ~KRFFS_MODE_SUID;
+    if (node->mode & 0010u) {
+        node->mode &= (uint16_t) ~KRFFS_MODE_SGID;
+    }
 }
 
 /** Non-zero when `gid` is in the caller's supplementary list. */
@@ -1370,6 +1410,13 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
             }
             if (flags & O_TRUNC) {
                 krffs_truncate(name, 0);
+                /* Applied through the node already in hand: a truncate to zero
+                 * only ever shrinks, and a shrink returns the same node. This
+                 * branch is already past the -EISDIR for the root and for any
+                 * directory, so only a regular file reaches it. */
+                if (!cred_privileged()) {
+                    cred_kill_setid(node);
+                }
             }
         }
     }
@@ -2725,7 +2772,23 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
         return -EPERM;
     }
     if (node != krffs_fs->node) {
-        node->mode = (uint16_t) ((node->mode & ~07777u) | (mode & 07777u));
+        uint32_t want = mode & 07777u;
+
+        /* chmod(2)'s own rule: an unprivileged caller storing a mode on a file
+         * whose group is not one of theirs does not get to keep setgid. This is
+         * the third place POSIX names a set-id clear, after write and chown, and
+         * it is the one no write-clear can stand in for: an owner may mint 02710
+         * on a gid-0 file they own by chmod alone, with no write ever running.
+         * Deliberately NOT conditioned on group-execute the way cred_kill_setid
+         * is, because the caller is choosing that bit in this same call, so
+         * reading it back as a reason to spare the mode would defeat the rule.
+         * Setuid needs no rule here: only the owner may chmod, and the setuid
+         * grant is that owner's own identity. */
+        if (!cred_privileged() && !KRFFS_IS_DIR(node->mode) &&
+            !cred_in_group(node->gid)) {
+            want &= ~(uint32_t) KRFFS_MODE_SGID;
+        }
+        node->mode = (uint16_t) ((node->mode & ~07777u) | want);
     }
     return 0;
 }
@@ -2754,6 +2817,15 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
     }
     if (gid != (uint32_t) -1) {
         node->gid = gid;
+    }
+    /* Not gated on privilege: POSIX drops the bits whoever asks, which is why
+     * cp and install chown before they chmod. Gated on a field ACTUALLY having
+     * changed, though, and that gate carries real weight: chown(path, -1, -1)
+     * succeeds for every caller by design, since a value that changes nothing
+     * needs no right, so a clear that ran on it would let any uid disarm
+     * /bin/su with one call. */
+    if (uid_changes || gid_changes) {
+        cred_kill_setid(node);
     }
     return 0;
 }
@@ -3864,8 +3936,21 @@ static int32_t sys_execve(isr_params_t *params)
         /* Capture the set-id facts while the node is at hand; they apply only
          * once the exec commits, so a rejected image changes nothing. The
          * root node cannot reach here (a directory fails the execute check),
-         * so the dirty flag can never read as a set-id bit. */
-        setid_mode = (uint32_t) (prog->mode & (KRFFS_MODE_SUID | KRFFS_MODE_SGID));
+         * so the dirty flag can never read as a set-id bit.
+         *
+         * Setgid is honored only when the group-execute bit is set with it,
+         * which is Linux's rule. Without that condition a 02700 file owned
+         * 1000:0 passes the execute check on its OWNER bits, since the access
+         * check judges one identity class and the owner's first, and then hands
+         * its executor egid 0. The mode needs no write to appear either: an
+         * owner may chmod any 07777 onto their own file. Setgid without
+         * group-execute means something else in Unix (the mandatory-locking
+         * mark), and nothing here implements that: the lock family is advisory
+         * and always granted. */
+        setid_mode = (uint32_t) (prog->mode & KRFFS_MODE_SUID);
+        if ((prog->mode & KRFFS_MODE_SGID) && (prog->mode & 0010u)) {
+            setid_mode |= KRFFS_MODE_SGID;
+        }
         file_uid   = prog->uid;
         file_gid   = prog->gid;
     }
@@ -4437,32 +4522,47 @@ static int32_t sys_creat(isr_params_t *params)
         return -EISDIR;
     }
 
+    /* Every refusal is decided, and the descriptor reserved, before anything
+     * destructive happens. The truncate below cannot be undone, so a later
+     * -EMFILE would report failure over a file already emptied. */
     if (node) {
         int32_t rc = cred_access_node(node, CRED_W, 0);
         if (rc != 0) {
             return rc; /* creat hands back a writable descriptor */
         }
-    }
-    if (!node) {
+    } else {
         int32_t rc = cred_parent_writable(name);
         if (rc != 0) {
             return rc;
         }
-        if (krffs_create(name) != 0) {
-            return -ENOSPC;
-        }
-        node = krffs_resolve(name);
-        if (!node) {
-            return -EIO;
-        }
-        /* Only a genuinely new file is stamped: creat of an existing file
-         * keeps its owner and mode, so it can never take a file over. */
-        krffs_stamp_new_node(node, mode);
     }
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
         return -EMFILE;
+    }
+
+    if (node) {
+        /* creat(2) is open(O_WRONLY|O_CREAT|O_TRUNC): an existing file is
+         * truncated, which this did not do, so a shorter rewrite left the old
+         * tail readable behind it. The set-id clear rides that truncate. */
+        krffs_truncate(name, 0);
+        if (!cred_privileged()) {
+            cred_kill_setid(node);
+        }
+    } else {
+        if (krffs_create(name) != 0) {
+            fd_free(&current_proc->fds, fd);
+            return -ENOSPC;
+        }
+        node = krffs_resolve(name);
+        if (!node) {
+            fd_free(&current_proc->fds, fd);
+            return -EIO;
+        }
+        /* Only a genuinely new file is stamped: creat of an existing file
+         * keeps its owner and mode, so it can never take a file over. */
+        krffs_stamp_new_node(node, mode);
     }
 
     entry = &current_proc->fds.entries[fd];

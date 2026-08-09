@@ -72,8 +72,19 @@ the supporting scripts.
   a hang fails and names the probes it never reached. `--selftest` checks that
   scoring rule against recorded serial shapes and needs no QEMU; `check.sh` runs
   it, so the rule that decides every probe's verdict is itself gated.
-* `crash_test.sh` (`make crash-test`): the disk crash-consistency probe (write,
-  interrupt mid-write, fsck, verify).
+* `crash_test.sh` (`make crash-test`): the disk dirty-flag checks, three boots
+  against scratch copies of one disk. The first is killed after the mount, so
+  offline `fsck.krffs` must report "not cleanly unmounted"; the second halts
+  cleanly, so fsck must find it clean; the third runs `dirtyprobe`, which
+  attacks the root node with every operation that could take a mode bit off it,
+  and the flag must still be there afterwards. That third phase exists because
+  `KRFFS_MODE_DIRTY` and `KRFFS_MODE_SUID` are the same bit: a set-id clear that
+  reached the root would report an unclean image as cleanly unmounted, losing
+  the crash evidence rather than a permission. It needs a real disk, since the
+  RAM mount never sets the flag, and the probe syncs after each attempt so a
+  spurious clear reaches the platter instead of sitting in a write-back frame
+  where the check could not see it. Each phase waits on the token the kernel or
+  the probe prints, never on a sleep.
 
 ## Image builders (need Docker)
 
