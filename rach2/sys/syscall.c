@@ -5807,18 +5807,43 @@ int signal_pending(void)
 }
 
 /**
- * The signal-permission rule (kill(2)): root may signal anything; anyone else
- * only a process whose real uid matches the sender's real or effective uid.
- * Applied per target, including the signo 0 existence probe, so an identity
- * cannot scan or stop processes it does not own. POSIX would also match the
- * target's saved uid and exempt SIGCONT within a session; both are dropped, a
- * strictly tighter rule that covers the job control the image ships.
+ * The signal-permission rule (kill(2)), judged per target and per signal.
+ *
+ * A privileged sender passes. `SIGCONT` passes within one session, whoever owns
+ * the target. Otherwise either of the sender's ids, real or effective, must
+ * match either of the target's, real or saved.
+ *
+ * The saved-uid arm is what POSIX requires and what makes a set-id program
+ * signallable by the identity that launched it. The session exception is what
+ * makes job control work at all: `/bin/su` is 04755 and calls `setuid`, so the
+ * shell it execs runs with real uid 0, and ash implements `fg` as
+ * `killpg(pgid, SIGCONT)` and ignores the result. Without the exception a
+ * uid-1000 shell cannot resume a job it started through `su`: the `killpg`
+ * fails silently and the shell waits forever on a process that will never run.
+ *
+ * The exception cannot extend a sender's reach beyond its own session, because
+ * `setsid` only ever creates a session and never joins one, so a process cannot
+ * move into a session to reach something. What it does expose is narrow and
+ * worth naming: a member of a session may make a root process in that same
+ * session run its `SIGCONT` handler at a time of the member's choosing.
+ *
+ * The signo 0 existence probe keeps the strict rule. The exception exists for
+ * resuming a stopped job, not for discovering what is running, and POSIX asks
+ * for permission on the probe too. `tty_signal_group` stays unchecked: those
+ * signals come from the terminal, not from a process.
  */
-static int cred_may_signal(const process_t *target)
+static int cred_may_signal(const process_t *target, int signo)
 {
-    return current_proc->euid == 0 ||
-           current_proc->ruid == target->ruid ||
-           current_proc->euid == target->ruid;
+    if (current_proc->euid == 0) {
+        return 1;
+    }
+    if (signo == SIGCONT && current_proc->sid == target->sid) {
+        return 1;
+    }
+    return current_proc->ruid == target->ruid ||
+           current_proc->ruid == target->suid ||
+           current_proc->euid == target->ruid ||
+           current_proc->euid == target->suid;
 }
 
 /* Post signo to a process group: pid==0 is the caller's group, pid<-1 the group
@@ -5840,7 +5865,7 @@ static int32_t kill_group(int pgid, int signo)
             continue;
         }
         found = 1;
-        if (!cred_may_signal(p)) {
+        if (!cred_may_signal(p, signo)) {
             continue;
         }
         allowed = 1;
@@ -5880,7 +5905,7 @@ static int32_t do_kill(int pid, int signo)
     if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE) {
         return -ESRCH;
     }
-    if (!cred_may_signal(target)) {
+    if (!cred_may_signal(target, signo)) {
         return -EPERM;
     }
     if (signo == 0) {

@@ -31,6 +31,9 @@ typedef unsigned int u32;
 #define SYS_UMASK       60
 #define SYS_FCHMOD      94
 #define SYS_GETPPID     64
+#define SYS_SETSID      66
+#define SIGCONT         18
+#define SIGTERM         15
 #define SYS_GETPID      20
 #define SYS_STAT64      195
 #define SYS_SETREUID32  203
@@ -191,12 +194,38 @@ static void child_main(void)
     }
 
     /* kill: the probe's parent is root; a 1000 sender gets EPERM, not
-     * silence, and may still probe itself. */
-    if (syscall3(SYS_KILL, syscall3(SYS_GETPPID, 0, 0, 0), 0, 0) != -EPERM) {
-        fail("kill root parent not EPERM");
-    }
-    if (syscall3(SYS_KILL, syscall3(SYS_GETPID, 0, 0, 0), 0, 0) != 0) {
-        fail("kill self probe");
+     * silence, and may still probe itself. These two are the paired
+     * assertions that prove the uid drop above actually took, so the SIGCONT
+     * case below cannot be read as the rule failing open. */
+    {
+        int ppid = syscall3(SYS_GETPPID, 0, 0, 0);
+
+        if (syscall3(SYS_KILL, ppid, 0, 0) != -EPERM) {
+            fail("kill root parent not EPERM");
+        }
+        if (syscall3(SYS_KILL, syscall3(SYS_GETPID, 0, 0, 0), 0, 0) != 0) {
+            fail("kill self probe");
+        }
+        if (syscall3(SYS_KILL, ppid, SIGTERM, 0) != -EPERM) {
+            fail("SIGTERM to the root parent not EPERM");
+        }
+
+        /* SIGCONT passes within the session, which is what lets a shell resume
+         * a job it started through su: that job's real uid is 0 and the shell's
+         * is not. The probe shares its parent's session here. */
+        if (syscall3(SYS_KILL, ppid, SIGCONT, 0) != 0) {
+            fail("SIGCONT to the root parent in our session");
+        }
+
+        /* Leave the session and the exception goes with it, which is what
+         * keeps it from being a way to reach anything at all: setsid only ever
+         * creates a session, so nothing can move into one to gain reach. */
+        if (syscall3(SYS_SETSID, 0, 0, 0) < 0) {
+            fail("setsid");
+        }
+        if (syscall3(SYS_KILL, ppid, SIGCONT, 0) != -EPERM) {
+            fail("SIGCONT across sessions not EPERM");
+        }
     }
 
     syscall3(SYS_CLOSE, fd, 0, 0);
@@ -217,6 +246,37 @@ void _start(void)
     }
     if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid || status != 0) {
         fail("child walk");
+    }
+
+    /* The saved-uid arm, which nothing in the shipped images reaches: su and
+     * dropbear both drop all three ids, so only a process that deliberately
+     * parks an identity in its saved slot can be signalled through it. The
+     * parent keeps 1000 there while staying root, and the child probes with
+     * signal 0 rather than a real one, which would land on this probe's own
+     * init and could end the run. */
+    if (syscall3(SYS_SETRESUID32, 0, 0, 1000) != 0) {
+        fail("park 1000 in the saved slot");
+    }
+    pid = syscall3(SYS_FORK, 0, 0, 0);
+    if (pid < 0) {
+        fail("fork for the saved-uid case");
+    }
+    if (pid == 0) {
+        int ppid = syscall3(SYS_GETPPID, 0, 0, 0);
+
+        if (syscall3(SYS_SETRESUID32, 1000, 1000, 1000) != 0) {
+            syscall3(SYS_EXIT, 21, 0, 0);
+        }
+        if (syscall3(SYS_KILL, ppid, 0, 0) != 0) {
+            syscall3(SYS_EXIT, 22, 0, 0);
+        }
+        syscall3(SYS_EXIT, 0, 0, 0);
+    }
+    if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid || status != 0) {
+        fail("the saved-uid child");
+    }
+    if (syscall3(SYS_SETRESUID32, 0, 0, 0) != 0) {
+        fail("restore the saved uid");
     }
 
     /* The parent is still root: remove the probe's droppings and restore the
