@@ -49,6 +49,13 @@ LIBC_TARBALL     = vendor/musl/musl-1.2.5.tar.gz
 BUSYBOX_TARBALL  = vendor/busybox/busybox-1.36.1.tar.bz2
 DROPBEAR_TARBALL = vendor/dropbear/dropbear-2022.83.tar.bz2
 
+# The two musl artifacts consumers depend on, both derived from the tarball name so
+# the pinned version is written once: the installed static libc the cross-compiled
+# userland links against, and the extracted source, which the host-compiled mkhash
+# and its seam test read the SHA-512 crypt from.
+LIBC_A         = vendor/musl/install/lib/libc.a
+MUSL_CRYPT_SRC = $(LIBC_TARBALL:.tar.gz=)/src/crypt/crypt_sha512.c
+
 # --- RAM-disk images. Each is built out of tree from a checked-in manifest by the
 #     manifest-driven stageimage.krffs (see krffs/mkimage.sh and krffs/manifests/),
 #     which writes the whole tree directly as KRFFS v2 nodes (no FUSE mount). Each
@@ -66,7 +73,8 @@ MKDISK          = krffs/mkdisk.sh
         crash-test stress-test os-real-grub-disk \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
-        check-busybox check-busybox-suid check-dropbearmulti compile-commands check-sources \
+        check-busybox check-busybox-suid check-dropbearmulti check-libc \
+        compile-commands check-sources \
         verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
 
@@ -121,11 +129,11 @@ $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoption
 $(BASE_DIRS) $(FULL_DIRS):
 	$(MAKE) -C $@
 
-# krffs waits on the libc stamp because mkhash compiles its SHA-512 crypt from
-# the vendored musl source, which exists only once build_libc.sh has extracted
-# the pinned tarball; without this a from-scratch tree (a fresh clone, or make
-# distclean) builds krffs first and cannot find the file.
-krffs: $(LIBC_STAMP)
+# krffs waits on the vendored musl because mkhash compiles its SHA-512 crypt from
+# that source, which exists only once build_libc.sh has extracted the pinned
+# tarball; without this a from-scratch tree (a fresh clone, or make distclean)
+# builds krffs first and cannot find the file.
+krffs: check-libc
 rach2: krffs
 tests: rach2 $(LIBC_STAMP)
 ish: rach2
@@ -313,6 +321,15 @@ check-busybox-suid:
 check-dropbearmulti: $(DROPBEAR_STAMP)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 
+# musl's stamp guards two artifacts, not one: the installed libc the cross links
+# against, and the EXTRACTED source tree, which krffs (mkhash's crypt) and the
+# mkhash seam test compile from directly. A copied worktree carries the stamp
+# without either, so check both here rather than let a consumer fail later on a
+# missing file with no cause named.
+check-libc: $(LIBC_STAMP)
+	@test -s $(LIBC_A) || { echo "libc: $(LIBC_A) missing or empty; rm vendor/musl/.stamp and rebuild (make deps)" >&2; exit 1; }
+	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm vendor/musl/.stamp and rebuild (make deps)" >&2; exit 1; }
+
 # --- toolchain preflight + quality gates ---
 doctor:
 	@./tools/doctor.sh
@@ -323,8 +340,11 @@ verify-style:
 	@./tools/check.sh
 
 # Dual-target seam tests (see tools/hosttest.sh): pure kernel logic compiled and
-# run natively under AddressSanitizer + UndefinedBehaviorSanitizer.
-verify-host:
+# run natively under AddressSanitizer + UndefinedBehaviorSanitizer. It waits on
+# the vendored musl for the same reason krffs does: mkhash_hosttest names the
+# musl crypt in its host-deps, and that source exists only once the tarball is
+# extracted.
+verify-host: check-libc
 	@./tools/hosttest.sh
 
 # --- IDE support + source-list guard ---

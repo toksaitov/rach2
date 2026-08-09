@@ -33,6 +33,29 @@ for t in tests/host/*_hosttest.c; do
     base="$(basename "$t" .c)"
     deps="$(grep -oE 'host-deps:[^*]*' "$t" | head -1 | sed 's/host-deps://')"
     out="$VDIR/$base"
+    # Name a missing dep here: passed on to the compiler it would surface as a
+    # bare "no such file", which reads as a broken test. A dep under the
+    # extracted musl tree has one specific cause and one specific repair, and the
+    # repair names the stamp rather than `make deps`, because a copied worktree
+    # carries a stamp whose tree is gone and make reads that stamp as current. An
+    # in-house dep is a typo or a rename, so say only that it is missing.
+    missing=""
+    missing_musl=""
+    for d in $deps; do
+        [ -f "$d" ] && continue
+        missing="$missing $d"
+        case "$d" in
+            vendor/musl/*) missing_musl=1 ;;
+        esac
+    done
+    if [ -n "$missing" ]; then
+        echo "  FAIL: $base: missing host-deps:$missing"
+        if [ -n "$missing_musl" ]; then
+            echo "        the vendored musl source is not extracted; rm vendor/musl/.stamp and rebuild (make deps)"
+        fi
+        fail=1
+        continue
+    fi
     # -Wno-empty-body tolerates the kernel's `for(...);` idiom in linked sources.
     # shellcheck disable=SC2086
     if $CC -std=c99 $SAN -g -O1 -Wno-empty-body $INC -o "$out" "$t" $deps \
