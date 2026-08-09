@@ -121,6 +121,11 @@ $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoption
 $(BASE_DIRS) $(FULL_DIRS):
 	$(MAKE) -C $@
 
+# krffs waits on the libc stamp because mkhash compiles its SHA-512 crypt from
+# the vendored musl source, which exists only once build_libc.sh has extracted
+# the pinned tarball; without this a from-scratch tree (a fresh clone, or make
+# distclean) builds krffs first and cannot find the file.
+krffs: $(LIBC_STAMP)
 rach2: krffs
 tests: rach2 $(LIBC_STAMP)
 ish: rach2
