@@ -7065,6 +7065,12 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
             return -EADDRINUSE;
         }
     }
+    if (entry->sock->type == SOCK_STREAM && port != 0 && tcp_port_listening(port)) {
+        /* Advisory, and where a server reports it: the invariant belongs to
+         * `tcp_listen`, since `bind` and `listen` are separate syscalls and any
+         * check made only here is bypassed by binding both sockets first. */
+        return -EADDRINUSE;
+    }
     entry->sock->local_port = port;
     return 0;
 }
@@ -7258,8 +7264,15 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     dst_port = SC_BE16(sa + 2);
     dst_ip   = canonical_dst_ip(SC_BE32(sa + 4));
 
-    if (tcp_connect(entry->sock, dst_ip, dst_port) < 0) {
-        return -ECONNREFUSED;
+    {
+        /* Verbatim: the refusal a closed port earns comes from the handshake,
+         * not from here, so collapsing a full pool or a duplicate pairing into
+         * ECONNREFUSED would report a local failure as the peer's answer. */
+        int opened = tcp_connect(entry->sock, dst_ip, dst_port);
+
+        if (opened < 0) {
+            return opened;
+        }
     }
 
     /* A non-blocking socket does not wait out the handshake: report it as

@@ -415,6 +415,54 @@ static int tcp_local_port_in_use(uint16_t port)
 }
 
 /**
+ * Whether a live listener already holds `port`. Caller holds `net_lock`.
+ *
+ * The scope is `TCP_LISTEN` and not every in-use TCB, deliberately. An accepted
+ * connection and a TIME_WAIT remnant both hold a local port in this table, and
+ * `setsockopt` is a no-op here, so `SO_REUSEADDR` buys nothing: a scan that
+ * counted them would make restarting dropbear or httpd after a session fail at
+ * `bind(22)` or `bind(80)` where today it succeeds. What a connecting, closing
+ * or TIME_WAIT connection holds is a port against nobody.
+ */
+static int tcp_port_has_listener(uint16_t port)
+{
+    int i;
+
+    for (i = 0; i < MAX_TCP_CONNS; i++) {
+        if (tcp_table[i].in_use && tcp_table[i].state == TCP_LISTEN &&
+            tcp_table[i].local_port == port) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Whether the exact four-tuple this stack keys on is already taken. Caller
+ * holds `net_lock`.
+ *
+ * `tcp_find` keys on the local port, the remote address and the remote port, so
+ * two TCBs sharing all three would have one connection's segments delivered to
+ * whichever the scan reached first. Only an identical triple is a conflict: a
+ * bound port shared with a listener, or with a connection to a different peer,
+ * stays legal, since `tcp_find` returns the exact match and falls back to the
+ * listener only when there is none.
+ */
+static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
+{
+    int i;
+
+    for (i = 0; i < MAX_TCP_CONNS; i++) {
+        if (tcp_table[i].in_use && tcp_table[i].state != TCP_LISTEN &&
+            tcp_table[i].local_port == local_port && tcp_table[i].remote_ip == remote_ip &&
+            tcp_table[i].remote_port == remote_port) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Answer a segment that matches no connection with the RFC 793 reset.
  *
  * Without this, a SYN to a closed port simply vanishes and the peer's connect
@@ -628,20 +676,59 @@ void tcp_tick(void)
 }
 
 /**
+ * Whether a live listener holds `port`. Takes `net_lock` itself.
+ *
+ * For `bind`, which reports the collision where a server expects to hear about
+ * it. The invariant is `tcp_listen`'s; this is the courtesy.
+ */
+int tcp_port_listening(uint16_t port)
+{
+    uint32_t flags = net_lock();
+    int held = tcp_port_has_listener(port);
+
+    net_unlock(flags);
+
+    return held;
+}
+
+/**
  * Bind a socket to a port in the LISTEN state for passive opens.
+ *
+ * The port check lives here and not in `bind`, because `bind` and `listen` are
+ * separate syscalls with arbitrary user code between them: `bind(A, P)`,
+ * `bind(B, P)`, `listen(A)`, `listen(B)` slips past any check that only `bind`
+ * makes, and leaves two LISTEN TCBs on one port for `tcp_find` and
+ * `tcp_find_listen_sock` to disagree about. So the scan and the publish are one
+ * `net_lock` region, and the check `bind` still makes is advisory.
+ *
+ * @return 0, `-EADDRINUSE` if a listener already holds the port,
+ *         `-EDESTADDRREQ` if the socket never bound one, or `-ENOBUFS` if the
+ *         connection pool is full.
  */
 int tcp_listen(struct socket *sock, uint16_t port)
 {
     struct tcb *tcb;
     uint32_t flags;
 
+    /* This stack assigns no port at `listen`, so a socket that never bound one
+     * would listen on port 0, which no segment can reach and which the next
+     * caller would then collide with. */
+    if (port == 0) {
+        return -EDESTADDRREQ;
+    }
+
     /* Allocating from the shared pool races with the IRQ-context allocator. */
     flags = net_lock();
+
+    if (tcp_port_has_listener(port)) {
+        net_unlock(flags);
+        return -EADDRINUSE;
+    }
 
     tcb = tcb_alloc();
     if (!tcb) {
         net_unlock(flags);
-        return -1;
+        return -ENOBUFS;
     }
 
     tcb->local_ip   = NET_IP_ADDR;
@@ -655,37 +742,59 @@ int tcp_listen(struct socket *sock, uint16_t port)
 }
 
 /**
- * Begin an active open: allocate a TCB, send the SYN, and enter SYN_SENT.
+ * Begin an active open: settle the local port, send the SYN, enter SYN_SENT.
  *
  * Does not block; the handshake completes in tcp_rx and wakes the socket.
+ *
+ * A socket that bound a port keeps it. What is refused is only the exact triple
+ * `tcp_find` keys on, a local port already paired with this same peer address
+ * and port, since two such TCBs would have one connection's segments delivered
+ * to the other.
+ *
+ * @return 0, `-EADDRINUSE` for that duplicate, or `-ENOBUFS` if the connection
+ *         pool is full.
  */
 int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 {
     struct tcb *tcb;
     uint32_t flags;
-    uint16_t eph;
+    uint16_t local;
 
-    /* Allocate from the shared pool and send the SYN atomically. */
+    /* Settle the port and send the SYN atomically against the IRQ side. */
     flags = net_lock();
+
+    /* The port is settled before the TCB is allocated, so neither branch has to
+     * reason about the caller's own half-built block; the old loop leaned on
+     * the fresh TCB still holding port 0. */
+    if (sock->local_port != 0) {
+        /* A `bind` before `connect` pins the source port, which is the whole
+         * point of binding a client socket; discarding it here made that
+         * impossible. */
+        local = sock->local_port;
+        if (tcp_pair_in_use(local, dst_ip, dst_port)) {
+            net_unlock(flags);
+            return -EADDRINUSE;
+        }
+    } else {
+        /* Skip local ports already spoken for, listeners included: over
+         * loopback an ephemeral that collides with the listener being dialed
+         * would give the looped SYN src == dst port, match the caller's own
+         * TCB, and hang the handshake. The pool bounds the loop at
+         * MAX_TCP_CONNS + 1 increments. */
+        do {
+            local = next_ephemeral++;
+            if (next_ephemeral < 49152) next_ephemeral = 49152;
+        } while (tcp_local_port_in_use(local));
+    }
 
     tcb = tcb_alloc();
     if (!tcb) {
         net_unlock(flags);
-        return -1;
+        return -ENOBUFS;
     }
 
-    /* Skip local ports already spoken for, listeners included: over loopback
-     * an ephemeral that collides with the listener being dialed would give the
-     * looped SYN src == dst port, match the caller's own TCB, and hang the
-     * handshake. The fresh TCB holds port 0, so it never matches a candidate,
-     * and the pool bounds the loop at MAX_TCP_CONNS + 1 increments. */
-    do {
-        eph = next_ephemeral++;
-        if (next_ephemeral < 49152) next_ephemeral = 49152;
-    } while (tcp_local_port_in_use(eph));
-
     tcb->local_ip    = NET_IP_ADDR;
-    tcb->local_port  = eph;
+    tcb->local_port  = local;
     tcb->remote_ip   = dst_ip;
     tcb->remote_port = dst_port;
     tcb->iss         = tcp_isn(tcb->local_port, dst_port);
@@ -948,6 +1057,27 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         break;
 
     case TCP_SYN_SENT:
+        if ((flags & TCP_SYN) && !(flags & TCP_ACK)) {
+            /* Simultaneous open (RFC 793): both ends sent a SYN and neither has
+             * seen an ACK. The peer's SYN acknowledges nothing, so this end
+             * answers with a SYN-ACK and waits in SYN_RCVD for the peer's.
+             *
+             * The rewind is the whole of it. The first SYN left snd_nxt at
+             * iss + 1; tcp_send_flags emits at snd_nxt and takes retx_seq from
+             * it, while the peer's answering SYN-ACK acknowledges iss + 1. A
+             * SYN-ACK sent at iss + 1 is therefore acknowledged by nothing,
+             * retx_seq names a sequence the peer will never confirm, and the
+             * connection wedges with snd_una, snd_nxt and retx_seq
+             * inconsistent. Emitting at iss re-sends the sequence the peer is
+             * waiting on, and tcp_send_flags re-advances snd_nxt past it. */
+            tcb->irs     = seq;
+            tcb->rcv_nxt = seq + 1;
+            tcb->snd_wnd = window;
+            tcb->snd_nxt = tcb->iss;
+            tcp_send_flags(tcb, TCP_SYN | TCP_ACK);
+            tcb->state = TCP_SYN_RCVD;
+            return;
+        }
         if (!((flags & TCP_SYN) && (flags & TCP_ACK))) return;
         if (ack_num != tcb->snd_nxt) return;
 

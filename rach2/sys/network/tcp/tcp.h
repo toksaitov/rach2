@@ -121,10 +121,25 @@ void tcb_free(struct tcb *tcb);
 /** Process an inbound TCP segment; called by ip_rx for IP protocol 6. */
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 
-/** Bind a socket to a port in LISTEN for passive opens; 0 ok, -1 on error. */
+/** Whether a live listener holds `port`; for `bind`'s advisory refusal. */
+int tcp_port_listening(uint16_t port);
+
+/**
+ * Bind a socket to a port in LISTEN for passive opens.
+ *
+ * 0, `-EADDRINUSE` if a listener already holds the port, `-EDESTADDRREQ` if the
+ * socket bound none, or `-ENOBUFS` if the connection pool is full. A bare -1
+ * would reach userland as `EPERM` through musl's return convention.
+ */
 int tcp_listen(struct socket *sock, uint16_t port);
 
-/** Begin an active open to dst_ip:dst_port; 0 ok, -1 on error. */
+/**
+ * Begin an active open to dst_ip:dst_port, from the socket's bound port when it
+ * has one and from a fresh ephemeral otherwise.
+ *
+ * 0, `-EADDRINUSE` when that local port is already paired with this exact peer,
+ * or `-ENOBUFS` if the connection pool is full.
+ */
 int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port);
 
 /** Queue up to len bytes for sending; returns the count accepted, -1 on error. */
