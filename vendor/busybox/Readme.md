@@ -55,7 +55,7 @@ The last group is off because the console login is ours now. `LOGIN` and `SULOGI
 
 ## Known limits (present but constrained)
 
-* An applet that needs an unimplemented syscall is compiled in but returns its error at runtime: `df` (no `statfs64`, `-ENOSYS`), `mount`/`umount`, and date is not tz-aware (set `TZ=UTC`). The networking applets (`wget nc telnet ping httpd tftp`) run against the from-scratch TCP/IP stack, within its limits.
+* An applet that needs an unimplemented syscall is compiled in but returns its error at runtime: `df` (no `statfs64`, `-ENOSYS`), `mount`/`umount`, and date is not tz-aware (set `TZ=UTC`). The networking applets (`wget nc telnet httpd tftp`) run against the from-scratch TCP/IP stack, within its limits. `PING`, `PING6`, `TRACEROUTE`, `TRACEROUTE6` and `ARPING` are off, and not for a limit but for an absence: every one of them opens `SOCK_RAW` or `AF_PACKET`, this kernel's socket layer offers neither, and busybox's ping dies with `can't create raw socket: Invalid argument` before it sends anything. `/bin/ping` is ours (`utils/ping.c`) and reaches a bare `ping` from the shell's PATH only because the applet is gone.
 * The static config triggers no file-backed `mmap` (Rach2's `mmap2` is anon-only, `-ENOSYS` otherwise); musl's allocator uses anonymous mmap, which works.
 * `getcwd` is capped at the PCB `CWD_MAX=64`.
 * Fixed kernel limits: `MAX_FDS=16`, `MAX_PROCS=16`, socket pool 16.

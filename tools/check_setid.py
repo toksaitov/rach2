@@ -1241,7 +1241,7 @@ def report(problems):
 # looks for absences passes just as well on a header it failed to understand.
 FORBIDDEN_APPLETS = ("su", "passwd", "adduser", "deluser", "addgroup", "delgroup", "chpasswd",
                      "cryptpw", "mkpasswd", "login", "vlock", "sulogin", "getty", "wall",
-                     "crontab")
+                     "crontab", "ping", "ping6", "traceroute", "traceroute6", "arping")
 APPLET_SENTINEL = "cat"
 
 APPLET_TABLE = os.path.join(

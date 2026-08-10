@@ -24,6 +24,9 @@ file 04755:0:0 /bin/su build/utils/sbin/su
 file 04755:0:0 /bin/passwd build/utils/sbin/passwd
 file 0755:0:0 /bin/adduser build/utils/sbin/adduser
 file 0755:0:0 /bin/login build/utils/sbin/login
+# Ours, and reachable as a bare `ping` only because busybox's applet is gone:
+# that one wants SOCK_RAW, which this kernel's socket layer does not offer.
+file 0755 /bin/ping build/utils/ping
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
 

@@ -12,6 +12,7 @@
  */
 
 #include <stdio.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/syscall.h>
 
@@ -23,8 +24,12 @@
 #define PING_COUNT 4
 
 /**
- * Send one echo to `ip` (host byte order) and return the RTT in ticks, or a
- * value `< 0` on timeout.
+ * Send one echo to `ip` (host byte order) and return the RTT in ticks, or -1
+ * with `errno` set.
+ *
+ * `ETIMEDOUT` is nobody answering and `EBUSY` is another ping holding the
+ * machine's one in-flight request, which is a different thing to tell a user:
+ * counting a refusal as a timeout would report a live host as dead.
  */
 static int ping_once(unsigned int ip)
 {
@@ -54,6 +59,10 @@ int main(int argc, char **argv)
         if (rtt >= 0) {
             printf("  reply: seq=%d time=%d ms\n", i, rtt * 10);
             replies++;
+        } else if (errno == EBUSY) {
+            fputs("ping: another ping in flight\n", stderr);
+
+            return 1;
         } else {
             printf("  seq=%d timeout\n", i);
         }

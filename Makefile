@@ -72,7 +72,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        login-test crash-test stress-test os-real-grub-disk \
+        ping-test login-test crash-test stress-test os-real-grub-disk \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-setid check-dropbearmulti check-libc \
@@ -292,6 +292,18 @@ cred-persist-test: rach2 musl-programs krffs
 # fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
 # test-disk on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
+# `make ping-test`: the ICMP path against the SLIRP gateway, which is why it is
+# its own target rather than a probe in the suite. The explicit wait= is
+# load-bearing: after its last step harness.py drains only --grace and then
+# kills QEMU, while the timeout case alone costs four seconds and the child the
+# probe forks lives three to eight, so without it the token would arrive after
+# QEMU was dead.
+ping-test: rach2 tests krffs test-image
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 120 --ok "PINGTEST OK" \
+	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+
 # `make login-test`: prove the console cannot fall back to an unauthenticated
 # shell. Two images differing only in the init they declare, neither staging
 # /bin/login, plus a rescue boot of the real image, which is the way back into
@@ -475,6 +487,7 @@ help:
 	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
+	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"

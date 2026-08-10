@@ -10,7 +10,7 @@ A from-scratch TCP/IP stack for the Rach2 kernel, targeting QEMU's RTL8139 NIC o
 | `ethernet/`        | Frame parse and build; dispatch by EtherType to ARP or IP                   |
 | `arp/`             | IP-to-MAC resolution with an 8-entry cache                                  |
 | `ip/ip.*`          | IPv4 header build/parse, checksum, routing, fragment drop, loopback ring    |
-| `ip/icmp.*`        | Echo (ping): replies to requests, sends our own with a timeout              |
+| `ip/icmp.*`        | Echo (ping): replies to requests, sends our own and sleeps for the reply    |
 | `udp/`             | Datagrams, a port-to-socket table, length validation                        |
 | `tcp/`             | RFC 793 state machine with RFC 6298 RTT/RTO and RFC 5681 congestion control |
 | `socket/`          | Socket pool, blocking recv/accept/connect, refcounted lifecycle             |
@@ -26,11 +26,13 @@ The stack knows exactly one local address, and `127/8` is an alias for it: `conn
 
 ## Socket interface
 
+The `ping` sub-call waits by sleeping, not by spinning, and that is a rule about who else gets to run: the timer skips `schedule()` while a process is inside a syscall, so a poll with `sti; hlt` from there gives every other process no CPU at all for as long as the wait lasts, which on a machine several people can log into is a freeze any of them can fire at a dead address. The waiter blocks on a wait queue that `icmp_rx` wakes, and the wait is bounded twice over: `wakeup_tick` is armed so the timer makes the process runnable, and the same deadline is in the wait predicate, because a woken sleeper whose condition is still false re-enqueues with its timer already disarmed and would then never wake. The kernel debug shell keeps the spin and correctly so: it runs with the scheduler stopped and no process to block. There is one in-flight echo for the whole machine, claimed under `net_lock` and released on every exit path, which is the raw-socket non-goal made visible to users: with a real `SOCK_RAW` each caller would own a socket, and here a second caller is refused with `-EBUSY` rather than queued, since a queue needs a fairness rule to give a shell command a wait it cannot see. So the sub-call returns ticks, `-ETIMEDOUT`, `-EBUSY` or `-EINTR`, and a ping at a dead address holds the slot, and refuses everyone else, for about four seconds.
+
 Sockets are first-class file descriptors (`FD_TYPE_SOCKET`). `read`, `write`, `close`, `dup2`, `fork`, and process exit all handle them through the FD layer, with a reference count so a socket shared by `fork`/`dup2` is torn down only when its last descriptor closes. The Linux i386 `socketcall` (syscall 102) multiplexes socket, bind, connect, listen, accept, send, recv, sendto, recvfrom, plus a `ping` sub-call; every user pointer argument is range-checked before use. A datagram socket that sends before an explicit `bind` is assigned an ephemeral source port automatically, so replies can return and `close` releases the port.
 
 ## Name resolution
 
-The kernel resolves no names; it provides only the transport. Host names are turned into addresses in userspace by a small stub resolver (`utils/resolv.c`, shared through `utils/netdb.h`) that `ping` and `nc` call: it tries a numeric literal, then the `/hosts` file, then a DNS `A` query over UDP to the nameserver in `/resolv.conf` (SLIRP's forwarder `10.0.2.3`). Both config files live in the flat KRFFS root. This mirrors a libc stub resolver and leaves room to add `getaddrinfo` over the same files.
+The kernel resolves no names; it provides only the transport. Host names are turned into addresses in userspace by a small stub resolver (`utils/resolv.c`, shared through `utils/netdb.h`) that `ping` and `nc` call: it tries a numeric literal, then the hosts file, then a DNS `A` query over UDP to the nameserver in the resolver config (SLIRP's forwarder `10.0.2.3`). Each file is looked for under `/etc` first and in the flat KRFFS root second, since os-real stages a real `/etc` and the test image stages neither directory. This mirrors a libc stub resolver and leaves room to add `getaddrinfo` over the same files.
 
 ## Concurrency
 
