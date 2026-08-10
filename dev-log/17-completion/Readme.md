@@ -1,0 +1,169 @@
+# Milestone 17: closing the deferrals
+
+Milestone 15 shipped privilege with a list of things it did not do, and
+milestone 16 audited what it did. This milestone closes that list. The rule it
+was run under is the one thing worth stating before the work: every deferral
+ends either with a probe that can actually fail, or as declared policy in this
+record with its reason. Nothing stays dangling.
+
+The plan (`plan.md`) was drafted first, sharpened by a Codex review, and then
+corrected twice by the work itself, in place and with the reason recorded: once
+in phase 10, when a review round showed the planned lock ordering held a lock
+across a terminal read, and once in phase 11, when the contention case it
+described could no longer exist because of that same rework. A plan that is
+edited by what the code turns out to be is worth more than one that is defended.
+
+Seventeen phases, each its own commit, each with the whole gate and an
+independent Codex review whose every finding was adjudicated against the code
+before the commit landed.
+
+## What was closed
+
+The descriptor lifetime, first, because three later phases stand on it. An open
+descriptor now names one file across `unlink`, `rename` and the file system's own
+relocation of a growing node: the fd layer holds a reference, and a node that is
+unlinked while open is removed from the directory and freed only when the last
+descriptor closes. Before this, a rename could leave a descriptor writing into a
+node that had been reused.
+
+The credential library (`utils/pwauth.c`), which is the spine of everything after
+it. One comparison, one salt alphabet, one replacement idiom, one lock. The lock
+is a file created `O_CREAT|O_EXCL` holding the writer's pid, and it is never
+broken: an age bound cannot tell a stopped writer from a dead one, the break
+cannot be made safe once taken (there is no `funlink` here), and the cost of
+refusing falls on the writer rather than on everyone trying to log in, since no
+reader takes the lock at all. The replacement is a temp file carrying the
+writer's pid, the original's owner and then its mode, a flush, a re-check of the
+lock, a rename, and a second flush through the descriptor still open on the file,
+which is the only thing that makes a writeback error reportable. Its three
+returns (published, unflushed, unchanged) reach the caller's exit status,
+because a change that is live but not on the platter is not a clean finish. That
+phase took twenty-one review rounds; several of the last ones found defects
+introduced by the previous round's fix.
+
+`passwd`, the first program that writes a credential file. Setuid root, deciding
+from the real uid, prompting before it takes the transaction and holding it
+across a re-read and the publish alone. The ordering is the correction phase 10's
+review forced: an early lock made the account, the hash and the file one image by
+construction, but held the lock across two terminal reads, so anyone could sit at
+a prompt and stop every other writer. A late lock makes the same property
+detectable instead of impossible, and detectable is enough, since the only honest
+answer to a record that changed while the password was being typed is to say so
+and change nothing.
+
+`adduser`, root's, which writes three databases and a home directory under one
+transaction. No lock makes four changes one change, so the order does the rest:
+shadow with a locked field first, then group, then the home, then passwd, and
+every prefix of that order is a system a reader can still make sense of. What
+each prefix leaves and how root clears it is written down rather than left to be
+discovered, and the ordering is proved by injection: a second build of the same
+source dies the instant a named publication has landed, and one probe round per
+point asserts what is there, what is byte-identical, and what the refused re-run
+must name.
+
+The console, which is now behind a login. `utils/login.c` authenticates and drops
+`setgroups`, `setgid`, `setuid` in that order, and init stops being one program
+with a fallback list: it builds twice, and the strict artifact holds no code path
+and no string that names a shell. That split is at compile time on purpose. Every
+runtime signal is a thing an edit can drop, and the drop must not be the
+permissive direction; a marker file left out of a manifest would hand the console
+back to an unauthenticated root shell. `make login-test` boots two images that
+differ only in the init they declare and requires the strict one to refuse and
+keep refusing while the permissive one reaches `uid=0`, which is what makes the
+strict one's silence mean anything.
+
+The ping freeze, which was a denial of service any SSH user could fire once
+`/bin/ping` was staged. The wait polled `sti; hlt` from inside a syscall, and the
+timer skips `schedule()` there, so nothing else on the machine ran for four
+seconds per unanswered attempt. It sleeps now, bounded twice over (an armed
+`wakeup_tick` so the timer makes it runnable, and the same deadline in the wait
+predicate so a woken sleeper cannot re-enqueue with its timer disarmed), and the
+one in-flight slot has an owner, so a second caller is refused with `-EBUSY`
+rather than silently overwriting the first.
+
+The disk as the writable machine. Attaching a disk now mounts it, so `make
+os-real-disk` and one command give a persistent Rach2 where an account created or
+a password changed is still there after the power goes off.
+
+Two network gaps the earlier milestones left. A datagram of no bytes is now a
+datagram: the receive slot's occupancy is a flag rather than its length, so an
+empty UDP payload is delivered instead of built, sent, accepted and dropped at
+the last step. And a stream socket keeps the local port it bound through
+`connect`, one listener holds a port against a second (checked where the listener
+is published, since `bind` and `listen` are separate syscalls and a check in
+`bind` alone is walked past by binding both sockets first), and simultaneous open
+works, which loopback makes reachable.
+
+## What the reviews caught
+
+The reviews were worth their cost, and the shape of what they caught is worth
+recording. Two findings were console denials of service that no probe of mine had
+thought to look for: `^Z` at the login prompt stopped a process with no shell
+above it to continue it, and `stty -icanon min 0` followed by `exit` left every
+later login reading zero bytes at once. Both are fixed where they belong, the
+first in init (a stop is the parent's to undo, and `SIGSTOP` cannot be caught at
+all) and the second in login (a getty resets the line before it asks).
+
+Three were the same class of defect in three places: a program acting on a record
+that musl's own parser skips, and then reporting success. `passwd` resolved
+`x:1000junk` as uid 1000 where `getpwnam` resolves nothing; it rechecked a shadow
+record's hash under the lock but not its shape, so an aging field turned to junk
+mid-prompt was republished; and `adduser` counted uids with `strtoul`, which
+saturates where musl's parser wraps. All three now read exactly what musl reads.
+
+One was mine in the test rather than the code, and it is the one worth repeating:
+a boot test greped for a token that appeared in the console's echo of the command
+that would print it, so it passed against a deliberately broken kernel. Three
+separate vacuous-test bugs were caught this milestone by mutating the code and
+demanding the test fail; none of them would have been caught by reading.
+
+## What stays deferred, and why
+
+`SO_REUSEADDR` is a no-op, and the listener check is scoped to live listeners
+rather than to every block in the connection table because of it: counting an
+accepted connection or a `TIME_WAIT` remnant would make restarting a server after
+a session fail where it succeeds today, and `setsockopt` offers no way out. The
+probe asserts the restart works.
+
+The ping slot stays one request for the whole machine. A queue needs a second
+wait queue and a fairness rule to give a shell command a wait it cannot see, and
+one slot is the raw-socket non-goal made visible: with a real `SOCK_RAW` each
+caller would own a socket. The cost, four seconds of refusals per dead address,
+is written in the Readme rather than hidden.
+
+The credential lock's two residues are policy, not bugs. A writer killed by
+`SIGKILL` leaves the lock and possibly its own `<path>.tmp.<pid>`; both are
+root's to remove, and the never-break rule is why. The window where a release
+that has just read its own pid can unlink a successor's lock is one scheduling
+boundary wide, opens only after somebody has already broken the rule by hand, and
+cannot be closed without an unlink and a rename that name a descriptor rather
+than a path.
+
+`adduser` never resumes a partial account and never rolls one back. Resuming
+means deciding that a partial state is a residue rather than something an
+operator wrote; rolling back means a second series of replacements, each able to
+fail the way the first did.
+
+The ping deadline's wrap guard is argued rather than probed: the tick counter
+wraps about every 497 days at 100 Hz and no test here can set it.
+
+Every ordinary disk boot leaves the dirty-mount flag set, because there is no
+userland `reboot(2)` and the only caller that clears the flag is the debug
+shell's `halt`.
+
+## The gate
+
+`make verify-style`, `make verify-host` and `make test` on every phase, with the
+disk probes on both buses and the SSH capstone whenever a phase touched what they
+exercise. `make test` grew from 44 probes to 51. Three targets were added and
+join the gate: `make test-noentropy` (twice over, for the library and for
+`passwd`), `make login-test` and `make ping-test`.
+
+Every capstone was run live, and the ones whose failure is the point were run
+against a deliberately broken build first: the console login and its refusals,
+`passwd` over SSH followed by a login with the new password and a refusal of the
+old, `adduser` at the os-real prompt followed by an SSH login as the new account
+that reads `/etc/motd`, cannot write it, and is denied `/etc/shadow`, `ping
+127.0.0.1` and `ping localhost` with a second session staying responsive through
+a ping to a dead address, and a password change surviving a real power cycle on
+the disk image.

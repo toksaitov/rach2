@@ -123,6 +123,11 @@ $ ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost    (key only; -g bars
 
 ## What stays deferred
 
+Closed by milestone 17 (`dev-log/17-completion`), which took this list as its
+charter; what remains open there is stated in that record with its reason. The
+list below is left as it was written, because it is the record of what this
+milestone shipped and did not ship.
+
 The reasoning for each is at its point of use in the code and the owning
 Readmes; collected here:
 
