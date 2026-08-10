@@ -423,13 +423,14 @@ static int tcp_local_port_in_use(uint16_t port)
  * counted them would make restarting dropbear or httpd after a session fail at
  * `bind(22)` or `bind(80)` where today it succeeds. What a connecting, closing
  * or TIME_WAIT connection holds is a port against nobody.
+ *
+ * Answers 0 when the pool was never reserved, since this runs before the
+ * allocator that would otherwise catch it.
  */
 static int tcp_port_has_listener(uint16_t port)
 {
     int i;
 
-    /* The pool may never have been reserved; `tcb_alloc` checks the same
-     * thing, and these scans run before it. */
     if (!tcp_table) {
         return 0;
     }
@@ -453,13 +454,13 @@ static int tcp_port_has_listener(uint16_t port)
  * bound port shared with a listener, or with a connection to a different peer,
  * stays legal, since `tcp_find` returns the exact match and falls back to the
  * listener only when there is none.
+ *
+ * Answers 0 when the pool was never reserved, for the reason above.
  */
 static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
 {
     int i;
 
-    /* The pool may never have been reserved; `tcb_alloc` checks the same
-     * thing, and these scans run before it. */
     if (!tcp_table) {
         return 0;
     }
@@ -930,6 +931,22 @@ static uint16_t tcp_accept_data(struct tcb *tcb, const uint8_t *payload, uint16_
  * TCB), handles RST, then dispatches on TCP state: completing handshakes,
  * delivering in-order data and acknowledging, and stepping through the closing
  * states. Called in IRQ context off the IP receive path.
+ *
+ * Simultaneous open (RFC 793) is handled in SYN_SENT: both ends sent a SYN and
+ * neither has seen an ACK, so this end answers with a SYN-ACK and waits in
+ * SYN_RCVD for the peer's. `snd_nxt` is rewound to `iss` first, and that rewind
+ * is the whole of it. The first SYN left `snd_nxt` at `iss + 1`, the send emits
+ * at `snd_nxt` and takes its retransmit sequence from it, and the peer's
+ * answering SYN-ACK acknowledges `iss + 1`; a SYN-ACK sent from `iss + 1` is
+ * therefore acknowledged by nothing, and the connection wedges with `snd_una`,
+ * `snd_nxt` and the retransmit sequence inconsistent.
+ *
+ * That arm is why SYN_RCVD dispatches on `passive`. A passive block was made by
+ * a listener and no descriptor owns its socket until `accept` hands one over,
+ * so its completion goes on the listener's queue and a reset frees both. An
+ * active opener's socket belongs to a descriptor already, so its completion
+ * wakes that `connect` (there is no listener to queue it on) and a reset is a
+ * refused connect, leaving the socket for its descriptor to close.
  */
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             const uint8_t *data, uint16_t len)
@@ -992,17 +1009,12 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             return;
         case TCP_SYN_RCVD: {
             if (tcb->passive) {
-                /* The connection never reached the application, and nothing
-                 * else holds this socket, so free both. */
                 struct socket *s = tcb->sock;
                 tcb->sock = NULL;
                 if (s) { s->tcb = NULL; socket_unref(s); }
                 tcb_free(tcb);
                 return;
             }
-            /* An active open that got here through a crossed SYN: the socket
-             * belongs to a descriptor, so the reset is a refused connect and
-             * the socket is the caller's to close. */
             tcb->so_error   = ECONNREFUSED;
             tcb->state      = TCP_CLOSED;
             tcb->retx_flags = 0;
@@ -1086,26 +1098,12 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
                 socket_tcp_accept(listen_sock, tcb->sock);
             }
         } else {
-            /* A crossed SYN: this is the caller's own socket finishing its
-             * `connect`, and there is no listener to hand it to. */
             socket_tcp_connected(tcb->sock);
         }
         break;
 
     case TCP_SYN_SENT:
         if ((flags & TCP_SYN) && !(flags & TCP_ACK)) {
-            /* Simultaneous open (RFC 793): both ends sent a SYN and neither has
-             * seen an ACK. The peer's SYN acknowledges nothing, so this end
-             * answers with a SYN-ACK and waits in SYN_RCVD for the peer's.
-             *
-             * The rewind is the whole of it. The first SYN left snd_nxt at
-             * iss + 1; tcp_send_flags emits at snd_nxt and takes retx_seq from
-             * it, while the peer's answering SYN-ACK acknowledges iss + 1. A
-             * SYN-ACK sent at iss + 1 is therefore acknowledged by nothing,
-             * retx_seq names a sequence the peer will never confirm, and the
-             * connection wedges with snd_una, snd_nxt and retx_seq
-             * inconsistent. Emitting at iss re-sends the sequence the peer is
-             * waiting on, and tcp_send_flags re-advances snd_nxt past it. */
             tcb->irs     = seq;
             tcb->rcv_nxt = seq + 1;
             tcb->snd_wnd = window;

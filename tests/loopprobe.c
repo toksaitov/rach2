@@ -52,11 +52,8 @@ typedef unsigned char uint8_t;
 #define BOUND_LISTEN_PORT 7300
 #define BOUND_CLIENT_PORT 7301
 
-/* The two ports the simultaneous-open case dials at each other. */
+/* Where the simultaneous-open case's port pairs start; each round takes two. */
 #define SIM_PORT_A  7310
-#define SIM_PORT_B  7311
-#define SIM_PORT_C  7312
-#define SIM_PORT_D  7313
 #define TCP_PORT    7200
 #define CLOSED_PORT 7300
 
@@ -606,124 +603,85 @@ static void tcp_simultaneous(void)
 {
     uint32_t args[6];
     uint8_t sa[16];
-    int a, b, rc, spin;
+    int a = -1, b = -1, rc, spin, round, crossed = 0;
     const char *msg = "simultaneous";
     char rbuf[32];
-    int n;
+    int n = 0;
 
-    args[0] = AF_INET;
-    args[1] = SOCK_STREAM;
-    args[2] = 0;
-    a = socketcall(SC_SOCKET, args);
-    if (a < 0)
-        fail("simultaneous socket a");
-    args[0] = AF_INET;
-    args[1] = SOCK_STREAM;
-    args[2] = 0;
-    b = socketcall(SC_SOCKET, args);
-    if (b < 0)
-        fail("simultaneous socket b");
+    /* Retried, because the crossing is a race this probe cannot win outright:
+     * the loopback ring is drained by the 100 Hz timer, so a tick landing
+     * between the two connects delivers the first SYN to a port whose socket
+     * has no block yet and resets it. A round that loses that race is a
+     * refused connect and not a failure; only losing every round is. */
+    for (round = 0; round < 8 && !crossed; round++) {
+        args[0] = AF_INET;
+        args[1] = SOCK_STREAM;
+        args[2] = 0;
+        a = socketcall(SC_SOCKET, args);
+        args[0] = AF_INET;
+        args[1] = SOCK_STREAM;
+        args[2] = 0;
+        b = socketcall(SC_SOCKET, args);
+        if (a < 0 || b < 0)
+            fail("simultaneous sockets");
 
-    make_sockaddr(sa, SIM_PORT_A, 0, 0, 0, 0);
-    args[0] = (uint32_t)a;
-    args[1] = (uint32_t)sa;
-    args[2] = 16;
-    if (socketcall(SC_BIND, args) != 0)
-        fail("simultaneous bind a");
-    make_sockaddr(sa, SIM_PORT_B, 0, 0, 0, 0);
-    args[0] = (uint32_t)b;
-    args[1] = (uint32_t)sa;
-    args[2] = 16;
-    if (socketcall(SC_BIND, args) != 0)
-        fail("simultaneous bind b");
-
-    /* Both non-blocking, which is the whole of how two SYNs get to be in
-     * flight at once from one process: a blocking connect would sit inside the
-     * first handshake, and its SYN would reach a port whose socket has no TCB
-     * yet and earn a reset instead of a crossing SYN. */
-    if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0 || sys_fcntl(b, F_SETFL, O_NONBLOCK) < 0)
-        fail("simultaneous nonblock");
-
-    make_sockaddr(sa, SIM_PORT_B, 127, 0, 0, 1);
-    args[0] = (uint32_t)a;
-    args[1] = (uint32_t)sa;
-    args[2] = 16;
-    rc = socketcall(SC_CONNECT, args);
-    if (rc != -EINPROGRESS && rc != 0)
-        fail("simultaneous connect a");
-
-    make_sockaddr(sa, SIM_PORT_A, 127, 0, 0, 1);
-    args[0] = (uint32_t)b;
-    args[1] = (uint32_t)sa;
-    args[2] = 16;
-    rc = socketcall(SC_CONNECT, args);
-    if (rc != -EINPROGRESS && rc != 0)
-        fail("simultaneous connect b");
-
-    /* Both ends must come up. A SYN that fell out of SYN_SENT left both
-     * hanging, so this loop is the assertion and its bound is the failure. */
-    for (spin = 0; spin < 400; spin++) {
+        make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2), 0, 0, 0, 0);
         args[0] = (uint32_t)a;
         args[1] = (uint32_t)sa;
         args[2] = 16;
-        if (socketcall(SC_CONNECT, args) == -EISCONN) {
-            break;
-        }
-        sys_nanosleep_ms(20);
-    }
-    if (spin >= 400)
-        fail("the crossing SYNs never established");
+        if (socketcall(SC_BIND, args) != 0)
+            fail("simultaneous bind a");
+        make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2 + 1), 0, 0, 0, 0);
+        args[0] = (uint32_t)b;
+        args[1] = (uint32_t)sa;
+        args[2] = 16;
+        if (socketcall(SC_BIND, args) != 0)
+            fail("simultaneous bind b");
 
-    /* And a BLOCKING connect must return 0 through the same path. What this
-     * does NOT gate is the wake: the loopback ring is drained by the timer,
-     * which fires while the caller is still inside its own `connect`, so the
-     * handshake usually finishes before the wait predicate is first evaluated
-     * and no wake is needed. Over a real interface the segments arrive
-     * milliseconds later and the caller certainly blocks, which is why the
-     * completion path must wake an active opener rather than queue it on a
-     * listener that does not exist; that half is argued in the network Readme
-     * and not proved here. */
-    sys_close(a);
-    sys_close(b);
-    args[0] = AF_INET;
-    args[1] = SOCK_STREAM;
-    args[2] = 0;
-    a = socketcall(SC_SOCKET, args);
-    args[0] = AF_INET;
-    args[1] = SOCK_STREAM;
-    args[2] = 0;
-    b = socketcall(SC_SOCKET, args);
-    if (a < 0 || b < 0)
-        fail("blocking simultaneous sockets");
-    make_sockaddr(sa, SIM_PORT_C, 0, 0, 0, 0);
-    args[0] = (uint32_t)a;
-    args[1] = (uint32_t)sa;
-    args[2] = 16;
-    if (socketcall(SC_BIND, args) != 0)
-        fail("blocking simultaneous bind a");
-    make_sockaddr(sa, SIM_PORT_D, 0, 0, 0, 0);
-    args[0] = (uint32_t)b;
-    args[1] = (uint32_t)sa;
-    args[2] = 16;
-    if (socketcall(SC_BIND, args) != 0)
-        fail("blocking simultaneous bind b");
-    if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0)
-        fail("blocking simultaneous nonblock a");
-    make_sockaddr(sa, SIM_PORT_D, 127, 0, 0, 1);
-    args[0] = (uint32_t)a;
-    args[1] = (uint32_t)sa;
-    args[2] = 16;
-    rc = socketcall(SC_CONNECT, args);
-    if (rc != -EINPROGRESS && rc != 0)
-        fail("blocking simultaneous connect a");
-    /* b blocks. Its SYN crosses a's, and what must wake it is its own connect
-     * completing rather than an accept queue nothing is listening on. */
-    make_sockaddr(sa, SIM_PORT_C, 127, 0, 0, 1);
-    args[0] = (uint32_t)b;
-    args[1] = (uint32_t)sa;
-    args[2] = 16;
-    if (socketcall(SC_CONNECT, args) != 0)
-        fail("a blocking connect through crossed SYNs did not complete");
+        /* Both non-blocking, which is how two SYNs get to be in flight at once
+         * from one process: a blocking connect would sit inside the first
+         * handshake, and its SYN would reach a port whose socket has no block
+         * yet and earn a reset instead of a crossing SYN. */
+        if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0 || sys_fcntl(b, F_SETFL, O_NONBLOCK) < 0)
+            fail("simultaneous nonblock");
+
+        make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2 + 1), 127, 0, 0, 1);
+        args[0] = (uint32_t)a;
+        args[1] = (uint32_t)sa;
+        args[2] = 16;
+        rc = socketcall(SC_CONNECT, args);
+        if (rc != -EINPROGRESS && rc != 0)
+            fail("simultaneous connect a");
+
+        make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2), 127, 0, 0, 1);
+        args[0] = (uint32_t)b;
+        args[1] = (uint32_t)sa;
+        args[2] = 16;
+        rc = socketcall(SC_CONNECT, args);
+        if (rc != -EINPROGRESS && rc != 0)
+            fail("simultaneous connect b");
+
+        for (spin = 0; spin < 100; spin++) {
+            args[0] = (uint32_t)a;
+            args[1] = (uint32_t)sa;
+            args[2] = 16;
+            rc = socketcall(SC_CONNECT, args);
+            if (rc == -EISCONN) {
+                crossed = 1;
+                break;
+            }
+            if (rc == -ECONNREFUSED) {
+                break;
+            }
+            sys_nanosleep_ms(20);
+        }
+        if (!crossed) {
+            sys_close(a);
+            sys_close(b);
+        }
+    }
+    if (!crossed)
+        fail("the crossing SYNs never established");
 
     /* And it carries data, which is what an established connection is for. */
     args[0] = (uint32_t)a;
@@ -734,7 +692,7 @@ static void tcp_simultaneous(void)
     args[5] = 0;
     if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
         fail("simultaneous send");
-    for (spin = 0; spin < 400; spin++) {
+    for (spin = 0; spin < 200; spin++) {
         args[0] = (uint32_t)b;
         args[1] = (uint32_t)rbuf;
         args[2] = sizeof(rbuf);

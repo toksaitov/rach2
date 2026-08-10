@@ -16,16 +16,7 @@ the supporting scripts.
   shellcheck, the convention grep (no `//`, ASCII only, header guards),
   clang-format on new code, a readelf ABI check, the source-list guard, and the
   text-style check.
-* `textcheck.sh` (invoked by `check.sh`): the mechanical prose checks (ASCII
-  only, no em-dash, `*` bullets, and the rest of the writing standard). Its
-  roots are the source trees and the top-level `*.md`; `dev-log` is deliberately
-  not one. The milestone records are frozen at the style of the day they were
-  written, and the early ones would fail these checks: editing them to satisfy a
-  later checker would destroy the only account of what each milestone actually
-  proved, which is the whole reason they are kept. So a new record is held to
-  the same rules the way voice is, by review, and this is the statement of that
-  rather than a gap nobody noticed. The mechanical half of the gate covers the
-  code and the current documentation; it does not cover the history.
+* `textcheck.sh` (invoked by `check.sh`): the mechanical prose checks (ASCII only, no em-dash, `*` bullets, and the rest of the writing standard). Its roots are the source trees and the top-level `*.md`; `dev-log` is deliberately not one. The milestone records are frozen at the style of the day they were written, and the early ones would fail these checks: editing them to satisfy a later checker would destroy the only account of what each milestone actually proved, which is the whole reason they are kept. So a new record is held to the same rules the way voice is, by review, and this is the statement of that rather than a gap nobody noticed. The mechanical half of the gate covers the code and the current documentation; it does not cover the history.
 * `check_sources.sh` (`make check-sources`, also run inside the gate): fails if a
   kernel `.c` on disk is missing from `C_SRC`, so a new source cannot be silently
   dropped from the build.
