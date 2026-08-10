@@ -57,7 +57,7 @@ UTILITIES = true  \
 # one names it explicitly, which is also what makes the set-id allowlist in
 # tools/check_setid.py a complete list rather than a sample: a privileged program
 # reaches an image only through a `file` line naming it.
-SBIN_PROGS = init su sudo passwd
+SBIN_PROGS = init su sudo passwd adduser adduser-crash
 
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
 SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
@@ -128,6 +128,21 @@ $(BUILD)/sbin/su: su.c pwauth.c pwauth.h
 $(BUILD)/sbin/passwd: passwd.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/passwd.d -o $@ $(LINK_PRE) passwd.c pwauth.c $(LINK_POST)
+
+# adduser links the credential library the same way, and builds twice from the
+# one source: as shipped, and as a crash build that dies the instant a named
+# publication has landed, so the ordering the account's consistency rests on is
+# proved by injection rather than by a reading of the source. Everything the
+# second build adds lives under -DADDUSER_CRASH_POINT, so the shipped binary has
+# neither the extra argument nor the code, and only the test image stages it.
+$(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/adduser.d -o $@ $(LINK_PRE) adduser.c pwauth.c $(LINK_POST)
+
+$(BUILD)/sbin/adduser-crash: adduser.c pwauth.c pwauth.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DADDUSER_CRASH_POINT -MF $(BUILD)/sbin/adduser-crash.d -o $@ \
+	    $(LINK_PRE) adduser.c pwauth.c $(LINK_POST)
 
 -include $(addprefix $(BUILD)/, $(UTILITIES:=.d)) \
         $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS:=.d))
