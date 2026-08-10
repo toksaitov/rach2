@@ -49,9 +49,16 @@ typedef struct socket {
     uint32_t last_src_ip;
     uint16_t last_src_port;
 
-    /* UDP single-datagram receive buffer (recv_len == 0 means empty). */
+    /* UDP single-datagram receive buffer. Occupancy is `recv_full` and not the
+     * length, because a datagram of no bytes is a datagram: UDP carries an
+     * empty payload perfectly well, and a slot that read its own emptiness as
+     * "nothing here" would build one, send it, accept it, deliver it to the
+     * right socket, and then drop it at the last step, leaving a blocked
+     * `recvfrom` blocked. So a read of this socket may return 0, which is a
+     * datagram and not end of input. */
     uint8_t  recv_buf[SOCK_RECV_BUF_SIZE];
     uint16_t recv_len;
+    int      recv_full;
 
     /* Processes blocked waiting for data, a connection, or an accept. The
      * IRQ-side deliver/accept/connect/fin routines wake every waiter; each

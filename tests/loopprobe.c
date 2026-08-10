@@ -34,7 +34,10 @@ typedef unsigned char uint8_t;
 #define SC_ACCEPT      5
 #define SC_GETPEERNAME 7
 #define SC_SENDTO      11
-#define SC_RECVFROM    12
+#define MSG_DONTWAIT   0x40
+#define EAGAIN         11
+
+#define SC_RECVFROM 12
 
 #define AF_INET     2
 #define SOCK_STREAM 1
@@ -187,6 +190,72 @@ static void udp_loop(void)
     if (src[2] != (UDP_PORT >> 8) || src[3] != (UDP_PORT & 0xFF)) {
         fail("udp source port");
     }
+
+    /* A datagram of no bytes is a datagram. UDP carries an empty payload, and a
+     * receive slot that read its own emptiness as "nothing here" would build
+     * this one, send it, accept it, deliver it to the right socket, and drop it
+     * at the last step, leaving the recvfrom below blocked forever. A hang here
+     * is a detection too: the runner reports a probe that never returns. */
+    args[0] = (uint32_t)s;
+    args[1] = (uint32_t)msg;
+    args[2] = 0;
+    args[3] = 0;
+    args[4] = (uint32_t)dst;
+    args[5] = 16;
+    if (socketcall(SC_SENDTO, args) != 0)
+        fail("udp empty sendto");
+
+    args[0] = (uint32_t)s;
+    args[1] = (uint32_t)rbuf;
+    args[2] = sizeof(rbuf);
+    args[3] = 0;
+    args[4] = (uint32_t)src;
+    args[5] = (uint32_t)&salen;
+    salen = 16;
+    n = socketcall(SC_RECVFROM, args);
+    if (n != 0)
+        fail("udp empty payload");
+    if (!mem_eq(src + 4, canon_ip, 4))
+        fail("udp empty source not canonical");
+    if (src[2] != (UDP_PORT >> 8) || src[3] != (UDP_PORT & 0xFF)) {
+        fail("udp empty source port");
+    }
+
+    /* And the slot was cleared by that read, not merely reported: the next
+     * datagram must arrive whole. */
+    args[0] = (uint32_t)s;
+    args[1] = (uint32_t)msg;
+    args[2] = (uint32_t)strlen(msg);
+    args[3] = 0;
+    args[4] = (uint32_t)dst;
+    args[5] = 16;
+    if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
+        fail("udp sendto after empty");
+
+    args[0] = (uint32_t)s;
+    args[1] = (uint32_t)rbuf;
+    args[2] = sizeof(rbuf);
+    args[3] = 0;
+    args[4] = (uint32_t)src;
+    args[5] = (uint32_t)&salen;
+    salen = 16;
+    n = socketcall(SC_RECVFROM, args);
+    if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n)) {
+        fail("udp payload after empty");
+    }
+
+    /* And an empty slot is still empty. This is the assertion a fix that made
+     * the slot unconditionally ready would fail while passing both above. */
+    args[0] = (uint32_t)s;
+    args[1] = (uint32_t)rbuf;
+    args[2] = sizeof(rbuf);
+    args[3] = MSG_DONTWAIT;
+    args[4] = (uint32_t)src;
+    args[5] = (uint32_t)&salen;
+    salen = 16;
+    n = socketcall(SC_RECVFROM, args);
+    if (n != -EAGAIN)
+        fail("udp drained socket not empty");
 
     sys_close(s);
 }

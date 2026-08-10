@@ -73,6 +73,7 @@ struct socket *socket_alloc(int type)
             socket_pool[i].last_src_ip   = 0;
             socket_pool[i].last_src_port = 0;
             socket_pool[i].recv_len      = 0;
+            socket_pool[i].recv_full     = 0;
             wait_queue_init(&socket_pool[i].waiters);
             k_memset(socket_pool[i].accept_queue, 0,
                      sizeof(socket_pool[i].accept_queue));
@@ -164,6 +165,7 @@ void socket_udp_deliver(struct socket *sock,
 
     k_memcpy(sock->recv_buf, data, copy_len);
     sock->recv_len      = copy_len;
+    sock->recv_full     = 1;
     sock->last_src_ip   = src_ip;
     sock->last_src_port = src_port;
 
@@ -174,7 +176,7 @@ void socket_udp_deliver(struct socket *sock,
 static int udp_recv_ready(void *arg)
 {
     socket_t *sock = (socket_t *)arg;
-    return sock->recv_len != 0;
+    return sock->recv_full;
 }
 
 /* Wait predicate: a stream socket has buffered data, saw a FIN (EOF), or its
@@ -216,7 +218,7 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len,
 
     /* Consume the single-datagram slot under net_lock so the RX IRQ producer
      * (socket_udp_deliver) cannot overwrite it mid-readout, which would tear the
-     * payload, mismatch the recorded source, or let the trailing recv_len = 0 drop
+     * payload, mismatch the recorded source, or let the trailing clear drop
      * a datagram the IRQ just delivered. The caller prefaulted the user buffer, so
      * the copy cannot fault with interrupts off. */
     flags = net_lock();
@@ -231,7 +233,8 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len,
     if (src_port) {
         *src_port = sock->last_src_port;
     }
-    sock->recv_len = 0;
+    sock->recv_len  = 0;
+    sock->recv_full = 0;
     net_unlock(flags);
     return copy_len;
 }
@@ -250,7 +253,7 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
     /* Same atomic read-out as socket_recv: snapshot and clear the slot under
      * net_lock so the RX IRQ cannot interleave. */
     flags = net_lock();
-    if (sock->recv_len == 0) {
+    if (!sock->recv_full) {
         net_unlock(flags);
         return SOCK_EAGAIN;
     }
@@ -265,7 +268,8 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
     if (src_port) {
         *src_port = sock->last_src_port;
     }
-    sock->recv_len = 0;
+    sock->recv_len  = 0;
+    sock->recv_full = 0;
     net_unlock(flags);
     return copy_len;
 }
@@ -493,7 +497,7 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     }
 
     if (sock->type == SOCK_DGRAM) {
-        if (sock->recv_len != 0) {
+        if (sock->recv_full) {
             revents |= (short)(events & POLLIN);
         }
         revents |= (short)(events & POLLOUT); /* a datagram socket can always send */
