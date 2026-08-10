@@ -223,6 +223,10 @@ test-noentropy: test-image
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 90 --ok "SALTNOENT OK" \
 	    "expect=Type 'help'" "send=exec /musl/saltnoent" wait=20
+	python3 tools/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=qemu64 \
+	    --timeout 180 --ok "PASSWDMUSL OK (fail-closed)" \
+	    "expect=Type 'help'" "send=exec /musl/passwdmusl" wait=60
 
 # `make test-disk`: the disk-backed page-cache integrity check. Builds a disk
 # image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
@@ -371,8 +375,17 @@ check-busybox: $(BUSYBOX_STAMP)
 # of the five mode-bearing directives, fails the build rather than a boot. Every
 # artifact a check reads becomes a prerequisite here, in the phase that adds the
 # check, because make does not order the siblings of a prerequisite list.
-check-setid:
+# The manifest sweep needs no build product, but the applet-table check reads
+# one, so this target is ordered against the busybox stamp. Unordered it would
+# fail a correct tree on a header that does not exist yet, or, in the case that
+# matters, read the PREVIOUS configuration's table after rach2.config was edited,
+# pass, and let the image stage the busybox whose re-enabled applet the check
+# exists to forbid: build_busybox.sh opens by removing and re-extracting the
+# tree, so for most of a rebuild the header is absent and before that it is
+# stale.
+check-setid: $(BUSYBOX_STAMP)
 	@python3 tools/check_setid.py
+	@python3 tools/check_setid.py --applets
 check-dropbearmulti: $(DROPBEAR_STAMP)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 

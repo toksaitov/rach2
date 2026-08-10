@@ -522,7 +522,15 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
     struct sigaction saved_tstp, saved_cont, saved_pipe, saved_death[PWAUTH_SIG_MAX];
     sigset_t stops, saved_mask;
     size_t len = 0;
+    /* The shortest limit any reader in this image imposes, applied here so that
+     * every caller gets it rather than each remembering to ask for it: `su`
+     * passes a buffer of its own size, and a password it accepted but dropbear
+     * refuses is an account that works at the console and not over the network.
+     * A caller with a smaller buffer still gets its own size. */
+    size_t room = size - 1 < (size_t)PWAUTH_MAX_PASSWORD ? size - 1 : (size_t)PWAUTH_MAX_PASSWORD;
     int deaths = 0;
+    int over = 0;
+    int bad = 0;
     int rc = -1;
     int i;
 
@@ -584,6 +592,8 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
         if (Tty_resumed) {
             Tty_resumed = 0;
             len = 0;
+            over = 0;
+            bad = 0;
         }
         n = read(0, &c, 1);
 
@@ -593,6 +603,8 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
         if (Tty_resumed) {
             Tty_resumed = 0;
             len = 0;
+            over = 0;
+            bad = 0;
             continue;
         }
         if (n < 0) {
@@ -609,8 +621,17 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
             rc = 0;
             break;
         }
-        if (len + 1 < size) {
+        if (c == '\0') {
+            /* Stored it would be an ordinary byte, but `strcmp` and `crypt`
+             * both stop there, so two entries differing only past the NUL
+             * confirm each other and the hash is taken over the prefix alone:
+             * the user chooses one secret and the system stores a shorter one,
+             * and is told it succeeded. */
+            bad = 1;
+        } else if (len < room) {
             buf[len++] = c;
+        } else {
+            over = 1;
         }
     }
     buf[len] = '\0';
@@ -635,6 +656,22 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
     sigaction(SIGPIPE, &saved_pipe, NULL);
     Prompt = "";
     Prompt_len = 0;
+
+    /* A line that did not fit is a refusal, not a shorter password. Keeping the
+     * prefix would store a secret the user never chose and never typed: they
+     * would be told the change succeeded and then be unable to enter what they
+     * had entered. The buffer's size is the caller's statement of what it can
+     * use, so the honest answer is that the line was too long. */
+    if (bad) {
+        memset(buf, 0, size);
+        fprintf(stderr, "pwauth: the entry holds a NUL byte, which no reader here can store\n");
+        rc = -1;
+    } else if (over) {
+        memset(buf, 0, size);
+        fprintf(stderr, "pwauth: the entry is longer than %u characters\n", (unsigned)room);
+        rc = -1;
+    }
+
     return rc;
 }
 

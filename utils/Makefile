@@ -57,7 +57,7 @@ UTILITIES = true  \
 # one names it explicitly, which is also what makes the set-id allowlist in
 # tools/check_setid.py a complete list rather than a sample: a privileged program
 # reaches an image only through a `file` line naming it.
-SBIN_PROGS = init su sudo
+SBIN_PROGS = init su sudo passwd
 
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
 SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
@@ -122,6 +122,12 @@ $(BUILD)/sbin/%: %.c
 $(BUILD)/sbin/su: su.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/su.d -o $@ $(LINK_PRE) su.c pwauth.c $(LINK_POST)
+
+# passwd links the credential library for the same reason su does, and is the
+# first program that writes through it.
+$(BUILD)/sbin/passwd: passwd.c pwauth.c pwauth.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/passwd.d -o $@ $(LINK_PRE) passwd.c pwauth.c $(LINK_POST)
 
 -include $(addprefix $(BUILD)/, $(UTILITIES:=.d)) \
         $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS:=.d))

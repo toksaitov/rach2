@@ -126,6 +126,15 @@
  * buffer passed to `pwauth_mint_salt` holds this many plus the terminator. */
 #define PWAUTH_SALT_LEN 16
 
+/* The longest password this system can actually use, and the reason it is not
+ * simply "as long as the buffer". Dropbear refuses an SSH password over
+ * `DROPBEAR_MAX_PASSWORD_LEN`, which is 100, before it ever calls `crypt`, and
+ * it does so to keep the hash inside its failure delay. A longer password would
+ * therefore work at the console and never over the network, which is a way to
+ * lock yourself out of the box by succeeding. One limit, and it is the smallest
+ * one any reader in the image imposes. */
+#define PWAUTH_MAX_PASSWORD 100
+
 /* What `cred_rewrite` returns, and two of them what `cred_txn_end` returns. The
  * three are one distinction the caller cannot make for itself and must report
  * honestly: the replacement is live and on the platter, live but perhaps not on
@@ -173,9 +182,20 @@ int pwauth_verify(const char *user, const char *password);
  * controlling terminal at all, where a `/dev/tty` reader would block forever.
  *
  * The trailing newline is not stored, a carriage return ends the line the way a
- * newline does, and input past `size - 1` characters is discarded rather than
- * split across two reads. End of input with nothing read is -1, which is the
- * refusal a caller reports; end of input after some bytes is a complete line.
+ * newline does, and end of input with nothing read is -1, which is the refusal
+ * a caller reports; end of input after some bytes is a complete line.
+ *
+ * A line longer than the limit is refused rather than truncated, and the limit
+ * is the smaller of the caller's buffer and `PWAUTH_MAX_PASSWORD`, so every
+ * caller gets the one every reader in the image agrees on without having to ask
+ * for it. Keeping the prefix that fitted would store a secret the user never
+ * chose and never typed, and then tell them the change succeeded. A line
+ * holding a NUL byte is refused the same way and not cut short at it, since
+ * `strcmp` and `crypt` both stop at a NUL: two entries differing only past one
+ * would confirm each other where a caller asks twice, and the secret stored
+ * would be the prefix alone. A resume clears either refusal along with the line
+ * that earned it, since the line being started again is a new one and the old
+ * one's length is not its fault.
  *
  * Signals are handled by what each one endangers. A stop is not a death, so
  * `SIGTSTP` and `SIGCONT` are handled always, transaction or none: the terminal

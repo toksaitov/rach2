@@ -34,6 +34,7 @@ text 0644 /etc/sudoers # uids permitted to run sudo\n1000\n
 # reports the identity, the working directory, the argv[0] and the environment
 # it was given and exits non-zero on the first item that does not match.
 file 04755:0:0 /su build/utils/sbin/su
+file 04755:0:0 /passwd build/utils/sbin/passwd
 
 # The probe account's home. It is a real directory and not the image root,
 # because a chdir to the directory the caller is already in would prove nothing
@@ -90,9 +91,9 @@ file 04755:0:0 /musl/suidmusl.suid build/tests/musl/suidmusl
 dir 0755 /etc
 text 0644 /etc/motd Welcome to Rach2 (test image).\n
 text 0644 /etc/hostname rach2\n
-text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\nprobe:x:1000:1000:probe:/home/probe:/idreport\n
-text 0644 /etc/group root:x:0:\nprobe:x:1000:\n
-text 0600 /etc/shadow root:$6$rach2test$br2Wb86wTtgiPWLN2WQoPqu69kGMNLnIQj3eaZLhG6sNTm9sN6ny.2af9tuaB/2HTw86.N3ZZN585IBoPgi0w/:0:0:99999:7:::\nprobe:$6$probetest$81REycl6dLv1SAkzSsuY0bx0yRoiYWOLkNshDgfNYybAChA02pRRKRGRlPADOnGg9SwQRz80cXN875vlU6LSF0:0:0:99999:7:::\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\nprobe:x:1000:1000:probe:/home/probe:/idreport\nprobe2:x:1001:1001:probe2:/home/probe:/idreport\n
+text 0644 /etc/group root:x:0:\nprobe:x:1000:\nprobe2:x:1001:\n
+text 0600 /etc/shadow root:$6$rach2test$br2Wb86wTtgiPWLN2WQoPqu69kGMNLnIQj3eaZLhG6sNTm9sN6ny.2af9tuaB/2HTw86.N3ZZN585IBoPgi0w/:0:0:99999:7:::\nprobe:$6$probetest$81REycl6dLv1SAkzSsuY0bx0yRoiYWOLkNshDgfNYybAChA02pRRKRGRlPADOnGg9SwQRz80cXN875vlU6LSF0:0:0:99999:7:::\nprobe2:$6$probe2test$v9NhhsuiXi4hOCF74Pbx1Wf6OFlAxvxA6U9pcCazHvodWv3lCg2LoShwjBUpyOazABVMnpgK2Ln2zNuIx2vpd0:0:0:99999:7:::\n
 
 text 0644 /hello.txt hello, world\n
 text 0644 /resolv.conf nameserver 10.0.2.3\n

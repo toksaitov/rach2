@@ -21,6 +21,7 @@ dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 file 04755:0:0 /bin/su build/utils/sbin/su
+file 04755:0:0 /bin/passwd build/utils/sbin/passwd
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
 

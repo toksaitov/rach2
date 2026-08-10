@@ -30,7 +30,7 @@ the supporting scripts.
 * `gen_compile_commands.sh` (`make compile-commands`): writes
   `compile_commands.json` (git-ignored) from the build's own commands so clangd
   can index the kernel through the i686-elf cross GCC (see `mk/Readme.md`).
-* `check_setid.py`: the set-id guard, in two halves that check each other.
+* `check_setid.py`: the set-id guard, in three checks; the first two check each other.
   The MANIFEST SWEEP (run inside the gate) parses every
   `krffs/manifests/*.manifest` and compares its set-id lines against a
   per-image allowlist naming each path's exact mode and owner, failing on an
@@ -45,6 +45,27 @@ the supporting scripts.
   rather than text (a lone carriage return ends a line for Python and not for
   `fgets`, which is enough to hide a privileged path behind a declared one) and
   to the line-length limit and arity the stager enforces.
+  The APPLET TABLE (`--applets [PATH]`, run from `check-setid`) reads the
+  busybox `include/applet_tables.h` the build generates and fails when `su` or
+  `passwd` is present, because privilege climbs through the declared set-id
+  programs and nowhere else and busybox is staged unprivileged: an applet of
+  either name would answer from the shell's PATH before `/bin/su` and
+  `/bin/passwd` and then refuse for want of a bit it does not have. It matches
+  whole NUL-delimited names rather than substrings, since `passwd` occurs
+  inside `passwd_main` and inside help text, and it requires `cat` to be
+  present, so a header it could not parse fails loudly rather than reading as a
+  clean absence. It reads `vendor/busybox/rach2.config` in the same pass, for
+  the capabilities that live inside an applet rather than as one:
+  `CONFIG_FEATURE_HTTPD_AUTH_MD5` makes `httpd -m` mint a password hash from
+  a salt no entropy source was read for, and no applet name changes when it
+  comes back. That half also fails when a forbidden symbol is absent from the
+  config altogether, since a regenerated config could drop the line and leave
+  the check proving nothing.
+  It is the one check that reads a build product, which is why
+  `check-setid` is ordered against the busybox stamp: unordered it would fail a
+  correct tree on a header not yet generated, or read the previous
+  configuration's table after `rach2.config` was edited and let the image stage
+  the busybox whose re-enabled applet the check exists to forbid.
   The IMAGE INVENTORY (`--image FILE --manifest PATH [--offset] [--size]`, run
   from `mkimage.sh` and `mkdisk.sh` before the image is moved into place) walks
   the staged artifact's node chain, rebuilds each path from `parent_id`, and

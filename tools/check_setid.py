@@ -115,7 +115,10 @@ ALLOWLIST = {
         # would run every one of its BB_SUID_REQUIRE and BB_SUID_MAYBE applets
         # as root unless an /etc/busybox.conf confined it, and that config path
         # trips a busybox use-after-free the kernel's strict munmap faults.
-        "setid": {"/bin/su": (0o4755, 0, 0, "build/utils/sbin/su")},
+        "setid": {
+            "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
+            "/bin/passwd": (0o4755, 0, 0, "build/utils/sbin/passwd"),
+        },
         "unprivileged": ("/bin/busybox",),
         "sentinel": None,
     },
@@ -131,6 +134,7 @@ ALLOWLIST = {
             "/suidhelper.nox": (0o4644, 0, 0, "build/tests/suidhelper"),
             "/sudo": (0o4755, 0, 0, "build/utils/sbin/sudo"),
             "/su": (0o4755, 0, 0, "build/utils/sbin/su"),
+            "/passwd": (0o4755, 0, 0, "build/utils/sbin/passwd"),
             "/musl/suidmusl.suid": (0o4755, 0, 0,
                                     "build/tests/musl/suidmusl"),
         },
@@ -767,7 +771,8 @@ def sweep(paths, table=ALLOWLIST, require_all=False):
 # not for C, a tab as a field separator, and a NUL that ends the line for C and
 # not for Python.
 OS_REAL_MINIMUM = ("file 0755 /bin/busybox build/vendor/busybox/busybox\n"
-                   "file 04755:0:0 /bin/su build/utils/sbin/su\n")
+                   "file 04755:0:0 /bin/su build/utils/sbin/su\n"
+                   "file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n")
 
 TEST_MINIMUM = ("file 04755:0:0 /suidhelper.suid build/tests/suidhelper\n"
                 "file 04755:5:0 /suidhelper.u5 build/tests/suidhelper\n"
@@ -775,6 +780,7 @@ TEST_MINIMUM = ("file 04755:0:0 /suidhelper.suid build/tests/suidhelper\n"
                 "file 04644:0:0 /suidhelper.nox build/tests/suidhelper\n"
                 "file 04755:0:0 /sudo build/utils/sbin/sudo\n"
                 "file 04755:0:0 /su build/utils/sbin/su\n"
+                "file 04755:0:0 /passwd build/utils/sbin/passwd\n"
                 "file 04755:0:0 /musl/suidmusl.suid "
                 "build/tests/musl/suidmusl\n")
 
@@ -786,7 +792,8 @@ SELFTEST_CASES = [
     ("a declared set-id file", "os-real", OS_REAL_MINIMUM, True, ""),
     ("a declared set-id optional-file", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
-     "optional-file 04755:0:0 /bin/su build/utils/sbin/su\n", True, ""),
+     "optional-file 04755:0:0 /bin/su build/utils/sbin/su\n"
+     "optional-file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n", True, ""),
     ("a declared set-id path staged as text", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
      "text 04755:0:0 /bin/su placeholder\n", False, "inline"),
@@ -858,7 +865,8 @@ SELFTEST_CASES = [
      False, "/bin/evil"),
     ("tab-separated fields", "os-real",
      "file\t0755\t/bin/busybox\tbuild/vendor/busybox/busybox\n"
-     "file\t04755:0:0\t/bin/su\tbuild/utils/sbin/su\n", True, ""),
+     "file\t04755:0:0\t/bin/su\tbuild/utils/sbin/su\n"
+     "file\t04755:0:0\t/bin/passwd\tbuild/utils/sbin/passwd\n", True, ""),
     ("a carriage return inside a path", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
      "file 04755:0:0 /bin/su\r#x build/utils/sbin/su\n",
@@ -1090,6 +1098,127 @@ def report(problems):
     return 1
 
 
+
+# The applets a shipped busybox must not carry, and the one it must, for two
+# reasons that both come down to one rule: there is one way to climb and one way
+# to write a credential file.
+#
+# `su` and `passwd` are the climb. Compiled back in they would answer a bare
+# `su` or `passwd` from the shell's PATH before /bin/su and /bin/passwd do, and
+# busybox is staged unprivileged, so the user would get the applet's own refusal
+# rather than the program that works.
+#
+# The next group are the writers. `adduser`, `deluser`, `addgroup`, `delgroup`
+# and `chpasswd` rewrite /etc/passwd, /etc/shadow or /etc/group through
+# busybox's own `update_passwd`, which takes an advisory `fcntl` lock this
+# kernel grants unconditionally and knows nothing of /etc/.pwlock. Two writers
+# using different protocols do not exclude each other at all: each reads a
+# pre-image and the later rename erases the other's change, which is exactly the
+# lost update the credential transaction exists to prevent. A lock only works if
+# every writer takes it.
+#
+# `cryptpw` and `mkpasswd` are here for a third reason, since they write
+# nothing: they are a second way to mint a hash, and their salt comes from a pid
+# and a clock through a linear congruential generator rather than from any
+# entropy source. This image mints one way, through `pwauth_mint_salt`, which
+# refuses outright when the kernel's generator is not trusted; a tool that
+# cannot refuse would put a weaker hash into the same file by a route that rule
+# cannot see.
+#
+# The sentinel is an applet that must be present, because a check that only ever
+# looks for absences passes just as well on a header it failed to understand.
+FORBIDDEN_APPLETS = ("su", "passwd", "adduser", "deluser", "addgroup", "delgroup", "chpasswd",
+                     "cryptpw", "mkpasswd")
+APPLET_SENTINEL = "cat"
+
+APPLET_TABLE = os.path.join(
+    "vendor", "busybox", "busybox-1.36.1", "include", "applet_tables.h")
+
+
+def check_applets(path=APPLET_TABLE):
+    """Check a generated busybox applet table. Returns a list of problems.
+
+    The names live in one NUL-delimited string, so the match is on whole tokens
+    rather than on a substring: `passwd` appears inside `passwd_main` and inside
+    a help string, and a search that did not split would find it in a busybox
+    that compiled the applet out.
+    """
+    if not os.path.exists(path):
+        return ["%s: no applet table; build busybox before checking it" % path]
+
+    try:
+        with open(path, "r", encoding="latin-1", newline="\n") as handle:
+            text = handle.read()
+    except OSError as error:
+        return ["%s: cannot read the applet table: %s" % (path, error)]
+
+    names = set()
+    for chunk in re.findall(r'"((?:[^"\\]|\\.)*)"', text):
+        for token in chunk.split("\\0"):
+            token = token.strip()
+            if token:
+                names.add(token)
+
+    problems = []
+    if APPLET_SENTINEL not in names:
+        problems.append(
+            "%s: the applet table does not name `%s`, so this check found "
+            "nothing rather than proving an absence" % (path, APPLET_SENTINEL))
+        return problems
+    for applet in FORBIDDEN_APPLETS:
+        if applet in names:
+            problems.append(
+                "%s: busybox carries the `%s` applet; privilege climbs through "
+                "the declared set-id programs alone" % (path, applet))
+
+    return problems
+
+
+
+# Config symbols a shipped busybox must not carry, checked in the source config
+# rather than in the generated table because they are features inside an applet
+# and no applet name changes when they come back.
+#
+# `FEATURE_HTTPD_AUTH_MD5` is one: `httpd -m` mints a `$1$` hash and prints it,
+# through the same pid-and-clock salt `cryptpw` used, and standalone ash reaches
+# the applet with no file to remove. A hash minted that way is accepted by
+# `pwauth_check` and by dropbear once it is in `/etc/shadow`, so leaving it
+# enabled would keep a second minter that cannot fail closed, which is the thing
+# the entropy rule exists to prevent.
+FORBIDDEN_CONFIG = ("CONFIG_FEATURE_HTTPD_AUTH_MD5",)
+
+BUSYBOX_CONFIG = os.path.join("vendor", "busybox", "rach2.config")
+
+
+def check_config(path=BUSYBOX_CONFIG):
+    """Check the busybox config for features that return a forbidden capability."""
+    if not os.path.exists(path):
+        return ["%s: no busybox config to check" % path]
+
+    try:
+        with open(path, "r", encoding="latin-1", newline="\n") as handle:
+            lines = handle.read().split("\n")
+    except OSError as error:
+        return ["%s: cannot read the config: %s" % (path, error)]
+
+    problems = []
+    seen = 0
+    for line in lines:
+        for symbol in FORBIDDEN_CONFIG:
+            if line.startswith(symbol + "=") or line == ("# %s is not set" % symbol):
+                seen += 1
+            if line.startswith(symbol + "=y"):
+                problems.append(
+                    "%s: %s is set; it mints a password hash from a salt no entropy "
+                    "source was read for" % (path, symbol))
+    if seen < len(FORBIDDEN_CONFIG):
+        problems.append(
+            "%s: not every forbidden symbol appears at all, so this check proved "
+            "nothing; the config may have been regenerated" % path)
+
+    return problems
+
+
 def main(argv):
     parser = argparse.ArgumentParser(
         description="the set-id guard for the manifests and the staged images")
@@ -1097,6 +1226,8 @@ def main(argv):
                         help="manifests to sweep (all of them by default)")
     parser.add_argument("--selftest", action="store_true",
                         help="run the sweep's own cases over fixtures")
+    parser.add_argument("--applets", nargs="?", const=APPLET_TABLE,
+                        help="check a generated busybox applet table")
     parser.add_argument("--image", help="staged image to inventory")
     parser.add_argument("--manifest", help="the manifest that staged --image")
     parser.add_argument("--offset", default="0",
@@ -1107,6 +1238,13 @@ def main(argv):
 
     if args.selftest:
         return selftest()
+
+    if args.applets:
+        problems = check_applets(args.applets) + check_config()
+        if problems:
+            return report(problems)
+        print("check-setid: OK (%s: no forbidden applet or feature)" % args.applets)
+        return 0
 
     if args.image:
         if not args.manifest:

@@ -180,6 +180,56 @@ static ssize_t slurp(const char *path, char *buffer, size_t size)
 }
 
 /**
+ * Write into `out` the shadow `text` with `user`'s hash field replaced by
+ * `hash`. Returns 0, or -1 when it would not fit.
+ */
+static int replace_field(const char *text, const char *user, const char *hash, char *out,
+                         size_t size)
+{
+    size_t len = strlen(user);
+    const char *line = text;
+    size_t off = 0;
+
+    while (*line) {
+        const char *end = strchr(line, '\n');
+        size_t span = end ? (size_t)(end - line) : strlen(line);
+        int mine = span > len && strncmp(line, user, len) == 0 && line[len] == ':';
+
+        if (mine) {
+            const char *rest = memchr(line + len + 1, ':', span - len - 1);
+            size_t tail = rest ? span - (size_t)(rest - line) : 0;
+
+            if (off + len + 1 + strlen(hash) + tail + 2 >= size) {
+                return -1;
+            }
+            memcpy(out + off, line, len + 1);
+            off += len + 1;
+            memcpy(out + off, hash, strlen(hash));
+            off += strlen(hash);
+            if (rest) {
+                memcpy(out + off, rest, tail);
+                off += tail;
+            }
+        } else {
+            if (off + span + 2 >= size) {
+                return -1;
+            }
+            memcpy(out + off, line, span);
+            off += span;
+        }
+        if (end) {
+            out[off++] = '\n';
+        } else {
+            break;
+        }
+        line = end + 1;
+    }
+    out[off] = '\0';
+
+    return 0;
+}
+
+/**
  * Write `text` to `path` at mode `mode`, replacing whatever was there. Returns
  * 0 on success and -1 otherwise.
  */
@@ -1568,6 +1618,112 @@ static int check_prompt_stale_owner(void)
 }
 
 /**
+ * The child for the overflow-then-resume case: one read, which must come back
+ * with the line typed AFTER the stop.
+ */
+static void prompt_overflow_child(int in)
+{
+    char password[64];
+
+    if (dup2(in, 0) != 0) {
+        _exit(42);
+    }
+    if (in > 2) {
+        close(in);
+    }
+    if (pwauth_read_password("Password: ", password, sizeof(password)) != 0) {
+        _exit(44);
+    }
+    _exit(strcmp(password, "secret") == 0 ? 0 : 45);
+}
+
+/**
+ * A run too long to keep, then a stop, then a line that fits.
+ *
+ * The reader refuses an over-long entry rather than storing the prefix it
+ * fitted, and it drops the line it has whenever a resume is served. Those two
+ * meet here: a resume starts a fresh line, so the overflow that ended the old
+ * one must go with it. Left standing, the flag rejects the perfectly good
+ * password typed after the continue, and the user is told their entry was too
+ * long when it was not, with no way past it but to start the program again.
+ *
+ * The channel is a pipe and not a pseudo-terminal, which is the whole reason
+ * this case can exist. A terminal here is canonical, so nothing reaches the
+ * reader until a newline does and an over-long line therefore ends the read
+ * before any stop can be served; on a pipe the bytes arrive as they are
+ * written, so the reader can be holding an over-long run when the stop lands.
+ * Driving a program by script, which is how these probes and dropbear both run
+ * one, is exactly that case.
+ */
+static int check_prompt_overflow_resume(void)
+{
+    char filler[200];
+    int in[2];
+    pid_t child;
+    int status;
+    size_t i;
+
+    if (pipe(in) != 0) {
+        return fail("could not make the pipe the overflow-resume case feeds");
+    }
+    child = fork();
+    if (child == 0) {
+        close(in[1]);
+        prompt_overflow_child(in[0]);
+    }
+    close(in[0]);
+    if (child < 0) {
+        close(in[1]);
+
+        return fail("could not fork the reader the overflow-resume case interrupts");
+    }
+
+    /* More than the reader will keep, and no newline, so it is still collecting
+     * when the stop arrives. */
+    for (i = 0; i < sizeof(filler) - 1; i++) {
+        filler[i] = 'a';
+    }
+    filler[sizeof(filler) - 1] = '\0';
+    if (write(in[1], filler, sizeof(filler) - 1) != (ssize_t)(sizeof(filler) - 1)) {
+        kill(child, SIGKILL);
+        (void)waitpid(child, &status, 0);
+        close(in[1]);
+
+        return fail("could not write the over-long run");
+    }
+    sleep(1);
+    kill(child, SIGTSTP);
+    if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status)) {
+        kill(child, SIGKILL);
+        (void)waitpid(child, &status, 0);
+        close(in[1]);
+
+        return fail("the reader did not stop in the overflow-resume case");
+    }
+    kill(child, SIGCONT);
+    sleep(1);
+    if (write(in[1], "secret\n", 7) != 7) {
+        kill(child, SIGKILL);
+        (void)waitpid(child, &status, 0);
+        close(in[1]);
+
+        return fail("could not write the password after the resume");
+    }
+    close(in[1]);
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
+        return fail("the reader did not finish the overflow-resume case");
+    }
+    if (WEXITSTATUS(status) == 44) {
+        return fail("a line that fits was refused because an earlier one had not");
+    }
+    if (WEXITSTATUS(status) != 0) {
+        return fail("the password typed after the resume was not the one read");
+    }
+
+    return 0;
+}
+
+/**
  * The session leader for the never-foreground case: it keeps the terminal and
  * never hands it over, which is the shape a shell's `&` leaves behind.
  */
@@ -2044,6 +2200,49 @@ static int check_su(void)
         return fail("a non-login su did not run the target's shell as it was");
     }
 
+    /* The limit belongs to the library, not to whichever buffer a caller
+     * happened to declare. `su` asks with a buffer of its own size, and an
+     * entry longer than the shortest limit any reader imposes must still be
+     * refused here: a password `su` accepted and dropbear refuses is an account
+     * that works at the console and never over the network. */
+    {
+        char overlong[160];
+        char saved[4096];
+        char rebuilt[4096];
+        char *made;
+        size_t i;
+
+        for (i = 0; i < sizeof(overlong) - 1; i++) {
+            overlong[i] = 'a';
+        }
+        overlong[sizeof(overlong) - 1] = '\0';
+
+        /* The account's real password is made this long, which `passwd` would
+         * refuse to do and only a hand-written record can arrange. Feeding a
+         * long WRONG password would prove nothing: it is refused for being
+         * wrong. Feeding the long RIGHT one asks the only question there is,
+         * which is whether the reader stops at the limit every other reader in
+         * the image stops at. */
+        if (slurp("/etc/shadow", saved, sizeof(saved)) < 0) {
+            return fail("cannot read the shadow file the long-password case rewrites");
+        }
+        made = crypt(overlong, "$6$sulimit");
+        if (!made || made[0] != '$') {
+            return fail("cannot mint the hash the long-password case needs");
+        }
+        if (replace_field(saved, "probe", made, rebuilt, sizeof(rebuilt)) != 0 ||
+            spill("/etc/shadow", rebuilt, 0600) != 0) {
+            (void)spill("/etc/shadow", saved, 0600);
+
+            return fail("could not stage the account with a long password");
+        }
+        status = run_su("/musl", non_login, caller_env, overlong);
+        (void)spill("/etc/shadow", saved, 0600);
+        if (status == 0) {
+            return fail("su accepted a password longer than any reader in the image will take");
+        }
+    }
+
     status = run_su("/musl", non_login, caller_env, ROOT_PASSWORD);
     if (status == CALLER_BROKEN) {
         return fail("a refused su left the caller's identity changed");
@@ -2145,6 +2344,9 @@ int main(void)
     }
     if (rc == 0) {
         rc = check_prompt_burst();
+    }
+    if (rc == 0) {
+        rc = check_prompt_overflow_resume();
     }
     if (rc == 0) {
         rc = check_prompt_stop_before_read();

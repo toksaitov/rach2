@@ -77,8 +77,9 @@ newcode_ch()
     # utils/, and its two guest tests are under tests/musl/; no glob here
     # reaches either tree. The seam test's compat headers are a directory down
     # from tests/host, which the glob above does not descend into.
-    ls utils/pwauth.c utils/pwauth.h 2>/dev/null
-    ls tests/musl/pwauthmusl.c tests/musl/saltnoent.c tests/musl/creddisk.c 2>/dev/null
+    ls utils/pwauth.c utils/pwauth.h utils/passwd.c 2>/dev/null
+    ls tests/musl/pwauthmusl.c tests/musl/saltnoent.c tests/musl/creddisk.c \
+       tests/musl/passwdmusl.c 2>/dev/null
     ls tests/host/compat/crypt.h tests/host/compat/shadow.h \
        tests/host/compat/sys/random.h 2>/dev/null
 }
@@ -106,8 +107,9 @@ find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 ls "$REPO"/tests/fdstale.c "$REPO"/tests/idreport.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
-ls "$REPO"/utils/pwauth.c "$REPO"/utils/pwauth.h >>"$VDIR/_srcs.txt" 2>/dev/null || true
+ls "$REPO"/utils/pwauth.c "$REPO"/utils/pwauth.h "$REPO"/utils/passwd.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 ls "$REPO"/tests/host/pwauth_hosttest.c "$REPO"/tests/musl/pwauthmusl.c \
+   "$REPO"/tests/musl/passwdmusl.c \
    "$REPO"/tests/musl/saltnoent.c "$REPO"/tests/musl/creddisk.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \

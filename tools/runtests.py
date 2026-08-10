@@ -51,6 +51,10 @@ PROBES = [
     # held transaction once, which is why `make test` gives every step a window
     # wide enough for it.
     "musl/pwauthmusl",
+    # After it, and for the same reasons doubled: it drives the shipped setuid
+    # passwd, which takes the same lock and rewrites the same files, and it
+    # restores all three databases before it exits.
+    "musl/passwdmusl",
     # Last: it flips the modes of a staged tree and mints fixtures outside it.
     # It puts every one back, but a probe that mutates shared state belongs
     # where a failure part-way through cannot be another probe's premise.
