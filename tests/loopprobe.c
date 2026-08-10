@@ -55,6 +55,8 @@ typedef unsigned char uint8_t;
 /* The two ports the simultaneous-open case dials at each other. */
 #define SIM_PORT_A  7310
 #define SIM_PORT_B  7311
+#define SIM_PORT_C  7312
+#define SIM_PORT_D  7313
 #define TCP_PORT    7200
 #define CLOSED_PORT 7300
 
@@ -671,6 +673,57 @@ static void tcp_simultaneous(void)
     }
     if (spin >= 400)
         fail("the crossing SYNs never established");
+
+    /* And a BLOCKING connect must return 0 through the same path. What this
+     * does NOT gate is the wake: the loopback ring is drained by the timer,
+     * which fires while the caller is still inside its own `connect`, so the
+     * handshake usually finishes before the wait predicate is first evaluated
+     * and no wake is needed. Over a real interface the segments arrive
+     * milliseconds later and the caller certainly blocks, which is why the
+     * completion path must wake an active opener rather than queue it on a
+     * listener that does not exist; that half is argued in the network Readme
+     * and not proved here. */
+    sys_close(a);
+    sys_close(b);
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    a = socketcall(SC_SOCKET, args);
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    b = socketcall(SC_SOCKET, args);
+    if (a < 0 || b < 0)
+        fail("blocking simultaneous sockets");
+    make_sockaddr(sa, SIM_PORT_C, 0, 0, 0, 0);
+    args[0] = (uint32_t)a;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("blocking simultaneous bind a");
+    make_sockaddr(sa, SIM_PORT_D, 0, 0, 0, 0);
+    args[0] = (uint32_t)b;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("blocking simultaneous bind b");
+    if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0)
+        fail("blocking simultaneous nonblock a");
+    make_sockaddr(sa, SIM_PORT_D, 127, 0, 0, 1);
+    args[0] = (uint32_t)a;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    rc = socketcall(SC_CONNECT, args);
+    if (rc != -EINPROGRESS && rc != 0)
+        fail("blocking simultaneous connect a");
+    /* b blocks. Its SYN crosses a's, and what must wake it is its own connect
+     * completing rather than an accept queue nothing is listening on. */
+    make_sockaddr(sa, SIM_PORT_C, 127, 0, 0, 1);
+    args[0] = (uint32_t)b;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != 0)
+        fail("a blocking connect through crossed SYNs did not complete");
 
     /* And it carries data, which is what an established connection is for. */
     args[0] = (uint32_t)a;

@@ -147,6 +147,17 @@ fail the way the first did.
 The ping deadline's wrap guard is argued rather than probed: the tick counter
 wraps about every 497 days at 100 Hz and no test here can set it.
 
+Two halves of the simultaneous-open fix are argued the same way. An active open
+that reaches SYN_RCVD must be woken as its own completed `connect` rather than
+queued on a listener that does not exist, and must not be unref'd on a reset,
+since a descriptor holds its socket; both were real defects a review found in the
+first version. Neither is gated by a probe, and the reason is the medium: the
+loopback ring is drained by the timer while the caller is still inside its own
+`connect`, so the crossing finishes before the wait predicate is first evaluated
+and no wake is needed, and a reset arriving in that window has nothing to send
+it. The probe asserts what it can, that a blocking connect through crossed SYNs
+returns 0 and that the connection carries data.
+
 Every ordinary disk boot leaves the dirty-mount flag set, because there is no
 userland `reboot(2)` and the only caller that clears the flag is the debug
 shell's `halt`.

@@ -55,6 +55,15 @@ struct tcb {
     int         in_use;
     tcp_state_t state;
 
+    /* Whether this block came from a passive open, meaning a listener made it
+     * for an incoming SYN and no descriptor owns its socket until `accept`
+     * hands one over. An active open reaches SYN_RCVD too, through the
+     * simultaneous-open arm, and there the socket is the caller's already: it
+     * must be woken as a completed `connect` rather than queued on a listener
+     * that does not exist, and never unref'd on a reset, since the descriptor
+     * still holds it. */
+    int         passive;
+
     uint32_t local_ip;
     uint16_t local_port;
     uint32_t remote_ip;

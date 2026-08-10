@@ -428,6 +428,12 @@ static int tcp_port_has_listener(uint16_t port)
 {
     int i;
 
+    /* The pool may never have been reserved; `tcb_alloc` checks the same
+     * thing, and these scans run before it. */
+    if (!tcp_table) {
+        return 0;
+    }
+
     for (i = 0; i < MAX_TCP_CONNS; i++) {
         if (tcp_table[i].in_use && tcp_table[i].state == TCP_LISTEN &&
             tcp_table[i].local_port == port) {
@@ -451,6 +457,12 @@ static int tcp_port_has_listener(uint16_t port)
 static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
 {
     int i;
+
+    /* The pool may never have been reserved; `tcb_alloc` checks the same
+     * thing, and these scans run before it. */
+    if (!tcp_table) {
+        return 0;
+    }
 
     for (i = 0; i < MAX_TCP_CONNS; i++) {
         if (tcp_table[i].in_use && tcp_table[i].state != TCP_LISTEN &&
@@ -979,11 +991,28 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         case TCP_TIME_WAIT:
             return;
         case TCP_SYN_RCVD: {
-            /* The connection never reached the application; free both. */
-            struct socket *s = tcb->sock;
-            tcb->sock = NULL;
-            if (s) { s->tcb = NULL; socket_unref(s); }
-            tcb_free(tcb);
+            if (tcb->passive) {
+                /* The connection never reached the application, and nothing
+                 * else holds this socket, so free both. */
+                struct socket *s = tcb->sock;
+                tcb->sock = NULL;
+                if (s) { s->tcb = NULL; socket_unref(s); }
+                tcb_free(tcb);
+                return;
+            }
+            /* An active open that got here through a crossed SYN: the socket
+             * belongs to a descriptor, so the reset is a refused connect and
+             * the socket is the caller's to close. */
+            tcb->so_error   = ECONNREFUSED;
+            tcb->state      = TCP_CLOSED;
+            tcb->retx_flags = 0;
+            tcb->rto_timer  = 0;
+            if (tcb->sock) {
+                socket_tcp_connected(tcb->sock);
+                socket_tcp_fin(tcb->sock);
+            } else {
+                tcb_free(tcb);
+            }
             return;
         }
         default:
@@ -1019,6 +1048,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             return;
         }
 
+        conn_tcb->passive      = 1;
         conn_tcb->local_ip     = NET_IP_ADDR;
         conn_tcb->local_port   = tcb->local_port;
         conn_tcb->remote_ip    = src_ip;
@@ -1050,9 +1080,15 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         tcb->retx_flags = 0;
         tcb->rto_timer  = 0;
 
-        listen_sock = tcp_find_listen_sock(tcb->local_port);
-        if (listen_sock) {
-            socket_tcp_accept(listen_sock, tcb->sock);
+        if (tcb->passive) {
+            listen_sock = tcp_find_listen_sock(tcb->local_port);
+            if (listen_sock) {
+                socket_tcp_accept(listen_sock, tcb->sock);
+            }
+        } else {
+            /* A crossed SYN: this is the caller's own socket finishing its
+             * `connect`, and there is no listener to hand it to. */
+            socket_tcp_connected(tcb->sock);
         }
         break;
 
