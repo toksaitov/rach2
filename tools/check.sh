@@ -70,8 +70,17 @@ newcode_ch()
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     ls tests/host/*.c tests/host/*.h tests/*probe.c 2>/dev/null
     # By name, per the rule above: fdstale is a probe in everything but its
-    # name, and the *probe.c glob does not reach it.
-    ls tests/fdstale.c 2>/dev/null
+    # name, idreport is the helper the credential probes drive, and the
+    # *probe.c glob reaches neither.
+    ls tests/fdstale.c tests/idreport.c 2>/dev/null
+    # By name, per the rule above: the credential library is new code under
+    # utils/, and its two guest tests are under tests/musl/; no glob here
+    # reaches either tree. The seam test's compat headers are a directory down
+    # from tests/host, which the glob above does not descend into.
+    ls utils/pwauth.c utils/pwauth.h 2>/dev/null
+    ls tests/musl/pwauthmusl.c tests/musl/saltnoent.c tests/musl/creddisk.c 2>/dev/null
+    ls tests/host/compat/crypt.h tests/host/compat/shadow.h \
+       tests/host/compat/sys/random.h 2>/dev/null
 }
 
 # 0. required tools
@@ -96,7 +105,10 @@ hr "2/10 cppcheck (c89, warning+style)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
-ls "$REPO"/tests/fdstale.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
+ls "$REPO"/tests/fdstale.c "$REPO"/tests/idreport.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
+ls "$REPO"/utils/pwauth.c "$REPO"/utils/pwauth.h >>"$VDIR/_srcs.txt" 2>/dev/null || true
+ls "$REPO"/tests/host/pwauth_hosttest.c "$REPO"/tests/musl/pwauthmusl.c \
+   "$REPO"/tests/musl/saltnoent.c "$REPO"/tests/musl/creddisk.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/cppcheck.suppress" \

@@ -27,6 +27,22 @@ file 04644:0:0 /suidhelper.nox  build/tests/suidhelper
 file 04755:0:0 /sudo build/utils/sbin/sudo
 text 0644 /etc/sudoers # uids permitted to run sudo\n1000\n
 
+# pwauthmusl's target: the shipped setuid-root su (utils/su.c), the same binary
+# and the same mode the os-real image carries, so the probe drives what a user
+# runs rather than a copy of it. The probe's own account is `probe` below, whose
+# shell is the /idreport helper the exec-dir sweep already staged, so a su run
+# reports the identity, the working directory, the argv[0] and the environment
+# it was given and exits non-zero on the first item that does not match.
+file 04755:0:0 /su build/utils/sbin/su
+
+# The probe account's home. It is a real directory and not the image root,
+# because a chdir to the directory the caller is already in would prove nothing
+# about what a login su does; the probe runs su from /musl and requires the
+# login form to land here and the non-login form not to. 0700 owned by the
+# account, so entering it is the target's privilege and not the caller's.
+dir 0755 /home
+dir 0700:1000:1000 /home/probe
+
 # searchprobe's fixtures: a root-owned tree whose modes the probe flips to prove
 # search is charged on every directory a path enters. Staged rather than minted
 # because the execve cases need a real program under the denied ancestor and a
@@ -64,14 +80,19 @@ exec-dir 0755 /musl build/tests/musl
 file 04755:0:0 /musl/suidmusl.suid build/tests/musl/suidmusl
 
 # A minimal /etc: catfile reads motd and lists the directory, permmusl opens
-# motd, and authmusl resolves root through passwd to uid 0. The shadow line is a
-# fixed, committed test credential (the password is "rach2"), not a secret: the
-# probes need a known hash to verify against.
+# motd, and authmusl resolves root through passwd to uid 0. Both shadow lines
+# are fixed, committed test credentials, not secrets: the probes need a known
+# hash to verify against. Root's password is "rach2" and the probe account's is
+# "probepass", two different ones on purpose, so offering root's to `su probe`
+# is a wrong password rather than a lucky one. The probe account is uid 1000
+# with /idreport as its shell and /home/probe as its home; /etc/group gives it
+# the group its gid names.
 dir 0755 /etc
 text 0644 /etc/motd Welcome to Rach2 (test image).\n
 text 0644 /etc/hostname rach2\n
-text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\n
-text 0600 /etc/shadow root:$6$rach2test$br2Wb86wTtgiPWLN2WQoPqu69kGMNLnIQj3eaZLhG6sNTm9sN6ny.2af9tuaB/2HTw86.N3ZZN585IBoPgi0w/:0:0:99999:7:::\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\nprobe:x:1000:1000:probe:/home/probe:/idreport\n
+text 0644 /etc/group root:x:0:\nprobe:x:1000:\n
+text 0600 /etc/shadow root:$6$rach2test$br2Wb86wTtgiPWLN2WQoPqu69kGMNLnIQj3eaZLhG6sNTm9sN6ny.2af9tuaB/2HTw86.N3ZZN585IBoPgi0w/:0:0:99999:7:::\nprobe:$6$probetest$81REycl6dLv1SAkzSsuY0bx0yRoiYWOLkNshDgfNYybAChA02pRRKRGRlPADOnGg9SwQRz80cXN875vlU6LSF0:0:0:99999:7:::\n
 
 text 0644 /hello.txt hello, world\n
 text 0644 /resolv.conf nameserver 10.0.2.3\n

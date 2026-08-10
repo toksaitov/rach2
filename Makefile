@@ -69,7 +69,9 @@ MKIMAGE         = krffs/mkimage.sh
 MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test test-disk \
+        test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
+        cred-persist-test \
         crash-test stress-test os-real-grub-disk \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
@@ -198,9 +200,29 @@ os-real-grub-disk: krffs rach2 utils check-busybox check-setid check-dropbearmul
 # --timeout is one deadline for the whole run, not per probe, so it is stated here
 # rather than left at the default: the suite grows every milestone, and a default
 # sized for an older, shorter suite fails the tail as a hang on a slow host.
+# --steptmo is the per-probe window, and it is stated here for one probe:
+# musl/pwauthmusl waits out the credential lock's real ten-second retry budget
+# twice, so tens of seconds is its GREEN path. Only a failing probe ever waits a
+# step window out, so widening it costs a passing run nothing.
 test: test-image
 	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
-	    --timeout 300
+	    --timeout 300 --steptmo 60
+
+# `make test-noentropy`: the salt policy's negative half, which no other target
+# can reach. `make test` always boots -cpu max, so the CPU has RDSEED and RDRAND
+# and the kernel's pool is trusted; a minter that quietly fell back to the
+# untrusted stream would pass every proof in the suite. This boots the same test
+# image on a CPU that exposes neither instruction, and /musl/saltnoent (staged by
+# the image sweep, deliberately absent from runtests.py's PROBES because it must
+# fail where entropy is trusted) asserts that the mint refuses, says so once, and
+# leaves /etc/shadow, its temporary file and the lock exactly as they were.
+# harness.py passes no -cpu of its own, so the passthrough is the only one on the
+# command line.
+test-noentropy: test-image
+	python3 tools/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=qemu64 \
+	    --timeout 90 --ok "SALTNOENT OK" \
+	    "expect=Type 'help'" "send=exec /musl/saltnoent" wait=20
 
 # `make test-disk`: the disk-backed page-cache integrity check. Builds a disk
 # image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
@@ -232,6 +254,34 @@ persist-test: rach2 tests krffs
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
+
+# `make cred-persist-test`: the credential replacement's durability across a
+# reboot. Both of cred_rewrite's flushes are no-ops on the RAM module `make test`
+# boots, so a library that dropped either would pass every other proof in the
+# milestone. This boots one disk image three times. The first boot publishes one
+# replacement and releases, then publishes a second and is cut off holding the
+# lock, as a power failure would cut it off. The second boot reads both back with
+# the modes and owners they inherited, and reports the lock the cut-off writer
+# left rather than breaking it. The third reads back the release itself: a lock
+# whose removal stayed in the page cache would still be there.
+CRED_PERSIST_DISK = $(IMAGES_DIR)/cred-persist-test.disk
+cred-persist-test: rach2 musl-programs krffs
+	$(MKDISK) krffs/manifests/cred-persist-test.manifest $(CRED_PERSIST_DISK) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 60 --ok "CREDDISK OK (wrote)" \
+	    "expect=Type 'help'" "send=exec /creddisk" wait=15
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 60 --ok "CREDDISK OK (released)" \
+	    "expect=Type 'help'" "send=exec /creddisk" wait=15
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 60 --ok "CREDDISK OK (read back)" \
+	    "expect=Type 'help'" "send=exec /creddisk" wait=15
 
 # `make crash-test`: prove the dirty-mount flag detects an unclean shutdown. A
 # crashed boot (killed after mounting) leaves the on-disk dirty bit set for
@@ -392,7 +442,9 @@ help:
 	@echo "  make os-real-disk   the os-real tree on a partitioned ATA disk image"
 	@echo "  make os-real-grub-disk   a BIOS-bootable GRUB disk (needs Docker)"
 	@echo "  make test       boot the test image and check every probe passes"
+	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
+	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"

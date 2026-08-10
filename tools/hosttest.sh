@@ -23,7 +23,12 @@ mkdir -p "$VDIR"
 
 CC="${CC:-cc}"
 SAN="-fsanitize=address,undefined -fno-sanitize-recover=all"
-INC="-I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I utils"
+# tests/host/compat holds stand-ins for the three musl headers a util source
+# includes that a native host need not have (<crypt.h>, <shadow.h>,
+# <sys/random.h>). Any -I precedes the system directories, so on a host that
+# does have them these declarations are the ones used; they are musl's, so the
+# seam is the same either way. See tests/host/compat/crypt.h.
+INC="-I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I utils -I tests/host/compat"
 fail=0
 any=0
 

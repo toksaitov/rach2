@@ -9,77 +9,95 @@
  * surface a hundred lines instead of a megabyte: busybox stays unprivileged and
  * this is the one program that climbs.
  *
- * Usage: `su [user] [-c command]`, user defaulting to root. The caller proves
- * the target's password (root is exempt, as always), read from standard input;
- * su resolves the target through `getpwnam`, verifies the `/etc/shadow` hash
- * with `crypt`, drops to the target's group and then user (the order matters:
- * privilege to set the gid is gone once the uid drops), builds the target's
- * environment from nothing rather than inherit the caller's (the shell expands
- * variables like `PATH` and `PS1`, so a carried-over one could run the caller's
- * code as the target), and execs the target's shell.
+ * Usage: `su [-] [-l|--login] [user] [-c command]`, user defaulting to root.
+ * The caller proves the target's password (root is exempt, as always), read
+ * through the credential library so the terminal does not echo it; su resolves
+ * the target through `getpwnam`, verifies the `/etc/shadow` hash, drops to the
+ * target's group and then user (the order matters: privilege to set the gid is
+ * gone once the uid drops), builds the target's environment from nothing rather
+ * than inherit the caller's (the shell expands variables like `PATH` and `PS1`,
+ * so a carried-over one could run the caller's code as the target), and execs
+ * the target's shell.
  *
- * Deliberately left for the exercise: reading the password from the controlling
- * terminal with echo disabled (it is read from stdin here, so it echoes and can
- * come from a pipe), the login (`-`) semantics beyond the environment, and the
- * PAM/login.defs policy layer.
+ * Login mode is three things and is entered by a bare `-`, by `-l`, or by
+ * `--login`: the target's home becomes the working directory, `argv[0]` becomes
+ * a `-` followed by the shell's base name (`-sh` for `/bin/sh`), which is how a
+ * shell here is told it is a login shell, and the environment is the one su
+ * already builds from nothing. A home that cannot be entered is fatal rather
+ * than a warning: the directory and the dash are the whole of `-`, so
+ * continuing would run a login shell in the caller's directory and call it a
+ * login. Everything about non-login mode, the working directory and `argv[0]`
+ * included, is unchanged.
+ *
+ * The password comparison, the terminal handling, and the signal handling
+ * belong to `pwauth.c`, which is also what `passwd`, `adduser` and `login`
+ * authenticate through. su holds no credential lock: a reader takes none, so no
+ * stuck writer can keep anyone out of the box. The PAM/login.defs policy layer
+ * stays a non-goal.
  */
 
-#define _GNU_SOURCE /* crypt, getspnam, setgroups */
+#define _GNU_SOURCE /* getspnam, setgroups */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <grp.h>
 #include <pwd.h>
-#include <shadow.h>
-#include <crypt.h>
+
+#include "pwauth.h"
 
 /* Above the kernel's per-process descriptor cap (MAX_FDS is 16). */
 #define MAX_FD 64
 
-/* Read one line from stdin into `buf`, stripping the newline. Returns 0 on
- * success, -1 on end of input. */
-static int read_line(char *buf, size_t size)
+/** Print the usage line and return the exit status a usage error takes. */
+static int usage(void)
 {
-    if (fgets(buf, (int) size, stdin) == NULL) {
-        return -1;
-    }
-    buf[strcspn(buf, "\r\n")] = '\0';
-    return 0;
+    fprintf(stderr, "usage: su [-] [-l|--login] [user] [-c command]\n");
+    return 2;
 }
 
-/* Verify `password` against the target's /etc/shadow hash. Returns 1 if it
- * matches, 0 otherwise. A missing shadow entry or a locked (non-`$`) hash
- * denies everyone. */
-static int password_ok(const char *user, const char *password)
+/**
+ * Return the base name of `path`: `sh` for `/bin/sh`, the whole string when it
+ * holds no slash.
+ *
+ * A trailing slash is not special-cased, since a shell path that ends in one
+ * cannot be executed anyway and would fail at the exec with its own message.
+ */
+static const char *base_name(const char *path)
 {
-    struct spwd *sp = getspnam(user);
-    char *hash;
+    const char *slash = strrchr(path, '/');
 
-    if (!sp || !sp->sp_pwdp || sp->sp_pwdp[0] != '$') {
-        return 0;
-    }
-    hash = crypt(password, sp->sp_pwdp);
-    return hash != NULL && strcmp(hash, sp->sp_pwdp) == 0;
+    return slash ? slash + 1 : path;
 }
 
 int main(int argc, char **argv)
 {
-    const char *user = "root";
+    const char *user = NULL;
     const char *command = NULL;
+    const char *arg0;
     struct passwd *pw;
-    int i;
+    int login = 0;
+    int i, fd;
 
-    int fd;
-
-    /* A bare "-" and other options are accepted and ignored; implementing the
-     * login semantics is part of the exercise. */
+    /* Every argument is accounted for: an unrecognized option is a usage error,
+     * never a discarded one, and a second operand is one too. */
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "-") == 0 || strcmp(argv[i], "-l") == 0 ||
+            strcmp(argv[i], "--login") == 0) {
+            login = 1;
+        } else if (strcmp(argv[i], "-c") == 0) {
+            if (i + 1 >= argc) {
+                return usage();
+            }
             command = argv[++i];
-        } else if (argv[i][0] != '-') {
+        } else if (argv[i][0] == '-' || user) {
+            return usage();
+        } else {
             user = argv[i];
         }
+    }
+    if (!user) {
+        user = "root";
     }
 
     pw = getpwnam(user);
@@ -89,12 +107,13 @@ int main(int argc, char **argv)
     }
 
     /* Root becomes anyone without proof; everyone else proves the target's
-     * password, read from stdin. */
+     * password. A wrong password, an absent account and a locked one are one
+     * refusal, so nothing can be learned by trying. */
     if (getuid() != 0) {
         char password[256];
 
-        if (read_line(password, sizeof(password)) != 0 ||
-            !password_ok(user, password)) {
+        if (pwauth_read_password("Password: ", password, sizeof(password)) != 0 ||
+            !pwauth_verify(user, password)) {
             fprintf(stderr, "su: authentication failure\n");
             return 1;
         }
@@ -115,10 +134,18 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* The home is entered as the target and not before, so a home the target
+     * cannot reach refuses the login instead of being opened with the
+     * privilege su is in the middle of giving away. */
+    if (login && chdir(pw->pw_dir) != 0) {
+        fprintf(stderr, "su: cannot enter %s\n", pw->pw_dir);
+        return 1;
+    }
+
     /* Only these five reach the target's shell (see the header on why the
      * caller's environment is discarded, not patched). */
     {
-        static char home[128], shell[128], usr[96], logname[96];
+        static char home[128], shell[128], usr[96], logname[96], dashed[128];
         char *const env[] = {
             (char *) "PATH=/bin:/usr/bin", home, shell, usr, logname, NULL
         };
@@ -128,10 +155,16 @@ int main(int argc, char **argv)
         snprintf(usr, sizeof(usr), "USER=%s", pw->pw_name);
         snprintf(logname, sizeof(logname), "LOGNAME=%s", pw->pw_name);
 
+        arg0 = pw->pw_shell;
+        if (login) {
+            snprintf(dashed, sizeof(dashed), "-%s", base_name(pw->pw_shell));
+            arg0 = dashed;
+        }
+
         if (command) {
-            execle(pw->pw_shell, pw->pw_shell, "-c", command, (char *) 0, env);
+            execle(pw->pw_shell, arg0, "-c", command, (char *) 0, env);
         } else {
-            execle(pw->pw_shell, pw->pw_shell, (char *) 0, env);
+            execle(pw->pw_shell, arg0, (char *) 0, env);
         }
     }
     fprintf(stderr, "su: cannot exec %s\n", pw->pw_shell);

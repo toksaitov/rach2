@@ -9,6 +9,21 @@
 # every other component), staged into the test image under /musl by its manifest (so
 # /musl/hello, /musl/mallocqsort, ...). `make musl-programs` runs this.
 #
+# A program that must link a source from elsewhere in the tree names it in a
+# "link-deps:" comment, the convention tools/hosttest.sh parses for the host
+# seam tests, with the paths written from the repo root:
+#
+#     /**
+#      * ...
+#      *
+#      * link-deps: utils/pwauth.c
+#      */
+#
+# The utils headers are on the include path for the same reason, so a probe can
+# test the library its program links. A named dependency that is not there is a
+# hard error: passed on to the compiler it would surface as a bare "no such
+# file", which reads as a broken toolchain rather than a typo.
+#
 # Run vendor/musl/build_libc.sh first if install/ is absent.
 #
 
@@ -17,6 +32,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PREFIX="$SCRIPT_DIR/../../vendor/musl/install"
 CC="i686-elf-gcc"
 LIBGCC="$($CC -print-libgcc-file-name)"
@@ -32,10 +48,19 @@ fi
 mkdir -p "$OUT"
 for src in *.c; do
     prog="${src%.c}"
+    deps=""
+    for dep in $(grep -oE 'link-deps:[^*]*' "$src" | head -1 | sed 's/link-deps://'); do
+        if [ ! -f "$REPO/$dep" ]; then
+            echo "error: $src names a link-deps: source that is not there: $dep" >&2
+            exit 1
+        fi
+        deps="$deps $REPO/$dep"
+    done
     echo "  CC $prog"
-    $CC -static -nostdlib -nostartfiles -isystem "$PREFIX/include" -O2 \
+    # shellcheck disable=SC2086
+    $CC -static -nostdlib -nostartfiles -isystem "$PREFIX/include" -I ../../utils -O2 \
         -o "$OUT/$prog" \
-        "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$src" \
+        "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$src" $deps \
         "$PREFIX/lib/libc.a" "$LIBGCC" "$PREFIX/lib/crtn.o" \
         -Wl,-z,noexecstack
 done

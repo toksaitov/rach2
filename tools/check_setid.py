@@ -121,14 +121,16 @@ ALLOWLIST = {
     },
     "test": {
         # suidprobe's fixtures (the same helper at several modes and owners),
-        # sudoprobe's reference sudo, and suidmusl's setuid copy, which proves
-        # libc's view of a set-id exec.
+        # sudoprobe's reference sudo, suidmusl's setuid copy, which proves
+        # libc's view of a set-id exec, and pwauthmusl's /su, which is the
+        # shipped binary at the shipped mode rather than a copy of it.
         "setid": {
             "/suidhelper.suid": (0o4755, 0, 0, "build/tests/suidhelper"),
             "/suidhelper.u5": (0o4755, 5, 0, "build/tests/suidhelper"),
             "/suidhelper.sgid": (0o2755, 0, 5, "build/tests/suidhelper"),
             "/suidhelper.nox": (0o4644, 0, 0, "build/tests/suidhelper"),
             "/sudo": (0o4755, 0, 0, "build/utils/sbin/sudo"),
+            "/su": (0o4755, 0, 0, "build/utils/sbin/su"),
             "/musl/suidmusl.suid": (0o4755, 0, 0,
                                     "build/tests/musl/suidmusl"),
         },
@@ -149,6 +151,11 @@ ALLOWLIST = {
         "setid": {},
         "unprivileged": (),
         "sentinel": ("/persistprobe", 0o755, 0, 0),
+    },
+    "cred-persist-test": {
+        "setid": {},
+        "unprivileged": (),
+        "sentinel": ("/creddisk", 0o755, 0, 0),
     },
     "stress-test": {
         "setid": {},
@@ -767,6 +774,7 @@ TEST_MINIMUM = ("file 04755:0:0 /suidhelper.suid build/tests/suidhelper\n"
                 "file 02755:0:5 /suidhelper.sgid build/tests/suidhelper\n"
                 "file 04644:0:0 /suidhelper.nox build/tests/suidhelper\n"
                 "file 04755:0:0 /sudo build/utils/sbin/sudo\n"
+                "file 04755:0:0 /su build/utils/sbin/su\n"
                 "file 04755:0:0 /musl/suidmusl.suid "
                 "build/tests/musl/suidmusl\n")
 
@@ -792,7 +800,7 @@ SELFTEST_CASES = [
     ("an undeclared set-id text", "os-real",
      OS_REAL_MINIMUM + "text 02755:0:0 /etc/motd hello\\n",
      False, "does not declare it"),
-    ("the test image's six declared entries", "test", TEST_MINIMUM, True, ""),
+    ("the test image's seven declared entries", "test", TEST_MINIMUM, True, ""),
     ("a set-id exec-dir", "os-simple",
      "text 0644 /hello.txt hello, world\\n\n"
      "exec-dir 04755 / build/utils\n", False, "refused"),

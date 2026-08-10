@@ -1,6 +1,6 @@
 # Rach2 Signals
 
-A small but real signal subsystem: per-process dispositions and masks, delivery on the way back to user mode through a frame pushed on the user stack, and the `sigreturn` trampoline that unwinds it. It is enough for the things a libc, a shell, and `abort()` actually need (`SIGSEGV`/`SIGFPE` from a fault, `SIGINT` from Ctrl-C, `SIGCHLD` on child exit, `SIGTERM`/`SIGABRT` teardown), and it is the path musl's `sigaction`, `raise`, and `abort` ride on. Standard signals only (1..64), including the job-control stops; real-time signal queueing is not implemented.
+A small but real signal subsystem: per-process dispositions and masks, delivery on the way back to user mode through a frame pushed on the user stack, and the `sigreturn` trampoline that unwinds it. It is enough for the things a libc, a shell, and `abort()` actually need (`SIGINT` from Ctrl-C, `SIGCHLD` on child exit, `SIGTERM`/`SIGABRT` teardown), and it is the path musl's `sigaction`, `raise`, and `abort` ride on. A CPU fault is not on that path and never has been: `_exception_handler` and the page-fault handler both call `terminate_current_process`, which zombifies the process and encodes the signal number into the wait status for the parent to decode, without ever consulting the dispositions or the mask. So a handler for `SIGSEGV` or `SIGFPE` runs only for one that was sent, and a real fault kills the process whatever it has installed. Standard signals only (1..64), including the job-control stops; real-time signal queueing is not implemented.
 
 ## Pieces
 

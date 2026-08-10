@@ -45,6 +45,12 @@ PROBES = [
     "musl/authmusl",
     "musl/permmusl",
     "musl/suidmusl",
+    # After those three, because it rewrites files they read and puts them back.
+    # It is also the slowest probe here by a wide margin, and deliberately so: it
+    # waits out the credential lock's real retry budget twice and sleeps inside a
+    # held transaction once, which is why `make test` gives every step a window
+    # wide enough for it.
+    "musl/pwauthmusl",
     # Last: it flips the modes of a staged tree and mints fixtures outside it.
     # It puts every one back, but a probe that mutates shared state belongs
     # where a failure part-way through cannot be another probe's premise.

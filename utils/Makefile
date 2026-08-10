@@ -116,6 +116,13 @@ $(BUILD)/sbin/%: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/$*.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
+# su links the credential library (pwauth.c, declared in pwauth.h), the way ping
+# and nc link the resolver above and for the same reason: the -MF .d records only
+# the last source's headers, so the inputs are explicit prerequisites here.
+$(BUILD)/sbin/su: su.c pwauth.c pwauth.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/su.d -o $@ $(LINK_PRE) su.c pwauth.c $(LINK_POST)
+
 -include $(addprefix $(BUILD)/, $(UTILITIES:=.d)) \
         $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS:=.d))
 

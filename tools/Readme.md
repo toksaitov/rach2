@@ -23,7 +23,10 @@ the supporting scripts.
   dropped from the build.
 * `hosttest.sh` (`make verify-host`): the dual-target seam tests. Compiles the
   pure kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer
-  and runs the auto-discovered `*_hosttest.c` suites.
+  and runs the auto-discovered `*_hosttest.c` suites. A test names the sources it
+  links in a `host-deps:` comment; `utils/` and `tests/host/compat` are on the
+  include path, the second holding stand-ins for the few musl headers a guest
+  source includes that a native host need not have (see `tests/host/Readme.md`).
 * `gen_compile_commands.sh` (`make compile-commands`): writes
   `compile_commands.json` (git-ignored) from the build's own commands so clangd
   can index the kernel through the i686-elf cross GCC (see `mk/Readme.md`).
@@ -71,7 +74,30 @@ the supporting scripts.
   neither the first nor the last is reliably the probe's own. A run cut short by
   a hang fails and names the probes it never reached. `--selftest` checks that
   scoring rule against recorded serial shapes and needs no QEMU; `check.sh` runs
-  it, so the rule that decides every probe's verdict is itself gated.
+  it, so the rule that decides every probe's verdict is itself gated. `make test`
+  states both windows rather than taking the defaults: one deadline for the whole
+  run, and a per-step window wide enough for `musl/pwauthmusl`, which waits out
+  the credential lock's real ten-second retry budget twice and so takes tens of
+  seconds on its green path. Only a failing probe ever waits a step window out,
+  so widening it costs a passing run nothing.
+
+  `make test-noentropy` is the run that suite cannot make. `make test` always
+  boots `-cpu max`, so the CPU exposes RDSEED and RDRAND and the kernel's random
+  pool is trusted; a salt minter that quietly fell back to the untrusted stream
+  would pass every probe in the list. This target boots the same test image
+  through `harness.py` on `-cpu qemu64`, which has neither instruction, and runs
+  `/musl/saltnoent` (staged by the image sweep and deliberately absent from
+  `PROBES`, since it must fail where entropy is trusted) for its `SALTNOENT OK`
+  token. `harness.py` passes no `-cpu` of its own, so the passthrough is the only
+  one on the command line, which is what makes the CPU contract of this target
+  hold rather than be quietly overridden.
+
+  `make cred-persist-test` is the other run that suite cannot make. Both of
+  `cred_rewrite`'s flushes are no-ops on the RAM module `make test` boots, so a
+  library that dropped either would pass every credential proof in the tree.
+  This boots one disk image three times against `/musl/creddisk`, with one send
+  per boot rather than the repeating `probe=` step, since each boot must run the
+  probe exactly once: the state the next boot reads is the state this one left.
 * `crash_test.sh` (`make crash-test`): the disk dirty-flag checks, three boots
   against scratch copies of one disk. The first is killed after the mount, so
   offline `fsck.krffs` must report "not cleanly unmounted"; the second halts
