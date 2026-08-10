@@ -2749,9 +2749,16 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     debug_shell_is_home = true;
     while (1) {
+        const char *banner = rescue_mode ? "Kernel debug shell active (rescue mode)."
+                                         : "Kernel debug shell active.";
+
         k_puts("");
-        k_puts(rescue_mode ? "Kernel debug shell active (rescue mode)."
-                           : "Kernel debug shell active.");
+        k_puts(banner);
+        /* And on the wire, the way shell_loop announces itself below: this box
+         * is driven over the serial line, and a rescue banner that reached the
+         * VGA text buffer alone would be invisible to whoever booted it. */
+        serial_puts(banner);
+        serial_puts("\n");
         shell_loop();
     }
 }

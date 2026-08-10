@@ -37,6 +37,7 @@ file 04755:0:0 /su build/utils/sbin/su
 file 04755:0:0 /passwd build/utils/sbin/passwd
 file 0755:0:0 /adduser build/utils/sbin/adduser
 file 0755:0:0 /adduser-crash build/utils/sbin/adduser-crash
+file 0755:0:0 /login build/utils/sbin/login
 
 # The probe account's home. It is a real directory and not the image root,
 # because a chdir to the directory the caller is already in would prove nothing

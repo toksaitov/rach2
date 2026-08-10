@@ -475,6 +475,15 @@ int main(int argc, char **argv)
 
         return 1;
     }
+    /* And short enough for the console to read: `login` refuses an over-long
+     * line rather than answering for its prefix, so an account named past that
+     * limit is one nobody could ever enter at the keyboard. */
+    if (strlen(name) > PWAUTH_MAX_NAME) {
+        fprintf(stderr, "adduser: %s: longer than the %d characters a login reads\n", name,
+                PWAUTH_MAX_NAME);
+
+        return 1;
+    }
     if (chosen && number == 0) {
         fprintf(stderr, "adduser: 0 is root's number\n");
 

@@ -30,7 +30,7 @@ the supporting scripts.
 * `gen_compile_commands.sh` (`make compile-commands`): writes
   `compile_commands.json` (git-ignored) from the build's own commands so clangd
   can index the kernel through the i686-elf cross GCC (see `mk/Readme.md`).
-* `check_setid.py`: the set-id guard, in three checks; the first two check each other.
+* `check_setid.py`: the set-id guard, in four checks; the first two check each other.
   The MANIFEST SWEEP (run inside the gate) parses every
   `krffs/manifests/*.manifest` and compares its set-id lines against a
   per-image allowlist naming each path's exact mode and owner, failing on an
@@ -60,7 +60,46 @@ the supporting scripts.
   a salt no entropy source was read for, and no applet name changes when it
   comes back. That half also fails when a forbidden symbol is absent from the
   config altogether, since a regenerated config could drop the line and leave
-  the check proving nothing.
+  the check proving nothing. The forbidden list is the applets that
+  would want a set-id bit or would mint a hash (`su`, `passwd`, `adduser`,
+  `deluser`, `addgroup`, `delgroup`, `chpasswd`, `cryptpw`, `mkpasswd`) plus the
+  console-login family ours replaces (`login`, `vlock`, `sulogin`, `getty`,
+  `wall`, `crontab`).
+  The INIT CHECK is the fourth, and it is split by what each half must read.
+  The manifest half runs inside the sweep, since it reads text alone: each
+  manifest's `/sbin/init` line must be a mandatory `file` naming exactly the
+  artifact its table entry declares, and a manifest whose entry declares no init
+  must carry no such line. The whole source path is compared and not its last
+  component, since a basename test would take any `*/init-login` while the
+  byte-string half went on inspecting the canonical artifact, and the two halves
+  have to be talking about the same file. The byte-string half runs from
+  `check-setid` beside the applet table, since it reads a built binary:
+  `build/utils/sbin/init-login` must contain neither of the byte strings
+  `/bin/sh` and `/ish`, and `init-shell` must contain both. That positive
+  requirement is the sentinel, the way `cat` is the applet table's: an
+  unreadable or empty scan fails rather than passes. The check is exact in this
+  tree because a static musl util that never calls `system` carries neither
+  string; only init's own table puts them in a binary. Both artifacts come from
+  the `utils` sub-make, which `check-setid` therefore lists as a prerequisite:
+  unordered, a parallel build scans yesterday's binaries and passes while
+  today's are staged.
+* `login_test.sh` (`make login-test`): the proof that the console cannot fall
+  back to an unauthenticated shell, in the shape of `crash_test.sh`. It boots
+  two committed fixtures, `krffs/manifests/login-test-strict.manifest` and
+  `login-test-shell.manifest`, which differ only in the init they declare and
+  neither of which stages `/bin/login`. The strict one must report that it
+  cannot exec it, must report it at least twice (once is a failure, not a
+  retry), must say how to get back in, and must never print `uid=0`. The
+  permissive one must print `uid=0`, and that half is what makes the strict
+  half's silence mean anything: a strict image that failed to boot for an
+  unrelated reason would otherwise pass by printing nothing. `id` is a
+  standalone-ash applet, so `uid=0` at a console nobody authenticated at is an
+  unauthenticated root shell and nothing else. The missing-program case is the
+  one that matters and the one a `chmod 0000` never reaches, since that yields
+  `EACCES` and not the `ENOENT` an image built without the program gives. A
+  third boot runs the real image with `rach2.rescue` and must reach the kernel
+  debug shell, which is the documented way back into an image that will not
+  offer a prompt.
   It is the one check that reads a build product, which is why
   `check-setid` is ordered against the busybox stamp: unordered it would fail a
   correct tree on a header not yet generated, or read the previous

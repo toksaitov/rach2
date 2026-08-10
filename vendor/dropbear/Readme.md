@@ -4,12 +4,32 @@ A static Dropbear 2022.83 SSH server linked against the ported musl (`vendor/mus
 
     ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 
-and lands in an interactive BusyBox `ash` shell over an SSH-driven pty. Start the
-server with `dropbearmulti dropbear -R -g -p 22`: log in as `root` with the key
-above (the `-g` disables password auth for root, so the administrator takes no
-password over the network), or as the unprivileged `test` account with
+and lands in an interactive BusyBox `ash` shell over an SSH-driven pty. The
+server is started by hand from a console session, and that session is now behind
+`rach2 login:`, so the recipe below begins with logging in at the console rather
+than at a shell that was already there. Nothing starts the server at boot, which
+is deliberate: SSH is not a second way into a broken image, and `rach2.rescue` is
+the only one.
+
+Start the server with `dropbearmulti dropbear -R -g -p 22`: log in as `root`
+with the key above, or as the unprivileged `test` account with
 `krffs/rach2_test_ed25519` or its generated password (`krffs/rach2_test_password`),
 verified against the SHA-512 crypt hash staged in `/etc/shadow`.
+
+What `-g` does, exactly, since the shorter claim it replaces was worth more than
+it bought: it bars root's password from the SSH authentication exchange, so
+nobody guesses their way in as root over the network. It does not keep root's
+password off the link. The recorded capstone pipes that password to `su` over
+the session channel, and an interactive `su` echoes it into a pty, so the
+password crosses the wire either way, inside the transport's encryption and out
+of the authentication protocol. The asymmetry is the point rather than an
+oversight: an authentication exchange is what an attacker can retry at will
+without an account, and a session channel is what somebody who already has one
+uses. A student who wants root's password to work at the SSH prompt drops the
+`-g` and gets the guessable surface back. Root's shadow field is a real hash and
+not a `!`, and that is deliberate too: `su` refuses any hash that does not begin
+with `$`, so locking the field would break the very climb this system is built
+to demonstrate.
 
 ## Build
 
@@ -36,7 +56,9 @@ There are no source patches; all customization is `localoptions.h`. If a patch e
 
 ## Run
 
-Boot the os-real image (`run.sh os-real`) and, from its busybox shell, start the server:
+Boot the os-real image (`run.sh os-real`), log in at `rach2 login:` as `root`
+with the password in `krffs/rach2_demo_password`, and start the server from that
+session:
 
     dropbearmulti dropbear -F -R -g -p 22
 
@@ -48,7 +70,7 @@ The test harness boots qemu with `-cpu max -netdev user,hostfwd=tcp::2222-:22 -d
 
 ## Login provisioning
 
-`krffs/gen_demo_key.sh` generates two demo keypairs (`krffs/rach2_demo_ed25519` for root and `krffs/rach2_test_ed25519` for the unprivileged test account, git-ignored) when their public halves are absent, and the os-real manifest stages each into its account's `~/.ssh/authorized_keys` (0600, under a 0755 `/root` or 0700 `/home/test` and a 0700 `.ssh` so dropbear's strict permission check accepts it). `krffs/gen_demo_password.sh` mints each account's password beside them and stages the `$6$` hashes as `/etc/shadow` (0600 root); dropbear resolves the account through `getpwnam`, prefers the shadow entry whenever `getspnam` returns one (the staged passwd fields are `x` placeholders), and musl's `crypt` verifies it. `/etc/passwd` holds `root:x:0:0:root:/root:/bin/sh` and `test:x:1000:1000:test:/home/test:/bin/sh`; `/etc/shells` lists `/bin/sh` so dropbear's `getusershell()` shell check passes; `/bin/sh` is busybox (invoked as `sh` it runs `ash`). Start the server with `dropbearmulti dropbear -R -g -p 22`: password auth is on for the test account, `-g` keeps root pubkey-only, and blank passwords stay rejected (`-B` is never passed). Now that the kernel enforces the permission bits, the two accounts are genuinely separated: the test account lands in a 0700 home that root can still administer, and cannot touch root's files, `/etc/shadow` included.
+`krffs/gen_demo_key.sh` generates two demo keypairs (`krffs/rach2_demo_ed25519` for root and `krffs/rach2_test_ed25519` for the unprivileged test account, git-ignored) when their public halves are absent, and the os-real manifest stages each into its account's `~/.ssh/authorized_keys` (0600, under a 0755 `/root` or 0700 `/home/test` and a 0700 `.ssh` so dropbear's strict permission check accepts it). `krffs/gen_demo_password.sh` mints each account's password beside them and stages the `$6$` hashes as `/etc/shadow` (0600 root); dropbear resolves the account through `getpwnam`, prefers the shadow entry whenever `getspnam` returns one (the staged passwd fields are `x` placeholders), and musl's `crypt` verifies it. `/etc/passwd` holds `root:x:0:0:root:/root:/bin/sh` and `test:x:1000:1000:test:/home/test:/bin/sh`; `/etc/shells` lists `/bin/sh` so dropbear's `getusershell()` shell check passes; `/bin/sh` is busybox (invoked as `sh` it runs `ash`). Start the server from a console session with `dropbearmulti dropbear -R -g -p 22`: password auth is on for the test account, `-g` bars root's password from the authentication exchange as described above, and blank passwords stay rejected (`-B` is never passed). Now that the kernel enforces the permission bits, the two accounts are genuinely separated: the test account lands in a 0700 home that root can still administer, and cannot touch root's files, `/etc/shadow` included.
 
 ## Kernel gaps this integration surfaced (and how they were closed)
 

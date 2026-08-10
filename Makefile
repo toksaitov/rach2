@@ -72,7 +72,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        crash-test stress-test os-real-grub-disk \
+        login-test crash-test stress-test os-real-grub-disk \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-setid check-dropbearmulti check-libc \
@@ -292,6 +292,19 @@ cred-persist-test: rach2 musl-programs krffs
 # fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
 # test-disk on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
+# `make login-test`: prove the console cannot fall back to an unauthenticated
+# shell. Two images differing only in the init they declare, neither staging
+# /bin/login, plus a rescue boot of the real image, which is the way back into
+# one that will not offer a prompt.
+LOGIN_TEST_STRICT = $(IMAGES_DIR)/login-test-strict.krffs
+LOGIN_TEST_SHELL  = $(IMAGES_DIR)/login-test-shell.krffs
+
+login-test: rach2 utils krffs busybox os-real-image
+	$(MKIMAGE) krffs/manifests/login-test-strict.manifest $(LOGIN_TEST_STRICT) 10
+	$(MKIMAGE) krffs/manifests/login-test-shell.manifest $(LOGIN_TEST_SHELL) 10
+	sh tools/login_test.sh build/rach2/kernel $(LOGIN_TEST_STRICT) \
+	    $(LOGIN_TEST_SHELL) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`"
+
 crash-test: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(CRASH_TEST_IMAGE) 64 48
 	sh tools/crash_test.sh build/rach2/kernel $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
@@ -383,7 +396,11 @@ check-busybox: $(BUSYBOX_STAMP)
 # exists to forbid: build_busybox.sh opens by removing and re-extracting the
 # tree, so for most of a rebuild the header is absent and before that it is
 # stale.
-check-setid: $(BUSYBOX_STAMP)
+# The applet half reads a generated header and the init half reads two built
+# binaries, so both are ordered after what produces them, the way phase 3's rule
+# requires: unordered, a parallel build scans a build/utils/sbin/ that holds
+# yesterday's artifacts and passes while today's are staged.
+check-setid: $(BUSYBOX_STAMP) utils
 	@python3 tools/check_setid.py
 	@python3 tools/check_setid.py --applets
 check-dropbearmulti: $(DROPBEAR_STAMP)
@@ -458,6 +475,7 @@ help:
 	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
+	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"

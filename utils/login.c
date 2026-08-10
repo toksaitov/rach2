@@ -1,0 +1,308 @@
+/**
+ * login: authenticate whoever is at the console and become them.
+ *
+ * init's session child execs this, so the console is behind a password rather
+ * than in front of one. It carries no set-id bit and needs none: init is root,
+ * so this program starts as root and spends that authority once, dropping to
+ * the account it just authenticated and never climbing back.
+ *
+ * It prompts for a name, reads the password through the credential library,
+ * and verifies it against `/etc/shadow`. A failure sleeps and asks again, a
+ * bounded number of times, and says the same thing whichever half was wrong: a
+ * message that distinguished an unknown name from a wrong password would turn
+ * the prompt into an oracle for which accounts exist. Running out of tries is
+ * an exit, and init brings the prompt back.
+ *
+ * The identity drop is `setgroups`, `setgid`, `setuid`, in that order, and the
+ * order is the whole of it: `setgroups` and `setgid` need the privilege that
+ * `setuid` gives away, so either one after it is a call that fails while the
+ * process keeps a group it was never entitled to. Each is checked, and a
+ * failure is fatal rather than a warning, since carrying on would mean running
+ * a shell as an identity nobody chose.
+ *
+ * It does not `setsid` and does not claim the terminal. init's child already
+ * did both, and this exec inherits them: an exec by the session leader
+ * re-publishes the console across the destructive load, and a second claim
+ * after the identity drop would be refused anyway, since the process is no
+ * longer root and, having been the leader all along, is not a new one.
+ *
+ * The environment is built from nothing rather than filtered, for the reason su
+ * builds one: what arrives here came from init, which got it from the kernel,
+ * and a login that passed a variable through would be handing the account
+ * whatever the boot happened to carry.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <grp.h>
+#include <pwd.h>
+#include <sys/stat.h>
+#include <termios.h>
+#include <sys/types.h>
+
+#include "pwauth.h"
+
+#define MOTD_FILE "/etc/motd"
+
+/* How many names may be tried before the program gives up and init starts it
+ * again. A bound rather than a loop forever, so a wedged reader cannot hold the
+ * console: the respawn is the retry. */
+#define LOGIN_TRIES 3
+
+/* The pause after a refusal. It costs an honest typist one second and costs
+ * anyone working through a list of passwords the same second every time. */
+#define LOGIN_PAUSE 2
+
+/* The longest account name that will be read, from the library, so that what
+ * this reads and what `adduser` writes are one limit. An over-long line is
+ * refused rather than truncated, for the reason the password reader refuses
+ * one: a prefix is a different name, and answering for it would either fail
+ * confusingly or, worse, match somebody else. */
+#define LOGIN_NAME_MAX (PWAUTH_MAX_NAME + 1)
+
+/* The descriptors a fresh session should hold. Anything above them belongs to
+ * whatever ran before and is not the account's to inherit. */
+#define LOGIN_MAX_FDS 16
+
+/* A hash of nothing anyone knows, hashed against when the name names no
+ * account so that a refusal costs what an acceptance costs. Only the `$6$`
+ * prefix and the shape matter, since it is `crypt`'s work and not its answer
+ * that this is for. */
+#define LOGIN_DUMMY_HASH \
+    "$6$rach2login$"     \
+    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+/**
+ * Put the console back into the shape a login can be typed at. Returns
+ * nothing.
+ *
+ * The terminal's settings are the terminal's, not the session's: they outlive
+ * the account that changed them, so `stty -icanon min 0` followed by `exit` is
+ * enough to leave every later login reading zero bytes at once, exiting, and
+ * being respawned into the same failure forever. A getty resets the line before
+ * it asks who is there, and this is that reset. Pending input goes with it,
+ * since whatever was typed at the last session's shell is not this login's
+ * answer.
+ */
+static void sane_terminal(void)
+{
+    struct termios modes;
+
+    if (tcgetattr(STDIN_FILENO, &modes) != 0) {
+        return;
+    }
+    modes.c_iflag |= ICRNL;
+    modes.c_iflag &= ~(tcflag_t)(IGNCR | INLCR);
+    modes.c_oflag |= OPOST | ONLCR;
+    modes.c_lflag |= ICANON | ECHO | ECHOE | ECHOK | ISIG;
+    modes.c_cc[VMIN] = 1;
+    modes.c_cc[VTIME] = 0;
+    (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &modes);
+}
+
+/**
+ * Read a line from standard input into `buf` without its newline. Returns 0 on
+ * a line, -1 at end of input. A line too long for the buffer is drained through
+ * its newline and returned empty, which the caller treats as a name that named
+ * nothing: keeping the prefix would answer for a different account than the one
+ * typed.
+ *
+ * Read a byte at a time through `read`, not `fgets`: musl's buffered read asks
+ * for `readv` whenever it is given more than one byte to fill, and this kernel
+ * has `writev` and no `readv`.
+ */
+static int read_line(char *buf, size_t size)
+{
+    size_t len = 0;
+    int over = 0;
+
+    for (;;) {
+        char c;
+        ssize_t got = read(STDIN_FILENO, &c, 1);
+
+        if (got < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            return -1;
+        }
+        if (got == 0) {
+            return len > 0 ? 0 : -1;
+        }
+        if (c == '\n' || c == '\r') {
+            break;
+        }
+        if (len + 1 < size) {
+            buf[len++] = c;
+        } else {
+            over = 1;
+        }
+    }
+    buf[len] = '\0';
+    if (over) {
+        buf[0] = '\0';
+    }
+
+    return 0;
+}
+
+/**
+ * Close every descriptor a login should not hand on. Returns nothing.
+ *
+ * The three standard ones are the session's terminal and stay. Anything else
+ * open here was opened by whatever ran before this program, and an account that
+ * inherited it would hold a descriptor on a file its own permissions may not
+ * open at all.
+ */
+static void close_inherited(void)
+{
+    int fd;
+
+    for (fd = 3; fd < LOGIN_MAX_FDS; fd++) {
+        (void)close(fd);
+    }
+}
+
+/**
+ * Print `/etc/motd` to standard output, if it is there and readable.
+ *
+ * After the drop, deliberately: the file is the account's to read or not, and a
+ * login that printed it as root would be answering a question the modes were
+ * asked. A file that is not there is not an error.
+ */
+static void print_motd(void)
+{
+    char buffer[512];
+    int fd = open(MOTD_FILE, O_RDONLY);
+
+    if (fd < 0) {
+        return;
+    }
+    for (;;) {
+        ssize_t got = read(fd, buffer, sizeof(buffer));
+
+        if (got <= 0) {
+            break;
+        }
+        if (write(STDOUT_FILENO, buffer, (size_t)got) != got) {
+            break;
+        }
+    }
+    close(fd);
+}
+
+/**
+ * Become `pw` and exec its shell. Returns only on failure.
+ *
+ * The environment is the one this builds, the working directory is the
+ * account's home, and `argv[0]` carries the leading dash that tells a shell it
+ * is a login shell. A home that cannot be entered is reported and the root
+ * directory is used instead, since a missing home is a reason to complain and
+ * not a reason to refuse a login the password already earned.
+ */
+static void become(const struct passwd *pw)
+{
+    char *argv[2];
+    char *env[5];
+    char home[256];
+    char shell[256];
+    char user[LOGIN_NAME_MAX + 8];
+    char logname[LOGIN_NAME_MAX + 8];
+    char arg0[256];
+    const char *base;
+
+    if (setgroups(0, NULL) != 0 || setgid(pw->pw_gid) != 0 || setuid(pw->pw_uid) != 0) {
+        fprintf(stderr, "login: cannot become %s: %s\n", pw->pw_name, strerror(errno));
+        _exit(1);
+    }
+    if (chdir(pw->pw_dir) != 0) {
+        fprintf(stderr, "login: %s: %s; using /\n", pw->pw_dir, strerror(errno));
+        (void)chdir("/");
+    }
+    print_motd();
+
+    snprintf(home, sizeof(home), "HOME=%s", pw->pw_dir);
+    snprintf(shell, sizeof(shell), "SHELL=%s", pw->pw_shell);
+    snprintf(user, sizeof(user), "USER=%s", pw->pw_name);
+    snprintf(logname, sizeof(logname), "LOGNAME=%s", pw->pw_name);
+    env[0] = home;
+    env[1] = shell;
+    env[2] = user;
+    env[3] = logname;
+    env[4] = NULL;
+
+    base = strrchr(pw->pw_shell, '/');
+    base = base ? base + 1 : pw->pw_shell;
+    snprintf(arg0, sizeof(arg0), "-%s", base);
+    argv[0] = arg0;
+    argv[1] = NULL;
+    execve(pw->pw_shell, argv, env);
+    fprintf(stderr, "login: cannot exec %s: %s\n", pw->pw_shell, strerror(errno));
+    _exit(1);
+}
+
+/**
+ * Ask who is there until somebody proves it, then become them.
+ */
+int main(void)
+{
+    char name[LOGIN_NAME_MAX];
+    char password[PWAUTH_MAX_PASSWORD + 1];
+    int attempt;
+
+    close_inherited();
+    sane_terminal();
+    for (attempt = 0; attempt < LOGIN_TRIES; attempt++) {
+        struct passwd *pw;
+        int proved;
+
+        printf("rach2 login: ");
+        fflush(stdout);
+        if (read_line(name, sizeof(name)) != 0) {
+            return 1;
+        }
+        if (name[0] == '\0') {
+            /* A bare newline is somebody finding the prompt, and costs
+             * nothing. An over-long line arrives here as an empty name too, and
+             * so costs nothing either; what it must not do is authenticate. */
+            attempt--;
+            continue;
+        }
+        if (pwauth_read_password("Password: ", password, sizeof(password)) != 0) {
+            return 1;
+        }
+        /* The account is looked up whether or not the name is one, and the
+         * answer is the same either way: a refusal that came faster or read
+         * differently for an unknown name would tell whoever is at the console
+         * which accounts exist. */
+        pw = getpwnam(name);
+        proved = pwauth_verify(name, password);
+        if (!pw) {
+            /* The same work, so the same time. `pwauth_verify` returns without
+             * hashing when no account answers to the name, and SHA-512 crypt is
+             * the whole cost of this loop, so a refusal that skipped it would
+             * come back a hundred times faster and tell whoever is at the
+             * console which accounts exist. The answer is discarded; the cost
+             * is the point. */
+            (void)pwauth_check(LOGIN_DUMMY_HASH, password);
+        }
+        memset(password, 0, sizeof(password));
+        if (proved && pw) {
+            become(pw);
+
+            return 1;
+        }
+        printf("login: incorrect\n");
+        fflush(stdout);
+        sleep(LOGIN_PAUSE);
+    }
+    printf("login: too many tries\n");
+    fflush(stdout);
+
+    return 1;
+}

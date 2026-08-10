@@ -1,0 +1,37 @@
+# login-test-strict.manifest: an image that declares the strict init and stages
+# no /bin/login, which is the case the console must refuse hardest.
+#
+# The failure this fixture exists to catch is a fall-through: an init that tried
+# /bin/login and then a shell would hand the console to whoever is standing at
+# it, and gating that fall-through on ENOENT would invert the danger rather than
+# remove it, since ENOENT is exactly this image. So the strict init has no
+# fallback compiled in at all, and this boot must say it cannot exec /bin/login,
+# say it more than once (once is a failure, not a retry), and never print uid=0.
+#
+# The shell is staged all the same, at the same path os-real uses. An image with
+# no shell anywhere would prove nothing: the assertion is that init will not
+# reach for one, not that there was none to reach.
+#
+# tools/login_test.sh boots this and its permissive twin. Host paths are
+# relative to the repo root (mkimage.sh cd's there).
+
+dir 0755 /bin
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-login
+
+# A real /etc, so that what stops the boot is the missing program and not a
+# missing account: the strict init's refusal has to be the only difference
+# between this image and its twin.
+dir 0755 /etc
+text 0644 /etc/motd login-test-strict\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\n
+file 0600 /etc/shadow krffs/shadow
+text 0644 /etc/group root:x:0:\n
+text 0644 /etc/shells /bin/sh\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\n
+
+dir 0755 /root

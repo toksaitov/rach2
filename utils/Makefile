@@ -57,7 +57,7 @@ UTILITIES = true  \
 # one names it explicitly, which is also what makes the set-id allowlist in
 # tools/check_setid.py a complete list rather than a sample: a privileged program
 # reaches an image only through a `file` line naming it.
-SBIN_PROGS = init su sudo passwd adduser adduser-crash
+SBIN_PROGS = init-shell init-login login su sudo passwd adduser adduser-crash
 
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
 SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
@@ -128,6 +128,26 @@ $(BUILD)/sbin/su: su.c pwauth.c pwauth.h
 $(BUILD)/sbin/passwd: passwd.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/passwd.d -o $@ $(LINK_PRE) passwd.c pwauth.c $(LINK_POST)
+
+# init builds twice from the one source, and neither artifact is named plain
+# `init`: a manifest left on the old path fails to stage rather than silently
+# getting whichever init the tree happens to build. init-shell is today's
+# behavior unchanged; init-login execs /bin/login and nothing else, with the
+# shell table and its exec loop compiled out, so the strict artifact holds no
+# code path and no string that names a shell.
+$(BUILD)/sbin/init-shell: init.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/init-shell.d -o $@ $(LINK_PRE) init.c $(LINK_POST)
+
+$(BUILD)/sbin/init-login: init.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DINIT_CONSOLE_LOGIN -MF $(BUILD)/sbin/init-login.d -o $@ \
+	    $(LINK_PRE) init.c $(LINK_POST)
+
+# login links the credential library: it is the console's authentication.
+$(BUILD)/sbin/login: login.c pwauth.c pwauth.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/login.d -o $@ $(LINK_PRE) login.c pwauth.c $(LINK_POST)
 
 # adduser links the credential library the same way, and builds twice from the
 # one source: as shipped, and as a crash build that dies the instant a named

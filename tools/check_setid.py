@@ -121,6 +121,7 @@ ALLOWLIST = {
         },
         "unprivileged": ("/bin/busybox",),
         "sentinel": None,
+        "init": "init-login",
     },
     "test": {
         # suidprobe's fixtures (the same helper at several modes and owners),
@@ -140,31 +141,53 @@ ALLOWLIST = {
         },
         "unprivileged": (),
         "sentinel": None,
+        "init": None,
     },
     "os-simple": {
         "setid": {},
         "unprivileged": (),
         "sentinel": ("/hello.txt", 0o644, 0, 0),
+        "init": "init-shell",
     },
     "disk-test": {
         "setid": {},
         "unprivileged": (),
         "sentinel": ("/blockprobe", 0o755, 0, 0),
+        "init": None,
     },
     "persist-test": {
         "setid": {},
         "unprivileged": (),
         "sentinel": ("/persistprobe", 0o755, 0, 0),
+        "init": None,
     },
     "cred-persist-test": {
         "setid": {},
         "unprivileged": (),
         "sentinel": ("/creddisk", 0o755, 0, 0),
+        "init": None,
+    },
+    "login-test-strict": {
+        # The console-login fixtures: the same image but for the init each
+        # declares, and neither stages /bin/login. The strict one must refuse
+        # and the permissive one must reach a root shell, which is what makes
+        # the strict one's silence mean anything.
+        "setid": {},
+        "unprivileged": ("/sbin/init",),
+        "sentinel": ("/etc/motd", 0o644, 0, 0),
+        "init": "init-login",
+    },
+    "login-test-shell": {
+        "setid": {},
+        "unprivileged": ("/sbin/init",),
+        "sentinel": ("/etc/motd", 0o644, 0, 0),
+        "init": "init-shell",
     },
     "stress-test": {
         "setid": {},
         "unprivileged": (),
         "sentinel": ("/stressprobe", 0o755, 0, 0),
+        "init": None,
     },
 }
 
@@ -344,6 +367,50 @@ def parse_manifest(path):
     return directives, problems
 
 
+def check_init_line(name, directives, want):
+    """Check which init a manifest stages. Returns a list of problems.
+
+    Neither init artifact is named plain `init`, so a manifest left on the old
+    path fails to stage rather than silently getting whichever one the tree
+    happens to build; and which one an image gets is a fact worth asserting
+    rather than reading, since the two differ in whether the console can fall
+    back to an unauthenticated root shell. A manifest whose entry declares no
+    init must stage none: the test images boot no init at all, and one that
+    grew an init line would be running a different system than the one its
+    probes were written against.
+    """
+    problems = []
+    staged = [(lineno, verb, source) for lineno, verb, _m, _u, _g, guest, source
+              in directives if guest == "/sbin/init" and verb in FILE_VERBS]
+
+    if want is None:
+        for lineno, _verb, _source in staged:
+            problems.append("%s:%d: stages /sbin/init and the allowlist "
+                            "declares none for this image" % (name, lineno))
+        return problems
+    if not staged:
+        return ["%s: stages no /sbin/init and the allowlist declares %s"
+                % (name, want)]
+    wanted_source = "build/utils/sbin/" + want
+    for lineno, verb, source in staged:
+        # The whole path and not its last component: a basename test would take
+        # any */init-login, and the artifact `check_inits` scans is the one at
+        # this path, so the two halves must be talking about the same file.
+        if source != wanted_source:
+            problems.append("%s:%d: stages /sbin/init from %s and the "
+                            "allowlist declares %s"
+                            % (name, lineno, source if source else "an inline payload",
+                               wanted_source))
+        # And mandatory: an `optional-file` that is not there stages nothing,
+        # and an image with no init at all is not the image this declares.
+        if verb != "file":
+            problems.append("%s:%d: stages /sbin/init with '%s'; an image that "
+                            "declares an init must carry one, so the directive "
+                            "must be 'file'" % (name, lineno, verb))
+
+    return problems
+
+
 def check_manifest(path, table=ALLOWLIST):
     """Check one manifest against the allowlist. Returns a list of problems."""
     name = os.path.basename(path)
@@ -361,6 +428,7 @@ def check_manifest(path, table=ALLOWLIST):
     # and a second is reported here rather than left to fail the build.
     staged = {}
 
+    problems.extend(check_init_line(name, directives, allow.get("init")))
     for lineno, verb, mode, uid, gid, guest, source in directives:
         if verb in FILE_VERBS:
             if guest in staged:
@@ -1043,6 +1111,40 @@ def run_case(name, got, want_ok, fragment):
     return 0
 
 
+def declared_init_line(stem, table=ALLOWLIST):
+    """The /sbin/init line a manifest with this stem must carry, or ""."""
+    want = table.get(stem, {}).get("init")
+
+    return "" if want is None else ("file 0755 /sbin/init build/utils/sbin/%s\n" % want)
+
+
+# The init check's own cases. The set-id fixtures above carry their declared
+# init line for free, so here the line is exactly what varies: a manifest that
+# stages the other artifact, one that stages it from somewhere else, one that
+# makes it optional, one that stages none, and one that stages an init where the
+# allowlist declares none.
+INIT_CASES = [
+    ("the declared init", "os-simple",
+     "file 0755 /sbin/init build/utils/sbin/init-shell\n", True, ""),
+    ("the other init", "os-simple",
+     "file 0755 /sbin/init build/utils/sbin/init-login\n", False,
+     "build/utils/sbin/init-shell"),
+    ("the declared init from somewhere else", "os-simple",
+     "file 0755 /sbin/init build/elsewhere/init-shell\n", False,
+     "build/utils/sbin/init-shell"),
+    ("an optional init", "os-simple",
+     "optional-file 0755 /sbin/init build/utils/sbin/init-shell\n", False,
+     "must be 'file'"),
+    ("an inline init", "os-simple",
+     "text 0755 /sbin/init placeholder\n", False, "an inline payload"),
+    ("no init at all", "os-simple",
+     "file 0755 /hello.txt build/utils/cat\n", False, "stages no /sbin/init"),
+    ("an init where none is declared", "test",
+     TEST_MINIMUM + "file 0755 /sbin/init build/utils/sbin/init-shell\n", False,
+     "declares none for this image"),
+]
+
+
 def selftest():
     """Run both halves over the fixtures. Returns a process status."""
     bad = 0
@@ -1054,6 +1156,16 @@ def selftest():
 
     with tempfile.TemporaryDirectory() as tmp:
         for name, stem, text, want_ok, fragment in SELFTEST_CASES:
+            path = os.path.join(tmp, stem + ".manifest")
+            with open(path, "w", encoding="latin-1", newline="\n") as f:
+                # Each fixture is about the set-id sweep, so it gets the init
+                # line its stem declares for free; the init check has its own
+                # cases below, where the line is what varies.
+                f.write(declared_init_line(stem) + text)
+            bad += run_case(name, check_manifest(path), want_ok, fragment)
+            ran += 1
+
+        for name, stem, text, want_ok, fragment in INIT_CASES:
             path = os.path.join(tmp, stem + ".manifest")
             with open(path, "w", encoding="latin-1", newline="\n") as f:
                 f.write(text)
@@ -1128,7 +1240,8 @@ def report(problems):
 # The sentinel is an applet that must be present, because a check that only ever
 # looks for absences passes just as well on a header it failed to understand.
 FORBIDDEN_APPLETS = ("su", "passwd", "adduser", "deluser", "addgroup", "delgroup", "chpasswd",
-                     "cryptpw", "mkpasswd")
+                     "cryptpw", "mkpasswd", "login", "vlock", "sulogin", "getty", "wall",
+                     "crontab")
 APPLET_SENTINEL = "cat"
 
 APPLET_TABLE = os.path.join(
@@ -1219,6 +1332,54 @@ def check_config(path=BUSYBOX_CONFIG):
     return problems
 
 
+# The two init artifacts, and the byte strings that tell them apart. init-login
+# execs /bin/login and nothing else; the shell table and the loop that walks it
+# live inside an `#ifndef`, so the strict artifact holds no code path and no
+# string that names a shell. Requiring init-shell to carry BOTH is the sentinel:
+# an unreadable or empty scan then fails rather than passes, the way the applet
+# table's own scan is guarded. The check is exact in this tree because a static
+# musl util that never calls `system` carries neither string; only init's own
+# table puts them in a binary.
+INIT_BINARIES = os.path.join("build", "utils", "sbin")
+INIT_SHELL_STRINGS = (b"/bin/sh", b"/ish")
+
+
+def check_inits(directory=INIT_BINARIES):
+    """Check that the strict init cannot name a shell and the other can."""
+    problems = []
+    wanted = {"init-login": False, "init-shell": True}
+
+    for name in sorted(wanted):
+        path = os.path.join(directory, name)
+        try:
+            with open(path, "rb") as handle:
+                image = handle.read()
+        except OSError as error:
+            problems.append("%s: cannot read the init artifact: %s"
+                            % (path, error))
+            continue
+        if not image:
+            problems.append("%s: the init artifact is empty, so this check "
+                            "proved nothing" % path)
+            continue
+        for wanted_string in INIT_SHELL_STRINGS:
+            held = wanted_string in image
+            if wanted[name] and not held:
+                problems.append(
+                    "%s: does not carry the byte string %s, so this check "
+                    "proved nothing; the artifact may not be the one the "
+                    "manifests stage"
+                    % (path, wanted_string.decode("ascii")))
+            elif not wanted[name] and held:
+                problems.append(
+                    "%s: carries the byte string %s; the strict init must hold "
+                    "no path it could fall back to, since a fall-through on an "
+                    "exec failure hands the console an unauthenticated root "
+                    "shell" % (path, wanted_string.decode("ascii")))
+
+    return problems
+
+
 def main(argv):
     parser = argparse.ArgumentParser(
         description="the set-id guard for the manifests and the staged images")
@@ -1240,10 +1401,11 @@ def main(argv):
         return selftest()
 
     if args.applets:
-        problems = check_applets(args.applets) + check_config()
+        problems = check_applets(args.applets) + check_config() + check_inits()
         if problems:
             return report(problems)
-        print("check-setid: OK (%s: no forbidden applet or feature)" % args.applets)
+        print("check-setid: OK (%s: no forbidden applet or feature; the strict "
+              "init names no shell)" % args.applets)
         return 0
 
     if args.image:

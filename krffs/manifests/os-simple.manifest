@@ -7,7 +7,7 @@
 # root (mkimage.sh cd's there).
 
 dir 0755 /sbin
-file 0755 /sbin/init build/utils/sbin/init
+file 0755 /sbin/init build/utils/sbin/init-shell
 
 file 0755 /ish build/ish/ish
 

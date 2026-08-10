@@ -23,14 +23,20 @@ file 0755 /bin/sh build/vendor/busybox/busybox
 file 04755:0:0 /bin/su build/utils/sbin/su
 file 04755:0:0 /bin/passwd build/utils/sbin/passwd
 file 0755:0:0 /bin/adduser build/utils/sbin/adduser
+file 0755:0:0 /bin/login build/utils/sbin/login
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
 
-# /sbin/init (PID 1): the kernel boots it; it forks the busybox login shell
-# (/bin/sh) and reaps orphans, so the shells dropbear forks per SSH session never
-# leak once the session closes.
+# /sbin/init (PID 1): the kernel boots it; it forks a session child that execs
+# /bin/login and nothing else, so the console is behind a password. This is the
+# init-login artifact: the one built with the shell table compiled out, so an
+# image missing /bin/login refuses rather than falling back to a root shell.
+# The way back into a broken image is booting with rach2.rescue. init reaps
+# orphans too, so the shells dropbear forks per SSH session never leak once the
+# session closes, and /bin/login execs the account's shell (/bin/sh) in place
+# after the identity drop.
 dir 0755 /sbin
-file 0755 /sbin/init build/utils/sbin/init
+file 0755 /sbin/init build/utils/sbin/init-login
 
 # /etc: a real login + name-resolution config. dropbear reads passwd and validates
 # the login shell against shells; busybox ash reads profile on a login shell. The

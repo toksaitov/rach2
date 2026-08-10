@@ -135,6 +135,14 @@
  * one any reader in the image imposes. */
 #define PWAUTH_MAX_PASSWORD 100
 
+/* The longest account name any reader here will take, and the limit every
+ * writer here holds to. It is the console login's line, and that is the binding
+ * one: an account whose name cannot be typed at `rach2 login:` is an account
+ * nobody can enter, so a creator that allowed a longer one would be minting
+ * accounts that only SSH could reach. The number is generous beside the eight
+ * characters `utmp` once imposed and the 32 Linux allows. */
+#define PWAUTH_MAX_NAME 63
+
 /* What `cred_rewrite` returns, and two of them what `cred_txn_end` returns. The
  * three are one distinction the caller cannot make for itself and must report
  * honestly: the replacement is live and on the platter, live but perhaps not on

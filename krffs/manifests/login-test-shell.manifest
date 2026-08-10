@@ -1,0 +1,32 @@
+# login-test-shell.manifest: the permissive twin, identical but for the init it
+# declares, which is the one that still walks a shell table.
+#
+# It is what makes the strict image's silence mean something. This boot must
+# print uid=0 at the console, and that is the exact shape of the defect the
+# strict init removes: `id` is a standalone-ash applet, so uid=0 on a console
+# nobody authenticated at is an unprivileged nobody's root shell. Without this
+# half, a strict image that failed to boot at all for some unrelated reason
+# would pass the test by printing nothing.
+#
+# tools/login_test.sh boots this and its strict twin. Host paths are relative to
+# the repo root (mkimage.sh cd's there).
+
+dir 0755 /bin
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-shell
+
+# The same /etc as the strict image, so the init each declares is the only
+# difference between the two.
+dir 0755 /etc
+text 0644 /etc/motd login-test-shell\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\n
+file 0600 /etc/shadow krffs/shadow
+text 0644 /etc/group root:x:0:\n
+text 0644 /etc/shells /bin/sh\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\n
+
+dir 0755 /root
