@@ -603,10 +603,10 @@ static void tcp_simultaneous(void)
 {
     uint32_t args[6];
     uint8_t sa[16];
-    int a = -1, b = -1, rc, spin, round, crossed = 0;
+    int a, b, rc, spin, round, crossed = 0;
     const char *msg = "simultaneous";
     char rbuf[32];
-    int n = 0;
+    int n;
 
     /* Retried, because the crossing is a race this probe cannot win outright:
      * the loopback ring is drained by the 100 Hz timer, so a tick landing
@@ -665,51 +665,48 @@ static void tcp_simultaneous(void)
             args[0] = (uint32_t)a;
             args[1] = (uint32_t)sa;
             args[2] = 16;
-            rc = socketcall(SC_CONNECT, args);
-            if (rc == -EISCONN) {
-                crossed = 1;
-                break;
-            }
-            if (rc == -ECONNREFUSED) {
+            if (socketcall(SC_CONNECT, args) == -EISCONN) {
                 break;
             }
             sys_nanosleep_ms(20);
         }
-        if (!crossed) {
-            sys_close(a);
-            sys_close(b);
-        }
-    }
-    if (!crossed)
-        fail("the crossing SYNs never established");
 
-    /* And it carries data, which is what an established connection is for. */
-    args[0] = (uint32_t)a;
-    args[1] = (uint32_t)msg;
-    args[2] = (uint32_t)strlen(msg);
-    args[3] = 0;
-    args[4] = 0;
-    args[5] = 0;
-    if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
-        fail("simultaneous send");
-    for (spin = 0; spin < 200; spin++) {
-        args[0] = (uint32_t)b;
-        args[1] = (uint32_t)rbuf;
-        args[2] = sizeof(rbuf);
-        args[3] = MSG_DONTWAIT;
+        /* Whether the round crossed is decided by data moving, not by the
+         * connect's answer: a socket this stack reset keeps its block attached
+         * in CLOSED, and a repeated connect reports -EISCONN for any attached
+         * block that is not still in SYN_SENT, so the two outcomes are
+         * indistinguishable from there. A connection that carries a payload
+         * crossed; anything else is a lost round. */
+        n = 0;
+        args[0] = (uint32_t)a;
+        args[1] = (uint32_t)msg;
+        args[2] = (uint32_t)strlen(msg);
+        args[3] = 0;
         args[4] = 0;
         args[5] = 0;
-        n = socketcall(SC_RECVFROM, args);
-        if (n > 0) {
-            break;
+        if (socketcall(SC_SENDTO, args) == (int)strlen(msg)) {
+            for (spin = 0; spin < 100; spin++) {
+                args[0] = (uint32_t)b;
+                args[1] = (uint32_t)rbuf;
+                args[2] = sizeof(rbuf);
+                args[3] = MSG_DONTWAIT;
+                args[4] = 0;
+                args[5] = 0;
+                n = socketcall(SC_RECVFROM, args);
+                if (n > 0) {
+                    break;
+                }
+                sys_nanosleep_ms(20);
+            }
         }
-        sys_nanosleep_ms(20);
+        if (n == (int)strlen(msg) && mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n)) {
+            crossed = 1;
+        }
+        sys_close(a);
+        sys_close(b);
     }
-    if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
-        fail("simultaneous payload");
-
-    sys_close(a);
-    sys_close(b);
+    if (!crossed)
+        fail("the crossing SYNs never established a connection that carries data");
 }
 
 void _start(void)
