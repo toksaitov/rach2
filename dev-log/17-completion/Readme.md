@@ -48,6 +48,10 @@ Two halves of the simultaneous-open fix are argued the same way. An active open 
 
 Every ordinary disk boot leaves the dirty-mount flag set, because there is no userland `reboot(2)` and the only caller that clears the flag is the debug shell's `halt`.
 
+Four items on milestone 15's list stay open on purpose, and they are named here so the list is closed even where the work is not. A loopback interface proper, with routes and an `lo` device, is not built: the `127/8` alias is the whole feature, a real interface wants a routing table this stack does not have, and nothing in the image asks for one. Quotas, access control lists and capabilities are each a policy layer over a credential model and a file system that this system states plainly rather than extends; each is a milestone of its own, none is needed by anything the image runs, and adding any of them would make the nine-bit check harder to read for a student without teaching anything the nine bits do not.
+
+Root's password over SSH also stays refused, which was the first item on that list and is now argued rather than merely asserted. `vendor/dropbear/Readme.md` states what `-g` does (it bars root's password from the authentication exchange, the surface an attacker can retry without an account) and what it does not (keep the password off the link, since the capstone pipes it to `su` over the session channel), names the one flag a student drops to change the policy, and records why root's shadow field is a real hash rather than a lock: `su` refuses any hash that does not begin with `$`, so locking it would break the climb the whole system exists to demonstrate.
+
 ## The gate
 
 `make verify-style`, `make verify-host` and `make test` on every phase, with the disk probes on both buses and the SSH capstone whenever a phase touched what they exercise. `make test` grew from 44 probes to 51. Three targets were added and join the gate: `make test-noentropy` (twice over, for the library and for `passwd`), `make login-test` and `make ping-test`.
