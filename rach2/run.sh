@@ -24,13 +24,26 @@
 #   RESCUE=1 ./run.sh os-real
 #
 # DISK=<file> attaches a raw image as the primary master ATA disk (if=ide,
-# index=0), so the kernel debug shell's `disk` command can probe it:
+# index=0) and mounts KRFFS from it (rach2.fsdisk), so what boots is the
+# writable Rach2 rather than the RAM module. This is the persistent machine:
 #   make os-real-disk
-#   DISK=../build/images/os-real.disk RESCUE=1 ./run.sh
+#   DISK=../build/images/os-real.disk ./run.sh
+#
+# The page cache is write-back, so an edit is durable after a `sync` (or after
+# `passwd`, which flushes for you) and not before. Every ordinary disk boot
+# leaves the dirty-mount flag set and prints the fsck advice, because nothing in
+# userland can ask for a clean unmount: `halt` at the kernel debug shell is the
+# only caller that clears it.
+#
+# DISKNOMOUNT=1 attaches the disk without mounting it, which is the older
+# recipe: the kernel boots the RAM module and the debug shell's `disk` command
+# probes the platter as an unmounted device. It is kept for exactly that, and
+# for nothing else:
+#   DISK=../build/images/os-real.disk DISKNOMOUNT=1 RESCUE=1 ./run.sh
 #
 # DISKBUS=ahci attaches that same DISK on an ich9-ahci SATA HBA instead, and
-# appends rach2.disk=ahci (select the AHCI backend) + rach2.fsdisk (mount KRFFS
-# from the disk), so the root file system rides the AHCI driver:
+# appends rach2.disk=ahci (select the AHCI backend) beside the mount, so the
+# root file system rides the AHCI driver:
 #   DISK=../build/images/os-real.disk DISKBUS=ahci ./run.sh os-real
 
 IMAGE="$1"
@@ -73,15 +86,22 @@ if [ -n "$DISK" ]; then
     fi
 fi
 
-# Assemble the kernel command line. RESCUE drops to the debug shell; DISKBUS=ahci
-# selects the AHCI backend and mounts KRFFS from the disk (the two flags are
-# orthogonal: the selector alone boots but does not mount).
+# Assemble the kernel command line. RESCUE drops to the debug shell; DISK mounts
+# KRFFS from the platter and DISKBUS=ahci selects the AHCI backend under it.
 CMDLINE=""
 if [ -n "$RESCUE" ]; then
     CMDLINE="$CMDLINE rach2.rescue"
 fi
-if [ -n "$DISK" ] && [ "$DISKBUS" = ahci ]; then
-    CMDLINE="$CMDLINE rach2.disk=ahci rach2.fsdisk"
+# A disk that is attached is a disk that is mounted, on either bus: the two
+# flags are separate because the selector alone boots without mounting, and
+# DISKNOMOUNT is the way to ask for that on purpose rather than by forgetting.
+if [ -n "$DISK" ]; then
+    if [ "$DISKBUS" = ahci ]; then
+        CMDLINE="$CMDLINE rach2.disk=ahci"
+    fi
+    if [ -z "$DISKNOMOUNT" ]; then
+        CMDLINE="$CMDLINE rach2.fsdisk"
+    fi
 fi
 CMDLINE="${CMDLINE# }"
 if [ -n "$CMDLINE" ]; then

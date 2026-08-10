@@ -197,9 +197,15 @@ The same os-real tree also goes onto a real disk image, which the kernel mounts 
     make os-real-disk        # build/images/os-real.disk: MBR + a 48 MiB KRFFS partition
     make os-real-grub-disk   # build/images/os-real-grub.disk: BIOS-bootable, GRUB + a FAT boot partition + KRFFS (needs Docker)
 
-Attach the `os-real-disk` image as the primary ATA disk and drop to the debug shell, where the `disk` command probes it:
+Attaching that image is booting it: `DISK=` mounts KRFFS from the platter, so what comes up is the writable Rach2 rather than the disposable RAM module.
 
-    cd ../rach2 && DISK=../build/images/os-real.disk RESCUE=1 ./run.sh
+    cd ../rach2 && DISK=../build/images/os-real.disk ./run.sh
+
+An account created or a password changed on this machine is still there after the power goes off, which is the whole difference between it and the module: the module is a copy of the image made at boot, so every change to it dies with the process. The page cache is write-back, so an edit is on the platter after a `sync` and not before; `passwd` and `adduser` flush for themselves, and anything else typed at the shell wants a `sync` before the machine is killed. Every ordinary disk boot leaves the dirty-mount flag set and prints the fsck advice on the next one, because nothing in userland can ask for a clean unmount: `halt` at the kernel debug shell is the only caller that clears it, and there is no `reboot(2)`.
+
+To attach the disk without mounting it, which is the older recipe and now has to be asked for, add `DISKNOMOUNT=1`: the kernel boots the RAM module and the debug shell's `disk` command probes the platter as an unmounted device.
+
+    cd ../rach2 && DISK=../build/images/os-real.disk DISKNOMOUNT=1 RESCUE=1 ./run.sh
 
 The `os-real-grub-disk` image carries its own kernel and GRUB, so it boots with no `-kernel`, the way a real machine would, BIOS to MBR to GRUB to kernel to KRFFS:
 
