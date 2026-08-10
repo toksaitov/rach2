@@ -205,6 +205,12 @@ int icmp_ping(uint32_t dst_ip)
         ping_replied  = 0;
         start         = kernel_ticks;
         ping_deadline = start + ICMP_PING_WAIT;
+        if (ping_deadline == 0) {
+            /* 0 is `wakeup_tick`'s "not sleeping" sentinel, so a deadline that
+             * lands there arms nothing and the sleeper is never made runnable
+             * again. `sys_nanosleep` steps around the same tick. */
+            ping_deadline = 1;
+        }
 
         ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, 8);
 
