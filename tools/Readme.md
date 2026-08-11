@@ -169,7 +169,12 @@ the supporting scripts.
   RAM mount never sets the flag, and the probe syncs after each attempt so a
   spurious clear reaches the platter instead of sitting in a write-back frame
   where the check could not see it. Each phase waits on the token the kernel or
-  the probe prints, never on a sleep.
+  the probe prints, never on a sleep, and the three logs are removed before the
+  first boot rather than only in the trap: an uncatchable kill leaves them, each
+  holds the token its phase waits for, and the redirect that would truncate one
+  belongs to the backgrounded child, which the parent's grep is not ordered
+  after. The clean phase is the one that would lie if that race were ever won,
+  since its image is a fresh copy and fsck would agree with a stale halt token.
 
 ## Image builders (need Docker)
 

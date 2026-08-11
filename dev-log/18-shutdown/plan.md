@@ -36,17 +36,15 @@ That is a latent defect of its own, and it is the more interesting half of this 
 
 ## The phases
 
-### Phase 0: a test script's logs cannot outlive its run
+### Phase 0: dropped, its premise disproved before it was written
 
-`tools/crash_test.sh` removes its logs only in the `trap` (`crash_test.sh:41`). A run killed before the trap fires leaves a file that already holds every token the next run waits for, and `wait_serial` greps it before the backgrounded redirect has truncated it, so the suite can pass without booting anything. `tools/login_test.sh` carries the fix already (an up-front `rm -f $LOGS`, `login_test.sh:44-51`) and its comment says why; this is the same defect in the older script, and every phase below adds boots to it.
+This phase was to give `tools/crash_test.sh` the up-front `rm -f $LOGS` that `tools/login_test.sh` carries, on the argument that a run killed before its trap fires leaves a log holding every token the next run waits for, and that `wait_serial` could grep it before the backgrounded redirect had truncated it.
 
-Change: the up-front `rm -f $LOGS` and the comment, in `tools/crash_test.sh` only.
+Executing it disproved it. With `build/images/crash-test.disk.crash.log` planted holding `(disk)`, `halt: system halted` and `DIRTYPROBE OK`, and with `qemu-system-i386` replaced by a stub that exits at once, the unmodified script still failed at its first wait with `crash-test: FAIL: disk mount never reported on serial`. The reason is structural rather than lucky: the redirect is the shell's, not QEMU's, so `>"$CRASH.log"` truncates the file when the phase's background job is forked and before anything can be read from it; the script gives each of its three phases its own log (`crash_test.sh:68`, `:88`, `:109`) and waits on each only after starting the job that owns it. There is no window, so there is nothing to fix and no proof that could fail.
 
-Proof: with a stale `$DISK.crash.log` planted from a previous run and QEMU renamed out of the way, `make crash-test` must fail rather than pass, since nothing can boot. Shown FALSELY PASSING before the fix, on the stale tokens alone, and failing after it.
+What the run does leave behind on a kill is three copies of a 48 MB disk image, which the next run overwrites with `cp` anyway. That is tidiness, not correctness, and it does not earn a commit.
 
-Done when: `make crash-test` is green, and the planted-log experiment fails on the fixed script for the right reason.
-
-Readmes: `tools/Readme.md`'s `crash_test.sh` entry gains the sentence, since it states the script's contract.
+The commit that stands in this phase's place is a text one: `tools/login_test.sh`'s comment on its own `rm -f` states the mechanism above as fact ("a grep can read the old contents before the new boot has written a byte: the test would pass without booting anything"), and that claim is wrong for the same reason. The `rm` stays, since it does remove residue, but the comment stops asserting a race the redirect forecloses. A comment that explains a defence against something impossible teaches the next reader the wrong model of their own tools, which is the kind of error this tree's text standard exists to catch.
 
 ### Phase 1: flush, then clear, then flush
 

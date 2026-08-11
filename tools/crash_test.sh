@@ -39,6 +39,16 @@ DIRTY="$DISK.dirty"
 cp "$DISK" "$CRASH"
 cp "$DISK" "$CLEAN"
 cp "$DISK" "$DIRTY"
+# Removed here and not only in the trap. An uncatchable kill leaves a previous
+# run's logs, and each holds the token its phase waits for; the redirect that
+# would truncate one is performed by the backgrounded child, which the parent's
+# grep is not ordered after. The clean phase is the one that would then lie: a
+# stale halt token ends its wait before the boot, and its fresh copy of the image
+# is clean, so the fsck below agrees. The window is narrow (the parent's grep
+# costs a fork and an exec while the child's truncate costs an open, and it was
+# not won in 600 trials of both background forms used here), which is a reason to
+# spend one line closing it rather than a reason to argue about it.
+rm -f "$CRASH.log" "$CLEAN.log" "$DIRTY.log"
 trap 'rm -f "$CRASH" "$CLEAN" "$DIRTY" "$CRASH.log" "$CLEAN.log" "$DIRTY.log"' EXIT INT TERM
 
 qemu_disk() {

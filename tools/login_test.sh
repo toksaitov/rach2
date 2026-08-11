@@ -41,11 +41,10 @@ if [ -z "$KERNEL" ] || [ -z "$STRICT" ] || [ -z "$SHELL_IMAGE" ] || [ -z "$REAL"
 fi
 
 LOGS="$STRICT.log $SHELL_IMAGE.log $REAL.stop.log $REAL.rescue.log"
-# Removed up front and not only at exit. A previous run's log is a file that
-# already holds every token this one waits for, and the redirect that truncates
-# it happens in a backgrounded child, so a grep can read the old contents before
-# the new boot has written a byte: the test would pass without booting anything.
-# A run killed before its trap fires leaves exactly that file behind.
+# Removed here and not only in the trap. An uncatchable kill leaves a previous
+# run's logs, and each holds the token its phase waits for; the redirect that
+# would truncate one is performed by the backgrounded child, which the parent's
+# grep is not ordered after, so a wait could end before its boot began.
 # shellcheck disable=SC2086
 rm -f $LOGS
 trap 'rm -f $LOGS' EXIT INT TERM
