@@ -102,7 +102,10 @@ the supporting scripts.
   one phase per signal arm since the arms do not map one-to-one onto the phases;
   and last the refusal, an unprivileged bare `halt` that must be turned away
   while the machine stays up to say so, which is the only committed test of the
-  kernel's permission check on a signal to init.
+  kernel's permission check on a signal to init. Every phase that claims a stop
+  also names WHICH stop happened and which must not have, because under
+  `-no-reboot` a reset and a power-off both end QEMU with a clean image: without
+  that, a `reboot` wired to power the machine off instead would pass.
 * `login_test.sh` (`make login-test`): the proof that the console cannot fall
   back to an unauthenticated shell, in the shape of `crash_test.sh`. It boots
   two committed fixtures, `krffs/manifests/login-test-strict.manifest` and

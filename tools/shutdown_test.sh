@@ -132,7 +132,10 @@ fail() {
 
 # Every phase that stops the machine asserts the same three things, so they are
 # asserted in one place: the process ended, the kernel said it cleared the flag,
-# and the image agrees offline.
+# and the image agrees offline. $2 is the line that says WHICH stop happened,
+# and it is not optional for a reason: under -no-reboot a reset and a power-off
+# both end QEMU with a clean image, so without it a `reboot` that powered the
+# machine off instead would pass. $3 is the path that must NOT appear.
 require_clean_stop() {
     if ! wait_stop 90; then
         fail "$1: the machine did not stop"
@@ -149,6 +152,12 @@ require_clean_stop() {
     if grep -q "halting instead" "$LOG"; then
         fail "$1: the stop fell back to a halt"
     fi
+    if ! grep -q "$2" "$LOG"; then
+        fail "$1: the kernel never said '$2', so this was a different stop"
+    fi
+    if grep -q "$3" "$LOG"; then
+        fail "$1: the kernel said '$3', which is not the stop this asked for"
+    fi
     if ! fsck_says_clean; then
         fail "$1: the image is not clean"
     fi
@@ -160,7 +169,8 @@ require_clean_stop() {
 # and the phase would pass with the kernel's own flush deleted.
 fresh_image
 start_boot 'echo marker > /root/marker; poweroff -n -f'
-require_clean_stop "poweroff -n -f stops the machine and flushes it"
+require_clean_stop "poweroff -n -f stops the machine and flushes it" \
+    "poweroff: powering off" "reboot: restarting"
 
 # And the marker is really there. Measured: the same write is LOST when the
 # machine is killed instead of stopped, so this is a real durability assertion
@@ -204,7 +214,8 @@ fresh_image
 # $PPID is the GUEST shell's, so it must reach the guest unexpanded.
 # shellcheck disable=SC2016
 start_boot 'kill -USR2 $PPID'
-require_clean_stop "a SIGUSR2 to init powers the machine off"
+require_clean_stop "a SIGUSR2 to init powers the machine off" \
+    "poweroff: powering off" "reboot: restarting"
 
 # And now the bare forms, which need init to actually BE pid 1, since that is
 # who busybox signals. One phase per signal arm, because the arms do not map
@@ -213,7 +224,8 @@ require_clean_stop "a SIGUSR2 to init powers the machine off"
 # SIGTERM fails bare reboot alone.
 fresh_image
 start_boot 'poweroff'
-require_clean_stop "a bare poweroff stops the machine"
+require_clean_stop "a bare poweroff stops the machine" \
+    "poweroff: powering off" "reboot: restarting"
 
 # Bare halt parks the CPU, so the runner does the killing; what it must still
 # have done is flush and clear the flag.
@@ -236,7 +248,8 @@ echo "shutdown-test: a bare halt flushes and parks the CPU: OK"
 fresh_image
 EXTRA_QEMU="-no-reboot"
 start_boot 'reboot'
-require_clean_stop "a bare reboot restarts the machine"
+require_clean_stop "a bare reboot restarts the machine" \
+    "reboot: restarting" "poweroff: powering off"
 EXTRA_QEMU=""
 
 # The refusal, which is the only committed test of the kernel's permission check

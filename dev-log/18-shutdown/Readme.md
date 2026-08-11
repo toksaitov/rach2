@@ -44,6 +44,8 @@ It caught a utility that would never have been built: `utils/halt.c` without its
 
 It caught the plan promising two proofs that could not exist. A `reboot -f` phase would have proved nothing about the kernel's flush, because busybox calls `sync()` itself before it splits on `-f`; every forced phase now passes `-n`. And a `halt -n -f` phase could never have required a self-exit, because a halt parks the CPU and leaves QEMU running by design; that phase now waits for the token and does its own killing.
 
+It caught a gate that could certify a broken `reboot`. Under `-no-reboot` a reset and a power-off both end QEMU with a clean image and no fallback line, so the bare-`reboot` phase would have passed with SIGTERM wired to power the machine off. Every phase that claims a stop now names which stop happened and which must not have; demonstrated by making SIGTERM power off and watching that phase, and only that phase, fail.
+
 It also caught a residual the fix could not remove, and it is recorded below rather than papered over.
 
 ## What was refuted
