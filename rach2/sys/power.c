@@ -79,6 +79,16 @@ static void power_settle(void)
 /**
  * Ask a PIIX4 to remove power. Returns only if the machine is still running.
  *
+ * This is QEMU's power-off and not a general one, and the difference is worth
+ * stating rather than implying. The three checks below establish where the PM
+ * block is; they do not establish that sleep type 0 means soft-off, which on
+ * real hardware is a value firmware publishes in the ACPI tables this kernel
+ * does not parse. On QEMU's PIIX4 model the write below powers the machine off;
+ * on a board whose S5 is some other type it could ask for a different sleep
+ * state instead of falling through to the halt, which is the one outcome here
+ * that the fallback cannot catch. Reading S5 properly needs an AML interpreter,
+ * which is a milestone of its own.
+ *
  * The PM block's base is read out of configuration space rather than assumed,
  * because this kernel also boots real hardware from a GRUB disk and the port
  * that means power-off on a PIIX4 means something else, or nothing, elsewhere.

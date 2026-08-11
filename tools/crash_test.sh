@@ -53,6 +53,24 @@ cp "$DISK" "$OFF"
 rm -f "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"
 trap 'rm -f "$CRASH" "$CLEAN" "$DIRTY" "$OFF" "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"' EXIT INT TERM
 
+# Whether an offline fsck calls $1 dirty. Its status is read as well, because
+# fsck prints the dirty line before it finishes walking the chain: a pipeline
+# would read grep's status, so an image that is dirty AND corrupt would pass a
+# phase that only asked whether the line appeared.
+fsck_says_dirty() {
+    out=$("$FSCK" "$1" --offset "$OFFSET" --size "$SIZE" 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "crash-test: fsck.krffs exited $rc on $1:" >&2
+        echo "$out" >&2
+        return 1
+    fi
+    case "$out" in
+        *"not cleanly unmounted"*) return 0 ;;
+    esac
+    return 1
+}
+
 # Whether an offline fsck calls $1 clean. Its exit status is read as well as its
 # output, because a check that only asked whether the dirty line was absent
 # would read a corrupt or unreadable image, which prints something else
@@ -106,13 +124,11 @@ if ! wait_serial "$CRASH.log" "(disk)"; then
 fi
 kill "$QPID" 2>/dev/null || true
 wait "$QPID" 2>/dev/null || true
-if "$FSCK" "$CRASH" --offset "$OFFSET" --size "$SIZE" 2>&1 \
-        | grep -q "not cleanly unmounted"; then
-    echo "crash-test: crashed image reports not-cleanly-unmounted: OK"
-else
+if ! fsck_says_dirty "$CRASH"; then
     echo "crash-test: FAIL: crashed image did not report dirty" >&2
     exit 1
 fi
+echo "crash-test: crashed image reports not-cleanly-unmounted: OK"
 
 # Clean: boot and halt from the debug shell, which clears the bit. The kernel
 # prints "halt: system halted" on serial only after the clean-unmount flush.
@@ -196,10 +212,8 @@ if ! wait_serial "$DIRTY.log" "DIRTYPROBE OK"; then
 fi
 kill "$QPID" 2>/dev/null || true
 wait "$QPID" 2>/dev/null || true
-if "$FSCK" "$DIRTY" --offset "$OFFSET" --size "$SIZE" 2>&1 \
-        | grep -q "not cleanly unmounted"; then
-    echo "crash-test: root node survived the set-id clears: OK"
-else
+if ! fsck_says_dirty "$DIRTY"; then
     echo "crash-test: FAIL: the dirty flag was cleared off the root node" >&2
     exit 1
 fi
+echo "crash-test: root node survived the set-id clears: OK"

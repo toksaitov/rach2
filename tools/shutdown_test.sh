@@ -66,6 +66,51 @@ fsck_says_clean() {
     return 0
 }
 
+# As above, for the phase that requires the image to still be dirty. Its status
+# is read for the same reason: fsck prints the dirty line before it finishes
+# walking the chain.
+fsck_says_dirty() {
+    out=$("$FSCK" "$WORK" --offset "$OFFSET" --size "$SIZE" 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "shutdown-test: fsck.krffs exited $rc:" >&2
+        echo "$out" >&2
+        return 1
+    fi
+    case "$out" in
+        *"not cleanly unmounted"*) return 0 ;;
+    esac
+    return 1
+}
+
+# A halt is asserted differently from a stop, because it does not end QEMU: the
+# runner does the killing. The forbidden routes matter more here than anywhere,
+# since `power_stop` prints the halt token after a power-off or a reset that did
+# not take, so a halt that fell back through one of those would otherwise look
+# like a halt that was asked for.
+require_clean_halt() {
+    if ! wait_token "halt: system halted" 120; then
+        fail "$1: never reported a halt"
+    fi
+    if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$LOG"; then
+        fail "$1: did not report a clean unmount"
+    fi
+    if grep -q "halting instead" "$LOG"; then
+        fail "$1: fell back to a halt from another route"
+    fi
+    if grep -qE "poweroff: powering off|reboot: restarting" "$LOG"; then
+        fail "$1: took a platform route a halt must not take"
+    fi
+    if ! kill -0 "$QPID" 2>/dev/null; then
+        fail "$1: QEMU ended by itself, so this was not a halt"
+    fi
+    cleanup_boot
+    if ! fsck_says_clean; then
+        fail "$1: the image is not clean"
+    fi
+    echo "shutdown-test: $1: OK"
+}
+
 # Start a boot on the working image, with $1 as the shell line typed at the
 # console. The copy is a separate step, because the phase that reads a file back
 # has to boot the image the previous phase WROTE, not a pristine one. The fixture's init drops straight to a root shell, so there is no
@@ -193,17 +238,7 @@ echo "shutdown-test: the write before the power-off reached the platter: OK"
 # does the killing. It still has to have flushed and cleared the flag.
 fresh_image
 start_boot 'halt -n -f'
-if ! wait_token "halt: system halted" 90; then
-    fail "halt -n -f never reported a halt"
-fi
-if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$LOG"; then
-    fail "halt -n -f did not report a clean unmount"
-fi
-cleanup_boot
-if ! fsck_says_clean; then
-    fail "the image is not clean after halt -n -f"
-fi
-echo "shutdown-test: halt -n -f flushes and parks the CPU: OK"
+require_clean_halt "halt -n -f flushes and parks the CPU"
 
 # The signal contract, before the pid is: `$PPID` from the console shell is
 # init by construction, so this phase names no number and does not depend on
@@ -231,17 +266,7 @@ require_clean_stop "a bare poweroff stops the machine" \
 # have done is flush and clear the flag.
 fresh_image
 start_boot 'halt'
-if ! wait_token "halt: system halted" 120; then
-    fail "a bare halt never reported a halt"
-fi
-if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$LOG"; then
-    fail "a bare halt did not report a clean unmount"
-fi
-cleanup_boot
-if ! fsck_says_clean; then
-    fail "the image is not clean after a bare halt"
-fi
-echo "shutdown-test: a bare halt flushes and parks the CPU: OK"
+require_clean_halt "a bare halt flushes and parks the CPU"
 
 # Bare reboot exercises SIGTERM and RB_AUTOBOOT. -no-reboot makes the reset end
 # QEMU rather than start the machine again.
@@ -267,8 +292,8 @@ if grep -q "shutdown:" "$LOG"; then
     fail "an unprivileged bare halt reached the kernel's shutdown"
 fi
 cleanup_boot
-if fsck_says_clean; then
-    fail "the image is clean, so the refused halt stopped the machine anyway"
+if ! fsck_says_dirty; then
+    fail "the image is not dirty, so the refused halt stopped the machine anyway"
 fi
 echo "shutdown-test: an unprivileged bare halt is refused: OK"
 

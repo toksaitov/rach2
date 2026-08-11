@@ -18,17 +18,23 @@ The dirty-mount flag therefore fired on every ordinary boot, which is worse than
 
 And the one path that did clear the flag could lie. `krffs_disk_mark_clean` cleared the bit and then flushed once; `pc_sync` walks the cache by slot and fails whole, having already written what succeeded. A run whose root page was written and whose later frame was not left the platter reading CLEAN with data missing, while the kernel printed that the image stayed dirty. That was a defect in shipped code, found while planning, and it is why the first change was not a new feature.
 
-## What shipped, in ten commits
+## What shipped, and one scoping error in how it shipped
 
+Thirteen commits, and the ledger is written from `git show --stat` rather than from the plan, because the two disagree and the history is what a reader can audit.
+
+* `e09a87b` plans the milestone.
 * `c1b71ea` removes a test run's logs before the next one boots rather than only when it exits, in `crash_test.sh`, and corrects the same claim in `login_test.sh`.
-* `d618bb5` makes the clean unmount flush, then clear, then flush.
-* `db57ade` gives the kernel one place that knows how it stops: `sys/power.c`, with halt as a loop rather than a single `cli; hlt`, a PIIX4 power-off whose PM base is read out of PCI configuration space, and a chipset reset; plus `kernel_shutdown`, and `poweroff` and `reboot` at the debug shell.
-* `d3e2d5e` adds `reboot(2)` at syscall 88, root only, and `rebootprobe`.
+* `d618bb5` makes the clean unmount flush, then clear, then flush, and ALSO carries `sys/power.{c,h}`, the `C_SRC` line, `kernel_shutdown` and the debug shell's new commands, which belong to the next phase.
+* `db57ade` therefore carries only what was left of that phase: the Readmes and `crash_test.sh`'s power-off boot.
+* `d3e2d5e` adds `reboot(2)` at syscall 88, root only, with `rebootprobe`.
 * `5c1bfd7` stops the shutdown claiming a clean unmount it did not earn, and makes `crash_test.sh` read the statuses that would say otherwise.
 * `70bad4d` gives the images with no busybox a `halt` of their own.
-* `23dfd34` adds the `shutdown-test` fixture and runner.
+* `23dfd34` adds the `shutdown-test` fixture, its allowlist entry and its runner.
 * `945d8e3` lets init answer the three signals that ask for a shutdown.
 * `77f952a` makes `/sbin/init` pid 1, which is what makes a bare `halt`, `poweroff` and `reboot` work.
+* `300d3a9`, `5d0aa56` and `c26f0a0` are this record, the fix for a gate that could not tell a reset from a power-off, and the clean-tree run.
+
+The split between `d618bb5` and `db57ade` is a scoping error, and it is written here rather than tidied away. The ordering fix was committed, then reviewed, then amended with the correction the review asked for, and the amend staged the whole working tree, which by then already held the next phase's new files. The rule this tree keeps is one logical change per commit; this is two in one, and its neighbour is the remainder. The history was not rewritten to hide it because these commits were already the record other work referred to, and a reader who runs `git show` on either hash should find what this paragraph says they will.
 
 Typing `halt`, `poweroff` or `reboot` as root now stops the machine, flushing the page cache and clearing the dirty-mount flag on the way; `-f` on any of the three calls `reboot(2)` directly; an unprivileged caller is refused and the machine stays up; and a boot that is killed rather than stopped still leaves the flag set, which is now a statement about that boot rather than about every boot.
 
@@ -82,4 +88,4 @@ No committed test discriminates the old flush ordering from the new one. Both ag
 
 The marker phase asserts that a write made immediately before a stop survives it, and not that the shutdown's flush is the only thing that could have carried the page: the cache also writes a frame back when it evicts one. Measured: the same write is lost when the machine is killed instead of stopped, so the assertion is real; a mutation that published the flag page alone still passed it.
 
-The power-off is a PIIX4 fact. The base is read out of configuration space and the three gates refuse anything else, so a machine that is not that chipset falls into the halt loop and says so; what it does not have is a second mechanism for hardware that wants one. The reset writes a fixed port for the same reason in reverse: a wrong derived address would put a sleep word into a live device, while `0xCF9` is inert where it is unclaimed.
+The power-off is QEMU's, not a general one, and the earlier draft of this record overstated it. The three gates find where the PM block is; they do not establish that sleep type 0 means soft-off, which on real hardware firmware publishes in ACPI tables this kernel does not parse. A machine that is not this chipset falls into the halt loop and says so, but a board whose S5 is some other type could be asked for a different sleep state instead, which is the one outcome the fallback cannot catch. Reading S5 properly needs an AML interpreter. The reset writes a fixed port for the same reason in reverse: a wrong derived address would put a sleep word into a live device, while `0xCF9` is inert where it is unclaimed.
