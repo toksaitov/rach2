@@ -206,4 +206,57 @@ fresh_image
 start_boot 'kill -USR2 $PPID'
 require_clean_stop "a SIGUSR2 to init powers the machine off"
 
+# And now the bare forms, which need init to actually BE pid 1, since that is
+# who busybox signals. One phase per signal arm, because the arms do not map
+# one-to-one onto these phases: removing SIGUSR2 fails both the phase above and
+# the bare poweroff here, removing SIGUSR1 fails bare halt alone, and removing
+# SIGTERM fails bare reboot alone.
+fresh_image
+start_boot 'poweroff'
+require_clean_stop "a bare poweroff stops the machine"
+
+# Bare halt parks the CPU, so the runner does the killing; what it must still
+# have done is flush and clear the flag.
+fresh_image
+start_boot 'halt'
+if ! wait_token "halt: system halted" 120; then
+    fail "a bare halt never reported a halt"
+fi
+if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$LOG"; then
+    fail "a bare halt did not report a clean unmount"
+fi
+cleanup_boot
+if ! fsck_says_clean; then
+    fail "the image is not clean after a bare halt"
+fi
+echo "shutdown-test: a bare halt flushes and parks the CPU: OK"
+
+# Bare reboot exercises SIGTERM and RB_AUTOBOOT. -no-reboot makes the reset end
+# QEMU rather than start the machine again.
+fresh_image
+EXTRA_QEMU="-no-reboot"
+start_boot 'reboot'
+require_clean_stop "a bare reboot restarts the machine"
+EXTRA_QEMU=""
+
+# The refusal, which is the only committed test of the kernel's permission check
+# on a signal to init: an unprivileged caller must be turned away, and the
+# machine must still be there afterwards to say so.
+fresh_image
+start_boot 'su test -c halt; echo STILL""HERE'
+if ! wait_token "STILLHERE" 120; then
+    fail "the machine did not survive an unprivileged halt"
+fi
+if ! grep -q "Operation not permitted" "$LOG"; then
+    fail "an unprivileged bare halt was not refused"
+fi
+if grep -q "shutdown:" "$LOG"; then
+    fail "an unprivileged bare halt reached the kernel's shutdown"
+fi
+cleanup_boot
+if fsck_says_clean; then
+    fail "the image is clean, so the refused halt stopped the machine anyway"
+fi
+echo "shutdown-test: an unprivileged bare halt is refused: OK"
+
 echo "shutdown-test: PASS"

@@ -116,6 +116,9 @@ extern process_t *current_proc;
 void init_proc(void);
 
 /** Claim the first unused process slot; returns it, or NULL if the table is full. */
+/** Restart pid numbering at 1, for the boot that is about to start init. */
+void proc_reclaim_boot_pids(void);
+
 process_t *alloc_process(void);
 
 /** Mark a process slot unused. */

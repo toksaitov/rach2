@@ -48,6 +48,26 @@ void init_proc(void)
 }
 
 /**
+ * Restart pid numbering at 1, for the boot that is about to start init.
+ *
+ * Every Unix says init is pid 1, and until this call ran, this one did not:
+ * `next_pid` starts at 0 and the boot self-tests spawn processes before init
+ * exists, so init took whatever number the counter had reached and the kernel
+ * carried `init_pid` to remember it. That was not only untidy. `kill(1, ...)`
+ * is how the shipped `halt`, `poweroff` and `reboot` ask for a shutdown, and
+ * pid 1 was a dead self-test process, so the request went nowhere and the
+ * programs failed.
+ *
+ * Safe by construction rather than by timing: `alloc_process` already skips any
+ * pid that is still live, so a self-test slot that outlived its test would push
+ * init to the next free number rather than collide with it.
+ */
+void proc_reclaim_boot_pids(void)
+{
+    next_pid = 1;
+}
+
+/**
  * Claim the first unused process slot and return it ready to run.
  *
  * The new pid is bounded to the positive int range, since the /proc path

@@ -1285,6 +1285,11 @@ static void boot_init_process(void)
     k_puts("boot: starting /sbin/init");
     k_puts("");
 
+    /* Only now, past the point where this boot is certainly starting init, so
+     * the rescue and init-less boots keep the numbering every probe and the
+     * whole harness were written against. */
+    proc_reclaim_boot_pids();
+
     init_argv[0] = (char *) init_path;
     init_argv[1] = NULL;
     exec_program(1, init_argv);

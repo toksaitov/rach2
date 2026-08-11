@@ -95,7 +95,14 @@ the supporting scripts.
   report a clean unmount before the runner kills it. The `-n` is load-bearing:
   busybox syncs for itself before it splits on `-f`, so without it the kernel's
   own flush could be deleted and the phase would still pass. The serial input is
-  a FIFO held open past each wait, because EOF there stops QEMU by itself.
+  a FIFO held open past each wait, because EOF there stops QEMU by itself. Then
+  the signal contract, sent once as `kill -USR2 $PPID` so the phase names no pid
+  and cannot come to depend on busybox's retry; then the bare `halt`, `poweroff`
+  and `reboot`, which need init to be pid 1 because that is who busybox signals,
+  one phase per signal arm since the arms do not map one-to-one onto the phases;
+  and last the refusal, an unprivileged bare `halt` that must be turned away
+  while the machine stays up to say so, which is the only committed test of the
+  kernel's permission check on a signal to init.
 * `login_test.sh` (`make login-test`): the proof that the console cannot fall
   back to an unauthenticated shell, in the shape of `crash_test.sh`. It boots
   two committed fixtures, `krffs/manifests/login-test-strict.manifest` and

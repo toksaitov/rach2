@@ -666,7 +666,7 @@ The kernel maintains a fixed-size process table (`MAX_PROCS = 16`). At boot, pro
 
 ### Init, the rescue shell, and CTRL+C
 
-After boot and self-tests, the kernel runs a real init as PID 1. `boot_init_process` execs `/sbin/init` if the RAM disk holds it (the os-simple and os-real images do). That init is a small userland program, `utils/init.c`: it forks the login shell, reaps every orphan the kernel reparents onto it, and respawns the shell when it exits, so the shell never disappears and an exited login leaves you at a fresh prompt rather than at a kernel shell.
+After boot and self-tests, the kernel runs a real init as PID 1, and it is pid 1 in fact and not only in the prose: pid numbering is restarted at 1 on the way into `boot_init_process`, past the point where the boot is certainly starting init, so the self-tests that ran first no longer consume the numbering while the rescue and init-less boots keep it. That matters beyond tidiness, because `kill(1, ...)` is how `halt`, `poweroff` and `reboot` ask for a shutdown: before it, pid 1 was a dead self-test process and all three failed with `No such process`. Pid 0 is the kernel's first process, which is why `/proc` lists a 0 beside the 1. `boot_init_process` execs `/sbin/init` if the RAM disk holds it (the os-simple and os-real images do). That init is a small userland program, `utils/init.c`: it forks the login shell, reaps every orphan the kernel reparents onto it, and respawns the shell when it exits, so the shell never disappears and an exited login leaves you at a fresh prompt rather than at a kernel shell.
 
 Because init is persistent, the kernel's built-in debug shell is no longer the home you land in. It is the rescue/developer environment, reached two ways:
 
