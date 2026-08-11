@@ -109,6 +109,9 @@
 #define SYS_SYNC        36
 #define SYS_FSYNC       118
 #define SYS_FDATASYNC   148
+
+/* Stop the machine, after the same flush sync(2) does. Root only. */
+#define SYS_REBOOT      88
 /* KRFFS has no hard links; link/linkat return -EPERM (dropbear falls back). */
 #define SYS_LINK        9
 #define SYS_LINKAT      303

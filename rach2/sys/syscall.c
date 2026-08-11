@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "power.h"
 #include "serial.h"
 #include "panic.h"
 #include "kio.h"
@@ -374,6 +375,7 @@ extern void shell_reset_input(void);
  * is PID 1, in which case its death is fatal (panic_init_died, never returns). */
 extern bool debug_shell_is_home;
 extern void panic_init_died(uint32_t pid);
+extern void kernel_shutdown(int how);
 
 /* Kernel stack from loader.s */
 extern char stack[];
@@ -1738,6 +1740,79 @@ static int32_t sys_sync(isr_params_t *params)
     (void) params;
     pc_sync();
     return 0;
+}
+
+
+/* The magics Linux's reboot(2) demands, which musl passes for the caller: a
+ * first word, one of four accepted second words, and then the command. */
+#define REBOOT_MAGIC1     0xfee1deadu
+#define REBOOT_MAGIC2     672274793u  /* 0x28121969 */
+#define REBOOT_MAGIC2A    85072278u   /* 0x05121996 */
+#define REBOOT_MAGIC2B    369367448u  /* 0x16041998 */
+#define REBOOT_MAGIC2C    537993216u  /* 0x20112000 */
+
+/* The commands. Two of them are negative read as a signed int, which is why
+ * everything here compares raw 32-bit values. */
+#define REBOOT_CMD_RESTART  0x01234567u
+#define REBOOT_CMD_HALT     0xcdef0123u
+#define REBOOT_CMD_POWER_OFF 0x4321fedcu
+#define REBOOT_CMD_CAD_ON   0x89abcdefu
+#define REBOOT_CMD_CAD_OFF  0x00000000u
+
+/**
+ * reboot(2): stop the machine. EBX = magic1, ECX = magic2, EDX = command.
+ *
+ * Does not return for the three commands that stop the machine. Returns
+ * `-EPERM` for an unprivileged caller, `-EINVAL` for a wrong magic or an
+ * unknown command, and 0 for `RB_DISABLE_CAD`.
+ *
+ * The privilege check comes before the magics, which inverts the order the rest
+ * of this file uses, and Linux inverts it the same way. A magic-first handler
+ * would let any uid learn the ABI of the one call that stops the machine and
+ * erases the evidence of what it was doing; nothing is learned from `-EPERM`.
+ *
+ * `RB_DISABLE_CAD` returning 0 is what makes the rest testable. Every command
+ * that works stops the machine, so without one that succeeds quietly a caller
+ * cannot tell an accepted magic from a rejected one: both would answer
+ * `-EINVAL`. It asks for a state this kernel is permanently in, since there is
+ * no keyboard reboot to disable, so 0 is a true answer. `RB_ENABLE_CAD` asks
+ * for a feature that does not exist and answers `-EINVAL`, because a 0 there
+ * would be the one reply a caller could not tell from a working one.
+ */
+static int32_t sys_reboot(isr_params_t *params)
+{
+    uint32_t magic1 = (uint32_t) params->ebx;
+    uint32_t magic2 = (uint32_t) params->ecx;
+    uint32_t cmd = (uint32_t) params->edx;
+
+    if (!cred_privileged()) {
+        return -EPERM;
+    }
+    if (magic1 != REBOOT_MAGIC1) {
+        return -EINVAL;
+    }
+    if (magic2 != REBOOT_MAGIC2 && magic2 != REBOOT_MAGIC2A &&
+        magic2 != REBOOT_MAGIC2B && magic2 != REBOOT_MAGIC2C) {
+        return -EINVAL;
+    }
+
+    switch (cmd) {
+    case REBOOT_CMD_RESTART:
+        kernel_shutdown(POWER_RESTART);
+        break;
+    case REBOOT_CMD_HALT:
+        kernel_shutdown(POWER_HALT);
+        break;
+    case REBOOT_CMD_POWER_OFF:
+        kernel_shutdown(POWER_OFF);
+        break;
+    case REBOOT_CMD_CAD_OFF:
+        return 0;
+    default:
+        break;
+    }
+
+    return -EINVAL;
 }
 
 /* lseek(2): EBX = fd, ECX = offset, EDX = whence (0=SET, 1=CUR, 2=END). Returns
@@ -8732,6 +8807,7 @@ void init_syscall(void)
     _syscall_table[SYS_PRLIMIT64] = sys_prlimit64;
     _syscall_table[SYS_DUP3] = sys_dup3;
     _syscall_table[SYS_SYNC] = sys_sync;
+    _syscall_table[SYS_REBOOT] = sys_reboot;
     _syscall_table[SYS_FSYNC] = sys_fsync;
     _syscall_table[SYS_FDATASYNC] = sys_fsync;
     _syscall_table[SYS_LINK] = sys_link;

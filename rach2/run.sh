@@ -30,10 +30,10 @@
 #   DISK=../build/images/os-real.disk ./run.sh
 #
 # The page cache is write-back, so an edit is durable after a `sync` (or after
-# `passwd`, which flushes for you) and not before. Every ordinary disk boot
-# leaves the dirty-mount flag set and prints the fsck advice, because nothing in
-# userland can ask for a clean unmount: `halt` at the kernel debug shell is the
-# only caller that clears it.
+# `passwd`, which flushes for you) and not before. Stop the machine with `halt
+# -f`, `poweroff -f` or `reboot -f`, which reach reboot(2) and flush before they
+# clear the dirty-mount flag; a boot that is simply killed leaves the flag set
+# and the next one prints the fsck advice.
 #
 # DISKNOMOUNT=1 attaches the disk without mounting it, which is the older
 # recipe: the kernel boots the RAM module and the debug shell's `disk` command
