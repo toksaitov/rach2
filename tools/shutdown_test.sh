@@ -195,4 +195,15 @@ if ! fsck_says_clean; then
 fi
 echo "shutdown-test: halt -n -f flushes and parks the CPU: OK"
 
+# The signal contract, before the pid is: `$PPID` from the console shell is
+# init by construction, so this phase names no number and does not depend on
+# init being pid 1. It sends the signal exactly ONCE, because busybox sends its
+# own twice and a shipped path that came to depend on the retry would be a path
+# that breaks the day this system serves a /proc/meminfo.
+fresh_image
+# $PPID is the GUEST shell's, so it must reach the guest unexpanded.
+# shellcheck disable=SC2016
+start_boot 'kill -USR2 $PPID'
+require_clean_stop "a SIGUSR2 to init powers the machine off"
+
 echo "shutdown-test: PASS"
