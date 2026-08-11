@@ -72,7 +72,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        ping-test login-test crash-test stress-test os-real-grub-disk \
+        ping-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-setid check-dropbearmulti check-libc \
@@ -304,6 +304,17 @@ ping-test: rach2 tests krffs test-image
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" wait=60
 
+# `make shutdown-test`: userland stopping the machine, on a disk fixture, with
+# every claim of a stop asserted on the QEMU process ending rather than on a
+# token, and every image checked by offline fsck afterwards.
+SHUTDOWN_TEST_DISK = $(IMAGES_DIR)/shutdown-test.disk
+
+shutdown-test: rach2 utils krffs busybox
+	sh krffs/gen_demo_password.sh
+	$(MKDISK) krffs/manifests/shutdown-test.manifest $(SHUTDOWN_TEST_DISK) 64 48
+	sh tools/shutdown_test.sh build/rach2/kernel $(SHUTDOWN_TEST_DISK) \
+	    build/krffs/fsck.krffs "`cat krffs/rach2_demo_password`"
+
 # `make login-test`: prove the console cannot fall back to an unauthenticated
 # shell. Two images differing only in the init they declare, neither staging
 # /bin/login, plus a rescue boot of the real image, which is the way back into
@@ -488,6 +499,7 @@ help:
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
+	@echo "  make shutdown-test  userland stops the machine, and only root can"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"

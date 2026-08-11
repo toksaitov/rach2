@@ -82,6 +82,20 @@ the supporting scripts.
   the `utils` sub-make, which `check-setid` therefore lists as a prerequisite:
   unordered, a parallel build scans yesterday's binaries and passes while
   today's are staged.
+* `shutdown_test.sh` (`make shutdown-test`): userland stopping the machine, on
+  a disk fixture (`krffs/manifests/shutdown-test.manifest`) that boots straight
+  to a root shell, because `login` flushes pending input and would eat a
+  scripted feed. Every phase that claims a stop waits on the QEMU process
+  ending and reads its exit status, since a token proves only that the kernel
+  reached the line before the write, and every image is checked by offline
+  `fsck.krffs` whose status is read beside its output. `poweroff -n -f` must
+  stop the machine and leave the image clean; a file written immediately before
+  it must be readable on the next boot, which is lost if the machine is killed
+  instead; and `halt -n -f`, which parks the CPU by design, must flush and
+  report a clean unmount before the runner kills it. The `-n` is load-bearing:
+  busybox syncs for itself before it splits on `-f`, so without it the kernel's
+  own flush could be deleted and the phase would still pass. The serial input is
+  a FIFO held open past each wait, because EOF there stops QEMU by itself.
 * `login_test.sh` (`make login-test`): the proof that the console cannot fall
   back to an unauthenticated shell, in the shape of `crash_test.sh`. It boots
   two committed fixtures, `krffs/manifests/login-test-strict.manifest` and

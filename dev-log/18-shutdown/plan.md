@@ -134,7 +134,7 @@ Proof, this phase: `poweroff -n -f` on the fixture, requiring QEMU to exit by it
 
 The `-n` is load-bearing and the plan states why: busybox calls `sync()` itself before it splits on `-f` (`init/halt.c:204-209`), so without `-n` a marker file is already on the platter through `SYS_SYNC` and the phase would pass with the kernel's own flush deleted. With `-n` the kernel's flush is the only one in the path. A marker written immediately before the command must read back on the second boot.
 
-Shown failing: both `pc_sync` calls removed from `kernel_shutdown`, and the marker must be absent.
+Shown failing: both flushes removed, which fails the phase above on a dirty image. Measured while proving it, and recorded because it bounds what the marker phase claims: the same write is lost when the machine is killed rather than stopped, so the assertion is real; but a mutation that published the flag page alone still passed it, because the cache also writes a frame back when it evicts one and the page can arrive that way on a busier boot. The phase asserts that a write made immediately before a stop survives it, not that the shutdown's flush is the only thing that could have carried it.
 
 Done when: `make shutdown-test` passes its phases from a clean tree; `make check-setid` is green with the new manifest.
 

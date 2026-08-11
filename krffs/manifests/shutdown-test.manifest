@@ -1,0 +1,41 @@
+# shutdown-test.manifest: an image for proving that userland can stop the
+# machine, and that only root can.
+#
+# It declares init-shell rather than init-login, and the choice is the runner's:
+# init-shell drops straight to a root shell, so a scripted feed never meets
+# `login`, which flushes pending input when it puts the line back into canonical
+# mode and would eat a script written ahead of its prompts. What is being proved
+# here is the shutdown path, not the console's authentication, which
+# `make login-test` owns.
+#
+# It stages an unprivileged account and the setuid `/bin/su` because one phase
+# is a refusal: a bare `halt` run as somebody who is not root must be turned
+# away by the kernel's signal permission check, and an image with only root in
+# it cannot ask that question.
+#
+# tools/shutdown_test.sh boots it. Host paths are relative to the repo root
+# (mkimage.sh cd's there).
+
+dir 0755 /bin
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+file 04755:0:0 /bin/su build/utils/sbin/su
+
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-shell
+
+# The same /etc the console fixtures carry, plus the second account. Its shadow
+# hash is the demo one the build generates, so the runner reads the password out
+# of the same file the rest of the tree does.
+dir 0755 /etc
+text 0644 /etc/motd shutdown-test\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
+file 0600 /etc/shadow krffs/shadow
+text 0644 /etc/group root:x:0:\ntest:x:1000:\n
+text 0644 /etc/shells /bin/sh\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\n
+
+dir 0755 /root
+dir 0755 /home
+dir 0700:1000:1000 /home/test

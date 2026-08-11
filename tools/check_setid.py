@@ -183,6 +183,16 @@ ALLOWLIST = {
         "sentinel": ("/etc/motd", 0o644, 0, 0),
         "init": "init-shell",
     },
+    "shutdown-test": {
+        # The shutdown fixture stages the shipped setuid `su` so one phase can
+        # ask a bare `halt` as somebody who is not root and be refused.
+        "setid": {
+            "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
+        },
+        "unprivileged": ("/bin/busybox",),
+        "sentinel": None,
+        "init": "init-shell",
+    },
     "stress-test": {
         "setid": {},
         "unprivileged": (),
