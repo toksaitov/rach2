@@ -1455,6 +1455,8 @@ static int _krffs_on_disk;
 
 /**
  * Flushes the cache and then clears the dirty-mount flag, for a clean shutdown.
+ * Returns 0 when the flag is cleared and -1 when it is not, so a caller cannot
+ * announce a clean unmount the data did not earn.
  *
  * The kernel sets the root node's dirty bit on a disk mount and only this clears
  * it, write-through. A no-op unless KRFFS is mounted from a disk.
@@ -1486,25 +1488,28 @@ static int _krffs_on_disk;
  * protect, and closing the window would mean pinning the root frame for the
  * life of the mount, which is a page-cache change and not a shutdown one.
  */
-static void krffs_disk_mark_clean(void)
+static int krffs_disk_mark_clean(void)
 {
     krffs_node_t *root;
     uint16_t mode;
 
     if (!_krffs_on_disk) {
-        return;
+        return -1;
     }
     root = (krffs_node_t *) PCWIN_BASE;
     mode = root->mode;
 
     if (pc_sync() != 0) {
         serial_printf("KRFFS: flush failed before the clear; image stays dirty\n");
-        return;
+        return -1;
     }
     root->mode = (uint16_t) (mode & ~KRFFS_MODE_DIRTY);
     if (pc_sync() != 0) {
         serial_printf("KRFFS: flush failed after the clear; image stays dirty\n");
+        return -1;
     }
+
+    return 0;
 }
 
 /**
@@ -1514,7 +1519,10 @@ static void krffs_disk_mark_clean(void)
  * The one path out of a running Rach2, whether the request came from the debug
  * shell or from a `reboot(2)`. It disables scheduling, flushes the page cache,
  * clears the dirty-mount flag when there is a disk mount to clear it on, says
- * on the serial line which of those happened, and stops.
+ * on the serial line which of those happened, and stops. The clean-unmount line
+ * is printed only when the flag was actually cleared; a failure has already said
+ * why, and a token that appeared either way would be a claim no test could
+ * trust.
  *
  * A failed flush does not stop the machine from stopping. An unwritable disk
  * would otherwise be an unstoppable machine, and the lie this refuses is the
@@ -1533,8 +1541,9 @@ void kernel_shutdown(int how)
     sched_disable();
 
     if (_krffs_on_disk) {
-        krffs_disk_mark_clean();
-        serial_printf("shutdown: clean unmount: dirty-mount flag cleared\n");
+        if (krffs_disk_mark_clean() == 0) {
+            serial_printf("shutdown: clean unmount: dirty-mount flag cleared\n");
+        }
     } else if (pc_sync() != 0) {
         serial_printf("shutdown: page cache flush failed\n");
     } else {

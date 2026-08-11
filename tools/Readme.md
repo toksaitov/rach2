@@ -168,7 +168,12 @@ the supporting scripts.
   kernel reached the line before the write, and `halt` cannot carry that
   assertion at all because parking the CPU leaves QEMU running by design. Its
   serial input is a FIFO held open past the wait, because EOF there stops QEMU
-  on its own and would make every outcome look like a success. That third phase exists because
+  on its own and would make every outcome look like a success. QEMU's own exit
+  status is read as well, since a process that aborted also ends; and every
+  phase reads `fsck.krffs`'s status beside its output, because the two checks
+  that ask whether the dirty line is ABSENT would otherwise read a corrupt or
+  unreadable image, which prints something else, as a clean one: in a pipeline
+  it is grep's status that survives, not fsck's. That third phase exists because
   `KRFFS_MODE_DIRTY` and `KRFFS_MODE_SUID` are the same bit: a set-id clear that
   reached the root would report an unclean image as cleanly unmounted, losing
   the crash evidence rather than a permission. It needs a real disk, since the

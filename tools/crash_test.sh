@@ -53,6 +53,25 @@ cp "$DISK" "$OFF"
 rm -f "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"
 trap 'rm -f "$CRASH" "$CLEAN" "$DIRTY" "$OFF" "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"' EXIT INT TERM
 
+# Whether an offline fsck calls $1 clean. Its exit status is read as well as its
+# output, because a check that only asked whether the dirty line was absent
+# would read a corrupt or unreadable image, which prints something else
+# entirely, as a clean one: in a pipeline it is grep's status that survives, not
+# fsck's.
+fsck_says_clean() {
+    out=$("$FSCK" "$1" --offset "$OFFSET" --size "$SIZE" 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "crash-test: fsck.krffs exited $rc on $1:" >&2
+        echo "$out" >&2
+        return 1
+    fi
+    case "$out" in
+        *"not cleanly unmounted"*) return 1 ;;
+    esac
+    return 0
+}
+
 qemu_disk() {
     qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
         -append "rach2.fsdisk rach2.rescue" \
@@ -107,13 +126,11 @@ if ! wait_serial "$CLEAN.log" "halt: system halted"; then
 fi
 kill "$QPID" 2>/dev/null || true
 wait "$QPID" 2>/dev/null || true
-if "$FSCK" "$CLEAN" --offset "$OFFSET" --size "$SIZE" 2>&1 \
-        | grep -q "not cleanly unmounted"; then
-    echo "crash-test: FAIL: cleanly-halted image still dirty" >&2
+if ! fsck_says_clean "$CLEAN"; then
+    echo "crash-test: FAIL: cleanly-halted image is not clean" >&2
     exit 1
-else
-    echo "crash-test: cleanly-halted image is clean: OK"
 fi
+echo "crash-test: cleanly-halted image is clean: OK"
 
 # Power off, which is the only phase that asserts the machine STOPPED. `halt`
 # parks the CPU and leaves QEMU running by design, so no halt phase can tell a
@@ -144,7 +161,12 @@ if kill -0 "$QPID" 2>/dev/null; then
     echo "crash-test: FAIL: poweroff did not stop the machine" >&2
     exit 1
 fi
-wait "$QPID" 2>/dev/null || true
+if ! wait "$QPID"; then
+    kill "$FPID" 2>/dev/null || true
+    rm -f "$FEED"
+    echo "crash-test: FAIL: QEMU stopped, but not with the status a power-off gives" >&2
+    exit 1
+fi
 kill "$FPID" 2>/dev/null || true
 rm -f "$FEED"
 if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$OFF.log"; then
@@ -155,13 +177,11 @@ if grep -q "halting instead" "$OFF.log"; then
     echo "crash-test: FAIL: the power-off fell back to a halt" >&2
     exit 1
 fi
-if "$FSCK" "$OFF" --offset "$OFFSET" --size "$SIZE" 2>&1 \
-        | grep -q "not cleanly unmounted"; then
-    echo "crash-test: FAIL: powered-off image still dirty" >&2
+if ! fsck_says_clean "$OFF"; then
+    echo "crash-test: FAIL: powered-off image is not clean" >&2
     exit 1
-else
-    echo "crash-test: powered-off image is clean and QEMU stopped itself: OK"
 fi
+echo "crash-test: powered-off image is clean and QEMU stopped itself: OK"
 
 # The root node under attack: boot dirty, run dirtyprobe, kill without a halt.
 # The probe syncs after every attempt, so a spurious clear reaches the platter
