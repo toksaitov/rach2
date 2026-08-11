@@ -48,7 +48,8 @@ UTILITIES = true  \
             ls    \
             ping  \
             nc    \
-            httpd
+            httpd \
+            halt
 
 # init is PID 1, and su and sudo climb privilege; none of the three is a user tool
 # to be swept into an image root. They build into a sbin/ subdir so the os-simple
