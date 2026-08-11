@@ -18,6 +18,7 @@
 #include "sys/tty/pty.h"
 #include "sys/ipc/pipe.h"
 #include "sys/proc/sched.h"
+#include "sys/power.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
 #include "sys/lib/krandom.h"
@@ -1453,26 +1454,94 @@ static block_partition_t _krffs_disk_part;
 static int _krffs_on_disk;
 
 /**
- * Clears the dirty-mount flag and flushes, for a clean shutdown.
+ * Flushes the cache and then clears the dirty-mount flag, for a clean shutdown.
  *
  * The kernel sets the root node's dirty bit on a disk mount and only this clears
- * it, write-through. The sole caller is the debug-shell `halt`, so a normal
- * `/sbin/init` boot (which runs forever and is powered off externally) never
- * reaches here and leaves the bit set on the device, the same as a crash, for
- * `fsck.krffs` to find. A no-op unless KRFFS is mounted from a disk.
+ * it, write-through. A no-op unless KRFFS is mounted from a disk.
+ *
+ * The two flushes are the whole of it, and the order is the correction. Clearing
+ * the flag and then flushing once, which is what this did, can publish the
+ * cleared root page while a later frame's write-back fails: `pc_sync` walks the
+ * slots by index and fails whole, having already written the ones that
+ * succeeded, so the platter is left reading CLEAN with data missing while the
+ * caller reports a failure. Flushing first makes the flag conditional on the
+ * data: if that flush fails the bit is never touched, the platter keeps the bit
+ * the mount wrote through, and the next boot invites `fsck.krffs`, which is the
+ * safe direction. A failure of the second flush leaves the cleared byte in a
+ * dirty frame and the platter still marked, which is the same safe direction.
+ *
+ * The root's mode is read before either flush, which buys exactly one thing:
+ * the store below cannot need disk I/O. That store goes through the
+ * demand-paged window, where a fill that cannot be served is a panic and not an
+ * error return, and reading first turns it into a write fault on a resident
+ * frame, which is a remap. `pc_sync` re-protects but never evicts, so the frame
+ * is still there when the store arrives.
+ *
+ * It does not make the read itself safe, and nothing here can. Bringing a page
+ * in needs a free frame, taking a frame needs an eviction, and an eviction
+ * needs a write; on a disk that can no longer be written, with the root evicted
+ * and every slot dirty, the fill fails and the machine panics here instead of
+ * reporting. That is a machine which has already lost its disk, the panic stops
+ * it with the flag still set, which is the direction this function exists to
+ * protect, and closing the window would mean pinning the root frame for the
+ * life of the mount, which is a page-cache change and not a shutdown one.
  */
 static void krffs_disk_mark_clean(void)
 {
-    if (_krffs_on_disk) {
-        krffs_node_t *root = (krffs_node_t *) PCWIN_BASE;
-        root->mode &= (uint16_t) ~KRFFS_MODE_DIRTY;
-        if (pc_sync() != 0) {
-            /* The cleared flag did not reach the disk: report it rather than
-               claim a clean unmount. The image stays marked dirty, so the next
-               boot conservatively invites fsck.krffs. */
-            serial_printf("KRFFS: clean-unmount flush failed; image stays dirty\n");
-        }
+    krffs_node_t *root;
+    uint16_t mode;
+
+    if (!_krffs_on_disk) {
+        return;
     }
+    root = (krffs_node_t *) PCWIN_BASE;
+    mode = root->mode;
+
+    if (pc_sync() != 0) {
+        serial_printf("KRFFS: flush failed before the clear; image stays dirty\n");
+        return;
+    }
+    root->mode = (uint16_t) (mode & ~KRFFS_MODE_DIRTY);
+    if (pc_sync() != 0) {
+        serial_printf("KRFFS: flush failed after the clear; image stays dirty\n");
+    }
+}
+
+/**
+ * Bring the machine to a stop the way `how` asks, flushing first. Does not
+ * return.
+ *
+ * The one path out of a running Rach2, whether the request came from the debug
+ * shell or from a `reboot(2)`. It disables scheduling, flushes the page cache,
+ * clears the dirty-mount flag when there is a disk mount to clear it on, says
+ * on the serial line which of those happened, and stops.
+ *
+ * A failed flush does not stop the machine from stopping. An unwritable disk
+ * would otherwise be an unstoppable machine, and the lie this refuses is the
+ * other one: reporting a clean unmount the data did not earn. What a failure
+ * costs is the flag, which stays set, so the next boot invites `fsck.krffs`.
+ *
+ * A second concurrent caller cannot exist, which is the first thing a reader of
+ * a function that never returns wants to know. Preemption is already off inside
+ * a syscall, since the timer skips `schedule()` while `in_syscall` is set;
+ * `sched_disable()` closes the debug-shell and kernel-thread cases where it is
+ * not; and nothing returns from here to enter it again. `sched_disable()` has
+ * to stay ahead of the flush for that reason and not merely for tidiness.
+ */
+void kernel_shutdown(int how)
+{
+    sched_disable();
+
+    if (_krffs_on_disk) {
+        krffs_disk_mark_clean();
+        serial_printf("shutdown: clean unmount: dirty-mount flag cleared\n");
+    } else if (pc_sync() != 0) {
+        serial_printf("shutdown: page cache flush failed\n");
+    } else {
+        serial_printf("shutdown: no disk mount; nothing to unmount\n");
+    }
+    k_puts("Stopping the system. Goodbye!");
+    power_stop(how);
 }
 
 static int krffs_disk_read(uint32_t off, void *page)
@@ -2289,12 +2358,11 @@ static void process_command(const char *cmd)
         k_puts("Triggering page fault at 0xA0000000...");
         *bad_ptr = 0xDEADBEEF;
     } else if (str_equal(cmd, "halt")) {
-        krffs_disk_mark_clean();
-        k_puts("Halting system. Goodbye!");
-        /* On serial as well: the crash test waits for this token instead of
-           guessing how long the flush above takes. */
-        serial_printf("halt: system halted\n");
-        __asm__ __volatile__("cli; hlt");
+        kernel_shutdown(POWER_HALT);
+    } else if (str_equal(cmd, "poweroff")) {
+        kernel_shutdown(POWER_OFF);
+    } else if (str_equal(cmd, "reboot")) {
+        kernel_shutdown(POWER_RESTART);
     } else if (str_equal(cmd, "usermode")) {
         k_puts("Testing user mode (ring 3) transition...");
         k_puts("Expected: 'Hello from ring 3!' followed by infinite loop.");

@@ -40,7 +40,12 @@
  * no clean-unmount path (init runs forever and power-off is external), so the bit
  * is cleared only by the debug-shell `halt` or offline by `fsck.krffs`; a normal
  * boot therefore leaves it set across power-off, which fsck reads as a mount that
- * may not have flushed. `sync` flushes the cache but does not clear it. It sits
+ * may not have flushed. `sync` flushes the cache but does not clear it. The clear
+ * is conditional on the data: the shutdown path flushes the whole cache first and
+ * touches this bit only if that flush returned 0, because a write-back walks the
+ * cache by slot and fails whole, so clearing first can publish the cleared root
+ * page while another frame's write fails and leave an image that reads clean with
+ * data missing. It sits
  * above the nine permission bits and below the 0170000 type field KRFFS_IS_DIR
  * tests. On the root node it is safe from every masked mode comparison: stat
  * reports the root with a fixed mode, chmod never touches it, and the access

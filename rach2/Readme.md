@@ -912,7 +912,7 @@ The kernel will display the module at boot:
 
 ## File System (KRFFS)
 
-The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a hierarchical file system whose v2 directories are written by the image builder and read and written by the kernel. KRFFS mounts one of three ways: from a RAM disk module passed via multiboot (the default); from the page-cache window over the disk image embedded behind the module (`rach2.fswindow`); or from a real ATA disk through that same window (`rach2.fsdisk`, or `rach2.root=disk`, which probes the MBR for the root partition). The disk mount is persistent: a clean shutdown clears the root node's dirty-mount flag, an unclean one leaves it set for `fsck.krffs` to find.
+The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a hierarchical file system whose v2 directories are written by the image builder and read and written by the kernel. KRFFS mounts one of three ways: from a RAM disk module passed via multiboot (the default); from the page-cache window over the disk image embedded behind the module (`rach2.fswindow`); or from a real ATA disk through that same window (`rach2.fsdisk`, or `rach2.root=disk`, which probes the MBR for the root partition). The disk mount is persistent: a clean shutdown flushes the cache and, only if that flush succeeded, clears the root node's dirty-mount flag; an unclean one, or one whose flush failed, leaves it set for `fsck.krffs` to find. The order is what makes the flag mean anything, since a write-back fails whole after writing part of the cache, so clearing the flag first can leave the platter reading clean with data missing.
 
 ### KRFFS Overview
 

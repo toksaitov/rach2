@@ -26,6 +26,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/panic.c     \
 	  sys/speaker.c   \
 	  sys/pci.c       \
+	  sys/power.c     \
 	  sys/block/block.c     \
 	  sys/block/ata.c       \
 	  sys/block/ahci.c      \
