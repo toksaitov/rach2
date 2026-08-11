@@ -173,6 +173,16 @@ Done when: `ls /proc` on a booted os-real lists `1` and `/proc/1/cmdline` reads 
 
 Readmes: `rach2/Readme.md`'s pid-1 claims become true rather than aspirational, and say that the boot self-tests no longer consume the numbering.
 
+### What the work changed about this plan
+
+Three things, recorded here rather than quietly rewritten above.
+
+The message component in phase 1 became `KRFFS:` and not `shutdown:`, since three other lines about that same flag already carry it and the file system owns the bit; `shutdown:` is phase 2's, for the sequence rather than the flag.
+
+Phase 2 shipped as two commits rather than one. The review found that `kernel_shutdown` printed its clean-unmount line whether or not the flag had been cleared, because `krffs_disk_mark_clean` returned nothing, and that `crash_test.sh` discarded QEMU's exit status and read `fsck`'s through a pipe. That is one logical change (stop claiming more than was earned, and read the statuses that would say otherwise) and it landed as its own commit after the phase, which is later than the rule wants and is recorded as such.
+
+Phase 5's marker phase proves less than the plan said. It asserts that a write made immediately before a stop survives it, which is real and which a plain kill fails; it does not prove the shutdown's flush is what carried the page, because the cache also writes a frame back on eviction. The plan's claim was corrected in place.
+
 ### Phase 8: the record and the gate
 
 Change: `dev-log/18-shutdown/Readme.md`, this plan corrected in place wherever the work disproved it with the reason recorded, one bullet in `dev-log/Readme.md` carrying the anchor sentence forward off the 17-completion bullet, and a pointer at the head of 17-completion's deferral section saying where its last item was closed.
