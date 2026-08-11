@@ -157,12 +157,18 @@ the supporting scripts.
   This boots one disk image three times against `/musl/creddisk`, with one send
   per boot rather than the repeating `probe=` step, since each boot must run the
   probe exactly once: the state the next boot reads is the state this one left.
-* `crash_test.sh` (`make crash-test`): the disk dirty-flag checks, three boots
+* `crash_test.sh` (`make crash-test`): the disk dirty-flag checks, four boots
   against scratch copies of one disk. The first is killed after the mount, so
   offline `fsck.krffs` must report "not cleanly unmounted"; the second halts
   cleanly, so fsck must find it clean; the third runs `dirtyprobe`, which
   attacks the root node with every operation that could take a mode bit off it,
-  and the flag must still be there afterwards. That third phase exists because
+  and the flag must still be there afterwards. The fourth types `poweroff` and
+  is the only phase that asserts the machine STOPPED: it waits on the QEMU
+  process ending rather than on a token, since a token proves only that the
+  kernel reached the line before the write, and `halt` cannot carry that
+  assertion at all because parking the CPU leaves QEMU running by design. Its
+  serial input is a FIFO held open past the wait, because EOF there stops QEMU
+  on its own and would make every outcome look like a success. That third phase exists because
   `KRFFS_MODE_DIRTY` and `KRFFS_MODE_SUID` are the same bit: a set-id clear that
   reached the root would report an unclean image as cleanly unmounted, losing
   the crash evidence rather than a permission. It needs a real disk, since the

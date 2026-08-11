@@ -36,9 +36,11 @@ fi
 CRASH="$DISK.crash"
 CLEAN="$DISK.clean"
 DIRTY="$DISK.dirty"
+OFF="$DISK.off"
 cp "$DISK" "$CRASH"
 cp "$DISK" "$CLEAN"
 cp "$DISK" "$DIRTY"
+cp "$DISK" "$OFF"
 # Removed here and not only in the trap. An uncatchable kill leaves a previous
 # run's logs, and each holds the token its phase waits for; the redirect that
 # would truncate one is performed by the backgrounded child, which the parent's
@@ -48,8 +50,8 @@ cp "$DISK" "$DIRTY"
 # costs a fork and an exec while the child's truncate costs an open, and it was
 # not won in 600 trials of both background forms used here), which is a reason to
 # spend one line closing it rather than a reason to argue about it.
-rm -f "$CRASH.log" "$CLEAN.log" "$DIRTY.log"
-trap 'rm -f "$CRASH" "$CLEAN" "$DIRTY" "$CRASH.log" "$CLEAN.log" "$DIRTY.log"' EXIT INT TERM
+rm -f "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"
+trap 'rm -f "$CRASH" "$CLEAN" "$DIRTY" "$OFF" "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"' EXIT INT TERM
 
 qemu_disk() {
     qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
@@ -111,6 +113,54 @@ if "$FSCK" "$CLEAN" --offset "$OFFSET" --size "$SIZE" 2>&1 \
     exit 1
 else
     echo "crash-test: cleanly-halted image is clean: OK"
+fi
+
+# Power off, which is the only phase that asserts the machine STOPPED. `halt`
+# parks the CPU and leaves QEMU running by design, so no halt phase can tell a
+# stop from a hang; `poweroff` asks the PIIX4 to remove power, and QEMU exits.
+# The wait is therefore on the process and not on a token: a token proves only
+# that the kernel reached the line before the write. stdin is a FIFO held open
+# by a writer that outlives the wait, because EOF on the serial input stops QEMU
+# on its own and would make every outcome here look like a success.
+FEED="$DISK.feed"
+rm -f "$FEED"
+mkfifo "$FEED"
+( sleep 6; printf 'poweroff\n'; sleep 120 ) > "$FEED" &
+FPID=$!
+qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    -append "rach2.fsdisk rach2.rescue" \
+    -drive "file=$OFF,format=raw,if=ide,index=0,media=disk" \
+    -serial stdio < "$FEED" > "$OFF.log" 2>&1 &
+QPID=$!
+i=0
+while kill -0 "$QPID" 2>/dev/null && [ "$i" -lt 60 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+if kill -0 "$QPID" 2>/dev/null; then
+    kill -9 "$QPID" 2>/dev/null || true
+    kill "$FPID" 2>/dev/null || true
+    rm -f "$FEED"
+    echo "crash-test: FAIL: poweroff did not stop the machine" >&2
+    exit 1
+fi
+wait "$QPID" 2>/dev/null || true
+kill "$FPID" 2>/dev/null || true
+rm -f "$FEED"
+if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$OFF.log"; then
+    echo "crash-test: FAIL: poweroff did not report a clean unmount" >&2
+    exit 1
+fi
+if grep -q "halting instead" "$OFF.log"; then
+    echo "crash-test: FAIL: the power-off fell back to a halt" >&2
+    exit 1
+fi
+if "$FSCK" "$OFF" --offset "$OFFSET" --size "$SIZE" 2>&1 \
+        | grep -q "not cleanly unmounted"; then
+    echo "crash-test: FAIL: powered-off image still dirty" >&2
+    exit 1
+else
+    echo "crash-test: powered-off image is clean and QEMU stopped itself: OK"
 fi
 
 # The root node under attack: boot dirty, run dirtyprobe, kill without a halt.
