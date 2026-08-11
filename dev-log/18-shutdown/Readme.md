@@ -60,7 +60,9 @@ The claim that reading the root node before the flush makes the store safe: it m
 
 `make verify-style`, `make verify-host` and `make test` on every phase, plus `make crash-test`, `make shutdown-test`, `make login-test`, `make ping-test`, the disk probes on both buses, and the SSH capstone on the phase that touched init. `make test` grew from 51 probes to 52 with `rebootprobe`. `make shutdown-test` is new and runs eight boots.
 
-Every capstone was run live: `poweroff` and `reboot` at the debug shell each stop QEMU within a second of being typed; `poweroff -f` stops os-real where it printed `Function not implemented` before; os-simple stops from its own `ish` prompt with the in-house `halt`; `/proc` lists `0 1 2 3 self` with `/proc/1/cmdline` reading `init`; and the SSH capstone logs in over a pty with init as pid 1.
+The whole gate was re-run from a clean tree at the end, with `build/` and the vendored stamps removed and everything rebuilt: `verify-style`, `verify-host`, `test` (52 probes), `crash-test`, `shutdown-test`, `login-test`, `ping-test`, `test-disk`, `test-disk-ahci`, `persist-test`, `persist-test-ahci`, `cred-persist-test` and `test-noentropy`, all green.
+
+Every capstone was run live: `poweroff` and `reboot` at the debug shell each stop QEMU within a second of being typed; `poweroff -f` stops os-real where it printed `Function not implemented` before; os-simple stops from its own `ish` prompt with the in-house `halt`; `/proc` lists `0 1 2 3 self` with `/proc/1/cmdline` reading `init`; and the SSH capstone logs in over a pty with init as pid 1, reads `/proc/1/cmdline` as `init`, and stops the machine with a bare `poweroff` from that session, which ends QEMU one second later.
 
 The experiments no committed test can carry, each run and recorded:
 
