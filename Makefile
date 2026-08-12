@@ -308,9 +308,12 @@ ping-test: rach2 tests krffs test-image
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" wait=60
 
-# `make account-test`: an account created, used and deleted with busybox's tools
-# on os-real, with the databases read back in a second boot so what is asserted
-# is what reached the platter.
+# `make account-test`: accounts created, authenticated, changed and deleted with
+# busybox's tools on os-real, over three boots, so what is asserted is what
+# reached the platter and not what one process had in its cache. The
+# authentication is done from an unprivileged account, since root's `su` asks
+# for no password and would pass over a wrong hash and an unusable set-id
+# `passwd` alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 
 account-test: rach2 utils krffs busybox
@@ -522,7 +525,7 @@ help:
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
-	@echo "  make account-test   an account created, used and deleted with busybox's tools"
+	@echo "  make account-test   accounts created, authenticated and deleted with busybox's tools"
 	@echo "  make shutdown-test  userland stops the machine, and only root can"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
