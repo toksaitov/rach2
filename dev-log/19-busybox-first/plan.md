@@ -1,47 +1,53 @@
-# Milestone 19: busybox first
+# Milestone 19: busybox first, and a home for our own tools
 
 ## The direction
 
-Take as much as possible from busybox and keep as little in-house code as possible. A student learns more from the tools a real system ships than from a second implementation of them, and every program this tree writes itself is one more thing to maintain and to get wrong.
+Two images, two answers to the same question, and each one honest about what it is.
 
-Two decisions are already made and are not reopened here.
+`os-real` is the machine built from the tools the world actually ships. Anything busybox can do there, busybox does. What stays ours in that image stays only because busybox's version cannot run on this kernel.
 
-The applets that need no privilege come back: `adduser`, `addgroup`, `chpasswd`, `deluser` and `delgroup`. Two of those, `deluser` and `delgroup`, are capabilities this system does not have at all today, so removing an account currently means editing three files by hand.
+`os-simple` is the machine built from the tools this project wrote. It already holds our shell and our coreutils; it gains our `passwd`, `su`, `adduser` and `login`, and the small `/etc` they need in order to mean anything. Nothing written for milestone 17 is thrown away; it moves to the image where it is the point rather than a duplicate.
 
-`fcntl` record locking is not built. The reason it was proposed was to make busybox's `update_passwd` exclude our writers, and reading the code shows it would not: the lock there is non-blocking, a failure only prints `warning: can't lock` (`libbb/update_passwd.c:173-174`), and it is released at `:314` before the `fsync` and the `rename` at `:318-319`, so the moment that matters is outside it. What busybox actually excludes with is an `O_CREAT|O_EXCL` temp file at `:142`, retried at 0.1 s intervals, which is the same technique this tree's own lock file uses and which works on this kernel today. Real `fcntl` would be a week of kernel work buying nothing for this.
+Size is not a consideration. Neither is defence against an attacker who does not exist: the rule is not to do anything stupid, not to do everything conceivable.
 
-## The open question
+## os-real: what comes back from busybox
 
-`passwd` and `su` are in-house because they carry the set-id bit, which makes a program run as its owner rather than as whoever started it. busybox here is one binary holding about two hundred applets, and setting that bit on it would run all two hundred as root. So the question is whether busybox can be built into small single-applet binaries, one per set-id applet, each carrying the bit.
+Five applets need no privilege and simply come back, and two of them are capabilities this system does not have at all today, since removing an account currently means editing three files by hand:
 
-It can, and busybox says so itself. From its own `Config.in:216-219`:
+`adduser`, `addgroup`, `deluser`, `delgroup`, `chpasswd`.
 
-> If you are really paranoid and don't want even initial busybox code to run under root for every applet, build two busybox binaries with different applets in them (and the appropriate symlinks pointing to each binary), and only set the suid bit on the one that needs it.
+Two more come back that were switched off over the strength of busybox's password salt, which is a pid and a clock through a small generator. For a teaching system that is good enough, and busybox's own comment says as much:
 
-The same block names the applets that require root and refuse to run without it: `crontab`, `login`, `passwd`, `su`, `vlock`, `wall`. And those that use root if they have it: `findfs`, `ping[6]`, `traceroute[6]`, `mount`.
+`cryptpw`, `mkpasswd`. The same reasoning retires the objection to `FEATURE_HTTPD_AUTH_MD5`.
 
-## What was established before writing this
+Three need the set-id bit, which is what makes a program run as its owner rather than as whoever started it. They come from a second busybox, built from the same source with a config holding only them, staged as separate files carrying the bit:
 
-`FEATURE_INDIVIDUAL` is not the mechanism, although its name suggests it. It depends on `BUILD_LIBBUSYBOX` (`Config.in:424-440`), produces a shared `libbusybox.so` with a tiny executable per applet linked against it, and its help text ends with "You need to have a working dynamic linker." Rach2 has none: every binary here is static non-PIE, and the loader cannot relocate a dynamic one, which is why dropbear must be configured `--disable-harden`. So that route is closed for a reason that has nothing to do with this milestone.
+`passwd`, `su`, `login`.
 
-The second-binary route was measured rather than assumed. A pristine 1.36.1 tree configured with `allnoconfig` plus `CONFIG_PASSWD`, `CONFIG_STATIC`, `CONFIG_LFS`, the shadow options and `USE_BB_CRYPT`, cross-built with the repo's own `muslgcc` wrapper, produces a working link of 148,236 bytes holding two applets, `busybox` and `passwd`. The in-house `passwd` it would replace is 99,688 bytes. `CONFIG_LFS=y` is required and its absence is not obvious: without it the build stops on `BUG_off_t_size_is_misdetected`, because `off_t` and `uoff_t` disagree.
+That is busybox's own advice, from `Config.in:216-219`: build two binaries with different applets in them and set the bit only on the one that needs it. The alternative that sounds right, `FEATURE_INDIVIDUAL`, is not available: it depends on `BUILD_LIBBUSYBOX` and needs a dynamic linker (`Config.in:424-440`), and everything here is static.
 
-busybox's `passwd` decides what its caller may do from the REAL uid (`loginutils/passwd.c:136`), which is the discipline a set-id program must follow and the same rule this tree already states for its own. It raises to root only where it writes (`:213`).
+## os-real: what stays ours, and why
 
-The architecture would not change, and this is the part most likely to be got wrong. busybox's standalone shell dispatches applets in-process before it consults the file system, so a separate `/bin/passwd` is only reached if `CONFIG_PASSWD` is OFF in the main busybox. That is exactly the shape shipped today: a main busybox without the applet, plus a small set-id binary beside it. Only the source of the small binary changes, from four hundred lines of ours to a hundred and fifty kilobytes of busybox's.
+`ping`, because busybox's opens a raw socket and this kernel has none, so it dies before it sends anything. This is the only in-house program in that image that is there for a reason no decision can change.
 
-KRFFS has no symlinks, so the "appropriate symlinks" of busybox's advice become a second staged file. That costs nothing: dispatch is on `argv[0]`, and a file staged as `/bin/passwd` is already named `passwd`.
+`init`, for now. Ours is PID 1, execs `/bin/login` and nothing else, answers the three shutdown signals and continues a stopped console session. busybox has an `init` applet and moving to it is a real option, but PID 1 is the wrong place to take a change casually, and nothing about it is currently wrong. Left as a later question rather than folded into this milestone.
 
-## What has to be settled before this is built
+## os-simple: the tools find their home
 
-The history that killed the last attempt has to be re-examined against this one. Milestone 15 tried a single set-id busybox and abandoned it: `check_suid` frees the parsed `/etc/busybox.conf` list and never clears the global, and a later in-process re-dispatch walks the dangling pointer. It hides on Linux, where the freed page usually stays mapped, and faults here because this kernel's `munmap` unmaps promptly. A single-applet binary never parses that file and never re-dispatches, so on the face of it the bug is unreachable; that has to be confirmed rather than assumed, because it is the exact failure this replaces.
+Today that image stages our shell, our coreutils and `halt`, and has no accounts at all: no `/etc/passwd`, no `/etc/shadow`, no `/etc/group`. So its console is a root shell and there is nobody to be.
 
-How much code runs as root is the other question, and size is the wrong measure of it. What matters is how much is reachable while privileged: for a one-applet build that is the applet plus the parts of `libbb` it calls. Someone should read that path once, the way the in-house programs were read, rather than trading a hundred audited lines for a hundred and fifty kilobytes on trust.
+It gains a small `/etc` with two accounts, and the four programs that make an account mean something: `su`, `passwd`, `adduser` and `login`, the last through the strict init that cannot fall back to an unauthenticated shell. The result is a complete little multi-user Unix built entirely from code this project wrote and can read end to end, which is a better thing to hand a student than a second copy of busybox's.
 
-The set-id inventory is a build-time guard here (`tools/check_setid.py`), and it would need to learn about a second busybox artifact: a new set-id binary that the allowlist does not declare fails the build, which is the behaviour wanted, but the allowlist has to name the new one and the manifest has to stage it at the right mode and owner.
+## What has to be got right
 
-Whether `su` follows `passwd` is a separate decision from whether `passwd` moves. `su` is the one program privilege climbs through in this system, it is a hundred lines, and it was audited twice; the case for replacing it is weaker than the case for `passwd`.
+The applet guard is the piece most likely to break quietly. `tools/check_setid.py` currently fails the build if `su`, `passwd` or `login` appear in busybox's applet table at all. After this its job inverts: the MAIN busybox must contain no applet that wants the set-id bit, the second build must contain only the three that do, and the manifest must stage those three at the right mode and owner. That check is what stops a later config edit from quietly putting a privileged applet back into the unprivileged binary.
 
-## What this milestone would be
+The bug that killed the last attempt has to be re-examined rather than assumed away. Milestone 15 tried one set-id busybox and abandoned it: `check_suid` frees the parsed `/etc/busybox.conf` list without clearing the pointer, and a later in-process dispatch walks it; it hides on Linux and faults here because this kernel unmaps freed pages promptly. A single-applet binary parses no config and re-dispatches to nothing, so the path should be unreachable, and that should be confirmed with the same capstone that found it.
 
-Nothing here is implemented yet. In rough order: re-enable the five unprivileged applets and delete the in-house `adduser`, then build the second busybox and move `passwd` to it, then decide about `su` on what the first two teach. Each step keeps the existing gate, and the shutdown, login and credential suites already exercise most of what would change.
+Somebody should read busybox's `passwd` and the `libbb` functions it calls once, while privileged, the way the in-house programs were read. It authorizes on the real uid (`loginutils/passwd.c:136`), which is the discipline that matters and which it gets right; the rest deserves one honest pass.
+
+A build detail worth writing down because its symptom is opaque: the second build needs `CONFIG_LFS=y`, without which it stops on `BUG_off_t_size_is_misdetected`.
+
+## Order
+
+Re-enable the seven unprivileged applets and drop our `adduser` from os-real. Then the second busybox and the three set-id programs. Then os-simple's `/etc` and the four programs that move into it. `init` is a separate decision, later.
