@@ -45,10 +45,15 @@ dd if=/dev/zero of="$TMP" bs=1048576 count="$SIZE" 2>/dev/null
 "$TOOLS/mkfs.krffs" "$TMP" >/dev/null
 "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP"
 
-# The set-id inventory reads the staged artifact, which is the half the manifest
-# sweep cannot do: exec-dir privileges a set of paths the manifest text never
-# names, and a parser that has drifted from the stager reads a manifest the stager
-# does not. Run it before the rename, so a failing image is never moved into place.
+# Both halves of the set-id guard, before the rename, so a failing image is never
+# moved into place. The sweep reads the manifest, which is where a declaration
+# lives: what stages a path, from where, at what mode and owner, and for a
+# credential file written inline, what it says. The inventory reads the staged
+# artifact, which is the half the text cannot do: exec-dir privileges a set of
+# paths the manifest never names, and a parser that has drifted from the stager
+# reads a manifest the stager does not. Each catches what the other cannot, so a
+# build that ran only one of them would ship what the other refuses.
+python3 "$REPO/tools/check_setid.py" "$MANIFEST"
 python3 "$REPO/tools/check_setid.py" --image "$TMP" --manifest "$MANIFEST"
 
 mv "$TMP" "$OUT"

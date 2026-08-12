@@ -184,8 +184,10 @@ the supporting scripts.
   configuration's table after `rach2.config` was edited and let the image stage
   the busybox whose re-enabled applet the check exists to forbid.
   The IMAGE INVENTORY (`--image FILE --manifest PATH [--offset] [--size]`, run
-  from `mkimage.sh` and `mkdisk.sh` before the image is moved into place) walks
-  the staged artifact's node chain, rebuilds each path from `parent_id`, and
+  from `mkimage.sh` and `mkdisk.sh` beside the sweep of the manifest they are
+  staging, both before the image is moved into place, since each catches what
+  the other cannot and a build that ran one of them would ship what the other
+  refuses) walks the staged artifact's node chain, rebuilds each path from `parent_id`, and
   compares the set-id nodes it actually finds against the same allowlist. It
   exists because the sweep cannot see either `exec-dir`'s expansion or a
   divergence between its own parser and the stager's. A walk that finds nothing

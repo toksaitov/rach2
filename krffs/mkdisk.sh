@@ -102,8 +102,10 @@ PY
 "$TOOLS/mkfs.krffs" "$TMP" --offset "$PART_OFFSET" --size "$PART_SIZE" >/dev/null
 "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP" --offset "$PART_OFFSET" --size "$PART_SIZE"
 
-# The set-id inventory, over the partition rather than the whole file: the region
-# is the partition, so the walk needs both bounds or it runs off the wrong end.
+# Both halves, as mkimage.sh runs them, the inventory over the partition rather
+# than the whole file: the region is the partition, so the walk needs both bounds
+# or it runs off the wrong end.
+python3 "$REPO/tools/check_setid.py" "$MANIFEST"
 python3 "$REPO/tools/check_setid.py" --image "$TMP" --manifest "$MANIFEST" \
     --offset "$PART_OFFSET" --size "$PART_SIZE"
 mv "$TMP" "$OUT"
