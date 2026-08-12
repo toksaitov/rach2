@@ -252,6 +252,30 @@ static void _load_page_dir(page_dir_t *dir)
 #define PF_ERR_USER    0x4u /* 0 = supervisor mode, 1 = user mode */
 
 
+static int cow_fault(uint32_t addr);
+
+/**
+ * Is the page containing `addr` writable in `dir`? Present and write-enabled;
+ * a present copy-on-write page answers 0, which is what tells the resolver to
+ * make it private before promising a caller it may write there.
+ */
+static int pte_writable(page_dir_t *dir, uint32_t addr)
+{
+    uint32_t page_num = addr / PAGE_SIZE;
+    uint32_t table_index = page_num / 1024;
+    uint32_t page_index = page_num % 1024;
+    page_table_t *table;
+
+    if (table_index >= 1024) {
+        return 0;
+    }
+    table = dir->logical_page_tables[table_index];
+    if (!table) {
+        return 0;
+    }
+    return (table->pages[page_index] & 0x3) == 0x3;
+}
+
 /**
  * Is the page containing `addr` already present in `dir`? Keeps the demand-paging
  * resolver idempotent: an eager-loaded code/data page, or one the pre-fault path
@@ -310,6 +334,21 @@ static int vm_resolve(uint32_t addr, int write)
             return 0;
         }
         if (pte_present(_curr_dir, addr)) {
+            /* Present is not enough for a write. A page shared by a fork is
+             * present, read-only and marked copy-on-write, and the region it
+             * lies in is writable, so the protection test above passed: a
+             * pre-fault that answered "backed" here would promise the kernel a
+             * page it cannot write, and the raw store that followed would fault
+             * with the copy already half made. Making it private now is the
+             * same work the fault handler would do, done before the promise.
+             *
+             * A present page that is not writable and not copy-on-write is out
+             * of frames or a mapping this kernel does not make; reporting that
+             * as unresolved segfaults the process, where reporting it as backed
+             * would fault on the same instruction forever. */
+            if (write && !pte_writable(_curr_dir, addr)) {
+                return cow_fault(addr);
+            }
             return 1; /* already backed; nothing to do */
         }
     }

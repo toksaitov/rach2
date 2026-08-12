@@ -33,6 +33,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/uio.h>
+#include <sys/wait.h>
 
 #define SCRATCH "/readvmusl.tmp"
 
@@ -351,6 +352,60 @@ static int check_edges(void)
 }
 
 /**
+ * A destination shared by a fork, which is where the check before the read has
+ * something to do.
+ *
+ * Every page a child inherits is present, read-only and marked copy-on-write
+ * until it is written. `readv` promises to check each destination is writable
+ * before it takes a byte, and a check that only asked whether the page was
+ * present would answer yes about a page nothing may write to yet. The child
+ * reads into a buffer it has not touched since the fork, and the bytes must
+ * arrive.
+ */
+static int check_shared(void)
+{
+    struct iovec parts[2];
+    /* Three pages, so the middle one can be used alone. A buffer sharing a page
+     * with anything else the child writes would be made private by that write
+     * before the read got there, and the case would prove nothing. */
+    static char arena[3 * 4096];
+    char *inherited = arena + (4096 - ((unsigned long)arena % 4096));
+    int status = 0;
+    int child;
+    int fd;
+
+    memset(inherited, 'x', 4096);
+    child = fork();
+    if (child < 0) {
+        return fail("fork for the shared-page case");
+    }
+    if (child == 0) {
+        fd = file_holding("COPYONWRITE");
+        if (fd < 0) {
+            _exit(2);
+        }
+        parts[0].iov_base = inherited;
+        parts[0].iov_len = 11;
+        parts[1].iov_base = inherited + 2048;
+        parts[1].iov_len = 16;
+        if (readv(fd, parts, 2) != 11) {
+            _exit(3);
+        }
+        close(fd);
+        _exit(memcmp(inherited, "COPYONWRITE", 11) == 0 ? 0 : 4);
+    }
+    if (waitpid(child, &status, 0) != child) {
+        return fail("waiting for the shared-page child");
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("a readv into a page inherited through fork did not deliver");
+    }
+    unlink(SCRATCH);
+
+    return 0;
+}
+
+/**
  * Run the cases and report.
  */
 int main(void)
@@ -365,6 +420,9 @@ int main(void)
     }
     if (rc == 0) {
         rc = check_edges();
+    }
+    if (rc == 0) {
+        rc = check_shared();
     }
     if (rc == 0) {
         printf("READVMUSL OK\n");

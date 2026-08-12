@@ -370,7 +370,8 @@ reading through `fgets`, `fread` or `scanf` fails.
 The whole vector list is checked before a byte is taken: a length past the
 signed range, or a destination that is outside the user window, unmapped or
 read-only, refuses the call with the input still queued, since a read cannot be
-undone. A list that asks for nothing still checks the descriptor, so a closed fd
+undone. Every destination is also faulted in for writing, which for a page
+shared by a fork means copying it there rather than at the first store. A list that asks for nothing still checks the descriptor, so a closed fd
 is `EBADF`.
 
 Only a regular file is then filled buffer after buffer. Everything else is read
