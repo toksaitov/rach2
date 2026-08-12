@@ -233,12 +233,16 @@ run_simple_arc() {
         "$TESTPASSWORD" \
         "$NEXTPASS" \
         "$NEXTPASS" \
+        "echo TRYOLD" \
         "su - test -c pwd" \
         "$TESTPASSWORD" \
+        "echo TRYOTHER" \
         "su - $SIMPLEUSER -c pwd" \
         "$NEXTPASS" \
+        "echo TRYNEW" \
         "su - test -c pwd" \
-        "$NEXTPASS"
+        "$NEXTPASS" \
+        "echo TRYEND"
 
     if ! wait_token "^/root[[:space:]]*\$" 150; then
         fail "a bare command name after login found nothing; the PATH login builds is wrong"
@@ -271,14 +275,38 @@ run_simple_arc() {
     # old password, which must now be refused; the new password offered to the
     # OTHER account, which must be refused too, since a passwd that rewrote the
     # wrong record would leave exactly that; and the new password for its own
-    # account, which must work. The refusals are counted, because the first boot
-    # already has one from the wrong-password attempt above.
-    if ! wait_count "^/home/test[[:space:]]*\$" 2 240; then
-        fail "the changed password does not authenticate the account it was changed for"
+    # account, which must work.
+    #
+    # Each attempt is read inside its own markers, and that is the whole point:
+    # counted over the boot as a whole, "two homes and three refusals" is
+    # satisfied just as well by a passwd that changed nothing, where the OLD
+    # password is the one that works and the new one is refused. The markers are
+    # printed by `echo` with an ordinary argument, since the ISH shell does no
+    # quote removal and a split token would arrive with its quotes in it; the
+    # console's echo of the command lands immediately before the output it
+    # delimits, so it does not separate an attempt from its own result.
+    if ! wait_token "TRYEND" 240; then
+        fail "the attempts after the password change never finished"
     fi
-    if ! wait_count "authentication failure" 3 30; then
-        fail "the old password, or the new one offered to another account, was accepted"
-    fi
+    old_try=$(sed -n '/TRYOLD/,/TRYOTHER/p' "$LOG")
+    other_try=$(sed -n '/TRYOTHER/,/TRYNEW/p' "$LOG")
+    new_try=$(sed -n '/TRYNEW/,/TRYEND/p' "$LOG")
+    case "$old_try" in
+        *"authentication failure"*) ;;
+        *) fail "the password the account replaced still authenticates it" ;;
+    esac
+    case "$other_try" in
+        *"authentication failure"*) ;;
+        *) fail "the new password authenticates an account it was not set for" ;;
+    esac
+    case "$new_try" in
+        *"authentication failure"*)
+            fail "the changed password does not authenticate the account it was changed for" ;;
+    esac
+    case "$new_try" in
+        *"/home/test"*) ;;
+        *) fail "the changed password did not reach the account's own shell" ;;
+    esac
     cleanup_boot
 
     echo "account-test: an account was created, authenticated and changed with our own tools: OK"
