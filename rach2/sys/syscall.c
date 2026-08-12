@@ -6677,16 +6677,23 @@ void deliver_signals(isr_params_t *tf)
     }
 }
 
-/* True if some live process is in process group `pgid` within session `sid` --
+/* True if some process is in process group `pgid` within session `sid`. This is
  * the TIOCSPGRP rule that a foreground group must belong to the controlling
- * session. */
+ * session.
+ *
+ * A zombie counts. A process leaves its group when it is reaped and not when it
+ * exits, and a shell depends on that: putting a pipeline in the foreground
+ * means setting the terminal's group to the first member's pid, and that member
+ * can be a short command that has already exited by the time the shell gets
+ * there. Excluding zombies refused the claim in exactly that race and left the
+ * shell reporting that it could not set the terminal's process group. */
 static int pgrp_in_session(int pgid, int sid)
 {
     int i;
 
     for (i = 0; i < MAX_PROCS; i++) {
         process_t *p = &proc_table[i];
-        if (p->state != PROC_UNUSED && p->state != PROC_ZOMBIE &&
+        if (p->state != PROC_UNUSED &&
             (int)p->pgid == pgid && (int)p->sid == sid) {
             return 1;
         }

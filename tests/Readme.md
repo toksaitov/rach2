@@ -42,7 +42,7 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `ownprobe` (`OWNPROBE OK`): file ownership: creation stamping under the umask, the chmod/chown and fchmod/fchown rules, and the kill rule. The last is judged per signal: a uid-1000 child is refused signal 0 and `SIGTERM` to its root parent, permitted `SIGCONT` while it shares that parent's session, and refused it again after `setsid`. A second round parks 1000 in the parent's saved slot and probes it with signal 0, which is the only way to reach the saved-uid arm, since `su` and dropbear both drop all three ids.
 * `permprobe` (`PERMPROBE OK`): permission enforcement: the nine-bit access check at open, create, unlink, rename, mkdir, chdir, exec, utimensat (the touch-versus-set split), and access(2), with the root override.
 * `waitprobe` (`WAITPROBE OK`): the fd-layer blocking and dispatch substrate.
-* `jobprobe` (`JOBPROBE OK`): the session and process-group identity model.
+* `jobprobe` (`JOBPROBE OK`): the session and process-group identity model, including the rule that a process leaves its group when it is reaped and not when it exits, so a terminal can be handed to a group holding one unreaped zombie (which is what a shell does when the first member of a pipeline is a command that has already finished).
 * `ttyprobe` (`TTYPROBE OK`): the tty line discipline and termios ioctls.
 * `ptyprobe` (`PTYPROBE OK`): the pseudo-terminal pair (`/dev/ptmx` and `/dev/pts/N`).
 * `devprobe` (`DEVPROBE OK`): the synthetic `/dev` devices and `/proc` self views.

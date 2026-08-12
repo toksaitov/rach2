@@ -19,20 +19,21 @@
 
 typedef unsigned int size_t;
 
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_READ    3
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
-#define SYS_GETPID  20
-#define SYS_KILL    37
-#define SYS_PAUSE   29
-#define SYS_SETPGID 57
-#define SYS_GETPGRP 65
-#define SYS_SETSID  66
-#define SYS_GETPGID 132
-#define SYS_GETSID  147
-#define SYS_IOCTL   54
+#define SYS_EXIT      1
+#define SYS_FORK      2
+#define SYS_READ      3
+#define SYS_WRITE     4
+#define SYS_WAITPID   7
+#define SYS_GETPID    20
+#define SYS_KILL      37
+#define SYS_PAUSE     29
+#define SYS_SETPGID   57
+#define SYS_NANOSLEEP 162
+#define SYS_GETPGRP   65
+#define SYS_SETSID    66
+#define SYS_GETPGID   132
+#define SYS_GETSID    147
+#define SYS_IOCTL     54
 
 #define SIGKILL 9
 #define SIGTERM 15
@@ -112,6 +113,21 @@ static int fork(void)
 static int waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, pid, (int)(size_t)status, options);
+}
+/* Long enough for a child that does nothing but exit to have done so. */
+struct timespec_probe {
+    long tv_sec;
+    long tv_nsec;
+};
+static void sleep_ms(long ms)
+{
+    struct timespec_probe req;
+    int r;
+
+    req.tv_sec = ms / 1000L;
+    req.tv_nsec = (ms % 1000L) * 1000000L;
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_NANOSLEEP), "b"(&req), "c"(0) : "memory");
+    (void)r;
 }
 static int ioctl(int fd, int req, void *arg)
 {
@@ -255,6 +271,35 @@ void _start(void)
             bad = -7;
             check(ioctl(0, TIOCSPGRP, &bad) == -EINVAL, "TIOCSPGRP negative pgrp -> -EINVAL");
         }
+        /* A group whose only member has exited but has not been reaped is
+         * still a group, and a shell putting a pipeline in the foreground
+         * depends on it: the first member can exit before the shell claims the
+         * terminal for the job, and a rule that counted only running processes
+         * would refuse the claim and leave the shell complaining that it cannot
+         * set the terminal's process group. */
+        {
+            int child = fork();
+            int status = 0;
+
+            if (child == 0) {
+                setpgid(0, 0);
+                sys_exit(0);
+            }
+            check(child > 0, "fork for the zombie group");
+            setpgid(child, child);
+            /* Let it run to its exit. It is not reaped until after the claim,
+             * so what the kernel sees is a group holding one zombie. */
+            sleep_ms(50);
+            check(ioctl(0, TIOCSPGRP, &child) == 0,
+                  "TIOCSPGRP to a group holding only an unreaped zombie");
+            check(waitpid(child, &status, 0) == child, "the zombie is reaped");
+            /* And once reaped the group is gone, so the same claim is refused. */
+            check(ioctl(0, TIOCSPGRP, &child) == -EPERM,
+                  "TIOCSPGRP to a group whose zombie was reaped -> -EPERM");
+            pgrp = getpgrp();
+            check(ioctl(0, TIOCSPGRP, &pgrp) == 0, "the terminal comes back to us");
+        }
+
         /* Detach, then a foreground query finds no controlling session. */
         check(ioctl(0, TIOCNOTTY, 0) == 0, "TIOCNOTTY detaches");
         check(ioctl(0, TIOCGPGRP, &pgrp) == 0 && pgrp == 0, "after NOTTY, fg group is 0");
