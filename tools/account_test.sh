@@ -225,10 +225,13 @@ run_simple_arc() {
         "test" \
         "$TESTPASSWORD" \
         "pwd" \
+        "echo TRYWRONG" \
         "su - $SIMPLEUSER -c pwd" \
         "$WRONGPASS" \
+        "echo TRYRIGHT" \
         "su - $SIMPLEUSER -c pwd" \
         "$SIMPLEPASS" \
+        "echo TRYDONE" \
         "passwd" \
         "$TESTPASSWORD" \
         "$NEXTPASS" \
@@ -261,12 +264,26 @@ run_simple_arc() {
     if ! wait_token "^/home/test[[:space:]]*\$" 180; then
         fail "the test account never reached a shell of its own"
     fi
-    if ! wait_token "authentication failure" 120; then
-        fail "su took a password the account does not have"
+    # The two attempts are read inside their own markers for the reason every
+    # other pair here is: a refusal that ran the command anyway leaves the same
+    # log as a refusal that did not, once the successful attempt beside it has
+    # printed the same line.
+    if ! wait_token "TRYDONE" 240; then
+        fail "the account's own password was never tried"
     fi
-    if ! wait_token "^/home/${SIMPLEUSER}[[:space:]]*\$" 150; then
-        fail "the account never authenticated with its own password"
-    fi
+    wrong_try=$(sed -n '/TRYWRONG/,/TRYRIGHT/p' "$LOG")
+    right_try=$(sed -n '/TRYRIGHT/,/TRYDONE/p' "$LOG")
+    case "$wrong_try" in
+        *"authentication failure"*) ;;
+        *) fail "su took a password the account does not have" ;;
+    esac
+    case "$wrong_try" in
+        *"/home/$SIMPLEUSER"*) fail "a refused su ran the command anyway" ;;
+    esac
+    case "$right_try" in
+        *"/home/$SIMPLEUSER"*) ;;
+        *) fail "the account never authenticated with its own password" ;;
+    esac
     if ! wait_token "password changed for test" 180; then
         fail "the account could not change its own password through the set-id passwd"
     fi
