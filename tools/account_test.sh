@@ -131,6 +131,23 @@ wait_token() {
     return 1
 }
 
+# Wait up to $3 seconds for the pattern $1 to appear at least $2 times. Counting
+# is what an assertion needs when the same line is printed by more than one step
+# of an arc: the ISH shell does no quote removal, so a marker cannot be split
+# the way it is in a busybox shell and every token it prints would be matched
+# from the console's echo of the command that printed it.
+wait_count() {
+    i=0
+    while [ "$i" -lt "$3" ]; do
+        if [ "$(grep -c "$1" "$LOG" 2>/dev/null)" -ge "$2" ]; then
+            return 0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
 # Boot the working image and feed it the script on standard input, one line per
 # argument, spaced. The image logs in at the console first, since os-real's
 # console is behind a login.
@@ -215,6 +232,12 @@ run_simple_arc() {
         "passwd" \
         "$TESTPASSWORD" \
         "$NEXTPASS" \
+        "$NEXTPASS" \
+        "su - test -c pwd" \
+        "$TESTPASSWORD" \
+        "su - $SIMPLEUSER -c pwd" \
+        "$NEXTPASS" \
+        "su - test -c pwd" \
         "$NEXTPASS"
 
     if ! wait_token "^/root[[:space:]]*\$" 150; then
@@ -242,6 +265,19 @@ run_simple_arc() {
     fi
     if ! wait_token "password changed for test" 180; then
         fail "the account could not change its own password through the set-id passwd"
+    fi
+
+    # And the change is used rather than believed. Three attempts follow it: the
+    # old password, which must now be refused; the new password offered to the
+    # OTHER account, which must be refused too, since a passwd that rewrote the
+    # wrong record would leave exactly that; and the new password for its own
+    # account, which must work. The refusals are counted, because the first boot
+    # already has one from the wrong-password attempt above.
+    if ! wait_count "^/home/test[[:space:]]*\$" 2 240; then
+        fail "the changed password does not authenticate the account it was changed for"
+    fi
+    if ! wait_count "authentication failure" 3 30; then
+        fail "the old password, or the new one offered to another account, was accepted"
     fi
     cleanup_boot
 
@@ -346,8 +382,8 @@ run_real_arc() {
         "mkdir -p /www; echo SERVED\"\"OK > /www/index.html" \
         "httpd -m hunter2 > /tmp/webhash; cat /tmp/webhash" \
         "echo /:webuser:\$(cat /tmp/webhash) > /etc/httpd.conf; httpd -p 8080 -h /www" \
-        "wget -q -O - http://127.0.0.1:8080/index.html 2>&1 | head -2" \
-        "wget -q -O - http://webuser:hunter2@127.0.0.1:8080/index.html" \
+        "echo ANON\"\"BEGIN; wget -q -O - http://127.0.0.1:8080/index.html 2>&1; echo ANON\"\"END" \
+        "echo AUTH\"\"BEGIN; wget -q -O - http://webuser:hunter2@127.0.0.1:8080/index.html 2>&1; echo AUTH\"\"END" \
         "mkpasswd -m sha512 -S abcdefgh hunter2; echo MK\"\"END" \
         "echo BEG\"\"IN; cat /etc/passwd; echo PW\"\"END" \
         "cat /etc/shadow; echo SH\"\"END" \
@@ -371,12 +407,23 @@ run_real_arc() {
     if ! grep -qE '^\$1\$[^$]+\$' "$LOG"; then
         fail "httpd -m did not mint an MD5 hash"
     fi
-    if ! grep -qi "401 Unauthorized" "$LOG"; then
-        fail "httpd served a page to a request carrying no credential"
-    fi
-    if ! grep -q "SERVEDOK" "$LOG"; then
-        fail "httpd refused the credential its own -m minted"
-    fi
+    # Each request is read inside its own markers rather than from the log as a
+    # whole. Asked of the whole log, "a 401 appears and the page appears" is
+    # satisfied by an httpd that had the two the wrong way round, which is
+    # exactly what a broken authentication branch looks like.
+    ANON_TEXT=$(sed -n '/ANONBEGIN/,/ANONEND/p' "$LOG")
+    AUTH_TEXT=$(sed -n '/AUTHBEGIN/,/AUTHEND/p' "$LOG")
+    case "$ANON_TEXT" in
+        *"401 Unauthorized"*) ;;
+        *) fail "httpd did not refuse a request carrying no credential" ;;
+    esac
+    case "$ANON_TEXT" in
+        *SERVEDOK*) fail "httpd served the page to a request carrying no credential" ;;
+    esac
+    case "$AUTH_TEXT" in
+        *SERVEDOK*) ;;
+        *) fail "httpd refused the credential its own -m minted" ;;
+    esac
 
     # The hash generators, pinned against the value this project's own SHA-512
     # crypt produces for the same password and salt, so the assertion is that
