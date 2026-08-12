@@ -108,6 +108,33 @@ int main(void)
     if (rc != 126) {
         return fail("a builtin ran with a redirection that could not be opened");
     }
+    /* A redirection that DOES open must not eat the builtin's operand: pulling
+     * it out of the argument array clears the slots it occupied, so a builtin
+     * reading the operand from where it was before the pull would find a
+     * redirection's leftovers. A `cd` with somewhere to go must still go there,
+     * and a bare `cd` must do the same thing with a redirection as without one,
+     * whatever that is: this probe runs with no `HOME` in its environment, so
+     * here it is a refusal. */
+    rc = ish_status("cd / > /ishmusl.redirect");
+    if (rc != 0) {
+        return fail("a redirection took the cd operand with it");
+    }
+    rc = ish_status("cd /no/such/directory > /ishmusl.redirect");
+    if (rc != 1) {
+        return fail("a cd to nowhere with a redirection reported success");
+    }
+    if (ish_status("cd > /ishmusl.redirect") != ish_status("cd")) {
+        return fail("a redirection changed what a bare cd did");
+    }
+    rc = ish_status("exit > /ishmusl.redirect");
+    if (rc != 0) {
+        return fail("exit with a redirection did not report 0");
+    }
+    rc = ish_status("exit 7");
+    if (rc != 7) {
+        return fail("exit did not report the status it was given");
+    }
+    unlink("/ishmusl.redirect");
 
     printf("ISHMUSL OK\n");
 

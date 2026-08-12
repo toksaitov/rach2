@@ -66,7 +66,7 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
     char *arguments[Max_Argument_Count + 1];
     arguments[Max_Argument_Count] = 0;
 
-    unsigned long argument_count = ish_build_argument_array_from_input(input, arguments, Max_Argument_Count);
+    ish_build_argument_array_from_input(input, arguments, Max_Argument_Count);
 
     const char *command = arguments[0];
     if (!command) {
@@ -95,7 +95,11 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
     }
 
     if (ish_are_cstrings_equal(command, Builtin_Command_CD)) {
-        char *directory = argument_count == 0 ? home : arguments[1];
+        /* The operand is read from the array AFTER the redirections were pulled
+         * out of it, since pulling one clears its slots: a bare `cd` and a
+         * `cd > file` both arrive here with nothing at arguments[1], and both
+         * mean the home directory. */
+        char *directory = arguments[1] ? arguments[1] : home;
         int moved = directory ? chdir(directory) : -1;
 
         if (stdin_descriptor > 0) {
@@ -112,7 +116,7 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
     }
 
     if (ish_are_cstrings_equal(command, Builtin_Command_Exit)) {
-        int exit_status = argument_count == 0 ? 0 : ish_get_integer_from_cstring(arguments[1]);
+        int exit_status = arguments[1] ? ish_get_integer_from_cstring(arguments[1]) : 0;
         exit(exit_status);
         return 0;
     }
