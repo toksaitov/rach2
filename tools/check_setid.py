@@ -109,13 +109,21 @@ MAX_LINE = LINE_BUFFER - 2
 # gid 5 to prove the bit grants the file's owner whoever that is, and the host
 # source is declared because a path alone does not say what runs there:
 # pointing /bin/su at build/vendor/busybox/busybox satisfies every other rule
-# and hands a setuid-root busybox to the image. `unprivileged` names files that
-# must be staged and must NOT be set-id, and it names them the same four ways,
-# because "not set-id" is not the whole of what a shipped program must be:
-# `/bin/login` is exec'd by init as root, so a `/bin/login` staged 0777 would
-# let any account replace the program root runs next, without a set-id bit
-# anywhere in sight. The image half checks the three fields an image records and
-# the manifest half checks the host source as well. `sentinel` names one ordinary
+# and hands a setuid-root busybox to the image. `trusted` names the files that
+# must be staged, must NOT be set-id, and must be at exactly the mode, owner and
+# host source named here, because "not set-id" is not the whole of what an image
+# has to get right. Two kinds are in it. The first is a program root runs:
+# `/bin/login` is exec'd by init as root, and `/bin/sh` is what login and
+# dropbear exec for root, so either one staged 0777 lets any account replace the
+# program root runs next, with no set-id bit anywhere in sight. The second is a
+# file root READS to decide who somebody is: `/etc/shadow` writable by anyone is
+# a root password anyone may choose, and so, one step removed, are `/etc/passwd`,
+# `/etc/group`, `/etc/shells`, `/etc/profile` and root's `authorized_keys`.
+# The image half checks the three fields an image records; the manifest half
+# checks the host source as well, and `None` there is an inline `text` payload.
+#
+# The test account's own `authorized_keys` is deliberately NOT here: it is that
+# account's file, under a home the account owns, and replacing it is not a climb. `sentinel` names one ordinary
 # node the image inventory must report exactly; it is required of a manifest
 # that declares no set-id entry, which would otherwise have nothing positive to
 # find and would read a misparsed image as clean.
@@ -134,8 +142,18 @@ ALLOWLIST = {
             "/bin/passwd": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
             "/bin/login": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
         },
-        "unprivileged": {
+        "trusted": {
             "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
+            "/bin/sh": (0o755, 0, 0, "build/vendor/busybox/busybox"),
+            "/bin/dropbearmulti": (0o755, 0, 0,
+                                   "build/vendor/dropbear/dropbearmulti"),
+            "/etc/passwd": (0o644, 0, 0, None),
+            "/etc/shadow": (0o600, 0, 0, "krffs/shadow"),
+            "/etc/group": (0o644, 0, 0, None),
+            "/etc/shells": (0o644, 0, 0, None),
+            "/etc/profile": (0o644, 0, 0, None),
+            "/root/.ssh/authorized_keys": (0o600, 0, 0,
+                                           "krffs/authorized_keys"),
         },
         "sentinel": None,
         "init": "init-login",
@@ -156,7 +174,7 @@ ALLOWLIST = {
             "/musl/suidmusl.suid": (0o4755, 0, 0,
                                     "build/tests/musl/suidmusl"),
         },
-        "unprivileged": {},
+        "trusted": {},
         "sentinel": None,
         "init": None,
     },
@@ -169,30 +187,34 @@ ALLOWLIST = {
             "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
             "/bin/passwd": (0o4755, 0, 0, "build/utils/sbin/passwd"),
         },
-        "unprivileged": {
+        "trusted": {
             "/bin/login": (0o755, 0, 0, "build/utils/sbin/login"),
             "/bin/adduser": (0o755, 0, 0, "build/utils/sbin/adduser"),
             "/bin/ish": (0o755, 0, 0, "build/ish/ish"),
             "/bin/sh": (0o755, 0, 0, "build/ish/ish"),
+            "/etc/passwd": (0o644, 0, 0, None),
+            "/etc/shadow": (0o600, 0, 0, "krffs/shadow"),
+            "/etc/group": (0o644, 0, 0, None),
+            "/etc/shells": (0o644, 0, 0, None),
         },
         "sentinel": ("/hello.txt", 0o644, 0, 0),
         "init": "init-login",
     },
     "disk-test": {
         "setid": {},
-        "unprivileged": {},
+        "trusted": {},
         "sentinel": ("/blockprobe", 0o755, 0, 0),
         "init": None,
     },
     "persist-test": {
         "setid": {},
-        "unprivileged": {},
+        "trusted": {},
         "sentinel": ("/persistprobe", 0o755, 0, 0),
         "init": None,
     },
     "cred-persist-test": {
         "setid": {},
-        "unprivileged": {},
+        "trusted": {},
         "sentinel": ("/creddisk", 0o755, 0, 0),
         "init": None,
     },
@@ -202,7 +224,7 @@ ALLOWLIST = {
         # and the permissive one must reach a root shell, which is what makes
         # the strict one's silence mean anything.
         "setid": {},
-        "unprivileged": {
+        "trusted": {
             "/sbin/init": (0o755, 0, 0, "build/utils/sbin/init-login"),
         },
         "sentinel": ("/etc/motd", 0o644, 0, 0),
@@ -210,7 +232,7 @@ ALLOWLIST = {
     },
     "login-test-shell": {
         "setid": {},
-        "unprivileged": {
+        "trusted": {
             "/sbin/init": (0o755, 0, 0, "build/utils/sbin/init-shell"),
         },
         "sentinel": ("/etc/motd", 0o644, 0, 0),
@@ -222,7 +244,7 @@ ALLOWLIST = {
         "setid": {
             "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
         },
-        "unprivileged": {
+        "trusted": {
             "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
         },
         "sentinel": None,
@@ -230,7 +252,7 @@ ALLOWLIST = {
     },
     "stress-test": {
         "setid": {},
-        "unprivileged": {},
+        "trusted": {},
         "sentinel": ("/stressprobe", 0o755, 0, 0),
         "init": None,
     },
@@ -495,7 +517,7 @@ def ancestors_of(guest):
 
 def declared_paths(allow):
     """Every path an allowlist entry says root runs or trusts."""
-    paths = sorted(allow["setid"]) + sorted(allow["unprivileged"])
+    paths = sorted(allow["setid"]) + sorted(allow["trusted"])
     if allow.get("init"):
         paths.append("/sbin/init")
 
@@ -624,12 +646,13 @@ def check_manifest(path, table=ALLOWLIST):
             dirs[guest] = (mode & PERM, uid, gid)
     problems.extend(check_ancestors(name, allow, dirs.get))
 
-    for guest in sorted(allow["unprivileged"]):
-        want_mode, want_uid, want_gid, want_source = allow["unprivileged"][guest]
+    for guest in sorted(allow["trusted"]):
+        want_mode, want_uid, want_gid, want_source = allow["trusted"][guest]
         want = fmt_entry(want_mode, want_uid, want_gid)
         if guest not in staged:
             problems.append("%s: %s is not staged; the allowlist requires it "
-                            "to be present and unprivileged" % (name, guest))
+                            "to be present, unprivileged and exactly as "
+                            "declared" % (name, guest))
             continue
         lineno, mode, uid, gid, source = staged[guest]
         if mode & SETID:
@@ -638,9 +661,9 @@ def check_manifest(path, table=ALLOWLIST):
                             "the declared paths alone"
                             % (name, lineno, guest, fmt_entry(mode, uid, gid)))
         elif (mode, uid, gid) != (want_mode, want_uid, want_gid):
-            problems.append("%s:%d: %s is declared %s but is staged %s; an "
-                            "unprivileged program root runs is a trust "
-                            "boundary too"
+            problems.append("%s:%d: %s is declared %s but is staged %s; a "
+                            "program root runs, and a file root reads to "
+                            "decide who somebody is, are trust boundaries too"
                             % (name, lineno, guest, want,
                                fmt_entry(mode, uid, gid)))
         elif source != want_source:
@@ -907,8 +930,8 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
 
     problems.extend(check_ancestors(os.path.basename(image), allow, image_dir))
 
-    for path in sorted(allow["unprivileged"]):
-        want_mode, want_uid, want_gid, _ = allow["unprivileged"][path]
+    for path in sorted(allow["trusted"]):
+        want_mode, want_uid, want_gid, _ = allow["trusted"][path]
         node = paths.get(path)
         if node is None:
             problems.append("%s: %s is not in the image; the allowlist "
@@ -916,15 +939,15 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
                             % (os.path.basename(image), path))
         elif node["mode"] & SETID:
             problems.append("%s: %s is staged set-id (%s); it must stay "
-                            "unprivileged"
+                            "trusted"
                             % (os.path.basename(image), path,
                                fmt_entry(node["mode"] & PERM, node["uid"],
                                          node["gid"])))
         elif (node["mode"] & PERM, node["uid"], node["gid"]) != (
                 want_mode, want_uid, want_gid):
             problems.append("%s: %s is declared %s but the image carries %s; "
-                            "an unprivileged program root runs is a trust "
-                            "boundary too"
+                            "a program root runs, and a file root reads to "
+                            "decide who somebody is, are trust boundaries too"
                             % (os.path.basename(image), path,
                                fmt_entry(want_mode, want_uid, want_gid),
                                fmt_entry(node["mode"] & PERM, node["uid"],
@@ -1004,6 +1027,17 @@ def sweep(paths, table=ALLOWLIST, require_all=False):
 # not for Python.
 OS_REAL_MINIMUM = ("dir 0755 /bin\n"
                    "dir 0755 /sbin\n"
+                   "dir 0755 /etc\n"
+                   "dir 0755 /root\n"
+                   "dir 0700 /root/.ssh\n"
+                   "file 0755 /bin/sh build/vendor/busybox/busybox\n"
+                   "file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti\n"
+                   "text 0644 /etc/passwd x\n"
+                   "file 0600 /etc/shadow krffs/shadow\n"
+                   "text 0644 /etc/group x\n"
+                   "text 0644 /etc/shells x\n"
+                   "text 0644 /etc/profile x\n"
+                   "file 0600 /root/.ssh/authorized_keys krffs/authorized_keys\n"
                    "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
                    "file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
                    "file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid\n"
@@ -1022,6 +1056,11 @@ TEST_MINIMUM = ("dir 0755 /musl\n"
 
 OS_SIMPLE_MINIMUM = ("dir 0755 /bin\n"
                      "dir 0755 /sbin\n"
+                     "dir 0755 /etc\n"
+                     "text 0644 /etc/passwd x\n"
+                     "file 0600 /etc/shadow krffs/shadow\n"
+                     "text 0644 /etc/group x\n"
+                     "text 0644 /etc/shells x\n"
                      "file 04755:0:0 /bin/su build/utils/sbin/su\n"
                      "file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n"
                      "file 0755 /bin/login build/utils/sbin/login\n"
@@ -1036,11 +1075,11 @@ LONGEST_LINE = ("file 0755 /pad build/utils/cat"
 SELFTEST_CASES = [
     ("a declared set-id file", "os-real", OS_REAL_MINIMUM, True, ""),
     ("a declared set-id optional-file", "os-real",
-     "dir 0755 /bin\ndir 0755 /sbin\n"
-     "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
-     "optional-file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
-     "optional-file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid\n"
-     "optional-file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid\n", True, ""),
+     OS_REAL_MINIMUM
+     .replace("file 04755:0:0 /bin/su", "optional-file 04755:0:0 /bin/su")
+     .replace("file 04755:0:0 /bin/passwd", "optional-file 04755:0:0 /bin/passwd")
+     .replace("file 04755:0:0 /bin/login", "optional-file 04755:0:0 /bin/login"),
+     True, ""),
     ("a declared set-id path staged as text", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
      "text 04755:0:0 /bin/su placeholder\n", False, "inline"),
@@ -1111,12 +1150,7 @@ SELFTEST_CASES = [
      OS_REAL_MINIMUM + "file 04755:0:0 /bin/evil build/evil # note\n",
      False, "/bin/evil"),
     ("tab-separated fields", "os-real",
-     "dir\t0755\t/bin\n"
-     "dir\t0755\t/sbin\n"
-     "file\t0755\t/bin/busybox\tbuild/vendor/busybox/busybox\n"
-     "file\t04755:0:0\t/bin/su\tbuild/vendor/busybox/busybox-suid\n"
-     "file\t04755:0:0\t/bin/passwd\tbuild/vendor/busybox/busybox-suid\n"
-     "file\t04755:0:0\t/bin/login\tbuild/vendor/busybox/busybox-suid\n", True, ""),
+     OS_REAL_MINIMUM.replace(" ", "\t"), True, ""),
     ("a carriage return inside a path", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
      "file 04755:0:0 /bin/su\r#x build/utils/sbin/su\n",
@@ -1130,10 +1164,19 @@ SELFTEST_CASES = [
      "# caf\xe9\n" + OS_REAL_MINIMUM, True, ""),
     ("an unprivileged program root runs, staged world-writable", "os-simple",
      OS_SIMPLE_MINIMUM.replace("file 0755 /bin/login", "file 0777 /bin/login")
-     + "text 0644 /hello.txt hi\n", False, "trust boundary too"),
+     + "text 0644 /hello.txt hi\n", False, "trust boundaries too"),
     ("an unprivileged program staged from somewhere else", "os-simple",
      OS_SIMPLE_MINIMUM.replace("build/utils/sbin/login", "build/elsewhere/login")
      + "text 0644 /hello.txt hi\n", False, "declared staged from"),
+    ("the shadow file staged readable by anyone", "os-real",
+     OS_REAL_MINIMUM.replace("file 0600 /etc/shadow", "file 0644 /etc/shadow"),
+     False, "trust boundaries too"),
+    ("root's authorized_keys staged from somewhere else", "os-real",
+     OS_REAL_MINIMUM.replace("krffs/authorized_keys", "krffs/test_authorized_keys"),
+     False, "declared staged from"),
+    ("the shell root's login execs staged writable", "os-real",
+     OS_REAL_MINIMUM.replace("file 0755 /bin/sh", "file 0777 /bin/sh"),
+     False, "trust boundaries too"),
     ("a safe directory declared again, unsafely", "os-simple",
      OS_SIMPLE_MINIMUM + "dir 0777 /bin\ntext 0644 /hello.txt hi\n",
      False, "may write is a way to replace"),
@@ -1178,10 +1221,10 @@ SELFTEST_CASES = [
 # itself, so the rules that police it are exercised rather than assumed.
 TABLE_CASES = [
     ("a table entry with nothing to find",
-     {"x": {"setid": {}, "unprivileged": {}, "sentinel": None}},
+     {"x": {"setid": {}, "trusted": {}, "sentinel": None}},
      "nothing to find"),
     ("a declared entry carrying no set-id bit",
-     {"x": {"setid": {"/x": (0o755, 0, 0, "build/x")}, "unprivileged": {},
+     {"x": {"setid": {"/x": (0o755, 0, 0, "build/x")}, "trusted": {},
             "sentinel": None}},
      "carries no set-id bit"),
 ]
@@ -1198,12 +1241,12 @@ TABLE_CASES = [
 IMAGE_TABLE = {
     "img-fixture": {
         "setid": {"/bin/su": (0o4755, 0, 0, "build/utils/sbin/su")},
-        "unprivileged": {
+        "trusted": {
             "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
         },
         "sentinel": ("/hello.txt", 0o644, 0, 0),
     },
-    "img-blind": {"setid": {}, "unprivileged": {}, "sentinel": None},
+    "img-blind": {"setid": {}, "trusted": {}, "sentinel": None},
 }
 
 IMAGE_TOTAL = 4096
@@ -1279,7 +1322,7 @@ IMAGE_CASES = [
      False, "present and unprivileged"),
     ("an unprivileged file at a mode nobody declared", "img-fixture",
      fixture(3, (NODE_RESERVED, 13, b"busybox", 0o777, 0, 0, 11)), None,
-     False, "trust boundary too"),
+     False, "trust boundaries too"),
     ("the directory holding them writable by anyone", "img-fixture",
      fixture(1, (NODE_RESERVED, 11, b"bin", 0o40777, 0, 0, 0)), None,
      False, "may write is a way to replace"),

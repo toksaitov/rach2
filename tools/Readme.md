@@ -91,16 +91,23 @@ the supporting scripts.
   `wall`, `crontab`) and the five that need a raw socket this kernel does not
   offer (`ping`, `ping6`, `traceroute`, `traceroute6`, `arping`). `getty` and
   `sulogin` are not on it: neither wants privilege, and neither is selected.
-  Two rules cover what a set-id bit alone does not. A program root runs
-  unprivileged is declared the same four ways a set-id one is, mode, owner and
-  host source included, because `/bin/login` is what init execs as root and one
-  staged 0777 would let any account replace it without a set-id bit anywhere in
-  sight; `/sbin/init` is held to `0755:0:0` for the same reason, by a rule
-  rather than a per-image entry, since no image has cause to stage it
-  otherwise. And every directory above a declared path must be staged,
-  root-owned and writable by nobody else: this kernel decides `unlink` and
-  `rename` on the parent's write bit, so a `/bin` at 0777 replaces a correctly
-  declared program without touching the program's own line.
+  Three rules cover what a set-id bit alone does not. The TRUSTED list is
+  declared the same four ways the set-id one is, mode, owner and host source
+  included, and it holds two kinds of file: a program root runs (`/bin/login`,
+  which init execs; `/bin/sh`, which login and dropbear exec for root;
+  `/bin/dropbearmulti`, which root starts) and a file root READS to decide who
+  somebody is (`/etc/shadow`, `/etc/passwd`, `/etc/group`, `/etc/shells`,
+  `/etc/profile`, and root's `authorized_keys`). One of those staged 0777 is a
+  way to root with no set-id bit anywhere in sight. The test account's own
+  `authorized_keys` is deliberately not in it: that file is the account's, under
+  a home the account owns, and replacing it is not a climb. `/sbin/init` is held
+  to `0755:0:0` by a rule rather than a per-image entry, since no image has
+  cause to stage it otherwise. And every directory above a declared path must be
+  staged by a `dir` line, root-owned and writable by nobody else: this kernel
+  decides `unlink` and `rename` on the parent's write bit, so a `/bin` at 0777
+  replaces a correctly declared program without touching the program's own line,
+  and the LAST `dir` for a path is the one that counts, the way `stage_dir`
+  re-applies mode and owner.
   The INIT CHECK is the fourth, and it is split by what each half must read.
   The manifest half runs inside the sweep, since it reads text alone: each
   manifest's `/sbin/init` line must be a mandatory `file` naming exactly the
