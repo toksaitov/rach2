@@ -20,10 +20,13 @@ dir 0755 /bin
 # (CONFIG_SU off) so a bare `su` resolves to /bin/su.
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
-file 04755:0:0 /bin/su build/utils/sbin/su
-file 04755:0:0 /bin/passwd build/utils/sbin/passwd
-file 0755:0:0 /bin/adduser build/utils/sbin/adduser
-file 0755:0:0 /bin/login build/utils/sbin/login
+# The account tools are busybox's, from the second build: one binary holding
+# only login, passwd and su, staged three times under those names because KRFFS
+# has no symlinks and busybox dispatches on argv[0]. It carries the set-id bit
+# and the main busybox does not, which is the whole reason there are two.
+file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 # Ours, and reachable as a bare `ping` only because busybox's applet is gone:
 # that one wants SOCK_RAW, which this kernel's socket layer does not offer.
 file 0755 /bin/ping build/utils/ping

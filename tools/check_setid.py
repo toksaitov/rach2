@@ -116,8 +116,9 @@ ALLOWLIST = {
         # as root unless an /etc/busybox.conf confined it, and that config path
         # trips a busybox use-after-free the kernel's strict munmap faults.
         "setid": {
-            "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
-            "/bin/passwd": (0o4755, 0, 0, "build/utils/sbin/passwd"),
+            "/bin/su": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
+            "/bin/passwd": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
+            "/bin/login": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
         },
         "unprivileged": ("/bin/busybox",),
         "sentinel": None,
@@ -849,8 +850,9 @@ def sweep(paths, table=ALLOWLIST, require_all=False):
 # not for C, a tab as a field separator, and a NUL that ends the line for C and
 # not for Python.
 OS_REAL_MINIMUM = ("file 0755 /bin/busybox build/vendor/busybox/busybox\n"
-                   "file 04755:0:0 /bin/su build/utils/sbin/su\n"
-                   "file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n")
+                   "file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
+                   "file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid\n"
+                   "file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid\n")
 
 TEST_MINIMUM = ("file 04755:0:0 /suidhelper.suid build/tests/suidhelper\n"
                 "file 04755:5:0 /suidhelper.u5 build/tests/suidhelper\n"
@@ -870,8 +872,9 @@ SELFTEST_CASES = [
     ("a declared set-id file", "os-real", OS_REAL_MINIMUM, True, ""),
     ("a declared set-id optional-file", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
-     "optional-file 04755:0:0 /bin/su build/utils/sbin/su\n"
-     "optional-file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n", True, ""),
+     "optional-file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
+     "optional-file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid\n"
+     "optional-file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid\n", True, ""),
     ("a declared set-id path staged as text", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
      "text 04755:0:0 /bin/su placeholder\n", False, "inline"),
@@ -943,8 +946,9 @@ SELFTEST_CASES = [
      False, "/bin/evil"),
     ("tab-separated fields", "os-real",
      "file\t0755\t/bin/busybox\tbuild/vendor/busybox/busybox\n"
-     "file\t04755:0:0\t/bin/su\tbuild/utils/sbin/su\n"
-     "file\t04755:0:0\t/bin/passwd\tbuild/utils/sbin/passwd\n", True, ""),
+     "file\t04755:0:0\t/bin/su\tbuild/vendor/busybox/busybox-suid\n"
+     "file\t04755:0:0\t/bin/passwd\tbuild/vendor/busybox/busybox-suid\n"
+     "file\t04755:0:0\t/bin/login\tbuild/vendor/busybox/busybox-suid\n", True, ""),
     ("a carriage return inside a path", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
      "file 04755:0:0 /bin/su\r#x build/utils/sbin/su\n",
@@ -1249,9 +1253,16 @@ def report(problems):
 #
 # The sentinel is an applet that must be present, because a check that only ever
 # looks for absences passes just as well on a header it failed to understand.
-FORBIDDEN_APPLETS = ("su", "passwd", "adduser", "deluser", "addgroup", "delgroup", "chpasswd",
-                     "cryptpw", "mkpasswd", "login", "vlock", "sulogin", "getty", "wall",
-                     "crontab", "ping", "ping6", "traceroute", "traceroute6", "arping")
+# What the MAIN busybox must not carry. Two reasons, and the list says which is
+# which. The first six want the set-id bit, and this binary is staged without
+# one, so an applet of that name would answer from the shell's PATH before the
+# set-id build's copy and then refuse for want of a bit it does not have. The
+# last five need a raw socket, which this kernel's socket layer does not offer,
+# so they cannot work at all. `getty` and `sulogin` are NOT here: both are
+# BB_SUID_DROP and neither wants privilege; they are simply not selected,
+# because this system's init does not use them.
+FORBIDDEN_APPLETS = ("su", "passwd", "login", "vlock", "wall", "crontab",
+                     "ping", "ping6", "traceroute", "traceroute6", "arping")
 APPLET_SENTINEL = "cat"
 
 # The applet table as it was STAGED, beside the binary it describes, rather than
