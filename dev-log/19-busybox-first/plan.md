@@ -28,7 +28,9 @@ That is busybox's own advice, from `Config.in:216-219`: build two binaries with 
 
 ## os-real: what stays ours, and why
 
-`ping`, because busybox's opens a raw socket and this kernel has none, so it dies before it sends anything. This is the only in-house program in that image that is there for a reason no decision can change.
+`ping`, because busybox's opens a raw socket and this kernel has none, so it dies before it sends anything.
+
+Adding raw sockets was considered and declined. The send half is nearly free, since `ip_tx` already exists; the receive half is not, because busybox's ping reads the IP header off the front of every reply (`networking/ping.c:283-285`) while this stack strips it before delivery, and the kernel's own in-flight echo would have to agree with a raw socket about who gets a reply. Even then busybox's ping is `BB_SUID_MAYBE`, so it would be root-only or need the set-id bit. The feature earns its keep if `traceroute` and `arping` are wanted, which have no in-house substitute; for ping alone it does not, and ours works.
 
 `init`, for now. Ours is PID 1, execs `/bin/login` and nothing else, answers the three shutdown signals and continues a stopped console session. busybox has an `init` applet and moving to it is a real option, but PID 1 is the wrong place to take a change casually, and nothing about it is currently wrong. Left as a later question rather than folded into this milestone.
 

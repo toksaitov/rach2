@@ -53,6 +53,14 @@ The last group is off because the console login is ours now. `LOGIN` and `SULOGI
 
 `CONFIG_FEATURE_DEFAULT_PASSWD_ALGO` is `sha512` rather than the stock `des`, so that anything left in the tree that consults it agrees with the `$6$` hashes the image actually carries. `tools/check_setid.py --applets` reads the generated `include/applet_tables.h` and fails the build if either applet comes back, matching whole NUL-delimited names rather than substrings (`passwd` appears inside `passwd_main` and inside help text) and requiring `cat` to be present, so a header it failed to parse fails loudly instead of passing as an absence.
 
+## An upstream bug we should report
+
+`check_suid` frees the parsed `/etc/busybox.conf` list and never clears the global that points at it (`libbb/appletlib.c:642`, with the global declared at `:305` and read at `:565`). A second in-process dispatch then walks freed memory to decide which applets keep root. Checked against upstream master in August 2026: the free is still there and the pointer is still not cleared, so this is not a quirk of the pinned tarball.
+
+It needs three things at once to bite: busybox set-id, `FEATURE_SUID_CONFIG` on, and a `NOEXEC` applet re-dispatching in process. All three are supported configurations. Milestone 15 met it here, as a page fault on `ssh test@host id`, and dropped the set-id-busybox design because of it; the write-up is in `dev-log/15-privilege/Readme.md`. On Linux the freed page usually stays mapped and the read quietly returns plausible data, which is why it survived; this kernel unmaps promptly, so it faults every time.
+
+Reporting it is an open action, not yet done. The list `busybox@busybox.net` is the route the project's own README prefers over the tracker at `bugs.busybox.net`, and it wants a transcript anyone can replay. The fix is one line, clearing the pointer after the free. If a local patch is wanted before upstream moves, `build_busybox.sh` already applies `patches/*.patch` after extraction, and a context diff there will stop the build loudly if upstream ever changes that function.
+
 ## Known limits (present but constrained)
 
 * An applet that needs an unimplemented syscall is compiled in but returns its error at runtime: `df` (no `statfs64`, `-ENOSYS`), `mount`/`umount`, and date is not tz-aware (set `TZ=UTC`). The networking applets (`wget nc telnet httpd tftp`) run against the from-scratch TCP/IP stack, within its limits. `PING`, `PING6`, `TRACEROUTE`, `TRACEROUTE6` and `ARPING` are off, and not for a limit but for an absence: every one of them opens `SOCK_RAW` or `AF_PACKET`, this kernel's socket layer offers neither, and busybox's ping dies with `can't create raw socket: Invalid argument` before it sends anything. `/bin/ping` is ours (`utils/ping.c`) and reaches a bare `ping` from the shell's PATH only because the applet is gone.
