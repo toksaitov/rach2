@@ -92,6 +92,23 @@ int main(void)
         return fail("a command a signal killed did not report 128 + the signal");
     }
 
+    /* The builtins answer the same way. They are the shell's own work, so a
+     * caller learns nothing about them from a child's status, and a `cd` that
+     * went nowhere leaves the next command in the caller's line running
+     * somewhere the caller did not choose. */
+    rc = ish_status("cd /");
+    if (rc != 0) {
+        return fail("a cd that worked did not report 0");
+    }
+    rc = ish_status("cd /no/such/directory");
+    if (rc != 1) {
+        return fail("a cd to nowhere reported success");
+    }
+    rc = ish_status("cd / < /no/such/input");
+    if (rc != 126) {
+        return fail("a builtin ran with a redirection that could not be opened");
+    }
+
     printf("ISHMUSL OK\n");
 
     return 0;

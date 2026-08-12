@@ -52,7 +52,9 @@ static const int Status_Signalled_Base = 128;
  *
  * The status is the command's own, or one of the conventional ones for what the
  * shell could not run at all: 127 for a name that resolved to nothing, 126 for
- * a command that could not be started, and 128 + N for one a signal killed.
+ * a command that could not be started (a redirection that would not open
+ * included, builtins and all), 128 + N for one a signal killed, and 1 for a
+ * `cd` to somewhere it could not go.
  * That matters here more than in a shell somebody types at, because `-c` hands
  * this status to `su`, and a caller that read every failure as success would
  * report work done that never ran.
@@ -71,12 +73,42 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
         return 0;
     }
 
+    /* The redirections are opened before anything runs, builtins included. A
+     * line whose `< file` could not be opened is not that line, and running it
+     * anyway would read from wherever the shell's own input comes from. */
+    char *stdin_file = ish_extract_last_stdin_redirection_file(arguments);
+    int stdin_descriptor = !stdin_file ? -1 : open(stdin_file, Standard_Input_File_Flags);
+
+    char *stdout_file = ish_extract_last_stdout_redirection_file(arguments);
+    int stdout_descriptor = !stdout_file ? -1 : creat(stdout_file, Standard_Output_File_Mode);
+
+    if ((stdin_file && stdin_descriptor < 0) || (stdout_file && stdout_descriptor < 0)) {
+        write(2, Redirection_Error_Message, sizeof(Redirection_Error_Message) - 1);
+        if (stdin_descriptor > 0) {
+            close(stdin_descriptor);
+        }
+        if (stdout_descriptor > 1) {
+            close(stdout_descriptor);
+        }
+
+        return Status_Not_Runnable;
+    }
+
     if (ish_are_cstrings_equal(command, Builtin_Command_CD)) {
         char *directory = argument_count == 0 ? home : arguments[1];
-        if (directory) {
-            chdir(directory);
+        int moved = directory ? chdir(directory) : -1;
+
+        if (stdin_descriptor > 0) {
+            close(stdin_descriptor);
         }
-        return 0;
+        if (stdout_descriptor > 1) {
+            close(stdout_descriptor);
+        }
+
+        /* A directory that could not be entered is a failure and says so in the
+         * status, since the next command in a caller's line runs somewhere the
+         * caller did not choose. */
+        return moved == 0 ? 0 : 1;
     }
 
     if (ish_are_cstrings_equal(command, Builtin_Command_Exit)) {
@@ -111,20 +143,6 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
     }
 
     if (!executable) {
-        return Status_Not_Found;
-    }
-
-    char *stdin_file = ish_extract_last_stdin_redirection_file(arguments);
-    int stdin_descriptor = !stdin_file ? -1 : open(stdin_file, Standard_Input_File_Flags);
-
-    char *stdout_file = ish_extract_last_stdout_redirection_file(arguments);
-    int stdout_descriptor = !stdout_file ? -1 : creat(stdout_file, Standard_Output_File_Mode);
-
-    /* A redirection that could not be opened is not a command to run without
-     * it: the input would come from wherever the shell's does, and the output
-     * would land on the terminal, which is not what was asked for. */
-    if ((stdin_file && stdin_descriptor < 0) || (stdout_file && stdout_descriptor < 0)) {
-        write(2, Redirection_Error_Message, sizeof(Redirection_Error_Message) - 1);
         if (stdin_descriptor > 0) {
             close(stdin_descriptor);
         }
@@ -132,7 +150,7 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
             close(stdout_descriptor);
         }
 
-        return Status_Not_Runnable;
+        return Status_Not_Found;
     }
 
     int status = 0;
