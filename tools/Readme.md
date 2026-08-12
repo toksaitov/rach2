@@ -91,6 +91,16 @@ the supporting scripts.
   `wall`, `crontab`) and the five that need a raw socket this kernel does not
   offer (`ping`, `ping6`, `traceroute`, `traceroute6`, `arping`). `getty` and
   `sulogin` are not on it: neither wants privilege, and neither is selected.
+  Two rules cover what a set-id bit alone does not. A program root runs
+  unprivileged is declared the same four ways a set-id one is, mode, owner and
+  host source included, because `/bin/login` is what init execs as root and one
+  staged 0777 would let any account replace it without a set-id bit anywhere in
+  sight; `/sbin/init` is held to `0755:0:0` for the same reason, by a rule
+  rather than a per-image entry, since no image has cause to stage it
+  otherwise. And every directory above a declared path must be staged,
+  root-owned and writable by nobody else: this kernel decides `unlink` and
+  `rename` on the parent's write bit, so a `/bin` at 0777 replaces a correctly
+  declared program without touching the program's own line.
   The INIT CHECK is the fourth, and it is split by what each half must read.
   The manifest half runs inside the sweep, since it reads text alone: each
   manifest's `/sbin/init` line must be a mandatory `file` naming exactly the

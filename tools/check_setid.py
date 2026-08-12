@@ -412,6 +412,10 @@ def parse_manifest(path):
     return directives, problems
 
 
+# The one mode and owner an init may be staged at. See check_init_line.
+INIT_MODE = 0o755
+
+
 def check_init_line(name, directives, want):
     """Check which init a manifest stages. Returns a list of problems.
 
@@ -425,11 +429,12 @@ def check_init_line(name, directives, want):
     probes were written against.
     """
     problems = []
-    staged = [(lineno, verb, source) for lineno, verb, _m, _u, _g, guest, source
+    staged = [(lineno, verb, mode, uid, gid, source)
+              for lineno, verb, mode, uid, gid, guest, source
               in directives if guest == "/sbin/init" and verb in FILE_VERBS]
 
     if want is None:
-        for lineno, _verb, _source in staged:
+        for lineno, _verb, _m, _u, _g, _source in staged:
             problems.append("%s:%d: stages /sbin/init and the allowlist "
                             "declares none for this image" % (name, lineno))
         return problems
@@ -437,7 +442,7 @@ def check_init_line(name, directives, want):
         return ["%s: stages no /sbin/init and the allowlist declares %s"
                 % (name, want)]
     wanted_source = "build/utils/sbin/" + want
-    for lineno, verb, source in staged:
+    for lineno, verb, mode, uid, gid, source in staged:
         # The whole path and not its last component: a basename test would take
         # any */init-login, and the artifact `check_inits` scans is the one at
         # this path, so the two halves must be talking about the same file.
@@ -452,6 +457,75 @@ def check_init_line(name, directives, want):
             problems.append("%s:%d: stages /sbin/init with '%s'; an image that "
                             "declares an init must carry one, so the directive "
                             "must be 'file'" % (name, lineno, verb))
+        # And at the one mode and owner an init may have. The kernel execs this
+        # file as root before anything else runs, so it is the same trust
+        # boundary a set-id program is, and a persistent image whose init any
+        # account may rewrite hands that account root at the next boot. The mode
+        # is a rule here rather than a per-image datum: no image has a reason to
+        # stage its init any other way.
+        if (mode, uid, gid) != (INIT_MODE, 0, 0):
+            problems.append("%s:%d: stages /sbin/init %s; the kernel execs it "
+                            "as root, so it must be %s"
+                            % (name, lineno, fmt_entry(mode, uid, gid),
+                               fmt_entry(INIT_MODE, 0, 0)))
+
+    return problems
+
+
+# The directories on the way to a program root runs, which are part of the same
+# trust boundary the program is. This kernel decides `unlink` and `rename` on
+# the parent directory's write permission, so a `/bin` staged 0777 lets any
+# account replace a correctly declared `/bin/login` with a program of their own
+# and wait for init to exec it. A declared mode on the file alone does not make
+# the file the one that runs.
+#
+# The rule is a rule and not a table: every ancestor of a declared path must be
+# staged, owned by root, and writable by nobody else. `/` is not checked here
+# because no manifest stages it; `stageimage` forces the root node to 0:0 and
+# the image half reads it back.
+def ancestors_of(guest):
+    """Yield the directory paths above `guest`, nearest last."""
+    parts = [p for p in guest.split("/") if p]
+    out = []
+    for i in range(1, len(parts)):
+        out.append("/" + "/".join(parts[:i]))
+
+    return out
+
+
+def declared_paths(allow):
+    """Every path an allowlist entry says root runs or trusts."""
+    paths = sorted(allow["setid"]) + sorted(allow["unprivileged"])
+    if allow.get("init"):
+        paths.append("/sbin/init")
+
+    return paths
+
+
+def check_ancestors(where, allow, look):
+    """Check the directories above every declared path.
+
+    `look` answers a directory path with (mode, uid, gid) or None. Returns a
+    list of problems.
+    """
+    problems = []
+    seen = []
+    for guest in declared_paths(allow):
+        for parent in ancestors_of(guest):
+            if parent in seen:
+                continue
+            seen.append(parent)
+            found = look(parent)
+            if found is None:
+                problems.append("%s: %s holds a program root runs and is not "
+                                "staged as a directory" % (where, parent))
+                continue
+            mode, uid, gid = found
+            if (uid, gid) != (0, 0) or (mode & 0o022) != 0:
+                problems.append("%s: %s is staged %s and holds a program root "
+                                "runs; a directory anyone else may write is a "
+                                "way to replace what is in it"
+                                % (where, parent, fmt_entry(mode, uid, gid)))
 
     return problems
 
@@ -535,6 +609,12 @@ def check_manifest(path, table=ALLOWLIST):
         else:
             problems.append("%s: %s is declared %s but no directive stages it"
                             % (name, guest, want))
+
+    dirs = {}
+    for lineno, verb, mode, uid, gid, guest, _source in directives:
+        if verb in ("dir", "exec-dir") and guest not in dirs:
+            dirs[guest] = (mode & PERM, uid, gid)
+    problems.extend(check_ancestors(name, allow, dirs.get))
 
     for guest in sorted(allow["unprivileged"]):
         want_mode, want_uid, want_gid, want_source = allow["unprivileged"][guest]
@@ -810,6 +890,15 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
                             % (os.path.basename(image), path,
                                fmt_entry(want_mode, want_uid, want_gid)))
 
+    def image_dir(guest):
+        node = paths.get(guest)
+        if node is None or not (node["mode"] & 0o40000):
+            return None
+
+        return (node["mode"] & PERM, node["uid"], node["gid"])
+
+    problems.extend(check_ancestors(os.path.basename(image), allow, image_dir))
+
     for path in sorted(allow["unprivileged"]):
         want_mode, want_uid, want_gid, _ = allow["unprivileged"][path]
         node = paths.get(path)
@@ -905,12 +994,15 @@ def sweep(paths, table=ALLOWLIST, require_all=False):
 # byte where fgets gives up, a carriage return that ends a line for Python and
 # not for C, a tab as a field separator, and a NUL that ends the line for C and
 # not for Python.
-OS_REAL_MINIMUM = ("file 0755 /bin/busybox build/vendor/busybox/busybox\n"
+OS_REAL_MINIMUM = ("dir 0755 /bin\n"
+                   "dir 0755 /sbin\n"
+                   "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
                    "file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
                    "file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid\n"
                    "file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid\n")
 
-TEST_MINIMUM = ("file 04755:0:0 /suidhelper.suid build/tests/suidhelper\n"
+TEST_MINIMUM = ("dir 0755 /musl\n"
+                "file 04755:0:0 /suidhelper.suid build/tests/suidhelper\n"
                 "file 04755:5:0 /suidhelper.u5 build/tests/suidhelper\n"
                 "file 02755:0:5 /suidhelper.sgid build/tests/suidhelper\n"
                 "file 04644:0:0 /suidhelper.nox build/tests/suidhelper\n"
@@ -920,7 +1012,9 @@ TEST_MINIMUM = ("file 04755:0:0 /suidhelper.suid build/tests/suidhelper\n"
                 "file 04755:0:0 /musl/suidmusl.suid "
                 "build/tests/musl/suidmusl\n")
 
-OS_SIMPLE_MINIMUM = ("file 04755:0:0 /bin/su build/utils/sbin/su\n"
+OS_SIMPLE_MINIMUM = ("dir 0755 /bin\n"
+                     "dir 0755 /sbin\n"
+                     "file 04755:0:0 /bin/su build/utils/sbin/su\n"
                      "file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n"
                      "file 0755 /bin/login build/utils/sbin/login\n"
                      "file 0755 /bin/adduser build/utils/sbin/adduser\n"
@@ -934,6 +1028,7 @@ LONGEST_LINE = ("file 0755 /pad build/utils/cat"
 SELFTEST_CASES = [
     ("a declared set-id file", "os-real", OS_REAL_MINIMUM, True, ""),
     ("a declared set-id optional-file", "os-real",
+     "dir 0755 /bin\ndir 0755 /sbin\n"
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
      "optional-file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
      "optional-file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid\n"
@@ -1008,6 +1103,8 @@ SELFTEST_CASES = [
      OS_REAL_MINIMUM + "file 04755:0:0 /bin/evil build/evil # note\n",
      False, "/bin/evil"),
     ("tab-separated fields", "os-real",
+     "dir\t0755\t/bin\n"
+     "dir\t0755\t/sbin\n"
      "file\t0755\t/bin/busybox\tbuild/vendor/busybox/busybox\n"
      "file\t04755:0:0\t/bin/su\tbuild/vendor/busybox/busybox-suid\n"
      "file\t04755:0:0\t/bin/passwd\tbuild/vendor/busybox/busybox-suid\n"
@@ -1166,6 +1263,12 @@ IMAGE_CASES = [
     ("an unprivileged file at a mode nobody declared", "img-fixture",
      fixture(3, (NODE_RESERVED, 13, b"busybox", 0o777, 0, 0, 11)), None,
      False, "trust boundary too"),
+    ("the directory holding them writable by anyone", "img-fixture",
+     fixture(1, (NODE_RESERVED, 11, b"bin", 0o40777, 0, 0, 0)), None,
+     False, "may write is a way to replace"),
+    ("the directory holding them owned by somebody else", "img-fixture",
+     fixture(1, (NODE_RESERVED, 11, b"bin", 0o40755, 1000, 0, 0)), None,
+     False, "may write is a way to replace"),
     ("a region cut on a node boundary", "img-fixture", fixture(),
      NODE_SIZE * 3, False, "does not close"),
     ("a node larger than the region", "img-fixture", oversized_fixture(2),
@@ -1224,6 +1327,12 @@ INIT_CASES = [
     ("an optional init", "os-simple",
      OS_SIMPLE_MINIMUM + "optional-file 0755 /sbin/init build/utils/sbin/init-login\n", False,
      "must be 'file'"),
+    ("the declared init staged writable by anyone", "os-simple",
+     OS_SIMPLE_MINIMUM + "file 0777 /sbin/init build/utils/sbin/init-login\n",
+     False, "must be 0755:0:0"),
+    ("the declared init staged to another owner", "os-simple",
+     OS_SIMPLE_MINIMUM + "file 0755:1000:0 /sbin/init build/utils/sbin/init-login\n",
+     False, "must be 0755:0:0"),
     ("an inline init", "os-simple",
      OS_SIMPLE_MINIMUM + "text 0755 /sbin/init placeholder\n", False, "an inline payload"),
     ("no init at all", "os-simple",
