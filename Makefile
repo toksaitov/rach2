@@ -170,6 +170,7 @@ test-image: krffs rach2 tests musl-programs utils
 # mints them when krffs/shadow is absent and does nothing when it is there, and it
 # is the same file os-real stages, so one password opens either image.
 os-simple-image: krffs rach2 ish utils
+	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
 
 # The os-real image: a real Unix-like environment (busybox shell + coreutils,
@@ -313,20 +314,25 @@ ping-test: rach2 tests krffs test-image
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" wait=60
 
-# `make account-test`: accounts created, authenticated, changed and deleted with
-# busybox's tools on os-real, over three boots, so what is asserted is what
-# reached the platter and not what one process had in its cache. The
-# authentication is done from an unprivileged account, since root's `su` asks
-# for no password and would pass over a wrong hash and an unusable set-id
-# `passwd` alike.
+# `make account-test`: accounts created, authenticated, changed and deleted on
+# both images, since both have account tools now and they are different code.
+# os-real gets busybox's over three boots, so what is asserted is what reached
+# the platter and not what one process had in its cache; os-simple gets this
+# project's own in RAM, where there is no `deluser` to finish with. Both
+# authenticate from an unprivileged account, since root's `su` asks for no
+# password and would pass over a wrong hash and an unusable set-id `passwd`
+# alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 
-account-test: rach2 utils krffs busybox
+account-test: rach2 utils krffs busybox ish
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
 	sh tools/account_test.sh build/rach2/kernel $(ACCOUNT_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`"
+	    "`cat krffs/rach2_demo_password`" real
+	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
+	sh tools/account_test.sh build/rach2/kernel $(OS_SIMPLE_IMAGE) \
+	    "`cat krffs/rach2_demo_password`" simple
 
 # `make shutdown-test`: userland stopping the machine, on a disk fixture, with
 # every claim of a stop asserted on the QEMU process ending rather than on a

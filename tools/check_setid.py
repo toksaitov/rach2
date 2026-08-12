@@ -147,10 +147,17 @@ ALLOWLIST = {
         "init": None,
     },
     "os-simple": {
-        "setid": {},
-        "unprivileged": (),
+        # The same trust boundary as os-real's, drawn around this project's own
+        # code instead of busybox's: su and passwd read /etc/shadow, so they
+        # carry the bit, and login and adduser are exec'd by something that is
+        # root already.
+        "setid": {
+            "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
+            "/bin/passwd": (0o4755, 0, 0, "build/utils/sbin/passwd"),
+        },
+        "unprivileged": ("/bin/login", "/bin/adduser", "/bin/ish", "/bin/sh"),
         "sentinel": ("/hello.txt", 0o644, 0, 0),
-        "init": "init-shell",
+        "init": "init-login",
     },
     "disk-test": {
         "setid": {},
@@ -866,6 +873,13 @@ TEST_MINIMUM = ("file 04755:0:0 /suidhelper.suid build/tests/suidhelper\n"
                 "file 04755:0:0 /musl/suidmusl.suid "
                 "build/tests/musl/suidmusl\n")
 
+OS_SIMPLE_MINIMUM = ("file 04755:0:0 /bin/su build/utils/sbin/su\n"
+                     "file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n"
+                     "file 0755 /bin/login build/utils/sbin/login\n"
+                     "file 0755 /bin/adduser build/utils/sbin/adduser\n"
+                     "file 0755 /bin/ish build/ish/ish\n"
+                     "file 0755 /bin/sh build/ish/ish\n")
+
 # A line of exactly MAX_LINE content bytes, the longest stageimage accepts.
 LONGEST_LINE = ("file 0755 /pad build/utils/cat"
                 + " " * (MAX_LINE - len("file 0755 /pad build/utils/cat")))
@@ -892,10 +906,10 @@ SELFTEST_CASES = [
      False, "does not declare it"),
     ("the test image's seven declared entries", "test", TEST_MINIMUM, True, ""),
     ("a set-id exec-dir", "os-simple",
-     "text 0644 /hello.txt hello, world\\n\n"
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hello, world\\n\n"
      "exec-dir 04755 / build/utils\n", False, "refused"),
     ("a plain exec-dir", "os-simple",
-     "text 0644 /hello.txt hello, world\\n\n"
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hello, world\\n\n"
      "exec-dir 0755 / build/utils\n", True, ""),
     ("a setgid dir", "os-real",
      OS_REAL_MINIMUM + "dir 02755 /home\n", False, "no setgid-directory"),
@@ -939,7 +953,7 @@ SELFTEST_CASES = [
      OS_REAL_MINIMUM + "exec-dir 0755 /bin\n",
      False, "'exec-dir' needs a host dir"),
     ("a 'text' with no payload", "os-simple",
-     "text 0644 /hello.txt\n", True, ""),
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt\n", True, ""),
     ("a full-line comment", "os-real",
      "# file 04755:0:0 /bin/evil build/evil\n"
      "   # an indented comment line\n" + OS_REAL_MINIMUM, True, ""),
@@ -963,12 +977,13 @@ SELFTEST_CASES = [
     ("a non-ASCII byte in a comment", "os-real",
      "# caf\xe9\n" + OS_REAL_MINIMUM, True, ""),
     ("the longest line stageimage accepts", "os-simple",
-     "text 0644 /hello.txt hi\n" + LONGEST_LINE + "\n", True, ""),
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hi\n" + LONGEST_LINE + "\n",
+     True, ""),
     ("a line one byte too long", "os-simple",
-     "text 0644 /hello.txt hi\n" + LONGEST_LINE + "x\n",
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hi\n" + LONGEST_LINE + "x\n",
      False, "longer than"),
     ("the longest line ended with CRLF", "os-simple",
-     "text 0644 /hello.txt hi\n" + LONGEST_LINE + "\r\n",
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hi\n" + LONGEST_LINE + "\r\n",
      False, "longer than"),
     ("an unknown manifest name", "login-test",
      "text 0644 /hello.txt hello\\n", False, "no allowlist names"),
@@ -1141,22 +1156,22 @@ def declared_init_line(stem, table=ALLOWLIST):
 # allowlist declares none.
 INIT_CASES = [
     ("the declared init", "os-simple",
-     "file 0755 /sbin/init build/utils/sbin/init-shell\n", True, ""),
+     OS_SIMPLE_MINIMUM + "file 0755 /sbin/init build/utils/sbin/init-login\n", True, ""),
     ("the other init", "os-simple",
-     "file 0755 /sbin/init build/utils/sbin/init-login\n", False,
-     "build/utils/sbin/init-shell"),
+     OS_SIMPLE_MINIMUM + "file 0755 /sbin/init build/utils/sbin/init-shell\n", False,
+     "build/utils/sbin/init-login"),
     ("the declared init from somewhere else", "os-simple",
-     "file 0755 /sbin/init build/elsewhere/init-shell\n", False,
-     "build/utils/sbin/init-shell"),
+     OS_SIMPLE_MINIMUM + "file 0755 /sbin/init build/elsewhere/init-login\n", False,
+     "build/utils/sbin/init-login"),
     ("an optional init", "os-simple",
-     "optional-file 0755 /sbin/init build/utils/sbin/init-shell\n", False,
+     OS_SIMPLE_MINIMUM + "optional-file 0755 /sbin/init build/utils/sbin/init-login\n", False,
      "must be 'file'"),
     ("an inline init", "os-simple",
-     "text 0755 /sbin/init placeholder\n", False, "an inline payload"),
+     OS_SIMPLE_MINIMUM + "text 0755 /sbin/init placeholder\n", False, "an inline payload"),
     ("no init at all", "os-simple",
-     "file 0755 /hello.txt build/utils/cat\n", False, "stages no /sbin/init"),
+     OS_SIMPLE_MINIMUM + "file 0755 /hello.txt build/utils/cat\n", False, "stages no /sbin/init"),
     ("an init where none is declared", "test",
-     TEST_MINIMUM + "file 0755 /sbin/init build/utils/sbin/init-shell\n", False,
+     TEST_MINIMUM + "file 0755 /sbin/init build/utils/sbin/init-login\n", False,
      "declares none for this image"),
 ]
 

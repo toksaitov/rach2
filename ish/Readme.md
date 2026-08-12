@@ -4,11 +4,14 @@
 
 A small Unix shell in freestanding C. It reads a line, parses it, and runs a builtin (`cd`, `exit`) or forks and execs a program found on `PATH`, with `<` and `>` redirection. It links no C library: the system calls are inline `int $0x80` wrappers for 32-bit x86, and the string routines (length, compare, tokenize, path join) are hand-rolled, so the shell needs nothing but the kernel's syscall ABI.
 
+It also runs one line named on its own command line, `ish -c 'command'`, and exits with that line's status. That form is not a convenience: it is how another program asks a shell to run something as somebody, which is what `su -c` and `login` do, and a shell that only ever read its input would sit waiting for a line nobody is going to type.
+
 The shell can be built for both Linux (native) and the Rach2 kernel (freestanding ELF32).
 
 ## Features
 
 * Built-in commands: `cd` (change directory), `exit` (terminate shell)
+* One line from the command line with `-c`, exiting with that line's status
 * External command execution by searching the PATH environment variable
 * Input redirection with `<` (stdin from file)
 * Output redirection with `>` (stdout to file)
@@ -80,6 +83,7 @@ make clean
 Example commands:
 
 ```
+ish -c 'echo one line and out'
 ls -la
 echo hello world
 cd /tmp

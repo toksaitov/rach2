@@ -56,7 +56,7 @@ The kernel is freestanding and links no libgcc, so it alone also builds with `x8
 
 ```sh
 make doctor    # check your toolchain (PASS/MISSING with install hints)
-make           # the kernel + the os-simple image (the ISH shell + our Unix utilities)
+make           # the kernel + the os-simple image (our login, shell and Unix utilities)
 make full      # all three images: test, os-simple, and the os-real (BusyBox, Dropbear
                #   SSH, Doom) capstone the SSH login boots
 make test      # boot the test image headless and assert every probe exits 0
@@ -75,12 +75,18 @@ make distclean # + the vendored musl/busybox/dropbear builds (a full from-scratc
 ```sh
 make doctor                                 # check the toolchain
 make                                        # build the kernel + the os-simple image
-cd rach2 && ./run.sh os-simple              # boot into the ISH shell
+cd rach2 && ./run.sh os-simple              # log in, then the ISH shell
 
 # With audio:
 cd rach2 && ./run.sh os-simple sb16         # Sound Blaster 16
 cd rach2 && ./run.sh os-simple hda          # Intel HD Audio
 ```
+
+Both images ask who is there. `make` mints the two demo passwords when they are
+absent, into `krffs/rach2_demo_password` (root) and `krffs/rach2_test_password`
+(the unprivileged `test` account), neither of which is committed; `cat` the one
+you want and type it at the login prompt. The same `/etc/shadow` is staged into
+os-simple and os-real, so one password opens either.
 
 ### The SSH capstone: log into Rach2 with a real client
 

@@ -29,7 +29,11 @@
  * The environment is built from nothing rather than filtered, for the reason su
  * builds one: what arrives here came from init, which got it from the kernel,
  * and a login that passed a variable through would be handing the account
- * whatever the boot happened to carry.
+ * whatever the boot happened to carry. `PATH` is part of what it builds, and
+ * has to be: a shell handed no `PATH` at all resolves nothing but the names its
+ * caller spells out in full, so the first bare `ls` after a login would fail.
+ * It is the same `/bin:/usr/bin` su sets, so an account reaches the same
+ * programs however it arrived.
  */
 
 #include <stdio.h>
@@ -208,7 +212,7 @@ static void print_motd(void)
 static void become(const struct passwd *pw)
 {
     char *argv[2];
-    char *env[5];
+    char *env[6];
     char home[256];
     char shell[256];
     char user[LOGIN_NAME_MAX + 8];
@@ -230,11 +234,12 @@ static void become(const struct passwd *pw)
     snprintf(shell, sizeof(shell), "SHELL=%s", pw->pw_shell);
     snprintf(user, sizeof(user), "USER=%s", pw->pw_name);
     snprintf(logname, sizeof(logname), "LOGNAME=%s", pw->pw_name);
-    env[0] = home;
-    env[1] = shell;
-    env[2] = user;
-    env[3] = logname;
-    env[4] = NULL;
+    env[0] = (char *)"PATH=/bin:/usr/bin";
+    env[1] = home;
+    env[2] = shell;
+    env[3] = user;
+    env[4] = logname;
+    env[5] = NULL;
 
     base = strrchr(pw->pw_shell, '/');
     base = base ? base + 1 : pw->pw_shell;
