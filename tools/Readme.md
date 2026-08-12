@@ -66,12 +66,17 @@ the supporting scripts.
   present, so a header it could not parse fails loudly rather than reading as a
   clean absence. It reads two configs in the same pass, for the settings that
   live inside an applet rather than as one, where no applet name changes when
-  they come or go. `vendor/busybox/rach2.config` has a forbidden-symbol list
-  that is empty today: `CONFIG_FEATURE_HTTPD_AUTH_MD5` was on it, because
+  they come or go. Both are the configs `oldconfig` RESOLVED and
+  `build_busybox.sh` staged beside the binaries, `build/vendor/busybox/config-main`
+  and `config-suid`, and not the hand-written files: the resolved file has one
+  canonical line per symbol, so the guard needs none of Kconfig's rules for a
+  symbol assigned twice or written `=yes`, and what it reads is what was
+  compiled. A file holding either of those shapes anyway is refused rather than
+  read. The main one has a forbidden-symbol list that is empty today: `CONFIG_FEATURE_HTTPD_AUTH_MD5` was on it, because
   `httpd -m` mints a password hash from a salt no entropy source was read for,
   and that objection was retired along with `cryptpw` and `mkpasswd` on the
   judgment that busybox's salt is good enough for a teaching machine. The rule
-  is kept for the next such setting. `vendor/busybox/rach2-suid.config` is the
+  is kept for the next such setting. The set-id build's config is the
   other, and its list is not empty, because that config describes the binary
   that runs as root: `STATIC`, `LFS`, `FEATURE_SUID`, `FEATURE_SHADOWPASSWDS`,
   `SH_IS_NONE` and the three applets must be on, and the suid.conf parser, the

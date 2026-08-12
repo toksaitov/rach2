@@ -119,7 +119,9 @@ $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
                   $(BUSYBOX_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
 	    build/vendor/busybox/applet_tables-main.h \
-	    build/vendor/busybox/applet_tables-suid.h
+	    build/vendor/busybox/applet_tables-suid.h \
+	    build/vendor/busybox/config-main \
+	    build/vendor/busybox/config-suid
 	./vendor/busybox/build_busybox.sh
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
 	@touch $@
@@ -163,7 +165,10 @@ musl-programs: $(LIBC_STAMP)
 test-image: krffs rach2 tests musl-programs utils
 	$(MKIMAGE) krffs/manifests/test.manifest $(TEST_IMAGE) 10
 
-# The os-simple image: /sbin/init (which forks the ish shell) and the hand-written utils.
+# The os-simple image: a small Unix built out of this project's own code. init
+# execs /bin/login, so this image needs the account databases; gen_demo_password.sh
+# mints them when krffs/shadow is absent and does nothing when it is there, and it
+# is the same file os-real stages, so one password opens either image.
 os-simple-image: krffs rach2 ish utils
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
 
@@ -422,13 +427,15 @@ os-real-iso: os-real-image
 # stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards
 # while the stamp lingers, so these PHONY check targets (depending on the stamp so it
 # builds first) run `test -s` on EVERY build and catch a missing OR zero-byte artifact.
-# Both binaries and both applet tables, because a stamp file outlives an artifact
-# somebody deleted or truncated, and the set-id one is the artifact whose absence
-# would be noticed last and matter most.
+# Both binaries, both applet tables and both resolved configs, because a stamp
+# file outlives an artifact somebody deleted or truncated, and the set-id ones
+# are the artifacts whose absence would be noticed last and matter most.
 check-busybox: $(BUSYBOX_STAMP)
 	@for f in $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
 	          build/vendor/busybox/applet_tables-main.h \
-	          build/vendor/busybox/applet_tables-suid.h; do \
+	          build/vendor/busybox/applet_tables-suid.h \
+	          build/vendor/busybox/config-main \
+	          build/vendor/busybox/config-suid; do \
 	    test -s "$$f" || { echo "busybox: $$f missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }; \
 	done
 

@@ -91,6 +91,12 @@ i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox"
 # configuration. A copy staged beside the binary describes the binary that
 # ships, which is the only thing worth checking.
 cp "$SRC/include/applet_tables.h" "$STAGE/applet_tables-main.h"
+# And the config the build actually used, for the same reason and one more: a
+# hand-written config is what a person meant, while this is what `oldconfig`
+# resolved it to, one canonical line per symbol. A guard reading the source file
+# would have to reimplement Kconfig's rules for duplicates and for values it
+# reads loosely; reading the resolved file it does not.
+cp "$SRC/.config" "$STAGE/config-main"
 ls -l "$STAGE/busybox"
 
 # The second binary: the same source, configured to hold only the applets that
@@ -112,6 +118,7 @@ make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
 echo "busybox: staging the set-id binary to build/vendor/busybox/busybox-suid"
 i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox-suid"
 cp "$SRC/include/applet_tables.h" "$STAGE/applet_tables-suid.h"
+cp "$SRC/.config" "$STAGE/config-suid"
 
 echo "busybox: built $VERSION ($(wc -c < "$STAGE/busybox") bytes main, $(wc -c < "$STAGE/busybox-suid") bytes set-id, static, musl, i686)"
 echo "busybox: rebuild the os-real image (make os-real-image) to install it"
