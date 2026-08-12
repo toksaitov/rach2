@@ -2097,20 +2097,30 @@ static int32_t sys_read(isr_params_t *params)
  * across the iovecs, or a negative errno.
  *
  * The whole vector list is checked before a byte is taken, because a read
- * cannot be undone: a caller that named a bad address in its last buffer gets
- * -EFAULT with its input still queued, rather than a partial total over data
- * that is now gone. A list that asks for nothing still checks the descriptor,
- * so a closed fd is -EBADF and not a quiet zero.
+ * cannot be undone: a caller that named a bad destination in its last buffer
+ * gets -EFAULT with its input still queued, rather than a partial total over
+ * data that is now gone. The check is the one `write` makes of a buffer it is
+ * about to hand a driver, `user_buffer_ok` with write access, so an address
+ * that is merely inside the user window but unmapped or read-only is refused
+ * here and not discovered half way through. A list that asks for nothing still
+ * checks the descriptor, so a closed fd is -EBADF and not a quiet zero.
  *
  * Only a regular file is then filled buffer after buffer. Everything else gets
- * exactly one read, which is what Linux's single scatter read amounts to for
- * this kernel: a second read of a pipe or a terminal would block for input
+ * exactly one read: a second read of a pipe or a terminal would block for input
  * nobody has written once the first buffer happened to fill exactly, and a
- * second read of a datagram socket would take the next datagram after the
- * first one's tail had already been dropped. A file has neither hazard, since
- * its read returns at once and its bytes carry no message boundary. Returning
- * less than was asked for is what a reader must already handle, and musl's
- * stdio, which is what issues this call, loops.
+ * second read of a datagram socket would take the next datagram after the first
+ * one's tail had already been dropped. A file has neither hazard, since its read
+ * returns at once and its bytes carry no message boundary. Returning less than
+ * was asked for is what a reader must already handle, and musl's stdio, which is
+ * what issues this call, loops.
+ *
+ * That single read is where this differs from Linux, which treats the vectors as
+ * one buffer and would fill the later ones from the same datagram. Here a
+ * datagram longer than the FIRST buffer is truncated exactly as `read` truncates
+ * it, and the rest is dropped. Filling the rest would need one read into a
+ * kernel buffer the size of the whole list and a copy out of it, and this kernel
+ * has no allocator to take that buffer from; a second read instead is the bug
+ * this call was written to avoid.
  */
 static int32_t sys_readv(isr_params_t *params)
 {
@@ -2141,7 +2151,7 @@ static int32_t sys_readv(isr_params_t *params)
         if (iov.iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov.iov_len) {
             return -EINVAL;
         }
-        if (!user_access_ok(iov.iov_base, iov.iov_len)) {
+        if (!user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
             return -EFAULT;
         }
         wanted += iov.iov_len;

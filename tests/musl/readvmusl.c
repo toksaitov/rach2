@@ -283,7 +283,10 @@ static int check_edges(void)
     parts[0].iov_len = sizeof(one);
 
     /* A bad address in the second buffer refuses the call, and the bytes the
-     * first buffer would have taken are still there afterwards. */
+     * first buffer would have taken are still there afterwards. Two kinds of
+     * bad: one below the user window, and one inside it that no mapping backs,
+     * which a range check alone would let through and only a write to it would
+     * discover, by which time the input would be gone. */
     fd = pipe_holding("KEEPTHIS");
     if (fd < 0) {
         return fail("could not make the pipe the refusal case uses");
@@ -293,7 +296,13 @@ static int check_edges(void)
     if (readv(fd, parts, 2) != -1 || errno != EFAULT) {
         close(fd);
 
-        return fail("a bad address in a later buffer was not refused");
+        return fail("an address outside the user window was not refused");
+    }
+    parts[1].iov_base = (void *)0x30000000;
+    if (readv(fd, parts, 2) != -1 || errno != EFAULT) {
+        close(fd);
+
+        return fail("an unmapped address inside the user window was not refused");
     }
     if (read(fd, rest, sizeof(rest)) != 8 || memcmp(rest, "KEEPTHIS", 8) != 0) {
         close(fd);

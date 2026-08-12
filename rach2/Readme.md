@@ -367,10 +367,11 @@ It exists because musl's buffered stdio issues this call rather than `read`
 whenever it is filling more than a single byte, so without it every program
 reading through `fgets`, `fread` or `scanf` fails.
 
-The whole vector list is checked before a byte is taken: a bad address or a
-length past the signed range refuses the call with the input still queued,
-since a read cannot be undone. A list that asks for nothing still checks the
-descriptor, so a closed fd is `EBADF`.
+The whole vector list is checked before a byte is taken: a length past the
+signed range, or a destination that is outside the user window, unmapped or
+read-only, refuses the call with the input still queued, since a read cannot be
+undone. A list that asks for nothing still checks the descriptor, so a closed fd
+is `EBADF`.
 
 Only a regular file is then filled buffer after buffer. Everything else is read
 exactly once, and the call returns what that one read gave: a second read of a
@@ -378,6 +379,13 @@ pipe or a terminal would block for input nobody has written once the first
 buffer happened to fill exactly, and a second read of a datagram socket would
 take the next datagram after the first one's tail had been dropped. Returning
 less than was asked for is what any reader must already handle.
+
+That single read is the one place this differs from Linux, which treats the
+vectors as one buffer. A datagram longer than the first buffer is truncated
+exactly as `read` truncates it; Linux would put the rest into the buffers that
+follow. Doing the same here would need a kernel buffer the size of the whole
+list to read into and copy out of, and this kernel has no allocator to take one
+from.
 
 ### write (syscall 4)
 
