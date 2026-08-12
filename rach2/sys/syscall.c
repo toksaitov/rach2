@@ -2096,9 +2096,21 @@ static int32_t sys_read(isr_params_t *params)
  * EBX = fd, ECX = struct iovec[], EDX = iovcnt. Returns the total bytes read
  * across the iovecs, or a negative errno.
  *
- * A short read stops the walk, as `readv` does: the console hands back one
- * cooked line per call, so filling the caller's second buffer would block for
- * input that has not been typed.
+ * The whole vector list is checked before a byte is taken, because a read
+ * cannot be undone: a caller that named a bad address in its last buffer gets
+ * -EFAULT with its input still queued, rather than a partial total over data
+ * that is now gone. A list that asks for nothing still checks the descriptor,
+ * so a closed fd is -EBADF and not a quiet zero.
+ *
+ * Only a regular file is then filled buffer after buffer. Everything else gets
+ * exactly one read, which is what Linux's single scatter read amounts to for
+ * this kernel: a second read of a pipe or a terminal would block for input
+ * nobody has written once the first buffer happened to fill exactly, and a
+ * second read of a datagram socket would take the next datagram after the
+ * first one's tail had already been dropped. A file has neither hazard, since
+ * its read returns at once and its bytes carry no message boundary. Returning
+ * less than was asked for is what a reader must already handle, and musl's
+ * stdio, which is what issues this call, loops.
  */
 static int32_t sys_readv(isr_params_t *params)
 {
@@ -2106,7 +2118,10 @@ static int32_t sys_readv(isr_params_t *params)
     uint32_t iov_user = params->ecx;
     int iovcnt = (int)params->edx;
     struct kernel_iovec iov;
+    fd_entry_t *entry;
+    uint32_t wanted = 0;
     int32_t total = 0;
+    int walk;
     int i;
 
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
@@ -2114,11 +2129,34 @@ static int32_t sys_readv(isr_params_t *params)
     }
 
     for (i = 0; i < iovcnt; i++) {
+        if (copy_from_user(&iov,
+                           (const void __user *)(iov_user +
+                               (uint32_t)i * sizeof(struct kernel_iovec)),
+                           sizeof(iov)) != 0) {
+            return -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        if (iov.iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov.iov_len) {
+            return -EINVAL;
+        }
+        if (!user_access_ok(iov.iov_base, iov.iov_len)) {
+            return -EFAULT;
+        }
+        wanted += iov.iov_len;
+    }
+
+    if (wanted == 0) {
+        return read_fd(fd, (char __user *)0, 0);
+    }
+
+    entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
+    walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
+
+    for (i = 0; i < iovcnt; i++) {
         int32_t r;
 
-        /* Once bytes have been read they cannot be un-read, so a fault after
-         * that reports the partial total rather than the error; only a failure
-         * before anything was delivered reports itself. */
         if (copy_from_user(&iov,
                            (const void __user *)(iov_user +
                                (uint32_t)i * sizeof(struct kernel_iovec)),
@@ -2127,10 +2165,6 @@ static int32_t sys_readv(isr_params_t *params)
         }
         if (iov.iov_len == 0) {
             continue;
-        }
-        if (iov.iov_len > 0x7FFFFFFFu ||
-            (uint32_t)total > 0x7FFFFFFFu - iov.iov_len) {
-            return (total > 0) ? total : -EINVAL;
         }
         if (!user_access_ok(iov.iov_base, iov.iov_len)) {
             return (total > 0) ? total : -EFAULT;
@@ -2141,8 +2175,8 @@ static int32_t sys_readv(isr_params_t *params)
             return (total > 0) ? total : r;
         }
         total += r;
-        if ((uint32_t)r < iov.iov_len) {
-            break;  /* short read; stop, as readv does */
+        if (!walk || (uint32_t)r < iov.iov_len) {
+            break;
         }
     }
 

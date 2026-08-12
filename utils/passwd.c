@@ -91,11 +91,8 @@
  * how many lines carry a name, and what the other lines are, since they must
  * come through byte for byte.
  *
- * Read through `read` and not `fread`, which is not a style choice here: musl's
- * buffered read asks for `readv` whenever it is given more than one byte to
- * fill, and this kernel has `writev` and no `readv`, so a `fread` of a whole
- * file fails where a `getline` of the same file succeeds a byte at a time. It
- * also keeps the credential text out of a second buffer that nothing here would
+ * Read through `read` and not `fread`, which is not a style choice here: it
+ * keeps the credential text out of a second buffer that nothing here would
  * clear.
  */
 static long slurp(const char *path, char *buffer, size_t size)

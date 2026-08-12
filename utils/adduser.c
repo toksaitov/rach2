@@ -94,9 +94,8 @@
  * Read the whole of `path` into `buffer`, terminating it. Returns the length,
  * or -1 having said why.
  *
- * Read through `read` and not `fread`: musl's buffered read asks for `readv`
- * whenever it is given more than one byte to fill, and this kernel has `writev`
- * and no `readv`.
+ * Read through `read` and not `fread`: the file is wanted whole, and a direct
+ * read is one call rather than a buffered layer over the same bytes.
  */
 static long slurp(const char *path, char *buffer, size_t size)
 {

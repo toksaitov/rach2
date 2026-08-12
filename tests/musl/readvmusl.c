@@ -8,25 +8,33 @@
  * is the one that forced the issue: it reads its input with `xmalloc_fgetline`
  * and exited without a message.
  *
- * The cases run against a pipe, which is where a program's input usually comes
- * from when something is feeding it:
+ * The call has two shapes here, and the probe pins both. A regular file is
+ * filled buffer after buffer, since its read returns at once and its bytes
+ * carry no message boundary. Anything else is read exactly once, because a
+ * second read of a pipe whose first buffer happened to fill exactly would block
+ * for input nobody has written, and a second read of a datagram socket would
+ * take the next datagram after the first one's tail was dropped. A reader that
+ * asked for more than it got must go round again, which is what musl's stdio
+ * does and what the buffered cases here demonstrate.
  *
- * `fgets` returns the line that was written, which is the case that was broken.
- * `fread` of a known length returns exactly that many bytes. A `readv` issued
- * directly across three buffers fills them in order and returns the total, and
- * one with a zero-length middle buffer skips it rather than stopping. A short
- * read stops the walk, since a pipe holding four bytes cannot fill eight.
- * `readv` of nothing returns 0, and a negative count is refused with -EINVAL.
+ * The rest is the edges: the whole vector list is checked before a byte is
+ * taken, so a bad address in a later buffer refuses the call with the input
+ * still queued; a list that asks for nothing still checks the descriptor; and a
+ * negative count is refused.
  *
  * Prints "READVMUSL OK" on success and "READVMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <sys/uio.h>
+
+#define SCRATCH "/readvmusl.tmp"
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -41,7 +49,8 @@ static int fail(const char *what)
  *
  * The writing end is closed before the caller reads, so a reader that asks for
  * more than was written sees end of input rather than blocking for a writer
- * that will never write again.
+ * that will never write again. The cases that need a live writer make their own
+ * pipe and keep its other end.
  */
 static int pipe_holding(const char *text)
 {
@@ -59,6 +68,26 @@ static int pipe_holding(const char *text)
     close(ends[1]);
 
     return ends[0];
+}
+
+/**
+ * Make a file holding `text`, returning a descriptor open for reading, or -1.
+ */
+static int file_holding(const char *text)
+{
+    int fd = open(SCRATCH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    if (fd < 0) {
+        return -1;
+    }
+    if (write(fd, text, strlen(text)) != (ssize_t)strlen(text)) {
+        close(fd);
+
+        return -1;
+    }
+    close(fd);
+
+    return open(SCRATCH, O_RDONLY);
 }
 
 /**
@@ -122,9 +151,9 @@ static int check_buffered(void)
 }
 
 /**
- * The call itself, at its edges.
+ * A regular file, which is the one thing filled buffer after buffer.
  */
-static int check_readv(void)
+static int check_file(void)
 {
     struct iovec parts[3];
     char one[4];
@@ -133,9 +162,9 @@ static int check_readv(void)
     ssize_t got;
     int fd;
 
-    fd = pipe_holding("AAAABBBBCCCC");
+    fd = file_holding("AAAABBBBCCCC");
     if (fd < 0) {
-        return fail("could not make the pipe readv uses");
+        return fail("could not make the file the walk uses");
     }
     parts[0].iov_base = one;
     parts[0].iov_len = sizeof(one);
@@ -146,7 +175,7 @@ static int check_readv(void)
     got = readv(fd, parts, 3);
     close(fd);
     if (got != 12) {
-        return fail("readv across three buffers did not return the total");
+        return fail("readv across three buffers of a file did not return the total");
     }
     if (memcmp(one, "AAAA", 4) != 0 || memcmp(two, "BBBB", 4) != 0 ||
         memcmp(three, "CCCC", 4) != 0) {
@@ -154,16 +183,11 @@ static int check_readv(void)
     }
 
     /* A zero-length buffer in the middle is skipped, not treated as an end. */
-    fd = pipe_holding("XXXXYYYY");
+    fd = file_holding("XXXXYYYY");
     if (fd < 0) {
-        return fail("could not make the pipe the empty-buffer case uses");
+        return fail("could not make the file the empty-buffer case uses");
     }
-    parts[0].iov_base = one;
-    parts[0].iov_len = sizeof(one);
-    parts[1].iov_base = two;
     parts[1].iov_len = 0;
-    parts[2].iov_base = three;
-    parts[2].iov_len = sizeof(three);
     got = readv(fd, parts, 3);
     close(fd);
     if (got != 8) {
@@ -173,11 +197,44 @@ static int check_readv(void)
         return fail("the buffers around the empty one hold the wrong bytes");
     }
 
-    /* Less input than the buffers can hold stops the walk rather than blocking
-     * for a writer that has already gone. */
-    fd = pipe_holding("ZZZZ");
+    /* End of file stops the walk rather than reporting an error. */
+    fd = file_holding("ZZZZ");
     if (fd < 0) {
-        return fail("could not make the pipe the short case uses");
+        return fail("could not make the file the short case uses");
+    }
+    parts[1].iov_len = sizeof(two);
+    got = readv(fd, parts, 3);
+    close(fd);
+    if (got != 4) {
+        return fail("end of file did not stop the walk");
+    }
+
+    unlink(SCRATCH);
+
+    return 0;
+}
+
+/**
+ * A pipe, which is read exactly once however many buffers were offered.
+ *
+ * The case that matters is the second one: the pipe holds exactly what the
+ * first buffer takes and its writer is still open, so a second read would have
+ * nothing to return and would park until something wrote again. If that
+ * regressed this probe would not fail, it would hang, and the suite's timeout
+ * is the failure.
+ */
+static int check_stream(void)
+{
+    struct iovec parts[2];
+    char one[4];
+    char two[4];
+    ssize_t got;
+    int ends[2];
+    int fd;
+
+    fd = pipe_holding("AAAABBBB");
+    if (fd < 0) {
+        return fail("could not make the pipe the single read uses");
     }
     parts[0].iov_base = one;
     parts[0].iov_len = sizeof(one);
@@ -186,12 +243,88 @@ static int check_readv(void)
     got = readv(fd, parts, 2);
     close(fd);
     if (got != 4) {
-        return fail("a short read did not stop the walk");
+        return fail("readv of a pipe read past its first buffer");
+    }
+    if (memcmp(one, "AAAA", 4) != 0) {
+        return fail("readv of a pipe filled the wrong buffer");
     }
 
+    if (pipe(ends) != 0) {
+        return fail("could not make the pipe the live-writer case uses");
+    }
+    if (write(ends[1], "LIVE", 4) != 4) {
+        close(ends[0]);
+        close(ends[1]);
+
+        return fail("could not write the live-writer pipe");
+    }
+    got = readv(ends[0], parts, 2);
+    close(ends[0]);
+    close(ends[1]);
+    if (got != 4) {
+        return fail("readv did not stop at the bytes a live writer had written");
+    }
+
+    return 0;
+}
+
+/**
+ * The edges, which are about refusing without taking anything.
+ */
+static int check_edges(void)
+{
+    struct iovec parts[2];
+    char one[4];
+    char rest[8];
+    ssize_t got;
+    int fd;
+
+    parts[0].iov_base = one;
+    parts[0].iov_len = sizeof(one);
+
+    /* A bad address in the second buffer refuses the call, and the bytes the
+     * first buffer would have taken are still there afterwards. */
+    fd = pipe_holding("KEEPTHIS");
+    if (fd < 0) {
+        return fail("could not make the pipe the refusal case uses");
+    }
+    parts[1].iov_base = (void *)0x10;
+    parts[1].iov_len = sizeof(rest);
+    if (readv(fd, parts, 2) != -1 || errno != EFAULT) {
+        close(fd);
+
+        return fail("a bad address in a later buffer was not refused");
+    }
+    if (read(fd, rest, sizeof(rest)) != 8 || memcmp(rest, "KEEPTHIS", 8) != 0) {
+        close(fd);
+
+        return fail("the refused readv had already taken the input");
+    }
+    close(fd);
+
+    /* Asking for nothing still says whether the descriptor was any good. */
+    parts[0].iov_len = 0;
+    parts[1].iov_base = rest;
+    parts[1].iov_len = 0;
     fd = pipe_holding("Q");
     if (fd < 0) {
         return fail("could not make the pipe the edge cases use");
+    }
+    got = readv(fd, parts, 2);
+    if (got != 0) {
+        close(fd);
+
+        return fail("readv of empty buffers did not return 0");
+    }
+    close(fd);
+    if (readv(fd, parts, 2) != -1 || errno != EBADF) {
+        return fail("readv of empty buffers on a closed fd was not refused");
+    }
+
+    parts[0].iov_len = sizeof(one);
+    fd = pipe_holding("Q");
+    if (fd < 0) {
+        return fail("could not make the pipe the count case uses");
     }
     if (readv(fd, parts, 0) != 0) {
         close(fd);
@@ -216,7 +349,13 @@ int main(void)
     int rc = check_buffered();
 
     if (rc == 0) {
-        rc = check_readv();
+        rc = check_file();
+    }
+    if (rc == 0) {
+        rc = check_stream();
+    }
+    if (rc == 0) {
+        rc = check_edges();
     }
     if (rc == 0) {
         printf("READVMUSL OK\n");

@@ -111,9 +111,9 @@ static void sane_terminal(void)
  * nothing: keeping the prefix would answer for a different account than the one
  * typed.
  *
- * Read a byte at a time through `read`, not `fgets`: musl's buffered read asks
- * for `readv` whenever it is given more than one byte to fill, and this kernel
- * has `writev` and no `readv`.
+ * Read a byte at a time through `read`, not `fgets`: the prompt is answered one
+ * line at a time and nothing beyond the newline may be swallowed into a buffer
+ * the next prompt does not own.
  */
 static int read_line(char *buf, size_t size)
 {

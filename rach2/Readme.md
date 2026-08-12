@@ -280,8 +280,8 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 | 63  | dup2         | oldfd, newfd              | Duplicate file descriptor     |
 | 78  | gettimeofday | tv, tz                    | Get time since boot           |
 | 88  | reboot       | magic1, magic2, cmd       | Stop the machine (root only)  |
-| 145 | readv        | fd, iov, iovcnt           | Scatter read (buffered stdio) |
 | 106 | stat         | path, statbuf             | Get file status (32-bit)      |
+| 145 | readv        | fd, iov, iovcnt           | Scatter read (buffered stdio) |
 | 183 | getcwd       | buf, size                 | Get current working directory |
 | 195 | stat64       | path, statbuf             | Get file status (64-bit)      |
 | 220 | getdents64   | fd, dirp, count           | Read directory entries        |
@@ -358,6 +358,26 @@ For file fds:
 * Returns 0 at EOF
 
 Returns number of bytes read, or -1 on error.
+
+### readv (syscall 145)
+
+Reads into `iovcnt` buffers named by `iov`, in order, returning the total.
+
+It exists because musl's buffered stdio issues this call rather than `read`
+whenever it is filling more than a single byte, so without it every program
+reading through `fgets`, `fread` or `scanf` fails.
+
+The whole vector list is checked before a byte is taken: a bad address or a
+length past the signed range refuses the call with the input still queued,
+since a read cannot be undone. A list that asks for nothing still checks the
+descriptor, so a closed fd is `EBADF`.
+
+Only a regular file is then filled buffer after buffer. Everything else is read
+exactly once, and the call returns what that one read gave: a second read of a
+pipe or a terminal would block for input nobody has written once the first
+buffer happened to fill exactly, and a second read of a datagram socket would
+take the next datagram after the first one's tail had been dropped. Returning
+less than was asked for is what any reader must already handle.
 
 ### write (syscall 4)
 
