@@ -517,8 +517,10 @@ def check_ancestors(where, allow, look):
             seen.append(parent)
             found = look(parent)
             if found is None:
-                problems.append("%s: %s holds a program root runs and is not "
-                                "staged as a directory" % (where, parent))
+                problems.append("%s: %s holds a program root runs and no 'dir' "
+                                "line stages it; a directory that comes into "
+                                "being on the way to a file takes a mode "
+                                "nobody wrote down" % (where, parent))
                 continue
             mode, uid, gid = found
             if (uid, gid) != (0, 0) or (mode & 0o022) != 0:
@@ -610,9 +612,15 @@ def check_manifest(path, table=ALLOWLIST):
             problems.append("%s: %s is declared %s but no directive stages it"
                             % (name, guest, want))
 
+    # The LAST `dir` for a path is the one that decides its mode and owner, the
+    # way `stage_dir` does: a repeated directive re-applies both to the node it
+    # finds. `exec-dir` is not a directory declaration at all; its mode belongs
+    # to the files it stages, and the guest directory it stages them into is
+    # either declared by a `dir` of its own or created implicitly at 0755 by
+    # `resolve_dir`, which is a mode nobody wrote down.
     dirs = {}
     for lineno, verb, mode, uid, gid, guest, _source in directives:
-        if verb in ("dir", "exec-dir") and guest not in dirs:
+        if verb == "dir":
             dirs[guest] = (mode & PERM, uid, gid)
     problems.extend(check_ancestors(name, allow, dirs.get))
 
@@ -1126,6 +1134,15 @@ SELFTEST_CASES = [
     ("an unprivileged program staged from somewhere else", "os-simple",
      OS_SIMPLE_MINIMUM.replace("build/utils/sbin/login", "build/elsewhere/login")
      + "text 0644 /hello.txt hi\n", False, "declared staged from"),
+    ("a safe directory declared again, unsafely", "os-simple",
+     OS_SIMPLE_MINIMUM + "dir 0777 /bin\ntext 0644 /hello.txt hi\n",
+     False, "may write is a way to replace"),
+    ("an unsafe directory declared again, safely", "os-simple",
+     "dir 0777 /bin\n" + OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hi\n",
+     True, ""),
+    ("an exec-dir standing in for the directory declaration", "os-simple",
+     OS_SIMPLE_MINIMUM.replace("dir 0755 /bin\n", "exec-dir 0755 /bin build/utils\n")
+     + "text 0644 /hello.txt hi\n", False, "no 'dir' line stages it"),
     ("the longest line stageimage accepts", "os-simple",
      OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hi\n" + LONGEST_LINE + "\n",
      True, ""),
