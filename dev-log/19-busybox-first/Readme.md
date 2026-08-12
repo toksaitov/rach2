@@ -18,7 +18,7 @@ Removing the set-id bit from a manifest to prove a test catches it does not reac
 
 ## What shipped
 
-Twenty commits, read from `git show --stat` rather than from the plan.
+Twenty-four commits, read from `git show --stat` rather than from the plan.
 
 * `5c55730` points the applet guard at the table `build_busybox.sh` stages beside the binary, not the one in the tree the build deletes and re-extracts.
 * `df9a22c` builds busybox twice and adds `rach2-suid.config`, the set-id build's configuration.
@@ -39,6 +39,10 @@ Twenty commits, read from `git show --stat` rather than from the plan.
 * `f24e276` guards the mode, the owner and the source of the programs root runs unprivileged.
 * `b1acda2` makes the shell report what it could not run, since `su -c` reads that status.
 * `272f680` reads each HTTP request and each password attempt on its own rather than off the whole log.
+* `a0e20c9` is this record and the dev-log index bullet.
+* `febace9` guards the directories above a program root runs, and init's own mode.
+* `751b4c0` lets a built-in fail: `cd` says so, and a redirection is opened before it runs.
+* `f3e1da0` reads each attempt after the password change on its own.
 
 ## Two defects the work found in code that was already shipping
 
@@ -50,9 +54,11 @@ A write pre-fault reported a copy-on-write page backed. `vm_prefault_range` is w
 
 ## What the reviews caught
 
-Four rounds, each adjudicated against the code.
+Six rounds, each adjudicated against the code.
 
 Confirmed and fixed: the account suite proved almost nothing, because `su testee -c id` run by root never asks for a password, so a wrong hash and an unusable set-id `passwd` would both have passed; the same suite's `AUTHIT` token was printed by the next command in a list rather than by the run that succeeded, and its `uid=` assertion was satisfied by an earlier `id` in the same boot; the config guard read the hand-written config rather than the one `oldconfig` resolved, so a duplicate or `=yes` assignment would be read one way by the guard and another by the build; the unprivileged allowlist recorded only paths, so `/bin/login`, which init execs as root, could have been staged world-writable and passed; `readv` validated address ranges without faulting the destinations in; `ish -c` reported 0 for a command it never found, which `su -c` would have read as work done; and the HTTP test's two requests were asserted against the whole log, which an inverted authentication branch would have satisfied.
+
+The last two rounds were about the guard rather than the images, and both were right. A set-id bit is not the whole of a trust boundary: `/bin/login` is what init execs as root, so its mode, its owner and the file it is staged from are all part of the boundary, and so is every directory above it, because this kernel decides `unlink` and `rename` on the parent's write bit. A `/bin` at 0777 replaces a correctly declared program without touching its line. `/sbin/init` is held to one mode by a rule rather than a per-image entry. And an assertion counted over a whole log is not an assertion about an attempt: the password test could be satisfied by a `passwd` that changed nothing, where the old password was the one that worked, so each attempt is now bracketed and read on its own.
 
 Refuted with evidence: that `readv` filling one buffer per call from a pipe is a defect (a short read is what every reader must already handle, and the alternative, walking the vectors, is the blocking bug the change was made to remove). The datagram half of that finding is real and is deferred below rather than dismissed.
 
