@@ -1275,20 +1275,43 @@ def applet_names(path):
     """
     if not os.path.exists(path):
         return set(), ["%s: no applet table; build busybox before checking it" % path]
-    if os.path.getsize(path) == 0:
-        return set(), ["%s: the applet table is empty, so this check proved nothing" % path]
     try:
         with open(path, "r", encoding="latin-1", newline="\n") as handle:
             text = handle.read()
     except OSError as error:
         return set(), ["%s: cannot read the applet table: %s" % (path, error)]
 
+    # The whole initializer or nothing. A file truncated part way through it
+    # would otherwise read as a shorter applet set, and the names are sorted, so
+    # a prefix that still holds the `cat` sentinel can have lost `passwd` and
+    # `su` from the tail: the guard would find no forbidden applet because it
+    # never read as far as one. The declared count is the other half of that,
+    # since a file can end in the right punctuation and still be short.
+    start = text.find("const char applet_names[]")
+    if start < 0:
+        return set(), ["%s: no applet_names table; this is not a busybox applet "
+                       "table, so the check proved nothing" % path]
+    end = text.find(";", start)
+    if end < 0:
+        return set(), ["%s: the applet_names table is unterminated, so it was "
+                       "read part way and proves nothing" % path]
+
     names = set()
-    for chunk in re.findall(r'"((?:[^"\\]|\\.)*)"', text):
+    tokens = 0
+    for chunk in re.findall(r'"((?:[^"\\]|\\.)*)"', text[start:end]):
         for token in chunk.split("\\0"):
             token = token.strip()
             if token:
                 names.add(token)
+                tokens += 1
+
+    declared = re.search(r"#define\s+NUM_APPLETS\s+(\d+)", text)
+    if not declared:
+        return set(), ["%s: the table declares no NUM_APPLETS, so its length "
+                       "cannot be checked" % path]
+    if tokens != int(declared.group(1)):
+        return set(), ["%s: the table names %d applets but declares %s; it was "
+                       "truncated or edited" % (path, tokens, declared.group(1))]
 
     return names, []
 
