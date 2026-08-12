@@ -59,6 +59,10 @@ PROBES = [
     "musl/loginmusl",
     "rebootprobe",
     "musl/readvmusl",
+    # The shell's one-line form, which `su -c` depends on. It runs
+    # /musl/statushelper, a fixture and not a probe, which is why that one is
+    # staged but not listed here.
+    "musl/ishmusl",
     # Last: it flips the modes of a staged tree and mints fixtures outside it.
     # It puts every one back, but a probe that mutates shared state belongs
     # where a failure part-way through cannot be another probe's premise.

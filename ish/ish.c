@@ -27,6 +27,15 @@ static const unsigned short Standard_Input_File_Flags = 00000;
 static const unsigned short Standard_Output_File_Mode = 00644;
 
 static const char Fork_Error_Message[] = "fork failure\n";
+static const char Redirection_Error_Message[] = "cannot open a redirection\n";
+
+/* The statuses a shell reports for what it could not run, which are the
+ * conventional ones a caller of `sh -c` reads: 127 for a name that resolved to
+ * nothing, 126 for a command found but not runnable, and 128 + N for a child a
+ * signal killed. */
+static const int Status_Not_Found = 127;
+static const int Status_Not_Runnable = 126;
+static const int Status_Signalled_Base = 128;
 
 /**
  * Split one line into arguments and run it. Returns the command's exit status.
@@ -40,6 +49,13 @@ static const char Fork_Error_Message[] = "fork failure\n";
  * parent waits for the child.
  *
  * `input` is split in place, so the caller's buffer comes back tokenized.
+ *
+ * The status is the command's own, or one of the conventional ones for what the
+ * shell could not run at all: 127 for a name that resolved to nothing, 126 for
+ * a command that could not be started, and 128 + N for one a signal killed.
+ * That matters here more than in a shell somebody types at, because `-c` hands
+ * this status to `su`, and a caller that read every failure as success would
+ * report work done that never ran.
  */
 static int ish_run_line(char *input, char *home, char *paths, char **envp)
 {
@@ -95,7 +111,7 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
     }
 
     if (!executable) {
-        return 0;
+        return Status_Not_Found;
     }
 
     char *stdin_file = ish_extract_last_stdin_redirection_file(arguments);
@@ -103,6 +119,21 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
 
     char *stdout_file = ish_extract_last_stdout_redirection_file(arguments);
     int stdout_descriptor = !stdout_file ? -1 : creat(stdout_file, Standard_Output_File_Mode);
+
+    /* A redirection that could not be opened is not a command to run without
+     * it: the input would come from wherever the shell's does, and the output
+     * would land on the terminal, which is not what was asked for. */
+    if ((stdin_file && stdin_descriptor < 0) || (stdout_file && stdout_descriptor < 0)) {
+        write(2, Redirection_Error_Message, sizeof(Redirection_Error_Message) - 1);
+        if (stdin_descriptor > 0) {
+            close(stdin_descriptor);
+        }
+        if (stdout_descriptor > 1) {
+            close(stdout_descriptor);
+        }
+
+        return Status_Not_Runnable;
+    }
 
     int status = 0;
     int pid = fork();
@@ -116,15 +147,23 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
             close(stdout_descriptor);
         }
         execve(executable, arguments, envp);
-        exit(-1);
+        exit(Status_Not_Runnable);
     } else if (pid > 0) {
         int child_status = 0;
         waitpid(pid, &child_status, 0);
-        /* The wait status, which puts a normal exit's code in the second
-         * byte, is the ABI this kernel and Linux share. */
-        status = (child_status >> 8) & 0xFF;
+        /* The wait status is the ABI this kernel and Linux share: a normal exit
+         * puts its code in the second byte and leaves the low seven bits clear,
+         * and a signal death puts the signal number in those bits instead.
+         * Reading only the second byte would report a killed command as a
+         * command that succeeded. */
+        if ((child_status & 0x7F) != 0) {
+            status = Status_Signalled_Base + (child_status & 0x7F);
+        } else {
+            status = (child_status >> 8) & 0xFF;
+        }
     } else {
         write(2, Fork_Error_Message, sizeof(Fork_Error_Message) - 1);
+        status = Status_Not_Runnable;
     }
 
     /* Only the parent reaches here (the child exec'd or exited). Close the

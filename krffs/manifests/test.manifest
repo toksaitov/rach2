@@ -8,6 +8,11 @@
 
 exec-dir 0755 / build/tests
 
+# The ISH shell, which `ishmusl` runs with -c to read back the status it
+# reports for a command that could not be run. It is the same binary os-simple
+# stages as its login shell.
+file 0755 /ish build/ish/ish
+
 # suidprobe's fixtures: the same helper binary staged at several modes and
 # owners. exec-dir above already placed a plain 0755 /suidhelper (the "plain"
 # control); these add the setuid-root copy suidprobe execs to gain root, a
