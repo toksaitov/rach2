@@ -120,7 +120,13 @@ MAX_LINE = LINE_BUFFER - 2
 # a root password anyone may choose, and so, one step removed, are `/etc/passwd`,
 # `/etc/group`, `/etc/shells`, `/etc/profile` and root's `authorized_keys`.
 # The image half checks the three fields an image records; the manifest half
-# checks the host source as well, and `None` there is an inline `text` payload.
+# checks the fourth as well, which for a `file` is the host path it is staged
+# from and for a `text` is the payload itself, byte for byte before the escapes
+# are expanded. Pinning the content is the point for the inline ones: a
+# credential file's MEANING is its text, and `test:x:0:0:` in a manifest hands
+# root to an account whose password is written on the host, with every mode,
+# owner and set-id bit in the image exactly as declared. The cost is that adding
+# an account to a shipped image is a change to two files, deliberately.
 #
 # The test account's own `authorized_keys` is deliberately NOT here: it is that
 # account's file, under a home the account owns, and replacing it is not a climb. `sentinel` names one ordinary
@@ -147,11 +153,15 @@ ALLOWLIST = {
             "/bin/sh": (0o755, 0, 0, "build/vendor/busybox/busybox"),
             "/bin/dropbearmulti": (0o755, 0, 0,
                                    "build/vendor/dropbear/dropbearmulti"),
-            "/etc/passwd": (0o644, 0, 0, None),
+            "/etc/passwd": (0o644, 0, 0,
+                            "root:x:0:0:root:/root:/bin/sh\\n"
+                            "test:x:1000:1000:test:/home/test:/bin/sh\\n"),
             "/etc/shadow": (0o600, 0, 0, "krffs/shadow"),
-            "/etc/group": (0o644, 0, 0, None),
-            "/etc/shells": (0o644, 0, 0, None),
-            "/etc/profile": (0o644, 0, 0, None),
+            "/etc/group": (0o644, 0, 0, "root:x:0:\\ntest:x:1000:\\n"),
+            "/etc/shells": (0o644, 0, 0, "/bin/sh\\n"),
+            "/etc/profile": (0o644, 0, 0,
+                             "export PATH=/bin:/usr/bin\\n"
+                             "export HOME=\"${HOME:-/root}\"\\ncd \"$HOME\"\\n"),
             "/root/.ssh/authorized_keys": (0o600, 0, 0,
                                            "krffs/authorized_keys"),
         },
@@ -192,10 +202,12 @@ ALLOWLIST = {
             "/bin/adduser": (0o755, 0, 0, "build/utils/sbin/adduser"),
             "/bin/ish": (0o755, 0, 0, "build/ish/ish"),
             "/bin/sh": (0o755, 0, 0, "build/ish/ish"),
-            "/etc/passwd": (0o644, 0, 0, None),
+            "/etc/passwd": (0o644, 0, 0,
+                            "root:x:0:0:root:/root:/bin/ish\\n"
+                            "test:x:1000:1000:test:/home/test:/bin/ish\\n"),
             "/etc/shadow": (0o600, 0, 0, "krffs/shadow"),
-            "/etc/group": (0o644, 0, 0, None),
-            "/etc/shells": (0o644, 0, 0, None),
+            "/etc/group": (0o644, 0, 0, "root:x:0:\\ntest:x:1000:\\n"),
+            "/etc/shells": (0o644, 0, 0, "/bin/ish\\n/bin/sh\\n"),
         },
         "sentinel": ("/hello.txt", 0o644, 0, 0),
         "init": "init-login",
@@ -427,7 +439,19 @@ def parse_manifest(path):
                                    "dir" if verb == "exec-dir" else "path"))
                 continue
             mode, uid, gid = parsed
-            source = fields[3] if verb in HOST_VERBS else None
+            if verb in HOST_VERBS:
+                source = fields[3]
+            elif verb == "text":
+                # `stage_text` takes the rest of the line after the path, less
+                # the spaces and tabs in front of it, and unescapes it. What is
+                # kept here is that text before the unescape, which is what a
+                # trusted entry declares: an image's credential files are
+                # inline, so their CONTENT is the thing that decides who is
+                # root, and the guard has nowhere else to read it from.
+                after = line.split(fields[2], 1)[1] if fields[2] in line else ""
+                source = after.lstrip(" \t")
+            else:
+                source = None
             directives.append((lineno, verb, mode, uid, gid, fields[2],
                                source))
 
@@ -471,7 +495,9 @@ def check_init_line(name, directives, want):
         if source != wanted_source:
             problems.append("%s:%d: stages /sbin/init from %s and the "
                             "allowlist declares %s"
-                            % (name, lineno, source if source else "an inline payload",
+                            % (name, lineno,
+                               source if source and verb != "text"
+                               else "an inline payload",
                                wanted_source))
         # And mandatory: an `optional-file` that is not there stages nothing,
         # and an image with no init at all is not the image this declares.
@@ -608,7 +634,7 @@ def check_manifest(path, table=ALLOWLIST):
                             "declares %s"
                             % (name, lineno, guest, fmt_entry(mode, uid, gid),
                                stem, fmt_entry(want_mode, want_uid, want_gid)))
-        elif source is None:
+        elif source is None or verb == "text":
             problems.append("%s:%d: '%s' stages the declared set-id path %s "
                             "inline; the %s allowlist declares it staged from "
                             "%s, and a privileged file is a program copied "
@@ -640,6 +666,10 @@ def check_manifest(path, table=ALLOWLIST):
     # to the files it stages, and the guest directory it stages them into is
     # either declared by a `dir` of its own or created implicitly at 0755 by
     # `resolve_dir`, which is a mode nobody wrote down.
+    verb_of = {}
+    for _lineno, verb, _m, _u, _g, guest, _source in directives:
+        verb_of.setdefault(guest, verb)
+
     dirs = {}
     for lineno, verb, mode, uid, gid, guest, _source in directives:
         if verb == "dir":
@@ -667,9 +697,15 @@ def check_manifest(path, table=ALLOWLIST):
                             % (name, lineno, guest, want,
                                fmt_entry(mode, uid, gid)))
         elif source != want_source:
-            problems.append("%s:%d: %s is declared staged from %s but this "
-                            "stages %s" % (name, lineno, guest, want_source,
-                                           source))
+            if verb_of.get(guest) == "text":
+                problems.append("%s:%d: %s does not hold the text the "
+                                "allowlist pins; a credential file's meaning "
+                                "is its content, so the two are declared "
+                                "together" % (name, lineno, guest))
+            else:
+                problems.append("%s:%d: %s is declared staged from %s but this "
+                                "stages %s" % (name, lineno, guest, want_source,
+                                               source))
 
     return problems
 
@@ -921,6 +957,30 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
                             % (os.path.basename(image), path,
                                fmt_entry(want_mode, want_uid, want_gid)))
 
+    def trusted_text(path, want):
+        """Compare a staged node's bytes with the payload the allowlist pins.
+
+        The expansion is `unescape_text`'s: a backslash before n or t or a
+        backslash is that character, and a backslash before anything else stays
+        as it was written.
+        """
+        node = paths.get(path)
+        if node is None:
+            return None
+        start = node["offset"] + NODE_SIZE
+        data = region[start:start + node["data_size"]]
+        out = []
+        i = 0
+        while i < len(want):
+            if want[i] == "\\" and i + 1 < len(want):
+                nxt = want[i + 1]
+                out.append({"n": "\n", "t": "\t", "\\": "\\"}.get(nxt, "\\" + nxt))
+                i += 2
+            else:
+                out.append(want[i])
+                i += 1
+        return data == "".join(out).encode("latin-1")
+
     def image_dir(guest):
         node = paths.get(guest)
         if node is None or not (node["mode"] & 0o40000):
@@ -931,7 +991,7 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
     problems.extend(check_ancestors(os.path.basename(image), allow, image_dir))
 
     for path in sorted(allow["trusted"]):
-        want_mode, want_uid, want_gid, _ = allow["trusted"][path]
+        want_mode, want_uid, want_gid, want_source = allow["trusted"][path]
         node = paths.get(path)
         if node is None:
             problems.append("%s: %s is not in the image; the allowlist "
@@ -943,6 +1003,12 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
                             % (os.path.basename(image), path,
                                fmt_entry(node["mode"] & PERM, node["uid"],
                                          node["gid"])))
+        elif want_source is not None and not want_source.startswith("build/") \
+                and not want_source.startswith("krffs/") \
+                and trusted_text(path, want_source) is False:
+            problems.append("%s: %s does not hold the text the allowlist pins; "
+                            "a credential file's meaning is its content"
+                            % (os.path.basename(image), path))
         elif (node["mode"] & PERM, node["uid"], node["gid"]) != (
                 want_mode, want_uid, want_gid):
             problems.append("%s: %s is declared %s but the image carries %s; "
@@ -1025,21 +1091,31 @@ def sweep(paths, table=ALLOWLIST, require_all=False):
 # byte where fgets gives up, a carriage return that ends a line for Python and
 # not for C, a tab as a field separator, and a NUL that ends the line for C and
 # not for Python.
+# The fixtures' declared lines come from the table they are checked against, so
+# a mutation below is the one thing that varies. What they prove is that the
+# parser and the rules read a manifest the way stageimage does, not that the
+# table holds any particular value.
+def trusted_lines(stem, table=None):
+    """The directive lines a manifest needs to satisfy one entry's trusted list."""
+    entry = (table or ALLOWLIST)[stem]
+    out = []
+    for guest in sorted(entry["trusted"]):
+        mode, uid, gid, source = entry["trusted"][guest]
+        verb = "file" if source and source.split("/")[0] in ("build", "krffs") \
+            else "text"
+        out.append("%s %s %s %s\n" % (verb, fmt_entry(mode, uid, gid), guest,
+                                      source))
+
+    return "".join(out)
+
+
 OS_REAL_MINIMUM = ("dir 0755 /bin\n"
                    "dir 0755 /sbin\n"
                    "dir 0755 /etc\n"
                    "dir 0755 /root\n"
                    "dir 0700 /root/.ssh\n"
-                   "file 0755 /bin/sh build/vendor/busybox/busybox\n"
-                   "file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti\n"
-                   "text 0644 /etc/passwd x\n"
-                   "file 0600 /etc/shadow krffs/shadow\n"
-                   "text 0644 /etc/group x\n"
-                   "text 0644 /etc/shells x\n"
-                   "text 0644 /etc/profile x\n"
-                   "file 0600 /root/.ssh/authorized_keys krffs/authorized_keys\n"
-                   "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
-                   "file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
+                   + trusted_lines("os-real")
+                   + "file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
                    "file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid\n"
                    "file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid\n")
 
@@ -1057,16 +1133,9 @@ TEST_MINIMUM = ("dir 0755 /musl\n"
 OS_SIMPLE_MINIMUM = ("dir 0755 /bin\n"
                      "dir 0755 /sbin\n"
                      "dir 0755 /etc\n"
-                     "text 0644 /etc/passwd x\n"
-                     "file 0600 /etc/shadow krffs/shadow\n"
-                     "text 0644 /etc/group x\n"
-                     "text 0644 /etc/shells x\n"
-                     "file 04755:0:0 /bin/su build/utils/sbin/su\n"
-                     "file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n"
-                     "file 0755 /bin/login build/utils/sbin/login\n"
-                     "file 0755 /bin/adduser build/utils/sbin/adduser\n"
-                     "file 0755 /bin/ish build/ish/ish\n"
-                     "file 0755 /bin/sh build/ish/ish\n")
+                     + trusted_lines("os-simple")
+                     + "file 04755:0:0 /bin/su build/utils/sbin/su\n"
+                     "file 04755:0:0 /bin/passwd build/utils/sbin/passwd\n")
 
 # A line of exactly MAX_LINE content bytes, the longest stageimage accepts.
 LONGEST_LINE = ("file 0755 /pad build/utils/cat"
@@ -1150,7 +1219,8 @@ SELFTEST_CASES = [
      OS_REAL_MINIMUM + "file 04755:0:0 /bin/evil build/evil # note\n",
      False, "/bin/evil"),
     ("tab-separated fields", "os-real",
-     OS_REAL_MINIMUM.replace(" ", "\t"), True, ""),
+     "".join(l.replace(" ", "\t", 3) + "\n"
+             for l in OS_REAL_MINIMUM.split("\n") if l), True, ""),
     ("a carriage return inside a path", "os-real",
      "file 0755 /bin/busybox build/vendor/busybox/busybox\n"
      "file 04755:0:0 /bin/su\r#x build/utils/sbin/su\n",
@@ -1163,19 +1233,26 @@ SELFTEST_CASES = [
     ("a non-ASCII byte in a comment", "os-real",
      "# caf\xe9\n" + OS_REAL_MINIMUM, True, ""),
     ("an unprivileged program root runs, staged world-writable", "os-simple",
-     OS_SIMPLE_MINIMUM.replace("file 0755 /bin/login", "file 0777 /bin/login")
+     OS_SIMPLE_MINIMUM.replace("file 0755:0:0 /bin/login", "file 0777:0:0 /bin/login")
      + "text 0644 /hello.txt hi\n", False, "trust boundaries too"),
     ("an unprivileged program staged from somewhere else", "os-simple",
      OS_SIMPLE_MINIMUM.replace("build/utils/sbin/login", "build/elsewhere/login")
      + "text 0644 /hello.txt hi\n", False, "declared staged from"),
+    ("an account given root's numbers in the passwd text", "os-real",
+     OS_REAL_MINIMUM.replace("test:x:1000:1000:test", "test:x:0:0:test"),
+     False, "does not hold the text the allowlist pins"),
+    ("a shell nobody declared added to the shells file", "os-real",
+     OS_REAL_MINIMUM.replace("/etc/shells /bin/sh\\n",
+                             "/etc/shells /bin/sh\\n/tmp/mine\\n"),
+     False, "does not hold the text the allowlist pins"),
     ("the shadow file staged readable by anyone", "os-real",
-     OS_REAL_MINIMUM.replace("file 0600 /etc/shadow", "file 0644 /etc/shadow"),
+     OS_REAL_MINIMUM.replace("file 0600:0:0 /etc/shadow", "file 0644:0:0 /etc/shadow"),
      False, "trust boundaries too"),
     ("root's authorized_keys staged from somewhere else", "os-real",
      OS_REAL_MINIMUM.replace("krffs/authorized_keys", "krffs/test_authorized_keys"),
      False, "declared staged from"),
     ("the shell root's login execs staged writable", "os-real",
-     OS_REAL_MINIMUM.replace("file 0755 /bin/sh", "file 0777 /bin/sh"),
+     OS_REAL_MINIMUM.replace("file 0755:0:0 /bin/sh", "file 0777:0:0 /bin/sh"),
      False, "trust boundaries too"),
     ("a safe directory declared again, unsafely", "os-simple",
      OS_SIMPLE_MINIMUM + "dir 0777 /bin\ntext 0644 /hello.txt hi\n",
