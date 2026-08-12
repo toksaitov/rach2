@@ -291,13 +291,22 @@ run_simple_arc() {
     old_try=$(sed -n '/TRYOLD/,/TRYOTHER/p' "$LOG")
     other_try=$(sed -n '/TRYOTHER/,/TRYNEW/p' "$LOG")
     new_try=$(sed -n '/TRYNEW/,/TRYEND/p' "$LOG")
+    # Each refused attempt is asserted twice: that su said no, and that the
+    # command behind it did not run anyway. The message alone would pass a `su`
+    # that printed a refusal and went on to exec the shell.
     case "$old_try" in
         *"authentication failure"*) ;;
         *) fail "the password the account replaced still authenticates it" ;;
     esac
+    case "$old_try" in
+        *"/home/test"*) fail "a refused su ran the command anyway" ;;
+    esac
     case "$other_try" in
         *"authentication failure"*) ;;
         *) fail "the new password authenticates an account it was not set for" ;;
+    esac
+    case "$other_try" in
+        *"/home/$SIMPLEUSER"*) fail "a refused su reached the other account anyway" ;;
     esac
     case "$new_try" in
         *"authentication failure"*)
