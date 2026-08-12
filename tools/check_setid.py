@@ -1159,6 +1159,52 @@ INIT_CASES = [
 ]
 
 
+#
+# The set-id config's fixtures. Each is the real config with one setting turned
+# the wrong way, so what they prove is that the guard reads the setting rather
+# than the file's name. The clean case reads the file that ships, which is the
+# sentinel: if the config were regenerated under other symbol names, every
+# mutation below would still fail and this one would say so.
+def suid_config_cases(tmp):
+    """Yield (name, path, want_ok, fragment) over mutations of the real config."""
+    try:
+        with open(SUID_BUSYBOX_CONFIG, "r", encoding="latin-1",
+                  newline="\n") as handle:
+            text = handle.read()
+    except OSError as error:
+        yield ("the set-id config as it ships", SUID_BUSYBOX_CONFIG, False,
+               str(error))
+
+        return
+
+    yield ("the set-id config as it ships", SUID_BUSYBOX_CONFIG, True, None)
+
+    mutations = (
+        ("the suid.conf parser compiled back in",
+         "# CONFIG_FEATURE_SUID_CONFIG is not set",
+         "CONFIG_FEATURE_SUID_CONFIG=y", "capability"),
+        ("a shell smuggled into the set-id binary",
+         "# CONFIG_SH_IS_ASH is not set", "CONFIG_SH_IS_ASH=y", "capability"),
+        ("applets preferred over the programs on disk",
+         "# CONFIG_FEATURE_PREFER_APPLETS is not set",
+         "CONFIG_FEATURE_PREFER_APPLETS=y", "capability"),
+        ("the set-id bit no longer honored",
+         "CONFIG_FEATURE_SUID=y", "# CONFIG_FEATURE_SUID is not set",
+         "is off"),
+        ("a symbol the guard names gone from the config",
+         "CONFIG_SH_IS_NONE=y", "", "proved nothing"),
+    )
+    for i, (name, old, new, fragment) in enumerate(mutations):
+        if old not in text:
+            yield (name, SUID_BUSYBOX_CONFIG, False,
+                   "the fixture's own line is not in the config")
+            continue
+        path = os.path.join(tmp, "suid-%d.config" % i)
+        with open(path, "w", encoding="latin-1", newline="\n") as handle:
+            handle.write(text.replace(old, new, 1))
+        yield (name, path, False, fragment)
+
+
 def selftest():
     """Run both halves over the fixtures. Returns a process status."""
     bad = 0
@@ -1184,6 +1230,10 @@ def selftest():
             with open(path, "w", encoding="latin-1", newline="\n") as f:
                 f.write(text)
             bad += run_case(name, check_manifest(path), want_ok, fragment)
+            ran += 1
+
+        for name, path, want_ok, fragment in suid_config_cases(tmp):
+            bad += run_case(name, check_suid_config(path), want_ok, fragment)
             ran += 1
 
         for name, table, fragment in TABLE_CASES:
@@ -1225,34 +1275,6 @@ def report(problems):
 
 
 
-# The applets a shipped busybox must not carry, and the one it must, for two
-# reasons that both come down to one rule: there is one way to climb and one way
-# to write a credential file.
-#
-# `su` and `passwd` are the climb. Compiled back in they would answer a bare
-# `su` or `passwd` from the shell's PATH before /bin/su and /bin/passwd do, and
-# busybox is staged unprivileged, so the user would get the applet's own refusal
-# rather than the program that works.
-#
-# The next group are the writers. `adduser`, `deluser`, `addgroup`, `delgroup`
-# and `chpasswd` rewrite /etc/passwd, /etc/shadow or /etc/group through
-# busybox's own `update_passwd`, which takes an advisory `fcntl` lock this
-# kernel grants unconditionally and knows nothing of /etc/.pwlock. Two writers
-# using different protocols do not exclude each other at all: each reads a
-# pre-image and the later rename erases the other's change, which is exactly the
-# lost update the credential transaction exists to prevent. A lock only works if
-# every writer takes it.
-#
-# `cryptpw` and `mkpasswd` are here for a third reason, since they write
-# nothing: they are a second way to mint a hash, and their salt comes from a pid
-# and a clock through a linear congruential generator rather than from any
-# entropy source. This image mints one way, through `pwauth_mint_salt`, which
-# refuses outright when the kernel's generator is not trusted; a tool that
-# cannot refuse would put a weaker hash into the same file by a route that rule
-# cannot see.
-#
-# The sentinel is an applet that must be present, because a check that only ever
-# looks for absences passes just as well on a header it failed to understand.
 # What the MAIN busybox must not carry. Two reasons, and the list says which is
 # which. The first six want the set-id bit, and this binary is staged without
 # one, so an applet of that name would answer from the shell's PATH before the
@@ -1261,6 +1283,9 @@ def report(problems):
 # so they cannot work at all. `getty` and `sulogin` are NOT here: both are
 # BB_SUID_DROP and neither wants privilege; they are simply not selected,
 # because this system's init does not use them.
+#
+# The sentinel is an applet that must be present, because a check that only ever
+# looks for absences passes just as well on a header it failed to understand.
 FORBIDDEN_APPLETS = ("su", "passwd", "login", "vlock", "wall", "crontab",
                      "ping", "ping6", "traceroute", "traceroute6", "arping")
 APPLET_SENTINEL = "cat"
@@ -1414,6 +1439,82 @@ FORBIDDEN_CONFIG = ()
 BUSYBOX_CONFIG = os.path.join("vendor", "busybox", "rach2.config")
 
 
+# The set-id build's config, and the settings that make it the thing its name
+# claims. The whitelist above reads the generated table, which holds names and
+# nothing else, so every one of these is invisible to it: turning
+# `FEATURE_SUID_CONFIG` back on leaves exactly `login`, `passwd` and `su` in the
+# table while compiling in a parser of a file the binary reads as root, and one
+# with a use-after-free at that. A shell coming back is the same kind of
+# invisible, since a shell reached through `sh` is a name the table does carry
+# but the whitelist would then have to be widened to admit.
+#
+# Both halves are required to APPEAR, on or off, for the reason the applet scan
+# has a sentinel: a config that was regenerated by a busybox version using other
+# symbol names would otherwise pass every check by holding none of them.
+SUID_BUSYBOX_CONFIG = os.path.join("vendor", "busybox", "rach2-suid.config")
+SUID_CONFIG_ON = ("CONFIG_STATIC", "CONFIG_LFS", "CONFIG_FEATURE_SUID",
+                  "CONFIG_FEATURE_SHADOWPASSWDS", "CONFIG_SH_IS_NONE",
+                  "CONFIG_LOGIN", "CONFIG_PASSWD", "CONFIG_SU")
+SUID_CONFIG_OFF = ("CONFIG_FEATURE_SUID_CONFIG", "CONFIG_FEATURE_PREFER_APPLETS",
+                   "CONFIG_LOGIN_SCRIPTS", "CONFIG_BUSYBOX", "CONFIG_ASH",
+                   "CONFIG_HUSH", "CONFIG_SH_IS_ASH", "CONFIG_SH_IS_HUSH",
+                   "CONFIG_FEATURE_SH_STANDALONE")
+
+# Why each of the ones that are off:
+#
+# `FEATURE_SUID_CONFIG` reads /etc/busybox.conf as root and frees the parsed
+# table while a global still points into it; that bug is upstream and this
+# config's answer to it is not to compile the parser.
+# `FEATURE_PREFER_APPLETS` and `FEATURE_SH_STANDALONE` make a name resolve to an
+# applet inside this binary rather than to the program on disk, which is how a
+# set-id process quietly reaches code it was not staged to run.
+# `LOGIN_SCRIPTS` runs a program named by a variable at login.
+# `BUSYBOX`, `ASH`, `HUSH` and the two `SH_IS_` selectors are the shell, which is
+# the one thing a set-id executable must never contain.
+
+
+def check_suid_config(path=SUID_BUSYBOX_CONFIG):
+    """Check the set-id build's config. Returns a list of problems."""
+    if not os.path.exists(path):
+        return ["%s: no set-id busybox config to check" % path]
+
+    try:
+        with open(path, "r", encoding="latin-1", newline="\n") as handle:
+            lines = handle.read().split("\n")
+    except OSError as error:
+        return ["%s: cannot read the config: %s" % (path, error)]
+
+    state = {}
+    for line in lines:
+        for symbol in SUID_CONFIG_ON + SUID_CONFIG_OFF:
+            if line.startswith(symbol + "="):
+                state[symbol] = line[len(symbol) + 1:].strip() == "y"
+            elif line == ("# %s is not set" % symbol):
+                state[symbol] = False
+
+    problems = []
+    for symbol in SUID_CONFIG_ON:
+        if symbol not in state:
+            problems.append(
+                "%s: %s does not appear at all, so this check proved nothing "
+                "about it" % (path, symbol))
+        elif not state[symbol]:
+            problems.append(
+                "%s: %s is off; the set-id binary is then not the one this "
+                "guard describes" % (path, symbol))
+    for symbol in SUID_CONFIG_OFF:
+        if symbol not in state:
+            problems.append(
+                "%s: %s does not appear at all, so this check proved nothing "
+                "about it" % (path, symbol))
+        elif state[symbol]:
+            problems.append(
+                "%s: %s is on; it gives the set-id binary a capability its "
+                "three applet names do not mention" % (path, symbol))
+
+    return problems
+
+
 def check_config(path=BUSYBOX_CONFIG):
     """Check the busybox config for features that return a forbidden capability."""
     if not os.path.exists(path):
@@ -1513,7 +1614,7 @@ def main(argv):
 
     if args.applets:
         problems = (check_applets(args.applets) + check_suid_applets()
-                    + check_config() + check_inits())
+                    + check_config() + check_suid_config() + check_inits())
         if problems:
             return report(problems)
         print("check-setid: OK (%s: no forbidden applet or feature; the set-id build "
