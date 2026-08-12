@@ -92,4 +92,19 @@ The busybox use-after-free in `check_suid` is recorded there too, with what an u
 
 ## The gate
 
-`make verify-style`, `make verify-host` (18 host seam tests), `make test` (54 probes), `make account-test` (both images), `make shutdown-test`, `make login-test`, `make ping-test`, `make crash-test`, `make test-disk`, `make persist-test`, `make cred-persist-test`, `make test-noentropy`, and the SSH capstone.
+Run in one pass from a tree `make distclean` had emptied, so the vendored musl,
+busybox and dropbear were built from their tarballs again: `make full`, then
+`make verify-style`, `make verify-host` (18 host seam tests), `make test` (54
+probes), `make account-test` (both images), `make shutdown-test`,
+`make login-test`, `make ping-test`, `make crash-test`, `make test-disk`,
+`make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`,
+`make cred-persist-test` and `make test-noentropy`. Every one passed.
+
+The SSH capstone was run by hand on that same tree, both ways in: the demo key
+for root, and the generated password for the unprivileged account, each reaching
+a busybox shell over a dropbear pty. The console login it starts from is
+busybox's `login` now, reading the `/etc/shadow` this milestone's tools write.
+
+The account suite is the one that has to be run more than once to be believed.
+The process-group defect above showed up in roughly one run in five, and both
+arcs have been run green repeatedly since it was fixed.
