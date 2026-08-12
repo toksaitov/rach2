@@ -3,11 +3,12 @@
  *
  * This is Rach2's su, the companion to the reference sudo and the payoff of the
  * setuid milestone: a small setuid-root program that authenticates against
- * `/etc/shadow` and then runs a shell as the target. BusyBox ships its own su,
- * but it needs the whole busybox binary to be setuid root, and a setuid busybox
- * must then be confined so only su keeps the privilege. Rach2 keeps the setuid
- * surface a hundred lines instead of a megabyte: busybox stays unprivileged and
- * this is the one program that climbs.
+ * `/etc/shadow` and then runs a shell as the target. It is os-simple's way up,
+ * a hundred readable lines of it. os-real climbs through busybox's own su
+ * instead, from a second build holding three applets, since making the whole
+ * megabyte setuid would hand every applet in it root. The two images run the
+ * same job in this project's code and in the code a real system ships, which is
+ * what having two of them is for.
  *
  * Usage: `su [-] [-l|--login] [user] [-c command]`, user defaulting to root.
  * The caller proves the target's password (root is exempt, as always), read

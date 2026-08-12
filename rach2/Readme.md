@@ -8,7 +8,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 
 ## Highlights
 
-* Boots a persistent /sbin/init (PID 1) that forks the ISH shell and reaps orphans, with cat, cp, echo, ls, mkdir, mv, pwd, rm, touch
+* Boots a persistent /sbin/init (PID 1) that puts the console behind a login and reaps orphans, with the ISH shell and cat, cp, echo, ls, mkdir, mv, pwd, rm, touch behind it
 * Over 100 Linux-compatible system calls via `int 0x80`
 * Preemptive round-robin scheduler at 100 Hz
 * Per-process page directories with full memory isolation
@@ -53,7 +53,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 * Multiboot module loading (RAM disk support via `-initrd`)
 * KRFFS file system with read/write support, mounted from a RAM disk module or, through the page-cache window, from a real ATA disk (persistent, bootable via GRUB). Attaching a disk with `DISK=` mounts it, so that boot is the writable machine; the module is the disposable one, a copy made at boot whose changes die with the process. The cache is write-back, so an edit is durable after a `sync` and not before. A boot that is stopped through `reboot(2)` (root only, syscall 88, which `halt -f`, `poweroff -f` and `reboot -f` reach) or through the debug shell's `halt`, `poweroff` or `reboot` flushes and clears the dirty-mount flag; a boot that is simply killed leaves it set, which is what `fsck.krffs` reads as a mount that may not have flushed
 * ELF32 header parsing for executable validation and loading
-* Boots a persistent init (PID 1) that reaps orphans and respawns the console session. On os-real that session execs `/bin/login` and nothing else, so the console asks who is there before it offers a shell, and an image missing that program refuses rather than falling back to one. A `rach2.rescue` command line boots the kernel debug shell instead, without consulting the image's init at all, which is the way back into an image that will not offer a prompt
+* Boots a persistent init (PID 1) that reaps orphans and respawns the console session. On both shipped images that session execs `/bin/login` and nothing else, so the console asks who is there before it offers a shell, and an image missing that program refuses rather than falling back to one. A `rach2.rescue` command line boots the kernel debug shell instead, without consulting the image's init at all, which is the way back into an image that will not offer a prompt
 
 ### Device Drivers
 

@@ -23,13 +23,14 @@ file 04644:0:0 /suidhelper.nox  build/tests/suidhelper
 # sudoprobe's fixtures: the reference sudo (utils/sudo.c, the coursework answer
 # key) staged setuid root, and a sudoers listing uid 1000. sudoprobe drops to
 # 1000, runs sudo to become root, and to 1001 to be refused. Shipped only here;
-# the os-real image deliberately carries su and no sudo.
+# neither shipped image carries a sudo, deliberately, since writing one is the
+# exercise this fixture is the answer key to.
 file 04755:0:0 /sudo build/utils/sbin/sudo
 text 0644 /etc/sudoers # uids permitted to run sudo\n1000\n
 
-# pwauthmusl's target: the shipped setuid-root su (utils/su.c), the same binary
-# and the same mode the os-real image carries, so the probe drives what a user
-# runs rather than a copy of it. The probe's own account is `probe` below, whose
+# pwauthmusl's target: the setuid-root su (utils/su.c), the same binary and the
+# same mode os-simple carries, so the probe drives what a user runs rather than
+# a copy of it. The probe's own account is `probe` below, whose
 # shell is the /idreport helper the exec-dir sweep already staged, so a su run
 # reports the identity, the working directory, the argv[0] and the environment
 # it was given and exits non-zero on the first item that does not match.

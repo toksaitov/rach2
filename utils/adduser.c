@@ -78,7 +78,7 @@
  * `getspnam` line buffer less its terminator and its newline. */
 #define RECORD_MAX 254
 
-/* The password program, and where it is staged. os-real has a `/bin` and the
+/* The password program, and where it is staged. os-simple has a `/bin` and the
  * flat test image does not, so a program that must run under both looks in
  * both, in that order. */
 #define PASSWD_PROGRAM      "/bin/passwd"
@@ -375,7 +375,8 @@ static int hand_to_passwd(const char *name)
 }
 
 #ifdef ADDUSER_CRASH_POINT
-/* The crash build, staged in the test image alone and never in os-real. It
+/* The crash build, staged in the test image alone and never in a shipped
+ * image. It
  * takes a leading count and dies the instant that publication has landed,
  * inside the transaction and through `_exit`, so it leaves exactly the residue
  * and exactly the lock a real crash leaves. Everything it adds lives under this

@@ -74,6 +74,8 @@ Change: `SYS_READV 145` in `rach2/sys/syscall.h`, and `sys_readv` in `rach2/sys/
 
 Proof: `tests/musl/readvmusl.c`, a new probe, taking the suite to 53. It reads a pipe through `fgets` and `fread`, which is the case that was broken, and then the call at its edges: three buffers filled in order, a zero-length middle buffer skipped rather than ending the walk, a short read stopping it, no buffers returning 0, and a negative count refused with `-EINVAL`.
 
+The first version of this walked every vector for every kind of descriptor, and that was wrong twice over: a second read of a pipe whose first buffer had filled exactly blocks for input nobody has written, and a second read of a datagram socket takes the NEXT datagram after the first one's tail was already dropped. What ships walks the vectors for a regular file alone, where a read returns at once and carries no message boundary, and reads everything else exactly once, which is a short read a caller must already handle. One deviation from Linux is left standing and stated in `rach2/Readme.md`: a datagram longer than the first buffer is truncated the way `read` truncates it, where Linux would fill the later buffers from the same datagram. Closing it needs a kernel buffer the size of the whole list to read into and copy out of, and this kernel has no allocator to take one from. The whole vector list is checked, and every destination faulted in writable, before a byte is consumed, since a read cannot be undone.
+
 Shown failing: `sys_readv` made to answer `-ENOSYS` while still compiling, where the probe fails at `fread`. The first attempt at that mutation simply unwired the handler, which does not compile (`-Werror=unused-function`) and therefore ran the previous kernel and passed; that is recorded because a mutation that does not build is a mutation that proves nothing.
 
 Readmes: `rach2/Readme.md`'s syscall table gains `readv` (145).
@@ -118,6 +120,8 @@ Two guard rules move with them, not one. `FORBIDDEN_APPLETS` still names `cryptp
 
 Proof: a probe or a runner case that `cryptpw` produces a `$6$` hash which `crypt` reproduces from the same password, and that `httpd -m` produces one the server then accepts. Without that the capability ships unexercised.
 
+What was built, and where this was wrong. `FORBIDDEN_APPLETS` had already lost `cryptpw` and `mkpasswd` in phase 3's rewrite of that list, so only `FORBIDDEN_CONFIG` moved here, and it was emptied rather than shortened: the rule and its self-tests are kept for the next feature that returns a capability no applet name mentions. The `mkpasswd` half of the proof is a boot case pinning the hash byte for byte against `build/krffs/mkhash.krffs`, this project's own SHA-512 crypt, so what is asserted is that busybox agrees with the implementation the rest of the image authenticates with. The `httpd` half is real and was nearly not: an enabled feature with no proof is what the phase exists to prevent, and it is proved over the loopback address with no network device in the machine at all, minting the hash with `httpd -m`, putting it in `/etc/httpd.conf`, and requiring the credential-less request to be refused and the right one to be served.
+
 Readmes: `vendor/busybox/Readme.md`'s paragraph on why these were off, which becomes a paragraph on why they are back.
 
 ## Phase 5: os-simple becomes the machine built from our code
@@ -136,11 +140,17 @@ Two more contracts break in the same corner, and a test that works around them w
 
 Change, once those are settled: a small `/etc` with two accounts and a group file, homes for each, `su` and `passwd` at `04755:0:0` and `adduser` and `login` at `0755:0:0` from `build/utils/sbin/`, and `init-login` in place of `init-shell`. The allowlist gains os-simple's two set-id entries and its changed init.
 
+How the three were settled. The utilities moved to `/bin` rather than the PATH moving to `/`, because `/bin` is where the programs of a Unix live and both `su` and `login` already say so; `login` gained the `PATH=/bin:/usr/bin` su was already setting, which it should have had from the first day, since a shell handed no PATH resolves nothing but what its caller spells out in full. ISH is staged a second time as `/bin/sh`, which is one file copied twice because KRFFS has no symlinks: that is what makes `adduser name` with no `-s` create an account that can log in, since the shell it writes down is `/bin/sh`. And ISH learned `-c`, rather than `su` learning to do without it: `-c` is how one program asks a shell to run one thing as somebody, `login` and `su` both speak it, and a shell that could only read its input would sit waiting for a line nobody types. It runs the line and exits with its status.
+
+The image is exercised in RAM rather than on a disk. Its arc claims nothing about the platter, since it has no `deluser` to finish with and nothing else it does needs a second boot to be believed.
+
 There is no in-house `deluser`, so os-simple's arc is create, authenticate, change a password, climb with `su`, and stop there. The plan does not pretend the two images run the same script. Writing a `deluser` to match would contradict the milestone's whole direction, and the asymmetry is recorded rather than papered over: deleting an account in os-simple is root editing three files, exactly as it was in os-real before this milestone.
 
 Proof: an `account_test.sh` phase against os-simple covering that arc, plus a bare-utility command after login and a command through `su`.
 
-Shown failing: the set-id bit removed from os-simple's `passwd`; and the `PATH` reverted, where the bare-utility command must fail.
+Shown failing: the set-id bit removed from os-simple's `passwd`; and the `PATH` reverted, where the bare-utility command must fail. Both were shown, and the first taught something the plan did not know: removing the bit from the manifest alone does not reach the test at all, because the allowlist declares that path set-id and `mkimage` refuses the image. The mutation has to move the entry to the unprivileged list as well, which is the guard doing its job on the way to proving the suite does its own.
+
+One more defect was found here and fixed, because the suite's own flake is what exposed it: `pgrp_in_session` excluded zombies, so a shell putting a pipeline in the foreground could be refused the terminal when the pipeline's first member had already exited and not yet been reaped. A process leaves its group when it is reaped, not when it exits. `tests/jobprobe.c` proves it deterministically.
 
 Readmes: `krffs/Readme.md`, `utils/Readme.md`, the top-level `Readme.md` where it describes the images.
 

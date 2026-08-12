@@ -11,13 +11,18 @@
 # Audio and networking devices are attached (see qemu_devices.sh).
 #
 # Examples:
-#   ./run.sh os-simple        # the ish shell + our simple Unix tools
+#   ./run.sh os-simple        # our login, the ish shell, and our Unix tools
 #   ./run.sh os-real sb16     # the busybox/dropbear environment, Sound Blaster 16
 #   ./run.sh test             # the automated test image (kernel debug shell)
 #
 # Networking (RTL8139 on QEMU's SLIRP user network) is enabled by default:
 #   NET=off ./run.sh os-real                              # disable it
 #   NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real  # forward SSH to :2222
+#
+# Both os-simple and os-real ask who is there. `make` mints the demo passwords
+# when they are absent: krffs/rach2_demo_password is root's, and
+# krffs/rach2_test_password the unprivileged test account's; neither is
+# committed. The same /etc/shadow is staged into both images.
 #
 # RESCUE=1 boots into the kernel debug shell instead of the image's /sbin/init,
 # for developing and debugging (a normal boot runs init and never drops there):

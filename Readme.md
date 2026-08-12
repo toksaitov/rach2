@@ -14,10 +14,10 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [rach2/sys/network/](rach2/sys/network/) | TCP/IP stack: RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets                                                    | [Readme](rach2/sys/network/Readme.md) |
 | [tests/](tests/)                         | Syscall test programs for kernel validation                                                                            | [Readme](tests/Readme.md)             |
 | [krffs/](krffs/)                         | K&R First-Fit File System tools and image builder (RAM disks and bootable ATA disks)                                   | [Readme](krffs/Readme.md)             |
-| [ish/](ish/)                             | Minimal Unix shell with I/O redirection and process management                                                         | [Readme](ish/Readme.md)               |
-| [utils/](utils/)                         | Core Unix utilities (`echo`, `cat`, `ls`, `mv`, `rm`, `ping`, `nc`, `httpd`, and more), linked against the ported musl | [Readme](utils/Readme.md)             |
+| [ish/](ish/)                             | Minimal Unix shell: redirection, process management, and `-c`                                                          | [Readme](ish/Readme.md)               |
+| [utils/](utils/)                         | Core Unix utilities and the account programs (`login`, `su`, `passwd`, `adduser`), linked against the ported musl      | [Readme](utils/Readme.md)             |
 | [vendor/musl/](vendor/musl/)             | The ported musl libc: reproducible build, the SysV/auxv startup contract                                               | [Readme](vendor/musl/Readme.md)       |
-| [vendor/busybox/](vendor/busybox/)       | Static-musl BusyBox build: the interactive `ash` login shell                                                           | [Readme](vendor/busybox/Readme.md)    |
+| [vendor/busybox/](vendor/busybox/)       | Static-musl BusyBox, built twice: the shell and tools, and the set-id account programs                                | [Readme](vendor/busybox/Readme.md)    |
 | [vendor/dropbear/](vendor/dropbear/)     | Static-musl Dropbear SSH server: the remote-login capstone                                                             | [Readme](vendor/dropbear/Readme.md)   |
 | [ports/doom/](ports/doom/)               | Doom port with VGA graphics, mouse, and audio                                                                          | [Readme](ports/doom/Readme.md)        |
 | [mk/](mk/)                               | Shared GNU-Make building blocks: toolchain, header-deps, `build/`, clangd/IDE setup                                    | [Readme](mk/Readme.md)                |

@@ -47,7 +47,7 @@ The shared TX assembly buffers, the TCB and socket pools, and the ARP cache are 
 Userspace programs exercise the stack:
 
 * The freestanding probes `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged into `test.krffs`. `make test` boots it headless and runs them, or boot it by hand and `exec` each from the kernel debug shell. `loopprobe` (in the `make test` pass) needs no host at all: it exercises the UDP and TCP paths against the machine itself over `127.0.0.1`.
-* The hand-written utilities `ping`, `nc`, and `httpd` are staged into `os-simple.krffs`. Run them from the ISH shell. (os-real carries busybox, whose own `ping`/`nc` applets exercise the same stack.)
+* The hand-written utilities `ping`, `nc`, and `httpd` are staged into `os-simple.krffs`, at `/bin` with everything else. Run them from the ISH shell after logging in. (os-real carries busybox, whose own `nc` applet exercises the same stack, and our `ping`, since busybox's wants a raw socket this kernel does not offer.)
 
 The UDP and TCP tests expect a host echo server at `10.0.2.2:7777`. Boot the image that carries the program you want with a NIC, and (for an inbound server like `httpd`) a host forward. The probes need `test.krffs`, the utilities `os-simple.krffs`:
 

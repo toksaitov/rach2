@@ -176,7 +176,7 @@ Rach2 ships three purpose-built RAM-disk module images, each its own file under 
 
 The top-level Makefile drives the build. Run from the repo root:
 
-    make os-simple-image   # the ISH shell + utilities (this is what plain `make` builds)
+    make os-simple-image   # our login, shell and utilities (what plain `make` builds)
     make test-image        # the syscall probes + musl programs
     make os-real-image     # the busybox/dropbear/Doom environment
     make images            # all three

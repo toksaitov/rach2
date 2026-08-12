@@ -2,8 +2,9 @@
 #
 # The build produces purpose-built RAM-disk images, each its own file under
 # build/images/ so they coexist: `test` (the automated end-to-end test binaries),
-# `os-simple` (our own shell and simple Unix tools, for teaching), and `os-real`
-# (a real Unix-like environment: busybox, dropbear, Doom).
+# `os-simple` (a small Unix built out of this project's own code: our login,
+# shell and Unix tools), and `os-real` (the same jobs taken from the code a real
+# system ships: busybox, dropbear, Doom).
 #
 # Quick start (run `make doctor` first to check your toolchain):
 #   make            build the kernel + the os-simple image: the everyday teaching
@@ -81,7 +82,7 @@ MKDISK          = krffs/mkdisk.sh
         verify-style verify-host doctor help \
         busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
 
-# Default: the kernel and the os-simple image (our shell + simple Unix tools).
+# Default: the kernel and the os-simple image (our login, shell and Unix tools).
 all: os-simple-image
 
 # Everything: all the RAM-disk images. Each is its own file under build/images/, so
@@ -527,7 +528,7 @@ distclean: clean
 
 help:
 	@echo "Rach2 build targets:"
-	@echo "  make            kernel + the os-simple image (ish shell + simple Unix tools)"
+	@echo "  make            kernel + the os-simple image (our login, shell and tools)"
 	@echo "  make full       all the RAM-disk images"
 	@echo "  make images     the RAM-disk images (test, os-simple, os-real)"
 	@echo "  make test-image / os-simple-image / os-real-image   one image"
@@ -538,7 +539,7 @@ help:
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
-	@echo "  make account-test   accounts created, authenticated and deleted with busybox's tools"
+	@echo "  make account-test   accounts created, authenticated and deleted, on both images"
 	@echo "  make shutdown-test  userland stops the machine, and only root can"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"

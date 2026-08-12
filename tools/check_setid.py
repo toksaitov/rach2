@@ -3,12 +3,16 @@
 check_setid.py: the guard on the set-id bits of the staged images.
 
 Privilege in a Rach2 image climbs through a few declared files and nowhere
-else: os-real has /bin/su, the test image has the suidprobe and sudoprobe
-fixtures, and the other images have none. The kernel honors the set-id bits at
-exec, so a bit staged anywhere else is a real privilege hole; the bits are
-declared in the table below before the build may stage them.
+else: os-real has busybox's set-id build staged as /bin/su, /bin/passwd and
+/bin/login, os-simple has this project's own /bin/su and /bin/passwd, the test
+image has the suidprobe and sudoprobe fixtures, and the other images have none.
+The kernel honors the set-id bits at exec, so a bit staged anywhere else is a
+real privilege hole; the bits are declared in the table below before the build
+may stage them.
 
-The guard has two halves, and they answer different questions.
+The guard has four halves by now, and they answer different questions about
+different artifacts: the manifests, the staged images, the two busybox applet
+tables with the two configs they were built from, and the two init binaries.
 
 The manifest sweep parses the manifests the way `apply_line`
 (krffs/stageimage.krffs.c) does, byte for byte: the file is read as latin-1 so
@@ -52,9 +56,12 @@ Usage:
         required with a nonzero offset: the region is a partition inside a
         larger file, and without it both the wrap at the region end and the
         iteration bound are computed off the wrong end.
+    check_setid.py --applets TABLE
+        Read the staged busybox applet tables and the configs the two builds
+        were resolved from, and the two init binaries.
     check_setid.py --selftest
-        Run both halves over the fixture manifests and images held in this
-        script.
+        Run every half over the fixture manifests, images and configs held in
+        this script.
 
 Exits non-zero on any finding.
 """

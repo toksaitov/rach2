@@ -23,7 +23,7 @@ There are no source patches; all customization is `rach2.config`. If a patch eve
 
 ## Config rationale (`rach2.config`, from `defconfig` minus what Rach2 cannot run)
 
-Earlier builds carried a hand-curated `allnoconfig` with a short coreutils list. This config is BusyBox's stock `defconfig`, the full standard toolset (the `vi` and `sed` editors, `awk`, `find` and `xargs`, the `tar`/`gzip`/`bzip2`/`unzip` archivers, the complete coreutils, `less`, `diff`, `grep`, and the job-control `ash`), 327 applets, with only the applets Rach2 cannot support turned off. Layered on top:
+Earlier builds carried a hand-curated `allnoconfig` with a short coreutils list. This config is BusyBox's stock `defconfig`, the full standard toolset (the `vi` and `sed` editors, `awk`, `find` and `xargs`, the `tar`/`gzip`/`bzip2`/`unzip` archivers, the complete coreutils, `less`, `diff`, `grep`, and the job-control `ash`), 314 applets, with only the applets Rach2 cannot support turned off and the three that need the set-id bit moved to a second binary. Layered on top:
 
 * `STATIC=y` (no shared libs), `LFS=y` (musl's off_t is always 64-bit; without this busybox's `BUG_off_t_size_is_misdetected` assert fires).
 * `SH_IS_ASH`, `ASH_JOB_CONTROL`, `FEATURE_SH_MATH[_64]` for `$((...))` arithmetic.

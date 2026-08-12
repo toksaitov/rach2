@@ -4,10 +4,9 @@
  * `halt [-p|-r]`: power off by default, `-p` to say so, `-r` to restart
  * instead. Root's, because `reboot(2)` is.
  *
- * It exists for the images that carry no busybox. os-simple stages the `utils`
- * sweep and the `ish` shell and nothing else, so without this it would be the
- * one shipped image with a system call to stop the machine and no program that
- * makes it. os-real does not stage it: busybox's standalone shell dispatches
+ * It exists for the images that carry no busybox. os-simple is built out of
+ * this project's own code alone, so without this it would be the one shipped
+ * image with a system call to stop the machine and no program that makes it. os-real does not stage it: busybox's standalone shell dispatches
  * `halt`, `poweroff` and `reboot` as applets before it looks at the file
  * system, so a binary of the same name there would be one nobody reaches, and a
  * second implementation of the same command is worse for a reader than none.
