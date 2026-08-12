@@ -1263,25 +1263,25 @@ APPLET_TABLE = os.path.join(
     "build", "vendor", "busybox", "applet_tables-main.h")
 
 
-def check_applets(path=APPLET_TABLE):
-    """Check a generated busybox applet table. Returns a list of problems.
+def applet_names(path):
+    """Read a generated applet table. Returns (names, problems).
 
     The names live in one NUL-delimited string, so the match is on whole tokens
     rather than on a substring: `passwd` appears inside `passwd_main` and inside
     a help string, and a search that did not split would find it in a busybox
-    that compiled the applet out.
+    that compiled the applet out. A missing or empty table is a problem rather
+    than an empty answer, so an unreadable scan fails instead of reading as a
+    clean absence.
     """
     if not os.path.exists(path):
-        return ["%s: no applet table; build busybox before checking it" % path]
-
+        return set(), ["%s: no applet table; build busybox before checking it" % path]
     if os.path.getsize(path) == 0:
-        return ["%s: the applet table is empty, so this check proved nothing" % path]
-
+        return set(), ["%s: the applet table is empty, so this check proved nothing" % path]
     try:
         with open(path, "r", encoding="latin-1", newline="\n") as handle:
             text = handle.read()
     except OSError as error:
-        return ["%s: cannot read the applet table: %s" % (path, error)]
+        return set(), ["%s: cannot read the applet table: %s" % (path, error)]
 
     names = set()
     for chunk in re.findall(r'"((?:[^"\\]|\\.)*)"', text):
@@ -1290,7 +1290,21 @@ def check_applets(path=APPLET_TABLE):
             if token:
                 names.add(token)
 
-    problems = []
+    return names, []
+
+
+def check_applets(path=APPLET_TABLE):
+    """Check a generated busybox applet table. Returns a list of problems.
+
+    The names live in one NUL-delimited string, so the match is on whole tokens
+    rather than on a substring: `passwd` appears inside `passwd_main` and inside
+    a help string, and a search that did not split would find it in a busybox
+    that compiled the applet out.
+    """
+    names, problems = applet_names(path)
+    if problems:
+        return problems
+
     if APPLET_SENTINEL not in names:
         problems.append(
             "%s: the applet table does not name `%s`, so this check found "
@@ -1304,6 +1318,42 @@ def check_applets(path=APPLET_TABLE):
 
     return problems
 
+
+
+# The set-id build's table, and the rule that points the other way. Everything in
+# the main binary is unprivileged, so its rule is a blacklist: no applet that
+# wants the set-id bit and none that needs a raw socket. Everything in THIS
+# binary gets the bit, so its rule has to be a whitelist: exactly these three and
+# nothing else. A blacklist here would pass a binary that had quietly grown a
+# shell, which is the one thing a set-id executable must never contain, and
+# `allnoconfig` leaves `CONFIG_SH_IS_ASH` set, so that is a mistake a config
+# written by omission actually makes.
+SUID_APPLET_TABLE = os.path.join(
+    "build", "vendor", "busybox", "applet_tables-suid.h")
+SUID_APPLETS = ("login", "passwd", "su")
+
+
+def check_suid_applets(path=SUID_APPLET_TABLE):
+    """Check the set-id build's applet table. Returns a list of problems."""
+    names, problems = applet_names(path)
+    if problems:
+        return problems
+
+    extra = sorted(names - set(SUID_APPLETS))
+    missing = sorted(set(SUID_APPLETS) - names)
+    if extra:
+        problems.append(
+            "%s: the set-id busybox carries %s beside the declared %s; every "
+            "applet in that binary runs as root"
+            % (path, ", ".join("`%s`" % n for n in extra),
+               ", ".join("`%s`" % n for n in SUID_APPLETS)))
+    if missing:
+        problems.append(
+            "%s: the set-id busybox is missing %s, so this check proved nothing "
+            "about the binary that ships"
+            % (path, ", ".join("`%s`" % n for n in missing)))
+
+    return problems
 
 
 # Config symbols a shipped busybox must not carry, checked in the source config
@@ -1419,11 +1469,13 @@ def main(argv):
         return selftest()
 
     if args.applets:
-        problems = check_applets(args.applets) + check_config() + check_inits()
+        problems = (check_applets(args.applets) + check_suid_applets()
+                    + check_config() + check_inits())
         if problems:
             return report(problems)
-        print("check-setid: OK (%s: no forbidden applet or feature; the strict "
-              "init names no shell)" % args.applets)
+        print("check-setid: OK (%s: no forbidden applet or feature; the set-id build "
+              "holds only %s; the strict init names no shell)"
+              % (args.applets, ", ".join(SUID_APPLETS)))
         return 0
 
     if args.image:

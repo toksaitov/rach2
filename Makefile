@@ -39,6 +39,7 @@ DROPBEAR_STAMP = vendor/dropbear/.stamp
 # removes them. They are the REAL prerequisites of the capstone image (see the check
 # targets below): a stamp only proves its build RAN.
 BUSYBOX_BIN  = build/vendor/busybox/busybox
+BUSYBOX_SUID_BIN = build/vendor/busybox/busybox-suid
 DROPBEAR_BIN = build/vendor/dropbear/dropbearmulti
 
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
@@ -113,9 +114,12 @@ $(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL)
 	@test -s vendor/musl/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }
 	@touch $@
 
-$(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config vendor/busybox/muslgcc \
+$(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
+                  vendor/busybox/rach2-suid.config vendor/busybox/muslgcc \
                   $(BUSYBOX_TARBALL) $(LIBC_STAMP)
-	@rm -f $@ $(BUSYBOX_BIN)
+	@rm -f $@ $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
+	    build/vendor/busybox/applet_tables-main.h \
+	    build/vendor/busybox/applet_tables-suid.h
 	./vendor/busybox/build_busybox.sh
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
 	@touch $@
@@ -403,8 +407,15 @@ os-real-iso: os-real-image
 # stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards
 # while the stamp lingers, so these PHONY check targets (depending on the stamp so it
 # builds first) run `test -s` on EVERY build and catch a missing OR zero-byte artifact.
+# Both binaries and both applet tables, because a stamp file outlives an artifact
+# somebody deleted or truncated, and the set-id one is the artifact whose absence
+# would be noticed last and matter most.
 check-busybox: $(BUSYBOX_STAMP)
-	@test -s $(BUSYBOX_BIN) || { echo "busybox: $(BUSYBOX_BIN) missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }
+	@for f in $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
+	          build/vendor/busybox/applet_tables-main.h \
+	          build/vendor/busybox/applet_tables-suid.h; do \
+	    test -s "$$f" || { echo "busybox: $$f missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }; \
+	done
 
 # Privilege climbs through a declared set of paths and no others. The sweep reads
 # every manifest against a per-image allowlist, so a set-id line anywhere, under any

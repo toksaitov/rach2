@@ -53,6 +53,16 @@ The last group is off because the console login is ours now. `LOGIN` and `SULOGI
 
 `CONFIG_FEATURE_DEFAULT_PASSWD_ALGO` is `sha512` rather than the stock `des`, so that anything left in the tree that consults it agrees with the `$6$` hashes the image actually carries. `tools/check_setid.py --applets` reads the generated `include/applet_tables.h` and fails the build if either applet comes back, matching whole NUL-delimited names rather than substrings (`passwd` appears inside `passwd_main` and inside help text) and requiring `cat` to be present, so a header it failed to parse fails loudly instead of passing as an absence.
 
+## The second binary, for the applets that need root
+
+busybox is built twice here. The main binary holds everything else and is staged unprivileged; a second one, from the same source with `rach2-suid.config`, holds exactly `login`, `passwd` and `su`, the three applets that refuse to work without the set-id bit, and is staged carrying it. That is busybox's own advice rather than an invention: its `Config.in` says that if you do not want even initial busybox code running as root for every applet, you build two binaries with different applets and set the bit only on the one that needs it.
+
+The obvious-looking alternative is not available. `FEATURE_INDIVIDUAL` produces one small executable per applet, but against a shared `libbusybox.so` and, in its own words, "You need to have a working dynamic linker." Every binary in this system is static and the loader cannot run a dynamic one.
+
+Three settings in that config are load-bearing. There is no shell of any kind, set explicitly: `allnoconfig` leaves `CONFIG_SH_IS_ASH` on, so a config written by leaving things out ships an `sh` applet inside a binary that runs as root. `CONFIG_FEATURE_SUID_CONFIG` is off, which compiles out the `/etc/busybox.conf` parser and with it the use-after-free described below. `CONFIG_LFS` is on, without which the build stops on `BUG_off_t_size_is_misdetected`, a message that names neither the option nor the file.
+
+The guard rules point in opposite directions for the two binaries, and that asymmetry is the point. For the main table it is a blacklist: no applet that wants the set-id bit, none that needs a raw socket. For the set-id table it is a whitelist of exactly those three names, because everything in that binary gets root, so a rule that only listed what is forbidden would pass a binary that had quietly grown a shell.
+
 ## An upstream bug we should report
 
 `check_suid` frees the parsed `/etc/busybox.conf` list and never clears the global that points at it (`libbb/appletlib.c:642`, with the global declared at `:305` and read at `:565`). A second in-process dispatch then walks freed memory to decide which applets keep root. Checked against upstream master in August 2026: the free is still there and the pointer is still not cleared, so this is not a quirk of the pinned tarball.

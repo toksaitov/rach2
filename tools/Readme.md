@@ -52,7 +52,11 @@ the supporting scripts.
   describes the previous configuration in the window before the re-extract. The
   staged copy describes the binary that ships. It is refused when it is missing
   and when it is empty, so an unreadable scan fails rather than reading as a
-  clean absence. It fails when `su` or
+  clean absence. There is a second table beside it,
+  `applet_tables-suid.h`, from the set-id build, and its rule is the opposite:
+  a whitelist of exactly `login`, `passwd` and `su`, because every applet in
+  that binary runs as root, so a blacklist would pass one that had quietly
+  grown a shell. The main table's rule fails when `su` or
   `passwd` is present, because privilege climbs through the declared set-id
   programs and nowhere else and busybox is staged unprivileged: an applet of
   either name would answer from the shell's PATH before `/bin/su` and

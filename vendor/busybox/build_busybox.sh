@@ -93,5 +93,25 @@ i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox"
 cp "$SRC/include/applet_tables.h" "$STAGE/applet_tables-main.h"
 ls -l "$STAGE/busybox"
 
-echo "busybox: built $VERSION ($(wc -c < "$STAGE/busybox") bytes, static, musl, i686)"
+# The second binary: the same source, configured to hold only the applets that
+# need the set-id bit, so the main one can stay unprivileged. busybox's own
+# Config.in recommends exactly this. It cannot share the first build's objects,
+# so the tree is cleaned between them; the first binary and its table are
+# already staged by the time that happens.
+echo "busybox: cleaning the tree for the set-id build"
+make -C "$SRC" mrproper >/dev/null
+
+echo "busybox: configuring the set-id build (rach2-suid.config: login, passwd, su)"
+cp rach2-suid.config "$SRC/.config"
+yes "" | make -C "$SRC" oldconfig HOSTCC=cc >/dev/null
+
+echo "busybox: building the set-id binary"
+make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
+    CROSS_COMPILE=i686-elf- CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
+
+echo "busybox: staging the set-id binary to build/vendor/busybox/busybox-suid"
+i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox-suid"
+cp "$SRC/include/applet_tables.h" "$STAGE/applet_tables-suid.h"
+
+echo "busybox: built $VERSION ($(wc -c < "$STAGE/busybox") bytes main, $(wc -c < "$STAGE/busybox-suid") bytes set-id, static, musl, i686)"
 echo "busybox: rebuild the os-real image (make os-real-image) to install it"
