@@ -110,11 +110,13 @@ MAX_LINE = LINE_BUFFER - 2
 #
 ALLOWLIST = {
     "os-real": {
-        # Privilege climbs through /bin/su alone: a small setuid-root program
-        # (utils/su.c). busybox stays unprivileged, since a setuid busybox
-        # would run every one of its BB_SUID_REQUIRE and BB_SUID_MAYBE applets
-        # as root unless an /etc/busybox.conf confined it, and that config path
-        # trips a busybox use-after-free the kernel's strict munmap faults.
+        # Privilege climbs through the set-id busybox and nowhere else: one
+        # binary built from busybox's own source with three applets in it,
+        # staged three times under the names it dispatches on. The main busybox
+        # stays unprivileged, since a setuid one would run every one of its
+        # BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless an
+        # /etc/busybox.conf confined it, and that config path trips a busybox
+        # use-after-free the kernel's strict munmap faults.
         "setid": {
             "/bin/su": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
             "/bin/passwd": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),

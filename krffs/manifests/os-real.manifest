@@ -11,13 +11,13 @@
 # /sbin/init forks and dropbear runs). dropbearmulti dispatches the server, the
 # client, and keygen on argv[1]: dropbearmulti {dropbear,dbclient,dropbearkey}.
 dir 0755 /bin
-# busybox stays unprivileged. A setuid busybox would run every one of its
+# This busybox stays unprivileged. A setuid one would run every one of its
 # BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a config file
 # confined it, and that config path tripped a busybox use-after-free the
-# kernel's strict munmap faults (dev-log/15-privilege has the story). Privilege
-# climbs through /bin/su alone: a small setuid-root program (utils/su.c) that
-# authenticates against /etc/shadow. busybox's own su applet is compiled out
-# (CONFIG_SU off) so a bare `su` resolves to /bin/su.
+# kernel's strict munmap faults (dev-log/15-privilege has the story). The answer
+# is busybox's own: two binaries, and the set-id bit on the one that needs it.
+# `su`, `passwd` and `login` are compiled out of THIS build, so a bare `su`
+# resolves to the set-id build staged below and to nothing else.
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 # The account tools are busybox's, from the second build: one binary holding
