@@ -105,7 +105,11 @@ the supporting scripts.
   with every mode, owner and set-id bit exactly as declared. The cost is that
   adding an account to a shipped image is a change to two files, deliberately.
   The staged image is read the same way, so what is compared is what the stager
-  wrote and not only what the manifest said. The test account's own
+  wrote and not only what the manifest said. Which directive stages each one is
+  declared too, and for a reason a value alone cannot carry: `text 0600
+  /etc/shadow krffs/shadow` writes those literal words into the file the system
+  authenticates against, and a check comparing the value would read it as the
+  host copy it is not. The test account's own
   `authorized_keys` is deliberately not in it: that file is the account's, under
   a home the account owns, and replacing it is not a climb. `/sbin/init` is held
   to `0755:0:0` by a rule rather than a per-image entry, since no image has

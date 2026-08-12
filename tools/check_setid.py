@@ -119,10 +119,16 @@ MAX_LINE = LINE_BUFFER - 2
 # file root READS to decide who somebody is: `/etc/shadow` writable by anyone is
 # a root password anyone may choose, and so, one step removed, are `/etc/passwd`,
 # `/etc/group`, `/etc/shells`, `/etc/profile` and root's `authorized_keys`.
+# An entry is (mode, uid, gid, verb, value). The verb is declared rather than
+# guessed, because the two verbs mean different things and a value alone cannot
+# tell them apart: `text 0600 /etc/shadow krffs/shadow` stages the LITERAL words
+# `krffs/shadow` into the file the system authenticates against, and a check
+# that only compared the value would read it as the host copy it is not.
+#
 # The image half checks the three fields an image records; the manifest half
-# checks the fourth as well, which for a `file` is the host path it is staged
-# from and for a `text` is the payload itself, byte for byte before the escapes
-# are expanded. Pinning the content is the point for the inline ones: a
+# checks the verb and the value as well, the value being for a `file` the host
+# path it is staged from and for a `text` the payload itself, byte for byte
+# before the escapes are expanded. Pinning the content is the point for the inline ones: a
 # credential file's MEANING is its text, and `test:x:0:0:` in a manifest hands
 # root to an account whose password is written on the host, with every mode,
 # owner and set-id bit in the image exactly as declared. The cost is that adding
@@ -149,20 +155,22 @@ ALLOWLIST = {
             "/bin/login": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
         },
         "trusted": {
-            "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
-            "/bin/sh": (0o755, 0, 0, "build/vendor/busybox/busybox"),
-            "/bin/dropbearmulti": (0o755, 0, 0,
+            "/bin/busybox": (0o755, 0, 0, "file",
+                             "build/vendor/busybox/busybox"),
+            "/bin/sh": (0o755, 0, 0, "file", "build/vendor/busybox/busybox"),
+            "/bin/dropbearmulti": (0o755, 0, 0, "file",
                                    "build/vendor/dropbear/dropbearmulti"),
-            "/etc/passwd": (0o644, 0, 0,
+            "/etc/passwd": (0o644, 0, 0, "text",
                             "root:x:0:0:root:/root:/bin/sh\\n"
                             "test:x:1000:1000:test:/home/test:/bin/sh\\n"),
-            "/etc/shadow": (0o600, 0, 0, "krffs/shadow"),
-            "/etc/group": (0o644, 0, 0, "root:x:0:\\ntest:x:1000:\\n"),
-            "/etc/shells": (0o644, 0, 0, "/bin/sh\\n"),
-            "/etc/profile": (0o644, 0, 0,
+            "/etc/shadow": (0o600, 0, 0, "file", "krffs/shadow"),
+            "/etc/group": (0o644, 0, 0, "text",
+                           "root:x:0:\\ntest:x:1000:\\n"),
+            "/etc/shells": (0o644, 0, 0, "text", "/bin/sh\\n"),
+            "/etc/profile": (0o644, 0, 0, "text",
                              "export PATH=/bin:/usr/bin\\n"
                              "export HOME=\"${HOME:-/root}\"\\ncd \"$HOME\"\\n"),
-            "/root/.ssh/authorized_keys": (0o600, 0, 0,
+            "/root/.ssh/authorized_keys": (0o600, 0, 0, "file",
                                            "krffs/authorized_keys"),
         },
         "sentinel": None,
@@ -198,16 +206,17 @@ ALLOWLIST = {
             "/bin/passwd": (0o4755, 0, 0, "build/utils/sbin/passwd"),
         },
         "trusted": {
-            "/bin/login": (0o755, 0, 0, "build/utils/sbin/login"),
-            "/bin/adduser": (0o755, 0, 0, "build/utils/sbin/adduser"),
-            "/bin/ish": (0o755, 0, 0, "build/ish/ish"),
-            "/bin/sh": (0o755, 0, 0, "build/ish/ish"),
-            "/etc/passwd": (0o644, 0, 0,
+            "/bin/login": (0o755, 0, 0, "file", "build/utils/sbin/login"),
+            "/bin/adduser": (0o755, 0, 0, "file", "build/utils/sbin/adduser"),
+            "/bin/ish": (0o755, 0, 0, "file", "build/ish/ish"),
+            "/bin/sh": (0o755, 0, 0, "file", "build/ish/ish"),
+            "/etc/passwd": (0o644, 0, 0, "text",
                             "root:x:0:0:root:/root:/bin/ish\\n"
                             "test:x:1000:1000:test:/home/test:/bin/ish\\n"),
-            "/etc/shadow": (0o600, 0, 0, "krffs/shadow"),
-            "/etc/group": (0o644, 0, 0, "root:x:0:\\ntest:x:1000:\\n"),
-            "/etc/shells": (0o644, 0, 0, "/bin/ish\\n/bin/sh\\n"),
+            "/etc/shadow": (0o600, 0, 0, "file", "krffs/shadow"),
+            "/etc/group": (0o644, 0, 0, "text",
+                           "root:x:0:\\ntest:x:1000:\\n"),
+            "/etc/shells": (0o644, 0, 0, "text", "/bin/ish\\n/bin/sh\\n"),
         },
         "sentinel": ("/hello.txt", 0o644, 0, 0),
         "init": "init-login",
@@ -237,7 +246,7 @@ ALLOWLIST = {
         # the strict one's silence mean anything.
         "setid": {},
         "trusted": {
-            "/sbin/init": (0o755, 0, 0, "build/utils/sbin/init-login"),
+            "/sbin/init": (0o755, 0, 0, "file", "build/utils/sbin/init-login"),
         },
         "sentinel": ("/etc/motd", 0o644, 0, 0),
         "init": "init-login",
@@ -245,7 +254,7 @@ ALLOWLIST = {
     "login-test-shell": {
         "setid": {},
         "trusted": {
-            "/sbin/init": (0o755, 0, 0, "build/utils/sbin/init-shell"),
+            "/sbin/init": (0o755, 0, 0, "file", "build/utils/sbin/init-shell"),
         },
         "sentinel": ("/etc/motd", 0o644, 0, 0),
         "init": "init-shell",
@@ -257,7 +266,8 @@ ALLOWLIST = {
             "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
         },
         "trusted": {
-            "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
+            "/bin/busybox": (0o755, 0, 0, "file",
+                             "build/vendor/busybox/busybox"),
         },
         "sentinel": None,
         "init": "init-shell",
@@ -677,7 +687,8 @@ def check_manifest(path, table=ALLOWLIST):
     problems.extend(check_ancestors(name, allow, dirs.get))
 
     for guest in sorted(allow["trusted"]):
-        want_mode, want_uid, want_gid, want_source = allow["trusted"][guest]
+        want_mode, want_uid, want_gid, want_verb, want_source = \
+            allow["trusted"][guest]
         want = fmt_entry(want_mode, want_uid, want_gid)
         if guest not in staged:
             problems.append("%s: %s is not staged; the allowlist requires it "
@@ -696,8 +707,15 @@ def check_manifest(path, table=ALLOWLIST):
                             "decide who somebody is, are trust boundaries too"
                             % (name, lineno, guest, want,
                                fmt_entry(mode, uid, gid)))
+        elif verb_of.get(guest) != want_verb:
+            problems.append("%s:%d: %s is staged with '%s' and the allowlist "
+                            "declares '%s'; a file copied from the host and a "
+                            "payload written in the manifest are not the same "
+                            "thing, whatever the words after them say"
+                            % (name, lineno, guest, verb_of.get(guest),
+                               want_verb))
         elif source != want_source:
-            if verb_of.get(guest) == "text":
+            if want_verb == "text":
                 problems.append("%s:%d: %s does not hold the text the "
                                 "allowlist pins; a credential file's meaning "
                                 "is its content, so the two are declared "
@@ -991,7 +1009,8 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
     problems.extend(check_ancestors(os.path.basename(image), allow, image_dir))
 
     for path in sorted(allow["trusted"]):
-        want_mode, want_uid, want_gid, want_source = allow["trusted"][path]
+        want_mode, want_uid, want_gid, want_verb, want_source = \
+            allow["trusted"][path]
         node = paths.get(path)
         if node is None:
             problems.append("%s: %s is not in the image; the allowlist "
@@ -1003,9 +1022,7 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
                             % (os.path.basename(image), path,
                                fmt_entry(node["mode"] & PERM, node["uid"],
                                          node["gid"])))
-        elif want_source is not None and not want_source.startswith("build/") \
-                and not want_source.startswith("krffs/") \
-                and trusted_text(path, want_source) is False:
+        elif want_verb == "text" and trusted_text(path, want_source) is False:
             problems.append("%s: %s does not hold the text the allowlist pins; "
                             "a credential file's meaning is its content"
                             % (os.path.basename(image), path))
@@ -1100,9 +1117,7 @@ def trusted_lines(stem, table=None):
     entry = (table or ALLOWLIST)[stem]
     out = []
     for guest in sorted(entry["trusted"]):
-        mode, uid, gid, source = entry["trusted"][guest]
-        verb = "file" if source and source.split("/")[0] in ("build", "krffs") \
-            else "text"
+        mode, uid, gid, verb, source = entry["trusted"][guest]
         out.append("%s %s %s %s\n" % (verb, fmt_entry(mode, uid, gid), guest,
                                       source))
 
@@ -1238,6 +1253,14 @@ SELFTEST_CASES = [
     ("an unprivileged program staged from somewhere else", "os-simple",
      OS_SIMPLE_MINIMUM.replace("build/utils/sbin/login", "build/elsewhere/login")
      + "text 0644 /hello.txt hi\n", False, "declared staged from"),
+    ("a host file restaged as its own path written inline", "os-real",
+     OS_REAL_MINIMUM.replace("file 0600:0:0 /etc/shadow krffs/shadow",
+                             "text 0600:0:0 /etc/shadow krffs/shadow"),
+     False, "are not the same thing"),
+    ("an inline file restaged as a host copy", "os-real",
+     OS_REAL_MINIMUM.replace("text 0644:0:0 /etc/shells /bin/sh\\n",
+                             "file 0644:0:0 /etc/shells /bin/sh\\n"),
+     False, "are not the same thing"),
     ("an account given root's numbers in the passwd text", "os-real",
      OS_REAL_MINIMUM.replace("test:x:1000:1000:test", "test:x:0:0:test"),
      False, "does not hold the text the allowlist pins"),
@@ -1319,7 +1342,8 @@ IMAGE_TABLE = {
     "img-fixture": {
         "setid": {"/bin/su": (0o4755, 0, 0, "build/utils/sbin/su")},
         "trusted": {
-            "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
+            "/bin/busybox": (0o755, 0, 0, "file",
+                             "build/vendor/busybox/busybox"),
         },
         "sentinel": ("/hello.txt", 0o644, 0, 0),
     },
