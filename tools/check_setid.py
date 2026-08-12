@@ -1400,7 +1400,16 @@ def check_suid_applets(path=SUID_APPLET_TABLE):
 # `pwauth_check` and by dropbear once it is in `/etc/shadow`, so leaving it
 # enabled would keep a second minter that cannot fail closed, which is the thing
 # the entropy rule exists to prevent.
-FORBIDDEN_CONFIG = ("CONFIG_FEATURE_HTTPD_AUTH_MD5",)
+# Nothing is forbidden here now. `CONFIG_FEATURE_HTTPD_AUTH_MD5` was, because
+# `httpd -m` mints a password hash from a salt made of a pid and a clock, and
+# this system minted salts one way, from the kernel's CSPRNG, refusing when that
+# generator is not trusted. That objection was retired with the same judgment
+# that brought `cryptpw` and `mkpasswd` back: busybox's salt is weak, its own
+# comment says so, and for a teaching machine whose threat model is a student it
+# is good enough. The rule and its self-tests are kept rather than deleted,
+# because the next feature that returns a capability the applet names do not
+# mention will want them.
+FORBIDDEN_CONFIG = ()
 
 BUSYBOX_CONFIG = os.path.join("vendor", "busybox", "rach2.config")
 

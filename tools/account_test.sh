@@ -138,6 +138,7 @@ cleanup_boot
 # cache. The tokens are split for the same reason as above.
 cp "$WORK" "$WORK.check" 2>/dev/null || true
 boot_with \
+    "mkpasswd -m sha512 -S abcdefgh hunter2; echo MK\"\"END" \
     "sync; cat /etc/passwd; echo PW\"\"END" \
     "cat /etc/shadow; echo SH\"\"END" \
     "cat /etc/group; echo GR\"\"END"
@@ -146,6 +147,16 @@ if ! wait_token "GREND" 150; then
     fail "the second boot could not read the databases back"
 fi
 cleanup_boot
+
+# The hash generators, pinned against the value this project's own SHA-512
+# crypt produces for the same password and salt, so the assertion is that
+# busybox agrees with the implementation the rest of the image authenticates
+# with, not merely that it printed something shaped like a hash.
+# shellcheck disable=SC2016
+EXPECTED_HASH='$6$abcdefgh$M/eYsB4rVXAm3ZNc88J.UD9rCKAT6FB1rahiwJCHtEndQNORCub5qhjxn50qbqVVthkM.9HpEwtf0t.iV9uH0/'
+if ! grep -qF "$EXPECTED_HASH" "$LOG"; then
+    fail "mkpasswd did not produce the hash this system's own crypt gives"
+fi
 
 SHADOW_TEXT=$(sed -n '/PWEND/,/SHEND/p' "$LOG")
 GROUP_TEXT=$(sed -n '/SHEND/,/GREND/p' "$LOG")
