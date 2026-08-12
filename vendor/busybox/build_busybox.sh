@@ -83,6 +83,14 @@ make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
 echo "busybox: staging the stripped binary to build/vendor/busybox/busybox"
 mkdir -p "$STAGE"
 i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox"
+
+# The generated applet table goes with it. The set-id guard reads this copy and
+# not the one in the source tree, because that tree is deleted and re-extracted
+# at the top of every build: for most of a rebuild the file is absent, and in
+# the window before the re-extract it still describes the previous
+# configuration. A copy staged beside the binary describes the binary that
+# ships, which is the only thing worth checking.
+cp "$SRC/include/applet_tables.h" "$STAGE/applet_tables-main.h"
 ls -l "$STAGE/busybox"
 
 echo "busybox: built $VERSION ($(wc -c < "$STAGE/busybox") bytes, static, musl, i686)"

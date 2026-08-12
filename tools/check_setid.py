@@ -1254,8 +1254,13 @@ FORBIDDEN_APPLETS = ("su", "passwd", "adduser", "deluser", "addgroup", "delgroup
                      "crontab", "ping", "ping6", "traceroute", "traceroute6", "arping")
 APPLET_SENTINEL = "cat"
 
+# The applet table as it was STAGED, beside the binary it describes, rather than
+# the copy generated inside the extracted source tree. `build_busybox.sh` opens
+# with `rm -rf` and a fresh `tar x`, so the in-tree file is absent for most of a
+# rebuild and describes the previous configuration in the window before the
+# re-extract; the staged copy describes what actually ships.
 APPLET_TABLE = os.path.join(
-    "vendor", "busybox", "busybox-1.36.1", "include", "applet_tables.h")
+    "build", "vendor", "busybox", "applet_tables-main.h")
 
 
 def check_applets(path=APPLET_TABLE):
@@ -1268,6 +1273,9 @@ def check_applets(path=APPLET_TABLE):
     """
     if not os.path.exists(path):
         return ["%s: no applet table; build busybox before checking it" % path]
+
+    if os.path.getsize(path) == 0:
+        return ["%s: the applet table is empty, so this check proved nothing" % path]
 
     try:
         with open(path, "r", encoding="latin-1", newline="\n") as handle:
