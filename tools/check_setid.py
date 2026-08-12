@@ -110,7 +110,12 @@ MAX_LINE = LINE_BUFFER - 2
 # source is declared because a path alone does not say what runs there:
 # pointing /bin/su at build/vendor/busybox/busybox satisfies every other rule
 # and hands a setuid-root busybox to the image. `unprivileged` names files that
-# must be staged and must carry no set-id bit. `sentinel` names one ordinary
+# must be staged and must NOT be set-id, and it names them the same four ways,
+# because "not set-id" is not the whole of what a shipped program must be:
+# `/bin/login` is exec'd by init as root, so a `/bin/login` staged 0777 would
+# let any account replace the program root runs next, without a set-id bit
+# anywhere in sight. The image half checks the three fields an image records and
+# the manifest half checks the host source as well. `sentinel` names one ordinary
 # node the image inventory must report exactly; it is required of a manifest
 # that declares no set-id entry, which would otherwise have nothing positive to
 # find and would read a misparsed image as clean.
@@ -129,7 +134,9 @@ ALLOWLIST = {
             "/bin/passwd": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
             "/bin/login": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
         },
-        "unprivileged": ("/bin/busybox",),
+        "unprivileged": {
+            "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
+        },
         "sentinel": None,
         "init": "init-login",
     },
@@ -149,7 +156,7 @@ ALLOWLIST = {
             "/musl/suidmusl.suid": (0o4755, 0, 0,
                                     "build/tests/musl/suidmusl"),
         },
-        "unprivileged": (),
+        "unprivileged": {},
         "sentinel": None,
         "init": None,
     },
@@ -162,25 +169,30 @@ ALLOWLIST = {
             "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
             "/bin/passwd": (0o4755, 0, 0, "build/utils/sbin/passwd"),
         },
-        "unprivileged": ("/bin/login", "/bin/adduser", "/bin/ish", "/bin/sh"),
+        "unprivileged": {
+            "/bin/login": (0o755, 0, 0, "build/utils/sbin/login"),
+            "/bin/adduser": (0o755, 0, 0, "build/utils/sbin/adduser"),
+            "/bin/ish": (0o755, 0, 0, "build/ish/ish"),
+            "/bin/sh": (0o755, 0, 0, "build/ish/ish"),
+        },
         "sentinel": ("/hello.txt", 0o644, 0, 0),
         "init": "init-login",
     },
     "disk-test": {
         "setid": {},
-        "unprivileged": (),
+        "unprivileged": {},
         "sentinel": ("/blockprobe", 0o755, 0, 0),
         "init": None,
     },
     "persist-test": {
         "setid": {},
-        "unprivileged": (),
+        "unprivileged": {},
         "sentinel": ("/persistprobe", 0o755, 0, 0),
         "init": None,
     },
     "cred-persist-test": {
         "setid": {},
-        "unprivileged": (),
+        "unprivileged": {},
         "sentinel": ("/creddisk", 0o755, 0, 0),
         "init": None,
     },
@@ -190,13 +202,17 @@ ALLOWLIST = {
         # and the permissive one must reach a root shell, which is what makes
         # the strict one's silence mean anything.
         "setid": {},
-        "unprivileged": ("/sbin/init",),
+        "unprivileged": {
+            "/sbin/init": (0o755, 0, 0, "build/utils/sbin/init-login"),
+        },
         "sentinel": ("/etc/motd", 0o644, 0, 0),
         "init": "init-login",
     },
     "login-test-shell": {
         "setid": {},
-        "unprivileged": ("/sbin/init",),
+        "unprivileged": {
+            "/sbin/init": (0o755, 0, 0, "build/utils/sbin/init-shell"),
+        },
         "sentinel": ("/etc/motd", 0o644, 0, 0),
         "init": "init-shell",
     },
@@ -206,13 +222,15 @@ ALLOWLIST = {
         "setid": {
             "/bin/su": (0o4755, 0, 0, "build/utils/sbin/su"),
         },
-        "unprivileged": ("/bin/busybox",),
+        "unprivileged": {
+            "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
+        },
         "sentinel": None,
         "init": "init-shell",
     },
     "stress-test": {
         "setid": {},
-        "unprivileged": (),
+        "unprivileged": {},
         "sentinel": ("/stressprobe", 0o755, 0, 0),
         "init": None,
     },
@@ -518,7 +536,9 @@ def check_manifest(path, table=ALLOWLIST):
             problems.append("%s: %s is declared %s but no directive stages it"
                             % (name, guest, want))
 
-    for guest in allow["unprivileged"]:
+    for guest in sorted(allow["unprivileged"]):
+        want_mode, want_uid, want_gid, want_source = allow["unprivileged"][guest]
+        want = fmt_entry(want_mode, want_uid, want_gid)
         if guest not in staged:
             problems.append("%s: %s is not staged; the allowlist requires it "
                             "to be present and unprivileged" % (name, guest))
@@ -529,6 +549,16 @@ def check_manifest(path, table=ALLOWLIST):
                             "unprivileged, and privilege must climb through "
                             "the declared paths alone"
                             % (name, lineno, guest, fmt_entry(mode, uid, gid)))
+        elif (mode, uid, gid) != (want_mode, want_uid, want_gid):
+            problems.append("%s:%d: %s is declared %s but is staged %s; an "
+                            "unprivileged program root runs is a trust "
+                            "boundary too"
+                            % (name, lineno, guest, want,
+                               fmt_entry(mode, uid, gid)))
+        elif source != want_source:
+            problems.append("%s:%d: %s is declared staged from %s but this "
+                            "stages %s" % (name, lineno, guest, want_source,
+                                           source))
 
     return problems
 
@@ -780,7 +810,8 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
                             % (os.path.basename(image), path,
                                fmt_entry(want_mode, want_uid, want_gid)))
 
-    for path in allow["unprivileged"]:
+    for path in sorted(allow["unprivileged"]):
+        want_mode, want_uid, want_gid, _ = allow["unprivileged"][path]
         node = paths.get(path)
         if node is None:
             problems.append("%s: %s is not in the image; the allowlist "
@@ -790,6 +821,15 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
             problems.append("%s: %s is staged set-id (%s); it must stay "
                             "unprivileged"
                             % (os.path.basename(image), path,
+                               fmt_entry(node["mode"] & PERM, node["uid"],
+                                         node["gid"])))
+        elif (node["mode"] & PERM, node["uid"], node["gid"]) != (
+                want_mode, want_uid, want_gid):
+            problems.append("%s: %s is declared %s but the image carries %s; "
+                            "an unprivileged program root runs is a trust "
+                            "boundary too"
+                            % (os.path.basename(image), path,
+                               fmt_entry(want_mode, want_uid, want_gid),
                                fmt_entry(node["mode"] & PERM, node["uid"],
                                          node["gid"])))
 
@@ -983,6 +1023,12 @@ SELFTEST_CASES = [
      False, "non-ASCII byte"),
     ("a non-ASCII byte in a comment", "os-real",
      "# caf\xe9\n" + OS_REAL_MINIMUM, True, ""),
+    ("an unprivileged program root runs, staged world-writable", "os-simple",
+     OS_SIMPLE_MINIMUM.replace("file 0755 /bin/login", "file 0777 /bin/login")
+     + "text 0644 /hello.txt hi\n", False, "trust boundary too"),
+    ("an unprivileged program staged from somewhere else", "os-simple",
+     OS_SIMPLE_MINIMUM.replace("build/utils/sbin/login", "build/elsewhere/login")
+     + "text 0644 /hello.txt hi\n", False, "declared staged from"),
     ("the longest line stageimage accepts", "os-simple",
      OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hi\n" + LONGEST_LINE + "\n",
      True, ""),
@@ -1018,10 +1064,10 @@ SELFTEST_CASES = [
 # itself, so the rules that police it are exercised rather than assumed.
 TABLE_CASES = [
     ("a table entry with nothing to find",
-     {"x": {"setid": {}, "unprivileged": (), "sentinel": None}},
+     {"x": {"setid": {}, "unprivileged": {}, "sentinel": None}},
      "nothing to find"),
     ("a declared entry carrying no set-id bit",
-     {"x": {"setid": {"/x": (0o755, 0, 0, "build/x")}, "unprivileged": (),
+     {"x": {"setid": {"/x": (0o755, 0, 0, "build/x")}, "unprivileged": {},
             "sentinel": None}},
      "carries no set-id bit"),
 ]
@@ -1038,10 +1084,12 @@ TABLE_CASES = [
 IMAGE_TABLE = {
     "img-fixture": {
         "setid": {"/bin/su": (0o4755, 0, 0, "build/utils/sbin/su")},
-        "unprivileged": ("/bin/busybox",),
+        "unprivileged": {
+            "/bin/busybox": (0o755, 0, 0, "build/vendor/busybox/busybox"),
+        },
         "sentinel": ("/hello.txt", 0o644, 0, 0),
     },
-    "img-blind": {"setid": {}, "unprivileged": (), "sentinel": None},
+    "img-blind": {"setid": {}, "unprivileged": {}, "sentinel": None},
 }
 
 IMAGE_TOTAL = 4096
@@ -1115,6 +1163,9 @@ IMAGE_CASES = [
     ("an unprivileged file missing", "img-fixture",
      fixture(3, (NODE_RESERVED, 13, b"other", 0o755, 0, 0, 11)), None,
      False, "present and unprivileged"),
+    ("an unprivileged file at a mode nobody declared", "img-fixture",
+     fixture(3, (NODE_RESERVED, 13, b"busybox", 0o777, 0, 0, 11)), None,
+     False, "trust boundary too"),
     ("a region cut on a node boundary", "img-fixture", fixture(),
      NODE_SIZE * 3, False, "does not close"),
     ("a node larger than the region", "img-fixture", oversized_fixture(2),
