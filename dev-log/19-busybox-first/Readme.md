@@ -18,7 +18,7 @@ Removing the set-id bit from a manifest to prove a test catches it does not reac
 
 ## What shipped
 
-Twenty-eight commits, read from `git show --stat` rather than from the plan.
+The commits that changed code, configuration or a manifest, read from `git show --stat` rather than from the plan. The ones that only wrote this record are not listed, and neither is the last of them, which cannot list itself.
 
 * `5c55730` points the applet guard at the table `build_busybox.sh` stages beside the binary, not the one in the tree the build deletes and re-extracts.
 * `df9a22c` builds busybox twice and adds `rach2-suid.config`, the set-id build's configuration.
@@ -39,11 +39,9 @@ Twenty-eight commits, read from `git show --stat` rather than from the plan.
 * `f24e276` guards the mode, the owner and the source of the programs root runs unprivileged.
 * `b1acda2` makes the shell report what it could not run, since `su -c` reads that status.
 * `272f680` reads each HTTP request and each password attempt on its own rather than off the whole log.
-* `a0e20c9` is this record and the dev-log index bullet.
 * `febace9` guards the directories above a program root runs, and init's own mode.
 * `751b4c0` lets a built-in fail: `cd` says so, and a redirection is opened before it runs.
 * `f3e1da0` reads each attempt after the password change on its own.
-* `a9d4874` carries the last review rounds into this record.
 * `b846740` models the stager's last-dir-wins rule and stops `exec-dir` standing in for a `dir`.
 * `0a20010` reads a built-in's operand after the redirection is pulled out of the line.
 * `1c96156` asserts a refused login ran nothing, not only that it complained.
@@ -66,6 +64,8 @@ The last rounds were about the guard rather than the images, and they were right
 
 Two of those fixes were themselves wrong at first, which is why the rounds kept going. Opening the redirections before the built-in dispatch made `cd > file` and a bare `cd` fail, because pulling a redirection out of the argument array clears the slots it occupied and the operand was still being read from where it had been; and the ancestor rule read the FIRST `dir` for a path where `stage_dir` re-applies the LAST, so a safe `/bin` followed by an unsafe one passed the sweep. Both are covered by cases now.
 
+Refuted with reasons, and recorded rather than dropped: that the guard should bind each busybox binary to the applet table and config staged beside it, by digest or by reading the names back out of the executable. The four artifacts are written by one run of one script, removed together when the stamp is invalidated, and rebuilt from a tarball checked against a sha256 in the tree. `build/` is a generated directory: somebody who can put a different binary there can put a different anything there, including the compiler, and a guard that pretended otherwise would be drawing the trust boundary in a place the build system does not defend. The boundary the guard does defend is the source: a manifest, a config or an allowlist entry that a person changes and another person reviews.
+
 Refuted with evidence: that `readv` filling one buffer per call from a pipe is a defect (a short read is what every reader must already handle, and the alternative, walking the vectors, is the blocking bug the change was made to remove). The datagram half of that finding is real and is deferred below rather than dismissed.
 
 The reviewer was right far more often than not, and one of its findings landed on a defect in a fix it had asked for in the previous round.
@@ -76,11 +76,13 @@ Phase 6 read every comment, document and support file the move touched. What it 
 
 What it looked for and did not find: an in-house source staged nowhere (every one is staged by name or swept in by `exec-dir`), a config symbol nothing selects, a Makefile variable with no user, and a forbidden-applet entry for an applet that is now expected.
 
+The last round also widened the guard past programs. `/etc/shadow` writable by anyone is a root password anyone may choose, and no set-id bit is involved; nor is one involved in `/etc/passwd`, `/etc/group`, `/etc/shells`, `/etc/profile`, root's `authorized_keys`, `/bin/sh` (which login and dropbear exec for root) or `/bin/dropbearmulti`. The allowlist's second list is therefore named `trusted` rather than `unprivileged`, and it holds both kinds: what root runs, and what root reads to decide who somebody is. The test account's own `authorized_keys` is deliberately not in it, since that file is the account's own and replacing it is not a climb.
+
 ## What stays deferred, and why
 
 A `readv` on a datagram socket truncates a datagram longer than its first buffer, exactly as `read` truncates it, where Linux would fill the buffers that follow from the same datagram. The deviation is stated in `rach2/Readme.md`. Closing it means either a kernel buffer the size of the whole vector list, which needs an allocator this kernel does not have, or an iovec-aware copy-out path through the socket layer, which is a change to `socket_recv` and its callers for a case nothing in this system exercises.
 
-busybox's `update_passwd` takes an advisory `fcntl` lock this kernel grants unconditionally and knows nothing of `/etc/.pwlock`, the lock the in-house credential library takes. Two writers on different protocols do not exclude each other, so a lost update is possible in principle. It needs two writers at the same second on a single-console teaching machine. The property was traded for the account tools a real system ships, deliberately, and it is written down in `vendor/busybox/Readme.md` rather than quietly lost.
+busybox's `update_passwd` takes an advisory `fcntl` lock this kernel grants unconditionally and knows nothing of `/etc/.pwlock`, the lock the in-house credential library takes. Two writers on different protocols do not exclude each other, so a lost update is possible: two account changes issued in the same second, one silently overwritten. The review's correction is kept here because it is right: os-real can carry a console session and an SSH login at once, so this is not bounded by there being one terminal. What bounds it is the cost, an account change made twice, against keeping a second implementation of tools a real system ships. The property was traded deliberately and is written down in `vendor/busybox/Readme.md` rather than quietly lost.
 
 busybox's `adduser` publishes `/etc/passwd` before `/etc/shadow`, so an interrupted run can leave a visible account with no password, which is the state the in-house ordering was built to make impossible. Same trade, same reasoning; os-simple still shows the other ordering.
 
