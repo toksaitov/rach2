@@ -2,8 +2,9 @@
  * Userspace stub resolver for the Rach2 network utilities, implementing
  * `netdb.h`.
  *
- * `resolve_host` tries, in order, a numeric literal, the `/hosts` file, then a
- * DNS A query to the nameserver in `/resolv.conf`. The pure helpers
+ * `resolve_host` tries, in order, a numeric literal, the hosts file, then a DNS
+ * A query to the nameserver in the resolver config, each looked for under
+ * `/etc` first and at the root after, since the test image has no `/etc`. The pure helpers
  * (`rach2_inet_aton`, `hosts_find`, `dns_build_query`, `dns_parse_a`) take
  * buffers and touch no syscalls, so the `dnstest` program can exercise them
  * directly; only `resolve_host` does file and socket I/O.

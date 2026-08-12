@@ -33,7 +33,7 @@ Every tool that opens a backing file (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`
 * `manifests/<image>.manifest`: The build recipe for each image (test, os-simple, os-real, disk-test, persist-test, cred-persist-test, stress-test): the dirs and files to stage and their host sources
 * `stageimage.krffs <manifest> <image> [--offset N --size N]`: Writes the whole tree (dirs and files) into a KRFFS image directly as v2 nodes
 * `gen_demo_key.sh`: Provisions the os-real SSH demo keys when they are absent: `rach2_demo_ed25519` for root and `rach2_test_ed25519` for the unprivileged test account
-* `gen_demo_password.sh`: Provisions the os-real account passwords when `shadow` is absent: a random password per account into the git-ignored `rach2_demo_password` (root, for `su`) and `rach2_test_password` (the SSH password login), hashed by `mkhash.krffs` into the git-ignored `shadow` the manifest stages as `/etc/shadow`
+* `gen_demo_password.sh`: Provisions the account passwords both shipped images share when `shadow` is absent: a random password per account into the git-ignored `rach2_demo_password` (root, for `su`) and `rach2_test_password` (the SSH password login), hashed by `mkhash.krffs` into the git-ignored `shadow` the manifest stages as `/etc/shadow`
 * `create_file_system.krffs.sh [size_mb]`: Creates an empty KRFFS file system (helper script)
 
 The GRUB-bootable disk lives one level up, in `tools/`, because it leans on the kernel and a Docker container rather than on the KRFFS tools alone:

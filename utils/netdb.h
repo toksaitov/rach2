@@ -2,8 +2,8 @@
  * Name resolution for the Rach2 network utilities.
  *
  * A small userspace stub resolver: it turns a host string into an IPv4 address
- * by trying, in order, a numeric dotted-quad literal, the /hosts file, then a
- * DNS "A" query to the nameserver listed in /resolv.conf. This mirrors a libc
+ * by trying, in order, a numeric dotted-quad literal, the hosts file, then a
+ * DNS "A" query to the nameserver listed in the resolver config. This mirrors a libc
  * stub resolver: the kernel stays transport-only and naming lives here.
  *
  * All addresses are host byte order. These functions are implemented in
@@ -25,7 +25,7 @@
 int rach2_inet_aton(const char *s, unsigned int *out_ip);
 
 /**
- * Look up `name` in a /hosts-format buffer: lines of "ip name [alias...]", with
+ * Look up `name` in a hosts-format buffer: lines of "ip name [alias...]", with
  * '#' starting a comment.
  *
  * Returns 0 and stores the first matching address in `*out_ip`; -1 if not
@@ -56,7 +56,8 @@ int dns_parse_a(const unsigned char *resp, int len, unsigned short id,
                 unsigned int *out_ip);
 
 /**
- * Resolve `host` (numeric literal, then /hosts, then DNS) to a host-order IPv4.
+ * Resolve `host` (numeric literal, then the hosts file, then DNS) to a host-order
+ * IPv4.
  *
  * Returns 0 and stores the address in `*out_ip`; -1 on failure.
  */
