@@ -280,6 +280,7 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 | 63  | dup2         | oldfd, newfd              | Duplicate file descriptor     |
 | 78  | gettimeofday | tv, tz                    | Get time since boot           |
 | 88  | reboot       | magic1, magic2, cmd       | Stop the machine (root only)  |
+| 145 | readv        | fd, iov, iovcnt           | Scatter read (buffered stdio) |
 | 106 | stat         | path, statbuf             | Get file status (32-bit)      |
 | 183 | getcwd       | buf, size                 | Get current working directory |
 | 195 | stat64       | path, statbuf             | Get file status (64-bit)      |

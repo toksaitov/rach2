@@ -62,6 +62,7 @@
 #define SYS_STAT     106
 #define SYS_LSTAT    107
 #define SYS_UNAME    122
+#define SYS_READV    145
 #define SYS_WRITEV   146
 #define SYS_GETCWD   183
 #define SYS_LLSEEK   140

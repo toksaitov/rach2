@@ -1891,11 +1891,8 @@ static int32_t sys_lseek(isr_params_t *params)
  * discipline until a cooked line or VMIN raw bytes arrive; in graphics mode it is
  * a non-blocking raw scancode read instead.
  */
-static int32_t sys_read(isr_params_t *params)
+static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 {
-    int fd = (int)params->ebx;
-    char __user *buf = (char __user *)params->ecx;
-    uint32_t count = params->edx;
     fd_entry_t *entry;
 
     if (!current_proc) {
@@ -2080,6 +2077,78 @@ static int32_t sys_read(isr_params_t *params)
 
     return -EBADF;
 }
+
+/* read(2): EBX = fd, ECX = buf, EDX = count. */
+static int32_t sys_read(isr_params_t *params)
+{
+    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
+}
+
+/*
+ * Scatter read (readv(2)). The twin of `writev` above, and it exists for the
+ * same reason that one does: musl's buffered stdio issues this call rather than
+ * `read` whenever it is filling more than a single byte, so without it every
+ * program that reads through `fgets`, `fread` or `scanf` fails on this system.
+ * That is why several programs in this tree read a byte at a time through
+ * `read` instead, and why busybox's `chpasswd`, which reads its input with
+ * `xmalloc_fgetline`, exited without a message before this existed.
+ *
+ * EBX = fd, ECX = struct iovec[], EDX = iovcnt. Returns the total bytes read
+ * across the iovecs, or a negative errno.
+ *
+ * A short read stops the walk, as `readv` does: the console hands back one
+ * cooked line per call, so filling the caller's second buffer would block for
+ * input that has not been typed.
+ */
+static int32_t sys_readv(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    uint32_t iov_user = params->ecx;
+    int iovcnt = (int)params->edx;
+    struct kernel_iovec iov;
+    int32_t total = 0;
+    int i;
+
+    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
+        return -EINVAL;
+    }
+
+    for (i = 0; i < iovcnt; i++) {
+        int32_t r;
+
+        /* Once bytes have been read they cannot be un-read, so a fault after
+         * that reports the partial total rather than the error; only a failure
+         * before anything was delivered reports itself. */
+        if (copy_from_user(&iov,
+                           (const void __user *)(iov_user +
+                               (uint32_t)i * sizeof(struct kernel_iovec)),
+                           sizeof(iov)) != 0) {
+            return (total > 0) ? total : -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        if (iov.iov_len > 0x7FFFFFFFu ||
+            (uint32_t)total > 0x7FFFFFFFu - iov.iov_len) {
+            return (total > 0) ? total : -EINVAL;
+        }
+        if (!user_access_ok(iov.iov_base, iov.iov_len)) {
+            return (total > 0) ? total : -EFAULT;
+        }
+
+        r = read_fd(fd, (char __user *)iov.iov_base, iov.iov_len);
+        if (r < 0) {
+            return (total > 0) ? total : r;
+        }
+        total += r;
+        if ((uint32_t)r < iov.iov_len) {
+            break;  /* short read; stop, as readv does */
+        }
+    }
+
+    return total;
+}
+
 
 /**
  * Duplicate a descriptor onto the lowest free fd (dup(2)).
@@ -8796,6 +8865,7 @@ void init_syscall(void)
     _syscall_table[SYS_TIMES] = sys_times;
     _syscall_table[SYS_SYSINFO] = sys_sysinfo;
     _syscall_table[SYS_VFORK] = sys_fork; /* conservative alias */
+    _syscall_table[SYS_READV] = sys_readv;
     _syscall_table[SYS_WRITEV] = sys_writev;
     _syscall_table[SYS_UNAME] = sys_uname;
     _syscall_table[SYS_SETHOSTNAME] = sys_sethostname;

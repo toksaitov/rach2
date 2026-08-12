@@ -64,6 +64,20 @@ Proof: `make check-busybox` and `make check-setid` on a tree where the second bi
 
 Readmes: `vendor/busybox/Readme.md` (the second build and busybox's own words for it), `tools/Readme.md` (the whitelist rule and the artifact checks).
 
+## Phase 2a: the kernel gains readv, which the work found it needs
+
+Not in the first draft of this plan, and inserted here because executing phase 3 stopped dead without it.
+
+busybox's `chpasswd` exited 2 with no message on os-real. The reason is not in chpasswd: it reads its input with `xmalloc_fgetline`, musl's buffered stdio fills its buffer with `readv` rather than `read` whenever it wants more than one byte, and this kernel had `writev` at 146 and nothing at 145. Every program that reads through `fgets`, `fread` or `scanf` was failing, silently, and the tree had already absorbed that: `utils/login.c`, `utils/passwd.c` and `utils/adduser.c` each carry a comment explaining that they read a byte at a time because there is no `readv`. That was treated as a property of the system rather than as a missing syscall.
+
+Change: `SYS_READV 145` in `rach2/sys/syscall.h`, and `sys_readv` in `rach2/sys/syscall.c` beside `sys_writev`, sharing its shape and its error rules. `sys_read`'s body becomes `read_fd(fd, buf, count)` with `sys_read` a two-line wrapper, which mirrors the `write_fd`/`sys_write` split the file already has; the body never touched its parameter block after the first three lines, so the split is mechanical.
+
+Proof: `tests/musl/readvmusl.c`, a new probe, taking the suite to 53. It reads a pipe through `fgets` and `fread`, which is the case that was broken, and then the call at its edges: three buffers filled in order, a zero-length middle buffer skipped rather than ending the walk, a short read stopping it, no buffers returning 0, and a negative count refused with `-EINVAL`.
+
+Shown failing: `sys_readv` made to answer `-ENOSYS` while still compiling, where the probe fails at `fread`. The first attempt at that mutation simply unwired the handler, which does not compile (`-Werror=unused-function`) and therefore ran the previous kernel and passed; that is recorded because a mutation that does not build is a mutation that proves nothing.
+
+Readmes: `rach2/Readme.md`'s syscall table gains `readv` (145).
+
 ## Phase 3: os-real's account tools become busybox's, in one step
 
 One commit, because a half-swapped image is worse than either end state: it would hold busybox's `adduser` writing through `/etc/passwd+` beside our `passwd` writing through `/etc/.pwlock`, and neither would see the other.
