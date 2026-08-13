@@ -17,8 +17,19 @@
  * find/insert/remove/overlap operations directly.
  */
 
-/* Maximum regions per process. */
-#define VMA_MAX 16
+/* Maximum regions per process.
+ *
+ * Four are spoken for before a program runs a line: its code, its data, the
+ * heap and the stack. The rest are anonymous mmaps, which is what a C library's
+ * allocator reaches for once an allocation is large enough, so this number is
+ * the number of large allocations a process may hold at once.
+ *
+ * It was 16, and 12 usable mappings is fewer than a compiler needs: tcc reading
+ * the 1.9 MB `libc.a` ran out and reported "memory full", with physical memory
+ * barely touched and the address space almost entirely free. The table was the
+ * ceiling, not the machine. 64 costs 48 bytes per entry per process, which is
+ * 36 KB of kernel .bss across the whole process table. */
+#define VMA_MAX 64
 
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
 #define VM_STACK_MAX_GROWTH 0x800000u

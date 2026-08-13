@@ -9,13 +9,13 @@ Physical frames, a virtual page table, a per-process address-space map (VMAs), a
 | `frame.*`     | Size the physical frame pool from the multiboot memory map, capped to the direct-mapped window                     |
 | `paging.*`    | 32-bit page tables, the identity map, user-page alloc/free, and the page-fault dispatcher                          |
 | `pagecache.*` | The page cache plus its demand-paged disk window at `PCWIN_BASE`, with CR0.WP dirty tracking and writeback         |
-| `vm.*`        | The VMA model: a small fixed array of `{start, end, prot, type}` regions per process, with find/insert/remove/grow |
+| `vm.*`        | The VMA model: a fixed 64-entry array of `{start, end, prot, type}` regions per process, with find/insert/remove/grow |
 | `heap.*`      | The kernel's own bump and region allocator (`mem_reserve`) for kernel structures                                   |
 | `usercopy.*`  | The `copy_from_user`, `copy_to_user`, and `strncpy_from_user` boundary, fault-aware                                |
 
 ## Address-space model
 
-Every process carries a `vm_space_t` (in its PCB) describing its user memory as a handful of virtual memory areas. Each VMA is a half-open, page-aligned range `[start, end)` with a protection (`VM_PROT_*`) and a kind (`VM_CODE`, `VM_DATA`, `VM_HEAP`, `VM_STACK`, `VM_ANON`). This is the structure real kernels build on (Linux `vm_area_struct`, BSD `vm_map_entry`); here it is a 16-entry array, since a teaching process has only a few regions. `vm.c` is pure logic with no kernel globals, so the host seam test (`tests/host/vm_hosttest.c`) exercises find, insert, remove, overlap, and stack growth directly under ASan and UBSan.
+Every process carries a `vm_space_t` (in its PCB) describing its user memory as a handful of virtual memory areas. Each VMA is a half-open, page-aligned range `[start, end)` with a protection (`VM_PROT_*`) and a kind (`VM_CODE`, `VM_DATA`, `VM_HEAP`, `VM_STACK`, `VM_ANON`). This is the structure real kernels build on (Linux `vm_area_struct`, BSD `vm_map_entry`); here it is a 64-entry array. It was 16, and that turned out to be a real limit rather than a comfortable one: four regions are spoken for before a program runs a line (code, data, heap, stack), so twelve were left for anonymous mappings, and a C library's allocator takes one per large allocation. The compiler reading musl's 1.9 MB `libc.a` ran out of them and reported "memory full" with physical memory barely touched and the address space almost entirely free, which is a confusing way for a table size to present itself. `vm.c` is pure logic with no kernel globals, so the host seam test (`tests/host/vm_hosttest.c`) exercises find, insert, remove, overlap, and stack growth directly under ASan and UBSan.
 
 `exec` builds the map (`elf_setup_vmas`): one VMA per loaded ELF segment with the segment's real permissions, an empty heap just past the image (`brk == image_end`), and a one-page stack at the top growable down to `stack_limit`. `fork` copies the parent's map verbatim.
 
