@@ -224,6 +224,13 @@ the supporting scripts.
 
 ## Boot, probe, and disk tests
 
+Every script here that starts a machine ends it on every way out, and not only
+on the two the script writes for itself. A run cancelled between the boot and
+the verdict used to leave QEMU alive, holding the disk copy and the forwarded
+port whose names had just been removed; the cleanup is installed as the trap,
+written to be safe to call twice, and a pid is forgotten as it is killed, since
+a pid a script no longer owns is one the host may since have given away.
+
 * `harness.py`: boots a kernel image in QEMU and matches probe success tokens on
   the serial log within a wall-clock timeout. The engine behind the disk tests.
   A step that does not do what it asked is a failure in its own right, so an

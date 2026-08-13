@@ -47,7 +47,8 @@ LOGS="$STRICT.log $SHELL_IMAGE.log $REAL.stop.log $REAL.rescue.log"
 # grep is not ordered after, so a wait could end before its boot began.
 # shellcheck disable=SC2086
 rm -f $LOGS
-trap 'rm -f $LOGS' EXIT INT TERM
+
+QPID=""
 
 # Type `id` at whatever the console offers. A shell answers it; a console that
 # never came up does not, which is the whole distinction being drawn.
@@ -73,9 +74,27 @@ wait_serial() {
 }
 
 stop() {
-    kill "$QPID" 2>/dev/null || true
-    wait "$QPID" 2>/dev/null || true
+    qpid="$QPID"
+    QPID=""
+    if [ -n "$qpid" ]; then
+        kill "$qpid" 2>/dev/null || true
+        wait "$qpid" 2>/dev/null || true
+    fi
 }
+
+# The machine goes down every way out of this script and not only the ways it
+# writes for itself: a cancelled run that had only removed the logs would leave
+# QEMU alive with nothing named to say so.
+# shellcheck disable=SC2086
+cleanup() {
+    stop
+    rm -f $LOGS
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 # The permissive image first, so a failure to boot at all is reported against
 # the half that is supposed to succeed rather than as a false pass of the other.

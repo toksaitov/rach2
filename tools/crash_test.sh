@@ -51,7 +51,40 @@ cp "$DISK" "$OFF"
 # not won in 600 trials of both background forms used here), which is a reason to
 # spend one line closing it rather than a reason to argue about it.
 rm -f "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"
-trap 'rm -f "$CRASH" "$CLEAN" "$DIRTY" "$OFF" "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"' EXIT INT TERM
+
+QPID=""
+FPID=""
+
+# Whatever machine a phase left running, stopped. Every phase ends its own, so
+# this is for the ways out that no phase writes: a cancelled run that had only
+# removed the images would leave QEMU alive on a file nothing can now name. The
+# pid is forgotten as it is killed, since a pid this script no longer owns is a
+# pid the host may since have given to somebody else.
+stop() {
+    qpid="$QPID"
+    fpid="$FPID"
+    QPID=""
+    FPID=""
+    if [ -n "$qpid" ]; then
+        kill "$qpid" 2>/dev/null || true
+        wait "$qpid" 2>/dev/null || true
+    fi
+    if [ -n "$fpid" ]; then
+        kill "$fpid" 2>/dev/null || true
+        wait "$fpid" 2>/dev/null || true
+    fi
+}
+
+cleanup() {
+    stop
+    rm -f "$CRASH" "$CLEAN" "$DIRTY" "$OFF" "$CRASH.log" "$CLEAN.log" \
+        "$DIRTY.log" "$OFF.log" "$DISK.feed"
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 # Whether an offline fsck calls $1 dirty. Its status is read as well, because
 # fsck prints the dirty line before it finishes walking the chain: a pipeline
@@ -117,13 +150,11 @@ wait_serial() {
 qemu_disk "$CRASH" >"$CRASH.log" 2>&1 &
 QPID=$!
 if ! wait_serial "$CRASH.log" "(disk)"; then
-    kill "$QPID" 2>/dev/null || true
-    wait "$QPID" 2>/dev/null || true
+    stop
     echo "crash-test: FAIL: disk mount never reported on serial" >&2
     exit 1
 fi
-kill "$QPID" 2>/dev/null || true
-wait "$QPID" 2>/dev/null || true
+stop
 if ! fsck_says_dirty "$CRASH"; then
     echo "crash-test: FAIL: crashed image did not report dirty" >&2
     exit 1
@@ -135,13 +166,11 @@ echo "crash-test: crashed image reports not-cleanly-unmounted: OK"
 printf '\nhalt\n' | qemu_disk "$CLEAN" >"$CLEAN.log" 2>&1 &
 QPID=$!
 if ! wait_serial "$CLEAN.log" "halt: system halted"; then
-    kill "$QPID" 2>/dev/null || true
-    wait "$QPID" 2>/dev/null || true
+    stop
     echo "crash-test: FAIL: clean halt never reported on serial" >&2
     exit 1
 fi
-kill "$QPID" 2>/dev/null || true
-wait "$QPID" 2>/dev/null || true
+stop
 if ! fsck_says_clean "$CLEAN"; then
     echo "crash-test: FAIL: cleanly-halted image is not clean" >&2
     exit 1
@@ -172,18 +201,22 @@ while kill -0 "$QPID" 2>/dev/null && [ "$i" -lt 60 ]; do
 done
 if kill -0 "$QPID" 2>/dev/null; then
     kill -9 "$QPID" 2>/dev/null || true
-    kill "$FPID" 2>/dev/null || true
+    stop
     rm -f "$FEED"
     echo "crash-test: FAIL: poweroff did not stop the machine" >&2
     exit 1
 fi
+# The status is read before the pid is forgotten, because it is the machine
+# stopping ITSELF that this phase is about.
 if ! wait "$QPID"; then
-    kill "$FPID" 2>/dev/null || true
+    QPID=""
+    stop
     rm -f "$FEED"
     echo "crash-test: FAIL: QEMU stopped, but not with the status a power-off gives" >&2
     exit 1
 fi
-kill "$FPID" 2>/dev/null || true
+QPID=""
+stop
 rm -f "$FEED"
 if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$OFF.log"; then
     echo "crash-test: FAIL: poweroff did not report a clean unmount" >&2
@@ -205,13 +238,11 @@ echo "crash-test: powered-off image is clean and QEMU stopped itself: OK"
 printf '\nexec /dirtyprobe\n' | qemu_disk "$DIRTY" >"$DIRTY.log" 2>&1 &
 QPID=$!
 if ! wait_serial "$DIRTY.log" "DIRTYPROBE OK"; then
-    kill "$QPID" 2>/dev/null || true
-    wait "$QPID" 2>/dev/null || true
+    stop
     echo "crash-test: FAIL: dirtyprobe never reported OK" >&2
     exit 1
 fi
-kill "$QPID" 2>/dev/null || true
-wait "$QPID" 2>/dev/null || true
+stop
 if ! fsck_says_dirty "$DIRTY"; then
     echo "crash-test: FAIL: the dirty flag was cleared off the root node" >&2
     exit 1

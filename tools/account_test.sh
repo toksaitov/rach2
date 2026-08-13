@@ -69,7 +69,6 @@ WORK="$DISK.work"
 LOG="$DISK.work.log"
 FEED="$DISK.work.feed"
 rm -f "$WORK" "$LOG" "$FEED"
-trap 'rm -f "$WORK" "$LOG" "$FEED"' EXIT INT TERM
 
 QPID=""
 FPID=""
@@ -99,12 +98,40 @@ SYS_ID_HIGH=999
 REG_ID_LOW=1000
 REG_ID_HIGH=60000
 
+# Everything this run started, ended. It is written to be safe to call twice,
+# because the ordinary paths call it and the trap calls it again: a script that
+# only killed its machine when it succeeded or failed its own checks leaves
+# QEMU running for a cancelled build, and that QEMU still holds the disk copy
+# whose name has just been removed.
+#
+# Each pid is taken and forgotten BEFORE it is signalled, so a trap that fires
+# between the kill and the wait finds nothing left to kill: a pid this script no
+# longer owns is one the host may since have given to somebody else.
 cleanup_boot() {
-    kill -9 "$QPID" 2>/dev/null || true
-    wait "$QPID" 2>/dev/null || true
-    kill "$FPID" 2>/dev/null || true
+    qpid="$QPID"
+    fpid="$FPID"
+    QPID=""
+    FPID=""
+    if [ -n "$qpid" ]; then
+        kill -9 "$qpid" 2>/dev/null || true
+        wait "$qpid" 2>/dev/null || true
+    fi
+    if [ -n "$fpid" ]; then
+        kill -9 "$fpid" 2>/dev/null || true
+        wait "$fpid" 2>/dev/null || true
+    fi
     rm -f "$FEED"
 }
+
+cleanup() {
+    cleanup_boot
+    rm -f "$WORK" "$LOG" "$FEED"
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 fail() {
     if [ -f "$LOG" ]; then

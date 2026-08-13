@@ -43,7 +43,6 @@ WORK="$DISK.work"
 LOG="$DISK.work.log"
 FEED="$DISK.work.feed"
 rm -f "$WORK" "$LOG" "$FEED"
-trap 'rm -f "$WORK" "$LOG" "$FEED"' EXIT INT TERM
 
 QPID=""
 FPID=""
@@ -162,12 +161,40 @@ wait_token() {
     return 1
 }
 
+# Everything this run started, ended. It is written to be safe to call twice,
+# because the ordinary paths call it and the trap calls it again: a script that
+# only killed its machine when it succeeded or failed its own checks leaves
+# QEMU running for a cancelled build, and that QEMU still holds the disk copy
+# whose name has just been removed.
+#
+# Each pid is taken and forgotten BEFORE it is signalled, so a trap that fires
+# between the kill and the wait finds nothing left to kill: a pid this script no
+# longer owns is one the host may since have given to somebody else.
 cleanup_boot() {
-    kill -9 "$QPID" 2>/dev/null || true
-    wait "$QPID" 2>/dev/null || true
-    kill "$FPID" 2>/dev/null || true
+    qpid="$QPID"
+    fpid="$FPID"
+    QPID=""
+    FPID=""
+    if [ -n "$qpid" ]; then
+        kill -9 "$qpid" 2>/dev/null || true
+        wait "$qpid" 2>/dev/null || true
+    fi
+    if [ -n "$fpid" ]; then
+        kill -9 "$fpid" 2>/dev/null || true
+        wait "$fpid" 2>/dev/null || true
+    fi
     rm -f "$FEED"
 }
+
+cleanup() {
+    cleanup_boot
+    rm -f "$WORK" "$LOG" "$FEED"
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 fail() {
     cleanup_boot
@@ -185,12 +212,16 @@ require_clean_stop() {
     if ! wait_stop 90; then
         fail "$1: the machine did not stop"
     fi
+    # The status is read before the pid is forgotten, because it is the machine
+    # stopping ITSELF that this phase is about; after that the pid is nobody's,
+    # and a pid this script no longer owns is one the host may since have given
+    # to somebody else.
     if ! wait "$QPID"; then
-        kill "$FPID" 2>/dev/null || true
+        QPID=""
         fail "$1: QEMU stopped, but not with the status a power-off gives"
     fi
-    kill "$FPID" 2>/dev/null || true
-    rm -f "$FEED"
+    QPID=""
+    cleanup_boot
     if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$LOG"; then
         fail "$1: the kernel never reported a clean unmount"
     fi
