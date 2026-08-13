@@ -176,6 +176,9 @@ ALLOWLIST = {
         },
         "sentinel": None,
         "init": "init-login",
+        # This image carries the compiler, so the inventory also checks the
+        # sysroot it was built to look in.
+        "sysroot": True,
     },
     "test": {
         # suidprobe's fixtures (the same helper at several modes and owners),
@@ -946,6 +949,30 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
         return ["%s: %s" % (os.path.basename(image), e)], ""
 
     problems = []
+    # The init contract, asked of the IMAGE and not only of the manifest text.
+    # The text half reads `file` directives, and `tree` stages paths no
+    # directive names: a `tree` over a host directory holding an `init` would
+    # put one at /sbin/init in an image whose allowlist declares none, and the
+    # kernel would run it as pid 1.
+    init_node = paths.get("/sbin/init")
+    if allow.get("init") is None:
+        if init_node is not None:
+            problems.append("%s: carries /sbin/init and the allowlist declares "
+                            "none for this image; the kernel runs that as pid 1"
+                            % os.path.basename(image))
+    elif init_node is None:
+        problems.append("%s: carries no /sbin/init and the allowlist declares "
+                        "%s" % (os.path.basename(image), allow["init"]))
+    elif (init_node["mode"] & PERM, init_node["uid"], init_node["gid"]) != \
+            (INIT_MODE, 0, 0):
+        problems.append("%s: /sbin/init is %s; the kernel execs it as root, so "
+                        "it must be %s"
+                        % (os.path.basename(image),
+                           fmt_entry(init_node["mode"] & PERM,
+                                     init_node["uid"], init_node["gid"]),
+                           fmt_entry(INIT_MODE, 0, 0)))
+    if allow.get("sysroot"):
+        problems.extend(check_sysroot_paths(paths, os.path.basename(image)))
     found = {}
     for path in sorted(paths):
         node = paths[path]
@@ -1389,11 +1416,12 @@ def build_region(nodes, total=IMAGE_TOTAL):
     return region
 
 
-def fixture(index=None, node=None):
-    """The fixture region, with one node optionally replaced."""
+def fixture(index=None, node=None, extra=()):
+    """The fixture region, with one node optionally replaced and more added."""
     nodes = list(IMAGE_NODES)
     if index is not None:
         nodes[index] = node
+    nodes.extend(extra)
 
     return build_region(nodes)
 
@@ -1435,6 +1463,13 @@ IMAGE_CASES = [
     ("an unprivileged file at a mode nobody declared", "img-fixture",
      fixture(3, (NODE_RESERVED, 13, b"busybox", 0o777, 0, 0, 11)), None,
      False, "trust boundaries too"),
+    # An init that no directive named: `tree` stages paths the manifest text
+    # does not hold, so the text half cannot see this one and the image half
+    # has to.
+    ("an init smuggled in where the allowlist declares none", "img-fixture",
+     fixture(extra=((NODE_RESERVED, 15, b"sbin", 0o40755, 0, 0, 0),
+                    (NODE_RESERVED, 16, b"init", 0o755, 0, 0, 15))), None,
+     False, "the kernel runs that as pid 1"),
     ("the directory holding them writable by anyone", "img-fixture",
      fixture(1, (NODE_RESERVED, 11, b"bin", 0o40777, 0, 0, 0)), None,
      False, "may write is a way to replace"),
@@ -1983,6 +2018,68 @@ def check_inits(directory=INIT_BINARIES):
                     "shell" % (path, wanted_string.decode("ascii")))
 
     return problems
+
+
+# The sysroot the compiler was configured to look in, which is a different
+# question from whether a path is privileged: tcc's search paths were baked into
+# the binary at configure time (vendor/tcc/Readme.md), so an image missing any
+# of them holds a compiler that fails at the last step, with a message about a
+# file rather than about the image. Checked here because this is the tool that
+# already reads a staged image node by node.
+#
+# The order of the two include directories is not checked and cannot be: it is
+# in the binary, not in the image. What is checked is that both are there.
+SYSROOT_PATHS = (
+    "/bin/tcc",
+    "/lib/tcc/libtcc1.a",
+    "/lib/tcc/include/stdarg.h",
+    "/lib/tcc/include/stddef.h",
+    "/lib/tcc/include/stdbool.h",
+    "/lib/tcc/include/float.h",
+    "/lib/tcc/include/varargs.h",
+    "/lib/libc.a",
+    "/lib/crt1.o",
+    "/lib/crti.o",
+    "/lib/crtn.o",
+    "/include/stdio.h",
+    "/include/stdlib.h",
+    "/include/string.h",
+    "/include/unistd.h",
+    "/include/sys/stat.h",
+    "/include/bits/alltypes.h",
+)
+
+
+def check_sysroot_paths(paths, name):
+    """Check an already-walked image for the compiler's sysroot."""
+    problems = []
+    for path in SYSROOT_PATHS:
+        node = paths.get(path)
+        if node is None:
+            problems.append("%s: %s is not staged; the compiler was built to "
+                            "look for it and would fail at the last step"
+                            % (name, path))
+        elif node["mode"] & 0o40000:
+            problems.append("%s: %s is a directory and the compiler wants a "
+                            "file" % (name, path))
+
+    return problems
+
+
+def check_sysroot(image, offset=0, size=None):
+    """Check a staged image carries everything the compiler looks for.
+
+    Run for the images whose allowlist entry says `sysroot`, so that a manifest
+    saying an image carries a compiler is the same statement as the image being
+    checked for one, and neither stager has to know which is which.
+    """
+    try:
+        region = read_region(image, offset, size)
+        paths = node_paths(walk_nodes(region))
+    except (ImageError, OSError) as e:
+        return ["%s: %s" % (os.path.basename(image), e)]
+
+    return check_sysroot_paths(paths, os.path.basename(image))
 
 
 def main(argv):

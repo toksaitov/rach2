@@ -122,6 +122,12 @@ the supporting scripts.
   and the LAST `dir` for a path is the one that counts, the way `stage_dir`
   re-applies mode and owner.
   The INIT CHECK is the fourth, and it is split by what each half must read.
+  Since `tree` stages paths no directive names, the IMAGE half asks the same
+  question of the artifact: an image whose allowlist declares no init must
+  carry no `/sbin/init`, and one that declares an init must carry it at
+  `0755:0:0`. A `tree` over a host directory holding an `init` would otherwise
+  put one where the kernel runs it as pid 1, with the manifest text saying
+  nothing.
   The manifest half runs inside the sweep, since it reads text alone: each
   manifest's `/sbin/init` line must be a mandatory `file` naming exactly the
   artifact its table entry declares, and a manifest whose entry declares no init

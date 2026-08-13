@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -661,6 +662,56 @@ static bool stage_exec_dir(
     return ok;
 }
 
+/**
+ * Make `path` a directory if it is not one already, leaving an existing one
+ * exactly as it is. Returns false on a hard error.
+ *
+ * `stage_dir` re-applies mode and owner to a directory it finds, which is what
+ * a `dir` line should do: the manifest said what that directory is. A `tree`
+ * must not: it walks INTO directories that other lines declared, and a tree
+ * owned by uid 1000 staged under a root-owned 0700 directory would otherwise
+ * hand that directory away.
+ */
+static bool stage_dir_if_absent(struct krffs_file_system *file_system,
+                                const char *path, uint16_t mode,
+                                uint32_t uid, uint32_t gid)
+{
+    char path_buf[256];
+    char dir_buf[256];
+    char *name;
+    uint64_t parent_id;
+    struct krffs_node *node;
+
+    if (strcmp(path, "/") == 0) {
+        return true;
+    }
+    name =
+        split_path(path, path_buf, sizeof(path_buf), dir_buf, sizeof(dir_buf));
+    if (name == NULL) {
+        fprintf(stderr, "stageimage: malformed directory path '%s'.\n", path);
+
+        return false;
+    }
+    parent_id =
+        resolve_dir(file_system, dir_buf);
+    if (parent_id == (uint64_t) -1) {
+        return false;
+    }
+    node =
+        find_child(file_system, parent_id, name);
+    if (node != NULL) {
+        if (!is_dir_node(node)) {
+            fprintf(stderr, "stageimage: '%s' already exists as a non-directory.\n", path);
+
+            return false;
+        }
+
+        return true; /* somebody else declared it; it is theirs */
+    }
+
+    return stage_dir(file_system, path, mode, uid, gid);
+}
+
 /** Order two directory entries by name, for `qsort` in `stage_tree`. */
 static int compare_names(const void *a, const void *b)
 {
@@ -697,6 +748,7 @@ static bool stage_tree(struct krffs_file_system *file_system,
                        uint16_t mode, uint32_t uid, uint32_t gid)
 {
     struct dirent *e;
+    struct stat root_st;
     char **names = NULL;
     size_t count = 0;
     size_t i;
@@ -709,8 +761,20 @@ static bool stage_tree(struct krffs_file_system *file_system,
         return false;
     }
 
+    /* The host directory itself must be a directory and not a link to one:
+       everything below is checked with lstat, and a symlinked root would walk
+       a tree the manifest did not name. */
+    if (lstat(hostdir, &root_st) != 0 || !S_ISDIR(root_st.st_mode)) {
+        fprintf(stderr, "stageimage: '%s' is not a directory; 'tree' takes "
+                        "one, and follows no symlink to reach it.\n", hostdir);
+        closedir(d);
+
+        return false;
+    }
+
     /* Read the names first, then sort them: readdir order is the file system's
        and differs between machines, and an image should not. */
+    errno = 0;
     while ((e = readdir(d)) != NULL) {
         char **grown;
 
@@ -729,13 +793,21 @@ static bool stage_tree(struct krffs_file_system *file_system,
             break;
         }
         count++;
+        errno = 0;
+    }
+    /* readdir returns NULL for the end AND for an error, and telling them apart
+       is the difference between a complete tree and a prefix of one published
+       as if it were complete. */
+    if (errno != 0) {
+        fprintf(stderr, "stageimage: cannot read host dir '%s'.\n", hostdir);
+        ok = false;
     }
     closedir(d);
     if (ok) {
         qsort(names, count, sizeof(*names), compare_names);
     }
 
-    if (!stage_dir(file_system, guestdir, 0755, uid, gid)) {
+    if (!stage_dir_if_absent(file_system, guestdir, 0755, uid, gid)) {
         ok = false;
     }
 
