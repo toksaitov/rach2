@@ -78,6 +78,7 @@ MKDISK          = krffs/mkdisk.sh
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
+        tcc-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
@@ -347,6 +348,22 @@ account-test: rach2 utils krffs busybox ish check-tcc
 	sh tools/account_test.sh build/rach2/kernel $(OS_SIMPLE_IMAGE) \
 	    "`cat krffs/rach2_demo_password`" simple
 
+# `make tcc-test`: the machine compiling a program on itself. Boots os-real from
+# a disk as the unprivileged `test` account, writes a C file at the prompt,
+# compiles it, runs the result, and then asks for the four kinds of program this
+# system cannot run and requires each to be refused with its reason and to leave
+# no output behind. The boot carries `rach2.trace=enosys`, so a syscall the
+# compiler wants and this kernel lacks is named on the console rather than
+# turning into a mysterious failure.
+TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
+
+tcc-test: rach2 utils krffs check-busybox check-tcc check-setid check-dropbearmulti ports/doom
+	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
+	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
+	sh tools/tcc_test.sh build/rach2/kernel $(TCC_TEST_DISK) \
+	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
+
 # `make shutdown-test`: userland stopping the machine, on a disk fixture, with
 # every claim of a stop asserted on the QEMU process ending rather than on a
 # token, and every image checked by offline fsck afterwards.
@@ -576,6 +593,7 @@ help:
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
+	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make account-test   accounts created, authenticated and deleted, on both images"
 	@echo "  make shutdown-test  userland stops the machine, and only root can"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"

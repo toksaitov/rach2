@@ -55,6 +55,14 @@ It sits at the one place in `main()` where the chosen output type is acted on, a
 
 A patch that does not apply stops the build, and `make check-tcc` reads all four diagnostics back out of the shipped binary, because a patch that quietly stopped applying and a compiler that accepts `-run` look identical from outside.
 
+## What the guest links against, and the three symbols that are not there
+
+The guest links `libc.a`, `libtcc1.a` and the startup objects, and nothing else. On the host the `muslgcc` wrapper appends libgcc, so the question of who provides gcc's helper routines never comes up; in the guest there is no libgcc, and musl was compiled by gcc.
+
+Three symbols fall in that gap: `vfprintf` wants `__udivmoddi4`, `__secs_to_tm` wants `__divmoddi4`, and `cpowl` wants `__mulxc3`. tcc's own runtime defines the first only as a file-local symbol and the other two not at all, because tcc's code generator never emits those calls. So `build_tcc.sh` takes those three objects from the libgcc of the compiler that built musl and adds them to `libtcc1.a`.
+
+The list is written out rather than computed, and then checked: `tools/check_link.py` asks of the very files that will be staged whether anything is left undefined, so a fourth such symbol is a build failure here rather than a student's first link failing with a name they have no way to place.
+
 ## What is deliberately not built
 
 The kernel, musl and dropbear are not compiled in the guest. Each has its own reason and they are recorded in `dev-log/20-compiler/`.

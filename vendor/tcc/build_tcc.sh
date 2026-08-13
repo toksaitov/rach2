@@ -192,6 +192,29 @@ make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
 echo "tcc: building libtcc1.a with the cross gcc"
 make -C "$SRC" TARGETOS=Linux CONFIG_OSX= i386-libtcc1-usegcc=yes libtcc1.a >/dev/null
 
+# The runtime has to answer what the guest's libc ASKS FOR, and the guest's libc
+# was compiled by gcc, which emits calls to helpers that live in libgcc: musl's
+# vfprintf wants __udivmoddi4, __secs_to_tm wants __divmoddi4, cpowl wants
+# __mulxc3. tcc's own runtime defines the first only as a file-local symbol and
+# the other two not at all, because tcc's code generator never emits those
+# calls; on the host the muslgcc wrapper appends libgcc and the question never
+# comes up. In the guest there is no libgcc, so the three objects are taken from
+# the same compiler that built musl and added to the runtime archive.
+#
+# The list is written out rather than computed, and then CHECKED: if musl ever
+# references a fourth, the assertion below says so instead of a student meeting
+# an undefined symbol at their first link.
+echo "tcc: adding the libgcc helpers musl references to libtcc1.a"
+LIBGCC="$(i686-elf-gcc -m32 -print-libgcc-file-name)"
+(
+    cd "$SRC"
+    rm -rf rach2-libgcc
+    mkdir rach2-libgcc
+    cd rach2-libgcc
+    i686-elf-ar x "$LIBGCC" _udivmoddi4.o _divmoddi4.o _mulxc3.o
+    i686-elf-ar rcs ../libtcc1.a _udivmoddi4.o _divmoddi4.o _mulxc3.o
+)
+
 mkdir -p "$STAGE" "$STAGE/include"
 echo "tcc: staging to build/vendor/tcc"
 i686-elf-strip "$SRC/tcc" -o "$STAGE/tcc"
@@ -202,6 +225,13 @@ cp "$SRC/libtcc1.a" "$STAGE/libtcc1.a"
 for h in float.h stdarg.h stdbool.h stddef.h varargs.h; do
     cp "$SRC/include/$h" "$STAGE/include/$h"
 done
+
+# Nothing the guest's libc asks for may be left for the guest to discover. The
+# question is asked of the artifacts that will actually be staged.
+echo "tcc: checking the guest can link against what it will carry"
+python3 "$SCRIPT_DIR/../../tools/check_link.py" \
+    "$PREFIX/lib/libc.a" "$STAGE/libtcc1.a" \
+    "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$PREFIX/lib/crtn.o"
 
 echo "tcc: built $VERSION ($(wc -c < "$STAGE/tcc") bytes, static, musl, i386, targeting i386)"
 echo "tcc: rebuild the os-real image (make os-real-image) to install it"

@@ -39,6 +39,7 @@
 #include "network/tcp/tcp.h"
 #include "network/ip/icmp.h"
 #include "network/net.h" /* NET_IP_ADDR for getsockname */
+#include "cmdline.h"    /* kcmdline_has, for the ENOSYS trace flag */
 
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
@@ -8955,6 +8956,13 @@ static int32_t sys_munmap(isr_params_t *params)
     return 0;
 }
 
+/* Name each missing syscall once per boot, behind `rach2.trace=enosys`. The
+ * bitmap is what makes it once: a program in a retry loop would otherwise fill
+ * the console with one number. Off unless the flag is on the command line, so
+ * no other boot sees a line it did not before. */
+static int _trace_enosys = 0;
+static uint32_t _enosys_seen[(SYSCALL_TABLE_SIZE + 31) / 32];
+
 /**
  * The syscall trap handler: dispatch on the number in EAX.
  *
@@ -8987,6 +8995,21 @@ static void _syscall_handler(isr_params_t *params)
 
     if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
         ret = _syscall_table[syscall_num](params);
+    } else if (_trace_enosys) {
+        /* A missing syscall is otherwise invisible: -ENOSYS goes back in a
+         * register and nothing is printed, so a program that fails for want of
+         * one fails for no stated reason. Behind `rach2.trace=enosys` each
+         * number is named ONCE per boot, with the process that asked, which is
+         * enough to tell a gap from a bug without turning a boot into a log. */
+        uint32_t word = syscall_num / 32;
+        uint32_t bit = 1u << (syscall_num % 32);
+
+        if (syscall_num < SYSCALL_TABLE_SIZE && !(_enosys_seen[word] & bit)) {
+            _enosys_seen[word] |= bit;
+            serial_printf("syscall: %d: not implemented (asked for by %s)\n",
+                          (int)syscall_num,
+                          current_proc ? current_proc->comm : "?");
+        }
     }
 
     /* Disable interrupts again so the epilogue restores the trapframe (segments
@@ -9129,6 +9152,8 @@ void init_syscall(void)
     /* musl's exit() issues exit_group(); for a single-threaded process it is
      * exactly _exit(). */
     _syscall_table[SYS_EXIT_GROUP] = sys_exit;
+
+    _trace_enosys = kcmdline_has("rach2.trace=enosys");
 
     register_isr_handler(SYSCALL_VECTOR, _syscall_handler);
 }
