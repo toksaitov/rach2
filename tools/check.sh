@@ -125,7 +125,7 @@ else
     echo "  FAIL: see $VDIR/verify_cppcheck.log"; fail=1
 fi
 
-# 3. shellcheck. New in-house scripts (tools/, vendor/musl/) are STRICT; SC2086 stays
+# 3. shellcheck. New in-house scripts (tools/, vendor/*/build_*.sh) are STRICT; SC2086 stays
 #    active so an accidental unquoted expansion is caught. The legacy QEMU
 #    run/build scripts waive SC2086 (option word-splitting is intentional) and
 #    SC2034 (vars shared across sourced fragments); SC1091 covers the dynamic
@@ -133,7 +133,7 @@ fi
 hr "3/10 shellcheck"
 sc=0
 # shellcheck disable=SC2046
-shellcheck -x -e SC1091 $(ls tools/*.sh vendor/musl/*.sh 2>/dev/null) \
+shellcheck -x -e SC1091 $(ls tools/*.sh vendor/musl/*.sh vendor/*/build_*.sh 2>/dev/null) \
     >"$VDIR/verify_shellcheck.log" 2>&1 || sc=1
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 -e SC2034 -e SC2086 \

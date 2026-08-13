@@ -1,0 +1,6 @@
+# Extracted tcc source + build output (rebuilt by build_tcc.sh from the pinned
+# tarball).
+tcc-0.9.27/
+
+# Build stamp (mk top-level orchestration)
+.stamp

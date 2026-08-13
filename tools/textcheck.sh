@@ -30,6 +30,7 @@ prune_find() {
         -path 'vendor/musl/install' -prune -o \
         -path 'vendor/musl/musl-*' -prune -o \
         -path 'vendor/busybox/busybox-*' -prune -o \
+        -path 'vendor/tcc/tcc-*' -prune -o \
         -path 'vendor/dropbear/dropbear-*' -prune -o \
         "$@" 2>/dev/null
 }

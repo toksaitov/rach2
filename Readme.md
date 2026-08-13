@@ -19,6 +19,7 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [vendor/musl/](vendor/musl/)             | The ported musl libc: reproducible build, the SysV/auxv startup contract                                               | [Readme](vendor/musl/Readme.md)       |
 | [vendor/busybox/](vendor/busybox/)       | Static-musl BusyBox, built twice: the shell and tools, and the set-id account programs                                | [Readme](vendor/busybox/Readme.md)    |
 | [vendor/dropbear/](vendor/dropbear/)     | Static-musl Dropbear SSH server: the remote-login capstone                                                             | [Readme](vendor/dropbear/Readme.md)   |
+| [vendor/tcc/](vendor/tcc/)               | The Tiny C Compiler, built to run on Rach2 and compile for it                                                          | [Readme](vendor/tcc/Readme.md)        |
 | [ports/doom/](ports/doom/)               | Doom port with VGA graphics, mouse, and audio                                                                          | [Readme](ports/doom/Readme.md)        |
 | [mk/](mk/)                               | Shared GNU-Make building blocks: toolchain, header-deps, `build/`, clangd/IDE setup                                    | [Readme](mk/Readme.md)                |
 | [tools/](tools/)                         | Build, verify, and test scripts behind the make targets (doctor, the gates, the boot harness, image builders)          | [Readme](tools/Readme.md)             |

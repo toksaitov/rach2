@@ -29,6 +29,7 @@ the supporting scripts.
 * `gen_compile_commands.sh` (`make compile-commands`): writes
   `compile_commands.json` (git-ignored) from the build's own commands so clangd
   can index the kernel through the i686-elf cross GCC (see `mk/Readme.md`).
+* `check_elf.py`: judges an ELF against what this kernel will actually load, in two halves kept apart on purpose. The LOADER half is `elf_load_image`'s contract copied rule for rule (identification bytes, `ET_EXEC`, `EM_386`, the exact program-header entry size, at most 32 headers and 8 `PT_LOAD`s, the header table inside a load so `AT_PHDR` is real, `p_filesz <= p_memsz`, ascending page-disjoint non-wrapping segments in the user window, an entry point in it). The POLICY half is this project's: no `PT_INTERP`, no `PT_DYNAMIC`. The distinction is the point. The kernel REFUSES what the first half names and IGNORES what the second does, so a dynamic image would load, jump and run with nothing relocated; `file(1)` reports neither. Run from `make check-tcc`.
 * `check_setid.py`: the set-id guard, in four checks; the first two check each other.
   The MANIFEST SWEEP (run inside the gate) parses every
   `krffs/manifests/*.manifest` and compares its set-id lines against a

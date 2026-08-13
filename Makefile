@@ -33,6 +33,7 @@ FULL_DIRS = ports/doom
 LIBC_STAMP     = vendor/musl/.stamp
 BUSYBOX_STAMP  = vendor/busybox/.stamp
 DROPBEAR_STAMP = vendor/dropbear/.stamp
+TCC_STAMP      = vendor/tcc/.stamp
 
 # The staged capstone binaries the build_*.sh scripts produce, out of tree under
 # build/vendor/ (mirroring their vendor/<name>/ sources). A routine `make clean` never
@@ -42,6 +43,7 @@ DROPBEAR_STAMP = vendor/dropbear/.stamp
 BUSYBOX_BIN  = build/vendor/busybox/busybox
 BUSYBOX_SUID_BIN = build/vendor/busybox/busybox-suid
 DROPBEAR_BIN = build/vendor/dropbear/dropbearmulti
+TCC_BIN      = build/vendor/tcc/tcc
 
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
@@ -50,6 +52,7 @@ DROPBEAR_BIN = build/vendor/dropbear/dropbearmulti
 LIBC_TARBALL     = vendor/musl/musl-1.2.5.tar.gz
 BUSYBOX_TARBALL  = vendor/busybox/busybox-1.36.1.tar.bz2
 DROPBEAR_TARBALL = vendor/dropbear/dropbear-2022.83.tar.bz2
+TCC_TARBALL      = vendor/tcc/tcc-0.9.27.tar.bz2
 
 # The two musl artifacts consumers depend on, both derived from the tarball name so
 # the pinned version is written once: the installed static libc the cross-compiled
@@ -77,10 +80,10 @@ MKDISK          = krffs/mkdisk.sh
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
-        check-busybox check-setid check-dropbearmulti check-libc \
+        check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         compile-commands check-sources \
         verify-style verify-host doctor help \
-        busybox dropbear $(BASE_DIRS) $(FULL_DIRS)
+        busybox dropbear tcc $(BASE_DIRS) $(FULL_DIRS)
 
 # Default: the kernel and the os-simple image (our login, shell and Unix tools).
 all: os-simple-image
@@ -99,6 +102,7 @@ endif
 # Friendly aliases for the third-party stamps.
 busybox: $(BUSYBOX_STAMP)
 dropbear: $(DROPBEAR_STAMP)
+tcc: $(TCC_STAMP)
 
 # --- third-party stamp rules. Each removes BOTH the stamp and the expected artifact
 #     up front, runs its build script, requires a non-empty artifact, then touches
@@ -125,6 +129,13 @@ $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
 	    build/vendor/busybox/config-suid
 	./vendor/busybox/build_busybox.sh
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
+	@touch $@
+
+$(TCC_STAMP): vendor/tcc/build_tcc.sh $(TCC_TARBALL) $(LIBC_STAMP)
+	@rm -f $@ $(TCC_BIN) build/vendor/tcc/libtcc1.a \
+	    build/vendor/tcc/include/stdarg.h
+	./vendor/tcc/build_tcc.sh
+	@test -s $(TCC_BIN) || { echo "tcc: build produced no $(TCC_BIN)" >&2; exit 1; }
 	@touch $@
 
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h vendor/dropbear/muslgcc \
@@ -437,6 +448,22 @@ os-real-iso: os-real-image
 # Both binaries, both applet tables and both resolved configs, because a stamp
 # file outlives an artifact somebody deleted or truncated, and the set-id ones
 # are the artifacts whose absence would be noticed last and matter most.
+# The compiler the guest runs, and the two things it cannot work without: its
+# runtime and its own headers. The ELF check is the one that matters: `file(1)`
+# would call a Mach-O or an arm64 build "an executable" and this kernel would
+# refuse it, and a dynamically linked one it would ACCEPT and then run
+# unrelocated, which is worse.
+check-tcc: $(TCC_STAMP)
+	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
+	          build/vendor/tcc/include/stdarg.h \
+	          build/vendor/tcc/include/stddef.h \
+	          build/vendor/tcc/include/stdbool.h \
+	          build/vendor/tcc/include/float.h \
+	          build/vendor/tcc/include/varargs.h; do \
+	    test -s "$$f" || { echo "tcc: $$f missing or empty; rm vendor/tcc/.stamp and rebuild (make tcc)" >&2; exit 1; }; \
+	done
+	@python3 tools/check_elf.py $(TCC_BIN)
+
 check-busybox: $(BUSYBOX_STAMP)
 	@for f in $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
 	          build/vendor/busybox/applet_tables-main.h \
@@ -519,11 +546,13 @@ clean:
 # distclean: a full from-scratch reset; clean plus every third-party build product: the
 # stamps, vendor/musl/install, the extracted vendored source trees, and the entire
 # out-of-tree build/ (including the staged capstones under build/vendor that a routine
-# clean leaves in place). The next build rebuilds musl/busybox/dropbear from the tarballs.
+# clean leaves in place). The next build rebuilds musl/busybox/dropbear/tcc from the
+# tarballs.
 distclean: clean
-	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP)
+	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP)
 	rm -rf vendor/musl/install \
-	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) $(DROPBEAR_TARBALL:.tar.bz2=)
+	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) \
+	       $(DROPBEAR_TARBALL:.tar.bz2=) $(TCC_TARBALL:.tar.bz2=)
 	rm -rf build
 
 help:
