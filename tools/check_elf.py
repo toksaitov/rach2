@@ -19,16 +19,21 @@ The check exists here precisely because the kernel will not make it.
 
 Usage:
     check_elf.py FILE...        judge each file, report every finding
+    check_elf.py --selftest     run the boundary cases over crafted headers
 Exits non-zero on any finding.
 """
 import struct
 import sys
 
-# From rach2/sys/proc/elf.h and rach2/sys/mm/usercopy.h.
+# From rach2/sys/proc/elf.h and elf.c. The window is the LOADER's own
+# (ELF_USER_MIN/ELF_USER_MAX at elf.c:16-17), which is one page below the
+# usercopy window that mm/usercopy.h defines: exec leaves that page out, and a
+# checker using the wider bound would approve an image exec refuses.
 ELF_MAX_PHNUM = 32
 ELF_MAX_SEGS = 8
-USER_ADDR_MIN = 0x02000000
-USER_ADDR_MAX = 0xC0000000
+ELF_USER_MIN = 0x02000000
+ELF_USER_MAX = 0xBFFFF000
+UINT32_MAX = 0xFFFFFFFF
 PAGE_SIZE = 0x1000
 
 ET_EXEC = 2
@@ -101,15 +106,18 @@ def loader_findings(name, data):
         if p_filesz > p_memsz:
             problems.append("%s: a segment's file size exceeds its memory size"
                             % name)
-        if p_offset + p_filesz < p_offset or p_vaddr + p_memsz < p_vaddr:
-            problems.append("%s: a segment wraps the address space" % name)
+        # The loader's wrap tests are 32-bit; Python's integers do not wrap, so
+        # the same question is asked as an explicit bound.
+        if p_offset + p_filesz > UINT32_MAX or p_vaddr + p_memsz > UINT32_MAX:
+            problems.append("%s: a segment wraps the 32-bit address space"
+                            % name)
             continue
         if p_offset + p_filesz > len(data):
             problems.append("%s: a segment runs past the file" % name)
-        if p_vaddr < USER_ADDR_MIN or p_vaddr + p_memsz > USER_ADDR_MAX:
-            problems.append("%s: a segment lies outside the user window "
-                            "[0x%08x, 0x%08x)"
-                            % (name, USER_ADDR_MIN, USER_ADDR_MAX))
+        if p_vaddr < ELF_USER_MIN or p_vaddr + p_memsz > ELF_USER_MAX:
+            problems.append("%s: a segment lies outside the window exec loads "
+                            "into, [0x%08x, 0x%08x)"
+                            % (name, ELF_USER_MIN, ELF_USER_MAX))
         page_start = p_vaddr & ~(PAGE_SIZE - 1)
         if page_start < end:
             problems.append("%s: the PT_LOAD segments are not ascending and "
@@ -123,9 +131,9 @@ def loader_findings(name, data):
     if not phdr_covered:
         problems.append("%s: the program header table lies outside every "
                         "PT_LOAD, so AT_PHDR would name nothing" % name)
-    if e_entry < USER_ADDR_MIN or e_entry >= USER_ADDR_MAX:
-        problems.append("%s: the entry point is outside the user window"
-                        % name)
+    if e_entry < ELF_USER_MIN or e_entry >= ELF_USER_MAX:
+        problems.append("%s: the entry point is outside the window exec loads "
+                        "into" % name)
 
     return problems
 
@@ -170,9 +178,71 @@ def check(path):
     return loader_findings(path, data) + policy_findings(path, data)
 
 
+# The cases that decide where the loader's window ends, crafted rather than
+# found: no binary in this tree lives near the ceiling, and the checker was
+# wrong about it once, using the usercopy window (0xC0000000) where the loader
+# uses one page less.
+#
+# The addresses are LITERAL and not written in terms of the constants above,
+# which is the whole point: a case built out of ELF_USER_MAX moves when
+# ELF_USER_MAX is wrong, passes, and proves nothing. These are the numbers
+# rach2/sys/proc/elf.c:16-17 actually holds, written out.
+#
+# Each is (name, e_entry, p_vaddr, p_memsz, want_ok).
+BOUNDARY_CASES = [
+    ("a segment ending exactly at the ceiling", 0x08048000,
+     0xBFFFE000, 0x1000, True),
+    ("a segment ending one byte past the ceiling", 0x08048000,
+     0xBFFFE000, 0x1001, False),
+    ("a segment inside the page exec leaves out", 0x08048000,
+     0xBFFFF000, 0x1000, False),
+    ("an entry point at the ceiling", 0xBFFFF000, 0x08048000, 0x1000, False),
+    ("an entry point one byte below it", 0xBFFFEFFF, 0x08048000, 0x1000, True),
+    ("a segment starting below the floor", 0x08048000,
+     0x01FFF000, 0x1000, False),
+]
+
+
+def crafted(entry, vaddr, memsz):
+    """One PT_LOAD image with the header table inside it, for the cases above."""
+    phoff = EHDR_SIZE
+    filesz = EHDR_SIZE + PHDR_SIZE
+    ehdr = struct.pack(EHDR, b"\x7fELF\x01\x01\x01" + b"\0" * 9, ET_EXEC,
+                       EM_386, 1, entry, phoff, 0, 0, EHDR_SIZE, PHDR_SIZE, 1,
+                       0, 0, 0)
+    phdr = struct.pack(PHDR, PT_LOAD, 0, vaddr, vaddr, filesz,
+                       max(memsz, filesz), 5, PAGE_SIZE)
+
+    return ehdr + phdr
+
+
+def selftest():
+    """Run the boundary cases. Returns a process status."""
+    bad = 0
+    for name, entry, vaddr, memsz, want_ok in BOUNDARY_CASES:
+        got = loader_findings("case", crafted(entry, vaddr, memsz))
+        if want_ok and got:
+            print("  FAIL: %s: expected a clean run, got: %s" % (name, got[0]))
+            bad += 1
+        elif not want_ok and not got:
+            print("  FAIL: %s: expected a finding, the run was clean" % name)
+            bad += 1
+    if bad:
+        print("check-elf: selftest: %d of %d cases failed"
+              % (bad, len(BOUNDARY_CASES)))
+
+        return 1
+
+    print("check-elf: selftest: %d cases PASS" % len(BOUNDARY_CASES))
+
+    return 0
+
+
 def main(argv):
+    if argv and argv[0] == "--selftest":
+        return selftest()
     if not argv:
-        sys.stderr.write("usage: check_elf.py FILE...\n")
+        sys.stderr.write("usage: check_elf.py FILE... | --selftest\n")
         return 2
 
     problems = []

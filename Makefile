@@ -131,7 +131,8 @@ $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
 	@touch $@
 
-$(TCC_STAMP): vendor/tcc/build_tcc.sh $(TCC_TARBALL) $(LIBC_STAMP)
+$(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
+              vendor/busybox/muslgcc $(TCC_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	    build/vendor/tcc/include/stdarg.h
 	./vendor/tcc/build_tcc.sh
@@ -464,6 +465,7 @@ check-tcc: $(TCC_STAMP)
 	          build/vendor/tcc/include/varargs.h; do \
 	    test -s "$$f" || { echo "tcc: $$f missing or empty; rm vendor/tcc/.stamp and rebuild (make tcc)" >&2; exit 1; }; \
 	done
+	@python3 tools/check_elf.py --selftest
 	@python3 tools/check_elf.py $(TCC_BIN)
 	@for m in "must be linked with -static" "run is not available" \
 	          "shared is not available"; do \
