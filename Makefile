@@ -452,7 +452,9 @@ os-real-iso: os-real-image
 # runtime and its own headers. The ELF check is the one that matters: `file(1)`
 # would call a Mach-O or an arm64 build "an executable" and this kernel would
 # refuse it, and a dynamically linked one it would ACCEPT and then run
-# unrelocated, which is worse.
+# unrelocated, which is worse. The last check reads the output policy's own
+# diagnostics out of the shipped binary, since a patch that did not apply and a
+# compiler that accepts `-run` look identical from outside.
 check-tcc: $(TCC_STAMP)
 	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	          build/vendor/tcc/include/stdarg.h \
@@ -463,6 +465,10 @@ check-tcc: $(TCC_STAMP)
 	    test -s "$$f" || { echo "tcc: $$f missing or empty; rm vendor/tcc/.stamp and rebuild (make tcc)" >&2; exit 1; }; \
 	done
 	@python3 tools/check_elf.py $(TCC_BIN)
+	@for m in "must be linked with -static" "run is not available" \
+	          "shared is not available"; do \
+	    strings $(TCC_BIN) | grep -q -- "$$m" || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm vendor/tcc/.stamp and rebuild" >&2; exit 1; }; \
+	done
 
 check-busybox: $(BUSYBOX_STAMP)
 	@for f in $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \

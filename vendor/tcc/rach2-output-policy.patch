@@ -1,0 +1,57 @@
+Refuse the output kinds this system cannot run.
+
+Rach2 has no dynamic linker and no mprotect, so three of tcc's output modes
+produce something that cannot work here:
+
+  -run      compiles into memory and jumps, which needs mprotect(2). This
+            kernel has no such syscall.
+  -shared   makes a shared object nothing can load: there is no loader.
+  a link    without -static emits a dynamic executable. This is the worst of
+            the three, because the kernel does NOT refuse it: elf_load_image
+            maps the PT_LOAD segments and never looks at PT_INTERP, so the
+            program loads, jumps, and runs with nothing relocated.
+
+Refusing them in the compiler rather than in a wrapper script is deliberate. A
+wrapper is something a student steps around by typing the real name, and then
+meets one of the three failures above with no explanation attached.
+
+Compiling to an object (-c) and preprocessing (-E) are untouched: neither
+produces a program to run, and both are how a multi-step build works.
+
+The check sits at the one place in main() where the chosen output type is acted
+on, immediately before tcc_set_output_type. It is NOT inside that function,
+although that would look like the tidier single funnel: -print-search-dirs
+calls it with TCC_OUTPUT_MEMORY as a scratch value purely to initialise the
+search paths (tcc.c:280), and a refusal there would break a diagnostic that
+runs no code at all.
+
+--- a/tcc.c
++++ b/tcc.c
+@@ -309,6 +309,27 @@
+     set_environment(s);
+     if (s->output_type == 0)
+         s->output_type = TCC_OUTPUT_EXE;
++
++    /* Rach2: the output kinds this system cannot run. See
++     * vendor/tcc/rach2-output-policy.patch. */
++    if (s->output_type == TCC_OUTPUT_MEMORY) {
++        tcc_error_noabort("-run is not available on Rach2: running from memory "
++            "needs mprotect(2), which this kernel does not have. Compile to a "
++            "file and run that.");
++        return 1;
++    }
++    if (s->output_type == TCC_OUTPUT_DLL) {
++        tcc_error_noabort("-shared is not available on Rach2: there is no "
++            "dynamic linker to load a shared object.");
++        return 1;
++    }
++    if (s->output_type == TCC_OUTPUT_EXE && !s->static_link) {
++        tcc_error_noabort("a program for Rach2 must be linked with -static: "
++            "there is no dynamic linker, and the kernel does not refuse a "
++            "dynamic executable, it loads one and jumps into it unrelocated.");
++        return 1;
++    }
++
+     tcc_set_output_type(s, s->output_type);
+     s->ppfp = ppfp;
+ 

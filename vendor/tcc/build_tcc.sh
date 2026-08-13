@@ -102,6 +102,22 @@ echo "tcc: extracting"
 rm -rf "$SRC"
 tar xf "$TARBALL"
 
+# The one change this project makes to somebody else's compiler: it refuses the
+# output kinds this system cannot run. A patch applied here rather than an
+# edited tree, so the vendored source stays as upstream shipped it and the diff
+# a reader wants is one file in this repository. A patch that does not apply is
+# a build that stops: silently shipping an unpatched compiler would ship one
+# that accepts `-run` and dies strangely.
+echo "tcc: applying the output policy"
+if ! (cd "$SRC" && patch -p1 --batch --forward < ../rach2-output-policy.patch >/dev/null); then
+    echo "tcc: rach2-output-policy.patch did not apply to $SRC" >&2
+    exit 1
+fi
+if ! grep -q "must be linked with -static" "$SRC/tcc.c"; then
+    echo "tcc: the output policy is not in the source it is about to build" >&2
+    exit 1
+fi
+
 # The toolchain directory the cross prefix names. Three one-line scripts, so
 # that ${prefix}gcc, ${prefix}ar and ${prefix}strip all resolve to the tools
 # this project already uses.

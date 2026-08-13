@@ -38,8 +38,22 @@ That the artifacts exist and are not empty, the way `check-busybox` does, becaus
 
 Then the part `file(1)` cannot do: `tools/check_elf.py` reads the ELF header against what this kernel will actually load. It is two halves on purpose. The LOADER half is `elf_load_image`'s contract copied rule for rule (`rach2/sys/proc/elf.c`): `ELFCLASS32`, `ELFDATA2LSB`, `EV_CURRENT`, `ET_EXEC`, `EM_386`, the exact program-header entry size, at most 32 headers and 8 `PT_LOAD`s, the header table inside a `PT_LOAD` so `AT_PHDR` names something real, `p_filesz <= p_memsz`, ascending page-disjoint non-wrapping segments inside the user window, and an entry point inside it. The POLICY half is this project's and not the kernel's: no `PT_INTERP`, no `PT_DYNAMIC`. The loader does not refuse those, it ignores them, so a dynamic image would load, jump, and run with nothing relocated. That is why the check lives here.
 
-## What is deliberately not built
+## The output policy
 
-`tcc -run` and every dynamic output are refused, and the refusal is in the compiler rather than in a wrapper somebody can step around. `-run` compiles into memory and jumps, which needs `mprotect`, a syscall this kernel does not have.
+Three of tcc's output modes make something this system cannot run, and `rach2-output-policy.patch` refuses each with a diagnostic that says why:
+
+* `-run` compiles into memory and jumps, which needs `mprotect(2)`, a syscall this kernel does not have.
+* `-shared` makes a shared object nothing can load.
+* A link without `-static` emits a dynamic executable. That one is the worst, because the kernel does NOT refuse it: `elf_load_image` maps the `PT_LOAD` segments and never looks at `PT_INTERP`, so the program loads, jumps, and runs with nothing relocated.
+
+Compiling to an object (`-c`) and preprocessing (`-E`) are untouched. Neither produces a program to run, and both are how a multi-step build works.
+
+The refusal is in the compiler and not in a wrapper script, deliberately: a wrapper is something a student steps around by typing the real name, and then meets one of the three failures above with nothing to explain it. The patch is applied at build time rather than committed as an edited tree, so the vendored source stays as upstream shipped it and the diff a reader wants is one file here.
+
+It sits at the one place in `main()` where the chosen output type is acted on, and not inside `tcc_set_output_type`, which would look like the tidier single funnel: `-print-search-dirs` calls that function with `TCC_OUTPUT_MEMORY` as a scratch value purely to initialise the search paths (`tcc.c:280`), and refusing there would break a diagnostic that runs no code at all.
+
+A patch that does not apply stops the build, and `make check-tcc` reads the three diagnostics back out of the shipped binary, because a patch that quietly stopped applying and a compiler that accepts `-run` look identical from outside.
+
+## What is deliberately not built
 
 The kernel, musl and dropbear are not compiled in the guest. Each has its own reason and they are recorded in `dev-log/20-compiler/`.
