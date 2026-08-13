@@ -19,6 +19,13 @@
 # a previous run's logs hold every token this run waits for, so they go before
 # the boot rather than only in the trap.
 #
+# A fourth, which the longer commands below came close to: a line typed at this
+# console is edited in a buffer of `N_TTY_LINE_MAX` bytes (256, in
+# rach2/sys/tty/n_tty.h), and what does not fit is dropped rather than wrapped.
+# The longest line here is about 180 characters. A command longer than the
+# buffer must be split, or it will fail in a way that looks like the compiler's
+# doing.
+#
 # Usage: tcc_test.sh <kernel> <disk> <root password> <test password>
 #
 
@@ -38,17 +45,44 @@ WORK="$DISK.work"
 LOG="$DISK.work.log"
 FEED="$DISK.work.feed"
 rm -f "$WORK" "$LOG" "$FEED"
-trap 'rm -f "$WORK" "$LOG" "$FEED"' EXIT INT TERM
 
 QPID=""
 FPID=""
 
+# Everything this run started, ended. It is written to be safe to call twice,
+# because the ordinary paths call it and the trap calls it again: a script that
+# only killed its machine when it succeeded or failed its own checks leaves
+# QEMU running for a cancelled build, and that QEMU still holds the disk copy
+# whose name has just been removed.
+#
+# Each pid is taken and forgotten BEFORE it is signalled, so a trap that fires
+# between the kill and the wait finds nothing left to kill: a pid this script no
+# longer owns is one the host may since have given to somebody else.
 cleanup_boot() {
-    kill -9 "$QPID" 2>/dev/null || true
-    wait "$QPID" 2>/dev/null || true
-    kill "$FPID" 2>/dev/null || true
+    qpid="$QPID"
+    fpid="$FPID"
+    QPID=""
+    FPID=""
+    if [ -n "$qpid" ]; then
+        kill -9 "$qpid" 2>/dev/null || true
+        wait "$qpid" 2>/dev/null || true
+    fi
+    if [ -n "$fpid" ]; then
+        kill -9 "$fpid" 2>/dev/null || true
+        wait "$fpid" 2>/dev/null || true
+    fi
     rm -f "$FEED"
 }
+
+cleanup() {
+    cleanup_boot
+    rm -f "$WORK" "$LOG" "$FEED"
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 fail() {
     if [ -f "$LOG" ]; then
@@ -73,23 +107,32 @@ wait_token() {
     return 1
 }
 
+# The machine is started first and the feed second, which is the order that
+# lets the feed know the machine's pid: opening a fifo for reading waits for a
+# writer, so QEMU sits in that open until the feed arrives, and neither half
+# misses a line. The feed then holds the pipe open only while the machine is up,
+# so nothing is left typing at a machine that is gone.
 boot_lines() {
     rm -f "$LOG" "$FEED"
     mkfifo "$FEED"
+    qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+        -append "rach2.fsdisk rach2.trace=enosys" \
+        -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
+        -serial stdio < "$FEED" > "$LOG" 2>&1 &
+    QPID=$!
     (
         sleep 12
         for line in "$@"; do
             printf '%s\n' "$line"
             sleep 6
         done
-        sleep 300
+        held=0
+        while [ "$held" -lt 300 ] && kill -0 "$QPID" 2>/dev/null; do
+            sleep 1
+            held=$((held + 1))
+        done
     ) > "$FEED" &
     FPID=$!
-    qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
-        -append "rach2.fsdisk rach2.trace=enosys" \
-        -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
-        -serial stdio < "$FEED" > "$LOG" 2>&1 &
-    QPID=$!
 }
 
 rm -f "$WORK"
@@ -112,9 +155,10 @@ boot_lines \
     "[ ! -e /tmp/lib.so ] && [ ! -e /tmp/dyn ] && [ ! -e /tmp/raw ] && echo NO\"\"LEFTOVERS" \
     "tcc -c -o /tmp/hello.o /tmp/hello.c && echo OBJECT\"\"OK" \
     "tcc -static -o /tmp/cat /src/utils/cat.c && echo TOOL\"\"BUILT" \
-    "printf 'a line this machine compiled\\n' > /tmp/in.txt" \
-    "/tmp/cat /tmp/in.txt > /tmp/mine.out; busybox cat /tmp/in.txt > /tmp/theirs.out" \
-    "cmp /tmp/mine.out /tmp/theirs.out && echo SAME\"\"BYTES" \
+    "busybox dd if=/bin/tcc of=/tmp/in.bin bs=1024 count=21 2>/dev/null && echo INPUT\"\"MADE" \
+    "/tmp/cat /tmp/in.bin > /tmp/mine.out && busybox cat /tmp/in.bin > /tmp/theirs.out && cmp /tmp/mine.out /tmp/theirs.out && echo SAME\"\"BYTES" \
+    "/tmp/cat /tmp/in.bin /tmp/hello.c > /tmp/mine2.out && busybox cat /tmp/in.bin /tmp/hello.c > /tmp/theirs2.out && cmp /tmp/mine2.out /tmp/theirs2.out && echo BOTH\"\"FILES" \
+    "tcc -static -o /tmp/ping /src/utils/ping.c /src/utils/resolv.c && echo TWO\"\"UNITS" \
     "sync; echo DONE\"\"IT"
 
 if ! wait_token "BUILTIT" 240; then
@@ -166,6 +210,49 @@ if ! wait_token "OBJECTOK" 120; then
     fail "compiling to an object was refused, and it must not be"
 fi
 
+# And a program of this project's own, compiled from the source the image
+# carries. The proof is behavioural rather than a byte comparison of the two
+# binaries: the shipped one was linked against libgcc on the host and this one
+# against libtcc1.a on the machine, so they are different objects that must do
+# the same thing.
+#
+# The reference is `busybox cat` and not `/bin/cat`, because in THIS image there
+# is no such file: busybox dispatches `cat` as an applet inside itself, and the
+# in-house cat lives in the other image. So what is compared is the program the
+# machine just built against the program this machine actually uses.
+#
+# The input is 21 KB of a binary file rather than a line of text, and the second
+# comparison passes two files rather than one. A line of text is one 4096-byte
+# read and one write: a cat that returned after its first read would copy it
+# perfectly and truncate everything larger, and a cat that stopped after its
+# first argument would never be noticed. The commands are chained with `&&`, so
+# a cat that failed cannot reach the token by leaving an old output in place.
+if ! wait_token "TOOLBUILT" 240; then
+    fail "the machine could not compile this project's own cat"
+fi
+if ! wait_token "INPUTMADE" 120; then
+    fail "the multi-block input for the comparison was not made"
+fi
+if ! wait_token "SAMEBYTES" 120; then
+    fail "the cat the machine compiled does not agree with the shipped one"
+fi
+if ! wait_token "BOTHFILES" 120; then
+    fail "the cat the machine compiled does not agree over two files"
+fi
+
+# Two translation units in one command, which is how the host builds this same
+# program: `ping` is the one in-house program with a companion source, and its
+# `#include "netdb.h"` resolves beside it because the whole directory is staged.
+# It is built and not run: this boot has no network, and what the compiler is
+# being asked for here is the link across two objects.
+if ! wait_token "TWOUNITS" 240; then
+    fail "the machine could not compile a program from two sources at once"
+fi
+
+if ! wait_token "DONEIT" 90; then
+    fail "the boot never finished its script"
+fi
+
 # A missing syscall says nothing on its own: the dispatcher answers -ENOSYS in a
 # register and prints nothing. The kernel's trace, on for this boot, turns that
 # into a line, once per number.
@@ -178,30 +265,15 @@ fi
 # which reads well and is wrong: a number `login` had already reported would
 # have been suppressed for the compiler and the subtraction would come back
 # empty.
+#
+# It is asked LAST, after the script's own end token, for the same reason: the
+# log is read once, so it must be read when every compile this test performs has
+# already had its say. Asked in the middle, it would miss whatever the larger
+# compile of /src/utils/cat.c goes on to ask for.
 if grep "not implemented" "$LOG" | grep -q "asked for by tcc"; then
     fail "the compiler asked this kernel for a syscall it does not have: $(grep -m1 'asked for by tcc' "$LOG")"
 fi
 
-# And a program of this project's own, compiled from the source the image
-# carries. The proof is behavioural rather than a byte comparison of the two
-# binaries: the shipped one was linked against libgcc on the host and this one
-# against libtcc1.a on the machine, so they are different objects that must do
-# the same thing.
-#
-# The reference is `busybox cat` and not `/bin/cat`, because in THIS image there
-# is no such file: busybox dispatches `cat` as an applet inside itself, and the
-# in-house cat lives in the other image. So what is compared is the program the
-# machine just built against the program this machine actually uses.
-if ! wait_token "TOOLBUILT" 240; then
-    fail "the machine could not compile this project's own cat"
-fi
-if ! wait_token "SAMEBYTES" 120; then
-    fail "the cat the machine compiled does not agree with the shipped one"
-fi
-
-if ! wait_token "DONEIT" 90; then
-    fail "the boot never finished its script"
-fi
 cleanup_boot
 
 echo "tcc-test: the machine compiled a program and one of its own tools, and refused what it cannot run: OK"

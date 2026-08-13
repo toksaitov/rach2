@@ -39,17 +39,44 @@ LOG="$DISK.work.log"
 FEED="$DISK.work.feed"
 KNOWN="$DISK.work.known"
 rm -f "$WORK" "$LOG" "$FEED" "$KNOWN"
-trap 'rm -f "$WORK" "$LOG" "$FEED" "$KNOWN"' EXIT INT TERM
 
 QPID=""
 FPID=""
 
+# Everything this run started, ended. It is written to be safe to call twice,
+# because the ordinary paths call it and the trap calls it again: a script that
+# only killed its machine when it succeeded or failed its own checks leaves
+# QEMU running for a cancelled build, still holding the forwarded port, and the
+# names that would have said so have just been removed.
+#
+# Each pid is taken and forgotten BEFORE it is signalled, so a trap that fires
+# between the kill and the wait finds nothing left to kill: a pid this script no
+# longer owns is one the host may since have given to somebody else.
 cleanup_boot() {
-    kill -9 "$QPID" 2>/dev/null || true
-    wait "$QPID" 2>/dev/null || true
-    kill "$FPID" 2>/dev/null || true
+    qpid="$QPID"
+    fpid="$FPID"
+    QPID=""
+    FPID=""
+    if [ -n "$qpid" ]; then
+        kill -9 "$qpid" 2>/dev/null || true
+        wait "$qpid" 2>/dev/null || true
+    fi
+    if [ -n "$fpid" ]; then
+        kill -9 "$fpid" 2>/dev/null || true
+        wait "$fpid" 2>/dev/null || true
+    fi
     rm -f "$FEED"
 }
+
+cleanup() {
+    cleanup_boot
+    rm -f "$WORK" "$LOG" "$FEED" "$KNOWN"
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 fail() {
     if [ -f "$LOG" ]; then
@@ -87,6 +114,17 @@ cp "$DISK" "$WORK"
 # image is built around.
 rm -f "$LOG" "$FEED"
 mkfifo "$FEED"
+qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    -append "rach2.fsdisk" \
+    -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
+    -netdev "user,id=n0,hostfwd=tcp::$PORT-:22" -device rtl8139,netdev=n0 \
+    -serial stdio < "$FEED" > "$LOG" 2>&1 &
+QPID=$!
+# The machine is started first and the feed second, which is the order that lets
+# the feed know the machine's pid: opening a fifo for reading waits for a
+# writer, so QEMU sits in that open until the feed arrives, and neither half
+# misses a line. The feed then holds the console open only while the machine is
+# up, so nothing is left typing at a machine that is gone.
 (
     sleep 14
     printf 'root\n'
@@ -94,15 +132,13 @@ mkfifo "$FEED"
     printf '%s\n' "$PASSWORD"
     sleep 6
     printf 'dropbearmulti dropbear -R -g -p 22\n'
-    sleep 600
+    held=0
+    while [ "$held" -lt 600 ] && kill -0 "$QPID" 2>/dev/null; do
+        sleep 1
+        held=$((held + 1))
+    done
 ) > "$FEED" &
 FPID=$!
-qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
-    -append "rach2.fsdisk" \
-    -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
-    -netdev "user,id=n0,hostfwd=tcp::$PORT-:22" -device rtl8139,netdev=n0 \
-    -serial stdio < "$FEED" > "$LOG" 2>&1 &
-QPID=$!
 
 if ! wait_token "rach2 login" 90; then
     fail "the machine never reached its login prompt"
@@ -112,9 +148,16 @@ fi
 sleep 25
 
 # Root, by key. The options are written out rather than held in a variable, so
-# nothing here depends on a shell splitting one.
+# nothing here depends on a shell splitting one, and each of the three that
+# narrow the attempt is there for a reason: `-i` alone only ADDS an identity,
+# so an agent or a default key in the runner's own ~/.ssh would still be
+# offered, and a run that passed on one of those would say nothing about the
+# key this image was built around. `IdentitiesOnly` cuts the offer down to the
+# file named here, and the two authentication options cut the METHOD down to
+# the one being claimed.
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-      -o ConnectTimeout=20 -o BatchMode=yes \
+      -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
+      -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
       -i "$REPO/krffs/rach2_demo_ed25519" -p "$PORT" \
       root@localhost 'id; echo KEY""LOGIN' 2>&1 || true)
 case "$OUT" in
@@ -126,19 +169,73 @@ case "$OUT" in
     *) fail "the key login did not arrive as root: $OUT" ;;
 esac
 
-# The unprivileged account, by password, which is the half that reaches
-# /etc/shadow.
-OUT=$(expect -c "
+# One password login, run through expect because ssh reads a password from a
+# terminal and not from a pipe. What comes back is the session's output plus two
+# lines this script reads: whether a password was ever ASKED for, since a server
+# that let somebody in without asking would otherwise be read as a password
+# login, and expect's own exit status, so a script that died before it ever
+# spoke to the server cannot be read as an answer from the server.
+#
+# The number of prompts is an argument: a login that is expected to work gets
+# the ordinary three, and one that is expected to be refused gets one, so a
+# wrong password is answered once and the attempt ends rather than sitting
+# through two more.
+#
+# Everything variable reaches Tcl through the environment, and the script is
+# held in single quotes so the shell expands none of it. Pasting a password into
+# Tcl source is how a `[`, a `$` or a quote in a generated password becomes a
+# Tcl error instead of a login, and an attempt that failed to run at all would
+# have satisfied every check below that asks for the ABSENCE of a token.
+ssh_password() {
+    # The `$env(...)` below are Tcl's, read at run time by expect, and must not
+    # be expanded by the shell; that is the whole point of this function.
+    # shellcheck disable=SC2016
+    RACH2_USER="$1" RACH2_PASSWORD="$2" RACH2_PROMPTS="$3" RACH2_COMMAND="$4" \
+    RACH2_PORT="$PORT" RACH2_KNOWN="$KNOWN" expect -c '
 set timeout 60
 log_user 0
-spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=$KNOWN \
-    -o ConnectTimeout=20 -o PubkeyAuthentication=no -p $PORT test@localhost \
-    {id; echo PASS\"\"LOGIN}
+set asked 0
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=$env(RACH2_KNOWN) \
+    -o ConnectTimeout=20 -o PubkeyAuthentication=no \
+    -o PreferredAuthentications=password \
+    -o NumberOfPasswordPrompts=$env(RACH2_PROMPTS) \
+    -p $env(RACH2_PORT) $env(RACH2_USER)@localhost $env(RACH2_COMMAND)
 expect {
-  \"assword:\" { send \"$TESTPASSWORD\r\"; exp_continue }
-  eof { puts \$expect_out(buffer) }
+  -re {[Pp]assword:} { set asked 1; send -- "$env(RACH2_PASSWORD)\r"; exp_continue }
+  eof { puts $expect_out(buffer) }
   timeout { puts TIMEDOUT }
-}" 2>&1 || true)
+}
+puts "PROMPTED=$asked"' 2>&1
+    echo "EXPECTRC=$?"
+}
+
+# Require an attempt to have been REFUSED, rather than merely to have run
+# nothing. An ssh that could not connect, a server that had died, and a Tcl
+# error all produce no session and no token; only the server saying no produces
+# this line. $1 is the output, $2 names the attempt.
+require_denied() {
+    case "$1" in
+        *"Permission denied"*) ;;
+        *) fail "$2 did not end in a refusal from the server, so it proves nothing: $1" ;;
+    esac
+    case "$1" in
+        *TIMEDOUT*) fail "$2 timed out rather than being refused: $1" ;;
+    esac
+}
+
+# And require the attempt to have been made at all: expect returns non-zero for
+# a Tcl error, which is a run that never reached the server.
+require_ran() {
+    case "$1" in
+        *"EXPECTRC=0"*) ;;
+        *) fail "$2 did not run to the end: $1" ;;
+    esac
+}
+
+# The unprivileged account, by password, which is the half that reaches
+# /etc/shadow.
+OUT=$(ssh_password test "$TESTPASSWORD" 3 'id; echo PASS""LOGIN')
+require_ran "$OUT" "the password login as the test account"
 case "$OUT" in
     *PASSLOGIN*) ;;
     *) fail "the password login as the test account did not run its command: $OUT" ;;
@@ -147,6 +244,48 @@ case "$OUT" in
     *"uid=1000(test)"*) ;;
     *) fail "the password login did not arrive as the test account: $OUT" ;;
 esac
+case "$OUT" in
+    *"PROMPTED=1"*) ;;
+    *) fail "the test account got in without ever being asked for a password: $OUT" ;;
+esac
+
+# What must be refused. Each of these is asserted twice: that no session ran,
+# and that the server SAID no. The absence of a token is not a refusal, since a
+# connection that was reset, a server that had died and an ssh that could not
+# start all produce the same nothing; `Permission denied` is ssh reporting an
+# answer it received. They also run after the two attempts that must work, which
+# is a second reason the same way: the server was answering a moment ago.
+OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+      -o ConnectTimeout=20 -o BatchMode=yes -o PubkeyAuthentication=no \
+      -o PasswordAuthentication=no -p "$PORT" \
+      test@localhost 'echo NOAUTH""RAN' 2>&1 || true)
+case "$OUT" in
+    *NOAUTHRAN*) fail "a login offering no credentials at all was let in: $OUT" ;;
+esac
+require_denied "$OUT" "the login offering no credentials"
+
+# The one that proves the hash is really compared, and not merely present: the
+# same account, one character short of its password.
+OUT=$(ssh_password test "${TESTPASSWORD}x" 1 'echo BADPASS""RAN')
+require_ran "$OUT" "the wrong-password attempt"
+case "$OUT" in
+    *BADPASSRAN*) fail "a wrong password was accepted: $OUT" ;;
+esac
+require_denied "$OUT" "the wrong-password attempt"
+case "$OUT" in
+    *"PROMPTED=1"*) ;;
+    *) fail "the wrong-password attempt was never asked for one, so its refusal proves nothing: $OUT" ;;
+esac
+
+# And root by password, with the RIGHT password, which the server was started
+# with -g to refuse. Nothing is required of the prompt here: a server that does
+# not offer the method has nothing to ask, and the refusal is the point.
+OUT=$(ssh_password root "$PASSWORD" 1 'echo ROOTPW""RAN')
+require_ran "$OUT" "root's password attempt"
+case "$OUT" in
+    *ROOTPWRAN*) fail "root was let in by password, which -g must refuse: $OUT" ;;
+esac
+require_denied "$OUT" "root's password attempt"
 
 cleanup_boot
 
