@@ -134,7 +134,9 @@ The unprivileged account is also deliberate. It proves the sysroot is readable b
 
 The same test carries the negatives from phase 2: `tcc -run hello.c`, `tcc -shared`, and an executable link without `-static` must each exit non-zero, say why, and leave no output file behind.
 
-It also watches for a missing syscall, and the mechanism has to be named rather than assumed: the dispatcher returns `-ENOSYS` in EAX and prints nothing, so nothing on the serial line would show it. This phase adds a boot-flag-gated trace, `rach2.trace=enosys`, which prints `syscall: N: not implemented` once per number per boot with the calling process's name. The verdict rule is a comparison and not a list to argue about: record the baseline from a program known to work (busybox `true`), then require the compiler's run to add nothing to it. Off by default, so no other suite sees a line it did not before.
+It also watches for a missing syscall, and the mechanism has to be named rather than assumed: the dispatcher returns `-ENOSYS` in EAX and prints nothing, so nothing on the serial line would show it. This phase adds a boot-flag-gated trace, `rach2.trace=enosys`, which prints `syscall: N: not implemented` once per number per boot with the calling process's name. Off by default, so no other suite sees a line it did not before.
+
+The verdict rule was to be a comparison: record the baseline from a program known to work (busybox `true`), then require the compiler's run to add nothing to it. That reads well and is wrong, and the work disproved it. A trace that prints each number once per boot is blind to a collision: `login` reports 104 before the compiler ever runs, and the compiler's own 104 would then be suppressed and the subtraction would come back empty. What ships names each number once PER PROCESS and asks the question by process name.
 
 Proof: the token from the compiled program's own output, and the three refusals.
 
@@ -142,13 +144,17 @@ Shown failing: the sysroot staged without tcc's `stdarg.h`, and separately witho
 
 This is the phase where the unknown lives. Whatever breaks here that is the kernel's fault gets its own numbered sub-phase with its own probe, the way `readv` did in milestone 19, rather than being worked around in the test.
 
+What broke here was the kernel's, and it was not memory. Reading musl's 1.9 MB `libc.a`, tcc reported "memory full (malloc)" with physical memory barely touched: a process's address space is a fixed array of `VMA_MAX` regions, that number was 16, four are spoken for before a program runs a line, and musl's allocator takes an `mmap` region for every large allocation. Twelve of them is not many. The number is now 64, with `tests/musl/vmamusl.c` to hold it.
+
 ## Phase 6: the machine compiles our own tools
 
-A second `tcc-test` phase compiles a program from this project's own source, staged into the image as source with the new `tree` directive: `utils/cat.c` first, then `echo.c`, `true.c`, `false.c`, `pwd.c`. The proof is behavioural: run the freshly compiled `cat` and the shipped `/bin/cat` over the same file and require the same bytes out.
+A second `tcc-test` phase compiles a program from this project's own source, staged into the image as source with the new `tree` directive. The whole `utils` tree is staged, since `tree` makes naming a subset the more awkward option, and the test compiles `utils/cat.c`. The proof is behavioural: run the freshly compiled `cat` and the one this image actually uses over the same file and require the same bytes out.
 
-They will not be the same binary and the record should not pretend otherwise: the shipped one was linked against libgcc on the host, the new one against `libtcc1.a` on the machine. Same behaviour, different object.
+The reference is `busybox cat` and not `/bin/cat`, which the plan named until the image was read: os-real has no such file, because busybox dispatches `cat` as an applet inside itself and the in-house `cat` lives in the other image.
 
-If that lands easily, one stretch case shows multi-file compiling in one command (`ping.c` with `resolv.c`). The account tools stay out: they pull in the credential library and are not what this milestone is about.
+They will not be the same binary and the record should not pretend otherwise: the shipped one was linked against libgcc on the host, the new one against `libtcc1.a` on the machine. Same behaviour, different object. And the file compared over has to be worth comparing: a line of text is one read and one write, which a `cat` that returned after its first read would copy perfectly, so the comparison runs over 21 KB of a binary file and again over two files at once.
+
+The stretch case landed too: `ping.c` with `resolv.c` in one command, which is two translation units linked into one program, and its `#include "netdb.h"` resolves beside the source because the whole directory is staged. The account tools stay out: they pull in the credential library and are not what this milestone is about.
 
 Shown failing: the same compile with `libc.a` removed from the image.
 
@@ -160,7 +166,9 @@ The gate below ends with the SSH capstone, and today that is a procedure in a Re
 
 Change: `tools/ssh_test.sh` and `make ssh-test`, bounded and scripted: a fresh disk, a boot with the port forward, a console login, dropbear started, a key login as root and a password login as the unprivileged account, one command asserted through each, QEMU stopped, and a timeout that fails rather than hangs.
 
-Proof: the target passes; and it fails when the demo key is removed.
+A session that merely happened proves nothing about how it was let in, which the review of this phase made plain. Each login is pinned to the method it claims: the key login offers that one identity and no password, and the password login offers no key and records that a password was actually asked for. Three attempts must also be refused, run after the two that must work so the server is known to be answering: an account offering no credentials at all, the test account one character off its password, and root by password, which `-g` bars.
+
+Proof: the target passes; it fails when the demo key is removed; and it fails when the wrong-password attempt is given the right password.
 
 Readmes: the top-level `Readme.md`'s capstone section says the recipe is now also a target.
 
