@@ -155,11 +155,16 @@ sleep 25
 # key this image was built around. `IdentitiesOnly` cuts the offer down to the
 # file named here, and the two authentication options cut the METHOD down to
 # the one being claimed.
+#
+# `-tt` and the `test -t` in front of the command are what make this a pty
+# session rather than a command run down a pipe. ssh asks for no terminal when
+# it is given a command, so without them dropbear's pty path is never touched
+# and the capstone would pass on a server that could not allocate one.
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
       -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
       -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
-      -i "$REPO/krffs/rach2_demo_ed25519" -p "$PORT" \
-      root@localhost 'id; echo KEY""LOGIN' 2>&1 || true)
+      -i "$REPO/krffs/rach2_demo_ed25519" -tt -p "$PORT" \
+      root@localhost 'test -t 0 && test -t 1 && id && echo KEY""LOGIN' 2>&1 || true)
 case "$OUT" in
     *KEYLOGIN*) ;;
     *) fail "the key login as root did not run its command: $OUT" ;;
@@ -198,7 +203,7 @@ set asked 0
 spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=$env(RACH2_KNOWN) \
     -o ConnectTimeout=20 -o PubkeyAuthentication=no \
     -o PreferredAuthentications=password \
-    -o NumberOfPasswordPrompts=$env(RACH2_PROMPTS) \
+    -o NumberOfPasswordPrompts=$env(RACH2_PROMPTS) -tt \
     -p $env(RACH2_PORT) $env(RACH2_USER)@localhost $env(RACH2_COMMAND)
 expect {
   -re {[Pp]assword:} { set asked 1; send -- "$env(RACH2_PASSWORD)\r"; exp_continue }
@@ -234,7 +239,8 @@ require_ran() {
 
 # The unprivileged account, by password, which is the half that reaches
 # /etc/shadow.
-OUT=$(ssh_password test "$TESTPASSWORD" 3 'id; echo PASS""LOGIN')
+OUT=$(ssh_password test "$TESTPASSWORD" 3 \
+      'test -t 0 && test -t 1 && id && echo PASS""LOGIN')
 require_ran "$OUT" "the password login as the test account"
 case "$OUT" in
     *PASSLOGIN*) ;;
