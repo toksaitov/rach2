@@ -1,15 +1,21 @@
 Refuse the output kinds this system cannot run.
 
-Rach2 has no dynamic linker and no mprotect, so three of tcc's output modes
+Rach2 has no dynamic linker and no mprotect, so several of tcc's output modes
 produce something that cannot work here:
 
   -run      compiles into memory and jumps, which needs mprotect(2). This
             kernel has no such syscall.
   -shared   makes a shared object nothing can load: there is no loader.
   a link    without -static emits a dynamic executable. This is the worst of
-            the three, because the kernel does NOT refuse it: elf_load_image
-            maps the PT_LOAD segments and never looks at PT_INTERP, so the
-            program loads, jumps, and runs with nothing relocated.
+            them, because the kernel does NOT refuse it: elf_load_image maps
+            the PT_LOAD segments and never looks at PT_INTERP, so the program
+            loads, jumps, and runs with nothing relocated.
+  -Wl,-oformat
+            asks for a raw image rather than an ELF. It reaches a different
+            field from the three above (output_format, not output_type), so a
+            check that read only the output type let `tcc -static
+            -Wl,-oformat=binary` through and produced a file exec refuses for
+            want of a program header table.
 
 Refusing them in the compiler rather than in a wrapper script is deliberate. A
 wrapper is something a student steps around by typing the real name, and then
@@ -27,7 +33,7 @@ runs no code at all.
 
 --- a/tcc.c
 +++ b/tcc.c
-@@ -309,6 +309,27 @@
+@@ -309,6 +309,33 @@
      set_environment(s);
      if (s->output_type == 0)
          s->output_type = TCC_OUTPUT_EXE;
@@ -49,6 +55,12 @@ runs no code at all.
 +        tcc_error_noabort("a program for Rach2 must be linked with -static: "
 +            "there is no dynamic linker, and the kernel does not refuse a "
 +            "dynamic executable, it loads one and jumps into it unrelocated.");
++        return 1;
++    }
++    if (s->output_type == TCC_OUTPUT_EXE &&
++        s->output_format != TCC_OUTPUT_FORMAT_ELF) {
++        tcc_error_noabort("a program for Rach2 must be an ELF: -Wl,-oformat "
++            "asks for a raw image, and exec reads a program header table.");
 +        return 1;
 +    }
 +

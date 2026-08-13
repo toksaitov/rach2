@@ -200,6 +200,14 @@ BOUNDARY_CASES = [
     ("an entry point one byte below it", 0xBFFFEFFF, 0x08048000, 0x1000, True),
     ("a segment starting below the floor", 0x08048000,
      0x01FFF000, 0x1000, False),
+    ("a segment starting exactly at the floor", 0x02000000,
+     0x02000000, 0x1000, True),
+    ("a segment starting one page below the floor", 0x08048000,
+     0x01FFF000, 0x2000, False),
+    ("an entry point exactly at the floor", 0x02000000,
+     0x02000000, 0x1000, True),
+    ("an entry point one byte below the floor", 0x01FFFFFF,
+     0x02000000, 0x1000, False),
 ]
 
 

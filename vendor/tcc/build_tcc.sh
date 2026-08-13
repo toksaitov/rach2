@@ -113,7 +113,8 @@ if ! (cd "$SRC" && patch -p1 --batch --forward < ../rach2-output-policy.patch >/
     echo "tcc: rach2-output-policy.patch did not apply to $SRC" >&2
     exit 1
 fi
-if ! grep -q "must be linked with -static" "$SRC/tcc.c"; then
+if ! grep -q "must be linked with -static" "$SRC/tcc.c" ||
+   ! grep -q "must be an ELF" "$SRC/tcc.c"; then
     echo "tcc: the output policy is not in the source it is about to build" >&2
     exit 1
 fi

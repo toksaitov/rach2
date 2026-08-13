@@ -468,7 +468,7 @@ check-tcc: $(TCC_STAMP)
 	@python3 tools/check_elf.py --selftest
 	@python3 tools/check_elf.py $(TCC_BIN)
 	@for m in "must be linked with -static" "run is not available" \
-	          "shared is not available"; do \
+	          "shared is not available" "must be an ELF"; do \
 	    strings $(TCC_BIN) | grep -q -- "$$m" || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm vendor/tcc/.stamp and rebuild" >&2; exit 1; }; \
 	done
 

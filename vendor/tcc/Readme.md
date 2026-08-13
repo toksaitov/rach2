@@ -36,15 +36,16 @@ The guest's own paths are baked in at configure time, because they are where the
 
 That the artifacts exist and are not empty, the way `check-busybox` does, because a stamp file outlives an artifact somebody deleted.
 
-Then the part `file(1)` cannot do: `tools/check_elf.py` reads the ELF header against what this kernel will actually load. It is two halves on purpose. The LOADER half is `elf_load_image`'s contract copied rule for rule (`rach2/sys/proc/elf.c`): `ELFCLASS32`, `ELFDATA2LSB`, `EV_CURRENT`, `ET_EXEC`, `EM_386`, the exact program-header entry size, at most 32 headers and 8 `PT_LOAD`s, the header table inside a `PT_LOAD` so `AT_PHDR` names something real, `p_filesz <= p_memsz`, ascending page-disjoint segments that do not wrap 32 bits, and both the segments and the entry point inside the window the LOADER uses. That window is `[0x02000000, 0xBFFFF000)`, one page below the one `mm/usercopy.h` defines, and the difference is not academic: the checker used the wider bound at first and approved an image exec refuses. `check_elf.py --selftest` holds six crafted cases on that boundary, written with literal addresses rather than in terms of the constant, so that getting the constant wrong fails them. The POLICY half is this project's and not the kernel's: no `PT_INTERP`, no `PT_DYNAMIC`. The loader does not refuse those, it ignores them, so a dynamic image would load, jump, and run with nothing relocated. That is why the check lives here.
+Then the part `file(1)` cannot do: `tools/check_elf.py` reads the ELF header against what this kernel will actually load. It is two halves on purpose. The LOADER half is `elf_load_image`'s contract copied rule for rule (`rach2/sys/proc/elf.c`): `ELFCLASS32`, `ELFDATA2LSB`, `EV_CURRENT`, `ET_EXEC`, `EM_386`, the exact program-header entry size, at most 32 headers and 8 `PT_LOAD`s, the header table inside a `PT_LOAD` so `AT_PHDR` names something real, `p_filesz <= p_memsz`, ascending page-disjoint segments that do not wrap 32 bits, and both the segments and the entry point inside the window the LOADER uses. That window is `[0x02000000, 0xBFFFF000)`, one page below the one `mm/usercopy.h` defines, and the difference is not academic: the checker used the wider bound at first and approved an image exec refuses. `check_elf.py --selftest` holds ten crafted cases on both ends of that window, written with literal addresses rather than in terms of the constants, so that getting either constant wrong fails them: the first version pinned only the ceiling, and moving the floor still passed. The POLICY half is this project's and not the kernel's: no `PT_INTERP`, no `PT_DYNAMIC`. The loader does not refuse those, it ignores them, so a dynamic image would load, jump, and run with nothing relocated. That is why the check lives here.
 
 ## The output policy
 
-Three of tcc's output modes make something this system cannot run, and `rach2-output-policy.patch` refuses each with a diagnostic that says why:
+Four of tcc's output modes make something this system cannot run, and `rach2-output-policy.patch` refuses each with a diagnostic that says why:
 
 * `-run` compiles into memory and jumps, which needs `mprotect(2)`, a syscall this kernel does not have.
 * `-shared` makes a shared object nothing can load.
 * A link without `-static` emits a dynamic executable. That one is the worst, because the kernel does NOT refuse it: `elf_load_image` maps the `PT_LOAD` segments and never looks at `PT_INTERP`, so the program loads, jumps, and runs with nothing relocated.
+* `-Wl,-oformat` asks for a raw image rather than an ELF. It reaches a different field from the other three (`output_format` rather than `output_type`), so the first version of this policy let `tcc -static -Wl,-oformat=binary` through and produced a file exec refuses for want of a program header table.
 
 Compiling to an object (`-c`) and preprocessing (`-E`) are untouched. Neither produces a program to run, and both are how a multi-step build works.
 
@@ -52,7 +53,7 @@ The refusal is in the compiler and not in a wrapper script, deliberately: a wrap
 
 It sits at the one place in `main()` where the chosen output type is acted on, and not inside `tcc_set_output_type`, which would look like the tidier single funnel: `-print-search-dirs` calls that function with `TCC_OUTPUT_MEMORY` as a scratch value purely to initialise the search paths (`tcc.c:280`), and refusing there would break a diagnostic that runs no code at all.
 
-A patch that does not apply stops the build, and `make check-tcc` reads the three diagnostics back out of the shipped binary, because a patch that quietly stopped applying and a compiler that accepts `-run` look identical from outside.
+A patch that does not apply stops the build, and `make check-tcc` reads all four diagnostics back out of the shipped binary, because a patch that quietly stopped applying and a compiler that accepts `-run` look identical from outside.
 
 ## What is deliberately not built
 
