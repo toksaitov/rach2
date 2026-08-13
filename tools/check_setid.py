@@ -753,6 +753,11 @@ def unpack_node(region, offset):
         raise ImageError("the node at offset %d has a name that is not ASCII "
                          "(%r), so no path names it unambiguously"
                          % (offset, raw))
+    if fields[1] == NODE_RESERVED and (name in ("", ".", "..") or "/" in name):
+        raise ImageError("the node at offset %d is named %r, which is not one "
+                         "path component; the path this inventory would build "
+                         "from it is not the path the kernel resolves"
+                         % (offset, name))
 
     return {
         "magic": fields[0],
@@ -1487,6 +1492,15 @@ IMAGE_CASES = [
     ("a non-ASCII node name", "img-fixture",
      fixture(3, (NODE_RESERVED, 13, b"m\xff", 0o755, 0, 0, 11)), None,
      False, "not ASCII"),
+    # A name is one path component. A node called `a/b` would be read here as
+    # two, so the inventory would name a path the kernel never resolves and
+    # would inspect a file nobody can open under that name.
+    ("a node name that is two path components", "img-fixture",
+     fixture(3, (NODE_RESERVED, 13, b"busy/box", 0o755, 0, 0, 11)), None,
+     False, "not one path component"),
+    ("a node named with a dot", "img-fixture",
+     fixture(3, (NODE_RESERVED, 13, b"..", 0o755, 0, 0, 11)), None,
+     False, "not one path component"),
     ("an allowlist with nothing to find", "img-blind", fixture(), None,
      False, "nothing to find"),
 ]
@@ -2132,16 +2146,33 @@ def check_reachable(paths, wanted, name):
     can open, and the image says nothing about it: the mode that refuses is on
     the directory. The bit asked for is the execute bit, which is what a walk
     needs; a compiler opens a header by name and never lists the directory.
+
+    An ancestor that is absent, or that is there and is not a directory, is
+    reported rather than skipped. Neither should be reachable from a manifest,
+    since a path is rebuilt here from the parents the nodes name, but this check
+    exists to disagree with the stager rather than to assume it: the kernel
+    answers ENOENT and ENOTDIR for those two, and either is a sysroot the
+    compiler cannot open.
     """
     problems = []
     seen = set()
     for path in wanted:
+        if path not in paths:
+            continue
         for parent in ancestors_of(path):
             if parent in seen:
                 continue
             seen.add(parent)
             node = paths.get(parent)
-            if node is None or not node["mode"] & 0o40000:
+            if node is None:
+                problems.append("%s: %s is not staged, and %s is under it; the "
+                                "walk to it would stop there"
+                                % (name, parent, path))
+                continue
+            if not node["mode"] & 0o40000:
+                problems.append("%s: %s is not a directory, and %s is under "
+                                "it; the walk to it would stop there"
+                                % (name, parent, path))
                 continue
             if not node["mode"] & WORLD_WALK:
                 problems.append("%s: %s is staged %s, so an ordinary account "
@@ -2313,12 +2344,31 @@ def header_cases(tmp):
                            {"/include/sys": 0o700}), False,
            "cannot be walked into")
 
+    reachable = {"/include": {"mode": 0o40755, "uid": 0, "gid": 0},
+                 "/include/sys": {"mode": 0o40755, "uid": 0, "gid": 0},
+                 "/include/sys/stat.h": {"mode": 0o644, "uid": 0, "gid": 0}}
     yield ("a header under a directory root alone can walk into",
-           check_reachable({"/include": {"mode": 0o40755, "uid": 0, "gid": 0},
-                            "/include/sys": {"mode": 0o40700, "uid": 0,
-                                             "gid": 0}},
+           check_reachable(dict(reachable,
+                                **{"/include/sys": {"mode": 0o40700, "uid": 0,
+                                                    "gid": 0}}),
                            ("/include/sys/stat.h",), "image"), False,
            "cannot walk into it")
+
+    yield ("a header under a directory that is not staged at all",
+           check_reachable(dict((p, n) for p, n in reachable.items()
+                                if p != "/include/sys"),
+                           ("/include/sys/stat.h",), "image"), False,
+           "is not staged, and")
+
+    yield ("a header under a parent that is a file",
+           check_reachable(dict(reachable,
+                                **{"/include/sys": {"mode": 0o644, "uid": 0,
+                                                    "gid": 0}}),
+                           ("/include/sys/stat.h",), "image"), False,
+           "is not a directory")
+
+    yield ("the header tree as it is staged", check_reachable(
+        reachable, ("/include/sys/stat.h",), "image"), True, "")
 
     yield ("the header tree read from a directory that is not there",
            [] if host_headers(os.path.join(tmp, "no-such-tree")) is None
