@@ -972,7 +972,8 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
                                      init_node["uid"], init_node["gid"]),
                            fmt_entry(INIT_MODE, 0, 0)))
     if allow.get("sysroot"):
-        problems.extend(check_sysroot_paths(paths, os.path.basename(image)))
+        problems.extend(check_sysroot_paths(paths, region,
+                                            os.path.basename(image)))
     found = {}
     for path in sorted(paths):
         node = paths[path]
@@ -1638,6 +1639,10 @@ def selftest():
             bad += run_case(name, check_suid_config(path), want_ok, fragment)
             ran += 1
 
+        for name, problems, want_ok, fragment in header_cases(tmp):
+            bad += run_case(name, problems, want_ok, fragment)
+            ran += 1
+
         for name, table, fragment in TABLE_CASES:
             bad += run_case(name, validate_table(table), False, fragment)
             ran += 1
@@ -2029,9 +2034,23 @@ def check_inits(directory=INIT_BINARIES):
 #
 # The order of the two include directories is not checked and cannot be: it is
 # in the binary, not in the image. What is checked is that both are there.
-# The tree the headers come from, so a stage that dropped some can be noticed
-# by counting rather than by a student's `#include` failing.
+# The tree the headers come from. The staged headers are compared with it path
+# by path and byte by byte, so a stage that dropped one, renamed one or
+# truncated one is noticed here rather than by a student's `#include` failing.
 SYSROOT_HEADER_SOURCE = os.path.join("vendor", "musl", "install", "include")
+
+# The guest directory that tree is staged into, from the manifest's `tree` line.
+SYSROOT_HEADER_ROOT = "/include"
+
+# The bits an ORDINARY account needs of a staged sysroot, which is the account
+# the compiler runs as: the world's read bit on a file it opens, the world's
+# execute bit on a program it runs and on every directory it walks through.
+# Owner and group say nothing here, since the account is neither.
+WORLD_READ = 0o004
+WORLD_WALK = 0o001
+
+# The sysroot paths that are run rather than read.
+SYSROOT_PROGRAMS = ("/bin/tcc",)
 
 SYSROOT_PATHS = (
     "/bin/tcc",
@@ -2054,18 +2073,152 @@ SYSROOT_PATHS = (
 )
 
 
-def host_header_count(root=SYSROOT_HEADER_SOURCE):
-    """How many headers the host musl install holds, or None if it is absent."""
+def host_headers(root=SYSROOT_HEADER_SOURCE):
+    """The host's header tree as {guest path: bytes}, or None if it is absent.
+
+    Keyed by the path the header will answer to in the guest, since that is what
+    the comparison is about: a header staged under some other name is not the
+    header a program asks for.
+    """
     if not os.path.isdir(root):
         return None
-    total = 0
-    for _dirpath, _dirnames, filenames in os.walk(root):
-        total += len(filenames)
 
-    return total
+    wanted = {}
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            host = os.path.join(dirpath, filename)
+            if os.path.islink(host) or not os.path.isfile(host):
+                continue
+            guest = SYSROOT_HEADER_ROOT + "/" + \
+                os.path.relpath(host, root).replace(os.sep, "/")
+            with open(host, "rb") as handle:
+                wanted[guest] = handle.read()
+
+    return wanted
 
 
-def check_sysroot_paths(paths, name):
+def staged_headers(paths, region):
+    """The image's header tree as {guest path: (mode, bytes)}.
+
+    A node's bytes follow its header in the region, which is how the set-id
+    sweep already reads a staged text. The mode comes with them because a
+    header the compiler cannot open is as absent as one that is not there, and
+    the compiler runs as whoever asked for it.
+    """
+    staged = {}
+    for path, node in paths.items():
+        if not path.startswith(SYSROOT_HEADER_ROOT + "/"):
+            continue
+        if node["mode"] & 0o40000:
+            continue
+        start = node["offset"] + NODE_SIZE
+        staged[path] = (node["mode"] & PERM,
+                        region[start:start + node["data_size"]])
+
+    return staged
+
+
+def staged_header_dirs(paths):
+    """The directories of the staged header tree as {guest path: mode}."""
+    return dict((path, node["mode"] & PERM) for path, node in paths.items()
+                if path.startswith(SYSROOT_HEADER_ROOT + "/")
+                and node["mode"] & 0o40000)
+
+
+def check_reachable(paths, wanted, name):
+    """Every directory above a staged path, walkable by an ordinary account.
+
+    A header staged 0644 under a directory staged 0700 is a header only root
+    can open, and the image says nothing about it: the mode that refuses is on
+    the directory. The bit asked for is the execute bit, which is what a walk
+    needs; a compiler opens a header by name and never lists the directory.
+    """
+    problems = []
+    seen = set()
+    for path in wanted:
+        for parent in ancestors_of(path):
+            if parent in seen:
+                continue
+            seen.add(parent)
+            node = paths.get(parent)
+            if node is None or not node["mode"] & 0o40000:
+                continue
+            if not node["mode"] & WORLD_WALK:
+                problems.append("%s: %s is staged %s, so an ordinary account "
+                                "cannot walk into it and everything the "
+                                "compiler looks for below it is out of reach"
+                                % (name, parent,
+                                   fmt_entry(node["mode"] & PERM, node["uid"],
+                                             node["gid"])))
+
+    return problems
+
+
+def compare_headers(staged, wanted, name, dirs=None):
+    """Compare a staged header tree with the tree it was staged from.
+
+    `staged` is `staged_headers`'s {path: (mode, bytes)} and `wanted` is
+    `host_headers`'s {path: bytes}; `dirs` is `staged_header_dirs`'s
+    {path: mode} where the caller has it.
+
+    The comparison is by path, by content and by mode, and all three are
+    needed. An earlier version compared how MANY files were under `/include`
+    with how many the host tree held, which is a check a wrong image passes
+    easily: drop a header, add a file of any name beside it, and the count is
+    right again. The contents are compared for the same reason, since a header
+    truncated by a stage that ran out of room is the right path holding the
+    wrong file. And the mode, because a `tree 0600` line stages every byte of
+    the tree correctly into a compiler no ordinary account can use.
+
+    Findings name a few of the paths rather than all of them: a stage that went
+    wrong tends to go wrong by hundreds, and a page of names says no more than
+    three do.
+    """
+    def some(paths):
+        listed = sorted(paths)
+        if len(listed) <= 3:
+            return ", ".join(listed)
+
+        return "%s and %d more" % (", ".join(listed[:3]), len(listed) - 3)
+
+    problems = []
+    missing = set(wanted) - set(staged)
+    if missing:
+        problems.append("%s: %d of the %d headers in %s are not staged (%s); "
+                        "the tree was staged short"
+                        % (name, len(missing), len(wanted),
+                           SYSROOT_HEADER_SOURCE, some(missing)))
+    unexpected = set(staged) - set(wanted)
+    if unexpected:
+        problems.append("%s: %d files under %s are not in %s (%s); the tree "
+                        "holds something it was not staged from"
+                        % (name, len(unexpected), SYSROOT_HEADER_ROOT,
+                           SYSROOT_HEADER_SOURCE, some(unexpected)))
+    differing = set(path for path in set(staged) & set(wanted)
+                    if staged[path][1] != wanted[path])
+    if differing:
+        problems.append("%s: %d staged headers do not hold what %s holds (%s); "
+                        "a header that is there and wrong is worse than one "
+                        "that is missing"
+                        % (name, len(differing), SYSROOT_HEADER_SOURCE,
+                           some(differing)))
+    shut = set(path for path in staged if not staged[path][0] & WORLD_READ)
+    if shut:
+        problems.append("%s: %d staged headers cannot be read by an ordinary "
+                        "account (%s); the compiler runs as whoever asked for "
+                        "it, not as root"
+                        % (name, len(shut), some(shut)))
+    if dirs:
+        closed = set(path for path in dirs if not dirs[path] & WORLD_WALK)
+        if closed:
+            problems.append("%s: %d directories of the header tree cannot be "
+                            "walked into by an ordinary account (%s)"
+                            % (name, len(closed), some(closed)))
+
+    return problems
+
+
+def check_sysroot_paths(paths, region, name):
     """Check an already-walked image for the compiler's sysroot."""
     problems = []
     for path in SYSROOT_PATHS:
@@ -2084,22 +2237,92 @@ def check_sysroot_paths(paths, name):
             problems.append("%s: %s is staged empty; a library or a startup "
                             "object that holds nothing is a link that fails "
                             "at the last step" % (name, path))
+        else:
+            want = WORLD_READ
+            if path in SYSROOT_PROGRAMS:
+                want |= WORLD_WALK
+            if node["mode"] & want != want:
+                problems.append("%s: %s is staged %s; the compiler runs as "
+                                "whoever asked for it, and an ordinary account "
+                                "could not use this"
+                                % (name, path,
+                                   fmt_entry(node["mode"] & PERM, node["uid"],
+                                             node["gid"])))
+
+    problems.extend(check_reachable(paths, SYSROOT_PATHS, name))
 
     # The named paths above are a sample: they say the shape is right, not that
     # the tree is whole. A header nobody sampled is exactly what a partial stage
-    # loses, so the count is compared with the tree it was staged from.
-    staged = len([p for p in paths
-                  if p.startswith("/include/") and not paths[p]["mode"] & 0o40000])
-    wanted = host_header_count()
+    # loses, so the whole tree is compared with the tree it was staged from.
+    wanted = host_headers()
     if wanted is None:
         problems.append("%s: %s is not there, so the staged headers could not "
-                        "be counted against it" % (name, SYSROOT_HEADER_SOURCE))
-    elif staged != wanted:
-        problems.append("%s: %d headers under /include and %d in %s; the tree "
-                        "was staged short" % (name, staged, wanted,
-                                              SYSROOT_HEADER_SOURCE))
+                        "be compared with it" % (name, SYSROOT_HEADER_SOURCE))
+    else:
+        problems.extend(compare_headers(staged_headers(paths, region), wanted,
+                                        name, staged_header_dirs(paths)))
 
     return problems
+
+
+def header_cases(tmp):
+    """Cases for the staged header tree, over a small pretend musl install.
+
+    They are run against `compare_headers` rather than against a crafted image,
+    because what is being asked is what the comparison notices and not how a
+    node is decoded, and a dictionary states a wrong stage exactly: this header
+    absent, this one renamed, this one holding something else.
+    """
+    root = os.path.join(tmp, "musl-include")
+    os.makedirs(os.path.join(root, "sys"))
+    for rel, text in (("stdio.h", "int puts(const char *);\n"),
+                      ("string.h", "void *memcpy(void *, const void *);\n"),
+                      ("sys/stat.h", "struct stat;\n")):
+        with open(os.path.join(root, rel), "w",
+                  encoding="latin-1", newline="\n") as handle:
+            handle.write(text)
+    wanted = host_headers(root)
+    staged = dict((path, (0o644, data)) for path, data in wanted.items())
+    dirs = {"/include/sys": 0o755}
+
+    yield ("the headers staged as they stand",
+           compare_headers(dict(staged), wanted, "image", dirs), True, "")
+
+    swapped = dict(staged)
+    del swapped["/include/sys/stat.h"]
+    swapped["/include/sys/notaheader.h"] = (0o644, b"nothing includes this\n")
+    yield ("a header dropped and an unrelated file put in beside it, so the "
+           "count still agrees",
+           compare_headers(swapped, wanted, "image", dirs), False,
+           "are not staged")
+
+    altered = dict(staged)
+    altered["/include/stdio.h"] = (0o644, wanted["/include/stdio.h"][:8])
+    yield ("a staged header truncated at the right path",
+           compare_headers(altered, wanted, "image", dirs), False,
+           "do not hold what")
+
+    shut = dict(staged)
+    shut["/include/stdio.h"] = (0o600, wanted["/include/stdio.h"])
+    yield ("a header staged with every byte right and readable only by root",
+           compare_headers(shut, wanted, "image", dirs), False,
+           "cannot be read by an ordinary account")
+
+    yield ("the tree's own directory staged unwalkable",
+           compare_headers(dict(staged), wanted, "image",
+                           {"/include/sys": 0o700}), False,
+           "cannot be walked into")
+
+    yield ("a header under a directory root alone can walk into",
+           check_reachable({"/include": {"mode": 0o40755, "uid": 0, "gid": 0},
+                            "/include/sys": {"mode": 0o40700, "uid": 0,
+                                             "gid": 0}},
+                           ("/include/sys/stat.h",), "image"), False,
+           "cannot walk into it")
+
+    yield ("the header tree read from a directory that is not there",
+           [] if host_headers(os.path.join(tmp, "no-such-tree")) is None
+           else ["a missing tree was read as a tree"], True, "")
 
 
 def check_sysroot(image, offset=0, size=None):
@@ -2115,7 +2338,7 @@ def check_sysroot(image, offset=0, size=None):
     except (ImageError, OSError) as e:
         return ["%s: %s" % (os.path.basename(image), e)]
 
-    return check_sysroot_paths(paths, os.path.basename(image))
+    return check_sysroot_paths(paths, region, os.path.basename(image))
 
 
 def main(argv):

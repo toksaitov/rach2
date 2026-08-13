@@ -205,7 +205,19 @@ the supporting scripts.
   cannot report a clean image: every declared entry must be found, an allowlist
   declaring none must name an ordinary sentinel node instead, and the ring
   closure of the node chain is checked so a truncated region fails rather than
-  reading clean. `--selftest` (run inside the gate) covers every directive form
+  reading clean. For an image whose allowlist entry says it carries a compiler
+  it asks a second question, since it is already reading the image node by
+  node: that the sysroot tcc was built to look in is all there. The named paths
+  (`/bin/tcc`, the startup objects, `libtcc1.a`, tcc's own headers) are a
+  sample, so the header tree under `/include` is compared with the host tree it
+  was staged from path by path and byte by byte. Counting them, which is what
+  this did first, passes a stage that dropped a header and gained a file of some
+  other name. Being there is not the whole of it either: the compiler runs as
+  whoever asked for it, so every one of those paths is required to be usable by
+  an ordinary account (the world's read bit on what is read, its execute bit on
+  `/bin/tcc` and on every directory above any of them). A `tree 0600` line
+  stages every byte correctly into a compiler only root can use.
+  `--selftest` (run inside the gate) covers every directive form
   and failure mode, including each hole the guard has had.
 * `cppcheck.suppress`: the cppcheck suppression list `check.sh` reads (a data
   file, not a script).
