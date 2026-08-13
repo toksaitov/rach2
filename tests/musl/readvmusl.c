@@ -8,14 +8,16 @@
  * is the one that forced the issue: it reads its input with `xmalloc_fgetline`
  * and exited without a message.
  *
- * The call has two shapes here, and the probe pins both. A regular file is
- * filled buffer after buffer, since its read returns at once and its bytes
- * carry no message boundary. Anything else is read exactly once, because a
- * second read of a pipe whose first buffer happened to fill exactly would block
- * for input nobody has written, and a second read of a datagram socket would
- * take the next datagram after the first one's tail was dropped. A reader that
- * asked for more than it got must go round again, which is what musl's stdio
- * does and what the buffered cases here demonstrate.
+ * The buffers are filled in order, and the probe pins what that costs behind
+ * each kind of descriptor. A regular file is read again per buffer, since its
+ * read returns at once and its bytes carry no boundary. A pipe is read again
+ * only while it says it holds more, so a walk never parks for input nobody has
+ * written. A datagram socket is not read again at all: one message is copied
+ * out across the buffers it reaches, and the next read starts the next message.
+ * A terminal is not read again either, for the same kind of reason: the line is
+ * its unit.
+ * A reader that asked for more than it got must still go round again, which is
+ * what musl's stdio does and what the buffered cases here demonstrate.
  *
  * The rest is the edges: the whole vector list is checked before a byte is
  * taken, so a bad address in a later buffer refuses the call with the input
@@ -34,6 +36,10 @@
 #include <errno.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define SCRATCH "/readvmusl.tmp"
 
@@ -216,13 +222,14 @@ static int check_file(void)
 }
 
 /**
- * A pipe, which is read exactly once however many buffers were offered.
+ * A pipe, which fills every buffer the bytes it holds reach and stops there.
  *
  * The case that matters is the second one: the pipe holds exactly what the
- * first buffer takes and its writer is still open, so a second read would have
- * nothing to return and would park until something wrote again. If that
- * regressed this probe would not fail, it would hang, and the suite's timeout
- * is the failure.
+ * first buffer takes and its writer is still open, so reading on would have
+ * nothing to return and would park until something wrote again. The walk asks
+ * whether there is more before it takes any, so it stops. If that regressed
+ * this probe would not fail, it would hang, and the suite's timeout is the
+ * failure.
  */
 static int check_stream(void)
 {
@@ -235,7 +242,7 @@ static int check_stream(void)
 
     fd = pipe_holding("AAAABBBB");
     if (fd < 0) {
-        return fail("could not make the pipe the single read uses");
+        return fail("could not make the pipe the walk uses");
     }
     parts[0].iov_base = one;
     parts[0].iov_len = sizeof(one);
@@ -243,10 +250,10 @@ static int check_stream(void)
     parts[1].iov_len = sizeof(two);
     got = readv(fd, parts, 2);
     close(fd);
-    if (got != 4) {
-        return fail("readv of a pipe read past its first buffer");
+    if (got != 8) {
+        return fail("readv of a pipe stopped before the bytes it held ran out");
     }
-    if (memcmp(one, "AAAA", 4) != 0) {
+    if (memcmp(one, "AAAA", 4) != 0 || memcmp(two, "BBBB", 4) != 0) {
         return fail("readv of a pipe filled the wrong buffer");
     }
 
@@ -264,6 +271,171 @@ static int check_stream(void)
     close(ends[1]);
     if (got != 4) {
         return fail("readv did not stop at the bytes a live writer had written");
+    }
+
+    return 0;
+}
+
+/**
+ * A datagram socket, where the message and not the buffer is the unit.
+ *
+ * One datagram fills as many buffers as it reaches, because reading it twice
+ * would take the NEXT one and copying it out once would drop whatever did not
+ * fit. Two are sent to this socket before either is read, so the second is
+ * proof that the first read consumed exactly one message: the second `readv`
+ * must return the other datagram whole, and not the tail of the first.
+ *
+ * Loopback, so the case needs no network device; the kernel turns a datagram
+ * addressed to 127.0.0.1 around through its own ring.
+ */
+static int check_datagram(void)
+{
+    struct sockaddr_in me;
+    struct iovec parts[3];
+    socklen_t melen = sizeof(me);
+    char one[4];
+    char two[4];
+    char three[8];
+    ssize_t got;
+    int fd;
+
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        return fail("could not make the datagram socket");
+    }
+    memset(&me, 0, sizeof(me));
+    me.sin_family = AF_INET;
+    me.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(fd, (struct sockaddr *)&me, sizeof(me)) != 0 ||
+        getsockname(fd, (struct sockaddr *)&me, &melen) != 0) {
+        close(fd);
+
+        return fail("could not bind the datagram socket to a port");
+    }
+    if (sendto(fd, "AAAABBBBCC", 10, 0, (struct sockaddr *)&me, sizeof(me)) != 10) {
+        close(fd);
+
+        return fail("could not send the datagram");
+    }
+
+    parts[0].iov_base = one;
+    parts[0].iov_len = sizeof(one);
+    parts[1].iov_base = two;
+    parts[1].iov_len = sizeof(two);
+    parts[2].iov_base = three;
+    parts[2].iov_len = sizeof(three);
+    got = readv(fd, parts, 3);
+    if (got != 10) {
+        close(fd);
+
+        return fail("one datagram did not fill the buffers it reached");
+    }
+    if (memcmp(one, "AAAA", 4) != 0 || memcmp(two, "BBBB", 4) != 0 || memcmp(three, "CC", 2) != 0) {
+        close(fd);
+
+        return fail("the datagram arrived out of order across the buffers");
+    }
+
+    /* A datagram longer than the buffers loses its tail, the way a `read` too
+     * small for one loses it, and the NEXT read still starts a new message. */
+    if (sendto(fd, "0123456789", 10, 0, (struct sockaddr *)&me, sizeof(me)) != 10) {
+        close(fd);
+
+        return fail("could not send the second datagram");
+    }
+    parts[1].iov_len = 2;
+    got = readv(fd, parts, 2);
+    if (got != 6) {
+        close(fd);
+
+        return fail("a datagram past the end of the buffers did not stop there");
+    }
+    if (memcmp(one, "0123", 4) != 0 || memcmp(two, "45", 2) != 0) {
+        close(fd);
+
+        return fail("the truncated datagram holds the wrong bytes");
+    }
+
+    /* And the remainder was dropped with the message, not left to answer the
+     * next read: nothing is waiting now. */
+    if (sendto(fd, "TAIL", 4, 0, (struct sockaddr *)&me, sizeof(me)) != 4) {
+        close(fd);
+
+        return fail("could not send the third datagram");
+    }
+    parts[0].iov_len = sizeof(one);
+    parts[1].iov_len = sizeof(two);
+    got = readv(fd, parts, 2);
+    close(fd);
+    if (got != 4 || memcmp(one, "TAIL", 4) != 0) {
+        return fail("a read after a truncated datagram saw the wrong message");
+    }
+
+    return 0;
+}
+
+/**
+ * A terminal, which hands back one line however many buffers were offered.
+ *
+ * The line is the unit a terminal reads in, so filling a second buffer with the
+ * line after it would answer a question the reader did not ask: a program that
+ * asked for one line and got two has consumed input it will not look at.
+ * Two lines are written into the master before either is read, and the first
+ * buffer is exactly the size of the first line: filled to its end, so nothing
+ * but the rule itself stops the read from going on to the line behind it.
+ */
+static int check_terminal(void)
+{
+    struct iovec parts[2];
+    char one[4];
+    char two[8];
+    ssize_t got;
+    int master;
+    int slave;
+
+    master = posix_openpt(O_RDWR | O_NOCTTY);
+    if (master < 0) {
+        return fail("could not open a pty master");
+    }
+    if (grantpt(master) != 0 || unlockpt(master) != 0) {
+        close(master);
+
+        return fail("could not unlock the pty");
+    }
+    slave = open(ptsname(master), O_RDWR | O_NOCTTY);
+    if (slave < 0) {
+        close(master);
+
+        return fail("could not open the pty slave");
+    }
+    /* Two writes, so both lines are cooked and waiting before the read: a
+     * discipline that had only the first would stop the walk by itself and the
+     * case would prove nothing about the rule. */
+    if (write(master, "one\n", 4) != 4 || write(master, "two\n", 4) != 4) {
+        close(slave);
+        close(master);
+
+        return fail("could not write the two lines");
+    }
+
+    parts[0].iov_base = one;
+    parts[0].iov_len = sizeof(one);
+    parts[1].iov_base = two;
+    parts[1].iov_len = sizeof(two);
+    got = readv(slave, parts, 2);
+    /* Closing the master hangs the slave up, which signals the group the slave
+     * belongs to, and here that is this probe's own. The terminal is finished
+     * with, so the hangup is ignored across the two closes rather than allowed
+     * to kill the run. */
+    signal(SIGHUP, SIG_IGN);
+    close(slave);
+    close(master);
+    signal(SIGHUP, SIG_DFL);
+    if (got != 4) {
+        return fail("readv of a terminal took more than the line it asked for");
+    }
+    if (memcmp(one, "one\n", 4) != 0) {
+        return fail("readv of a terminal returned something other than the line");
     }
 
     return 0;
@@ -420,6 +592,12 @@ int main(void)
     }
     if (rc == 0) {
         rc = check_edges();
+    }
+    if (rc == 0) {
+        rc = check_datagram();
+    }
+    if (rc == 0) {
+        rc = check_terminal();
     }
     if (rc == 0) {
         rc = check_shared();

@@ -374,19 +374,28 @@ undone. Every destination is also faulted in for writing, which for a page
 shared by a fork means copying it there rather than at the first store. A list that asks for nothing still checks the descriptor, so a closed fd
 is `EBADF`.
 
-Only a regular file is then filled buffer after buffer. Everything else is read
-exactly once, and the call returns what that one read gave: a second read of a
-pipe or a terminal would block for input nobody has written once the first
-buffer happened to fill exactly, and a second read of a datagram socket would
-take the next datagram after the first one's tail had been dropped. Returning
-less than was asked for is what any reader must already handle.
+The buffers are then filled in order, and what that costs depends on what is
+behind the descriptor, because reading again is not always the same thing as
+reading on.
 
-That single read is the one place this differs from Linux, which treats the
-vectors as one buffer. A datagram longer than the first buffer is truncated
-exactly as `read` truncates it; Linux would put the rest into the buffers that
-follow. Doing the same here would need a kernel buffer the size of the whole
-list to read into and copy out of, and this kernel has no allocator to take one
-from.
+* A regular file is read again for each buffer. Its read returns at once and
+  its bytes carry no message boundary.
+* A datagram socket is not read again: one datagram is one message. The waiting
+  datagram is copied out piece by piece and consumed once at the end, so it
+  fills as many buffers as it reaches and the remainder past the last one is
+  dropped, exactly as a plain `read` too small for it drops the tail. The next
+  read starts the next message.
+* A pipe, a stream socket, a device or a `/proc` file is read again only while
+  it says it holds more, so a walk never parks for input nobody has written.
+  The question and the read that follows it cannot be separated: the syscall
+  gate is an interrupt gate, so a system call runs with interrupts off from end
+  to end.
+* A terminal is read exactly once, and that is its contract rather than a
+  limitation: the line discipline hands back one line, and a second buffer
+  filled with the line behind it would consume input the reader did not ask
+  for.
+
+Returning less than was asked for is what any reader must already handle.
 
 ### write (syscall 4)
 

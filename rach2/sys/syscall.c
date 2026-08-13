@@ -2084,6 +2084,126 @@ static int32_t sys_read(isr_params_t *params)
     return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
 }
 
+/* Defined with the terminal ioctls below: the tty behind a descriptor, or NULL
+ * for one that is not a terminal. */
+static struct tty *fd_tty(fd_entry_t *e);
+
+/**
+ * Read into `buf` only if that can be done without waiting. Returns the bytes
+ * read, 0 when there are none, or a negative errno.
+ *
+ * This is what fills the second and later buffers of a `readv` on anything
+ * whose bytes arrive rather than sit there. Readiness is asked of the backing
+ * object itself: the ops vtable answers `poll`, and a stream socket has a
+ * non-blocking read of its own. Nothing can consume the bytes between the
+ * question and the read, since a system call here runs with interrupts off from
+ * end to end.
+ *
+ * A terminal answers 0 whatever it holds. Its read returns one line, and a
+ * second line into the next buffer would answer a question the reader did not
+ * ask.
+ */
+static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
+                          uint32_t count)
+{
+    if (!entry) {
+        return 0;
+    }
+    if (fd_tty(entry)) {
+        return 0;
+    }
+    if (entry->ops) {
+        struct wait_queue *wq = 0;
+
+        if (!entry->ops->poll || !entry->ops->read) {
+            return 0;
+        }
+        if (!(entry->ops->poll(entry, POLLIN, &wq) & POLLIN)) {
+            return 0;
+        }
+
+        return entry->ops->read(entry, buf, count);
+    }
+    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+        int32_t r;
+
+        if (!user_buffer_ok((uint32_t)buf, count, 1)) {
+            return -EFAULT;
+        }
+        r = socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf,
+                                (int)count);
+
+        return (r == SOCK_EAGAIN) ? 0 : r;
+    }
+
+    return read_fd(fd, buf, count);
+}
+
+/**
+ * Fill the buffers of a `readv` from one waiting datagram.
+ *
+ * A datagram is a message, so it is taken once and copied out in pieces: the
+ * buffers are filled in order until the datagram runs out, and what is left
+ * over when the buffers run out first is dropped, which is what a `read` too
+ * small for a datagram already does. Exactly one datagram is consumed either
+ * way, and a datagram of no bytes returns 0 without being end of input.
+ *
+ * The vector list was checked and faulted in by the caller. Returns the bytes
+ * copied, or a negative errno.
+ */
+static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
+{
+    struct kernel_iovec iov;
+    uint32_t offset = 0;
+    int32_t total = 0;
+    int nonblock;
+    int i;
+
+    nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
+    if (nonblock) {
+        if (socket_dgram_pending(entry->sock) < 0) {
+            return -EAGAIN;
+        }
+    } else {
+        int rc = socket_dgram_wait(entry->sock);
+
+        if (rc < 0) {
+            return rc;
+        }
+    }
+
+    for (i = 0; i < iovcnt; i++) {
+        int32_t r;
+
+        if (copy_from_user(&iov,
+                           (const void __user *)(iov_user +
+                               (uint32_t)i * sizeof(struct kernel_iovec)),
+                           sizeof(iov)) != 0) {
+            break;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        if (!user_access_ok(iov.iov_base, iov.iov_len)) {
+            break;
+        }
+        r = socket_dgram_peek(entry->sock, offset,
+                              (uint8_t __force *)iov.iov_base,
+                              (int)iov.iov_len);
+        if (r <= 0) {
+            break;  /* the datagram is spent, or it went while we were away */
+        }
+        offset += (uint32_t)r;
+        total += r;
+        if ((uint32_t)r < iov.iov_len) {
+            break;
+        }
+    }
+    socket_dgram_consume(entry->sock, 0, 0);
+
+    return total;
+}
+
 /*
  * Scatter read (readv(2)). The twin of `writev` above, and it exists for the
  * same reason that one does: musl's buffered stdio issues this call rather than
@@ -2105,22 +2225,33 @@ static int32_t sys_read(isr_params_t *params)
  * here and not discovered half way through. A list that asks for nothing still
  * checks the descriptor, so a closed fd is -EBADF and not a quiet zero.
  *
- * Only a regular file is then filled buffer after buffer. Everything else gets
- * exactly one read: a second read of a pipe or a terminal would block for input
- * nobody has written once the first buffer happened to fill exactly, and a
- * second read of a datagram socket would take the next datagram after the first
- * one's tail had already been dropped. A file has neither hazard, since its read
- * returns at once and its bytes carry no message boundary. Returning less than
- * was asked for is what a reader must already handle, and musl's stdio, which is
- * what issues this call, loops.
+ * The buffers are then filled in order, and what "in order" costs depends on
+ * what is behind the descriptor, because a second read is not always the same
+ * thing as reading on.
  *
- * That single read is where this differs from Linux, which treats the vectors as
- * one buffer and would fill the later ones from the same datagram. Here a
- * datagram longer than the FIRST buffer is truncated exactly as `read` truncates
- * it, and the rest is dropped. Filling the rest would need one read into a
- * kernel buffer the size of the whole list and a copy out of it, and this kernel
- * has no allocator to take that buffer from; a second read instead is the bug
- * this call was written to avoid.
+ * A regular file is read again for each buffer. Its read returns at once and
+ * its bytes carry no message boundary, so a walk is the single scatter read.
+ *
+ * A datagram socket is NOT read again: one datagram is one message, and a
+ * second read would take the next one while the first one's tail was dropped.
+ * The waiting datagram is copied out piece by piece instead, through
+ * `socket_dgram_peek`, and consumed once at the end, so the whole of it fills
+ * as many buffers as it needs and the remainder past the last one is discarded
+ * the way a plain `read` discards it.
+ *
+ * A pipe, a stream socket, a device or a `/proc` file is read again only while
+ * it says it has more, since a read of an empty one blocks for input nobody has
+ * written. That question and the read that follows it cannot be separated by
+ * anything: the syscall gate is an interrupt gate, so a system call runs with
+ * interrupts off from end to end and no other process runs between them.
+ *
+ * A terminal is read exactly once, and that is not a limitation but its
+ * contract: the line discipline hands back one line, and filling a second
+ * buffer with the line after it would return two lines where a reader asked
+ * for one.
+ *
+ * Returning less than was asked for is what a reader must already handle, and
+ * musl's stdio, which is what issues this call, loops.
  */
 static int32_t sys_readv(isr_params_t *params)
 {
@@ -2162,6 +2293,10 @@ static int32_t sys_readv(isr_params_t *params)
     }
 
     entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
+    if (entry && entry->type == FD_TYPE_SOCKET && entry->sock &&
+        entry->sock->type == SOCK_DGRAM) {
+        return readv_dgram(entry, iov_user, iovcnt);
+    }
     walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
 
     for (i = 0; i < iovcnt; i++) {
@@ -2180,12 +2315,22 @@ static int32_t sys_readv(isr_params_t *params)
             return (total > 0) ? total : -EFAULT;
         }
 
-        r = read_fd(fd, (char __user *)iov.iov_base, iov.iov_len);
-        if (r < 0) {
-            return (total > 0) ? total : r;
+        /* The first buffer is filled by the ordinary read, which waits if it
+         * must; every buffer after it only by one that will not wait. */
+        if (total > 0 && !walk) {
+            r = read_ready(entry, fd, (char __user *)iov.iov_base,
+                           iov.iov_len);
+            if (r <= 0) {
+                break;
+            }
+        } else {
+            r = read_fd(fd, (char __user *)iov.iov_base, iov.iov_len);
+            if (r < 0) {
+                return (total > 0) ? total : r;
+            }
         }
         total += r;
-        if (!walk || (uint32_t)r < iov.iov_len) {
+        if ((uint32_t)r < iov.iov_len) {
             break;
         }
     }

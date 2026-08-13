@@ -194,6 +194,99 @@ static int tcp_recv_ready(void *arg)
 }
 
 /**
+ * Wait for a datagram to be buffered. Returns 0, or -errno if a signal came
+ * first.
+ */
+int socket_dgram_wait(struct socket *sock)
+{
+    return wq_wait_event(&sock->waiters, udp_recv_ready, sock);
+}
+
+/**
+ * Bytes in the waiting datagram, or -1 when the slot is empty.
+ *
+ * Occupancy is `recv_full` and not the length, since a datagram of no bytes is
+ * a datagram; a caller that read 0 as emptiness would block forever on one.
+ */
+int socket_dgram_pending(struct socket *sock)
+{
+    int pending;
+    uint32_t flags;
+
+    flags = net_lock();
+    pending = sock->recv_full ? (int)sock->recv_len : -1;
+    net_unlock(flags);
+
+    return pending;
+}
+
+/**
+ * Copy part of the waiting datagram out without consuming it.
+ *
+ * `offset` is how far into the datagram to start, so a caller with several
+ * destinations fills them in order from the one message. A copy that starts at
+ * or past the end returns 0, which is what ends such a walk. Returns -1 when
+ * no datagram is waiting.
+ *
+ * The slot is read under `net_lock` so the receive interrupt cannot overwrite
+ * it mid-copy, which would tear the payload. The caller prefaulted the user
+ * buffer, so the copy cannot fault with interrupts off.
+ */
+int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf,
+                      int len)
+{
+    int copy_len;
+    uint32_t flags;
+
+    if (len < 0) {
+        return 0;
+    }
+
+    flags = net_lock();
+    if (!sock->recv_full) {
+        net_unlock(flags);
+
+        return -1;
+    }
+    if (offset >= (uint32_t)sock->recv_len) {
+        net_unlock(flags);
+
+        return 0;
+    }
+    copy_len = (int)((uint32_t)sock->recv_len - offset);
+    if (copy_len > len) {
+        copy_len = len;
+    }
+    k_memcpy(buf, sock->recv_buf + offset, (uint32_t)copy_len);
+    net_unlock(flags);
+
+    return copy_len;
+}
+
+/**
+ * Drop the waiting datagram, reporting its sender.
+ *
+ * Whatever of it a caller did not take is discarded here, which is what a
+ * datagram read does: the message is the unit, and the next one is next.
+ */
+void socket_dgram_consume(struct socket *sock, uint32_t *src_ip,
+                          uint16_t *src_port)
+{
+    uint32_t flags;
+
+    flags = net_lock();
+    if (src_ip) {
+        *src_ip = sock->last_src_ip;
+    }
+    if (src_port) {
+        *src_port = sock->last_src_port;
+    }
+    sock->recv_len  = 0;
+    sock->recv_full = 0;
+    net_unlock(flags);
+}
+
+/**
  * Blocking UDP receive: wait for a datagram, then copy it out.
  *
  * Sleeps until a datagram is buffered; a pending signal unwinds the wait and
@@ -209,33 +302,17 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len,
 {
     int copy_len;
     int rc;
-    uint32_t flags;
 
-    rc = wq_wait_event(&sock->waiters, udp_recv_ready, sock);
+    rc = socket_dgram_wait(sock);
     if (rc < 0) {
         return rc;
     }
+    copy_len = socket_dgram_peek(sock, 0, buf, len);
+    if (copy_len < 0) {
+        copy_len = 0;
+    }
+    socket_dgram_consume(sock, src_ip, src_port);
 
-    /* Consume the single-datagram slot under net_lock so the RX IRQ producer
-     * (socket_udp_deliver) cannot overwrite it mid-readout, which would tear the
-     * payload, mismatch the recorded source, or let the trailing clear drop
-     * a datagram the IRQ just delivered. The caller prefaulted the user buffer, so
-     * the copy cannot fault with interrupts off. */
-    flags = net_lock();
-    copy_len = (int)sock->recv_len;
-    if (copy_len > len) {
-        copy_len = len;
-    }
-    k_memcpy(buf, sock->recv_buf, (uint32_t)copy_len);
-    if (src_ip) {
-        *src_ip = sock->last_src_ip;
-    }
-    if (src_port) {
-        *src_port = sock->last_src_port;
-    }
-    sock->recv_len  = 0;
-    sock->recv_full = 0;
-    net_unlock(flags);
     return copy_len;
 }
 
@@ -248,29 +325,13 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
                     uint32_t *src_ip, uint16_t *src_port)
 {
     int copy_len;
-    uint32_t flags;
 
-    /* Same atomic read-out as socket_recv: snapshot and clear the slot under
-     * net_lock so the RX IRQ cannot interleave. */
-    flags = net_lock();
-    if (!sock->recv_full) {
-        net_unlock(flags);
+    copy_len = socket_dgram_peek(sock, 0, buf, len);
+    if (copy_len < 0) {
         return SOCK_EAGAIN;
     }
-    copy_len = (int)sock->recv_len;
-    if (copy_len > len) {
-        copy_len = len;
-    }
-    k_memcpy(buf, sock->recv_buf, (uint32_t)copy_len);
-    if (src_ip) {
-        *src_ip = sock->last_src_ip;
-    }
-    if (src_port) {
-        *src_port = sock->last_src_port;
-    }
-    sock->recv_len  = 0;
-    sock->recv_full = 0;
-    net_unlock(flags);
+    socket_dgram_consume(sock, src_ip, src_port);
+
     return copy_len;
 }
 

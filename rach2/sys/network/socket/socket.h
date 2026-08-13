@@ -91,6 +91,36 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len,
 int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
                     uint32_t *src_ip, uint16_t *src_port);
 
+/*
+ * The same receive taken in three steps, for a caller with more than one
+ * destination to fill. `readv` is the caller: a datagram is one message, so
+ * reading twice would take a second one and copying it out once would drop
+ * whatever did not fit the first buffer. Waiting, copying piece by piece, and
+ * consuming are therefore separable, and `socket_recv` above is the three of
+ * them in a row over a single buffer.
+ *
+ * The slot cannot change under a caller that is between them: a datagram
+ * arrives from the receive interrupt, and the syscall gate is an interrupt
+ * gate, so a system call runs with interrupts off from end to end.
+ */
+
+/** Wait for a datagram. Returns 0, or a negative errno (-EINTR on a signal). */
+int socket_dgram_wait(struct socket *sock);
+
+/** Bytes in the waiting datagram, or -1 when the slot is empty. */
+int socket_dgram_pending(struct socket *sock);
+
+/**
+ * Copy up to `len` bytes of the waiting datagram from `offset` bytes into it,
+ * leaving it in place. Returns the bytes copied, or -1 with no datagram.
+ */
+int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf,
+                      int len);
+
+/** Drop the waiting datagram, reporting its sender through the two pointers. */
+void socket_dgram_consume(struct socket *sock, uint32_t *src_ip,
+                          uint16_t *src_port);
+
 /* TCP-side helpers, implemented with the TCP layer. */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
 void socket_tcp_connected(struct socket *sock);
