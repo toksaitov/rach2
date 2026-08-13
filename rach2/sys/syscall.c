@@ -2148,26 +2148,37 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
  * small for a datagram already does. Exactly one datagram is consumed either
  * way, and a datagram of no bytes returns 0 without being end of input.
  *
- * The slot is held from the first copy to the consume, and that is not
- * optional: a syscall body runs with interrupts ENABLED (only preemption is
- * off), so the receive interrupt would otherwise deliver the next datagram over
- * this one between two buffers, and the walk would return a prefix of one
- * message followed by bytes of another. The copies are made under the same hold
- * for the same reason the single-buffer read always was.
+ * The message is taken out of the socket whole and under one hold, and only
+ * then spread across the buffers. Both halves of that are deliberate.
  *
- * Holding it is bounded work: the copying stops when the datagram is spent, and
- * a datagram is at most `SOCK_RECV_BUF_SIZE`. The vector list was checked and
- * faulted in by the caller, so nothing here can fault with interrupts off.
+ * Taking it under one hold is not optional: a syscall body runs with interrupts
+ * ENABLED (only preemption is off, see net.h), so the receive interrupt would
+ * otherwise deliver the next datagram over this one between two buffers, and
+ * the caller would get a prefix of one message followed by bytes of another.
+ *
+ * Spreading it afterwards, with interrupts on and through `copy_to_user`, is
+ * what keeps a caller's own iovec array from being a weapon. The buffers are
+ * read from user memory as the copy goes, so a caller can point one buffer AT
+ * its own vector list and have the datagram rewrite the destinations behind it.
+ * Those addresses were never checked by the pass that ran before the read.
+ * `copy_to_user` refuses an address it cannot fault in, which makes such a
+ * caller a process scribbling on itself rather than a raw kernel write to
+ * whatever it named.
+ *
+ * The message buffer is one datagram wide on a 16 KB kernel stack. That is the
+ * whole of what "a kernel buffer to read into" ever needed to be.
  *
  * Returns the bytes copied, or a negative errno.
  */
 static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
 {
+    uint8_t message[SOCK_RECV_BUF_SIZE];
     struct kernel_iovec iov;
     uint32_t offset = 0;
     int32_t total = 0;
     uint32_t held;
     int nonblock;
+    int taken;
     int i;
 
     nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
@@ -2184,8 +2195,15 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
     }
 
     held = net_lock();
-    for (i = 0; i < iovcnt; i++) {
-        int32_t r;
+    taken = socket_dgram_peek(entry->sock, 0, message, (int)sizeof(message));
+    if (taken < 0) {
+        taken = 0;  /* it went between the wait and the hold */
+    }
+    socket_dgram_consume(entry->sock, 0, 0);
+    net_unlock(held);
+
+    for (i = 0; i < iovcnt && (int)offset < taken; i++) {
+        uint32_t chunk;
 
         if (copy_from_user(&iov,
                            (const void __user *)(iov_user +
@@ -2196,23 +2214,20 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
         if (iov.iov_len == 0) {
             continue;
         }
-        if (!user_access_ok(iov.iov_base, iov.iov_len)) {
-            break;
+        chunk = (uint32_t)taken - offset;
+        if (chunk > iov.iov_len) {
+            chunk = iov.iov_len;
         }
-        r = socket_dgram_peek(entry->sock, offset,
-                              (uint8_t __force *)iov.iov_base,
-                              (int)iov.iov_len);
-        if (r <= 0) {
-            break;  /* the datagram is spent, or it went while we were away */
+        if (copy_to_user((void __user *)iov.iov_base, message + offset,
+                         chunk) != 0) {
+            break;  /* the caller moved its own buffer out from under itself */
         }
-        offset += (uint32_t)r;
-        total += r;
-        if ((uint32_t)r < iov.iov_len) {
+        offset += chunk;
+        total += (int32_t)chunk;
+        if (chunk < iov.iov_len) {
             break;
         }
     }
-    socket_dgram_consume(entry->sock, 0, 0);
-    net_unlock(held);
 
     return total;
 }

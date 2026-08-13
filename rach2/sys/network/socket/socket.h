@@ -99,12 +99,14 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
  * consuming are therefore separable, and `socket_recv` above is the three of
  * them in a row over a single buffer.
  *
- * A caller taking more than one piece must hold `net_lock` across all of them
- * and the consume. A syscall body runs with interrupts enabled here (see
- * net.h), so the receive interrupt would otherwise deliver the next datagram
- * over this one between two copies, and the caller would take a prefix of one
- * message followed by bytes of another. Each of these takes the lock itself,
- * and nesting it is safe, so a single-piece caller needs nothing.
+ * A caller must hold `net_lock` across every copy it makes AND the consume,
+ * whether it takes the message in one piece or several. A syscall body runs
+ * with interrupts enabled here (see net.h), so the receive interrupt would
+ * otherwise put the next datagram in the slot in between: a several-piece
+ * caller would take a prefix of one message followed by bytes of another, and
+ * a one-piece caller would return one message's bytes with the other one's
+ * sender while clearing a datagram nobody read. Each of these takes the lock
+ * itself as well, which nests safely.
  */
 
 /** Wait for a datagram. Returns 0, or a negative errno (-EINTR on a signal). */

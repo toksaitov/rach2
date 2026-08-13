@@ -356,6 +356,52 @@ static int check_datagram(void)
         return fail("the truncated datagram holds the wrong bytes");
     }
 
+    /* A caller may point a buffer AT its own vector list, so that the message
+     * rewrites the destinations behind it. The addresses that lands are ones
+     * nothing checked, and the kernel must not write through them blind. This
+     * payload is built to do exactly that: four bytes for the first buffer,
+     * then the eight bytes of a descriptor naming an address inside the user
+     * window that no mapping backs, then four more bytes for the kernel to put
+     * there. It must come back rather than fault in kernel mode, and what it
+     * returns is whatever it managed before it gave up.
+     */
+    {
+        struct iovec alias[3];
+        unsigned char payload[20];
+        char sink[4];
+
+        memcpy(payload, "AAAA", 4);
+        /* { .iov_base = (void *)0x30000000, .iov_len = 4 }, little-endian */
+        payload[4] = 0x00;
+        payload[5] = 0x00;
+        payload[6] = 0x00;
+        payload[7] = 0x30;
+        payload[8] = 0x04;
+        payload[9] = 0x00;
+        payload[10] = 0x00;
+        payload[11] = 0x00;
+        memcpy(payload + 12, "BBBBCCCC", 8);
+
+        if (sendto(fd, payload, sizeof(payload), 0, (struct sockaddr *)&me, sizeof(me)) !=
+            (ssize_t)sizeof(payload)) {
+            close(fd);
+
+            return fail("could not send the aliasing datagram");
+        }
+        alias[0].iov_base = sink;
+        alias[0].iov_len = sizeof(sink);
+        alias[1].iov_base = &alias[2]; /* the next descriptor itself */
+        alias[1].iov_len = sizeof(alias[2]);
+        alias[2].iov_base = sink;
+        alias[2].iov_len = sizeof(sink);
+        got = readv(fd, alias, 3);
+        if (got < 4) {
+            close(fd);
+
+            return fail("the aliasing readv did not even fill the first buffer");
+        }
+    }
+
     /* And the remainder was dropped with the message, not left to answer the
      * next read: nothing is waiting now. */
     if (sendto(fd, "TAIL", 4, 0, (struct sockaddr *)&me, sizeof(me)) != 4) {

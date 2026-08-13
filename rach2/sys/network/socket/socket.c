@@ -302,16 +302,25 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len,
 {
     int copy_len;
     int rc;
+    uint32_t flags;
 
     rc = socket_dgram_wait(sock);
     if (rc < 0) {
         return rc;
     }
+
+    /* One hold across the copy and the clear. Between them the receive
+     * interrupt could otherwise put the next datagram in the slot, and this
+     * would return one message's bytes with the other one's sender, clearing a
+     * datagram nobody read. The two calls take the lock again inside, which
+     * nests. */
+    flags = net_lock();
     copy_len = socket_dgram_peek(sock, 0, buf, len);
     if (copy_len < 0) {
         copy_len = 0;
     }
     socket_dgram_consume(sock, src_ip, src_port);
+    net_unlock(flags);
 
     return copy_len;
 }
@@ -325,12 +334,17 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
                     uint32_t *src_ip, uint16_t *src_port)
 {
     int copy_len;
+    uint32_t flags;
 
+    flags = net_lock();
     copy_len = socket_dgram_peek(sock, 0, buf, len);
     if (copy_len < 0) {
+        net_unlock(flags);
+
         return SOCK_EAGAIN;
     }
     socket_dgram_consume(sock, src_ip, src_port);
+    net_unlock(flags);
 
     return copy_len;
 }
