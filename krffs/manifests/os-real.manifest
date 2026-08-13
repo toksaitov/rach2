@@ -33,6 +33,25 @@ file 0755 /bin/ping build/utils/ping
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
 
+# The compiler, and the sysroot it looks in when it runs. /bin/tcc is an
+# ordinary program: nothing here execs it as root, so it is not in the guard's
+# trusted list the way /bin/sh and /bin/login are. What it needs is the parts of
+# a C toolchain that live outside the compiler: musl's headers and library, the
+# startup objects, and tcc's own runtime and headers. Those paths are not a
+# choice made here; they were baked into the binary at configure time
+# (vendor/tcc/Readme.md), and /lib/tcc/include comes BEFORE /include because
+# musl expects the compiler to provide stdarg.h and friends.
+file 0755 /bin/tcc build/vendor/tcc/tcc
+dir 0755 /lib
+dir 0755 /lib/tcc
+file 0644 /lib/tcc/libtcc1.a build/vendor/tcc/libtcc1.a
+tree 0644 /lib/tcc/include build/vendor/tcc/include
+file 0644 /lib/libc.a vendor/musl/install/lib/libc.a
+file 0644 /lib/crt1.o vendor/musl/install/lib/crt1.o
+file 0644 /lib/crti.o vendor/musl/install/lib/crti.o
+file 0644 /lib/crtn.o vendor/musl/install/lib/crtn.o
+tree 0644 /include vendor/musl/install/include
+
 # /sbin/init (PID 1): the kernel boots it; it forks a session child that execs
 # /bin/login and nothing else, so the console is behind a password. This is the
 # init-login artifact: the one built with the shell table compiled out, so an

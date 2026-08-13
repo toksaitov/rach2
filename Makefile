@@ -193,7 +193,7 @@ os-simple-image: krffs rach2 ish utils
 # is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when absent;
 # the check targets ensure the busybox/dropbear binaries are real.
-os-real-image: krffs rach2 utils check-busybox check-setid check-dropbearmulti ports/doom
+os-real-image: krffs rach2 utils check-busybox check-tcc check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
@@ -202,7 +202,7 @@ os-real-image: krffs rach2 utils check-busybox check-setid check-dropbearmulti p
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
 # partition is larger than the 32 MB resident page-cache cap on purpose, so it can
 # later prove an on-disk file system bigger than what fits in RAM at once.
-os-real-disk: krffs rach2 utils check-busybox check-setid check-dropbearmulti ports/doom
+os-real-disk: krffs rach2 utils check-busybox check-tcc check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
@@ -211,7 +211,7 @@ os-real-disk: krffs rach2 utils check-busybox check-setid check-dropbearmulti po
 # kernel, plus a KRFFS partition with the os-real tree. It boots a real machine
 # (or QEMU with no -kernel/-initrd) BIOS -> MBR -> GRUB -> kernel -> KRFFS on the
 # disk. Built in a throwaway Docker container (needs Docker).
-os-real-grub-disk: krffs rach2 utils check-busybox check-setid check-dropbearmulti ports/doom
+os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	sh tools/mkdisk_grub.sh
@@ -337,7 +337,7 @@ ping-test: rach2 tests krffs test-image
 # alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 
-account-test: rach2 utils krffs busybox ish
+account-test: rach2 utils krffs busybox ish check-tcc
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
