@@ -20,7 +20,7 @@ a line is a sequence of bytes and not of characters, only a newline ends a line
 the way only a newline ends `fgets`, fields split on spaces and tabs, a comment
 is a line whose first token begins with '#' (there is no trailing-comment form,
 so `file 0755 /x build/x # note` is a directive with an ignored tail), the mode
-is the second token of all five mode-bearing verbs, and an omitted owner reads
+is the second token of all six mode-bearing verbs, and an omitted owner reads
 as 0:0 the way `parse_mode` defaults it. A set-id `file` or `optional-file`
 must appear in that manifest's allowlist at the same path, mode, owner and host
 source. A set-id `exec-dir` is refused with no allowlist escape, because the
@@ -81,15 +81,16 @@ S_ISGID = 0o2000
 SETID = S_ISUID | S_ISGID
 PERM = 0o7777
 
-# The five mode-bearing verbs of apply_line, the three of them that stage one
-# named file and so can carry a declared set-id bit, the three that name a host
-# operand, and the fewest tokens each needs: `file`, `optional-file` and
-# `exec-dir` reach for a fourth token and refuse the line without it, while
-# `text` treats a missing payload as empty.
+# The six mode-bearing verbs of apply_line, the three of them that stage one
+# named file and so can carry a declared set-id bit, the four that name a host
+# operand, and the fewest tokens each needs: `file`, `optional-file`,
+# `exec-dir` and `tree` reach for a fourth token and refuse the line without it,
+# while `text` treats a missing payload as empty.
 FILE_VERBS = ("file", "optional-file", "text")
-HOST_VERBS = ("file", "optional-file", "exec-dir")
-VERBS = ("dir", "text", "file", "optional-file", "exec-dir")
-ARITY = {"dir": 3, "text": 3, "file": 4, "optional-file": 4, "exec-dir": 4}
+HOST_VERBS = ("file", "optional-file", "exec-dir", "tree")
+VERBS = ("dir", "text", "file", "optional-file", "exec-dir", "tree")
+ARITY = {"dir": 3, "text": 3, "file": 4, "optional-file": 4,
+         "exec-dir": 4, "tree": 4}
 
 # stageimage reads with fgets into `char line[2048]`, so it stores at most 2047
 # bytes and refuses a line that filled the buffer without a newline. The test
@@ -618,12 +619,13 @@ def check_manifest(path, table=ALLOWLIST):
                 staged[guest] = (lineno, mode, uid, gid, source)
         if not (mode & SETID):
             continue
-        if verb == "exec-dir":
-            problems.append("%s:%d: 'exec-dir' stages mode %s into %s; a "
-                            "set-id exec-dir privileges every executable that "
-                            "happens to be in the host directory, so it is "
-                            "refused. Name the one binary with 'file'."
-                            % (name, lineno, fmt_entry(mode, uid, gid), guest))
+        if verb in ("exec-dir", "tree"):
+            problems.append("%s:%d: '%s' stages mode %s into %s; a set-id %s "
+                            "privileges whatever happens to be in the host "
+                            "directory, so it is refused. Name the one binary "
+                            "with 'file'."
+                            % (name, lineno, verb, fmt_entry(mode, uid, gid),
+                               guest, verb))
             continue
         if verb == "dir":
             problems.append("%s:%d: 'dir' stages %s at mode %s; KRFFS has no "
@@ -1178,6 +1180,15 @@ SELFTEST_CASES = [
      OS_REAL_MINIMUM + "text 02755:0:0 /etc/motd hello\\n",
      False, "does not declare it"),
     ("the test image's seven declared entries", "test", TEST_MINIMUM, True, ""),
+    ("a set-id tree", "os-simple",
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hello, world\\n\n"
+     "tree 04644 /include vendor/musl/install/include\n", False, "refused"),
+    ("a plain tree", "os-simple",
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hello, world\\n\n"
+     "tree 0644 /include vendor/musl/install/include\n", True, ""),
+    ("a 'tree' with no host dir", "os-simple",
+     OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hello, world\\n\n"
+     "tree 0644 /include\n", False, "needs a host"),
     ("a set-id exec-dir", "os-simple",
      OS_SIMPLE_MINIMUM + "text 0644 /hello.txt hello, world\\n\n"
      "exec-dir 04755 / build/utils\n", False, "refused"),

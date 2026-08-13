@@ -36,9 +36,10 @@ the supporting scripts.
   per-image allowlist naming each path's exact mode and owner, failing on an
   undeclared entry, a declared entry nothing stages, a mode or owner mismatch,
   a malformed mode, or a manifest the table does not name. It parses the
-  grammar rather than searching the text, because all five mode-bearing
-  directives can grant privilege and `exec-dir` grants it to a set of paths the
-  manifest never names: `dir` and `exec-dir` may carry no set-id bit at all,
+  grammar rather than searching the text, because all six mode-bearing
+  directives can grant privilege and `exec-dir` and `tree` grant it to a set of
+  paths the manifest never names: `dir`, `exec-dir` and `tree` may carry no
+  set-id bit at all,
   since KRFFS has no setgid-directory inheritance and an `exec-dir` set is a
   property of what happened to be built, not of the manifest. Its tokenizing
   follows `stageimage.krffs`'s `apply_line` exactly, down to reading bytes
