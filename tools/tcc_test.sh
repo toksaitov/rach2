@@ -111,6 +111,10 @@ boot_lines \
     "tcc -static -Wl,-oformat=binary -o /tmp/raw /tmp/hello.c > /tmp/rw.out 2>&1; echo RW\"\"RC=\$?; cat /tmp/rw.out" \
     "ls /tmp/lib.so /tmp/dyn /tmp/raw 2>&1 | tail -3; echo SWEPT\"\"IT" \
     "tcc -c -o /tmp/hello.o /tmp/hello.c && echo OBJECT\"\"OK" \
+    "tcc -static -o /tmp/cat /src/utils/cat.c && echo TOOL\"\"BUILT" \
+    "printf 'a line this machine compiled\\n' > /tmp/in.txt" \
+    "/tmp/cat /tmp/in.txt > /tmp/mine.out; busybox cat /tmp/in.txt > /tmp/theirs.out" \
+    "cmp /tmp/mine.out /tmp/theirs.out && echo SAME\"\"BYTES" \
     "sync; echo DONE\"\"IT"
 
 if ! wait_token "BUILTIT" 240; then
@@ -178,10 +182,27 @@ if [ -n "$NEW" ]; then
     fail "the compiler asked this kernel for a syscall it does not have: $(printf '%s' "$NEW" | tr '\n' ' ')"
 fi
 
+# And a program of this project's own, compiled from the source the image
+# carries. The proof is behavioural rather than a byte comparison of the two
+# binaries: the shipped one was linked against libgcc on the host and this one
+# against libtcc1.a on the machine, so they are different objects that must do
+# the same thing.
+#
+# The reference is `busybox cat` and not `/bin/cat`, because in THIS image there
+# is no such file: busybox dispatches `cat` as an applet inside itself, and the
+# in-house cat lives in the other image. So what is compared is the program the
+# machine just built against the program this machine actually uses.
+if ! wait_token "TOOLBUILT" 240; then
+    fail "the machine could not compile this project's own cat"
+fi
+if ! wait_token "SAMEBYTES" 120; then
+    fail "the cat the machine compiled does not agree with the shipped one"
+fi
+
 if ! wait_token "DONEIT" 90; then
     fail "the boot never finished its script"
 fi
 cleanup_boot
 
-echo "tcc-test: the machine compiled a program, ran it, and refused what it cannot run: OK"
+echo "tcc-test: the machine compiled a program and one of its own tools, and refused what it cannot run: OK"
 echo "tcc-test: PASS"

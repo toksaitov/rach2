@@ -52,6 +52,11 @@ file 0644 /lib/crti.o vendor/musl/install/lib/crti.o
 file 0644 /lib/crtn.o vendor/musl/install/lib/crtn.o
 tree 0644 /include vendor/musl/install/include
 
+# The source of this project's own tools, staged so the machine can build them.
+# A student who changes one of these and compiles it has the shortest possible
+# loop between reading a program and running their version of it.
+tree 0644 /src/utils utils
+
 # /sbin/init (PID 1): the kernel boots it; it forks a session child that execs
 # /bin/login and nothing else, so the console is behind a password. This is the
 # init-login artifact: the one built with the shell table compiled out, so an
