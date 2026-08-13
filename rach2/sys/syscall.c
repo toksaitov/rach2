@@ -8956,12 +8956,21 @@ static int32_t sys_munmap(isr_params_t *params)
     return 0;
 }
 
-/* Name each missing syscall once per boot, behind `rach2.trace=enosys`. The
- * bitmap is what makes it once: a program in a retry loop would otherwise fill
- * the console with one number. Off unless the flag is on the command line, so
- * no other boot sees a line it did not before. */
+/* Name each missing syscall behind `rach2.trace=enosys`, once per number PER
+ * PROCESS rather than once per boot. Per boot was the first shape and it hides
+ * exactly what such a trace is for: `login` asks for setitimer early, so a
+ * later program asking for the same number would say nothing, and a reader
+ * comparing before and after would conclude the later program asked for
+ * nothing. Recording which process last reported a number costs one word per
+ * number and makes each program's own gaps visible.
+ *
+ * A number the table cannot hold is printed every time, since there is nowhere
+ * to remember it; nothing should ever ask for one, and a boot that fills the
+ * console with one is telling the truth about a program in a retry loop. Off
+ * unless the flag is on the command line, so no other boot sees a line it did
+ * not before. */
 static int _trace_enosys = 0;
-static uint32_t _enosys_seen[(SYSCALL_TABLE_SIZE + 31) / 32];
+static uint32_t _enosys_last_pid[SYSCALL_TABLE_SIZE];
 
 /**
  * The syscall trap handler: dispatch on the number in EAX.
@@ -8998,17 +9007,17 @@ static void _syscall_handler(isr_params_t *params)
     } else if (_trace_enosys) {
         /* A missing syscall is otherwise invisible: -ENOSYS goes back in a
          * register and nothing is printed, so a program that fails for want of
-         * one fails for no stated reason. Behind `rach2.trace=enosys` each
-         * number is named ONCE per boot, with the process that asked, which is
-         * enough to tell a gap from a bug without turning a boot into a log. */
-        uint32_t word = syscall_num / 32;
-        uint32_t bit = 1u << (syscall_num % 32);
+         * one fails for no stated reason. */
+        uint32_t pid = current_proc ? current_proc->pid : 0;
+        const char *who = current_proc ? current_proc->comm : "?";
 
-        if (syscall_num < SYSCALL_TABLE_SIZE && !(_enosys_seen[word] & bit)) {
-            _enosys_seen[word] |= bit;
+        if (syscall_num >= SYSCALL_TABLE_SIZE) {
+            serial_printf("syscall: %d: not implemented, and past the table "
+                          "(asked for by %s)\n", (int)syscall_num, who);
+        } else if (_enosys_last_pid[syscall_num] != pid) {
+            _enosys_last_pid[syscall_num] = pid;
             serial_printf("syscall: %d: not implemented (asked for by %s)\n",
-                          (int)syscall_num,
-                          current_proc ? current_proc->comm : "?");
+                          (int)syscall_num, who);
         }
     }
 

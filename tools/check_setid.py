@@ -2029,6 +2029,10 @@ def check_inits(directory=INIT_BINARIES):
 #
 # The order of the two include directories is not checked and cannot be: it is
 # in the binary, not in the image. What is checked is that both are there.
+# The tree the headers come from, so a stage that dropped some can be noticed
+# by counting rather than by a student's `#include` failing.
+SYSROOT_HEADER_SOURCE = os.path.join("vendor", "musl", "install", "include")
+
 SYSROOT_PATHS = (
     "/bin/tcc",
     "/lib/tcc/libtcc1.a",
@@ -2050,6 +2054,17 @@ SYSROOT_PATHS = (
 )
 
 
+def host_header_count(root=SYSROOT_HEADER_SOURCE):
+    """How many headers the host musl install holds, or None if it is absent."""
+    if not os.path.isdir(root):
+        return None
+    total = 0
+    for _dirpath, _dirnames, filenames in os.walk(root):
+        total += len(filenames)
+
+    return total
+
+
 def check_sysroot_paths(paths, name):
     """Check an already-walked image for the compiler's sysroot."""
     problems = []
@@ -2062,6 +2077,27 @@ def check_sysroot_paths(paths, name):
         elif node["mode"] & 0o40000:
             problems.append("%s: %s is a directory and the compiler wants a "
                             "file" % (name, path))
+        elif node["data_size"] == 0:
+            # A header may legitimately be empty and five of musl's are; a
+            # library or a startup object may not, and an empty one is what a
+            # truncated copy looks like.
+            problems.append("%s: %s is staged empty; a library or a startup "
+                            "object that holds nothing is a link that fails "
+                            "at the last step" % (name, path))
+
+    # The named paths above are a sample: they say the shape is right, not that
+    # the tree is whole. A header nobody sampled is exactly what a partial stage
+    # loses, so the count is compared with the tree it was staged from.
+    staged = len([p for p in paths
+                  if p.startswith("/include/") and not paths[p]["mode"] & 0o40000])
+    wanted = host_header_count()
+    if wanted is None:
+        problems.append("%s: %s is not there, so the staged headers could not "
+                        "be counted against it" % (name, SYSROOT_HEADER_SOURCE))
+    elif staged != wanted:
+        problems.append("%s: %d headers under /include and %d in %s; the tree "
+                        "was staged short" % (name, staged, wanted,
+                                              SYSROOT_HEADER_SOURCE))
 
     return problems
 

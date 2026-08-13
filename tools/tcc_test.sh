@@ -109,7 +109,7 @@ boot_lines \
     "tcc -shared -o /tmp/lib.so /tmp/hello.c > /tmp/sh.out 2>&1; echo SH\"\"RC=\$?; cat /tmp/sh.out" \
     "tcc -o /tmp/dyn /tmp/hello.c > /tmp/dy.out 2>&1; echo DY\"\"RC=\$?; cat /tmp/dy.out" \
     "tcc -static -Wl,-oformat=binary -o /tmp/raw /tmp/hello.c > /tmp/rw.out 2>&1; echo RW\"\"RC=\$?; cat /tmp/rw.out" \
-    "ls /tmp/lib.so /tmp/dyn /tmp/raw 2>&1 | tail -3; echo SWEPT\"\"IT" \
+    "[ ! -e /tmp/lib.so ] && [ ! -e /tmp/dyn ] && [ ! -e /tmp/raw ] && echo NO\"\"LEFTOVERS" \
     "tcc -c -o /tmp/hello.o /tmp/hello.c && echo OBJECT\"\"OK" \
     "tcc -static -o /tmp/cat /src/utils/cat.c && echo TOOL\"\"BUILT" \
     "printf 'a line this machine compiled\\n' > /tmp/in.txt" \
@@ -136,6 +136,9 @@ fi
 if ! wait_token "SHRC=1" 90; then
     fail "-shared was not refused"
 fi
+if ! grep -q "shared is not available" "$LOG"; then
+    fail "-shared was refused without saying why"
+fi
 if ! wait_token "DYRC=1" 90; then
     fail "a link without -static was not refused"
 fi
@@ -149,13 +152,12 @@ if ! grep -q "must be an ELF" "$LOG"; then
     fail "a raw-image link was refused without saying why"
 fi
 
-# A refusal that still wrote its output would be a refusal in name only.
-if ! wait_token "SWEPTIT" 90; then
-    fail "the check for leftover output never ran"
-fi
-LEFT=$(sed -n '/SWEPTIT/q;p' "$LOG" | grep -cE "^/tmp/(lib\.so|dyn|raw)$" || true)
-if [ "$LEFT" -ne 0 ]; then
-    fail "a refused compile left its output behind"
+# A refusal that still wrote its output would be a refusal in name only. The
+# guest answers this one itself: the console ends every line with a carriage
+# return, so a pattern anchored here would have matched nothing and passed
+# whatever was there.
+if ! wait_token "NOLEFTOVERS" 90; then
+    fail "a refused compile left its output behind, or the check never ran"
 fi
 
 # Compiling to an object is not refused: it produces no program to run, and it
@@ -170,16 +172,14 @@ fi
 #
 # The question is what the COMPILER asked for, and not what anything on the
 # machine asked for: busybox's `login` wants setitimer (104), which this kernel
-# does not have and does not need, and a boot that named that as the compiler's
-# fault would be lying. So the numbers traced before the first compile are the
-# baseline, and the compiler's run must add nothing to it. The trace naming each
-# number once per boot is what makes the subtraction meaningful.
-BEFORE=$(sed -n '1,/tcc -static -o/p' "$LOG" | grep "not implemented" | \
-    sed 's/.*syscall: \([0-9]*\).*/\1/' | sort -u)
-AFTER=$(grep "not implemented" "$LOG" | sed 's/.*syscall: \([0-9]*\).*/\1/' | sort -u)
-NEW=$(printf '%s\n' "$AFTER" | grep -vxF "$BEFORE" 2>/dev/null || true)
-if [ -n "$NEW" ]; then
-    fail "the compiler asked this kernel for a syscall it does not have: $(printf '%s' "$NEW" | tr '\n' ' ')"
+# does not have and does not need. The trace names the process, and names each
+# number once PER PROCESS, so the question is asked by name. An earlier version
+# subtracted the numbers seen before the compile from the numbers seen after,
+# which reads well and is wrong: a number `login` had already reported would
+# have been suppressed for the compiler and the subtraction would come back
+# empty.
+if grep "not implemented" "$LOG" | grep -q "asked for by tcc"; then
+    fail "the compiler asked this kernel for a syscall it does not have: $(grep -m1 'asked for by tcc' "$LOG")"
 fi
 
 # And a program of this project's own, compiled from the source the image
