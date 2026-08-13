@@ -78,7 +78,7 @@ MKDISK          = krffs/mkdisk.sh
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
-        tcc-test \
+        tcc-test ssh-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
@@ -364,6 +364,22 @@ tcc-test: rach2 utils krffs check-busybox check-tcc check-setid check-dropbearmu
 	sh tools/tcc_test.sh build/rach2/kernel $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
 
+# `make ssh-test`: the SSH capstone with nobody at the keyboard. Boots os-real
+# from a disk with the port forwarded, starts dropbear from the console session
+# the way the Readme's recipe does, then logs in twice: root by key, and the
+# unprivileged account by password, which is the half that reaches /etc/shadow.
+# Every wait is bounded, so a hang fails instead of sitting there.
+SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test.disk
+SSH_TEST_PORT ?= 2222
+
+ssh-test: rach2 utils krffs check-busybox check-tcc check-setid check-dropbearmulti ports/doom
+	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
+	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
+	sh tools/ssh_test.sh build/rach2/kernel $(SSH_TEST_DISK) \
+	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`" \
+	    $(SSH_TEST_PORT)
+
 # `make shutdown-test`: userland stopping the machine, on a disk fixture, with
 # every claim of a stop asserted on the QEMU process ending rather than on a
 # token, and every image checked by offline fsck afterwards.
@@ -594,6 +610,7 @@ help:
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make tcc-test    the machine compiles a program on itself"
+	@echo "  make ssh-test    the SSH capstone, both logins, unattended"
 	@echo "  make account-test   accounts created, authenticated and deleted, on both images"
 	@echo "  make shutdown-test  userland stops the machine, and only root can"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"

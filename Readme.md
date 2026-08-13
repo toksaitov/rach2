@@ -91,6 +91,10 @@ os-simple and os-real, so one password opens either.
 
 ### The SSH capstone: log into Rach2 with a real client
 
+`make ssh-test` runs the whole of what follows unattended, both logins included,
+and fails on a timeout rather than waiting; the recipe below is the same thing
+by hand, which is how you would actually use the machine.
+
 ```sh
 make full                                   # build the os-real image (busybox + dropbear + Doom)
 
