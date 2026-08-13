@@ -2,7 +2,7 @@
 
 ![First Versions of Rach2 Booting](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), and can run Doom.
+An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), compiles C on itself (TinyCC), and can run Doom.
 
 Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements a broad set of Linux-compatible syscalls, enough to host a ported musl libc, a static BusyBox `ash`, and a Dropbear SSH server. It has a custom file system (KRFFS), which runs from a RAM module or persists on a real ATA disk through a kernel page cache, audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
 
@@ -25,7 +25,7 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [tools/](tools/)                         | Build, verify, and test scripts behind the make targets (doctor, the gates, the boot harness, image builders)          | [Readme](tools/Readme.md)             |
 | [dev-log/](dev-log/)                     | How each milestone was planned and built, and where the tree stands now                                                | [Readme](dev-log/Readme.md)           |
 
-Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
+Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear, TinyCC): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). TinyCC is the one exception to "unmodified", and it is a stated one: a single patch file, applied at build time rather than committed as an edited tree, refuses the output kinds this system cannot run. `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
 
 ## Kernel subsystems
 
@@ -59,7 +59,7 @@ The kernel is freestanding and links no libgcc, so it alone also builds with `x8
 make doctor    # check your toolchain (PASS/MISSING with install hints)
 make           # the kernel + the os-simple image (our login, shell and Unix utilities)
 make full      # all three images: test, os-simple, and the os-real (BusyBox, Dropbear
-               #   SSH, Doom) capstone the SSH login boots
+               #   SSH, Doom, and a C compiler) capstone the SSH login boots
 make test      # boot the test image headless and assert every probe exits 0
 make images    # build all three images without the test run
 make isos      # a bootable ISO per image, for real hardware (Docker grub-mkrescue)
@@ -88,6 +88,28 @@ absent, into `krffs/rach2_demo_password` (root) and `krffs/rach2_test_password`
 (the unprivileged `test` account), neither of which is committed; `cat` the one
 you want and type it at the login prompt. The same `/etc/shadow` is staged into
 os-simple and os-real, so one password opens either.
+
+### Compiling on the machine itself
+
+os-real carries a C compiler, so a program can be written and built on Rach2
+rather than on the machine that built Rach2:
+
+```sh
+make full                                   # os-real carries tcc and its sysroot
+cd rach2 && DISK=../build/images/os-real.disk ./run.sh   # after: make os-real-disk
+
+# then, at the machine's own prompt, as any account:
+printf '#include <stdio.h>\nint main(void){puts("mine");return 0;}\n' > /tmp/m.c
+tcc -static -o /tmp/m /tmp/m.c
+/tmp/m
+```
+
+`-static` is not optional and the compiler says so: this system has no dynamic
+linker, and the kernel does not refuse a dynamic executable, it loads one and
+jumps into it unrelocated. `-run` and `-shared` are refused for their own
+reasons. The source of this project's own tools is staged at `/src/utils`, so
+`tcc -static -o /tmp/cat /src/utils/cat.c` builds a working `cat` on the machine
+that will run it. `make tcc-test` is that whole sequence as a gate.
 
 ### The SSH capstone: log into Rach2 with a real client
 
