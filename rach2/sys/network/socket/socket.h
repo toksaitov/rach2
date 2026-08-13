@@ -99,9 +99,12 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
  * consuming are therefore separable, and `socket_recv` above is the three of
  * them in a row over a single buffer.
  *
- * The slot cannot change under a caller that is between them: a datagram
- * arrives from the receive interrupt, and the syscall gate is an interrupt
- * gate, so a system call runs with interrupts off from end to end.
+ * A caller taking more than one piece must hold `net_lock` across all of them
+ * and the consume. A syscall body runs with interrupts enabled here (see
+ * net.h), so the receive interrupt would otherwise deliver the next datagram
+ * over this one between two copies, and the caller would take a prefix of one
+ * message followed by bytes of another. Each of these takes the lock itself,
+ * and nesting it is safe, so a single-piece caller needs nothing.
  */
 
 /** Wait for a datagram. Returns 0, or a negative errno (-EINTR on a signal). */

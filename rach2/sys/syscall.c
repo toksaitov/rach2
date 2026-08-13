@@ -2148,14 +2148,25 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
  * small for a datagram already does. Exactly one datagram is consumed either
  * way, and a datagram of no bytes returns 0 without being end of input.
  *
- * The vector list was checked and faulted in by the caller. Returns the bytes
- * copied, or a negative errno.
+ * The slot is held from the first copy to the consume, and that is not
+ * optional: a syscall body runs with interrupts ENABLED (only preemption is
+ * off), so the receive interrupt would otherwise deliver the next datagram over
+ * this one between two buffers, and the walk would return a prefix of one
+ * message followed by bytes of another. The copies are made under the same hold
+ * for the same reason the single-buffer read always was.
+ *
+ * Holding it is bounded work: the copying stops when the datagram is spent, and
+ * a datagram is at most `SOCK_RECV_BUF_SIZE`. The vector list was checked and
+ * faulted in by the caller, so nothing here can fault with interrupts off.
+ *
+ * Returns the bytes copied, or a negative errno.
  */
 static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
 {
     struct kernel_iovec iov;
     uint32_t offset = 0;
     int32_t total = 0;
+    uint32_t held;
     int nonblock;
     int i;
 
@@ -2172,6 +2183,7 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
         }
     }
 
+    held = net_lock();
     for (i = 0; i < iovcnt; i++) {
         int32_t r;
 
@@ -2200,6 +2212,7 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
         }
     }
     socket_dgram_consume(entry->sock, 0, 0);
+    net_unlock(held);
 
     return total;
 }
@@ -2241,9 +2254,10 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
  *
  * A pipe, a stream socket, a device or a `/proc` file is read again only while
  * it says it has more, since a read of an empty one blocks for input nobody has
- * written. That question and the read that follows it cannot be separated by
- * anything: the syscall gate is an interrupt gate, so a system call runs with
- * interrupts off from end to end and no other process runs between them.
+ * written. Asking and then reading is safe for two reasons together: no other
+ * process runs in between, because a syscall is not preemptible here, and the
+ * interrupts that do run can only ADD to what is readable, never take it away.
+ * Nothing else empties a pipe or a receive ring.
  *
  * A terminal is read exactly once, and that is not a limitation but its
  * contract: the line discipline hands back one line, and filling a second

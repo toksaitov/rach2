@@ -381,15 +381,18 @@ reading on.
 * A regular file is read again for each buffer. Its read returns at once and
   its bytes carry no message boundary.
 * A datagram socket is not read again: one datagram is one message. The waiting
-  datagram is copied out piece by piece and consumed once at the end, so it
-  fills as many buffers as it reaches and the remainder past the last one is
-  dropped, exactly as a plain `read` too small for it drops the tail. The next
-  read starts the next message.
+  datagram is copied out piece by piece and consumed once at the end, with the
+  slot held across all of it, since a syscall body runs with interrupts enabled
+  and the receive interrupt would otherwise put the next datagram over this one
+  between two buffers. It fills as many buffers as it reaches and the remainder
+  past the last one is dropped, exactly as a plain `read` too small for it drops
+  the tail. The next read starts the next message.
 * A pipe, a stream socket, a device or a `/proc` file is read again only while
   it says it holds more, so a walk never parks for input nobody has written.
-  The question and the read that follows it cannot be separated: the syscall
-  gate is an interrupt gate, so a system call runs with interrupts off from end
-  to end.
+  Asking and then reading is safe for two reasons together: a syscall is not
+  preemptible here, so no other process runs in between, and the interrupts that
+  do run can only add to what is readable. Nothing else empties a pipe or a
+  receive ring.
 * A terminal is read exactly once, and that is its contract rather than a
   limitation: the line discipline hands back one line, and a second buffer
   filled with the line behind it would consume input the reader did not ask
