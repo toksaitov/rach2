@@ -60,12 +60,26 @@ def symbols(path):
 
     Undefined symbols are attributed to the archive member that references them,
     so a member no link reaches can be left out of the question entirely.
+
+    A definition counts only when it is EXPORTED, which `nm` writes as an
+    upper-case type letter. A lower-case one is a local symbol, visible inside
+    its own object and to nothing else, so it cannot resolve another object's
+    reference; this archive holds exactly that case, a local `__udivmoddi4`
+    beside the global one, and counting it would let the global be removed
+    without the check noticing.
     """
     try:
-        out = subprocess.run([NM, path], capture_output=True, text=True,
-                             check=False).stdout
+        run = subprocess.run([NM, path], capture_output=True, text=True,
+                             check=False)
     except OSError as error:
         raise SystemExit("check-link: cannot run %s: %s" % (NM, error))
+    if run.returncode != 0:
+        raise SystemExit("check-link: %s exited %d on %s: %s"
+                         % (NM, run.returncode, path, run.stderr.strip()))
+    out = run.stdout
+    if path.endswith(".a") and not out.strip():
+        raise SystemExit("check-link: %s reported no symbols in the archive %s, "
+                         "so nothing in it was actually read" % (NM, path))
 
     defined = set()
     undefined = set()
@@ -83,7 +97,8 @@ def symbols(path):
                 undefined.add(parts[1])
         elif len(parts) == 2 and parts[0] in ("w", "v"):
             pass  # a weak undefined links as zero
-        elif len(parts) == 3 and parts[1] not in ("U", "u", "w", "v", "N"):
+        elif len(parts) == 3 and parts[1] not in ("U", "u", "N") and \
+                parts[1].isupper():
             defined.add(parts[2])
 
     return defined, undefined
