@@ -216,8 +216,9 @@ fi
 
 # 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC, so a
 #    newly added kernel source cannot be silently dropped from the build.
-hr "7/12 kernel source list (C_SRC vs disk)"
-if "$REPO/tools/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1; then
+hr "7/12 kernel source list (C_SRC vs disk) and the guest build lists"
+if "$REPO/tools/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
+   python3 "$REPO/tools/check_guest.py" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_sources.log"; fail=1

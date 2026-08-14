@@ -152,6 +152,12 @@ $(C_OBJECTS) : $(BUILD)/%.o : %.c
 print-c-src :
 	@echo $(C_SRC)
 
+# The assembly list too, for tools/check_guest.py (the guest build's list
+# guard): the guest makefile must name exactly these sources.
+.PHONY : print-asm-src
+print-asm-src :
+	@echo $(ASM_SRC)
+
 .PHONY : clean
 clean :
 	rm -rf $(BUILD)

@@ -126,6 +126,7 @@ The window at 0xC0000000 (PCWIN_BASE, the same address as USER_ADDR_MAX, just ab
 |-- kernel.c               # Main entry point, shell, self-tests
 |-- loader.s               # Multiboot header, stack setup, entry
 |-- link.ld                # Linker script (executable at 0x100000)
+|-- guest.mk               # The same kernel build for pdpmake and tcc on Rach2 itself
 |-- Makefile               # Build rules for the environment and ISO
 |-- sys/
 |   |-- kio.c/h            # Console I/O, printf, port I/O
