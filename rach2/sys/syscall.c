@@ -4962,6 +4962,7 @@ static int32_t sys_fork(isr_params_t *params)
     return (int32_t)child->pid;
 }
 
+
 /* waitpid/wait4 options. */
 #define WNOHANG    1
 #define WUNTRACED  2  /* also report a child that has STOPPED */

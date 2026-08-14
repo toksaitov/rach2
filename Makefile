@@ -114,7 +114,13 @@ tcc: $(TCC_STAMP)
 #     belt-and-suspenders backstop on the final touch. ---
 .DELETE_ON_ERROR:
 
-$(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL)
+# The pinned patches are prerequisites, not decoration: build_libc.sh applies
+# them after the extract, so a tree whose stamp predates a patch would keep
+# linking every program against the unpatched libc, and an edit to one would
+# never be built at all.
+LIBC_PATCHES = $(wildcard vendor/musl/patches/*.patch)
+
+$(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
 	@rm -f $@ vendor/musl/install/lib/libc.a
 	./vendor/musl/build_libc.sh
 	@test -s vendor/musl/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }

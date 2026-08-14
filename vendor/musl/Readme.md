@@ -12,7 +12,7 @@ This is how a static i386 Linux program is built and started: musl is a drop-in 
 
 You rarely run this by hand. The top-level `make` (and `make deps`) builds libc on demand behind a stamp file, in dependency order, before anything that links against it.
 
-No musl cross-toolchain is required. The build uses the same `i686-elf-gcc` the kernel uses (`CROSS_COMPILE=i686-elf- ./configure --target=i686 --disable-shared`), so it stays one compiler and one library build. The musl version is pinned to 1.2.5, and the vendored tarball's sha256 is verified before extraction. The extracted source and the `install/` output are rebuildable and git-ignored; only the tarball, this Readme, and the build script are tracked.
+No musl cross-toolchain is required. The build uses the same `i686-elf-gcc` the kernel uses (`CROSS_COMPILE=i686-elf- ./configure --target=i686 --disable-shared`), so it stays one compiler and one library build. The musl version is pinned to 1.2.5, and the vendored tarball's sha256 is verified before extraction. The extracted source and the `install/` output are rebuildable and git-ignored; the tracked files are the tarball, this Readme, the build script, and the one patch under `patches/` explained below.
 
 Outputs (under `install/`):
 
@@ -22,14 +22,33 @@ Outputs (under `install/`):
 
 ## Updating from upstream
 
-musl is vendored as the pinned source tarball beside this Readme and built unmodified; the only Rach2-owned files here are this Readme and `build_libc.sh`. To move to a new musl release:
+musl is vendored as the pinned source tarball beside this Readme, and built from it with the patches under `patches/` applied at extraction; the Rach2-owned files here are this Readme, `build_libc.sh`, and those patches. To move to a new musl release:
 
 1. Download the new `musl-X.Y.Z.tar.gz` from https://musl.libc.org and replace the tarball here.
 2. Set `MUSL_VERSION` and `SHA256` in `build_libc.sh` to the new release and its published sha256.
-3. Rebuild with `make` (or `./build_libc.sh`), then run `make verify-host` and a boot.
-4. musl is used as-is. If a new release expects a syscall the kernel does not implement, add it in `rach2/sys`, not here; the adaptation belongs in the kernel, not the dependency.
+3. REBASE EVERY PATCH under `patches/` onto the new source and check that each still applies; `build_libc.sh` stops the build when one does not, which is the point. A patch that no longer applies is a decision to make again, not a line to delete.
+4. Rebuild with `make` (or `./build_libc.sh`), then run `make verify-host`, `make test` (which includes `musl/spawnmusl`, the probe that fails outright if the spawn patch is missing) and a boot.
+5. Otherwise musl is used as-is. If a new release expects a syscall the kernel does not implement, add it in `rach2/sys` rather than patching here: the adaptation belongs in the kernel unless, as with the spawn, the kernel cannot honestly provide what is asked for.
 
-There are no source patches. If one ever becomes unavoidable, add `patches/NNNN-reason.patch` (applied right after extraction by `build_libc.sh`) and explain it here; keep it the rare exception, not a fork.
+There is ONE source patch, and it is explained here because a patch nobody can
+find the reason for becomes a fork.
+
+`patches/0001-posix-spawn-forks.patch` makes `posix_spawn` fork rather than
+clone. Upstream it issues `__clone(child, stack, CLONE_VM|CLONE_VFORK|SIGCHLD,
+&args)`: the child runs in the PARENT's address space, on a stack of its own,
+until it execs. Rach2 cannot share an address space between two processes, and a
+syscall that accepted those flags and quietly handed back a private
+copy-on-write image would be reporting semantics it does not provide, so syscall
+120 stays unimplemented and this call site changes instead. The child function
+never returns (it execs, or writes its errno to the pipe and exits) and it
+reports failure through that pipe rather than through shared memory, so a forked
+child serves it exactly as a cloned one did. Without this, `system(3)` and
+`popen(3)` fail on this system with a bare -1, which means no program can run a
+shell command and no make can run a recipe.
+
+Any further patch goes in `patches/NNNN-reason.patch` (applied right after
+extraction by `build_libc.sh`) and is explained here; keep them the rare
+exception, not a fork.
 
 ## Linking a program against musl
 

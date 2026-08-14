@@ -64,6 +64,7 @@ PROBES = [
     "musl/statmusl",
     "musl/stampmusl",
     "musl/execargmusl",
+    "musl/spawnmusl",
     # How many mappings a process may hold, which the compiler found too few.
     "musl/vmamusl",
     # The shell's one-line form, which `su -c` depends on. It runs

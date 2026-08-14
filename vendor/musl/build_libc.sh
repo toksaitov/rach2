@@ -64,7 +64,12 @@ if [ -d patches ]; then
     for p in patches/*.patch; do
         [ -e "$p" ] || break
         echo "libc: applying $p"
-        patch -p1 -d "$SRC" < "$p"
+        # --forward and no fuzz: a patch that no longer applies cleanly to a new
+        # musl is a decision to make again, not a hunk to place approximately.
+        if ! patch -p1 -F 0 --forward -d "$SRC" < "$p"; then
+            echo "libc: $p does not apply to musl $MUSL_VERSION; rebase it" >&2
+            exit 1
+        fi
     done
 fi
 

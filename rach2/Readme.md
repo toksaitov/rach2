@@ -294,6 +294,24 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 
 Terminates the current process with the given exit status. Marks the process as ZOMBIE, stores the exit code, wakes the parent process if it's blocked (waiting), and reschedules to another process.
 
+### fork (syscall 2), and why there is no clone
+
+There is no `clone` here, and syscall 120 answers `-ENOSYS` on purpose. musl's
+`posix_spawn`, which is how `system(3)` and `popen(3)` reach a child, asks
+upstream for `CLONE_VM|CLONE_VFORK`: a child running in the PARENT's address
+space on a stack of its own until it execs. This kernel cannot share an address
+space between two processes, and a syscall that accepted those flags and handed
+back a private copy-on-write image would be reporting semantics it does not
+provide, which is the kind of lie this project refuses elsewhere (see the
+compiler's output policy).
+
+So the vendored musl carries one pinned patch instead
+(`vendor/musl/patches/0001-posix-spawn-forks.patch`): `posix_spawn` forks. Its
+child function never returns and reports failure through a pipe rather than
+through shared memory, so a forked child serves it exactly as a cloned one did.
+`system` and `popen` work for every program in the image; `clone` still says it
+is not implemented, and a thread library asking for one gets a straight answer.
+
 ### fork (syscall 2)
 
 Creates a new child process as a copy of the current process. The child receives:
