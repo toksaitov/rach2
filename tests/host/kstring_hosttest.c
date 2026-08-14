@@ -82,6 +82,47 @@ int main(void)
               u[5] == '\0');
     }
 
+    /* k_memmove over overlapping ranges, both directions. Forward overlap
+     * (destination above the source, inside it) is the case a plain forward
+     * copy corrupts: it overwrites source bytes before reading them, turning
+     * "abcdef" into "ababab" instead of "ababcd". Backward overlap and the
+     * disjoint case must behave exactly like k_memcpy. */
+    {
+        char m[16];
+
+        k_memcpy(m, "abcdefgh", 9);
+        k_memmove(m + 2, m, 4);
+        CHECK(m[0] == 'a' && m[1] == 'b' && m[2] == 'a' && m[3] == 'b' && m[4] == 'c' &&
+              m[5] == 'd' && m[6] == 'g' && m[7] == 'h');
+
+        k_memcpy(m, "abcdefgh", 9);
+        k_memmove(m, m + 2, 4);
+        CHECK(m[0] == 'c' && m[1] == 'd' && m[2] == 'e' && m[3] == 'f' && m[4] == 'e' &&
+              m[5] == 'f' && m[6] == 'g' && m[7] == 'h');
+
+        k_memcpy(m, "abcdefgh", 9);
+        k_memmove(m + 4, m, 4);
+        CHECK(m[4] == 'a' && m[5] == 'b' && m[6] == 'c' && m[7] == 'd');
+
+        k_memmove(m, m, 8);
+        CHECK(m[0] == 'a' && m[7] == 'd');
+    }
+
+    /* k_memmove between two separate objects, which is the shape tcc's
+     * compiled struct assignments produce. The overlap test must not choose
+     * the backward copy or trip a sanitizer here, whatever the two objects'
+     * relative addresses are. */
+    {
+        char a[8];
+        char b[8];
+
+        k_memcpy(a, "12345678", 8);
+        k_memmove(b, a, 8);
+        CHECK(b[0] == '1' && b[7] == '8');
+        k_memmove(a, b, 8);
+        CHECK(a[0] == '1' && a[7] == '8');
+    }
+
     /* Bounded so the count never wraps to 0 (a false pass) as an exit
      * status. */
     return (fails > 120) ? 120 : fails;

@@ -4327,7 +4327,7 @@ static char *_exec_envp_bufs[EXEC_MAX_ENTRIES + 1];
  * the scheduler has a target), switch away, and never iret back into the
  * destroyed space.
  */
-static void exec_fail_destroyed(void)
+static void __attribute__((noreturn)) exec_fail_destroyed(void)
 {
     process_t *parent;
     page_dir_t *dir;
@@ -4411,6 +4411,11 @@ static void exec_fail_destroyed(void)
                          : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
                            "r"((uint32_t)shell_loop)
                          : "memory");
+    /* The jmp above never falls through; this loop makes the noreturn
+     * contract visible to the compiler, which cannot know that. */
+    for (;;) {
+        __asm__ __volatile__("cli; hlt");
+    }
 }
 
 /**
@@ -4711,14 +4716,12 @@ static int32_t sys_execve(isr_params_t *params)
 
     if (elf_load_image(exec_krffs_read, (void *)name, proc_dir, &img) != 0) {
         exec_fail_destroyed();
-        __builtin_unreachable();
     }
     entry_point = img.entry;
 
     stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
     if (stack_phys == 0) {
         exec_fail_destroyed();
-        __builtin_unreachable();
     }
 
     k_memset((void *)stack_phys, 0, PAGE_SIZE);
@@ -4748,7 +4751,6 @@ static int32_t sys_execve(isr_params_t *params)
 
         if (user_esp == 0) {
             exec_fail_destroyed();
-            __builtin_unreachable();
         }
 
         /* Modify the ISR return frame so iret resumes at the new program's

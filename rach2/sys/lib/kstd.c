@@ -40,7 +40,7 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
 
         case 'X':
             switch_case = true;
-            __attribute__((fallthrough));
+            /* fall through */
         case 'x':
             radix = 16;
             break;
