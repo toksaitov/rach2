@@ -53,6 +53,13 @@ int rtc_contents_lost(const rtc_snapshot_t *raw);
 
 int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b);
 
+/* What the boot read does with a pair of samples. */
+#define RTC_PAIR_ACCEPT 0
+#define RTC_PAIR_RETRY  1
+#define RTC_PAIR_STOP   2
+
+int rtc_pair_disposition(const rtc_snapshot_t *a, const rtc_snapshot_t *b);
+
 int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out);
 
 void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32_t uptime,

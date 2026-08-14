@@ -108,6 +108,32 @@ int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
 }
 
 /**
+ * What a pair of samples is worth: use it, take another, or stop reading.
+ *
+ * The whole policy of the boot read is here rather than in the loop that reads,
+ * so that it can be stated once and tested. Two rules, and the order of them is
+ * the point. A clock that says it lost its contents STOPS the read, even though
+ * the pair also disagrees, because taking another pair is exactly the mistake:
+ * reading register D can set the validity bit again, so the honest sample is
+ * the one already in hand and every later one is a fiction that agrees with
+ * itself. Any other disagreement is a read that straddled an update, which is
+ * worth taking again.
+ *
+ * @return `RTC_PAIR_ACCEPT`, `RTC_PAIR_RETRY` or `RTC_PAIR_STOP`.
+ */
+int rtc_pair_disposition(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
+{
+    if (rtc_contents_lost(a) || rtc_contents_lost(b)) {
+        return RTC_PAIR_STOP;
+    }
+    if (!rtc_snapshots_agree(a, b)) {
+        return RTC_PAIR_RETRY;
+    }
+
+    return RTC_PAIR_ACCEPT;
+}
+
+/**
  * Convert a raw CMOS sample to seconds since the Unix epoch, in UTC.
  *
  * This is the whole of the clock's arithmetic and it touches no hardware, so
@@ -385,6 +411,7 @@ void rtc_init(void)
     char text[20];
     int64_t seconds = 0;
     uint32_t uptime;
+    int disposition;
     int try;
 
     for (try = 0; try < RTC_SAMPLE_TRIES; try++) {
@@ -396,10 +423,11 @@ void rtc_init(void)
          * reading taken before the sampling would date the clock earlier than
          * it was and put the machine that far ahead for the rest of the boot. */
         uptime = kernel_uptime_seconds;
-        if (rtc_contents_lost(&first) || rtc_contents_lost(&second)) {
+        disposition = rtc_pair_disposition(&first, &second);
+        if (disposition == RTC_PAIR_STOP) {
             break;
         }
-        if (!rtc_snapshots_agree(&first, &second)) {
+        if (disposition == RTC_PAIR_RETRY) {
             continue;
         }
         if (rtc_decode(&first, &seconds, &when) != 0) {

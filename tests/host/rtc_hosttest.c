@@ -251,5 +251,41 @@ int main(void)
         CHECK(rtc_contents_lost(0) == 1);
     }
 
+    /* What the boot read does with a pair, which is the policy rather than the
+     * comparison: a healthy pair is used, a straddled update is read again, and
+     * a clock that says its battery went ends the read in either order. That
+     * last one is why this is a function and not two lines in the loop: a pair
+     * that both disagrees AND says the contents are lost must stop rather than
+     * be read again, and nothing in the comparison alone says so. */
+    {
+        rtc_snapshot_t a;
+        rtc_snapshot_t b;
+
+        bcd_sample(&a, 26, 8, 14, 9, 31, 7);
+        b = a;
+        CHECK(rtc_pair_disposition(&a, &b) == RTC_PAIR_ACCEPT);
+
+        b.status_a = (unsigned char)(a.status_a | RTC_STATUS_A_UPDATING);
+        CHECK(rtc_pair_disposition(&a, &b) == RTC_PAIR_ACCEPT);
+
+        b = a;
+        b.second = bcd(8);
+        CHECK(rtc_pair_disposition(&a, &b) == RTC_PAIR_RETRY);
+
+        /* Clear then set, which is the pair a dead cell hands back when reading
+         * register D sets the bit; and set then clear, the same fact arriving
+         * in the other order. Both stop, and neither is retried. */
+        b = a;
+        b.status_d = 0;
+        CHECK(rtc_pair_disposition(&b, &a) == RTC_PAIR_STOP);
+        CHECK(rtc_pair_disposition(&a, &b) == RTC_PAIR_STOP);
+
+        /* And the pair after it, which agrees and is in range and is whatever
+         * the dead cell left: stopping on the honest pair is what keeps this
+         * one from ever being taken. */
+        b.status_d = 0;
+        CHECK(rtc_pair_disposition(&b, &b) == RTC_PAIR_STOP);
+    }
+
     return fails > 100 ? 100 : fails;
 }
