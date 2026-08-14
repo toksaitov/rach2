@@ -26,12 +26,13 @@ FUSE_OBJS = $(CORE) $(addprefix $(BUILD)/, krffs_allocator.o krffs_fuse_operatio
                                            krffs.o)
 TOOL_OBJS = $(addprefix $(BUILD)/, mkfs.krffs.o defrag.krffs.o fsck.krffs.o \
                                    fsviz.krffs.o edfs.krffs.o stageimage.krffs.o \
-                                   mkhash.krffs.o)
+                                   mkhash.krffs.o readfile.krffs.o \
+                                   krffs_reader.o)
 
 OBJECTS = $(FUSE_OBJS) $(TOOL_OBJS) $(BUILD)/crypt_sha512.o
 TARGETS = $(addprefix $(BUILD)/, krffs mkfs.krffs defrag.krffs fsck.krffs \
                                  fsviz.krffs edfs.krffs stageimage.krffs \
-                                 mkhash.krffs)
+                                 mkhash.krffs readfile.krffs)
 
 # mkhash's crypt is the vendored musl SHA-512 implementation, compiled from the
 # pinned tarball's tree into build/ beside the tool, so the host mints exactly
@@ -65,6 +66,12 @@ $(BUILD)/fsck.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/fsck.krffs.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/stageimage.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/stageimage.krffs.o
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# readfile also links the reader, the path walk the host seam test runs on
+# crafted regions (tests/host/readfile_hosttest.c).
+$(BUILD)/readfile.krffs : $(CORE) $(BUILD)/krffs_reader.o $(BUILD)/readfile.krffs.o
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 

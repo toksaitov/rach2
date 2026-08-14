@@ -89,6 +89,9 @@ newcode_ch()
        tests/musl/spawnmusl.c 2>/dev/null
     ls tests/host/compat/crypt.h tests/host/compat/shadow.h \
        tests/host/compat/sys/random.h 2>/dev/null
+    # By name, per the rule above: the extractor and its path walk are new
+    # code in the otherwise legacy krffs tree, which no glob here reaches.
+    ls krffs/krffs_reader.c krffs/krffs_reader.h krffs/readfile.krffs.c 2>/dev/null
 }
 
 # 0. required tools
@@ -124,6 +127,8 @@ ls "$REPO"/tests/host/pwauth_hosttest.c "$REPO"/tests/musl/pwauthmusl.c \
    "$REPO"/tests/musl/clockmusl.c "$REPO"/tests/musl/statmusl.c \
    "$REPO"/tests/musl/stampmusl.c "$REPO"/tests/musl/execargmusl.c "$REPO"/tests/musl/spawnmusl.c \
    "$REPO"/tests/musl/saltnoent.c "$REPO"/tests/musl/creddisk.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
+ls "$REPO"/krffs/krffs_reader.c "$REPO"/krffs/krffs_reader.h \
+   "$REPO"/krffs/readfile.krffs.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/cppcheck.suppress" \

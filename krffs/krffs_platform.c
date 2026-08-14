@@ -206,6 +206,75 @@ void *krffs_map_file(
 }
 
 /**
+ * Maps a region of a file into virtual memory for reading only.
+ *
+ * The same call as `krffs_map_file` with the writable protection dropped, so
+ * a tool that only reads an image (the extractor) can open it `O_RDONLY` and
+ * work on an image whose file permissions allow no write. Returns
+ * `(void *) -1` on failure, as `mmap` does.
+ */
+void *krffs_map_file_readonly(
+          int file_descriptor,
+          off_t offset,
+          size_t size
+      )
+{
+#ifdef WINDOWS
+    void *result =
+        (void *) -1;
+
+    DWORD offset_high =
+        (DWORD) ((uint64_t) offset >> 32);
+    DWORD offset_low =
+        (DWORD) ((uint64_t) offset & 0xFFFFFFFF);
+
+    HANDLE file_handle =
+        (HANDLE) _get_osfhandle(file_descriptor);
+
+    HANDLE mapping_handle =
+        CreateFileMapping(
+            file_handle,
+            NULL,
+            PAGE_READONLY,
+            0,
+            0,
+            NULL
+        );
+
+    if (mapping_handle) {
+        result =
+            MapViewOfFile(
+                mapping_handle,
+                FILE_MAP_READ,
+                offset_high,
+                offset_low,
+                size
+            );
+
+        if (result) {
+            CloseHandle(
+                mapping_handle
+            );
+        } else {
+            result =
+                (void *) -1;
+        }
+    }
+
+    return result;
+#else
+    return mmap(
+               NULL,
+               size,
+               PROT_READ,
+               MAP_SHARED,
+               file_descriptor,
+               offset
+           );
+#endif
+}
+
+/**
  * Flushes `size` bytes of a mapping at `address` back to its file.
  *
  * Uses a synchronous `msync` (`MS_SYNC`) on Unix and `FlushViewOfFile` on

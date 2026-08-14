@@ -126,6 +126,17 @@ void *krffs_map_file(
       );
 
 /**
+ * Maps a region of a file into virtual memory for reading only.
+ *
+ * Returns `(void *) -1` on failure, as `mmap` does.
+ */
+void *krffs_map_file_readonly(
+          int file_descriptor,
+          off_t offset,
+          size_t size
+      );
+
+/**
  * Flushes a mapped region back to its backing file.
  *
  * Uses `msync` on Unix and `FlushViewOfFile` on Windows.
