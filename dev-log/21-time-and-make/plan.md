@@ -12,12 +12,14 @@ The make is pdpmake, pinned at 2.0.4, vendored the way musl, busybox, dropbear a
 
 It was chosen against bmake, GNU make and scc-make. The reasons, so they are not re-argued:
 
-* Public domain (the Unlicense), 4332 lines across nine `.c` files and one header, and its build is a 26-line POSIX makefile with no configure script to fight. tcc's port needed a fake cross prefix because its configure runs a compiled test binary; there is nothing here to run.
+* Public domain (the Unlicense), 4297 lines across nine `.c` files and one header (the planning said 4332, counted before the tarball was in the tree), and its build is a 26-line POSIX makefile with no configure script to fight. tcc's port needed a fake cross prefix because its configure runs a compiled test binary; there is nothing here to run.
 * POSIX.1-2024 make by default, POSIX.1-2017 selectable, non-POSIX extensions on by default. A student meets the constructs other makefiles use, and can switch to strict POSIX and watch a makefile stop working.
 * It is the program busybox-w32 ships as its `make` applet. Mainline busybox 1.36.1, which this repository vendors, has no make applet: `miscutils/make.c` is not in that tree and no `CONFIG_MAKE` is in `rach2.config`. A busybox bump would not have supplied one.
 * scc-make (ISC, 2336 lines) was the runner-up and was rejected on examination: it rejects archive members, ignores `.PHONY`, and takes no macro override on the command line, so `make CC=tcc` does not work. bmake is 31000 lines behind autoconf and requires a `sys.mk` set to start. GNU make is the make a student will meet elsewhere, and it is 36000 lines, GPLv3, autoconf and gnulib, and needs `--disable-posix-spawn` here.
 
 Parallel builds are out of scope. `MAX_FDS` is 16 per process and `MAX_PROCS` is 16 system-wide, so `-j` runs out of processes at about four. `make -j1` is the contract, and the Readme says why.
+
+The reason turned out to be simpler than the planning's, and the plan is corrected here rather than left as it was written: this pdpmake does not run jobs in parallel at all. `main.c` parses `-j`, passes it on in `MAKEFLAGS`, and says of it "not implemented". The process limits would have bitten if it did; they never get the chance.
 
 Building this repository's own makefiles in the guest is out of scope: they are GNU makefiles.
 
@@ -77,6 +79,7 @@ A synthetic node reports the boot epoch for all three times: it has no history, 
 This phase is provable before anything stamps, because `utimensat` already writes the node's times. Two paths cannot be proved that way and must not be written as though they could: `sys_utimensat` returns success for the root WITHOUT modifying it ("root timestamps are not modifiable"), and it returns `-EROFS` for a synthetic path. So the root's reporting is proved in phase 3, where creating a file in `/` stamps it, and a synthetic node is proved by comparing what `stat` reports with the boot epoch the probe reads from `clock_gettime`.
 
 * Proof: a probe that sets a known time with `utimensat` on a regular file and on a subdirectory and reads it back through `stat64`, `lstat64`, `fstat64` and `fstatat64` and through the legacy `stat`/`lstat` pair; and that requires a synthetic path (`/dev/null`, `/proc/self`) to report the boot epoch rather than zero.
+* Two of those the probe cannot reach by calling the C library, which the work found and the plan is corrected for here. musl on i386 never issues the legacy `stat(2)`, so that pair is asked for by syscall number through `syscall(2)` against a struct written to the kernel's layout; and `fstatat(AT_FDCWD, "/absolute")` is collapsed by musl into a plain `stat64`, so the `fstatat64` assertion is made through a directory descriptor and a relative name, which is the only shape that reaches that entry point.
 * Shown failing: the probe against the current kernel, where every one of those reads is zero; and with any ONE of the four fills left unchanged, which the per-path assertions must catch individually.
 * Readmes: `rach2/sys/fs/Readme.md`.
 
@@ -126,7 +129,13 @@ The buffers stay static, and the invariant that makes that safe is written besid
 * Shown failing: all three against the current caps, and the third against a per-vector budget instead of a combined one.
 * Readmes: `rach2/Readme.md`'s account of the exec limits.
 
-## Phase 6: a spawn shim at syscall 120
+## Phase 6: a spawn shim at syscall 120, which is not what shipped
+
+The plan below was written, implemented, reviewed and then withdrawn, and it is left standing because the reason is the useful part. The review's finding was that an exact flag match does not make the answer honest: a caller asking for `CLONE_VM` is asking for one address space, and a kernel that hands back a copy has answered a different question and said yes. The flags are not a signature of musl's spawn either; a thread library that happened to pass those three would be handed a private image and would corrupt itself, and the kernel would have promised that it would not.
+
+So syscall 120 stays unimplemented, `ENOSYS`, and the fallback this plan wrote into its own last paragraph became the shipped answer one phase early: `vendor/musl/patches/0001-posix-spawn-forks.patch` makes musl's `posix_spawn` fork. It is a smaller change than the shim (one call replaced, the child function called directly in the child) and it is true, because a forked child is what `system(3)` and `popen(3)` actually need: the child reads the argument structure it was handed and reports failure down a pipe, which is a descriptor rather than shared memory. `tests/musl/spawnmusl.c` proves both halves, the working `system` and `popen` and the refused `clone`, the second with a real stack so the refusal is about the call and not about a null pointer.
+
+What follows is the plan as written.
 
 `sys_clone`, accepting exactly `CLONE_VM|CLONE_VFORK|SIGCHLD` and returning `-EINVAL` for every other flag set. It is named for what it is, in the code and in the Readme: a compatibility shim for musl's `posix_spawn`, not Linux's `clone`. This kernel has no threads to justify the rest, and a caller asking for shared memory gets a refusal rather than a surprise.
 
