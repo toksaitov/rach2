@@ -18,6 +18,10 @@ All written language reads as if one careful author wrote it. The model for voic
 * No em-dash, written as U+2014 or as a spaced `--`. Recast with a period, colon, semicolon, or parentheses. The `--flag` and end-of-options `--` forms stay legal in code and command examples.
 * Markdown: do not wrap prose to a column, bullets are `*` and not `-`, do not lean on bold, and avoid tables unless the data is genuinely tabular and stays aligned. Code comments do wrap, at 80 columns.
 
+### Register rule for Claude Opus 5 and Fable 5
+
+These models drift into a figurative register that reads as private slang. It is banned from everything a reader sees: chat replies, code comments, docs, Readmes, commit messages, and prompts sent to reviewers. The named tics, and everything of their kind: "load-bearing", "the trap", "the point", "honest" or "fiction" applied to code or data, "worth stating plainly", "full stop", "not X, it's Y" reversals, fragments for drama ("Not a detail. A design decision."), and hardware or code given intentions (a clock that "believes", "refuses", or "is asked"; "the register says X" is fine, that is how datasheets speak). Do not build a sentence toward a turn of phrase; state the claim first in plain words: the component, what it does, why. A metaphor is allowed only when it is the established technical term (a socket listens, a lock is held, a cache is warm). In scratch files and internal reasoning any register is fine; none of it may be committed or shown to the user.
+
 ## Comments
 
 The explanation lives in a block comment before the function, not inside the body. The body is made clear by naming and structure, not narrated.
