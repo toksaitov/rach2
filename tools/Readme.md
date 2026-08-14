@@ -31,6 +31,30 @@ the supporting scripts.
   `compile_commands.json` (git-ignored) from the build's own commands so clangd
   can index the kernel through the i686-elf cross GCC (see `mk/Readme.md`).
 * `tcc_test.sh` (`make tcc-test`): the machine compiling a program on itself. Boots os-real from a disk copy as the UNPRIVILEGED `test` account, since a compiler only the administrator can use is a different thing; writes a C file at the prompt, compiles it, runs the result; compiles this project's own `/src/utils/cat.c` and requires its output to match busybox's `cat` byte for byte over 21 KB of a binary file and again over two files at once, since a line of text is one read and one write and would say nothing about a `cat` that returned after its first read or ignored its second argument; and then asks for the four kinds of program this system cannot run (`-run`, `-shared`, a link without `-static`, `-Wl,-oformat=binary`) and requires each to be refused WITH ITS REASON and to leave no output behind, the last checked in the guest because the console's carriage returns make a host-side pattern inert. The boot carries `rach2.trace=enosys`, so a syscall the compiler wants and this kernel lacks is named on the console instead of becoming a mystery.
+* `make_test.sh` (`make make-test`): the machine BUILDING on itself, which is a
+  different claim from compiling on itself. Two boots of one disk copy, as the
+  unprivileged `test` account, writing a two-source project with a shared header
+  at the prompt. What it asserts: a from-scratch build runs and the program
+  prints its answer; a second make reports nothing to do (a control, since that
+  passes on a machine with no clock at all); CHANGING one source recompiles
+  exactly that one, relinks exactly once, and the program that runs afterwards is
+  the new one; a make immediately after that runs the compiler ZERO times, which
+  is the discriminator, because an object nothing stamped stays older than its
+  source and rebuilds forever; touching the shared header rebuilds BOTH objects;
+  `.PHONY: clean` runs with a file named `clean` present and leaves nothing
+  behind; and one of this project's own programs is built from `/src/utils` and
+  compared with the one the image actually uses. The makefile deliberately names
+  a compiler that does not exist and every make overrides it on the command line,
+  so one run WITHOUT the override must fail and say which compiler it could not
+  find: an override naming the same compiler as the built-in default would prove
+  nothing. The second boot is the clock's own claim: an object's timestamp must
+  survive the reboot EXACTLY (a mount that replaced them all with one boot-time
+  value would pass a check that only compared orderings), a make with nothing
+  changed must do nothing, and a source changed after the reboot must rebuild,
+  which fails on a machine whose clock restarts at zero. Every count is taken IN
+  THE GUEST over that make's own output file, and every command is sent only
+  after the previous one printed its marker, because the console's input queue is
+  bounded and a build takes longer than any fixed pause.
 * `ssh_test.sh` (`make ssh-test`): the SSH capstone with nobody at the keyboard. Boots os-real from a disk copy with the port forwarded, starts dropbear from the console session the way the manual recipe does, then logs in twice, because the two prove different things: root by key, which is what the image is set up for, and the unprivileged account by password, which is the half that reaches `/etc/shadow` and the credential library. Each login is pinned to the method it claims (the key login offers that one identity and no password; the password login offers no key and records that a password was actually asked for), because a session that merely happened proves nothing about how it was let in. Both ask for a terminal (`-tt`) and both run `test -t 0 && test -t 1` before their token, since ssh requests no pty for a session that carries a command and the capstone is about a pty: without it dropbear's terminal path is never touched. Three attempts must then be refused, run after the two that must work so that the server is known to be answering: an account offering no credentials at all, the test account one character off its password, and root by password, which `-g` bars. Every wait is bounded, so a hang fails instead of sitting there. It needs `expect(1)` for the password half and says so rather than hanging without it.
 * `check_elf.py`: judges an ELF against what this kernel will actually load, in two halves kept apart on purpose. The LOADER half is `elf_load_image`'s contract copied rule for rule (identification bytes, `ET_EXEC`, `EM_386`, the exact program-header entry size, at most 32 headers and 8 `PT_LOAD`s, the header table inside a load so `AT_PHDR` is real, `p_filesz <= p_memsz`, ascending page-disjoint non-wrapping segments in the user window, an entry point in it). The POLICY half is this project's: no `PT_INTERP`, no `PT_DYNAMIC`. The distinction is the point. The kernel REFUSES what the first half names and IGNORES what the second does, so a dynamic image would load, jump and run with nothing relocated; `file(1)` reports neither. Run from `make check-tcc`.
 * `check_link.py`: asks whether a program could link against what an image carries. The guest links `libc.a`, `libtcc1.a` and the crt objects, with no libgcc appended the way the host's wrapper appends one, so a symbol musl references and neither archive defines is not a build-time question at all: it is a student's first link failing. Three exclusions, each stated in the file: `main` comes from the program being compiled, the linker provides its own section symbols, and an archive member no link reaches (tcc's bounds-checking alloca) may reference what it likes. Only an EXPORTED definition counts, which `nm` writes with an upper-case type letter: this archive holds a local `__udivmoddi4` beside the global one, and counting the local would let the global be dropped with the check none the wiser. Run from `build_tcc.sh`.

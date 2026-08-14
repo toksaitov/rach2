@@ -168,12 +168,14 @@ The steps, each chosen because it is a different claim, and each stated with wha
 2. A second `make` reports nothing to do. This one passes on today's kernel too, and is kept as a control rather than as evidence.
 3. Touch one source, `make`, and require that exactly the one object was recompiled and the program relinked, by reading which commands ran. This proves `touch`, `stat` and the dependency selection, and it is NOT the phase 3 discriminator: `touch` goes through `utimensat`, which already works, so a source made newer than a zero-time object rebuilds on today's kernel too.
 4. A third `make` immediately after, requiring nothing to run. THIS is the step that fails without phase 3: an object nothing stamped stays at the epoch, its source stays newer, and the same rebuild runs forever.
+
+The work sharpened that, and the plan is corrected here rather than left as it was written. On a machine that stamps NOTHING, pdpmake does not merely rebuild forever: it cannot see the sources at all. `make.c:337` treats a modification time of zero as "this file does not exist", so a from-scratch build reports `don't know how to make main.c` and step 1 fails before step 4 is reached. Removing only the write stamp is not the discriminator either, since a compiler creates its output fresh and creation stamps it; what step 4 discriminates is a system where writes do not stamp AND creation does not, which is what this system was.
 5. `make clean` through a `.PHONY` target with a file named `clean` present.
 6. `make CC=tcc` overriding the macro from the command line.
 7. A build of one of this project's own programs from `/src/utils` through a makefile written at the prompt, its output compared with the shipped binary's.
 8. Reboot, touch a source, `make`: the rebuild must happen. A clock that restarts at zero makes the pre-reboot object look newer than the post-reboot source, so nothing rebuilds. Merely running `make` after a reboot proves nothing, since untouched files keep their order.
 
-* Shown failing: phase 3's stamping removed (step 4 fails, and step 3 does not, which is the honest division of labour between them); the RTC stubbed (step 8 fails); the pdpmake patch reverted (step 1 fails at the link).
+* Shown failing: stamping neutered altogether, where the build fails at step 1 with `don't know how to make main.c`; the RTC stubbed, where step 8 fails with a source touched after the reboot not rebuilding; and the `-static` half of the pdpmake patch removed, which never reaches a boot at all because `build_pdpmake.sh` asserts the patched macro values and refuses to ship a make whose default link this system would reject.
 * Readmes: `tools/Readme.md`.
 
 ## Phase 9: the sweep

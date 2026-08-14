@@ -90,19 +90,33 @@ absent, into `krffs/rach2_demo_password` (root) and `krffs/rach2_test_password`
 you want and type it at the login prompt. The same `/etc/shadow` is staged into
 os-simple and os-real, so one password opens either.
 
-### Compiling on the machine itself
+### Building on the machine itself
 
-os-real carries a C compiler, so a program can be written and built on Rach2
-rather than on the machine that built Rach2:
+os-real carries a C compiler and a make, so a program can be written, compiled
+and BUILT on Rach2 rather than on the machine that built Rach2:
 
 ```sh
-make full                                   # os-real carries tcc and its sysroot
+make full                                   # os-real carries tcc, make and the sysroot
 cd rach2 && DISK=../build/images/os-real.disk ./run.sh   # after: make os-real-disk
 
 # then, at the machine's own prompt, as any account:
 printf '#include <stdio.h>\nint main(void){puts("mine");return 0;}\n' > /tmp/m.c
 tcc -static -o /tmp/m /tmp/m.c
 /tmp/m
+```
+
+And with a makefile, which is the point of having a clock and stamped
+timestamps: the second `make` does nothing, because the machine can tell the
+object from the source it was built from.
+
+```sh
+mkdir /tmp/p && cd /tmp/p
+cp /src/utils/cat.c .
+printf 'cat: cat.o\n\t$(CC) $(LDFLAGS) -o cat cat.o\n' > Makefile
+make                # tcc -O1 -c cat.c ; tcc -static -o cat cat.o
+make                # make: 'cat' is up to date
+touch cat.c
+make                # builds again, because the source is newer now
 ```
 
 `-static` is not optional and the compiler says so: this system has no dynamic

@@ -82,7 +82,7 @@ MKDISK          = krffs/mkdisk.sh
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
-        tcc-test ssh-test \
+        tcc-test ssh-test make-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
@@ -386,6 +386,19 @@ tcc-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tools/tcc_test.sh build/rach2/kernel $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
+
+# `make make-test`: the machine building a program on itself, and the claim a
+# compiler alone cannot make: that a second build does nothing, that touching
+# one source rebuilds one object, and that the answer survives a reboot. Two
+# boots of one disk, since the reboot is half the point.
+MAKE_TEST_DISK = $(IMAGES_DIR)/make-test.disk
+
+make-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	@mkdir -p $(IMAGES_DIR)
+	sh krffs/gen_demo_password.sh
+	$(MKDISK) krffs/manifests/os-real.manifest $(MAKE_TEST_DISK) 64 48
+	sh tools/make_test.sh build/rach2/kernel $(MAKE_TEST_DISK) \
+	    "`cat krffs/rach2_test_password`"
 
 # `make ssh-test`: the SSH capstone with nobody at the keyboard. Boots os-real
 # from a disk with the port forwarded, starts dropbear from the console session
