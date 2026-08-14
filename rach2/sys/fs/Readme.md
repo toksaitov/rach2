@@ -63,6 +63,22 @@ BOOT time: it has no history, zero would be a claim about 1970, and now would be
 worse, since a device whose modification time advanced on every stat would look
 freshly written to anything comparing times.
 
+The kernel stamps them, and stamping is the file system's own job rather than
+each caller's: `krffs_stamp` moves the modification and attribute-change times
+together when a file's CONTENTS change (a write, a truncate, the moment a node
+is created) and the attribute-change time alone when only its attributes do (a
+chmod, a chown that changed an owner). A directory is a file whose contents are
+its entries, so creating, removing, renaming or replacing a name stamps the
+DIRECTORY it happened in, both directories when a rename crosses two, and the
+root like any other. `rename(path, path)` and `chown(path, -1, -1)` change
+nothing and stamp nothing, which POSIX requires and which also matters here: a
+call any caller may make must not be a way to touch a file.
+
+Removing a name whose file somebody still holds open goes through
+`krffs_unlink_held`, which stamps and orphans in one place, because two callers
+reach it (the `unlink` syscall and the rescue shell's own `rm`) and a stamp
+written at each of them is a stamp one of them will lack.
+
 Access time is stored and reported but NEVER advanced by a read. That is a
 `noatime` mount, and the reason is this file system's own: it lives behind a
 write-back page cache, so stamping an atime on every read would dirty a page on

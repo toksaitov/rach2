@@ -161,6 +161,7 @@ uint32_t krffs_reap_orphans(void);
 
 /** Take `node` out of the namespace without freeing it (see the definition). */
 void krffs_orphan_node(krffs_node_t *node);
+void krffs_unlink_held(krffs_node_t *node);
 
 /** Build the absolute, canonical path of `node` into buf; 0 ok, -1 if it does not fit. */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
@@ -178,6 +179,13 @@ int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset);
 uint32_t krffs_get_file_size(const char *path);
 
 /* Write operations by path. */
+/* What krffs_stamp writes: data changed, or only the node's attributes. */
+#define KRFFS_STAMP_DATA 1
+#define KRFFS_STAMP_ATTR 2
+
+void krffs_stamp(krffs_node_t *node, int what);
+krffs_node_t *krffs_parent_node(krffs_node_t *node);
+
 int krffs_create(const char *path);
 int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t offset);
 int krffs_truncate(const char *path, uint32_t new_size);

@@ -3371,6 +3371,7 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
             want &= ~(uint32_t) KRFFS_MODE_SGID;
         }
         node->mode = (uint16_t) ((node->mode & ~07777u) | want);
+        krffs_stamp(node, KRFFS_STAMP_ATTR);
     }
     return 0;
 }
@@ -3400,13 +3401,19 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
     if (gid != (uint32_t) -1) {
         node->gid = gid;
     }
-    /* Not gated on privilege: POSIX drops the bits whoever asks, which is why
-     * cp and install chown before they chmod. Gated on a field ACTUALLY having
-     * changed, though, and that gate carries real weight: chown(path, -1, -1)
-     * succeeds for every caller by design, since a value that changes nothing
-     * needs no right, so a clear that ran on it would let any uid disarm
-     * /bin/su with one call. */
+    /* Stamped once, after both fields, and on the same gate the set-id clear
+     * below uses: a chown that changed an owner changed the node's attributes,
+     * whichever of the two it was, and chown(path, -1, -1) changed nothing and
+     * must leave the times alone. Stamping inside the uid branch, which is
+     * where this started, left `chown(path, -1, gid)` unstamped. */
+    /* The set-id clear is not gated on privilege: POSIX drops the bits whoever
+     * asks, which is why cp and install chown before they chmod. Both are gated
+     * on a field ACTUALLY having changed, and that gate carries real weight:
+     * chown(path, -1, -1) succeeds for every caller by design, since a value
+     * that changes nothing needs no right, so a clear that ran on it would let
+     * any uid disarm /bin/su with one call. */
     if (uid_changes || gid_changes) {
+        krffs_stamp(node, KRFFS_STAMP_ATTR);
         cred_kill_setid(node);
     }
     return 0;
@@ -5290,7 +5297,7 @@ static int32_t sys_unlink(isr_params_t *params)
          * an unconditional orphan would leak an extent on every removal made
          * while nothing happened to be reading. */
         if (fd_node_holders(node, NULL) > 0) {
-            krffs_orphan_node(node);
+            krffs_unlink_held(node);
             return 0;
         }
     }

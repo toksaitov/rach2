@@ -2239,7 +2239,7 @@ static void process_command(const char *cmd)
             krffs_node_t *victim = krffs_resolve(filename);
 
             if (victim && fs_node_is_held(victim)) {
-                krffs_orphan_node(victim);
+                krffs_unlink_held(victim);
                 k_printf("Deleted file (still open elsewhere): %s\n", filename);
             } else if (krffs_unlink(filename) == 0) {
                 k_printf("Deleted file: %s\n", filename);

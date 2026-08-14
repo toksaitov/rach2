@@ -249,6 +249,9 @@ extern int serial_printf(const char *format, ...);
 /* How many times to re-read a sample that changed under us before giving up. */
 #define RTC_SAMPLE_TRIES 4
 
+/* The same, for the two-counter read of the running clock. */
+#define RTC_SNAPSHOT_TRIES 3
+
 /*
  * The anchor: the second the clock reported, and the uptime second at which it
  * was read. Real time is the first plus the seconds elapsed since that read,
@@ -415,8 +418,35 @@ int64_t rtc_boot_time(void)
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, kernel_uptime_seconds,
-                         kernel_second_ticks, seconds, nanoseconds);
+    uint32_t uptime;
+    uint32_t ticks;
+    int try;
+
+    /* The two counters are read until they agree, and that is not caution for
+     * its own sake. A syscall body runs with interrupts ON, so the timer can
+     * roll the second over between the two reads: taken as (old second, new
+     * ticks) the answer is a second ahead, and as (new second, old ticks) it is
+     * a second BEHIND, which is the one that matters. A file written later
+     * would carry an earlier time than one written before it, and a make would
+     * read that as nothing to do.
+     *
+     * Two reads of the second around one read of the ticks settle it: if the
+     * second did not move, the ticks belong to it. The loop is bounded because
+     * a bound that is never reached is still cheaper than a hang. */
+    for (try = 0; try < RTC_SNAPSHOT_TRIES; try++) {
+        uptime = kernel_uptime_seconds;
+        ticks = kernel_second_ticks;
+        if (uptime == kernel_uptime_seconds) {
+            rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
+                                 nanoseconds);
+            return;
+        }
+    }
+
+    /* Three rollovers inside this loop is not a clock this code can read, so
+     * report the second without its fraction rather than an invented one. */
+    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, kernel_uptime_seconds, 0, seconds,
+                         nanoseconds);
 }
 
 #endif /* __i386__ */

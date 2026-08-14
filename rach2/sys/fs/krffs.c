@@ -9,6 +9,8 @@
  */
 
 #include "krffs.h"
+
+#include "../rtc.h"
 #include "../serial.h"
 #include "../lib/kerrno.h"
 
@@ -960,6 +962,57 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
  * The parent directory must already exist. Returns 0 on success, -1 if the
  * parent is missing or no node could be allocated.
  */
+/**
+ * Stamp a node's times with the current moment.
+ *
+ * `KRFFS_STAMP_DATA` is what a write does: the modification time and the
+ * attribute-change time both move, because changing a file changes the file.
+ * `KRFFS_STAMP_ATTR` is what a chmod does: only the attribute-change time.
+ *
+ * Access time is never stamped here, and that is a decision rather than an
+ * omission. This file system lives behind a write-back page cache, so touching
+ * a node on every READ would dirty a page on every read and turn a reading
+ * workload into a writing one. An atime set on purpose through `utimensat` is
+ * kept and reported; nothing advances it by itself. That is a `noatime` mount,
+ * and it is written down in the Readme as the contract it is.
+ */
+void krffs_stamp(krffs_node_t *node, int what)
+{
+    int64_t seconds = 0;
+    int64_t nanoseconds = 0;
+
+    if (!node) {
+        return;
+    }
+    rtc_realtime(&seconds, &nanoseconds);
+
+    if (what == KRFFS_STAMP_DATA) {
+        node->modification_time.seconds = seconds;
+        node->modification_time.nanoseconds = nanoseconds;
+    }
+    node->attribute_change_time.seconds = seconds;
+    node->attribute_change_time.nanoseconds = nanoseconds;
+}
+
+/**
+ * The directory a node lives in.
+ *
+ * A parent id of `KRFFS_ROOT_ID` names the root, which is not in the node table
+ * as a child of anything. Returns NULL only when the chain is broken, which is
+ * a corrupt image rather than an ordinary case.
+ */
+krffs_node_t *krffs_parent_node(krffs_node_t *node)
+{
+    if (!krffs_fs || !node) {
+        return (krffs_node_t *)0;
+    }
+    if (node->parent_id == KRFFS_ROOT_ID) {
+        return krffs_fs->node;
+    }
+
+    return krffs_find_node_by_id(krffs_fs, node->parent_id);
+}
+
 int krffs_create(const char *path)
 {
     krffs_node_t *node;
@@ -996,13 +1049,14 @@ int krffs_create(const char *path)
     node->uid = 0;
     node->gid = 0;
 
-    /* No real clock: timestamps are zero. */
-    node->access_time.seconds = 0;
-    node->access_time.nanoseconds = 0;
-    node->modification_time.seconds = 0;
-    node->modification_time.nanoseconds = 0;
-    node->attribute_change_time.seconds = 0;
-    node->attribute_change_time.nanoseconds = 0;
+    /* Born now, in all three: a file created and never written still has a
+     * moment it came into being, and a build tool compares against it. */
+    krffs_stamp(node, KRFFS_STAMP_DATA);
+    node->access_time = node->modification_time;
+
+    /* And the directory it appeared in changed, which is what a program
+     * watching a directory for new files is reading. */
+    krffs_stamp(krffs_parent_node(node), KRFFS_STAMP_DATA);
 
     return 0;
 }
@@ -1021,13 +1075,26 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
     void *base;
     uint64_t available_space;
     uint64_t new_size;
+    uint64_t old_data_size;
 
     if (!krffs_fs || !nodep || !*nodep || !buffer) {
         return -1;
     }
     node = *nodep;
     base = node + 1;
+    /* Taken BEFORE the resize below, which sets `data_size` itself when it can
+     * grow the node in place. Read afterwards it is already the new size, and
+     * the gap test below would never fire. */
+    old_data_size = node->data_size;
     available_space = node->size - sizeof(krffs_node_t);
+    /* A write of nothing does nothing. POSIX says a successful zero-byte write
+     * to a regular file has no other result, and without this the arithmetic
+     * below would still grow the file to `offset` and publish whatever the
+     * allocator last left in those bytes. */
+    if (size == 0) {
+        return 0;
+    }
+
     new_size = (uint64_t)offset + size;
 
     if (new_size > available_space) {
@@ -1038,10 +1105,19 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
         *nodep = node;
         base = node + 1;
     }
+    /* A write starting past the end leaves a hole, and the bytes under it are
+     * whatever the free space held: another file's contents, until they are
+     * cleared. `krffs_truncate` already zeroes what it grows; this is the same
+     * rule for the other way a file grows. */
+    if ((uint64_t)offset > old_data_size) {
+        k_memset((char *)base + old_data_size, 0,
+                 (uint32_t)((uint64_t)offset - old_data_size));
+    }
     if (new_size > node->data_size) {
         node->data_size = new_size;
     }
     _krffs_memcpy((char *)base + offset, buffer, size);
+    krffs_stamp(node, KRFFS_STAMP_DATA);
     return (int)size;
 }
 
@@ -1105,6 +1181,7 @@ int krffs_truncate(const char *path, uint32_t new_size)
         uint32_t fill_size = new_size - (uint32_t)old_data_size;
         k_memset(dest, 0, fill_size);
     }
+    krffs_stamp(node, KRFFS_STAMP_DATA);
 
     return 0;
 }
@@ -1129,6 +1206,8 @@ int krffs_unlink(const char *path)
         return -1;
     }
 
+    /* Stamped before the node goes: its parent is read from it. */
+    krffs_stamp(krffs_parent_node(node), KRFFS_STAMP_DATA);
     krffs_remove_reserved_node(krffs_fs, node);
     return 0;
 }
@@ -1154,6 +1233,21 @@ void krffs_orphan_node(krffs_node_t *node)
     if (node && node != krffs_fs->node) {
         node->name[0] = '\0';
     }
+}
+
+/**
+ * Remove a name whose file somebody still holds open, and stamp the directory
+ * it left.
+ *
+ * The stamp belongs here rather than at the call sites, because there are two
+ * of them (the `unlink` syscall and the rescue shell's own `rm`) and that is
+ * precisely how one of them ends up not stamping. Removing a name changes the
+ * directory whether or not the file it named goes with it.
+ */
+void krffs_unlink_held(krffs_node_t *node)
+{
+    krffs_stamp(krffs_parent_node(node), KRFFS_STAMP_DATA);
+    krffs_orphan_node(node);
 }
 
 /**
@@ -1251,18 +1345,30 @@ int krffs_rename(const char *old_path, const char *new_path)
         return -1;
     }
 
-    /* Replace any existing destination (but not the source itself), but never
-     * clobber a directory: freeing it would orphan its children. */
+    /* Renaming a file to the name it already has does nothing at all, which is
+     * what POSIX requires: no removal, no relink, and no timestamp moves. */
     existing = krffs_walk(krffs_fs, new_path);
-    if (existing && existing != node) {
+    if (existing == node) {
+        return 0;
+    }
+
+    /* Replace any existing destination, but never clobber a directory: freeing
+     * it would orphan its children. */
+    if (existing) {
         if (KRFFS_IS_DIR(existing->mode)) {
             return -1;
         }
         krffs_remove_reserved_node(krffs_fs, existing);
     }
 
+    /* Both ends change: the name left one directory and arrived in another,
+     * and they are the same directory in the ordinary case. The node itself
+     * kept its contents, so only its attribute-change time moves. */
+    krffs_stamp(krffs_parent_node(node), KRFFS_STAMP_DATA);
     krffs_set_reserved_node_name(node, base);
     node->parent_id = parent_id;
+    krffs_stamp(krffs_parent_node(node), KRFFS_STAMP_DATA);
+    krffs_stamp(node, KRFFS_STAMP_ATTR);
     return 0;
 }
 
@@ -1309,12 +1415,9 @@ int krffs_mkdir(const char *path)
     node->mode = (uint16_t)(KRFFS_S_IFDIR | 0755);
     node->uid = 0;
     node->gid = 0;
-    node->access_time.seconds = 0;
-    node->access_time.nanoseconds = 0;
-    node->modification_time.seconds = 0;
-    node->modification_time.nanoseconds = 0;
-    node->attribute_change_time.seconds = 0;
-    node->attribute_change_time.nanoseconds = 0;
+    krffs_stamp(node, KRFFS_STAMP_DATA);
+    node->access_time = node->modification_time;
+    krffs_stamp(krffs_parent_node(node), KRFFS_STAMP_DATA);
     return 0;
 }
 
@@ -1348,6 +1451,7 @@ int krffs_rmdir(const char *path)
         }
     } while ((scan = krffs_get_next_node(krffs_fs, scan)) != krffs_fs->node);
 
+    krffs_stamp(krffs_parent_node(node), KRFFS_STAMP_DATA);
     krffs_remove_reserved_node(krffs_fs, node);
     return 0;
 }
