@@ -2,7 +2,7 @@
 
 Milestone 20 put a compiler on the machine. This one puts a make there, and to do that it had to give the machine a clock first.
 
-The reason is exact. A make decides what to rebuild by comparing modification times, and this kernel reported a modification time of zero for every file and stamped none on write. That is worse than having no make: a from-scratch build would have worked, because the targets did not exist yet, and every build after it would have done nothing, because the source a student had just edited read as the same instant as the object built from it. So the first half of this milestone is the CMOS clock, the stat paths that report what the file system stores, and the write paths that stamp; the second half is pdpmake, staged as `/bin/make`, driving the tcc that was already there.
+The reason is exact. A make decides what to rebuild by comparing modification times, and this kernel reported a modification time of zero for every file and stamped none on write. The planning expected the usual shape of that failure, a first build that works because the targets do not exist yet and every build after it doing nothing, since the source a student had just edited reads as the same instant as the object built from it. pdpmake is blunter: `make.c:337` treats a modification time of zero as a file that is not there, so nothing would have built at all, and the first thing a student typed would have answered `don't know how to make main.c`. So the first half of this milestone is the CMOS clock, the stat paths that report what the file system stores, and the write paths that stamp; the second half is pdpmake, staged as `/bin/make`, driving the tcc that was already there.
 
 ## What a student does with it
 
@@ -16,7 +16,7 @@ The reason is exact. A make decides what to rebuild by comparing modification ti
 # make                  builds again, because the source is newer now
 ```
 
-The second line is the whole milestone. Before it, the third `make` rebuilt everything, forever, and the first one did not run at all: pdpmake reads a modification time of zero as "this file does not exist", so a machine that stamps nothing does not loop, it says `don't know how to make main.c`.
+The second line is the whole milestone: a machine that can tell an object from the source it was built from.
 
 ## Where the plan was wrong
 
@@ -46,7 +46,7 @@ Staged images became reproducible, which the milestone needed because it changes
 
 `system(3)` and `popen(3)` work, and pdpmake runs every recipe through the first. Syscall 120 still answers `ENOSYS`; what changed is the C library. `vendor/musl/patches/0001-posix-spawn-forks.patch` makes `posix_spawn` fork instead of clone.
 
-pdpmake 2.0.4 is vendored the way musl, busybox, dropbear and tcc are: a pinned tarball verified by sha256, extracted and built out of tree behind a stamp, linked against the ported musl through `muslgcc`, judged by `tools/check_elf.py`, staged as `/bin/make`. It is public domain, 4297 lines, and its own build is a 26-line POSIX makefile with no configure script. One patch sets the two built-in macros this platform needs, `CC=tcc` and `LDFLAGS=-static`, and `build_pdpmake.sh` asserts the values after applying it, because a patch can apply cleanly to the wrong place. tcc is staged a second time as `/bin/cc`, the name a makefile's built-in rules reach for.
+pdpmake 2.0.4 is vendored the way musl, busybox, dropbear and tcc are: a pinned tarball verified by sha256, extracted and built out of tree behind a stamp, linked against the ported musl through `muslgcc`, judged by `tools/check_elf.py`, staged as `/bin/make`. It is public domain, 4297 lines, and its own build is a 30-line POSIX makefile with no configure script. One patch sets the two built-in macros this platform needs, `CC=tcc` and `LDFLAGS=-static`, and `build_pdpmake.sh` asserts the values after applying it, because a patch can apply cleanly to the wrong place. tcc is staged a second time as `/bin/cc`, the name a makefile's built-in rules reach for.
 
 `make make-test` is the proof that a build is a build. Two boots of os-real from a disk copy, as the unprivileged `test` account: a project written at the prompt builds from scratch and runs, a second make reports nothing to do, touching one source rebuilds exactly that object and relinks, a `.PHONY` clean runs with a file named `clean` present, `CC=` overrides the built-in macro from the command line, one of this project's own tools builds from `/src/utils`, and then the machine reboots and the same source touched after the reboot rebuilds, with the file's exact modification time required to be the one it had before the machine stopped.
 
@@ -64,13 +64,15 @@ A zero-byte write could grow a file and expose stale data, and a write past the 
 
 A root descriptor reported the boot time rather than the root node's own. `fstat` on `/` went through a branch that never reached the node.
 
-The reproducibility gate could test stale binaries and could pass without ever exercising the ordering it claims to prove. It now builds what it tests, and it compares the staged names against a sorted list over four candidate name sets, so a host whose own directory order happens to be sorted cannot pass by accident and says so.
+The reproducibility gate could test stale binaries and could pass without ever exercising the ordering it claims to prove. It now builds what it tests, and it tries four candidate name sets looking for one this host reports out of order before it compares the staged names against the sorted list. A host that hands back all four already sorted cannot prove the ordering either way, and the check says exactly that rather than reporting a pass that covered half of what it claims.
 
 A vector that filled the copy-in buffer exactly and was followed by one more string reported `EFAULT`, which blames the caller's pointer for the kernel's budget. It is `E2BIG`.
 
 Editing a musl patch did not rebuild musl. The stamp's prerequisites now include `patches/*.patch`, which matters because a patch is now load-bearing.
 
 The make gate could accept a stale executable, never exercised the command-line macro override, could let one `make`'s success message be read as another's, and fed the console at a fixed rate that a slow host could overrun. It now hands the guest one command at a time and waits for its marker, counts in the guest over each command's own output file, and pins the modification time across the reboot exactly rather than within a tolerance.
+
+The two reads a boot compares were compared in their date fields and in status B and D, and not in status A, so a divider that was the running one in the first read and not in the second was accepted on the strength of the first. The comparison moved into the pure half as `rtc_snapshots_agree`, where the seam test can reach it, and it now covers status A with the update-in-progress bit masked off both sides, that being the one bit in those registers the hardware moves on its own.
 
 The closing sweep found nineteen stale contracts and then, in a second round, seven more: a dependency tier that did not build the two new capstones, a maintenance procedure that named the wrong gate, a probe-registration contract that was false for musl probes, a cppcheck suppression hiding every shadowed variable in `kernel.c` for a global that no longer exists, and a zero-byte file committed by an accidental shell redirection.
 

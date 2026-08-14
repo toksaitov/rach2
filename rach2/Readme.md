@@ -645,7 +645,9 @@ Four limits, stated rather than discovered:
 * A machine whose clock cannot be read boots normally with the anchor unset,
   real time falls back to time since boot, and the console says `rtc: no clock:
   times run from the epoch`. The clock is refused when the update flag never
-  clears, when two consecutive reads disagree, when a field is out of range, and
+  clears, when two consecutive reads disagree in any field, the three status
+  registers included and only the update flag excused, when a field is out of
+  range, and
   when the hardware says its own contents are not to be trusted: register D's
   validity bit clear (the battery went), register B's SET bit raised (updates
   inhibited), or register A's divider not the running one. A dead battery leaves

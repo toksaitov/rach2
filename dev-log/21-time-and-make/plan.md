@@ -12,7 +12,7 @@ The make is pdpmake, pinned at 2.0.4, vendored the way musl, busybox, dropbear a
 
 It was chosen against bmake, GNU make and scc-make. The reasons, so they are not re-argued:
 
-* Public domain (the Unlicense), 4297 lines across nine `.c` files and one header (the planning said 4332, counted before the tarball was in the tree), and its build is a 26-line POSIX makefile with no configure script to fight. tcc's port needed a fake cross prefix because its configure runs a compiled test binary; there is nothing here to run.
+* Public domain (the Unlicense), 4297 lines across nine `.c` files and one header (the planning said 4332, counted before the tarball was in the tree), and its build is a 30-line POSIX makefile with no configure script to fight. tcc's port needed a fake cross prefix because its configure runs a compiled test binary; there is nothing here to run.
 * POSIX.1-2024 make by default, POSIX.1-2017 selectable, non-POSIX extensions on by default. A student meets the constructs other makefiles use, and can switch to strict POSIX and watch a makefile stop working.
 * It is the program busybox-w32 ships as its `make` applet. Mainline busybox 1.36.1, which this repository vendors, has no make applet: `miscutils/make.c` is not in that tree and no `CONFIG_MAKE` is in `rach2.config`. A busybox bump would not have supplied one.
 * scc-make (ISC, 2336 lines) was the runner-up and was rejected on examination: it rejects archive members, ignores `.PHONY`, and takes no macro override on the command line, so `make CC=tcc` does not work. bmake is 31000 lines behind autoconf and requires a `sys.mk` set to start. GNU make is the make a student will meet elsewhere, and it is 36000 lines, GPLv3, autoconf and gnulib, and needs `--disable-posix-spawn` here.
@@ -44,7 +44,7 @@ Each of these was read in the tree or observed in a booted guest during planning
 
 `rach2/sys/rtc.c` and `rtc.h`: read the CMOS clock once, at boot, and anchor an epoch.
 
-The driver is split so that the arithmetic can be tested on the host. One half talks to the hardware through ports 0x70 and 0x71 and produces a RAW SNAPSHOT: the ten date and time registers plus status register B, taken as a set. The other half is a pure function from that snapshot to seconds since the Unix epoch, and it is what `tests/host/rtc_hosttest.c` exercises.
+The driver is split so that the arithmetic can be tested on the host. One half talks to the hardware through ports 0x70 and 0x71 and produces a RAW SNAPSHOT: the six date and time registers plus status registers A, B and D, taken as a set (the planning said status B alone; A and D joined it once the clock had to be refused on what the hardware says about itself). The other half is pure and is what `tests/host/rtc_hosttest.c` exercises: the decode from a snapshot to seconds since the Unix epoch, the comparison of two snapshots that the boot read accepts neither without, and the anchor arithmetic.
 
 The protocol, stated because getting it wrong is the usual way this fails:
 

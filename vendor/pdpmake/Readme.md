@@ -13,7 +13,7 @@ conditions at all.
 Rach2 needed a make that is small enough to read, portable enough to cross-build
 without a fight, and standard enough that what a student learns here is what
 they will meet elsewhere. pdpmake is 4297 lines across nine `.c` files and one
-header, and its build system is a 26-line POSIX makefile with no configure
+header, and its build system is a 30-line POSIX makefile with no configure
 script: the cross build here is the musl wrapper, `-static`, and nothing else.
 It implements POSIX.1-2024 make, with POSIX.1-2017 selectable and the common
 non-POSIX extensions on by default.

@@ -3,9 +3,11 @@
  *
  * host-deps: rach2/sys/rtc.c
  *
- * `rtc_decode` is the whole of the clock's arithmetic and it touches no
- * hardware, so it runs natively here over crafted samples: the two encodings,
- * the 12-hour PM flag, a leap year, and the fields a dead battery reports. The
+ * `rtc_decode`, `rtc_snapshots_agree` and `rtc_time_from_anchor` are the whole
+ * of the clock's arithmetic and they touch no hardware, so they run natively
+ * here over crafted samples: the two encodings, the 12-hour PM flag, a leap
+ * year, the fields a dead battery reports, the two reads a boot compares before
+ * it believes either, and the anchor a real time is measured from. The
  * expected seconds are literal, computed by hand rather than by the code under
  * test, because a case that derives its answer the way the implementation does
  * proves only that the implementation is self-consistent.
@@ -193,6 +195,47 @@ int main(void)
          * elapsed time rather than as a jump backwards. */
         rtc_time_from_anchor(1000LL, 0xFFFFFFF0u, 0x00000009u, 0u, &sec, &nsec);
         CHECK(sec == 1000LL + 25LL);
+    }
+
+    /* Two samples of one clock, which is what the boot read takes before it
+     * decodes either. The registers advance while they are being read, so a
+     * disagreement is a read to discard, and the status registers are part of
+     * that: the decode judges the clock by what they say, so a divider that was
+     * the running one in the first read and is not in the second must not be
+     * accepted on the strength of the first. */
+    {
+        rtc_snapshot_t a;
+        rtc_snapshot_t b;
+
+        bcd_sample(&a, 26, 8, 14, 9, 31, 7);
+        b = a;
+        CHECK(rtc_snapshots_agree(&a, &b) == 1);
+
+        /* The turn of a minute, which is the disagreement this is here for. */
+        b.second = bcd(8);
+        CHECK(rtc_snapshots_agree(&a, &b) == 0);
+
+        /* Each status register in turn, since each is a reason to refuse. */
+        b = a;
+        b.status_a = 0;
+        CHECK(rtc_snapshots_agree(&a, &b) == 0);
+        b = a;
+        b.status_b = (unsigned char)(a.status_b | RTC_STATUS_B_SET);
+        CHECK(rtc_snapshots_agree(&a, &b) == 0);
+        b = a;
+        b.status_d = 0;
+        CHECK(rtc_snapshots_agree(&a, &b) == 0);
+
+        /* The update-in-progress flag is the exception, and has to be: it is
+         * the one bit in those registers the hardware moves on its own, and it
+         * moves once a second, so counting it would make every second read
+         * disagree with itself for no reason. */
+        b = a;
+        b.status_a = (unsigned char)(a.status_a | RTC_STATUS_A_UPDATING);
+        CHECK(rtc_snapshots_agree(&a, &b) == 1);
+
+        CHECK(rtc_snapshots_agree(&a, 0) == 0);
+        CHECK(rtc_snapshots_agree(0, &b) == 0);
     }
 
     return fails > 100 ? 100 : fails;

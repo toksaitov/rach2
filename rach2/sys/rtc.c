@@ -57,6 +57,35 @@ static int32_t rtc_from_bcd(uint8_t value)
 }
 
 /**
+ * Whether two samples of the clock describe the same instant and the same clock.
+ *
+ * The caller takes two samples and decodes neither unless this says they agree,
+ * because the registers advance while they are being read. Every field is
+ * compared, the three status registers included: the decode judges the clock by
+ * what status A, B and D say, and a sample whose status changed between the two
+ * reads is one where that judgement would rest on a register the other read did
+ * not see.
+ *
+ * The update-in-progress bit is the one exception and is masked off both sides.
+ * It is the only bit in those registers that the hardware moves on its own, it
+ * moves once a second, and it says nothing about the values themselves.
+ *
+ * @return 1 when the two agree, 0 otherwise.
+ */
+int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+
+    return a->second == b->second && a->minute == b->minute && a->hour == b->hour &&
+           a->day == b->day && a->month == b->month && a->year == b->year &&
+           (uint8_t)(a->status_a & (uint8_t)~RTC_STATUS_A_UPDATING) ==
+               (uint8_t)(b->status_a & (uint8_t)~RTC_STATUS_A_UPDATING) &&
+           a->status_b == b->status_b && a->status_d == b->status_d;
+}
+
+/**
  * Convert a raw CMOS sample to seconds since the Unix epoch, in UTC.
  *
  * This is the whole of the clock's arithmetic and it touches no hardware, so
@@ -235,8 +264,6 @@ extern int serial_printf(const char *format, ...);
 #define RTC_REG_STATUS_B 0x0B
 #define RTC_REG_STATUS_D 0x0D
 
-#define RTC_STATUS_A_UPDATING 0x80
-
 /*
  * How long to wait for an update to finish. An RTC update takes under two
  * milliseconds and each read here is a pair of port accesses, so this bound is
@@ -287,7 +314,8 @@ static int rtc_wait_ready(void)
     return -1;
 }
 
-/** Read the six registers and status B once, after waiting out an update. */
+/** Read the six registers and status A, B and D once, after waiting out an
+ *  update. */
 static int rtc_sample(rtc_snapshot_t *out)
 {
     if (rtc_wait_ready() != 0) {
@@ -311,14 +339,6 @@ static void rtc_two(char *out, int32_t value)
 {
     out[0] = (char)('0' + (value / 10) % 10);
     out[1] = (char)('0' + value % 10);
-}
-
-/** Whether two samples agree in every field. */
-static int rtc_same(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
-{
-    return a->second == b->second && a->minute == b->minute && a->hour == b->hour &&
-           a->day == b->day && a->month == b->month && a->year == b->year &&
-           a->status_b == b->status_b && a->status_d == b->status_d;
 }
 
 /**
@@ -354,7 +374,7 @@ void rtc_init(void)
          * reading taken before the sampling would date the clock earlier than
          * it was and put the machine that far ahead for the rest of the boot. */
         uptime = kernel_uptime_seconds;
-        if (!rtc_same(&first, &second)) {
+        if (!rtc_snapshots_agree(&first, &second)) {
             continue;
         }
         if (rtc_decode(&first, &seconds, &when) != 0) {
