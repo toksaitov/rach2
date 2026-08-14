@@ -584,6 +584,12 @@ static size_t unescape_text(char *s)
  * why the GCC-written `.d` dependency files beside the binaries are not staged.
  * Returns false on a host or staging error.
  */
+/** Order two directory entries by name, for the `qsort` in both stagers. */
+static int compare_names(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *) a, *(const char *const *) b);
+}
+
 static bool stage_exec_dir(
                 struct krffs_file_system *file_system,
                 const char *guestdir,
@@ -596,6 +602,11 @@ static bool stage_exec_dir(
     DIR *d =
         opendir(hostdir);
     struct dirent *e;
+    char **names =
+        NULL;
+    size_t count =
+        0;
+    size_t i;
     bool ok =
         true;
 
@@ -605,7 +616,49 @@ static bool stage_exec_dir(
         return false;
     }
 
-    while (ok && (e = readdir(d)) != NULL) {
+    /* The names are read first and sorted, the way `stage_tree` already does
+       it: readdir order is the host file system's, it differs between machines
+       and between two builds on one machine, and an image built twice from one
+       tree should be one image. */
+    errno = 0;
+    while ((e = readdir(d)) != NULL) {
+        char **grown;
+
+        if (e->d_name[0] == '.') {
+            continue;
+        }
+        grown =
+            realloc(names, (count + 1) * sizeof(*names));
+        if (grown == NULL) {
+            ok =
+                false;
+            break;
+        }
+        names =
+            grown;
+        names[count] =
+            strdup(e->d_name);
+        if (names[count] == NULL) {
+            ok =
+                false;
+            break;
+        }
+        count++;
+        errno = 0;
+    }
+    /* readdir returns NULL for the end AND for an error, so a directory read
+       part way would otherwise be staged as if it were whole. */
+    if (errno != 0) {
+        fprintf(stderr, "stageimage: cannot read host dir '%s'.\n", hostdir);
+        ok =
+            false;
+    }
+    closedir(d);
+    if (ok) {
+        qsort(names, count, sizeof(*names), compare_names);
+    }
+
+    for (i = 0; ok && i < count; i++) {
         char hostpath[1024];
         char guestpath[512];
         struct stat st;
@@ -613,11 +666,8 @@ static bool stage_exec_dir(
         size_t len = 0;
         int n;
 
-        if (e->d_name[0] == '.') {
-            continue;
-        }
         n =
-            snprintf(hostpath, sizeof(hostpath), "%s/%s", hostdir, e->d_name);
+            snprintf(hostpath, sizeof(hostpath), "%s/%s", hostdir, names[i]);
         if (n < 0 || (size_t) n >= sizeof(hostpath)) {
             fprintf(stderr, "stageimage: host path under '%s' is too long.\n", hostdir);
             ok =
@@ -641,9 +691,9 @@ static bool stage_exec_dir(
         }
 
         if (strcmp(guestdir, "/") == 0) {
-            n = snprintf(guestpath, sizeof(guestpath), "/%s", e->d_name);
+            n = snprintf(guestpath, sizeof(guestpath), "/%s", names[i]);
         } else {
-            n = snprintf(guestpath, sizeof(guestpath), "%s/%s", guestdir, e->d_name);
+            n = snprintf(guestpath, sizeof(guestpath), "%s/%s", guestdir, names[i]);
         }
         if (n < 0 || (size_t) n >= sizeof(guestpath)) {
             fprintf(stderr, "stageimage: guest path under '%s' is too long.\n", guestdir);
@@ -657,7 +707,10 @@ static bool stage_exec_dir(
         free(data);
     }
 
-    closedir(d);
+    for (i = 0; i < count; i++) {
+        free(names[i]);
+    }
+    free(names);
 
     return ok;
 }
@@ -710,12 +763,6 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system,
     }
 
     return stage_dir(file_system, path, mode, uid, gid);
-}
-
-/** Order two directory entries by name, for `qsort` in `stage_tree`. */
-static int compare_names(const void *a, const void *b)
-{
-    return strcmp(*(const char *const *) a, *(const char *const *) b);
 }
 
 /**
@@ -1104,13 +1151,29 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /* mkfs stamps the root node with the building host's ids (the course
-       tool's contract); a kernel-bound image boots multi-user, so its root
-       directory belongs to root, whoever built it. */
-    file_system.node->uid =
-        0;
-    file_system.node->gid =
-        0;
+    /* mkfs stamps the root node with the building host's ids and the building
+       host's CLOCK (the course tool's contract). A kernel-bound image boots
+       multi-user, so its root directory belongs to root whoever built it; and
+       its times are zeroed for the same reason every staged node's are, which
+       is that an image built twice from one tree must be one image. Without
+       this the root node alone carried the moment of the build, and two clean
+       builds of the same commit differed in those twenty-four bytes. */
+    {
+        struct krffs_node_time zero_time = {
+            0
+        };
+
+        file_system.node->uid =
+            0;
+        file_system.node->gid =
+            0;
+        file_system.node->access_time =
+            zero_time;
+        file_system.node->modification_time =
+            zero_time;
+        file_system.node->attribute_change_time =
+            zero_time;
+    }
     krffs_sync_mapping(file_system.node, sizeof(*file_system.node));
 
     manifest =

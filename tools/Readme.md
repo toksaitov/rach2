@@ -11,11 +11,12 @@ the supporting scripts.
   optional tool as PASS / MISSING / OPTIONAL with an install hint, and exits
   non-zero if a required tool is absent, so a fresh machine sees a checklist
   instead of a cryptic mid-build failure.
-* `check.sh` (`make verify-style`): the style and quality gate. Runs the
-  `-Werror` kernel build, a scoped cppcheck (with `cppcheck.suppress`),
+* `check.sh` (`make verify-style`): the style and quality gate, in eleven steps.
+  Runs the `-Werror` kernel build, a scoped cppcheck (with `cppcheck.suppress`),
   shellcheck, the convention grep (no `//`, ASCII only, header guards),
-  clang-format on new code, a readelf ABI check, the source-list guard, and the
-  text-style check.
+  clang-format on new code, a readelf ABI check, the source-list guard, the
+  text-style check, the probe runner's own scoring selftest, the set-id manifest
+  sweep, and the image-reproducibility check.
 * `textcheck.sh` (invoked by `check.sh`): the mechanical prose checks (ASCII only, no em-dash, `*` bullets, and the rest of the writing standard). Its roots are the source trees and the top-level `*.md`; `dev-log` is deliberately not one. The milestone records are frozen at the style of the day they were written, and the early ones would fail these checks: editing them to satisfy a later checker would destroy the only account of what each milestone actually proved, which is the whole reason they are kept. So a new record is held to the same rules the way voice is, by review, and this is the statement of that rather than a gap nobody noticed. The mechanical half of the gate covers the code and the current documentation; it does not cover the history.
 * `check_sources.sh` (`make check-sources`, also run inside the gate): fails if a
   kernel `.c` on disk is missing from `C_SRC`, so a new source cannot be silently
@@ -219,6 +220,19 @@ the supporting scripts.
   stages every byte correctly into a compiler only root can use.
   `--selftest` (run inside the gate) covers every directive form
   and failure mode, including each hole the guard has had.
+* `check_repro.py` (run inside the gate): one tree, one image. A staged image is
+  built from a manifest and a set of host artifacts, and nothing about the
+  machine that built it may show through. Two things used to: `mkfs.krffs`
+  stamps the root node with the building host's clock at microsecond resolution,
+  and `exec-dir` staged whatever order `readdir` returned, which is the host file
+  system's and differs from machine to machine. It stages a scratch manifest
+  twice with the real tools and requires the images to be byte-identical, then
+  requires the staged names to be in NAME order. The second half needs care to
+  be a test at all: one directory returns one order, and re-creating the same
+  names in a different sequence proves nothing on a host that orders by hash, so
+  what is asserted is the property the sort provides, and the check says it could
+  not test rather than passing quietly when the host's own order is already
+  sorted.
 * `cppcheck.suppress`: the cppcheck suppression list `check.sh` reads (a data
   file, not a script).
 
