@@ -47,6 +47,29 @@ The `*at` calls let a libc build `FILE*` and `DIR*` and resolve against a direct
 * `fcntl64` (221): `F_DUPFD(_CLOEXEC)`, `F_GETFD`/`F_SETFD` (the close-on-exec bit), `F_GETFL`/`F_SETFL` (access mode and `O_APPEND`).
 * `O_CLOEXEC` and `O_APPEND` are honored at `open`; `execve` drops `FD_CLOEXEC` descriptors at its commit point.
 
+## Timestamps
+
+Every node carries three: access, modification and attribute-change. They are
+reported by every path that fills a stat, and there are more of those than there
+look: `krffs_fill_stat64` for a path, `fstat_fill` for a descriptor,
+`do_old_stat` for the narrower `stat(2)` ABI, `synth_stat` for `/dev` and
+`/proc`, and a root branch of its own in each of `stat64`, `fstatat64` and the
+old ABI. Every one of them zeroed all three until milestone 21, so every file on
+this system reported 1970 and nothing could tell a source from the object built
+from it.
+
+The root directory reports its own node's times. A synthetic node reports the
+BOOT time: it has no history, zero would be a claim about 1970, and now would be
+worse, since a device whose modification time advanced on every stat would look
+freshly written to anything comparing times.
+
+Access time is stored and reported but NEVER advanced by a read. That is a
+`noatime` mount, and the reason is this file system's own: it lives behind a
+write-back page cache, so stamping an atime on every read would dirty a page on
+every read and turn a reading workload into a writing one. An atime set on
+purpose through `utimensat` is kept and reported, which is why this is not the
+same thing as reporting the modification time in its place.
+
 ## Deliberate simplifications
 
 What KRFFS deliberately leaves out, without compromising the tree structure:

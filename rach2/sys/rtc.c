@@ -391,6 +391,20 @@ int rtc_is_anchored(void)
 }
 
 /**
+ * The real time at which this machine's clock was read, which is as close to
+ * boot as it knows.
+ *
+ * Reported by the nodes that have no history of their own: a device, a /proc
+ * file, a pipe. Zero would be a claim about 1970, and NOW would be worse: a
+ * synthetic file whose modification time advanced on every stat would look
+ * freshly written to anything comparing times, which is what a make does.
+ */
+int64_t rtc_boot_time(void)
+{
+    return rtc_anchor_seconds;
+}
+
+/**
  * The current real time, in seconds and nanoseconds since the Unix epoch.
  *
  * With an anchor this is the second the clock reported plus the ticks elapsed

@@ -2646,6 +2646,57 @@ struct linux_stat64 {
 #define S_IFDIR  0040000
 
 /**
+ * Report a node's three times into a stat64.
+ *
+ * KRFFS stores them; before this kernel had a clock nothing read them out, so
+ * every file reported the epoch and no build tool could tell a source from the
+ * object built from it. Access time is REPORTED but never advanced by a read
+ * (see fs/krffs.c): the file system is a write-back page cache, and stamping an
+ * atime on every read would dirty a page on every read.
+ */
+static void stat64_node_times(struct linux_stat64 *kst, const krffs_node_t *node)
+{
+    kst->st_atime = (unsigned long)node->access_time.seconds;
+    kst->st_atime_nsec = (unsigned long)node->access_time.nanoseconds;
+    kst->st_mtime = (unsigned long)node->modification_time.seconds;
+    kst->st_mtime_nsec = (unsigned long)node->modification_time.nanoseconds;
+    kst->st_ctime = (unsigned long)node->attribute_change_time.seconds;
+    kst->st_ctime_nsec = (unsigned long)node->attribute_change_time.nanoseconds;
+}
+
+/**
+ * Report the boot time into a stat64, for a node with no history of its own: a
+ * device, a /proc file, a pipe, a socket.
+ */
+static void stat64_boot_times(struct linux_stat64 *kst)
+{
+    unsigned long boot = (unsigned long)rtc_boot_time();
+
+    kst->st_atime = boot;
+    kst->st_mtime = boot;
+    kst->st_ctime = boot;
+    kst->st_atime_nsec = 0;
+    kst->st_mtime_nsec = 0;
+    kst->st_ctime_nsec = 0;
+}
+
+/**
+ * The root directory's own three times, into a stat64.
+ *
+ * The root is a real node and creating an entry in it stamps its times, so it
+ * reports them like any other directory; a machine with no file system mounted
+ * has nothing to report but the boot time.
+ */
+static void stat64_root_times(struct linux_stat64 *kst)
+{
+    if (krffs_fs && krffs_fs->node) {
+        stat64_node_times(kst, krffs_fs->node);
+    } else {
+        stat64_boot_times(kst);
+    }
+}
+
+/**
  * Fill a stat64 buffer from a resolved KRFFS node.
  *
  * Shared by stat64/fstat64/fstatat64. Reports S_IFDIR for directories and S_IFREG
@@ -2670,6 +2721,7 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
     kst->st_blocks = (node->data_size + 511) / 512;
     kst->st_ino = node->id;
     kst->__st_ino = (unsigned long)node->id;
+    stat64_node_times(kst, node);
 }
 
 /* Fill a stat64 from an open descriptor (factored from sys_fstat64 so the magic
@@ -2695,6 +2747,7 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
     k_memset(kst, 0, sizeof(*kst));
     kst->st_nlink = 1;
     kst->st_blksize = 4096;
+    stat64_boot_times(kst);
 
     switch (vp->kind) {
         case VNODE_DEV_DIR:
@@ -2933,6 +2986,9 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
         kst.st_nlink = 1;
         kst.st_ino = 0;  /* Root inode is 0 */
         kst.st_blksize = 4096;
+        /* The root is a real directory with real times: an entry created in it
+         * stamps them, which is how a program watching a directory sees it. */
+        stat64_root_times(&kst);
         if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
             return -EFAULT;
         }
@@ -3004,10 +3060,15 @@ static int32_t sys_lstat64(isr_params_t *params)
 static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 {
     k_memset(kst, 0, sizeof(*kst));
+    stat64_boot_times(kst); /* a node with times of its own overwrites these */
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
         kst->st_mode = S_IFDIR | 0755; /* the root directory */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
+        /* The root has times of its own, so a descriptor on it reports what a
+         * path to it reports; the boot-time default above is for the nodes that
+         * have no history, and the root is not one of them. */
+        stat64_root_times(kst);
     } else if (entry->node) {
         /* A stale fd (its node was unlinked or relocated) would leak freed
          * free-list bytes through the stat fields; leave the zeroed stat rather
@@ -3147,6 +3208,7 @@ static int32_t sys_fstatat64(isr_params_t *params)
         kst.st_mode = S_IFDIR | 0755; /* the root directory */
         kst.st_nlink = 1;
         kst.st_blksize = 4096;
+        stat64_root_times(&kst);
     } else {
         struct vpath vp;
         name = pathbuf;
@@ -3965,6 +4027,41 @@ static int32_t sys_fcntl64(isr_params_t *params)
  * only for the /proc magic symlinks, since KRFFS has none. EBX = path, ECX = stat
  * buffer.
  */
+/**
+ * Copy the three times out of a stat64 into the narrower old stat.
+ *
+ * The old ABI is a different struct, so every path that fills it fills it
+ * separately; before this kernel had a clock they were all zero and the
+ * difference did not show.
+ */
+static void stat_times_from_stat64(struct linux_stat *kst, const struct linux_stat64 *s64)
+{
+    kst->st_atime = s64->st_atime;
+    kst->st_atime_nsec = s64->st_atime_nsec;
+    kst->st_mtime = s64->st_mtime;
+    kst->st_mtime_nsec = s64->st_mtime_nsec;
+    kst->st_ctime = s64->st_ctime;
+    kst->st_ctime_nsec = s64->st_ctime_nsec;
+}
+
+/** The three times of a KRFFS node, into the old stat. */
+static void stat_node_times(struct linux_stat *kst, const krffs_node_t *node)
+{
+    struct linux_stat64 s64;
+
+    stat64_node_times(&s64, node);
+    stat_times_from_stat64(kst, &s64);
+}
+
+/** The root directory's three times, into the old stat. */
+static void stat_root_times(struct linux_stat *kst)
+{
+    struct linux_stat64 s64;
+
+    stat64_root_times(&s64);
+    stat_times_from_stat64(kst, &s64);
+}
+
 static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st, int follow)
 {
     struct linux_stat kst;
@@ -3990,6 +4087,9 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         kst.st_nlink = 1;
         kst.st_ino = 0;  /* Root inode is 0 */
         kst.st_blksize = 4096;
+        /* The root is a real directory with real times: an entry created in it
+         * stamps them, which is how a program watching a directory sees it. */
+        stat_root_times(&kst);
         if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
             return -EFAULT;
         }
@@ -4017,6 +4117,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             kst.st_ino = (unsigned long)s64.st_ino;
             kst.st_rdev = (unsigned long)s64.st_rdev;
             kst.st_blksize = (unsigned long)s64.st_blksize;
+            stat_times_from_stat64(&kst, &s64);
             if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
                 return -EFAULT;
             }
@@ -4036,7 +4137,12 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         }
     }
 
-    kst.st_mode = S_IFREG | (node->mode & 07777);
+    /* The type comes from the node, as it does in the stat64 path. This read
+     * S_IFREG for everything, so a directory stated through the old ABI came
+     * back a regular file; musl reaches this only when statx and fstatat64 are
+     * both unavailable, which is why it went unnoticed. */
+    kst.st_mode = (unsigned short)((KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
+                                   (node->mode & 07777));
     kst.st_nlink = 1;                              /* Always 1 for KRFFS */
     kst.st_uid = (unsigned short)node->uid;
     kst.st_gid = (unsigned short)node->gid;
@@ -4044,6 +4150,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     kst.st_blksize = 4096;
     kst.st_blocks = (node->data_size + 511) / 512;
     kst.st_ino = (unsigned long)node->id; /* the node's DJB hash is the inode */
+    stat_node_times(&kst, node);
 
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
