@@ -74,6 +74,8 @@ The make gate could accept a stale executable, never exercised the command-line 
 
 The two reads a boot compares were compared in their date fields and in status B and D, and not in status A, so a divider that was the running one in the first read and not in the second was accepted on the strength of the first. The comparison moved into the pure half as `rtc_snapshots_agree`, where the seam test can reach it, and it now covers status A with the update-in-progress bit masked off both sides, that being the one bit in those registers the hardware moves on its own.
 
+And then the review after that one found what the fix had made reachable, which is the finding of the milestone. Register D is not passive on every part: the validity bit is clear after the battery went, and READING the register sets it again. So a dead cell produces one honest sample and then nothing but dishonest ones, the pair disagrees, and a loop that retries a disagreement refuses the truth and believes the next pair, which agrees and is in range and is whatever the dead cell left. The validity bit is now terminal (`rtc_contents_lost`), checked on both samples before they are compared: a clock that has said it lost its contents is not asked again.
+
 The closing sweep found nineteen stale contracts and then, in a second round, seven more: a dependency tier that did not build the two new capstones, a maintenance procedure that named the wrong gate, a probe-registration contract that was false for musl probes, a cppcheck suppression hiding every shadowed variable in `kernel.c` for a global that no longer exists, and a zero-byte file committed by an accidental shell redirection.
 
 ## What was refuted

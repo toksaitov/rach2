@@ -57,6 +57,28 @@ static int32_t rtc_from_bcd(uint8_t value)
 }
 
 /**
+ * Whether this sample says the clock lost its own contents.
+ *
+ * Register D's validity bit is clear once the battery has gone, and on some
+ * parts READING that register sets it again, so the bit tells the truth once.
+ * A sample that sees it clear therefore ends the read: taking another pair
+ * would find them agreeing, in range, and holding whatever the dead cell left,
+ * which is exactly the clock this guard exists to refuse. A missing sample is
+ * counted the same way, since the answer here decides whether to believe a
+ * clock.
+ *
+ * @return 1 when the contents are not to be believed, 0 otherwise.
+ */
+int rtc_contents_lost(const rtc_snapshot_t *raw)
+{
+    if (!raw) {
+        return 1;
+    }
+
+    return (raw->status_d & RTC_STATUS_D_VALID) == 0;
+}
+
+/**
  * Whether two samples of the clock describe the same instant and the same clock.
  *
  * The caller takes two samples and decodes neither unless this says they agree,
@@ -374,6 +396,9 @@ void rtc_init(void)
          * reading taken before the sampling would date the clock earlier than
          * it was and put the machine that far ahead for the rest of the boot. */
         uptime = kernel_uptime_seconds;
+        if (rtc_contents_lost(&first) || rtc_contents_lost(&second)) {
+            break;
+        }
         if (!rtc_snapshots_agree(&first, &second)) {
             continue;
         }

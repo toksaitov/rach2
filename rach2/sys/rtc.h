@@ -49,6 +49,8 @@ typedef struct {
     int32_t second;
 } rtc_time_t;
 
+int rtc_contents_lost(const rtc_snapshot_t *raw);
+
 int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b);
 
 int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out);

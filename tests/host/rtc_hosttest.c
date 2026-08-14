@@ -236,6 +236,19 @@ int main(void)
 
         CHECK(rtc_snapshots_agree(&a, 0) == 0);
         CHECK(rtc_snapshots_agree(0, &b) == 0);
+
+        /* A battery that went ends the read rather than earning another try.
+         * On some parts reading register D SETS the validity bit again, so the
+         * pair a dead cell produces is a disagreement (clear, then set) and the
+         * pair after it agrees, is in range, and is whatever the dead cell
+         * left. The first sample of that sequence is the only honest one, and
+         * this is what the driver stops on. */
+        b = a;
+        b.status_d = 0;
+        CHECK(rtc_contents_lost(&b) == 1);
+        CHECK(rtc_snapshots_agree(&b, &a) == 0);
+        CHECK(rtc_contents_lost(&a) == 0);
+        CHECK(rtc_contents_lost(0) == 1);
     }
 
     return fails > 100 ? 100 : fails;

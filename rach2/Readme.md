@@ -652,7 +652,9 @@ Four limits, stated rather than discovered:
   validity bit clear (the battery went), register B's SET bit raised (updates
   inhibited), or register A's divider not the running one. A dead battery leaves
   bytes that are stable and in range and completely wrong, so the date fields
-  alone cannot decide this.
+  alone cannot decide this. The validity bit ends the read rather than earning
+  another try: on some parts READING register D sets that bit again, so a dead
+  cell shows itself in the first sample and in no sample after it.
 * The clock is read as UTC, because those registers carry no timezone to read.
   A machine whose CMOS keeps local time will be wrong by its offset; the daylight
   bit (register B's DSE) is refused rather than interpreted. QEMU's default is
