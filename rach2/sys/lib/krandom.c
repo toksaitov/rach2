@@ -201,7 +201,8 @@ static int rdseed32(uint32_t *out)
     int tries;
 
     for (tries = 0; tries < 32; tries++) {
-        __asm__ __volatile__("rdseed %0; setc %1" : "=r"(v), "=qm"(ok)::"cc");
+        /* rdseed %eax as bytes 0f c7 f8: tcc has no mnemonic for it. */
+        __asm__ __volatile__(".byte 0x0f, 0xc7, 0xf8\n\tsetc %1" : "=a"(v), "=qm"(ok)::"cc");
         if (ok) {
             *out = v;
             return 1;
@@ -217,7 +218,8 @@ static int rdrand32(uint32_t *out)
     int tries;
 
     for (tries = 0; tries < 32; tries++) {
-        __asm__ __volatile__("rdrand %0; setc %1" : "=r"(v), "=qm"(ok)::"cc");
+        /* rdrand %eax as bytes 0f c7 f0: tcc has no mnemonic for it. */
+        __asm__ __volatile__(".byte 0x0f, 0xc7, 0xf0\n\tsetc %1" : "=a"(v), "=qm"(ok)::"cc");
         if (ok) {
             *out = v;
             return 1;

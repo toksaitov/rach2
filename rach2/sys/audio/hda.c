@@ -256,7 +256,8 @@ static void hda_dma_sync_range(const volatile void *addr, uint32_t size)
         p = (uintptr_t)addr & ~(line - 1u);
         end = (uintptr_t)addr + (uintptr_t)size;
         while (p < end) {
-            __asm__ __volatile__("clflush (%0)" :: "r"(p) : "memory");
+            /* clflush (%eax) as bytes 0f ae 38: tcc has no mnemonic for it. */
+            __asm__ __volatile__(".byte 0x0f, 0xae, 0x38" :: "a"(p) : "memory");
             p += line;
         }
         /* Full barrier (avoid SSE mfence). */
