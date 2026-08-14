@@ -89,11 +89,11 @@ Two mutations meant to prove a test could fail did not, and both were instructiv
 
 `tcc -b`, bounds checking, is not available, for the `--config-musl` reason above.
 
-The kernel is not compiled in the guest. `rach2/link.ld` is a real linker script and tcc implements a subset of that language; `rach2/sys/isr_handler.s` uses a GAS `.macro`, which tcc's assembler does not have; and there is no `make` in the guest to drive any of it. Each is solvable and none is this milestone. Bellard compiled a Linux 2.4 kernel with tcc, so the direction is not fanciful.
+The kernel is not compiled in the guest. `rach2/link.ld` is a real linker script and tcc implements a subset of that language; `rach2/sys/isr_handler.s` uses a GAS `.macro`, which tcc's assembler does not have; and at this milestone there was no `make` in the guest to drive any of it (milestone 21 ported one, so that third obstacle is gone; the linker script and the GAS macro remain). Each is solvable and none is this milestone. Bellard compiled a Linux 2.4 kernel with tcc, so the direction is not fanciful.
 
 musl is not compiled in the guest: its own build wants GNU make, `ar`, `ranlib` and a shell toolchain. dropbear is ordinary C that tcc could probably take, but it wants `make` and more memory than the exercise is worth. The image ships the `libc.a` and headers the host build already produces.
 
-There is no `make` on the machine, so a build of more than one command is a command line. Two translation units in one command work and are proved (`ping.c` with `resolv.c`, which is how the host builds that same program); a project is not.
+There is no `make` on the machine, so a build of more than one command is a command line. Two translation units in one command work and are proved (`ping.c` with `resolv.c`, which is how the host builds that same program); a project is not. (Milestone 21 closed this one: pdpmake runs on the machine now. What made it possible was not the port but the clock and the timestamps under it, which is why that milestone is nine tenths kernel work.)
 
 `MAX_FDS` is 16 and a nested `#include` holds a descriptor open for as long as it is nested. It did not bite, because the includes these programs reach nest a few deep and not sixteen, but the ceiling is real and the number is small.
 

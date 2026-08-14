@@ -574,6 +574,12 @@ static size_t unescape_text(char *s)
     return (size_t) (w - s);
 }
 
+/** Order two directory entries by name, for the `qsort` in both stagers. */
+static int compare_names(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *) a, *(const char *const *) b);
+}
+
 /**
  * Stage every regular, executable file directly inside host directory `hostdir`
  * into guest directory `guestdir` with `mode`.
@@ -582,14 +588,10 @@ static size_t unescape_text(char *s)
  * build/utils) without naming each. It is NOT recursive and skips anything that is
  * not a regular executable (via `lstat`, so a symlink is left out too), which is
  * why the GCC-written `.d` dependency files beside the binaries are not staged.
- * Returns false on a host or staging error.
+ * The names are read first and staged in sorted order, so one host directory
+ * always produces one image: `readdir` order is the file system's, and on APFS
+ * it is a hash of the name. Returns false on a host or staging error.
  */
-/** Order two directory entries by name, for the `qsort` in both stagers. */
-static int compare_names(const void *a, const void *b)
-{
-    return strcmp(*(const char *const *) a, *(const char *const *) b);
-}
-
 static bool stage_exec_dir(
                 struct krffs_file_system *file_system,
                 const char *guestdir,

@@ -6,7 +6,7 @@ Version 0.9.27, the last release, pinned by sha256.
 
 ## Why tinycc and not gcc
 
-Turning C into a running program takes three tools: a compiler, an assembler and a linker. gcc and clang are only the first and hand their output to GNU `as` and `ld`, so porting either means porting binutils too, and then a `make`, and this image has none. The small teaching compilers lose the same way: each emits assembly text for somebody else to assemble.
+Turning C into a running program takes three tools: a compiler, an assembler and a linker. gcc and clang are only the first and hand their output to GNU `as` and `ld`, so porting either means porting binutils too, and this image has neither of those. The small teaching compilers lose the same way: each emits assembly text for somebody else to assemble. (The fourth tool, a make to drive the three, milestone 21 ported: pdpmake, at `/bin/make`.)
 
 tcc is all three in one binary. That is the argument, and it is architectural rather than a matter of taste. Memory is a second point: gcc wants hundreds of megabytes to compile one large file, and this machine has 32 MB for everything, kernel included.
 

@@ -591,7 +591,7 @@ Special values for `tv_nsec`:
 
 If `times` is NULL, both timestamps are set to current time.
 
-Time tracking uses the kernel's tick counter (PIT at 100 Hz). Each tick represents 10 milliseconds.
+The time written is the one `get_current_time()` reports: the CMOS clock read at boot, carried forward by the 100 Hz PIT, so a file this call stamps carries a real date on a machine whose clock could be read, and time since boot on one whose could not. See "The clock" below.
 
 Returns 0 on success, -1 on error (file not found).
 
@@ -638,7 +638,7 @@ beside it by the timer, wraps after 136 years.
 since boot, unchanged, because the scheduler, the sleep path and the audio timing
 loops all mean ticks when they ask for a clock.
 
-Three limits, stated rather than discovered:
+Four limits, stated rather than discovered:
 
 * There is no `settimeofday` and no NTP. The machine reads the clock once and
   then keeps its own time, so it drifts by whatever the PIT drifts by.
@@ -717,7 +717,7 @@ KRFFS is hierarchical, so a directory fd reads the entries of that directory.
 * `sys_utimensat()` - Update file timestamps
 * `sys_ioctl()` - Device control (framebuffer palette, PC speaker)
 * `sys_gettimeofday()` - Get the current real time
-* `get_current_time()` - Helper to get current time from kernel tick counter
+* `get_current_time()` - Helper returning RTC-anchored real time (uptime alone when the CMOS clock could not be read)
 * `copy_user_pages()` - Helper to copy all user pages from parent to child
 
 ---

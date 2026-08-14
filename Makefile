@@ -4,7 +4,8 @@
 # build/images/ so they coexist: `test` (the automated end-to-end test binaries),
 # `os-simple` (a small Unix built out of this project's own code: our login,
 # shell and Unix tools), and `os-real` (the same jobs taken from the code a real
-# system ships: busybox, dropbear, Doom).
+# system ships: busybox, dropbear, Doom, and the tcc compiler with pdpmake to
+# drive it).
 #
 # Quick start (run `make doctor` first to check your toolchain):
 #   make            build the kernel + the os-simple image: the everyday teaching
@@ -13,11 +14,13 @@
 #   make images     the RAM-disk images.
 #   make test       boot the test image and check every probe passes.
 #   make isos       a bootable ISO per image, for real hardware (needs Docker).
-#   make deps       build the vendored third-party (libc; DEPS=full adds bb+dropbear)
+#   make deps       build the vendored third-party (libc; DEPS=full adds the
+#                   busybox, dropbear, tcc and pdpmake capstones)
 #   make doctor     check the toolchain (PASS/MISSING with install hints)
 #   make verify-style / verify-host   the quality gates
 #   make clean      remove the in-house build products and the images
-#   make distclean  + the vendored musl/busybox/dropbear builds (full from-scratch)
+#   make distclean  + the vendored musl, busybox, dropbear, tcc and pdpmake
+#                   builds (full from-scratch)
 #   make help       list every target
 # Run a built image with rach2/run.sh <test|os-simple|os-real>; the build system
 # does not run QEMU (that script models the disk/audio/network/-cpu matrix).
@@ -26,8 +29,9 @@
 BASE_DIRS = krffs rach2 tests ish utils
 FULL_DIRS = ports/doom
 
-# --- vendored third-party: built by their own scripts (which wrap musl's autotools
-#     and busybox/dropbear's kbuild), tracked with stamp files so a clean clone
+# --- vendored third-party: built by their own scripts (which wrap musl's autotools,
+#     busybox/dropbear's kbuild, tcc's hand-written configure and pdpmake's bare
+#     POSIX makefile), tracked with stamp files so a clean clone
 #     "just works" without running the build_*.sh by hand, and each rebuilds only
 #     when its real inputs (tarball, build script, config) change. ---
 LIBC_STAMP     = vendor/musl/.stamp
@@ -98,11 +102,12 @@ all: os-simple-image
 # they coexist instead of overwriting one shared image.
 full: images
 
-# Build the vendored third-party. libc is built by default (utils link it); busybox
-# and dropbear are added with DEPS=full (they are slow capstones).
+# Build the vendored third-party. libc is built by default (utils link it); the
+# four capstones os-real carries are added with DEPS=full (they are slow, and
+# nothing but that image needs them).
 deps: $(LIBC_STAMP)
 ifeq ($(DEPS),full)
-deps: $(BUSYBOX_STAMP) $(DROPBEAR_STAMP)
+deps: $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP)
 endif
 
 # Friendly aliases for the third-party stamps.
@@ -656,20 +661,22 @@ help:
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make tcc-test    the machine compiles a program on itself"
+	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
 	@echo "  make ssh-test    the SSH capstone, both logins, unattended"
 	@echo "  make account-test   accounts created, authenticated and deleted, on both images"
 	@echo "  make shutdown-test  userland stops the machine, and only root can"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
-	@echo "  make deps       vendored third-party (libc; DEPS=full adds busybox+dropbear)"
-	@echo "  make busybox / make dropbear   one capstone's third-party build"
+	@echo "  make deps       vendored third-party (libc; DEPS=full adds the four capstones)"
+	@echo "  make busybox / dropbear / tcc / pdpmake   one capstone's third-party build"
+	@echo "  make check-tcc / check-pdpmake   the compiler and make an image will carry"
 	@echo "  make doctor     check the toolchain (PASS/MISSING with install hints)"
 	@echo "  make verify-style / verify-host   quality gates"
 	@echo "  make compile-commands   regenerate compile_commands.json for clangd (IDE)"
 	@echo "  make check-sources      verify the kernel C_SRC list matches the sources on disk"
 	@echo "  make clean      remove the in-house build products and the images"
-	@echo "  make distclean  + the vendored musl/busybox/dropbear builds (full from-scratch)"
+	@echo "  make distclean  + the vendored musl, busybox, dropbear, tcc and pdpmake builds"
 	@echo ""
 	@echo "Run an image (the build system does not run QEMU):"
 	@echo "  cd rach2 && ./run.sh os-simple              # boot the os-simple image"

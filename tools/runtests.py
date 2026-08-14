@@ -294,7 +294,7 @@ def main():
     if logf:
         logf.close()
 
-    # The clock, end to end. timemusl checks that its own date is real and
+    # The clock, end to end. clockmusl checks that its own date is real and
     # advancing; only this side can check it against the clock QEMU handed the
     # machine, which is what catches a date wrong by hours rather than by years
     # (a local-time CMOS read as UTC, say). The anchor's own arithmetic is

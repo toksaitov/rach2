@@ -44,8 +44,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* The flags musl's posix_spawn passes, which are the only ones this kernel
- * accepts (rach2/sys/syscall.c). */
+/* The flags upstream musl's posix_spawn passes to `clone`. This kernel cannot
+ * share an address space, so syscall 120 is unimplemented whatever the flags
+ * are (`ENOSYS`, asserted below) and the port patches posix_spawn to fork. */
 #define CLONE_VM      0x00000100
 #define CLONE_VFORK   0x00004000
 #define CLONE_SIGCHLD 0x00000011
@@ -149,8 +150,9 @@ int main(void)
     free(heap_canary);
     heap_canary = NULL;
 
-    /* Anything but the spawn's own flags is refused. A thread library asking
-     * for a shared address space must be told no, not handed a copy. */
+    /* Even upstream spawn's own flags are refused: this kernel implements no
+     * `clone` at all, whatever is asked for. A thread library wanting a shared
+     * address space must be told no, not handed a copy. */
     {
         /* A REAL stack, so a kernel that answered this call would get a
          * usable one and the refusal is about the call rather than about a

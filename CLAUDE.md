@@ -4,11 +4,11 @@ Project policy for Rach2. This file is normative and lean. A new rule replaces o
 
 ## Project
 
-Rach2 is an educational 32-bit x86 operating system. The kernel is freestanding C89 (`-ansi`, no libgcc), cross-built with `i686-elf-gcc`. The userland is the ported musl libc, the BusyBox shell, and the Dropbear SSH server. The readers are students and developers; the code and its prose are meant to teach.
+Rach2 is an educational 32-bit x86 operating system. The kernel is freestanding C89 (`-ansi`, no libgcc), cross-built with `i686-elf-gcc`. The userland is the ported musl libc, the BusyBox shell, the Dropbear SSH server, and the TinyCC compiler with pdpmake to drive it. The readers are students and developers; the code and its prose are meant to teach.
 
 ## Build
 
-GNU Make only. `make doctor` checks the toolchain, `make` builds the base OS, `make full` adds the BusyBox, Dropbear, and Doom capstones and the SSH image, and `make help` lists the rest. The shared make logic lives in `mk/`. Every component builds out of tree into one repo-root `build/` directory that mirrors the source tree: the objects, the `.d` files, and the final binaries alike, so the source tree never holds a build product. The kernel source list is explicit (`C_SRC` in `rach2/Makefile`) and guarded by `make check-sources`. There is no manual `build_*.sh` step and no `make clean` ritual: a header edit rebuilds only its dependents. The build does not run QEMU; the scripts in `rach2/` do.
+GNU Make only. `make doctor` checks the toolchain, `make` builds the base OS, `make full` adds the BusyBox, Dropbear, TinyCC, pdpmake, and Doom capstones and the SSH image, and `make help` lists the rest. The shared make logic lives in `mk/`. Every component builds out of tree into one repo-root `build/` directory that mirrors the source tree: the objects, the `.d` files, and the final binaries alike, so the source tree never holds a build product. The kernel source list is explicit (`C_SRC` in `rach2/Makefile`) and guarded by `make check-sources`. There is no manual `build_*.sh` step and no `make clean` ritual: a header edit rebuilds only its dependents. The build does not run QEMU; the scripts in `rach2/` do.
 
 ## Writing
 
@@ -32,7 +32,7 @@ Output from tools and code uses one shape. Diagnostics go to stderr as `componen
 
 ## Ports
 
-musl, BusyBox, and Dropbear are vendored as pinned tarballs, verified by sha256, extracted and built by their `build_*.sh` behind stamp files. BusyBox and Dropbear link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees.
+musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, verified by sha256, extracted and built by their `build_*.sh` behind stamp files. BusyBox, Dropbear, TinyCC, and pdpmake link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees.
 
 ## Verification
 

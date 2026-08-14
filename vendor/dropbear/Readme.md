@@ -48,7 +48,7 @@ It verifies the pinned tarball (`dropbear-2022.83.tar.bz2`, sha256 gated), extra
 The only Rach2-owned files here are this Readme, `build_dropbear.sh`, the `muslgcc` wrapper (shared with busybox), and `localoptions.h`; Dropbear itself is the pinned, unmodified tarball. To move to a new release:
 
 1. Download the new `dropbear-X.Y.Z.tar.bz2` from https://matt.ucc.asn.au/dropbear/ and replace the tarball here.
-2. Set `VERSION` and `TARBALL_SHA256` in `build_dropbear.sh` to the new release and its sha256.
+2. Set `VERSION` and `TARBALL_SHA256` in `build_dropbear.sh` to the new release and its sha256, and `DROPBEAR_TARBALL` in the root `Makefile`, which names the tarball the stamp depends on: leave it and the build stops looking for the file you just replaced.
 3. Rebuild with `make full` (or `./build_dropbear.sh`), then re-run a boot and the SSH capstone.
 4. If the new release changed an option, adjust `localoptions.h` (Dropbear's own local-options header) and keep `--disable-harden` in the configure flags.
 

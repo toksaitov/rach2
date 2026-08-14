@@ -25,7 +25,7 @@ Outputs (under `install/`):
 musl is vendored as the pinned source tarball beside this Readme, and built from it with the patches under `patches/` applied at extraction; the Rach2-owned files here are this Readme, `build_libc.sh`, and those patches. To move to a new musl release:
 
 1. Download the new `musl-X.Y.Z.tar.gz` from https://musl.libc.org and replace the tarball here.
-2. Set `MUSL_VERSION` and `SHA256` in `build_libc.sh` to the new release and its published sha256.
+2. Set `MUSL_VERSION` and `SHA256` in `build_libc.sh` to the new release and its published sha256, and `LIBC_TARBALL` in the root `Makefile`, which names the tarball the stamp depends on: leave it and the build stops looking for the file you just replaced.
 3. REBASE EVERY PATCH under `patches/` onto the new source and check that each still applies; `build_libc.sh` stops the build when one does not, which is the point. A patch that no longer applies is a decision to make again, not a line to delete.
 4. Rebuild with `make` (or `./build_libc.sh`), then run `make verify-host`, `make test` (which includes `musl/spawnmusl`, the probe that fails outright if the spawn patch is missing) and a boot.
 5. Otherwise musl is used as-is. If a new release expects a syscall the kernel does not implement, add it in `rach2/sys` rather than patching here: the adaptation belongs in the kernel unless, as with the spawn, the kernel cannot honestly provide what is asked for.

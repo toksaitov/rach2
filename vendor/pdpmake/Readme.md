@@ -68,9 +68,11 @@ It runs recipes through `/bin/sh -c`, which is busybox's ash in os-real, using
 tree patches to fork (see `vendor/musl/Readme.md`); before milestone 21 it did
 not work at all and no recipe could run.
 
-Parallel builds are out of scope. `MAX_FDS` is 16 per process and `MAX_PROCS` is
-16 system-wide, so `-j` runs out of processes at about four and would be a trap
-rather than a feature. `make -j1` is the contract.
+Parallel builds do not happen, and that is upstream's doing rather than the
+port's: `-j` is parsed and passed on in `MAKEFLAGS`, and `main.c` says of it "not
+implemented". Recipes run one after another whatever is asked for. Nothing here
+tries to change that, and there would be little room if it did: `MAX_PROCS` is 16
+system-wide and `MAX_FDS` 16 per process.
 
 This repository's own makefiles are GNU makefiles and pdpmake cannot read them.
 Building Rach2 on Rach2 is not what this is for; building a student's program on
@@ -80,10 +82,15 @@ Rach2 is.
 
 1. Download the new `pdpmake-X.Y.Z.tgz` from https://frippery.org/make and
    replace the tarball here.
-2. Set `VERSION` and `TARBALL_SHA256` in `build_pdpmake.sh`.
+2. Set `VERSION` and `TARBALL_SHA256` in `build_pdpmake.sh`, and `PDPMAKE_TARBALL`
+   in the root `Makefile`, which names the tarball the stamp depends on: leave it
+   and the build stops looking for the file you just replaced.
 3. Rebase the patch under `patches/` onto the new source. `build_pdpmake.sh`
    stops the build when it does not apply, which is the point: a patch that no
    longer applies is a decision to make again, not a line to delete.
-4. Rebuild, then run `make tcc-test` and boot os-real to build something with it.
-   `build_pdpmake.sh` asserts the patched macro values itself, so a patch that
-   applied to the wrong place fails the build rather than the student.
+4. Rebuild (`make pdpmake`), then run `make make-test`, which is the gate that
+   drives this program: a recipe run, a rebuild of only what changed, and a
+   timestamp that survives a reboot. `make tcc-test` will not fail on a broken
+   make, since it compiles by hand. `build_pdpmake.sh` asserts the patched macro
+   values itself, so a patch that applied to the wrong place fails the build
+   rather than the student.

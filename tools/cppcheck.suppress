@@ -38,9 +38,6 @@ duplicateExpression:*sys/lib/krandom.c
 
 # test_syscall() returns a structural constant; the self-test condition is intentional.
 knownConditionTrueFalse:*kernel.c
-# _exec_elf_buffer shadows the global ELF buffer; that whole-file buffer is
-# replaced by a segment loader in Phase 1.
-shadowVariable:*kernel.c
 
 # --- ABI layout structs in the timestamp probes ---
 

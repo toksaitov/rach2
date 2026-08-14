@@ -15,7 +15,7 @@ It verifies the pinned tarball (`busybox-1.36.1.tar.bz2`, sha256 gated), extract
 The only Rach2-owned files here are this Readme, `build_busybox.sh`, the `muslgcc` wrapper, and `rach2.config`; BusyBox itself is the pinned, unmodified tarball. To move to a new release:
 
 1. Download the new `busybox-X.Y.Z.tar.bz2` from https://busybox.net and replace the tarball here.
-2. Set `VERSION` and `TARBALL_SHA256` in `build_busybox.sh` to the new release and its sha256.
+2. Set `VERSION` and `TARBALL_SHA256` in `build_busybox.sh` to the new release and its sha256, and `BUSYBOX_TARBALL` in the root `Makefile`, which names the tarball the stamp depends on: leave it and the build stops looking for the file you just replaced.
 3. Rebuild with `make full` (or `./build_busybox.sh`), then re-run a boot and the SSH capstone.
 4. If the new release renamed or dropped a config symbol, adjust `rach2.config` (it is `defconfig` with the applets Rach2 cannot run turned off, so a `make oldconfig` against the new tree shows what changed).
 

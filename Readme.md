@@ -60,17 +60,18 @@ The kernel is freestanding and links no libgcc, so it alone also builds with `x8
 make doctor    # check your toolchain (PASS/MISSING with install hints)
 make           # the kernel + the os-simple image (our login, shell and Unix utilities)
 make full      # all three images: test, os-simple, and the os-real (BusyBox, Dropbear
-               #   SSH, Doom, and a C compiler) capstone the SSH login boots
+               #   SSH, Doom, a C compiler and a make) capstone the SSH login boots
 make test      # boot the test image headless and assert every probe exits 0
 make images    # build all three images without the test run
 make isos      # a bootable ISO per image, for real hardware (Docker grub-mkrescue)
-make deps      # just the vendored third-party (libc; DEPS=full adds busybox+dropbear)
+make deps      # just the vendored third-party (libc; DEPS=full adds busybox,
+               #   dropbear, tcc and pdpmake)
 make help      # list every target
 make clean     # remove component build products
-make distclean # + the vendored musl/busybox/dropbear builds (a full from-scratch reset)
+make distclean # + every vendored build: musl, busybox, dropbear, tcc, pdpmake
 ```
 
-`make` builds everything the everyday workflow needs, in dependency order, with no manual `build_*.sh` and no `make clean` rituals. A header edit rebuilds only the objects that include it. The ported musl libc and the BusyBox/Dropbear capstones are vendored as pinned tarballs and built on demand behind stamp files; all build output lives out of tree under a single repo-root `build/` directory that mirrors the source tree, so the source tree stays clean. The three RAM-disk images build out of tree to `build/images/` from manifests in `krffs/manifests/`. The RAM module is the disposable machine: it is a copy made at boot, so every change to it dies with the process. `make os-real-disk` builds the same tree onto a real disk, and booting that (`DISK=../build/images/os-real.disk ./run.sh` from `rach2/`) gives the writable one, where an account created or a password changed is still there after the power goes off. The page cache is write-back, so an edit is on the platter after a `sync` and not before. The build system does not run QEMU; the run scripts in `rach2/` do that.
+`make` builds everything the everyday workflow needs, in dependency order, with no manual `build_*.sh` and no `make clean` rituals. A header edit rebuilds only the objects that include it. The ported musl libc and the BusyBox, Dropbear, TinyCC and pdpmake capstones are vendored as pinned tarballs and built on demand behind stamp files; all build output lives out of tree under a single repo-root `build/` directory that mirrors the source tree, so the source tree stays clean. The three RAM-disk images build out of tree to `build/images/` from manifests in `krffs/manifests/`. The RAM module is the disposable machine: it is a copy made at boot, so every change to it dies with the process. `make os-real-disk` builds the same tree onto a real disk, and booting that (`DISK=../build/images/os-real.disk ./run.sh` from `rach2/`) gives the writable one, where an account created or a password changed is still there after the power goes off. The page cache is write-back, so an edit is on the platter after a `sync` and not before. The build system does not run QEMU; the run scripts in `rach2/` do that.
 
 ## Quick Start
 
@@ -124,7 +125,11 @@ linker, and the kernel does not refuse a dynamic executable, it loads one and
 jumps into it unrelocated. `-run` and `-shared` are refused for their own
 reasons. The source of this project's own tools is staged at `/src/utils`, so
 `tcc -static -o /tmp/cat /src/utils/cat.c` builds a working `cat` on the machine
-that will run it. `make tcc-test` is that whole sequence as a gate.
+that will run it. Two targets gate the two halves: `make tcc-test` compiles and
+links by hand and checks every refusal, and `make make-test` runs the makefile
+above, requires the second `make` to build nothing and the third to build again,
+and reboots to prove the timestamp it decided that on was on the disk and not in
+memory.
 
 ### The SSH capstone: log into Rach2 with a real client
 
