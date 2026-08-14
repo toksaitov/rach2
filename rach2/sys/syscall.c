@@ -20,6 +20,7 @@
 #include "io/poll.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
+#include "rtc.h"
 #include "fs/krffs.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
@@ -5472,14 +5473,15 @@ struct kernel_timespec {
 extern volatile uint32_t kernel_ticks;
 
 /*
- * get_current_time - convert kernel ticks to seconds/nanoseconds
- * Ticks are at 100 Hz, so each tick is 10ms = 10,000,000 ns
+ * get_current_time - the current real time, in seconds and nanoseconds
+ *
+ * Answered by the clock (sys/rtc.c): the second the CMOS reported at boot plus
+ * the ticks since that read, or time since boot on a machine whose clock could
+ * not be read. Resolution is the 10 ms tick either way.
  */
 static void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
-    uint32_t ticks = kernel_ticks;
-    *seconds = ticks / TIMER_FREQUENCY;
-    *nanoseconds = (ticks % TIMER_FREQUENCY) * 10000000LL;  /* 10ms per tick */
+    rtc_realtime(seconds, nanoseconds);
 }
 
 /**
@@ -5930,8 +5932,9 @@ struct kernel_timeval {
 };
 
 /*
- * gettimeofday(2): EBX = tv (timeval*), ECX = tz (ignored). Reports time since
- * boot from the kernel_ticks counter (100 Hz). Returns 0 or -errno.
+ * gettimeofday(2): EBX = tv (timeval*), ECX = tz (ignored). Reports real time
+ * from the clock anchored at boot (sys/rtc.c), or time since boot when there
+ * was no clock to read. Returns 0 or -errno.
  */
 static int32_t sys_gettimeofday(isr_params_t *params)
 {
@@ -5943,10 +5946,17 @@ static int32_t sys_gettimeofday(isr_params_t *params)
     }
 
     /* Build the result in a kernel struct, then copy it out (this also closes a
-     * previously unchecked raw write to the user pointer).
-     * kernel_ticks runs at 100 Hz, so 1 tick = 10ms = 10000us */
-    ktv.tv_sec = (int32_t)(kernel_ticks / 100);
-    ktv.tv_usec = (int32_t)((kernel_ticks % 100) * 10000);
+     * previously unchecked raw write to the user pointer). */
+    {
+        int64_t seconds;
+        int64_t nanoseconds;
+
+        get_current_time(&seconds, &nanoseconds);
+        ktv.tv_sec = (int32_t)seconds;
+        /* Narrowed before the divide: a 64-bit division would call __divdi3,
+         * and this kernel links no libgcc. A nanosecond field is under 1e9. */
+        ktv.tv_usec = (int32_t)nanoseconds / 1000;
+    }
 
     if (copy_to_user(tv, &ktv, sizeof(ktv)) != 0) {
         return -EFAULT;
@@ -5958,10 +5968,13 @@ static int32_t sys_gettimeofday(isr_params_t *params)
 /**
  * Read a POSIX clock (clock_gettime, syscall 265, 32-bit timespec).
  *
- * EBX = clockid, ECX = struct timespec*. CLOCK_REALTIME(0) and CLOCK_MONOTONIC(1)
- * both report time since boot at the 10 ms tick resolution (there is no wall-clock
- * RTC sync). musl falls back here from clock_gettime64 (403), which this kernel
- * does not provide.
+ * EBX = clockid, ECX = struct timespec*. CLOCK_REALTIME(0) reports real time
+ * from the clock read at boot (sys/rtc.c); CLOCK_MONOTONIC(1) reports time
+ * since boot, which is what the scheduler, the sleep path and the audio timing
+ * loops mean by a clock. Both run at the 10 ms tick resolution, and neither is
+ * disciplined by anything: the machine reads the CMOS once and then keeps its
+ * own time. musl falls back here from clock_gettime64 (403), which this kernel
+ * does not provide, so times are 32-bit here and this ABI ends in 2038.
  */
 static int32_t sys_clock_gettime(isr_params_t *params)
 {
@@ -5977,9 +5990,18 @@ static int32_t sys_clock_gettime(isr_params_t *params)
         return -EINVAL;
     }
 
-    ticks = kernel_ticks;
-    kts.tv_sec = (int32_t)(ticks / 100);
-    kts.tv_nsec = (int32_t)((ticks % 100) * 10000000); /* 10 ms = 1e7 ns per tick */
+    if (clk == 0) {
+        int64_t seconds;
+        int64_t nanoseconds;
+
+        get_current_time(&seconds, &nanoseconds);
+        kts.tv_sec = (int32_t)seconds;
+        kts.tv_nsec = (int32_t)nanoseconds;
+    } else {
+        ticks = kernel_ticks;
+        kts.tv_sec = (int32_t)(ticks / 100);
+        kts.tv_nsec = (int32_t)((ticks % 100) * 10000000); /* 1e7 ns per tick */
+    }
 
     if (copy_to_user(ts, &kts, sizeof(kts)) != 0) {
         return -EFAULT;

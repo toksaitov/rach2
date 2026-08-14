@@ -59,6 +59,7 @@ PROBES = [
     "musl/loginmusl",
     "rebootprobe",
     "musl/readvmusl",
+    "musl/timemusl",
     # How many mappings a process may hold, which the compiler found too few.
     "musl/vmamusl",
     # The shell's one-line form, which `su -c` depends on. It runs
@@ -194,9 +195,14 @@ def main():
         sys.stderr.write("runtests: --kernel and --initrd are required\n")
         return 2
 
+    # -rtc base=utc is QEMU's default and is passed anyway: this kernel reads
+    # the CMOS as UTC (there is no timezone in those registers to read), so a
+    # host configured for a local-time RTC would hand the guest a date wrong by
+    # its offset, and the clock check below would report it as our bug.
     cmd = ["qemu-system-i386", "-cpu", a.cpu, "-kernel", a.kernel,
            "-initrd", a.initrd, "-serial", "stdio", "-display", "none",
-           "-no-reboot", "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0"]
+           "-rtc", "base=utc", "-no-reboot",
+           "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0"]
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, bufsize=0)
@@ -247,6 +253,7 @@ def main():
         return 3
 
     results = []
+    clock_seen_at = None
     for name in PROBES:
         start = len(buf)
         send("exec " + name)
@@ -264,6 +271,12 @@ def main():
             break
         detail, ok = score_window(bytes(buf[start:m.end()]))
         results.append((name, detail, ok))
+        if name == "musl/timemusl":
+            # Host time AT the probe, not at the end of the suite: the guest
+            # printed its epoch a moment ago, so the two are comparable to the
+            # second. Sampling after the remaining probes would leave a window
+            # minutes wide, and a clock minutes wrong would pass.
+            clock_seen_at = time.time()
 
     pump(time.time() + 1.0)
     for fn in (p.terminate, p.kill):
@@ -276,6 +289,20 @@ def main():
     if logf:
         logf.close()
 
+    # The clock, end to end. timemusl checks that its own date is real and
+    # advancing; only this side can check it against the clock QEMU handed the
+    # machine, which is what catches a date wrong by hours rather than by years
+    # (a local-time CMOS read as UTC, say). The anchor's own arithmetic is
+    # pinned exactly in tests/host/rtc_hosttest.c and not here: that error is
+    # under a second and no tolerance would see it.
+    clock_ok = False
+    clock_detail = "the probe printed no epoch"
+    m = re.search(rb"TIMEMUSL EPOCH (\d+)", bytes(buf))
+    if m and clock_seen_at is not None:
+        guest = int(m.group(1))
+        skew = clock_seen_at - guest
+        clock_detail = "%+d s vs the host" % int(skew)
+        clock_ok = -30 <= skew <= 30
     fails = 0
     for name, detail, ok in results:
         if not ok:
@@ -291,6 +318,12 @@ def main():
         fails += len(missing)
         print("runtests: %d probe(s) never ran: %s"
               % (len(missing), " ".join(missing)))
+
+    # Reported beside the probes rather than as one, so the count stays the
+    # count of probes.
+    print("  %-12s %-18s %s" % ("clock", clock_detail, "PASS" if clock_ok else "FAIL"))
+    if not clock_ok:
+        fails += 1
 
     print("runtests: %d of %d probes, %d failures"
           % (len(results), len(PROBES), fails))

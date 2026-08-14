@@ -23,6 +23,7 @@
 #include "sys/proc/uimage.h"
 #include "sys/lib/krandom.h"
 #include "sys/lib/ksignal.h"
+#include "sys/rtc.h"
 #include "sys/fs/krffs.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
@@ -56,6 +57,16 @@ static volatile bool kernel_shell_active = false;
 
 /* Free-running tick counter, bumped at 100 Hz by the timer IRQ. */
 volatile uint32_t kernel_ticks = 0;
+
+/*
+ * Whole seconds since boot, and the ticks into the current one, carried beside
+ * the tick counter so the clock does not have to divide a wrapping 32-bit tick
+ * count. `kernel_ticks` wraps after about 497 days, and a clock that read the
+ * elapsed ticks as `now - anchor` would jump back by that whole cycle at the
+ * wrap. Seconds wrap after 136 years instead, which outlives the machine.
+ */
+volatile uint32_t kernel_uptime_seconds = 0;
+volatile uint32_t kernel_second_ticks = 0;
 
 /* PID of the init process, or 0 when none runs. */
 volatile uint32_t init_pid = 0;
@@ -126,6 +137,10 @@ static void timer_handler(isr_params_t *params)
     (void) params;
 
     ++kernel_ticks;
+    if (++kernel_second_ticks >= 100) {
+        kernel_second_ticks = 0;
+        ++kernel_uptime_seconds;
+    }
 
     /* Runs regardless of in_syscall, so a sleeper parked inside its syscall
      * still becomes runnable on time. */
@@ -2620,6 +2635,20 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     set_fore_color(light_green);
     k_puts(" OK");
     serial_printf(" OK\n");
+    set_fore_color(light_grey);
+
+    k_printf("  Clock...");
+    serial_printf("  Clock...");
+    rtc_init();
+    if (rtc_is_anchored()) {
+        set_fore_color(light_green);
+        k_puts(" OK");
+        serial_printf(" OK\n");
+    } else {
+        set_fore_color(light_brown);
+        k_puts(" none (times run from the epoch)");
+        serial_printf(" none (times run from the epoch)\n");
+    }
     set_fore_color(light_grey);
 
     k_printf("  Entropy...");

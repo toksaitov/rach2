@@ -21,6 +21,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/isr.c       \
 	  sys/pic.c       \
 	  sys/pit.c       \
+	  sys/rtc.c       \
 	  sys/kbd.c       \
 	  sys/mouse.c     \
 	  sys/panic.c     \

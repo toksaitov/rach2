@@ -26,6 +26,7 @@ This document covers the foundation kernel. The networking stack, the musl userl
 * Interrupt handling: IDT with 32 CPU exceptions and 16 IRQs
 * 8259 PIC initialization and EOI handling
 * Programmable Interval Timer (100 Hz tick)
+* CMOS real-time clock, read once at boot to anchor the date
 
 ### Memory Management
 
@@ -133,6 +134,7 @@ The window at 0xC0000000 (PCWIN_BASE, the same address as USER_ADDR_MAX, just ab
 |   |-- isr_handler.s      # ISR/IRQ stubs and common handlers
 |   |-- pic.c/h            # 8259 PIC initialization
 |   |-- pit.c/h            # Programmable Interval Timer
+|   |-- rtc.c/h            # CMOS real-time clock, read once at boot
 |   |-- kbd.c/h            # PS/2 keyboard driver with shift key support
 |   |-- mouse.c/h          # PS/2 mouse driver (IRQ12)
 |   |-- panic.c/h          # Kernel panic with visual screen
@@ -279,7 +281,7 @@ The IDT entry for vector 128 (0x80) is configured with DPL=3, allowing user mode
 | 38  | rename       | oldpath, newpath          | Rename a file                 |
 | 54  | ioctl        | fd, request, arg          | Device control                |
 | 63  | dup2         | oldfd, newfd              | Duplicate file descriptor     |
-| 78  | gettimeofday | tv, tz                    | Get time since boot           |
+| 78  | gettimeofday | tv, tz                    | Get the current real time     |
 | 88  | reboot       | magic1, magic2, cmd       | Stop the machine (root only)  |
 | 106 | stat         | path, statbuf             | Get file status (32-bit)      |
 | 145 | readv        | fd, iov, iovcnt           | Scatter read (buffered stdio) |
@@ -574,17 +576,53 @@ Returns 0 on success, -1 on error (invalid fd or request).
 
 ### gettimeofday (syscall 78)
 
-Gets the current time since boot.
+Gets the current real time, in seconds and microseconds since the Unix epoch.
 
 Arguments:
 * `tv` - Pointer to `struct timeval` to fill with time
 * `tz` - Timezone (ignored, can be NULL)
 
-The `timeval` structure contains:
-* `tv_sec` - Seconds since boot (kernel_ticks / 100)
-* `tv_usec` - Microseconds (kernel_ticks % 100 x 10000)
-
 Time resolution is 10 milliseconds (100 Hz PIT timer). Returns 0 on success, -1 on error.
+
+## The clock
+
+The date comes from the CMOS real-time clock (`sys/rtc.c`), read ONCE at boot.
+The kernel keeps an anchor: the second the clock reported, and the uptime second
+at which it was read. Real time is that second plus the seconds elapsed SINCE
+THE READ, not plus the whole uptime, which would count the stretch before the
+sample twice. It counts uptime seconds rather than ticks because `kernel_ticks`
+is 32 bits and wraps after about 497 days; `kernel_uptime_seconds`, carried
+beside it by the timer, wraps after 136 years.
+
+`CLOCK_REALTIME` and `gettimeofday` report that. `CLOCK_MONOTONIC` reports time
+since boot, unchanged, because the scheduler, the sleep path and the audio timing
+loops all mean ticks when they ask for a clock.
+
+Three limits, stated rather than discovered:
+
+* There is no `settimeofday` and no NTP. The machine reads the clock once and
+  then keeps its own time, so it drifts by whatever the PIT drifts by.
+* A machine whose clock cannot be read boots normally with the anchor unset,
+  real time falls back to time since boot, and the console says `rtc: no clock:
+  times run from the epoch`. The clock is refused when the update flag never
+  clears, when two consecutive reads disagree, when a field is out of range, and
+  when the hardware says its own contents are not to be trusted: register D's
+  validity bit clear (the battery went), register B's SET bit raised (updates
+  inhibited), or register A's divider not the running one. A dead battery leaves
+  bytes that are stable and in range and completely wrong, so the date fields
+  alone cannot decide this.
+* The clock is read as UTC, because those registers carry no timezone to read.
+  A machine whose CMOS keeps local time will be wrong by its offset; the daylight
+  bit (register B's DSE) is refused rather than interpreted. QEMU's default is
+  `-rtc base=utc` and the test harness passes it explicitly.
+* The kernel offers the 32-bit `clock_gettime` (265) and `gettimeofday` (78) and
+  no `clock_gettime64` (403). musl's own `time_t` is 64-bit, so the limit is this
+  ABI rather than the C library: it ends in 2038. KRFFS stores 64-bit seconds on
+  disk, so the file system is not what would have to change.
+
+The century is inferred as 2000 plus the two-digit year rather than read from
+CMOS register 0x32, which holds a century on machines whose firmware maintains
+one and an unrelated byte on machines whose firmware does not.
 
 ### getdents64 (syscall 220)
 
@@ -638,7 +676,7 @@ KRFFS is hierarchical, so a directory fd reads the entries of that directory.
 * `sys_getdents64()` - Read directory entries
 * `sys_utimensat()` - Update file timestamps
 * `sys_ioctl()` - Device control (framebuffer palette, PC speaker)
-* `sys_gettimeofday()` - Get time since boot
+* `sys_gettimeofday()` - Get the current real time
 * `get_current_time()` - Helper to get current time from kernel tick counter
 * `copy_user_pages()` - Helper to copy all user pages from parent to child
 
