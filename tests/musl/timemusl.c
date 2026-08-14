@@ -1,100 +1,69 @@
 /**
- * The clock this machine reads at boot, seen from a program.
+ * Exercises time, sleep, and randomness through the ported musl.
  *
- * Three claims, and they fail in different ways:
+ * An ordinary hosted C program. It reads a monotonic timestamp with
+ * `clock_gettime(CLOCK_MONOTONIC)`, sleeps 120 ms with `nanosleep`, then
+ * confirms the clock advanced by at least 100 ms, so the block-and-schedule
+ * sleep really suspended the thread rather than returning early. It then draws
+ * two 16-byte buffers from `getrandom` (the CSPRNG behind syscall 355) and
+ * requires them to differ. musl 1.2.5 has no arc4random, so getrandom is the
+ * integration point.
  *
- * The date is REAL. `time(NULL)` must be at least the lower bound below, which
- * is a moment already past when this probe was written. A machine reporting
- * time since boot answers a few dozen seconds and fails here, which is what it
- * did before there was a clock to read.
+ * Prints "TIMEMUSL OK" with the slept milliseconds and a few random bytes when
+ * the whole libc path works, or "TIMEMUSL FAIL: <reason>" on the first failure.
  *
- * The clock RUNS. Two reads across a sleep must differ, and by about the time
- * that was slept: a clock anchored once and never advanced would pass the first
- * claim and fail this one.
- *
- * The two clocks are DIFFERENT clocks. `CLOCK_MONOTONIC` reports time since
- * boot and `CLOCK_REALTIME` reports the date, so a machine that answered the
- * same number for both has one clock wearing two names. That is exactly what
- * this system did before, so it is asserted rather than assumed.
- *
- * The bound is a literal committed with the probe rather than a build-time
- * constant: a date compiled in at build time makes the binary differ on every
- * build, and a probe whose expected value moves with the thing it tests proves
- * nothing.
- *
- * Prints "TIMEMUSL OK" on success and "TIMEMUSL FAIL (detail)" otherwise.
+ * Linked statically against the ported musl; see tests/musl/build.sh.
  */
 
+#define _GNU_SOURCE /* expose getrandom */
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
-#include <unistd.h>
-
-/* 2026-08-14 00:00:00 UTC, the day this probe was written. */
-#define NOT_BEFORE 1786665600L
-
-/* A boot that reaches a probe takes seconds, not weeks. */
-#define BOOT_CEILING 1000000L
-
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
-{
-    printf("TIMEMUSL FAIL (%s)\n", what);
-
-    return 1;
-}
+#include <string.h>
+#include <sys/random.h>
 
 int main(void)
 {
-    struct timespec real;
-    struct timespec mono;
-    time_t first;
-    time_t second;
-    long slept;
+    struct timespec t0, t1, req;
+    long ms;
+    unsigned char rb[16], rb2[16];
 
-    first = time(NULL);
-    if (first == (time_t)-1) {
-        return fail("time() failed");
-    }
-    if ((long)first < NOT_BEFORE) {
-        char detail[80];
-
-        snprintf(detail, sizeof(detail),
-                 "the clock reports %ld, which is before this probe was written", (long)first);
-
-        return fail(detail);
+    if (clock_gettime(CLOCK_MONOTONIC, &t0) != 0) {
+        printf("TIMEMUSL FAIL: clock_gettime\n");
+        return 1;
     }
 
-    if (clock_gettime(CLOCK_REALTIME, &real) != 0) {
-        return fail("CLOCK_REALTIME failed");
-    }
-    if (clock_gettime(CLOCK_MONOTONIC, &mono) != 0) {
-        return fail("CLOCK_MONOTONIC failed");
-    }
-    if ((long)real.tv_sec < NOT_BEFORE) {
-        return fail("CLOCK_REALTIME is not the date");
-    }
-    if ((long)mono.tv_sec > BOOT_CEILING) {
-        return fail("CLOCK_MONOTONIC is not time since boot");
+    req.tv_sec = 0;
+    req.tv_nsec = 120000000; /* 120 ms */
+    if (nanosleep(&req, NULL) != 0) {
+        printf("TIMEMUSL FAIL: nanosleep\n");
+        return 1;
     }
 
-    sleep(2);
-    second = time(NULL);
-    slept = (long)second - (long)first;
-    if (slept < 1 || slept > 30) {
-        char detail[80];
-
-        snprintf(detail, sizeof(detail), "a two-second sleep moved the clock by %ld seconds",
-                 slept);
-
-        return fail(detail);
+    if (clock_gettime(CLOCK_MONOTONIC, &t1) != 0) {
+        printf("TIMEMUSL FAIL: clock_gettime (2)\n");
+        return 1;
     }
 
-    /* Printed for the host side of the check: the harness compares this with
-     * the clock QEMU handed the machine. A bound committed in this file cannot
-     * catch a date that is wrong by hours, and a machine reading a local-time
-     * CMOS as UTC is wrong by exactly that. */
-    printf("TIMEMUSL EPOCH %ld\n", (long)second);
-    printf("TIMEMUSL OK\n");
+    ms = (long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+    if (ms < 100) {
+        printf("TIMEMUSL FAIL: slept only %ld ms\n", ms);
+        return 1;
+    }
 
+    /* Two draws through libc must differ. */
+    if (getrandom(rb, sizeof rb, 0) != (ssize_t)sizeof rb ||
+        getrandom(rb2, sizeof rb2, 0) != (ssize_t)sizeof rb2) {
+        printf("TIMEMUSL FAIL: getrandom\n");
+        return 1;
+    }
+    if (memcmp(rb, rb2, sizeof rb) == 0) {
+        printf("TIMEMUSL FAIL: getrandom repeated\n");
+        return 1;
+    }
+
+    printf("TIMEMUSL OK (slept %ld ms, rand %02x%02x %02x%02x)\n", ms, rb[0], rb[15], rb2[0],
+           rb2[15]);
     return 0;
 }

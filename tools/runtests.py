@@ -60,7 +60,9 @@ PROBES = [
     "rebootprobe",
     "musl/readvmusl",
     "musl/timemusl",
+    "musl/clockmusl",
     "musl/statmusl",
+    "musl/stampmusl",
     # How many mappings a process may hold, which the compiler found too few.
     "musl/vmamusl",
     # The shell's one-line form, which `su -c` depends on. It runs
@@ -272,7 +274,7 @@ def main():
             break
         detail, ok = score_window(bytes(buf[start:m.end()]))
         results.append((name, detail, ok))
-        if name == "musl/timemusl":
+        if name == "musl/clockmusl":
             # Host time AT the probe, not at the end of the suite: the guest
             # printed its epoch a moment ago, so the two are comparable to the
             # second. Sampling after the remaining probes would leave a window
@@ -298,7 +300,7 @@ def main():
     # under a second and no tolerance would see it.
     clock_ok = False
     clock_detail = "the probe printed no epoch"
-    m = re.search(rb"TIMEMUSL EPOCH (\d+)", bytes(buf))
+    m = re.search(rb"CLOCKMUSL EPOCH (\d+)", bytes(buf))
     if m and clock_seen_at is not None:
         guest = int(m.group(1))
         skew = clock_seen_at - guest

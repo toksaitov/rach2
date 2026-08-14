@@ -41,3 +41,11 @@ knownConditionTrueFalse:*kernel.c
 # _exec_elf_buffer shadows the global ELF buffer; that whole-file buffer is
 # replaced by a segment loader in Phase 1.
 shadowVariable:*kernel.c
+
+# --- ABI layout structs in the timestamp probes ---
+
+# `struct old_stat` in these two mirrors the kernel's `struct linux_stat` field
+# for field, because musl never issues that call on i386 and the probes ask for
+# it by number. Members nothing reads are the layout, not dead code.
+unusedStructMember:*tests/musl/statmusl.c
+unusedStructMember:*tests/musl/stampmusl.c

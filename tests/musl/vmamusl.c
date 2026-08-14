@@ -49,8 +49,7 @@ int main(void)
     int i;
 
     for (i = 0; i < WANTED; i++) {
-        maps[i] = mmap(0, 4096, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        maps[i] = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (maps[i] == MAP_FAILED) {
             break;
         }
@@ -64,8 +63,7 @@ int main(void)
     if (taken < WANTED) {
         char detail[80];
 
-        snprintf(detail, sizeof(detail),
-                 "only %d of %d mappings were granted", taken, WANTED);
+        snprintf(detail, sizeof(detail), "only %d of %d mappings were granted", taken, WANTED);
         for (i = 0; i < taken; i++) {
             munmap(maps[i], 4096);
         }
