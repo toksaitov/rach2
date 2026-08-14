@@ -1,0 +1,5 @@
+# The extracted upstream tree: rebuildable from the pinned tarball beside it.
+pdpmake-*/
+
+# The build stamp: state, not source.
+.stamp

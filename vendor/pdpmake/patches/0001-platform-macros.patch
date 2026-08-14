@@ -1,0 +1,46 @@
+Point the built-in macros at this platform's compiler and link.
+
+POSIX leaves the values of make's built-in macros implementation-defined, so
+this is the port saying what its platform is rather than a change of behaviour.
+Three of them are wrong for Rach2 as they stand.
+
+CC is `cc` in the extensions mode, `c99` under POSIX 2017 and `c17` under POSIX
+2024. This image carries one compiler, `tcc`, staged again as `/bin/cc` for a
+student who types that; the other two names are on no path here, so a strict
+POSIX build would fail with "not found" and teach the student something false
+about their makefile. All three now name the compiler the machine has.
+
+LDFLAGS is empty, so the built-in link rule would ask tcc for a dynamic
+executable. tcc on this machine refuses that by its own pinned patch, because
+this kernel has no dynamic linker and would load and jump into an image with
+nothing relocated. `-static` is not an optimisation here; it is the only kind of
+program that runs.
+
+Without this a student's first `make` fails at the link, or at the compile if
+they asked for a POSIX mode.
+
+--- a/rules.c
++++ b/rules.c
+@@ -241,18 +241,18 @@
+ 	"LFLAGS=\n" \
+ 	"AR=ar\n" \
+ 	"ARFLAGS=-rv\n" \
+-	"LDFLAGS=\n"
++	"LDFLAGS=-static\n"
+ 
+ #define MACROS_2017 \
+-	"CC=c99\n" \
++	"CC=tcc\n" \
+ 	"FC=fort77\n" \
+ 	"FFLAGS=-O1\n" \
+ 
+ #define MACROS_2024 \
+-	"CC=c17\n"
++	"CC=tcc\n"
+ 
+ #define MACROS_EXT \
+-	"CC=cc\n"
++	"CC=tcc\n"
+ 
+ /*
+  * Read the built-in rules using a fake fgets-like interface.

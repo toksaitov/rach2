@@ -34,6 +34,7 @@ LIBC_STAMP     = vendor/musl/.stamp
 BUSYBOX_STAMP  = vendor/busybox/.stamp
 DROPBEAR_STAMP = vendor/dropbear/.stamp
 TCC_STAMP      = vendor/tcc/.stamp
+PDPMAKE_STAMP  = vendor/pdpmake/.stamp
 
 # The staged capstone binaries the build_*.sh scripts produce, out of tree under
 # build/vendor/ (mirroring their vendor/<name>/ sources). A routine `make clean` never
@@ -44,6 +45,7 @@ BUSYBOX_BIN  = build/vendor/busybox/busybox
 BUSYBOX_SUID_BIN = build/vendor/busybox/busybox-suid
 DROPBEAR_BIN = build/vendor/dropbear/dropbearmulti
 TCC_BIN      = build/vendor/tcc/tcc
+PDPMAKE_BIN  = build/vendor/pdpmake/make
 
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
@@ -53,6 +55,8 @@ LIBC_TARBALL     = vendor/musl/musl-1.2.5.tar.gz
 BUSYBOX_TARBALL  = vendor/busybox/busybox-1.36.1.tar.bz2
 DROPBEAR_TARBALL = vendor/dropbear/dropbear-2022.83.tar.bz2
 TCC_TARBALL      = vendor/tcc/tcc-0.9.27.tar.bz2
+PDPMAKE_TARBALL  = vendor/pdpmake/pdpmake-2.0.4.tgz
+PDPMAKE_PATCHES  = vendor/pdpmake/patches/0001-platform-macros.patch
 
 # The two musl artifacts consumers depend on, both derived from the tarball name so
 # the pinned version is written once: the installed static libc the cross-compiled
@@ -82,9 +86,10 @@ MKDISK          = krffs/mkdisk.sh
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
+        check-pdpmake \
         compile-commands check-sources \
         verify-style verify-host doctor help \
-        busybox dropbear tcc $(BASE_DIRS) $(FULL_DIRS)
+        busybox dropbear tcc pdpmake $(BASE_DIRS) $(FULL_DIRS)
 
 # Default: the kernel and the os-simple image (our login, shell and Unix tools).
 all: os-simple-image
@@ -104,6 +109,7 @@ endif
 busybox: $(BUSYBOX_STAMP)
 dropbear: $(DROPBEAR_STAMP)
 tcc: $(TCC_STAMP)
+pdpmake: $(PDPMAKE_STAMP)
 
 # --- third-party stamp rules. Each removes BOTH the stamp and the expected artifact
 #     up front, runs its build script, requires a non-empty artifact, then touches
@@ -144,6 +150,17 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
 	    build/vendor/tcc/include/stdarg.h
 	./vendor/tcc/build_tcc.sh
 	@test -s $(TCC_BIN) || { echo "tcc: build produced no $(TCC_BIN)" >&2; exit 1; }
+	@touch $@
+
+# pdpmake, the make that runs ON the machine. Its patches are prerequisites for
+# the reason musl's are: they are applied at extraction, so a stamp that
+# predates one would keep a make whose built-in rules name a compiler this image
+# does not have and whose default link this system's compiler refuses.
+$(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
+                  vendor/busybox/muslgcc $(PDPMAKE_TARBALL) $(LIBC_STAMP)
+	@rm -f $@ $(PDPMAKE_BIN)
+	./vendor/pdpmake/build_pdpmake.sh
+	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h vendor/dropbear/muslgcc \
@@ -200,7 +217,7 @@ os-simple-image: krffs rach2 ish utils
 # is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when absent;
 # the check targets ensure the busybox/dropbear binaries are real.
-os-real-image: krffs rach2 utils check-busybox check-tcc check-setid check-dropbearmulti ports/doom
+os-real-image: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
@@ -209,7 +226,7 @@ os-real-image: krffs rach2 utils check-busybox check-tcc check-setid check-dropb
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
 # partition is larger than the 32 MB resident page-cache cap on purpose, so it can
 # later prove an on-disk file system bigger than what fits in RAM at once.
-os-real-disk: krffs rach2 utils check-busybox check-tcc check-setid check-dropbearmulti ports/doom
+os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
@@ -218,7 +235,7 @@ os-real-disk: krffs rach2 utils check-busybox check-tcc check-setid check-dropbe
 # kernel, plus a KRFFS partition with the os-real tree. It boots a real machine
 # (or QEMU with no -kernel/-initrd) BIOS -> MBR -> GRUB -> kernel -> KRFFS on the
 # disk. Built in a throwaway Docker container (needs Docker).
-os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-setid check-dropbearmulti ports/doom
+os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	sh tools/mkdisk_grub.sh
@@ -344,7 +361,7 @@ ping-test: rach2 tests krffs test-image
 # alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 
-account-test: rach2 utils krffs busybox ish check-tcc
+account-test: rach2 utils krffs busybox ish check-tcc check-pdpmake
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
@@ -363,7 +380,7 @@ account-test: rach2 utils krffs busybox ish check-tcc
 # turning into a mysterious failure.
 TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
 
-tcc-test: rach2 utils krffs check-busybox check-tcc check-setid check-dropbearmulti ports/doom
+tcc-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
@@ -378,7 +395,7 @@ tcc-test: rach2 utils krffs check-busybox check-tcc check-setid check-dropbearmu
 SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test.disk
 SSH_TEST_PORT ?= 2222
 
-ssh-test: rach2 utils krffs check-busybox check-tcc check-setid check-dropbearmulti ports/doom
+ssh-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
@@ -495,6 +512,12 @@ os-real-iso: os-real-image
 # unrelocated, which is worse. The last check reads the output policy's own
 # diagnostics out of the shipped binary, since a patch that did not apply and a
 # compiler that accepts `-run` look identical from outside.
+check-pdpmake: $(PDPMAKE_STAMP)
+	@test -s $(PDPMAKE_BIN) || { \
+	    echo "pdpmake: $(PDPMAKE_BIN) missing or empty; rm vendor/pdpmake/.stamp and rebuild (make pdpmake)" >&2; \
+	    exit 1; }
+	@python3 tools/check_elf.py $(PDPMAKE_BIN)
+
 check-tcc: $(TCC_STAMP)
 	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	          build/vendor/tcc/include/stdarg.h \
@@ -593,13 +616,17 @@ clean:
 # distclean: a full from-scratch reset; clean plus every third-party build product: the
 # stamps, vendor/musl/install, the extracted vendored source trees, and the entire
 # out-of-tree build/ (including the staged capstones under build/vendor that a routine
-# clean leaves in place). The next build rebuilds musl/busybox/dropbear/tcc from the
-# tarballs.
+# clean leaves in place). The next build rebuilds musl/busybox/dropbear/tcc/pdpmake
+# from the tarballs. A stamp left behind while its binary went with build/ is the
+# failure this list exists to prevent: the next build would skip the work and
+# fail at the check instead.
 distclean: clean
-	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP)
+	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) \
+	      $(PDPMAKE_STAMP)
 	rm -rf vendor/musl/install \
 	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) \
-	       $(DROPBEAR_TARBALL:.tar.bz2=) $(TCC_TARBALL:.tar.bz2=)
+	       $(DROPBEAR_TARBALL:.tar.bz2=) $(TCC_TARBALL:.tar.bz2=) \
+	       $(PDPMAKE_TARBALL:.tgz=)
 	rm -rf build
 
 help:

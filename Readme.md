@@ -2,7 +2,7 @@
 
 ![First Versions of Rach2 Booting](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), compiles C on itself (TinyCC), and can run Doom.
+An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), compiles C on itself (TinyCC) and builds it with a make of its own (pdpmake), and can run Doom.
 
 Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements a broad set of Linux-compatible syscalls, enough to host a ported musl libc, a static BusyBox `ash`, and a Dropbear SSH server. It has a custom file system (KRFFS), which runs from a RAM module or persists on a real ATA disk through a kernel page cache, audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
 
@@ -20,12 +20,13 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [vendor/busybox/](vendor/busybox/)       | Static-musl BusyBox, built twice: the shell and tools, and the set-id account programs                                | [Readme](vendor/busybox/Readme.md)    |
 | [vendor/dropbear/](vendor/dropbear/)     | Static-musl Dropbear SSH server: the remote-login capstone                                                             | [Readme](vendor/dropbear/Readme.md)   |
 | [vendor/tcc/](vendor/tcc/)               | The Tiny C Compiler, built to run on Rach2 and compile for it                                                          | [Readme](vendor/tcc/Readme.md)        |
+| [vendor/pdpmake/](vendor/pdpmake/)       | pdpmake, the POSIX make that runs on Rach2 and drives that compiler                                                    | [Readme](vendor/pdpmake/Readme.md)    |
 | [ports/doom/](ports/doom/)               | Doom port with VGA graphics, mouse, and audio                                                                          | [Readme](ports/doom/Readme.md)        |
 | [mk/](mk/)                               | Shared GNU-Make building blocks: toolchain, header-deps, `build/`, clangd/IDE setup                                    | [Readme](mk/Readme.md)                |
 | [tools/](tools/)                         | Build, verify, and test scripts behind the make targets (doctor, the gates, the boot harness, image builders)          | [Readme](tools/Readme.md)             |
 | [dev-log/](dev-log/)                     | How each milestone was planned and built, and where the tree stands now                                                | [Readme](dev-log/Readme.md)           |
 
-Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear, TinyCC): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). Two of them carry a stated exception to "unmodified", each a single patch file applied at build time rather than an edited tree committed: TinyCC's refuses the output kinds this system cannot run, and musl's makes `posix_spawn` fork, because it otherwise asks for a shared address space this kernel cannot provide and `system(3)` and `popen(3)` fail on every program. `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
+Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear, TinyCC, pdpmake): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). Three of them carry a stated exception to "unmodified", each a single patch file applied at build time rather than an edited tree committed: TinyCC's refuses the output kinds this system cannot run; musl's makes `posix_spawn` fork, because it otherwise asks for a shared address space this kernel cannot provide and `system(3)` and `popen(3)` fail on every program; and pdpmake's points its built-in macros at the compiler and the link this platform actually has. `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
 
 ## Kernel subsystems
 

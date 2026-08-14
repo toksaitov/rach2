@@ -209,7 +209,7 @@ the supporting scripts.
   reading clean. For an image whose allowlist entry says it carries a compiler
   it asks a second question, since it is already reading the image node by
   node: that the sysroot tcc was built to look in is all there. The named paths
-  (`/bin/tcc`, the startup objects, `libtcc1.a`, tcc's own headers) are a
+  (`/bin/tcc`, `/bin/cc`, `/bin/make`, the startup objects, `libtcc1.a`, tcc's own headers) are a
   sample, so the header tree under `/include` is compared with the host tree it
   was staged from path by path and byte by byte. Counting them, which is what
   this did first, passes a stage that dropped a header and gained a file of some

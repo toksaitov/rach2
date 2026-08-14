@@ -2064,10 +2064,12 @@ WORLD_READ = 0o004
 WORLD_WALK = 0o001
 
 # The sysroot paths that are run rather than read.
-SYSROOT_PROGRAMS = ("/bin/tcc",)
+SYSROOT_PROGRAMS = ("/bin/tcc", "/bin/cc", "/bin/make")
 
 SYSROOT_PATHS = (
     "/bin/tcc",
+    "/bin/cc",
+    "/bin/make",
     "/lib/tcc/libtcc1.a",
     "/lib/tcc/include/stdarg.h",
     "/lib/tcc/include/stddef.h",

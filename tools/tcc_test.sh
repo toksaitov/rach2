@@ -171,28 +171,33 @@ fi
 # What it must refuse. Each is asserted twice: the status it reported, and the
 # reason it gave, because a compiler that refused for the wrong reason has told
 # the student something false about the machine.
+#
+# Both halves WAIT. The status and the reason come from two different commands
+# (the shell echoes `$?`, then `cat` prints the file the compiler wrote), so a
+# grep for the reason the moment the status appears is a race, and it is one
+# this suite lost once the machine got slower.
 if ! wait_token "RUNRC=1" 120; then
     fail "-run was not refused"
 fi
-if ! grep -q "mprotect" "$LOG"; then
+if ! wait_token "mprotect" 30; then
     fail "-run was refused without saying why"
 fi
 if ! wait_token "SHRC=1" 90; then
     fail "-shared was not refused"
 fi
-if ! grep -q "shared is not available" "$LOG"; then
+if ! wait_token "shared is not available" 30; then
     fail "-shared was refused without saying why"
 fi
 if ! wait_token "DYRC=1" 90; then
     fail "a link without -static was not refused"
 fi
-if ! grep -q "must be linked with -static" "$LOG"; then
+if ! wait_token "must be linked with -static" 30; then
     fail "a dynamic link was refused without saying why"
 fi
 if ! wait_token "RWRC=1" 90; then
     fail "a raw-image link was not refused"
 fi
-if ! grep -q "must be an ELF" "$LOG"; then
+if ! wait_token "must be an ELF" 30; then
     fail "a raw-image link was refused without saying why"
 fi
 

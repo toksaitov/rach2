@@ -42,6 +42,12 @@ optional-file 0755 /bin/doom build/ports/doom/doom
 # (vendor/tcc/Readme.md), and /lib/tcc/include comes BEFORE /include because
 # musl expects the compiler to provide stdarg.h and friends.
 file 0755 /bin/tcc build/vendor/tcc/tcc
+# The same compiler under the name a makefile's built-in rules reach for. KRFFS
+# has no symlinks, so it is staged twice, the way the account tools are.
+file 0755 /bin/cc build/vendor/tcc/tcc
+# And the make that drives them, which is what turns a pile of commands into a
+# build (vendor/pdpmake/Readme.md).
+file 0755 /bin/make build/vendor/pdpmake/make
 dir 0755 /lib
 dir 0755 /lib/tcc
 file 0644 /lib/tcc/libtcc1.a build/vendor/tcc/libtcc1.a
