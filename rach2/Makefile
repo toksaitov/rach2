@@ -118,9 +118,19 @@ all : $(KERNEL_BIN)
 
 # Kernel
 
+# The structural check runs on every link: a kernel the loaders would refuse,
+# or one whose _end does not equal the image end, fails the build here rather
+# than at a boot later. The
+# link lands in a temporary file that is renamed only after the check passes,
+# so a failed check cannot leave a newer kernel behind for the next make to
+# treat as current.
 $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) -o $@ $^
+	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp"' EXIT; \
+	echo '$(LD) $(LDFLAGS) -o $@ ...'; \
+	$(LD) $(LDFLAGS) -o "$$tmp" $^ && \
+	python3 ../tools/check_kernel.py "$$tmp" && \
+	mv "$$tmp" $@
 
 $(ASM_OBJECTS) : $(BUILD)/%.o : %.s
 	@mkdir -p $(dir $@)

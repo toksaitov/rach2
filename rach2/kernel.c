@@ -1979,7 +1979,7 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "info")) {
         k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         k_printf("Timer ticks:     %d\n", kernel_ticks);
-        k_printf("Kernel end:      0x%X\n", (uintptr_t) &k_phys_mem_end);
+        k_printf("Kernel end:      0x%X\n", (uintptr_t) &_end);
         k_printf("Modules loaded:  %d\n", module_count);
     } else if (str_equal(cmd, "modules")) {
         uint32_t i;

@@ -13,7 +13,7 @@ uintptr_t mem_reserved_ptr;
  */
 void init_mm(void)
 {
-    uintptr_t kernel_end = (uintptr_t) &k_phys_mem_end;
+    uintptr_t kernel_end = (uintptr_t) &_end;
 
     if (mem_reserved_ptr < kernel_end) {
         mem_reserved_ptr = kernel_end;

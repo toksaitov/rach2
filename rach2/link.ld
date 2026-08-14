@@ -1,4 +1,4 @@
-ENTRY(_k_entry)
+ENTRY(_start)
 
 SECTIONS {
     . = 0x100000;
@@ -19,5 +19,5 @@ SECTIONS {
         *(.bss)
     }
 
-    k_phys_mem_end = .;
+    _end = .;
 }

@@ -115,6 +115,8 @@ kernel_end - 0x01FFFFFF    Frame bitmap, page tables, user pages (up to 32 MB)
 
 The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 MB (HARD_MEMORY_LIMIT). Frames below `mem_reserved_ptr` are marked as used; frames above are available for user page allocation. Paging uses 4 KB pages.
 
+The kernel image's contract with its linkers: the entry symbol is `_start` (the multiboot entry in `loader.s`; both GNU ld and tcc use that name for the ELF entry point), and `_end` marks the end of the image, where the boot allocator starts reserving physical memory. `link.ld` assigns `_end` for the GNU build; tcc defines it at the end of `.bss` on its own and needs no script. The two builds lay the file out differently: GNU ld places the first load segment at file offset 0x1000, tcc at file offset 0 with the ELF headers inside it and `.text` at 0x100074. Both shapes are two load segments at or above 1 MB, and `tools/check_kernel.py`, run on every link, checks the multiboot header, the segments, the entry, and `_end` against exactly this contract.
+
 The window at 0xC0000000 (PCWIN_BASE, the same address as USER_ADDR_MAX, just above user space) is the page cache's view of a disk-backed KRFFS: it is supervisor-only and shared across every process's page directory. The fault handler demand-maps backing pages into the cache's reserved frames (PC_SLOTS, a fixed 1 MiB) and writes dirty ones back on eviction and fsync. The window span is the partition size capped at the lowest device MMIO BAR (and at PC_WINDOW_CAP, 256 MiB), so it never overlaps the PCI MMIO hole. It is inert on the default RAM-disk mount.
 
 ## Source Structure

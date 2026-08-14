@@ -13,8 +13,8 @@
 .long MULTIBOOT_FLAGS
 .long MULTIBOOT_CHECKSUM
 
-.globl _k_entry
-_k_entry:
+.globl _start
+_start:
     movl $(stack + KERNEL_STACK_SIZE), %esp
 
     pushl %ebx # Multiboot structure
