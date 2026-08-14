@@ -1,75 +1,262 @@
+# Interrupt entry stubs, one per vector, written out in full.
+#
+# Every stub was once produced by a GAS .macro. The stubs are explicit now so
+# that one source assembles under both toolchains that build this kernel:
+# GNU as, and tcc's assembler, whose directive set has no .macro. Each stub
+# disables interrupts, pushes an error code slot and its vector number, and
+# jumps to the common handler, so the handler always finds the same frame,
+# reading from the stack pointer toward higher addresses:
+# [vector][error code][iret frame].
+#
+# Two shapes exist because the CPU pushes an error code for some exceptions
+# and not for others. Vectors 8 (#DF), 10 (#TS), 11 (#NP), 12 (#SS), 13 (#GP),
+# 14 (#PF), 17 (#AC) and 21 (#CP) arrive with the CPU's error code already on
+# the stack, so their stubs push only the vector. Every other stub pushes a
+# zero first, so both shapes leave the frame identical. A stub given the wrong
+# shape leaves the vector slot intact and shifts everything above it: the
+# error code reads as the stub's zero, and the saved iret fields sit one slot
+# off, so the interrupt return consumes a malformed frame.
+
 .text
 
-# Macro for ISR without error code (pushes dummy error code 0)
-.macro ISR_WITHOUT_ERROR_CODE num
-    .globl isr\num
-    isr\num:
-        cli
-        pushl $0
-        pushl $\num
-        jmp isr_common_handler
-.endm
+# Exception stubs, vectors 0 through 31.
 
-# Macro for ISR with error code (CPU pushes error code)
-.macro ISR_WITH_ERROR_CODE num
-    .globl isr\num
-    isr\num:
-        cli
-        pushl $\num
-        jmp isr_common_handler
-.endm
+.globl isr0
+isr0:
+    cli
+    pushl $0
+    pushl $0
+    jmp isr_common_handler
 
-# Generate ISR stubs (exceptions 0-31)
-ISR_WITHOUT_ERROR_CODE 0
-ISR_WITHOUT_ERROR_CODE 1
-ISR_WITHOUT_ERROR_CODE 2
-ISR_WITHOUT_ERROR_CODE 3
-ISR_WITHOUT_ERROR_CODE 4
-ISR_WITHOUT_ERROR_CODE 5
-ISR_WITHOUT_ERROR_CODE 6
-ISR_WITHOUT_ERROR_CODE 7
+.globl isr1
+isr1:
+    cli
+    pushl $0
+    pushl $1
+    jmp isr_common_handler
 
-ISR_WITH_ERROR_CODE 8
+.globl isr2
+isr2:
+    cli
+    pushl $0
+    pushl $2
+    jmp isr_common_handler
 
-ISR_WITHOUT_ERROR_CODE 9
+.globl isr3
+isr3:
+    cli
+    pushl $0
+    pushl $3
+    jmp isr_common_handler
 
-ISR_WITH_ERROR_CODE 10
-ISR_WITH_ERROR_CODE 11
-ISR_WITH_ERROR_CODE 12
-ISR_WITH_ERROR_CODE 13
-ISR_WITH_ERROR_CODE 14
+.globl isr4
+isr4:
+    cli
+    pushl $0
+    pushl $4
+    jmp isr_common_handler
 
-ISR_WITHOUT_ERROR_CODE 15
-ISR_WITHOUT_ERROR_CODE 16
+.globl isr5
+isr5:
+    cli
+    pushl $0
+    pushl $5
+    jmp isr_common_handler
 
-# #AC (alignment check) pushes a CPU error code, like #DF and #GP above.
-ISR_WITH_ERROR_CODE 17
+.globl isr6
+isr6:
+    cli
+    pushl $0
+    pushl $6
+    jmp isr_common_handler
 
-ISR_WITHOUT_ERROR_CODE 18
-ISR_WITHOUT_ERROR_CODE 19
-ISR_WITHOUT_ERROR_CODE 20
+.globl isr7
+isr7:
+    cli
+    pushl $0
+    pushl $7
+    jmp isr_common_handler
 
-# #CP (control protection) pushes a CPU error code.
-ISR_WITH_ERROR_CODE 21
+# #DF double fault: the CPU pushes the error code.
+.globl isr8
+isr8:
+    cli
+    pushl $8
+    jmp isr_common_handler
 
-ISR_WITHOUT_ERROR_CODE 22
-ISR_WITHOUT_ERROR_CODE 23
-ISR_WITHOUT_ERROR_CODE 24
-ISR_WITHOUT_ERROR_CODE 25
-ISR_WITHOUT_ERROR_CODE 26
-ISR_WITHOUT_ERROR_CODE 27
-ISR_WITHOUT_ERROR_CODE 28
-ISR_WITHOUT_ERROR_CODE 29
-ISR_WITHOUT_ERROR_CODE 30
-ISR_WITHOUT_ERROR_CODE 31
+.globl isr9
+isr9:
+    cli
+    pushl $0
+    pushl $9
+    jmp isr_common_handler
 
-# Syscall interrupt (int 0x80 = vector 128)
-ISR_WITHOUT_ERROR_CODE 128
+# #TS invalid TSS: the CPU pushes the error code.
+.globl isr10
+isr10:
+    cli
+    pushl $10
+    jmp isr_common_handler
+
+# #NP segment not present: the CPU pushes the error code.
+.globl isr11
+isr11:
+    cli
+    pushl $11
+    jmp isr_common_handler
+
+# #SS stack fault: the CPU pushes the error code.
+.globl isr12
+isr12:
+    cli
+    pushl $12
+    jmp isr_common_handler
+
+# #GP general protection: the CPU pushes the error code.
+.globl isr13
+isr13:
+    cli
+    pushl $13
+    jmp isr_common_handler
+
+# #PF page fault: the CPU pushes the error code.
+.globl isr14
+isr14:
+    cli
+    pushl $14
+    jmp isr_common_handler
+
+.globl isr15
+isr15:
+    cli
+    pushl $0
+    pushl $15
+    jmp isr_common_handler
+
+.globl isr16
+isr16:
+    cli
+    pushl $0
+    pushl $16
+    jmp isr_common_handler
+
+# #AC alignment check: the CPU pushes the error code.
+.globl isr17
+isr17:
+    cli
+    pushl $17
+    jmp isr_common_handler
+
+.globl isr18
+isr18:
+    cli
+    pushl $0
+    pushl $18
+    jmp isr_common_handler
+
+.globl isr19
+isr19:
+    cli
+    pushl $0
+    pushl $19
+    jmp isr_common_handler
+
+.globl isr20
+isr20:
+    cli
+    pushl $0
+    pushl $20
+    jmp isr_common_handler
+
+# #CP control protection: the CPU pushes the error code.
+.globl isr21
+isr21:
+    cli
+    pushl $21
+    jmp isr_common_handler
+
+.globl isr22
+isr22:
+    cli
+    pushl $0
+    pushl $22
+    jmp isr_common_handler
+
+.globl isr23
+isr23:
+    cli
+    pushl $0
+    pushl $23
+    jmp isr_common_handler
+
+.globl isr24
+isr24:
+    cli
+    pushl $0
+    pushl $24
+    jmp isr_common_handler
+
+.globl isr25
+isr25:
+    cli
+    pushl $0
+    pushl $25
+    jmp isr_common_handler
+
+.globl isr26
+isr26:
+    cli
+    pushl $0
+    pushl $26
+    jmp isr_common_handler
+
+.globl isr27
+isr27:
+    cli
+    pushl $0
+    pushl $27
+    jmp isr_common_handler
+
+.globl isr28
+isr28:
+    cli
+    pushl $0
+    pushl $28
+    jmp isr_common_handler
+
+.globl isr29
+isr29:
+    cli
+    pushl $0
+    pushl $29
+    jmp isr_common_handler
+
+.globl isr30
+isr30:
+    cli
+    pushl $0
+    pushl $30
+    jmp isr_common_handler
+
+.globl isr31
+isr31:
+    cli
+    pushl $0
+    pushl $31
+    jmp isr_common_handler
+
+# The syscall gate, int 0x80 (vector 128).
+.globl isr128
+isr128:
+    cli
+    pushl $0
+    pushl $128
+    jmp isr_common_handler
 
 # Common ISR handler
 .globl isr_common_handler
 isr_common_handler:
-    pushal
+    pusha
 
     # Save the interrupted segment registers individually so the per-process
     # %gs TLS pointer survives this interrupt/syscall. Pushed ds, es, fs, gs so
@@ -100,7 +287,7 @@ isr_common_handler:
     addl $4, %esp       # Clean up pushed pointer
 
 # Fork child return point - child processes jump here after switch_context
-# Stack must contain: isr_params_t (gs, fs, es, ds, pushal regs, vector,
+# Stack must contain: isr_params_t (gs, fs, es, ds, pusha regs, vector,
 # error, iret frame)
 .globl isr_return
 isr_return:
@@ -123,45 +310,131 @@ isr_return:
     popl %eax
     movw %ax, %ds
 
-    popal
+    popa
     addl $8, %esp
 
     # iret restores EFLAGS (including IF) from the saved frame; no explicit sti,
     # so no timer IRQ can preempt between sti and iret.
     iret
 
-# Macro for IRQ handlers
-.macro IRQ num, vector
-    .globl irq\num
-    irq\num:
-        cli
-        pushl $0
-        pushl $\vector
-        jmp irq_common_handler
-.endm
+# IRQ stubs: IRQ 0 through 15, remapped to vectors 32 through 47.
 
-# Generate IRQ stubs (IRQ 0-15 mapped to vectors 32-47)
-IRQ 0,  32
-IRQ 1,  33
-IRQ 2,  34
-IRQ 3,  35
-IRQ 4,  36
-IRQ 5,  37
-IRQ 6,  38
-IRQ 7,  39
-IRQ 8,  40
-IRQ 9,  41
-IRQ 10, 42
-IRQ 11, 43
-IRQ 12, 44
-IRQ 13, 45
-IRQ 14, 46
-IRQ 15, 47
+.globl irq0
+irq0:
+    cli
+    pushl $0
+    pushl $32
+    jmp irq_common_handler
+
+.globl irq1
+irq1:
+    cli
+    pushl $0
+    pushl $33
+    jmp irq_common_handler
+
+.globl irq2
+irq2:
+    cli
+    pushl $0
+    pushl $34
+    jmp irq_common_handler
+
+.globl irq3
+irq3:
+    cli
+    pushl $0
+    pushl $35
+    jmp irq_common_handler
+
+.globl irq4
+irq4:
+    cli
+    pushl $0
+    pushl $36
+    jmp irq_common_handler
+
+.globl irq5
+irq5:
+    cli
+    pushl $0
+    pushl $37
+    jmp irq_common_handler
+
+.globl irq6
+irq6:
+    cli
+    pushl $0
+    pushl $38
+    jmp irq_common_handler
+
+.globl irq7
+irq7:
+    cli
+    pushl $0
+    pushl $39
+    jmp irq_common_handler
+
+.globl irq8
+irq8:
+    cli
+    pushl $0
+    pushl $40
+    jmp irq_common_handler
+
+.globl irq9
+irq9:
+    cli
+    pushl $0
+    pushl $41
+    jmp irq_common_handler
+
+.globl irq10
+irq10:
+    cli
+    pushl $0
+    pushl $42
+    jmp irq_common_handler
+
+.globl irq11
+irq11:
+    cli
+    pushl $0
+    pushl $43
+    jmp irq_common_handler
+
+.globl irq12
+irq12:
+    cli
+    pushl $0
+    pushl $44
+    jmp irq_common_handler
+
+.globl irq13
+irq13:
+    cli
+    pushl $0
+    pushl $45
+    jmp irq_common_handler
+
+.globl irq14
+irq14:
+    cli
+    pushl $0
+    pushl $46
+    jmp irq_common_handler
+
+.globl irq15
+irq15:
+    cli
+    pushl $0
+    pushl $47
+    jmp irq_common_handler
 
 # Common IRQ handler
 .globl irq_common_handler
 irq_common_handler:
-    pushal
+    pusha
 
     # Save the interrupted segment registers individually (see isr_common_handler)
     # so the per-process %gs TLS pointer survives the IRQ. gs at the lowest slot.
@@ -201,7 +474,7 @@ irq_common_handler:
     popl %eax
     movw %ax, %ds
 
-    popal
+    popa
     addl $8, %esp
 
     # iret restores EFLAGS (including IF); no explicit sti before iret.
