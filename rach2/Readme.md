@@ -644,17 +644,20 @@ Four limits, stated rather than discovered:
   then keeps its own time, so it drifts by whatever the PIT drifts by.
 * A machine whose clock cannot be read boots normally with the anchor unset,
   real time falls back to time since boot, and the console says `rtc: no clock:
-  times run from the epoch`. The clock is refused when the update flag never
-  clears, when two consecutive reads disagree in any field, the three status
-  registers included and only the update flag excused, when a field is out of
-  range, and
-  when the hardware says its own contents are not to be trusted: register D's
-  validity bit clear (the battery went), register B's SET bit raised (updates
-  inhibited), or register A's divider not the running one. A dead battery leaves
-  bytes that are stable and in range and completely wrong, so the date fields
-  alone cannot decide this. The validity bit ends the read rather than earning
-  another try: on some parts READING register D sets that bit again, so a dead
-  cell shows itself in the first sample and in no sample after it.
+  times run from the epoch`. The read takes two samples at a time and asks one
+  function what the pair is worth. A pair that agrees is used; a pair that
+  disagrees in any field, the three status registers included and only the
+  update-in-progress flag excused, is read again, up to four pairs, since the
+  usual cause is a read that straddled an update. The clock is refused when the
+  update flag never clears, when those four pairs are used up, when a field is
+  out of range, and when the hardware says its own contents are not to be
+  trusted: register D's validity bit clear (the battery went), register B's SET
+  bit raised (updates inhibited), or register A's divider not the running one.
+  A dead battery leaves bytes that are stable and in range and completely wrong,
+  so the date fields alone cannot decide this. The validity bit ends the read
+  rather than earning another try: on some parts READING register D sets that
+  bit again, so a dead cell shows itself in the first sample and in no sample
+  after it.
 * The clock is read as UTC, because those registers carry no timezone to read.
   A machine whose CMOS keeps local time will be wrong by its offset; the daylight
   bit (register B's DSE) is refused rather than interpreted. QEMU's default is
