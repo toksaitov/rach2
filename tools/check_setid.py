@@ -173,6 +173,16 @@ ALLOWLIST = {
                              "export HOME=\"${HOME:-/root}\"\\ncd \"$HOME\"\\n"),
             "/root/.ssh/authorized_keys": (0o600, 0, 0, "file",
                                            "krffs/authorized_keys"),
+            # The read-only source media the machine rebuilds itself from:
+            # the three guest makefiles pdpmake reads, and one representative
+            # nested source, pinned by mode, owner and bytes so a manifest
+            # edit cannot quietly hand the shared trees to another owner or
+            # stage a different build than the host's.
+            "/src/rach2/guest.mk": (0o644, 0, 0, "file", "rach2/guest.mk"),
+            "/src/utils/guest.mk": (0o644, 0, 0, "file", "utils/guest.mk"),
+            "/src/ish/guest.mk": (0o644, 0, 0, "file", "ish/guest.mk"),
+            "/src/rach2/sys/syscall.c": (0o644, 0, 0, "file",
+                                         "rach2/sys/syscall.c"),
         },
         "sentinel": None,
         "init": "init-login",
@@ -612,6 +622,21 @@ def check_manifest(path, table=ALLOWLIST):
     staged = {}
 
     problems.extend(check_init_line(name, directives, allow.get("init")))
+
+    # A trusted path may sit inside a staged source tree rather than on a
+    # `file` line of its own: `tree` copies every regular file under its host
+    # directory, so a pinned path under a tree's guest directory resolves to
+    # the host file the walk will copy, carrying the tree's mode and owner.
+    for lineno, verb, mode, uid, gid, guest, source in directives:
+        if verb != "tree":
+            continue
+        prefix = guest.rstrip("/") + "/"
+        for pinned in allow["trusted"]:
+            if pinned.startswith(prefix) and pinned not in staged:
+                host = "%s/%s" % (source.rstrip("/"), pinned[len(prefix):])
+                if os.path.isfile(host):
+                    staged[pinned] = (lineno, mode, uid, gid, host)
+
     for lineno, verb, mode, uid, gid, guest, source in directives:
         if verb in FILE_VERBS:
             if guest in staged:
@@ -712,7 +737,12 @@ def check_manifest(path, table=ALLOWLIST):
                             "decide who somebody is, are trust boundaries too"
                             % (name, lineno, guest, want,
                                fmt_entry(mode, uid, gid)))
-        elif verb_of.get(guest) != want_verb:
+        # A pinned path under a `tree` directive has no directive of its own
+        # (verb None): the walk copies it from the host file, which is what a
+        # 'file' declaration means, and the byte comparison still runs
+        # against that host file.
+        elif (verb_of.get(guest) != want_verb and
+              not (want_verb == "file" and verb_of.get(guest) is None)):
             problems.append("%s:%d: %s is staged with '%s' and the allowlist "
                             "declares '%s'; a file copied from the host and a "
                             "payload written in the manifest are not the same "
@@ -1164,6 +1194,11 @@ OS_REAL_MINIMUM = ("dir 0755 /bin\n"
                    "dir 0755 /etc\n"
                    "dir 0755 /root\n"
                    "dir 0700 /root/.ssh\n"
+                   "dir 0755 /src\n"
+                   "dir 0755 /src/utils\n"
+                   "dir 0755 /src/rach2\n"
+                   "dir 0755 /src/rach2/sys\n"
+                   "dir 0755 /src/ish\n"
                    + trusted_lines("os-real")
                    + "file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid\n"
                    "file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid\n"

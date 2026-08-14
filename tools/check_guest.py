@@ -19,6 +19,9 @@ the verify gate, and holds the four contracts:
   4. The build fits the machine: the deepest kernel include chain leaves
      room in the 16-descriptor table for the compiler's own files, and no
      guest recipe line approaches the 3072-byte exec string budget.
+  5. The os-real manifest stages all three source trees at /src, root-owned
+     and read-only, so the machine actually carries what the makefiles
+     build, and each staged tree carries its guest.mk.
 
 Usage: check_guest.py [REPO_ROOT]
 """
@@ -280,6 +283,42 @@ def check_limits(repo):
     return depth
 
 
+def check_staging(repo):
+    manifest = open(os.path.join(
+        repo, "krffs", "manifests", "os-real.manifest")).read()
+    expected = {"tree 0644 /src/rach2 rach2",
+                "tree 0644 /src/utils utils",
+                "tree 0644 /src/ish ish"}
+    seen = set()
+    for raw in manifest.split("\n"):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        guest_path = fields[2]
+        if guest_path == "/src" or guest_path.startswith("/src/"):
+            if line in expected:
+                seen.add(line)
+            elif line in ("dir 0755 /src", "dir 0755 /src/utils",
+                          "dir 0755 /src/rach2", "dir 0755 /src/rach2/sys",
+                          "dir 0755 /src/ish"):
+                pass
+            else:
+                fail("os-real.manifest directive '%s' touches /src; only "
+                     "the three root-owned read-only source trees may live "
+                     "there, or a later line could hand the shared source "
+                     "to another owner" % line)
+    for line in sorted(expected - seen):
+        fail("os-real.manifest does not stage '%s' (root-owned, 0644)"
+             % line)
+    for host_dir in ("rach2", "utils", "ish"):
+        if not os.path.isfile(os.path.join(repo, host_dir, "guest.mk")):
+            fail("%s/guest.mk is missing or not a regular file, so the "
+                 "staged tree could not be built in the guest" % host_dir)
+
+
 def main():
     repo = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(
         os.path.dirname(os.path.abspath(__file__)))
@@ -287,8 +326,10 @@ def main():
     programs = check_utils(repo)
     ish_objects = check_ish(repo)
     depth = check_limits(repo)
+    check_staging(repo)
     print("check-guest: ok: %d kernel sources, %d programs, %d ish objects, "
-          "include depth %d" % (len(sources), programs, ish_objects, depth))
+          "include depth %d, three /src trees staged"
+          % (len(sources), programs, ish_objects, depth))
 
 
 if __name__ == "__main__":

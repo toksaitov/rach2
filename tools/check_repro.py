@@ -136,12 +136,57 @@ def main(argv):
             print("check-repro: exec-dir must sort its entries the way tree does")
             return 1
 
+        # The tree half: a nested source tree, staged twice through the
+        # recursive directive, must produce identical bytes AND hold its
+        # entries in sorted order at every level, which is asserted against
+        # the exact expected walk rather than observed order, so an unsorted
+        # walk cannot pass by reading one host's directories twice in the
+        # same accidental order. The tree reuses the scrambled name set the
+        # exec-dir half found, at two levels. This is the shape /src/rach2
+        # and /src/ish take in os-real.
+        srcdir = os.path.join(work, "srctree")
+        os.makedirs(os.path.join(srcdir, "sub"))
+        for name in names:
+            for base in (srcdir, os.path.join(srcdir, "sub")):
+                with open(os.path.join(base, name), "w") as handle:
+                    handle.write("contents of %s\n" % name)
+        with open(os.path.join(srcdir, "guest.mk"), "w") as handle:
+            handle.write("all:\n")
+        tree_manifest = os.path.join(work, "t.manifest")
+        with open(tree_manifest, "w") as handle:
+            handle.write("dir 0755 /src\n")
+            handle.write("tree 0644 /src/demo %s\n" % srcdir)
+        tree_first = os.path.join(work, "tree-one.img")
+        tree_second = os.path.join(work, "tree-two.img")
+        stage(mkfs, stager, tree_manifest, tree_first)
+        stage(mkfs, stager, tree_manifest, tree_second)
+        with open(tree_first, "rb") as a, open(tree_second, "rb") as b:
+            if a.read() != b.read():
+                print("check-repro: FAIL: one source tree staged twice "
+                      "produced two different images")
+                return 1
+        top = sorted(list(names) + ["guest.mk", "sub"])
+        expected_walk = []
+        for entry in top:
+            expected_walk.append(entry)
+            if entry == "sub":
+                expected_walk.extend("sub/" + n for n in sorted(names))
+        tree_order = staged_names(tree_first, "/src/demo")
+        if tree_order != expected_walk:
+            print("check-repro: FAIL: the staged tree order is %s, and the "
+                  "sorted walk is %s"
+                  % (", ".join(tree_order) or "(none)",
+                     ", ".join(expected_walk)))
+            print("check-repro: tree must sort every directory it walks")
+            return 1
+
         if not scrambled:
             # Every set this check knows came back already in name order on this
             # host, so the assertion above held without the stager having to
             # sort anything. Said out loud rather than reported as a pass: the
             # clock half was tested, the ordering half was not.
-            print("check-repro: OK (one tree, one image; the clock excluded). "
+            print("check-repro: OK (one tree, one image; the clock and the tree "
+                  "directive excluded). "
                   "This host reports directory entries in name order, so the "
                   "ordering half was not exercised")
             return 0
