@@ -83,7 +83,8 @@ newcode_ch()
        tests/musl/passwdmusl.c tests/musl/addusermusl.c \
        tests/musl/loginmusl.c tests/musl/readvmusl.c tests/musl/vmamusl.c \
        tests/musl/clockmusl.c tests/musl/statmusl.c \
-       tests/musl/stampmusl.c 2>/dev/null
+       tests/musl/stampmusl.c \
+       tests/musl/execargmusl.c 2>/dev/null
     ls tests/host/compat/crypt.h tests/host/compat/shadow.h \
        tests/host/compat/sys/random.h 2>/dev/null
 }
@@ -119,7 +120,7 @@ ls "$REPO"/tests/host/pwauth_hosttest.c "$REPO"/tests/musl/pwauthmusl.c \
    "$REPO"/tests/musl/loginmusl.c \
    "$REPO"/tests/musl/readvmusl.c "$REPO"/tests/musl/vmamusl.c \
    "$REPO"/tests/musl/clockmusl.c "$REPO"/tests/musl/statmusl.c \
-   "$REPO"/tests/musl/stampmusl.c \
+   "$REPO"/tests/musl/stampmusl.c "$REPO"/tests/musl/execargmusl.c \
    "$REPO"/tests/musl/saltnoent.c "$REPO"/tests/musl/creddisk.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \

@@ -4287,11 +4287,37 @@ static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     return krffs_read((const char *)ctx, (char *)dst, count, off);
 }
 
-static char _exec_path_buf[64];
-static char _exec_argv_storage[512];
-static char *_exec_argv_bufs[16];
-static char _exec_envp_storage[512];
-static char *_exec_envp_bufs[16];
+/*
+ * Where execve holds the new image's arguments while it destroys the old one.
+ *
+ * Static, and safe to be static: one process at a time is between filling these
+ * and using them, because `in_syscall` stops the timer from scheduling and no
+ * path inside execve blocks. They cannot be on the stack (the kernel stack is
+ * 16 KB) and cannot be in the caller's address space (that is what is being
+ * torn down).
+ *
+ * The sizes come from the page these end up in rather than from a round number.
+ * `build_user_stack` lays the strings, both pointer arrays, the argc word, a
+ * nine-entry auxv and 16 bytes of AT_RANDOM into ONE 4096-byte page, and it runs
+ * AFTER the old image is freed, so a vector that fits here and not there kills
+ * the caller instead of failing it. For 63 entries in each vector the fixed part
+ * is 147 words of info block, 16 bytes of AT_RANDOM and up to 15 bytes of
+ * alignment, about 640 bytes; the remaining space is shared by the strings of
+ * BOTH vectors, which is why the budget below is one number for the two of them
+ * and not one each. 3072 leaves room for an auxv entry somebody adds later.
+ *
+ * The old limits were 15 entries and 512 bytes each, which a link line passes
+ * without trying: a compiler, `-static`, `-o`, an output name and a dozen
+ * objects is over both.
+ */
+#define EXEC_MAX_ENTRIES 63
+#define EXEC_MAX_STRINGS 3072
+
+static char _exec_path_buf[256];
+static char _exec_argv_storage[EXEC_MAX_STRINGS];
+static char *_exec_argv_bufs[EXEC_MAX_ENTRIES + 1];
+static char _exec_envp_storage[EXEC_MAX_STRINGS];
+static char *_exec_envp_bufs[EXEC_MAX_ENTRIES + 1];
 
 /**
  * Kill the current process after exec has destroyed its old address space.
@@ -4440,10 +4466,15 @@ static int32_t sys_execve(isr_params_t *params)
     /* Copy argv from user space, range-checking every user pointer and bounding
      * the cumulative offset so _exec_argv_storage cannot overflow. An argument
      * that does not fit fails the exec rather than being silently truncated. The
-     * pointer array and each string are now read through the copy helpers, which
-     * fault-check each access; the bounds and validation order are unchanged. */
+     * pointer array and each string are read through the copy helpers, which
+     * fault-check each access.
+     *
+     * The two vectors share one string budget, which is checked after both are
+     * in: the page they are laid into is one page whichever of them fills it,
+     * and the check that would otherwise catch it runs after the old image is
+     * gone, where the only way to fail is to kill the caller. */
     if (user_argv) {
-        for (argc = 0; argc < 15; argc++) {
+        for (argc = 0; argc < EXEC_MAX_ENTRIES; argc++) {
             uint32_t arg_ptr = 0;
             int r;
 
@@ -4455,8 +4486,10 @@ static int32_t sys_execve(isr_params_t *params)
             if (arg_ptr == 0) {
                 break;  /* NULL terminator */
             }
+            /* The storage is exactly full and another argument is waiting:
+             * that is a size limit reached, not a bad address. */
             if (argv_offset >= sizeof(_exec_argv_storage)) {
-                return -EFAULT;
+                return -E2BIG;
             }
             _exec_argv_bufs[argc] = &_exec_argv_storage[argv_offset];
             r = strncpy_from_user(&_exec_argv_storage[argv_offset],
@@ -4470,11 +4503,12 @@ static int32_t sys_execve(isr_params_t *params)
             }
             argv_offset += (uint32_t)r + 1;
         }
-        /* The 16-slot bufs array holds at most 15 args plus a NULL terminator;
-         * a 16th non-NULL pointer is too many args, not a silent truncation. */
-        if (argc == 15) {
+        /* The bufs array holds EXEC_MAX_ENTRIES args plus a NULL terminator; one
+         * more non-NULL pointer is too many args, not a silent truncation. */
+        if (argc == EXEC_MAX_ENTRIES) {
             uint32_t arg_ptr = 0;
-            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[15],
+            if (copy_from_user(&arg_ptr,
+                               (const void __user *)&user_argv[EXEC_MAX_ENTRIES],
                                sizeof(arg_ptr)) != 0) {
                 return -EFAULT;
             }
@@ -4487,7 +4521,7 @@ static int32_t sys_execve(isr_params_t *params)
 
     /* Copy the real envp the same way. */
     if (user_envp) {
-        for (envc = 0; envc < 15; envc++) {
+        for (envc = 0; envc < EXEC_MAX_ENTRIES; envc++) {
             uint32_t env_ptr = 0;
             int r;
 
@@ -4499,7 +4533,7 @@ static int32_t sys_execve(isr_params_t *params)
                 break;  /* NULL terminator */
             }
             if (envp_offset >= sizeof(_exec_envp_storage)) {
-                return -EFAULT;
+                return -E2BIG;
             }
             _exec_envp_bufs[envc] = &_exec_envp_storage[envp_offset];
             r = strncpy_from_user(&_exec_envp_storage[envp_offset],
@@ -4513,11 +4547,12 @@ static int32_t sys_execve(isr_params_t *params)
             }
             envp_offset += (uint32_t)r + 1;
         }
-        /* As with argv: a 16th non-NULL envp pointer overflows the bufs array;
+        /* As with argv: one more non-NULL envp pointer overflows the bufs array;
          * fail rather than silently drop the tail of the environment. */
-        if (envc == 15) {
+        if (envc == EXEC_MAX_ENTRIES) {
             uint32_t env_ptr = 0;
-            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[15],
+            if (copy_from_user(&env_ptr,
+                               (const void __user *)&user_envp[EXEC_MAX_ENTRIES],
                                sizeof(env_ptr)) != 0) {
                 return -EFAULT;
             }
@@ -4527,6 +4562,14 @@ static int32_t sys_execve(isr_params_t *params)
         }
     }
     _exec_envp_bufs[envc] = NULL;
+
+    /* The two vectors share the page they are laid into, so they share a
+     * budget, and it is checked HERE: `build_user_stack` would catch it, but it
+     * runs after `free_user_pages`, where there is no image left to return an
+     * error to and the caller is killed instead. */
+    if (argv_offset + envp_offset > EXEC_MAX_STRINGS) {
+        return -E2BIG;
+    }
 
     name = _exec_path_buf;
     if (name[0] == '/') {

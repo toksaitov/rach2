@@ -49,3 +49,7 @@ shadowVariable:*kernel.c
 # it by number. Members nothing reads are the layout, not dead code.
 unusedStructMember:*tests/musl/statmusl.c
 unusedStructMember:*tests/musl/stampmusl.c
+
+# main's argv is the ABI's, not ours: cppcheck asks for `const char *argv[]`,
+# which is not the signature a hosted C program's main has.
+constParameter:*tests/musl/execargmusl.c

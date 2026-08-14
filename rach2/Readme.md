@@ -329,21 +329,43 @@ Replaces the current process image with a new program loaded from the file syste
 Arguments:
 * `path` - Path to the ELF executable (leading '/' is stripped)
 * `argv` - Null-terminated array of argument strings
-* `envp` - Null-terminated array of environment strings (currently ignored)
+* `envp` - Null-terminated array of environment strings
 
-The syscall:
-1. Copies path and argv from user space to static kernel buffers
-2. Reads the ELF file from KRFFS into a static 512KB buffer
-3. Validates the ELF header (32-bit, executable, i386)
-4. Frees all existing user pages in the process's page directory
-5. Loads ELF segments into freshly allocated user pages
-6. Allocates a new user stack at USER_STACK_BASE (0xBFFFF000)
-7. Sets up the stack with argc, argv pointers, and argument strings
-8. Modifies the saved ISR frame to "return" to the new program: sets EIP and ESP, zeroes the general-purpose registers inherited from the old image (EBP, EDX, EBX, ECX, ESI, EDI) so startup code reads no stale state, and resets the segment selectors and TLS
+The syscall, in order, and the order is the contract:
 
-On success, does not return - execution continues at the new program's entry point. On failure, returns -1 (though this may leave the process in an inconsistent state).
+1. Copies the path, argv and envp from user space into static kernel buffers, checking every user pointer and both limits below. Everything that can refuse the call happens here, while the caller still has an address space to return to.
+2. Validates the ELF header against `elf_load_image`'s rules (ELFCLASS32, ELFDATA2LSB, ET_EXEC, EM_386, the program header geometry, the segment bounds) before anything is destroyed, so a bad image is `-ENOEXEC` to a live process.
+3. Frees all existing user pages in the process's page directory. THIS IS THE POINT OF NO RETURN.
+4. Streams the ELF segments from KRFFS into freshly allocated user pages, one page at a time rather than through a whole-file buffer.
+5. Allocates a new user stack at `USER_STACK_BASE` (0xBFFFF000) and builds the System V i386 initial stack in it: argc, the argv and envp pointer arrays, the auxiliary vector (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_PAGESZ, AT_CLKTCK, AT_SECURE, AT_RANDOM, AT_NULL) and the 16 random bytes AT_RANDOM points at.
+6. Modifies the saved ISR frame to "return" to the new program: sets EIP and ESP, zeroes the general-purpose registers inherited from the old image (EBP, EDX, EBX, ECX, ESI, EDI) so startup code reads no stale state, and resets the segment selectors and TLS.
 
-Note: Uses static buffers for ELF data (512KB) and argv storage (512 bytes) to avoid kernel stack overflow, since the kernel stack is only 16KB.
+On success it does not return: execution continues at the new program's entry point. A failure BEFORE step 3 returns an errno to the caller. A failure after it cannot: there is no image left to return to, so the process is made a zombie and its parent woken (`exec_fail_destroyed`). That is why the limits are checked in step 1 and not where the stack is laid out.
+
+Note: the two vectors are copied into static buffers, since the kernel stack is
+only 16 KB and the caller's address space is what is being torn down. They are
+safe to be static because one process at a time is between filling them and
+using them: `in_syscall` stops the timer from scheduling, and no path inside
+execve blocks.
+
+The limits, and where they come from:
+
+* At most 63 entries in each of argv and envp. One more is `E2BIG`, never a
+  silent truncation.
+* At most 3072 bytes of strings across BOTH vectors together, not each. They
+  share one 4096-byte page: `build_user_stack` lays the strings, both pointer
+  arrays, the argc word, a nine-entry auxv and 16 bytes of AT_RANDOM into it,
+  which for 63 entries apiece leaves about 3450 bytes for strings.
+* The budget is checked at copy-in, BEFORE the old image is freed. The stack
+  builder would catch an oversized vector too, but it runs after
+  `free_user_pages`, where there is no image left to return an error to and the
+  caller is killed instead. That is what the check exists to prevent, and
+  `tests/musl/execargmusl` is the probe that would notice if it went away.
+* The path is at most 255 bytes, matching every other path buffer in the file.
+
+A vector that exhausts the string storage exactly and is followed by another
+entry is `E2BIG` as well: a command line that is too long is a size problem, not
+a bad address.
 
 ### read (syscall 3)
 
