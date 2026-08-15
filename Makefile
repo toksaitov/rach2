@@ -412,7 +412,7 @@ make-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 # whole run carries one deadline over the per-step ones.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
 
-selfbuild-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+selfbuild-test: rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48

@@ -23,9 +23,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-KERNEL="$REPO/build/rach2/kernel"
+# The kernel and output default to the host build's, and both can be named:
+# the self-build proof hands the guest-built kernel here and boots the result.
+KERNEL="${1:-$REPO/build/rach2/kernel}"
+OUT="${2:-$REPO/build/images/os-real-grub.disk}"
 KRFFS_BIN="$REPO/build/images/grub-krffs.bin"
-OUT="$REPO/build/images/os-real-grub.disk"
 
 GAP_MB=1
 BOOT_MB=16

@@ -235,5 +235,98 @@ if [ -z "$GUEST_SHA" ]; then
 fi
 cleanup_boot
 
-echo "selfbuild-test: the machine built its kernel twice from clean trees, hash $GUEST_SHA, $SIZEONE bytes: OK"
+# The proof of the bytes. The machine is stopped; the exact kernel it built is
+# extracted from the synced disk copy, its hash must equal the one the guest
+# recorded, the structural checker must accept the tcc layout, and then those
+# bytes boot the full probe suite. Nothing here trusts the build; everything
+# is read back out and judged.
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+if ! build/krffs/readfile.krffs "$WORK" /home/test/kernel.selfbuilt \
+        "$KEXTRACT" --offset "$PART_OFFSET" --size "$PART_SIZE"; then
+    fail "the built kernel could not be extracted from the disk copy"
+fi
+HOST_SHA="$(sha256_of "$KEXTRACT")"
+if [ "$HOST_SHA" != "$GUEST_SHA" ]; then
+    fail "the extracted kernel hashes $HOST_SHA and the guest recorded $GUEST_SHA"
+fi
+if ! python3 tools/check_kernel.py --tcc "$KEXTRACT"; then
+    fail "the built kernel failed the structural checker"
+fi
+if ! python3 tools/runtests.py --kernel "$KEXTRACT" \
+        --initrd build/images/test.krffs --timeout 300 --steptmo 60; then
+    fail "the probe suite did not pass on the machine-built kernel"
+fi
+
+# The GRUB half: the same bytes through a real loader. It needs Docker to
+# assemble the disk, and where Docker is absent the skip is named rather than
+# silent; the QEMU proof above ran either way. Every Docker operation runs
+# under a bound, because a stalled daemon or package mirror would otherwise
+# hang a run whose every other wait has one.
+bounded() {
+    limit="$1"
+    shift
+    "$@" &
+    bpid=$!
+    bwaited=0
+    while [ "$bwaited" -lt "$limit" ] && kill -0 "$bpid" 2>/dev/null; do
+        sleep 1
+        bwaited=$((bwaited + 1))
+    done
+    if kill -0 "$bpid" 2>/dev/null; then
+        kill -9 "$bpid" 2>/dev/null || true
+        wait "$bpid" 2>/dev/null || true
+        return 124
+    fi
+    wait "$bpid"
+}
+
+docker_ready=1
+if command -v docker >/dev/null 2>&1; then
+    if bounded 30 docker info >/dev/null 2>&1; then
+        docker_ready=0
+    fi
+fi
+if [ "$docker_ready" -eq 0 ]; then
+    GRUB_DISK="$DISK.grub"
+    if ! bounded 900 sh tools/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
+        rm -f "$GRUB_DISK"
+        fail "the GRUB disk around the built kernel did not assemble inside its bound"
+    fi
+    GLOG="$DISK.grub.log"
+    rm -f "$GLOG"
+    qemu-system-i386 -cpu max -display none -rtc base=utc \
+        -drive "file=$GRUB_DISK,format=raw,if=ide,index=0,media=disk" \
+        -serial stdio < /dev/null > "$GLOG" 2>&1 &
+    QPID=$!
+    grub_ok=1
+    waited=0
+    while [ "$waited" -lt 120 ]; do
+        if grep -aq "login:" "$GLOG" 2>/dev/null; then
+            grub_ok=0
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    cleanup_boot
+    if [ "$grub_ok" -ne 0 ]; then
+        cp "$GLOG" "$DISK.fail.log" 2>/dev/null || true
+        rm -f "$GRUB_DISK" "$GLOG"
+        fail "the machine-built kernel did not reach a login prompt through GRUB"
+    fi
+    rm -f "$GRUB_DISK" "$GLOG"
+    GRUB_NOTE="and booted through GRUB"
+else
+    echo "selfbuild-test: the GRUB boot needs Docker to assemble the disk; skipped here"
+    GRUB_NOTE="(GRUB skipped: no Docker)"
+fi
+
+echo "selfbuild-test: the machine built its kernel twice from clean trees, hash $GUEST_SHA, $SIZEONE bytes; the exact bytes passed the checker and the probe suite $GRUB_NOTE: OK"
 echo "selfbuild-test: PASS"

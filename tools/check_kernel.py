@@ -132,10 +132,21 @@ def check(data, tcc_profile):
         symbols = read_symbols(data)
     except (struct.error, ValueError):
         fail("truncated or malformed symbol table")
-    if "_start" not in symbols:
-        fail("no _start symbol")
-    if e_entry != symbols["_start"]:
-        fail("entry 0x%x is not _start 0x%x" % (e_entry, symbols["_start"]))
+    if symbols is None:
+        # tcc's linker emits no symbol table; the entry and image-end
+        # addresses are baked into the code at link time, so the layout and
+        # containment rules below are what an artifact without symbols can be
+        # held to. A GNU-linked kernel carries its table and is held to the
+        # symbol rules too.
+        if not tcc_profile:
+            fail("no symbol table (the GNU-linked kernel carries one)")
+        symbols = {}
+    if not tcc_profile:
+        if "_start" not in symbols:
+            fail("no _start symbol")
+        if e_entry != symbols["_start"]:
+            fail("entry 0x%x is not _start 0x%x"
+                 % (e_entry, symbols["_start"]))
     entry_load = None
     for offset, vaddr, _p, filesz, memsz, _a in loads:
         if vaddr <= e_entry < vaddr + memsz:
@@ -147,11 +158,12 @@ def check(data, tcc_profile):
              "bytes" % e_entry)
 
     image_end = max(v + m for _o, v, _p, _f, m, _a in loads)
-    if "_end" not in symbols:
-        fail("no _end symbol")
-    if symbols["_end"] != image_end:
-        fail("_end 0x%x is not the image end 0x%x"
-             % (symbols["_end"], image_end))
+    if not tcc_profile:
+        if "_end" not in symbols:
+            fail("no _end symbol")
+        if symbols["_end"] != image_end:
+            fail("_end 0x%x is not the image end 0x%x"
+                 % (symbols["_end"], image_end))
 
     if tcc_profile:
         offset, vaddr, paddr, _filesz, _memsz, _align = loads[0]
@@ -168,19 +180,22 @@ def check(data, tcc_profile):
 
 
 def read_symbols(data):
-    """Return `{name: value}` for `_start` and `_end` from the symbol table."""
+    """Return `{name: value}` for `_start` and `_end` from the symbol table,
+    or None when the file has no symbol table section at all."""
     (shoff,) = struct.unpack_from("<I", data, 32)
     (_ehsize, _phentsize, _phnum, e_shentsize, e_shnum,
      _shstrndx) = struct.unpack_from("<HHHHHH", data, 40)
     wanted = {}
+    have_symtab = False
     if shoff == 0 or e_shentsize == 0:
-        return wanted
+        return None
     for i in range(e_shnum):
         (_name, sh_type, _flags, _addr, sh_offset, sh_size, sh_link, _info,
          _align, sh_entsize) = struct.unpack_from(
              "<IIIIIIIIII", data, shoff + e_shentsize * i)
         if sh_type != 2:  # SHT_SYMTAB
             continue
+        have_symtab = True
         (_sn, _st, _sf, _sa, str_offset, _ss, _sl, _si, _sal,
          _se) = struct.unpack_from("<IIIIIIIIII", data,
                                    shoff + e_shentsize * sh_link)
@@ -192,7 +207,7 @@ def read_symbols(data):
             name = data[str_offset + name_off:end].decode("ascii", "replace")
             if name in ("_start", "_end"):
                 wanted[name] = value
-    return wanted
+    return wanted if have_symtab else None
 
 
 def synthesize(first_off=0, mb_at=16, text_size=0x100):
@@ -342,12 +357,21 @@ def selftest():
     expect_fail(bytearray(gnu_shaped), "the GNU layout under the tcc profile",
                 "file offset", tcc_profile=True)
 
+    # No symbol table at all, which is what tcc's linker emits: the tcc
+    # profile accepts it (the addresses are baked into the code) and the
+    # common profile refuses it, because the GNU build carries its table.
+    d = bytearray(good)
+    set32(d, 32, 0)
+    check(bytes(d), tcc_profile=True)
+    expect_fail(d, "a kernel without a symbol table under the common profile",
+                "no symbol table")
+
     if failures:
         for line in failures:
             print("check-kernel: selftest: fail: %s" % line, file=sys.stderr)
         sys.exit(1)
-    print("check-kernel: selftest: ok: 4 accepted, 9 refused, each for its "
-          "own rule")
+    print("check-kernel: selftest: ok: 5 accepted, 10 refused, each for "
+          "its own rule")
 
 
 def main():
