@@ -147,7 +147,8 @@ def check_kernel_lists(repo):
 
     link = " ".join(rules.get("kernel", ([], []))[1])
     for needed in ("@kernel.objs", "-Wl,-Ttext=0x100074",
-                   "/lib/tcc/libtcc1.a", "-nostdlib", "-static"):
+                   "/lib/tcc/libtcc1.a", "-nostdlib", "-static",
+                   "-o kernel.new", "mv kernel.new kernel"):
         if needed not in link:
             fail("the kernel link line lacks %s" % needed)
     return sources

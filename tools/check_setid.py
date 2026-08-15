@@ -175,9 +175,11 @@ ALLOWLIST = {
                                            "krffs/authorized_keys"),
             # The read-only source media the machine rebuilds itself from:
             # the three guest makefiles pdpmake reads, and one representative
-            # nested source, pinned by mode, owner and bytes so a manifest
-            # edit cannot quietly hand the shared trees to another owner or
-            # stage a different build than the host's.
+            # nested source, pinned by path, mode, owner and declared host
+            # source, so a manifest edit cannot hand the shared trees to
+            # another owner or repoint them at other files. The image half
+            # verifies the node's presence, mode and owner; it does not
+            # compare the staged bytes.
             "/src/rach2/guest.mk": (0o644, 0, 0, "file", "rach2/guest.mk"),
             "/src/utils/guest.mk": (0o644, 0, 0, "file", "utils/guest.mk"),
             "/src/ish/guest.mk": (0o644, 0, 0, "file", "ish/guest.mk"),

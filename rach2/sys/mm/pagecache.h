@@ -18,7 +18,7 @@
 /* Resident cache capacity, in PAGE_SIZE frames. Must be a power of two: the
    lookup hash is sized at twice this. 1024 frames is a fixed 4 MiB
    reservation. It was 256 (1 MiB) until the machine became its own build
-   host: a compile faults the 700 KiB compiler, the sources, the headers and
+   host: a compile faults the 269 KiB compiler, the sources, the headers and
    the objects through this window, and under 1 MiB every compile re-read
    most of that working set from the disk, which measured at more than a
    minute per file. Four MiB holds the toolchain's hot set and leaves the

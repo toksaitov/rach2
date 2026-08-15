@@ -92,8 +92,12 @@ OBJS = loader.o \
        sys/lib/kstring.o \
        sys/lib/krandom.o
 
+# The link lands in kernel.new and is renamed only on success, so a failed
+# link cannot leave a newer partial kernel that the next make treats as
+# current. The structural check runs on the host, after extraction.
 kernel: $(OBJS) kernel.objs
-	$(KCC) -static -nostdlib -o kernel @kernel.objs -Wl,-Ttext=0x100074 /lib/tcc/libtcc1.a
+	$(KCC) -static -nostdlib -o kernel.new @kernel.objs -Wl,-Ttext=0x100074 /lib/tcc/libtcc1.a
+	mv kernel.new kernel
 
 # Regenerated whenever this makefile changes, through a temporary file
 # renamed only after every line landed: a printf that failed part way
@@ -122,4 +126,4 @@ kernel.objs: guest.mk
 	$(KCC) -c -o $@ $<
 
 clean:
-	rm -f $(OBJS) kernel.objs kernel.objs.new kernel
+	rm -f $(OBJS) kernel.objs kernel.objs.new kernel.new kernel

@@ -334,9 +334,12 @@ bounded() {
 }
 
 docker_ready=1
+docker_skip="the Docker command is not installed"
 if command -v docker >/dev/null 2>&1; then
     if bounded 30 docker info >/dev/null 2>&1; then
         docker_ready=0
+    else
+        docker_skip="the Docker daemon did not answer"
     fi
 fi
 if [ "$docker_ready" -eq 0 ]; then
@@ -370,8 +373,8 @@ if [ "$docker_ready" -eq 0 ]; then
     rm -f "$GRUB_DISK" "$GLOG"
     GRUB_NOTE="and booted through GRUB"
 else
-    echo "selfbuild-test: the GRUB boot needs Docker to assemble the disk; skipped here"
-    GRUB_NOTE="(GRUB skipped: no Docker)"
+    echo "selfbuild-test: the GRUB boot needs Docker to assemble the disk; skipped: $docker_skip"
+    GRUB_NOTE="(GRUB skipped: $docker_skip)"
 fi
 
 echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its 24 utilities and its shell; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
