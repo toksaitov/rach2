@@ -29,10 +29,14 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
-/* More than the twelve the old table left usable, and comfortably under the
- * sixty the new one does: a probe that asked for the exact maximum would be a
- * probe that fails the day somebody adds a region for a good reason. */
-#define WANTED 24
+/* More mappings than the 64-entry table could ever grant, and comfortably
+ * under what the 128-entry one does: this is the boundary that regressing the
+ * table to 64 fails, without asking for the exact maximum, which would make
+ * the probe fail the day somebody adds a region for a good reason. The table
+ * has been outgrown twice, both times by the compiler on the machine: 16
+ * died reading the 1.9 MB libc.a, and 64 died linking login, whose crypt
+ * pulls more archive members than any one-source link. */
+#define WANTED 96
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)

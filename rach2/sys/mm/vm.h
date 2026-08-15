@@ -27,9 +27,14 @@
  * It was 16, and 12 usable mappings is fewer than a compiler needs: tcc reading
  * the 1.9 MB `libc.a` ran out and reported "memory full", with physical memory
  * barely touched and the address space almost entirely free. The table was the
- * ceiling, not the machine. 64 costs 48 bytes per entry per process, which is
- * 36 KB of kernel .bss across the whole process table. */
-#define VMA_MAX 64
+ * ceiling, not the machine. Then 64 ran out the same way when the machine
+ * linked its own `login` (two sources whose SHA-512 crypt pulls more libc.a
+ * members than any one-source link), so it is 128. An entry is 16 bytes
+ * (three words and the kind), so all 128 across the 16-process table cost
+ * 32 KB of kernel .bss, 16 KB more than 64 did. The boundary is guarded by
+ * `tests/musl/vmamusl.c`, which requires more mappings than 64 could ever
+ * grant. */
+#define VMA_MAX 128
 
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
 #define VM_STACK_MAX_GROWTH 0x800000u
