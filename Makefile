@@ -82,7 +82,7 @@ OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
 MKDISK          = krffs/mkdisk.sh
 
-.PHONY: all full deps clean distclean images musl-programs test test-disk bootpart-test \
+.PHONY: all full deps clean distclean images musl-programs test test-disk bootpart-test install-test \
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
@@ -314,6 +314,24 @@ bootpart-test: rach2 tests krffs
 	    --append "rach2.fsdisk rach2.rescue rach2.bootprobe=fixture" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE OK" probe=bootprobe
+
+# `make install-test`: the machine installs its own kernel. Builds the GRUB
+# disk around the host kernel, boots it with no -kernel, and runs the whole
+# install loop twice as root: a marker edited into the banner source, the
+# kernel built in place, installed as a one-boot trial, proved running by its
+# marker after reboot -f, committed, held across a cold boot, corrupted at
+# the installer-named extent, recovered through the fallback and repaired
+# from inside. The interruption matrix's determinate states are then booted
+# from host-crafted environment blocks. Docker required; its absence fails
+# the target, because this harness is the milestone's proof.
+INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
+install-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	@mkdir -p $(IMAGES_DIR)
+	sh krffs/gen_demo_password.sh
+	sh krffs/gen_demo_key.sh
+	sh tools/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
+	sh tools/install_test.sh $(INSTALL_TEST_DISK) \
+	    "`cat krffs/rach2_demo_password`"
 
 # `make persist-test`: fsync durability across a reboot. Builds a disk holding
 # persistprobe, boots it twice against the SAME image: the first boot writes and
@@ -694,6 +712,7 @@ help:
 	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
 	@echo "  make bootpart-test  the /dev/bootpart window and /proc/cmdline"
+	@echo "  make install-test   the machine installs its own kernel (Docker)"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make tcc-test    the machine compiles a program on itself"
