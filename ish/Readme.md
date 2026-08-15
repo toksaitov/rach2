@@ -32,7 +32,7 @@ The shell can be built for both Linux (native) and the Rach2 kernel (freestandin
 * `crt0.c`: C runtime startup for Rach2 (provides `_start` entry point)
 * `Makefile`: Build configuration for Rach2 target
 * `Makefile.linux`: Build configuration for Linux target
-* `guest.mk`: the same build for pdpmake on Rach2 itself (`make -f guest.mk` in a copy of the staged `/src/ish`): the staged tcc compiles the five objects and links them `-nostdlib -static` with ish's own `crt0.o`, dropping only the host build's explicit `-Ttext`, since tcc's default i386 text base is the same address. `tools/check_guest.py` holds its object list equal to the Makefile's.
+* `guest.mk`: the same build for pdpmake on Rach2 itself (`make -f guest.mk` in `/src/ish` as root, or in a copy of it as any account): the staged tcc compiles the five objects and links them `-nostdlib -static` with ish's own `crt0.o`, dropping only the host build's explicit `-Ttext`, since tcc's default i386 text base is the same address. `tools/check_guest.py` holds its object list equal to the Makefile's.
 
 ## Required Syscalls
 

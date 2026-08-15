@@ -187,8 +187,14 @@ static uint64_t stage_node(
                 )
 {
     struct krffs_node *node;
-    struct krffs_node_time zero_time = {
-        0
+    /* Every staged node carries this one fixed instant: one second past the
+       epoch. Constant, because an image built twice from one tree must be one
+       image; nonzero, because pdpmake reads a modification time of zero as a
+       file that does not exist, and a student must be able to run make over
+       the staged sources in place. Anything the machine builds is stamped by
+       its real clock and is therefore newer than any staged source. */
+    struct krffs_node_time staged_time = {
+        1, 0
     };
 
     if (data_size > (uint64_t) SIZE_MAX) {
@@ -227,14 +233,14 @@ static uint64_t stage_node(
     node->data_size =
         data_size;
 
-    /* allocate_reserved_node does not clear the timestamps, so set them to a
-       deterministic zero rather than inherit stale free-block bytes. */
+    /* allocate_reserved_node does not clear the timestamps, so set them to
+       the fixed staged instant rather than inherit stale free-block bytes. */
     node->access_time =
-        zero_time;
+        staged_time;
     node->modification_time =
-        zero_time;
+        staged_time;
     node->attribute_change_time =
-        zero_time;
+        staged_time;
 
     if (data_size > 0 && data) {
         memcpy((char *) (node + 1), data, (size_t) data_size);
@@ -1156,13 +1162,15 @@ int main(int argc, char **argv)
     /* mkfs stamps the root node with the building host's ids and the building
        host's CLOCK (the course tool's contract). A kernel-bound image boots
        multi-user, so its root directory belongs to root whoever built it; and
-       its times are zeroed for the same reason every staged node's are, which
-       is that an image built twice from one tree must be one image. Without
-       this the root node alone carried the moment of the build, and two clean
-       builds of the same commit differed in those twenty-four bytes. */
+       its times are the fixed staged instant for the same reason every staged
+       node's are, which is that an image built twice from one tree must be
+       one image. Without this the root node alone carried the moment of the
+       build, and two clean builds of the same commit differed in those
+       twenty-four bytes. The value is the same instant every staged node gets
+       (see stage_file). */
     {
-        struct krffs_node_time zero_time = {
-            0
+        struct krffs_node_time staged_time = {
+            1, 0
         };
 
         file_system.node->uid =
@@ -1170,11 +1178,11 @@ int main(int argc, char **argv)
         file_system.node->gid =
             0;
         file_system.node->access_time =
-            zero_time;
+            staged_time;
         file_system.node->modification_time =
-            zero_time;
+            staged_time;
         file_system.node->attribute_change_time =
-            zero_time;
+            staged_time;
     }
     krffs_sync_mapping(file_system.node, sizeof(*file_system.node));
 

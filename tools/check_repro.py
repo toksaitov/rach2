@@ -22,6 +22,7 @@ Usage:
 """
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -165,6 +166,28 @@ def main(argv):
                 print("check-repro: FAIL: one source tree staged twice "
                       "produced two different images")
                 return 1
+
+        # Every staged node, the root included, must carry the one fixed
+        # instant {1, 0}: constant keeps the image reproducible, and nonzero
+        # is what lets a make run over the staged sources in place, since
+        # pdpmake reads a zero modification time as a file that does not
+        # exist. A revert to zero would pass the byte comparison above (zero
+        # is reproducible too), so the value itself is asserted here.
+        region = check_setid.read_region(tree_first, 0, None)
+        nodes = check_setid.walk_nodes(region)
+        times_at = 2 + 1 + 8 + 256 + 2 + 4 + 4
+        for node in nodes:
+            if node["type"] not in (check_setid.NODE_RESERVED,
+                                    check_setid.NODE_ROOT):
+                continue
+            for which in range(3):
+                sec, nsec = struct.unpack_from(
+                    "<qq", region, node["offset"] + times_at + 16 * which)
+                if (sec, nsec) != (1, 0):
+                    print("check-repro: FAIL: a staged node's timestamp is "
+                          "(%d, %d), not the fixed staged instant (1, 0)"
+                          % (sec, nsec))
+                    return 1
         top = sorted(list(names) + ["guest.mk", "sub"])
         expected_walk = []
         for entry in top:

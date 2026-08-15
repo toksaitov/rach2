@@ -5,11 +5,11 @@ Milestone 20 put a compiler on the machine, milestone 21 gave it a clock and a m
 ## What a student does with it
 
 ```
-# cp -r /src/rach2 ~ && cd ~/rach2
+# cd /src/rach2
 # make -f guest.mk        # 71 objects, then the link through @kernel.objs
 ```
 
-The same works for `/src/utils` and `/src/ish`. The build tools are the ones earlier milestones staged: tcc as `/bin/cc`, pdpmake as `/bin/make`, and each source tree carries the POSIX `guest.mk` that pdpmake reads, since the repository's own makefiles are GNU makefiles it cannot.
+The same works for `/src/utils` and `/src/ish`, and root builds them in place; an unprivileged account copies a tree home first (`cp -r /src/rach2 ~ && cd ~/rach2`), since `/src` is root's. The build tools are the ones earlier milestones staged: tcc as `/bin/cc`, pdpmake as `/bin/make`, and each source tree carries the POSIX `guest.mk` that pdpmake reads, since the repository's own makefiles are GNU makefiles it cannot. In-place builds work because the stager stamps every staged node with a fixed nonzero instant, one second past the epoch: constant, because two builds of one tree must produce one image; nonzero, because pdpmake reads a zero modification time as a file that does not exist.
 
 ## The four blockers, and what each turned out to need
 

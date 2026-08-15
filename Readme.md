@@ -135,13 +135,18 @@ memory.
 ### The machine builds itself
 
 The kernel's own source is staged at `/src/rach2`, the shell's at `/src/ish`,
-and each carries a `guest.mk` that pdpmake reads. The machine can therefore
-rebuild its own kernel, its utilities and its shell:
+the utilities' at `/src/utils`, and each tree carries a `guest.mk` that
+pdpmake reads (the `Makefile` beside it is the host build's, in GNU syntax
+pdpmake cannot parse). As root, the machine rebuilds any of the three in
+place:
 
 ```sh
-# cp -r /src/rach2 ~ && cd ~/rach2
+# cd /src/rach2
 # make -f guest.mk        # 71 objects, then the link through @kernel.objs
 ```
+
+The unprivileged account copies first, `/src` being root-owned read-only
+source media: `cp -r /src/rach2 ~ && cd ~/rach2 && make -f guest.mk`.
 
 `make selfbuild-test` is that as a gate: it builds the kernel twice from
 clean workspaces and requires the two to hash equal, builds the 24 utilities
