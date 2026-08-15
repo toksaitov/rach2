@@ -311,6 +311,17 @@ int main(void)
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
               strstr(err, "outside every load") != NULL,
           "an entry outside every load is refused");
+    make_kernel(kernel, 5000);
+    put32(kernel + 64, 0); /* p_paddr away from p_vaddr: the loader loads THERE */
+    CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
+              strstr(err, "physical address differs") != NULL,
+          "a physical address away from the virtual is refused");
+    make_kernel(kernel, 5000);
+    put32(kernel + 100, 0x10003); /* the a.out kludge bit changes the load */
+    put32(kernel + 104, (uint32_t)(0u - (0x1BADB002u + 0x10003)));
+    CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
+              strstr(err, "flags are not ALIGN") != NULL,
+          "multiboot flags away from ALIGN|MEMINFO are refused");
 
     /* A fallback whose loader surface is broken stops the install before the
        first environment write. */
@@ -370,6 +381,23 @@ int main(void)
     CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1,
           "a commit with the trial still armed is refused");
     CHECK(strstr(err, "has not booted") != NULL, "the commit-gate diagnostic");
+
+    /* A commit with no trial state at all is refused too: a fresh block has
+       no consumed marker, and neither does an interrupted install, whose slot
+       holds partial bytes the running kernel never was. */
+    load("");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for fresh commit");
+    CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1, "a commit on a fresh block is refused");
+    CHECK(strstr(err, "no consumed trial") != NULL, "the fresh-block diagnostic");
+    load("");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for cut commit");
+    img.writes_left = 2 + 30; /* the install is cut mid-slot */
+    CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == -1,
+          "the install is cut for the commit case");
+    img.writes_left = -1;
+    CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1,
+          "a commit after an interrupted install is refused");
+    CHECK(strstr(err, "no consumed trial") != NULL, "the interrupted-install diagnostic");
 
     /* The dropped sector: the write callback reports success and writes
        nothing, and only the byte-for-byte readback can catch it. The header

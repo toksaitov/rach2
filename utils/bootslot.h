@@ -84,7 +84,11 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
 int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, char *err,
                      size_t errlen);
 
-/** Write `saved_entry=candidate`: the trial boot proved itself. */
+/** Write `saved_entry=candidate`, making the booted candidate the saved
+ *  default. Requires the consumed-trial marker (`next_entry=`) in the block:
+ *  an armed line means the slot was refilled after this boot, and no line at
+ *  all means a fresh disk or an interrupted install, and neither state's
+ *  slot bytes are the running kernel. */
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen);
 
 /** Read the environment block (1024 bytes) into `out`. */

@@ -447,6 +447,13 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     if (!found) {
         return fail(err, errlen, "no multiboot header in the first 8192 bytes");
     }
+    /* The flags decide HOW the loader reads the image; both Rach2 layouts
+       carry exactly ALIGN|MEMINFO (3), and anything else (the a.out kludge
+       above all) would change the load. The same rule tools/check_kernel.py
+       holds on the host. */
+    if (le32(image + off + 4) != 3) {
+        return fail(err, errlen, "the multiboot flags are not ALIGN|MEMINFO");
+    }
 
     /* The loader surface, the way tools/check_kernel.py judges it on the
        host: a sane program-header table, at least one load that stays inside
@@ -483,6 +490,9 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
         }
         if (p_vaddr < 0x100000u) {
             return fail(err, errlen, "a load sits below the megabyte");
+        }
+        if (le32(ph + 12) != p_vaddr) {
+            return fail(err, errlen, "a load's physical address differs from its virtual");
         }
         if (e_entry >= p_vaddr && e_entry - p_vaddr < p_filesz) {
             entry_in_load = 1;
@@ -671,10 +681,16 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
     static uint8_t env[ENV_BYTES];
     uint32_t i;
 
-    /* An armed trial means an install happened after this machine booted, so
-       the slot no longer holds the kernel that is running: committing would
-       bless bytes that never booted. The arming line is exact; the emptied
-       form GRUB's consumption leaves behind does not match it. */
+    int consumed = 0;
+
+    /* Three trial states live in the block. An armed line
+       (next_entry=candidate) means an install happened after this machine
+       booted, so the slot no longer holds the running kernel. The consumed
+       line (next_entry=, the empty value GRUB's scripted consumption saves)
+       means the running candidate came through a trial boot; only that state
+       may commit. No line at all is a fresh disk or an interrupted install,
+       and an interrupted install's slot holds partial bytes, so committing
+       without the consumed marker would save bytes that never booted. */
     if (bootslot_read_env(bs, env, err, errlen) != 0) {
         return -1;
     }
@@ -684,6 +700,14 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
                         "an installed candidate has not booted; boot it "
                         "before committing");
         }
+        if (i + 13 <= ENV_BYTES && memcmp(env + i, "\nnext_entry=\n", 13) == 0) {
+            consumed = 1;
+        }
+    }
+    if (!consumed) {
+        return fail(err, errlen,
+                    "no consumed trial in the environment block; install and "
+                    "boot a candidate before committing");
     }
     return env_edit(bs, "saved_entry", "candidate", NULL, err, errlen);
 }
