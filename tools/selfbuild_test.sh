@@ -216,6 +216,7 @@ step "SMOKESU" "./su -c true < /dev/null > /dev/null 2>&1; [ \$? -eq 1 ] && echo
 step "SMOKESUDO" "./sudo true > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"SUDO"
 step "SMOKEPASSWD" "./passwd < /dev/null > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"PASSWD"
 step "SMOKEADD" "./adduser > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"ADD"
+step "SMOKEINSTK" "./install-kernel ./cat > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"INSTK"
 step "SMOKEISH" "cd /home/test/kbuild/ish && [ \"\$(./ish -c '/home/test/kbuild/utils/echo selfbuilt')\" = selfbuilt ] && echo SMOKE\"\"ISH"
 step "SYNCDONE" "sync; echo SYNC\"\"DONE"
 
@@ -276,7 +277,7 @@ if ! grep -q "IBUILDRC=0" "$LOG"; then
 fi
 for smoke in SMOKECAT SMOKEECHO SMOKETF SMOKEPWD SMOKELS SMOKETM SMOKEMCR \
              SMOKEYES SMOKEPING SMOKEWEB SMOKEBUILT SMOKELOGIN SMOKESU \
-             SMOKESUDO SMOKEPASSWD SMOKEADD SMOKEISH; do
+             SMOKESUDO SMOKEPASSWD SMOKEADD SMOKEINSTK SMOKEISH; do
     if ! wait_token "$smoke" 240; then
         fail "the userland smoke check $smoke did not pass"
     fi
@@ -405,5 +406,5 @@ if ! grep -q "INPLACERC=0" "$LOG"; then
 fi
 cleanup_boot
 
-echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its 24 utilities and its shell, and root rebuilt the staged /src/ish in place; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
+echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its 25 utilities and its shell, and root rebuilt the staged /src/ish in place; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
 echo "selfbuild-test: PASS"

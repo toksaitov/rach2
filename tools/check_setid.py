@@ -180,6 +180,11 @@ ALLOWLIST = {
             # another owner or repoint them at other files. The image half
             # verifies the node's presence, mode and owner; it does not
             # compare the staged bytes.
+            # The installer root runs against the raw boot partition: its
+            # mode, owner and source are pinned so a manifest edit cannot
+            # swap the binary root points at a disk device.
+            "/bin/install-kernel": (0o755, 0, 0, "file",
+                                    "build/utils/sbin/install-kernel"),
             "/src/rach2/guest.mk": (0o644, 0, 0, "file", "rach2/guest.mk"),
             "/src/utils/guest.mk": (0o644, 0, 0, "file", "utils/guest.mk"),
             "/src/ish/guest.mk": (0o644, 0, 0, "file", "ish/guest.mk"),

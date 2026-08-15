@@ -15,7 +15,7 @@ UFLAGS = -static
 
 PROGS = true false echo yes cat pwd touch mkdir rm mv cp ls ping nc \
         httpd halt init-shell init-login login su sudo passwd adduser \
-        adduser-crash
+        adduser-crash install-kernel
 
 all: $(PROGS)
 
@@ -67,6 +67,8 @@ adduser: adduser.c pwauth.c pwauth.h
 	$(UCC) $(UFLAGS) -o adduser adduser.c pwauth.c
 adduser-crash: adduser.c pwauth.c pwauth.h
 	$(UCC) $(UFLAGS) -DADDUSER_CRASH_POINT -o adduser-crash adduser.c pwauth.c
+install-kernel: install-kernel.c bootslot.c bootslot.h
+	$(UCC) $(UFLAGS) -o install-kernel install-kernel.c bootslot.c
 
 clean:
 	rm -f $(PROGS)

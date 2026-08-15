@@ -58,7 +58,7 @@ UTILITIES = true  \
 # one names it explicitly, which is also what makes the set-id allowlist in
 # tools/check_setid.py a complete list rather than a sample: a privileged program
 # reaches an image only through a `file` line naming it.
-SBIN_PROGS = init-shell init-login login su sudo passwd adduser adduser-crash
+SBIN_PROGS = init-shell init-login login su sudo passwd adduser adduser-crash install-kernel
 
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
 SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
@@ -159,6 +159,12 @@ $(BUILD)/sbin/login: login.c pwauth.c pwauth.h
 $(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/adduser.d -o $@ $(LINK_PRE) adduser.c pwauth.c $(LINK_POST)
+
+# install-kernel links the boot-slot library (bootslot.c), the pure core its
+# host seam test drives over fixture images with fault injection.
+$(BUILD)/sbin/install-kernel: install-kernel.c bootslot.c bootslot.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/install-kernel.d -o $@ $(LINK_PRE) install-kernel.c bootslot.c $(LINK_POST)
 
 $(BUILD)/sbin/adduser-crash: adduser.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)

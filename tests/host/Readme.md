@@ -45,6 +45,8 @@ Current tests:
 * `vm_hosttest.c`: the VMA interval tree, its overlap search and split logic (`sys/mm/vm.c`).
 * `frame_hosttest.c`: the physical-frame pool sizing from the multiboot memory map (`sys/mm/frame.c`).
 * `synthfs_hosttest.c`: the synthetic `/dev` and `/proc` path classifier (`sys/fs/synthfs.c`).
+* `mbr_hosttest.c`: the MBR partition-table parse and the boot-partition judgement (`sys/block/mbr.c`) over crafted tables, the malformed beside the valid.
+* `installkernel_hosttest.c`: the install-kernel core (`utils/bootslot.c`) over FAT32 fixtures from `mkfatfixture.py`, an independent writer of the same format; the write callback injects dropped sectors, torn sectors and cuts, so the byte-for-byte readback and the interruption-matrix order are both falsifiable.
 * `poll_select_hosttest.c`: the `fd_set` and `pollfd` translation and the readable/writable/except projection (`sys/io/poll_select.c`).
 * `pipe_ring_hosttest.c`: the pipe ring-buffer arithmetic (`sys/ipc/pipe_ring.c`).
 * `n_tty_hosttest.c`: the N_TTY line discipline's input editing and echo (`sys/tty/n_tty.c`).

@@ -149,7 +149,7 @@ The unprivileged account copies first, `/src` being root-owned read-only
 source media: `cp -r /src/rach2 ~ && cd ~/rach2 && make -f guest.mk`.
 
 `make selfbuild-test` is that as a gate: it builds the kernel twice from
-clean workspaces and requires the two to hash equal, builds the 24 utilities
+clean workspaces and requires the two to hash equal, builds the 25 utilities
 and ish with a smoke check each, then extracts the exact kernel bytes from
 the disk image, runs `tools/check_kernel.py --tcc` on them, and boots them
 through the full probe suite; where Docker is available the same bytes boot once more
