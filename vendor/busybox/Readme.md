@@ -19,6 +19,8 @@ The only Rach2-owned files here are this Readme, `build_busybox.sh`, the `muslgc
 3. Rebuild with `make full` (or `./build_busybox.sh`), then re-run a boot and the SSH capstone.
 4. If the new release renamed or dropped a config symbol, adjust `rach2.config` (it is `defconfig` with the applets Rach2 cannot run turned off, so a `make oldconfig` against the new tree shows what changed).
 
+The SHA hardware-acceleration options (`CONFIG_SHA1_HWACCEL`, `CONFIG_SHA256_HWACCEL`) are off. The accelerated paths dispatch on CPUID, which reports what the CPU has, and this kernel never enables what those paths need: `CR4.OSFXSR` stays clear and no context switch saves the XMM registers, so the first SSE instruction of the accelerated routine raises an invalid-opcode fault and the process is killed. `sha256sum` died exactly that way on the machine this image boots. The plain C paths use no vector state and run everywhere; the suid build always had these options off. The kernel-side gap (advertised CPU features the kernel does not enable state for) is recorded in the milestone 22 record as deferred.
+
 There are no source patches; all customization is `rach2.config`. If a patch ever becomes unavoidable, add `patches/NNNN-reason.patch` (applied after extraction by `build_busybox.sh`) and explain it here.
 
 ## Config rationale (`rach2.config`, from `defconfig` minus what Rach2 cannot run)
