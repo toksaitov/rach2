@@ -86,7 +86,7 @@ MKDISK          = krffs/mkdisk.sh
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
-        tcc-test ssh-test make-test \
+        tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
@@ -405,6 +405,20 @@ make-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 	sh tools/make_test.sh build/rach2/kernel $(MAKE_TEST_DISK) \
 	    "`cat krffs/rach2_test_password`"
 
+# `make selfbuild-test`: the machine builds its own kernel. Boots os-real from
+# a disk copy as the unprivileged test account, copies /src/rach2 home, and
+# runs the staged make and compiler over the staged guest.mk, twice from clean
+# workspaces; the two kernels must hash equal. Every wait is bounded, and the
+# whole run carries one deadline over the per-step ones.
+SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
+
+selfbuild-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	@mkdir -p $(IMAGES_DIR)
+	sh krffs/gen_demo_password.sh
+	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
+	sh tools/selfbuild_test.sh build/rach2/kernel $(SELFBUILD_DISK) \
+	    "`cat krffs/rach2_test_password`"
+
 # `make ssh-test`: the SSH capstone with nobody at the keyboard. Boots os-real
 # from a disk with the port forwarded, starts dropbear from the console session
 # the way the Readme's recipe does, then logs in twice: root by key, and the
@@ -662,6 +676,7 @@ help:
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
+	@echo "  make selfbuild-test   the machine builds its own kernel, twice, hash-equal"
 	@echo "  make ssh-test    the SSH capstone, both logins, unattended"
 	@echo "  make account-test   accounts created, authenticated and deleted, on both images"
 	@echo "  make shutdown-test  userland stops the machine, and only root can"
