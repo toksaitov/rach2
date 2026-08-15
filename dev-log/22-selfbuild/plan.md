@@ -32,7 +32,7 @@ Other settled points, recorded so they are not re-argued:
 * `tools/check_elf.py` checks user programs and rejects load addresses below 0x02000000; it cannot check a kernel. No kernel checker exists.
 * No host tool reads a file out of a KRFFS image. `stageimage.krffs` writes; `fsck`, `fsviz` and `edfs` check, draw and edit. The proof in phase 9 needs an extractor.
 * busybox in os-real has `sha256sum`, so the guest can hash its build products and the host can compare after extraction.
-* The limits that bound a guest build: 16 descriptors per process (fd.h:20), 16 processes (process.h:11), 64 VMAs (vm.h:32), 63 exec arguments and 3072 shared argv-plus-environment string bytes (syscall.c:4313-4314), and a 256-byte terminal input line (n_tty.h:67). The deepest kernel include chain is 6 files, and tcc holds each open include on a descriptor until it is consumed (tccpp.c:1801, :2627).
+* The limits that bound a guest build: 16 descriptors per process (fd.h:20), 16 processes (process.h:11), 64 VMAs (vm.h:32; the work raised this to 128 when linking the machine's own `login` ran the table out, the same way tcc had run out the 16-entry table in milestone 20), 63 exec arguments and 3072 shared argv-plus-environment string bytes (syscall.c:4313-4314), and a 256-byte terminal input line (n_tty.h:67). The deepest kernel include chain is 6 files, and tcc holds each open include on a descriptor until it is consumed (tccpp.c:1801, :2627).
 
 One working rule for every phase: a mutation shown failing runs on a disposable copy or behind a cleanup handler that restores the input, and the positive proof runs again after the restore, before the phase completes.
 

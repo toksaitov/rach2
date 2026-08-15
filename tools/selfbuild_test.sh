@@ -183,6 +183,31 @@ step "BUILDTWO" "cd /home/test/kbuild/rach2 && make -f guest.mk > /tmp/kb2.out 2
 step "TAILTWO" "busybox tail -4 /tmp/kb2.out; echo TAIL\"\"TWO"
 step "HASHTWO" "cd /home/test/kbuild/rach2 && busybox sha256sum kernel > /tmp/k2.sha; K2=\$(busybox cat /tmp/k2.sha); echo HASH\"\"TWO=\$K2"
 step "VERDICTDONE" "if [ -n \"\$K1\" ] && [ \"\$K1\" = \"\$K2\" ]; then echo HASH\"\"SAME; else echo HASH\"\"DIFFER; fi; echo VERDICT\"\"DONE"
+step "UCOPYDONE" "cd /home/test/kbuild && rm -rf utils ish && cp -r /src/utils . && cp -r /src/ish . && echo UCOPY\"\"DONE"
+step "UBUILDRC" "cd /home/test/kbuild/utils && make -f guest.mk > /tmp/ub.out 2>&1; echo UBUILD\"\"RC=\$?"
+step "UBTAIL" "busybox tail -4 /tmp/ub.out; echo UB\"\"TAIL"
+step "IBUILDRC" "cd /home/test/kbuild/ish && make -f guest.mk > /tmp/ib.out 2>&1; echo IBUILD\"\"RC=\$?"
+step "IBTAIL" "busybox tail -4 /tmp/ib.out; echo IB\"\"TAIL"
+step "SMOKECAT" "cd /home/test/kbuild/utils && busybox echo hi > /tmp/sf && [ \"\$(./cat /tmp/sf)\" = hi ] && echo SMOKE\"\"CAT"
+step "SMOKEECHO" "[ \"\$(./echo alpha)\" = alpha ] && echo SMOKE\"\"ECHO"
+step "SMOKETF" "./true && ! ./false && echo SMOKE\"\"TF"
+step "SMOKEPWD" "[ \"\$(cd /tmp && /home/test/kbuild/utils/pwd)\" = /tmp ] && echo SMOKE\"\"PWD"
+step "SMOKELS" "./ls /tmp | busybox grep -q sf && echo SMOKE\"\"LS"
+step "SMOKETM" "./touch /tmp/st && [ -f /tmp/st ] && ./mkdir /tmp/sd && [ -d /tmp/sd ] && echo SMOKE\"\"TM"
+step "SMOKEMCR" "./cp /tmp/sf /tmp/sc && busybox cmp -s /tmp/sf /tmp/sc && ./mv /tmp/sc /tmp/sm && [ -f /tmp/sm ] && ./rm /tmp/sm /tmp/st && [ ! -f /tmp/sm ] && echo SMOKE\"\"MCR"
+step "SMOKEYES" "./yes | busybox head -n 1 | busybox grep -qx y && echo SMOKE\"\"YES"
+step "SMOKEPING" "./ping 127.0.0.1 > /dev/null 2>&1 && echo SMOKE\"\"PING"
+step "SMOKEWEB" "./httpd > /dev/null 2>&1 & sleep 2; printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 80 | busybox grep -q HTTP/ && echo SMOKE\"\"WEB; kill %% 2>/dev/null"
+# The refusal statuses above are exact (1 for each credential refusal, and
+# sudo run against its permission check, not only its usage line), so an exec
+# failure (126, 127) or a crash (128 plus a signal) cannot pass as a refusal.
+step "SMOKEBUILT" "[ -x halt ] && [ -x init-shell ] && [ -x init-login ] && [ -x adduser-crash ] && echo SMOKE\"\"BUILT"
+step "SMOKELOGIN" "./login < /dev/null > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"LOGIN"
+step "SMOKESU" "./su -c true < /dev/null > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"SU"
+step "SMOKESUDO" "./sudo true > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"SUDO"
+step "SMOKEPASSWD" "./passwd < /dev/null > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"PASSWD"
+step "SMOKEADD" "./adduser > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"ADD"
+step "SMOKEISH" "cd /home/test/kbuild/ish && [ \"\$(./ish -c '/home/test/kbuild/utils/echo selfbuilt')\" = selfbuilt ] && echo SMOKE\"\"ISH"
 step "SYNCDONE" "sync; echo SYNC\"\"DONE"
 
 boot_steps
@@ -226,6 +251,27 @@ fi
 if ! grep -q "HASHSAME" "$LOG"; then
     fail "the hash comparison never reported"
 fi
+if ! wait_token "UBUILDRC=" 1200; then
+    fail "the utils build never finished"
+fi
+if ! grep -q "UBUILDRC=0" "$LOG"; then
+    wait_token "UBTAIL" 60 || true
+    fail "the utils build failed; its last lines are in the kept log"
+fi
+if ! wait_token "IBUILDRC=" 600; then
+    fail "the ish build never finished"
+fi
+if ! grep -q "IBUILDRC=0" "$LOG"; then
+    wait_token "IBTAIL" 60 || true
+    fail "the ish build failed; its last lines are in the kept log"
+fi
+for smoke in SMOKECAT SMOKEECHO SMOKETF SMOKEPWD SMOKELS SMOKETM SMOKEMCR \
+             SMOKEYES SMOKEPING SMOKEWEB SMOKEBUILT SMOKELOGIN SMOKESU \
+             SMOKESUDO SMOKEPASSWD SMOKEADD SMOKEISH; do
+    if ! wait_token "$smoke" 240; then
+        fail "the userland smoke check $smoke did not pass"
+    fi
+done
 if ! wait_token "SYNCDONE" 240; then
     fail "the disk was never synced after the builds"
 fi
@@ -328,5 +374,5 @@ else
     GRUB_NOTE="(GRUB skipped: no Docker)"
 fi
 
-echo "selfbuild-test: the machine built its kernel twice from clean trees, hash $GUEST_SHA, $SIZEONE bytes; the exact bytes passed the checker and the probe suite $GRUB_NOTE: OK"
+echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its 24 utilities and its shell; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
 echo "selfbuild-test: PASS"
