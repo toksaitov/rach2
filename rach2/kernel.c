@@ -13,6 +13,8 @@
 #include "sys/mm/paging.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
+#include "sys/block/mbr.h"
+#include "sys/fs/devfs.h"
 #include "sys/proc/process.h"
 #include "sys/tty/tty.h"
 #include "sys/tty/pty.h"
@@ -1600,11 +1602,12 @@ static int init_krffs_disk(void)
 {
     static uint8_t mbr[BLOCK_SECTOR_SIZE];
     static uint8_t part0[BLOCK_SECTOR_SIZE];
+    struct mbr_part parts[MBR_PART_COUNT];
     uint32_t start_lba = 0;
     uint32_t sector_count = 0;
     uint32_t part_bytes;
     int i;
-    int found = 0;
+    int found = -1;
 
     if (block_probe() != 0 || !block0) {
         serial_printf("KRFFS: no boot disk\n");
@@ -1614,7 +1617,7 @@ static int init_krffs_disk(void)
         serial_printf("KRFFS: MBR read failed\n");
         return -1;
     }
-    if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
+    if (mbr_parse(mbr, parts) != 0) {
         serial_printf("KRFFS: no MBR signature\n");
         return -1;
     }
@@ -1625,31 +1628,26 @@ static int init_krffs_disk(void)
        actual root tightens the weak 16-bit magic and works whatever the MBR type
        byte says, so a GRUB-partitioned disk (boot partition first, KRFFS second)
        still mounts. LBA 0 is never probed; it holds the boot code. */
-    for (i = 0; i < 4; ++i) {
-        uint8_t *e = mbr + 446 + i * 16;
-        uint32_t lba = (uint32_t) e[8] | ((uint32_t) e[9] << 8) |
-                       ((uint32_t) e[10] << 16) | ((uint32_t) e[11] << 24);
-        uint32_t count = (uint32_t) e[12] | ((uint32_t) e[13] << 8) |
-                         ((uint32_t) e[14] << 16) | ((uint32_t) e[15] << 24);
+    for (i = 0; i < MBR_PART_COUNT; ++i) {
         krffs_node_t *root;
 
-        if (count == 0 || lba == 0) {
+        if (parts[i].sector_count == 0 || parts[i].start_lba == 0) {
             continue;
         }
-        if (block0->read(block0, lba, 1, part0) != 0) {
+        if (block0->read(block0, parts[i].start_lba, 1, part0) != 0) {
             continue;
         }
         root = (krffs_node_t *) part0;
         if (root->magic == KRFFS_FILE_SYSTEM_MAGIC &&
             root->type == KRFFS_ROOT_NODE && root->size != 0 &&
-            root->size <= (uint64_t) count * BLOCK_SECTOR_SIZE) {
-            start_lba = lba;
-            sector_count = count;
-            found = 1;
+            root->size <= (uint64_t) parts[i].sector_count * BLOCK_SECTOR_SIZE) {
+            start_lba = parts[i].start_lba;
+            sector_count = parts[i].sector_count;
+            found = i;
             break;
         }
     }
-    if (!found) {
+    if (found < 0) {
         serial_printf("KRFFS: no KRFFS partition on the disk\n");
         return -1;
     }
@@ -1732,6 +1730,14 @@ static int init_krffs_disk(void)
         }
     }
     _krffs_on_disk = 1;
+
+    /* With KRFFS mounted, judge MBR entry 1 as the boot partition (the GRUB
+       disk's FAT half) and publish /dev/bootpart over it if it qualifies; on a
+       single-partition disk the device simply never appears. */
+    if (mbr_bootpart_pick(parts, found, block0->sector_count) == 0) {
+        devfs_bootpart_publish(block0, parts[0].start_lba,
+                               parts[0].sector_count);
+    }
     return 0;
 }
 

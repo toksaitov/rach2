@@ -29,6 +29,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/pci.c       \
 	  sys/power.c     \
 	  sys/block/block.c     \
+	  sys/block/mbr.c       \
 	  sys/block/ata.c       \
 	  sys/block/ahci.c      \
 	  sys/display/vga_text.c \

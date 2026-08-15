@@ -20,4 +20,7 @@ void kcmdline_capture(const char *cmdline);
  */
 int kcmdline_has(const char *flag);
 
+/** The captured command line, a NUL-terminated string (empty if none). */
+const char *kcmdline_get(void);
+
 #endif /* _CMDLINE_H_ */

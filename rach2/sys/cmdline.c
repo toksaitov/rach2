@@ -32,6 +32,11 @@ void kcmdline_capture(const char *cmdline)
     }
 }
 
+const char *kcmdline_get(void)
+{
+    return kcmdline;
+}
+
 int kcmdline_has(const char *flag)
 {
     size_t flen = k_strlen(flag);

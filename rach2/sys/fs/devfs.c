@@ -19,6 +19,8 @@
 #include "../lib/kerrno.h"
 #include "../io/poll.h"
 #include "../tty/pty.h"
+#include "../block/block.h"
+#include "../serial.h"
 
 /* Linux O_* bits devfs_open honours (the rest are irrelevant to a char device). */
 #define DEVFS_O_CLOEXEC   02000000
@@ -115,34 +117,151 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     return -ENOTTY; /* these are not terminals */
 }
 
+/*
+ * /dev/bootpart: the GRUB disk's FAT boot partition as a bounded raw window,
+ * published by the disk mount when the MBR qualifies (devfs_bootpart_publish)
+ * and absent otherwise. I/O is whole 512-byte sectors at sector-aligned
+ * offsets, staged through a kernel bounce buffer because the AHCI driver
+ * programs the buffer's physical address into its PRDT and must never see a
+ * user pointer. Writes are write-through: both disk drivers flush the drive
+ * cache after every write, so a returned write is on the platter.
+ */
+static struct {
+    int present;
+    block_partition_t part;
+} bootpart;
+
+static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    uint8_t sector[BLOCK_SECTOR_SIZE];
+    block_device_t *part = &bootpart.part.device;
+    uint32_t off = e->ofd->offset;
+    uint32_t total = (uint32_t) part->sector_count;
+    uint32_t lba, want, done;
+
+    if (!bootpart.present) {
+        return -ENXIO;
+    }
+    if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
+        return -EINVAL;
+    }
+    lba = off / BLOCK_SECTOR_SIZE;
+    if (lba >= total) {
+        return 0; /* end of the partition, the regular-file convention */
+    }
+    want = count / BLOCK_SECTOR_SIZE;
+    if (want > total - lba) {
+        want = total - lba;
+    }
+    for (done = 0; done < want; done++) {
+        if (part->read(part, lba + done, 1, sector) != 0) {
+            break;
+        }
+        if (copy_to_user((void __user *) (buf + done * BLOCK_SECTOR_SIZE),
+                         sector, BLOCK_SECTOR_SIZE) != 0) {
+            if (done == 0) {
+                return -EFAULT;
+            }
+            break;
+        }
+    }
+    if (done == 0) {
+        return -EIO;
+    }
+    e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
+    return (int32_t) (done * BLOCK_SECTOR_SIZE);
+}
+
+static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf,
+                                  uint32_t count)
+{
+    uint8_t sector[BLOCK_SECTOR_SIZE];
+    block_device_t *part = &bootpart.part.device;
+    uint32_t off = e->ofd->offset;
+    uint32_t total = (uint32_t) part->sector_count;
+    uint32_t lba, want, done;
+
+    if (!bootpart.present) {
+        return -ENXIO;
+    }
+    if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
+        return -EINVAL;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    lba = off / BLOCK_SECTOR_SIZE;
+    want = count / BLOCK_SECTOR_SIZE;
+    /* A write that starts at or crosses the end writes nothing: the boot
+       partition's size is fixed and a partial install write helps nobody. */
+    if (lba >= total || want > total - lba) {
+        return -ENOSPC;
+    }
+    for (done = 0; done < want; done++) {
+        if (copy_from_user(sector,
+                           (const void __user *) (buf + done * BLOCK_SECTOR_SIZE),
+                           BLOCK_SECTOR_SIZE) != 0) {
+            if (done == 0) {
+                return -EFAULT;
+            }
+            break;
+        }
+        if (part->write(part, lba + done, 1, sector) != 0) {
+            break;
+        }
+    }
+    if (done == 0) {
+        return -EIO;
+    }
+    e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
+    return (int32_t) (done * BLOCK_SECTOR_SIZE);
+}
+
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
+static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll, dev_ioctl, NULL};
 
 /*
  * The registry. major/minor are the real Linux mem-device numbers (major 1) so
  * stat reports a faithful rdev. A device has no per-fd heap state, so close is
  * NULL (nothing to release) and priv points at the registry entry itself, which
- * fstat reads for the rdev.
+ * fstat reads for the rdev. `mode` is the nine-bit permission stat reports and
+ * open enforces (the entries' owner is root:root); everything the machine
+ * always had is 0666, the Linux modes for these devices, and only the raw
+ * boot-partition window is root-only. `bootpart` is dynamically present and
+ * must stay the LAST entry: enumeration ends at the first absent name.
  */
 struct devfs_entry {
     const char *name;
     uint16_t major;
     uint16_t minor;
     uint8_t lseek_zero; /* mem devices seek-to-zero; the rest are not seekable */
+    uint16_t mode;
     const struct file_ops *ops;
 };
 
 /* ops == NULL marks a console-backed entry: opening it yields an FD_TYPE_CONSOLE
- * descriptor (the existing terminal I/O), not an ops-driven device. */
+ * descriptor (the existing terminal I/O), not an ops-driven device. bootpart's
+ * major is 240, the local/experimental block, minor 0. */
 static const struct devfs_entry dev_table[] = {
-    {"null", 1, 3, 1, &null_ops},   {"zero", 1, 5, 1, &zero_ops},
-    {"full", 1, 7, 1, &full_ops},   {"random", 1, 8, 0, &rand_ops},
-    {"urandom", 1, 9, 0, &rand_ops}, {"console", 5, 1, 0, NULL},
-    {"tty", 5, 0, 0, NULL},          {"ptmx", 5, 2, 0, NULL}};
+    {"null", 1, 3, 1, 0666, &null_ops},   {"zero", 1, 5, 1, 0666, &zero_ops},
+    {"full", 1, 7, 1, 0666, &full_ops},   {"random", 1, 8, 0, 0666, &rand_ops},
+    {"urandom", 1, 9, 0, 0666, &rand_ops}, {"console", 5, 1, 0, 0666, NULL},
+    {"tty", 5, 0, 0, 0666, NULL},          {"ptmx", 5, 2, 0, 0666, NULL},
+    {"bootpart", 240, 0, 0, 0600, &bootpart_ops}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
+
+/** Whether table entry `i` exists right now (bootpart is mount-dependent). */
+static int devfs_entry_present(int i)
+{
+    if (dev_table[i].ops == &bootpart_ops) {
+        return bootpart.present;
+    }
+    return 1;
+}
 
 /* Stable inode namespace for /dev: the directory itself, then one per device. */
 #define DEVFS_INO_DIR 2u
@@ -165,7 +284,7 @@ static const struct devfs_entry *devfs_find(const char *name)
     int i;
     for (i = 0; i < DEVFS_NDEV; i++) {
         if (name_eq(dev_table[i].name, name)) {
-            return &dev_table[i];
+            return devfs_entry_present(i) ? &dev_table[i] : NULL;
         }
     }
     return NULL;
@@ -300,7 +419,7 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
         return -1;
     }
     if (mode) {
-        *mode = 0020000u | 0666u; /* S_IFCHR | 0666 */
+        *mode = 0020000u | (uint32_t)dev->mode; /* S_IFCHR | the entry's mode */
     }
     if (rdev) {
         *rdev = ((uint32_t)dev->major << 8) | (uint32_t)dev->minor;
@@ -357,13 +476,62 @@ const char *devfs_fd_name(struct fd_entry *e)
 
 int devfs_count(void)
 {
-    return DEVFS_NDEV;
+    int i, n = 0;
+
+    for (i = 0; i < DEVFS_NDEV; i++) {
+        if (devfs_entry_present(i)) {
+            n++;
+        }
+    }
+    return n;
 }
 
 const char *devfs_name(int i)
 {
-    if (i < 0 || i >= DEVFS_NDEV) {
+    if (i < 0 || i >= DEVFS_NDEV || !devfs_entry_present(i)) {
         return NULL;
     }
     return dev_table[i].name;
+}
+
+uint32_t devfs_fd_mode(struct fd_entry *e)
+{
+    const struct devfs_entry *dev;
+
+    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+        return 0;
+    }
+    dev = (const struct devfs_entry *)e->priv;
+    return 0020000u | (uint32_t)dev->mode;
+}
+
+void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
+                            uint32_t sector_count)
+{
+    /* Byte offsets ride the descriptor's 32-bit offset and lseek's int32
+     * result, so the partition must sit under 2 GiB; the real boot partition
+     * is 16 MiB and anything larger than the bound is a misbuilt disk. */
+    if (sector_count == 0 || sector_count >= (0x80000000u / BLOCK_SECTOR_SIZE)) {
+        serial_printf("devfs: boot partition too large; /dev/bootpart absent\n");
+        return;
+    }
+    block_partition_init(&bootpart.part, backing, start_lba, sector_count);
+    bootpart.present = 1;
+}
+
+int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size)
+{
+    const struct devfs_entry *dev;
+
+    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+        return 0;
+    }
+    dev = (const struct devfs_entry *)e->priv;
+    if (dev->ops != &bootpart_ops || !bootpart.present) {
+        return 0;
+    }
+    if (size) {
+        *size = (uint32_t)bootpart.part.device.sector_count * BLOCK_SECTOR_SIZE;
+    }
+    return 1;
 }

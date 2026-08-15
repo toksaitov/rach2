@@ -11,6 +11,7 @@ The temptation is to scatter `if (path starts with "/dev")` checks in front of e
 "dev"               -> VNODE_DEV_DIR
 "dev/null"          -> VNODE_DEV          (name = "null")
 "proc"              -> VNODE_PROC_DIR
+"proc/cmdline"      -> VNODE_PROC_CMDLINE (the boot command line)
 "proc/self"         -> VNODE_PROC_PID     (pid = SELF)
 "proc/7/stat"       -> VNODE_PROC_FILE
 "proc/7/fd"         -> VNODE_PROC_FD_DIR
@@ -22,19 +23,22 @@ Every path-taking syscall (`open`, `stat`, `fstatat`, `readlink`, `getdents`, `m
 
 ## devfs: character devices over `file_ops`
 
-A small registry maps a leaf name to a character device: a `file_ops` vtable plus a `{major, minor}`. `open("/dev/<name>")` binds that vtable onto the descriptor (`FD_TYPE_DEVICE`, `priv` is the registry entry), after which the generic read, write, and close paths dispatch through it, so the device code lives nowhere in the syscall layer. The set, with the real Linux device numbers:
+A small registry maps a leaf name to a character device: a `file_ops` vtable plus a `{major, minor}` and a mode. `open("/dev/<name>")` checks the caller's credentials against that mode with the same nine-bit rule the file systems use (every entry is owned root:root), then binds the vtable onto the descriptor (`FD_TYPE_DEVICE`, `priv` is the registry entry), after which the generic read, write, and close paths dispatch through it, so the device code lives nowhere in the syscall layer. The set, with the real Linux device numbers:
 
-| device             | major:minor | behavior                                                                 |
-|--------------------|-------------|--------------------------------------------------------------------------|
-| `null`             | 1:3         | read returns EOF, write is discarded                                     |
-| `zero`             | 1:5         | read returns zeros, write is discarded                                   |
-| `full`             | 1:7         | read returns zeros, write returns `-ENOSPC`                              |
-| `random`/`urandom` | 1:8 / 1:9   | read returns the trusted CSPRNG, else `-EIO` (see the krandom Readme)    |
-| `console`          | 5:1         | the kernel console (`FD_TYPE_CONSOLE`)                                   |
-| `tty`              | 5:0         | the caller's controlling terminal: the console, a pty slave, or `-ENXIO` |
-| `ptmx`             | 5:2         | a clone device: each open mints a new pty pair and returns the master    |
+| device             | major:minor | mode | behavior                                                                 |
+|--------------------|-------------|------|--------------------------------------------------------------------------|
+| `null`             | 1:3         | 0666 | read returns EOF, write is discarded                                     |
+| `zero`             | 1:5         | 0666 | read returns zeros, write is discarded                                   |
+| `full`             | 1:7         | 0666 | read returns zeros, write returns `-ENOSPC`                              |
+| `random`/`urandom` | 1:8 / 1:9   | 0666 | read returns the trusted CSPRNG, else `-EIO` (see the krandom Readme)    |
+| `console`          | 5:1         | 0666 | the kernel console (`FD_TYPE_CONSOLE`)                                   |
+| `tty`              | 5:0         | 0666 | the caller's controlling terminal: the console, a pty slave, or `-ENXIO` |
+| `ptmx`             | 5:2         | 0666 | a clone device: each open mints a new pty pair and returns the master    |
+| `bootpart`         | 240:0       | 0600 | the boot partition as a bounded raw window (below); root only            |
 
-`lseek` on the mem devices returns 0 (Linux's `null_lseek`); the stream and terminal devices are `-ESPIPE` (a valid fd, just not seekable). `stat` and `fstat` report a character device (`S_IFCHR`) with a synthetic `st_dev` distinct from KRFFS's, so a device's `(st_dev, st_ino)` identity never aliases a real file's.
+`/dev/bootpart` exists only on a disk mount whose MBR carries a FAT-typed partition 1 disjoint from the KRFFS partition (the GRUB disk's shape, judged by `mbr_bootpart_pick` in `sys/block/mbr.c`); on every other boot the name is absent from lookup, stat, open, and the `/dev` listing alike. It reads and writes whole 512-byte sectors at sector-aligned offsets (`-EINVAL` otherwise), through a kernel bounce buffer, because the AHCI driver programs physical DMA addresses and must never see a user pointer; a read at the end returns 0, a write at or past it `-ENOSPC`, and both disk drivers flush the drive cache per write, so a returned write is durable. It seeks like a file whose size is the partition's.
+
+`lseek` on the mem devices returns 0 (Linux's `null_lseek`); the stream and terminal devices are `-ESPIPE` (a valid fd, just not seekable). `stat` and `fstat` report a character device (`S_IFCHR`) with the entry's mode and a synthetic `st_dev` distinct from KRFFS's, so a device's `(st_dev, st_ino)` identity never aliases a real file's.
 
 ## procfs: process state as files
 
@@ -43,7 +47,8 @@ Generated per query from the process table:
 * `/proc/<pid>/stat`: the space-separated fields ps parses (pid, `(comm)`, state, ppid, and the rest). Accounting fields the kernel does not track are zero, but the shape is exact and the `comm` parentheses are scrubbed so a naive parser is not fooled.
 * `/proc/<pid>/cmdline`: the program name (the kernel keeps `comm`, not the full argv).
 * `/proc/<pid>/fd/<n>`: a magic symlink whose `readlink` returns the descriptor's path (`/dev/console` for the console, `/dev/<name>` for a device, and so on).
-* `/proc/self` is the caller; `getdents("/proc")` lists `self` and the live PIDs.
+* `/proc/self` is the caller; `getdents("/proc")` lists `cmdline`, `self`, and the live PIDs.
+* `/proc/cmdline`: the boot command line the loader passed, plus a newline, a global file beside the pid tree. It is how a program learns which GRUB menu entry booted the machine (the entries carry `rach2.slot=` tokens).
 
 A `/proc` text file is snapshotted into a pooled buffer at open and served from there, so a read sees one consistent moment and dup and fork share the snapshot until the last descriptor closes (the open-file-description lifetime, freed by the `file_ops` close hook). Text is built with bounded append helpers and hand-rolled integer formatting: no `snprintf`, no 64-bit division (the kernel has no libgcc).
 
@@ -64,5 +69,7 @@ Linux's `devtmpfs` and `procfs` surface device nodes and process state as a moun
 ## Verify
 
 * `tests/devprobe.c` (freestanding): `/dev/zero` reads zeros, `/dev/null` is EOF and a sink, `/dev/full` is `-ENOSPC`, `/dev/urandom` varies (the probe runs with trusted entropy); `/proc/self/stat` reports the caller's pid and comm; `/proc/self/fd/0` resolves to `/dev/console`. Prints `DEVPROBE OK`.
+* `tests/bootprobe.c` (freestanding, `make bootpart-test`): `/proc/cmdline` at each seam (content, the `/proc` listing, stat/fstat identity, the fd's readlink origin) and `/dev/bootpart` end to end against a disk of known bytes, absence on a single-partition disk included. Prints `BOOTPROBE OK` or `BOOTPROBE ABSENT OK`.
 * `tests/host/synthfs_hosttest.c`: the path classifier under ASan and UBSan.
+* `tests/host/mbr_hosttest.c`: the MBR parse and the boot-partition judgement over crafted tables.
 * `tests/musl/devtest.c` (installed `mdevtest`): the devices, `ttyname(0)`, and `opendir` over `/dev` and `/proc`, all through real musl.

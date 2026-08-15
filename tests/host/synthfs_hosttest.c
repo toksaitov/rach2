@@ -55,6 +55,11 @@ int main(void)
     CHECK(synth_classify("proc/7", &vp) == VNODE_PROC_PID && vp.pid == 7);
     CHECK(synth_classify("proc/12/fd", &vp) == VNODE_PROC_FD_DIR && vp.pid == 12);
 
+    /* /proc/cmdline: the global boot line, not a pid, and a leaf. */
+    CHECK(synth_classify("proc/cmdline", &vp) == VNODE_PROC_CMDLINE);
+    CHECK(synth_classify("proc/cmdline/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("proc/cmdlinex", &vp) == VNODE_ENOENT); /* not a pid */
+
     /* /proc files. */
     CHECK(synth_classify("proc/7/stat", &vp) == VNODE_PROC_FILE && vp.procfile == SYNTH_PROC_STAT &&
           vp.pid == 7);

@@ -1287,8 +1287,36 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
 static int32_t synth_open(const struct vpath *vp, int flags)
 {
     switch (vp->kind) {
-        case VNODE_DEV:
+        case VNODE_DEV: {
+            /* The nine-bit check devices always deserved and only bootpart
+             * needs: every entry is owned root:root, so for the 0666 devices
+             * this grants what it always granted, and the raw boot-partition
+             * window (0600) opens for root alone. */
+            uint32_t dmode;
+            int want;
+
+            if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0) {
+                return -ENOENT;
+            }
+            switch (flags & 3) {
+                case 1:
+                    want = CRED_W;
+                    break;
+                case 2:
+                    want = CRED_R | CRED_W;
+                    break;
+                default:
+                    want = CRED_R;
+                    break;
+            }
+            {
+                int32_t rc = cred_access_bits(0, 0, dmode & 0777u, want, 0);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
             return devfs_open(vp->name, flags);
+        }
         case VNODE_PTS:
             /* /dev/pts/N: the slave end of pty N (pty_open_slave does its own fd
              * allocation, and rejects an unallocated/locked pair). The open is
@@ -1314,6 +1342,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
             }
             return pty_open_slave(vp->pts_index, flags);
         case VNODE_PROC_FILE:
+        case VNODE_PROC_CMDLINE:
             return procfs_open(vp, flags);
         case VNODE_DEV_DIR:
         case VNODE_PTS_DIR:
@@ -1840,6 +1869,31 @@ static int32_t sys_lseek(isr_params_t *params)
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry->type == FD_TYPE_DEVICE) {
+        uint32_t part_size;
+
+        /* The boot-partition window seeks like a file whose size is the
+         * partition's: SEEK_END resolves against it, and an offset past the
+         * end is allowed (a read there returns 0, a write -ENOSPC). */
+        if (devfs_fd_bootpart_size(entry, &part_size)) {
+            switch (whence) {
+                case 0: /* SEEK_SET */
+                    new_offset = offset;
+                    break;
+                case 1: /* SEEK_CUR */
+                    new_offset = (int32_t)entry->ofd->offset + offset;
+                    break;
+                case 2: /* SEEK_END */
+                    new_offset = (int32_t)part_size + offset;
+                    break;
+                default:
+                    return -EINVAL;
+            }
+            if (new_offset < 0) {
+                return -EINVAL;
+            }
+            entry->ofd->offset = (uint32_t)new_offset;
+            return new_offset;
+        }
         /* mem devices (null/zero/full) accept a seek that always lands at 0; the
          * stream devices (random/urandom) are not seekable. */
         if (devfs_lseek_zero(entry)) {
@@ -2770,6 +2824,12 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_mode = S_IFDIR | 0555;
             kst->st_ino = procfs_ino_dir();
             return 0;
+        case VNODE_PROC_CMDLINE:
+            /* /proc/cmdline: the boot command line, a read-only regular file. */
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_cmdline();
+            return 0;
         case VNODE_PROC_PID:
         case VNODE_PROC_FD_DIR:
             if (procfs_resolve_pid(vp->pid) < 0) {
@@ -3088,19 +3148,21 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_blksize = 4096;
     } else if (entry->type == FD_TYPE_DEVICE) {
         /* A devfs character device: report its identity so fstat matches the
-         * stat of its /dev path (what ttyname compares). */
-        kst->st_mode = 020666; /* S_IFCHR | 0666 */
+         * stat of its /dev path (what ttyname compares), the mode included. */
+        kst->st_mode = devfs_fd_mode(entry);
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_dev = DEVFS_FSID;
         kst->st_rdev = devfs_rdev(entry);
         kst->st_ino = devfs_fd_ino(entry);
     } else if (entry->type == FD_TYPE_PROC) {
-        /* A /proc text snapshot: a regular file. */
+        /* A /proc text snapshot: a regular file whose inode is its origin's,
+         * so fstat matches the stat of the path it was opened by. */
         kst->st_mode = 0100444; /* S_IFREG | 0444 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_dev = PROCFS_FSID;
+        kst->st_ino = procfs_fd_ino(entry);
     } else if (entry->type == FD_TYPE_CONSOLE) {
         /* stdin/stdout/stderr and /dev/console: report the same identity as
          * stat("/dev/console") so ttyname's (st_dev, st_ino) comparison matches. */
@@ -3833,6 +3895,38 @@ static int32_t sys__llseek(isr_params_t *params)
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry && entry->type == FD_TYPE_DEVICE) {
+        uint32_t part_size;
+
+        /* The boot-partition window: full 64-bit seek math against the
+         * partition size, the same semantics as the 32-bit lseek above. */
+        if (devfs_fd_bootpart_size(entry, &part_size)) {
+            off = (long long)(((uint64_t)offset_high << 32) |
+                              (uint64_t)offset_low);
+            switch (whence) {
+                case 0: /* SEEK_SET */
+                    new_off = off;
+                    break;
+                case 1: /* SEEK_CUR */
+                    new_off = (long long)entry->ofd->offset + off;
+                    break;
+                case 2: /* SEEK_END */
+                    new_off = (long long)part_size + off;
+                    break;
+                default:
+                    return -EINVAL;
+            }
+            if (new_off < 0 || new_off > (long long)0xFFFFFFFFu) {
+                return -EINVAL;
+            }
+            if (!result) {
+                return -EFAULT;
+            }
+            entry->ofd->offset = (uint32_t)new_off;
+            if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
         if (devfs_lseek_zero(entry)) {
             long long zero = 0;
             entry->ofd->offset = 0;
@@ -5863,6 +5957,19 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
     }
     if (kind == VNODE_PROC_DIR) {
         if (n == 0) {
+            name[0] = 'c';
+            name[1] = 'm';
+            name[2] = 'd';
+            name[3] = 'l';
+            name[4] = 'i';
+            name[5] = 'n';
+            name[6] = 'e';
+            name[7] = '\0';
+            *ino = procfs_ino_cmdline();
+            *dtype = DT_REG;
+            return 1;
+        }
+        if (n == 1) {
             name[0] = 's';
             name[1] = 'e';
             name[2] = 'l';
@@ -5873,7 +5980,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
             return 1;
         }
         {
-            int p = procfs_nth_pid(n - 1);
+            int p = procfs_nth_pid(n - 2);
             if (p < 0) {
                 return 0;
             }

@@ -82,7 +82,7 @@ OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
 MKDISK          = krffs/mkdisk.sh
 
-.PHONY: all full deps clean distclean images musl-programs test test-disk \
+.PHONY: all full deps clean distclean images musl-programs test test-disk bootpart-test \
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
@@ -294,6 +294,26 @@ test-disk: rach2 tests krffs
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
+
+# `make bootpart-test`: /proc/cmdline and the /dev/bootpart window. Two boots
+# of one disk: as mkdisk built it there is a single KRFFS partition, so the
+# device must be absent from stat and open; after tools/mkbootfixture.py adds
+# a FAT-typed partition 1 of known bytes, the probe drives the device end to
+# end (the 0600 mode from both stat paths, seeks against the partition size,
+# known bytes at a seek, a written sector read back, exactly 0 at the end,
+# -ENOSPC past it, -EINVAL unaligned, -EACCES unprivileged).
+BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
+bootpart-test: rach2 tests krffs
+	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 90 --ok "BOOTPROBE ABSENT OK" probe=bootprobe
+	python3 tools/mkbootfixture.py $(BOOTPART_TEST_IMAGE)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.rescue rach2.bootprobe=fixture" \
+	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 90 --ok "BOOTPROBE OK" probe=bootprobe
 
 # `make persist-test`: fsync durability across a reboot. Builds a disk holding
 # persistprobe, boots it twice against the SAME image: the first boot writes and
@@ -673,6 +693,7 @@ help:
 	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
+	@echo "  make bootpart-test  the /dev/bootpart window and /proc/cmdline"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make tcc-test    the machine compiles a program on itself"

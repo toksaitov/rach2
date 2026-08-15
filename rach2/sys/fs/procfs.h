@@ -4,6 +4,7 @@
 #include "../lib/kint.h"
 
 struct vpath;
+struct fd_entry;
 
 /*
  * procfs: the synthetic /proc, generated per query from the process table.
@@ -30,6 +31,8 @@ int procfs_nth_pid(int n);
 
 /* Stable synthetic inodes for stat. */
 uint32_t procfs_ino_dir(void);
+uint32_t procfs_ino_cmdline(void);
+uint32_t procfs_fd_ino(struct fd_entry *e);
 uint32_t procfs_ino_pid(int pid);
 
 #endif /* _PROCFS_H_ */

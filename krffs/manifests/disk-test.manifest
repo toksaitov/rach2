@@ -14,3 +14,10 @@ file 0755 /blockprobe build/tests/blockprobe
 # probe syncs after every attempt so a spurious clear reaches the platter, and
 # the offline fsck after the kill is what reads the verdict.
 file 0755 /dirtyprobe build/tests/dirtyprobe
+
+# bootprobe proves /proc/cmdline and the /dev/bootpart window. `make
+# bootpart-test` boots this disk twice: once as built (one KRFFS partition, so
+# the device must be absent), and once with the MBR rewritten by
+# tools/mkbootfixture.py to add a FAT-typed partition 1 of known bytes, where
+# the device must carry them.
+file 0755 /bootprobe build/tests/bootprobe

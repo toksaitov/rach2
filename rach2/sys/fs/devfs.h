@@ -14,6 +14,7 @@
  */
 
 struct fd_entry;
+struct block_device;
 
 /*
  * The synthetic device the namespace lives on. KRFFS files report st_dev 0, so a
@@ -34,6 +35,24 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
  */
 uint32_t devfs_rdev(struct fd_entry *e);
 uint32_t devfs_fd_ino(struct fd_entry *e);
+
+/** The S_IFCHR-typed mode of an open device fd (fstat64); 0 if not a device. */
+uint32_t devfs_fd_mode(struct fd_entry *e);
+
+/*
+ * Publish /dev/bootpart over the `sector_count`-sector slice of `backing` at
+ * `start_lba`: the GRUB disk's FAT boot partition, judged by mbr_bootpart_pick
+ * before this is called. Until (and unless) the disk mount publishes it, the
+ * device is absent from lookup, stat, open, and /dev enumeration alike. The
+ * partition must stay under 2 GiB so byte offsets fit the descriptor's 32-bit
+ * offset; a larger one is not published.
+ */
+void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
+                            uint32_t sector_count);
+
+/* Whether `e` is the open boot-partition device; if so, `*size` gets its byte
+ * size (for lseek/_llseek SEEK_END and bounds). Returns 0 for every other fd. */
+int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size);
 
 /* The leaf name ("null", ...) of an open device fd, for /proc/<pid>/fd readlink.
  * Returns "?" if e is not a devfs device. */

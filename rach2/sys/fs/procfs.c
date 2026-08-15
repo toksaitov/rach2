@@ -16,14 +16,17 @@
 #include "krffs.h"
 #include "../tty/pty.h"
 #include "../io/poll.h"
+#include "../cmdline.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 
 #define PROCFS_O_CLOEXEC 02000000
 
-/* Inode namespace for /proc: the directory, then a per-pid base. */
+/* Inode namespace for /proc: the directory, the boot command line, then a
+ * per-pid base. */
 #define PROCFS_INO_DIR 0x100u
+#define PROCFS_INO_CMDLINE 0x101u
 #define PROCFS_INO_PID_BASE 0x200u
 
 /* A /proc text file, snapshotted at open and served through file_ops. */
@@ -267,9 +270,14 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             break;
         }
         case FD_TYPE_PROC: {
-            /* a /proc/<pid>/{stat,cmdline} snapshot fd: its origin path */
+            /* a /proc snapshot fd: its origin path (a pid file or the global
+             * boot command line) */
             struct procfs_file *pf = (struct procfs_file *)e->priv;
             if (pf) {
+                if (pf->origin_file == SYNTH_PROC_BOOTLINE) {
+                    ap_str(buf, cap, &len, "/proc/cmdline");
+                    break;
+                }
                 ap_str(buf, cap, &len, "/proc/");
                 ap_int(buf, cap, &len, pf->origin_pid);
                 ap_ch(buf, cap, &len, '/');
@@ -312,6 +320,30 @@ int procfs_nth_pid(int n)
 uint32_t procfs_ino_dir(void)
 {
     return PROCFS_INO_DIR;
+}
+
+uint32_t procfs_ino_cmdline(void)
+{
+    return PROCFS_INO_CMDLINE;
+}
+
+/**
+ * The inode of an open /proc snapshot descriptor, from its origin, so fstat
+ * reports the same identity as the stat of the path it was opened by.
+ * Returns 0 if `e` is not a /proc snapshot fd.
+ */
+uint32_t procfs_fd_ino(struct fd_entry *e)
+{
+    struct procfs_file *pf;
+
+    if (!e || e->type != FD_TYPE_PROC || !e->priv) {
+        return 0;
+    }
+    pf = (struct procfs_file *)e->priv;
+    if (pf->origin_file == SYNTH_PROC_BOOTLINE) {
+        return PROCFS_INO_CMDLINE;
+    }
+    return procfs_ino_pid(pf->origin_pid);
 }
 
 uint32_t procfs_ino_pid(int pid)
@@ -392,14 +424,17 @@ static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procf
  */
 int procfs_open(const struct vpath *vp, int flags)
 {
-    int pid;
+    int pid = 0;
     struct procfs_file *f = NULL;
     fd_entry_t *e;
     int slot, fd, len;
 
-    pid = procfs_resolve_pid(vp->pid);
-    if (pid < 0) {
-        return -ENOENT;
+    /* /proc/cmdline is global; every other proc file lives under a pid. */
+    if (vp->kind != VNODE_PROC_CMDLINE) {
+        pid = procfs_resolve_pid(vp->pid);
+        if (pid < 0) {
+            return -ENOENT;
+        }
     }
     if ((flags & 0100 /* O_CREAT */) && (flags & 0200 /* O_EXCL */)) {
         return -EEXIST;
@@ -421,7 +456,13 @@ int procfs_open(const struct vpath *vp, int flags)
         return -ENFILE;
     }
 
-    if (vp->procfile == SYNTH_PROC_STAT) {
+    if (vp->kind == VNODE_PROC_CMDLINE) {
+        /* The captured boot line and a newline, the Linux shape. */
+        const char *line = kcmdline_get();
+        len = 0;
+        ap_str(f->data, (int)sizeof(f->data), &len, line);
+        ap_ch(f->data, (int)sizeof(f->data), &len, '\n');
+    } else if (vp->procfile == SYNTH_PROC_STAT) {
         len = procfs_gen_stat(pid, f->data, (int)sizeof(f->data));
     } else {
         len = procfs_gen_cmdline(pid, f->data, (int)sizeof(f->data));
@@ -432,7 +473,8 @@ int procfs_open(const struct vpath *vp, int flags)
     f->len = len;
     f->used = 1;
     f->origin_pid = pid;
-    f->origin_file = vp->procfile;
+    f->origin_file = (vp->kind == VNODE_PROC_CMDLINE) ? SYNTH_PROC_BOOTLINE
+                                                      : vp->procfile;
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {

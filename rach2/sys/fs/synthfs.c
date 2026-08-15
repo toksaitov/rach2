@@ -235,6 +235,12 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = VNODE_PROC_DIR;
             return vp->kind;
         }
+        /* /proc/cmdline: the boot command line, a global file beside the pid
+           tree (checked before pid parsing, since "cmdline" is not a pid). */
+        if (comp_eq(c[1], "cmdline")) {
+            vp->kind = (n == 2) ? VNODE_PROC_CMDLINE : VNODE_ENOTDIR;
+            return vp->kind;
+        }
         if (comp_eq(c[1], "self")) {
             pid = SYNTH_PID_SELF;
         } else {

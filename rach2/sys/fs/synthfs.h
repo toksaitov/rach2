@@ -27,13 +27,15 @@ enum vnode_kind {
     VNODE_PROC_FD_DIR,  /* /proc/<pid>/fd */
     VNODE_PROC_FILE,    /* /proc/<pid>/{stat,cmdline} */
     VNODE_PROC_FD_LINK, /* /proc/<pid>/fd/<n>: a magic symlink */
+    VNODE_PROC_CMDLINE, /* /proc/cmdline: the boot command line */
     VNODE_ENOENT,       /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR       /* under a synthetic mount, a non-dir used as a directory */
 };
 
-/* /proc/<pid>/<file> kinds. */
-#define SYNTH_PROC_STAT    1
-#define SYNTH_PROC_CMDLINE 2
+/* /proc/<pid>/<file> kinds, and the global boot line (a procfs_file origin). */
+#define SYNTH_PROC_STAT     1
+#define SYNTH_PROC_CMDLINE  2
+#define SYNTH_PROC_BOOTLINE 3
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the glue. */
 #define SYNTH_PID_SELF (-1)
