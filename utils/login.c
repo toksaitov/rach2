@@ -57,7 +57,7 @@
  * console: the respawn is the retry. */
 #define LOGIN_TRIES 3
 
-/* The pause after a refusal. It costs an honest typist one second and costs
+/* The pause after a refusal. It costs a legitimate user one second and costs
  * anyone working through a list of passwords the same second every time. */
 #define LOGIN_PAUSE 2
 

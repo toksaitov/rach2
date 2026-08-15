@@ -189,7 +189,7 @@ the supporting scripts.
   stop the machine and leave the image clean; a file written immediately before
   it must be readable on the next boot, which is lost if the machine is killed
   instead; and `halt -n -f`, which parks the CPU by design, must flush and
-  report a clean unmount before the runner kills it. The `-n` is load-bearing:
+  report a clean unmount before the runner kills it. The `-n` is required:
   busybox syncs for itself before it splits on `-f`, so without it the kernel's
   own flush could be deleted and the phase would still pass. The serial input is
   a FIFO held open past each wait, because EOF there stops QEMU by itself. Then

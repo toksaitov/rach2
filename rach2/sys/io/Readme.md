@@ -40,7 +40,7 @@ i386 musl uses the whole family, so all of them route to one core and whichever 
 
 Linux `fs/select.c`: `do_select` walks the fd_sets calling each file's `->poll`, which returns a readiness mask and registers the task on the file's wait queue through a poll table; if nothing is ready the task sleeps and any wake re-runs the walk. `do_sys_poll` is the same for `pollfd`s. Rach2's `do_poll` is that loop with a fixed per-call array instead of a poll-table allocation.
 
-## Honest simplifications
+## Deliberate simplifications
 
 * the `pselect6` and `ppoll` signal mask is accepted but not applied (there is no atomic pending-mask swap, and busybox and dropbear pass `NULL` or their normal mask here);
 * timeouts are quantized to the 10 ms PIT tick, and a parked poller is also re-woken each tick (it re-scans and re-sleeps): correct, if not the tightest;

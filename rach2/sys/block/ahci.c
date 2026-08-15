@@ -178,7 +178,7 @@ static uint32_t ahci_port_off(int port, uint32_t reg)
     return AHCI_PORT_BASE + (uint32_t) port * AHCI_PORT_STRIDE + reg;
 }
 
-/* Cache/DMA coherency, real-hardware honesty mirroring the HDA driver's helper.
+/* Cache/DMA coherency, a real-hardware requirement, mirroring the HDA driver's helper.
    x86 bus-master DMA snoops the caches, so this is a no-op in practice and a
    plain no-op on emulators (which report no CLFLUSH). */
 static bool ahci_have_clflush = false;

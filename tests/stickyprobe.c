@@ -53,8 +53,8 @@
  * that bit back: the probe asserts both staged modes before it touches
  * anything, so a staging tool that dropped 01000 fails here rather than quietly
  * shipping an inert /tmp. Everything else the root parent mints and removes,
- * the other two sticky directories included, since chmod and chown make those
- * honestly and a probe that leaves nothing behind rests on no other probe's file
+ * the other two sticky directories included, since chmod and chown can make
+ * those directly and a probe that leaves nothing behind rests on no other probe's file
  * and can be run again in the same boot.
  *
  * Exact errnos throughout, never a sign. That rests on the errno translation at

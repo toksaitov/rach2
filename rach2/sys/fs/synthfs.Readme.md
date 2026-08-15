@@ -60,7 +60,7 @@ A `/proc` text file is snapshotted into a pooled buffer at open and served from 
 
 Linux's `devtmpfs` and `procfs` surface device nodes and process state as a mounted synthetic namespace, with `->poll` and `->read` driver hooks and per-task `/proc` files. Rach2's version is the same shape, a path classifier in front of driver-backed inodes, minus the VFS mount plumbing.
 
-## Honest simplifications
+## Deliberate simplifications
 
 * A bare `ls /` does not yet merge the `dev` and `proc` mount names into the KRFFS root listing; they are reached by their absolute paths (`opendir("/proc")` works).
 * `openat(dirfd, rel)` relative to a synthetic directory fd is not resolved; busybox uses absolute `/proc/<pid>/...` paths.

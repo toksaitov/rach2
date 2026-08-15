@@ -20,7 +20,7 @@
  * then agree about when.
  *
  * Every comparison waits out a tick first. The clock advances every 10 ms and
- * two operations in the same tick share a timestamp honestly, so a test that
+ * two operations in the same tick share a timestamp by design, so a test that
  * did not wait would fail for a reason that is not a defect.
  *
  * Prints "STAMPMUSL OK" on success and "STAMPMUSL FAIL (detail)" otherwise.

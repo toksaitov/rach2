@@ -114,7 +114,7 @@ int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
  * so that it can be stated once and tested. Two rules, and the order of them is
  * the point. A clock that says it lost its contents STOPS the read, even though
  * the pair also disagrees, because taking another pair is exactly the mistake:
- * reading register D can set the validity bit again, so the honest sample is
+ * reading register D can set the validity bit again, so the only usable sample is
  * the one already in hand and every later one is a fiction that agrees with
  * itself. Any other disagreement is a read that straddled an update, which is
  * worth taking again.

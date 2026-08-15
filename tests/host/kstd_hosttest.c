@@ -5,7 +5,7 @@
  *
  * k_itoa is the integer formatter behind every kernel and util number print, so
  * it is exercised here natively under AddressSanitizer + UndefinedBehaviorSanitizer
- * across the bases and the signed-edge cases. INT_MIN is the load-bearing one:
+ * across the bases and the signed-edge cases. INT_MIN is the case that matters:
  * negating it in signed `int` is overflow UB, which UBSan flags here in
  * milliseconds rather than as a mystery value in QEMU. The buffer-too-small and
  * out-of-range-radix rejections, the returned character count, and the force_sign

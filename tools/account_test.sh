@@ -549,7 +549,7 @@ run_real_arc() {
     fi
     cleanup_boot
 
-    # The third boot, which is the only honest place to ask what the delete left.
+    # The third boot, the only boot that shows what the delete left on disk.
     boot_with \
         "echo BEG\"\"IN; cat /etc/passwd; echo PW\"\"END" \
         "cat /etc/shadow; echo SH\"\"END" \

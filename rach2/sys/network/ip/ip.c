@@ -62,7 +62,7 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
  *
  * `from_loopback` is nonzero only for the ring `ip_loop_drain` feeds; a packet
  * off the wire (`from_loopback == 0`) whose source is our own address or a
- * `127/8` loopback address is a martian, a spoof no honest peer sends, and is
+ * `127/8` loopback address is a martian, a spoof no real peer sends, and is
  * dropped before any reply can be steered onto the loopback ring or emitted
  * carrying a loopback source. A genuine loopback datagram carries our own
  * source by design, so the check is gated on the delivery path, not the value.

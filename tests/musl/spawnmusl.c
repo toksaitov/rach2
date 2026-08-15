@@ -11,7 +11,7 @@
  * vendor/musl/patches/): posix_spawn forks. The child function never returns
  * and reports failure through a pipe rather than through shared memory, so a
  * forked child serves it exactly as a cloned one did. Syscall 120 stays
- * unimplemented, which is the honest answer from a kernel with no threads and
+ * unimplemented, which is the correct answer from a kernel with no threads and
  * no shared address spaces: a shim that accepted those flags and handed back a
  * private copy would be reporting semantics it does not provide.
  *

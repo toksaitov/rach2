@@ -144,8 +144,8 @@
 #define PWAUTH_MAX_NAME 63
 
 /* What `cred_rewrite` returns, and two of them what `cred_txn_end` returns. The
- * three are one distinction the caller cannot make for itself and must report
- * honestly: the replacement is live and on the platter, live but perhaps not on
+ * three are one distinction the caller cannot make for itself and must be told
+ * exactly: the replacement is live and on the platter, live but perhaps not on
  * the platter, or never happened at all. A release borrows the middle one for
  * the same shape, the lock being gone from the running system with its removal
  * perhaps not on the platter. */
@@ -458,7 +458,7 @@ int cred_txn_end(void);
  * the file that was checked.
  *
  * The file being replaced must therefore exist: its mode and owner are the
- * result's, and there is nowhere else honest to get them. Bringing a credential
+ * result's, and there is nowhere else correct to get them. Bringing a credential
  * file into being is the image's job, not this idiom's. The inheritance is
  * faithful and has no floor: a database staged 0644, or carrying a set-id bit,
  * is reproduced as it is, and every later replacement reproduces it again. The

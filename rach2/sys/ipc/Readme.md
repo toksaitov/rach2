@@ -25,7 +25,7 @@ The byte FIFO itself is a power-of-two ring with monotonically increasing head a
 
 Linux `fs/pipe.c`: a pipe is an in-kernel object behind two `struct file`s with a `pipe_fops` operations table, readers and writers sleep on wait queues, and `pipe_release` tears an end down on the last close. Rach2's version is the same shape with a single fixed-size ring instead of Linux's chained page buffers.
 
-## Honest simplifications
+## Deliberate simplifications
 
 * one fixed page (`PIPE_BUF_SIZE` = 4096) per pipe, from a small fixed pool;
 * no `F_SETPIPE_SZ` resizing, no packet mode (`O_DIRECT`), no splice, tee, or vmsplice;

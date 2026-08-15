@@ -111,7 +111,7 @@ void _start(void)
     check(t0.tv_nsec >= 0 && t0.tv_nsec < 1000000000, "tv_nsec in range");
 
     /* 2. getrandom returns the count and varying bytes. Pre-zero both buffers
-     * so the difference test is honest (a broken getrandom that writes nothing
+     * so the difference test can actually fail (a broken getrandom that writes nothing
      * leaves them equal) and so they are visibly written. */
     for (i = 0; i < 16; i++) {
         r1[i] = 0;

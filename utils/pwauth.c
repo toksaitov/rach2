@@ -661,7 +661,7 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
      * prefix would store a secret the user never chose and never typed: they
      * would be told the change succeeded and then be unable to enter what they
      * had entered. The buffer's size is the caller's statement of what it can
-     * use, so the honest answer is that the line was too long. */
+     * use, so the correct answer is that the line was too long. */
     if (bad) {
         memset(buf, 0, size);
         fprintf(stderr, "pwauth: the entry holds a NUL byte, which no reader here can store\n");

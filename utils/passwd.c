@@ -515,7 +515,7 @@ int main(int argc, char **argv)
      * checking under the lock that the record authenticated against is still
      * the record about to be replaced: what an early lock made impossible, a
      * late one makes detectable, and detectable is enough because the only
-     * honest answer to "it changed while you were typing" is to say so. */
+     * right answer to "it changed while you were typing" is to say so. */
     if (slurp(PASSWD_FILE, passwd_text, sizeof(passwd_text)) < 0 ||
         slurp(SHADOW_FILE, shadow_text, sizeof(shadow_text)) < 0) {
         return 1;

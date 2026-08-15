@@ -78,7 +78,7 @@ dd if=/dev/zero of="$TMP" bs=1048576 count="$DISK_MB" 2>/dev/null
 # Write a minimal MBR: the boot code stays zero (GRUB is installed later), one
 # primary partition entry points at the KRFFS region, and the 0x55AA signature
 # marks the sector valid. Type 0x7F is the reserved "individual/experimental"
-# code, honest for a custom file system and ignored by host auto-mounters.
+# code, fitting for a custom file system and ignored by host auto-mounters.
 python3 - "$TMP" "$PART_LBA" "$((PART_SIZE / SECTOR))" <<'PY'
 import struct, sys
 path, lba, count = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])

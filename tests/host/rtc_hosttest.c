@@ -241,7 +241,7 @@ int main(void)
          * On some parts reading register D SETS the validity bit again, so the
          * pair a dead cell produces is a disagreement (clear, then set) and the
          * pair after it agrees, is in range, and is whatever the dead cell
-         * left. The first sample of that sequence is the only honest one, and
+         * left. The first sample of that sequence is the only usable one, and
          * this is what the driver stops on. */
         b = a;
         b.status_d = 0;
@@ -281,7 +281,7 @@ int main(void)
         CHECK(rtc_pair_disposition(&a, &b) == RTC_PAIR_STOP);
 
         /* And the pair after it, which agrees and is in range and is whatever
-         * the dead cell left: stopping on the honest pair is what keeps this
+         * the dead cell left: stopping on the valid pair is what keeps this
          * one from ever being taken. */
         b.status_d = 0;
         CHECK(rtc_pair_disposition(&b, &b) == RTC_PAIR_STOP);

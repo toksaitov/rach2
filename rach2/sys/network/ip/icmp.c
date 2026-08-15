@@ -15,7 +15,7 @@
  * boot shell keeps the poll, and correctly: it runs with the scheduler stopped
  * and no process to block, so there is nothing to yield to.
  *
- * The wait is bounded twice over, and both halves are load-bearing. The
+ * The wait is bounded twice over, and both halves are necessary. The
  * process arms wakeup_tick so the timer makes it runnable, since a BLOCKED
  * process nothing wakes is one schedule() never picks again; and the deadline
  * is also in the wait predicate, since a woken sleeper whose condition is still

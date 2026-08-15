@@ -3408,7 +3408,7 @@ static int32_t sys_faccessat(isr_params_t *params)
  * The chmod rule over a resolved KRFFS node: the owner or root replaces the
  * permission bits; anyone else is refused. The root node's mode is never
  * touched (its spare bits carry the dirty-mount flag), but the rule still
- * answers, so a non-owner probing `/` gets the honest -EPERM.
+ * answers, so a non-owner probing `/` gets the correct -EPERM.
  */
 static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
 {
@@ -3483,7 +3483,7 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
 
 /* Does an object exist at `name` (absolute, leading '/' stripped)? 0 if so, else
  * -ENOENT/-ENOTDIR, the same synthetic-vs-KRFFS resolution do_access uses. link()
- * resolves its source through this so a missing source is reported honestly before
+ * resolves its source through this so a missing source is reported as ENOENT before
  * the "no hard links" -EPERM. */
 static int32_t path_exists(const char *name)
 {
@@ -3791,7 +3791,7 @@ static int32_t sys_fchown(isr_params_t *params)
  * call returns -EPERM, the POSIX errno for "the filesystem does not support the
  * creation of hard links". The source is copied and resolved first, so a bad
  * pointer (-EFAULT), bad dirfd (-EBADF), or missing source (-ENOENT) is reported
- * honestly rather than masked by EPERM. dropbear depends on the EPERM: it moves a
+ * as itself rather than masked by EPERM. dropbear depends on the EPERM: it moves a
  * freshly generated host key with link(tmp, final) and, on EPERM/EACCES, falls
  * back to writing the key directly to the final path.
  */
@@ -8959,7 +8959,7 @@ static int32_t sys_getgroups(isr_params_t *params)
     return (int32_t) p->ngroups;
 }
 
-/* The honest resource caps: RLIMIT_NOFILE/NPROC mirror the kernel's fixed pools,
+/* The real resource caps: RLIMIT_NOFILE/NPROC mirror the kernel's fixed pools,
  * RLIMIT_STACK the user stack growth cap; the rest are effectively unlimited.
  * cur == max. */
 #define RLIMIT_STACK_RES  3
@@ -9008,7 +9008,7 @@ static int32_t sys_getrlimit(isr_params_t *params)
 /* prlimit64(340): EBX=pid (0/self), ECX=resource, EDX=new (rlimit64* or NULL),
  * ESI=old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }. New limits
  * are accepted (validated readable) but not enforced; old limits report the
- * honest caps. This is the form modern musl getrlimit/setrlimit issue. */
+ * real caps. This is the form modern musl getrlimit/setrlimit issue. */
 static int32_t sys_prlimit64(isr_params_t *params)
 {
     uint32_t resource = params->ecx;
