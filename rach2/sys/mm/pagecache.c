@@ -501,21 +501,37 @@ void init_pagecache(void)
         k_panic("pagecache: window pre-map failed");
     }
 
-    /* Reserve a fixed block of frames; each slot keeps its frame for good, so a
-       cold fault always has a frame and never competes with user pages. */
-    for (i = 0; i < PC_SLOTS; ++i) {
-        uintptr_t phys = alloc_kernel_frame();
-        if (!phys) {
+    /* Reserve a block of frames up front; each slot keeps its frame for good,
+       so a cold fault always has a frame and never competes with user pages.
+       The count adapts to the machine: the full PC_SLOTS wherever the pool can
+       spare it, and no more than a quarter of the free frames where it cannot,
+       so a small-memory boot keeps its user pages instead of dying here. The
+       floor is the size the cache had before it grew; a machine that cannot
+       spare that could not have mounted a disk before this change either. */
+    {
+        uint32_t spare = frame_free_count() / 4u;
+        uint32_t want = PC_SLOTS;
+
+        if (want > spare) {
+            want = spare;
+        }
+        if (want < PC_MIN_SLOTS) {
             k_panic("pagecache: frame reservation failed");
         }
-        pc_slots[i].phys = phys;
-        pc_slots[i].page = (void *) phys;
-        pc_slots[i].valid = 0;
-        pc_slots[i].dirty = 0;
-        pc_slots[i].accessed = 0;
-        pc_slots[i].pinned = 0;
+        for (i = 0; i < want; ++i) {
+            uintptr_t phys = alloc_kernel_frame();
+            if (!phys) {
+                k_panic("pagecache: frame reservation failed");
+            }
+            pc_slots[i].phys = phys;
+            pc_slots[i].page = (void *) phys;
+            pc_slots[i].valid = 0;
+            pc_slots[i].dirty = 0;
+            pc_slots[i].accessed = 0;
+            pc_slots[i].pinned = 0;
+        }
+        pc_capacity = want;
     }
-    pc_capacity = PC_SLOTS;
     pc_clock = 0;
     pc_reads = pc_evicts = pc_writebacks = 0;
     pc_hash_rebuild();

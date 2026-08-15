@@ -16,11 +16,20 @@
 #define PCWIN_BASE 0xC0000000u
 
 /* Resident cache capacity, in PAGE_SIZE frames. Must be a power of two: the
-   lookup hash is sized at twice this. 256 frames is a fixed 1 MiB reservation,
-   small against the 32 MiB pool so the inert module path keeps its memory. */
+   lookup hash is sized at twice this. 1024 frames is a fixed 4 MiB
+   reservation. It was 256 (1 MiB) until the machine became its own build
+   host: a compile faults the 700 KiB compiler, the sources, the headers and
+   the objects through this window, and under 1 MiB every compile re-read
+   most of that working set from the disk, which measured at more than a
+   minute per file. Four MiB holds the toolchain's hot set and leaves the
+   32 MiB pool most of its memory. */
 #ifndef PC_SLOTS
-#define PC_SLOTS 256u
+#define PC_SLOTS 1024u
 #endif
+
+/* The reservation's floor on a small-memory machine (see init_pagecache):
+   the size the cache had before it grew. */
+#define PC_MIN_SLOTS 64u
 
 /*
  * The backing store, accessed one page at a time. `disk_off` is a page-aligned
