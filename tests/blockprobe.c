@@ -30,10 +30,13 @@ typedef unsigned int size_t;
 #define O_CREAT  0x40
 #define O_TRUNC  0x200
 
-/* Eight 256 KiB files: 2 MiB of working set against a 1 MiB cache forces
-   eviction across files, while each file stays well under the cache budget. */
+/* Twenty-four 256 KiB files: 6 MiB of working set against a 4 MiB cache
+   forces eviction across files, while each file stays well under the cache
+   budget. The count grew with the cache (it was eight files against 1 MiB);
+   a working set the cache can hold outright proves nothing about eviction
+   or write-back. */
 #ifndef NFILES
-#define NFILES 8u
+#define NFILES 24u
 #endif
 #ifndef FILE_SIZE
 #define FILE_SIZE (256u * 1024u)

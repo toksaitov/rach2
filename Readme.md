@@ -2,7 +2,7 @@
 
 ![First Versions of Rach2 Booting](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), compiles C on itself (TinyCC) and builds it with a make of its own (pdpmake), and can run Doom.
+An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), compiles C on itself (TinyCC), builds it with a make of its own (pdpmake), rebuilds its own kernel, utilities and shell from the source it carries, and can run Doom.
 
 Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements a broad set of Linux-compatible syscalls, enough to host a ported musl libc, a static BusyBox `ash`, and a Dropbear SSH server. It has a custom file system (KRFFS), which runs from a RAM module or persists on a real ATA disk through a kernel page cache, audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
 
@@ -62,6 +62,7 @@ make           # the kernel + the os-simple image (our login, shell and Unix uti
 make full      # all three images: test, os-simple, and the os-real (BusyBox, Dropbear
                #   SSH, Doom, a C compiler and a make) capstone the SSH login boots
 make test      # boot the test image headless and assert every probe exits 0
+make selfbuild-test   # the machine builds its own kernel, utilities and shell
 make images    # build all three images without the test run
 make isos      # a bootable ISO per image, for real hardware (Docker grub-mkrescue)
 make deps      # just the vendored third-party (libc; DEPS=full adds busybox,
@@ -130,6 +131,24 @@ links by hand and checks every refusal, and `make make-test` runs the makefile
 above, requires the second `make` to build nothing and the third to build again,
 and reboots to prove the timestamp it decided that on was on the disk and not in
 memory.
+
+### The machine builds itself
+
+The kernel's own source is staged at `/src/rach2`, the shell's at `/src/ish`,
+and each carries a `guest.mk` that pdpmake reads. The machine can therefore
+rebuild its own kernel, its utilities and its shell:
+
+```sh
+# cp -r /src/rach2 ~ && cd ~/rach2
+# make -f guest.mk        # 71 objects, then the link through @kernel.objs
+```
+
+`make selfbuild-test` is that as a gate: it builds the kernel twice from
+clean workspaces and requires the two to hash equal, builds the 24 utilities
+and ish with a smoke check each, then extracts the exact kernel bytes from
+the disk image, runs `tools/check_kernel.py --tcc` on them, and boots them
+through the full probe suite; where Docker is available the same bytes boot once more
+through GRUB.
 
 ### The SSH capstone: log into Rach2 with a real client
 

@@ -4,11 +4,11 @@ Project policy for Rach2. This file is normative and lean. A new rule replaces o
 
 ## Project
 
-Rach2 is an educational 32-bit x86 operating system. The kernel is freestanding C89 (`-ansi`, no libgcc), cross-built with `i686-elf-gcc`. The userland is the ported musl libc, the BusyBox shell, the Dropbear SSH server, and the TinyCC compiler with pdpmake to drive it. The readers are students and developers; the code and its prose are meant to teach.
+Rach2 is an educational 32-bit x86 operating system. The kernel is freestanding C89 (`-ansi`, no libgcc), cross-built with `i686-elf-gcc`; the same sources also build on Rach2 itself with the staged TinyCC and pdpmake, so kernel code must stay inside both compilers' shared dialect. The userland is the ported musl libc, the BusyBox shell, the Dropbear SSH server, and the TinyCC compiler with pdpmake to drive it. The readers are students and developers; the code and its prose are meant to teach.
 
 ## Build
 
-GNU Make only. `make doctor` checks the toolchain, `make` builds the base OS, `make full` adds the BusyBox, Dropbear, TinyCC, pdpmake, and Doom capstones and the SSH image, and `make help` lists the rest. The shared make logic lives in `mk/`. Every component builds out of tree into one repo-root `build/` directory that mirrors the source tree: the objects, the `.d` files, and the final binaries alike, so the source tree never holds a build product. The kernel source list is explicit (`C_SRC` in `rach2/Makefile`) and guarded by `make check-sources`. There is no manual `build_*.sh` step and no `make clean` ritual: a header edit rebuilds only its dependents. The build does not run QEMU; the scripts in `rach2/` do.
+GNU Make only on the host. `make doctor` checks the toolchain, `make` builds the base OS, `make full` adds the BusyBox, Dropbear, TinyCC, pdpmake, and Doom capstones and the SSH image, and `make help` lists the rest. The guest build is separate: three POSIX `guest.mk` files (kernel, utils, ish) that pdpmake reads on the machine, held equal to the host lists by `tools/check_guest.py` and proved by `make selfbuild-test`. The shared make logic lives in `mk/`. Every component builds out of tree into one repo-root `build/` directory that mirrors the source tree: the objects, the `.d` files, and the final binaries alike, so the source tree never holds a build product. The kernel source list is explicit (`C_SRC` in `rach2/Makefile`) and guarded by `make check-sources`. There is no manual `build_*.sh` step and no `make clean` ritual: a header edit rebuilds only its dependents. The build does not run QEMU; the scripts in `rach2/` do.
 
 ## Writing
 

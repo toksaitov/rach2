@@ -13,6 +13,7 @@
 #   make full       all the RAM-disk images (test, os-simple, os-real).
 #   make images     the RAM-disk images.
 #   make test       boot the test image and check every probe passes.
+#   make selfbuild-test   the machine builds its own kernel, utilities and shell.
 #   make isos       a bootable ISO per image, for real hardware (needs Docker).
 #   make deps       build the vendored third-party (libc; DEPS=full adds the
 #                   busybox, dropbear, tcc and pdpmake capstones)
@@ -465,7 +466,7 @@ crash-test: rach2 tests krffs
 
 # `make stress-test`: prove an on-disk KRFFS larger than physical RAM works. Boots
 # a 64 MB disk with a 48 MB partition and runs stressprobe, which writes and
-# re-reads 33 MiB (past the 32 MiB RAM cap) through the 1 MiB cache.
+# re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache.
 STRESS_DISK = $(IMAGES_DIR)/stress-test.disk
 stress-test: rach2 tests krffs
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
@@ -676,7 +677,7 @@ help:
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
-	@echo "  make selfbuild-test   the machine builds its own kernel, twice, hash-equal"
+	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"
 	@echo "  make ssh-test    the SSH capstone, both logins, unattended"
 	@echo "  make account-test   accounts created, authenticated and deleted, on both images"
 	@echo "  make shutdown-test  userland stops the machine, and only root can"

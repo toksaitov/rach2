@@ -96,7 +96,7 @@ There is no `clone` and there are no threads. Syscall 120 says so.
 
 Parallel builds do not happen, upstream's doing rather than the port's.
 
-The kernel is still not built on the machine. Milestone 20 named three obstacles; this milestone removed the third by porting a make. `rach2/link.ld` is a real linker script and tcc implements a subset of that language, and `rach2/sys/isr_handler.s` uses a GAS `.macro`, which tcc's assembler does not have. Neither is solved here.
+The kernel is still not built on the machine. Milestone 20 named three obstacles; this milestone removed the third by porting a make. `rach2/link.ld` is a real linker script and tcc implements a subset of that language, and `rach2/sys/isr_handler.s` uses a GAS `.macro`, which tcc's assembler does not have. Neither is solved here. (Milestone 22 solved both: tcc links the kernel natively behind a structural checker, the stubs are written out macro-free, and `make selfbuild-test` builds and boots the kernel on the machine.)
 
 The exec caps are raised, not removed. A long enough link line still fails, and it fails as `-E2BIG` with the caller alive to see it.
 

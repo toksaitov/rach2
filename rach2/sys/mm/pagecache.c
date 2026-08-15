@@ -506,8 +506,9 @@ void init_pagecache(void)
        The count adapts to the machine: the full PC_SLOTS wherever the pool can
        spare it, and no more than a quarter of the free frames where it cannot,
        so a small-memory boot keeps its user pages instead of dying here. The
-       floor is the size the cache had before it grew; a machine that cannot
-       spare that could not have mounted a disk before this change either. */
+       floor is the 256 frames the cache had before it grew; a machine that
+       cannot spare that could not have mounted a disk before this change
+       either. */
     {
         uint32_t spare = frame_free_count() / 4u;
         uint32_t want = PC_SLOTS;

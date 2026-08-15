@@ -2,6 +2,6 @@
 #
 # Built into a partitioned disk by mkdisk.sh and booted with rach2.fsdisk +
 # rach2.rescue. The debug shell runs `exec /stressprobe`, which writes and
-# re-reads 33 MiB of files (past the 32 MiB physical-RAM cap) through the 1 MiB
+# re-reads 33 MiB of files (past the 32 MiB physical-RAM cap) through the 4 MiB
 # cache, proving an on-disk file system larger than memory round-trips.
 file 0755 /stressprobe build/tests/stressprobe

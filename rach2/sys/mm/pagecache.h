@@ -28,8 +28,9 @@
 #endif
 
 /* The reservation's floor on a small-memory machine (see init_pagecache):
-   the size the cache had before it grew. */
-#define PC_MIN_SLOTS 64u
+   256 frames, the size the cache had before it grew, so any machine that
+   booted the old cache boots this one. */
+#define PC_MIN_SLOTS 256u
 
 /*
  * The backing store, accessed one page at a time. `disk_off` is a page-aligned

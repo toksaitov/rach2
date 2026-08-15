@@ -65,4 +65,4 @@ The list is written out rather than computed, and then checked: `tools/check_lin
 
 ## What is deliberately not built
 
-The kernel, musl and dropbear are not compiled in the guest. Each has its own reason and they are recorded in `dev-log/20-compiler/`.
+The kernel IS compiled in the guest since milestone 22: `make selfbuild-test` builds it there with this compiler and pdpmake, boots the result through the full probe suite, and builds the utilities and the ish shell the same way. musl and dropbear are not compiled in the guest; their reasons are recorded in `dev-log/20-compiler/`.

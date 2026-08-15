@@ -19,10 +19,13 @@ overwrite itself, is refused on the host before a machine is started:
     loads at the physical address and would put a zero-paddr kernel in low
     memory), `p_filesz <= p_memsz`, the file range inside the file, and the
     file offset congruent to the address modulo the alignment.
-  * The entry point equal to the `_start` symbol's address and inside the
-    file-backed bytes of a load, not its zero-fill.
-  * `_end` present and equal to the highest `p_vaddr + p_memsz`, since the
-    boot allocator starts reserving physical memory at that symbol.
+  * The entry point inside the file-backed bytes of a load, not its
+    zero-fill; and, where the file carries a symbol table, the entry equal
+    to the `_start` symbol's address and `_end` equal to the highest
+    `p_vaddr + p_memsz`, since the boot allocator starts reserving physical
+    memory at that symbol. The GNU-linked kernel carries its table and is
+    held to both; tcc's linker emits none, so under `--tcc` the image end is
+    derived from the segments alone and the symbol assertions do not run.
 
 `--tcc` adds the assertions specific to tcc's layout, where the ELF and
 program headers themselves sit inside the first load: first-load file offset
