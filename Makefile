@@ -418,7 +418,7 @@ selfbuild-test: rach2 utils krffs test-image check-busybox check-tcc check-pdpma
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
 	sh tools/selfbuild_test.sh build/rach2/kernel $(SELFBUILD_DISK) \
-	    "`cat krffs/rach2_test_password`"
+	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
 
 # `make ssh-test`: the SSH capstone with nobody at the keyboard. Boots os-real
 # from a disk with the port forwarded, starts dropbear from the console session

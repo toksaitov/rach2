@@ -23,7 +23,12 @@
 # statfs), so the space preflight runs on the host, over the disk copy's own
 # free-node chain, before the machine is started.
 #
-# Usage: selfbuild_test.sh <kernel> <disk> <test password>
+# The run ends with a second, short boot as root that rebuilds the staged
+# /src/ish in place, no copy and no touch: that is the demonstration flow,
+# and it is what a revert to zero staged timestamps breaks (pdpmake reads a
+# zero modification time as a file that does not exist).
+#
+# Usage: selfbuild_test.sh <kernel> <disk> <test password> <root password>
 #
 
 set -e
@@ -31,9 +36,11 @@ set -e
 KERNEL="$1"
 DISK="$2"
 TESTPASSWORD="$3"
+ROOTPASSWORD="$4"
 
-if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$TESTPASSWORD" ]; then
-    echo "usage: selfbuild_test.sh <kernel> <disk> <test password>" >&2
+if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$TESTPASSWORD" ] ||
+   [ -z "$ROOTPASSWORD" ]; then
+    echo "usage: selfbuild_test.sh <kernel> <disk> <test password> <root password>" >&2
     exit 2
 fi
 
@@ -121,6 +128,8 @@ step() {
 # the writer). The feeder paces on each step's marker with a long bound, since
 # a full kernel build sits behind a single marker.
 boot_steps() {
+    login_name="$1"
+    login_password="$2"
     rm -f "$FEED"
     mkfifo "$FEED"
     qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
@@ -130,9 +139,9 @@ boot_steps() {
     QPID=$!
     (
         sleep 14
-        printf 'test\n'
+        printf '%s\n' "$login_name"
         sleep 4
-        printf '%s\n' "$TESTPASSWORD"
+        printf '%s\n' "$login_password"
         sleep 6
         while IFS='	' read -r marker command; do
             printf '%s\n' "$command"
@@ -210,7 +219,7 @@ step "SMOKEADD" "./adduser > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"ADD"
 step "SMOKEISH" "cd /home/test/kbuild/ish && [ \"\$(./ish -c '/home/test/kbuild/utils/echo selfbuilt')\" = selfbuilt ] && echo SMOKE\"\"ISH"
 step "SYNCDONE" "sync; echo SYNC\"\"DONE"
 
-boot_steps
+boot_steps test "$TESTPASSWORD"
 
 if ! wait_token "COPYONE" 1800; then
     fail "the source tree never copied into the workspace"
@@ -377,5 +386,24 @@ else
     GRUB_NOTE="(GRUB skipped: $docker_skip)"
 fi
 
-echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its 24 utilities and its shell; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
+# The in-place regression: root, in a second short boot of the same disk,
+# runs make directly in the staged /src/ish, no copy and no touch. This is
+# the demonstration flow, and it is what a revert to zero staged timestamps
+# breaks (pdpmake then reads every staged source as a file that does not
+# exist).
+: > "$STEPS"
+step "INPLACERC" "cd /src/ish && make -f guest.mk > /tmp/ip.out 2>&1; echo INPLACE\"\"RC=\$?"
+step "IPTAIL" "busybox tail -3 /tmp/ip.out; echo IP\"\"TAIL"
+rm -f "$LOG"
+boot_steps root "$ROOTPASSWORD"
+if ! wait_token "INPLACERC=" 600; then
+    fail "the in-place root build never reported"
+fi
+if ! grep -q "INPLACERC=0" "$LOG"; then
+    wait_token "IPTAIL" 60 || true
+    fail "make -f guest.mk in the staged /src/ish failed; its last lines are in the kept log"
+fi
+cleanup_boot
+
+echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its 24 utilities and its shell, and root rebuilt the staged /src/ish in place; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
 echo "selfbuild-test: PASS"
