@@ -344,8 +344,12 @@ a pid a script no longer owns is one the host may since have given away.
 ## Image builders (need Docker)
 
 * `mkdisk_grub.sh` (`make os-real-grub-disk`): builds a BIOS-bootable partitioned
-  GRUB disk image. It calls `grub_embed.py` because `grub-bios-setup` cannot run
-  on Docker's overlay filesystem.
+  GRUB disk image whose boot partition is the kernel-install surface: the
+  candidate slot (`/boot/kernel`, the kernel zero-padded to a fixed 2 MiB),
+  the untouched `/boot/fallback`, and the `grubenv` block that selects between
+  them, with every staged chain verified and the four boot files held
+  disjoint before the partition is committed. It calls `grub_embed.py`
+  because `grub-bios-setup` cannot run on Docker's overlay filesystem.
 * `grub_embed.py` (invoked by `mkdisk_grub.sh`): writes GRUB's `boot.img` and
   embeds `core.img` into the disk directly.
 * `mkiso.sh` (`make isos`): builds a bootable ISO per image with `grub-mkrescue`

@@ -22,18 +22,17 @@ NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::2222-:22}"
 . "$SCRIPT_DIR/qemu_devices.sh"
 
 DISK="$SCRIPT_DIR/../build/images/os-real-grub.disk"
-KERNEL="$SCRIPT_DIR/../build/rach2/kernel"
 
 if [ ! -f "$DISK" ]; then
     echo "run: disk image '$DISK' not found; build it with 'make os-real-grub-disk'" >&2
     exit 1
 fi
 
-# GRUB does not reload a fresh kernel: the disk holds a copy of the built
-# kernel. Warn if it is newer than the disk, so a stale-kernel boot is caught.
-if [ -f "$KERNEL" ] && [ "$KERNEL" -nt "$DISK" ]; then
-    echo "run: warning: $KERNEL is newer than the disk; rebuild with 'make os-real-grub-disk'" >&2
-fi
+# The disk owns its kernel state: /boot/kernel is the candidate slot the
+# machine itself rewrites with install-kernel, /boot/fallback the untouched
+# copy, and grubenv selects between them. A host kernel newer than the disk
+# is therefore not a reason to rebuild it; `make os-real-grub-disk` recreates
+# the disk from the host build and DISCARDS anything installed on it.
 
 # -cpu max exposes RDSEED/RDRAND so the CSPRNG seeds from trusted hardware
 # entropy (dropbear key generation needs it).
