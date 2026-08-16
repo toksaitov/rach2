@@ -6123,7 +6123,6 @@ static int32_t sys_getdents64(isr_params_t *params)
     fd_entry_t *entry;
     krffs_node_t *node;
     uint32_t bytes_written = 0;
-    uint32_t file_index = 0;
     uint32_t target_index;
     uint32_t name_len;
     uint32_t rec_len;
@@ -6164,7 +6163,34 @@ static int32_t sys_getdents64(isr_params_t *params)
         return -EBADF;  /* the directory was removed out from under this fd */
     }
 
-    target_index = entry->ofd->offset; /* the file index reached so far */
+    /*
+     * The cursor is the byte offset of the last node returned, plus one, and
+     * NOT a count of the children seen so far. That distinction is the whole
+     * of a bug this had: `rm -rf` reads a batch of names, unlinks them, and
+     * reads again, and a cursor that counted children renumbered every
+     * surviving child when one was removed, so the second read skipped as many
+     * entries as the first read had deleted. The files left behind then made
+     * the directory refuse to be removed, with `rm` reporting only that it was
+     * not empty (tests/unlinkdirprobe.c).
+     *
+     * What an offset guarantees, exactly. Deleting an entry does not move any
+     * other node: `krffs_remove_reserved_node` only widens free extents, and
+     * allocation splits a free node rather than shifting a reserved one. So a
+     * listing interleaved with deletions, which is the case that matters and
+     * the one `rm` performs, sees every surviving entry once.
+     *
+     * What it does not guarantee. Growing a file CAN move its node: when the
+     * following extent is not free and large enough, `krffs_resize_reserved_node`
+     * allocates elsewhere, copies, and frees the old node. A child that grows
+     * that way while another descriptor is mid-listing lands at a new offset,
+     * and is missed if that offset is below the cursor or repeated if above.
+     * The same is true of a file created during a listing in space a removed
+     * one freed. Both are concurrent modifications of a directory being read,
+     * which POSIX leaves unspecified, and neither is reachable from the loop
+     * this exists for; the previous count-based cursor failed the case that
+     * was reachable.
+     */
+    target_index = entry->ofd->offset;
 
     /* List only the children of THIS directory: entry->node is the directory
      * (NULL == the root), so match nodes whose parent_id is its id. */
@@ -6172,11 +6198,17 @@ static int32_t sys_getdents64(isr_params_t *params)
 
     node = krffs_fs->node;
     do {
+        /* Through uintptr_t rather than as a pointer difference: a signed
+         * ptrdiff_t on a 32-bit kernel cannot represent a distance above 2 GiB,
+         * and a KRFFS image may be larger than that. Every node begins inside
+         * the filesystem's own extent, so the unsigned distance always fits. */
+        uint32_t node_off = (uint32_t)((uintptr_t)node - (uintptr_t)krffs_fs->node);
+
         /* An orphan keeps its parent id but has no name, and a caller that
          * cannot reach it by path must not see it in a listing either. */
         if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id &&
             node->name[0] != '\0') {
-            if (file_index >= target_index) {
+            if (node_off >= target_index) {
                 /* Staging buffer for one record (a KRFFS name is at most
                  * KRFFS_FILE_NAME_BUFFER_SIZE bytes, so this always fits). */
                 uint8_t recbuf[KRFFS_FILE_NAME_BUFFER_SIZE + 32];
@@ -6198,7 +6230,7 @@ static int32_t sys_getdents64(isr_params_t *params)
                 k_memset(recbuf, 0, rec_len);
                 dirent = (struct linux_dirent64 *)recbuf;
                 dirent->d_ino = node->id;                      /* the DJB hash is the inode */
-                dirent->d_off = (int64_t)(file_index + 1);     /* next position */
+                dirent->d_off = (int64_t)(node_off + 1);       /* next position */
                 dirent->d_reclen = (uint16_t)rec_len;
                 dirent->d_type = KRFFS_IS_DIR(node->mode) ? DT_DIR : DT_REG;
                 k_memcpy(dirent->d_name, node->name, name_len + 1);
@@ -6210,17 +6242,14 @@ static int32_t sys_getdents64(isr_params_t *params)
                 }
 
                 bytes_written += rec_len;
-                entry->ofd->offset = file_index + 1;
+                entry->ofd->offset = node_off + 1;
             }
-            file_index++;
         }
     } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
 
-    /* Wrote nothing after scanning every child: end of directory. */
-    if (bytes_written == 0 && file_index > 0 && target_index >= file_index) {
-        return 0;
-    }
-
+    /* Nothing written after scanning every node is the end of the directory. A
+     * buffer too small for even one record returned -EINVAL above, so zero
+     * here has only the one meaning. */
     return (int32_t)bytes_written;
 }
 

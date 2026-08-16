@@ -34,6 +34,7 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `vmprobe` (`VMPROBE OK`): the VMA and demand-paging machinery (brk, anonymous mmap, stack growth, lazy zero-fill).
 * `cowprobe` (`COWPROBE OK`): copy-on-write fork.
 * `dirprobe` (`DIRPROBE OK`): hierarchical KRFFS directories and the `*at` API.
+* `unlinkdirprobe` (`UNLINKDIRPROBE OK`): removing a directory's files while listing it, the way `rm -rf` does. The directory cursor used to be a count of children, so each unlink renumbered the survivors and the next read skipped one entry per file already gone; the leftovers then made `rmdir` refuse, and the only thing a user saw was "Directory not empty". `make selfbuild-test` found it, once the kernel source tree had grown enough files that listing it took more than one call, so the buffer here is deliberately small. It also checks that two descriptors on one directory keep their own cursors and that the end of a directory is reported repeatedly rather than once.
 * `ofdprobe` (`OFDPROBE OK`): refcounted open-file descriptions (the shared seek offset).
 * `pipeprobe` (`PIPEPROBE OK`): the anonymous-pipe contract.
 * `pollprobe` (`POLLPROBE OK`): I/O multiplexing (poll and select).
