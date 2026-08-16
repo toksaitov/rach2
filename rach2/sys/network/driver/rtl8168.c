@@ -1047,7 +1047,13 @@ static void r8168_tx_reclaim(void)
         r8168_tx_tail++;
         reclaimed++;
     }
-    if (reclaimed != 0 && r8168_tx_tail != r8168_tx_head) {
+    (void)reclaimed;
+    /* Anything still outstanding gets another doorbell. A poll request can be
+     * lost when two arrive close together, which the reference covers by
+     * ringing again; here the tick does it, so a lost one costs 10 ms rather
+     * than the connection. It is one 8-bit write when the ring is not empty
+     * and nothing at all when it is. */
+    if (r8168_tx_tail != r8168_tx_head) {
         io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
     }
 }
@@ -1055,11 +1061,26 @@ static void r8168_tx_reclaim(void)
 /**
  * Send one Ethernet frame.
  *
- * Phase B has no timer hook, so this waits for the descriptor here rather
- * than deferring the reclaim: fill, hand over, ring, and poll ownership back
- * with a bounded wait, ringing again while the descriptor stays owned. A
- * frame that does not complete inside the budget is counted and dropped; the
- * alternative is a kernel that stops on a wedged chip.
+ * Fill, hand over, ring, and return: the chip finishes on its own time and the
+ * timer tick reclaims. Waiting here for completion, which is what this did
+ * before the tick drove the driver, put a bounded busy-wait inside every
+ * transmit, and every netconsole frame runs that wait with interrupts
+ * disabled.
+ *
+ * A full ring is the one case that still waits, briefly. Dropping the moment a
+ * burst outruns the chip would lose frames a 10 ms tick would have freed room
+ * for, so this rings the doorbell and reclaims for a bounded interval first,
+ * and counts a stall only if the oldest descriptor is still the chip's after
+ * that. A wedged chip therefore costs one bounded wait per frame rather than a
+ * kernel that stops.
+ *
+ * The whole of it runs with interrupts disabled, as the RTL8139's transmit
+ * does, because the timer tick reclaims from the same two ring indices this
+ * advances. `net.h` already asks every syscall-context sender to hold
+ * `net_lock`, and every one of them does; guarding here as well means the
+ * interface's contract does not rest on each caller remembering, and the two
+ * drivers behind that interface follow the same rule. The bracket nests, so a
+ * caller that already holds it pays nothing.
  */
 static void rtl8168_tx(const uint8_t *data, uint16_t len)
 {
@@ -1067,16 +1088,29 @@ static void rtl8168_tx(const uint8_t *data, uint16_t len)
     uint32_t eor;
     uint32_t i;
     uint16_t total = len;
+    uint32_t flags;
 
     if (!r8168_up || len == 0 || len > R8168_FRAME_MAX) {
         return;
     }
+    flags = net_lock();
     r8168_tx_reclaim();
 
     idx = r8168_tx_head % R8168_RING_SIZE;
     if (r8168_tx_ring[idx].opts1 & R8168_DESC_OWN) {
-        r8168_tx_stalls++;
-        return;
+        for (i = 0; i < R8168_TX_WAIT_STEPS; i++) {
+            io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
+            io->udelay(R8168_TX_WAIT_USEC);
+            r8168_tx_reclaim();
+            if (!(r8168_tx_ring[idx].opts1 & R8168_DESC_OWN)) {
+                break;
+            }
+        }
+        if (r8168_tx_ring[idx].opts1 & R8168_DESC_OWN) {
+            r8168_tx_stalls++;
+            net_unlock(flags);
+            return;
+        }
     }
 
     for (i = 0; i < len; i++) {
@@ -1103,19 +1137,8 @@ static void rtl8168_tx(const uint8_t *data, uint16_t len)
     r8168_tx_head++;
 
     io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
-
-    for (i = 0; i < 1000; i++) {
-        if (!(r8168_tx_ring[idx].opts1 & R8168_DESC_OWN)) {
-            r8168_tx_packets++;
-            r8168_tx_tail = r8168_tx_head;
-            return;
-        }
-        io->udelay(100);
-        /* A poll request can be lost when two arrive close together. */
-        io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
-    }
-    r8168_tx_stalls++;
-    r8168_tx_tail = r8168_tx_head;
+    r8168_tx_packets++;
+    net_unlock(flags);
 }
 
 /**
@@ -1135,6 +1158,7 @@ static void rtl8168_poll(void)
     if (!r8168_up) {
         return;
     }
+    r8168_tx_reclaim();
     for (budget = 0; budget < R8168_RING_SIZE; budget++) {
         uint32_t idx = r8168_rx_cur % R8168_RING_SIZE;
         uint32_t opts1 = r8168_rx_ring[idx].opts1;

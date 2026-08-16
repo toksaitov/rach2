@@ -17,8 +17,7 @@
  * handler, so its `poll` is NULL; the RTL8168GU runs with its interrupts
  * masked and is driven from the timer tick, so its `poll` does the work. A
  * caller polls through `netdev_poll`, which does nothing for a device that
- * does not need it. Nothing calls it yet: the RTL8168GU's transmit is
- * synchronous, and the timer hook arrives with its receive path.
+ * does not need it. The 100 Hz timer handler is what calls it.
  */
 
 /* What a driver's `init` reports. */

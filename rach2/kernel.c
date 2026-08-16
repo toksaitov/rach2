@@ -41,6 +41,7 @@
 #include "sys/udelay.h"
 #include "sys/network/net.h"
 #include "sys/network/netconf.h"
+#include "sys/network/driver/netdev.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
 #include "sys/network/ip/ip.h"
@@ -155,6 +156,13 @@ static void timer_handler(isr_params_t *params)
     proc_wake_sleepers(kernel_ticks);
 
     hda_tick();
+    /* A polled network device gets its turn here, before the layers above are
+     * given theirs, so a frame that arrived since the last tick is delivered
+     * in the same tick that acts on it. A device that raises an interrupt
+     * instead has no poll and this costs it a null check. Running from the
+     * timer handler means interrupts are already off, which is the discipline
+     * the stack's shared buffers require. */
+    netdev_poll();
     tcp_tick();
     ip_loop_drain();
     tty_console_poll();

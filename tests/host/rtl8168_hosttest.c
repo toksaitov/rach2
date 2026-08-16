@@ -62,6 +62,27 @@ void serial_printf(const char *fmt, ...)
     (void)fmt;
 }
 
+/* The kernel's interrupt bracket. There are no interrupts here, so the flag is
+   a token; what the test holds the driver to is that every lock it takes it
+   releases, which the balance below checks. */
+static int lock_depth;
+static int lock_ever_negative;
+
+unsigned int net_lock(void)
+{
+    lock_depth++;
+    return 0;
+}
+
+void net_unlock(unsigned int flags)
+{
+    (void)flags;
+    lock_depth--;
+    if (lock_depth < 0) {
+        lock_ever_negative = 1;
+    }
+}
+
 void k_puts(const char *s)
 {
     (void)s;
@@ -856,15 +877,54 @@ int main(void)
     model_swallow_doorbell = 1;
     {
         unsigned char frame[64];
+        unsigned f;
 
         for (i = 0; i < sizeof(frame); i++) {
             frame[i] = 1;
         }
-        /* The model leaves ownership with the chip when the doorbell is
-           swallowed, which is what a wedged transmitter looks like. */
-        r8168_tx_ring[0].opts1 |= R8168_DESC_OWN;
+        /* A chip that never answers the doorbell keeps every descriptor. The
+           transmit is asynchronous, so the ring absorbs the first RING_SIZE
+           frames and only then is there nowhere to put one; that is the
+           backpressure a burst meets, and it must be a counted refusal rather
+           than a wait without end. */
+        for (f = 0; f < R8168_RING_SIZE; f++) {
+            rtl8168_tx(frame, (unsigned short)sizeof(frame));
+        }
+        CHECK(r8168_tx_packets == R8168_RING_SIZE, "the ring absorbs a full burst");
+        CHECK(r8168_tx_stalls == 0, "and nothing stalls while there is room");
         rtl8168_tx(frame, (unsigned short)sizeof(frame));
-        CHECK(r8168_tx_stalls >= 1, "a transmit that never completes is counted");
+        CHECK(r8168_tx_stalls == 1, "the frame past a full ring is counted, not waited on");
+        CHECK(r8168_tx_packets == R8168_RING_SIZE, "and is not counted as sent");
+
+        /* The tick rings the doorbell again for whatever is outstanding, which
+           is what recovers a poll request the chip lost. */
+        {
+            unsigned before = model_log_len;
+
+            rtl8168_poll();
+            CHECK(find_write(before, 8, R8168_TXPOLL) >= 0,
+                  "the tick rings the doorbell again while frames are outstanding");
+        }
+    }
+
+    /* ---- a working chip drains, and the ring wraps under it ---- */
+    model_reset();
+    CHECK(rtl8168_init() == NETDEV_UP, "the bring-up completes before the drain case");
+    {
+        unsigned char frame[64];
+        unsigned f;
+
+        for (i = 0; i < sizeof(frame); i++) {
+            frame[i] = 2;
+        }
+        for (f = 0; f < R8168_RING_SIZE * 3; f++) {
+            rtl8168_tx(frame, (unsigned short)sizeof(frame));
+        }
+        CHECK(r8168_tx_packets == R8168_RING_SIZE * 3,
+              "a chip that answers takes three ring loads without a stall");
+        CHECK(r8168_tx_stalls == 0, "and stalls on none of them");
+        rtl8168_poll();
+        CHECK(r8168_tx_tail == r8168_tx_head, "the tick reclaims every completed descriptor");
     }
 
     /* ---- receive ---- */
@@ -978,6 +1038,9 @@ int main(void)
     CHECK(rtl8168_netdev.poll == rtl8168_poll, "the table names the poll path");
     CHECK(rtl8168_netdev.init == rtl8168_init, "the table names the bring-up");
     CHECK(rtl8168_netdev.error != 0, "the table names a diagnostic");
+
+    CHECK(lock_depth == 0 && !lock_ever_negative,
+          "every interrupt bracket the driver took, it released");
 
     (void)a;
     (void)b;

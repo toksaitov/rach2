@@ -133,6 +133,12 @@
  * nothing here supports jumbo frames. */
 #define R8168_FRAME_MAX 1514
 
+/* How long a transmit will wait for a full ring to free a descriptor: about a
+ * millisecond, which is a tick's worth of chip time at 100 Mbps and short
+ * enough that a wedged chip does not hold the caller. */
+#define R8168_TX_WAIT_STEPS 10u
+#define R8168_TX_WAIT_USEC  100u
+
 /** One C+ descriptor: 16 bytes, little-endian, as the chip reads them. */
 struct r8168_desc {
     uint32_t opts1;
