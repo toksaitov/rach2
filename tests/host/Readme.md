@@ -30,7 +30,7 @@ static int fails;
 int main(void) { /* ... CHECK(...) ... */ return fails; }
 ```
 
-The `host-deps:` line is a build contract: `tools/hosttest.sh` reads the paths after it and hands them to the compiler, so the list names every kernel source the seam links separately. A test that pulls its source in with a direct `#include` (to reach the file's `static` routines) leaves the line empty.
+The `host-deps:` line may be repeated, and is: clang-format wraps a comment at 80 columns, and a wrapped list loses everything past the fold without saying so, so a test with more dependencies than fit on one line writes a second `host-deps:` line rather than a continuation. The line is a build contract: `tools/hosttest.sh` reads the paths after it and hands them to the compiler, so the list names every kernel source the seam links separately. A test that pulls its source in with a direct `#include` (to reach the file's `static` routines) leaves the line empty.
 
 Keep the test free of host `<stdio.h>`/`<string.h>` so kernel and host type definitions never collide; assert via the return code; let the sanitizers do the rest.
 

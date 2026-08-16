@@ -55,7 +55,11 @@ for t in tests/host/*_hosttest.c; do
     [ -f "$t" ] || continue
     any=1
     base="$(basename "$t" .c)"
-    deps="$(grep -oE 'host-deps:[^*]*' "$t" | head -1 | sed 's/host-deps://')"
+    # Every host-deps: line, not just the first. The line is repeatable because
+    # clang-format wraps a comment at 80 columns, and a wrapped list would
+    # silently lose everything past the fold; a second line is how a test with
+    # more dependencies than fit says so.
+    deps="$(grep -oE 'host-deps:[^*]*' "$t" | sed 's/host-deps://' | tr '\n' ' ')"
     out="$VDIR/$base"
     # Name a missing dep here: passed on to the compiler it would surface as a
     # bare "no such file", which reads as a broken test. A dep under the
