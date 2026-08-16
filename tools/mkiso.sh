@@ -71,19 +71,52 @@ mkdir -p "$ISODIR/boot/grub"
 cat "$KERNEL" > "$ISODIR/boot/kernel"
 cat "$KRFFS" > "$ISODIR/boot/$IMAGE.krffs"
 
-# The metal profile gets a third entry: a machine with no serial port answers
-# only on its screen, so the numbers a first bring-up needs (the module layout
-# the bootloader chose, what memory survived, which Ethernet silicon is in the
-# slot) are one menu selection away rather than a rebuild away.
+# The metal profile's menu. It is longer than the others' because this is the
+# stick that goes into a laptop with no serial port, where every question has
+# to be answerable by choosing a menu entry rather than by typing a command
+# line at a machine you cannot read.
+#
+# The address is baked in rather than typed. There is no DHCP client in this
+# kernel, so a machine on a real LAN needs its address on the command line
+# every boot, and typing one at a GRUB prompt on a laptop keyboard, correctly,
+# every time, is a tax with no teaching value. These defaults are the network
+# the machine actually lives on; override them at build time for anywhere else:
+#
+#     RACH2_METAL_IP=10.0.0.50/24 RACH2_METAL_GATEWAY=10.0.0.1 make rach2-metal-iso
+#
+# and the last entry boots with no network configuration at all, for a network
+# nobody has told this stick about.
+METAL_IP="${RACH2_METAL_IP:-192.168.0.105/24}"
+METAL_GATEWAY="${RACH2_METAL_GATEWAY:-192.168.0.1}"
+METAL_NET="rach2.ip=$METAL_IP rach2.gateway=$METAL_GATEWAY rach2.netconsole"
+
 if [ "$IMAGE" = rach2-metal ]; then
-    DIAG_ENTRY='menuentry "Rach2 (metal) - diagnostics" {
-    multiboot /boot/kernel rach2.diag
+    # The disk diagnostic is its own entry and not part of the default, because
+    # it probes the SATA controller and resets its link, and that path has less
+    # standing on this board than the rest. A boot that stops there should cost
+    # a different menu choice, not a reinstall.
+    METAL_ENTRIES="menuentry \"Rach2 (metal) - with the disk diagnostic\" {
+    multiboot /boot/kernel $METAL_NET rach2.disk=ahci rach2.diskdiag
     module /boot/rach2-metal.krffs
     boot
 }
-'
+
+menuentry \"Rach2 (metal) - diagnostics, held on screen\" {
+    multiboot /boot/kernel $METAL_NET rach2.diag
+    module /boot/rach2-metal.krffs
+    boot
+}
+
+menuentry \"Rach2 (metal) - no network configuration\" {
+    multiboot /boot/kernel
+    module /boot/rach2-metal.krffs
+    boot
+}
+"
+    METAL_DEFAULT_ARGS="$METAL_NET"
 else
-    DIAG_ENTRY=''
+    METAL_ENTRIES=''
+    METAL_DEFAULT_ARGS=''
 fi
 
 cat > "$ISODIR/boot/grub/grub.cfg" <<CFG
@@ -91,12 +124,12 @@ set timeout=3
 set default=0
 
 menuentry "Rach2 ($IMAGE)" {
-    multiboot /boot/kernel
+    multiboot /boot/kernel $METAL_DEFAULT_ARGS
     module /boot/$IMAGE.krffs
     boot
 }
 
-$DIAG_ENTRY
+$METAL_ENTRIES
 menuentry "Rach2 ($IMAGE) - rescue (kernel debug shell)" {
     multiboot /boot/kernel rach2.rescue
     module /boot/$IMAGE.krffs

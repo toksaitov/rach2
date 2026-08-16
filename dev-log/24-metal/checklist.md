@@ -20,6 +20,7 @@ Then write `build/iso/rach2-metal.iso` to the stick unchanged. It is a hybrid im
 What to have on hand:
 
 * An Ethernet cable from the laptop to the same switch or router as the Mac.
+* Nothing to type at the GRUB prompt: the metal menu's first three entries carry `rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole` already. For another network, rebuild with `RACH2_METAL_IP=... RACH2_METAL_GATEWAY=... make rach2-metal-iso`, or pick the entry with no network configuration and edit at the prompt.
 * The demo passwords, which are short and fixed for development: root is `1qA2wS3eD` and the test account is `4rF5tG6yH` (`krffs/gen_demo_password.sh`, overridable with `RACH2_ROOT_PASSWORD`).
 * An address for the laptop that the router will not hand to anything else. Reserve it, or pick one outside the DHCP pool. Write it down; it goes on the kernel command line, since there is no DHCP.
 * The Mac's own address on that network, and a terminal ready to run `tcpdump`.
@@ -80,6 +81,8 @@ If no frames arrive, the boot line still says a great deal: the driver's own lin
 Repeat on a 100 Mbps port. The ring is 64 descriptors where the reference uses 256, and that deviation is decided by numbers rather than argument: a 64-frame burst should complete with no drops, and the counters on the boot line say so.
 
 ### 5. SSH, and the disk read against the baseline
+
+Two usage notes that cost the first session time. This project's `ping` takes a host and no flags, so `ping 192.168.0.1` and not `ping -c 1 192.168.0.1`, which tries to resolve `-c` as a name. And a name needs `/etc/resolv.conf`, which the metal image stages naming 1.1.1.1; numeric addresses never touch it.
 
 If the frames arrive, the machine is probably reachable. From the Mac:
 

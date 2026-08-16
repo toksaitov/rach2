@@ -37,6 +37,16 @@ text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home
 file 0600 /etc/shadow krffs/shadow
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
 text 0644 /etc/shells /bin/sh\n
+# The stub resolver reads these two (utils/resolv.c). Without them a name is
+# unresolvable and only numeric addresses work, which is what the first LAN
+# session found. The nameserver is the one this LAN's router hands out rather
+# than the router itself, because that router forwards nothing: it gives
+# clients Cloudflare's resolvers, and a machine that assumed the gateway would
+# answer would fail for a reason nobody could see. The resolver reads the first
+# `nameserver` line; the second is here for a reader, not for the code.
+# Numeric addresses never touch this file.
+text 0644 /etc/resolv.conf nameserver 1.1.1.1\nnameserver 1.0.0.1\n
+text 0644 /etc/hosts 127.0.0.1 localhost\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 
 dir 0755 /root
