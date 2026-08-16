@@ -1,5 +1,6 @@
 #include "block.h"
 #include "ata.h"
+#include "diskcmd.h"
 
 #include "../kio.h"
 #include "../serial.h"
@@ -61,6 +62,25 @@ static int ata_write(
            );
 
 static block_device_t ata_device;
+
+/**
+ * Issue one command to the drive, or refuse it. Returns 1 if it was issued.
+ *
+ * The one place a command leaves this driver, which is what makes the build's
+ * disk policy enforceable: a kernel built read-only refuses here, whatever the
+ * caller believed it was doing, and says so once so a refused boot has a
+ * reason on the screen rather than an unexplained error code.
+ */
+static int ata_command(uint8_t command)
+{
+    if (!diskcmd_allowed(command)) {
+        serial_printf("ata: refused command 0x%X: %s\n", (unsigned)command,
+                      diskcmd_policy_banner);
+        return 0;
+    }
+    outb(ATA_IO_BASE + ATA_REG_STATUS, command);
+    return 1;
+}
 
 /**
  * Wastes the roughly 400 ns the drive needs to settle after a command before
@@ -193,7 +213,9 @@ static int ata_read(
             return -EIO;
         }
         ata_program_lba(lba, chunk);
-        outb(ATA_IO_BASE + ATA_REG_STATUS, ATA_CMD_READ);
+        if (!ata_command(ATA_CMD_READ)) {
+            return -EIO;
+        }
         ata_settle();
 
         for (i = 0; i < chunk; ++i) {
@@ -241,7 +263,9 @@ static int ata_write(
             return -EIO;
         }
         ata_program_lba(lba, chunk);
-        outb(ATA_IO_BASE + ATA_REG_STATUS, ATA_CMD_WRITE);
+        if (!ata_command(ATA_CMD_WRITE)) {
+            return -EPERM;
+        }
         ata_settle();
 
         for (i = 0; i < chunk; ++i) {
@@ -255,7 +279,9 @@ static int ata_write(
         if (ata_wait_ready() != 0) {
             return -EIO;
         }
-        outb(ATA_IO_BASE + ATA_REG_STATUS, ATA_CMD_FLUSH);
+        if (!ata_command(ATA_CMD_FLUSH)) {
+            return -EPERM;
+        }
         ata_settle();
         if (ata_wait_ready() != 0) {
             return -EIO;
@@ -285,7 +311,9 @@ int ata_init(void)
     outb(ATA_IO_BASE + ATA_REG_LBA_LOW, 0);
     outb(ATA_IO_BASE + ATA_REG_LBA_MID, 0);
     outb(ATA_IO_BASE + ATA_REG_LBA_HIGH, 0);
-    outb(ATA_IO_BASE + ATA_REG_STATUS, ATA_CMD_IDENTIFY);
+    if (!ata_command(ATA_CMD_IDENTIFY)) {
+        return -1;
+    }
     ata_settle();
 
     {

@@ -1,4 +1,5 @@
 #include "ahci.h"
+#include "diskcmd.h"
 #include "block.h"
 
 #include "../pci.h"
@@ -475,6 +476,14 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count,
     uint32_t is_off = ahci_port_off(ahci_port, AHCI_PxIS);
     uint32_t prdtl = (bytes > 0) ? AHCI_PRDTL_ONE : 0u;
     uint32_t spin;
+
+    /* The one place a command leaves this driver. A kernel built read-only
+     * refuses here, whatever the caller believed it was doing. */
+    if (!diskcmd_allowed(command)) {
+        serial_printf("ahci: refused command 0x%X: %s\n", (unsigned)command,
+                      diskcmd_policy_banner);
+        return -1;
+    }
 
     ahci_zero(ahci_cmdtable, AHCI_CMDTABLE_SIZE);
 

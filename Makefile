@@ -87,7 +87,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        ping-test netconsole-test test-addressed metal-test \
+        ping-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
@@ -236,7 +236,19 @@ os-real-image: krffs rach2 utils check-busybox check-tcc check-pdpmake check-set
 # leaves out the compiler, /src, Doom and install-kernel, which a machine with
 # no writable disk cannot use. 4 MB: the binaries come to about 1.4 MB, and the
 # rest is headroom under the kernel's 32 MB direct map.
-rach2-metal-image: krffs rach2 utils check-busybox check-setid check-dropbearmulti
+# The metal kernel: the same sources built read-only at the disk, into its own
+# object tree so the two kernels never share one. The switch is a build switch
+# and not a boot flag because a boot flag is editable at the GRUB prompt, and
+# what it protects is somebody else's Windows installation. check_diskpolicy.py
+# then reads the policy back off the artifact, since there is nothing to check
+# for by absence: the commands are numbers and the functions that issue them
+# are static.
+METAL_KERNEL = build/rach2-metal/kernel
+rach2-metal: krffs
+	$(MAKE) -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
+	python3 tools/check_diskpolicy.py $(METAL_KERNEL) read-only
+
+rach2-metal-image: krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $(METAL_IMAGE) 4
@@ -439,6 +451,14 @@ netconsole-test: rach2 tests krffs test-image
 	    --expect "Network... OK" \
 	    --expect "netconsole: broadcast"
 
+# `make diskpolicy-test`: the read-only kernel does not write the disk, shown on
+# the bytes rather than on a return value. The same disk is booted with each
+# kernel; the ordinary one must change it, which is what makes the other half
+# mean anything, and the metal one must refuse a command by name and leave the
+# image untouched.
+diskpolicy-test: rach2 rach2-metal
+	sh tools/diskpolicy_test.sh build/rach2/kernel $(METAL_KERNEL)
+
 # `make metal-test`: the metal image reached over SSH with nobody at its
 # console. This is the rehearsal for the Lenovo: the machine is given power and
 # an address on its command line, and nothing is typed at it. What that proves
@@ -447,8 +467,8 @@ netconsole-test: rach2 tests krffs test-image
 # key authentication, a pty, and a file crossing intact each way are all one
 # test. It kills the server once as well, because a supervisor that starts a
 # daemon and does not restart it has not been tested.
-metal-test: rach2 rach2-metal-image
-	sh tools/metal_test.sh build/rach2/kernel $(METAL_IMAGE) 2223
+metal-test: rach2-metal rach2-metal-image
+	sh tools/metal_test.sh $(METAL_KERNEL) $(METAL_IMAGE) 2223
 
 # `make account-test`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools now and they are different code.
@@ -775,6 +795,7 @@ help:
 	@echo "  make netconsole-test  the boot log leaves over Ethernet, captured and checked"
 	@echo "  make test-addressed   the same suite with the network named on the boot line"
 	@echo "  make metal-test  the metal image reached over SSH with nobody at its console"
+	@echo "  make diskpolicy-test  the read-only kernel leaves a disk byte for byte"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
 	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"

@@ -31,6 +31,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/block/block.c     \
 	  sys/block/mbr.c       \
 	  sys/block/ata.c       \
+	  sys/block/diskcmd.c   \
 	  sys/block/ahci.c      \
 	  sys/display/vga_text.c \
 	  sys/display/vga_gfx.c  \
@@ -116,6 +117,15 @@ ifdef HARNESS
 CFLAGS += -DRACH2_HARNESS
 endif
 
+# Anything the caller wants added to every compile, which is how the second
+# kernel is built: `make -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY`
+# puts its objects and its binary under build/rach2-metal/ (mk/build.mk derives
+# both from COMPONENT), so the two kernels never share an object. A build switch
+# rather than a boot flag because the switch is what a command line edited at
+# the GRUB prompt cannot undo, and the disk it protects is somebody's Windows.
+KEXTRA ?=
+CFLAGS += $(KEXTRA)
+
 # General Rules
 
 .PHONY : all
@@ -139,6 +149,32 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
 	$(LD) $(LDFLAGS) -o "$$tmp" $^ && \
 	python3 ../tools/check_kernel.py "$$tmp" && \
 	mv "$$tmp" $@
+
+# A build tree remembers the flags it was built with, and refuses to be built
+# again with different ones. The reason is -DRACH2_DISK_READONLY: make decides
+# what to rebuild from timestamps, which say nothing about compiler flags, so
+# building one tree twice with different switches links some objects from each
+# and produces a kernel that reports one policy and enforces the other. That is
+# the single artifact this milestone cannot ship, and a partial rebuild is a
+# worse answer than a refusal, because a refusal is visible. The two kernels
+# therefore live in two trees (COMPONENT=rach2-metal for the read-only one) and
+# this stops the trees being crossed.
+KFLAGS_STAMP = $(BUILD)/.kflags
+
+.PHONY : kflags
+kflags :
+	@mkdir -p $(BUILD)
+	@if [ -f $(KFLAGS_STAMP) ] && ! printf '%s\n' '$(CFLAGS)' | cmp -s - $(KFLAGS_STAMP); then \
+	    echo "rach2: $(BUILD) was built with different flags:" >&2; \
+	    echo "rach2:   built with: $$(cat $(KFLAGS_STAMP))" >&2; \
+	    echo "rach2:   asked for:  $(CFLAGS)" >&2; \
+	    echo "rach2: remove $(BUILD) and build again; mixing the two would link" >&2; \
+	    echo "rach2: objects from both and the kernel would enforce neither policy" >&2; \
+	    exit 1; \
+	fi
+	@printf '%s\n' '$(CFLAGS)' > $(KFLAGS_STAMP)
+
+$(ASM_OBJECTS) $(C_OBJECTS) : | kflags
 
 $(ASM_OBJECTS) : $(BUILD)/%.o : %.s
 	@mkdir -p $(dir $@)

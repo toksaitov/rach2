@@ -40,6 +40,16 @@ So IRQ and async stay out on purpose. Whoever revisits them starts from this ana
 
 Linux `drivers/ata/libahci.c` enables per-port interrupts, issues commands into a tagged queue, and completes them in an interrupt handler that wakes the block layer; the block layer merges and schedules requests across a deep queue. Rach2's AHCI is that driver with the queue depth set to one, the interrupt removed, and the completion handler replaced by a bounded spin on `PxCI`, because its one caller runs in a context that cannot take the interrupt. The ATA driver is the same shape one register set down: Linux's `libata` PIO path, polled and single-sector-handshaked, with no IRQ.
 
+## The read-only build
+
+Milestone 24 carries this kernel to a laptop whose SSD holds a Windows installation its owner has not backed up, and until a carved partition is approved after a full backup, nothing this kernel does may write that disk. A promise of that size cannot rest on remembering not to call the write path, so it is enforced in one place per driver and decided when the kernel is built.
+
+`diskcmd.c` holds an allowlist, and both drivers consult it where a command leaves them for the device: `ahci_run_command` in `ahci.c`, and `ata_command` in `ata.c`. Under `-DRACH2_DISK_READONLY` only `READ SECTORS`, `READ SECTORS EXT`, `READ DMA EXT` and `IDENTIFY` are permitted; everything else is refused, including commands this file has never heard of, for the same reason a write is: nothing knows what an unknown command would do to somebody else's disk. It is an allowlist rather than a list of forbidden commands because a list of refusals is one somebody has to keep complete, and the cost of a missing entry is the disk this exists to protect.
+
+A build switch rather than a boot flag, because a boot flag is editable at the GRUB prompt by whoever is sitting at the machine. The two kernels are built into two object trees (`build/rach2/` and `build/rach2-metal/`, the second from `make rach2-metal`), and a tree refuses to be rebuilt with different flags rather than mixing objects from both: make decides what to recompile from timestamps, which say nothing about compiler flags, so a tree built twice with different switches would link some objects from each and produce a kernel that reports one policy and enforces the other.
+
+Which policy an artifact carries is read off the artifact. Checking for the absence of a write path would prove nothing, since the commands are numbers and the functions that issue them are static, so `diskcmd.c` carries a banner naming its policy, the kernel prints it at boot, and `tools/check_diskpolicy.py` requires the expected banner present and the other absent. `make diskpolicy-test` then shows it on the bytes: the same freshly built disk is booted with each kernel, the ordinary one must mount and change it (which is what makes the other half mean anything), and the metal one must refuse a command by name and leave the image byte for byte as it was.
+
 ## Deliberate simplifications
 
 * One command slot, polled, no NCQ: all the page-cache fault path ever issues.

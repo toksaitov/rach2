@@ -123,6 +123,12 @@ fi
 if ! grep -q "IPv4 $GUEST_IP/24" "$LOG"; then
     fail "the machine did not take the address from its command line"
 fi
+# The kernel says which disk policy it was built with, and for this image it
+# must be the one that cannot write. tools/check_diskpolicy.py reads the same
+# string out of the artifact; this reads it out of a machine that is running.
+if ! grep -q "disk policy: read-only" "$LOG"; then
+    fail "the running kernel does not report the read-only disk policy"
+fi
 
 # Nothing has been typed and nothing will be. The SSH server is up because init
 # started it, or it is not up at all.

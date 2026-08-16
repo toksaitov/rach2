@@ -41,6 +41,7 @@
 #include "sys/udelay.h"
 #include "sys/network/net.h"
 #include "sys/network/netconf.h"
+#include "sys/block/diskcmd.h"
 #include "sys/network/driver/netdev.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
@@ -2842,6 +2843,17 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     }
 
     /* Modules were parsed early, before paging; just report them. */
+    /* Which disk policy this kernel was built with, on the screen and in the
+     * log. A machine whose disk must not be written says so before it has
+     * touched one, and the same string is what tools/check_diskpolicy.py reads
+     * out of the artifact. */
+    if (diskcmd_policy() != DISKCMD_READ_WRITE) {
+        set_fore_color(light_brown);
+        k_printf("  %s\n", diskcmd_policy_banner);
+        set_fore_color(light_grey);
+    }
+    serial_printf("  %s\n", diskcmd_policy_banner);
+
     k_printf("  Modules...");
     serial_printf("  Modules...");
     if (num_modules > 0) {
