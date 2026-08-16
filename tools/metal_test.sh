@@ -227,6 +227,17 @@ if ! grep -q "rach2 login" "$LOG"; then
     fail "the console login is not on the console"
 fi
 
+# The machine's own copy of its boot log, which is what makes a question about
+# a boot answerable after that boot without anything arranged in advance.
+BOOTLOG="$(ssh_run 'cat /dev/bootlog' | tr -d '\r')"
+if [ -z "$BOOTLOG" ]; then
+    fail "/dev/bootlog gave nothing, so the machine cannot be asked what it printed"
+fi
+for want in "Rach2 Booting" "Initializing system components" "Network..."; do
+    echo "$BOOTLOG" | grep -q "$want" || fail "the fetched boot log does not contain '$want'"
+done
+echo "metal-test: the machine handed over its own boot log, from the first line: OK"
+
 # The acceptance script itself, rehearsed here so it is not being debugged on
 # the laptop. Its baseline comparisons are against a drive this machine does
 # not have, which it reports rather than fails on.

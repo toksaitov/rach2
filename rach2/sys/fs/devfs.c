@@ -10,6 +10,7 @@
  */
 
 #include "devfs.h"
+#include "../bootlog.h"
 #include "fd.h"
 #include "file.h"
 #include "../proc/process.h"
@@ -285,8 +286,44 @@ static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t c
     return -EPERM;
 }
 
+/*
+ * /dev/bootlog: what this machine printed while it was starting.
+ *
+ * It exists so a question about a boot can be asked after that boot, over the
+ * network, by somebody who arranged nothing in advance. The alternatives all
+ * demand foresight: the screen scrolls the log past in under a second, the
+ * netconsole reaches only a capture that was already running when the power
+ * came on, and holding the screen helps only a person standing at the machine.
+ */
+static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    char chunk[256];
+    uint32_t done = 0;
+
+    while (done < count) {
+        uint32_t want = count - done;
+        uint32_t n;
+
+        if (want > sizeof(chunk)) {
+            want = (uint32_t)sizeof(chunk);
+        }
+        n = bootlog_read(chunk, want, e->ofd->offset + done);
+        if (n == 0) {
+            break; /* the end of the log, the regular-file convention */
+        }
+        if (copy_to_user((void __user *)(buf + done), chunk, n) != 0) {
+            return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        done += n;
+    }
+    e->ofd->offset += done;
+    return (int32_t)done;
+}
+
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
                                              dev_ioctl, NULL};
+static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
+                                            NULL};
 static const struct file_ops disk0_ops = {dev_disk0_read, dev_disk0_write, dev_poll, dev_ioctl,
                                           NULL};
 
@@ -325,7 +362,8 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"tty", 5, 0, 0, 0666, NULL},
                                                {"ptmx", 5, 2, 0, 0666, NULL},
                                                {"bootpart", 240, 0, 0, 0600, &bootpart_ops},
-                                               {"disk0", 240, 1, 0, 0400, &disk0_ops}};
+                                               {"disk0", 240, 1, 0, 0400, &disk0_ops},
+                                               {"bootlog", 240, 2, 0, 0400, &bootlog_ops}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
@@ -615,6 +653,12 @@ int devfs_fd_disk_size(struct fd_entry *e, uint32_t *size)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
+    /* The log seeks like a file whose size is what it currently holds, so
+     * SEEK_END and a plain `cat` both behave. */
+    if (dev->ops == &bootlog_ops) {
+        *size = bootlog_len();
+        return 1;
+    }
     if (dev->ops != &disk0_ops || !disk0.present) {
         return 0;
     }

@@ -152,8 +152,19 @@ else
     fi
 fi
 
+# ---- the machine's own boot log, saved rather than read ----
+BOOTLOG_OUT="$REPO/build/images/metal-bootlog.txt"
+if run 'cat /dev/bootlog' > "$BOOTLOG_OUT" 2>/dev/null && [ -s "$BOOTLOG_OUT" ]; then
+    note "boot log: $(wc -l < "$BOOTLOG_OUT" | tr -d ' ') lines saved to $BOOTLOG_OUT"
+    if grep -q "refused command" "$BOOTLOG_OUT"; then
+        bad "the boot log records a refused disk command; something strayed off the read path"
+    fi
+else
+    bad "/dev/bootlog gave nothing; this kernel predates it, or the log is empty"
+fi
+
 # ---- and that nothing on this machine has been refused a command ----
-note "(check the console or the netconsole capture for 'refused command'; there should be none)"
+note "(the saved boot log above is the whole of what this machine printed)"
 
 if [ "$fails" -gt 0 ]; then
     echo "metal-accept: FAIL ($fails)" >&2

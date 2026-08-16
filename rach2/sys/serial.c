@@ -1,21 +1,22 @@
 #include "serial.h"
+#include "bootlog.h"
 #include "kio.h"
 
 /* Serial port register offsets from base address */
-#define SERIAL_DATA          0   /* Data register (R/W) */
-#define SERIAL_INTR_ENABLE   1   /* Interrupt enable register */
-#define SERIAL_FIFO_CTRL     2   /* FIFO control register */
-#define SERIAL_LINE_CTRL     3   /* Line control register */
-#define SERIAL_MODEM_CTRL    4   /* Modem control register */
-#define SERIAL_LINE_STATUS   5   /* Line status register */
-#define SERIAL_SCRATCH       7   /* Scratch register (for detection) */
+#define SERIAL_DATA        0 /* Data register (R/W) */
+#define SERIAL_INTR_ENABLE 1 /* Interrupt enable register */
+#define SERIAL_FIFO_CTRL   2 /* FIFO control register */
+#define SERIAL_LINE_CTRL   3 /* Line control register */
+#define SERIAL_MODEM_CTRL  4 /* Modem control register */
+#define SERIAL_LINE_STATUS 5 /* Line status register */
+#define SERIAL_SCRATCH     7 /* Scratch register (for detection) */
 
 /* Line status register bits */
-#define SERIAL_LSR_DR        0x01  /* Data ready (received data available) */
-#define SERIAL_LSR_THRE      0x20  /* Transmit holding register empty */
+#define SERIAL_LSR_DR   0x01 /* Data ready (received data available) */
+#define SERIAL_LSR_THRE 0x20 /* Transmit holding register empty */
 
 /* Line control register bits */
-#define SERIAL_LCR_DLAB      0x80  /* Divisor latch access bit */
+#define SERIAL_LCR_DLAB 0x80 /* Divisor latch access bit */
 
 /*
  * Set once a real COM1 UART is found. On hardware without COM1, port reads
@@ -75,13 +76,13 @@ void serial_init(void)
         return;
     }
 
-    outb(port + SERIAL_INTR_ENABLE, 0x00);  /* Disable interrupts */
-    outb(port + SERIAL_LINE_CTRL, SERIAL_LCR_DLAB);  /* Enable DLAB */
-    outb(port + SERIAL_DATA, 0x01);         /* Divisor low (115200 baud) */
-    outb(port + SERIAL_INTR_ENABLE, 0x00);  /* Divisor high */
-    outb(port + SERIAL_LINE_CTRL, 0x03);    /* 8N1, disable DLAB */
-    outb(port + SERIAL_FIFO_CTRL, 0xC7);    /* Enable FIFO, 14-byte threshold */
-    outb(port + SERIAL_MODEM_CTRL, 0x0B);   /* DTR, RTS, OUT2 */
+    outb(port + SERIAL_INTR_ENABLE, 0x00);          /* Disable interrupts */
+    outb(port + SERIAL_LINE_CTRL, SERIAL_LCR_DLAB); /* Enable DLAB */
+    outb(port + SERIAL_DATA, 0x01);                 /* Divisor low (115200 baud) */
+    outb(port + SERIAL_INTR_ENABLE, 0x00);          /* Divisor high */
+    outb(port + SERIAL_LINE_CTRL, 0x03);            /* 8N1, disable DLAB */
+    outb(port + SERIAL_FIFO_CTRL, 0xC7);            /* Enable FIFO, 14-byte threshold */
+    outb(port + SERIAL_MODEM_CTRL, 0x0B);           /* DTR, RTS, OUT2 */
 }
 
 void serial_set_tap(void (*tap)(char c))
@@ -91,13 +92,17 @@ void serial_set_tap(void (*tap)(char c))
 
 void serial_putc(char c)
 {
+    /* Kept whatever else is or is not there: a machine with no serial port and
+     * nobody capturing its netconsole still has its own log to hand out. */
+    bootlog_putc(c);
     if (_serial_tap != NULL) {
         _serial_tap(c);
     }
     if (!_serial_port_exists) {
         return;
     }
-    while (!_serial_is_transmit_empty());
+    while (!_serial_is_transmit_empty())
+        ;
     outb(SERIAL_COM1 + SERIAL_DATA, c);
 }
 
@@ -106,19 +111,23 @@ void serial_putc(char c)
  */
 static void _serial_putc_crlf(char c)
 {
-    if (c == '\n') serial_putc('\r');
+    if (c == '\n')
+        serial_putc('\r');
     serial_putc(c);
 }
 
 void serial_puts(const char *str)
 {
-    if (str == NULL) return;
-    while (*str) _serial_putc_crlf(*str++);
+    if (str == NULL)
+        return;
+    while (*str)
+        _serial_putc_crlf(*str++);
 }
 
 void serial_printf(const char *format, ...)
 {
-    char **args = (char **) &format; ++args;
+    char **args = (char **)&format;
+    ++args;
     k_vprintf(_serial_putc_crlf, format, args);
 }
 
@@ -137,7 +146,8 @@ int serial_port_exists(void)
 
 char serial_getc(void)
 {
-    while (!serial_data_available());
+    while (!serial_data_available())
+        ;
     return inb(SERIAL_COM1 + SERIAL_DATA);
 }
 
