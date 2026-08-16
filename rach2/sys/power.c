@@ -16,6 +16,7 @@
 
 #include "power.h"
 #include "board.h"
+#include "cmdline.h"
 #include "kio.h"
 #include "pci.h"
 #include "serial.h"
@@ -216,14 +217,32 @@ static int kbc_ready(void)
  */
 static void power_reset(void)
 {
-    serial_printf("reboot: restarting\n");
+    int skip = 0;
+    char value[8];
 
-    outb(APM_CONTROL_PORT, APM_CMD_RESET);
-    power_reset_settle();
+    if (kcmdline_value("rach2.resetskip", value, (unsigned int)sizeof(value))) {
+        if (value[0] >= '0' && value[0] <= '9' && value[1] == '\0') {
+            skip = value[0] - '0';
+        }
+    }
+    serial_printf("reboot: restarting (skipping %d)\n", skip);
 
-    outb(RESET_CONTROL_PORT, RESET_CONTROL_ARM);
-    outb(RESET_CONTROL_PORT, RESET_CONTROL_FIRE);
-    power_reset_settle();
+    /* `rach2.resetskip=N` leaves out the first N mechanisms. It exists so the
+     * later ones can be shown to work on their own, which is the only way to
+     * know the sequence is a real fallback chain rather than a first method
+     * that happens to work everywhere it has been tried; `make reset-test`
+     * boots each value. It is also the switch to reach for on a machine where
+     * an earlier method makes things worse. */
+    if (skip < 1) {
+        outb(APM_CONTROL_PORT, APM_CMD_RESET);
+        power_reset_settle();
+    }
+
+    if (skip < 2) {
+        outb(RESET_CONTROL_PORT, RESET_CONTROL_ARM);
+        outb(RESET_CONTROL_PORT, RESET_CONTROL_FIRE);
+        power_reset_settle();
+    }
 
     if (kbc_ready()) {
         outb(KBC_COMMAND_PORT, KBC_PULSE_RESET);

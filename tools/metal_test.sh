@@ -111,7 +111,7 @@ GUEST_IP="192.168.90.15"
 GUEST_GW="192.168.90.2"
 qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -initrd "$WORK" \
-    -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole" \
+    -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole rach2.diskdiag" \
     -netdev "user,id=n0,net=$GUEST_NET,host=$GUEST_GW,hostfwd=tcp::$PORT-$GUEST_IP:22" \
     -device rtl8139,netdev=n0 \
     -serial stdio < /dev/null > "$LOG" 2>&1 &
@@ -226,6 +226,14 @@ echo "metal-test: the server was killed (pid $BEFORE) and init brought back anot
 if ! grep -q "rach2 login" "$LOG"; then
     fail "the console login is not on the console"
 fi
+
+# The acceptance script itself, rehearsed here so it is not being debugged on
+# the laptop. Its baseline comparisons are against a drive this machine does
+# not have, which it reports rather than fails on.
+if ! sh "$REPO/tools/metal_accept.sh" 127.0.0.1 "$PORT" >/dev/null 2>&1; then
+    fail "the acceptance script did not pass against the rehearsal machine"
+fi
+echo "metal-test: the acceptance script runs clean against the rehearsal machine: OK"
 
 cleanup_boot
 echo "metal-test: PASS"

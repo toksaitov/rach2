@@ -88,7 +88,7 @@ MKDISK          = krffs/mkdisk.sh
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
         ping-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
-        subset-test diskdiag-test \
+        subset-test diskdiag-test reset-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
@@ -451,6 +451,15 @@ netconsole-test: rach2 tests krffs test-image
 	    --expect "Initializing system components" \
 	    --expect "Network... OK" \
 	    --expect "netconsole: broadcast"
+
+# `make reset-test`: each reset mechanism on its own. The kernel tries three,
+# most of the machine first, and the order was chosen for a laptop whose
+# chipset register may not act; the risk in that choice is that only the first
+# one is ever exercised, and nobody finds out the later ones do not work until
+# the machine they were written for refuses to restart. So each is booted with
+# the ones before it left out, and each must still restart the machine.
+reset-test: rach2 tests krffs test-image
+	sh tools/reset_test.sh build/rach2/kernel $(TEST_IMAGE)
 
 # `make diskdiag-test`: a disk read without being mounted and without being
 # written. Three boots of one freshly built image: the ordinary kernel mounting
@@ -825,6 +834,7 @@ help:
 	@echo "  make diskpolicy-test  the read-only kernel leaves a disk byte for byte"
 	@echo "  make subset-test  the kernel boots with any subset of its optional devices"
 	@echo "  make diskdiag-test  a disk read over SSH without mounting it or writing a byte"
+	@echo "  make reset-test  each of the three restart mechanisms on its own"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
 	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"

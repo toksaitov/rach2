@@ -62,11 +62,45 @@ The bounded-wait helper in the RTL8168 driver accepted any bit of its mask where
 
 The netconsole's drain followed a moving end, so a device that reported an error from inside every transmit would have kept the machine inside one `printf` forever, transmitting the report of its own failure to transmit. The host test written to provoke exactly that hung, which is also why every host test now runs under a watchdog.
 
+## The supported surface, and what is excluded
+
+An excluded device is listed here rather than skipped quietly, because a reader who cannot tell "not built" from "built and broken" cannot use this record.
+
+| Part | On the metal image | Proved by |
+|------|--------------------|-----------|
+| Boot from a USB stick (CSM, El Torito hybrid ISO) | yes | the laptop, unproved |
+| VGA text console and the 8042 keyboard | yes | the laptop, unproved |
+| RTL8168GU Ethernet | yes | the chip model in `verify-host`; the wire waits for the laptop |
+| Netconsole over that card | yes | `make netconsole-test` over the RTL8139; the 8168 waits |
+| Boot-line IPv4, ARP, ICMP, UDP, TCP, sockets | yes | `make test-addressed`, the whole suite |
+| Dropbear over SSH, supervised by init | yes | `make metal-test`, unattended |
+| The console login as the recovery path | yes | `make metal-test`, `make login-test` |
+| AHCI to identify and read | yes | `make test-disk-ahci`; the reset and COMRESET wait for the laptop |
+| Reading the disk without mounting it | yes | `make diskdiag-test`, on the bytes |
+| Writing any disk | NO, refused by the build | `make diskpolicy-test`, on the bytes |
+| Restart | yes | `make reset-test`, each mechanism alone |
+| Power off | yes, when a profile matches | `make shutdown-test`; the laptop's chipset row is unproved |
+| Trusted entropy for the host key | required | `make metal-test`; needs RDRAND on the laptop |
+| HD Audio | NO, excluded from the image | nothing stages an audio program; the driver is in the kernel |
+| The compiler, `/src`, pdpmake, the installer | NO, excluded from the image | a machine with no writable disk cannot use them |
+| Doom | NO, excluded from the image | RAM under the 32 MiB direct map |
+| Writing the SSD, carving a partition, a persistent host key | NO, phase E | gated on the owner's approval after a full backup |
+| DHCP, DNS, IPv6, a second interface | NO | out of scope; a numeric address is the contract |
+
 ## What is proved, and where
 
 In QEMU, from a clean tree: the whole existing probe suite, twice, once with the address compiled in and once with it on the boot line; the netconsole capture; every subset of the optional device switches; the read-only kernel against a real disk image; all three AHCI paths with the controller reset in place; the SSH capstone; and the unattended metal rehearsal. On the host: 27 seam tests, including the chip model, the address parser, the command allowlist and the netconsole.
 
 Nothing here has touched the laptop. Everything below is unproved until it does.
+
+Who supplies each proof matters, because some of it cannot be scripted. The scripted half of the acceptance is `tools/metal_accept.sh`, run over SSH from the development host: it reads what the machine says it is, checks the running kernel is the read-only build, checks the disk is not mounted, and compares the drive's identity and the hash of its first sector against `baseline.md`. It is rehearsed inside `make metal-test`, so it is not being debugged on the machine it is meant to measure. The human half is `checklist.md` and stays human: a cable pulled and put back, cold power cycles, a screen photographed, a sound heard, and Windows booting with the stick out.
+
+## What was refuted
+
+* That nothing calls `netdev_poll` was raised as a defect during phase B's review and refuted: the plan assigns the timer hook to phase C, where it landed.
+* That `install-test` had regressed: it failed once and passed on a serial re-run. Its matrix boot has a 75-second bounded wait and three QEMU tests were running at once; the script is byte-identical to the milestone-23 close.
+* That the AHCI host test needed a full register model like the RTL8168's. The bounds that matter are arithmetic, and one of them was a real defect (an all-ones capacity accepted, truncating every later LBA), fixed in the driver where it lives.
+* The plan's literal poweroff numbers. `0x1804` is derivable and is now derived from the chipset's own base register; only the sleep type is a constant, carried per profile with its provenance, because it lives in AML this kernel does not interpret.
 
 ## What waits for the hardware
 

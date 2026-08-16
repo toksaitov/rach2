@@ -105,6 +105,16 @@ Shut Windows down normally, then boot the stick again. This is the other entry s
 
 Boot Windows. It must come up exactly as before. This is checked at the end of every session, not once.
 
+### 8. The scripted acceptance
+
+Once SSH answers, run the scripted half from the development host rather than reading numbers off a screen:
+
+```sh
+sh tools/metal_accept.sh <the laptop>
+```
+
+It reports what the machine says it is, checks that the running kernel is the read-only build and that nothing is mounted, and compares the drive's identity and the hash of its first sector against `baseline.md`. Keep its output; it is the record of the session. Everything it cannot do is in this file, and stays here: it cannot pull a cable, power-cycle a machine, hear a sound, or watch Windows boot.
+
 ## What to capture when something does not work
 
 * The screen, photographed, including the line the boot stopped on.
