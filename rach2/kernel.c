@@ -2781,7 +2781,11 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_printf("  Mouse...");
     serial_printf("  Mouse...");
-    if (init_mouse() == 0) {
+    if (kcmdline_has("rach2.nomouse")) {
+        set_fore_color(light_brown);
+        k_puts(" skipped (rach2.nomouse)");
+        serial_printf(" skipped (rach2.nomouse)\n");
+    } else if (init_mouse() == 0) {
         set_fore_color(light_green);
         k_puts(" OK");
         serial_printf(" OK\n");
@@ -2829,17 +2833,24 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_printf("  Audio...");
     serial_printf("  Audio...");
-    init_audio();
-    if (audio) {
-        set_fore_color(light_green);
-        k_printf(" OK (%s)\n", audio_get_boot_status());
-        serial_printf(" OK (%s)\n", audio_get_boot_status());
+    if (kcmdline_has("rach2.noaudio")) {
+        set_fore_color(light_brown);
+        k_puts(" skipped (rach2.noaudio)");
+        serial_printf(" skipped (rach2.noaudio)\n");
         set_fore_color(light_grey);
     } else {
-        set_fore_color(light_red);
-        k_puts(" FAIL");
-        serial_printf(" FAIL\n");
-        set_fore_color(light_grey);
+        init_audio();
+        if (audio) {
+            set_fore_color(light_green);
+            k_printf(" OK (%s)\n", audio_get_boot_status());
+            serial_printf(" OK (%s)\n", audio_get_boot_status());
+            set_fore_color(light_grey);
+        } else {
+            set_fore_color(light_red);
+            k_puts(" FAIL");
+            serial_printf(" FAIL\n");
+            set_fore_color(light_grey);
+        }
     }
 
     /* Modules were parsed early, before paging; just report them. */
@@ -2937,7 +2948,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_printf("  Network...");
     serial_printf("  Network...");
-    if (init_network()) {
+    if (kcmdline_has("rach2.nonet")) {
+        set_fore_color(light_brown);
+        k_puts(" skipped (rach2.nonet)");
+        serial_printf(" skipped (rach2.nonet)\n");
+        set_fore_color(light_grey);
+    } else if (init_network()) {
         set_fore_color(light_green);
         k_printf(" OK (%s)\n", net_status());
         serial_printf(" OK (%s)\n", net_status());

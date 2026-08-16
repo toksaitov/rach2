@@ -498,6 +498,13 @@ static int ahci_port_ready(int port)
  * Naming the one signature this driver drives, rather than excluding the ones
  * it happens to know about, means an unfamiliar device is skipped rather than
  * driven as if it were a disk.
+ *
+ * A port that is skipped is stopped again before the scan moves on. The reset
+ * had to enable that port's FIS receive engine, and every port is pointed at
+ * the same single received-FIS area, so a skipped port left running would go
+ * on writing into the buffer the selected port is using. On the machine this
+ * targets that is not hypothetical: it has a SATA disk and a bay that may hold
+ * an optical drive, which is exactly two ports.
  */
 static int ahci_select_port(void)
 {
@@ -511,11 +518,13 @@ static int ahci_select_port(void)
             continue;
         }
         if (ahci_port_comreset(p) != 0) {
-            continue; /* nothing on this port */
+            (void)ahci_port_stop(p); /* nothing on this port */
+            continue;
         }
         ssts = ahci_read32(ahci_port_off(p, AHCI_PxSSTS));
         if ((ssts & AHCI_DET_MASK) != AHCI_DET_PRESENT ||
             ((ssts >> 8) & 0xF) != AHCI_IPM_ACTIVE) {
+            (void)ahci_port_stop(p);
             continue;
         }
         /* The signature is only valid once the device has finished its own
@@ -523,11 +532,13 @@ static int ahci_select_port(void)
          * which is not a signature but a port that has not answered yet. */
         if (ahci_port_ready(p) != 0) {
             serial_printf("ahci: port %d: the device never became ready; skipped\n", p);
+            (void)ahci_port_stop(p);
             continue;
         }
         sig = ahci_read32(ahci_port_off(p, AHCI_PxSIG));
         if (sig != AHCI_SIG_ATA) {
             serial_printf("ahci: port %d: signature %X is not a disk; skipped\n", p, sig);
+            (void)ahci_port_stop(p);
             continue;
         }
         ahci_port = p;

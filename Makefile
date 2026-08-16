@@ -88,6 +88,7 @@ MKDISK          = krffs/mkdisk.sh
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
         ping-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
+        subset-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
@@ -451,6 +452,23 @@ netconsole-test: rach2 tests krffs test-image
 	    --expect "Network... OK" \
 	    --expect "netconsole: broadcast"
 
+# `make subset-test`: the kernel reaches a shell with any subset of its optional
+# devices switched off. On a machine with no serial port, a boot that stops has
+# no diagnostic but the screen, and the only way to find which probe stopped it
+# is to switch them off one at a time from the GRUB command line. That is only
+# useful if each switch actually works, so each is booted here.
+subset-test: rach2 tests krffs test-image
+	@for opt in "" "rach2.noaudio" "rach2.nomouse" "rach2.nonet" \
+	            "rach2.noaudio rach2.nomouse rach2.nonet"; do \
+	    echo "  subset-test: booting with [$$opt]"; \
+	    python3 tools/harness.py --kernel build/rach2/kernel \
+	        --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	        --append "$$opt" --timeout 90 --ok "Type 'help'" \
+	        "expect=Type 'help'" wait=2 >/dev/null 2>&1 \
+	        || { echo "subset-test: FAIL: no shell with [$$opt]" >&2; exit 1; }; \
+	done
+	@echo "subset-test: PASS"
+
 # `make diskpolicy-test`: the read-only kernel does not write the disk, shown on
 # the bytes rather than on a return value. The same disk is booted with each
 # kernel; the ordinary one must change it, which is what makes the other half
@@ -796,6 +814,7 @@ help:
 	@echo "  make test-addressed   the same suite with the network named on the boot line"
 	@echo "  make metal-test  the metal image reached over SSH with nobody at its console"
 	@echo "  make diskpolicy-test  the read-only kernel leaves a disk byte for byte"
+	@echo "  make subset-test  the kernel boots with any subset of its optional devices"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
 	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"
