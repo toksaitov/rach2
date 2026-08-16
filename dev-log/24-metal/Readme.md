@@ -108,7 +108,17 @@ Who supplies each proof matters, because some of it cannot be scripted. The scri
 * That the AHCI reset and COMRESET behave on a Lynx Point controller, and that COMRESET is in fact the recovery for the link that comes up dead after a warm reboot.
 * That the three-mechanism restart restarts this machine, and that poweroff works: the ACPI path still derives its address from a PIIX4's configuration space and will refuse on this chipset, falling back to a halt. The PCH power-management path and the ACPI-enable handshake are written down in the plan and not yet built.
 * That the module layout fits under the direct map on this machine's memory map.
-* Everything about the SSD beyond reading it, which is phase E and gated twice: on the owner's approval after a full backup, and on the MBR inventory. `rach2.bootuuid=` and the two-disk fixture are not built.
+* Everything about the SSD beyond reading it, which is phase E.
+
+## Phase E, designed and deliberately not built
+
+Phase E's local half was designed in full and then not built, which is a decision rather than an omission, so the reasons are here.
+
+It is gated twice by the plan's own terms: on the owner's explicit approval after a full backup of the SSD, and on the MBR inventory. Neither gate has opened, so the carved topology those pieces address does not exist. Building them now would mean shipping a `rach2.bootuuid=` selection that nothing can select, and adding a GRUB entry to the stick that addresses volumes that are not there. The second is worse than useless: the stick that works today is the one the first laptop session depends on, and an entry pointing at a missing volume is a way to break it before it has ever been used.
+
+The design also had one part that should not be built as designed, and it is worth recording so it is not rediscovered later. To make the fixture bootable it published a WRITABLE `/dev/bootpart` window over a FAT volume, chosen by a boot-line token, under the ordinary read-write kernel. That is precisely the shape this milestone spent phase D removing: a boot flag is editable at the GRUB prompt, and the volume in question would sit on the disk holding somebody's Windows. Whatever phase E builds, the write side of it belongs behind the build switch, not behind a token.
+
+What is inherited when phase E begins: the MBR arithmetic is already decided by the inventory (entries 3 and 4 are free, so the carve uses primary slots and no extended-partition support is needed), `baseline.md` holds the numbers to check the disk against, and `/proc/disk` and `/dev/disk0` are the instrument for checking them.
 
 ## The baseline, and its deadline
 
