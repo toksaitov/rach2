@@ -46,6 +46,26 @@
 #define RESET_CONTROL_ARM  0x02
 #define RESET_CONTROL_FIRE 0x06
 
+/* The APM control port. Writing it raises an SMI, and the firmware's handler
+ * decides what the value means; 0xFB is the reset command on the Insyde
+ * firmware this kernel is being carried to. On a machine with no SMM handler
+ * for it, which includes QEMU as this kernel runs it, the write is inert. */
+#define APM_CONTROL_PORT 0xB2
+#define APM_CMD_RESET    0xFB
+
+/* The keyboard controller's command port, and the pulse that drives the CPU's
+ * reset line on a PC that still wires it that way. Bit 1 of the status is set
+ * while the input buffer is full, and a command written then is lost. */
+#define KBC_STATUS_PORT  0x64
+#define KBC_COMMAND_PORT 0x64
+#define KBC_INPUT_FULL   0x02
+#define KBC_PULSE_RESET  0xFE
+
+/* Between reset attempts, rather than after the last one. A reset that is
+ * going to happen happens within milliseconds, so waiting the full settle
+ * three times over would only delay the fallback. */
+#define POWER_RESET_SPINS 2000000UL
+
 /* How long to let an asynchronous request land before giving up on it. The
  * unit is an idle loop iteration and the number wants only to be large enough
  * that a machine which is going to stop has stopped. */
@@ -70,6 +90,16 @@ static void power_halt_forever(void)
 static void power_settle(void)
 {
     volatile unsigned long spins = POWER_SETTLE_SPINS;
+
+    while (spins > 0) {
+        spins--;
+    }
+}
+
+/** As power_settle, for the shorter wait between reset attempts. */
+static void power_reset_settle(void)
+{
+    volatile unsigned long spins = POWER_RESET_SPINS;
 
     while (spins > 0) {
         spins--;
@@ -130,22 +160,53 @@ static void power_acpi_off(void)
     serial_printf("poweroff: the platform did not power off; halting instead\n");
 }
 
+/** Wait, boundedly, for the keyboard controller to accept a command. */
+static int kbc_ready(void)
+{
+    int spins;
+
+    for (spins = 0; spins < 100000; spins++) {
+        if ((inb(KBC_STATUS_PORT) & KBC_INPUT_FULL) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
- * Ask the chipset to reset. Returns only if the machine is still running.
+ * Ask the machine to reset, three ways. Returns only if it is still running.
  *
- * The port is fixed rather than discovered, and the asymmetry with the
+ * All three ports are fixed rather than discovered, and the asymmetry with the
  * power-off above is deliberate: that one derives an address, and a wrong
  * address would put a sleep word into a live device, so it refuses unless it
- * knows the address is right. This one writes a byte to a port that is the
- * reset control on the chipsets that have it and unclaimed on those that do
- * not, where the write is inert. Discovering it would need a mechanism PCI
- * configuration space does not offer for this register.
+ * knows the address is right. Each of these writes a byte to a port that is a
+ * reset mechanism on the machines that have it and unclaimed on those that do
+ * not, where the write is inert. Discovering them would need a mechanism PCI
+ * configuration space does not offer for these registers.
+ *
+ * The order is by how much of the machine each one goes through, most first.
+ * The firmware's own SMI handler resets the way the firmware intends,
+ * including whatever it does about the devices it owns; the chipset register
+ * resets the chipset; the keyboard controller pulse is the oldest and the
+ * least likely to be wired on a recent laptop. Trying them in the other order
+ * would work on QEMU, where the chipset register is the one that acts, and
+ * leave the target machine parked at a halt, which over SSH is
+ * indistinguishable from a kernel that died.
  */
 static void power_reset(void)
 {
     serial_printf("reboot: restarting\n");
+
+    outb(APM_CONTROL_PORT, APM_CMD_RESET);
+    power_reset_settle();
+
     outb(RESET_CONTROL_PORT, RESET_CONTROL_ARM);
     outb(RESET_CONTROL_PORT, RESET_CONTROL_FIRE);
+    power_reset_settle();
+
+    if (kbc_ready()) {
+        outb(KBC_COMMAND_PORT, KBC_PULSE_RESET);
+    }
     power_settle();
     serial_printf("reboot: the platform did not reset; halting instead\n");
 }
