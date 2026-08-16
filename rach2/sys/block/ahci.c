@@ -1,5 +1,6 @@
 #include "ahci.h"
 #include "diskcmd.h"
+#include "diskinfo.h"
 #include "../udelay.h"
 #include "block.h"
 
@@ -749,6 +750,13 @@ static int ahci_identify(void)
     if (ahci_sector_count == 0) {
         return -1;
     }
+    /* An all-ones capacity is a device that did not answer, not a 281 TB
+     * disk: the field is 48 bits, so the top 16 must be zero, and a driver
+     * that accepted it would truncate every LBA it later computed. */
+    if ((ahci_sector_count >> 48) != 0 || ahci_sector_count == 0xFFFFFFFFFFFFull) {
+        return -1;
+    }
+    diskinfo_record_identify("ahci", ahci_port, w, ahci_sector_count);
     return 0;
 }
 

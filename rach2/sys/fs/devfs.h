@@ -54,6 +54,18 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
  * size (for lseek/_llseek SEEK_END and bounds). Returns 0 for every other fd. */
 int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size);
 
+/**
+ * Publish `/dev/disk0`, a read-only window over the whole of `whole`.
+ *
+ * The window is `window_sectors` sectors, which is the disk's size clamped to
+ * what a 32-bit file offset can address; `/proc/disk` prints both numbers so
+ * the clamp is visible rather than silent.
+ */
+void devfs_disk_publish(struct block_device *whole, uint32_t window_sectors);
+
+/** The whole-disk window's size in bytes, for lseek; 0 if `e` is not it. */
+int devfs_fd_disk_size(struct fd_entry *e, uint32_t *size);
+
 /* The leaf name ("null", ...) of an open device fd, for /proc/<pid>/fd readlink.
  * Returns "?" if e is not a devfs device. */
 const char *devfs_fd_name(struct fd_entry *e);
@@ -68,7 +80,18 @@ int devfs_lseek_zero(struct fd_entry *e);
  * Number of devfs entries, and the leaf name of entry i (for getdents on /dev).
  * Returns NULL past the end.
  */
-int devfs_count(void);
+/**
+ * The `n`-th device that exists right now: its name and its stable inode.
+ *
+ * Absent entries are skipped rather than ending the walk, because two of them
+ * are dynamic and a machine can have the later one without the earlier: the
+ * metal profile never mounts, so it has `disk0` and no `bootpart`. The inode
+ * is the registry index and not the listing position, so a device's identity
+ * is the same number `stat` reports whatever else is present.
+ *
+ * @return 1 when `n` named a device, 0 past the end.
+ */
+int devfs_dirent(int n, const char **name, uint32_t *ino);
 const char *devfs_name(int i);
 
 #endif /* _DEVFS_H_ */

@@ -17,6 +17,7 @@
 #include "../tty/pty.h"
 #include "../io/poll.h"
 #include "../cmdline.h"
+#include "../block/diskinfo.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
@@ -27,6 +28,7 @@
  * per-pid base. */
 #define PROCFS_INO_DIR 0x100u
 #define PROCFS_INO_CMDLINE 0x101u
+#define PROCFS_INO_DISK    0x102u
 #define PROCFS_INO_PID_BASE 0x200u
 
 /* A /proc text file, snapshotted at open and served through file_ops. */
@@ -278,6 +280,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                     ap_str(buf, cap, &len, "/proc/cmdline");
                     break;
                 }
+                if (pf->origin_file == SYNTH_PROC_DISKINFO) {
+                    ap_str(buf, cap, &len, "/proc/disk");
+                    break;
+                }
                 ap_str(buf, cap, &len, "/proc/");
                 ap_int(buf, cap, &len, pf->origin_pid);
                 ap_ch(buf, cap, &len, '/');
@@ -327,6 +333,11 @@ uint32_t procfs_ino_cmdline(void)
     return PROCFS_INO_CMDLINE;
 }
 
+uint32_t procfs_ino_disk(void)
+{
+    return PROCFS_INO_DISK;
+}
+
 /**
  * The inode of an open /proc snapshot descriptor, from its origin, so fstat
  * reports the same identity as the stat of the path it was opened by.
@@ -342,6 +353,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     pf = (struct procfs_file *)e->priv;
     if (pf->origin_file == SYNTH_PROC_BOOTLINE) {
         return PROCFS_INO_CMDLINE;
+    }
+    if (pf->origin_file == SYNTH_PROC_DISKINFO) {
+        return PROCFS_INO_DISK;
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -429,8 +443,9 @@ int procfs_open(const struct vpath *vp, int flags)
     fd_entry_t *e;
     int slot, fd, len;
 
-    /* /proc/cmdline is global; every other proc file lives under a pid. */
-    if (vp->kind != VNODE_PROC_CMDLINE) {
+    /* /proc/cmdline and /proc/disk are global; every other proc file lives
+     * under a pid. */
+    if (vp->kind != VNODE_PROC_CMDLINE && vp->kind != VNODE_PROC_DISK) {
         pid = procfs_resolve_pid(vp->pid);
         if (pid < 0) {
             return -ENOENT;
@@ -462,6 +477,10 @@ int procfs_open(const struct vpath *vp, int flags)
         len = 0;
         ap_str(f->data, (int)sizeof(f->data), &len, line);
         ap_ch(f->data, (int)sizeof(f->data), &len, '\n');
+    } else if (vp->kind == VNODE_PROC_DISK) {
+        /* Rendered from the record taken at boot, so opening this file issues
+         * no command to the device. */
+        len = diskinfo_format(diskinfo_get(), f->data, (int)sizeof(f->data));
     } else if (vp->procfile == SYNTH_PROC_STAT) {
         len = procfs_gen_stat(pid, f->data, (int)sizeof(f->data));
     } else {
@@ -473,8 +492,13 @@ int procfs_open(const struct vpath *vp, int flags)
     f->len = len;
     f->used = 1;
     f->origin_pid = pid;
-    f->origin_file = (vp->kind == VNODE_PROC_CMDLINE) ? SYNTH_PROC_BOOTLINE
-                                                      : vp->procfile;
+    if (vp->kind == VNODE_PROC_CMDLINE) {
+        f->origin_file = SYNTH_PROC_BOOTLINE;
+    } else if (vp->kind == VNODE_PROC_DISK) {
+        f->origin_file = SYNTH_PROC_DISKINFO;
+    } else {
+        f->origin_file = vp->procfile;
+    }
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {

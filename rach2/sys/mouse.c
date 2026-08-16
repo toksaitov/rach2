@@ -72,6 +72,11 @@ static bool mouse_initialized = false;
  *
  * @return 0 when the buffer drains, -1 on timeout.
  */
+/* How many bytes the initial drain will read before calling the controller
+   stuck. A PS/2 output buffer holds one byte, so anything past a handful is a
+   controller that is not answering. */
+#define PS2_DRAIN_LIMIT 4096
+
 static int ps2_wait_input(void)
 {
     int timeout = PS2_TIMEOUT;
@@ -257,9 +262,24 @@ int init_mouse(void)
 
     __asm__ __volatile__("cli");
 
-    /* Discard firmware junk so the handshake starts from a clean buffer. */
-    while (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
-        inb(PS2_DATA_PORT);
+    /* Discard firmware junk so the handshake starts from a clean buffer. The
+     * count is a bound and not an expectation: the buffer is one byte deep and
+     * a working controller clears in a read or two, but a controller that
+     * reports output-full forever is a real failure on real hardware, and this
+     * runs with interrupts off during boot. Unbounded, it would stop the
+     * machine here with nothing said, which on a laptop with no serial port is
+     * a blank refusal nobody can act on. */
+    {
+        int drained = PS2_DRAIN_LIMIT;
+
+        while ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0) {
+            inb(PS2_DATA_PORT);
+            if (--drained <= 0) {
+                serial_printf("mouse: the 8042 buffer never drained\n");
+                __asm__ __volatile__("sti");
+                return -1;
+            }
+        }
     }
 
     if (ps2_send_command(PS2_CMD_ENABLE_MOUSE) < 0) {

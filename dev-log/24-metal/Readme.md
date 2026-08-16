@@ -76,6 +76,10 @@ Nothing here has touched the laptop. Everything below is unproved until it does.
 * That the module layout fits under the direct map on this machine's memory map.
 * Everything about the SSD beyond reading it, which is phase E and gated twice: on the owner's approval after a full backup, and on the MBR inventory. `rach2.bootuuid=` and the two-disk fixture are not built.
 
+## The baseline, and its deadline
+
+`baseline.md` holds what Windows measured on this machine before Rach2 had touched it: the drive's model and serial, its 1953525168 sectors, its disk signature, its two partition entries and the SHA-256 of its first sector. It exists in the tree because `Lenovo_G50-70_report_temp.txt`, where those numbers came from, is untracked and is deleted when the hardware work concludes, and because the SSD half of this milestone has no other baseline to check itself against.
+
 ## The record's own housekeeping
 
 `Lenovo_G50-70_report_temp.txt` sits untracked in the repository root and is deleted at the very end of the milestone, once the hardware work has concluded. It has never been committed.

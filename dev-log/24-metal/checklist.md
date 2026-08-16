@@ -76,7 +76,7 @@ If no frames arrive, the boot line still says a great deal: the driver's own lin
 
 Repeat on a 100 Mbps port. The ring is 64 descriptors where the reference uses 256, and that deviation is decided by numbers rather than argument: a 64-frame burst should complete with no drops, and the counters on the boot line say so.
 
-### 5. SSH
+### 5. SSH, and the disk read against the baseline
 
 If the frames arrive, the machine is probably reachable. From the Mac:
 
@@ -87,6 +87,15 @@ ssh -i krffs/rach2_demo_ed25519 root@<the laptop>
 The host key is minted per boot, so use a scratch known-hosts file rather than turning checking off.
 
 Everything after this point is a normal session, and the loop of this milestone is over: the screen and the camera stop being the interface.
+
+Add `rach2.disk=ahci rach2.diskdiag` to the command line and read the disk without touching it:
+
+```sh
+cat /proc/disk
+dd if=/dev/disk0 bs=512 count=1 2>/dev/null | sha256sum
+```
+
+Compare every line against `baseline.md`, which holds what Windows measured before Rach2 existed on this machine: the model, the serial, 1953525168 sectors, the disk signature `0x4905b015`, the two partition entries, and the MBR's SHA-256. A disagreement is the finding, whichever side is wrong. Nothing in this step writes; if the machine ever prints `refused command` during it, the diagnostic strayed off the read path and that is a defect to report rather than to work around.
 
 ### 6. After a Windows shutdown
 

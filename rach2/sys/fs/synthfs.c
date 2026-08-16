@@ -241,6 +241,11 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = (n == 2) ? VNODE_PROC_CMDLINE : VNODE_ENOTDIR;
             return vp->kind;
         }
+        /* /proc/disk: the same shape, a global file beside the pid tree. */
+        if (comp_eq(c[1], "disk")) {
+            vp->kind = (n == 2) ? VNODE_PROC_DISK : VNODE_ENOTDIR;
+            return vp->kind;
+        }
         if (comp_eq(c[1], "self")) {
             pid = SYNTH_PID_SELF;
         } else {

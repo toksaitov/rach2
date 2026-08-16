@@ -1,6 +1,7 @@
 #include "block.h"
 #include "ata.h"
 #include "diskcmd.h"
+#include "diskinfo.h"
 
 #include "../kio.h"
 #include "../serial.h"
@@ -356,6 +357,8 @@ int ata_init(void)
     if (sector_count == 0) {
         return -1;
     }
+
+    diskinfo_record_identify("ata", -1, identify, sector_count);
 
     ata_device.sector_size = BLOCK_SECTOR_SIZE;
     ata_device.sector_count = sector_count;

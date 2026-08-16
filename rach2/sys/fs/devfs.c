@@ -136,7 +136,7 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
     uint8_t sector[BLOCK_SECTOR_SIZE];
     block_device_t *part = &bootpart.part.device;
     uint32_t off = e->ofd->offset;
-    uint32_t total = (uint32_t) part->sector_count;
+    uint32_t total = (uint32_t)part->sector_count;
     uint32_t lba, want, done;
 
     if (!bootpart.present) {
@@ -157,8 +157,8 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
         if (part->read(part, lba + done, 1, sector) != 0) {
             break;
         }
-        if (copy_to_user((void __user *) (buf + done * BLOCK_SECTOR_SIZE),
-                         sector, BLOCK_SECTOR_SIZE) != 0) {
+        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), sector,
+                         BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
                 return -EFAULT;
             }
@@ -169,16 +169,15 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
         return -EIO;
     }
     e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
-    return (int32_t) (done * BLOCK_SECTOR_SIZE);
+    return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
-static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf,
-                                  uint32_t count)
+static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     uint8_t sector[BLOCK_SECTOR_SIZE];
     block_device_t *part = &bootpart.part.device;
     uint32_t off = e->ofd->offset;
-    uint32_t total = (uint32_t) part->sector_count;
+    uint32_t total = (uint32_t)part->sector_count;
     uint32_t lba, want, done;
 
     if (!bootpart.present) {
@@ -198,8 +197,7 @@ static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf,
         return -ENOSPC;
     }
     for (done = 0; done < want; done++) {
-        if (copy_from_user(sector,
-                           (const void __user *) (buf + done * BLOCK_SECTOR_SIZE),
+        if (copy_from_user(sector, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
                            BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
                 return -EFAULT;
@@ -214,14 +212,83 @@ static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf,
         return -EIO;
     }
     e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
-    return (int32_t) (done * BLOCK_SECTOR_SIZE);
+    return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
-static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll, dev_ioctl, NULL};
+/*
+ * The whole disk, read-only, for the milestone 24 diagnostic. It exists only
+ * on a boot that asked for it (`rach2.diskdiag`), so no image grows a raw
+ * whole-disk node by accident.
+ *
+ * The write is refused here as well as everywhere else. Three refusals already
+ * stand between a caller and a written sector: the 0400 mode fails an
+ * `open(O_WRONLY)`, the descriptor carries no write flag, and under the metal
+ * build the driver's allowlist refuses the command. This is the fourth, and it
+ * is the one that does not depend on which kernel is running.
+ */
+static struct {
+    int present;
+    block_device_t *whole;
+    uint32_t window_sectors;
+} disk0;
+
+static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    uint8_t sector[BLOCK_SECTOR_SIZE];
+    block_device_t *dev = disk0.whole;
+    uint32_t off = e->ofd->offset;
+    uint32_t total = disk0.window_sectors;
+    uint32_t lba, want, done;
+
+    if (!disk0.present || !dev) {
+        return -ENXIO;
+    }
+    if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
+        return -EINVAL;
+    }
+    lba = off / BLOCK_SECTOR_SIZE;
+    if (lba >= total) {
+        return 0; /* the end of the window, the regular-file convention */
+    }
+    want = count / BLOCK_SECTOR_SIZE;
+    if (want > total - lba) {
+        want = total - lba;
+    }
+    for (done = 0; done < want; done++) {
+        if (dev->read(dev, (uint64_t)(lba + done), 1, sector) != 0) {
+            break;
+        }
+        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), sector,
+                         BLOCK_SECTOR_SIZE) != 0) {
+            if (done == 0) {
+                return -EFAULT;
+            }
+            break;
+        }
+    }
+    if (done == 0) {
+        return -EIO;
+    }
+    e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
+    return (int32_t)(done * BLOCK_SECTOR_SIZE);
+}
+
+static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return -EPERM;
+}
+
+static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
+                                             dev_ioctl, NULL};
+static const struct file_ops disk0_ops = {dev_disk0_read, dev_disk0_write, dev_poll, dev_ioctl,
+                                          NULL};
 
 /*
  * The registry. major/minor are the real Linux mem-device numbers (major 1) so
@@ -229,9 +296,13 @@ static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_wri
  * NULL (nothing to release) and priv points at the registry entry itself, which
  * fstat reads for the rdev. `mode` is the nine-bit permission stat reports and
  * open enforces (the entries' owner is root:root); everything the machine
- * always had is 0666, the Linux modes for these devices, and only the raw
- * boot-partition window is root-only. `bootpart` is dynamically present and
- * must stay the LAST entry: enumeration ends at the first absent name.
+ * always had is 0666, the Linux modes for these devices, and only the two raw
+ * disk windows are root-only. `bootpart` and `disk0` are both dynamically
+ * present, which is why enumeration goes through `devfs_dirent` and skips
+ * absent entries rather than stopping at the first one: with two of them, a
+ * machine that has the second and not the first (the metal profile, which
+ * never mounts) would otherwise have a device it could open and could not
+ * list.
  */
 struct devfs_entry {
     const char *name;
@@ -245,12 +316,16 @@ struct devfs_entry {
 /* ops == NULL marks a console-backed entry: opening it yields an FD_TYPE_CONSOLE
  * descriptor (the existing terminal I/O), not an ops-driven device. bootpart's
  * major is 240, the local/experimental block, minor 0. */
-static const struct devfs_entry dev_table[] = {
-    {"null", 1, 3, 1, 0666, &null_ops},   {"zero", 1, 5, 1, 0666, &zero_ops},
-    {"full", 1, 7, 1, 0666, &full_ops},   {"random", 1, 8, 0, 0666, &rand_ops},
-    {"urandom", 1, 9, 0, 0666, &rand_ops}, {"console", 5, 1, 0, 0666, NULL},
-    {"tty", 5, 0, 0, 0666, NULL},          {"ptmx", 5, 2, 0, 0666, NULL},
-    {"bootpart", 240, 0, 0, 0600, &bootpart_ops}};
+static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops},
+                                               {"zero", 1, 5, 1, 0666, &zero_ops},
+                                               {"full", 1, 7, 1, 0666, &full_ops},
+                                               {"random", 1, 8, 0, 0666, &rand_ops},
+                                               {"urandom", 1, 9, 0, 0666, &rand_ops},
+                                               {"console", 5, 1, 0, 0666, NULL},
+                                               {"tty", 5, 0, 0, 0666, NULL},
+                                               {"ptmx", 5, 2, 0, 0666, NULL},
+                                               {"bootpart", 240, 0, 0, 0600, &bootpart_ops},
+                                               {"disk0", 240, 1, 0, 0400, &disk0_ops}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
@@ -260,11 +335,14 @@ static int devfs_entry_present(int i)
     if (dev_table[i].ops == &bootpart_ops) {
         return bootpart.present;
     }
+    if (dev_table[i].ops == &disk0_ops) {
+        return disk0.present;
+    }
     return 1;
 }
 
 /* Stable inode namespace for /dev: the directory itself, then one per device. */
-#define DEVFS_INO_DIR 2u
+#define DEVFS_INO_DIR  2u
 #define DEVFS_INO_BASE 16u
 #define DEVFS_INO(idx) (DEVFS_INO_BASE + (uint32_t)(idx))
 
@@ -474,16 +552,29 @@ const char *devfs_fd_name(struct fd_entry *e)
     return dev->name;
 }
 
-int devfs_count(void)
+int devfs_dirent(int n, const char **name, uint32_t *ino)
 {
-    int i, n = 0;
+    int i;
 
-    for (i = 0; i < DEVFS_NDEV; i++) {
-        if (devfs_entry_present(i)) {
-            n++;
-        }
+    if (n < 0) {
+        return 0;
     }
-    return n;
+    for (i = 0; i < DEVFS_NDEV; i++) {
+        if (!devfs_entry_present(i)) {
+            continue;
+        }
+        if (n == 0) {
+            *name = dev_table[i].name;
+            /* The TABLE index, not the listing position: a device's inode must
+             * be the same number `stat` reports, or the identity comparison
+             * that `ttyname` makes between a listing and a stat would fail as
+             * soon as an absent entry shifted the listing. */
+            *ino = DEVFS_INO(i);
+            return 1;
+        }
+        n--;
+    }
+    return 0;
 }
 
 const char *devfs_name(int i)
@@ -505,8 +596,33 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
     return 0020000u | (uint32_t)dev->mode;
 }
 
-void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
-                            uint32_t sector_count)
+void devfs_disk_publish(struct block_device *whole, uint32_t window_sectors)
+{
+    if (!whole || window_sectors == 0) {
+        serial_printf("devfs: no whole-disk window to publish\n");
+        return;
+    }
+    disk0.whole = whole;
+    disk0.window_sectors = window_sectors;
+    disk0.present = 1;
+}
+
+int devfs_fd_disk_size(struct fd_entry *e, uint32_t *size)
+{
+    const struct devfs_entry *dev;
+
+    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+        return 0;
+    }
+    dev = (const struct devfs_entry *)e->priv;
+    if (dev->ops != &disk0_ops || !disk0.present) {
+        return 0;
+    }
+    *size = disk0.window_sectors * BLOCK_SECTOR_SIZE;
+    return 1;
+}
+
+void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, uint32_t sector_count)
 {
     /* Byte offsets ride the descriptor's 32-bit offset and lseek's int32
      * result, so the partition must sit under 2 GiB; the real boot partition

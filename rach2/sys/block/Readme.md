@@ -50,6 +50,18 @@ The scan is then tolerant by construction. A port with nothing on it never reach
 
 The waits here are measured rather than counted, through `k_udelay`, because what they wait for happens on the wire and inside the device rather than at the processor's speed: one second for the PHY, five for the device's own reset.
 
+## Reading a disk without mounting it
+
+The metal machine must be able to say what its SSD is, how big it is and what its partition table holds, and to hand out any sector for hashing, without mounting anything: the disk-root mount stamps a dirty flag, and that is a write. `rach2.diskdiag` on the boot line publishes two read-only objects and nothing else happens without it, so no image grows a raw whole-disk node by accident.
+
+`/proc/disk` is what the drive said about itself, one fact per line: state, driver, port, the build's disk policy, whether the root file system is on this disk, model, serial, firmware, sector size, sector count, the window size, and the four MBR entries. It is rendered from a record taken once at boot, so opening it issues no command. The identity comes from the ATA IDENTIFY response both drivers already ask for and both used to discard; `diskinfo.c` keeps it, un-swapping the big-endian-within-a-word strings, trimming the padding the device does not terminate, and replacing any byte outside printable ASCII with a question mark, because what parses this file is `awk` and `grep` on the machine and a device that answered with a newline would otherwise split a line.
+
+`/dev/disk0` is the whole disk as a root-only, read-only sector window, and sector hashes are computed in userland: `dd if=/dev/disk0 bs=512 skip=2048 count=8 | sha256sum`. A SHA-256 in the kernel would duplicate the `sha256sum` the image already carries, and hashing on the machine the same way the host does means the two numbers are comparable. Writes are refused four times over and each refusal stands alone: the 0400 mode fails an `open` for writing, the descriptor carries no write flag, the node's own write returns `-EPERM`, and under the metal build the driver's allowlist refuses the command.
+
+The window reaches the first 8388607 sectors, because an open file's offset is 32 bits. `/proc/disk` prints the disk's real size beside the window's, so on a larger disk the two numbers disagree visibly rather than one of them quietly lying.
+
+`make diskdiag-test` proves it on three boots of one freshly built image: the ordinary kernel mounting it, which must change it, since otherwise the comparison could not detect a write at all; the read-only kernel reading it over SSH with nothing typed at the console, where every sector hashed on the machine must equal the same offset hashed on the host; and the same kernel with no drive attached.
+
 ## The read-only build
 
 Milestone 24 carries this kernel to a laptop whose SSD holds a Windows installation its owner has not backed up, and until a carved partition is approved after a full backup, nothing this kernel does may write that disk. A promise of that size cannot rest on remembering not to call the write path, so it is enforced in one place per driver and decided when the kernel is built.
@@ -67,7 +79,7 @@ Which policy an artifact carries is read off the artifact. Checking for the abse
 * First present port only, single disk: there is one `block0`, like the rest of the storage stack.
 * 512-byte logical sectors, asserted: KRFFS sector math assumes them.
 * No hot-plug, no port multipliers, no ATAPI: the driver scopes to a fixed boot or data disk.
-* `GHC.HR` and the full COMRESET/staggered-spin-up handshake are deferred; the lighter per-port stop/program/start suffices for QEMU `ich9-ahci`.
+* The former deferrals, `GHC.HR` and the full COMRESET,/staggered-spin-up handshake are deferred; the lighter per-port stop/program/start suffices for QEMU `ich9-ahci`.
 * The BIOS/GRUB boot stays on the legacy IDE channel (it uses INT 13h, not this driver); AHCI is the in-kernel-driven root or data disk, reached by booting the kernel directly. Proving a full SeaBIOS-from-AHCI boot is out of scope.
 
 ## Verify

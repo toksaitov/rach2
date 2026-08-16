@@ -32,6 +32,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/block/mbr.c       \
 	  sys/block/ata.c       \
 	  sys/block/diskcmd.c   \
+	  sys/block/diskinfo.c  \
 	  sys/block/ahci.c      \
 	  sys/display/vga_text.c \
 	  sys/display/vga_gfx.c  \

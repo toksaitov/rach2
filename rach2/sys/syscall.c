@@ -1345,6 +1345,16 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_FILE:
         case VNODE_PROC_CMDLINE:
             return procfs_open(vp, flags);
+        case VNODE_PROC_DISK:
+            /* Root only. The file carries the drive's serial number, and an
+             * image that has this file also has an unprivileged account. */
+            {
+                int32_t rc = cred_access_bits(0, 0, 0400u, CRED_R, 0);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+            return procfs_open(vp, flags);
         case VNODE_DEV_DIR:
         case VNODE_PTS_DIR:
         case VNODE_PROC_DIR:
@@ -1875,7 +1885,8 @@ static int32_t sys_lseek(isr_params_t *params)
         /* The boot-partition window seeks like a file whose size is the
          * partition's: SEEK_END resolves against it, and an offset past the
          * end is allowed (a read there returns 0, a write -ENOSPC). */
-        if (devfs_fd_bootpart_size(entry, &part_size)) {
+        if (devfs_fd_bootpart_size(entry, &part_size) ||
+            devfs_fd_disk_size(entry, &part_size)) {
             switch (whence) {
                 case 0: /* SEEK_SET */
                     new_offset = offset;
@@ -2830,6 +2841,12 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_cmdline();
+            return 0;
+        case VNODE_PROC_DISK:
+            /* /proc/disk: what the disk reported, root-readable only. */
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0400;
+            kst->st_ino = procfs_ino_disk();
             return 0;
         case VNODE_PROC_PID:
         case VNODE_PROC_FD_DIR:
@@ -3900,7 +3917,8 @@ static int32_t sys__llseek(isr_params_t *params)
 
         /* The boot-partition window: full 64-bit seek math against the
          * partition size, the same semantics as the 32-bit lseek above. */
-        if (devfs_fd_bootpart_size(entry, &part_size)) {
+        if (devfs_fd_bootpart_size(entry, &part_size) ||
+            devfs_fd_disk_size(entry, &part_size)) {
             off = (long long)(((uint64_t)offset_high << 32) |
                               (uint64_t)offset_low);
             switch (whence) {
@@ -5927,16 +5945,21 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
     n -= 2;
 
     if (kind == VNODE_DEV_DIR) {
-        const char *dn = devfs_name(n);
+        const char *dn = NULL;
+        uint32_t dino = 0;
         int i;
-        if (!dn) {
+
+        /* Through devfs_dirent, which skips absent entries and reports the
+         * registry inode: two devices are dynamically present now, so a walk
+         * that stopped at the first absent one would hide the second. */
+        if (!devfs_dirent(n, &dn, &dino) || !dn) {
             return 0;
         }
         for (i = 0; i < 30 && dn[i]; i++) {
             name[i] = dn[i];
         }
         name[i] = '\0';
-        *ino = 16u + (uint32_t)n;
+        *ino = dino;
         *dtype = DT_CHR;
         return 1;
     }
@@ -5971,6 +5994,16 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
             return 1;
         }
         if (n == 1) {
+            name[0] = 'd';
+            name[1] = 'i';
+            name[2] = 's';
+            name[3] = 'k';
+            name[4] = '\0';
+            *ino = procfs_ino_disk();
+            *dtype = DT_REG;
+            return 1;
+        }
+        if (n == 2) {
             name[0] = 's';
             name[1] = 'e';
             name[2] = 'l';
@@ -5981,7 +6014,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
             return 1;
         }
         {
-            int p = procfs_nth_pid(n - 2);
+            int p = procfs_nth_pid(n - 3);
             if (p < 0) {
                 return 0;
             }

@@ -1,6 +1,7 @@
 #include "block.h"
 #include "ata.h"
 #include "ahci.h"
+#include "../serial.h"
 
 #include "../cmdline.h"
 #include "../lib/kerrno.h"
@@ -83,6 +84,15 @@ void block_partition_init(
 
 int block_probe(void)
 {
+    /* rach2.nodisk skips the probe entirely, which is the switch a first boot
+       on unfamiliar hardware needs: a controller that does not answer its
+       reset holds this path for the whole of its bounded wait, and on a
+       machine with no serial port the way to find out whether that is what
+       stopped the boot is to leave the disk alone and see. */
+    if (kcmdline_has("rach2.nodisk")) {
+        serial_printf("block: skipped (rach2.nodisk)\n");
+        return -1;
+    }
     /* With rach2.disk=ahci, prefer the AHCI HBA and fall back to ATA if none
        answered; otherwise use ATA, so every existing IDE image boots exactly as
        before. kcmdline_has matches whole tokens, so the flag never collides

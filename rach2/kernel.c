@@ -42,6 +42,7 @@
 #include "sys/network/net.h"
 #include "sys/network/netconf.h"
 #include "sys/block/diskcmd.h"
+#include "sys/block/diskinfo.h"
 #include "sys/network/driver/netdev.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
@@ -2925,6 +2926,26 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
     set_fore_color(light_grey);
+
+    /* The disk diagnostic, asked for by name. It probes a disk only if the
+     * mount above did not, publishes /proc/disk and /dev/disk0, and issues
+     * nothing but IDENTIFY and a sector read, so the read-only build runs it
+     * unchanged. Without the flag neither object exists, so no image grows a
+     * raw whole-disk node by accident. */
+    if (kcmdline_has("rach2.diskdiag")) {
+        k_printf("  Disk diagnostic...");
+        serial_printf("  Disk diagnostic...");
+        if (diskinfo_probe(_krffs_on_disk) == 0) {
+            set_fore_color(light_green);
+            k_puts(" OK (/proc/disk, /dev/disk0)");
+            serial_printf(" OK (/proc/disk, /dev/disk0)\n");
+        } else {
+            set_fore_color(light_brown);
+            k_puts(" none (no disk answered)");
+            serial_printf(" none (no disk answered)\n");
+        }
+        set_fore_color(light_grey);
+    }
 
     /* Allocate the pipe pool (kept out of BSS) before user processes can pipe(). */
     pipe_init_pool();

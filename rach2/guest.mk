@@ -45,6 +45,7 @@ OBJS = loader.o \
        sys/block/mbr.o \
        sys/block/ata.o \
        sys/block/diskcmd.o \
+       sys/block/diskinfo.o \
        sys/block/ahci.o \
        sys/display/vga_text.o \
        sys/display/vga_gfx.o \
@@ -115,7 +116,7 @@ kernel.objs: guest.mk
 	printf '%s\n' loader.o sys/isr_handler.o sys/tables/gdt_handler.o sys/tables/idt_handler.o sys/proc/switch.o kernel.o > kernel.objs.new
 	printf '%s\n' sys/kio.o sys/serial.o sys/syscall.o sys/module.o sys/cmdline.o sys/isr.o >> kernel.objs.new
 	printf '%s\n' sys/pic.o sys/pit.o sys/rtc.o sys/kbd.o sys/mouse.o sys/panic.o >> kernel.objs.new
-	printf '%s\n' sys/speaker.o sys/pci.o sys/power.o sys/block/block.o sys/block/mbr.o sys/block/ata.o sys/block/diskcmd.o sys/block/ahci.o >> kernel.objs.new
+	printf '%s\n' sys/speaker.o sys/pci.o sys/power.o sys/block/block.o sys/block/mbr.o sys/block/ata.o sys/block/diskcmd.o sys/block/diskinfo.o sys/block/ahci.o >> kernel.objs.new
 	printf '%s\n' sys/display/vga_text.o sys/display/vga_gfx.o sys/audio/audio.o sys/audio/audio_debug.o sys/audio/dma.o sys/audio/sb16.o >> kernel.objs.new
 	printf '%s\n' sys/audio/hda.o sys/tables/gdt.o sys/tables/tss.o sys/tables/idt.o sys/mm/heap.o sys/mm/paging.o >> kernel.objs.new
 	printf '%s\n' sys/mm/usercopy.o sys/mm/vm.o sys/mm/frame.o sys/mm/pagecache.o sys/mm/modlayout.o sys/diag.o sys/udelay.o sys/proc/process.o sys/proc/sched.o >> kernel.objs.new
