@@ -110,6 +110,25 @@ Who supplies each proof matters, because some of it cannot be scripted. The scri
 * That the AHCI host test needed a full register model like the RTL8168's. The bounds that matter are arithmetic, and one of them was a real defect (an all-ones capacity accepted, truncating every later LBA), fixed in the driver where it lives.
 * The plan's literal poweroff numbers. `0x1804` is derivable and is now derived from the chipset's own base register; only the sleep type is a constant, carried per profile with its provenance, because it lives in AML this kernel does not interpret.
 
+## The first LAN session, measured
+
+The machine was booted from the stick on a real network and reached over SSH from the development host. What that settled:
+
+* The ported driver works. `xid 0x509` as predicted, `Network... OK (RTL8168GU)`, ARP resolved, ICMP both ways, and a TCP session carrying SSH. The bring-up sequence, the four indirect windows, the descriptor rings and the PHY all behave on the chip nothing here can emulate.
+* Init brings the machine up unattended: dropbear was listening before the login prompt appeared, and root authenticated by key with nothing typed at the console.
+* `lynxpoint-lp` matched once the mobile device-id range was added, and `poweroff` cuts power rather than halting.
+* Name resolution needed `/etc/resolv.conf`, which the metal image did not stage. It names 1.1.1.1, which is what this LAN's router hands out; the router forwards DNS too, but a fixed public resolver keeps working if the stick moves.
+* A 104 KB file crossed in each direction, byte for byte by checksum.
+
+Two throughput numbers, which the plan asked for and which say different things:
+
+| Measurement | Laptop, RTL8168GU, polled | QEMU, RTL8139, interrupt-driven |
+|---|---|---|
+| A whole SSH session: connect, authenticate, run, close | 0.3 s | comparable |
+| Bulk transfer, 104 KB one direction | 0.9 KB/s | 1.1 KB/s |
+
+The interactive figure is what remote development needs and it is fine. The bulk figure is poor, and the comparison is the point: the polled driver on real hardware is within twenty percent of the interrupt-driven one in QEMU, so this is not the new driver and not the 100 Hz poll. It is a property of the TCP stack that predates this milestone, and it is recorded here as the next thing worth chasing rather than attributed to the hardware.
+
 ## What waits for the hardware
 
 * That the RTL8168GU driver works at all. The model proves the sequences and their order; it cannot prove PCIe ordering, that DMA reaches the rings, the PHY's behaviour, or whether this board needs the firmware patch the port omits. The first proof is a packet capture on the development host showing our frames with the machine's own source address.
