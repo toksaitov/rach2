@@ -42,21 +42,36 @@ if [ -f shadow ]; then
     exit 0
 fi
 
+# The demo passwords. These are development credentials for a teaching system:
+# the same on every build, written in plaintext to a git-ignored file, and typed
+# at a console by whoever is sitting at the machine. Short and memorable beats
+# random here, because the one place they are actually used is a person typing
+# them at a laptop across the room; every automated caller reads the file.
+#
+# Set RACH2_ROOT_PASSWORD or RACH2_TEST_PASSWORD to override, and use a random
+# token for either if this machine is somewhere a demo account matters:
+#
+#     RACH2_ROOT_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)"
+#
+# The salts stay random regardless, since nobody types a salt.
+DEFAULT_ROOT_PASSWORD="1qA2wS3eD"
+DEFAULT_TEST_PASSWORD="4rF5tG6yH"
+
 # A random token from the urandom pool: $1 characters of the salt/password
 # alphabet. LC_ALL=C keeps tr byte-oriented whatever the host locale is.
 random_token() {
     LC_ALL=C tr -dc 'A-Za-z0-9./' < /dev/urandom | dd bs=1 "count=$1" 2>/dev/null
 }
 
-# Mint account $1's password into credential file $2 and append the shadow
-# line to shadow.tmp. The password never appears in an argument list: mkhash
-# reads it from stdin. The credential file is removed first so it is recreated
+# Mint account $1's password $3 into credential file $2 and append the shadow
+# line to shadow.tmp. The password never reaches mkhash's argument list: it is
+# read from stdin, so it stays out of the process table. The credential file is removed first so it is recreated
 # fresh under the 077 umask, never rewritten through a stale loose mode.
 mint() {
     user="$1"
     file="$2"
+    password="$3"
 
-    password="$(random_token 20)"
     salt="$(random_token 16)"
     hash="$(printf '%s\n' "$password" | "$MKHASH" "\$6\$$salt")"
 
@@ -70,8 +85,8 @@ mint() {
 # Stage the shadow file atomically: both lines into a temp file renamed into
 # place, so an interrupted run never leaves a partial shadow a later run trusts.
 rm -f shadow.tmp
-mint root rach2_demo_password
-mint test rach2_test_password
+mint root rach2_demo_password "${RACH2_ROOT_PASSWORD:-$DEFAULT_ROOT_PASSWORD}"
+mint test rach2_test_password "${RACH2_TEST_PASSWORD:-$DEFAULT_TEST_PASSWORD}"
 mv shadow.tmp shadow
 echo "gen_demo_password: wrote krffs/shadow"
 echo "gen_demo_password: ssh -p 2222 test@localhost takes krffs/rach2_test_password"

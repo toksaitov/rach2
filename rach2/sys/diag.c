@@ -171,6 +171,53 @@ static void diag_eth_report(const struct diag_eth *e)
     }
 }
 
+/**
+ * Print the report again and hold the screen until a key is pressed.
+ *
+ * The first report goes out before any driver runs, which is where its numbers
+ * are worth having and also where a machine with no serial port cannot read
+ * them: the whole boot log scrolls past in well under a second, and the only
+ * thing left on the screen is the login prompt. Photographing it needs a video
+ * camera, which is what the first laptop session actually resorted to.
+ *
+ * So under `rach2.diag` the report is printed a second time at the end of the
+ * boot, where the keyboard is up and nothing further will scroll, and the
+ * machine waits. The wait is a polled read of the 8042 rather than anything
+ * interrupt-driven, so it holds whatever else is or is not working. A byte on
+ * the serial line releases it too, since that is how this project's harnesses
+ * type at a machine.
+ */
+void boot_diag_hold(void)
+{
+    k_puts("");
+    boot_diag_report();
+    k_puts("  press any key to continue booting");
+    serial_printf("diag: holding for a keypress\n");
+
+    /* Drain whatever is already buffered, so a keystroke from earlier in the
+     * boot does not consume the hold before anyone has read the screen. */
+    while ((inb(0x64) & 0x01u) != 0) {
+        (void)inb(0x60);
+    }
+    while (serial_data_available()) {
+        (void)serial_try_getc();
+    }
+
+    /* Either input releases it: a key on the machine's own keyboard, which is
+     * what the laptop has, or a byte on the serial line, which is how every
+     * harness in this project drives a machine. */
+    for (;;) {
+        if ((inb(0x64) & 0x01u) != 0) {
+            (void)inb(0x60);
+            return;
+        }
+        if (serial_data_available()) {
+            (void)serial_try_getc();
+            return;
+        }
+    }
+}
+
 void boot_diag_report(void)
 {
     struct diag_eth eth;

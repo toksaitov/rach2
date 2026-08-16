@@ -12,6 +12,7 @@
 #include "pic.h"
 #include "cmdline.h"
 #include "serial.h"
+#include "kio.h"
 
 /*
  * The profiles, in probe order.
@@ -26,17 +27,27 @@
  * handshake provable in QEMU at all (`-machine q35`). Its sleep type is
  * QEMU's convention rather than the ICH9 datasheet's.
  *
- * lynxpoint is the laptop's, and its two constants of belief are marked as
- * such: sleep type 7 is the Intel PCH encoding for S5, and 0xA0 is the ACPI
- * enable value its firmware publishes. Neither is measured; only the machine
- * powering off will confirm them.
+ * The two Lynx Point rows are the laptop's family, split because the mobile
+ * parts are a different device-id range from the desktop ones and the first
+ * boot on the real machine matched neither: its SATA controller reports
+ * 8086:9c03, which is Lynx Point-LP, so its LPC bridge is in the 0x9c4x range
+ * and not the 0x8c4x one this table originally carried. Wildcat Point-LP is
+ * the Broadwell refresh of the same chassis and is listed beside it.
+ *
+ * Their two constants of belief are marked as such: sleep type 7 is the Intel
+ * PCH encoding for S5, and 0xA0 is the ACPI enable value the firmware
+ * publishes. Neither is measured; only the machine powering off confirms them.
  */
 static const board_profile_t profiles[] = {
     {"piix4", 0, 1, 3, 0x8086, 0x7113, 0x7113, 0xFF, 0xFF, 0x40, 0xFFC0, 0x80, 0, 0, 9, 0, 0, 0},
     {"ich9", 0, 31, 0, 0x8086, 0x2918, 0x2918, 0x06, 0x01, 0x40, 0xFF80, 0x44, 7, 0x44, -1, 0, 0xB2,
      0x02},
     {"lynxpoint", 0, 31, 0, 0x8086, 0x8C40, 0x8C5F, 0x06, 0x01, 0x40, 0xFF80, 0x44, 7, 0x44, -1, 7,
-     0xB2, 0xA0}};
+     0xB2, 0xA0},
+    {"lynxpoint-lp", 0, 31, 0, 0x8086, 0x9C40, 0x9C4F, 0x06, 0x01, 0x40, 0xFF80, 0x44, 7, 0x44, -1,
+     7, 0xB2, 0xA0},
+    {"wildcatpoint-lp", 0, 31, 0, 0x8086, 0x9CC0, 0x9CCF, 0x06, 0x01, 0x40, 0xFF80, 0x44, 7, 0x44,
+     -1, 7, 0xB2, 0xA0}};
 
 #define BOARD_NPROFILES ((int)(sizeof(profiles) / sizeof(profiles[0])))
 
@@ -278,6 +289,24 @@ int board_init(const char **why)
         return board_verdict;
     }
 
+    /*
+     * Nothing matched, so say what IS there. A machine whose only output is
+     * its screen cannot be asked twice cheaply, and "no profile matched" on
+     * its own costs a rebuild and another trip to the machine to learn one
+     * number. Printing the identity at the one place every profile looks turns
+     * an unknown chipset into a row somebody can add.
+     */
+    {
+        unsigned v = (unsigned)pci_read_config16(0, 31, 0, PCI_VENDOR_ID);
+        unsigned d = (unsigned)pci_read_config16(0, 31, 0, PCI_DEVICE_ID);
+        unsigned c = (unsigned)pci_read_config8(0, 31, 0, PCI_CLASS);
+        unsigned sc = (unsigned)pci_read_config8(0, 31, 0, PCI_SUBCLASS);
+
+        /* On the screen as well as the log: the machine this matters for has
+         * no serial port, so a serial-only diagnostic is no diagnostic. */
+        k_printf("  board: 0:31.0 is %X:%X class %X:%X\n", v, d, c, sc);
+        serial_printf("board: no profile matched: 0:31.0 is %X:%X class %X:%X\n", v, d, c, sc);
+    }
     if (forced) {
         *why = "the named board profile's chipset is not in this machine";
         board_verdict = BOARD_REFUSED;

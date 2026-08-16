@@ -72,6 +72,11 @@ void serial_printf(const char *fmt, ...)
     (void)fmt;
 }
 
+void k_printf(const char *fmt, ...)
+{
+    (void)fmt;
+}
+
 /* The port I/O board.c's enable handshake performs. Nothing here reaches it:
    the judgements are pure and board_init is never called. */
 unsigned short inw(unsigned short port)

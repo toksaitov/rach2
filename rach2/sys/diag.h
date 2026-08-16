@@ -23,4 +23,13 @@
  */
 void boot_diag_report(void);
 
+/**
+ * Print the report again at the end of the boot and wait for a keypress.
+ *
+ * For a machine whose only output is its screen: the boot log scrolls past in
+ * under a second and cannot be photographed, so the numbers are shown once
+ * more where nothing further will scroll over them.
+ */
+void boot_diag_hold(void);
+
 #endif /* _DIAG_H_ */

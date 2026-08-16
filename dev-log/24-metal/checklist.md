@@ -20,6 +20,7 @@ Then write `build/iso/rach2-metal.iso` to the stick unchanged. It is a hybrid im
 What to have on hand:
 
 * An Ethernet cable from the laptop to the same switch or router as the Mac.
+* The demo passwords, which are short and fixed for development: root is `1qA2wS3eD` and the test account is `4rF5tG6yH` (`krffs/gen_demo_password.sh`, overridable with `RACH2_ROOT_PASSWORD`).
 * An address for the laptop that the router will not hand to anything else. Reserve it, or pick one outside the DHCP pool. Write it down; it goes on the kernel command line, since there is no DHCP.
 * The Mac's own address on that network, and a terminal ready to run `tcpdump`.
 * A camera. On the boots before SSH works, a photograph of the screen is the log.
@@ -41,7 +42,9 @@ Each boot is written down with where it came from, because the network card's en
 
 ### 1. Cold power-on, the diagnostic entry
 
-From a full power-off, boot the stick and pick the `rach2.diag` menu entry. Photograph the screen.
+From a full power-off, boot the stick and pick the `rach2.diag` menu entry.
+
+The boot log scrolls past in well under a second and cannot be photographed; the first session had to film it. So the diagnostic entry now prints its report a SECOND time at the end of the boot and waits there until a key is pressed. Photograph that screen, then press a key. The earlier copy of the report is still the one that scrolls, and is not worth chasing.
 
 What it should show: the kernel's end address, the allocator's break, the direct-map end, the free frame count, every module's range, and the Ethernet controller's identity read from `TxConfig`.
 

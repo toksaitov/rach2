@@ -3044,6 +3044,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * (an is-init death path jmps back to shell_loop while the debug shell is
      * home), which is the contract the test harness drives.
      */
+    /* The diagnostic numbers once more, on a screen nothing will scroll, before
+     * init takes the console. */
+    if (kcmdline_has("rach2.diag")) {
+        boot_diag_hold();
+    }
+
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 
     if (!rescue_mode) {
