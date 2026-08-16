@@ -661,7 +661,7 @@ os-simple-iso: os-simple-image
 	sh tools/mkiso.sh os-simple
 os-real-iso: os-real-image
 	sh tools/mkiso.sh os-real
-rach2-metal-iso: rach2-metal-image
+rach2-metal-iso: rach2-metal rach2-metal-image
 	sh tools/mkiso.sh rach2-metal
 
 # The staged capstone binaries are the REAL prerequisites of the os-real image. A

@@ -28,13 +28,32 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-KERNEL="$REPO/build/rach2/kernel"
+# The metal profile carries the kernel that cannot write a disk, and no other
+# profile does. This is the stick that goes into a laptop whose SSD holds
+# somebody's Windows, so the artifact is checked here rather than assumed:
+# staging the ordinary kernel under the metal name would produce exactly the
+# image this milestone promises not to make.
+if [ "$IMAGE" = rach2-metal ]; then
+    KERNEL="$REPO/build/rach2-metal/kernel"
+    POLICY=read-only
+else
+    KERNEL="$REPO/build/rach2/kernel"
+    POLICY=read-write
+fi
 KRFFS="$REPO/build/images/$IMAGE.krffs"
 ISO_OUT="$REPO/build/images/$IMAGE.iso"
 ISODIR="$REPO/build/iso/$IMAGE"
 
 if [ ! -f "$KERNEL" ]; then
-    echo "mkiso: kernel not built ($KERNEL); run 'make' first" >&2
+    if [ "$IMAGE" = rach2-metal ]; then
+        echo "mkiso: metal kernel not built ($KERNEL); run 'make rach2-metal' first" >&2
+    else
+        echo "mkiso: kernel not built ($KERNEL); run 'make' first" >&2
+    fi
+    exit 1
+fi
+if ! python3 "$REPO/tools/check_diskpolicy.py" "$KERNEL" "$POLICY"; then
+    echo "mkiso: refusing to build $IMAGE.iso around a kernel with the wrong disk policy" >&2
     exit 1
 fi
 if [ ! -f "$KRFFS" ]; then
