@@ -26,6 +26,12 @@
 #include "serial.h"
 #include "module.h"
 #include "pci.h"
+#include "board.h"
+#include "block/diskcmd.h"
+#include "fs/krffs.h"
+#include "lib/krandom.h"
+#include "network/net.h"
+#include "network/driver/netdev.h"
 #include "mm/heap.h"
 #include "mm/paging.h"
 
@@ -172,6 +178,51 @@ static void diag_eth_report(const struct diag_eth *e)
 }
 
 /**
+ * The facts the rest of the boot printed, gathered onto one screen.
+ *
+ * Re-printing the early report was not enough and the reason is the screen
+ * itself: it holds about twenty-five lines and the boot prints half as many
+ * again, so everything the drivers reported has scrolled off by the time
+ * anything can be read. The chipset profile, the station address, the disk
+ * policy and the entropy source are each one line somewhere in that scroll,
+ * and each is a fact a first bring-up is there to collect.
+ *
+ * So they are asked for again here, from the modules that hold them, rather
+ * than being recovered from a screen that no longer has them.
+ */
+static void diag_summary(void)
+{
+    diag_say("======= What this boot found =======");
+
+    k_printf("  board: %s\n", board_name());
+    serial_printf("  board: %s\n", board_name());
+
+    k_printf(
+        "  network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n", netdev_name(),
+        (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4),
+        (unsigned)(net_mac[1] & 0xF), (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
+        (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4),
+        (unsigned)(net_mac[4] & 0xF), (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+    serial_printf(
+        "  network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n", netdev_name(),
+        (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4),
+        (unsigned)(net_mac[1] & 0xF), (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
+        (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4),
+        (unsigned)(net_mac[4] & 0xF), (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+
+    k_printf("  %s\n", diskcmd_policy_banner);
+    serial_printf("  %s\n", diskcmd_policy_banner);
+
+    k_printf("  entropy: %s\n", krandom_is_trusted() ? "trusted" : "NOT trusted");
+    serial_printf("  entropy: %s\n", krandom_is_trusted() ? "trusted" : "NOT trusted");
+
+    k_printf("  file system: %d files\n", (uint32_t)krffs_count_files());
+    serial_printf("  file system: %d files\n", (uint32_t)krffs_count_files());
+
+    diag_say("===================================");
+}
+
+/**
  * Print the report again and hold the screen until a key is pressed.
  *
  * The first report goes out before any driver runs, which is where its numbers
@@ -191,6 +242,7 @@ void boot_diag_hold(void)
 {
     k_puts("");
     boot_diag_report();
+    diag_summary();
     k_puts("  press any key to continue booting");
     serial_printf("diag: holding for a keypress\n");
 
