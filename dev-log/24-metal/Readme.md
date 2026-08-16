@@ -87,6 +87,14 @@ An excluded device is listed here rather than skipped quietly, because a reader 
 | Writing the SSD, carving a partition, a persistent host key | NO, phase E | gated on the owner's approval after a full backup |
 | DHCP, DNS, IPv6, a second interface | NO | out of scope; a numeric address is the contract |
 
+## A kernel bug this milestone's own growth exposed
+
+The self-build capstone failed near the end, and it was not a flake. `sys_getdents64`'s directory cursor was a count of the children seen so far. `rm -rf` reads a batch of names, unlinks them, and reads on from that cursor, so every unlink renumbered the survivors and the next read skipped one entry for each file already gone. The leftovers made `rmdir` refuse, and all a user saw was "Directory not empty".
+
+It had presumably always been there, and it surfaced now because this milestone added enough files to `rach2/sys` that listing it stopped fitting in one call: below that threshold every name is read before any unlink, and the defect cannot show.
+
+The cursor is now the byte offset of the last node returned. That survives deletion, because removing a node only widens free extents and allocation splits a free node rather than shifting a reserved one. It does not survive a file growing out of its extent, which relocates that node; a child that grows while another descriptor is mid-listing can be missed or repeated. That is a concurrent modification of a directory being read, which POSIX leaves unspecified, and it is not reachable from the loop the cursor exists for. The boundary is written in the function rather than left to be rediscovered. `tests/unlinkdirprobe.c` reproduces the original defect with a deliberately small buffer and fails against the old cursor.
+
 ## What is proved, and where
 
 In QEMU, from a clean tree: the whole existing probe suite, twice, once with the address compiled in and once with it on the boot line; the netconsole capture; every subset of the optional device switches; the read-only kernel against a real disk image; all three AHCI paths with the controller reset in place; the SSH capstone; and the unattended metal rehearsal. On the host: 27 seam tests, including the chip model, the address parser, the command allowlist and the netconsole.
