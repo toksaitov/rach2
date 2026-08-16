@@ -192,6 +192,11 @@ def main():
     # before the prompt, and on a slow host it alone can exceed a probe step.
     ap.add_argument("--boottmo", type=float, default=60.0)
     ap.add_argument("--log", default=None)
+    # Passed straight to QEMU's -append. The suite is run once with nothing here
+    # and once with the address options that name the very network SLIRP already
+    # provides: the same probes must pass either way, which is what proves the
+    # boot-line configuration reaches every layer that used to read a constant.
+    ap.add_argument("--append", default=None)
     a = ap.parse_args()
 
     if a.selftest:
@@ -208,6 +213,8 @@ def main():
            "-initrd", a.initrd, "-serial", "stdio", "-display", "none",
            "-rtc", "base=utc", "-no-reboot",
            "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0"]
+    if a.append:
+        cmd += ["-append", a.append]
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, bufsize=0)

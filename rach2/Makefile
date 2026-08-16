@@ -69,6 +69,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/fs/devfs.c        \
 	  sys/fs/synthfs.c      \
 	  sys/fs/procfs.c       \
+	  sys/network/netconf.c \
 	  sys/network/netconsole.c \
 	  sys/network/core/net_core.c \
 	  sys/network/driver/netdev.c \

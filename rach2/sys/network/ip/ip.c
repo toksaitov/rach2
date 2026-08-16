@@ -4,7 +4,7 @@
  * The 20-byte header carries the source and destination addresses, the upper
  * protocol number, a TTL, and a one's complement checksum over the header.
  * Multi-byte fields are big-endian on the wire; we keep IP addresses as
- * host-endian uint32_t (NET_IP_ADDR = 0x0A00020F = 10.0.2.15) and convert at
+ * host-endian uint32_t (net_ip_addr = 0x0A00020F = 10.0.2.15) and convert at
  * the wire boundary.
  *
  * We do not implement fragment reassembly, so any fragment (MF set or a
@@ -19,6 +19,7 @@
 #include "../core/byteorder.h"
 #include "../ethernet/ethernet.h"
 #include "../net.h"
+#include "../netconf.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 
@@ -106,7 +107,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     }
 
     dst_ip = read32be(data + 16);
-    if (dst_ip != NET_IP_ADDR) {
+    if (dst_ip != net_ip_addr) {
         return;   /* not addressed to us */
     }
 
@@ -115,7 +116,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     /* Reject a martian source off the wire: our own address, or 127/8, from a
      * peer is a spoof (only a loopback delivery legitimately carries these). */
     if (!from_loopback &&
-        (src_ip == NET_IP_ADDR || (src_ip & 0xFF000000u) == 0x7F000000u)) {
+        (src_ip == net_ip_addr || (src_ip & 0xFF000000u) == 0x7F000000u)) {
         return;
     }
 
@@ -191,13 +192,13 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
     ip_tx_buf[8]  = 64;                          /* TTL */
     ip_tx_buf[9]  = proto;
     write16be(ip_tx_buf + 10, 0x0000);           /* checksum, filled below */
-    write32be(ip_tx_buf + 12, NET_IP_ADDR);
+    write32be(ip_tx_buf + 12, net_ip_addr);
     write32be(ip_tx_buf + 16, dst_ip);
     write16be(ip_tx_buf + 10, ip_checksum(ip_tx_buf, IP_HDR_SIZE));
 
     k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
 
-    if (dst_ip == NET_IP_ADDR) {
+    if (dst_ip == net_ip_addr) {
         uint32_t slot;
 
         if (loop_head - loop_tail == LOOP_RING_SLOTS) {
@@ -211,11 +212,17 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
         return;
     }
 
-    /* On-subnet destinations resolve directly; otherwise via the gateway. */
-    if ((dst_ip & NET_IP_MASK) == (NET_IP_ADDR & NET_IP_MASK)) {
+    /* On-subnet destinations resolve directly; otherwise via the gateway. A
+     * machine configured with an address and no gateway has no route off its
+     * own subnet, and the datagram is dropped here with a reason rather than
+     * ARPed for at address zero. */
+    if ((dst_ip & net_ip_mask) == (net_ip_addr & net_ip_mask)) {
         route_ip = dst_ip;
+    } else if (net_ip_gateway != 0) {
+        route_ip = net_ip_gateway;
     } else {
-        route_ip = NET_IP_GATEWAY;
+        serial_printf("ip: no gateway: dropped a datagram for another subnet\n");
+        return;
     }
 
     if (!arp_lookup(route_ip, dst_mac)) {

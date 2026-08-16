@@ -13,6 +13,7 @@
 #include "../core/byteorder.h"
 #include "../ethernet/ethernet.h"
 #include "../net.h"
+#include "../netconf.h"
 #include "../../lib/kstring.h"
 
 /* One cached IP-to-MAC mapping. */
@@ -76,7 +77,7 @@ static void arp_send_reply(const uint8_t *dst_mac, uint32_t dst_ip)
     arp_reply_buf[5] = 4;
     write16be(arp_reply_buf + 6,  ARP_OP_REPLY);
     k_memcpy(arp_reply_buf + 8,  net_mac, 6);
-    write32be(arp_reply_buf + 14, NET_IP_ADDR);
+    write32be(arp_reply_buf + 14, net_ip_addr);
     k_memcpy(arp_reply_buf + 18, dst_mac, 6);
     write32be(arp_reply_buf + 24, dst_ip);
 
@@ -116,7 +117,7 @@ void arp_rx(const uint8_t *data, uint16_t len)
     /* Learn the sender's mapping from any ARP packet. */
     arp_cache_update(sender_ip, sender_mac);
 
-    if (op == ARP_OP_REQUEST && target_ip == NET_IP_ADDR) {
+    if (op == ARP_OP_REQUEST && target_ip == net_ip_addr) {
         arp_send_reply(sender_mac, sender_ip);
     }
 }
@@ -156,7 +157,7 @@ void arp_request(uint32_t target_ip)
     arp_req_buf[5] = 4;
     write16be(arp_req_buf + 6,  ARP_OP_REQUEST);
     k_memcpy(arp_req_buf + 8,  net_mac, 6);
-    write32be(arp_req_buf + 14, NET_IP_ADDR);
+    write32be(arp_req_buf + 14, net_ip_addr);
     k_memcpy(arp_req_buf + 18, zero_mac, 6);
     write32be(arp_req_buf + 24, target_ip);
 

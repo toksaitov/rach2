@@ -40,6 +40,7 @@
 #include "sys/audio/hda.h"
 #include "sys/udelay.h"
 #include "sys/network/net.h"
+#include "sys/network/netconf.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
 #include "sys/network/ip/ip.h"
@@ -2407,7 +2408,7 @@ static void process_command(const char *cmd)
         set_fore_color(light_grey);
     } else if (audio_debug_handle_command(cmd)) {
     } else if (str_equal(cmd, "netping")) {
-        int rtt = icmp_ping(NET_IP_GATEWAY);
+        int rtt = icmp_ping(net_ip_gateway);
         if (rtt >= 0) {
             set_fore_color(light_green);
             k_printf("ping 10.0.2.2: reply in %d ticks (%d ms)\n",
@@ -2899,6 +2900,20 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     /* Allocate the pty pool before user processes can open /dev/ptmx. */
     pty_init_pool();
+
+    /* The address before the device, so the boot line reports what the machine
+     * will use and a refusal is on screen before anything depends on it. */
+    {
+        const char *why = "";
+        int verdict = netconf_apply(&why);
+
+        if (verdict == NETCONF_REFUSED) {
+            set_fore_color(light_brown);
+            k_printf("  Address... refused (%s)\n", why);
+            serial_printf("  Address... refused (%s)\n", why);
+            set_fore_color(light_grey);
+        }
+    }
 
     k_printf("  Network...");
     serial_printf("  Network...");

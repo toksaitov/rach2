@@ -49,7 +49,17 @@ Three things make it safe to call from anywhere, including interrupt handlers an
 
 ## Configuration
 
-The stack is configured for QEMU SLIRP in `net.h`: guest `10.0.2.15/24`, gateway `10.0.2.2`. The MAC address is read from the NIC at init.
+The stack knows one address, one mask and at most one gateway, and the boot command line chooses them (`netconf.c`):
+
+```
+rach2.ip=192.168.1.50/24 rach2.gateway=192.168.1.1
+```
+
+With neither option the machine keeps QEMU's SLIRP tuple, `10.0.2.15/24` via `10.0.2.2`, which is what every test expects and what the constants in `net.h` still hold. With `rach2.ip=` given and `rach2.gateway=` absent there is no default gateway at all, rather than the SLIRP one: `10.0.2.2` beside a real LAN address is a router that does not exist, and a stack that kept it would send every off-subnet packet into nothing. Instead `ip_tx` drops such a datagram and says so, which is a failure someone can diagnose. The MAC address is read from the NIC at init.
+
+The parsing refuses more than it accepts, because the only thing worse than refusing to configure is configuring something other than what was written. Out by one digit and the machine comes up on a network nobody asked for, which on a board across the room is indistinguishable from a machine that did not come up. So a leading zero is refused rather than read as octal or as decimal, a quartet over 255 is refused rather than truncated, trailing text is refused rather than ignored, and the subnet's own network and broadcast addresses, loopback, multicast and the all-zero and all-ones addresses are refused as host addresses. A gateway must be a host on the subnet just given. Either option repeated is refused rather than resolved by a first-wins rule nobody would remember. Every refusal leaves the SLIRP tuple in force and prints what was wrong on the boot line.
+
+`tests/host/netconf_hosttest.c` holds the parser to all of that, and `make test-addressed` runs the whole probe suite with the address named on the boot line instead of compiled in: the address given is the one SLIRP already provides, so all 61 probes must pass exactly as they do without it, which is what proves the configuration reaches ARP, IP, TCP, the sockets and the boot line.
 
 ## Loopback
 
@@ -78,6 +88,7 @@ The shared TX assembly buffers, the TCB and socket pools, and the ARP cache are 
 Userspace programs exercise the stack:
 
 * The freestanding probes `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged into `test.krffs`. `make test` boots it headless and runs them, or boot it by hand and `exec` each from the kernel debug shell. `loopprobe` (in the `make test` pass) needs no host at all: it exercises the UDP and TCP paths against the machine itself over `127.0.0.1`.
+* `make test-addressed` runs the whole suite with `rach2.ip=` and `rach2.gateway=` naming the network SLIRP already provides, so every probe must pass exactly as it does without them.
 * `make netconsole-test` boots with `rach2.netconsole`, captures every frame the guest sends through QEMU's `filter-dump`, and checks the capture with `tools/netconsole_check.py`: one boot id, sequence numbers in order with no gaps, lengths that match, checksums that sum to zero, and a line printed before the device existed, which is what proves the buffer was carried rather than dropped.
 * The hand-written utilities `ping`, `nc`, and `httpd` are staged into `os-simple.krffs`, at `/bin` with everything else. Run them from the ISH shell after logging in. (os-real carries busybox, whose own `nc` applet exercises the same stack, and our `ping`, since busybox's wants a raw socket this kernel does not offer.)
 

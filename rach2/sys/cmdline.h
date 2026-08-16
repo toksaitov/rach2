@@ -20,6 +20,25 @@ void kcmdline_capture(const char *cmdline);
  */
 int kcmdline_has(const char *flag);
 
+/**
+ * Copy the value of the `key=value` token into `out`.
+ *
+ * `key` is written without the `=`, and the match is on a whole token, so
+ * `rach2.ip` finds `rach2.ip=10.0.0.5/24` and not `norach2.ip=...`. The first
+ * occurrence wins; a second one is a contradiction the caller should refuse,
+ * so `kcmdline_count` is there to notice it.
+ *
+ * A value too long for `out` is refused rather than truncated: half an address
+ * parses into a different address, and a machine that quietly used one the
+ * operator did not write is worse than one that refuses to configure.
+ *
+ * @return 1 when the option was present and its value fit, 0 otherwise.
+ */
+int kcmdline_value(const char *key, char *out, unsigned int outlen);
+
+/** How many `key=` tokens the line carries; more than one is a contradiction. */
+int kcmdline_count(const char *key);
+
 /** The captured command line, a NUL-terminated string (empty if none). */
 const char *kcmdline_get(void);
 

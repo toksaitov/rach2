@@ -39,7 +39,8 @@
 #include "network/udp/udp.h"
 #include "network/tcp/tcp.h"
 #include "network/ip/icmp.h"
-#include "network/net.h" /* NET_IP_ADDR for getsockname */
+#include "network/net.h"
+#include "network/netconf.h" /* net_ip_addr for getsockname */
 #include "cmdline.h"    /* kcmdline_has, for the ENOSYS trace flag */
 
 /* User stack base address (stack grows down from here) */
@@ -7573,14 +7574,14 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
  * Canonicalize a destination address at the socket boundary.
  *
  * The stack below the socket layer knows exactly one local address
- * (`NET_IP_ADDR`): every TCB stamps it, checksums verify against it, and
+ * (`net_ip_addr`): every TCB stamps it, checksums verify against it, and
  * `getsockname` reports it. 127/8 is therefore an alias for that one address,
  * rewritten here before any connection state exists, so no lower layer ever
  * sees a second local address and `getpeername` stays truthful.
  */
 static uint32_t canonical_dst_ip(uint32_t ip)
 {
-    return (ip & 0xFF000000UL) == 0x7F000000UL ? NET_IP_ADDR : ip;
+    return (ip & 0xFF000000UL) == 0x7F000000UL ? net_ip_addr : ip;
 }
 
 /* recv flags: only MSG_DONTWAIT is honored. */
@@ -8107,7 +8108,7 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
                                     len);
 }
 
-/* getsockname: the socket's local address, the single NIC IP (NET_IP_ADDR) plus
+/* getsockname: the socket's local address, the single NIC IP (net_ip_addr) plus
  * its bound or ephemeral port. */
 static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
@@ -8122,7 +8123,7 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         return -EFAULT;
     }
     return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port,
-                                 (uint32_t)NET_IP_ADDR);
+                                 (uint32_t)net_ip_addr);
 }
 
 /* getpeername: the connected peer's address (a connected stream socket only). */

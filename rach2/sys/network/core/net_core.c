@@ -10,6 +10,7 @@
 #include "byteorder.h"
 #include "../driver/netdev.h"
 #include "../netconsole.h"
+#include "../netconf.h"
 #include "../tcp/tcp.h"
 #include "../socket/socket.h"
 #include "../../serial.h"
@@ -81,8 +82,17 @@ void net_print_info(void)
      * console keeps just the one-line summary). The card's half of it comes
      * from the driver, which is the only layer that knows what its own
      * registers are called. */
+    char addr[16], gw[16];
+
     netdev_print_info();
-    serial_printf("    IPv4 10.0.2.15/24, gateway 10.0.2.2\n");
+    netconf_format(net_ip_addr, addr);
+    if (net_ip_gateway != 0) {
+        netconf_format(net_ip_gateway, gw);
+        serial_printf("    IPv4 %s/%d, gateway %s\n", addr, netconf_prefix_of(net_ip_mask), gw);
+    } else {
+        serial_printf("    IPv4 %s/%d, no gateway: this subnet only\n", addr,
+                      netconf_prefix_of(net_ip_mask));
+    }
     netconsole_print_info();
 }
 

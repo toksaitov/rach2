@@ -23,6 +23,7 @@
 #include "../ip/ip.h"
 #include "../core/byteorder.h"
 #include "../net.h"
+#include "../netconf.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
@@ -513,7 +514,7 @@ static void tcp_send_rst_unmatched(uint32_t remote_ip, uint16_t local_port,
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
     write16be(tcp_tx_buf + 16,
-              tcp_checksum(NET_IP_ADDR, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
+              tcp_checksum(net_ip_addr, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
     ip_tx(remote_ip, IP_PROTO_TCP, tcp_tx_buf, TCP_HDR_SIZE);
 }
 
@@ -744,7 +745,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
         return -ENOBUFS;
     }
 
-    tcb->local_ip   = NET_IP_ADDR;
+    tcb->local_ip   = net_ip_addr;
     tcb->local_port = port;
     tcb->state      = TCP_LISTEN;
     tcb->sock       = sock;
@@ -806,7 +807,7 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
         return -ENOBUFS;
     }
 
-    tcb->local_ip    = NET_IP_ADDR;
+    tcb->local_ip    = net_ip_addr;
     tcb->local_port  = local;
     tcb->remote_ip   = dst_ip;
     tcb->remote_port = dst_port;
@@ -967,7 +968,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     }
 
     /* Verify the checksum before trusting any field. */
-    if (tcp_checksum(src_ip, NET_IP_ADDR, data, len) != 0) {
+    if (tcp_checksum(src_ip, net_ip_addr, data, len) != 0) {
         serial_printf("TCP: bad checksum, dropped\n");
         return;
     }
@@ -1061,7 +1062,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
 
         conn_tcb->passive      = 1;
-        conn_tcb->local_ip     = NET_IP_ADDR;
+        conn_tcb->local_ip     = net_ip_addr;
         conn_tcb->local_port   = tcb->local_port;
         conn_tcb->remote_ip    = src_ip;
         conn_tcb->remote_port  = src_port;

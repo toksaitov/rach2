@@ -87,6 +87,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
+        ping-test netconsole-test test-addressed \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
@@ -272,6 +273,16 @@ os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check
 test: test-image
 	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60
+
+# `make test-addressed`: the same suite, with the network named on the boot line
+# instead of compiled in. The address given is the one SLIRP already provides,
+# so every probe must pass exactly as it does without it; what is under test is
+# that `rach2.ip=` and `rach2.gateway=` reach ARP, IP, TCP, the sockets and the
+# boot line, and that naming the current network changes nothing.
+test-addressed: test-image
+	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --timeout 300 --steptmo 60 \
+	    --append "rach2.ip=10.0.2.15/24 rach2.gateway=10.0.2.2"
 
 # `make test-noentropy`: the salt policy's negative half, which no other target
 # can reach. `make test` always boots -cpu max, so the CPU has RDSEED and RDRAND
@@ -751,6 +762,7 @@ help:
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make netconsole-test  the boot log leaves over Ethernet, captured and checked"
+	@echo "  make test-addressed   the same suite with the network named on the boot line"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
 	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"

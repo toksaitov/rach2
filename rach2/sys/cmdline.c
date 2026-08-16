@@ -37,6 +37,88 @@ const char *kcmdline_get(void)
     return kcmdline;
 }
 
+/**
+ * Walk the tokens, calling nothing: this is the shared scan the two lookups
+ * below use so the tokenizing rule lives in one place.
+ *
+ * On each call it advances `*p` past one token and reports where that token
+ * began and how long it was. Returns 0 when the line is exhausted.
+ */
+static int next_token(const char **p, const char **start, size_t *len)
+{
+    while (**p == ' ' || **p == '\t') {
+        (*p)++;
+    }
+    if (**p == '\0') {
+        return 0;
+    }
+    *start = *p;
+    while (**p != '\0' && **p != ' ' && **p != '\t') {
+        (*p)++;
+    }
+    *len = (size_t)(*p - *start);
+    return 1;
+}
+
+/** Whether `tok` of length `len` is `key` followed by `=`. */
+static int token_has_key(const char *tok, size_t len, const char *key, size_t klen)
+{
+    size_t i;
+
+    if (len < klen + 1 || tok[klen] != '=') {
+        return 0;
+    }
+    for (i = 0; i < klen && tok[i] == key[i]; i++) {
+        /* match each byte of the token against the key */
+    }
+    return i == klen;
+}
+
+int kcmdline_value(const char *key, char *out, unsigned int outlen)
+{
+    size_t klen = k_strlen(key);
+    const char *p = kcmdline;
+    const char *tok;
+    size_t len;
+
+    if (outlen == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    while (next_token(&p, &tok, &len)) {
+        if (token_has_key(tok, len, key, klen)) {
+            size_t vlen = len - klen - 1;
+            size_t i;
+
+            if (vlen + 1 > (size_t)outlen) {
+                return 0;
+            }
+            for (i = 0; i < vlen; i++) {
+                out[i] = tok[klen + 1 + i];
+            }
+            out[vlen] = '\0';
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int kcmdline_count(const char *key)
+{
+    size_t klen = k_strlen(key);
+    const char *p = kcmdline;
+    const char *tok;
+    size_t len;
+    int n = 0;
+
+    while (next_token(&p, &tok, &len)) {
+        if (token_has_key(tok, len, key, klen)) {
+            n++;
+        }
+    }
+    return n;
+}
+
 int kcmdline_has(const char *flag)
 {
     size_t flen = k_strlen(flag);
