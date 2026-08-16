@@ -27,7 +27,7 @@ file 0755 /bin/ping build/utils/ping
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 dir 0755 /sbin
-file 0755 /sbin/init build/utils/sbin/init-login
+file 0755 /sbin/init build/utils/sbin/init-metal
 
 dir 0755 /etc
 dir 0700 /etc/dropbear

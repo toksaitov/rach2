@@ -228,7 +228,7 @@ ALLOWLIST = {
                                            "krffs/authorized_keys"),
         },
         "sentinel": None,
-        "init": "init-login",
+        "init": "init-metal",
         "sysroot": False,
     },
     "test": {
@@ -2082,7 +2082,12 @@ INIT_SHELL_STRINGS = (b"/bin/sh", b"/ish")
 def check_inits(directory=INIT_BINARIES):
     """Check that the strict init cannot name a shell and the other can."""
     problems = []
-    wanted = {"init-login": False, "init-shell": True}
+    # False means the artifact must hold no string naming a shell. init-metal is
+    # init-login plus a supervised SSH server, so it inherits the strict rule:
+    # the console it puts behind /bin/login is the recovery path for a machine
+    # whose network is the broken part, and a fall-through to a shell there
+    # would hand that machine to whoever is standing at it.
+    wanted = {"init-login": False, "init-metal": False, "init-shell": True}
 
     for name in sorted(wanted):
         path = os.path.join(directory, name)

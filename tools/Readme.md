@@ -342,6 +342,18 @@ a pid a script no longer owns is one the host may since have given away.
   after. The clean phase is the one that would lie if that race were ever won,
   since its image is a fresh copy and fsck would agree with a stale halt token.
 
+## Reaching a machine that has nobody at it
+
+`metal_test.sh` (`make metal-test`) is the pattern for probing a Rach2 that is not in front of you, and it is the rehearsal for the Lenovo. Everything the older `ssh_test.sh` does by typing at the console (log in, start the server, then connect), this does by not typing at all: the machine is given power and a command line, and every check that follows is a check on what the machine did by itself.
+
+The parts worth reusing when a probe has to reach a real board:
+
+* The address is on the kernel command line (`rach2.ip=`, `rach2.gateway=`) and SLIRP is told to serve the same network (`-netdev user,net=...,host=...`), so the guest's idea of the network and the emulated network agree. On real hardware the router plays SLIRP's part and nothing else changes.
+* Nothing is typed, and the console is opened from `/dev/null`. A probe that types at the console is testing a different machine from the one that will be on the desk.
+* Every wait is bounded and every failure copies the console log aside before killing the machine, because the log is the only account of a boot that went wrong.
+* A restart claim is checked by pid, not by liveness: the server's pid is read, that pid is killed, and a DIFFERENT pid must answer. A kill that silently failed would otherwise leave the original process answering and the check would pass having proved nothing.
+* The transfer is compared by checksum in both directions. A file that arrives readable is not the same as a file that arrives.
+
 ## Image builders (need Docker)
 
 * `mkdisk_grub.sh` (`make os-real-grub-disk`): builds a BIOS-bootable partitioned

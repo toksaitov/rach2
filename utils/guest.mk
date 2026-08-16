@@ -14,7 +14,7 @@ UCC = cc
 UFLAGS = -static
 
 PROGS = true false echo yes cat pwd touch mkdir rm mv cp ls ping nc \
-        httpd halt init-shell init-login login su sudo passwd adduser \
+        httpd halt init-shell init-login init-metal login su sudo passwd adduser \
         adduser-crash install-kernel
 
 all: $(PROGS)
@@ -55,6 +55,8 @@ init-shell: init.c
 	$(UCC) $(UFLAGS) -o init-shell init.c
 init-login: init.c
 	$(UCC) $(UFLAGS) -DINIT_CONSOLE_LOGIN -o init-login init.c
+init-metal: init.c
+	$(UCC) $(UFLAGS) -DINIT_CONSOLE_LOGIN -DINIT_METAL -o init-metal init.c
 login: login.c pwauth.c pwauth.h
 	$(UCC) $(UFLAGS) -o login login.c pwauth.c
 su: su.c pwauth.c pwauth.h

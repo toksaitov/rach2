@@ -87,7 +87,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        ping-test netconsole-test test-addressed \
+        ping-test netconsole-test test-addressed metal-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
@@ -439,6 +439,17 @@ netconsole-test: rach2 tests krffs test-image
 	    --expect "Network... OK" \
 	    --expect "netconsole: broadcast"
 
+# `make metal-test`: the metal image reached over SSH with nobody at its
+# console. This is the rehearsal for the Lenovo: the machine is given power and
+# an address on its command line, and nothing is typed at it. What that proves
+# is everything that has to happen by itself for a machine across the room to be
+# usable, so the address configuration, init-metal's supervision of dropbear,
+# key authentication, a pty, and a file crossing intact each way are all one
+# test. It kills the server once as well, because a supervisor that starts a
+# daemon and does not restart it has not been tested.
+metal-test: rach2 rach2-metal-image
+	sh tools/metal_test.sh build/rach2/kernel $(METAL_IMAGE) 2223
+
 # `make account-test`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools now and they are different code.
 # os-real gets busybox's over three boots, so what is asserted is what reached
@@ -763,6 +774,7 @@ help:
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
 	@echo "  make netconsole-test  the boot log leaves over Ethernet, captured and checked"
 	@echo "  make test-addressed   the same suite with the network named on the boot line"
+	@echo "  make metal-test  the metal image reached over SSH with nobody at its console"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
 	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"

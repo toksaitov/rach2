@@ -9,8 +9,17 @@
  * stopped, since nothing else can. It never exits; if it did,
  * the kernel would have no reaper, so the kernel panics if init dies.
  *
+ * Three artifacts are built from this one source, and none of them is named
+ * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
+ * that console behind `/bin/login`, and `init-metal` is `init-login` plus a
+ * supervised SSH server. The metal build exists because the machine it is for
+ * is across the room: nobody is going to type a command at its console to
+ * start a daemon, so the daemon has to be running when the machine finishes
+ * booting. The console login stays exactly as it is beside it, and is the way
+ * back in when the network is the thing that is broken.
+ *
  * Built like the other utils, linked against the ported musl (see utils/Makefile),
- * and staged at /sbin/init by the os-simple and os-real image manifests.
+ * and staged at /sbin/init by the image manifests.
  */
 #include <unistd.h>
 #include <time.h>
@@ -44,6 +53,30 @@ extern char **environ;
  * runs as a login shell and reads /etc/profile. */
 static const char *const Shells[] = {"/bin/sh", "/ish", 0};
 static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
+#endif
+
+#ifdef INIT_METAL
+/*
+ * The SSH server this build supervises, and how it is asked to run.
+ *
+ * `dropbearmulti` dispatches on its first argument, so the program name is
+ * argv[1] and the flags follow. `-F` keeps it in the foreground, which is what
+ * makes it supervisable at all: without it dropbear forks and the parent
+ * exits, and init would see that exit as a death and respawn it forever
+ * against a daemon that is in fact running. `-R` mints a host key per boot,
+ * which needs the kernel's entropy to be trusted, so a machine whose CPU
+ * offers neither RDSEED nor RDRAND will not get an SSH server (and will still
+ * get its console login, which is the point of keeping both). `-g` bars root's
+ * password from the exchange, so root arrives by key, which is the policy the
+ * metal image is built around.
+ */
+#define SSHD_PROGRAM "/bin/dropbearmulti"
+
+/* The pause after an SSH server that died almost at once. Long enough that a
+ * server failing for a permanent reason (no entropy, no network, a port
+ * already taken) does not respawn at full speed, and short enough that a
+ * machine reachable only over the network is reachable again quickly. */
+#define SSHD_RESPAWN_PAUSE 5
 #endif
 
 #ifdef INIT_CONSOLE_LOGIN
@@ -154,10 +187,52 @@ static pid_t spawn_shell(void)
     return -1; /* unreachable; quiets the compiler */
 }
 
+#ifdef INIT_METAL
+/**
+ * Fork the SSH server and return its pid (-1 on failure).
+ *
+ * Unlike the console session this child does NOT call `setsid` or claim a
+ * controlling terminal. Dropbear makes a session per login and gives each one
+ * a pty of its own; handing it the console as well would put two sessions on
+ * one terminal, and the console login is the recovery path precisely because
+ * nothing else is on it.
+ */
+static pid_t spawn_sshd(void)
+{
+    pid_t pid = fork();
+
+    if (pid != 0) {
+        return pid; /* init (the parent), or -1 if fork failed */
+    }
+    {
+        char *argv[8];
+        argv[0] = (char *)"dropbearmulti";
+        argv[1] = (char *)"dropbear";
+        argv[2] = (char *)"-F";
+        argv[3] = (char *)"-R";
+        argv[4] = (char *)"-g";
+        argv[5] = (char *)"-p";
+        argv[6] = (char *)"22";
+        argv[7] = 0;
+        execve(SSHD_PROGRAM, argv, environ); /* returns only on failure */
+    }
+    {
+        static const char msg[] = "init: cannot exec /bin/dropbearmulti\n";
+        (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    }
+    _exit(127);
+    return -1; /* unreachable; quiets the compiler */
+}
+#endif
+
 int main(void)
 {
     pid_t shell = -1;
     time_t spawned = 0;
+#ifdef INIT_METAL
+    pid_t sshd = -1;
+    time_t sshd_spawned = 0;
+#endif
 
     /* The three shutdown requests, installed before the first child so a
      * request that arrives early is answered rather than defaulting to a
@@ -183,6 +258,20 @@ int main(void)
             spawned = time(0);
         }
 
+#ifdef INIT_METAL
+        /* And keep an SSH server running beside it. A failed fork is left for
+         * the next time round the loop rather than retried here: the console
+         * session above is the machine's other way in, and holding this loop
+         * to retry a daemon would delay reaping the orphans that are the whole
+         * reason a process table filled up. */
+        if (sshd < 0) {
+            sshd = spawn_sshd();
+            if (sshd >= 0) {
+                sshd_spawned = time(0);
+            }
+        }
+#endif
+
         /* The shell is a live child, so this blocks until it or a reparented
          * orphan dies. Reap it; only the login shell's death triggers a
          * respawn.
@@ -198,7 +287,24 @@ int main(void)
             kill(reaped, SIGCONT);
             continue;
         }
-        if (reaped == shell) {
+#ifdef INIT_METAL
+        /* `reaped > 0` and not just the pid comparison: `waitpid` reports a
+         * failure as -1, and while no child is running the pid held here is
+         * -1 too, so the bare comparison would read an interrupted wait as
+         * the death of a server that was not running. */
+        if (reaped > 0 && reaped == sshd) {
+            sshd = -1;
+            /* A server that died almost as soon as it started has a permanent
+             * reason: no trusted entropy for the host key, no network, or a
+             * port already held. Pause so it does not respawn at full speed,
+             * and let the console session carry on regardless. */
+            if (time(0) - sshd_spawned < 2) {
+                sleep(SSHD_RESPAWN_PAUSE);
+            }
+            continue;
+        }
+#endif
+        if (reaped > 0 && reaped == shell) {
             shell = -1;
             /* A shell that dies almost as soon as it starts (a missing or
              * crash-looping binary in a misbuilt image) would otherwise be
