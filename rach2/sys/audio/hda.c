@@ -18,15 +18,12 @@
 #define HDA_MMIO_SIZE 0x4000
 
 /* PCI capability IDs and offsets (for power/MSI diagnostics) */
-#define PCI_CAP_PTR             0x34
 #define PCI_SUBSYSTEM_VENDOR_ID 0x2C
 #define PCI_SUBSYSTEM_ID        0x2E
 
-#define PCI_STATUS_CAP_LIST     0x0010
 
 #define PCI_CAP_ID_PM           0x01
 #define PCI_CAP_ID_MSI          0x05
-#define PCI_CAP_ID_PCIE         0x10
 
 /* PCI device info */
 static pci_device_t hda_pci;
@@ -483,7 +480,6 @@ static uint32_t hda_sd_read32(int stream, uint32_t reg);
 static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb);
 static uint32_t hda_get_param(uint8_t nid, uint8_t param);
 static int hda_get_connections(uint8_t nid, uint8_t *conn_list, int max_conn);
-static uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id);
 static void hda_pci_force_d0(pci_device_t *dev);
 static bool hda_pcm_rate_supported(uint32_t pcm_caps, uint32_t rate);
 static uint32_t hda_select_hw_rate(uint32_t req_rate);
@@ -745,39 +741,6 @@ static void hda_delay_walclk_us(uint32_t us)
     }
 }
 
-/**
- * Walk the PCI capability list for `cap_id`, returning its config offset or 0.
- *
- * Returns 0 when the device exposes no capability list or the capability is
- * absent. The walk is bounded to guard against a malformed (looping) list.
- */
-static uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id)
-{
-    uint16_t status;
-    uint8_t cap;
-    int limit;
-
-    status = pci_read_config16(bus, device, function, PCI_STATUS);
-    if (!(status & PCI_STATUS_CAP_LIST)) {
-        return 0;
-    }
-
-    cap = pci_read_config8(bus, device, function, PCI_CAP_PTR);
-    limit = 0;
-
-    while (cap != 0 && limit++ < 48) {
-        uint8_t id = pci_read_config8(bus, device, function, cap + 0);
-        uint8_t next = pci_read_config8(bus, device, function, cap + 1);
-
-        if (id == cap_id) {
-            return cap;
-        }
-
-        cap = next;
-    }
-
-    return 0;
-}
 
 /**
  * Force the controller into PCI power state D0.

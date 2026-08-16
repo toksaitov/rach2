@@ -2,6 +2,7 @@
 #define _RTL8139_H_
 
 #include "../../lib/kint.h"
+#include "netdev.h"
 
 /*
  * Realtek RTL8139 PCI NIC driver.
@@ -89,5 +90,9 @@ uint8_t  rtl8139_irq_line(void);
 
 /** Reason the most recent rtl8139_init() returned 0; valid only after a 0 return. */
 const char *rtl8139_error(void);
+
+/** This driver's entry in the device table (see driver/netdev.h). Its `poll`
+ *  is NULL: the card takes an interrupt and delivers from its handler. */
+extern const struct netdev_ops rtl8139_netdev;
 
 #endif /* _RTL8139_H_ */

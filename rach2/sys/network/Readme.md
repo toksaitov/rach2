@@ -1,12 +1,14 @@
 # Rach2 Network Stack
 
-A from-scratch TCP/IP stack for the Rach2 kernel, targeting QEMU's RTL8139 NIC on the SLIRP user network. It brings up, bottom to top: an RTL8139 driver, Ethernet, ARP, IPv4, ICMP, UDP, TCP, and a BSD-style socket layer exposed to user space through a Linux `socketcall` syscall.
+A from-scratch TCP/IP stack for the Rach2 kernel. It brings up, bottom to top: a network device, Ethernet, ARP, IPv4, ICMP, UDP, TCP, and a BSD-style socket layer exposed to user space through a Linux `socketcall` syscall. Two devices can carry it: QEMU's RTL8139 on the SLIRP user network, which every test boots against, and the RTL8168GU in the Lenovo G50-70 (`dev-log/24-metal/plan.md`).
 
 ## Layers
 
 | Directory          | Responsibility                                                              |
 |--------------------|-----------------------------------------------------------------------------|
+| `driver/netdev.*`  | The device interface and the probe order; the layers above name no card     |
 | `driver/rtl8139.*` | PCI NIC driver: RX ring, four TX descriptors, IRQ-driven receive            |
+| `driver/rtl8168.*` | RTL8168GU (PCIe gigabit): C+ descriptor rings, four indirect access windows, polled |
 | `ethernet/`        | Frame parse and build; dispatch by EtherType to ARP or IP                   |
 | `arp/`             | IP-to-MAC resolution with an 8-entry cache                                  |
 | `ip/ip.*`          | IPv4 header build/parse, checksum, routing, fragment drop, loopback ring    |
@@ -15,6 +17,22 @@ A from-scratch TCP/IP stack for the Rach2 kernel, targeting QEMU's RTL8139 NIC o
 | `tcp/`             | RFC 793 state machine with RFC 6298 RTT/RTO and RFC 5681 congestion control |
 | `socket/`          | Socket pool, blocking recv/accept/connect, refcounted lifecycle             |
 | `core/`            | `init_network`, byte-order helpers, shared configuration                    |
+
+## The device interface
+
+A driver publishes a `netdev_ops` (`driver/netdev.h`): a name, a bring-up, a transmit, an optional poll, a diagnostic and a detail line. `netdev_probe` tries each compiled-in driver in table order and binds the first that answers, so the layers above name no card: `init_network` probes, `ethernet_tx` calls `netdev_tx`, and the boot summary asks the bound driver what it is. The RTL8139 comes first in the table, which keeps every existing test's machine exactly what it was.
+
+The two drivers differ in how packets arrive, and the interface says so rather than hiding it. The RTL8139 takes an interrupt and delivers from its handler, so its `poll` is NULL. The RTL8168GU runs with its own interrupts masked, because this kernel is PIC-only and polled everywhere else that matters, so its `poll` is where its receiving and its transmit reclaim will happen. Nothing drives `netdev_poll` yet: the RTL8168GU transmits synchronously, and the timer hook that will call it arrives with the receive path.
+
+## The RTL8168GU
+
+The chip in the Lenovo, and the one device here that cannot be tested before it is met: QEMU does not emulate it. So `driver/rtl8168.c` is a port of one pinned reference rather than a reading of a datasheet (Linux v6.16, commit `038d61fd642278bab63ee8ef722c50d10ab01e8f`, `r8169_main.c` and `r8169_phy_config.c`, for the version that file calls `RTL_GIGA_MAC_VER_42`), and each sequence names the reference function it came from.
+
+What that buys: the chip is identified by the revision it reports in `TxConfig` rather than by its PCI device id, which covers the whole 8168 family; the out-of-band state a previous operating system can leave is cleared through the two link-list handshakes the reference uses; the twelve-step configuration runs in the reference's order, including the packet-filter bit that is cleared and then set again and the two separate read-modify-writes of the same ERI word; and every one of the four indirect windows (ERI, MAC-OCP, PHY-OCP, EPHY) is a bounded protocol whose timeout fails the bring-up rather than feeding a garbage value back into the chip, which is what the reference's own error path does.
+
+Two departures from the reference are deliberate and are in the file's header comment: link state is read from `PHYstatus`, which the reference declares and never reads because phylib reaches the PHY over MDIO instead; and the PHY is powered up here, because the reference suspends it at probe and lets phylib wake it, and nothing here would.
+
+`tests/host/rtl8168_hosttest.c` drives the whole driver against a software model of the chip: completion flags that move only when a command completes, an out-of-band bit that must be cleared, a link list that must be handshaked twice, descriptors whose ownership moves, and a recorded write log the test asserts the reference's order against. It cannot prove PCIe ordering, that DMA reaches the rings, the PHY's analog behavior, or whether this board needs the firmware patch the port omits; those wait for the laptop.
 
 ## Configuration
 

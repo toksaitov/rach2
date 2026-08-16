@@ -8,12 +8,12 @@
 
 #include "../net.h"
 #include "byteorder.h"
-#include "../driver/rtl8139.h"
+#include "../driver/netdev.h"
 #include "../tcp/tcp.h"
 #include "../socket/socket.h"
 #include "../../serial.h"
 
-/* Our hardware address; the RTL8139 driver fills this in at init. */
+/* Our hardware address; the bound driver fills this in at init. */
 uint8_t net_mac[6] = { 0, 0, 0, 0, 0, 0 };
 
 uint16_t read16be(const uint8_t *p)
@@ -44,18 +44,20 @@ void write32be(uint8_t *p, uint32_t value)
 /**
  * Bring the network stack up from the bottom and start the NIC.
  *
- * The TCB and socket pools are allocated before rtl8139_init() so they are
+ * The TCB and socket pools are allocated before the device probe so they are
  * ready before the NIC can deliver the first packet. ARP, IP, and ICMP keep
- * their state in zero-initialized statics and need no explicit init.
+ * their state in zero-initialized statics and need no explicit init. Which
+ * card answers is the driver table's business (driver/netdev.c), not this
+ * layer's.
  *
- * @return 1 on success, 0 if the RTL8139 NIC is absent or fails to init.
+ * @return 1 on success, 0 when no supported card is present or bring-up fails.
  */
 int init_network(void)
 {
     tcp_init();
     socket_init();
 
-    if (!rtl8139_init()) {
+    if (!netdev_probe()) {
         return 0;
     }
 
@@ -64,28 +66,21 @@ int init_network(void)
 
 const char *net_status(void)
 {
-    return "RTL8139 10.0.2.15";
+    return netdev_name();
 }
 
 const char *net_error(void)
 {
-    return rtl8139_error();
+    return netdev_error();
 }
 
 void net_print_info(void)
 {
     /* Indented detail under the "  Network... OK" banner line (serial only; the
-     * console keeps just the one-line summary). serial_printf has no field
-     * width, so the MAC is printed a nibble at a time. */
-    serial_printf("    RTL8139: IRQ %d, I/O 0x%X, "
-                  "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
-                  (int)rtl8139_irq_line(), (unsigned)rtl8139_iobase(),
-                  (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
-                  (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
-                  (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
-                  (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
-                  (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
-                  (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+     * console keeps just the one-line summary). The card's half of it comes
+     * from the driver, which is the only layer that knows what its own
+     * registers are called. */
+    netdev_print_info();
     serial_printf("    IPv4 10.0.2.15/24, gateway 10.0.2.2\n");
 }
 

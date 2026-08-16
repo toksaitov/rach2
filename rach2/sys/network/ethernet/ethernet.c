@@ -7,7 +7,7 @@
 
 #include "ethernet.h"
 #include "../net.h"
-#include "../driver/rtl8139.h"
+#include "../driver/netdev.h"
 #include "../arp/arp.h"
 #include "../ip/ip.h"
 #include "../../serial.h"
@@ -50,9 +50,9 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
  * Build an Ethernet frame and hand it to the driver.
  *
  * Prepends the 14-byte header (destination MAC, our `net_mac` source MAC, and
- * the big-endian EtherType) ahead of the payload and transmits via the
- * RTL8139. The payload must fit the 1500-byte MTU; an oversize payload is
- * dropped, not truncated.
+ * the big-endian EtherType) ahead of the payload and hands it to whichever
+ * driver `netdev_probe` bound. The payload must fit the 1500-byte MTU; an
+ * oversize payload is dropped, not truncated.
  */
 void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
                  const uint8_t *payload, uint16_t plen)
@@ -72,5 +72,5 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
     k_memcpy(eth_tx_frame + ETH_HDR_SIZE, payload, plen);
 
     total = (uint16_t)(ETH_HDR_SIZE + plen);
-    rtl8139_tx(eth_tx_frame, total);
+    netdev_tx(eth_tx_frame, total);
 }

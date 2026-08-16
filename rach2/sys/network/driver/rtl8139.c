@@ -70,13 +70,13 @@ int rtl8139_init(void)
 
     if (!pci_find_device_by_id(0x10EC, 0x8139, &rtl_pci)) {
         rtl_err = "RTL8139 not found on PCI bus";
-        return 0;
+        return NETDEV_ABSENT;
     }
 
     /* Reject an unrouted interrupt line rather than register a bogus vector. */
     if (rtl_pci.irq == 0xFF) {
         rtl_err = "RTL8139 has no usable IRQ line";
-        return 0;
+        return NETDEV_FAILED;
     }
 
     pci_enable_bus_master(&rtl_pci);
@@ -93,7 +93,7 @@ int rtl8139_init(void)
     }
     if (timeout == 0) {
         rtl_err = "RTL8139 soft reset timed out";
-        return 0;
+        return NETDEV_FAILED;
     }
 
     /* The MAC address is latched at I/O offsets 0x00-0x05 after reset. */
@@ -113,7 +113,7 @@ int rtl8139_init(void)
         rx_buf = (uint8_t *)mem_reserve(RTL_RX_BUF_SIZE, true);
         if (!rx_buf) {
             rtl_err = "RTL8139 cannot allocate RX ring";
-            return 0;
+            return NETDEV_FAILED;
         }
     }
     outl(iobase + RTL_RBSTART, (uint32_t)rx_buf);
@@ -145,13 +145,36 @@ int rtl8139_init(void)
     /* Enable the receiver and transmitter (after the buffers are configured). */
     outb(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 
-    return 1;
+    return NETDEV_UP;
 }
 
 /* Boot-summary accessors (see net_print_info). */
 uint16_t rtl8139_iobase(void)   { return iobase; }
 uint8_t  rtl8139_irq_line(void) { return rtl_pci.irq; }
 const char *rtl8139_error(void) { return rtl_err; }
+
+/**
+ * Write this card's detail line under the boot summary.
+ *
+ * serial_printf has no field width, so the MAC is printed a nibble at a time.
+ * The console keeps only the one-line summary; this is the serial detail.
+ */
+static void rtl8139_print_info(void)
+{
+    serial_printf("    RTL8139: IRQ %d, I/O 0x%X, "
+                  "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
+                  (int)rtl_pci.irq, (unsigned)iobase,
+                  (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
+                  (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
+                  (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
+                  (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
+                  (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
+                  (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+}
+
+/* The card's entry in the driver table. `poll` is NULL: this one interrupts. */
+const struct netdev_ops rtl8139_netdev = {
+    "RTL8139", rtl8139_init, rtl8139_tx, 0, rtl8139_error, rtl8139_print_info};
 
 /**
  * Copy a frame into the next TX descriptor and start its DMA.

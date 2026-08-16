@@ -1,0 +1,1199 @@
+/*
+ * rtl8168.c: the RTL8168GU driver, ported from a pinned reference.
+ *
+ * The chip cannot be emulated by anything on this desk, so this file was
+ * written against Linux v6.16 (commit 038d61fd642278bab63ee8ef722c50d10ab01e8f),
+ * drivers/net/ethernet/realtek/r8169_main.c and r8169_phy_config.c, for the
+ * version that file calls RTL_GIGA_MAC_VER_42, and every sequence below names
+ * the reference function it was taken from. What the reference does through
+ * phylib, a firmware blob and an interrupt handler, this does directly,
+ * without firmware, and polled.
+ *
+ * Two deliberate departures from the reference, both stated here because
+ * neither can be discovered by reading the sequences alone:
+ *
+ *  - Link state is read from PHYstatus (0x6c). The reference declares that
+ *    register and its bits and then never reads it, because phylib reaches the
+ *    PHY over MDIO instead. A kernel with no phylib has no such path, so this
+ *    driver reads the MAC's own summary of the link. That is a documented
+ *    register used in a way the reference does not exercise.
+ *  - The PHY is powered up here. The reference suspends the PHY at the end of
+ *    probe and lets phy_resume wake it at open; with no phylib nothing would
+ *    ever clear BMCR power-down, and the MAC would be configured and silent.
+ *
+ * All register access goes through an indirection (`io`) so the host test can
+ * drive the whole bring-up against a software model of the chip; the default
+ * binding is plain MMIO on the mapped window.
+ */
+
+#include "rtl8168.h"
+#include "../net.h"
+#include "../ethernet/ethernet.h"
+#include "../../serial.h"
+#include "../../udelay.h"
+#include "../../pci.h"
+#include "../../mm/paging.h"
+
+/* ------------------------------------------------------------------ */
+/* Register access, behind an indirection the host test can replace.   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The chip's register window and the short waits its handshakes need.
+ *
+ * `udelay` is a floor, not a deadline: every use below is a poll interval or a
+ * settle time the reference expresses with fsleep/udelay, and waiting longer
+ * than asked is always safe. The real binding is `k_udelay`, which measures
+ * against the timer chip; a counted loop cannot promise a duration on a
+ * processor whose speed the kernel never learns, and a settle time that comes
+ * up short leaves this chip half-configured.
+ */
+struct r8168_io {
+    uint8_t (*r8)(uint32_t off);
+    uint16_t (*r16)(uint32_t off);
+    uint32_t (*r32)(uint32_t off);
+    void (*w8)(uint32_t off, uint8_t value);
+    void (*w16)(uint32_t off, uint16_t value);
+    void (*w32)(uint32_t off, uint32_t value);
+    void (*udelay)(uint32_t usec);
+};
+
+/* The mapped window; the real accessors read and write through it. */
+static volatile uint8_t *r8168_mmio;
+
+static uint8_t mmio_r8(uint32_t off)
+{
+    return *(volatile uint8_t *)(r8168_mmio + off);
+}
+
+static uint16_t mmio_r16(uint32_t off)
+{
+    return *(volatile uint16_t *)(r8168_mmio + off);
+}
+
+static uint32_t mmio_r32(uint32_t off)
+{
+    return *(volatile uint32_t *)(r8168_mmio + off);
+}
+
+static void mmio_w8(uint32_t off, uint8_t value)
+{
+    *(volatile uint8_t *)(r8168_mmio + off) = value;
+}
+
+static void mmio_w16(uint32_t off, uint16_t value)
+{
+    *(volatile uint16_t *)(r8168_mmio + off) = value;
+}
+
+static void mmio_w32(uint32_t off, uint32_t value)
+{
+    *(volatile uint32_t *)(r8168_mmio + off) = value;
+}
+
+static const struct r8168_io mmio_io = {mmio_r8,  mmio_r16, mmio_r32, mmio_w8,
+                                        mmio_w16, mmio_w32, k_udelay};
+
+/* The binding in force. The host test points this at its model. */
+static const struct r8168_io *io = &mmio_io;
+
+/* ------------------------------------------------------------------ */
+/* Driver state.                                                       */
+/* ------------------------------------------------------------------ */
+
+static pci_device_t r8168_pci;
+static uint32_t r8168_xid;
+static uint16_t r8168_cp_cmd;
+static const char *r8168_err = "no RTL8168 present";
+static int r8168_up;
+
+/* The PHY page base the MDIO shim is on, the reference's tp->ocp_base. */
+#define R8168_OCP_STD_PHY_BASE 0xa400
+static uint32_t r8168_ocp_base = R8168_OCP_STD_PHY_BASE;
+
+/* Counters the diagnostic line reports; the polling budget is judged by them
+ * (dev-log/24-metal/plan.md), so they are part of the contract, not decoration. */
+static uint32_t r8168_rx_packets;
+static uint32_t r8168_rx_errors;
+static uint32_t r8168_rx_dropped;
+static uint32_t r8168_tx_packets;
+static uint32_t r8168_tx_stalls;
+
+/*
+ * The rings and their buffers, in .bss, which this kernel places below the
+ * 32 MiB identity-mapped limit: the virtual address is the physical one, so
+ * what goes into the descriptor is the address of the array. The rings are
+ * 256-byte aligned as the reference requires.
+ */
+static struct r8168_desc r8168_tx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
+static struct r8168_desc r8168_rx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
+static uint8_t r8168_rx_buf[R8168_RING_SIZE][R8168_RX_BUF_SIZE + 1] __attribute__((aligned(8)));
+static uint8_t r8168_tx_buf[R8168_RING_SIZE][R8168_FRAME_MAX] __attribute__((aligned(8)));
+
+static uint32_t r8168_tx_head; /* next descriptor to fill */
+static uint32_t r8168_tx_tail; /* oldest descriptor not yet reclaimed */
+static uint32_t r8168_rx_cur;  /* next descriptor to inspect */
+
+/* ------------------------------------------------------------------ */
+/* Bounded polling, the reference's rtl_loop_wait.                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Poll `mask` at `reg` until every bit of it reaches `high`, or give up.
+ *
+ * The condition is ALL of the mask, not any of it, which is what the
+ * reference's conditions say and the only reading that is right for a
+ * multi-bit mask: the FIFO drain waits on two bits, and one FIFO empty while
+ * the other still holds data is not a drained chip. For a single-bit mask the
+ * two readings are the same.
+ *
+ * The reference checks the condition BEFORE the first delay and up to `n`
+ * times in all; a handshake that is already complete costs nothing. Every
+ * caller must treat a 0 return as a failed bring-up rather than continue,
+ * because the reference's own habit of ignoring the result relies on a later
+ * interrupt-driven recovery this driver does not have.
+ *
+ * @return 1 when the condition held, 0 when the budget ran out.
+ */
+static int r8168_wait32(uint32_t reg, uint32_t mask, int high, uint32_t usec, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        uint32_t v = io->r32(reg) & mask;
+        int now = (v == (high ? mask : 0u)) ? 1 : 0;
+
+        if (now) {
+            return 1;
+        }
+        io->udelay(usec);
+    }
+    return 0;
+}
+
+/** As r8168_wait32, over an 8-bit register. */
+static int r8168_wait8(uint32_t reg, uint8_t mask, int high, uint32_t usec, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        uint8_t v = (uint8_t)(io->r8(reg) & mask);
+        int now = (v == (high ? mask : 0)) ? 1 : 0;
+
+        if (now) {
+            return 1;
+        }
+        io->udelay(usec);
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* The four indirect-access windows.                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Read the ERI dword at `addr` (reference: rtl_eri_read).
+ *
+ * A timeout is reported rather than folded into the value: the reference
+ * returns ~0 on timeout and its read-modify-write helpers feed that straight
+ * back into the chip, which writes 0xffffffff into a configuration register.
+ * This port refuses instead, and `*ok` says which happened.
+ */
+static uint32_t r8168_eri_read(uint32_t addr, int *ok)
+{
+    io->w32(R8168_ERIAR, R8168_ERIAR_MASK_1111 | addr);
+    if (!r8168_wait32(R8168_ERIAR, R8168_ERIAR_FLAG, 1, 100, 100)) {
+        *ok = 0;
+        return 0;
+    }
+    *ok = 1;
+    return io->r32(R8168_ERIDR);
+}
+
+/** Write `value` to the ERI dword at `addr` under `mask` (rtl_eri_write). */
+static int r8168_eri_write(uint32_t addr, uint32_t mask, uint32_t value)
+{
+    io->w32(R8168_ERIDR, value);
+    io->w32(R8168_ERIAR, R8168_ERIAR_WRITE | mask | addr);
+    return r8168_wait32(R8168_ERIAR, R8168_ERIAR_FLAG, 0, 100, 100);
+}
+
+/** Clear `mask` and set `set` in the ERI dword at `addr` (rtl_w0w1_eri). */
+static int r8168_eri_rmw(uint32_t addr, uint32_t clear, uint32_t set)
+{
+    int ok = 0;
+    uint32_t v = r8168_eri_read(addr, &ok);
+
+    if (!ok) {
+        return 0;
+    }
+    return r8168_eri_write(addr, R8168_ERIAR_MASK_1111, (v & ~clear) | set);
+}
+
+/** Read the MAC-OCP word at `reg` (r8168_mac_ocp_read). No completion poll. */
+static uint16_t r8168_mac_ocp_read(uint32_t reg)
+{
+    io->w32(R8168_OCPDR, reg << 15);
+    return (uint16_t)(io->r32(R8168_OCPDR) & 0xffff);
+}
+
+/** Write the MAC-OCP word at `reg` (r8168_mac_ocp_write). */
+static void r8168_mac_ocp_write(uint32_t reg, uint16_t data)
+{
+    io->w32(R8168_OCPDR, R8168_OCP_FLAG | (reg << 15) | (uint32_t)data);
+}
+
+/** Clear `clear` and set `set` in the MAC-OCP word (r8168_mac_ocp_modify). */
+static void r8168_mac_ocp_modify(uint32_t reg, uint16_t clear, uint16_t set)
+{
+    uint16_t v = r8168_mac_ocp_read(reg);
+
+    r8168_mac_ocp_write(reg, (uint16_t)((v & ~clear) | set));
+}
+
+/** Read the PHY-OCP word at `reg` (r8168_phy_ocp_read); `*ok` reports timeout. */
+static uint16_t r8168_phy_ocp_read(uint32_t reg, int *ok)
+{
+    io->w32(R8168_GPHY_OCP, reg << 15);
+    if (!r8168_wait32(R8168_GPHY_OCP, R8168_OCP_FLAG, 1, 25, 10)) {
+        *ok = 0;
+        return 0;
+    }
+    *ok = 1;
+    return (uint16_t)(io->r32(R8168_GPHY_OCP) & 0xffff);
+}
+
+/** Write the PHY-OCP word at `reg` (r8168_phy_ocp_write). */
+static int r8168_phy_ocp_write(uint32_t reg, uint16_t data)
+{
+    io->w32(R8168_GPHY_OCP, R8168_OCP_FLAG | (reg << 15) | (uint32_t)data);
+    return r8168_wait32(R8168_GPHY_OCP, R8168_OCP_FLAG, 0, 25, 10);
+}
+
+/**
+ * Select the PHY register page.
+ *
+ * Register 0x1f never reaches the chip: writing it moves the OCP base this
+ * shim adds, exactly as the reference's `ocp_base` does. Nothing is issued, so
+ * there is nothing here that can fail; the register access that follows is
+ * what can.
+ */
+static void r8168_mdio_page(uint16_t page)
+{
+    r8168_ocp_base = page ? ((uint32_t)page << 4) : R8168_OCP_STD_PHY_BASE;
+}
+
+/**
+ * Write an MII register through the PHY-OCP window (r8168g_mdio_write).
+ *
+ * On any page but the standard one the register number is biased by 0x10,
+ * which is the reference's convention for the paged register file.
+ */
+static int r8168_mdio_write(uint32_t reg, uint16_t value)
+{
+    if (reg == 0x1f) {
+        r8168_mdio_page(value);
+        return 1;
+    }
+    if (r8168_ocp_base != R8168_OCP_STD_PHY_BASE) {
+        reg -= 0x10;
+    }
+    return r8168_phy_ocp_write(r8168_ocp_base + reg * 2, value);
+}
+
+/** Read an MII register through the PHY-OCP window (r8168g_mdio_read). */
+static uint16_t r8168_mdio_read(uint32_t reg, int *ok)
+{
+    if (reg == 0x1f) {
+        *ok = 1;
+        return (uint16_t)(r8168_ocp_base == R8168_OCP_STD_PHY_BASE ? 0 : (r8168_ocp_base >> 4));
+    }
+    if (r8168_ocp_base != R8168_OCP_STD_PHY_BASE) {
+        reg -= 0x10;
+    }
+    return r8168_phy_ocp_read(r8168_ocp_base + reg * 2, ok);
+}
+
+/** Read the EPHY word at `reg` (rtl_ephy_read); `*ok` reports timeout. */
+static uint16_t r8168_ephy_read(uint32_t reg, int *ok)
+{
+    io->w32(R8168_EPHYAR, (reg & 0x1f) << 16);
+    if (!r8168_wait32(R8168_EPHYAR, R8168_ERIAR_FLAG, 1, 10, 100)) {
+        *ok = 0;
+        return 0;
+    }
+    *ok = 1;
+    return (uint16_t)(io->r32(R8168_EPHYAR) & 0xffff);
+}
+
+/**
+ * Write the EPHY word at `reg` (rtl_ephy_write).
+ *
+ * The trailing delay is the reference's and is not optional: consecutive EPHY
+ * commands issued closer than 10 microseconds apart are not both seen.
+ */
+static int r8168_ephy_write(uint32_t reg, uint16_t value)
+{
+    int done;
+
+    io->w32(R8168_EPHYAR, R8168_ERIAR_FLAG | ((reg & 0x1f) << 16) | (uint32_t)value);
+    done = r8168_wait32(R8168_EPHYAR, R8168_ERIAR_FLAG, 0, 10, 100);
+    io->udelay(10);
+    return done;
+}
+
+/** Read the CSI dword at `addr` (rtl_csi_read); `*ok` reports timeout. */
+static uint32_t r8168_csi_read(uint32_t addr, int *ok)
+{
+    io->w32(R8168_CSIAR,
+            (addr & 0xfff) | R8168_CSIAR_BYTE_ENABLE | ((uint32_t)r8168_pci.function << 16));
+    if (!r8168_wait32(R8168_CSIAR, R8168_CSIAR_FLAG, 1, 10, 100)) {
+        *ok = 0;
+        return 0;
+    }
+    *ok = 1;
+    return io->r32(R8168_CSIDR);
+}
+
+/** Write the CSI dword at `addr` (rtl_csi_write). */
+static int r8168_csi_write(uint32_t addr, uint32_t value)
+{
+    io->w32(R8168_CSIDR, value);
+    io->w32(R8168_CSIAR, R8168_CSIAR_FLAG | (addr & 0xfff) | R8168_CSIAR_BYTE_ENABLE |
+                             ((uint32_t)r8168_pci.function << 16));
+    return r8168_wait32(R8168_CSIAR, R8168_CSIAR_FLAG, 0, 10, 100);
+}
+
+/* ------------------------------------------------------------------ */
+/* Bring-up.                                                           */
+/* ------------------------------------------------------------------ */
+
+/** Unlock and lock the configuration registers (rtl_un/lock_config_regs). */
+static void r8168_unlock_config(void)
+{
+    io->w8(R8168_CFG9346, R8168_CFG9346_UNLOCK);
+}
+
+static void r8168_lock_config(void)
+{
+    io->w8(R8168_CFG9346, R8168_CFG9346_LOCK);
+}
+
+/** Flush posted writes by reading a register back (rtl_pci_commit). */
+static void r8168_pci_commit(void)
+{
+    (void)io->r8(R8168_CHIPCMD);
+}
+
+/** Mask and acknowledge every device interrupt (rtl8169_irq_mask_and_ack). */
+static void r8168_irq_mask_and_ack(void)
+{
+    io->w16(R8168_INTRMASK, 0);
+    io->w16(R8168_INTRSTATUS, 0xffff);
+}
+
+/**
+ * Gate the receiver and wait for both FIFOs to drain (rtl_enable_rxdvgate).
+ *
+ * The two polls are the reference's rtl_wait_txrx_fifo_empty for this chip
+ * version: the transmit FIFO reports empty in TxConfig, the receive side in
+ * the MCU register. Both are bounded; a chip that never drains is reported
+ * rather than waited on forever.
+ */
+static int r8168_enable_rxdvgate(void)
+{
+    io->w32(R8168_MISC, io->r32(R8168_MISC) | R8168_MISC_RXDV_GATED);
+    io->udelay(2000);
+    if (!r8168_wait32(R8168_TXCONFIG, R8168_TXCFG_EMPTY, 1, 100, 42)) {
+        return 0;
+    }
+    return r8168_wait8(R8168_MCU, R8168_MCU_RXTX_EMPTY, 1, 100, 42);
+}
+
+/** Ungate the receiver (rtl_disable_rxdvgate). RX is dead until this runs. */
+static void r8168_disable_rxdvgate(void)
+{
+    io->w32(R8168_MISC, io->r32(R8168_MISC) & ~R8168_MISC_RXDV_GATED);
+}
+
+/** Reset the chip and wait for the bit to clear (rtl_hw_reset). */
+static int r8168_hw_reset(void)
+{
+    io->w8(R8168_CHIPCMD, R8168_CMD_RESET);
+    return r8168_wait8(R8168_CHIPCMD, R8168_CMD_RESET, 0, 100, 100);
+}
+
+/**
+ * The pre-start initialization for this chip version (rtl_hw_init_8168g).
+ *
+ * The out-of-band bit and the two link-list handshakes are what make this
+ * different from an ordinary reset: firmware, or the operating system that ran
+ * before this one, can leave the MAC serving its management engine, and a
+ * chip in that state ignores an ordinary bring-up. This is the sequence that
+ * takes it back.
+ */
+static int r8168_hw_init_8168g(void)
+{
+    if (!r8168_enable_rxdvgate()) {
+        r8168_err = "the FIFOs did not drain before reset";
+        return 0;
+    }
+
+    io->w8(R8168_CHIPCMD,
+           (uint8_t)(io->r8(R8168_CHIPCMD) & ~(R8168_CMD_TX_ENB | R8168_CMD_RX_ENB)));
+    io->udelay(1000);
+    io->w8(R8168_MCU, (uint8_t)(io->r8(R8168_MCU) & ~R8168_MCU_NOW_IS_OOB));
+
+    r8168_mac_ocp_modify(0xe8de, 1u << 14, 0);
+    if (!r8168_wait8(R8168_MCU, R8168_MCU_LINK_LIST_RDY, 1, 100, 42)) {
+        r8168_err = "the link list did not become ready";
+        return 0;
+    }
+    r8168_mac_ocp_modify(0xe8de, 0, 1u << 15);
+    if (!r8168_wait8(R8168_MCU, R8168_MCU_LINK_LIST_RDY, 1, 100, 42)) {
+        r8168_err = "the link list did not become ready after sharing";
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * Whether `mac` is a usable station address.
+ *
+ * The two shapes a stale or absent register reports are all zeroes and an
+ * address with the multicast bit set; neither can be this machine's own.
+ */
+static int r8168_mac_valid(const uint8_t *mac)
+{
+    int i;
+    int zero = 1;
+
+    if (mac[0] & 0x01) {
+        return 0;
+    }
+    for (i = 0; i < 6; i++) {
+        if (mac[i] != 0) {
+            zero = 0;
+        }
+    }
+    return !zero;
+}
+
+/**
+ * Read the station address the chip was built with.
+ *
+ * The reference takes the permanent address from the ERI window and uses the
+ * MAC registers only as a fallback, and the order matters more here than it
+ * does there: this driver runs after another operating system on a machine
+ * that is not power-cycled between the two, so the register pair can hold
+ * whatever that one left behind.
+ *
+ * @return 1 with `mac` filled, 0 when neither source gives a usable address.
+ */
+static int r8168_read_mac(uint8_t *mac)
+{
+    int ok = 0;
+    uint32_t lo, hi;
+
+    lo = r8168_eri_read(0xe0, &ok);
+    if (ok) {
+        hi = r8168_eri_read(0xe4, &ok);
+        if (ok) {
+            mac[0] = (uint8_t)(lo >> 0);
+            mac[1] = (uint8_t)(lo >> 8);
+            mac[2] = (uint8_t)(lo >> 16);
+            mac[3] = (uint8_t)(lo >> 24);
+            mac[4] = (uint8_t)(hi >> 0);
+            mac[5] = (uint8_t)(hi >> 8);
+            if (r8168_mac_valid(mac)) {
+                return 1;
+            }
+        }
+    }
+
+    lo = io->r32(R8168_MAC0);
+    hi = io->r32(R8168_MAC4);
+    mac[0] = (uint8_t)(lo >> 0);
+    mac[1] = (uint8_t)(lo >> 8);
+    mac[2] = (uint8_t)(lo >> 16);
+    mac[3] = (uint8_t)(lo >> 24);
+    mac[4] = (uint8_t)(hi >> 0);
+    mac[5] = (uint8_t)(hi >> 8);
+    return r8168_mac_valid(mac);
+}
+
+/**
+ * Turn PCIe L1 off at both ends of the link this card sits on.
+ *
+ * The reference asks the PCI layer to disable L1 and says why: on these parts
+ * the link state can stop the device and hang the bus. A link has two ends,
+ * and clearing the bit in the card alone leaves the state negotiated by the
+ * port above it, so this also walks to the bridge whose secondary bus carries
+ * the card. The target machine's inventory reports this card running with
+ * ASPM enabled under its previous operating system, so the bits really are
+ * set when this kernel arrives.
+ *
+ * A card with no PCIe capability, or a bridge that cannot be found, is not a
+ * failure: a device with no such control cannot be in the state this guards
+ * against.
+ */
+static void r8168_disable_link_state(void)
+{
+    pci_device_t bridge;
+    uint8_t cap;
+
+    cap = pci_find_capability(r8168_pci.bus, r8168_pci.device, r8168_pci.function, PCI_CAP_ID_PCIE);
+    if (cap != 0) {
+        uint16_t ctl = pci_read_config16(r8168_pci.bus, r8168_pci.device, r8168_pci.function,
+                                         (uint8_t)(cap + PCIE_LINK_CONTROL));
+
+        pci_write_config16(r8168_pci.bus, r8168_pci.device, r8168_pci.function,
+                           (uint8_t)(cap + PCIE_LINK_CONTROL),
+                           (uint16_t)(ctl & ~PCIE_LINK_CTL_ASPM_MASK));
+    }
+
+    if (pci_find_bridge_for_bus(r8168_pci.bus, &bridge)) {
+        cap = pci_find_capability(bridge.bus, bridge.device, bridge.function, PCI_CAP_ID_PCIE);
+        if (cap != 0) {
+            uint16_t ctl = pci_read_config16(bridge.bus, bridge.device, bridge.function,
+                                             (uint8_t)(cap + PCIE_LINK_CONTROL));
+
+            pci_write_config16(bridge.bus, bridge.device, bridge.function,
+                               (uint8_t)(cap + PCIE_LINK_CONTROL),
+                               (uint16_t)(ctl & ~PCIE_LINK_CTL_ASPM_MASK));
+        }
+    }
+}
+
+/** Program the station address (rtl_rar_set): two 32-bit writes, unlocked. */
+static void r8168_rar_set(const uint8_t *mac)
+{
+    uint32_t low = (uint32_t)mac[0] | ((uint32_t)mac[1] << 8) | ((uint32_t)mac[2] << 16) |
+                   ((uint32_t)mac[3] << 24);
+    uint32_t high = (uint32_t)mac[4] | ((uint32_t)mac[5] << 8);
+
+    r8168_unlock_config();
+    io->w32(R8168_MAC4, high);
+    r8168_pci_commit();
+    io->w32(R8168_MAC0, low);
+    r8168_pci_commit();
+    r8168_lock_config();
+}
+
+/* The EPHY table for this chip version (e_info_8168g_2): register, the bits
+ * cleared, the bits set, applied in this order. */
+static const uint16_t r8168_ephy_table[][3] = {
+    {0x00, 0x0008, 0x0000}, {0x0c, 0x3ff0, 0x0820}, {0x19, 0xffff, 0x7c00},
+    {0x1e, 0xffff, 0x20eb}, {0x0d, 0xffff, 0x1666}, {0x00, 0xffff, 0x10a3},
+    {0x06, 0xffff, 0xf050}, {0x04, 0x0000, 0x0010}, {0x1d, 0x4000, 0x0000}};
+
+#define R8168_EPHY_ENTRIES ((int)(sizeof(r8168_ephy_table) / sizeof(r8168_ephy_table[0])))
+
+/** Apply the EPHY table (rtl_ephy_init). */
+static int r8168_ephy_init(void)
+{
+    int i;
+
+    for (i = 0; i < R8168_EPHY_ENTRIES; i++) {
+        int ok = 0;
+        uint16_t v = r8168_ephy_read(r8168_ephy_table[i][0], &ok);
+
+        if (!ok) {
+            return 0;
+        }
+        v = (uint16_t)((v & ~r8168_ephy_table[i][1]) | r8168_ephy_table[i][2]);
+        if (!r8168_ephy_write(r8168_ephy_table[i][0], v)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * The chip-specific configuration (rtl_hw_start_8168g).
+ *
+ * Twelve steps in the reference's order, and the order is the contract: the
+ * packet filter is a clear THEN a set of one ERI bit, the two read-modify
+ * writes of ERI 0x1b0 are separate because the reference writes the value
+ * between them, and the receive gate is opened here rather than later because
+ * the receiver is enabled after this returns.
+ */
+static int r8168_hw_start_8168g(void)
+{
+    int ok = 0;
+    uint32_t v;
+
+    /* FIFO sizes, static and dynamic (rtl_set_fifo_size 0x08,0x10,0x02,0x06). */
+    if (!r8168_eri_write(0xc8, R8168_ERIAR_MASK_1111, 0x00080002) ||
+        !r8168_eri_write(0xe8, R8168_ERIAR_MASK_1111, 0x00100006)) {
+        return 0;
+    }
+    /* Pause thresholds (rtl8168g_set_pause_thresholds 0x38, 0x48). */
+    if (!r8168_eri_write(0xcc, R8168_ERIAR_MASK_0001, 0x38) ||
+        !r8168_eri_write(0xd0, R8168_ERIAR_MASK_0001, 0x48)) {
+        return 0;
+    }
+    /* ASPM entry latency (rtl_set_def_aspm_entry_latency): byte 0x27 into the
+     * extended configuration space at 0x070f, reached through the chip's own
+     * configuration window because this kernel addresses only the first 256
+     * bytes of PCI configuration space. */
+    v = r8168_csi_read(0x070c, &ok);
+    if (!ok || !r8168_csi_write(0x070c, (v & ~0xff000000u) | 0x27000000u)) {
+        return 0;
+    }
+    /* Packet filter reset (rtl_reset_packet_filter): clear then set. */
+    if (!r8168_eri_rmw(0xdc, 1u, 0) || !r8168_eri_rmw(0xdc, 0, 1u)) {
+        return 0;
+    }
+    if (!r8168_eri_write(0x2f8, R8168_ERIAR_MASK_0011, 0x1d8f)) {
+        return 0;
+    }
+    r8168_disable_rxdvgate();
+    if (!r8168_eri_write(0xc0, R8168_ERIAR_MASK_0011, 0x0000) ||
+        !r8168_eri_write(0xb8, R8168_ERIAR_MASK_0011, 0x0000)) {
+        return 0;
+    }
+    /* EEE on the MAC side (rtl8168_config_eee_mac). The reference configures
+     * EEE rather than disabling it, and this port follows: leaving it alone
+     * does not clear whatever state the previous operating system left. */
+    io->w8(R8168_EEE_LED, (uint8_t)(io->r8(R8168_EEE_LED) & ~0x07));
+    if (!r8168_eri_rmw(0x1b0, 0, 0x0003)) {
+        return 0;
+    }
+    if (!r8168_eri_rmw(0x2fc, 0x06, 0x01)) {
+        return 0;
+    }
+    if (!r8168_eri_rmw(0x1b0, 1u << 12, 0)) {
+        return 0;
+    }
+    /* Leave the L2/L3 power state alone (rtl_pcie_state_l2l3_disable). */
+    io->w8(R8168_CONFIG3, (uint8_t)(io->r8(R8168_CONFIG3) & ~0x02));
+    return 1;
+}
+
+/** Set the receive filter (rtl_set_rx_mode): our address, broadcast and all
+ *  multicast, which is what this stack's ARP and ICMP need. */
+static void r8168_set_rx_mode(void)
+{
+    io->w32(R8168_MAR0 + 4, 0xffffffffu);
+    io->w32(R8168_MAR0, 0xffffffffu);
+    io->w32(R8168_RXCONFIG,
+            (io->r32(R8168_RXCONFIG) & ~(uint32_t)R8168_RXCFG_ACCEPT_OK_MASK) | R8168_RXCFG_ACCEPT);
+}
+
+/**
+ * Start the chip (rtl_hw_start), in the reference's order.
+ *
+ * The order is the whole of it: the configuration window opens, the chip's
+ * own power management is turned off before the EPHY window is touched, the
+ * chip-specific table runs, the ring addresses go in high half first, the
+ * window closes, posted writes are flushed, and only then are the receiver
+ * and transmitter enabled and the filters set.
+ */
+static int r8168_hw_start(void)
+{
+    r8168_unlock_config();
+
+    /* Chip ASPM and clock request off before any EPHY access. */
+    io->w8(R8168_CONFIG2, (uint8_t)(io->r8(R8168_CONFIG2) & ~0x80));
+    io->w8(R8168_CONFIG5, (uint8_t)(io->r8(R8168_CONFIG5) & ~0x01));
+
+    io->w16(R8168_CPLUSCMD, r8168_cp_cmd);
+
+    /* The early-transmit threshold (rtl_hw_start_8168, 8168evl and later). */
+    io->w8(R8168_MAXTXPACKETSIZE, 0x27);
+
+    if (!r8168_hw_start_8168g() || !r8168_ephy_init()) {
+        r8168_err = "the chip configuration sequence did not complete";
+        return 0;
+    }
+
+    /* No interrupt coalescing. */
+    io->w16(R8168_INTRMITIGATE, 0x0000);
+
+    /* Allow the link to leave L1 (rtl_enable_exit_l1). */
+    r8168_mac_ocp_modify(0xc0ac, 0x0000, 0x1f80);
+
+    /* This chip version's ASPM is left off; the reference re-enables nothing
+     * here either. */
+
+    io->w16(R8168_RXMAXSIZE, R8168_RX_MAX_SIZE);
+
+    /* Ring addresses, high half first, as the reference requires for the
+     * transmit pair and does for both. */
+    io->w32(R8168_TXDESC_HI, 0);
+    io->w32(R8168_TXDESC_LO, (uint32_t)(uintptr_t)r8168_tx_ring);
+    io->w32(R8168_RXDESC_HI, 0);
+    io->w32(R8168_RXDESC_LO, (uint32_t)(uintptr_t)r8168_rx_ring);
+
+    r8168_lock_config();
+    r8168_pci_commit();
+
+    io->w8(R8168_CHIPCMD, R8168_CMD_TX_ENB | R8168_CMD_RX_ENB);
+    io->w32(R8168_RXCONFIG, R8168_RXCFG_VALUE);
+    io->w32(R8168_TXCONFIG, R8168_TXCFG_VALUE);
+    io->w32(R8168_RXCONFIG, io->r32(R8168_RXCONFIG) & ~(uint32_t)R8168_RXCFG_ACCEPT_ERR_MASK);
+    r8168_set_rx_mode();
+
+    /* The interrupt mask stays zero: this driver is polled, and an unmasked
+     * line on a kernel with no handler for it would be an interrupt storm. */
+    io->w16(R8168_INTRMASK, 0x0000);
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Rings.                                                              */
+/* ------------------------------------------------------------------ */
+
+/** Hand every receive descriptor to the chip, the last one marked end-of-ring. */
+static void r8168_rx_fill(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < R8168_RING_SIZE; i++) {
+        uint32_t eor = (i == R8168_RING_SIZE - 1) ? R8168_DESC_EOR : 0;
+
+        r8168_rx_ring[i].addr_lo = (uint32_t)(uintptr_t)r8168_rx_buf[i];
+        r8168_rx_ring[i].addr_hi = 0;
+        r8168_rx_ring[i].opts2 = 0;
+        /* The address and options must be visible before ownership moves. */
+        __asm__ __volatile__("" : : : "memory");
+        r8168_rx_ring[i].opts1 = R8168_DESC_OWN | eor | R8168_RX_BUF_SIZE;
+    }
+    r8168_rx_cur = 0;
+}
+
+/** Clear the transmit ring and its indices. */
+static void r8168_tx_clear(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < R8168_RING_SIZE; i++) {
+        r8168_tx_ring[i].opts1 = 0;
+        r8168_tx_ring[i].opts2 = 0;
+        r8168_tx_ring[i].addr_lo = 0;
+        r8168_tx_ring[i].addr_hi = 0;
+    }
+    r8168_tx_head = 0;
+    r8168_tx_tail = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* The PHY.                                                            */
+/* ------------------------------------------------------------------ */
+
+/* MII registers this driver touches. */
+#define R8168_MII_BMCR      0x00
+#define R8168_MII_BMSR      0x01
+#define R8168_MII_ADVERTISE 0x04
+#define R8168_MII_CTRL1000  0x09
+
+#define R8168_BMCR_RESET     0x8000
+#define R8168_BMCR_ANENABLE  0x1000
+#define R8168_BMCR_PDOWN     0x0800
+#define R8168_BMCR_ANRESTART 0x0200
+
+/* Everything this port advertises: 10 and 100 in both duplexes with the
+ * 802.3 selector, and 1000 full duplex. */
+#define R8168_ADVERTISE_VALUE 0x01e1
+#define R8168_CTRL1000_VALUE  0x0200
+
+/**
+ * Bring the PHY up and start autonegotiation.
+ *
+ * The reference reaches the PHY through phylib, which powers it up, applies a
+ * firmware patch and configures EEE. This port does the two things that
+ * cannot be skipped: it clears the power-down bit the reference's probe path
+ * leaves set, and it negotiates. The firmware patch is deliberately absent;
+ * the reference proceeds without it too, and if this board turns out to need
+ * it the plan names porting the interpreter as the contingency.
+ */
+static int r8168_phy_init(void)
+{
+    int ok = 0;
+    uint16_t bmcr;
+
+    r8168_ocp_base = R8168_OCP_STD_PHY_BASE;
+
+    bmcr = r8168_mdio_read(R8168_MII_BMCR, &ok);
+    if (!ok) {
+        r8168_err = "the PHY did not answer";
+        return 0;
+    }
+    /* Out of power-down, then a soft reset that the chip clears itself. */
+    if (!r8168_mdio_write(R8168_MII_BMCR, (uint16_t)(bmcr & ~R8168_BMCR_PDOWN))) {
+        r8168_err = "the PHY would not power up";
+        return 0;
+    }
+    if (!r8168_mdio_write(R8168_MII_BMCR, R8168_BMCR_RESET)) {
+        r8168_err = "the PHY would not reset";
+        return 0;
+    }
+    {
+        int i;
+
+        for (i = 0; i < 100; i++) {
+            bmcr = r8168_mdio_read(R8168_MII_BMCR, &ok);
+            if (ok && !(bmcr & R8168_BMCR_RESET)) {
+                break;
+            }
+            io->udelay(1000);
+        }
+        if (!ok || (bmcr & R8168_BMCR_RESET)) {
+            r8168_err = "the PHY reset did not complete";
+            return 0;
+        }
+    }
+
+    /* The PHY-side energy-efficiency bit the reference applies for this chip
+     * version, and the whole of its per-version PHY configuration apart from
+     * the firmware patch: page 0x0a43, register 0x11, bit 4. It is applied
+     * rather than skipped because the MAC side is configured too, and the
+     * machine this runs on leaves EEE enabled under its previous operating
+     * system: a PHY and a MAC that disagree about it is what makes a first
+     * link flap. */
+    r8168_mdio_page(0x0a43);
+    {
+        int page_ok = 0;
+        uint16_t v = r8168_mdio_read(0x11, &page_ok);
+
+        if (!page_ok || !r8168_mdio_write(0x11, (uint16_t)(v | (1u << 4)))) {
+            r8168_err = "the PHY energy-efficiency bit would not set";
+            r8168_mdio_page(0x0000);
+            return 0;
+        }
+    }
+    r8168_mdio_page(0x0000);
+
+    if (!r8168_mdio_write(R8168_MII_ADVERTISE, R8168_ADVERTISE_VALUE) ||
+        !r8168_mdio_write(R8168_MII_CTRL1000, R8168_CTRL1000_VALUE) ||
+        !r8168_mdio_write(R8168_MII_BMCR, R8168_BMCR_ANENABLE | R8168_BMCR_ANRESTART)) {
+        r8168_err = "autonegotiation would not start";
+        return 0;
+    }
+    return 1;
+}
+
+/* PHYstatus bits (reference: enum rtl_register_content). */
+#define R8168_PHY_LINK    0x02
+#define R8168_PHY_1000F   0x10
+#define R8168_PHY_100M    0x08
+#define R8168_PHY_10M     0x04
+#define R8168_PHY_FULLDUP 0x01
+
+/** The negotiated speed in megabits, or 0 with no link. */
+static uint32_t r8168_link_speed(void)
+{
+    uint8_t st = io->r8(R8168_PHYSTATUS);
+
+    if (!(st & R8168_PHY_LINK)) {
+        return 0;
+    }
+    if (st & R8168_PHY_1000F) {
+        return 1000;
+    }
+    if (st & R8168_PHY_100M) {
+        return 100;
+    }
+    if (st & R8168_PHY_10M) {
+        return 10;
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* The driver's entry points.                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Find the chip, take it out of whatever state it was left in, and start it.
+ *
+ * The order is the reference's three stages: identify and quiesce, then the
+ * rings and the PHY, then the start sequence. A failure at any point leaves
+ * `r8168_err` naming it and the device unbound, so the probe of the next
+ * driver in the table runs on a machine this one did not configure.
+ *
+ * @return 1 when the chip is up, 0 when it is absent or refused.
+ */
+static int rtl8168_init(void)
+{
+    uint32_t txconfig;
+    uint32_t bar = 0;
+    uint32_t addr;
+    int i;
+
+    r8168_up = 0;
+    if (!pci_find_device_by_id(0x10EC, 0x8168, &r8168_pci)) {
+        r8168_err = "no RTL8168 present";
+        return NETDEV_ABSENT;
+    }
+
+    /* The memory window, by index, as the reference takes it. */
+    for (i = 0; i < 6; i++) {
+        if (!pci_bar_is_memory(r8168_pci.bar[i])) {
+            continue;
+        }
+        if (pci_bar_address(r8168_pci.bar[i]) != 0) {
+            bar = r8168_pci.bar[i];
+            break;
+        }
+        if (pci_bar_is_64bit(r8168_pci.bar[i])) {
+            i++;
+        }
+    }
+    if (bar == 0) {
+        r8168_err = "the RTL8168 has no memory window";
+        return NETDEV_FAILED;
+    }
+    addr = pci_bar_address(bar);
+    if (map_mmio(addr, 256) == 0) {
+        r8168_err = "the RTL8168 window would not map";
+        return NETDEV_FAILED;
+    }
+    r8168_mmio = (volatile uint8_t *)(uintptr_t)addr;
+    pci_enable_memory_space(&r8168_pci);
+
+    /* The chip's own revision, which is what decides whether this driver may
+     * drive it: one PCI device id covers the whole 8168 family and its members
+     * need different sequences. */
+    txconfig = io->r32(R8168_TXCONFIG);
+    if (txconfig == 0xffffffffu) {
+        r8168_err = "the RTL8168 window reads back all ones";
+        return NETDEV_FAILED;
+    }
+    r8168_xid = (txconfig >> R8168_XID_SHIFT) & R8168_XID_MASK;
+    if ((r8168_xid & R8168_XID_FAMILY_MASK) != R8168_XID_8168GU) {
+        r8168_err = "this RTL8168 is not the GU this driver was written for";
+        return NETDEV_FAILED;
+    }
+
+    /* Before anything else is configured and before the rings exist: this is
+     * the link state the reference warns can stop the device outright, and
+     * the target machine's previous operating system leaves it enabled. */
+    r8168_disable_link_state();
+
+    r8168_cp_cmd = (uint16_t)(io->r16(R8168_CPLUSCMD) & R8168_CPCMD_MASK);
+    io->w32(R8168_RXCONFIG, R8168_RXCFG_VALUE);
+    r8168_irq_mask_and_ack();
+
+    if (!r8168_hw_init_8168g()) {
+        return NETDEV_FAILED;
+    }
+    if (!r8168_hw_reset()) {
+        r8168_err = "the chip did not come out of reset";
+        return NETDEV_FAILED;
+    }
+
+    if (!r8168_read_mac(net_mac)) {
+        r8168_err = "the chip reports no usable station address";
+        return NETDEV_FAILED;
+    }
+
+    r8168_tx_clear();
+    r8168_rx_fill();
+    pci_enable_bus_master(&r8168_pci);
+
+    if (!r8168_phy_init()) {
+        return NETDEV_FAILED;
+    }
+
+    /* The reference resets once more between the PHY work and the start. */
+    r8168_irq_mask_and_ack();
+    io->w32(R8168_RXCONFIG, io->r32(R8168_RXCONFIG) & ~(uint32_t)0x3f); /* rtl_rx_close */
+    if (!r8168_enable_rxdvgate()) {
+        r8168_err = "the FIFOs did not drain before the start";
+        return NETDEV_FAILED;
+    }
+    io->udelay(2000);
+    if (!r8168_hw_reset()) {
+        r8168_err = "the chip did not come out of the second reset";
+        return NETDEV_FAILED;
+    }
+    r8168_tx_clear();
+    r8168_rx_fill();
+    r8168_rar_set(net_mac);
+
+    if (!r8168_hw_start()) {
+        return NETDEV_FAILED;
+    }
+
+    r8168_up = 1;
+    return NETDEV_UP;
+}
+
+/**
+ * Reclaim finished transmit descriptors, and ring the doorbell again if any
+ * remain outstanding.
+ *
+ * The re-ring is the reference's workaround for a poll request the chip can
+ * lose when two arrive close together, and it is gated the way the reference
+ * gates it: only after a pass that actually reclaimed something, and only
+ * while descriptors are still outstanding.
+ */
+static void r8168_tx_reclaim(void)
+{
+    uint32_t reclaimed = 0;
+
+    while (r8168_tx_tail != r8168_tx_head) {
+        uint32_t idx = r8168_tx_tail % R8168_RING_SIZE;
+
+        if (r8168_tx_ring[idx].opts1 & R8168_DESC_OWN) {
+            break;
+        }
+        /* The descriptor's other fields are read only after ownership is seen
+         * to have returned. */
+        __asm__ __volatile__("" : : : "memory");
+        r8168_tx_tail++;
+        reclaimed++;
+    }
+    if (reclaimed != 0 && r8168_tx_tail != r8168_tx_head) {
+        io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
+    }
+}
+
+/**
+ * Send one Ethernet frame.
+ *
+ * Phase B has no timer hook, so this waits for the descriptor here rather
+ * than deferring the reclaim: fill, hand over, ring, and poll ownership back
+ * with a bounded wait, ringing again while the descriptor stays owned. A
+ * frame that does not complete inside the budget is counted and dropped; the
+ * alternative is a kernel that stops on a wedged chip.
+ */
+static void rtl8168_tx(const uint8_t *data, uint16_t len)
+{
+    uint32_t idx;
+    uint32_t eor;
+    uint32_t i;
+    uint16_t total = len;
+
+    if (!r8168_up || len == 0 || len > R8168_FRAME_MAX) {
+        return;
+    }
+    r8168_tx_reclaim();
+
+    idx = r8168_tx_head % R8168_RING_SIZE;
+    if (r8168_tx_ring[idx].opts1 & R8168_DESC_OWN) {
+        r8168_tx_stalls++;
+        return;
+    }
+
+    for (i = 0; i < len; i++) {
+        r8168_tx_buf[idx][i] = data[i];
+    }
+    /* The chip does not pad, and a short frame on the wire is a runt: pad to
+     * the 60-byte minimum with zeroes so no stale buffer bytes are sent. */
+    if (total < 60) {
+        for (i = total; i < 60; i++) {
+            r8168_tx_buf[idx][i] = 0;
+        }
+        total = 60;
+    }
+
+    eor = (idx == R8168_RING_SIZE - 1) ? R8168_DESC_EOR : 0;
+    r8168_tx_ring[idx].addr_lo = (uint32_t)(uintptr_t)r8168_tx_buf[idx];
+    r8168_tx_ring[idx].addr_hi = 0;
+    r8168_tx_ring[idx].opts2 = 0;
+    /* Every field must be visible before ownership moves to the chip. */
+    __asm__ __volatile__("" : : : "memory");
+    r8168_tx_ring[idx].opts1 =
+        R8168_DESC_OWN | R8168_DESC_FS | R8168_DESC_LS | eor | (uint32_t)total;
+    __asm__ __volatile__("" : : : "memory");
+    r8168_tx_head++;
+
+    io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
+
+    for (i = 0; i < 1000; i++) {
+        if (!(r8168_tx_ring[idx].opts1 & R8168_DESC_OWN)) {
+            r8168_tx_packets++;
+            r8168_tx_tail = r8168_tx_head;
+            return;
+        }
+        io->udelay(100);
+        /* A poll request can be lost when two arrive close together. */
+        io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
+    }
+    r8168_tx_stalls++;
+    r8168_tx_tail = r8168_tx_head;
+}
+
+/**
+ * Take received frames off the ring and hand them up.
+ *
+ * Bounded per call, because this runs on the timer tick and the rest of the
+ * machine is waiting. Only whole single-descriptor frames are delivered: a
+ * frame split across descriptors would need reassembly this driver does not
+ * do, and at a 1500-byte transfer unit against a 16 KB buffer the chip has no
+ * reason to split one. The reported length includes the frame check sequence,
+ * which is stripped before delivery.
+ */
+static void rtl8168_poll(void)
+{
+    uint32_t budget;
+
+    if (!r8168_up) {
+        return;
+    }
+    for (budget = 0; budget < R8168_RING_SIZE; budget++) {
+        uint32_t idx = r8168_rx_cur % R8168_RING_SIZE;
+        uint32_t opts1 = r8168_rx_ring[idx].opts1;
+        uint32_t eor = (idx == R8168_RING_SIZE - 1) ? R8168_DESC_EOR : 0;
+        uint32_t len;
+
+        if (opts1 & R8168_DESC_OWN) {
+            break;
+        }
+        /* The descriptor's payload is read only after ownership returned. */
+        __asm__ __volatile__("" : : : "memory");
+
+        len = opts1 & R8168_DESC_LEN_MASK;
+        if (opts1 & R8168_DESC_RX_RES) {
+            r8168_rx_errors++;
+        } else if ((opts1 & (R8168_DESC_FS | R8168_DESC_LS)) != (R8168_DESC_FS | R8168_DESC_LS)) {
+            r8168_rx_dropped++;
+        } else if (len <= 4 || len > R8168_RX_BUF_SIZE) {
+            r8168_rx_dropped++;
+        } else {
+            r8168_rx_packets++;
+            ethernet_rx(r8168_rx_buf[idx], (uint16_t)(len - 4));
+        }
+
+        r8168_rx_ring[idx].opts2 = 0;
+        __asm__ __volatile__("" : : : "memory");
+        r8168_rx_ring[idx].opts1 = R8168_DESC_OWN | eor | R8168_RX_BUF_SIZE;
+        r8168_rx_cur++;
+    }
+}
+
+static const char *rtl8168_error(void)
+{
+    return r8168_err;
+}
+
+/** The card's detail line under the boot summary. */
+static void rtl8168_print_info(void)
+{
+    uint32_t speed = r8168_link_speed();
+
+    serial_printf(
+        "    RTL8168GU: xid 0x%X, MMIO 0x%X, "
+        "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
+        r8168_xid, (unsigned)(uintptr_t)r8168_mmio, (unsigned)(net_mac[0] >> 4),
+        (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
+        (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF), (unsigned)(net_mac[3] >> 4),
+        (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
+        (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+    if (speed == 0) {
+        serial_printf("    RTL8168GU: no link yet\n");
+    } else {
+        serial_printf("    RTL8168GU: link %d Mb/s, %s duplex\n", speed,
+                      (io->r8(R8168_PHYSTATUS) & R8168_PHY_FULLDUP) ? "full" : "half");
+    }
+    serial_printf("    RTL8168GU: rx %d (%d error, %d dropped), tx %d (%d stalled)\n",
+                  r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_tx_packets,
+                  r8168_tx_stalls);
+}
+
+const struct netdev_ops rtl8168_netdev = {"RTL8168GU",  rtl8168_init,  rtl8168_tx,
+                                          rtl8168_poll, rtl8168_error, rtl8168_print_info};

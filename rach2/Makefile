@@ -50,6 +50,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/mm/pagecache.c    \
 	  sys/mm/modlayout.c    \
 	  sys/diag.c            \
+	  sys/udelay.c          \
 	  sys/proc/process.c    \
 	  sys/proc/sched.c      \
 	  sys/proc/wait_queue.c \
@@ -69,7 +70,9 @@ C_SRC   = $(KERNEL).c \
 	  sys/fs/synthfs.c      \
 	  sys/fs/procfs.c       \
 	  sys/network/core/net_core.c \
+	  sys/network/driver/netdev.c \
 	  sys/network/driver/rtl8139.c \
+	  sys/network/driver/rtl8168.c \
 	  sys/network/ethernet/ethernet.c \
 	  sys/network/arp/arp.c \
 	  sys/network/ip/ip.c \

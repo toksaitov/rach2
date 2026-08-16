@@ -38,6 +38,7 @@
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
 #include "sys/audio/hda.h"
+#include "sys/udelay.h"
 #include "sys/network/net.h"
 #include "sys/network/ip/icmp.h"
 #include "sys/network/ip/ip.h"
@@ -110,6 +111,7 @@ static bool test_memory(void);
 static bool test_strings(void);
 static void test_display(void);
 static bool test_timer(void);
+static bool test_udelay(uint32_t *measured_ms);
 static bool test_syscall(void);
 static bool test_usermode(void);
 static void test_switch(void);
@@ -573,6 +575,28 @@ static bool test_timer(void)
     }
 
     return kernel_ticks > start_ticks;
+}
+
+/**
+ * Check that `k_udelay` waits for as long as it is asked to.
+ *
+ * The delay measures itself against the 8254's counter; the timer interrupt
+ * counts its own 100 Hz reloads. The two arrive at a duration by different
+ * arithmetic over the same chip, so a disagreement is an error in one of them,
+ * and the device bring-up sequences that ask for microseconds are only as good
+ * as this. 200 ms keeps the one-tick quantization under a percent without
+ * lengthening the boot noticeably. `*measured_ms` reports what was seen, since
+ * a wrong figure says more than a failed comparison.
+ */
+static bool test_udelay(uint32_t *measured_ms)
+{
+    uint32_t start = kernel_ticks;
+    uint32_t elapsed;
+
+    k_udelay(200000);
+    elapsed = kernel_ticks - start;
+    *measured_ms = elapsed * 10;
+    return elapsed >= 19 && elapsed <= 23;
 }
 
 static bool test_syscall(void)
@@ -1785,6 +1809,23 @@ static void run_self_tests(void)
         set_fore_color(light_red);
         k_puts("[FAIL]");
         serial_printf("[FAIL]\n");
+    }
+    set_fore_color(light_grey);
+
+    k_printf("  Microsecond delay:  ");
+    serial_printf("  Microsecond delay:  ");
+    {
+        uint32_t measured_ms = 0;
+
+        if (test_udelay(&measured_ms)) {
+            set_fore_color(light_green);
+            k_printf("[PASS] (200 ms asked, %d ms seen)\n", (int)measured_ms);
+            serial_printf("[PASS] (200 ms asked, %d ms seen)\n", (int)measured_ms);
+        } else {
+            set_fore_color(light_red);
+            k_printf("[FAIL] (200 ms asked, %d ms seen)\n", (int)measured_ms);
+            serial_printf("[FAIL] (200 ms asked, %d ms seen)\n", (int)measured_ms);
+        }
     }
     set_fore_color(light_grey);
 
