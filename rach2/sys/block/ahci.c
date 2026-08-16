@@ -1,5 +1,6 @@
 #include "ahci.h"
 #include "diskcmd.h"
+#include "../udelay.h"
 #include "block.h"
 
 #include "../pci.h"
@@ -46,6 +47,7 @@
 #define AHCI_PxTFD  0x20 /* task file data (STS/ERR) */
 #define AHCI_PxSIG  0x24 /* device signature */
 #define AHCI_PxSSTS 0x28 /* SATA status */
+#define AHCI_PxSCTL 0x2C /* SATA control: DET in bits 0-3 */
 #define AHCI_PxSERR 0x30 /* SATA error (write 1 to clear) */
 #define AHCI_PxSACT 0x34 /* SATA active */
 #define AHCI_PxCI   0x38 /* command issue */
@@ -61,10 +63,36 @@
 #define AHCI_DET_PRESENT 0x3u
 #define AHCI_IPM_ACTIVE  0x1u
 
+/* SCTL.DET: 1 requests a COMRESET, 0 lets the link come up again. */
+#define AHCI_SCTL_DET_MASK    0xFu
+#define AHCI_SCTL_DET_INIT    0x1u
+#define AHCI_SCTL_DET_NONE    0x0u
+
+/* GHC.HR: the HBA-wide reset, which the HBA clears when it is done. */
+#define AHCI_GHC_HR 0x00000001u
+
+/* PxSIG, the signature the device leaves after a reset. A plain SATA disk
+ * answers 0x00000101; an ATAPI device answers 0xEB140101, a port multiplier
+ * 0x96690101, and an enclosure service 0xC33C0101. This driver drives disks. */
+#define AHCI_SIG_ATA   0x00000101u
+#define AHCI_SIG_ATAPI 0xEB140101u
+
 /* Iteration watchdogs (no timer to bound by when the I/O path runs at IF=0).
    The link wait is shorter so an empty port skips quickly during bring-up. */
 #define AHCI_SPIN_LIMIT 10000000u
 #define AHCI_LINK_SPIN  1000000u
+
+/* The two waits that follow a COMRESET are measured rather than counted, since
+   what they wait for happens on the wire and in the device rather than at the
+   processor's speed. The poll interval is 100 us; the budgets are one second
+   for the PHY to negotiate, which is what the specification allows, and five
+   for the device to finish its own reset and post its signature, which is
+   generous for a disk and short enough that a port with something unresponsive
+   on it does not hold up a boot. Both expiries are ordinary answers: an empty
+   port and a device that will not answer are both ports to move past. */
+#define AHCI_RESET_POLL_US 100u
+#define AHCI_LINK_STEPS    10000u
+#define AHCI_READY_STEPS   50000u
 
 /* The DMA regions the HBA reads and writes. They are static so they land in
    .bss below HARD_MEMORY_LIMIT, where the identity map makes the virtual
@@ -290,14 +318,76 @@ static int ahci_discover(void)
     return 0;
 }
 
+/**
+ * Re-establish the SATA link on one port (COMRESET), or report that it is
+ * empty. Returns 0 when a device is present and the PHY is ready.
+ *
+ * This is the recovery the laptop needs and the reason the HBA reset above can
+ * be issued at all. A warm reboot on that machine leaves its SATA link in a
+ * state where the port reports a device and the device never becomes ready,
+ * and the only way back is to take the link down and bring it up: DET=1 holds
+ * COMRESET asserted, and the specification requires it held for at least one
+ * millisecond, after which DET=0 releases it and the PHY negotiates again.
+ *
+ * An empty port is not a failure. Every implemented port is reset at bring-up,
+ * and most machines have ports with nothing on them; this reports that plainly
+ * so the scan can move on.
+ */
+static int ahci_port_comreset(int port)
+{
+    uint32_t sctl_off = ahci_port_off(port, AHCI_PxSCTL);
+    uint32_t ssts_off = ahci_port_off(port, AHCI_PxSSTS);
+    uint32_t serr_off = ahci_port_off(port, AHCI_PxSERR);
+    uint32_t cmd_off = ahci_port_off(port, AHCI_PxCMD);
+    uint32_t sctl = ahci_read32(sctl_off);
+    uint32_t spin;
+
+    /* The device answers a reset with a FIS carrying its signature, and a FIS
+     * arrives only if the port has somewhere to put it and is listening. So
+     * the received-FIS area is programmed and FRE turned on before the reset
+     * rather than in the start path afterwards; without this the task file
+     * never updates and every port looks like a device that will not answer.
+     * The command engine stays off: nothing is being issued here. */
+    ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)(uintptr_t)ahci_cmdlist);
+    ahci_write32(ahci_port_off(port, AHCI_PxCLBU), 0);
+    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)(uintptr_t)ahci_recv_fis);
+    ahci_write32(ahci_port_off(port, AHCI_PxFBU), 0);
+    pci_enable_bus_master(&ahci_pci);
+    ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_FRE);
+
+    ahci_write32(sctl_off, (sctl & ~AHCI_SCTL_DET_MASK) | AHCI_SCTL_DET_INIT);
+    /* At least 1 ms with COMRESET asserted. */
+    k_udelay(2000);
+    ahci_write32(sctl_off, (sctl & ~AHCI_SCTL_DET_MASK) | AHCI_SCTL_DET_NONE);
+
+    /* The link then has to negotiate. A port with nothing on it never reaches
+     * DET=3, so this is bounded and its expiry is an ordinary answer. */
+    for (spin = 0; spin < AHCI_LINK_STEPS; ++spin) {
+        if ((ahci_read32(ssts_off) & AHCI_DET_MASK) == AHCI_DET_PRESENT) {
+            /* The errors a link-up necessarily raises are ours to clear, and
+             * clearing them is what leaves the port usable. PxSERR is
+             * write-1-to-clear, so writing back what was read clears exactly
+             * the bits that were set. */
+            ahci_write32(serr_off, ahci_read32(serr_off));
+            return 0;
+        }
+        k_udelay(AHCI_RESET_POLL_US);
+    }
+    return -1;
+}
+
 /** Take ownership of the HBA and ensure AHCI mode.
  *
- * The HBA-wide reset (GHC.HR) is deliberately skipped. Without the full
- * per-port COMRESET handshake (deferred this milestone), an HR leaves the SATA
- * link needing re-establishment and the device not ready: on QEMU ich9-ahci,
- * the port's TFD then loses DRDY (0x50 becomes 0x130). The all-port quiesce
- * below gives owned ports without disturbing the link. A real-hardware
- * bring-up would HR and then COMRESET each port. */
+ * The HBA-wide reset (GHC.HR) is issued here, which it was not before: the
+ * driver skipped it while there was no COMRESET, because an HR leaves every
+ * SATA link needing re-establishment and a port whose link never comes back
+ * reports a device that is not ready (on QEMU's ich9-ahci the port's TFD loses
+ * DRDY, 0x50 becoming 0x130). With the per-port COMRESET below, that is a
+ * state the driver can get out of, and a reset is worth having: the machine
+ * this is being carried to hands the HBA over from firmware that has been
+ * using it, and the only way to know what state the registers are in is to put
+ * them in a known one.
+ */
 static int ahci_hba_own(void)
 {
     /* BIOS/OS handoff, only when the HBA advertises it (QEMU does not). */
@@ -308,8 +398,19 @@ static int ahci_hba_own(void)
         }
     }
 
-    ahci_write32(AHCI_GHC, (ahci_read32(AHCI_GHC) | AHCI_GHC_AE) &
-                           ~AHCI_GHC_IE);
+    /* AHCI mode before the reset, as the specification requires: the HBA's
+     * registers are only defined in AHCI mode, and that includes GHC.HR. */
+    ahci_write32(AHCI_GHC, ahci_read32(AHCI_GHC) | AHCI_GHC_AE);
+    ahci_write32(AHCI_GHC, ahci_read32(AHCI_GHC) | AHCI_GHC_HR);
+    /* The HBA clears HR when it has finished; the specification allows it one
+     * second, and a bit that never clears is an HBA this driver cannot use. */
+    if (ahci_wait_clear(AHCI_GHC, AHCI_GHC_HR) != 0) {
+        serial_printf("ahci: the host reset never completed\n");
+        return -1;
+    }
+    /* The reset clears AE, so AHCI mode is set again, and interrupts stay off:
+     * this driver polls. */
+    ahci_write32(AHCI_GHC, (ahci_read32(AHCI_GHC) | AHCI_GHC_AE) & ~AHCI_GHC_IE);
     return 0;
 }
 
@@ -360,30 +461,77 @@ static int ahci_quiesce_ports(void)
     return 0;
 }
 
-/** Select the first implemented port with a device present and the link up. */
+/**
+ * Wait for a port's device to finish its reset. Returns 0 when it has.
+ *
+ * After a COMRESET the device runs its own reset and then posts a D2H FIS
+ * carrying its signature; until that has happened the task file reports busy
+ * and the signature register holds nothing worth reading. Bounded, because a
+ * device that never becomes ready is a device this driver must move past
+ * rather than wait on.
+ */
+static int ahci_port_ready(int port)
+{
+    uint32_t tfd_off = ahci_port_off(port, AHCI_PxTFD);
+    uint32_t spin;
+
+    for (spin = 0; spin < AHCI_READY_STEPS; ++spin) {
+        if (!(ahci_read32(tfd_off) & (AHCI_PxTFD_BSY | AHCI_PxTFD_DRQ))) {
+            return 0;
+        }
+        k_udelay(AHCI_RESET_POLL_US);
+    }
+    return -1;
+}
+
+/**
+ * Select the first implemented port carrying a SATA disk.
+ *
+ * Every implemented port is COMRESET first, because a link that a warm reboot
+ * left wedged reports a device that never becomes ready, and the scan would
+ * otherwise select it and then fail on the identify. A port that comes back
+ * empty is skipped without comment, since most machines have some.
+ *
+ * The signature decides what the port carries, and only a disk is taken. An
+ * optical drive answers the ATAPI signature and would fail every command this
+ * driver knows; a port multiplier and an enclosure service answer their own.
+ * Naming the one signature this driver drives, rather than excluding the ones
+ * it happens to know about, means an unfamiliar device is skipped rather than
+ * driven as if it were a disk.
+ */
 static int ahci_select_port(void)
 {
     uint32_t pi = ahci_read32(AHCI_PI);
     int p;
 
     for (p = 0; p < 32; ++p) {
-        uint32_t ssts = 0;
-        uint32_t spin = AHCI_LINK_SPIN;
+        uint32_t ssts, sig;
 
         if (!(pi & (1u << p))) {
             continue;
         }
-        do {
-            ssts = ahci_read32(ahci_port_off(p, AHCI_PxSSTS));
-            if ((ssts & AHCI_DET_MASK) == AHCI_DET_PRESENT) {
-                break;
-            }
-        } while (--spin != 0);
-        if ((ssts & AHCI_DET_MASK) == AHCI_DET_PRESENT &&
-            ((ssts >> 8) & 0xF) == AHCI_IPM_ACTIVE) {
-            ahci_port = p;
-            return 0;
+        if (ahci_port_comreset(p) != 0) {
+            continue; /* nothing on this port */
         }
+        ssts = ahci_read32(ahci_port_off(p, AHCI_PxSSTS));
+        if ((ssts & AHCI_DET_MASK) != AHCI_DET_PRESENT ||
+            ((ssts >> 8) & 0xF) != AHCI_IPM_ACTIVE) {
+            continue;
+        }
+        /* The signature is only valid once the device has finished its own
+         * reset and posted its first FIS; read before that it is all ones,
+         * which is not a signature but a port that has not answered yet. */
+        if (ahci_port_ready(p) != 0) {
+            serial_printf("ahci: port %d: the device never became ready; skipped\n", p);
+            continue;
+        }
+        sig = ahci_read32(ahci_port_off(p, AHCI_PxSIG));
+        if (sig != AHCI_SIG_ATA) {
+            serial_printf("ahci: port %d: signature %X is not a disk; skipped\n", p, sig);
+            continue;
+        }
+        ahci_port = p;
+        return 0;
     }
     return -1;
 }

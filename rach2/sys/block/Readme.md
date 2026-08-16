@@ -40,6 +40,16 @@ So IRQ and async stay out on purpose. Whoever revisits them starts from this ana
 
 Linux `drivers/ata/libahci.c` enables per-port interrupts, issues commands into a tagged queue, and completes them in an interrupt handler that wakes the block layer; the block layer merges and schedules requests across a deep queue. Rach2's AHCI is that driver with the queue depth set to one, the interrupt removed, and the completion handler replaced by a bounded spin on `PxCI`, because its one caller runs in a context that cannot take the interrupt. The ATA driver is the same shape one register set down: Linux's `libata` PIO path, polled and single-sector-handshaked, with no IRQ.
 
+## Reset, and what a port is carrying
+
+Bring-up resets the HBA (`GHC.HR`) and then COMRESETs every implemented port. The reset was skipped until milestone 24 and for a good reason: an HBA reset leaves every SATA link needing re-establishment, and without a COMRESET to re-establish it the port reports a device that never becomes ready (on QEMU's `ich9-ahci` the task file loses DRDY, 0x50 becoming 0x130). With the COMRESET the driver can get out of that state, so the reset is worth having: a machine hands the HBA over from firmware that has been using it, and the only way to know what state the registers are in is to put them in a known one. It is also the recovery for the failure the target laptop shows after a warm reboot, a SATA link that comes up dead.
+
+A COMRESET is DET=1 held for at least a millisecond, then DET=0 and a bounded wait for the PHY to negotiate. Two details are easy to get wrong and were: the received-FIS area must be programmed and `PxCMD.FRE` enabled BEFORE the reset, because the device answers with a FIS carrying its signature and a FIS arrives only if the port has somewhere to put it and is listening; and `PxSIG` must not be read until the task file says the device has finished its own reset, since before that it reads as all ones, which is not a signature but a port that has not answered yet.
+
+The scan is then tolerant by construction. A port with nothing on it never reaches DET=3 and is skipped without comment, since most machines have some. A port whose device never becomes ready is skipped rather than waited on. And only the plain SATA disk signature (`0x00000101`) is taken: an optical drive answers the ATAPI signature and would fail every command this driver knows, and a port multiplier and an enclosure service answer their own. Naming the one signature this driver drives, rather than excluding the ones it happens to know about, means an unfamiliar device is skipped rather than driven as if it were a disk.
+
+The waits here are measured rather than counted, through `k_udelay`, because what they wait for happens on the wire and inside the device rather than at the processor's speed: one second for the PHY, five for the device's own reset.
+
 ## The read-only build
 
 Milestone 24 carries this kernel to a laptop whose SSD holds a Windows installation its owner has not backed up, and until a carved partition is approved after a full backup, nothing this kernel does may write that disk. A promise of that size cannot rest on remembering not to call the write path, so it is enforced in one place per driver and decided when the kernel is built.
