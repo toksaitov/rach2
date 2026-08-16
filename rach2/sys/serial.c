@@ -24,6 +24,9 @@
  */
 static int _serial_port_exists = 0;
 
+/* Set by serial_set_tap; see the header for what a tap may do. */
+static void (*_serial_tap)(char c) = NULL;
+
 static int _serial_is_transmit_empty(void)
 {
     return inb(SERIAL_COM1 + SERIAL_LINE_STATUS) & SERIAL_LSR_THRE;
@@ -81,8 +84,16 @@ void serial_init(void)
     outb(port + SERIAL_MODEM_CTRL, 0x0B);   /* DTR, RTS, OUT2 */
 }
 
+void serial_set_tap(void (*tap)(char c))
+{
+    _serial_tap = tap;
+}
+
 void serial_putc(char c)
 {
+    if (_serial_tap != NULL) {
+        _serial_tap(c);
+    }
     if (!_serial_port_exists) {
         return;
     }

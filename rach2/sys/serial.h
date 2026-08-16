@@ -16,6 +16,16 @@ void serial_init(void);
 void serial_putc(char c);
 
 /*
+ * Repeat every character written here to `tap` as well, or stop repeating when
+ * `tap` is NULL. The tap is offered the character before the port is checked,
+ * so it still sees the stream on a machine that has no COM1, which is the case
+ * it exists for; see network/netconsole.c, the only caller. It runs from
+ * interrupt handlers and from the panic path, so it must not block, allocate,
+ * or write to the serial port itself.
+ */
+void serial_set_tap(void (*tap)(char c));
+
+/*
  * Write a null-terminated string to the serial port. Each LF is sent as
  * CR LF.
  */

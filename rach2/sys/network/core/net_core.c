@@ -9,6 +9,7 @@
 #include "../net.h"
 #include "byteorder.h"
 #include "../driver/netdev.h"
+#include "../netconsole.h"
 #include "../tcp/tcp.h"
 #include "../socket/socket.h"
 #include "../../serial.h"
@@ -82,6 +83,7 @@ void net_print_info(void)
      * registers are called. */
     netdev_print_info();
     serial_printf("    IPv4 10.0.2.15/24, gateway 10.0.2.2\n");
+    netconsole_print_info();
 }
 
 uint32_t net_lock(void)

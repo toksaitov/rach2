@@ -40,6 +40,7 @@
 #include "sys/audio/hda.h"
 #include "sys/udelay.h"
 #include "sys/network/net.h"
+#include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
 #include "sys/network/ip/ip.h"
 #include "sys/network/tcp/tcp.h"
@@ -2628,6 +2629,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         kcmdline_capture((const char *)info->cmdline);
     }
 
+    /* With `rach2.netconsole` the serial stream is buffered from here on, so
+     * the memory layout and the device probes below are in the first frames
+     * the network device sends once it comes up. Nothing is transmitted until
+     * then; this only starts collecting. */
+    if (kcmdline_has("rach2.netconsole")) {
+        serial_set_tap(netconsole_putc);
+    }
+
     k_cls();
 
     set_fore_color(light_cyan);
@@ -2898,6 +2907,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         k_printf(" OK (%s)\n", net_status());
         serial_printf(" OK (%s)\n", net_status());
         set_fore_color(light_grey);
+        if (kcmdline_has("rach2.netconsole")) {
+            netconsole_enable();
+        }
         net_print_info();
     } else {
         set_fore_color(light_brown);

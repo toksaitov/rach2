@@ -32,6 +32,25 @@ INC="-I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/
 fail=0
 any=0
 
+# A test that hangs must fail the gate rather than hang it. One of these tests
+# drives a device that reports an error on every transmit, and the first defect
+# it caught was an unbounded loop, so this is a demonstrated case and not a
+# precaution. The test runs in the FOREGROUND under timeout(1): a background
+# job in a non-interactive shell inherits SIGINT and SIGQUIT ignored, and
+# pwauth_hosttest checks precisely those dispositions in a child it forks, so
+# backgrounding the test makes that test fail for a reason of our own making.
+WATCHDOG_SECS=60
+WATCHDOG=""
+for t0 in timeout gtimeout; do
+    if command -v "$t0" >/dev/null 2>&1; then
+        WATCHDOG="$t0 $WATCHDOG_SECS"
+        break
+    fi
+done
+if [ -z "$WATCHDOG" ]; then
+    echo "hosttest: no timeout(1) or gtimeout(1); a hung test will not be cut short" >&2
+fi
+
 for t in tests/host/*_hosttest.c; do
     [ -f "$t" ] || continue
     any=1
@@ -65,8 +84,14 @@ for t in tests/host/*_hosttest.c; do
     # shellcheck disable=SC2086
     if $CC -std=c99 $SAN -g -O1 -Wno-empty-body $INC -o "$out" "$t" $deps \
          >"$VDIR/$base.clog" 2>&1; then
-        if "$out" >"$VDIR/$base.rlog" 2>&1; then
+        # shellcheck disable=SC2086
+        $WATCHDOG "$out" >"$VDIR/$base.rlog" 2>&1
+        rc=$?
+        if [ "$rc" -eq 0 ]; then
             echo "  PASS: $base"
+        elif [ -n "$WATCHDOG" ] && [ "$rc" -eq 124 ]; then
+            echo "  FAIL (hung; killed after ${WATCHDOG_SECS}s; see $VDIR/$base.rlog): $base"
+            fail=1
         else
             echo "  FAIL (run; see $VDIR/$base.rlog): $base"; fail=1
         fi

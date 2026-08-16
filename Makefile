@@ -397,7 +397,7 @@ cred-persist-test: rach2 musl-programs krffs
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 # `make ping-test`: the ICMP path against the SLIRP gateway, which is why it is
 # its own target rather than a probe in the suite. The explicit wait= is
-# load-bearing: after its last step harness.py drains only --grace and then
+# required: after its last step harness.py drains only --grace and then
 # kills QEMU, while the timeout case alone costs four seconds and the child the
 # probe forks lives three to eight, so without it the token would arrive after
 # QEMU was dead.
@@ -406,6 +406,27 @@ ping-test: rach2 tests krffs test-image
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+
+# `make netconsole-test`: the kernel log on the wire. The machine this milestone
+# targets has no serial port, so the boot log has to leave over Ethernet or not
+# at all. QEMU's filter-dump writes every frame the guest sends to a libpcap
+# file; the boot below asks for netconsole on the command line, and the checker
+# holds the frames to the header's contract and requires a line printed BEFORE
+# the network device came up, which is what proves the pre-transmit buffer was
+# carried rather than dropped.
+NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole.pcap
+netconsole-test: rach2 tests krffs test-image
+	@rm -f $(NETCONSOLE_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=nc0,netdev=net0,file=$(NETCONSOLE_PCAP) \
+	    --append "rach2.netconsole" \
+	    --timeout 90 --ok "Type 'help'" "expect=Type 'help'" wait=3
+	python3 tools/netconsole_check.py $(NETCONSOLE_PCAP) --min-frames 4 \
+	    --expect "Initializing system components" \
+	    --expect "Network... OK" \
+	    --expect "netconsole: broadcast"
 
 # `make account-test`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools now and they are different code.
@@ -729,6 +750,7 @@ help:
 	@echo "  make install-test   the machine installs its own kernel (Docker)"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
+	@echo "  make netconsole-test  the boot log leaves over Ethernet, captured and checked"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
 	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"

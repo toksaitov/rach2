@@ -17,6 +17,7 @@ A from-scratch TCP/IP stack for the Rach2 kernel. It brings up, bottom to top: a
 | `tcp/`             | RFC 793 state machine with RFC 6298 RTT/RTO and RFC 5681 congestion control |
 | `socket/`          | Socket pool, blocking recv/accept/connect, refcounted lifecycle             |
 | `core/`            | `init_network`, byte-order helpers, shared configuration                    |
+| `netconsole.*`     | The serial stream repeated as broadcast frames, for a machine with no serial port |
 
 ## The device interface
 
@@ -33,6 +34,18 @@ What that buys: the chip is identified by the revision it reports in `TxConfig` 
 Two departures from the reference are deliberate and are in the file's header comment: link state is read from `PHYstatus`, which the reference declares and never reads because phylib reaches the PHY over MDIO instead; and the PHY is powered up here, because the reference suspends it at probe and lets phylib wake it, and nothing here would.
 
 `tests/host/rtl8168_hosttest.c` drives the whole driver against a software model of the chip: completion flags that move only when a command completes, an out-of-band bit that must be cleared, a link list that must be handshaked twice, descriptors whose ownership moves, and a recorded write log the test asserts the reference's order against. It cannot prove PCIe ordering, that DMA reaches the rings, the PHY's analog behavior, or whether this board needs the firmware patch the port omits; those wait for the laptop.
+
+## Netconsole
+
+The Lenovo has no serial port, so on it the kernel log exists only on the screen until SSH is up, and a screen cannot be scrolled back or diffed. `netconsole.c` repeats the same byte stream into broadcast Ethernet frames of EtherType `0x88b5` (IEEE Std 802 local experimental 1), which any host on the segment can capture into a file.
+
+It sits below IP deliberately: there is no address to configure, no ARP to answer and no peer that must be reachable, so it works on the first boot on an unknown network and keeps working when the address configuration is the thing that is wrong. The cost is that the frames are broadcast and unacknowledged. This is a diagnostic, not a log transport.
+
+The frame payload after the Ethernet header is a 16-byte header, all fields big-endian: the magic `RCH2`, a boot id (one random value per boot, so a capture spanning a reboot can be split), a sequence number from zero (so a gap is visible), the payload length, and a checksum over header and payload with the field zeroed. A receiver sums the whole payload including that field and checks for zero, the same convention as the IP header. At most 512 log bytes ride in one frame.
+
+Three things make it safe to call from anywhere, including interrupt handlers and the panic path. It allocates nothing: one fixed ring and one fixed frame buffer. It brackets the ring update and each frame with `net_lock`/`net_unlock`, because a syscall prints with interrupts enabled while the timer and the NIC print from their handlers, and both the ring and the Ethernet layer's shared assembly buffer would otherwise be entered twice at once. And it refuses to re-enter itself: a driver reporting a transmit error through the serial port arrives back in the same call, where disabling interrupts protects nothing, so while a frame is being sent a character only joins the ring, and a drain stops at the ring head it saw when it started. Without that second half, a chip that failed every transmit would sit inside one `printf` forever, transmitting the report of its own failure to transmit; `tests/host/netconsole_hosttest.c` provokes exactly that.
+
+`serial.c` knows nothing about any of this. It offers a tap (`serial_set_tap`), called before it checks whether a COM1 exists, and `kernel.c` installs `netconsole_putc` there when the command line carries `rach2.netconsole`. The tap is installed early, right after the command line is captured, so the memory layout, the module ranges and every device probe are already in the buffer when the network device comes up; `netconsole_enable` then sends what accumulated. Broadcasting a kernel log is a decision for whoever runs the network, so nothing happens without the boot flag.
 
 ## Configuration
 
@@ -65,6 +78,7 @@ The shared TX assembly buffers, the TCB and socket pools, and the ARP cache are 
 Userspace programs exercise the stack:
 
 * The freestanding probes `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged into `test.krffs`. `make test` boots it headless and runs them, or boot it by hand and `exec` each from the kernel debug shell. `loopprobe` (in the `make test` pass) needs no host at all: it exercises the UDP and TCP paths against the machine itself over `127.0.0.1`.
+* `make netconsole-test` boots with `rach2.netconsole`, captures every frame the guest sends through QEMU's `filter-dump`, and checks the capture with `tools/netconsole_check.py`: one boot id, sequence numbers in order with no gaps, lengths that match, checksums that sum to zero, and a line printed before the device existed, which is what proves the buffer was carried rather than dropped.
 * The hand-written utilities `ping`, `nc`, and `httpd` are staged into `os-simple.krffs`, at `/bin` with everything else. Run them from the ISH shell after logging in. (os-real carries busybox, whose own `nc` applet exercises the same stack, and our `ping`, since busybox's wants a raw socket this kernel does not offer.)
 
 The UDP and TCP tests expect a host echo server at `10.0.2.2:7777`. Boot the image that carries the program you want with a NIC, and (for an inbound server like `httpd`) a host forward. The probes need `test.krffs`, the utilities `os-simple.krffs`:
