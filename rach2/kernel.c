@@ -13,6 +13,8 @@
 #include "sys/mm/paging.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
+#include "sys/mm/modlayout.h"
+#include "sys/diag.h"
 #include "sys/block/mbr.h"
 #include "sys/fs/devfs.h"
 #include "sys/proc/process.h"
@@ -2538,17 +2540,41 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * so fail the boot closed with a clear diagnostic rather than let init_paging
      * corrupt low memory when its first reservation comes back empty. */
     if (num_modules > 0) {
+        static struct modlayout_range ranges[MAX_MODULES];
         uint32_t m;
+        uint32_t nranges = 0;
         uintptr_t modules_end = 0;
+        uint32_t bad = 0;
+        int verdict;
 
-        for (m = 0; m < num_modules; m++) {
+        for (m = 0; m < num_modules && m < MAX_MODULES; m++) {
             module_info_t *mod = get_module(m);
-            if (mod && mod->end > modules_end) {
+
+            if (!mod) {
+                continue;
+            }
+            ranges[nranges].start = mod->start;
+            ranges[nranges].end = mod->end;
+            nranges++;
+            if (mod->end > modules_end) {
                 modules_end = mod->end;
             }
         }
-        if (modules_end > HARD_MEMORY_LIMIT) {
-            k_panic("k_main: a boot module exceeds the 32 MiB memory limit");
+
+        verdict = modlayout_check(ranges, nranges,
+                                  (uint32_t) (uintptr_t) &_end,
+                                  HARD_MEMORY_LIMIT, &bad);
+        if (verdict != MODLAYOUT_OK) {
+            /* The detail travels INTO the panic rather than ahead of it: the
+             * machine this check was written for has no serial port, and
+             * k_panic clears the screen, so anything printed here first would
+             * be gone before a camera could read it. */
+            static char verdict_msg[128];
+
+            modlayout_describe(verdict, bad, ranges[bad].start, ranges[bad].end,
+                               verdict_msg, (uint32_t) sizeof(verdict_msg));
+            serial_printf("module: %s\n", verdict_msg);
+            k_panic(verdict_msg);
         }
         if (modules_end > mem_reserved_ptr) {
             mem_reserved_ptr = (modules_end + 0xFFF) & ~0xFFF;
@@ -2631,6 +2657,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     k_puts(" OK");
     serial_printf(" OK\n");
     set_fore_color(light_grey);
+
+    /* The boot report, after every boot-time reservation and before any driver
+     * has configured a device. After, because the page cache reserves frames
+     * and the report's own device peek maps a page, and a figure printed
+     * before those is not the memory the machine has left. */
+    if (kcmdline_has("rach2.diag")) {
+        boot_diag_report();
+    }
 
     k_printf("  Timer (100 Hz)...");
     serial_printf("  Timer (100 Hz)...");

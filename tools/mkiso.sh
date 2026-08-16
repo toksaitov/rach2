@@ -8,7 +8,7 @@
 # needed) to produce build/images/<image>.iso. Each image gets its own ISO and its
 # own staging dir, so `make isos` can build all three in parallel without a race.
 #
-# Usage: ./mkiso.sh <test|os-simple|os-real>
+# Usage: ./mkiso.sh <test|os-simple|os-real|rach2-metal>
 #
 # Requires Docker (the only step that does). Build the kernel and the image first
 # (make / make <image>-image).
@@ -19,9 +19,9 @@ set -e
 IMAGE="$1"
 # Allowlist the image name before it reaches the destructive rm -rf below.
 case "$IMAGE" in
-    test|os-simple|os-real) ;;
+    test|os-simple|os-real|rach2-metal) ;;
     *)
-        echo "usage: mkiso.sh <test|os-simple|os-real>" >&2
+        echo "usage: mkiso.sh <test|os-simple|os-real|rach2-metal>" >&2
         exit 2
         ;;
 esac
@@ -52,6 +52,21 @@ mkdir -p "$ISODIR/boot/grub"
 cat "$KERNEL" > "$ISODIR/boot/kernel"
 cat "$KRFFS" > "$ISODIR/boot/$IMAGE.krffs"
 
+# The metal profile gets a third entry: a machine with no serial port answers
+# only on its screen, so the numbers a first bring-up needs (the module layout
+# the bootloader chose, what memory survived, which Ethernet silicon is in the
+# slot) are one menu selection away rather than a rebuild away.
+if [ "$IMAGE" = rach2-metal ]; then
+    DIAG_ENTRY='menuentry "Rach2 (metal) - diagnostics" {
+    multiboot /boot/kernel rach2.diag
+    module /boot/rach2-metal.krffs
+    boot
+}
+'
+else
+    DIAG_ENTRY=''
+fi
+
 cat > "$ISODIR/boot/grub/grub.cfg" <<CFG
 set timeout=3
 set default=0
@@ -62,6 +77,7 @@ menuentry "Rach2 ($IMAGE)" {
     boot
 }
 
+$DIAG_ENTRY
 menuentry "Rach2 ($IMAGE) - rescue (kernel debug shell)" {
     multiboot /boot/kernel rach2.rescue
     module /boot/$IMAGE.krffs

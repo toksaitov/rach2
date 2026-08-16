@@ -197,6 +197,40 @@ ALLOWLIST = {
         # sysroot it was built to look in.
         "sysroot": True,
     },
+    # The metal profile the Lenovo boots from a USB stick. Its privilege model
+    # is os-real's, because the account tools are the same busybox pair, but it
+    # carries no compiler, no /src and no installer: a machine with no writable
+    # disk cannot use them, and every byte it does carry costs RAM under the
+    # kernel's direct map.
+    "rach2-metal": {
+        "setid": {
+            "/bin/su": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
+            "/bin/passwd": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
+            "/bin/login": (0o4755, 0, 0, "build/vendor/busybox/busybox-suid"),
+        },
+        "trusted": {
+            "/bin/busybox": (0o755, 0, 0, "file",
+                             "build/vendor/busybox/busybox"),
+            "/bin/sh": (0o755, 0, 0, "file", "build/vendor/busybox/busybox"),
+            "/bin/dropbearmulti": (0o755, 0, 0, "file",
+                                   "build/vendor/dropbear/dropbearmulti"),
+            "/etc/passwd": (0o644, 0, 0, "text",
+                            "root:x:0:0:root:/root:/bin/sh\\n"
+                            "test:x:1000:1000:test:/home/test:/bin/sh\\n"),
+            "/etc/shadow": (0o600, 0, 0, "file", "krffs/shadow"),
+            "/etc/group": (0o644, 0, 0, "text",
+                           "root:x:0:\\ntest:x:1000:\\n"),
+            "/etc/shells": (0o644, 0, 0, "text", "/bin/sh\\n"),
+            "/etc/profile": (0o644, 0, 0, "text",
+                             "export PATH=/bin:/usr/bin\\n"
+                             "export HOME=\"${HOME:-/root}\"\\ncd \"$HOME\"\\n"),
+            "/root/.ssh/authorized_keys": (0o600, 0, 0, "file",
+                                           "krffs/authorized_keys"),
+        },
+        "sentinel": None,
+        "init": "init-login",
+        "sysroot": False,
+    },
     "test": {
         # suidprobe's fixtures (the same helper at several modes and owners),
         # sudoprobe's reference sudo, suidmusl's setuid copy, which proves

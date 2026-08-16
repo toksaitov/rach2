@@ -61,6 +61,8 @@ OBJS = loader.o \
        sys/mm/vm.o \
        sys/mm/frame.o \
        sys/mm/pagecache.o \
+       sys/mm/modlayout.o \
+       sys/diag.o \
        sys/proc/process.o \
        sys/proc/sched.o \
        sys/proc/wait_queue.o \
@@ -110,7 +112,7 @@ kernel.objs: guest.mk
 	printf '%s\n' sys/speaker.o sys/pci.o sys/power.o sys/block/block.o sys/block/mbr.o sys/block/ata.o sys/block/ahci.o >> kernel.objs.new
 	printf '%s\n' sys/display/vga_text.o sys/display/vga_gfx.o sys/audio/audio.o sys/audio/audio_debug.o sys/audio/dma.o sys/audio/sb16.o >> kernel.objs.new
 	printf '%s\n' sys/audio/hda.o sys/tables/gdt.o sys/tables/tss.o sys/tables/idt.o sys/mm/heap.o sys/mm/paging.o >> kernel.objs.new
-	printf '%s\n' sys/mm/usercopy.o sys/mm/vm.o sys/mm/frame.o sys/mm/pagecache.o sys/proc/process.o sys/proc/sched.o >> kernel.objs.new
+	printf '%s\n' sys/mm/usercopy.o sys/mm/vm.o sys/mm/frame.o sys/mm/pagecache.o sys/mm/modlayout.o sys/diag.o sys/proc/process.o sys/proc/sched.o >> kernel.objs.new
 	printf '%s\n' sys/proc/wait_queue.o sys/ipc/pipe.o sys/ipc/pipe_ring.o sys/io/poll.o sys/io/poll_select.o sys/tty/n_tty.o >> kernel.objs.new
 	printf '%s\n' sys/tty/tty.o sys/tty/pty.o sys/proc/elf.o sys/proc/uimage.o sys/proc/tls.o sys/fs/krffs.o >> kernel.objs.new
 	printf '%s\n' sys/fs/fd.o sys/fs/devfs.o sys/fs/synthfs.o sys/fs/procfs.o sys/network/core/net_core.o sys/network/driver/rtl8139.o >> kernel.objs.new

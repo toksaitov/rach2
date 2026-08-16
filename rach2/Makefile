@@ -48,6 +48,8 @@ C_SRC   = $(KERNEL).c \
 	  sys/mm/vm.c           \
 	  sys/mm/frame.c        \
 	  sys/mm/pagecache.c    \
+	  sys/mm/modlayout.c    \
+	  sys/diag.c            \
 	  sys/proc/process.c    \
 	  sys/proc/sched.c      \
 	  sys/proc/wait_queue.c \

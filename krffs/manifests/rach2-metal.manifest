@@ -1,0 +1,50 @@
+# The metal profile: the image the Lenovo G50-70 boots from a USB stick.
+#
+# The machine has no USB driver of its own, so whatever GRUB loads as the boot
+# module IS the machine: nothing persists, and every byte here costs RAM under
+# the kernel's 32 MiB direct map. So this profile carries what a bring-up needs
+# and nothing else: a shell, an SSH server, the account files, and the keys.
+#
+# What os-real has and this does not, each for the same reason (it cannot be
+# used on a machine with no writable disk, or it is not needed to bring the
+# hardware up): the compiler and its sysroot, pdpmake, the /src trees, Doom,
+# and install-kernel, which writes a boot partition this profile never has.
+#
+# The account files are os-real's, so one password opens either image, and the
+# authorized keys are the same pair the SSH capstone uses.
+
+dir 0755 /bin
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+
+# The three applets that need the set-id bit come from busybox's second build,
+# which holds only login, passwd and su, exactly as os-real stages them.
+file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
+
+file 0755 /bin/ping build/utils/ping
+file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-login
+
+dir 0755 /etc
+dir 0700 /etc/dropbear
+text 0644 /etc/motd Rach2 on real hardware (metal profile). No disk, no compiler: this machine lives in RAM.\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
+file 0600 /etc/shadow krffs/shadow
+text 0644 /etc/group root:x:0:\ntest:x:1000:\n
+text 0644 /etc/shells /bin/sh\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
+
+dir 0755 /root
+dir 0700 /root/.ssh
+file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
+
+dir 1777 /tmp
+dir 0755 /home
+dir 0700:1000:1000 /home/test
+dir 0700:1000:1000 /home/test/.ssh
+file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys

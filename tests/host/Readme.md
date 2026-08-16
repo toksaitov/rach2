@@ -46,6 +46,7 @@ Current tests:
 * `frame_hosttest.c`: the physical-frame pool sizing from the multiboot memory map (`sys/mm/frame.c`).
 * `synthfs_hosttest.c`: the synthetic `/dev` and `/proc` path classifier (`sys/fs/synthfs.c`).
 * `mbr_hosttest.c`: the MBR partition-table parse and the boot-partition judgement (`sys/block/mbr.c`) over crafted tables, the malformed beside the valid.
+* `modlayout_hosttest.c`: the boot-module placement check (`sys/mm/modlayout.c`). Three of its four refusals name placements no bootloader produces on request (a module over the kernel image, two modules overlapping, a range that wraps the address space), so they are crafted here; the accepted cases (back to back, out of order, ending exactly at the ceiling) matter as much, since refusing one would panic a legal boot.
 * `installkernel_hosttest.c`: the install-kernel core (`utils/bootslot.c`) over FAT32 fixtures from `mkfatfixture.py`, an independent writer of the same format; the write callback injects dropped sectors, torn sectors and cuts, so the byte-for-byte readback and the interruption-matrix order are both falsifiable.
 * `poll_select_hosttest.c`: the `fd_set` and `pollfd` translation and the readable/writable/except projection (`sys/io/poll_select.c`).
 * `pipe_ring_hosttest.c`: the pipe ring-buffer arithmetic (`sys/ipc/pipe_ring.c`).

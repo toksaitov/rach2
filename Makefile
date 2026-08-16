@@ -78,6 +78,7 @@ IMAGES_DIR      = build/images
 TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
 OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
 OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
+METAL_IMAGE     = $(IMAGES_DIR)/rach2-metal.krffs
 OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
 MKDISK          = krffs/mkdisk.sh
@@ -89,7 +90,7 @@ MKDISK          = krffs/mkdisk.sh
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci persist-test-ahci stress-test-ahci \
-        isos test-iso os-simple-iso os-real-iso \
+        isos test-iso os-simple-iso os-real-iso rach2-metal-image rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
         compile-commands check-sources \
@@ -227,6 +228,17 @@ os-real-image: krffs rach2 utils check-busybox check-tcc check-pdpmake check-set
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
+
+# The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
+# machine (the kernel has no USB driver, so the module GRUB loads is the whole
+# system), so it carries a shell, dropbear, the account files and the keys, and
+# leaves out the compiler, /src, Doom and install-kernel, which a machine with
+# no writable disk cannot use. 4 MB: the binaries come to about 1.4 MB, and the
+# rest is headroom under the kernel's 32 MB direct map.
+rach2-metal-image: krffs rach2 utils check-busybox check-setid check-dropbearmulti
+	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
+	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $(METAL_IMAGE) 4
 
 # The os-real disk: the same os-real tree, but on a real disk image instead of a
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
@@ -561,13 +573,15 @@ stress-test-ahci: rach2 tests krffs
 # Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
 # image as GRUB multiboot modules, built by grub-mkrescue in a throwaway Docker
 # container (see tools/mkiso.sh). Output: build/images/<image>.iso.
-isos: test-iso os-simple-iso os-real-iso
+isos: test-iso os-simple-iso os-real-iso rach2-metal-iso
 test-iso: test-image
 	sh tools/mkiso.sh test
 os-simple-iso: os-simple-image
 	sh tools/mkiso.sh os-simple
 os-real-iso: os-real-image
 	sh tools/mkiso.sh os-real
+rach2-metal-iso: rach2-metal-image
+	sh tools/mkiso.sh rach2-metal
 
 # The staged capstone binaries are the REAL prerequisites of the os-real image. A
 # stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards
@@ -724,6 +738,7 @@ help:
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
+	@echo "  make rach2-metal-image / rach2-metal-iso   the RAM-only image the Lenovo boots"
 	@echo "  make deps       vendored third-party (libc; DEPS=full adds the four capstones)"
 	@echo "  make busybox / dropbear / tcc / pdpmake   one capstone's third-party build"
 	@echo "  make check-tcc / check-pdpmake   the compiler and make an image will carry"
