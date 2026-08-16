@@ -9,6 +9,16 @@ void init_pic(void);
 /** Unmask master IRQ line `irq` (0..7) once its handler is installed. */
 void pic_unmask_irq(uint8_t irq);
 
+/**
+ * Mask IRQ line `irq` (0..15), master or slave.
+ *
+ * For a line this kernel has no handler for and that a device may assert
+ * anyway. The SCI is the case it was written for: with ACPI enabled, a power
+ * button or a thermal event raises a level-triggered interrupt that nothing
+ * here clears, and an unmasked one would be taken forever.
+ */
+void pic_mask_irq(uint8_t irq);
+
 /** Sends End Of Interrupt to the master PIC. */
 void reset_master_pic(void);
 

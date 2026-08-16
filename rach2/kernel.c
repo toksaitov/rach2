@@ -43,6 +43,7 @@
 #include "sys/network/netconf.h"
 #include "sys/block/diskcmd.h"
 #include "sys/block/diskinfo.h"
+#include "sys/board.h"
 #include "sys/network/driver/netdev.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
@@ -2769,6 +2770,32 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         serial_printf("%s\n", desc);
     }
     set_fore_color(light_grey);
+
+    /* Which power controller this machine has, before interrupts are enabled:
+     * with ACPI on, an unhandled SCI is level-triggered and would be taken
+     * forever, so the line it sits on is masked here. A machine no profile
+     * matches keeps exactly the behaviour it had before this existed. */
+    {
+        const char *why = "";
+        int verdict = board_init(&why);
+
+        k_printf("  Board...");
+        serial_printf("  Board...");
+        if (verdict == BOARD_FOUND) {
+            set_fore_color(light_green);
+            k_printf(" OK (%s)\n", board_name());
+            serial_printf(" OK (%s)\n", board_name());
+        } else if (verdict == BOARD_REFUSED) {
+            set_fore_color(light_brown);
+            k_printf(" refused (%s)\n", why);
+            serial_printf(" refused (%s)\n", why);
+        } else {
+            set_fore_color(light_brown);
+            k_puts(" none (no profile matched; poweroff will halt)");
+            serial_printf(" none (no profile matched; poweroff will halt)\n");
+        }
+        set_fore_color(light_grey);
+    }
 
     k_printf("  Keyboard...");
     serial_printf("  Keyboard...");

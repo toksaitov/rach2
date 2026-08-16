@@ -15,6 +15,7 @@
  */
 
 #include "power.h"
+#include "board.h"
 #include "kio.h"
 #include "pci.h"
 #include "serial.h"
@@ -22,14 +23,14 @@
 /* The PIIX4 the QEMU `pc` machine carries, at 00:01.3, and the two registers
  * that say where its ACPI power management block lives and whether that block
  * is decoding. */
-#define PIIX4_BUS      0
-#define PIIX4_DEVICE   1
-#define PIIX4_FUNCTION 3
-#define PIIX4_VENDOR   0x8086
-#define PIIX4_DEVICE_ID 0x7113
-#define PIIX4_CFG_VENDOR   0x00
-#define PIIX4_CFG_DEVICE   0x02
-#define PIIX4_CFG_PMBA     0x40
+#define PIIX4_BUS           0
+#define PIIX4_DEVICE        1
+#define PIIX4_FUNCTION      3
+#define PIIX4_VENDOR        0x8086
+#define PIIX4_DEVICE_ID     0x7113
+#define PIIX4_CFG_VENDOR    0x00
+#define PIIX4_CFG_DEVICE    0x02
+#define PIIX4_CFG_PMBA      0x40
 #define PIIX4_CFG_PMREGMISC 0x80
 
 /* PMREGMISC bit 0: the PM I/O space is decoding. */
@@ -132,32 +133,52 @@ static void power_reset_settle(void)
  */
 static void power_acpi_off(void)
 {
-    uint16_t vendor = pci_read_config16(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION,
-                                        PIIX4_CFG_VENDOR);
-    uint16_t device = pci_read_config16(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION,
-                                        PIIX4_CFG_DEVICE);
-    uint32_t pmba;
-    uint8_t misc;
-    uint16_t base;
+    /* The identified chipset first. `board.c` derived this port from the
+     * controller's own base register and refused unless four checks passed, so
+     * a nonzero port here is one this kernel is entitled to write. The PIIX4
+     * path below stays for a machine no profile matched, which is every
+     * machine this kernel ran on before board.c existed. */
+    uint16_t port = board_pm1_cnt_port();
 
-    if (vendor != PIIX4_VENDOR || device != PIIX4_DEVICE_ID) {
-        serial_printf("poweroff: no PIIX4 power management; halting instead\n");
+    if (port != 0) {
+        const board_profile_t *p = board_current();
+
+        /* The token stays exactly what it was: tools/shutdown_test.sh watches
+         * for it, so the board's name goes on its own line rather than into
+         * the middle of a string another program reads. */
+        serial_printf("poweroff: board %s\n", board_name());
+        serial_printf("poweroff: powering off\n");
+        outw(port, board_sleep_word(p));
+        power_settle();
+        serial_printf("poweroff: the platform did not power off; halting instead\n");
         return;
     }
-    misc = pci_read_config8(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION,
-                            PIIX4_CFG_PMREGMISC);
-    pmba = pci_read_config32(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION,
-                             PIIX4_CFG_PMBA);
-    base = (uint16_t) (pmba & 0xFFC0u);
-    if ((misc & PIIX4_PMIOSE) == 0 || base == 0) {
-        serial_printf("poweroff: no PIIX4 power management; halting instead\n");
-        return;
-    }
+    {
+        uint16_t vendor =
+            pci_read_config16(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION, PIIX4_CFG_VENDOR);
+        uint16_t device =
+            pci_read_config16(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION, PIIX4_CFG_DEVICE);
+        uint32_t pmba;
+        uint8_t misc;
+        uint16_t base;
 
-    serial_printf("poweroff: powering off\n");
-    outw((uint16_t) (base + PM1A_CNT_OFFSET), PM1A_CNT_SLP_EN);
-    power_settle();
-    serial_printf("poweroff: the platform did not power off; halting instead\n");
+        if (vendor != PIIX4_VENDOR || device != PIIX4_DEVICE_ID) {
+            serial_printf("poweroff: no PIIX4 power management; halting instead\n");
+            return;
+        }
+        misc = pci_read_config8(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION, PIIX4_CFG_PMREGMISC);
+        pmba = pci_read_config32(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION, PIIX4_CFG_PMBA);
+        base = (uint16_t)(pmba & 0xFFC0u);
+        if ((misc & PIIX4_PMIOSE) == 0 || base == 0) {
+            serial_printf("poweroff: no PIIX4 power management; halting instead\n");
+            return;
+        }
+
+        serial_printf("poweroff: powering off\n");
+        outw((uint16_t)(base + PM1A_CNT_OFFSET), PM1A_CNT_SLP_EN);
+        power_settle();
+        serial_printf("poweroff: the platform did not power off; halting instead\n");
+    }
 }
 
 /** Wait, boundedly, for the keyboard controller to accept a command. */

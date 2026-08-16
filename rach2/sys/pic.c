@@ -53,6 +53,28 @@ void pic_unmask_irq(uint8_t irq)
     outb(0x21, mask);
 }
 
+/**
+ * Mask one PIC line, on whichever of the two controllers carries it.
+ *
+ * Masking a slave line leaves the cascade line itself alone, since the other
+ * slave lines still have to arrive.
+ */
+void pic_mask_irq(uint8_t irq)
+{
+    uint8_t mask;
+
+    if (irq > 15) {
+        return;
+    }
+    if (irq < 8) {
+        mask = inb(0x21);
+        outb(0x21, (uint8_t)(mask | (1u << irq)));
+    } else {
+        mask = inb(0xA1);
+        outb(0xA1, (uint8_t)(mask | (1u << (irq - 8))));
+    }
+}
+
 void reset_master_pic(void)
 {
     outb(0x20, 0x20);

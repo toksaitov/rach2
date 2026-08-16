@@ -20,6 +20,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/cmdline.c   \
 	  sys/isr.c       \
 	  sys/pic.c       \
+	  sys/board.c     \
 	  sys/pit.c       \
 	  sys/rtc.c       \
 	  sys/kbd.c       \

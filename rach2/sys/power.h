@@ -8,6 +8,10 @@
  *
  * Nothing here flushes anything or knows what a file system is. The caller
  * decides the machine may stop; this decides how.
+ *
+ * Which chipset the power-off talks to is `board.c`'s answer, decided once at
+ * boot and refused unless four checks pass; a machine no profile matches keeps
+ * the PIIX4 path this file has always had, and failing that, the halt.
  */
 #ifndef _POWER_H_
 #define _POWER_H_
