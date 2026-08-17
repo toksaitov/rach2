@@ -34,3 +34,7 @@ The remaining two: the BIOS/OS handoff, which our driver performs and fails clos
 4. The handoff: bounded attempt, then warn and proceed rather than fail closed, which is still more careful than Linux, which never asks.
 5. Judge a link by DET alone and command `ICC` active, per Linux `ata_phys_link_online`.
 6. Convert the remaining iteration-counted waits (handoff, host reset, port stop: ten million raw reads each) to `k_udelay`-measured budgets, now that `k_udelay` is proven on the metal.
+
+## Applied blind, ahead of the evening session
+
+All six were implemented (`be2a0a6`), reviewed against the pinned Linux sources with no findings, and verified in QEMU: the three AHCI suites, the disk diagnostic, the disk policy comparison and the full probe suite all pass, and a no-disk boot names its cause and reports what a direct read of `0:31.2` sees. The failure dump prints `CAP`, `CAP2`, `GHC`, `PI`, `BOHC`, the Intel PCS word and per-port `SSTS`/`SCTL`/`SERR`/`CMD`/`TFD`/`SIG` into the log `/dev/bootlog` hands out, so if the machine still finds no disk, one SSH command carries everything the hypotheses above disagree about.
