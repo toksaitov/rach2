@@ -54,9 +54,21 @@
 #define AHCI_PxCI        0x38 /* command issue */
 
 #define AHCI_PxCMD_ST  0x0001u /* start (command engine) */
+#define AHCI_PxCMD_SUD 0x0002u /* spin-up device (staggered spin-up) */
+#define AHCI_PxCMD_POD 0x0004u /* power on device (cold presence detect) */
 #define AHCI_PxCMD_FRE 0x0010u /* FIS receive enable */
 #define AHCI_PxCMD_FR  0x4000u /* FIS receive running */
 #define AHCI_PxCMD_CR  0x8000u /* command list running */
+
+/* PxCMD.ICC, the interface communication control: writing 1 asks the link to
+   go active; the HBA clears the field when the transition is done. */
+#define AHCI_PxCMD_ICC_MASK   0xF0000000u
+#define AHCI_PxCMD_ICC_ACTIVE 0x10000000u
+
+/* PCS, the Intel port control and status word in PCI CONFIG space: one enable
+   bit per port. Not an AHCI register at all, which is why it is easy to miss
+   and why Linux carries a named quirk for it. */
+#define AHCI_INTEL_PCS 0x92
 
 /* SSTS: DET (bits 0-3) == 3 is device present + PHY ready; IPM (bits 8-11) == 1
    is the active power state. */
@@ -78,10 +90,17 @@
 #define AHCI_SIG_ATA   0x00000101u
 #define AHCI_SIG_ATAPI 0xEB140101u
 
-/* Iteration watchdogs (no timer to bound by when the I/O path runs at IF=0).
-   The link wait is shorter so an empty port skips quickly during bring-up. */
-#define AHCI_SPIN_LIMIT 10000000u
-#define AHCI_LINK_SPIN  1000000u
+/* Every wait is measured against the timer chip rather than counted, because
+   an iteration count is really a bet on the processor's speed: ten million raw
+   register reads are a moment on the QEMU loop and several seconds on the
+   laptop this drives. The budgets: one second for a handshake (the host reset
+   is allowed exactly that by the specification, and the rest are shorter in
+   practice), and one second at a fine grain for a command, which a healthy
+   device answers in microseconds. */
+#define AHCI_WAIT_POLL_US 100u
+#define AHCI_WAIT_STEPS   10000u
+#define AHCI_CMD_POLL_US  10u
+#define AHCI_CMD_STEPS    100000u
 
 /* The two waits that follow a COMRESET are measured rather than counted, since
    what they wait for happens on the wire and in the device rather than at the
@@ -255,14 +274,15 @@ static void ahci_dma_sync(const volatile void *addr, uint32_t size)
    when the iteration watchdog expires (a wedged HBA). */
 static int ahci_wait_clear(uint32_t offset, uint32_t mask)
 {
-    uint32_t spin = AHCI_SPIN_LIMIT;
+    uint32_t spin;
 
-    while (ahci_read32(offset) & mask) {
-        if (--spin == 0) {
-            return -1;
+    for (spin = 0; spin < AHCI_WAIT_STEPS; ++spin) {
+        if ((ahci_read32(offset) & mask) == 0) {
+            return 0;
         }
+        k_udelay(AHCI_WAIT_POLL_US);
     }
-    return 0;
+    return -1;
 }
 
 /** Find and map the AHCI HBA on the PCI bus. Discovery only, no transfer. */
@@ -288,6 +308,17 @@ static int ahci_discover(void)
         skip_dev = &skip;
     }
     if (!found) {
+        /* Say what IS at the address a PCH keeps its SATA controller, because
+         * "nothing matched" cannot tell an absent controller from a scan that
+         * never visited it: the controller lives at function 2 of a
+         * multi-function device, and reaching it depends on function 0
+         * advertising its siblings. One direct read settles that in a line. */
+        serial_printf("ahci: no match; 0:31.2 reads %X:%X class %X:%X prog-if %X\n",
+                      (unsigned)pci_read_config16(0, 31, 2, PCI_VENDOR_ID),
+                      (unsigned)pci_read_config16(0, 31, 2, PCI_DEVICE_ID),
+                      (unsigned)pci_read_config8(0, 31, 2, PCI_CLASS),
+                      (unsigned)pci_read_config8(0, 31, 2, PCI_SUBCLASS),
+                      (unsigned)pci_read_config8(0, 31, 2, PCI_PROG_IF));
         ahci_err = "no SATA controller in AHCI mode on the bus";
         return -1;
     }
@@ -359,6 +390,24 @@ static int ahci_port_comreset(int port)
     ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)(uintptr_t)ahci_recv_fis);
     ahci_write32(ahci_port_off(port, AHCI_PxFBU), 0);
     pci_enable_bus_master(&ahci_pci);
+
+    /* Bring the port's power state up before asking it for a link. Our own
+     * HBA reset put every port at its reset defaults, and on silicon that
+     * supports staggered spin-up the default is spun DOWN: PxCMD.SUD resets
+     * to 0 and the specification requires it be 1 for the COMRESET below to
+     * act at all (AHCI 1.3.1, 10.4.2). QEMU could never show this, because
+     * its model resets ports with spin-up and power already on, so every
+     * suite passed while the real chip sat dark. Where the features are
+     * absent both bits read as 1 and the writes change nothing, which is why
+     * Linux (ahci_power_up) writes them unconditionally too; the ICC write
+     * then asks the interface itself to go active. */
+    {
+        uint32_t cmd = ahci_read32(cmd_off) | AHCI_PxCMD_SUD | AHCI_PxCMD_POD;
+
+        ahci_write32(cmd_off, cmd);
+        ahci_write32(cmd_off, (cmd & ~AHCI_PxCMD_ICC_MASK) | AHCI_PxCMD_ICC_ACTIVE);
+    }
+
     ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_FRE);
 
     ahci_write32(sctl_off, (sctl & ~AHCI_SCTL_DET_MASK) | AHCI_SCTL_DET_INIT);
@@ -396,12 +445,17 @@ static int ahci_port_comreset(int port)
  */
 static int ahci_hba_own(void)
 {
-    /* BIOS/OS handoff, only when the HBA advertises it (QEMU does not). */
+    /* BIOS/OS handoff, only when the HBA advertises it (QEMU does not). The
+     * request is made and the answer waited for, but an unanswered request is
+     * a warning rather than a refusal: Linux never performs this handoff at
+     * all (BOHC appears in its AHCI driver only as a capability bit's name),
+     * so firmware with a broken handoff semaphore would fail only us, on a
+     * controller Linux would simply take. Asking first is still the polite
+     * order; being refused by silence is not a reason to stop. */
     if (ahci_read32(AHCI_CAP2) & AHCI_CAP2_BOH) {
         ahci_write32(AHCI_BOHC, ahci_read32(AHCI_BOHC) | AHCI_BOHC_OOS);
         if (ahci_wait_clear(AHCI_BOHC, AHCI_BOHC_BOS) != 0) {
-            ahci_err = "the firmware never handed the controller over";
-            return -1;
+            serial_printf("ahci: the firmware did not answer the handoff; continuing\n");
         }
     }
 
@@ -418,6 +472,30 @@ static int ahci_hba_own(void)
     /* The reset clears AE, so AHCI mode is set again, and interrupts stay off:
      * this driver polls. */
     ahci_write32(AHCI_GHC, (ahci_read32(AHCI_GHC) | AHCI_GHC_AE) & ~AHCI_GHC_IE);
+
+    /* Re-enable the port PHYs the reset may have left disabled. On Intel
+     * controllers of this era a per-port enable lives in PCI configuration
+     * space (PCS, word 0x92), outside everything GHC.HR touches or the AHCI
+     * specification names; a port whose PCS bit is clear has no PHY, and no
+     * COMRESET can wake it. Linux ORs the implemented-port map into PCS after
+     * every controller reset and applies that quirk to this laptop's exact
+     * controller by device id (ahci_intel_pcs_quirk, 8086:9c03 in its PCI
+     * table). Gated to the Lynx Point and Wildcat Point families this
+     * project's board profiles cover, because on newer Intel platforms the
+     * register moved and a blind write here would poke something else. */
+    if (ahci_pci.vendor_id == 0x8086 &&
+        ((ahci_pci.device_id & 0xFF00u) == 0x8C00u || (ahci_pci.device_id & 0xFF00u) == 0x9C00u)) {
+        uint16_t pcs =
+            pci_read_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function, AHCI_INTEL_PCS);
+        uint16_t ports = (uint16_t)(ahci_read32(AHCI_PI) & 0xFFFFu);
+
+        if ((pcs & ports) != ports) {
+            pci_write_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function, AHCI_INTEL_PCS,
+                               (uint16_t)(pcs | ports));
+            serial_printf("ahci: enabled ports %X in PCS (was %X)\n", (unsigned)ports,
+                          (unsigned)pcs);
+        }
+    }
     return 0;
 }
 
@@ -530,7 +608,13 @@ static int ahci_select_port(void)
             continue;
         }
         ssts = ahci_read32(ahci_port_off(p, AHCI_PxSSTS));
-        if ((ssts & AHCI_DET_MASK) != AHCI_DET_PRESENT || ((ssts >> 8) & 0xF) != AHCI_IPM_ACTIVE) {
+        /* DET alone decides, as Linux's link-online test does
+         * (ata_phys_link_online checks DET==3 and nothing else): a link that
+         * negotiated and then dropped into a low-power interface state is a
+         * live link, and the ICC write in the reset path asks it back up.
+         * Requiring IPM to read active as well, which this did, silently
+         * discards exactly that disk. */
+        if ((ssts & AHCI_DET_MASK) != AHCI_DET_PRESENT) {
             (void)ahci_port_stop(p);
             continue;
         }
@@ -687,17 +771,18 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
     }
 
     /* The task file must be idle before a command issues (AHCI 5.5.1). */
-    spin = AHCI_SPIN_LIMIT;
+    spin = AHCI_CMD_STEPS;
     while (ahci_read32(tfd_off) & (AHCI_PxTFD_BSY | AHCI_PxTFD_DRQ)) {
         if (--spin == 0) {
             return ahci_io_error();
         }
+        k_udelay(AHCI_CMD_POLL_US);
     }
 
     ahci_write32(is_off, 0xFFFFFFFFu); /* clear stale status (write 1) */
     ahci_write32(ci_off, 1u << AHCI_SLOT);
 
-    spin = AHCI_SPIN_LIMIT;
+    spin = AHCI_CMD_STEPS;
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
         if (ahci_read32(is_off) & AHCI_PxIS_FATAL) {
             return ahci_io_error();
@@ -705,6 +790,7 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
         if (--spin == 0) {
             return ahci_io_error();
         }
+        k_udelay(AHCI_CMD_POLL_US);
     }
     /* A fatal PxIS error can clear PxCI without setting PxTFD.ERR, so the
        post-loop check tests both: a fatal interrupt or a task-file ERR/DF. */
@@ -813,6 +899,13 @@ int ahci_init(void)
     if (ahci_discover() != 0 || ahci_hba_own() != 0 || ahci_quiesce_ports() != 0 ||
         ahci_select_port() != 0 || ahci_port_start() != 0 || ahci_identify() != 0) {
         serial_printf("ahci: %s\n", ahci_err);
+        /* The registers behind the refusal, into the log the machine hands
+         * out afterwards (/dev/bootlog): one failed boot then carries enough
+         * to decide between every cause the investigation named, instead of
+         * costing another trip to the machine. */
+        if (ahci_base) {
+            ahci_dump();
+        }
         return -1;
     }
 
@@ -844,6 +937,13 @@ void ahci_dump(void)
     vs = ahci_read32(AHCI_VS);
     serial_printf("ahci: CAP=%X GHC=%X PI=%X VS=%X ports=%d active=%d\n", cap, ghc, pi, vs,
                   (int)((cap & AHCI_CAP_NP_MASK) + 1), ahci_port);
+    /* CAP2 says whether a handoff exists, BOHC how it went, and PCS whether
+     * the Intel port PHYs are enabled at all; each is one of the named causes
+     * of a machine that finds no disk, so the dump that decides between them
+     * has to carry all three. */
+    serial_printf("ahci: CAP2=%X BOHC=%X PCS=%X\n", ahci_read32(AHCI_CAP2), ahci_read32(AHCI_BOHC),
+                  (unsigned)pci_read_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function,
+                                              AHCI_INTEL_PCS));
     serial_printf("ahci: dma cmdlist=%X fis=%X table=%X\n", (uint32_t)(uintptr_t)ahci_cmdlist,
                   (uint32_t)(uintptr_t)ahci_recv_fis, (uint32_t)(uintptr_t)ahci_cmdtable);
 
@@ -861,6 +961,9 @@ void ahci_dump(void)
         serial_printf("ahci:  port %d: SSTS=%X (DET=%d) "
                       "SIG=%X TFD=%X CMD=%X CLB=%X\n",
                       port, ssts, (int)(ssts & AHCI_DET_MASK), sig, tfd, cmd, clb);
+        serial_printf("ahci:  port %d: SCTL=%X SERR=%X\n", port,
+                      ahci_read32(ahci_port_off(port, AHCI_PxSCTL)),
+                      ahci_read32(ahci_port_off(port, AHCI_PxSERR)));
     }
 }
 
