@@ -1,7 +1,7 @@
 /**
  * Probes that a user touch of the page-cache window is killed, not honored.
  *
- * `PCWIN_BASE` (0xC0000000) is the base of the kernel-only demand-paged disk
+ * `PCWIN_BASE` (0xD0000000) is the base of the kernel-only demand-paged disk
  * window. A user process has no business there; the segments are flat, so the
  * read reaches the fault handler, which must treat a user-mode in-window fault
  * as an illegal access and segfault the process. The window branch is for the
@@ -20,7 +20,7 @@ typedef unsigned int size_t;
 #define SYS_EXIT  1
 #define SYS_WRITE 4
 
-#define PCWIN_BASE 0xC0000000u
+#define PCWIN_BASE 0xD0000000u
 
 static int sys_write(int fd, const void *buf, size_t count)
 {

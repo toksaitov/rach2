@@ -11,9 +11,14 @@
  * fault path polls and never sleeps, so it runs with interrupts off.
  */
 
-/* Base of the demand-paged window. Equal to USER_ADDR_MAX (0xC0000000): just
-   above user space and below the PCI MMIO hole. */
-#define PCWIN_BASE 0xC0000000u
+/* Base of the demand-paged window. It sat at USER_ADDR_MAX (0xC0000000) until
+   the first real machine: its firmware places device MMIO from 0xC0500000,
+   and since the window is sized down to the lowest BAR above its base, a
+   window starting at 0xC0000000 was five megabytes long there, smaller than
+   any disk worth mounting. So the window starts a quarter of the way up
+   instead. User space still ends at 0xC0000000, and the 0xC0000000-0xD0000000
+   gap is exactly where that firmware's identity-mapped MMIO lives. */
+#define PCWIN_BASE 0xD0000000u
 
 /* Resident cache capacity, in PAGE_SIZE frames. Must be a power of two: the
    lookup hash is sized at twice this. 1024 frames is a fixed 4 MiB

@@ -32,10 +32,11 @@ static void pc_platform_unmap(uint32_t va)
 
 #define PC_PAGE_SIZE PAGE_SIZE
 
-/* The default cap on the window when no device MMIO BAR sits below it: 256 MiB,
-   enough for the milestone file system and a working set past the resident cap,
-   while bounding the pre-mapped page tables to 64 (256 KiB). */
-#define PC_WINDOW_CAP 0x10000000u
+/* The default cap on the window when no device MMIO BAR sits below it:
+   512 MiB, which is the ceiling on a mounted disk file system, sized for the
+   machine that boots from its own disk rather than for a test image, while
+   bounding the pre-mapped page tables to 128 (512 KiB). */
+#define PC_WINDOW_CAP 0x20000000u
 
 static void pc_platform_map(uint32_t va, uintptr_t phys, int writable)
 {
