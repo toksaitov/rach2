@@ -91,7 +91,7 @@ MKDISK          = krffs/mkdisk.sh
         subset-test diskdiag-test reset-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
-        test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci \
+        test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci rach2-metal-grub-disk \
         isos test-iso os-simple-iso os-real-iso rach2-metal-image rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
@@ -271,6 +271,23 @@ os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	sh tools/mkdisk_grub.sh
+
+# `make rach2-metal-grub-disk`: the disk that goes INTO the laptop, imaged over
+# a USB adapter and swapped in place of the Windows disk. The full os-real
+# machine (/src, the compilers, the installer) with the metal init supervising
+# dropbear, the LAN address and the AHCI driver named in every menu entry, and
+# a KRFFS partition sized for real work rather than for a test. The kernel is
+# the ordinary read-write build, which is safe for one reason only: this image
+# is written to a disk the project owns, and it boots in the laptop only after
+# the Windows disk is physically out.
+METAL_GRUB_DISK = build/images/rach2-metal-grub.disk
+rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
+	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
+	RACH2_DISK_KRFFS_MB=500 \
+	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole" \
+	    sh tools/mkdisk_grub.sh build/rach2/kernel $(METAL_GRUB_DISK)
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
 # (-cpu max) and runs every probe, failing if any does not exit 0. The few probes

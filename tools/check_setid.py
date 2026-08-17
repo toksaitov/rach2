@@ -335,6 +335,13 @@ ALLOWLIST = {
     },
 }
 
+# The laptop's own-disk profile: os-real's surface with the metal init and
+# nothing else changed. Derived rather than duplicated so the two cannot
+# drift: a privilege change to os-real is a change to this profile too, which
+# is exactly right, since its manifest is os-real's with the one init line
+# edited and is built the same way.
+ALLOWLIST["rach2-metal-disk"] = dict(ALLOWLIST["os-real"], init="init-metal")
+
 #
 # The v2 on-disk node, byte for byte. struct krffs_node (krffs/krffs_node.h) is
 # `#pragma pack(1)`, so this one format string is the whole layout: magic,

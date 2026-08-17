@@ -39,9 +39,18 @@ KERNEL="${1:-$REPO/build/rach2/kernel}"
 OUT="${2:-$REPO/build/images/os-real-grub.disk}"
 KRFFS_BIN="$REPO/build/images/grub-krffs.bin"
 
+# Three knobs for a disk aimed at a particular machine, each defaulting to
+# exactly what this script always built so no existing caller changes:
+# the manifest staged into the KRFFS partition, that partition's size, and
+# extra kernel command-line tokens appended to every menu entry (a real
+# machine needs its address and its disk driver named; QEMU's defaults need
+# neither).
+MANIFEST="${RACH2_DISK_MANIFEST:-$REPO/krffs/manifests/os-real.manifest}"
+KRFFS_MB="${RACH2_DISK_KRFFS_MB:-47}"
+EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
+
 GAP_MB=1
 BOOT_MB=16
-KRFFS_MB=47
 # The candidate slot: install-kernel rewrites these bytes in place and never
 # touches FAT metadata, so the file's size is fixed at build time.
 SLOT_BYTES=2097152
@@ -59,7 +68,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 # The KRFFS partition image, sized to partition 2, built with the host tools.
-sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/os-real.manifest" \
+sh "$REPO/krffs/mkimage.sh" "$MANIFEST" \
     "$KRFFS_BIN" "$KRFFS_MB"
 
 # The GRUB config lives on the host so the container does not have to escape it.
@@ -120,6 +129,15 @@ menuentry "Rach2 (kernel debug shell)" --id debug {
     boot
 }
 CFG
+
+# The per-machine tokens ride into every entry the same way, appended after
+# the tokens the install contract fixes. A sed over the finished file keeps
+# the heredoc above quoted, which keeps GRUB's own ${...} variables out of the
+# shell's reach.
+if [ -n "$EXTRA_APPEND" ]; then
+    sed "s|rach2.root=disk|rach2.root=disk $EXTRA_APPEND|" "$GRUB_CFG" > "$GRUB_CFG.new"
+    mv "$GRUB_CFG.new" "$GRUB_CFG"
+fi
 
 # Assemble with mtools (FAT) and a hand embed of GRUB's boot code, never a loop
 # mount: loop devices destabilize Docker Desktop. The FAT boot partition is
