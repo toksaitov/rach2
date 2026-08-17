@@ -81,6 +81,13 @@
 #define AHCI_SCTL_DET_INIT 0x1u
 #define AHCI_SCTL_DET_NONE 0x0u
 
+/* SCTL.IPM with every link power state forbidden: partial, slumber and
+   DevSleep. Forbidding them host-side also makes the HBA refuse the DEVICE'S
+   requests to enter them, so one write covers both halves of what Windows
+   calls HIPM and DIPM. */
+#define AHCI_SCTL_IPM_MASK        0xF00u
+#define AHCI_SCTL_IPM_DISABLE_ALL 0x700u
+
 /* GHC.HR: the HBA-wide reset, which the HBA clears when it is done. */
 #define AHCI_GHC_HR 0x00000001u
 
@@ -410,10 +417,22 @@ static int ahci_port_comreset(int port)
 
     ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_FRE);
 
-    ahci_write32(sctl_off, (sctl & ~AHCI_SCTL_DET_MASK) | AHCI_SCTL_DET_INIT);
+    /* Link power management is forbidden outright, in the same write that
+     * drives the reset and permanently thereafter. This machine's own history
+     * is the reason: with its previous operating system, a warm reboot left
+     * this drive invisible even to the firmware until power was removed, and
+     * disabling the link power states in the storage driver cured it. Linux
+     * documents the same temperament in this drive family (its quirk table
+     * marks "Samsung SSD 870*", scoped there to ATI controllers), and its
+     * strongest policy, ATA_LPM_MAX_POWER, is exactly this value: SControl
+     * IPM = 7, every transition disabled (libata-sata.c). A diagnostic that
+     * reads a sector an hour after boot must not find that the link slept in
+     * between and the drive never woke. */
+    sctl = (sctl & ~(AHCI_SCTL_DET_MASK | AHCI_SCTL_IPM_MASK)) | AHCI_SCTL_IPM_DISABLE_ALL;
+    ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_INIT);
     /* At least 1 ms with COMRESET asserted. */
     k_udelay(2000);
-    ahci_write32(sctl_off, (sctl & ~AHCI_SCTL_DET_MASK) | AHCI_SCTL_DET_NONE);
+    ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_NONE);
 
     /* The link then has to negotiate. A port with nothing on it never reaches
      * DET=3, so this is bounded and its expiry is an ordinary answer. */
