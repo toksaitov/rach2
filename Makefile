@@ -91,7 +91,7 @@ MKDISK          = krffs/mkdisk.sh
         subset-test diskdiag-test reset-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
-        test-disk-ahci persist-test-ahci stress-test-ahci \
+        test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci \
         isos test-iso os-simple-iso os-real-iso rach2-metal-image rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
@@ -647,6 +647,21 @@ test-disk-ahci: rach2 tests krffs
 	    $(AHCI_ATTACH) \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
 
+# `make test-disk-q35`: the same disk proof on the q35 machine, whose AHCI
+# controller is built in at 0:31.2, function 2 of the multi-function device 31.
+# That is the laptop's exact topology, and no other test exercises it: every
+# other AHCI test attaches a separate controller that lands at function 0, so a
+# scan that never walked past function 0 would pass all of them and fail on
+# the real machine.
+test-disk-q35: rach2 tests krffs
+	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
+	    --qemu-arg=-machine --qemu-arg=q35 --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ide.0 \
+	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
+
 persist-test-ahci: rach2 tests krffs
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
 	python3 tools/harness.py --kernel build/rach2/kernel \
@@ -835,6 +850,7 @@ help:
 	@echo "  make subset-test  the kernel boots with any subset of its optional devices"
 	@echo "  make diskdiag-test  a disk read over SSH without mounting it or writing a byte"
 	@echo "  make reset-test  each of the three restart mechanisms on its own"
+	@echo "  make test-disk-q35  the disk proof on the laptop's exact PCI topology"
 	@echo "  make tcc-test    the machine compiles a program on itself"
 	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
 	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"
