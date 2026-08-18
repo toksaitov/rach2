@@ -510,6 +510,8 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
         buf[i] = tcb->recv_buf[(tcb->recv_head + i) & (TCP_RING_SIZE - 1)];
     }
     tcb->recv_head += copy_len;
+
+    tcp_window_update(sock);
     return (int)copy_len;
 }
 
@@ -540,6 +542,8 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
         buf[i] = tcb->recv_buf[(tcb->recv_head + i) & (TCP_RING_SIZE - 1)];
     }
     tcb->recv_head += copy_len;
+
+    tcp_window_update(sock);
     return (int)copy_len;
 }
 

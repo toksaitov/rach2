@@ -160,4 +160,12 @@ void tcp_close(struct socket *sock);
 /** Report whether a stream socket has a peer (ESTABLISHED or any later state). */
 int tcp_is_connected(struct socket *sock);
 
+/**
+ * Announce a receive window that reopened after the reader drained the ring.
+ * Sends at most one bare ACK, and only from ESTABLISHED. Safe to call after
+ * every read: it stays quiet until the window has grown enough to be worth a
+ * segment. Takes `net_lock` itself.
+ */
+void tcp_window_update(struct socket *sock);
+
 #endif /* _TCP_H_ */

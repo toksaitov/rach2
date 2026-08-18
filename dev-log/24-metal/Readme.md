@@ -127,7 +127,7 @@ Two throughput numbers, which the plan asked for and which say different things:
 | A whole SSH session: connect, authenticate, run, close | 0.3 s | comparable |
 | Bulk transfer, 104 KB one direction | 0.9 KB/s | 1.1 KB/s |
 
-The interactive figure is what remote development needs and it is fine. The bulk figure is poor, and the comparison is the point: the polled driver on real hardware is within twenty percent of the interrupt-driven one in QEMU, so this is not the new driver and not the 100 Hz poll. It is a property of the TCP stack that predates this milestone, and it is recorded here as the next thing worth chasing rather than attributed to the hardware.
+The interactive figure is what remote development needs and it is fine. The bulk figure is poor, and the comparison is the point: the polled driver on real hardware is within twenty percent of the interrupt-driven one in QEMU, so this is not the new driver and not the 100 Hz poll. It is a defect in the TCP stack that predates this milestone, and it is recorded here as the next thing worth chasing rather than attributed to the hardware. (Milestone 25 phase A found and fixed it: the receiver never told a peer that its window had reopened, so the peer's persist timer set the rate. The same 64 KiB transfer now takes 0.291 s instead of 60.179 s. See `dev-log/25-sealed/Readme.md`.)
 
 ## What waits for the hardware
 

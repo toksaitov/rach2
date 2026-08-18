@@ -19,6 +19,7 @@
  */
 
 #include "tcp.h"
+#include "rcvwnd.h"
 #include "../socket/socket.h"
 #include "../ip/ip.h"
 #include "../core/byteorder.h"
@@ -889,6 +890,50 @@ int tcp_is_connected(struct socket *sock)
      * states (SYN_SENT/RCVD), LISTEN, and CLOSED have no peer to name. The state
      * enum is ordered so ESTABLISHED and later compare >= TCP_ESTABLISHED. */
     return tcb->state >= TCP_ESTABLISHED;
+}
+
+/**
+ * Announce a receive window that reopened because the reader drained the ring.
+ *
+ * The inbound paths recompute `rcv_wnd` whenever a segment arrives, so the peer
+ * learns about a window that SHRANK. Nothing told it about a window that grew:
+ * the reader advances `recv_head` in syscall context and sends nothing, so a
+ * peer that filled the buffer waited for its own persist timer before probing
+ * again. That is what held bulk receive to about a kilobyte a second while
+ * transmit ran two hundred times faster.
+ *
+ * Only ESTABLISHED is worth a segment. In the closing states the peer has
+ * either stopped sending or is about to, so an update buys nothing and this
+ * stays out of the state machine entirely: the only thing sent is a bare ACK
+ * carrying the new window.
+ *
+ * Called from syscall context without `net_lock` held, so it takes the lock
+ * itself, the same as `tcp_send`, and holds it from the `sock->tcb` snapshot
+ * through the send: an IRQ-side `tcp_close` detaches the TCB by NULLing
+ * `sock->tcb`, so a re-read after the check could hand a freed block to
+ * `tcp_send_flags`.
+ */
+void tcp_window_update(struct socket *sock)
+{
+    struct tcb *tcb;
+    uint32_t flags;
+    uint16_t wnd;
+
+    if (!sock) {
+        return;
+    }
+
+    flags = net_lock();
+    tcb = sock->tcb;
+    if (tcb && tcb->state == TCP_ESTABLISHED) {
+        wnd = rcvwnd_update(tcb->rcv_wnd, tcb->recv_tail - tcb->recv_head,
+                            TCP_RING_SIZE, TCP_MSS);
+        if (wnd != 0u) {
+            tcb->rcv_wnd = wnd;
+            tcp_send_flags(tcb, TCP_ACK);
+        }
+    }
+    net_unlock(flags);
 }
 
 /*

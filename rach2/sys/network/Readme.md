@@ -15,6 +15,7 @@ A from-scratch TCP/IP stack for the Rach2 kernel. It brings up, bottom to top: a
 | `ip/icmp.*`        | Echo (ping): replies to requests, sends our own and sleeps for the reply    |
 | `udp/`             | Datagrams, a port-to-socket table, length validation                        |
 | `tcp/`             | RFC 793 state machine with RFC 6298 RTT/RTO and RFC 5681 congestion control |
+| `tcp/rcvwnd.*`     | When a drained receive buffer is worth announcing (RFC 1122 4.2.3.3)        |
 | `socket/`          | Socket pool, blocking recv/accept/connect, refcounted lifecycle             |
 | `core/`            | `init_network`, byte-order helpers, shared configuration                    |
 | `netconsole.*`     | The serial stream repeated as broadcast frames, for a machine with no serial port |
@@ -64,6 +65,24 @@ The parsing refuses more than it accepts, because the only thing worse than refu
 ## Loopback
 
 The stack knows exactly one local address, and `127/8` is an alias for it: `connect`, `sendto`, and the `ping` sub-call canonicalize a `127/8` destination to `10.0.2.15` at the socket boundary, before any connection state exists, so no lower layer ever carries a second local address and `getsockname`/`getpeername` report the canonical one. A datagram addressed to ourselves then never touches ARP or the wire: `ip_tx` copies it onto a small loopback ring, and the 100 Hz timer delivers the queued datagrams to `ip_rx` (`ip_loop_drain`), under the same interrupts-off discipline as NIC delivery; delivering inline would reenter TCP under the sender's own call frame. A full ring drops the datagram, exactly as a full NIC ring would. There is no loopback interface proper (no routes, no `lo` device): the alias is the whole feature, and `loopprobe` proves it end to end. Because a genuine loopback datagram carries our own address as its source, `ip_rx` takes a `from_loopback` flag and drops a wire packet whose source is our own address or `127/8`: such a martian is a spoof no real peer sends, and without the check it could steer a reply onto the loopback ring or out the wire carrying a loopback source.
+
+## The receive window
+
+A TCP receiver has two things to tell its peer about the room left in its buffer, and until recently this stack only told it one. The inbound paths recompute `rcv_wnd` whenever a segment arrives, so a window that shrank was reported at once. A window that grew was reported to nobody: the reader advances `recv_head` in syscall context, and that path sent nothing at all. A peer that had filled the buffer therefore waited for its own persist timer before probing again, and that timer, not the network, set the rate. Bulk receive ran at about a kilobyte a second while transmit ran two hundred times faster over the same connection.
+
+`socket_tcp_recv` and `socket_tcp_try_recv` now call `tcp_window_update` after advancing `recv_head`. It takes `net_lock` itself, the same as `tcp_send`, sends at most one bare ACK, and only from ESTABLISHED, since the closing states have no reader to make room. Whether to send at all is the whole of `tcp/rcvwnd.c`, a pure function with no state and no transmit: stay quiet until the window has grown by one maximum segment size or half the buffer, whichever is smaller, then announce the whole new window at once. Announcing sooner would spend a segment per byte read and draw segments just as small in reply, which is the silly-window syndrome RFC 1122 4.2.3.3 exists to prevent.
+
+Measured host to guest over SSH into `/dev/null`, on the same image and the same QEMU invocation, with the call removed and restored:
+
+| Bytes   | Without the update | With it |
+|---------|--------------------|---------|
+| 4096    |                    | 0.361 s |
+| 65536   | 60.179 s           | 0.291 s |
+| 1048576 |                    | 0.408 s |
+
+That is 1089 B/s against 225 KB/s at 64 KiB, and 2.57 MB/s at a megabyte.
+
+One limit belongs here, because the rule above does not cover it. `rcvwnd_update` governs the update the reader triggers, not every window this stack advertises: the inbound paths still recompute `rcv_wnd` from the free space whenever they owe an ACK, so a segment arriving after a small read can advertise a window below the bar. That is older than the update path and the update path largely hides it, since a reader draining normally announces a full-sized window before a peer has cause to probe. Fixing it properly means holding the advertised right edge fixed as data is accepted, which changes the receive state machine and wants a stateful test; it is recorded in `dev-log/25-sealed/Readme.md` rather than done here.
 
 ## Socket interface
 
