@@ -41,7 +41,7 @@ Every tool that opens a backing file (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`
 
 The GRUB-bootable disk lives one level up, in `tools/`, because it leans on the kernel and a Docker container rather than on the KRFFS tools alone:
 
-* `tools/mkdisk_grub.sh`: Builds a BIOS-bootable disk: a FAT32 boot partition holding the kernel and GRUB, a KRFFS partition with the os-real tree, and optionally a third FAT32 partition for a recovery system, assembled in a throwaway Docker container (`make os-real-grub-disk`, `make rach2-metal-grub-disk`, `make rach2-sealed-disk`)
+* `tools/mkdisk_grub.sh`: Builds a BIOS-bootable disk: a FAT32 boot partition holding the kernel, GRUB's immutable stub and the rewritable menu slot beside it, a KRFFS partition with the os-real tree, and optionally a third FAT32 partition for a recovery system, assembled in a throwaway Docker container (`make os-real-grub-disk`, `make rach2-metal-grub-disk`, `make rach2-sealed-disk`)
 * `tools/grub_embed.py`: Writes GRUB's `boot.img` into the MBR and `core.img` into the post-MBR gap and patches their pointers, the install `grub-bios-setup` would do but cannot on a Docker overlay filesystem
 
 ## Structure
@@ -201,6 +201,10 @@ The same os-real tree also goes onto a real disk image, which the kernel mounts 
 
     make os-real-disk        # build/images/os-real.disk: MBR + a 48 MiB KRFFS partition
     make os-real-grub-disk   # build/images/os-real-grub.disk: BIOS-bootable, GRUB + a FAT boot partition + KRFFS (needs Docker)
+
+The boot partition holds five files, all preallocated when the disk is built so no later write extends one or moves its cluster chain. `/boot/kernel` is the candidate slot `bootctl kernel` rewrites and `/boot/fallback` the untouched copy. `/boot/grub/grubenv` is the 1024-byte state block that selects between them. `/boot/grub/grub.cfg` is the immutable stub: it defines every entry the machine needs to boot, in a fixed order because `set fallback` names an index and not a name, and only then sources `/boot/boot.cfg`, the rewritable menu slot `bootctl config` overwrites in place. A staged menu that is missing, truncated mid-write, or simply wrong therefore costs nothing but the entries it meant to add: the stub's own are already defined and hold the low indices.
+
+A staged menu is GRUB script that `source` runs, so whoever writes it can direct the boot: it can set the environment keys the stub reads, or load a kernel itself. That is the same authority replacing the candidate kernel already carries. What the stub guarantees is different and narrower: every entry the machine needs is defined before the staged file is read, so a menu that is missing, truncated mid-write or unparseable leaves the machine booting.
     make rach2-sealed-disk   # build/images/rach2-sealed.disk: the sealed laptop disk, 630 MiB (needs Docker)
 
 Attaching that image is booting it: `DISK=` mounts KRFFS from the platter, so what comes up is the writable Rach2 rather than the disposable RAM module.

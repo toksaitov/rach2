@@ -29,6 +29,8 @@ static int fails;
         }                                   \
     } while (0)
 
+static const char *arg2_out;
+
 static enum bootverb parse(char *a1, char *a2, char *a3, const char **arg)
 {
     char *argv[4];
@@ -44,7 +46,8 @@ static enum bootverb parse(char *a1, char *a2, char *a3, const char **arg)
     if (a3) {
         argv[argc++] = a3;
     }
-    return bootverb_parse(argc, argv, arg);
+    arg2_out = 0;
+    return bootverb_parse(argc, argv, arg, &arg2_out);
 }
 
 int main(void)
@@ -74,6 +77,32 @@ int main(void)
           "kernel without a path is refused, not treated as status");
     CHECK(parse((char *)"kernel", (char *)"/tmp/k", (char *)"extra", &arg) == BOOTVERB_NONE,
           "kernel with a surplus argument is refused, not silently trimmed");
+
+    CHECK(parse((char *)"config", (char *)"/tmp/m", 0, &arg) == BOOTVERB_CONFIG,
+          "config with a path is a verb");
+    CHECK(parse((char *)"trial", (char *)"candidate", 0, &arg) == BOOTVERB_TRIAL,
+          "trial with an entry is a verb");
+    CHECK(parse((char *)"trial", (char *)"candidate", (char *)"x", &arg) == BOOTVERB_NONE,
+          "trial with a surplus argument is refused");
+    CHECK(parse((char *)"config", (char *)"/tmp/m", (char *)"x", &arg) == BOOTVERB_NONE,
+          "config with a surplus argument is refused");
+    CHECK(parse((char *)"env", (char *)"a", (char *)"b", 0) == BOOTVERB_ENV,
+          "a caller that wants neither operand may pass NULL for both");
+    CHECK(parse((char *)"cancel", 0, 0, &arg) == BOOTVERB_CANCEL, "cancel is a verb");
+
+    /* env is the one verb whose operand count varies: a key alone reads, a key
+       and a value write, and the caller tells them apart by the second. */
+    CHECK(parse((char *)"env", (char *)"next_entry", 0, &arg) == BOOTVERB_ENV,
+          "env with a key alone is a verb");
+    CHECK(arg2_out == 0, "and yields no value");
+    CHECK(parse((char *)"env", (char *)"next_entry", (char *)"candidate", &arg) == BOOTVERB_ENV,
+          "env with a key and a value is a verb");
+    CHECK(arg2_out != 0 && strcmp(arg2_out, "candidate") == 0, "and yields the value");
+    CHECK(parse((char *)"env", 0, 0, &arg) == BOOTVERB_NONE, "env with no key is refused");
+    CHECK(parse((char *)"config", 0, 0, &arg) == BOOTVERB_NONE, "config with no path is refused");
+    CHECK(parse((char *)"trial", 0, 0, &arg) == BOOTVERB_NONE, "trial with no entry is refused");
+    CHECK(parse((char *)"cancel", (char *)"x", 0, &arg) == BOOTVERB_NONE,
+          "cancel with a surplus argument is refused");
     CHECK(parse((char *)"status", (char *)"extra", 0, &arg) == BOOTVERB_NONE,
           "status with a surplus argument is refused");
     CHECK(parse((char *)"commit", (char *)"extra", 0, &arg) == BOOTVERB_NONE,
@@ -102,12 +131,13 @@ int main(void)
           "a known verb can still fail to parse, which is what separates the two diagnostics");
 
     {
-        static char *const names[] = {(char *)"status", (char *)"commit", (char *)"kernel"};
+        static char *const names[] = {(char *)"status", (char *)"commit", (char *)"cancel",
+                                      (char *)"kernel", (char *)"config", (char *)"trial",
+                                      (char *)"env"};
         int i;
 
-        for (i = 0; i < 3; i++) {
-            CHECK(bootverb_known(names[i]) &&
-                      parse(names[i], (char *)"/tmp/k", (char *)"/tmp/j", &arg) == BOOTVERB_NONE,
+        for (i = 0; i < 7; i++) {
+            CHECK(bootverb_known(names[i]),
                   "every verb the parser takes is also one the diagnostic knows");
         }
     }

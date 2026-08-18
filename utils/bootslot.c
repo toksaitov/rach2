@@ -176,7 +176,8 @@ struct scan_state {
     uint32_t kernel_cluster, kernel_size;
     uint32_t fallback_cluster, fallback_size;
     uint32_t grubenv_cluster, grubenv_size;
-    int have_kernel, have_fallback, have_grubenv;
+    uint32_t menu_cluster, menu_size;
+    int have_kernel, have_fallback, have_grubenv, have_menu;
 };
 
 /**
@@ -256,6 +257,10 @@ static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int d
                 st->grubenv_cluster = cluster;
                 st->grubenv_size = size;
                 st->have_grubenv = 1;
+            } else if (path == 1 && name11_eq(e, "BOOT    CFG") && !is_dir) {
+                st->menu_cluster = cluster;
+                st->menu_size = size;
+                st->have_menu = 1;
             }
 
             if (is_dir) {
@@ -394,7 +399,7 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
         return fail(err, errlen, "no /boot/grub/grubenv on the volume");
     }
 
-    /* Resolve the three chains for I/O. The scan already visited them, so the
+    /* Resolve the four chains for I/O. The scan already visited them, so the
        bitmap is cleared first and the walk re-proves each chain alone; the
        cross-link property was proved by the scan above. */
     memset(bs->visited, 0, sizeof(bs->visited));
@@ -403,8 +408,20 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
         resolve_file(bs, st.fallback_cluster, st.fallback_size, &bs->fallback, "fallback", err,
                      errlen) != 0 ||
         resolve_file(bs, st.grubenv_cluster, st.grubenv_size, &bs->grubenv, "grubenv", err,
-                     errlen) != 0) {
+                     errlen) != 0 ||
+        (st.have_menu &&
+         resolve_file(bs, st.menu_cluster, st.menu_size, &bs->menu, "boot.cfg", err, errlen) !=
+             0)) {
         return -1;
+    }
+    bs->have_menu = st.have_menu;
+    /* A slot whose size is not a whole number of sectors cannot be rewritten
+       whole, and one of no size cannot be rewritten at all. Either is a disk
+       built wrong rather than a menu written wrong, so it is refused here where
+       the volume is judged, not later where a write would half-succeed. */
+    if (bs->have_menu &&
+        (bs->menu.size == 0 || (bs->menu.size % BOOTSLOT_SECTOR) != 0)) {
+        return fail(err, errlen, "the menu slot is not a whole number of sectors");
     }
     if (bs->grubenv.size != ENV_BYTES) {
         return fail(err, errlen, "the environment block is not 1024 bytes");
@@ -521,7 +538,7 @@ static int env_edit(struct bootslot *bs, const char *set_key, const char *set_va
     static uint8_t env[ENV_BYTES];
     static uint8_t out[ENV_BYTES];
     uint32_t n = 0, i = 0, s;
-    size_t keylen = strlen(key);
+    size_t keylen = (key != NULL) ? strlen(key) : 0;
 
     uint32_t end = 0;
 
@@ -552,7 +569,8 @@ static int env_edit(struct bootslot *bs, const char *set_key, const char *set_va
         }
         i++;
         len = (uint32_t)i - start;
-        if (len > keylen && memcmp(env + start, key, keylen) == 0 && env[start + keylen] == '=') {
+        if (key != NULL && len > keylen && memcmp(env + start, key, keylen) == 0 &&
+            env[start + keylen] == '=') {
             continue; /* the line being replaced */
         }
         if (drop_key != NULL) {
@@ -569,15 +587,20 @@ static int env_edit(struct bootslot *bs, const char *set_key, const char *set_va
         memcpy(out + n, env + start, len);
         n += len;
     }
-    if (n + keylen + 1 + strlen(value) + 1 > ENV_BYTES) {
-        return fail(err, errlen, "the environment block overflows");
+    /* A NULL key writes no line at all, which is how a key is removed rather
+       than emptied. For `next_entry` the two are different states: an empty
+       value is the marker a trial boot leaves and a commit requires. */
+    if (key != NULL) {
+        if (n + keylen + 1 + strlen(value) + 1 > ENV_BYTES) {
+            return fail(err, errlen, "the environment block overflows");
+        }
+        memcpy(out + n, key, keylen);
+        n += keylen;
+        out[n++] = '=';
+        memcpy(out + n, value, strlen(value));
+        n += strlen(value);
+        out[n++] = '\n';
     }
-    memcpy(out + n, key, keylen);
-    n += keylen;
-    out[n++] = '=';
-    memcpy(out + n, value, strlen(value));
-    n += strlen(value);
-    out[n++] = '\n';
     memset(out + n, '#', ENV_BYTES - n);
 
     for (s = 0; s < ENV_BYTES / BOOTSLOT_SECTOR; s++) {
@@ -592,6 +615,58 @@ static int env_edit(struct bootslot *bs, const char *set_key, const char *set_va
         return fail(err, errlen, "the environment block did not read back as written");
     }
     return 0;
+}
+
+int bootslot_write_menu(struct bootslot *bs, const uint8_t *text, uint32_t size, char *err,
+                        size_t errlen)
+{
+    static uint8_t sector[BOOTSLOT_SECTOR];
+    static uint8_t back[BOOTSLOT_SECTOR];
+    uint32_t slot = bs->menu.size;
+    uint32_t sectors = slot / BOOTSLOT_SECTOR;
+    uint32_t n, i;
+
+    if (!bs->have_menu) {
+        return fail(err, errlen, "this disk has no menu slot");
+    }
+    if (size > slot) {
+        return fail(err, errlen, "the menu does not fit the slot");
+    }
+
+    for (n = 0; n < sectors; n++) {
+        for (i = 0; i < BOOTSLOT_SECTOR; i++) {
+            uint32_t at = n * BOOTSLOT_SECTOR + i;
+
+            sector[i] = (at < size) ? text[at] : (uint8_t)'#';
+        }
+        if (file_write_sector(bs, &bs->menu, n, sector) != 0) {
+            return fail(err, errlen, "the menu slot did not write");
+        }
+        if (file_read_sector(bs, &bs->menu, n, back) != 0) {
+            return fail(err, errlen, "the menu slot did not read back");
+        }
+        for (i = 0; i < BOOTSLOT_SECTOR; i++) {
+            if (back[i] != sector[i]) {
+                return fail(err, errlen, "the menu slot did not read back what was written");
+            }
+        }
+    }
+    return 0;
+}
+
+int bootslot_env_set(struct bootslot *bs, const char *key, const char *value, char *err,
+                     size_t errlen)
+{
+    return env_edit(bs, key, value, NULL, err, errlen);
+}
+
+int bootslot_env_drop(struct bootslot *bs, const char *key, char *err, size_t errlen)
+{
+    /* The key is dropped rather than set empty, and the difference is the whole
+       trial state machine: `bootslot_commit` reads an empty `next_entry` as the
+       consumed marker GRUB leaves after a trial actually booted. Writing that
+       marker by hand would let a kernel that never ran be committed. */
+    return env_edit(bs, NULL, NULL, key, err, errlen);
 }
 
 int bootslot_read_env(struct bootslot *bs, uint8_t *out, char *err, size_t errlen)

@@ -51,6 +51,7 @@ KRFFS_BIN="$REPO/build/images/grub-krffs.bin"
 MANIFEST="${RACH2_DISK_MANIFEST:-$REPO/krffs/manifests/os-real.manifest}"
 KRFFS_MB="${RACH2_DISK_KRFFS_MB:-47}"
 EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
+STATIC_APPEND="${RACH2_DISK_STATIC_APPEND:-}"
 
 # Three more for the sealed disk, each defaulting to what this script always
 # built. BOOT_MB is the FAT partition; CLUSTER is mformat's sectors-per-cluster
@@ -86,6 +87,10 @@ FAT_SERIAL=1acef00d
 # The candidate slot: bootctl rewrites these bytes in place and never
 # touches FAT metadata, so the file's size is fixed at build time.
 SLOT_BYTES=2097152
+# The rewritable menu's slot. bootctl overwrites these bytes in place and never
+# extends the file or moves its chain, so the size is fixed at build time and is
+# a whole number of clusters at either geometry this script produces.
+MENU_BYTES=8192
 # One spare MiB so the last partition ends before the device edge (parted
 # rejects a partition that ends exactly at the device size).
 DISK_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + 1))
@@ -123,6 +128,81 @@ cat > "$GRUB_CFG" <<'CFG'
 serial --unit=0 --speed=115200
 terminal_output serial console
 load_env
+
+# Every entry this file owns is defined before the rewritable half is read, and
+# the order below is a contract. `source` merges the second file's entries onto
+# the tail of this list, so these keep the low indices whatever that file holds;
+# `set fallback` takes an entry NUMBER and an id does not resolve, so a menu
+# supplied later cannot move what the fallback points at. A boot.cfg that is
+# missing, truncated mid-write or wrong leaves these standing and the machine
+# still boots.
+#
+#   0 candidate   1 fallback   2 candidate-static   3 fallback-static
+#   4 debug       5 recovery
+
+menuentry "Rach2" --id candidate {
+    multiboot /boot/kernel rach2.root=disk rach2.slot=candidate RACH2_APPEND_TOKENS
+    boot
+}
+
+menuentry "Rach2 (fallback kernel)" --id fallback {
+    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback RACH2_APPEND_TOKENS
+    boot
+}
+
+menuentry "Rach2 (static address)" --id candidate-static {
+    multiboot /boot/kernel rach2.root=disk rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    boot
+}
+
+menuentry "Rach2 (fallback kernel, static address)" --id fallback-static {
+    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    boot
+}
+
+menuentry "Rach2 (kernel debug shell)" --id debug {
+    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback rach2.rescue RACH2_APPEND_TOKENS
+    boot
+}
+
+# Not bootable until the phase that builds it: the kernel and RAM image it names
+# live on partition 3 and are staged later. It is defined now because the
+# numbers above are a contract and adding an entry afterwards would move them.
+menuentry "Rach2 (recovery, not yet built)" --id recovery {
+    set root=(hd0,msdos3)
+    multiboot /boot/recovery rach2.root=ram RACH2_APPEND_TOKENS
+    module /boot/recovery.krffs
+    boot
+}
+
+# The rewritable half. `configfile` would open a new environment context, show
+# its own menu on the spot and never come back here; `source` merges into this
+# one and returns. The test keeps a missing file from being an error.
+#
+# This file is GRUB script, not a list of declarations, so whoever can write it
+# can direct this boot: `source` will run a `set next_entry=` in it, or a
+# `multiboot` and `boot` at its top level, before control comes back here. That
+# is the same authority level one already grants, since `bootctl kernel`
+# replaces the kernel that boots next. It is not what the entries above defend
+# against.
+#
+# What they defend against is a file that is damaged rather than written: a
+# power cut during a write leaves a prefix of a new menu above the tail of an
+# old one, and one slot overwritten in place cannot be written atomically. Every
+# entry the machine needs is already defined by the time this line runs, so a
+# `boot.cfg` that is missing, truncated, or unparseable costs only the entries
+# it meant to add.
+if [ -f /boot/boot.cfg ]; then
+    source /boot/boot.cfg
+fi
+
+# The install contract (dev-log/23-install/plan.md): /boot/kernel is the
+# candidate slot bootctl rewrites, /boot/fallback the untouched copy, and
+# /boot/grub/grubenv the 1024-byte state block both GRUB and the installer edit
+# in place. saved_entry and next_entry are compared against the exact menu ids
+# and any other value selects the fallback entry, because the block has no
+# checksum and a torn write can still load; next_entry is consumed here, the
+# one-boot trial, since this GRUB does not consume it built-in.
 set default=fallback
 if [ "${saved_entry}" = "candidate" ]; then set default=candidate; fi
 if [ "${next_entry}" = "candidate" ]; then
@@ -135,41 +215,38 @@ if [ "${next_entry}" = "fallback" ]; then
     set next_entry=
     save_env next_entry
 fi
+if [ "${next_entry}" = "candidate-static" ]; then
+    set default=candidate-static
+    set next_entry=
+    save_env next_entry
+fi
+if [ "${next_entry}" = "fallback-static" ]; then
+    set default=fallback-static
+    set next_entry=
+    save_env next_entry
+fi
 if [ "${next_entry}" = "debug" ]; then
     set default=debug
     set next_entry=
     save_env next_entry
 fi
-# The fallback variable takes the entry NUMBER (an id does not resolve), so
-# the menu order below is part of this file's contract: candidate 0,
-# fallback 1, debug 2.
+if [ "${next_entry}" = "recovery" ]; then
+    set default=recovery
+    set next_entry=
+    save_env next_entry
+fi
+
 set fallback=1
 set timeout=3
-
-menuentry "Rach2" --id candidate {
-    multiboot /boot/kernel rach2.root=disk rach2.slot=candidate
-    boot
-}
-
-menuentry "Rach2 (fallback kernel)" --id fallback {
-    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback
-    boot
-}
-
-menuentry "Rach2 (kernel debug shell)" --id debug {
-    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback rach2.rescue
-    boot
-}
 CFG
 
-# The per-machine tokens ride into every entry the same way, appended after
-# the tokens the install contract fixes. A sed over the finished file keeps
-# the heredoc above quoted, which keeps GRUB's own ${...} variables out of the
-# shell's reach.
-if [ -n "$EXTRA_APPEND" ]; then
-    sed "s|rach2.root=disk|rach2.root=disk $EXTRA_APPEND|" "$GRUB_CFG" > "$GRUB_CFG.new"
-    mv "$GRUB_CFG.new" "$GRUB_CFG"
-fi
+# The per-machine tokens ride into the entries through two placeholders, so the
+# heredoc above stays quoted and GRUB's own ${...} variables never reach the
+# shell. The static-address entries take their own set, which is empty until the
+# phase that gives this machine an address; they exist now to hold their numbers.
+sed -e "s|RACH2_STATIC_TOKENS|$STATIC_APPEND|" \
+    -e "s|RACH2_APPEND_TOKENS|$EXTRA_APPEND|" "$GRUB_CFG" > "$GRUB_CFG.new"
+mv "$GRUB_CFG.new" "$GRUB_CFG"
 
 # Assemble with mtools (FAT) and a hand embed of GRUB's boot code, never a loop
 # mount: loop devices destabilize Docker Desktop. The FAT boot partition is
@@ -224,6 +301,13 @@ docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
     mcopy -i /tmp/p1.img /tmp/candidate.pad ::/boot/kernel
     mcopy -i /tmp/p1.img '$KERNEL' ::/boot/fallback
     mcopy -i /tmp/p1.img '$GRUB_CFG' ::/boot/grub/grub.cfg
+    # The rewritable menu, empty but full size. A '#' fill rather than zeros
+    # because GRUB reads the whole file and a comment is what an empty menu
+    # looks like to it; the first line says so to anyone who reads the disk.
+    dd if=/dev/zero bs=1 count=$MENU_BYTES status=none | tr '\\0' '#' > /tmp/boot.cfg
+    printf '# no menu staged; bootctl config replaces this file\n' \
+        | dd of=/tmp/boot.cfg conv=notrunc status=none
+    mcopy -i /tmp/p1.img /tmp/boot.cfg ::/boot/boot.cfg
     grub-editenv /tmp/genv create
     grub-editenv /tmp/genv set saved_entry=candidate
     mcopy -i /tmp/p1.img /tmp/genv ::/boot/grub/grubenv
@@ -236,14 +320,15 @@ docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
     CFGBYTES=\$(stat -c %s '$GRUB_CFG')
     : > /tmp/chains.txt
     for f in ::/boot/kernel ::/boot/fallback ::/boot/grub/grub.cfg \
-             ::/boot/grub/grubenv; do
+             ::/boot/grub/grubenv ::/boot/boot.cfg; do
         mshowfat -i /tmp/p1.img \$f >> /tmp/chains.txt
     done
     python3 -c '
 import sys, re
 seen = []
 sizes = {\"kernel\": $SLOT_BYTES, \"fallback\": int(sys.argv[1]),
-         \"grub.cfg\": int(sys.argv[2]), \"grubenv\": 1024}
+         \"grub.cfg\": int(sys.argv[2]), \"grubenv\": 1024,
+         \"boot.cfg\": $MENU_BYTES}
 # The cluster size comes from the volume that was just formatted, not from an
 # assumption: this compared cluster counts against sector counts, which was
 # only ever right because mformat happened to pick one sector per cluster.

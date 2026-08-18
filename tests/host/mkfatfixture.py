@@ -6,7 +6,7 @@ the FAT specification (BPB fields, two FAT copies, cluster chains, short
 directory entries), while utils/bootslot.c reads it, so the seam test compares
 two implementations of the format against each other. The well-formed image
 carries the shapes the walk must skip (a volume label, a long-name sequence,
-`.` and `..` entries in every subdirectory) and the three files the install
+`.` and `..` entries in every subdirectory) and the four files the boot
 contract names; every malformed option breaks exactly one fact.
 
 The default geometry is a 4 MiB small FAT32 with 512-byte clusters, the shape
@@ -19,7 +19,7 @@ Options (at most one):
     --fats-differ --loop --out-of-range --short-chain --cross-link
     --bpb-sector-size --bpb-fat-oversized --bpb-root-out --bpb-overflow
     --no-grubenv --small-candidate --fragmented --bad-fallback --cfg-short
-    --cluster8 --cluster8-past-end
+    --cluster8 --cluster8-past-end --menu-short --menu-odd --no-menu
 
 --cluster8 builds the same files at eight sectors per cluster instead of one,
 which is the geometry the sealed 64 MiB boot partition needs and the only one
@@ -53,6 +53,7 @@ BOOTDIR = 3
 GRUBDIR = 4
 EXTRADIR = 5
 KERNEL_FIRST = 16
+MENU_BYTES = 8192
 KERNEL_CLUSTERS = 4096
 FALLBACK_FIRST = KERNEL_FIRST + KERNEL_CLUSTERS + 16
 FALLBACK_CLUSTERS = 32
@@ -130,6 +131,11 @@ def main(argv):
     env_clusters = (1024 + cbytes - 1) // cbytes
     cfg_first = grubenv_first + env_clusters
     extra_first = cfg_first + 1
+    # The rewritable menu slot. bootslot_open requires it, the way it requires
+    # the kernel, the fallback and the environment block.
+    menu_bytes = MENU_BYTES
+    menu_clusters = (menu_bytes + cbytes - 1) // cbytes
+    menu_first = extra_first + 1
 
     img = bytearray(TOTAL * SECTOR)
 
@@ -194,6 +200,7 @@ def main(argv):
     chain(fallback_first, fallback_clusters)
     chain(grubenv_first, env_clusters)
     chain(cfg_first, 1)
+    chain(menu_first, menu_clusters)
 
     fat2 = bytearray(fat)
     if opt == "--fats-differ":
@@ -220,7 +227,11 @@ def main(argv):
             dirent(b"FALLBACK   ", 0x20, fallback_first,
                    fallback_clusters * cbytes),
             dirent(b"GRUB       ", 0x10, GRUBDIR, 0),
-            dirent(b"EXTRA      ", 0x10, EXTRADIR, 0)]
+            dirent(b"EXTRA      ", 0x10, EXTRADIR, 0),
+            dirent(b"BOOT    CFG", 0x20, menu_first,
+                   {"--menu-short": 0, "--menu-odd": menu_bytes - 1}.get(opt, menu_bytes))]
+    if opt == "--no-menu":
+        ents = ents[:-1]
     bootdir[0:32 * len(ents)] = b"".join(ents)
     img[cluster_off(BOOTDIR):cluster_off(BOOTDIR) + cbytes] = bootdir
 
@@ -269,6 +280,7 @@ def main(argv):
     env = env + b"#" * (1024 - len(env))
     img[cluster_off(grubenv_first):cluster_off(grubenv_first) + 1024] = env
     img[cluster_off(cfg_first):cluster_off(cfg_first) + 40] = b"x" * 40
+    img[cluster_off(menu_first):cluster_off(menu_first) + menu_bytes] = b"#" * menu_bytes
 
     with open(out, "wb") as f:
         f.write(img)

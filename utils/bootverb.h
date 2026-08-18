@@ -6,7 +6,11 @@ enum bootverb {
     BOOTVERB_NONE = 0,
     BOOTVERB_STATUS,
     BOOTVERB_KERNEL,
-    BOOTVERB_COMMIT
+    BOOTVERB_COMMIT,
+    BOOTVERB_CONFIG,
+    BOOTVERB_ENV,
+    BOOTVERB_TRIAL,
+    BOOTVERB_CANCEL
 };
 
 /**
@@ -22,10 +26,16 @@ enum bootverb {
  * `argv[0]` is the program name and is not examined. Pure: it reads nothing
  * but the arguments handed to it.
  *
- * @param out_arg receives the operand for a verb that takes one, else NULL.
- *                May itself be NULL if the caller does not want it.
+ * `env` is the one verb whose operand count varies: with a key alone it reads,
+ * with a key and a value it writes. Both are accepted and the caller tells them
+ * apart by whether the second operand is there.
+ *
+ * @param out_arg  receives the first operand for a verb that takes one, else
+ *                 NULL. May itself be NULL if the caller does not want it.
+ * @param out_arg2 receives the second operand where there is one, else NULL.
+ *                 May itself be NULL.
  */
-enum bootverb bootverb_parse(int argc, char **argv, const char **out_arg);
+enum bootverb bootverb_parse(int argc, char **argv, const char **out_arg, const char **out_arg2);
 
 /**
  * Whether `word` names a verb, whatever operands followed it.

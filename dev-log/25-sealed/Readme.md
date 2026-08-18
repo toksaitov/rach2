@@ -205,3 +205,47 @@ Three more were about what the test reached. It exercised only the whole-disk wi
 The rest were smaller. A first-chunk fault from the whole-disk writer returned `-EIO` where the bounded writer correctly returned `-EFAULT`. The call counter was 32 bits, which wraps after about nine passes over a 250 GB disk, and the probe parsed it into a signed 32-bit value that would overflow sooner. The DMA buffer had no declared alignment despite the AHCI PRDT taking its address directly. `make rach2-recovery` checked an artifact it did not depend on, so a clean tree could reach a missing file. And several comments still described `/dev/disk0` as read-only on every kernel.
 
 One claim was overstated rather than wrong, and is corrected in place: `check_recovery.py` catches a kernel built without the switch, which is the mistake worth catching early, but the banner and the handler are separate conditionals, so it is not proof against a tampered artifact. `make authority-test` boots both kernels and is the proof of what they do.
+
+## Phase D: the boot menu that can be rewritten
+
+GRUB reads two files on this disk now. `/boot/grub/grub.cfg` is the stub, written once when the disk is built and never again. It defines every entry the machine needs and then sources `/boot/boot.cfg`, the rewritable half `bootctl config` overwrites in place, preallocated to 8192 bytes so no write extends a file or moves a cluster chain.
+
+The order is the safety property and the reason the plan pinned it before any code was written. `source` merges the second file's entries onto the tail of the first's, and `set fallback` names an index rather than an id, so the stub's entries have to hold the low indices whatever a staged menu adds. With them first, a menu that is missing, truncated mid-write, or simply wrong costs nothing but the entries it meant to add.
+
+The entry list is fixed because the numbers are a contract: candidate 0, fallback 1, candidate-static 2, fallback-static 3, debug 4, recovery 5. The two static-address entries carry a token set that is empty until the networking phase gives this machine an address; they exist now to hold their numbers. Entry 5 names a kernel and a RAM image on partition 3 that the recovery phase has not built, and is marked in its title as not yet bootable for the same reason.
+
+One question the plan left open had to be answered here, and the first answer was wrong. The plan's proof line asks for a machine that boots an entry only the staged file defines, and the obvious way to arrange that is to let the staged file name its own default in a variable the stub reads last. That was built, and it does not hold. A slot overwritten in place is not written atomically, so a power cut can leave a syntactically valid prefix of a new menu above the tail of an old one, and a file in that state could set the variable and point the machine at an entry that might not even fail in a way the fallback catches. Worse, `load_env` imports every grubenv key as a variable, so a value written into the environment block could set it too, which is the opposite of the property the design claimed.
+
+The mechanism is gone. What replaced it is a smaller and true statement, arrived at after a second review round rejected the first replacement too. `source` runs GRUB script, so a staged file can set the environment keys the stub reads, or load a kernel itself, before control returns. There is no way to make it a declarations-only menu. Whoever can write that file can direct the boot, and that is the authority level one already grants, since `bootctl kernel` replaces the kernel that boots next.
+
+What the stub does guarantee is narrower and is the property that matters here: a menu which is damaged rather than written leaves a bootable machine. Every entry the machine needs is defined before the staged file is read, so one that is missing, truncated mid-write or unparseable costs only the entries it meant to add.
+
+`bootctl` grew four verbs. `config` stages a menu, refusing a file larger than the slot before anything is written. `env` reads or sets one of the two grubenv keys, through an allowlist rather than as a general editor. `trial` arms one boot of an entry the stub defines, and `cancel` clears it. The library grew `boot.cfg` as a fourth resolved file and a writer that rewrites every sector of the slot whether the new text reaches it or not, so a shorter menu leaves nothing of a longer one behind, and reads each sector back before writing the next.
+
+Proof: `make menu-test`, four boots of one disk. The first stages a two-entry menu through `bootctl config`, round-trips a grubenv key through `bootctl env` and `bootctl cancel`, and corrupts the candidate kernel so the next boot must take the fallback. The second proves both staged entries reached the menu and that the fallback number still named the stub's own entry rather than a staged one. The third truncates the staged file mid-entry from the host and the machine still boots through the stub, with GRUB's parse error in the log. The fourth reads the slot's extent back and it has not moved.
+
+Shown failing: moving the stub's entries after the `source` line makes `set fallback=1` select `stagedtwo` instead of the stub's own fallback, and GRUB says so by name in the log. A menu one byte over the slot is refused. A writer that touched only the sectors the new text reaches leaves a longer menu's tail behind, which the host test catches by writing a full slot and then a short one over it.
+
+### What the review changed
+
+Ten findings, all confirmed.
+
+Two were the same defect seen from opposite sides, and together they removed a feature rather than fixing one: a torn slot write could publish a staged default, and `load_env` imports grubenv keys as variables, so the environment block could set that variable too. The claim that it could not was false. The mechanism is gone.
+
+A second round then rejected the replacement claim as well, and was right to. Removing the variable did not make the staged file inert: `source` runs GRUB script, so it can set the environment keys the stub reads, or load a kernel outright, before control returns. There is no way to restrict it to declarations. What is written down now is the true and smaller statement, above.
+
+The two static-address entries carried only the static token set, which is empty until the networking phase, so on the sealed disk they would have booted with no `rach2.disk=ahci` and failed to find their root. They carry the machine's tokens as well now.
+
+`bootctl trial` accepted two ids the stub never consumed, which would have left a value armed forever, blocking every later commit while selecting nothing. The stub consumes them now. It also accepted `recovery`, promising a boot of a kernel no phase has built yet; that one is out of the allowlist until it exists.
+
+The menu writer computed its sector count by truncating division, so a slot whose size was not a whole number of sectors left its last bytes stale, and a slot of no size returned success having written nothing. Both are now refused when the volume is opened, where a disk built wrong is a better place to fail than a write that half-succeeds.
+
+Requiring the menu slot made every older boot partition unmanageable: `status`, `kernel` and `commit` need no menu and would have stopped working on any disk built before this phase. The slot is optional now and only `config` requires it.
+
+The rule that a staged menu must end in a newline was neither necessary nor sufficient. It rejects a valid GRUB file ending at its final brace, and accepts a transfer cut after a whole entry. It is gone, and the tool says plainly that it checks the size and nothing else.
+
+Three test gaps and a set of stale comments made up the rest, including a `--menu-short` fixture option that existed and was never used by any case.
+
+A third round found the worst of them, and it was one I had introduced. `bootctl cancel` wrote `next_entry=` with an empty value, and an empty `next_entry` is not "no trial": it is the marker GRUB's scripted consumption leaves after a trial has actually booted, and `bootslot_commit` requires it. So installing a kernel, cancelling the trial, and committing would have made a kernel the default that never ran once. Cancelling removes the key now, `env` refuses to write an empty value at all and says which command to use instead, and a host case installs, cancels, and requires the commit to be refused.
+
+The second round found four more. `bootctl env` validated only the key, so `env next_entry recovery` armed an entry `trial` refuses, and a newline in a value would have written a second grubenv assignment nobody asked for; values are now checked for control characters and against the same entry list `trial` uses. `config` read into a fixed buffer without probing for one more byte, so on a large enough slot an oversized menu would have been truncated and reported as staged. The harness asserted only the fallback index, so swapping entries 2 and 3 passed; it now reads every title off the drawn menu and requires the whole order. And the claim that a zero-size slot is refused was not true and not needed: an empty file with no cluster is treated as absent, which is the right answer anyway.

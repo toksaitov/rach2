@@ -9,7 +9,7 @@
  * partition lives here, behind caller-supplied sector callbacks, so the host
  * seam test drives the same code over image files with fault injection while
  * the guest main binds it to /dev/bootpart. The library validates the FAT32
- * volume before trusting one field of it, walks the namespace for the three
+ * volume before trusting one field of it, walks the namespace for the four
  * files the install contract names (/boot/kernel, /boot/fallback,
  * /boot/grub/grubenv), refuses every malformed shape by name, and performs the
  * install in the interruption-matrix order documented in
@@ -44,7 +44,7 @@ struct bootslot_file {
     uint32_t chain[BOOTSLOT_MAX_FILE_CLUSTERS];
 };
 
-/** The opened volume: validated geometry, one FAT, the three files. */
+/** The opened volume: validated geometry, one FAT, the four files. */
 struct bootslot {
     struct bootslot_io io;
     uint32_t total_sectors;
@@ -57,6 +57,8 @@ struct bootslot {
     struct bootslot_file kernel;
     struct bootslot_file fallback;
     struct bootslot_file grubenv;
+    struct bootslot_file menu;
+    int have_menu; /* a disk built before the menu slot existed has none */
     uint8_t visited[BOOTSLOT_MAX_CLUSTERS / 8];
 };
 
@@ -66,7 +68,7 @@ struct bootslot {
  */
 
 /** Read and validate the volume: the BPB, both FATs (compared whole), and the
- *  namespace walk that resolves the three files and requires every reachable
+ *  namespace walk that resolves the four files and requires every reachable
  *  chain legal, loop-free and disjoint. */
 int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, size_t errlen);
 
@@ -94,6 +96,52 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
  *  all means a fresh disk or an interrupted install, and neither state's
  *  slot bytes are the running kernel. */
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen);
+
+/**
+ * Write `size` bytes of `text` into the menu slot, padding the rest.
+ *
+ * The slot is a fixed-size file preallocated at build time, so this overwrites
+ * bytes in place and never extends a file or moves a cluster chain: the chain
+ * was found once when the volume was opened and does not change. Every sector
+ * is written whether the new text reaches it or not, so a shorter menu leaves
+ * none of a longer one behind, and each is read back and compared before the
+ * next, so a slot that does not take the write fails here rather than at the
+ * next boot. The padding is '#' rather than zeros because GRUB reads the whole
+ * file and a comment is what an empty tail has to look like to it.
+ *
+ * This is not atomic and cannot be: one slot overwritten in place can be left
+ * holding a prefix of a new menu above the tail of an old one. What makes that
+ * survivable is elsewhere, in the immutable stub, which defines every entry the
+ * machine needs before it reads this file and never lets it choose the default.
+ *
+ * Refuses text larger than the slot, and a disk that has no slot at all,
+ * without writing anything.
+ */
+int bootslot_write_menu(struct bootslot *bs, const uint8_t *text, uint32_t size, char *err,
+                        size_t errlen);
+
+/**
+ * Set one key in the environment block, preserving every other line.
+ *
+ * The block is 1024 bytes with no checksum, which GRUB parses at boot with no
+ * recourse if it is malformed, so the write is read back and compared. This
+ * imposes no policy on which keys may be set; the caller decides that, because
+ * the allowlist belongs with the tool a person types at rather than with the
+ * library.
+ */
+int bootslot_env_set(struct bootslot *bs, const char *key, const char *value, char *err,
+                     size_t errlen);
+
+/**
+ * Remove one key from the environment block, preserving every other line.
+ *
+ * Removing is not the same as setting empty, and for `next_entry` the
+ * difference decides whether a kernel may be committed: an empty value is the
+ * consumed marker GRUB's scripted consumption leaves after a trial boot, and
+ * `bootslot_commit` requires it. A key that is simply absent is a machine with
+ * no trial, which is what cancelling one means.
+ */
+int bootslot_env_drop(struct bootslot *bs, const char *key, char *err, size_t errlen);
 
 /** Read the environment block (1024 bytes) into `out`. */
 int bootslot_read_env(struct bootslot *bs, uint8_t *out, char *err, size_t errlen);

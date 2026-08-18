@@ -7,7 +7,11 @@
  *
  *     bootctl status         what is installed, committed, and booting next
  *     bootctl kernel FILE    stage a kernel into the candidate slot
+ *     bootctl config FILE    stage a boot menu into the rewritable slot
  *     bootctl commit         make the booted trial the saved default
+ *     bootctl trial ID       boot one entry once, on the next boot only
+ *     bootctl cancel         clear an armed trial
+ *     bootctl env KEY [VAL]  read, or set, one allowlisted grubenv key
  *
  * `kernel` validates the named file and the machine's fallback kernel, writes
  * `saved_entry=fallback`, writes the candidate slot, reads it back byte for
@@ -15,11 +19,20 @@
  * kernel and a power cycle after a crash returns to the fallback. Once it has
  * proved itself, `commit` makes it the saved default.
  *
- * `status` is the only window onto this disk. It prints the three files'
- * sector extents, what the environment block holds, whether a trial is armed
- * or consumed, and which slot this boot came from. Its extent lines are a
- * test contract: `tools/install_test.sh` reads the candidate's first sector
- * from them to corrupt it, so their field order is fixed.
+ * `status` is the only window onto this disk. It prints the four files' sector
+ * extents, what the environment block holds, whether a trial is armed or
+ * consumed, and which slot this boot came from. Its extent lines are a test
+ * contract: `tools/install_test.sh` reads the candidate's first sector from
+ * them to corrupt it, so their field order is fixed.
+ *
+ * `config` writes the boot menu GRUB reads after its own stub entries. That file
+ * is GRUB script and whoever writes it can direct the boot, which is the same
+ * authority `kernel` already has. What the immutable stub guarantees is that a
+ * menu which is damaged rather than written leaves a bootable machine: every
+ * entry the machine needs is defined before the staged file is read. `env` and `trial` write the two grubenv keys the
+ * trial and commit state machine turns on, through an allowlist rather than as
+ * a general editor, because that block has no checksum and GRUB parses it at
+ * boot with no recourse if it is malformed.
  *
  * The tool runs only on a machine that GRUB booted from a slot: it requires a
  * `rach2.slot=` token on /proc/cmdline before installing and
@@ -185,6 +198,11 @@ static int cmd_status(void)
     print_extent("candidate", &bs.kernel, bs.cluster_sectors, bs.data_start);
     print_extent("fallback", &bs.fallback, bs.cluster_sectors, bs.data_start);
     print_extent("grubenv", &bs.grubenv, bs.cluster_sectors, bs.data_start);
+    if (bs.have_menu) {
+        print_extent("boot.cfg", &bs.menu, bs.cluster_sectors, bs.data_start);
+    } else {
+        printf("bootctl: boot.cfg: absent (a disk built before the menu slot existed)\n");
+    }
 
     if (bootslot_read_env(&bs, env, errbuf, sizeof(errbuf)) != 0) {
         fprintf(stderr, "bootctl: %s\n", errbuf);
@@ -256,25 +274,218 @@ static int cmd_kernel(const char *path)
     return 0;
 }
 
+/* The environment keys this tool will write. grubenv is a fixed 1024-byte block
+ * with no checksum that GRUB parses at boot with no recourse if it is
+ * malformed, and two of its keys are the whole trial and commit state machine,
+ * so this is an allowlist and not a general editor. */
+static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
+#define ENV_KEY_COUNT ((int)(sizeof(ENV_KEYS) / sizeof(ENV_KEYS[0])))
+
+/* The menu ids `trial` may arm. Every one of these is an entry the stub both
+ * defines and consumes a trial for; a value the stub does not consume would
+ * stay in the block forever, arming nothing and blocking every later commit.
+ * `recovery` is deliberately absent: the stub defines and consumes it, but the
+ * kernel and RAM image it names are staged by a later phase, so arming it today
+ * would promise a boot that cannot happen. */
+static const char *const ENTRY_IDS[] = {"candidate", "fallback", "candidate-static",
+                                        "fallback-static", "debug"};
+#define ENTRY_ID_COUNT ((int)(sizeof(ENTRY_IDS) / sizeof(ENTRY_IDS[0])))
+
+static int allowed(const char *const *list, int count, const char *word)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (strcmp(list[i], word) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Stage a boot menu into the rewritable slot.
+ *
+ * The file is refused before anything is written if it does not fit the slot,
+ * which is the only thing this can check. It is not a completeness test and
+ * does not pretend to be one: a transfer cut after a whole menuentry produces a
+ * file that parses, and nothing here can tell it from what the sender meant. A
+ * caller who needs that compares a digest. What makes a wrong menu survivable
+ * is the stub, which defines every entry the machine needs before it reads this
+ * file and never lets it choose the default.
+ */
+static int cmd_config(const char *path)
+{
+    static uint8_t text[SLOT_MAX];
+    FILE *f;
+    size_t size;
+
+    f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "bootctl: cannot open '%s'\n", path);
+        return 1;
+    }
+    size = fread(text, 1, sizeof(text), f);
+    if (ferror(f)) {
+        fclose(f);
+        fprintf(stderr, "bootctl: reading '%s' failed\n", path);
+        return 1;
+    }
+    if (size == sizeof(text) && fgetc(f) != EOF) {
+        fclose(f);
+        fprintf(stderr, "bootctl: '%s' is larger than this tool reads\n", path);
+        return 1;
+    }
+    fclose(f);
+    if (size == 0) {
+        fprintf(stderr, "bootctl: '%s' is empty\n", path);
+        return 1;
+    }
+    if (open_slot() != 0) {
+        return 1;
+    }
+    if (!bs.have_menu) {
+        fprintf(stderr, "bootctl: this disk has no menu slot; it was built before one existed\n");
+        return 1;
+    }
+    if (size > bs.menu.size) {
+        fprintf(stderr, "bootctl: '%s' is %u bytes and the menu slot holds %u\n", path,
+                (unsigned)size, (unsigned)bs.menu.size);
+        return 1;
+    }
+    if (bootslot_write_menu(&bs, text, (uint32_t)size, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: staged: %u bytes of menu in a %u-byte slot\n", (unsigned)size,
+           (unsigned)bs.menu.size);
+    return 0;
+}
+
+/** Read one environment key, or set it. */
+static int cmd_env(const char *key, const char *value)
+{
+    static uint8_t env[BOOTSLOT_ENV_BYTES];
+
+    if (!allowed(ENV_KEYS, ENV_KEY_COUNT, key)) {
+        fprintf(stderr, "bootctl: not a key this tool writes: '%s'\n", key);
+        return 1;
+    }
+    if (value) {
+        size_t i;
+
+        /* The block is lines of `key=value`, so a value carrying a newline
+           would write a second assignment nobody asked for. */
+        for (i = 0; value[i] != '\0'; i++) {
+            if (value[i] < 0x20 || value[i] == 0x7f) {
+                fprintf(stderr, "bootctl: a value may not carry control characters\n");
+                return 1;
+            }
+        }
+        /* Both keys name a menu entry, and the same restriction `trial` puts on
+           the entry it arms has to hold here or it is not a restriction. An
+           empty value is refused outright: for `next_entry` that is the marker
+           a trial boot leaves behind and `commit` requires, so a tool that let
+           anyone write it would let a kernel that never ran be committed. */
+        if (value[0] == '\0') {
+            fprintf(stderr, "bootctl: an empty value is the marker a trial boot leaves; "
+                            "use `bootctl cancel` to clear a trial\n");
+            return 1;
+        }
+        if (!allowed(ENTRY_IDS, ENTRY_ID_COUNT, value)) {
+            fprintf(stderr, "bootctl: not a menu entry this tool arms: '%s'\n", value);
+            return 1;
+        }
+    }
+    if (open_slot() != 0) {
+        return 1;
+    }
+    if (!value) {
+        if (bootslot_read_env(&bs, env, errbuf, sizeof(errbuf)) != 0) {
+            fprintf(stderr, "bootctl: %s\n", errbuf);
+            return 1;
+        }
+        print_env(env, key, strcmp(key, "next_entry") == 0);
+        return 0;
+    }
+    if (bootslot_env_set(&bs, key, value, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: %s: %s\n", key, value);
+    return 0;
+}
+
+/** Arm one boot of `id`, and only of an entry the stub defines. */
+static int cmd_trial(const char *id)
+{
+    if (!allowed(ENTRY_IDS, ENTRY_ID_COUNT, id)) {
+        fprintf(stderr, "bootctl: not a menu entry this disk has: '%s'\n", id);
+        return 1;
+    }
+    if (open_slot() != 0) {
+        return 1;
+    }
+    if (bootslot_env_set(&bs, "next_entry", id, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: armed: the next boot tries %s once\n", id);
+    return 0;
+}
+
+/**
+ * Clear an armed trial, so the next boot takes the saved default.
+ *
+ * The key is removed and not set empty. An empty `next_entry` is the marker
+ * GRUB leaves behind after a trial has actually booted, and `commit` requires
+ * it, so writing it here would let a kernel that never ran be made the default.
+ */
+static int cmd_cancel(void)
+{
+    if (open_slot() != 0) {
+        return 1;
+    }
+    if (bootslot_env_drop(&bs, "next_entry", errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: cancelled: the next boot takes the saved default\n");
+    return 0;
+}
+
 static void usage(void)
 {
     fprintf(stderr, "usage: bootctl status\n");
     fprintf(stderr, "       bootctl kernel <file>\n");
+    fprintf(stderr, "       bootctl config <file>\n");
     fprintf(stderr, "       bootctl commit\n");
+    fprintf(stderr, "       bootctl trial <entry>\n");
+    fprintf(stderr, "       bootctl cancel\n");
+    fprintf(stderr, "       bootctl env <key> [value]\n");
 }
 
 /** Resolve the command line and run the verb it names. */
 int main(int argc, char **argv)
 {
     const char *arg;
+    const char *arg2;
 
-    switch (bootverb_parse(argc, argv, &arg)) {
+    switch (bootverb_parse(argc, argv, &arg, &arg2)) {
     case BOOTVERB_STATUS:
         return cmd_status();
     case BOOTVERB_COMMIT:
         return cmd_commit();
+    case BOOTVERB_CANCEL:
+        return cmd_cancel();
     case BOOTVERB_KERNEL:
         return cmd_kernel(arg);
+    case BOOTVERB_CONFIG:
+        return cmd_config(arg);
+    case BOOTVERB_TRIAL:
+        return cmd_trial(arg);
+    case BOOTVERB_ENV:
+        return cmd_env(arg, arg2);
     default:
         break;
     }

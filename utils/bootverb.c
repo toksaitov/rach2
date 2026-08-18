@@ -15,36 +15,55 @@
 static const struct {
     const char *name;
     enum bootverb verb;
-    int operands;
-} verbs[] = {
-    {"status", BOOTVERB_STATUS, 0}, {"commit", BOOTVERB_COMMIT, 0}, {"kernel", BOOTVERB_KERNEL, 1}};
+    int min_operands;
+    int max_operands;
+} verbs[] = {{"status", BOOTVERB_STATUS, 0, 0},
+             {"commit", BOOTVERB_COMMIT, 0, 0},
+             {"cancel", BOOTVERB_CANCEL, 0, 0},
+             {"kernel", BOOTVERB_KERNEL, 1, 1},
+             {"config", BOOTVERB_CONFIG, 1, 1},
+             {"trial", BOOTVERB_TRIAL, 1, 1},
+             {"env", BOOTVERB_ENV, 1, 2}};
 
 #define VERB_COUNT ((int)(sizeof(verbs) / sizeof(verbs[0])))
 
-enum bootverb bootverb_parse(int argc, char **argv, const char **out_arg)
+enum bootverb bootverb_parse(int argc, char **argv, const char **out_arg, const char **out_arg2)
 {
     int i;
 
     if (out_arg) {
         *out_arg = 0;
     }
+    if (out_arg2) {
+        *out_arg2 = 0;
+    }
     if (argc < 2 || !argv || !argv[1]) {
         return BOOTVERB_NONE;
     }
 
     for (i = 0; i < VERB_COUNT; i++) {
+        int operands = argc - 2;
+
         if (strcmp(argv[1], verbs[i].name) != 0) {
             continue;
         }
-        if (argc != 2 + verbs[i].operands) {
+        if (operands < verbs[i].min_operands || operands > verbs[i].max_operands) {
             return BOOTVERB_NONE;
         }
-        if (verbs[i].operands == 1) {
+        if (operands >= 1) {
             if (!argv[2]) {
                 return BOOTVERB_NONE;
             }
             if (out_arg) {
                 *out_arg = argv[2];
+            }
+        }
+        if (operands >= 2) {
+            if (!argv[3]) {
+                return BOOTVERB_NONE;
+            }
+            if (out_arg2) {
+                *out_arg2 = argv[3];
             }
         }
         return verbs[i].verb;

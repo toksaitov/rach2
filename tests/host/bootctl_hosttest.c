@@ -6,7 +6,7 @@
  * The fixtures come from tests/host/mkfatfixture.py, an independent FAT32
  * writer, so two implementations of the format meet over every image. The
  * well-formed image (a volume label, a long-name entry, dot entries, an empty
- * file, the three named files) must open and install; each malformed image
+ * file, the four named files) must open and install; each malformed image
  * must be refused with its own diagnostic, matched by substring so a mutation
  * cannot pass by tripping a different rule. The write callback is the fault
  * injector: it can report success while dropping a chosen sector (what makes
@@ -334,7 +334,7 @@ int main(void)
     CHECK(env_has("saved_entry=candidate\n"), "the environment was never touched");
 
     /* A grub.cfg whose size does not match its chain is a refused volume:
-       every reachable regular file is held to the rule, not only the three
+       every reachable regular file is held to the rule, not only the four
        named ones. */
     expect_open_error("--cfg-short", "size does not match its chain");
 
@@ -409,6 +409,103 @@ int main(void)
        reported: a chain reaching one cluster past the last legal one must be
        refused at this geometry too. */
     expect_open_error("--cluster8-past-end", "a chain leaves the volume");
+
+    /* Cancelling a trial removes the key; it does not set it empty. An empty
+       `next_entry` is the marker GRUB leaves after a trial has actually booted
+       and `bootslot_commit` requires it, so a cancel that wrote it would let a
+       kernel that never ran be made the default. */
+    load("");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the cancel image opens");
+    make_kernel(kernel, 60 * 512);
+    CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == 0, "a kernel installs");
+    CHECK(env_has("next_entry=candidate\n"), "and the trial is armed");
+    CHECK(bootslot_env_drop(&bs, "next_entry", err, sizeof(err)) == 0, "the trial cancels");
+    CHECK(!env_has("next_entry=candidate\n"), "the armed line is gone");
+    CHECK(!env_has("\nnext_entry=\n"), "and no consumed marker was written in its place");
+    CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1,
+          "so a commit after a cancel is refused, because nothing booted");
+    CHECK(strstr(err, "no consumed trial") != NULL, "and says why");
+
+    /* The rewritable menu slot: written whole, read back, and refused when the
+       text is larger than the slot. Every sector is rewritten whether the new
+       text reaches it or not, so a shorter menu leaves nothing of a longer one
+       behind, which is the property a torn boot would otherwise expose. */
+    load("");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the menu image opens");
+    CHECK(bs.menu.size == 8192, "the menu slot is 8192 bytes");
+    {
+        static uint8_t menu[8192];
+        static uint8_t seen[8192];
+        uint32_t i;
+        int ok = 1;
+
+        for (i = 0; i < sizeof(menu); i++) {
+            menu[i] = (uint8_t)('a' + (i % 26));
+        }
+        /* A long menu first, so the slot holds something other than its fill,
+           and then a short one over it. A writer that touched only the sectors
+           the new text reaches would leave the long menu's tail behind, and
+           GRUB reads the whole file. */
+        CHECK(bootslot_write_menu(&bs, menu, 8192, err, sizeof(err)) == 0, "a full menu writes");
+        CHECK(bootslot_write_menu(&bs, menu, 400, err, sizeof(err)) == 0,
+              "and a short one writes over it");
+        for (i = 0; i < sizeof(seen); i++) {
+            static uint8_t sector[512];
+
+            if ((i % 512) == 0) {
+                CHECK(IO.read(IO.ctx,
+                              (bs.data_start +
+                               (bs.menu.chain[i / (bs.cluster_sectors * 512)] - 2) *
+                                   bs.cluster_sectors +
+                               ((i / 512) % bs.cluster_sectors)),
+                              sector) == 0,
+                      "the slot reads back");
+            }
+            seen[i] = sector[i % 512];
+        }
+        for (i = 0; i < 400; i++) {
+            if (seen[i] != menu[i]) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "the short menu's bytes are on the disk");
+        ok = 1;
+        for (i = 400; i < sizeof(seen); i++) {
+            if (seen[i] != (uint8_t)'#') {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "and the long menu's tail is gone, not left behind");
+
+        CHECK(bootslot_write_menu(&bs, menu, 8193, err, sizeof(err)) == -1,
+              "a menu one byte over the slot is refused");
+        CHECK(strstr(err, "does not fit the slot") != NULL, "and says so");
+        CHECK(bootslot_write_menu(&bs, menu, 8192, err, sizeof(err)) == 0,
+              "a menu exactly the slot's size is accepted");
+    }
+
+    /* A slot whose size is not a whole number of sectors cannot be rewritten
+       whole, so it is refused where the volume is judged rather than later,
+       where a write would half-succeed. */
+    expect_open_error("--menu-odd", "the menu slot is not a whole number of sectors");
+    /* And a slot whose directory size does not match its chain is the ordinary
+       inconsistency, caught by the same rule as any other file's. */
+    expect_open_error("--menu-short", "size does not match its chain");
+
+    /* A disk built before the menu slot existed still opens, and every command
+       that does not need a menu still works on it. Only staging one fails, and
+       it says why. */
+    load("--no-menu");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "a disk with no menu slot still opens");
+    CHECK(bs.have_menu == 0, "and reports that it has none");
+    CHECK(bs.kernel.size == 2 * 1024 * 1024, "its candidate slot is still readable");
+    {
+        static uint8_t one[512];
+
+        CHECK(bootslot_write_menu(&bs, one, 1, err, sizeof(err)) == -1,
+              "staging a menu on it is refused");
+        CHECK(strstr(err, "no menu slot") != NULL, "and says why");
+    }
 
     /* A key that merely ends in next_entry is not the trial state. The writer
        preserves lines it does not recognise, so a block can hold one; commit
