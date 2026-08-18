@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build FAT32 fixture images for the install-kernel seam test.
+"""Build FAT32 fixture images for the bootctl seam test.
 
 An independent implementation on purpose: this builder writes the volume from
 the FAT specification (BPB fields, two FAT copies, cluster chains, short

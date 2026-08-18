@@ -17,7 +17,7 @@
 # it; prove a commit is refused while the trial is armed; reboot -f into the
 # trial and prove the marker and the slot token; commit; cold-boot and prove
 # the saved default held. Then the recovery half: corrupt the candidate's
-# first sector through /dev/bootpart at the extent install-kernel --where
+# first sector through /dev/bootpart at the extent bootctl status
 # names, reboot into the fallback (the marker must be absent from that boot's
 # log interval), reinstall from inside, reboot into the repaired candidate,
 # and commit so the repair is the saved default.
@@ -204,13 +204,13 @@ run_pass() {
     step "Password:" 1 "busybox grep -o 'rach2.slot=[a-z]*' /proc/cmdline | busybox sed s/slot/slotA${P}/"
     step "rach2.slotA${P}=candidate" 1 "cd /src/rach2 && busybox sed -i 's/${OLDMARK}/${MARK}/' kernel.c && busybox grep -c '${MARK}' kernel.c | busybox sed s/^/SED${P}N/"
     step "SED${P}N2" 1 "make -f guest.mk > /tmp/ik.out 2>&1; echo BUILD${P}RC=\$?"
-    step "BUILD${P}RC=0" 1 "install-kernel kernel && echo INST\"\"${P}A"
-    step "INST${P}A" 1 "install-kernel --commit > /dev/null 2>&1; echo ARMED${P}RC=\$?"
+    step "BUILD${P}RC=0" 1 "bootctl kernel kernel && echo INST\"\"${P}A"
+    step "INST${P}A" 1 "bootctl commit > /dev/null 2>&1; echo ARMED${P}RC=\$?"
     step "ARMED${P}RC=1" 1 "echo PRERB${P}A; reboot -f"
     step "rach2 login:" 2 "root"
     step "Password:" 2 "$ROOTPASSWORD"
     step "Password:" 2 "busybox grep -o 'rach2.slot=[a-z]*' /proc/cmdline | busybox sed s/slot/slotB${P}/"
-    step "rach2.slotB${P}=candidate" 1 "install-kernel --commit && echo COMMIT\"\"${P}A"
+    step "rach2.slotB${P}=candidate" 1 "bootctl commit && echo COMMIT\"\"${P}A"
     step "COMMIT${P}A" 1 "poweroff -f"
 
     LOG="$DISK.log.p${P}a"
@@ -241,7 +241,7 @@ if rb < 0 or slot2 < 0 or slot2 < rb or armed > rb:
 interval = log[rb:slot2]
 if b'Booting... ${TOKEN}' not in interval:
     sys.exit('pass $P: the installed kernel did not print its marker')
-if b'install-kernel: committed' not in log[slot2:]:
+if b'bootctl: committed' not in log[slot2:]:
     sys.exit('pass $P: the trial commit did not report success')
 " || fail "pass $P: the trial boot's identity did not hold"
 
@@ -253,17 +253,17 @@ if b'install-kernel: committed' not in log[slot2:]:
     step "rach2 login:" 1 "root"
     step "Password:" 1 "$ROOTPASSWORD"
     step "Password:" 1 "busybox grep -o 'rach2.slot=[a-z]*' /proc/cmdline | busybox sed s/slot/slotC${P}/"
-    step "rach2.slotC${P}=candidate" 1 "S=\$(install-kernel --where | busybox awk '/candidate/{print \$5}' | busybox tr -d ,); echo SECTOR${P}=\$S; busybox dd if=/dev/zero of=/dev/bootpart bs=512 seek=\$S count=1 2>/dev/null && echo CORRUPT\"\"${P}OK"
+    step "rach2.slotC${P}=candidate" 1 "S=\$(bootctl status | busybox awk '/^bootctl: candidate: first sector/{print \$5}' | busybox tr -d ,); echo SECTOR${P}=\$S; busybox dd if=/dev/zero of=/dev/bootpart bs=512 seek=\$S count=1 2>/dev/null && echo CORRUPT\"\"${P}OK"
     step "CORRUPT${P}OK" 1 "echo PRERB${P}B; reboot -f"
     step "rach2 login:" 2 "root"
     step "Password:" 2 "$ROOTPASSWORD"
     step "Password:" 2 "busybox grep -o 'rach2.slot=[a-z]*' /proc/cmdline | busybox sed s/slot/slotD${P}/"
-    step "rach2.slotD${P}=fallback" 1 "cd /src/rach2 && install-kernel kernel && echo REPAIR\"\"${P}OK"
+    step "rach2.slotD${P}=fallback" 1 "cd /src/rach2 && bootctl kernel kernel && echo REPAIR\"\"${P}OK"
     step "REPAIR${P}OK" 1 "echo PRERB${P}C; reboot -f"
     step "rach2 login:" 3 "root"
     step "Password:" 3 "$ROOTPASSWORD"
     step "Password:" 3 "busybox grep -o 'rach2.slot=[a-z]*' /proc/cmdline | busybox sed s/slot/slotE${P}/"
-    step "rach2.slotE${P}=candidate" 1 "install-kernel --commit && echo COMMIT\"\"${P}B"
+    step "rach2.slotE${P}=candidate" 1 "bootctl commit && echo COMMIT\"\"${P}B"
     step "COMMIT${P}B" 1 "poweroff -f"
 
     LOG="$DISK.log.p${P}b"
@@ -293,7 +293,7 @@ if mark in log[rb_b:slot_d]:
     sys.exit('pass $P: the fallback boot carries the marker')
 if mark not in log[rb_c:slot_e]:
     sys.exit('pass $P: the repaired candidate did not print its marker')
-if b'install-kernel: committed' not in log[slot_e:]:
+if b'bootctl: committed' not in log[slot_e:]:
     sys.exit('pass $P: the repair commit did not report success')
 " || fail "pass $P: the recovery half's identity did not hold"
 }

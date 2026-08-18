@@ -1,5 +1,5 @@
 /**
- * Seam test for the install-kernel core (utils/bootslot.c).
+ * Seam test for the boot-slot library bootctl drives (utils/bootslot.c).
  *
  * host-deps: utils/bootslot.c
  *
@@ -88,12 +88,12 @@ static void load(const char *opt)
     snprintf(cmd, sizeof(cmd), "python3 tests/host/mkfatfixture.py %s/fat_case.img %s", FIXDIR,
              opt);
     if (system(cmd) != 0) {
-        fprintf(stderr, "installkernel_hosttest: fixture builder failed\n");
+        fprintf(stderr, "bootctl_hosttest: fixture builder failed\n");
         exit(1);
     }
     f = fopen(FIXDIR "/fat_case.img", "rb");
     if (!f || fread(img.data, 1, IMG_BYTES, f) != IMG_BYTES) {
-        fprintf(stderr, "installkernel_hosttest: fixture did not load\n");
+        fprintf(stderr, "bootctl_hosttest: fixture did not load\n");
         exit(1);
     }
     fclose(f);
@@ -364,6 +364,32 @@ int main(void)
     CHECK(!env_has("next_entry=candidate\n"),
           "the stale armed trial was dropped before the slot was touched");
 
+    /* A key that merely ends in next_entry is not the trial state. The writer
+       preserves lines it does not recognise, so a block can hold one; commit
+       must read the consumed marker beside it and not refuse on the impostor. */
+    load("");
+    {
+        long env_off = (long)(160 + 4160 - 2) * 512;
+        const char *junk = "x_next_entry=candidate\n";
+        const char *done = "next_entry=\n";
+        long end = 0, i;
+        size_t add_len = strlen(junk) + strlen(done);
+
+        for (i = 0; i < 1024; i++) {
+            if (img.data[env_off + i] == '\n') {
+                end = i + 1;
+            }
+        }
+        memmove(img.data + env_off + end + add_len, img.data + env_off + end,
+                (size_t)(1024 - end) - add_len);
+        memcpy(img.data + env_off + end, junk, strlen(junk));
+        memcpy(img.data + env_off + end + strlen(junk), done, strlen(done));
+    }
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the impostor image opens");
+    CHECK(bootslot_commit(&bs, err, sizeof(err)) == 0,
+          "a line ending in next_entry is not an armed trial");
+    CHECK(env_has("saved_entry=candidate\n"), "the impostor did not block the commit");
+
     /* A dropped environment sector is caught by the block's own readback. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for env drop");
@@ -445,7 +471,7 @@ int main(void)
           "a torn env write fails the install");
 
     if (fails) {
-        fprintf(stderr, "installkernel_hosttest: %d failure(s)\n", fails);
+        fprintf(stderr, "bootctl_hosttest: %d failure(s)\n", fails);
     }
     return fails;
 }

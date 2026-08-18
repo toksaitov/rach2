@@ -234,7 +234,7 @@ os-real-image: krffs rach2 utils check-busybox check-tcc check-pdpmake check-set
 # The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
 # machine (the kernel has no USB driver, so the module GRUB loads is the whole
 # system), so it carries a shell, dropbear, the account files and the keys, and
-# leaves out the compiler, /src, Doom and install-kernel, which a machine with
+# leaves out the compiler, /src, Doom and bootctl, which a machine with
 # no writable disk cannot use. 4 MB: the binaries come to about 1.4 MB, and the
 # rest is headroom under the kernel's 32 MB direct map.
 # The metal kernel: the same sources built read-only at the disk, into its own

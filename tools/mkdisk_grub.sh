@@ -12,7 +12,7 @@
 #
 # The boot partition is the install surface (dev-log/23-install/plan.md):
 # /boot/kernel is the candidate, the kernel padded with zeros to a fixed
-# 2 MiB slot whose data sectors install-kernel rewrites in place on the
+# 2 MiB slot whose data sectors bootctl rewrites in place on the
 # machine itself; /boot/fallback is the same kernel, never written afterward;
 # and /boot/grub/grubenv is the 1024-byte state block that selects between
 # them, initialized to boot the candidate. The build verifies every staged
@@ -51,7 +51,7 @@ EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
 
 GAP_MB=1
 BOOT_MB=16
-# The candidate slot: install-kernel rewrites these bytes in place and never
+# The candidate slot: bootctl rewrites these bytes in place and never
 # touches FAT metadata, so the file's size is fixed at build time.
 SLOT_BYTES=2097152
 # One spare MiB so the last partition ends before the device edge (parted
@@ -79,7 +79,7 @@ GRUB_CFG="$REPO/build/images/grub-disk.cfg"
 trap 'rm -f "$GRUB_CFG" "$OUT.new"' EXIT
 
 # The install contract (dev-log/23-install/plan.md): /boot/kernel is the
-# candidate slot install-kernel rewrites, /boot/fallback the untouched copy,
+# candidate slot bootctl rewrites, /boot/fallback the untouched copy,
 # and /boot/grub/grubenv the 1024-byte state block both GRUB and the installer
 # edit in place. saved_entry and next_entry are compared against the exact
 # menu ids and any other value selects the fallback entry, because the block

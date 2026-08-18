@@ -58,7 +58,7 @@ UTILITIES = true  \
 # one names it explicitly, which is also what makes the set-id allowlist in
 # tools/check_setid.py a complete list rather than a sample: a privileged program
 # reaches an image only through a `file` line naming it.
-SBIN_PROGS = init-shell init-login init-metal login su sudo passwd adduser adduser-crash install-kernel
+SBIN_PROGS = init-shell init-login init-metal login su sudo passwd adduser adduser-crash bootctl
 
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
 SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
@@ -72,12 +72,28 @@ $(TARGETS) $(SBIN_TARGETS): | libc-check
 # `exec-dir` stages every regular file directly in build/utils, so a binary an
 # earlier build left there (one since renamed, dropped from UTILITIES, or moved
 # into sbin/) would go on being staged from a tree that no longer builds it. The
-# build is out of tree and incremental, so nothing else removes it. Sweep the top
-# level down to the current targets first; the sbin/ subdirectory is untouched,
-# and its contents are staged by name rather than by sweep.
+# build is out of tree and incremental, so nothing else removes it.
+#
+# Both levels are swept, and sbin/ is swept for a reason worth stating: its
+# contents are staged by name, so a stale binary there is only reachable through
+# a manifest line naming it, and `check_setid.py` compares a manifest's declared
+# source against its own table without ever stat-ing the host file. A rename
+# that missed one manifest line would therefore go on staging the old binary
+# with nothing reporting it. Milestone 25's rename of install-kernel to bootctl
+# left exactly that artifact behind, which is what closed this gap.
 prune-stale:
 	@keep=" $(UTILITIES) "; \
 	for f in $(BUILD)/*; do \
+	    [ -f "$$f" ] || continue; \
+	    b=`basename "$$f"`; \
+	    case "$$b" in *.d) b=`echo "$$b" | sed 's/\.d$$//'`;; esac; \
+	    case "$$keep" in \
+	        *" $$b "*) ;; \
+	        *) echo "utils: removing stale $$f"; rm -f "$$f";; \
+	    esac; \
+	done
+	@keep=" $(SBIN_PROGS) "; \
+	for f in $(BUILD)/sbin/*; do \
 	    [ -f "$$f" ] || continue; \
 	    b=`basename "$$f"`; \
 	    case "$$b" in *.d) b=`echo "$$b" | sed 's/\.d$$//'`;; esac; \
@@ -166,11 +182,11 @@ $(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/adduser.d -o $@ $(LINK_PRE) adduser.c pwauth.c $(LINK_POST)
 
-# install-kernel links the boot-slot library (bootslot.c), the pure core its
+# bootctl links the boot-slot library (bootslot.c), the pure core its
 # host seam test drives over fixture images with fault injection.
-$(BUILD)/sbin/install-kernel: install-kernel.c bootslot.c bootslot.h
+$(BUILD)/sbin/bootctl: bootctl.c bootslot.c bootslot.h bootverb.c bootverb.h
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/install-kernel.d -o $@ $(LINK_PRE) install-kernel.c bootslot.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) bootctl.c bootslot.c bootverb.c $(LINK_POST)
 
 $(BUILD)/sbin/adduser-crash: adduser.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)

@@ -8,7 +8,7 @@
 # What os-real has and this does not, each for the same reason (it cannot be
 # used on a machine with no writable disk, or it is not needed to bring the
 # hardware up): the compiler and its sysroot, pdpmake, the /src trees, Doom,
-# and install-kernel, which writes a boot partition this profile never has.
+# and bootctl, which writes a boot partition this profile never has.
 #
 # The account files are os-real's, so one password opens either image, and the
 # authorized keys are the same pair the SSH capstone uses.

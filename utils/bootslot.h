@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 /*
- * bootslot: the install-kernel core. Everything that reads or writes the boot
+ * bootslot: the boot-slot core bootctl drives. Everything that reads or writes the boot
  * partition lives here, behind caller-supplied sector callbacks, so the host
  * seam test drives the same code over image files with fault injection while
  * the guest main binds it to /dev/bootpart. The library validates the FAT32
@@ -17,6 +17,10 @@
  */
 
 #define BOOTSLOT_SECTOR 512
+
+/* GRUB's environment block is exactly this many bytes and is never resized;
+ * `bootslot_read_env` fills that many, so a caller sizes its buffer from it. */
+#define BOOTSLOT_ENV_BYTES 1024
 
 /* Bounds on what the walk accepts: enough for the real 16 MiB boot partition
  * (252-sector FATs, 512-byte clusters) with generous headroom, small enough

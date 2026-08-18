@@ -29,7 +29,7 @@ if [ ! -f "$DISK" ]; then
 fi
 
 # The disk owns its kernel state: /boot/kernel is the candidate slot the
-# machine itself rewrites with install-kernel, /boot/fallback the untouched
+# machine itself rewrites with bootctl, /boot/fallback the untouched
 # copy, and grubenv selects between them. A host kernel newer than the disk
 # is therefore not a reason to rebuild it; `make os-real-grub-disk` recreates
 # the disk from the host build and DISCARDS anything installed on it.

@@ -162,16 +162,16 @@ the kernel it built, and the next boot runs it:
 ```sh
 # cd /src/rach2
 # make -f guest.mk
-# install-kernel kernel    # a one-boot trial; a crash falls back
+# bootctl kernel kernel   # a one-boot trial; a crash falls back
 # reboot -f
 ...
-# install-kernel --commit  # the booted kernel becomes the saved default
+# bootctl commit          # the booted kernel becomes the saved default
 ```
 
 The boot partition holds two kernels: the candidate slot the installer
 rewrites and an untouched fallback. Every install is a trial GRUB revokes on
 the next power cycle unless the booted kernel is committed, so a kernel that
-does not boot costs a reboot, not the machine; `install-kernel --where` shows
+does not boot costs a reboot, not the machine; `bootctl status` shows
 the slots, and the debug menu entry always boots the fallback with the
 kernel debug shell. `make install-test` proves the whole loop, twice, on the
 booted disk (Docker required).

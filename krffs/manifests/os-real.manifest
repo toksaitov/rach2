@@ -89,10 +89,10 @@ tree 0644 /src/ish ish
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-login
 
-# install-kernel puts a machine-built kernel into the boot partition's
+# bootctl puts a machine-built kernel into the boot partition's
 # candidate slot as a one-boot trial (dev-log/23-install/plan.md). It is
 # root-only by its device: /dev/bootpart is mode 0600, so no set-id bit here.
-file 0755 /bin/install-kernel build/utils/sbin/install-kernel
+file 0755 /bin/bootctl build/utils/sbin/bootctl
 
 # /etc: a real login + name-resolution config. dropbear reads passwd and validates
 # the login shell against shells; busybox ash reads profile on a login shell. The

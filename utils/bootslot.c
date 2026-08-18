@@ -1,5 +1,5 @@
 /*
- * bootslot.c: the install-kernel core over caller-supplied sector I/O.
+ * bootslot.c: the boot-slot core bootctl drives, over caller-supplied sector I/O.
  *
  * The shape follows dev-log/23-install/plan.md. Nothing here trusts the
  * volume: the BPB is validated field by field with subtraction-based bounds,
@@ -22,7 +22,7 @@
 #define ATTR_DIR         0x10
 #define FAT_ENTRY_MASK   0x0FFFFFFFu
 #define FAT_EOC_MIN      0x0FFFFFF8u
-#define ENV_BYTES        1024
+#define ENV_BYTES        BOOTSLOT_ENV_BYTES
 #define ENV_HEADER       "# GRUB Environment Block\n"
 #define MULTIBOOT_MAGIC  0x1BADB002u
 #define MULTIBOOT_SEARCH 8192
@@ -690,17 +690,23 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
        means the running candidate came through a trial boot; only that state
        may commit. No line at all is a fresh disk or an interrupted install,
        and an interrupted install's slot holds partial bytes, so committing
-       without the consumed marker would save bytes that never booted. */
+       without the consumed marker would save bytes that never booted.
+
+       Both patterns carry a leading newline so they match a whole line and not
+       a suffix of some other key: the writer preserves lines it does not know,
+       so a block could hold an `x_next_entry=candidate` that is nobody's trial
+       state, and the block's header line guarantees every real variable has a
+       newline before it. */
     if (bootslot_read_env(bs, env, err, errlen) != 0) {
         return -1;
     }
-    for (i = 0; i + 21 <= ENV_BYTES; i++) {
-        if (memcmp(env + i, "next_entry=candidate\n", 21) == 0) {
+    for (i = 0; i + 13 <= ENV_BYTES; i++) {
+        if (i + 22 <= ENV_BYTES && memcmp(env + i, "\nnext_entry=candidate\n", 22) == 0) {
             return fail(err, errlen,
                         "an installed candidate has not booted; boot it "
                         "before committing");
         }
-        if (i + 13 <= ENV_BYTES && memcmp(env + i, "\nnext_entry=\n", 13) == 0) {
+        if (memcmp(env + i, "\nnext_entry=\n", 13) == 0) {
             consumed = 1;
         }
     }
