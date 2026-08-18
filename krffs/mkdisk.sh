@@ -39,8 +39,11 @@ DISK_SIZE=$((DISK_MB * 1048576))
 
 # The kernel maps the KRFFS partition through a fixed virtual window; a partition
 # larger than that window cannot be mounted from disk. The window is capped at
-# 256 MiB (PC_WINDOW_CAP in sys/mm/pagecache.c), so cap the partition to match.
-WINDOW_MB=256
+# 512 MiB (PC_WINDOW_CAP in sys/mm/pagecache.c), so cap the partition to match.
+# This said 256 until milestone 25: the cap was raised when the window moved
+# above the region real firmware uses for MMIO, and this copy of the number was
+# left behind, which put a 500 MiB root out of reach of its own builder.
+WINDOW_MB=512
 
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
     echo "usage: mkdisk.sh <manifest> <output.disk> [disk_mb] [partition_mb]" >&2

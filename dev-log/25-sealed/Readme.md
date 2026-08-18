@@ -75,3 +75,35 @@ The remaining two were smaller. `utils/Readme.md` still described `--commit`, na
 A second round over those fixes found one more and refuted nothing. `bootverb_parse` and `bootverb_known` had grown separate copies of the verb list, so a verb added to one and missed in the other would compile and then report itself as no verb at all. They share one catalog now, and a test walks it: every verb the parser accepts must also be one the diagnostic knows, which fails if the two ever drift.
 
 One finding from that round was refuted with evidence. The new fixture in `tests/host/bootctl_hosttest.c` opens with a comment introducing the case, which the comment rule reads against. That file is a sequence of eighteen such cases, each introduced the same way, and the rule is written for production bodies rather than for a test whose structure is its scenarios. Following the file is right here; restyling it is a separate cleanup, not part of a rename.
+
+## Phase C step 1: the geometry
+
+The sealed disk's layout is now something the build produces rather than something the plan asserts. `make rach2-sealed-disk` writes it, and every number in the plan's map was checked against the built image: 660602880 bytes, 1290240 sectors, 630 MiB; partition 1 at LBA 2048 for 131072 sectors, type 0x0c; partition 2 at 133120 for 1024000; partition 3 at 1157120 for 131072; entry 4 empty; 4096 bytes per cluster in the boot partition.
+
+`tools/mkdisk_grub.sh` grew three knobs, each defaulting to what it always built, so no existing caller changes: the boot partition's size, mformat's sectors per cluster, and a third partition that is absent at zero. The two size knobs are not independent, and the plan says why: `bootslot_open` refuses a volume whose FAT is over 512 sectors or whose cluster count is over 65536, and a 64 MiB partition at one sector per cluster is about 130500 clusters with a 1020-sector FAT. At eight sectors per cluster it is 16348 clusters with a 128-sector FAT.
+
+Three things had to change to make that build correct rather than merely produce a file.
+
+The builder's chain verifier compared cluster counts against sector counts. It was right only because mformat had always chosen one sector per cluster, and it now reads the cluster size out of the volume it just formatted and divides by that. Its report names the figure, so a geometry that silently changed would be visible in the log.
+
+The same verifier read `mshowfat` output with a pattern that matched only a run of clusters, `<a-b>`. A file that fits a single cluster prints as `<a>`, which never happened at 512 bytes and happens to `grub.cfg` immediately at 4096. It now accepts both.
+
+`krffs/mkdisk.sh` refused any partition over 256 MiB, citing the kernel's mount window. That window became 512 MiB in milestone 24 when it moved above the region real firmware uses for MMIO, and this copy of the number was left behind. It is corrected, with the reason recorded so the next person does not have to rediscover it. This path did not block the sealed image, which goes through `mkimage.sh`, but the number was wrong wherever it was read.
+
+The host fixture assumed one sector per cluster in fifteen places, which is why the library's cluster arithmetic had never been exercised: at one sector per cluster the multiply by `cluster_sectors` is the identity, so a version that dropped it entirely would have passed every test in the suite. `mkfatfixture.py` now takes the geometry as a parameter, `--cluster8` builds the same files at 4096 bytes per cluster, and every existing option was checked to produce a byte-identical image to before. A new case opens that volume, checks the library reports eight sectors per cluster and 512 clusters for the 2 MiB slot rather than 4096, and installs and refuses a commit there.
+
+Proof: the sealed image built and its table read back and compared field by field against the plan; the current kernel booting that image, mounting the 500 MiB root and reaching a login with partition 3 ignored; `make install-test` green at the unchanged default geometry, its log naming 512 bytes per cluster.
+
+Shown failing: dropping the `* cluster_sectors` from the library's cluster-to-sector conversion now fails the host test, which it did not before this fixture existed; and computing the volume's cluster count as a sector count fails it too.
+
+### What the review changed
+
+Four findings, all confirmed.
+
+Partition 3 had a type byte and no filesystem. `parted`'s filesystem argument selects the MBR type and creates nothing, so the entry named FAT32 over 64 MiB of zeros, and GRUB could not have read the partition the recovery entry will need. It is now formatted, with the two directories its contents will live in. What goes into it still belongs to phase G.
+
+The image was not reproducible. Two builds of one tree differed in the FAT volume serial, which mformat randomises, and in the creation and access dates mcopy stamps into every directory entry from the clock. Both are pinned, the second through `SOURCE_DATE_EPOCH`, which mtools honours, and two builds now produce one byte-identical image. Two inputs are deliberately left unpinned and are named as inputs rather than treated as noise: the container is the floating `ubuntu:24.04` tag, and the machine's SSH host key and password salt are generated per tree.
+
+The new cluster case did not constrain everything the geometry made relevant. It checked the cluster-to-sector conversion but not the volume's cluster count, and a version computing that count as though a cluster were a sector passed: the wrong value is larger than the volume, so it bounds nothing, and every chain in the fixture ends well below it. The count is now asserted directly, and a second fixture at the same geometry runs a chain past the end so the count is exercised as a bound rather than as a number that is merely reported.
+
+The owning documentation still described a two-partition disk and none of the new knobs.

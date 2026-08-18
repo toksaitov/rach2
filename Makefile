@@ -92,6 +92,7 @@ MKDISK          = krffs/mkdisk.sh
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci rach2-metal-grub-disk \
+        rach2-sealed-disk \
         isos test-iso os-simple-iso os-real-iso rach2-metal-image rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
@@ -288,6 +289,29 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 	RACH2_DISK_KRFFS_MB=500 \
 	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole" \
 	    sh tools/mkdisk_grub.sh build/rach2/kernel $(METAL_GRUB_DISK)
+
+# `make rach2-sealed-disk`: the disk milestone 25 seals into the laptop, written
+# once over a USB adapter and not removed again. Its geometry is the milestone's
+# contract and every number here is checked against the built image: a 64 MiB
+# FAT32 boot partition at 4 KiB clusters (one sector per cluster puts a 64 MiB
+# volume past both of bootslot's bounds), a 500 MiB root, and a 64 MiB recovery
+# partition whose kernel and RAM image GRUB can reach when partition 1 cannot be
+# read at all. The image is 630 MiB, 1290240 sectors.
+#
+# This target is the geometry only. The boot menu, the GRUB core slots, the
+# network configuration and the recovery contents are added by the phases that
+# own them; until then it boots the same machine the metal disk does.
+SEALED_DISK = build/images/rach2-sealed.disk
+rach2-sealed-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
+	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
+	RACH2_DISK_BOOT_MB=64 \
+	RACH2_DISK_CLUSTER=8 \
+	RACH2_DISK_KRFFS_MB=500 \
+	RACH2_DISK_RECOVERY_MB=64 \
+	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole" \
+	    sh tools/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
 # (-cpu max) and runs every probe, failing if any does not exit 0. The few probes
@@ -853,6 +877,7 @@ help:
 	@echo "  make test-image / os-simple-image / os-real-image   one image"
 	@echo "  make os-real-disk   the os-real tree on a partitioned ATA disk image"
 	@echo "  make os-real-grub-disk   a BIOS-bootable GRUB disk (needs Docker)"
+	@echo "  make rach2-sealed-disk   the sealed laptop disk: 64 MiB boot, 500 MiB root, 64 MiB recovery"
 	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"

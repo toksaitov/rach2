@@ -41,7 +41,7 @@ Every tool that opens a backing file (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`
 
 The GRUB-bootable disk lives one level up, in `tools/`, because it leans on the kernel and a Docker container rather than on the KRFFS tools alone:
 
-* `tools/mkdisk_grub.sh`: Builds a BIOS-bootable disk: a FAT boot partition holding the kernel and GRUB, plus a KRFFS partition with the os-real tree, assembled in a throwaway Docker container (`make os-real-grub-disk`)
+* `tools/mkdisk_grub.sh`: Builds a BIOS-bootable disk: a FAT32 boot partition holding the kernel and GRUB, a KRFFS partition with the os-real tree, and optionally a third FAT32 partition for a recovery system, assembled in a throwaway Docker container (`make os-real-grub-disk`, `make rach2-metal-grub-disk`, `make rach2-sealed-disk`)
 * `tools/grub_embed.py`: Writes GRUB's `boot.img` into the MBR and `core.img` into the post-MBR gap and patches their pointers, the install `grub-bios-setup` would do but cannot on a Docker overlay filesystem
 
 ## Structure
@@ -201,6 +201,7 @@ The same os-real tree also goes onto a real disk image, which the kernel mounts 
 
     make os-real-disk        # build/images/os-real.disk: MBR + a 48 MiB KRFFS partition
     make os-real-grub-disk   # build/images/os-real-grub.disk: BIOS-bootable, GRUB + a FAT boot partition + KRFFS (needs Docker)
+    make rach2-sealed-disk   # build/images/rach2-sealed.disk: the sealed laptop disk, 630 MiB (needs Docker)
 
 Attaching that image is booting it: `DISK=` mounts KRFFS from the platter, so what comes up is the writable Rach2 rather than the disposable RAM module.
 

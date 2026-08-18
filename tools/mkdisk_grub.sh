@@ -3,10 +3,13 @@
 #
 # mkdisk_grub.sh: build a BIOS-bootable disk image with kernel slots.
 #
-# The disk has two MBR partitions: partition 1 is a small FAT boot file system
-# holding GRUB and two kernels, partition 2 is a KRFFS image. GRUB's boot.img
-# goes in the MBR and core.img in the post-MBR gap (partition 1 starts at
-# 1 MiB), so a real machine, or QEMU with no -kernel, boots
+# The disk has two MBR partitions, or three when a recovery partition is asked
+# for: partition 1 is a FAT32 boot file system holding GRUB and two kernels,
+# partition 2 is a KRFFS image, and partition 3, when RACH2_DISK_RECOVERY_MB is
+# nonzero, is an empty FAT32 volume for the recovery kernel and its RAM image.
+#
+# GRUB's boot.img goes in the MBR and core.img in the post-MBR gap (partition 1
+# starts at 1 MiB), so a real machine, or QEMU with no -kernel, boots
 # BIOS -> MBR -> GRUB -> the Multiboot kernel, which then mounts KRFFS from
 # partition 2 (rach2.root=disk).
 #
@@ -49,14 +52,43 @@ MANIFEST="${RACH2_DISK_MANIFEST:-$REPO/krffs/manifests/os-real.manifest}"
 KRFFS_MB="${RACH2_DISK_KRFFS_MB:-47}"
 EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
 
+# Three more for the sealed disk, each defaulting to what this script always
+# built. BOOT_MB is the FAT partition; CLUSTER is mformat's sectors-per-cluster
+# (empty leaves mformat's own choice, which is one sector at the sizes this
+# script used before); RECOVERY_MB adds a third partition after the root, and
+# zero leaves the table with two entries as it has always had.
+#
+# The two are not independent. bootslot_open refuses a volume whose FAT exceeds
+# BOOTSLOT_FAT_MAX_SECTORS (512) or whose cluster count exceeds
+# BOOTSLOT_MAX_CLUSTERS (65536), and a 64 MiB partition at one sector per
+# cluster is about 130500 clusters with a 1020-sector FAT, which fails both. At
+# eight sectors per cluster it is 16348 clusters with a 128-sector FAT.
 GAP_MB=1
-BOOT_MB=16
+BOOT_MB="${RACH2_DISK_BOOT_MB:-16}"
+CLUSTER="${RACH2_DISK_CLUSTER:-}"
+RECOVERY_MB="${RACH2_DISK_RECOVERY_MB:-0}"
+
+# The FAT half of this disk used to differ between two builds of one tree, in
+# two places that have nothing to do with its contents: mformat picks a random
+# volume serial, and mcopy stamps each directory entry's creation and access
+# dates from the clock. Both are pinned here. SOURCE_DATE_EPOCH is the standard
+# name and mtools honours it; a caller that has one already keeps it, so this
+# disk agrees with whatever else that caller is building.
+#
+# What is still not fixed, and is not pretended to be: the container is the
+# floating ubuntu:24.04 tag and installs whatever GRUB and mtools the archive
+# holds that day, and the machine's SSH host key and password salt are
+# generated per tree. Those are inputs to the artifact, not noise in it.
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
+export SOURCE_DATE_EPOCH
+FAT_SERIAL=1acef00d
+
 # The candidate slot: bootctl rewrites these bytes in place and never
 # touches FAT metadata, so the file's size is fixed at build time.
 SLOT_BYTES=2097152
 # One spare MiB so the last partition ends before the device edge (parted
 # rejects a partition that ends exactly at the device size).
-DISK_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + 1))
+DISK_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + 1))
 
 if [ ! -f "$KERNEL" ]; then
     echo "mkdisk_grub: kernel not built ($KERNEL); run 'make' first" >&2
@@ -155,6 +187,7 @@ docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
     apt-get install -y -qq grub-pc-bin grub-common parted mtools python3 \
         >/dev/null 2>&1
     export MTOOLS_SKIP_CHECK=1
+    export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH
     export PATH=\"\$PATH:/usr/sbin:/sbin\"
     command -v grub-editenv >/dev/null || {
         echo 'mkdisk_grub: grub-editenv is not in the container' >&2; exit 1; }
@@ -166,6 +199,11 @@ docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
         $((GAP_MB + BOOT_MB))MiB
     parted -s '$OUT.new' mkpart primary $((GAP_MB + BOOT_MB))MiB \
         $((GAP_MB + BOOT_MB + KRFFS_MB))MiB
+    if [ $RECOVERY_MB -gt 0 ]; then
+        parted -s '$OUT.new' mkpart primary fat32 \
+            $((GAP_MB + BOOT_MB + KRFFS_MB))MiB \
+            $((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB))MiB
+    fi
     parted -s '$OUT.new' set 1 boot on
 
     KBYTES=\$(stat -c %s '$KERNEL')
@@ -176,7 +214,11 @@ docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
     dd if=/dev/zero of=/tmp/candidate.pad bs=$SLOT_BYTES count=1 status=none
     dd if='$KERNEL' of=/tmp/candidate.pad conv=notrunc status=none
     dd if=/dev/zero of=/tmp/p1.img bs=1M count=$BOOT_MB status=none
-    mformat -i /tmp/p1.img -F ::
+    if [ -n '$CLUSTER' ]; then
+        mformat -i /tmp/p1.img -F -N $FAT_SERIAL -c $CLUSTER ::
+    else
+        mformat -i /tmp/p1.img -F -N $FAT_SERIAL ::
+    fi
     mmd -i /tmp/p1.img ::/boot
     mmd -i /tmp/p1.img ::/boot/grub
     mcopy -i /tmp/p1.img /tmp/candidate.pad ::/boot/kernel
@@ -202,19 +244,29 @@ import sys, re
 seen = []
 sizes = {\"kernel\": $SLOT_BYTES, \"fallback\": int(sys.argv[1]),
          \"grub.cfg\": int(sys.argv[2]), \"grubenv\": 1024}
+# The cluster size comes from the volume that was just formatted, not from an
+# assumption: this compared cluster counts against sector counts, which was
+# only ever right because mformat happened to pick one sector per cluster.
+bpb = open(\"/tmp/p1.img\", \"rb\").read(64)
+cbytes = (bpb[11] | (bpb[12] << 8)) * bpb[13]
+if cbytes <= 0:
+    sys.exit(\"mkdisk_grub: the formatted volume reports a zero cluster size\")
 for line in open(\"/tmp/chains.txt\"):
     name = line.split()[0].rsplit(\"/\", 1)[-1]
-    ranges = [(int(a), int(b)) for a, b in
-              re.findall(r\"<(\\d+)-(\\d+)>\", line)]
+    # mshowfat prints a run as <a-b> and a lone cluster as <a>; a file small
+    # enough to fit one cluster only appears in the second form, which a
+    # larger cluster size makes the common case rather than the rare one.
+    ranges = [(int(a), int(b if b else a)) for a, b in
+              re.findall(r\"<(\\d+)(?:-(\\d+))?>\", line)]
     if not ranges:
         sys.exit(\"mkdisk_grub: %s has no clusters\" % name)
     n = sum(b - a + 1 for a, b in ranges)
     want = sizes.pop(name, None)
     if want is None:
         sys.exit(\"mkdisk_grub: unexpected or repeated record for %s\" % name)
-    if n != (want + 511) // 512:
+    if n != (want + cbytes - 1) // cbytes:
         sys.exit(\"mkdisk_grub: %s spans %d clusters and its %d bytes need %d\" %
-                 (name, n, want, (want + 511) // 512))
+                 (name, n, want, (want + cbytes - 1) // cbytes))
     seen.append((name, ranges))
 if sizes:
     sys.exit(\"mkdisk_grub: no chain record for %s\" %
@@ -226,7 +278,7 @@ for i in range(len(seen)):
                 if a1 <= b2 and a2 <= b1:
                     sys.exit(\"mkdisk_grub: %s and %s share clusters\" %
                              (seen[i][0], seen[j][0]))
-print(\"mkdisk_grub: boot files verified:\",
+print(\"mkdisk_grub: boot files verified at %d bytes per cluster:\" % cbytes,
       \" \".join(n for n, _ in seen))
 ' \"\$KBYTES\" \"\$CFGBYTES\"
     dd if=/tmp/p1.img of='$OUT.new' bs=1M seek=$GAP_MB conv=notrunc status=none
@@ -239,6 +291,24 @@ print(\"mkdisk_grub: boot files verified:\",
 
     dd if='$KRFFS_BIN' of='$OUT.new' bs=1M seek=$((GAP_MB + BOOT_MB)) \
         conv=notrunc status=none
+
+    # Partition 3, when asked for: an empty FAT32 volume with the directories
+    # its contents will live in. parted's filesystem argument only sets the MBR
+    # type byte, so without this the entry would name a filesystem that is not
+    # there, and GRUB could not read the partition the recovery entry needs.
+    # What goes into it belongs to the phase that builds recovery.
+    if [ $RECOVERY_MB -gt 0 ]; then
+        dd if=/dev/zero of=/tmp/p3.img bs=1M count=$RECOVERY_MB status=none
+        if [ -n '$CLUSTER' ]; then
+            mformat -i /tmp/p3.img -F -N $FAT_SERIAL -c $CLUSTER ::
+        else
+            mformat -i /tmp/p3.img -F -N $FAT_SERIAL ::
+        fi
+        mmd -i /tmp/p3.img ::/boot
+        mmd -i /tmp/p3.img ::/boot/grub
+        dd if=/tmp/p3.img of='$OUT.new' bs=1M \
+            seek=$((GAP_MB + BOOT_MB + KRFFS_MB)) conv=notrunc status=none
+    fi
     mv '$OUT.new' '$OUT'
 "
 

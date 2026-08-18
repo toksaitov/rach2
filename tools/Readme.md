@@ -363,6 +363,32 @@ The parts worth reusing when a probe has to reach a real board:
   them, with every staged chain verified and the four boot files held
   disjoint before the partition is committed. It calls `grub_embed.py`
   because `grub-bios-setup` cannot run on Docker's overlay filesystem.
+
+  Six environment variables shape the disk, each defaulting to what the script
+  always built. `RACH2_DISK_MANIFEST` is the tree staged into the root,
+  `RACH2_DISK_KRFFS_MB` its size, and `RACH2_DISK_APPEND` extra kernel
+  command-line tokens spliced into every menu entry. `RACH2_DISK_BOOT_MB` sizes
+  the boot partition, `RACH2_DISK_CLUSTER` is mformat's sectors per cluster, and
+  `RACH2_DISK_RECOVERY_MB` adds a third partition after the root, absent at
+  zero. The last three arrived with milestone 25's sealed disk.
+
+  The boot size and the cluster size are coupled, and getting it wrong produces
+  a disk the installer refuses rather than one that fails later.
+  `bootslot_open` rejects a volume whose FAT exceeds 512 sectors or whose
+  cluster count exceeds 65536; a 64 MiB partition at one sector per cluster is
+  about 130500 clusters with a 1020-sector FAT and fails both, while at eight
+  sectors per cluster it is 16348 clusters with a 128-sector FAT. The chain
+  verifier reads the cluster size out of the volume it just formatted rather
+  than assuming, and names the figure in its output.
+
+  Two builds of one tree produce one byte-identical image. That needed pinning
+  two things which have nothing to do with the disk's contents: mformat's
+  otherwise random volume serial, and the creation and access dates mcopy
+  stamps into each directory entry from the clock, which mtools takes from
+  `SOURCE_DATE_EPOCH`. Two inputs are deliberately not pinned, because they are
+  inputs rather than noise: the container is the floating `ubuntu:24.04` tag
+  with whatever GRUB and mtools the archive holds that day, and the machine's
+  SSH host key and password salt are generated per tree.
 * `grub_embed.py` (invoked by `mkdisk_grub.sh`): writes GRUB's `boot.img` and
   embeds `core.img` into the disk directly.
 * `mkiso.sh` (`make isos`): builds a bootable ISO per image with `grub-mkrescue`

@@ -364,6 +364,52 @@ int main(void)
     CHECK(!env_has("next_entry=candidate\n"),
           "the stale armed trial was dropped before the slot was touched");
 
+    /* Eight sectors per cluster. Every fixture before milestone 25 was
+       one-to-one, so the library's cluster arithmetic had never been driven at
+       any other geometry, and the sealed 64 MiB boot partition cannot use the
+       old one: at one sector per cluster it is past both BOOTSLOT_FAT_MAX_SECTORS
+       and BOOTSLOT_MAX_CLUSTERS. Everything the library reports here is in
+       sectors and bytes, so the multiplication is what is under test. */
+    load("--cluster8");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "a 4 KiB-cluster volume opens");
+    CHECK(bs.cluster_sectors == 8, "the volume reports eight sectors per cluster");
+    /* 8192 total sectors less a data start of 160, divided by eight, is 1004.
+       A count computed as though a cluster were a sector gives 8032, which is
+       larger than the volume and so bounds nothing. */
+    CHECK(bs.cluster_count == 1004,
+          "the cluster count divides by the cluster size rather than counting sectors");
+    CHECK(bs.kernel.size == 2 * 1024 * 1024, "the candidate is still 2 MiB");
+    CHECK(bs.kernel.chain_len == 512,
+          "2 MiB at 4 KiB per cluster is 512 clusters, not the 4096 it would be at 512 bytes");
+    CHECK(bs.grubenv.size == 1024, "grubenv is still 1024 bytes");
+    CHECK(bs.grubenv.chain_len == 1, "1024 bytes fits one 4 KiB cluster");
+    make_kernel(kernel, 60 * 512);
+    CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == 0,
+          "an install works at eight sectors per cluster");
+    {
+        /* env_has reads the block at the default geometry's offset; here the
+           library is asked where it actually is. */
+        static uint8_t envbuf[BOOTSLOT_ENV_BYTES];
+        int armed = 0;
+        size_t i;
+
+        CHECK(bootslot_read_env(&bs, envbuf, err, sizeof(err)) == 0,
+              "the environment block reads back at the new geometry");
+        for (i = 0; i + 21 <= BOOTSLOT_ENV_BYTES; i++) {
+            if (memcmp(envbuf + i, "next_entry=candidate\n", 21) == 0) {
+                armed = 1;
+            }
+        }
+        CHECK(armed, "the trial is armed at the new geometry");
+    }
+    CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1,
+          "and an unbooted candidate is still refused there");
+
+    /* The count has to be the range bound, not a number that is merely
+       reported: a chain reaching one cluster past the last legal one must be
+       refused at this geometry too. */
+    expect_open_error("--cluster8-past-end", "a chain leaves the volume");
+
     /* A key that merely ends in next_entry is not the trial state. The writer
        preserves lines it does not recognise, so a block can hold one; commit
        must read the consumed marker beside it and not refuse on the impostor. */

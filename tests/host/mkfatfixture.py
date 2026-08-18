@@ -19,12 +19,29 @@ Options (at most one):
     --fats-differ --loop --out-of-range --short-chain --cross-link
     --bpb-sector-size --bpb-fat-oversized --bpb-root-out --bpb-overflow
     --no-grubenv --small-candidate --fragmented --bad-fallback --cfg-short
+    --cluster8 --cluster8-past-end
+
+--cluster8 builds the same files at eight sectors per cluster instead of one,
+which is the geometry the sealed 64 MiB boot partition needs and the only one
+that makes bootslot's cluster arithmetic visible: at one sector per cluster the
+multiplication by cluster_sectors is the identity. --cluster8-past-end is that
+geometry with a chain running off the end of the volume, so the cluster count
+is checked as a bound and not merely reported.
 """
 import struct
 import sys
 
 SECTOR = 512
 TOTAL = 8192
+
+# Sectors per cluster. Every fixture was one-to-one until milestone 25, which is
+# why bootslot's cluster arithmetic had never run at any other geometry: the
+# sealed boot partition is 64 MiB, and at one sector per cluster that is past
+# both BOOTSLOT_FAT_MAX_SECTORS and BOOTSLOT_MAX_CLUSTERS, so the real disk
+# formats at eight. `--cluster8` builds the same files that way, at the same
+# byte sizes and so at eight times fewer clusters. The default stays one, which
+# keeps every existing case at the byte offsets it asserts on.
+DEFAULT_SPC = 1
 RESERVED = 32
 FATSZ = 64
 DATA_START = RESERVED + 2 * FATSZ
@@ -97,6 +114,23 @@ def main(argv):
     out = argv[1]
     opt = argv[2] if len(argv) == 3 else ""
 
+    spc = 8 if opt in ("--cluster8", "--cluster8-past-end") else DEFAULT_SPC
+    cbytes = spc * SECTOR
+    clusters = (TOTAL - DATA_START) // spc
+    slot_clusters = KERNEL_CLUSTERS // spc
+    kernel_clusters = (16 // spc if spc <= 16 else 1) if opt == "--small-candidate" else slot_clusters
+    fallback_clusters = FALLBACK_CLUSTERS // spc
+    kernel_first = KERNEL_FIRST
+    # The layout follows the full slot, so a short candidate leaves a hole
+    # rather than moving every file after it.
+    fallback_first = kernel_first + slot_clusters + 16
+    grubenv_first = fallback_first + fallback_clusters
+    # 1024 bytes is two clusters at 512 bytes each and one at 4096; the chain
+    # has to follow the size or the volume fails its own consistency check.
+    env_clusters = (1024 + cbytes - 1) // cbytes
+    cfg_first = grubenv_first + env_clusters
+    extra_first = cfg_first + 1
+
     img = bytearray(TOTAL * SECTOR)
 
     # The BPB, mformat's small-FAT32 shape.
@@ -105,14 +139,14 @@ def main(argv):
     bpb[3:11] = b"MKFATFIX"
     sector_size = 4096 if opt == "--bpb-sector-size" else SECTOR
     struct.pack_into("<H", bpb, 11, sector_size)
-    bpb[13] = 1  # sectors per cluster
+    bpb[13] = spc  # sectors per cluster
     struct.pack_into("<H", bpb, 14, RESERVED)
     bpb[16] = 2  # FATs
     struct.pack_into("<H", bpb, 19, TOTAL)  # total16, like mformat
     bpb[21] = 0xF8
     fatsz = 0x40000 if opt == "--bpb-fat-oversized" else FATSZ
     struct.pack_into("<I", bpb, 36, fatsz)
-    root = CLUSTERS + 100 if opt == "--bpb-root-out" else ROOT
+    root = clusters + 100 if opt == "--bpb-root-out" else ROOT
     struct.pack_into("<I", bpb, 44, root)
     if opt == "--bpb-overflow":
         # A reserved count near the 16-bit edge: data_start arithmetic that
@@ -138,78 +172,77 @@ def main(argv):
     for d in (ROOT, BOOTDIR, GRUBDIR, EXTRADIR):
         link(d, EOC)
 
-    kernel_clusters = 16 if opt == "--small-candidate" else KERNEL_CLUSTERS
     if opt == "--fragmented":
         # Two runs with a hole between them; the chain crosses the hole.
         half = kernel_clusters // 2
-        chain(KERNEL_FIRST, half, cross_to=KERNEL_FIRST + half + 8)
-        chain(KERNEL_FIRST + half + 8, kernel_clusters - half)
+        chain(kernel_first, half, cross_to=kernel_first + half + 8)
+        chain(kernel_first + half + 8, kernel_clusters - half)
     elif opt == "--loop":
-        chain(KERNEL_FIRST, kernel_clusters,
-              cross_to=KERNEL_FIRST + 4)
-    elif opt == "--out-of-range":
-        chain(KERNEL_FIRST, kernel_clusters, cross_to=CLUSTERS + 500)
+        chain(kernel_first, kernel_clusters,
+              cross_to=kernel_first + 4)
+    elif opt == "--out-of-range" or opt == "--cluster8-past-end":
+        chain(kernel_first, kernel_clusters, cross_to=clusters + 500)
     elif opt == "--short-chain":
-        chain(KERNEL_FIRST, kernel_clusters // 2)
+        chain(kernel_first, kernel_clusters // 2)
     elif opt == "--cross-link":
         # The candidate's chain ends inside the grub.cfg chain, its length
         # still matching its size, so the shared cluster is the one broken
         # fact the walk reports.
-        chain(KERNEL_FIRST, kernel_clusters - 1, cross_to=CFG_FIRST)
+        chain(kernel_first, kernel_clusters - 1, cross_to=cfg_first)
     else:
-        chain(KERNEL_FIRST, kernel_clusters)
-    chain(FALLBACK_FIRST, FALLBACK_CLUSTERS)
-    chain(GRUBENV_FIRST, 2)
-    chain(CFG_FIRST, 1)
+        chain(kernel_first, kernel_clusters)
+    chain(fallback_first, fallback_clusters)
+    chain(grubenv_first, env_clusters)
+    chain(cfg_first, 1)
 
     fat2 = bytearray(fat)
     if opt == "--fats-differ":
-        struct.pack_into("<I", fat2, (KERNEL_FIRST + 7) * 4, EOC)
+        struct.pack_into("<I", fat2, (kernel_first + 7) * 4, EOC)
     img[RESERVED * SECTOR:(RESERVED + FATSZ) * SECTOR] = fat
     img[(RESERVED + FATSZ) * SECTOR:DATA_START * SECTOR] = fat2
 
     def cluster_off(c):
-        return (DATA_START + (c - 2)) * SECTOR
+        return (DATA_START + (c - 2) * spc) * SECTOR
 
     # The root: a volume label, a long-name sequence, then BOOT.
-    rootdir = bytearray(SECTOR)
+    rootdir = bytearray(cbytes)
     ents = [dirent(b"FIXTURE    ", 0x08, 0, 0), lfn_entry(0x41),
             dirent(b"BOOT       ", 0x10, BOOTDIR, 0)]
     rootdir[0:32 * len(ents)] = b"".join(ents)
-    img[cluster_off(ROOT):cluster_off(ROOT) + SECTOR] = rootdir
+    img[cluster_off(ROOT):cluster_off(ROOT) + cbytes] = rootdir
 
     # /BOOT: dot entries, the two kernel files, GRUB, and an extra subtree.
-    kernel_size = kernel_clusters * SECTOR
-    bootdir = bytearray(SECTOR)
+    kernel_size = kernel_clusters * cbytes
+    bootdir = bytearray(cbytes)
     ents = [dirent(b".          ", 0x10, BOOTDIR, 0),
             dirent(b"..         ", 0x10, 0, 0),
-            dirent(b"KERNEL     ", 0x20, KERNEL_FIRST, kernel_size),
-            dirent(b"FALLBACK   ", 0x20, FALLBACK_FIRST,
-                   FALLBACK_CLUSTERS * SECTOR),
+            dirent(b"KERNEL     ", 0x20, kernel_first, kernel_size),
+            dirent(b"FALLBACK   ", 0x20, fallback_first,
+                   fallback_clusters * cbytes),
             dirent(b"GRUB       ", 0x10, GRUBDIR, 0),
             dirent(b"EXTRA      ", 0x10, EXTRADIR, 0)]
     bootdir[0:32 * len(ents)] = b"".join(ents)
-    img[cluster_off(BOOTDIR):cluster_off(BOOTDIR) + SECTOR] = bootdir
+    img[cluster_off(BOOTDIR):cluster_off(BOOTDIR) + cbytes] = bootdir
 
     # /BOOT/GRUB: dot entries, grub.cfg, and (unless absent) grubenv.
-    grubdir = bytearray(SECTOR)
+    grubdir = bytearray(cbytes)
     ents = [dirent(b".          ", 0x10, GRUBDIR, 0),
             dirent(b"..         ", 0x10, BOOTDIR, 0),
-            dirent(b"GRUB    CFG", 0x20, CFG_FIRST,
+            dirent(b"GRUB    CFG", 0x20, cfg_first,
                    2000 if opt == "--cfg-short" else 40)]
     if opt != "--no-grubenv":
-        ents.append(dirent(b"GRUBENV    ", 0x20, GRUBENV_FIRST, 1024))
+        ents.append(dirent(b"GRUBENV    ", 0x20, grubenv_first, 1024))
     grubdir[0:32 * len(ents)] = b"".join(ents)
-    img[cluster_off(GRUBDIR):cluster_off(GRUBDIR) + SECTOR] = grubdir
+    img[cluster_off(GRUBDIR):cluster_off(GRUBDIR) + cbytes] = grubdir
 
     # /BOOT/EXTRA: an empty file (cluster zero) and the dot entries; the walk
     # must take all of this in stride.
-    extradir = bytearray(SECTOR)
+    extradir = bytearray(cbytes)
     ents = [dirent(b".          ", 0x10, EXTRADIR, 0),
             dirent(b"..         ", 0x10, BOOTDIR, 0),
             dirent(b"EMPTY      ", 0x20, 0, 0)]
     extradir[0:32 * len(ents)] = b"".join(ents)
-    img[cluster_off(EXTRADIR):cluster_off(EXTRADIR) + SECTOR] = extradir
+    img[cluster_off(EXTRADIR):cluster_off(EXTRADIR) + cbytes] = extradir
 
     # File contents: the candidate slot holds a valid padded kernel, the
     # fallback a valid kernel, grubenv GRUB's block.
@@ -217,25 +250,25 @@ def main(argv):
     if opt == "--fragmented":
         # The content follows the chain across the hole.
         half = kernel_clusters // 2
-        first_bytes = half * SECTOR
-        img[cluster_off(KERNEL_FIRST):
-            cluster_off(KERNEL_FIRST) + first_bytes] = slot[:first_bytes]
-        second = KERNEL_FIRST + half + 8
+        first_bytes = half * cbytes
+        img[cluster_off(kernel_first):
+            cluster_off(kernel_first) + first_bytes] = slot[:first_bytes]
+        second = kernel_first + half + 8
         img[cluster_off(second):
             cluster_off(second) + len(slot) - first_bytes] = slot[first_bytes:]
     else:
-        img[cluster_off(KERNEL_FIRST):
-            cluster_off(KERNEL_FIRST) + len(slot)] = slot
-    fb = minimal_kernel(FALLBACK_CLUSTERS * SECTOR,
+        img[cluster_off(kernel_first):
+            cluster_off(kernel_first) + len(slot)] = slot
+    fb = minimal_kernel(fallback_clusters * cbytes,
                         phnum=0 if opt == "--bad-fallback" else 1)
-    img[cluster_off(FALLBACK_FIRST):cluster_off(FALLBACK_FIRST) + len(fb)] = fb
+    img[cluster_off(fallback_first):cluster_off(fallback_first) + len(fb)] = fb
     env = (b"# GRUB Environment Block\n"
            b"# WARNING: Do not edit this file by tools other than "
            b"grub-editenv!!!\n"
            b"saved_entry=candidate\n")
     env = env + b"#" * (1024 - len(env))
-    img[cluster_off(GRUBENV_FIRST):cluster_off(GRUBENV_FIRST) + 1024] = env
-    img[cluster_off(CFG_FIRST):cluster_off(CFG_FIRST) + 40] = b"x" * 40
+    img[cluster_off(grubenv_first):cluster_off(grubenv_first) + 1024] = env
+    img[cluster_off(cfg_first):cluster_off(cfg_first) + 40] = b"x" * 40
 
     with open(out, "wb") as f:
         f.write(img)
