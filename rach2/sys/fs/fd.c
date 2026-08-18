@@ -14,7 +14,8 @@ static struct open_file ofd_pool[OFD_POOL_SIZE];
 /**
  * Allocate a fresh open-file description.
  *
- * Returns an OFD with refcount 1, offset 0, and cleared status flags, or NULL
+ * Returns an OFD with refcount 1, both offsets 0, and cleared status flags,
+ * or NULL
  * if the pool is exhausted.
  */
 static struct open_file *ofd_alloc(void)
@@ -25,6 +26,7 @@ static struct open_file *ofd_alloc(void)
         if (ofd_pool[i].refcount == 0) {
             ofd_pool[i].refcount     = 1;
             ofd_pool[i].offset       = 0;
+            ofd_pool[i].raw_offset   = 0;
             ofd_pool[i].status_flags = 0;
             return &ofd_pool[i];
         }

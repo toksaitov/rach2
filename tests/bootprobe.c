@@ -7,12 +7,21 @@
  * the probe proves the device end to end: the 0600 mode from stat and fstat
  * both, seeks resolved against the partition size, a read of known bytes at a
  * seek, a written sector read back, exactly 0 at the end, -ENOSPC past it,
- * -EINVAL unaligned, and -EACCES for an unprivileged open. Without the flag
+ * -EINVAL unaligned, and -EACCES for an unprivileged open. With
+ * `rach2.bootprobe=ramroot` the machine mounted a RAM image and no disk file
+ * system, and both /dev/bootpart and /dev/grubcore must exist anyway. With
+ * `rach2.bootprobe=wide` a sparse 260 GB drive is attached over AHCI with
+ * markers at 5 GiB and 258 GiB: the far one needs 38 bits of offset, so an
+ * implementation keeping fewer misses it however well it does at 5 GiB, and the
+ * boot also walks SEEK_CUR across the 4 GiB line both ways, refuses a seek
+ * before the start, and duplicates a descriptor to prove the wide offset is
+ * shared through the open-file description. Without the flag
  * the disk has only the KRFFS partition and the device must be absent from
  * stat and open alike. /proc/cmdline is proved at each of its seams: content,
  * the /proc listing, stat/fstat identity, and the fd's readlink origin.
  *
- * Prints "BOOTPROBE OK" or "BOOTPROBE ABSENT OK".
+ * Prints "BOOTPROBE OK", "BOOTPROBE ABSENT OK", "BOOTPROBE RAMROOT OK" or
+ * "BOOTPROBE WIDE OK".
  *
  * Freestanding; direct int 0x80.
  */
@@ -25,6 +34,8 @@ typedef unsigned int size_t;
 #define SYS_OPEN       5
 #define SYS_CLOSE      6
 #define SYS_LSEEK      19
+#define SYS_DUP        41
+#define SYS_LLSEEK     140
 #define SYS_READLINK   85
 #define SYS_STAT64     195
 #define SYS_FSTAT64    197
@@ -36,13 +47,15 @@ typedef unsigned int size_t;
 #define O_RDWR   2
 
 #define SEEK_SET 0
+#define SEEK_CUR 1
 #define SEEK_END 2
 
-#define ENOENT 2
-#define EPERM  1
-#define EACCES 13
-#define EINVAL 22
-#define ENOSPC 28
+#define ENOENT    2
+#define EPERM     1
+#define EACCES    13
+#define EINVAL    22
+#define EOVERFLOW 75
+#define ENOSPC    28
 
 /* i386 struct stat64: st_mode at offset 16, the 64-bit st_ino (the field musl
  * reads) at 88 (96 bytes total). */
@@ -63,6 +76,46 @@ static int syscall3(int n, int a, int b, int c)
 {
     int r;
     __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
+
+/**
+ * The high and low halves `_llseek` takes its offset in.
+ *
+ * The shift is done on an unsigned value because shifting a negative one right
+ * is not defined by the language, and these are used with negative
+ * displacements.
+ */
+static int off_hi(long long v)
+{
+    return (int)(unsigned)((unsigned long long)v >> 32);
+}
+
+static int off_lo(long long v)
+{
+    return (int)(unsigned)(unsigned long long)v;
+}
+
+/** Whether `buf` holds the 512-byte marker this fixture writes at `gib` GiB. */
+static int pattern_ok(const char *buf, int gib)
+{
+    int j;
+
+    for (j = 0; j < 512; j++) {
+        if ((unsigned char)buf[j] != (unsigned char)((j * 7 + 3 + gib) & 0xff)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int syscall5(int n, int a, int b, int c, int d, int e)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
+                         : "memory");
     return r;
 }
 
@@ -134,8 +187,8 @@ void _start(void)
     }
     /* The RAM-root boot deliberately does not ask for a disk root, so the token
        it is checked for is the one its own mode is named by. */
-    if (contains(cmdline, "rach2.bootprobe=ramroot")) {
-        check(!contains(cmdline, "rach2.fsdisk"), "the RAM-root boot asks for no disk root");
+    if (contains(cmdline, "rach2.bootprobe=ramroot") || contains(cmdline, "rach2.bootprobe=wide")) {
+        check(!contains(cmdline, "rach2.fsdisk"), "a RAM-root boot asks for no disk root");
     } else {
         check(contains(cmdline, "rach2.fsdisk"), "cmdline carries rach2.fsdisk");
     }
@@ -272,6 +325,81 @@ void _start(void)
 
         if (fails == 0) {
             puts("BOOTPROBE RAMROOT OK");
+            sys_exit(0);
+        }
+        puts("BOOTPROBE FAILED");
+        sys_exit(1);
+    }
+
+    if (contains(cmdline, "rach2.bootprobe=wide")) {
+        long long pos = 0;
+        long long near_at = 5LL * 1024 * 1024 * 1024;
+        long long far_at = 258LL * 1024 * 1024 * 1024;
+        long long size = 260LL * 1024 * 1024 * 1024;
+        int fd2;
+
+        fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDONLY, 0);
+        check(fd >= 0, "root opens /dev/disk0 on a 260 GB drive");
+
+        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&pos, SEEK_END);
+        check(rc == 0, "_llseek to the end of a 260 GB window succeeds");
+        check(pos == size, "and reports the whole drive, not a truncation");
+
+        rc =
+            syscall5(SYS_LLSEEK, fd, off_hi(near_at), off_lo(near_at), (int)(size_t)&pos, SEEK_SET);
+        check(rc == 0 && pos == near_at, "_llseek to 5 GiB lands where it was asked");
+        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        check(n == SECTOR, "a sector reads at 5 GiB");
+        check(pattern_ok(sector, 5), "and holds the bytes written there");
+
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (int)(size_t)&pos, SEEK_SET);
+        check(rc == 0 && pos == far_at, "_llseek to 258 GiB lands where it was asked");
+        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        check(n == SECTOR, "a sector reads at 258 GiB");
+        check(pattern_ok(sector, 258), "and holds the bytes written there");
+
+        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&pos, SEEK_SET);
+        check(rc == 0 && pos == 0, "seek back to the start");
+        {
+            long long step = near_at;
+
+            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (int)(size_t)&pos, SEEK_CUR);
+            check(rc == 0 && pos == near_at, "SEEK_CUR forward crosses 4 GiB");
+            step = far_at - near_at;
+            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (int)(size_t)&pos, SEEK_CUR);
+            check(rc == 0 && pos == far_at, "SEEK_CUR forward again reaches 258 GiB");
+            n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+            check(n == SECTOR && pattern_ok(sector, 258),
+                  "and a read there still finds the far marker");
+            step = -(far_at + SECTOR);
+            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (int)(size_t)&pos, SEEK_CUR);
+            check(rc == 0 && pos == 0, "SEEK_CUR backward returns to the start");
+            step = -1;
+            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (int)(size_t)&pos, SEEK_CUR);
+            check(rc == -EINVAL, "a seek before the start is refused, not wrapped");
+        }
+
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (int)(size_t)&pos, SEEK_SET);
+        check(rc == 0, "seek to the far marker before duplicating");
+        fd2 = syscall1(SYS_DUP, fd);
+        check(fd2 >= 0, "the descriptor duplicates");
+        rc = syscall5(SYS_LLSEEK, fd2, 0, 0, (int)(size_t)&pos, SEEK_CUR);
+        check(rc == 0 && pos == far_at, "the duplicate shares the wide offset");
+        n = syscall3(SYS_READ, fd2, (int)(size_t)sector, SECTOR);
+        check(n == SECTOR && pattern_ok(sector, 258), "and reads the far marker through it");
+        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&pos, SEEK_CUR);
+        check(rc == 0 && pos == far_at + SECTOR,
+              "the original saw the duplicate's read advance it");
+        syscall1(SYS_CLOSE, fd2);
+
+        rc = syscall3(SYS_LSEEK, fd, 0, SEEK_END);
+        check(rc == -EOVERFLOW, "the 32-bit lseek reports overflow, not an invalid seek");
+        rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
+        check(rc == 0, "and still works for an offset it can name");
+        syscall1(SYS_CLOSE, fd);
+
+        if (fails == 0) {
+            puts("BOOTPROBE WIDE OK");
             sys_exit(0);
         }
         puts("BOOTPROBE FAILED");

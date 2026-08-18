@@ -81,12 +81,12 @@ int diskinfo_u64_dec(char *out, int cap, uint64_t v)
     return n;
 }
 
-uint32_t diskinfo_window(uint64_t sectors)
+uint64_t diskinfo_window(uint64_t sectors)
 {
     if (sectors > (uint64_t)DISKINFO_WINDOW_MAX_SECTORS) {
-        return DISKINFO_WINDOW_MAX_SECTORS;
+        return (uint64_t)DISKINFO_WINDOW_MAX_SECTORS;
     }
-    return (uint32_t)sectors;
+    return sectors;
 }
 
 /** Append `s` to `buf` at `*n`, stopping at `cap - 1`. */

@@ -162,9 +162,10 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
 {
     uint8_t sector[BLOCK_SECTOR_SIZE];
     block_device_t *part = &w->part.device;
-    uint32_t off = e->ofd->offset;
-    uint32_t total = (uint32_t)part->sector_count;
-    uint32_t lba, want, done;
+    uint64_t off = e->ofd->raw_offset;
+    uint64_t total = part->sector_count;
+    uint64_t lba;
+    uint32_t want, done;
 
     if (!w->present) {
         return -ENXIO;
@@ -177,11 +178,11 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
         return 0;
     }
     want = count / BLOCK_SECTOR_SIZE;
-    if (want > total - lba) {
-        want = total - lba;
+    if ((uint64_t)want > total - lba) {
+        want = (uint32_t)(total - lba);
     }
     for (done = 0; done < want; done++) {
-        if (part->read(part, lba + done, 1, sector) != 0) {
+        if (part->read(part, (uint32_t)(lba + done), 1, sector) != 0) {
             break;
         }
         if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), sector,
@@ -195,7 +196,7 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
     if (done == 0) {
         return -EIO;
     }
-    e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
+    e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
@@ -219,9 +220,10 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
 {
     uint8_t sector[BLOCK_SECTOR_SIZE];
     block_device_t *part = &w->part.device;
-    uint32_t off = e->ofd->offset;
-    uint32_t total = (uint32_t)part->sector_count;
-    uint32_t lba, want, done;
+    uint64_t off = e->ofd->raw_offset;
+    uint64_t total = part->sector_count;
+    uint64_t lba;
+    uint32_t want, done;
 
     if (!w->present) {
         return -ENXIO;
@@ -237,7 +239,7 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
     }
     lba = off / BLOCK_SECTOR_SIZE;
     want = count / BLOCK_SECTOR_SIZE;
-    if (lba >= total || want > total - lba) {
+    if (lba >= total || (uint64_t)want > total - lba) {
         return -ENOSPC;
     }
     for (done = 0; done < want; done++) {
@@ -248,14 +250,14 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
             }
             break;
         }
-        if (part->write(part, lba + done, 1, sector) != 0) {
+        if (part->write(part, (uint32_t)(lba + done), 1, sector) != 0) {
             break;
         }
     }
     if (done == 0) {
         return -EIO;
     }
-    e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
+    e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
@@ -297,16 +299,17 @@ static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll
 static struct {
     int present;
     block_device_t *whole;
-    uint32_t window_sectors;
+    uint64_t window_sectors;
 } disk0;
 
 static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     uint8_t sector[BLOCK_SECTOR_SIZE];
     block_device_t *dev = disk0.whole;
-    uint32_t off = e->ofd->offset;
-    uint32_t total = disk0.window_sectors;
-    uint32_t lba, want, done;
+    uint64_t off = e->ofd->raw_offset;
+    uint64_t total = disk0.window_sectors;
+    uint64_t lba;
+    uint32_t want, done;
 
     if (!disk0.present || !dev) {
         return -ENXIO;
@@ -319,11 +322,11 @@ static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
         return 0; /* the end of the window, the regular-file convention */
     }
     want = count / BLOCK_SECTOR_SIZE;
-    if (want > total - lba) {
-        want = total - lba;
+    if ((uint64_t)want > total - lba) {
+        want = (uint32_t)(total - lba);
     }
     for (done = 0; done < want; done++) {
-        if (dev->read(dev, (uint64_t)(lba + done), 1, sector) != 0) {
+        if (dev->read(dev, lba + done, 1, sector) != 0) {
             break;
         }
         if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), sector,
@@ -337,7 +340,7 @@ static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (done == 0) {
         return -EIO;
     }
-    e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
+    e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
@@ -717,7 +720,7 @@ void devfs_disk_withdraw(void)
     disk0.whole = 0;
 }
 
-void devfs_disk_publish(struct block_device *whole, uint32_t window_sectors)
+void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors)
 {
     if (!whole || window_sectors == 0) {
         serial_printf("devfs: no whole-disk window to publish\n");
@@ -728,7 +731,7 @@ void devfs_disk_publish(struct block_device *whole, uint32_t window_sectors)
     disk0.present = 1;
 }
 
-int devfs_fd_disk_size(struct fd_entry *e, uint32_t *size)
+int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 {
     const struct devfs_entry *dev;
 
@@ -737,24 +740,24 @@ int devfs_fd_disk_size(struct fd_entry *e, uint32_t *size)
     }
     dev = (const struct devfs_entry *)e->priv;
     /* The log seeks like a file whose size is what it currently holds, so
-     * SEEK_END and a plain `cat` both behave. */
+     * SEEK_END and a plain `cat` both behave. It is not a raw window: it reads
+     * through the ordinary 32-bit offset, and a ring of kilobytes has no use
+     * for a wider one. */
     if (dev->ops == &bootlog_ops) {
-        *size = bootlog_len();
+        if (size) {
+            *size = bootlog_len();
+        }
         return 1;
     }
-    if (dev->ops != &disk0_ops || !disk0.present) {
-        return 0;
-    }
-    *size = disk0.window_sectors * BLOCK_SECTOR_SIZE;
-    return 1;
+    return 0;
 }
 
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, uint32_t sector_count)
 {
-    /* Byte offsets ride the descriptor's 32-bit offset and lseek's int32
-     * result, so the partition must sit under 2 GiB; the real boot partition
-     * is 16 MiB on a test image and 64 MiB on the sealed disk; anything larger
-     * than the bound is a misbuilt disk. */
+    /* The boot partition is 16 MiB on a test image and 64 MiB on the sealed
+     * disk. The bound is kept at 2 GiB so the legacy 32-bit lseek can still
+     * name every byte of this particular window; the wider windows are what
+     * _llseek exists for. Anything larger than the bound is a misbuilt disk. */
     if (sector_count == 0 || sector_count >= (0x80000000u / BLOCK_SECTOR_SIZE)) {
         serial_printf("devfs: boot partition too large; /dev/bootpart absent\n");
         return;
@@ -813,7 +816,18 @@ void devfs_grubcore_publish(struct block_device *backing)
     grubcore.present = 1;
 }
 
-int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size)
+int devfs_fd_is_raw(struct fd_entry *e)
+{
+    const struct devfs_entry *dev;
+
+    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+        return 0;
+    }
+    dev = (const struct devfs_entry *)e->priv;
+    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &disk0_ops;
+}
+
+int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
 {
     const struct devfs_entry *dev;
 
@@ -823,13 +837,19 @@ int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size)
     dev = (const struct devfs_entry *)e->priv;
     if (dev->ops == &bootpart_ops && bootpart.present) {
         if (size) {
-            *size = (uint32_t)bootpart.part.device.sector_count * BLOCK_SECTOR_SIZE;
+            *size = bootpart.part.device.sector_count * BLOCK_SECTOR_SIZE;
         }
         return 1;
     }
     if (dev->ops == &grubcore_ops && grubcore.present) {
         if (size) {
-            *size = (uint32_t)grubcore.part.device.sector_count * BLOCK_SECTOR_SIZE;
+            *size = grubcore.part.device.sector_count * BLOCK_SECTOR_SIZE;
+        }
+        return 1;
+    }
+    if (dev->ops == &disk0_ops && disk0.present) {
+        if (size) {
+            *size = disk0.window_sectors * BLOCK_SECTOR_SIZE;
         }
         return 1;
     }

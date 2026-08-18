@@ -143,3 +143,33 @@ The last two were documentation: the devfs and block Readmes still described the
 ### A scope decision worth challenging
 
 The plan asks for MBR validation against the geometry compiled into the build: the exact type and bounds of entries 0, 1 and 2. That is not what was built. Pinning those numbers would make every image that is not the sealed disk fail the check, so `install-test`, `test-disk` and the rest would lose `/dev/bootpart` and fail. What is built instead is a judgement that holds for any disk: the gap rule, containment, and non-overlap. The review agreed the gap rule was the part that mattered for safety and raised it to a finding; it did not accept that the exact pinning can wait. Pinning the sealed layout belongs with the sealed kernel build, which step 4 introduces, and it is recorded here rather than done quietly.
+
+## Phase C step 3: offsets wide enough for a real drive
+
+Reflashing a 250 GB disk from recovery means addressing its far end, and nothing in this kernel could. An open file's offset was 32 bits, `_llseek` refused anything above 4 GiB, and `/dev/disk0`'s window was clamped to 8388607 sectors for exactly that reason, with the clamp's comment saying so.
+
+The plan warned this was the step most likely to break something unrelated, because that one offset is shared by every descriptor in the system. It is, so it was left alone. The open-file description gained a second field, `raw_offset`, 64 bits wide, and only the three raw disk windows read or write it; every file, procfs, pipe and terminal path keeps the 32-bit offset it always had. The field lives in the open-file description rather than in the descriptor, so `dup` and `fork` still share one offset the way POSIX requires.
+
+Two size queries replaced two others, and the split matters. `devfs_fd_bootpart_size` and `devfs_fd_disk_size` were doing three jobs between them, and one of those jobs was the boot log, which is not a disk window at all and reads through the ordinary offset. They are now `devfs_fd_raw_size`, returning 64 bits for the three raw windows, and `devfs_fd_log_size`, returning 32 for the log. Both seek syscalls branch on which one answers. `lseek` refuses a result it cannot express rather than truncating it, which is what makes `_llseek` the way to reach the far end rather than an alternative spelling.
+
+With the offset wide, the window clamp had nothing left to protect and rose from 8388607 sectors to 2^32 of them, which is 2 TiB. That ceiling is the window's own choice rather than anything forced on it: the ATA path stops earlier at its 28-bit LBA and AHCI programs a 48-bit one. `/proc/disk` still prints the drive's true size beside the window's, so the two disagree visibly on a disk larger than the ceiling.
+
+Proof: a fourth boot in `make bootpart-test`, against a sparse 260 GB image built by `tools/mkwidefixture.py` and attached over AHCI, because the ATA driver's 28-bit LBA stops at 128 GiB. It seeks to the end and requires the whole drive rather than a truncation; reads known markers at 5 GiB and at 258 GiB, comparing every byte, where the far one needs 38 bits of offset; walks `SEEK_CUR` across the 4 GiB line in both directions and refuses a seek before the start; duplicates a descriptor parked at 258 GiB and reads through the copy, so the wide offset is proved shared through the open-file description rather than the descriptor; and requires the 32-bit `lseek` to report overflow on an end it cannot name. Before this step the window stopped at 4 GiB and none of those sectors existed as far as the machine was concerned. `make test`'s 62 probes, `verify-host`, `bootpart-test`, `diskdiag-test`, `test-disk` and `persist-test` all stayed green, which is the evidence that the blast radius stayed inside the disk windows.
+
+Shown failing: pointing `/dev/disk0`'s read at the old 32-bit offset fails the 5 GiB read; keeping only 33 bits of the resolved offset fails the 258 GiB read while still passing at 5 GiB, which is why the fixture is 260 GB rather than a few; in the host test, the old 4 GiB byte bound fails its case.
+
+### What the review changed
+
+Seven findings, all confirmed.
+
+Both seek paths added the displacement to the base as a signed 64-bit value and then checked the sum for negativity. That check is not a bound: a descriptor parked at the top of the signed range and seeked forward by one has no defined result to test, and negating the most negative displacement is undefined too. One resolver now does the arithmetic unsigned, takes the displacement's magnitude without ever negating it, and bounds both directions before adding rather than after.
+
+A seek whose result is a real offset the 32-bit call simply cannot return was reported as `-EINVAL`, which says the seek was invalid when it was not. It is `-EOVERFLOW` now, and the probe requires that.
+
+Raw identity was being decided by whether the window was currently published, so withdrawing one during a controller re-probe turned an already-open descriptor from a seekable disk window into an unseekable generic device. `devfs_fd_is_raw` answers what the descriptor is, from the operations bound at open, and seek returns `-ENXIO` while the backing is away.
+
+The raised window cap was set to the largest 32-bit LBA and used as a sector count, which left the last addressable sector unreachable. It is a count of 2^32 now.
+
+The wide test proved less than it appeared to. Its 6 GiB fixture would have been satisfied by an implementation keeping 33 bits of offset, and it never exercised `SEEK_CUR` or the shared offset at all. The fixture is 260 GB, larger than the drive being sealed, so its far marker needs 38 bits; it is attached over AHCI because the ATA driver's 28-bit LBA stops at 128 GiB; and the boot now walks `SEEK_CUR` across the 4 GiB line in both directions, refuses a seek before the start, and duplicates a descriptor parked at 258 GiB to prove the wide offset is shared through the open-file description rather than the descriptor.
+
+The last two were prose: the filesystem and block Readmes still described one offset and the old cap, and several comments had drifted from what the code does.

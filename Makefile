@@ -380,10 +380,16 @@ test-disk: rach2 tests krffs
 # known bytes at a seek, a written sector read back, exactly 0 at the end,
 # -ENOSPC past it, -EINVAL unaligned, -EACCES unprivileged); and a third boot
 # mounts a RAM image instead of the disk and requires both /dev/bootpart and
-# /dev/grubcore anyway. That last one is the milestone 25 property: a machine
+# /dev/grubcore anyway. That third one is the milestone 25 property: a machine
 # that mounts nothing from its disk still manages its boot partition and its
-# boot loader, which is what recovery depends on.
+# boot loader, which is what recovery depends on. A fourth boot attaches a
+# sparse 260 GB drive over AHCI and reads known sectors at 5 GiB and at 258
+# GiB, which the raw windows could not address at all while an open file's
+# offset was 32 bits. It is that large on purpose: a few gigabytes would be
+# satisfied by an implementation that kept 33 bits, and it is attached over
+# AHCI because the ATA driver's 28-bit LBA stops at 128 GiB.
 BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
+WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
 bootpart-test: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
 	python3 tools/harness.py --kernel build/rach2/kernel \
@@ -399,6 +405,12 @@ bootpart-test: rach2 tests krffs
 	    --append "rach2.rescue rach2.bootprobe=ramroot" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE RAMROOT OK" probe=bootprobe
+	python3 tools/mkwidefixture.py $(WIDE_TEST_IMAGE)
+	python3 tools/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=wide" \
+	    --drive "file=$(WIDE_TEST_IMAGE),format=raw,if=none,id=drv0" \
+	    $(AHCI_ATTACH) \
+	    --timeout 180 --ok "BOOTPROBE WIDE OK" probe=bootprobe
 
 # `make install-test`: the machine installs its own kernel. Builds the GRUB
 # disk around the host kernel, boots it with no -kernel, and runs the whole

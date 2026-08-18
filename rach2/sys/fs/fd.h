@@ -77,10 +77,21 @@ struct file_ops;
  * offset and one set of status flags (the POSIX open-file description semantics)
  * instead of each carrying its own. Allocated from a fixed pool (see fd.c);
  * refcount 0 means the slot is free, and the last referencing close frees it.
+ *
+ * There are two offsets because there are two ranges. Everything this kernel
+ * opens as a file is under 4 GiB, so `offset` is 32 bits and every path that
+ * reads or writes one stays in 32-bit arithmetic. The raw disk windows are not:
+ * a whole 250 GB drive needs a 64-bit offset to address its far end, and
+ * widening the field every other subsystem uses to reach it would put the whole
+ * file, procfs and terminal layer in the blast radius of a change that only the
+ * disk windows need. `raw_offset` belongs to those windows alone; nothing else
+ * reads it, and it lives here rather than in the descriptor so `dup` and `fork`
+ * keep sharing one offset the way POSIX says they must.
  */
 struct open_file {
     uint32_t refcount;           /* Number of descriptors sharing this OFD */
     uint32_t offset;             /* Shared read/write offset */
+    uint64_t raw_offset;         /* Shared offset for the raw disk windows */
     uint32_t status_flags;       /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
 };
 

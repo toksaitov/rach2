@@ -1857,8 +1857,75 @@ static int32_t sys_reboot(isr_params_t *params)
     return -EINVAL;
 }
 
-/* lseek(2): EBX = fd, ECX = offset, EDX = whence (0=SET, 1=CUR, 2=END). Returns
- * the new offset or -errno. */
+/**
+ * Resolve a seek on a raw disk window, in unsigned arithmetic throughout.
+ *
+ * The obvious form adds the delta to the base as a signed 64-bit value and
+ * then checks the result for negativity, which is undefined the moment the sum
+ * leaves the signed range: a descriptor parked at the top of that range and
+ * seeked forward by one has no defined result to test. So the base is unsigned,
+ * the delta's magnitude is taken without ever negating it (negating the most
+ * negative value is itself undefined), and both directions are bounds-checked
+ * before the arithmetic rather than after.
+ *
+ * @param cur    the window's current offset.
+ * @param size   the window's byte size, for SEEK_END.
+ * @param delta  the requested displacement, which may be negative.
+ * @param whence 0 SEEK_SET, 1 SEEK_CUR, 2 SEEK_END.
+ * @param out    the resolved offset, untouched on failure.
+ * @return 0, `-EINVAL` for a bad whence or a result before the start, or
+ *         `-EOVERFLOW` for one past what an offset can hold.
+ */
+static int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence,
+                                uint64_t *out)
+{
+    uint64_t base;
+    uint64_t mag;
+
+    switch (whence) {
+        case 0:
+            base = 0;
+            break;
+        case 1:
+            base = cur;
+            break;
+        case 2:
+            base = size;
+            break;
+        default:
+            return -EINVAL;
+    }
+
+    if (delta >= 0) {
+        if ((uint64_t)delta > (uint64_t)0xFFFFFFFFFFFFFFFFull - base) {
+            return -EOVERFLOW;
+        }
+        *out = base + (uint64_t)delta;
+        return 0;
+    }
+
+    /* -(delta) is undefined when delta is the most negative value, so the
+       magnitude is built from delta + 1, which is always representable. */
+    mag = (uint64_t)(-(delta + 1)) + 1u;
+    if (mag > base) {
+        return -EINVAL;
+    }
+    *out = base - mag;
+    return 0;
+}
+
+/**
+ * lseek(2): EBX = fd, ECX = offset, EDX = whence (0=SET, 1=CUR, 2=END).
+ *
+ * A raw disk window seeks like a file whose size is the window's: SEEK_END
+ * resolves against it, and an offset past the end is allowed, since a read
+ * there returns 0 and a write `-ENOSPC`. Its offset is the open-file
+ * description's 64-bit `raw_offset`, which this call can address only part of;
+ * a real offset it cannot return is refused with `-EOVERFLOW` rather than
+ * truncated, and `_llseek` is the way to reach the far end of a large drive.
+ *
+ * @return the new offset, or -errno.
+ */
 static int32_t sys_lseek(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -1880,13 +1947,28 @@ static int32_t sys_lseek(isr_params_t *params)
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry->type == FD_TYPE_DEVICE) {
-        uint32_t part_size;
+        uint64_t raw_size;
+        uint32_t log_size;
 
-        /* The boot-partition window seeks like a file whose size is the
-         * partition's: SEEK_END resolves against it, and an offset past the
-         * end is allowed (a read there returns 0, a write -ENOSPC). */
-        if (devfs_fd_bootpart_size(entry, &part_size) ||
-            devfs_fd_disk_size(entry, &part_size)) {
+        if (devfs_fd_is_raw(entry)) {
+            uint64_t resolved;
+            int32_t rc;
+
+            if (!devfs_fd_raw_size(entry, &raw_size)) {
+                return -ENXIO; /* the window was withdrawn under an open fd */
+            }
+            rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence,
+                                  &resolved);
+            if (rc != 0) {
+                return rc;
+            }
+            if (resolved > (uint64_t)0x7FFFFFFF) {
+                return -EOVERFLOW; /* a real offset this call cannot return */
+            }
+            entry->ofd->raw_offset = resolved;
+            return (int32_t)resolved;
+        }
+        if (devfs_fd_log_size(entry, &log_size)) {
             switch (whence) {
                 case 0: /* SEEK_SET */
                     new_offset = offset;
@@ -1895,7 +1977,7 @@ static int32_t sys_lseek(isr_params_t *params)
                     new_offset = (int32_t)entry->ofd->offset + offset;
                     break;
                 case 2: /* SEEK_END */
-                    new_offset = (int32_t)part_size + offset;
+                    new_offset = (int32_t)log_size + offset;
                     break;
                 default:
                     return -EINVAL;
@@ -3892,8 +3974,10 @@ static int32_t sys_linkat(isr_params_t *params)
 
 /*
  * _llseek (syscall 140): 64-bit seek. EBX=fd, ECX=offset_high, EDX=offset_low,
- * ESI=result (long long*), EDI=whence. musl's lseek is implemented on top of this
- * on i386. KRFFS files are under 4 GB so offset_high is 0.
+ * ESI=result (long long*), EDI=whence. musl's lseek is implemented on top of
+ * this on i386. KRFFS files are under 4 GB so offset_high is 0 for them; the
+ * raw disk windows are the reason this call carries a full 64-bit offset, since
+ * a whole drive's far end cannot be named in 32 bits.
  */
 static int32_t sys__llseek(isr_params_t *params)
 {
@@ -3913,12 +3997,36 @@ static int32_t sys__llseek(isr_params_t *params)
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry && entry->type == FD_TYPE_DEVICE) {
-        uint32_t part_size;
+        uint64_t raw_size;
+        uint32_t log_size;
 
-        /* The boot-partition window: full 64-bit seek math against the
-         * partition size, the same semantics as the 32-bit lseek above. */
-        if (devfs_fd_bootpart_size(entry, &part_size) ||
-            devfs_fd_disk_size(entry, &part_size)) {
+        if (devfs_fd_is_raw(entry)) {
+            uint64_t resolved;
+            int32_t rc;
+
+            if (!devfs_fd_raw_size(entry, &raw_size)) {
+                return -ENXIO; /* the window was withdrawn under an open fd */
+            }
+            off = (long long)(((uint64_t)offset_high << 32) |
+                              (uint64_t)offset_low);
+            rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, off, whence, &resolved);
+            if (rc != 0) {
+                return rc;
+            }
+            if (resolved > (uint64_t)0x7FFFFFFFFFFFFFFFull) {
+                return -EOVERFLOW;
+            }
+            if (!result) {
+                return -EFAULT;
+            }
+            new_off = (long long)resolved;
+            entry->ofd->raw_offset = resolved;
+            if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
+        if (devfs_fd_log_size(entry, &log_size)) {
             off = (long long)(((uint64_t)offset_high << 32) |
                               (uint64_t)offset_low);
             switch (whence) {
@@ -3929,7 +4037,7 @@ static int32_t sys__llseek(isr_params_t *params)
                     new_off = (long long)entry->ofd->offset + off;
                     break;
                 case 2: /* SEEK_END */
-                    new_off = (long long)part_size + off;
+                    new_off = (long long)log_size + off;
                     break;
                 default:
                     return -EINVAL;

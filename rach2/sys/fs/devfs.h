@@ -39,13 +39,17 @@ uint32_t devfs_fd_ino(struct fd_entry *e);
 /** The S_IFCHR-typed mode of an open device fd (fstat64); 0 if not a device. */
 uint32_t devfs_fd_mode(struct fd_entry *e);
 
-/*
+/**
  * Publish /dev/bootpart over the `sector_count`-sector slice of `backing` at
- * `start_lba`: the GRUB disk's FAT boot partition, judged by mbr_bootpart_ok
+ * `start_lba`: the GRUB disk's FAT boot partition, judged by `mbr_bootpart_ok`
  * before this is called. Until it is published the device is absent from
- * lookup, stat, open, and /dev enumeration alike. The partition must stay under
- * 2 GiB so byte offsets fit the descriptor's 32-bit offset; a larger one is not
- * published.
+ * lookup, stat, open, and /dev enumeration alike.
+ *
+ * The partition must stay under 2 GiB, which is not a limit of the offset any
+ * more: the raw windows seek and transfer through a 64-bit one. It is kept so
+ * the legacy 32-bit `lseek` can still name every byte of this particular
+ * window, which the boot partition is small enough for on any disk this
+ * project builds. A larger one is not published.
  */
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
@@ -68,22 +72,42 @@ void devfs_grubcore_withdraw(void);
 /** Withdraw /dev/disk0; a no-op when it was never published. */
 void devfs_disk_withdraw(void);
 
-/* Whether `e` is one of the open raw disk windows (/dev/bootpart or
- * /dev/grubcore); if so, `*size` gets its byte size (for lseek/_llseek SEEK_END
- * and bounds). Returns 0 for every other fd. */
-int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size);
+/**
+ * Whether `e` is one of the raw disk windows (`/dev/bootpart`, `/dev/grubcore`
+ * or `/dev/disk0`).
+ *
+ * This asks what the descriptor IS, from the operations bound to it at open,
+ * and not whether its window is currently published. The two differ while a
+ * controller is being re-probed, and a descriptor that changed from a seekable
+ * disk window into an unseekable generic device for the duration would be a
+ * worse answer than one that reports its backing is gone.
+ */
+int devfs_fd_is_raw(struct fd_entry *e);
+
+/**
+ * Whether `e` is a raw disk window whose backing is published; if so, `*size`
+ * gets its byte size.
+ *
+ * The size needs 64 bits because a whole drive can exceed 4 GiB. These are the
+ * only descriptors that seek and transfer through the open-file description's
+ * `raw_offset`.
+ */
+int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size);
 
 /**
  * Publish `/dev/disk0`, a read-only window over the whole of `whole`.
  *
  * The window is `window_sectors` sectors, which is the disk's size clamped to
- * what a 32-bit file offset can address; `/proc/disk` prints both numbers so
- * the clamp is visible rather than silent.
+ * this window's chosen ceiling; `/proc/disk` prints both numbers so the clamp
+ * is visible rather than silent.
  */
-void devfs_disk_publish(struct block_device *whole, uint32_t window_sectors);
+void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors);
 
-/** The whole-disk window's size in bytes, for lseek; 0 if `e` is not it. */
-int devfs_fd_disk_size(struct fd_entry *e, uint32_t *size);
+/**
+ * Whether `e` is the open boot log; if so, `*size` gets its current byte
+ * length. It seeks through the ordinary 32-bit offset like any other file.
+ */
+int devfs_fd_log_size(struct fd_entry *e, uint32_t *size);
 
 /* The leaf name ("null", ...) of an open device fd, for /proc/<pid>/fd readlink.
  * Returns "?" if e is not a devfs device. */

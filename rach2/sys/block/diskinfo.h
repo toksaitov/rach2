@@ -49,13 +49,25 @@
 #define DISKINFO_MBR_OK     2
 
 /*
- * The last sector `/dev/disk0` can reach. An open file's offset is 32 bits, so
- * the window ends where a byte offset would: the byte just past this sector is
- * 8388607 * 512 = 4294966784, which still fits. A larger disk is reported at
- * its true size beside this number, so the two disagree visibly rather than
- * one of them quietly lying.
+ * The last sector `/dev/disk0` can reach.
+ *
+ * This was 8388607 until milestone 25, because an open file's offset was 32
+ * bits and the byte just past that sector is the largest one such an offset can
+ * name. The raw disk windows now seek and transfer through a 64-bit offset, so
+ * the window covers whatever the drive reports. A recovery image has to be able
+ * to rewrite any region of a 250 GB drive, and a window that stopped at 4 GiB
+ * could not reach most of one.
+ *
+ * The bound that remains is this window's own, chosen rather than forced: 2^32
+ * sectors, which is 2 TiB, comfortably past any disk this project is aimed at
+ * and past what the ATA driver's 28-bit LBA could reach anyway. AHCI programs a
+ * 48-bit LBA and could go further; the ceiling is here so the window has one,
+ * not because a driver imposes it. A larger disk is reported at its true size
+ * beside the window's, so the two disagree visibly rather than one quietly
+ * lying. This is a COUNT, not the largest LBA: a count of 0xFFFFFFFF would
+ * leave the last addressable sector unreachable.
  */
-#define DISKINFO_WINDOW_MAX_SECTORS 8388607u
+#define DISKINFO_WINDOW_MAX_SECTORS 0x100000000ull
 
 /** What one disk said about itself, filled once and then only read. */
 struct diskinfo {
@@ -65,7 +77,7 @@ struct diskinfo {
     int port;           /* the AHCI port, or -1 for ATA */
     uint64_t sectors;
     uint32_t sector_size;
-    uint32_t window_sectors;
+    uint64_t window_sectors;
     char model[DISKINFO_MODEL_CHARS + 1];
     char serial[DISKINFO_SERIAL_CHARS + 1];
     char firmware[DISKINFO_FIRMWARE_CHARS + 1];
@@ -99,7 +111,7 @@ void diskinfo_ata_string(char *out, int chars, const volatile uint16_t *id, int 
 int diskinfo_u64_dec(char *out, int cap, uint64_t v);
 
 /** How many sectors of a `sectors`-sector disk `/dev/disk0` can reach. */
-uint32_t diskinfo_window(uint64_t sectors);
+uint64_t diskinfo_window(uint64_t sectors);
 
 /**
  * Render `d` as the text of `/proc/disk` into `buf`, which holds `cap` bytes.
