@@ -107,3 +107,20 @@ The image was not reproducible. Two builds of one tree differed in the FAT volum
 The new cluster case did not constrain everything the geometry made relevant. It checked the cluster-to-sector conversion but not the volume's cluster count, and a version computing that count as though a cluster were a sector passed: the wrong value is larger than the volume, so it bounds nothing, and every chain in the fixture ends well below it. The count is now asserted directly, and a second fixture at the same geometry runs a chain past the end so the count is exercised as a bound rather than as a number that is merely reported.
 
 The owning documentation still described a two-partition disk and none of the new knobs.
+
+## Phase C step 2: in progress, uncommitted
+
+This section describes work in the tree that is NOT committed. It compiles and the host tests pass, but the kernel is not wired up yet, so nothing here is proved.
+
+Done so far:
+
+* `mbr_bootpart_ok` in `rach2/sys/block/mbr.c`, the boot-partition judgement with no mounted root to compare against. A RAM-root boot never mounts a KRFFS partition and still has a boot partition to manage, so entry 0 is judged against the whole table: FAT-typed, non-empty, inside the disk, starting at or after the end of the post-MBR gap, and sharing no sector with any other non-empty entry. `mbr_bootpart_pick` is now that judgement plus its KRFFS-entry constraints, which makes it stricter than before: it refuses a boot partition starting inside the gap.
+* Host cases for all of it in `tests/host/mbr_hosttest.c`, with a labelled `CHECKN` macro added because that file counted failures without naming them. Two mutations were shown to fail it: dropping the gap check, and comparing entry 0 against only entry 1.
+* `/dev/grubcore` in `rach2/sys/fs/devfs.c`, minor 3, mode 0600, over LBA 1 through 2047. `bootpart`'s read and write became `raw_window_read` and `raw_window_write` over a shared `struct raw_window`, so both devices run the same proven path. The write handler now checks the effective uid at write time rather than trusting the open, because the mode stops a non-root caller and nothing else: a process can open while privileged, drop privilege, and keep the descriptor.
+
+Not done:
+
+* `rach2/kernel.c` still publishes `/dev/bootpart` only at the end of a successful disk mount, and never publishes `/dev/grubcore` at all. The boot order still has to be refactored so `block_probe` runs once, sector 0 is read and judged once, both level-one devices are published, and only then the root source is chosen. Until that lands, `devfs_grubcore_publish` has no caller.
+* No proof has been run for any of it: no QEMU boot showing both devices present on a RAM-root boot, and none of the bounded-range refusals.
+
+Steps 3 and 4 of phase C, and phases D through I, are untouched.
