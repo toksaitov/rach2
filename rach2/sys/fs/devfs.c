@@ -17,6 +17,7 @@
 #include "../mm/usercopy.h"
 #include "../lib/kstring.h"
 #include "../lib/krandom.h"
+#include "../block/mbr.h"
 #include "../lib/kerrno.h"
 #include "../io/poll.h"
 #include "../tty/pty.h"
@@ -127,20 +128,45 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
  * user pointer. Writes are write-through: both disk drivers flush the drive
  * cache after every write, so a returned write is on the platter.
  */
-static struct {
+struct raw_window {
     int present;
     block_partition_t part;
-} bootpart;
+};
 
-static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count)
+static struct raw_window bootpart;
+
+/*
+ * /dev/grubcore: the post-MBR gap, LBA 1 through 2047, as a bounded raw
+ * window. GRUB's core image lives there, outside every partition, so updating
+ * the boot loader needs a device and /dev/bootpart cannot be it: that one is
+ * relative to partition 1 and the gap is before it. The range is a constant of
+ * the layout rather than anything the partition table says, so a damaged table
+ * cannot widen it. Sector 0 is deliberately outside: it holds the partition
+ * table, and a disk writes whole sectors.
+ */
+static struct raw_window grubcore;
+
+/**
+ * Read whole sectors from a bounded raw window.
+ *
+ * Offsets and counts must be whole sectors: a partial sector has no meaning to
+ * a disk, and rounding one would either read a neighbour's bytes or write
+ * them. The end is handled the way a regular file's is, with a short read
+ * rather than an error, because a reader walking a window to its end is
+ * ordinary. Sectors are staged through a kernel buffer because the AHCI driver
+ * programs the buffer's physical address into its PRDT and must never be given
+ * a user pointer.
+ */
+static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user *buf,
+                               uint32_t count)
 {
     uint8_t sector[BLOCK_SECTOR_SIZE];
-    block_device_t *part = &bootpart.part.device;
+    block_device_t *part = &w->part.device;
     uint32_t off = e->ofd->offset;
     uint32_t total = (uint32_t)part->sector_count;
     uint32_t lba, want, done;
 
-    if (!bootpart.present) {
+    if (!w->present) {
         return -ENXIO;
     }
     if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
@@ -148,7 +174,7 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
     }
     lba = off / BLOCK_SECTOR_SIZE;
     if (lba >= total) {
-        return 0; /* end of the partition, the regular-file convention */
+        return 0;
     }
     want = count / BLOCK_SECTOR_SIZE;
     if (want > total - lba) {
@@ -173,16 +199,35 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
-static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+/**
+ * Write whole sectors to a bounded raw window.
+ *
+ * The whole request is judged before the first sector goes down: a write that
+ * starts at or crosses the end writes nothing, because these windows are fixed
+ * in size and a half-written boot loader or kernel slot helps nobody. The range
+ * arithmetic subtracts rather than adds so a count near the 32-bit edge cannot
+ * wrap past the check.
+ *
+ * The effective uid is checked here rather than trusted from the open. The
+ * mode stops a non-root caller at open time and nothing else: the generic
+ * credential check returns success the moment the uid is zero, so a process
+ * can open this device while privileged, drop privilege, and keep the
+ * descriptor. Checking at write time is what makes that useless.
+ */
+static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char __user *buf,
+                                uint32_t count)
 {
     uint8_t sector[BLOCK_SECTOR_SIZE];
-    block_device_t *part = &bootpart.part.device;
+    block_device_t *part = &w->part.device;
     uint32_t off = e->ofd->offset;
     uint32_t total = (uint32_t)part->sector_count;
     uint32_t lba, want, done;
 
-    if (!bootpart.present) {
+    if (!w->present) {
         return -ENXIO;
+    }
+    if (!current_proc || current_proc->euid != 0) {
+        return -EPERM;
     }
     if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
         return -EINVAL;
@@ -192,8 +237,6 @@ static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_
     }
     lba = off / BLOCK_SECTOR_SIZE;
     want = count / BLOCK_SECTOR_SIZE;
-    /* A write that starts at or crosses the end writes nothing: the boot
-       partition's size is fixed and a partial install write helps nobody. */
     if (lba >= total || want > total - lba) {
         return -ENOSPC;
     }
@@ -214,6 +257,26 @@ static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_
     }
     e->ofd->offset = off + done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
+}
+
+static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return raw_window_read(&bootpart, e, buf, count);
+}
+
+static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    return raw_window_write(&bootpart, e, buf, count);
+}
+
+static int32_t dev_grubcore_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return raw_window_read(&grubcore, e, buf, count);
+}
+
+static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    return raw_window_write(&grubcore, e, buf, count);
 }
 
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
@@ -320,6 +383,8 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
+static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
+                                            dev_ioctl, NULL};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
                                              dev_ioctl, NULL};
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
@@ -363,7 +428,8 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"ptmx", 5, 2, 0, 0666, NULL},
                                                {"bootpart", 240, 0, 0, 0600, &bootpart_ops},
                                                {"disk0", 240, 1, 0, 0400, &disk0_ops},
-                                               {"bootlog", 240, 2, 0, 0400, &bootlog_ops}};
+                                               {"bootlog", 240, 2, 0, 0400, &bootlog_ops},
+                                               {"grubcore", 240, 3, 0, 0600, &grubcore_ops}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
@@ -372,6 +438,9 @@ static int devfs_entry_present(int i)
 {
     if (dev_table[i].ops == &bootpart_ops) {
         return bootpart.present;
+    }
+    if (dev_table[i].ops == &grubcore_ops) {
+        return grubcore.present;
     }
     if (dev_table[i].ops == &disk0_ops) {
         return disk0.present;
@@ -634,6 +703,20 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
     return 0020000u | (uint32_t)dev->mode;
 }
 
+/**
+ * Withdraw /dev/disk0.
+ *
+ * The window holds a pointer to the block device it reads through, and a
+ * driver that is re-initialised clears the state behind that pointer. Anything
+ * that resets a controller takes this node down with the other two raw
+ * windows. A no-op when the device was never published.
+ */
+void devfs_disk_withdraw(void)
+{
+    disk0.present = 0;
+    disk0.whole = 0;
+}
+
 void devfs_disk_publish(struct block_device *whole, uint32_t window_sectors)
 {
     if (!whole || window_sectors == 0) {
@@ -670,13 +753,64 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, ui
 {
     /* Byte offsets ride the descriptor's 32-bit offset and lseek's int32
      * result, so the partition must sit under 2 GiB; the real boot partition
-     * is 16 MiB and anything larger than the bound is a misbuilt disk. */
+     * is 16 MiB on a test image and 64 MiB on the sealed disk; anything larger
+     * than the bound is a misbuilt disk. */
     if (sector_count == 0 || sector_count >= (0x80000000u / BLOCK_SECTOR_SIZE)) {
         serial_printf("devfs: boot partition too large; /dev/bootpart absent\n");
         return;
     }
     block_partition_init(&bootpart.part, backing, start_lba, sector_count);
     bootpart.present = 1;
+}
+
+/**
+ * Withdraw /dev/bootpart.
+ *
+ * Discovery publishes the device before any root is chosen, judging entry 0
+ * against the whole partition table. One fact is only knowable after the mount:
+ * which entry holds the root. Entry 0 can be FAT-typed and still be the entry
+ * the root was found in, and a boot partition sitting over the root is not one
+ * this machine should offer. A no-op when the device was never published.
+ */
+void devfs_bootpart_withdraw(void)
+{
+    if (bootpart.present) {
+        serial_printf("devfs: entry 0 holds the root; /dev/bootpart withdrawn\n");
+        bootpart.present = 0;
+    }
+}
+
+/**
+ * Withdraw /dev/grubcore.
+ *
+ * The window names a backing device, and a driver that is re-initialised
+ * clears the state that device reads through. Anything that resets a
+ * controller takes the window down first and republishes afterwards.
+ * A no-op when the device was never published.
+ */
+void devfs_grubcore_withdraw(void)
+{
+    grubcore.present = 0;
+}
+
+/**
+ * Publish /dev/grubcore over the post-MBR gap.
+ *
+ * The range is the layout's, not the partition table's: LBA 1 through 2047,
+ * fixed, so nothing a damaged table says can widen it. Sector 0 is outside it
+ * because that sector carries the partition table and a disk writes whole
+ * sectors, so there is no way to touch the eight bytes of boot code that point
+ * at the core image without rewriting the table beside them.
+ */
+void devfs_grubcore_publish(struct block_device *backing)
+{
+    if (!backing || backing->sector_count < (uint64_t)MBR_GAP_END_LBA) {
+        serial_printf("devfs: no room for the boot loader gap; /dev/grubcore absent\n");
+        return;
+    }
+    block_partition_init(&grubcore.part, backing, MBR_GAP_FIRST_LBA,
+                         MBR_GAP_END_LBA - MBR_GAP_FIRST_LBA);
+    grubcore.present = 1;
 }
 
 int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size)
@@ -687,11 +821,17 @@ int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    if (dev->ops != &bootpart_ops || !bootpart.present) {
-        return 0;
+    if (dev->ops == &bootpart_ops && bootpart.present) {
+        if (size) {
+            *size = (uint32_t)bootpart.part.device.sector_count * BLOCK_SECTOR_SIZE;
+        }
+        return 1;
     }
-    if (size) {
-        *size = (uint32_t)bootpart.part.device.sector_count * BLOCK_SECTOR_SIZE;
+    if (dev->ops == &grubcore_ops && grubcore.present) {
+        if (size) {
+            *size = (uint32_t)grubcore.part.device.sector_count * BLOCK_SECTOR_SIZE;
+        }
+        return 1;
     }
-    return 1;
+    return 0;
 }

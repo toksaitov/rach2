@@ -108,19 +108,38 @@ The new cluster case did not constrain everything the geometry made relevant. It
 
 The owning documentation still described a two-partition disk and none of the new knobs.
 
-## Phase C step 2: in progress, uncommitted
+## Phase C step 2: the level-one devices
 
-This section describes work in the tree that is NOT committed. It compiles and the host tests pass, but the kernel is not wired up yet, so nothing here is proved.
+Two devices carry level one of the disk model: `/dev/bootpart` over the boot partition, and `/dev/grubcore` over the post-MBR gap where GRUB's core image lives. Every image may write both, including the everyday one, because updating a kernel or a boot loader is ordinary work.
 
-Done so far:
+The old order made that impossible for the case it matters most in. `/dev/bootpart` was published at the very end of a successful KRFFS mount, so a machine booting a RAM image and mounting nothing from the disk had no way to touch the boot partition that had stopped it booting, which is precisely what recovery is for. Discovery now runs before the root source is chosen: the disk is probed once, sector 0 is read and judged once, both devices are published, and only then does the machine decide where its root comes from.
 
-* `mbr_bootpart_ok` in `rach2/sys/block/mbr.c`, the boot-partition judgement with no mounted root to compare against. A RAM-root boot never mounts a KRFFS partition and still has a boot partition to manage, so entry 0 is judged against the whole table: FAT-typed, non-empty, inside the disk, starting at or after the end of the post-MBR gap, and sharing no sector with any other non-empty entry. `mbr_bootpart_pick` is now that judgement plus its KRFFS-entry constraints, which makes it stricter than before: it refuses a boot partition starting inside the gap.
-* Host cases for all of it in `tests/host/mbr_hosttest.c`, with a labelled `CHECKN` macro added because that file counted failures without naming them. Two mutations were shown to fail it: dropping the gap check, and comparing entry 0 against only entry 1.
-* `/dev/grubcore` in `rach2/sys/fs/devfs.c`, minor 3, mode 0600, over LBA 1 through 2047. `bootpart`'s read and write became `raw_window_read` and `raw_window_write` over a shared `struct raw_window`, so both devices run the same proven path. The write handler now checks the effective uid at write time rather than trusting the open, because the mode stops a non-root caller and nothing else: a process can open while privileged, drop privilege, and keep the descriptor.
+Judging entry 0 needed a second question, because the old one cannot be asked without a mounted root. `mbr_bootpart_pick` compares entry 0 against the entry the root was found in; a RAM-root boot has no such entry. `mbr_bootpart_ok` compares it against the whole table instead: FAT-typed, non-empty, inside the disk, starting at or after the end of the post-MBR gap, and sharing no sector with any other non-empty entry. `mbr_bootpart_pick` is now that judgement plus its own two constraints, so the two cannot drift apart. The mount still has one fact discovery cannot know, which entry holds the root, so a disk whose FAT entry 0 turns out to be the root itself loses the device again through `devfs_bootpart_withdraw`.
 
-Not done:
+The gap rule found a real problem in the project's own test fixture. `tools/mkbootfixture.py` had been placing its FAT boot partition at LBA 64, inside the 1 MiB gap that holds the boot loader. That was harmless while nothing else reached those sectors and stopped being harmless the moment `/dev/grubcore` was published over them: a boot partition overlapping the boot loader is a disk this kernel now refuses to offer one for. The fixture moved into the free space after the KRFFS partition.
 
-* `rach2/kernel.c` still publishes `/dev/bootpart` only at the end of a successful disk mount, and never publishes `/dev/grubcore` at all. The boot order still has to be refactored so `block_probe` runs once, sector 0 is read and judged once, both level-one devices are published, and only then the root source is chosen. Until that lands, `devfs_grubcore_publish` has no caller.
-* No proof has been run for any of it: no QEMU boot showing both devices present on a RAM-root boot, and none of the bounded-range refusals.
+`/dev/grubcore` is minor 3, mode 0600, over LBA 1 through 2047. Its range is a constant of the layout rather than anything the partition table reports, so a damaged table cannot widen it. Sector 0 is deliberately outside: it carries the partition table, and a disk writes whole sectors, so there is no way to touch the eight bytes of boot code that point at the core image without rewriting the table beside them.
 
-Steps 3 and 4 of phase C, and phases D through I, are untouched.
+Both devices now share one implementation. `raw_window_read` and `raw_window_write` took over from the bootpart-specific pair, so the second device runs the path the first one proved. The write handler gained one check it did not have: the effective uid, tested at write time rather than trusted from the open. The mode stops a non-root caller at open and nothing else, because the credential check passes uid 0 whatever the mode says, so a process could open the device while privileged, drop privilege, and keep writing through the descriptor. `block_ready` caches the probe, so the three callers that each used to reset and re-identify the controller now agree on one answer.
+
+Proof: `make bootpart-test` grew a third boot that mounts a RAM image with the disk attached and requires both devices anyway, which is the milestone property stated as a test. It drives the gap window end to end: its exact extent, a read at the start, exactly 0 at the end, `-ENOSPC` at and across the end, `-EINVAL` for an unaligned offset and for a partial-sector count, and `-EACCES` for an unprivileged open. `mbr_hosttest` covers the new judgement, and gained a labelled macro because it had been counting failures without naming them.
+
+Shown failing: making discovery return before it publishes anything fails the RAM-root boot; dropping the write-time uid check lets the privilege-drop write through and fails it; widening the gap window past 2047 fails its extent and end-of-window assertions. In `mbr_hosttest`, dropping the gap check and comparing entry 0 against only entry 1 each fail.
+
+### What the review changed
+
+Six findings, all confirmed, and the first was a way to destroy a file system.
+
+`/dev/grubcore` was published before sector 0 had been read at all, and its only condition was that the disk held 2048 sectors. On a disk with an unreadable or unsigned table, or one whose partitions reach into the gap, the window would have handed out write access to sectors a file system owned. That is not hypothetical: this repository's own test fixture put a partition at LBA 64 until this milestone. Nothing is published now until the table has been read and its signature accepted, and `mbr_gap_clear` withholds the window when any non-empty entry reaches into LBA 1 through 2047.
+
+Discovery and the mount each read sector 0 and parsed their own copy, so the record's claim that the table is read once was false, and two reads of one sector can disagree. Discovery keeps the parsed table and the mount uses it.
+
+`block_ready` cached failure as well as success, which quietly disabled the rescue shell. A controller that did not answer at boot could never be asked again, and the rescue shell exists for exactly that machine. It now answers from `block0` when a disk has already been found, so a working controller is still never reset twice, and retries when none has.
+
+The rescue shell's `ahci` command re-initialises the controller, which clears `block0` and the HBA globals. Before this step that was harmless, because no raw window existed on a boot that had not mounted a disk; now one does, and it would have been left addressing a driver with no port. The command takes all three raw windows down first, `/dev/disk0` included, and republishes afterwards on both the success and the failure path.
+
+The last two were documentation: the devfs and block Readmes still described the old contract, and three comments had drifted from the declarations they belonged to, including a claim that the boot partition is 16 MiB.
+
+### A scope decision worth challenging
+
+The plan asks for MBR validation against the geometry compiled into the build: the exact type and bounds of entries 0, 1 and 2. That is not what was built. Pinning those numbers would make every image that is not the sealed disk fail the check, so `install-test`, `test-disk` and the rest would lose `/dev/bootpart` and fail. What is built instead is a judgement that holds for any disk: the gap rule, containment, and non-overlap. The review agreed the gap rule was the part that mattered for safety and raised it to a finding; it did not accept that the exact pinning can wait. Pinning the sealed layout belongs with the sealed kernel build, which step 4 introduces, and it is recorded here rather than done quietly.

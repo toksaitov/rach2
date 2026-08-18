@@ -33,6 +33,11 @@ int block_probe(void)
     return -1;
 }
 
+int block_ready(void)
+{
+    return -1;
+}
+
 void devfs_disk_publish(struct block_device *whole, uint32_t window_sectors)
 {
     (void)whole;

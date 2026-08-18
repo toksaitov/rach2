@@ -3,10 +3,17 @@
 
 mkdisk.sh builds an MBR whose entry 1 is the KRFFS partition at LBA 2048.
 This tool moves that entry to slot 2 and writes a FAT-typed (0x0c) entry 1
-over the 1 MiB gap: LBA 64, 1024 sectors, filled with the pattern bootprobe
-expects (byte j of partition sector k is (k * 7 + j) & 0xff). The kernel's
-mount still finds KRFFS (it probes entry contents, not order), and the MBR
-then qualifies for /dev/bootpart: FAT-typed entry 1, disjoint from KRFFS.
+after it: LBA 102400, 1024 sectors, filled with the pattern bootprobe expects
+(byte j of partition sector k is (k * 7 + j) & 0xff). The kernel's mount still
+finds KRFFS (it probes entry contents, not order), and the MBR then qualifies
+for /dev/bootpart: FAT-typed entry 1, disjoint from KRFFS.
+
+The partition sat at LBA 64 until milestone 25, inside the 1 MiB post-MBR gap
+where GRUB's core image lives. That was harmless while nothing else reached
+those sectors, and stopped being harmless when /dev/grubcore was published over
+the gap: a boot partition overlapping the boot loader is a disk this kernel now
+refuses to offer one for, so the fixture moved into the free space after the
+KRFFS partition instead.
 
 Usage:
     mkbootfixture.py <disk-image>
@@ -14,7 +21,7 @@ Usage:
 import struct
 import sys
 
-PART_LBA = 64
+PART_LBA = 102400
 PART_SECTORS = 1024
 SECTOR = 512
 

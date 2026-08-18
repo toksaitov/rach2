@@ -221,7 +221,7 @@ int diskinfo_probe(int mounted)
     /* Adopt a device the mount already published rather than probing again: a
      * second bring-up would reset the controller under a mounted file
      * system. */
-    if (!block0 && block_probe() != 0) {
+    if (!block0 && block_ready() != 0) {
         info.state = DISKINFO_NO_DEVICE;
         info.driver = "none";
         return -1;

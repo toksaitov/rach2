@@ -43,6 +43,24 @@ extern block_device_t *block0;
 int block_probe(void);
 
 /**
+ * Report a boot disk, probing only if none has been established.
+ *
+ * `block_probe` resets and re-identifies a controller every time it is called,
+ * which is work a boot has no reason to repeat and which several callers do:
+ * the disk mount, the diagnostic, and the device discovery that runs before
+ * either. This answers from `block0` when a disk has already answered, so a
+ * working controller is never reset a second time.
+ *
+ * A failure is deliberately not remembered. Caching one would mean a controller
+ * that did not answer at boot could never be asked again, and the rescue
+ * shell's whole purpose is to ask a machine questions after it has failed to
+ * start normally.
+ *
+ * @return 0 when a device answered and `block0` is set, -1 when none did.
+ */
+int block_ready(void);
+
+/**
  * A partition: the sector range `[start_lba, start_lba + sector_count)` of a
  * backing device, presented as its own `block_device`.
  *

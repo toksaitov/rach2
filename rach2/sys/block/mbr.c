@@ -41,25 +41,65 @@ static int ranges_overlap(const struct mbr_part *a, const struct mbr_part *b)
     return a->start_lba < b_end && b->start_lba < a_end;
 }
 
-int mbr_bootpart_pick(const struct mbr_part parts[MBR_PART_COUNT],
-                      int krffs_index, uint64_t disk_sectors)
+int mbr_gap_clear(const struct mbr_part parts[MBR_PART_COUNT])
+{
+    struct mbr_part gap;
+    int i;
+
+    gap.type = 0;
+    gap.start_lba = MBR_GAP_FIRST_LBA;
+    gap.sector_count = MBR_GAP_END_LBA - MBR_GAP_FIRST_LBA;
+
+    for (i = 0; i < MBR_PART_COUNT; i++) {
+        if (parts[i].sector_count == 0) {
+            continue;
+        }
+        if (ranges_overlap(&parts[i], &gap)) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int mbr_bootpart_ok(const struct mbr_part parts[MBR_PART_COUNT], uint64_t disk_sectors)
 {
     const struct mbr_part *p = &parts[0];
+    int i;
 
-    if (krffs_index < 0 || krffs_index >= MBR_PART_COUNT || krffs_index == 0) {
-        return -1;
-    }
     if (p->type != 0x0b && p->type != 0x0c) {
         return -1;
     }
     if (p->start_lba == 0 || p->sector_count == 0) {
         return -1;
     }
+    if (p->start_lba < MBR_GAP_END_LBA) {
+        return -1;
+    }
     if ((uint64_t) p->start_lba >= disk_sectors ||
         (uint64_t) p->sector_count > disk_sectors - p->start_lba) {
         return -1;
     }
-    if (ranges_overlap(p, &parts[krffs_index])) {
+    for (i = 1; i < MBR_PART_COUNT; i++) {
+        if (parts[i].sector_count == 0) {
+            continue;
+        }
+        if (ranges_overlap(p, &parts[i])) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int mbr_bootpart_pick(const struct mbr_part parts[MBR_PART_COUNT],
+                      int krffs_index, uint64_t disk_sectors)
+{
+    if (krffs_index < 0 || krffs_index >= MBR_PART_COUNT || krffs_index == 0) {
+        return -1;
+    }
+    if (mbr_bootpart_ok(parts, disk_sectors) != 0) {
+        return -1;
+    }
+    if (ranges_overlap(&parts[0], &parts[krffs_index])) {
         return -1;
     }
     return 0;

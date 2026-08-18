@@ -41,17 +41,36 @@ uint32_t devfs_fd_mode(struct fd_entry *e);
 
 /*
  * Publish /dev/bootpart over the `sector_count`-sector slice of `backing` at
- * `start_lba`: the GRUB disk's FAT boot partition, judged by mbr_bootpart_pick
- * before this is called. Until (and unless) the disk mount publishes it, the
- * device is absent from lookup, stat, open, and /dev enumeration alike. The
- * partition must stay under 2 GiB so byte offsets fit the descriptor's 32-bit
- * offset; a larger one is not published.
+ * `start_lba`: the GRUB disk's FAT boot partition, judged by mbr_bootpart_ok
+ * before this is called. Until it is published the device is absent from
+ * lookup, stat, open, and /dev enumeration alike. The partition must stay under
+ * 2 GiB so byte offsets fit the descriptor's 32-bit offset; a larger one is not
+ * published.
  */
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
 
-/* Whether `e` is the open boot-partition device; if so, `*size` gets its byte
- * size (for lseek/_llseek SEEK_END and bounds). Returns 0 for every other fd. */
+/**
+ * Publish /dev/grubcore over the post-MBR gap of `backing`.
+ *
+ * The window is LBA 1 through 2047, a constant of the disk layout rather than
+ * anything the partition table reports, so a damaged table cannot widen it.
+ * Absent when the device is too small to hold the gap.
+ */
+void devfs_grubcore_publish(struct block_device *backing);
+
+/** Withdraw /dev/bootpart; a no-op when it was never published. */
+void devfs_bootpart_withdraw(void);
+
+/** Withdraw /dev/grubcore; a no-op when it was never published. */
+void devfs_grubcore_withdraw(void);
+
+/** Withdraw /dev/disk0; a no-op when it was never published. */
+void devfs_disk_withdraw(void);
+
+/* Whether `e` is one of the open raw disk windows (/dev/bootpart or
+ * /dev/grubcore); if so, `*size` gets its byte size (for lseek/_llseek SEEK_END
+ * and bounds). Returns 0 for every other fd. */
 int devfs_fd_bootpart_size(struct fd_entry *e, uint32_t *size);
 
 /**

@@ -82,6 +82,14 @@ void block_partition_init(
     partition->device.drvdata = partition;
 }
 
+int block_ready(void)
+{
+    if (block0) {
+        return 0;
+    }
+    return block_probe();
+}
+
 int block_probe(void)
 {
     /* rach2.nodisk skips the probe entirely, which is the switch a first boot

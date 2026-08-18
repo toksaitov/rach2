@@ -15,9 +15,10 @@ file 0755 /blockprobe build/tests/blockprobe
 # the offline fsck after the kill is what reads the verdict.
 file 0755 /dirtyprobe build/tests/dirtyprobe
 
-# bootprobe proves /proc/cmdline and the /dev/bootpart window. `make
-# bootpart-test` boots this disk twice: once as built (one KRFFS partition, so
-# the device must be absent), and once with the MBR rewritten by
-# tools/mkbootfixture.py to add a FAT-typed partition 1 of known bytes, where
-# the device must carry them.
+# bootprobe proves /proc/cmdline and the two raw disk windows. `make
+# bootpart-test` boots this disk three times: once as built (one KRFFS
+# partition, so /dev/bootpart must be absent); once with the MBR rewritten by
+# tools/mkbootfixture.py to add a FAT-typed partition of known bytes, where the
+# device must carry them; and once mounting a RAM image instead of the disk,
+# where both /dev/bootpart and /dev/grubcore must be present anyway.
 file 0755 /bootprobe build/tests/bootprobe

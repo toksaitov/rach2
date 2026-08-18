@@ -1628,36 +1628,93 @@ static int krffs_disk_write(uint32_t off, const void *page)
                PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
 }
 
+/*
+ * The partition table as discovery read it, and whether it is usable. The disk
+ * mount reads no second copy: two reads of one sector can disagree, and then
+ * the published device would address one table while the mounted root came
+ * from another.
+ */
+static struct mbr_part disc_parts[MBR_PART_COUNT];
+static int disc_table_ok;
+
+/**
+ * Publish the boot partition and the boot loader's gap, before any root is
+ * chosen.
+ *
+ * These two devices are level one of the milestone 25 disk model: every image,
+ * including the everyday one, may write the kernel slots, the boot menu and
+ * GRUB's core image. That has to hold on a machine booting a RAM image and
+ * mounting nothing from the disk, which is exactly the recovery case, and the
+ * old order made it impossible: `/dev/bootpart` appeared only at the end of a
+ * successful KRFFS mount, so a machine with no mounted root had no way to
+ * repair the boot partition that had stopped it booting.
+ *
+ * Nothing is published until sector 0 has been read and judged. `/dev/grubcore`
+ * covers the post-MBR gap, which no partition may occupy; a table that puts one
+ * there describes a disk where writing the boot loader would destroy a file
+ * system, so both devices are withheld rather than one. `/dev/bootpart` needs
+ * entry 0 judged against the whole table, because a machine booting a RAM image
+ * has no mounted root to compare it against.
+ *
+ * Silent when there is no disk: a machine booting a RAM image on a diskless
+ * board is the ordinary case, not a failure.
+ */
+static void discover_boot_devices(void)
+{
+    static uint8_t mbr[BLOCK_SECTOR_SIZE];
+
+    if (block_ready() != 0 || !block0) {
+        return;
+    }
+    if (block0->read(block0, 0, 1, mbr) != 0) {
+        serial_printf("block: MBR read failed; no boot devices\n");
+        return;
+    }
+    if (mbr_parse(mbr, disc_parts) != 0) {
+        serial_printf("block: no MBR signature; no boot devices\n");
+        return;
+    }
+    disc_table_ok = 1;
+
+    if (mbr_gap_clear(disc_parts) != 0) {
+        serial_printf("block: a partition occupies the boot loader's gap; "
+                      "/dev/grubcore absent\n");
+    } else {
+        devfs_grubcore_publish(block0);
+    }
+
+    if (mbr_bootpart_ok(disc_parts, block0->sector_count) != 0) {
+        serial_printf("block: entry 0 is not a boot partition; /dev/bootpart absent\n");
+        return;
+    }
+    devfs_bootpart_publish(block0, disc_parts[0].start_lba, disc_parts[0].sector_count);
+}
+
 /**
  * Mounts KRFFS from the real disk through the page-cache window.
  *
- * Probes the primary disk, reads its MBR, slices out the first KRFFS partition
- * (type 0x7F), and points the cache at that partition through `block0` so the
- * window is backed by real sectors. KRFFS then mounts at PCWIN_BASE exactly as
- * over the RAM stub. Rejects a partition larger than the window (which also
- * keeps the byte size within 32 bits). Returns 0 on a valid mount, -1 otherwise.
+ * Slices the first KRFFS partition out of the table discovery already read and
+ * judged, and points the cache at that partition through `block0` so the window
+ * is backed by real sectors. KRFFS then mounts at PCWIN_BASE exactly as over
+ * the RAM stub. Rejects a partition larger than the window (which also keeps
+ * the byte size within 32 bits). Returns 0 on a valid mount, -1 otherwise.
  */
 static int init_krffs_disk(void)
 {
-    static uint8_t mbr[BLOCK_SECTOR_SIZE];
     static uint8_t part0[BLOCK_SECTOR_SIZE];
-    struct mbr_part parts[MBR_PART_COUNT];
+    const struct mbr_part *parts = disc_parts;
     uint32_t start_lba = 0;
     uint32_t sector_count = 0;
     uint32_t part_bytes;
     int i;
     int found = -1;
 
-    if (block_probe() != 0 || !block0) {
+    if (block_ready() != 0 || !block0) {
         serial_printf("KRFFS: no boot disk\n");
         return -1;
     }
-    if (block0->read(block0, 0, 1, mbr) != 0) {
-        serial_printf("KRFFS: MBR read failed\n");
-        return -1;
-    }
-    if (mbr_parse(mbr, parts) != 0) {
-        serial_printf("KRFFS: no MBR signature\n");
+    if (!disc_table_ok) {
+        serial_printf("KRFFS: no usable partition table\n");
         return -1;
     }
 
@@ -1770,12 +1827,13 @@ static int init_krffs_disk(void)
     }
     _krffs_on_disk = 1;
 
-    /* With KRFFS mounted, judge MBR entry 1 as the boot partition (the GRUB
-       disk's FAT half) and publish /dev/bootpart over it if it qualifies; on a
-       single-partition disk the device simply never appears. */
-    if (mbr_bootpart_pick(parts, found, block0->sector_count) == 0) {
-        devfs_bootpart_publish(block0, parts[0].start_lba,
-                               parts[0].sector_count);
+    /* The boot partition was judged and published before any root was chosen
+       (discover_boot_devices), so a machine that mounts nothing still has it.
+       What the mount adds is the one fact discovery cannot know: which entry
+       holds the root, and therefore whether entry 0 overlaps it. A disk whose
+       boot partition sits over its own root loses the device again. */
+    if (mbr_bootpart_pick(parts, found, block0->sector_count) != 0) {
+        devfs_bootpart_withdraw();
     }
     return 0;
 }
@@ -2060,7 +2118,7 @@ static void process_command(const char *cmd)
 
         if (_krffs_on_disk) {
             serial_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
-        } else if (block_probe() != 0 || !block0) {
+        } else if (block_ready() != 0 || !block0) {
             serial_printf("disk: no boot disk\n");
         } else {
             serial_printf("disk: block0: %d sectors, %d MiB\n",
@@ -2094,7 +2152,7 @@ static void process_command(const char *cmd)
 
         if (_krffs_on_disk) {
             serial_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
-        } else if (block_probe() != 0 || !block0) {
+        } else if (block_ready() != 0 || !block0) {
             serial_printf("disk: no boot disk\n");
         } else {
             /* The last sector lies past the partition and the boot gap, so the
@@ -2125,11 +2183,27 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "ahci")) {
         if (_krffs_on_disk) {
             serial_printf("ahci: re-probe refused while KRFFS is mounted from disk\n");
-        } else if (ahci_init() != 0) {
-            serial_printf("ahci: no AHCI HBA on the PCI bus\n");
         } else {
-            ahci_dump();
-            ahci_selftest();
+            /* ahci_init clears block0 and the HBA globals before resetting, so
+               the raw devices published over the old block0 would be pointing
+               at a driver with no port. All three raw windows come down first
+               and are rebuilt from whatever answers, which is what makes a
+               re-probe leave a usable machine rather than a half-attached one
+               on either the success or the failure path. */
+            devfs_bootpart_withdraw();
+            devfs_grubcore_withdraw();
+            devfs_disk_withdraw();
+            disc_table_ok = 0;
+            if (ahci_init() != 0) {
+                serial_printf("ahci: no AHCI HBA on the PCI bus\n");
+            } else {
+                ahci_dump();
+                ahci_selftest();
+            }
+            discover_boot_devices();
+            if (kcmdline_has("rach2.diskdiag")) {
+                diskinfo_probe(_krffs_on_disk);
+            }
         }
     } else if (str_equal(cmd, "ls")) {
         if (!krffs_fs) {
@@ -2911,6 +2985,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         serial_printf(" None\n");
         set_fore_color(light_grey);
     }
+
+    discover_boot_devices();
 
     k_printf("  File system...");
     serial_printf("  File system...");

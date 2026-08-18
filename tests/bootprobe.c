@@ -39,6 +39,7 @@ typedef unsigned int size_t;
 #define SEEK_END 2
 
 #define ENOENT 2
+#define EPERM  1
 #define EACCES 13
 #define EINVAL 22
 #define ENOSPC 28
@@ -131,7 +132,13 @@ void _start(void)
     if (n > 0) {
         cmdline[n] = '\0';
     }
-    check(contains(cmdline, "rach2.fsdisk"), "cmdline carries rach2.fsdisk");
+    /* The RAM-root boot deliberately does not ask for a disk root, so the token
+       it is checked for is the one its own mode is named by. */
+    if (contains(cmdline, "rach2.bootprobe=ramroot")) {
+        check(!contains(cmdline, "rach2.fsdisk"), "the RAM-root boot asks for no disk root");
+    } else {
+        check(contains(cmdline, "rach2.fsdisk"), "cmdline carries rach2.fsdisk");
+    }
     check(n > 0 && cmdline[n - 1] == '\n', "cmdline ends with a newline");
     {
         char link[32] = "";
@@ -198,6 +205,78 @@ void _start(void)
     }
 
     fixture = contains(cmdline, "rach2.bootprobe=fixture");
+
+    /* A machine that mounted a RAM image and no disk file system still has a
+       disk, and milestone 25 gives it both level-one devices: the boot
+       partition it may have to repair, and the gap holding the boot loader.
+       Before discovery ran ahead of the root choice, /dev/bootpart appeared
+       only at the end of a successful mount, so this boot had neither. */
+    if (contains(cmdline, "rach2.bootprobe=ramroot")) {
+        rc = syscall3(SYS_STAT64, (int)(size_t)"/dev/bootpart", (int)(size_t)statbuf, 0);
+        check(rc == 0, "a RAM-root boot still has /dev/bootpart");
+        check(*(unsigned int *)(statbuf + ST_MODE) == 020600, "and it is a 0600 device");
+        rc = syscall3(SYS_STAT64, (int)(size_t)"/dev/grubcore", (int)(size_t)statbuf, 0);
+        check(rc == 0, "a RAM-root boot has /dev/grubcore");
+        check(*(unsigned int *)(statbuf + ST_MODE) == 020600, "and it is a 0600 device");
+
+        fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDWR, 0);
+        check(fd >= 0, "root opens /dev/grubcore read-write");
+        rc = syscall3(SYS_LSEEK, fd, 0, SEEK_END);
+        check(rc == 2047 * SECTOR, "grubcore spans LBA 1 through 2047 and no more");
+
+        rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
+        check(rc == 0, "seek to the gap's first sector");
+        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        check(n == SECTOR, "the gap's first sector reads whole");
+
+        /* The window ends at LBA 2047 and the checks are on the whole request,
+           so a write starting past the end writes nothing rather than part. */
+        rc = syscall3(SYS_LSEEK, fd, 2047 * SECTOR, SEEK_SET);
+        check(rc == 2047 * SECTOR, "seek to the gap's end");
+        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        check(n == 0, "a read at the end is exactly 0");
+        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+        check(n == -ENOSPC, "a write at the end is -ENOSPC");
+        rc = syscall3(SYS_LSEEK, fd, 2046 * SECTOR, SEEK_SET);
+        check(rc == 2046 * SECTOR, "seek to the last sector");
+        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, 2 * SECTOR);
+        check(n == -ENOSPC, "a write crossing the end writes nothing");
+
+        rc = syscall3(SYS_LSEEK, fd, 1, SEEK_SET);
+        check(rc == 1, "an unaligned seek is allowed");
+        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        check(n == -EINVAL, "an unaligned read is -EINVAL");
+        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+        check(n == -EINVAL, "an unaligned write is -EINVAL");
+        rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
+        check(rc == 0, "seek back to the start");
+        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR - 1);
+        check(n == -EINVAL, "a partial-sector count is -EINVAL");
+
+        /* The mode stops a non-root caller at open and nothing else: the
+           credential check passes uid 0 whatever the mode says. So the write
+           handler asks again, and this descriptor, opened while privileged and
+           carried across a privilege drop, must stop working. */
+        rc = syscall1(SYS_SETUID32, 1000);
+        check(rc == 0, "the probe drops to an unprivileged uid");
+        rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
+        check(rc == 0, "the descriptor still seeks after the drop");
+        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        check(n == SECTOR, "and still reads, which is not the privilege in question");
+        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+        check(n == -EPERM, "but a write through it is -EPERM after the drop");
+        syscall1(SYS_CLOSE, fd);
+
+        rc = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDONLY, 0);
+        check(rc == -EACCES, "and an unprivileged open of grubcore is -EACCES");
+
+        if (fails == 0) {
+            puts("BOOTPROBE RAMROOT OK");
+            sys_exit(0);
+        }
+        puts("BOOTPROBE FAILED");
+        sys_exit(1);
+    }
 
     if (!fixture) {
         /* A single-partition disk: the device must not exist anywhere. */
