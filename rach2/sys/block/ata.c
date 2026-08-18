@@ -79,6 +79,10 @@ static int ata_command(uint8_t command)
                       diskcmd_policy_banner);
         return 0;
     }
+    block_count_command();
+    if (command == ATA_CMD_FLUSH) {
+        block_count_flush();
+    }
     outb(ATA_IO_BASE + ATA_REG_STATUS, command);
     return 1;
 }

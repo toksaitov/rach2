@@ -799,6 +799,10 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
     }
 
     ahci_write32(is_off, 0xFFFFFFFFu); /* clear stale status (write 1) */
+    block_count_command();
+    if (command == ATA_FLUSH_EXT) {
+        block_count_flush();
+    }
     ahci_write32(ci_off, 1u << AHCI_SLOT);
 
     spin = AHCI_CMD_STEPS;

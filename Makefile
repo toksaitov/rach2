@@ -92,7 +92,7 @@ MKDISK          = krffs/mkdisk.sh
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci rach2-metal-grub-disk \
-        rach2-sealed-disk \
+        rach2-sealed-disk rach2-recovery authority-test \
         isos test-iso os-simple-iso os-real-iso rach2-metal-image rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
@@ -249,6 +249,21 @@ METAL_KERNEL = build/rach2-metal/kernel
 rach2-metal: krffs
 	$(MAKE) -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
 	python3 tools/check_diskpolicy.py $(METAL_KERNEL) read-only
+
+# The recovery kernel: the same sources, built with the authority to write any
+# sector of the disk, into its own object tree so the two kernels never share
+# one. A build switch and not a boot flag, for the reason above: a flag is
+# editable at the GRUB prompt, and what this one guards is the whole disk rather
+# than one file. It is NOT the read-only switch and must not be confused with
+# it; that one is enforced below devfs and would stop this kernel writing the
+# boot partition too, which recovery needs to do. check_recovery.py reads the
+# authority back off the artifact in both directions.
+RECOVERY_KERNEL = build/rach2-recovery/kernel
+rach2-recovery: krffs rach2
+	$(MAKE) -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
+	python3 tools/check_recovery.py $(RECOVERY_KERNEL) recovery
+	python3 tools/check_recovery.py build/rach2/kernel ordinary
+	python3 tools/check_diskpolicy.py $(RECOVERY_KERNEL) read-write
 
 rach2-metal-image: krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	sh krffs/gen_demo_key.sh
@@ -411,6 +426,34 @@ bootpart-test: rach2 tests krffs
 	    --drive "file=$(WIDE_TEST_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 180 --ok "BOOTPROBE WIDE OK" probe=bootprobe
+
+# `make authority-test`: which kernel may write the whole disk. Two boots of one
+# probe against one sparse image, differing only in the kernel. The everyday
+# build must refuse a write to /dev/disk0 with -EPERM and the sector must still
+# be zero afterwards, so the refusal is proved to have written nothing rather
+# than merely returned an error. The recovery build must write a sector past
+# 2 GiB, read it back byte for byte, and take a 200-sector write in one call,
+# which is what makes a whole-disk reflash finishable: one sector per driver
+# call turned a 500 MiB write into a million cache flushes.
+#
+# The two kernels are the same sources built with different switches into
+# different object trees, and check_recovery.py reads the authority back off
+# each artifact so a mislabelled one cannot reach this test.
+AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
+authority-test: rach2 rach2-recovery tests krffs
+	python3 tools/mkwidefixture.py $(AUTH_TEST_IMAGE)
+	python3 tools/check_recovery.py build/rach2/kernel ordinary
+	python3 tools/check_recovery.py $(RECOVERY_KERNEL) recovery
+	python3 tools/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-ordinary" \
+	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \
+	    $(AHCI_ATTACH) \
+	    --timeout 180 --ok "BOOTPROBE AUTH ORDINARY OK" probe=bootprobe
+	python3 tools/harness.py --kernel $(RECOVERY_KERNEL) --initrd $(TEST_IMAGE) \
+	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-recovery" \
+	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \
+	    $(AHCI_ATTACH) \
+	    --timeout 180 --ok "BOOTPROBE AUTH RECOVERY OK" probe=bootprobe
 
 # `make install-test`: the machine installs its own kernel. Builds the GRUB
 # disk around the host kernel, boots it with no -kernel, and runs the whole
@@ -898,6 +941,8 @@ help:
 	@echo "  make os-real-disk   the os-real tree on a partitioned ATA disk image"
 	@echo "  make os-real-grub-disk   a BIOS-bootable GRUB disk (needs Docker)"
 	@echo "  make rach2-sealed-disk   the sealed laptop disk: 64 MiB boot, 500 MiB root, 64 MiB recovery"
+	@echo "  make rach2-recovery      the recovery kernel, the only build that can write the whole disk"
+	@echo "  make authority-test  only a recovery kernel writes the whole disk"
 	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"

@@ -110,3 +110,33 @@ int block_probe(void)
     }
     return ata_init();
 }
+
+/*
+ * Command counters. Batching is invisible from above: a request of any size
+ * returns the same answer however many commands carried it, and only the time
+ * differs. These make the difference measurable from userland through
+ * /proc/disk, which is what lets a test require the batching rather than the
+ * result.
+ */
+static uint64_t cmd_count;
+static uint64_t flush_count;
+
+void block_count_command(void)
+{
+    cmd_count++;
+}
+
+void block_count_flush(void)
+{
+    flush_count++;
+}
+
+uint64_t block_commands(void)
+{
+    return cmd_count;
+}
+
+uint64_t block_flushes(void)
+{
+    return flush_count;
+}

@@ -2074,7 +2074,9 @@ static void process_command(const char *cmd)
         serial_puts("  info                - Display system information\n");
         k_puts("  modules             - List loaded multiboot modules");
         k_puts("  disk                - Probe the boot disk and dump sector 0");
+#ifdef RACH2_RECOVERY
         k_puts("  disk write          - Round-trip the last sector (destructive)");
+#endif
         k_puts("  ls                  - List files in the mounted file system");
         k_puts("  cat <file>          - Display file contents");
         k_puts("  elf <file>          - Display ELF header info");
@@ -2147,6 +2149,7 @@ static void process_command(const char *cmd)
             }
         }
     } else if (str_equal(cmd, "disk write")) {
+#ifdef RACH2_RECOVERY
         static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
         static uint8_t disk_scratch[BLOCK_SECTOR_SIZE];
 
@@ -2180,6 +2183,9 @@ static void process_command(const char *cmd)
                               ok ? "OK" : "MISMATCH");
             }
         }
+#else
+        serial_printf("disk: writing the whole disk needs a recovery kernel\n");
+#endif
     } else if (str_equal(cmd, "ahci")) {
         if (_krffs_on_disk) {
             serial_printf("ahci: re-probe refused while KRFFS is mounted from disk\n");

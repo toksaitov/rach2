@@ -69,6 +69,20 @@ void devfs_bootpart_withdraw(void);
 /** Withdraw /dev/grubcore; a no-op when it was never published. */
 void devfs_grubcore_withdraw(void);
 
+/* Sectors carried by one driver call from a raw window. Reported by /proc/disk
+ * beside the call count so the two can be compared. */
+#define DEVFS_RAW_BATCH_SECTORS 64
+
+/**
+ * How many driver calls the raw disk windows have made since boot.
+ *
+ * Reported by `/proc/disk`, because batching is otherwise invisible from
+ * outside: a transfer of any size returns the same answer whether it took one
+ * driver command or two hundred. A test that wants to require the batching
+ * rather than the result reads this before and after.
+ */
+uint64_t devfs_raw_calls(void);
+
 /** Withdraw /dev/disk0; a no-op when it was never published. */
 void devfs_disk_withdraw(void);
 

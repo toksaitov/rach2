@@ -79,23 +79,6 @@ static int syscall3(int n, int a, int b, int c)
     return r;
 }
 
-/**
- * The high and low halves `_llseek` takes its offset in.
- *
- * The shift is done on an unsigned value because shifting a negative one right
- * is not defined by the language, and these are used with negative
- * displacements.
- */
-static int off_hi(long long v)
-{
-    return (int)(unsigned)((unsigned long long)v >> 32);
-}
-
-static int off_lo(long long v)
-{
-    return (int)(unsigned)(unsigned long long)v;
-}
-
 /** Whether `buf` holds the 512-byte marker this fixture writes at `gib` GiB. */
 static int pattern_ok(const char *buf, int gib)
 {
@@ -170,6 +153,223 @@ static char cmdline[300];
 static char statbuf[96];
 static char fstatbuf[96];
 static char sector[SECTOR];
+static char big[200 * SECTOR];
+
+/**
+ * The high and low halves `_llseek` takes its offset in.
+ *
+ * The shift is done on an unsigned value because shifting a negative one right
+ * is not defined by the language, and these are used with negative
+ * displacements.
+ */
+static int off_hi(long long v)
+{
+    return (int)(unsigned)((unsigned long long)v >> 32);
+}
+
+static int off_lo(long long v)
+{
+    return (int)(unsigned)(unsigned long long)v;
+}
+
+/**
+ * Read one decimal field out of /proc/disk, or -1 if it is not there.
+ *
+ * The file is small and read whole each time, because the fields this looks
+ * for change as the machine runs and a cached copy would answer with the
+ * machine's past.
+ */
+static int proc_disk_field(const char *key, unsigned long long *out)
+{
+    static char text[2048];
+    int fd, n, i, j;
+    unsigned long long v = 0;
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/disk", O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0;
+    }
+    text[n] = '\0';
+    for (i = 0; i < n; i++) {
+        if (i != 0 && text[i - 1] != '\n') {
+            continue;
+        }
+        for (j = 0; key[j] && text[i + j] == key[j]; j++) {
+        }
+        if (key[j]) {
+            continue;
+        }
+        i += j;
+        if (text[i] < '0' || text[i] > '9') {
+            return 0;
+        }
+        while (text[i] >= '0' && text[i] <= '9') {
+            v = v * 10 + (unsigned long long)(text[i] - '0');
+            i++;
+        }
+        *out = v;
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Whether this kernel may write any sector of its own disk.
+ *
+ * Both boots run this against the same image and differ only in the kernel:
+ * `recovery` says which one is running. An ordinary build must refuse and leave
+ * the sector as it found it, so the refusal is shown to have written nothing
+ * rather than merely returned an error. A recovery build must write past 2 GiB,
+ * read it back, and take a large write in few driver calls, which is what makes
+ * a whole-disk reflash finishable: batching is invisible in the result, so the
+ * count of calls is read out of /proc/disk either side of it.
+ */
+static void auth_case(int recovery)
+{
+    long long at = 3LL * 1024 * 1024 * 1024;
+    long long pos = 0;
+    int fd, rc, n, j;
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDWR, 0);
+    check(fd >= 0, "root opens /dev/disk0 read-write");
+    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+    check(rc == 0 && pos == at, "seek to 3 GiB");
+
+    for (j = 0; j < SECTOR; j++) {
+        sector[j] = (char)((j * 11 + 5) & 0xff);
+    }
+    n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+
+    if (!recovery) {
+        check(n == -EPERM, "an everyday kernel refuses the write");
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+        check(rc == 0, "seek back to it");
+        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        check(n == SECTOR, "but still reads it");
+        {
+            int ok = 1;
+
+            for (j = 0; j < SECTOR; j++) {
+                if (sector[j] != 0) {
+                    ok = 0;
+                    break;
+                }
+            }
+            check(ok, "and the sector is still zero, so the refusal wrote nothing");
+        }
+        syscall1(SYS_CLOSE, fd);
+        return;
+    }
+
+    check(n == SECTOR, "a recovery kernel writes a sector past 2 GiB");
+    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+    check(rc == 0, "seek back to it");
+    for (j = 0; j < SECTOR; j++) {
+        sector[j] = 0;
+    }
+    n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+    check(n == SECTOR, "and reads it back");
+    {
+        int ok = 1;
+
+        for (j = 0; j < SECTOR; j++) {
+            if ((unsigned char)sector[j] != (unsigned char)((j * 11 + 5) & 0xff)) {
+                ok = 0;
+                break;
+            }
+        }
+        check(ok, "byte for byte");
+    }
+
+    {
+        unsigned long long rb = 0, ra = 0;
+
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+        check(rc == 0, "seek back for a batched read");
+        check(proc_disk_field("raw-driver-calls ", &rb), "the call count is readable");
+        n = syscall3(SYS_READ, fd, (int)(size_t)big, 200 * SECTOR);
+        check(n == 200 * SECTOR, "a 200-sector read of the whole-disk window is taken whole");
+        check(proc_disk_field("raw-driver-calls ", &ra) && ra - rb == 4,
+              "and took four driver calls, so the read loop batches too");
+    }
+
+    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+    check(rc == 0, "seek back once more");
+    {
+        unsigned long long before = 0, after = 0, batch = 0;
+        int got_before, got_after;
+
+        unsigned long long cmd_before = 0, cmd_after = 0;
+        unsigned long long flush_before = 0, flush_after = 0;
+
+        got_before = proc_disk_field("raw-driver-calls ", &before);
+        (void)proc_disk_field("disk-commands ", &cmd_before);
+        (void)proc_disk_field("disk-flushes ", &flush_before);
+        n = syscall3(SYS_WRITE, fd, (int)(size_t)big, 200 * SECTOR);
+        check(n == 200 * SECTOR, "a 200-sector write is taken whole");
+        got_after = proc_disk_field("raw-driver-calls ", &after);
+        check(got_before && got_after, "/proc/disk reports a driver-call count");
+        check(after > before, "the write is visible in it");
+        check(after - before == 4,
+              "and took four driver calls, not two hundred: 200 sectors at 64 a call");
+        check(proc_disk_field("raw-batch-sectors ", &batch) && batch == 64,
+              "/proc/disk reports the batch size the count should be read against");
+
+        /* The call count says how devfs batched. What the driver did with each
+           call is the number that decides whether a reflash finishes, so the
+           commands and the cache flushes are counted where they leave for the
+           device and required to match. */
+        check(proc_disk_field("disk-commands ", &cmd_after), "/proc/disk reports disk commands");
+        check(proc_disk_field("disk-flushes ", &flush_after), "and cache flushes");
+        check(cmd_after - cmd_before == 8,
+              "four batched writes cost exactly eight commands, not four hundred");
+        check(flush_after - flush_before == 4, "and exactly four cache flushes, not two hundred");
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+/**
+ * That the bounded windows batch too, in both directions.
+ *
+ * The whole-disk window is the one a reflash uses, but all three share the same
+ * loops, and a batching regression in the two bounded ones would be just as
+ * slow and just as invisible in the result. This drives /dev/grubcore, which
+ * every boot with a readable disk has, over more sectors than one batch holds.
+ */
+static void window_batch_case(void)
+{
+    unsigned long long before = 0, after = 0;
+    int fd, rc, n;
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDONLY, 0);
+    check(fd >= 0, "root opens /dev/grubcore");
+    rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
+    check(rc == 0, "seek to the start of the gap");
+
+    check(proc_disk_field("raw-driver-calls ", &before), "the driver-call count is readable");
+    n = syscall3(SYS_READ, fd, (int)(size_t)big, 200 * SECTOR);
+    check(n == 200 * SECTOR, "a 200-sector read of the gap is taken whole");
+    check(proc_disk_field("raw-driver-calls ", &after), "and the count is readable after");
+    check(after - before == 4, "and took four driver calls, not two hundred");
+    syscall1(SYS_CLOSE, fd);
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDWR, 0);
+    check(fd >= 0, "root opens /dev/grubcore read-write");
+    rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
+    check(rc == 0, "seek to the start of the gap again");
+    check(proc_disk_field("raw-driver-calls ", &before), "the call count is readable again");
+    n = syscall3(SYS_WRITE, fd, (int)(size_t)big, 200 * SECTOR);
+    check(n == 200 * SECTOR, "a 200-sector write of the gap is taken whole");
+    check(proc_disk_field("raw-driver-calls ", &after) && after - before == 4,
+          "and took four driver calls, so the bounded write loop batches too");
+    syscall1(SYS_CLOSE, fd);
+}
+
 static char written[SECTOR];
 
 void _start(void)
@@ -187,7 +387,8 @@ void _start(void)
     }
     /* The RAM-root boot deliberately does not ask for a disk root, so the token
        it is checked for is the one its own mode is named by. */
-    if (contains(cmdline, "rach2.bootprobe=ramroot") || contains(cmdline, "rach2.bootprobe=wide")) {
+    if (contains(cmdline, "rach2.bootprobe=ramroot") || contains(cmdline, "rach2.bootprobe=wide") ||
+        contains(cmdline, "rach2.bootprobe=auth")) {
         check(!contains(cmdline, "rach2.fsdisk"), "a RAM-root boot asks for no disk root");
     } else {
         check(contains(cmdline, "rach2.fsdisk"), "cmdline carries rach2.fsdisk");
@@ -325,6 +526,20 @@ void _start(void)
 
         if (fails == 0) {
             puts("BOOTPROBE RAMROOT OK");
+            sys_exit(0);
+        }
+        puts("BOOTPROBE FAILED");
+        sys_exit(1);
+    }
+
+    /* Whether this kernel may write the whole disk. Both boots run the same
+       probe against the same image; the kernel is what differs. */
+    if (contains(cmdline, "rach2.bootprobe=auth")) {
+        auth_case(contains(cmdline, "rach2.bootprobe=auth-recovery"));
+        window_batch_case();
+        if (fails == 0) {
+            puts(contains(cmdline, "rach2.bootprobe=auth-recovery") ? "BOOTPROBE AUTH RECOVERY OK"
+                                                                    : "BOOTPROBE AUTH ORDINARY OK");
             sys_exit(0);
         }
         puts("BOOTPROBE FAILED");

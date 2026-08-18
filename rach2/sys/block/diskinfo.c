@@ -166,6 +166,14 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put_dec(buf, &n, cap, d->sectors);
     put(buf, &n, cap, "\nwindow-sectors ");
     put_dec(buf, &n, cap, (uint64_t)d->window_sectors);
+    put(buf, &n, cap, "\nraw-batch-sectors ");
+    put_dec(buf, &n, cap, (uint64_t)DEVFS_RAW_BATCH_SECTORS);
+    put(buf, &n, cap, "\nraw-driver-calls ");
+    put_dec(buf, &n, cap, devfs_raw_calls());
+    put(buf, &n, cap, "\ndisk-commands ");
+    put_dec(buf, &n, cap, block_commands());
+    put(buf, &n, cap, "\ndisk-flushes ");
+    put_dec(buf, &n, cap, block_flushes());
     put(buf, &n, cap, "\nmbr-signature ");
     if (d->mbr_state == DISKINFO_MBR_OK) {
         put(buf, &n, cap, "ok");

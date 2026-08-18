@@ -38,6 +38,24 @@ int block_ready(void)
     return -1;
 }
 
+uint64_t block_commands(void)
+{
+    return 0;
+}
+
+uint64_t block_flushes(void)
+{
+    return 0;
+}
+
+uint64_t devfs_raw_calls(void)
+{
+    /* The rendered text carries a live count; the fixture pins it so the
+       expected bytes below are a constant rather than whatever a previous case
+       happened to leave behind. */
+    return 0;
+}
+
 void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors)
 {
     (void)whole;
@@ -237,6 +255,10 @@ int main(void)
                                      "sector-size 512\n",
                                      "sectors 1953525168\n",
                                      "window-sectors 1953525168\n",
+                                     "raw-batch-sectors 64\n",
+                                     "raw-driver-calls 0\n",
+                                     "disk-commands 0\n",
+                                     "disk-flushes 0\n",
                                      "mbr-signature ok\n",
                                      "mbr-id 4905b015\n",
                                      "part1 07 2048 1024000\n",

@@ -133,6 +133,44 @@ struct raw_window {
     block_partition_t part;
 };
 
+/*
+ * The staging buffer every raw transfer passes through, and the number of
+ * sectors one driver call carries.
+ *
+ * A user pointer can never go to a driver: AHCI programs the buffer's physical
+ * address into its PRDT, so the bytes must be somewhere the kernel knows the
+ * physical address of. This array is in `.bss`, which the linker places below
+ * the 32 MiB identity-mapped limit, so its virtual address is its physical one
+ * and it is contiguous.
+ *
+ * Sixty-four sectors is one command for both drivers: ATA chunks at 256 and
+ * AHCI refuses above 8192. The size is what makes a whole-disk reflash
+ * finishable at all. One sector per call turned a 500 MiB write into about a
+ * million driver calls, and both drivers flush the drive's cache after every
+ * write command, so it was a million cache flushes too; at 64 sectors it is
+ * sixteen thousand.
+ *
+ * One buffer is safe for all of them because a syscall cannot be preempted:
+ * the entry path sets `in_syscall` and the timer refuses to schedule a process
+ * that is in one, so a second writer cannot be running while this is in use.
+ * Interrupts do still run, so no interrupt path may touch it.
+ */
+#define RAW_BATCH_SECTORS DEVFS_RAW_BATCH_SECTORS
+static uint8_t raw_batch[RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE] __attribute__((aligned(4096)));
+
+/* How many driver calls the raw windows have made. Batching is otherwise
+ * invisible from outside: a transfer of any size returns the same answer
+ * whether it took one command or two hundred, and only the time differs. This
+ * is reported by /proc/disk so a test can require the batching rather than the
+ * result, which is the difference between a 500 MiB reflash taking sixteen
+ * thousand driver calls and a million. */
+static uint64_t raw_calls;
+
+uint64_t devfs_raw_calls(void)
+{
+    return raw_calls;
+}
+
 static struct raw_window bootpart;
 
 /*
@@ -145,6 +183,7 @@ static struct raw_window bootpart;
  * table, and a disk writes whole sectors.
  */
 static struct raw_window grubcore;
+
 
 /**
  * Read whole sectors from a bounded raw window.
@@ -160,7 +199,6 @@ static struct raw_window grubcore;
 static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user *buf,
                                uint32_t count)
 {
-    uint8_t sector[BLOCK_SECTOR_SIZE];
     block_device_t *part = &w->part.device;
     uint64_t off = e->ofd->raw_offset;
     uint64_t total = part->sector_count;
@@ -181,17 +219,25 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
     if ((uint64_t)want > total - lba) {
         want = (uint32_t)(total - lba);
     }
-    for (done = 0; done < want; done++) {
-        if (part->read(part, (uint32_t)(lba + done), 1, sector) != 0) {
+    done = 0;
+    while (done < want) {
+        uint32_t chunk = want - done;
+
+        if (chunk > RAW_BATCH_SECTORS) {
+            chunk = RAW_BATCH_SECTORS;
+        }
+        raw_calls++;
+        if (part->read(part, (uint32_t)(lba + done), chunk, raw_batch) != 0) {
             break;
         }
-        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), sector,
-                         BLOCK_SECTOR_SIZE) != 0) {
+        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), raw_batch,
+                         chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
                 return -EFAULT;
             }
             break;
         }
+        done += chunk;
     }
     if (done == 0) {
         return -EIO;
@@ -209,6 +255,19 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
  * arithmetic subtracts rather than adds so a count near the 32-bit edge cannot
  * wrap past the check.
  *
+ * A short return divides the request into three parts, and only the first is a
+ * guarantee. The sectors it counts are written. The batch that failed begins at
+ * the returned offset and its state is unknown: the block interface answers
+ * with zero or an errno and cannot report a partial command, while the ATA
+ * driver writes sector by sector inside one and can fail after several have
+ * gone. That batch is `RAW_BATCH_SECTORS` sectors, or fewer if it was the last
+ * one the request had room for. Everything past it was never attempted. A
+ * caller continues by writing again from the returned offset, which covers the
+ * unknown batch as well as the rest. Batching widened that unknown range from
+ * the single sector it used to be; narrowing it back would take a block
+ * interface that can say how much of a command completed, which this one
+ * cannot.
+ *
  * The effective uid is checked here rather than trusted from the open. The
  * mode stops a non-root caller at open time and nothing else: the generic
  * credential check returns success the moment the uid is zero, so a process
@@ -218,7 +277,6 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
 static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char __user *buf,
                                 uint32_t count)
 {
-    uint8_t sector[BLOCK_SECTOR_SIZE];
     block_device_t *part = &w->part.device;
     uint64_t off = e->ofd->raw_offset;
     uint64_t total = part->sector_count;
@@ -242,17 +300,25 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
     if (lba >= total || (uint64_t)want > total - lba) {
         return -ENOSPC;
     }
-    for (done = 0; done < want; done++) {
-        if (copy_from_user(sector, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
-                           BLOCK_SECTOR_SIZE) != 0) {
+    done = 0;
+    while (done < want) {
+        uint32_t chunk = want - done;
+
+        if (chunk > RAW_BATCH_SECTORS) {
+            chunk = RAW_BATCH_SECTORS;
+        }
+        if (copy_from_user(raw_batch, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
+                           chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
                 return -EFAULT;
             }
             break;
         }
-        if (part->write(part, (uint32_t)(lba + done), 1, sector) != 0) {
+        raw_calls++;
+        if (part->write(part, (uint32_t)(lba + done), chunk, raw_batch) != 0) {
             break;
         }
+        done += chunk;
     }
     if (done == 0) {
         return -EIO;
@@ -286,15 +352,21 @@ static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 /*
- * The whole disk, read-only, for the milestone 24 diagnostic. It exists only
- * on a boot that asked for it (`rach2.diskdiag`), so no image grows a raw
- * whole-disk node by accident.
+ * The whole disk as a raw window. It exists only on a boot that asked for it
+ * (`rach2.diskdiag`), so no image grows one by accident.
  *
- * The write is refused here as well as everywhere else. Three refusals already
- * stand between a caller and a written sector: the 0400 mode fails an
- * `open(O_WRONLY)`, the descriptor carries no write flag, and under the metal
- * build the driver's allowlist refuses the command. This is the fourth, and it
- * is the one that does not depend on which kernel is running.
+ * Reads serve the milestone 24 diagnostic, which answers what this machine's
+ * drive is and what it holds without mounting it, since mounting stamps a dirty
+ * flag and that is a write. Writes belong to the recovery build alone: an
+ * ordinary kernel compiles a handler that returns `-EPERM`, and the rescue
+ * shell's own destructive command is compiled out of it too, so the refusal is
+ * a property of the kernel rather than of one function. `sys/block/recovery.h`
+ * says why that is decided when the kernel is built and not when it boots.
+ *
+ * The mode is the weakest of the barriers and is not one at all for root, whose
+ * credential check passes whatever the mode says. That is why the recovery
+ * write handler asks the effective uid again at write time rather than trusting
+ * the open.
  */
 static struct {
     int present;
@@ -304,7 +376,6 @@ static struct {
 
 static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    uint8_t sector[BLOCK_SECTOR_SIZE];
     block_device_t *dev = disk0.whole;
     uint64_t off = e->ofd->raw_offset;
     uint64_t total = disk0.window_sectors;
@@ -325,17 +396,25 @@ static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if ((uint64_t)want > total - lba) {
         want = (uint32_t)(total - lba);
     }
-    for (done = 0; done < want; done++) {
-        if (dev->read(dev, lba + done, 1, sector) != 0) {
+    done = 0;
+    while (done < want) {
+        uint32_t chunk = want - done;
+
+        if (chunk > RAW_BATCH_SECTORS) {
+            chunk = RAW_BATCH_SECTORS;
+        }
+        raw_calls++;
+        if (dev->read(dev, lba + done, chunk, raw_batch) != 0) {
             break;
         }
-        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), sector,
-                         BLOCK_SECTOR_SIZE) != 0) {
+        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), raw_batch,
+                         chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
                 return -EFAULT;
             }
             break;
         }
+        done += chunk;
     }
     if (done == 0) {
         return -EIO;
@@ -344,6 +423,70 @@ static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
+/**
+ * Write whole sectors anywhere on the disk, in a recovery build only.
+ *
+ * This is the one place in the kernel that can destroy the machine outright,
+ * so which kernel it is compiled into is decided when the kernel is built and
+ * not when it boots. An everyday build compiles the refusal below and has no
+ * path around it; a `-DRACH2_RECOVERY` build compiles the body. Both carry a
+ * banner naming which they are, and `tools/check_recovery.py` reads it off the
+ * artifact in both directions.
+ */
+#ifdef RACH2_RECOVERY
+static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    block_device_t *dev = disk0.whole;
+    uint64_t off = e->ofd->raw_offset;
+    uint64_t total = disk0.window_sectors;
+    uint64_t lba;
+    uint32_t want, done;
+
+    if (!disk0.present || !dev) {
+        return -ENXIO;
+    }
+    if (!current_proc || current_proc->euid != 0) {
+        return -EPERM;
+    }
+    if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
+        return -EINVAL;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    lba = off / BLOCK_SECTOR_SIZE;
+    want = count / BLOCK_SECTOR_SIZE;
+    if (lba >= total || (uint64_t)want > total - lba) {
+        return -ENOSPC;
+    }
+
+    done = 0;
+    while (done < want) {
+        uint32_t chunk = want - done;
+
+        if (chunk > RAW_BATCH_SECTORS) {
+            chunk = RAW_BATCH_SECTORS;
+        }
+        if (copy_from_user(raw_batch, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
+                           chunk * BLOCK_SECTOR_SIZE) != 0) {
+            if (done == 0) {
+                return -EFAULT;
+            }
+            break;
+        }
+        raw_calls++;
+        if (dev->write(dev, lba + done, chunk, raw_batch) != 0) {
+            break;
+        }
+        done += chunk;
+    }
+    if (done == 0) {
+        return -EIO;
+    }
+    e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
+    return (int32_t)(done * BLOCK_SECTOR_SIZE);
+}
+#else
 static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     (void)e;
@@ -351,6 +494,7 @@ static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t c
     (void)count;
     return -EPERM;
 }
+#endif
 
 /*
  * /dev/bootlog: what this machine printed while it was starting.

@@ -61,6 +61,23 @@ int block_probe(void);
 int block_ready(void);
 
 /**
+ * How many commands each driver has issued to the device, and how many of those
+ * were cache flushes.
+ *
+ * The raw windows count their own calls into the block interface, which says
+ * how well devfs batched but nothing about what the driver did underneath: a
+ * driver that broke one 64-sector request into 64 commands would look identical
+ * from above and cost exactly the million cache flushes batching exists to
+ * avoid. These count where the commands actually leave for the device.
+ */
+uint64_t block_commands(void);
+uint64_t block_flushes(void);
+
+/** Record one command, and separately one cache flush, as it is issued. */
+void block_count_command(void);
+void block_count_flush(void);
+
+/**
  * A partition: the sector range `[start_lba, start_lba + sector_count)` of a
  * backing device, presented as its own `block_device`.
  *
