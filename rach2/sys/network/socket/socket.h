@@ -42,9 +42,23 @@ typedef struct socket {
     uint16_t family;
     uint16_t local_port;
 
-    /* Remote endpoint (set for SOCK_STREAM connections). */
+    /* Remote endpoint: a stream's peer, or the address a datagram socket was
+     * connected to. A connected datagram socket sends there without being told
+     * again, and receives from nobody else, which is what `connect` means for
+     * UDP and what a DHCP client's renewal uses. */
     uint32_t remote_ip;
     uint16_t remote_port;
+    int      connected;
+
+    /* The three options a program really sets on a socket here. `broadcast` is
+     * required before a datagram may go to a broadcast address, because a
+     * program that broadcasts by accident wakes every machine on the wire.
+     * `reuseaddr` is recorded and reported and overrides nothing, since this
+     * stack never refuses a bind for the reason the flag exists to override.
+     * `bound_device` is one interface or none. */
+    int      broadcast;
+    int      reuseaddr;
+    int      bound_device;
 
     /* TCP control block for SOCK_STREAM sockets (NULL for SOCK_DGRAM). */
     struct tcb *tcb;

@@ -206,7 +206,9 @@ step "SMOKETM" "./touch /tmp/st && [ -f /tmp/st ] && ./mkdir /tmp/sd && [ -d /tm
 step "SMOKEMCR" "./cp /tmp/sf /tmp/sc && busybox cmp -s /tmp/sf /tmp/sc && ./mv /tmp/sc /tmp/sm && [ -f /tmp/sm ] && ./rm /tmp/sm /tmp/st && [ ! -f /tmp/sm ] && echo SMOKE\"\"MCR"
 step "SMOKEYES" "./yes | busybox head -n 1 | busybox grep -qx y && echo SMOKE\"\"YES"
 step "SMOKEPING" "./ping 127.0.0.1 > /dev/null 2>&1 && echo SMOKE\"\"PING"
-step "SMOKEWEB" "./httpd > /dev/null 2>&1 & sleep 2; printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 80 | busybox grep -q HTTP/ && echo SMOKE\"\"WEB; kill %% 2>/dev/null"
+# Port 8080 and not 80: these steps run as an ordinary user, and a port below
+# 1024 is root's, so the self-built server is asked for one this user may have.
+step "SMOKEWEB" "./httpd 8080 > /dev/null 2>&1 & sleep 2; printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 8080 | busybox grep -q HTTP/ && echo SMOKE\"\"WEB; kill %% 2>/dev/null"
 # The refusal statuses above are exact (1 for each credential refusal, and
 # sudo run against its permission check, not only its usage line), so an exec
 # failure (126, 127) or a crash (128 plus a signal) cannot pass as a refusal.

@@ -8,9 +8,10 @@
  * reload visibly proves a full SYN, ESTABLISHED, data, FIN, TIME_WAIT cycle
  * round-tripped. Anything reflected from the request is HTML-escaped.
  *
- * It binds port 80 (reachable at the SLIRP address `10.0.2.15:80`) and uses
- * only the blocking socket calls (`socket`, `bind`, `listen`, `accept`, `recv`,
- * `send`, `close`).
+ * It binds port 80 by default (reachable at the SLIRP address `10.0.2.15:80`)
+ * and uses only the blocking socket calls (`socket`, `bind`, `listen`,
+ * `accept`, `recv`, `send`, `close`). A port below 1024 is root's, so an
+ * argument names another one: `httpd 8080` is how an ordinary user runs it.
  *
  * Test from the host (with QEMU hostfwd tcp::8080-:80):
  *   curl http://127.0.0.1:8080/
@@ -466,22 +467,39 @@ static int build_response(uint32_t uptime_s)
  * request, decode it into the `cur_*` readout, render and send the status
  * page, then close and access-log the connection.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     int fd, conn;
     struct sockaddr_in addr, peer;
     socklen_t peerlen;
+    uint16_t listen_port = LISTEN_PORT;
     int i;
+
+    if (argc > 1) {
+        long v = 0;
+        const char *p = argv[1];
+
+        while (*p >= '0' && *p <= '9') {
+            v = v * 10 + (*p - '0');
+            p++;
+        }
+        if (*p != '\0' || v <= 0 || v > 65535) {
+            print("httpd: usage: httpd [port]\n");
+            sys_exit(2);
+        }
+        listen_port = (uint16_t)v;
+    }
 
     fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { print("httpd: error: socket() failed\n"); sys_exit(1); }
 
     addr.sin_family = AF_INET;
-    addr.sin_port   = htons(LISTEN_PORT);
+    addr.sin_port   = htons(listen_port);
     addr.sin_addr.s_addr = 0;
     for (i = 0; i < 8; i++) addr.sin_zero[i] = 0;
     if (bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
-        print("httpd: error: cannot bind port 80 (already in use?)\n");
+        print("httpd: error: cannot bind the port (in use, or below 1024 and "
+              "this is not root?)\n");
         sys_exit(1);
     }
 
@@ -490,7 +508,9 @@ int main(void)
     }
 
     epoch_sec_start = now_sec();
-    print("httpd: listening on " SERVER_ADDR "\n");
+    print("httpd: listening on ");
+    print_port(htons(listen_port));
+    print("\n");
 
     for (;;) {
         int rlen, total, sent, n;

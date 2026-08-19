@@ -56,6 +56,14 @@
  */
 int32_t netif_ioctl(uint32_t request, uint32_t arg, int *handled);
 
+/**
+ * Whether `name` is this machine's interface.
+ *
+ * `SO_BINDTODEVICE` names an interface the way the ioctls do, so it is judged
+ * the same way and by the same code.
+ */
+int netif_name_is_ours(const char *name);
+
 /** Whether the interface is administratively up; frames are dropped when not. */
 int netif_is_up(void);
 

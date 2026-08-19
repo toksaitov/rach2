@@ -88,6 +88,11 @@ static int name_is_ours(const uint8_t *name)
     return name[n] == '\0';
 }
 
+int netif_name_is_ours(const char *name)
+{
+    return name_is_ours((const uint8_t *)name);
+}
+
 /** Fill the sockaddr in an ifreq's union with an IPv4 address. */
 static void set_sa(uint8_t *ifr, uint32_t ip)
 {

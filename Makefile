@@ -87,7 +87,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        ping-test packet-test netif-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
+        ping-test packet-test netif-test dgram-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
         subset-test diskdiag-test reset-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
@@ -605,6 +605,23 @@ netif-test: rach2 tests krffs test-image
 	    --append "rach2.ip=none" \
 	    --timeout 120 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /netifprobe" wait=60
+
+# `make dgram-test`: a connected datagram socket and the permission to
+# broadcast, which is how a DHCP client renews a lease and how it asks for one.
+# Its own target because it broadcasts, and a probe in the suite must not put a
+# frame on the wire that the other probes did not ask for.
+DGRAM_PCAP = $(IMAGES_DIR)/dgram.pcap
+dgram-test: rach2 tests krffs test-image
+	@rm -f $(DGRAM_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "user,id=net0,hostfwd=udp::15998-:7502" \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=dg0,netdev=net0,file=$(DGRAM_PCAP) \
+	    --timeout 180 --ok "DGRAMPROBE OK" \
+	    "expect=Type 'help'" "send=exec /dgramprobe" \
+	    "expect=DGRAMPROBE OUTSIDE" "udp=15998:outsider" wait=30
+	python3 tools/bcast_check.py $(DGRAM_PCAP) --port 7500 --dst-ip 255.255.255.255
 
 # `make netconsole-test`: the kernel log on the wire. The machine this milestone
 # targets has no serial port, so the boot log has to leave over Ethernet or not

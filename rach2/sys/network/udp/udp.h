@@ -29,6 +29,6 @@ int udp_bind(uint16_t port, struct socket *sock);
 uint16_t udp_bind_ephemeral(struct socket *sock);
 
 /* Remove the binding for port, called when a socket closes. */
-void udp_unbind(uint16_t port);
+void udp_unbind(struct socket *sock);
 
 #endif /* _UDP_H_ */

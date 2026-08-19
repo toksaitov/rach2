@@ -68,6 +68,10 @@ struct socket *socket_alloc(int type)
             socket_pool[i].local_port    = 0;
             socket_pool[i].remote_ip     = 0;
             socket_pool[i].remote_port   = 0;
+            socket_pool[i].connected     = 0;
+            socket_pool[i].broadcast     = 0;
+            socket_pool[i].reuseaddr     = 0;
+            socket_pool[i].bound_device  = 0;
             socket_pool[i].tcb           = NULL;
             socket_pool[i].accept_head   = 0;
             socket_pool[i].accept_tail   = 0;
@@ -129,7 +133,7 @@ void socket_unref(struct socket *sock)
     if (sock->family == AF_PACKET) {
         packet_unbind(sock);
     } else if (sock->type == SOCK_DGRAM && sock->local_port != 0) {
-        udp_unbind(sock->local_port);
+        udp_unbind(sock);
     } else if (sock->type == SOCK_STREAM && sock->tcb) {
         tcp_close(sock);
     }
@@ -162,6 +166,13 @@ void socket_udp_deliver(struct socket *sock,
                         const uint8_t *data, uint16_t len)
 {
     uint16_t copy_len = len;
+
+    /* A connected datagram socket hears from its peer and from nobody else.
+       That is what `connect` means for UDP, and a client that connected to its
+       server must not be answered by whoever else is on the wire. */
+    if (sock->connected && (src_ip != sock->remote_ip || src_port != sock->remote_port)) {
+        return;
+    }
 
     if (copy_len > SOCK_RECV_BUF_SIZE) {
         copy_len = SOCK_RECV_BUF_SIZE;

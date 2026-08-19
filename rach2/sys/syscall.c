@@ -38,6 +38,7 @@
 #include "network/socket/socket.h"
 #include "network/socket/packet.h"
 #include "network/netif.h"
+#include "network/driver/netdev.h"
 #include "network/udp/udp.h"
 #include "network/tcp/tcp.h"
 #include "network/ip/icmp.h"
@@ -55,6 +56,11 @@ static int user_access_ok(uint32_t addr, uint32_t len);
  * a lower layer that dereferences it directly (krffs, tcp, udp, drivers). 'write'
  * is 1 if that layer writes into the buffer. Defined with user_access_ok. */
 static int user_buffer_ok(uint32_t addr, uint32_t len, int write);
+
+/* Send one datagram from `sock`, judging the destination against the socket's
+ * permission to broadcast. Defined with the socketcall helpers. */
+static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
+                          const uint8_t *buf, uint16_t len);
 
 /* Only one process owns the framebuffer at a time; when it exits or closes fb,
  * text mode is restored. */
@@ -621,7 +627,22 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
                                    (int)count,
                                    entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
         }
-        /* Datagram sockets send via sendto(). */
+        /* A datagram socket writes to the peer it connected to, and has
+         * nowhere to send without one. */
+        if (entry->sock->type == SOCK_DGRAM) {
+            if (!entry->sock->connected) {
+                return -EDESTADDRREQ;
+            }
+            if (!user_buffer_ok((uint32_t)buf, count, 0)) {
+                return -EFAULT;
+            }
+            if (count > 1500) {
+                return -EMSGSIZE;
+            }
+            return dgram_send(entry->sock, entry->sock->remote_ip,
+                              entry->sock->remote_port,
+                              (const uint8_t __force *)buf, (uint16_t)count);
+        }
         return -EOPNOTSUPP;
     }
 
@@ -7795,6 +7816,33 @@ static uint32_t canonical_dst_ip(uint32_t ip)
     return (ip & 0xFF000000UL) == 0x7F000000UL ? net_ip_addr : ip;
 }
 
+/**
+ * Send one datagram, judging the destination first.
+ *
+ * A datagram to a broadcast address reaches every machine on the wire, so a
+ * socket must have asked for that with `SO_BROADCAST` before it can send one.
+ * A program that broadcasts by accident wakes the whole network, and the
+ * option exists so that it has to mean it.
+ */
+static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
+                          const uint8_t *buf, uint16_t len)
+{
+    if (!sock->broadcast && netconf_is_broadcast(dst_ip)) {
+        return -EACCES;
+    }
+    /* One IPv4 datagram over Ethernet: 1500 bytes of frame, less the twenty of
+       the IP header and the eight of UDP's. A larger one is refused here rather
+       than dropped further down, where this call would have reported it sent. */
+    if (len > 1472) {
+        return -EMSGSIZE;
+    }
+    if (sock->local_port == 0 && udp_bind_ephemeral(sock) == 0) {
+        return -EAGAIN;
+    }
+    udp_tx(sock->local_port, dst_ip, dst_port, buf, len);
+    return (int32_t)len;
+}
+
 /* recv flags: only MSG_DONTWAIT is honored. */
 #define MSG_DONTWAIT 0x40
 
@@ -7987,12 +8035,19 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 
     port = SC_BE16(sa + 2);
 
+    /* A port below 1024 is a service's, and a service is root's. Without this
+     * any user could take the port a DHCP client or an SSH server answers on
+     * and be the one machines on the wire talk to. */
+    if (port != 0 && port < 1024 && (!current_proc || current_proc->euid != 0)) {
+        return -EACCES;
+    }
+
     if (entry->sock->type == SOCK_DGRAM) {
         /* A datagram send before bind auto-binds an ephemeral source port; drop
          * that registration before claiming the requested one, or its port-table
          * slot leaks for the socket's life. */
         if (entry->sock->local_port != 0) {
-            udp_unbind(entry->sock->local_port);
+            udp_unbind(entry->sock);
             entry->sock->local_port = 0;
         }
         if (port == 0) {
@@ -8086,6 +8141,17 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
         return -EMSGSIZE;
     }
 
+    /* A connected datagram socket needs no destination: `send` is `sendto`
+     * with none, which is what musl's send() issues. */
+    if (sa_ptr == 0 || addrlen == 0) {
+        if (!entry->sock->connected) {
+            return -EDESTADDRREQ;
+        }
+        return dgram_send(entry->sock, entry->sock->remote_ip, entry->sock->remote_port,
+                          (const uint8_t __force *)(const void __user *)buf_ptr,
+                          (uint16_t)len);
+    }
+
     /* Datagram path: a real destination address is required. */
     if (addrlen < SOCKADDR_MIN) {
         return -EINVAL;  /* declared sockaddr shorter than the header we read */
@@ -8095,22 +8161,15 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
         return -EFAULT;
     }
 
-    /* A datagram socket needs a source port so replies can come back. The
-     * binding table is smaller than the socket table, so the ephemeral bind can
-     * fail; report it rather than send from port 0 and claim success. */
-    if (entry->sock->local_port == 0) {
-        if (udp_bind_ephemeral(entry->sock) == 0) {
-            return -EAGAIN;
-        }
-    }
-
     dst_port = SC_BE16(sa + 2);
     dst_ip   = canonical_dst_ip(SC_BE32(sa + 4));
 
-    /* udp_tx reads the payload itself; __force strips __user at the boundary. */
-    udp_tx(entry->sock->local_port, dst_ip, dst_port,
-           (const uint8_t __force *)(const void __user *)buf_ptr, (uint16_t)len);
-    return len;
+    /* One send path, so the broadcast permission and the ephemeral bind are
+     * the same here as they are for a write to a connected socket. udp_tx
+     * reads the payload itself; __force strips __user at the boundary. */
+    return dgram_send(entry->sock, dst_ip, dst_port,
+                      (const uint8_t __force *)(const void __user *)buf_ptr,
+                      (uint16_t)len);
 }
 
 /* recvfrom(2): a stream socket behaves like recv (no source writeback); a datagram
@@ -8252,24 +8311,90 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     fd_entry_t *entry;
     uint32_t    dst_ip;
     uint16_t    dst_port;
+    uint16_t    family;
     uint8_t     sa[SOCKADDR_MIN];
     int         rc;
 
-    if (addrlen < SOCKADDR_MIN) {
-        return -EINVAL;  /* declared sockaddr shorter than the header we read */
-    }
-
-    /* Copy the sockaddr header into a kernel buffer for the BE helpers. */
-    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
-        return -EFAULT;
-    }
-
+    /* The family is read first and on its own, because a disconnect is a
+     * family and nothing else: `connect(fd, &unspec, sizeof(sa_family_t))` is
+     * how a program lets go of a peer, and requiring a whole address for it
+     * would leave that program connected. */
+    /* The descriptor is resolved before its argument is read, so that a call on
+     * something that is not a socket says so rather than reporting whatever was
+     * wrong with an address it was never going to use. */
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
+    }
+    /* A packet socket has no peer to connect to: it is bound to an interface
+     * and sends to a hardware address each time. Reaching the datagram arm
+     * below would put it in the UDP port table, which its teardown never
+     * unbinds from. */
+    if (entry->sock->family == AF_PACKET) {
+        return -EOPNOTSUPP;
+    }
+
+    k_memset(sa, 0, sizeof(sa));
+    if (addrlen < 2) {
+        return -EINVAL;
+    }
+    if (copy_from_user(sa, (const void __user *)sa_ptr, 2) != 0) {
+        return -EFAULT;
+    }
+    family = (uint16_t)((uint16_t)sa[0] | ((uint16_t)sa[1] << 8));
+    /* Two bytes are enough for a disconnect and only for a disconnect, and only
+     * a datagram socket has one to do: a stream's connection ends by closing
+     * it. Anything else must give a whole address, or the bytes past the family
+     * would be this function's stack. */
+    if (family == 0) {
+        if (entry->sock->type != SOCK_DGRAM) {
+            return -EAFNOSUPPORT;
+        }
+    } else {
+        if (addrlen < SOCKADDR_MIN) {
+            return -EINVAL; /* declared sockaddr shorter than the header we read */
+        }
+        if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+            return -EFAULT;
+        }
+    }
+    /* A datagram socket's connect records where it will send and who it will
+     * hear from; there is no handshake and nothing to wait for. AF_UNSPEC
+     * undoes it, which is how a program lets go of a peer. */
+    if (entry->sock->type == SOCK_DGRAM) {
+        uint32_t held;
+
+        if (family == 0) {
+            held = net_lock();
+            entry->sock->connected = 0;
+            entry->sock->remote_ip = 0;
+            entry->sock->remote_port = 0;
+            net_unlock(held);
+            return 0;
+        }
+        if (family != AF_INET) {
+            return -EAFNOSUPPORT;
+        }
+        /* Something must answer, so the socket needs a source port: the same
+         * ephemeral bind a send before bind would have taken. The bind and the
+         * peer are published together, under one hold. A bind that landed first
+         * would put the socket in the port table with no peer recorded, and a
+         * datagram arriving in that interval would be admitted from anyone; a
+         * reconnect that published a new port beside an old address would admit
+         * a sender that is neither the old peer nor the new one. */
+        held = net_lock();
+        if (entry->sock->local_port == 0 && udp_bind_ephemeral(entry->sock) == 0) {
+            net_unlock(held);
+            return -EAGAIN;
+        }
+        entry->sock->remote_port = SC_BE16(sa + 2);
+        entry->sock->remote_ip = canonical_dst_ip(SC_BE32(sa + 4));
+        entry->sock->connected = 1;
+        net_unlock(held);
+        return 0;
     }
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
@@ -8526,9 +8651,14 @@ static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
     }
-    /* A peer exists only once the TCP handshake completes (not a listener, not a
-     * still-connecting SYN_SENT, not a closed/UDP socket). */
-    if (!tcp_is_connected(entry->sock)) {
+    /* A peer exists once the TCP handshake completes (not a listener, not a
+     * still-connecting SYN_SENT, not a closed socket), or once a datagram
+     * socket has been connected to one, which is a peer with no handshake. */
+    if (entry->sock->type == SOCK_DGRAM) {
+        if (!entry->sock->connected) {
+            return -ENOTCONN;
+        }
+    } else if (!tcp_is_connected(entry->sock)) {
         return -ENOTCONN;
     }
     if (!sa_ptr || !salen_ptr) {
@@ -8575,6 +8705,10 @@ static int32_t do_shutdown(int fd, int how)
 #define SO_REUSEADDR  2
 #define SO_TYPE       3
 #define SO_ERROR      4
+#define SO_BROADCAST  6
+#define SO_REUSEADDR  2
+#define SO_BINDTODEVICE 25
+#define IFNAMSIZ     16
 #define SO_KEEPALIVE  9
 #define IPPROTO_TCP   6
 #define TCP_NODELAY   1
@@ -8602,12 +8736,60 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
         return -ENOPROTOOPT;
     }
     (void)optname;
+    /* SO_BINDTODEVICE's value is a name, not a number, and it is judged
+     * against the one interface this machine has. */
+    if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
+        char name[IFNAMSIZ];
+        uint32_t take = (optlen < 0) ? 0u : (uint32_t)optlen;
+
+        /* The name is at the start of whatever the caller passed, and busybox
+         * passes a whole `struct ifreq` for it, 32 bytes on this machine. So
+         * only the name's worth is read and a larger buffer is not a refusal. */
+        if (take == 0) {
+            return -EINVAL;
+        }
+        if (take > IFNAMSIZ) {
+            take = IFNAMSIZ;
+        }
+        k_memset(name, 0, sizeof(name));
+        if (!optval_ptr ||
+            copy_from_user(name, (const void __user *)optval_ptr, take) != 0) {
+            return -EFAULT;
+        }
+        name[IFNAMSIZ - 1] = '\0';
+        if (name[0] == '\0') {
+            entry->sock->bound_device = 0; /* an empty name unbinds */
+            return 0;
+        }
+        if (!netif_name_is_ours(name)) {
+            return -ENODEV;
+        }
+        entry->sock->bound_device = 1;
+        return 0;
+    }
+
     /* A declared int-sized option with a NULL value is a bad pointer, not a
      * silently-accepted no-op. */
     if (optlen >= (int)sizeof(int)) {
         if (!optval_ptr ||
             copy_from_user(&val, (const void __user *)optval_ptr, sizeof(val)) != 0) {
             return -EFAULT;
+        }
+    }
+
+    /* The two flags this stack really keeps. Everything else is accepted and
+     * has no effect, which is what it has always done: refusing them would
+     * stop programs that set options a small stack has no use for. */
+    if (level == SOL_SOCKET && (optname == SO_BROADCAST || optname == SO_REUSEADDR)) {
+        /* A flag whose value was too short to read is not a flag set to zero:
+           the caller passed something this could not understand. */
+        if (optlen < (int)sizeof(int)) {
+            return -EINVAL;
+        }
+        if (optname == SO_BROADCAST) {
+            entry->sock->broadcast = val ? 1 : 0;
+        } else {
+            entry->sock->reuseaddr = val ? 1 : 0;
         }
     }
     return 0;
@@ -8638,8 +8820,38 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
             entry->sock->tcb->so_error = 0;
         }
         net_unlock(flags);
+    } else if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
+        /* This one answers with a name, not a number. */
+        char name[IFNAMSIZ];
+        uint32_t give;
+
+        k_memset(name, 0, sizeof(name));
+        if (entry->sock->bound_device) {
+            k_strncpy(name, NETDEV_IFNAME, sizeof(name) - 1);
+        }
+        if (!optval_ptr || !optlen_ptr) {
+            return -EFAULT;
+        }
+        if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
+            return -EFAULT;
+        }
+        give = k_strlen(name) + 1u;
+        if (give > olen) {
+            give = olen;
+        }
+        if (give > 0 && copy_to_user((void __user *)optval_ptr, name, give) != 0) {
+            return -EFAULT;
+        }
+        if (copy_to_user((void __user *)optlen_ptr, &give, sizeof(give)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    } else if (level == SOL_SOCKET && optname == SO_BROADCAST) {
+        val = entry->sock->broadcast;
+    } else if (level == SOL_SOCKET && optname == SO_REUSEADDR) {
+        val = entry->sock->reuseaddr;
     } else {
-        val = 0; /* SO_REUSEADDR / SO_KEEPALIVE / TCP_NODELAY: off/none */
+        val = 0; /* SO_KEEPALIVE / TCP_NODELAY and the rest: off/none */
     }
     if (!optval_ptr || !optlen_ptr) {
         return -EFAULT;
@@ -8653,7 +8865,9 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
     if (olen > 0 && copy_to_user((void __user *)optval_ptr, &val, olen) != 0) {
         return -EFAULT;
     }
-    olen = (uint32_t)sizeof(val);
+    /* The count actually written, which for a caller that offered less than an
+       int is less than an int: telling it four would be describing bytes that
+       were never put there. */
     if (copy_to_user((void __user *)optlen_ptr, &olen, sizeof(olen)) != 0) {
         return -EFAULT;
     }

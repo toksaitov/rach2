@@ -90,6 +90,15 @@ int netconf_apply(const char **why);
 uint32_t netconf_broadcast(void);
 
 /**
+ * Whether `ip` is an address that reaches every machine on the wire.
+ *
+ * The one judgement of that, used by the permission check a socket passes and
+ * by the transmit path that puts the frame on the wire, so the two cannot
+ * disagree about what a broadcast is.
+ */
+int netconf_is_broadcast(uint32_t ip);
+
+/**
  * Set the machine's address and mask at runtime.
  *
  * An address of zero means unconfigured, and takes the mask with it: half a

@@ -7,6 +7,7 @@
  */
 
 #include "udp.h"
+#include "../../proc/process.h"
 #include "../net.h"
 #include "../socket/socket.h"
 #include "../ip/ip.h"
@@ -18,6 +19,7 @@
 typedef struct udp_binding {
     uint16_t       port;
     struct socket *sock;
+    uint32_t       owner;  /* the effective uid that bound it */
     uint8_t        in_use;
 } udp_binding_t;
 
@@ -57,16 +59,36 @@ int udp_bind(uint16_t port, struct socket *sock)
     /* The port table is read by udp_rx in IRQ context; update it atomically. */
     flags = net_lock();
 
+    /* A port already bound is taken again only when every socket on it asked
+       for that, the new one included. A DHCP client needs exactly this: it
+       keeps a socket bound to port 68 to listen on while it opens a second one
+       bound to 68 to send its renewal from. It does not need, and must not
+       have, a stranger's socket beside it: the connected socket takes the
+       answer, so anyone who could share the port could take the client's
+       replies by asking for them first. */
     if (udp_port_in_use(port)) {
-        net_unlock(flags);
-        serial_printf("UDP: port %d already bound\n", (int)port);
-        return -1;
+        uint32_t uid = current_proc ? current_proc->euid : 0;
+        int shared = sock && sock->reuseaddr;
+
+        for (i = 0; shared && i < UDP_PORT_TABLE_SIZE; i++) {
+            if (port_table[i].in_use && port_table[i].port == port &&
+                (!port_table[i].sock || !port_table[i].sock->reuseaddr ||
+                 port_table[i].owner != uid)) {
+                shared = 0;
+            }
+        }
+        if (!shared) {
+            net_unlock(flags);
+            serial_printf("UDP: port %d already bound\n", (int)port);
+            return -1;
+        }
     }
 
     for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
         if (!port_table[i].in_use) {
             port_table[i].port   = port;
             port_table[i].sock   = sock;
+            port_table[i].owner  = current_proc ? current_proc->euid : 0;
             port_table[i].in_use = 1;
             net_unlock(flags);
             return 0;
@@ -90,7 +112,27 @@ int udp_bind(uint16_t port, struct socket *sock)
 uint16_t udp_bind_ephemeral(struct socket *sock)
 {
     int tries;
+    int i;
     uint16_t port;
+    uint32_t flags;
+    int room = 0;
+
+    /* A table with no free slot is answered at once. Walking sixteen thousand
+       ports to find that out takes a long time and prints a line for each, and
+       a caller holding the network lock across this call would hold interrupts
+       off for all of it: a process that filled the table could stop the
+       machine's clock by connecting one more socket. */
+    flags = net_lock();
+    for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
+        if (!port_table[i].in_use) {
+            room = 1;
+            break;
+        }
+    }
+    net_unlock(flags);
+    if (!room) {
+        return 0;
+    }
 
     for (tries = 0; tries < 16384; tries++) {
         port = udp_next_ephemeral++;
@@ -110,16 +152,19 @@ uint16_t udp_bind_ephemeral(struct socket *sock)
     return 0;
 }
 
-void udp_unbind(uint16_t port)
+void udp_unbind(struct socket *sock)
 {
     int i;
     uint32_t flags;
 
+    /* By socket and not by port: two sockets may share a port, and releasing
+       the first entry that names it would take the other one's binding away
+       and leave this one's behind. */
     flags = net_lock();
     for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
-        if (port_table[i].in_use && port_table[i].port == port) {
+        if (port_table[i].in_use && port_table[i].sock == sock) {
             port_table[i].in_use = 0;
-            break;
+            port_table[i].sock = NULL;
         }
     }
     net_unlock(flags);
@@ -158,14 +203,34 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     }
     payload_len = (uint16_t)(udp_len - UDP_HDR_SIZE);
 
-    for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
-        if (port_table[i].in_use && port_table[i].port == dst_port) {
-            if (port_table[i].sock) {
-                socket_udp_deliver(port_table[i].sock,
-                                   src_ip, read16be(data + 0),
-                                   data + UDP_HDR_SIZE, payload_len);
+    /* A port may have more than one socket on it. The one connected to the
+       sender takes the datagram, because it asked for that sender by name; the
+       first unconnected one takes it otherwise. Anything else would hand a
+       renewal's answer to the socket that is merely listening. */
+    {
+        struct socket *listener = NULL;
+        uint16_t src_port = read16be(data + 0);
+
+        for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
+            struct socket *cand = port_table[i].sock;
+
+            if (!port_table[i].in_use || port_table[i].port != dst_port || !cand) {
+                continue;
             }
-            return;
+            if (cand->connected) {
+                if (cand->remote_ip == src_ip && cand->remote_port == src_port) {
+                    socket_udp_deliver(cand, src_ip, src_port, data + UDP_HDR_SIZE,
+                                       payload_len);
+                    return;
+                }
+                continue;
+            }
+            if (!listener) {
+                listener = cand;
+            }
+        }
+        if (listener) {
+            socket_udp_deliver(listener, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
         }
     }
 }

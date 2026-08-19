@@ -294,6 +294,11 @@ int netconf_prefix_of(uint32_t mask)
     return n;
 }
 
+int netconf_is_broadcast(uint32_t ip)
+{
+    return ip == 0xFFFFFFFFu || (net_ip_addr != 0 && net_ip_mask != 0 && ip == netconf_broadcast());
+}
+
 /** Whether `mask` is a run of ones followed by a run of zeros. */
 static int mask_ok(uint32_t mask)
 {
@@ -439,9 +444,14 @@ int netconf_set_netmask(uint32_t mask)
         addr_publish(pending_addr ? 0 : net_ip_addr, 0);
         mask_provisional = 0;
         pending_addr = 0;
+    } else if (ip == 0) {
+        /* A mask with no address to go with it is half a configuration, and it
+           would leave a machine with a subnet broadcast address derived from
+           nothing. */
+        rc = -EINVAL;
     } else if (!mask_ok(mask) || mask == 0xFFFFFFFFu) {
         rc = -EINVAL;
-    } else if (ip != 0 && (ip == (ip & mask) || ip == (ip | ~mask))) {
+    } else if (ip == (ip & mask) || ip == (ip | ~mask)) {
         rc = -EINVAL;
     } else {
         addr_publish(ip, mask);

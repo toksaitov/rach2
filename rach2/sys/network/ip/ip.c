@@ -227,6 +227,27 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
         return;
     }
 
+    /* A broadcast goes to every machine on the wire, and the wire's own
+       broadcast address is what carries it: there is nobody to ask for a
+       hardware address, and asking the gateway to forward it would send one
+       machine's broadcast to a router that has no business with it. */
+    if (netconf_is_broadcast(dst_ip)) {
+        static const uint8_t all_ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+
+        /* Only a datagram is ever broadcast. A connection is between two
+           machines and a broadcast SYN is one machine asking every machine on
+           the wire to answer; an echo request to a broadcast address is one
+           packet answered by all of them, at whatever address the sender
+           claimed. Whether a datagram may be broadcast at all is the socket's
+           permission, checked before it gets here. */
+        if (proto != IP_PROTO_UDP) {
+            serial_printf("ip: refused to broadcast a datagram that is not UDP\n");
+            return;
+        }
+        ethernet_tx(all_ones, ETH_TYPE_IP, ip_tx_buf, total_len);
+        return;
+    }
+
     /* On-subnet destinations resolve directly; otherwise via the gateway. A
      * machine configured with an address and no gateway has no route off its
      * own subnet, and the datagram is dropped here with a reason rather than
