@@ -17,6 +17,11 @@
 
 #define SOCK_STREAM          1      /* TCP */
 #define SOCK_DGRAM           2      /* UDP */
+/* A descriptor that carries the interface ioctls and nothing else. A DHCP
+ * client opens one to ask this machine about itself (busybox's
+ * `udhcp_read_interface`); this stack has no raw IP path, so every other
+ * operation on it is refused rather than answered with silence. */
+#define SOCK_RAW             3
 #define AF_INET              2      /* IPv4 address family */
 #define MAX_SOCKETS          16    /* static pool size */
 #define SOCK_RECV_BUF_SIZE   1500  /* one max-size UDP datagram */
@@ -30,7 +35,7 @@ struct tcb; /* defined in tcp/tcp.h */
 typedef struct socket {
     int      in_use;
     int      refcount;        /* descriptors referencing this socket */
-    int      type;            /* SOCK_DGRAM or SOCK_STREAM */
+    int      type;            /* SOCK_DGRAM, SOCK_STREAM or SOCK_RAW */
     /* AF_INET, or AF_PACKET for the tap above the Ethernet layer. Nearly every
      * path below is AF_INET's; the family is what the few that are not branch
      * on, rather than a second socket pool. */

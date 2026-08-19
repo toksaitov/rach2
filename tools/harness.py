@@ -19,6 +19,10 @@ Usage:
     expect=REGEX   wait until REGEX appears (per-step cap = --steptmo)
     send=TEXT      write TEXT + newline to the guest serial
     wait=SECS      sleep SECS, draining serial
+    udp=PORT:TEXT  send TEXT as one UDP datagram to 127.0.0.1:PORT, which a
+                   `hostfwd=udp::PORT-:GUESTPORT` in --net carries into the
+                   guest. This is the only way a test can put a frame on the
+                   guest's wire that the guest did not ask for.
     exec=NAME|MARK run "exec NAME", re-sending if the shell drops it, until MARK
     probe=NAME     boot, run "exec NAME", and let the kernel's harness_exit stop
                    QEMU; the process exit code is then decoded from QEMU's.
@@ -27,7 +31,7 @@ Exit code: 0 if the guest process exited 0 (QEMU returned 1 via isa-debug-exit);
 1 if it exited non-zero; 2 if QEMU failed to launch; 3 on timeout/hang (QEMU
 never self-exited), an unambiguous failure.
 """
-import argparse, os, re, select, subprocess, sys, time
+import argparse, os, re, select, socket, subprocess, sys, time
 
 
 def main():
@@ -160,6 +164,13 @@ def main():
             send(step[len("send="):])
         elif step.startswith("wait="):
             pump(time.time() + float(step[len("wait="):]))
+        elif step.startswith("udp="):
+            port, _, text = step[len("udp="):].partition(":")
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sk.sendto(text.encode(), ("127.0.0.1", int(port)))
+            finally:
+                sk.close()
         elif step.startswith("exec="):
             name, _, marker = step[len("exec="):].partition("|")
             tries = 0

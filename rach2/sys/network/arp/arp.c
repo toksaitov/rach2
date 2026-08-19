@@ -37,6 +37,15 @@ static uint8_t arp_req_buf[28];
  * Entries do not age out, which is fine for the handful of SLIRP peers
  * (gateway, DNS, one client).
  */
+void arp_flush(void)
+{
+    int i;
+
+    for (i = 0; i < ARP_CACHE_SIZE; i++) {
+        arp_cache[i].valid = 0;
+    }
+}
+
 static void arp_cache_update(uint32_t ip, const uint8_t *mac)
 {
     int i;

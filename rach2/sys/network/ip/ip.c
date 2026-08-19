@@ -73,6 +73,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     uint8_t  ihl, proto;
     uint16_t total_len, hdr_len, frag;
     uint32_t src_ip, dst_ip;
+    int to_broadcast;
 
     if (len < IP_HDR_SIZE) {
         return;
@@ -107,7 +108,11 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     }
 
     dst_ip = read32be(data + 16);
-    if (dst_ip != net_ip_addr) {
+    /* An unconfigured machine owns no address, and 0.0.0.0 is not one it owns:
+       comparing against it would make every packet addressed to nobody look
+       like a packet addressed to this machine. */
+    to_broadcast = (dst_ip == 0xFFFFFFFFu || dst_ip == netconf_broadcast());
+    if (!(net_ip_addr != 0 && dst_ip == net_ip_addr) && !to_broadcast) {
         return;   /* not addressed to us */
     }
 
@@ -121,6 +126,16 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     }
 
     proto  = data[9];
+
+    /* A broadcast is delivered to UDP and to nothing else. The two broadcasts
+       are how a DHCP server answers a machine that has no address yet and how
+       a renewal's refusal arrives, which is the whole reason they are accepted.
+       Answering a broadcast echo request would make this machine one of the
+       many that reply to one packet, at whatever address the sender claimed,
+       and a broadcast TCP segment is not a connection anyone opened. */
+    if (to_broadcast && proto != IP_PROTO_UDP) {
+        return;
+    }
 
     switch (proto) {
     case IP_PROTO_ICMP:

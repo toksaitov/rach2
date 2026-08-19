@@ -168,4 +168,16 @@ int tcp_is_connected(struct socket *sock);
  */
 void tcp_window_update(struct socket *sock);
 
+/**
+ * Abort every connection that was opened from a different local address.
+ *
+ * A TCB records the address it was opened from, and after an address change
+ * that address is somebody else's. Such a connection cannot be continued: its
+ * segments would carry a source this machine no longer has, and its peer would
+ * answer to a machine that is no longer here. Each is reset locally, with
+ * `ENETRESET` on its socket so a blocked read or write returns, rather than
+ * left to time out.
+ */
+void tcp_local_addr_changed(uint32_t new_ip);
+
 #endif /* _TCP_H_ */

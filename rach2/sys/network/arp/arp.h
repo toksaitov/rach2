@@ -22,6 +22,15 @@
 /** Handle a received ARP packet (the payload after the Ethernet header). */
 void arp_rx(const uint8_t *data, uint16_t len);
 
+/**
+ * Forget every mapping.
+ *
+ * Called when this machine's address changes: every entry was learned by a
+ * machine at the old address, and an entry kept across the change would send
+ * to a MAC that answered a question nobody is asking any more.
+ */
+void arp_flush(void);
+
 /** Look up the cached MAC for an IP; 1 on a hit, 0 on a miss. */
 int arp_lookup(uint32_t ip, uint8_t *mac_out);
 

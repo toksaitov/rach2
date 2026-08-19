@@ -439,6 +439,27 @@ static int send_space_ready(void *arg)
 }
 
 /**
+ * The reason a connection ended, as a negative errno, or -1 when none was
+ * recorded.
+ *
+ * A read or a write of a connection that is gone used to answer a bare -1,
+ * which the C library reads as `EPERM`: a program woken because this machine's
+ * address changed under it was told it lacked permission. The reason is in the
+ * block already, put there by whatever ended the connection, so it is what the
+ * call returns.
+ */
+static int tcp_dead_error(struct tcb *tcb)
+{
+    if (tcb && tcb->so_error != 0) {
+        int err = (int)tcb->so_error;
+
+        tcb->so_error = 0;
+        return -err;
+    }
+    return -1;
+}
+
+/**
  * Blocking stream send: queue bytes, waiting for send-ring space if needed.
  *
  * tcp_send is the non-blocking primitive (it copies what fits and returns 0 when
@@ -455,13 +476,18 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
     }
     for (;;) {
         int sent = tcp_send(sock, buf, len);
+        if (sent == -1) {
+            /* The bare refusal a closed block gives, turned into the reason it
+               closed. Anything else negative already names itself. */
+            return tcp_dead_error(sock->tcb);
+        }
         if (sent != 0 || len == 0) {
             return sent; /* queued some, an error (< 0), or a 0-length request */
         }
         /* The ring is full and the request is nonzero. */
         if (!sock->tcb || (sock->tcb->state != TCP_ESTABLISHED &&
                            sock->tcb->state != TCP_CLOSE_WAIT)) {
-            return -1;
+            return tcp_dead_error(sock->tcb);
         }
         if (nonblock) {
             return SOCK_EAGAIN;
@@ -528,7 +554,7 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
 
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0 && !tcb->fin_received && tcb->state == TCP_CLOSED) {
-        return -1;              /* connection reset/closed with no data */
+        return tcp_dead_error(tcb); /* reset or closed with no data */
     }
     if (avail == 0) return 0;   /* EOF (FIN, no buffered data) */
 
@@ -561,7 +587,7 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0) {
         if (tcb->fin_received)        return 0;            /* EOF */
-        if (tcb->state == TCP_CLOSED) return -1;           /* reset/closed */
+        if (tcb->state == TCP_CLOSED) return tcp_dead_error(tcb);
         return SOCK_EAGAIN;                                /* no data yet */
     }
 
@@ -602,6 +628,13 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     }
     if (wq) {
         *wq = &sock->waiters;
+    }
+
+    /* The query descriptor is never readable and never writable: it carries
+       ioctls. POLLERR says so at once, so a caller that polls it waits on
+       nothing rather than forever. */
+    if (sock->type == SOCK_RAW) {
+        return (short)POLLERR;
     }
 
     if (sock->type == SOCK_DGRAM) {

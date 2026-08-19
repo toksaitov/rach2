@@ -37,6 +37,7 @@
 #include "audio/audio.h"
 #include "network/socket/socket.h"
 #include "network/socket/packet.h"
+#include "network/netif.h"
 #include "network/udp/udp.h"
 #include "network/tcp/tcp.h"
 #include "network/ip/icmp.h"
@@ -2082,6 +2083,9 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         if (!entry->sock || !user_buffer_ok((uint32_t)buf, count, 1)) {
             return -EFAULT;
         }
+        if (entry->sock->type == SOCK_RAW) {
+            return -EOPNOTSUPP;
+        }
         sock_nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
         /* socket_*recv write straight into the validated user buffer; __force
          * strips the __user tag at the boundary. */
@@ -2278,6 +2282,9 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
     if (entry->type == FD_TYPE_SOCKET && entry->sock) {
         int32_t r;
 
+        if (entry->sock->type == SOCK_RAW) {
+            return -EOPNOTSUPP;
+        }
         if (!user_buffer_ok((uint32_t)buf, count, 1)) {
             return -EFAULT;
         }
@@ -7534,6 +7541,19 @@ static int32_t sys_ioctl(isr_params_t *params)
         return -EBADF;
     }
 
+    /* A socket carries the interface ioctls: this is where a program sets the
+     * machine's address, which is what a DHCP client is for. They are checked
+     * before the tty block because a socket is not a terminal and would
+     * otherwise fall through to -ENOTTY. */
+    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+        int handled;
+        int32_t r = netif_ioctl(request, arg, &handled);
+
+        if (handled) {
+            return r;
+        }
+    }
+
     /* tty-family fds (the console and a pty slave) share the termios/session
      * ioctls, handled here, BEFORE the generic ops dispatch, so a pty slave's
      * TCGETS/TIOCSCTTY reach the shared handler rather than its FIONBIO-only
@@ -7778,6 +7798,10 @@ static uint32_t canonical_dst_ip(uint32_t ip)
 /* recv flags: only MSG_DONTWAIT is honored. */
 #define MSG_DONTWAIT 0x40
 
+/* The query-only raw descriptor a DHCP client asks the interface through. */
+#define SOCK_RAW     3
+#define IPPROTO_RAW  255
+
 /* setsockopt levels and the one packet option that is answered. */
 #define SOL_PACKET      263
 #define PACKET_AUXDATA  8
@@ -7861,7 +7885,20 @@ static int32_t do_socket(int domain, int type, int protocol)
     if (domain != AF_INET && domain != AF_PACKET) {
         return -EAFNOSUPPORT;
     }
-    if (type != SOCK_DGRAM && type != SOCK_STREAM) {
+    /* The query descriptor. A DHCP client opens AF_INET/SOCK_RAW/IPPROTO_RAW
+     * and does nothing with it but ask the interface ioctls about the machine
+     * (busybox's `udhcp_read_interface`), so that is what it is here: a
+     * descriptor that carries ioctls and closes, and refuses to send or
+     * receive, because this stack has no raw IP path to offer. Root's, like
+     * every raw socket. */
+    if (domain == AF_INET && type == SOCK_RAW) {
+        if (protocol != IPPROTO_RAW) {
+            return -EPROTONOSUPPORT;
+        }
+        if (!current_proc || current_proc->euid != 0) {
+            return -EPERM;
+        }
+    } else if (type != SOCK_DGRAM && type != SOCK_STREAM) {
         return -EINVAL;
     }
     if (domain == AF_PACKET) {
@@ -7944,6 +7981,10 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
         return packet_bind(entry->sock, (int)ifindex);
     }
 
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+
     port = SC_BE16(sa + 2);
 
     if (entry->sock->type == SOCK_DGRAM) {
@@ -7993,6 +8034,13 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+
+    /* The query descriptor carries ioctls and nothing else: this stack has no
+     * raw IP path, and a caller that got silence here would be waiting for a
+     * datagram that cannot arrive. */
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
     }
 
     /* On a connected stream socket, sendto with any (or no) destination behaves
@@ -8109,6 +8157,13 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
         }
     }
 
+    /* The query descriptor carries ioctls and nothing else: this stack has no
+     * raw IP path, and a caller that got silence here would be waiting for a
+     * datagram that cannot arrive. */
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+
     /* Receive without blocking when the caller asked per-call (MSG_DONTWAIT) or
      * the descriptor is O_NONBLOCK (an OFD status flag, shared by dup/fork). */
     nonblock = (flags & MSG_DONTWAIT) ||
@@ -8213,6 +8268,9 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
@@ -8272,6 +8330,9 @@ static int32_t do_listen(int fd, int backlog)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
@@ -8304,6 +8365,9 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
     }
     listen_sock = entry->sock;
 
@@ -8366,6 +8430,9 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
@@ -8393,6 +8460,9 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
     }
     /* Don't block when the caller asked per-call (MSG_DONTWAIT) or the descriptor
      * is O_NONBLOCK. socket_tcp_*recv write into the validated user buffer;
@@ -8433,6 +8503,9 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
     /* Unlike accept/recvfrom, getsockname requires the buffers (copy_sockaddr_to_
      * user treats NULL as "no address wanted"). */
     if (!sa_ptr || !salen_ptr) {
@@ -8449,6 +8522,9 @@ static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
     }
     /* A peer exists only once the TCP handshake completes (not a listener, not a
      * still-connecting SYN_SENT, not a closed/UDP socket). */
@@ -8475,6 +8551,9 @@ static int32_t do_shutdown(int fd, int how)
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
     }
     if (how < SHUT_RD || how > SHUT_RDWR) {
         return -EINVAL;

@@ -581,6 +581,62 @@ static void tcp_send_zwp(struct tcb *tcb)
     ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len);
 }
 
+void tcp_local_addr_changed(uint32_t new_ip)
+{
+    int i;
+
+    if (!tcp_table) {
+        return;
+    }
+    for (i = 0; i < MAX_TCP_CONNS; i++) {
+        struct tcb *tcb = &tcp_table[i];
+
+        if (!tcb->in_use || tcb->local_ip == new_ip) {
+            continue;
+        }
+        /* A block that is already closed has nothing to abort, and arming its
+           reason again would hand the same reset to a reader twice: the reason
+           belongs to the first reader, and this is not a new one. */
+        if (tcb->state == TCP_CLOSED) {
+            continue;
+        }
+        /* A listener is not a connection: it is bound to a port and answers
+           whatever address this machine has, so it follows the change instead
+           of dying with it. A server started before a lease arrived would
+           otherwise stop accepting and never know why. */
+        if (tcb->state == TCP_LISTEN) {
+            tcb->local_ip = new_ip;
+            continue;
+        }
+        serial_printf("tcp: address changed: aborting a connection opened from the old one\n");
+        /* A half-open passive block owns a socket nobody has accepted yet and
+           no descriptor refers to, so waking it would leave both to be reclaimed
+           by nothing. It is released the way a reset releases it. */
+        if (tcb->state == TCP_SYN_RCVD && tcb->passive) {
+            struct socket *s = tcb->sock;
+
+            tcb->sock = NULL;
+            if (s) {
+                s->tcb = NULL;
+                socket_unref(s);
+            }
+            tcb_free(tcb);
+            continue;
+        }
+        tcb->state      = TCP_CLOSED;
+        tcb->so_error   = ENETRESET;
+        tcb->retx_flags = 0;
+        tcb->rto_timer  = 0;
+        tcb->zwp_timer  = 0;
+        if (tcb->sock) {
+            socket_tcp_connected(tcb->sock);
+            socket_tcp_fin(tcb->sock);
+        } else {
+            tcb_free(tcb);
+        }
+    }
+}
+
 /* Abandon a connection that timed out: reset it and wake any blocked syscall. */
 static void tcp_giveup(struct tcb *tcb)
 {

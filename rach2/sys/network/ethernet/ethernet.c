@@ -2,7 +2,8 @@
  * ethernet.c - Ethernet frame parsing and construction.
  *
  * ethernet_rx dispatches a received frame to ARP or IP by EtherType, offering
- * every IPv4 frame to the packet sockets on the way past.
+ * every IPv4 frame to the packet sockets on the way past, and drops everything
+ * while the interface is down.
  * ethernet_tx prepends the 14-byte header and hands the frame to the driver.
  */
 
@@ -12,6 +13,7 @@
 #include "../arp/arp.h"
 #include "../ip/ip.h"
 #include "../socket/packet.h"
+#include "../netif.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 
@@ -31,6 +33,13 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
     uint16_t etype;
 
     if (len < ETH_HDR_SIZE) {
+        return;
+    }
+    /* An interface an administrator took down receives nothing either. The
+       device is still handing frames up, but a machine that answered them
+       while it was down would be a machine whose sockets saw traffic it could
+       not reply to, since transmission is gated below. */
+    if (!netif_is_up()) {
         return;
     }
 
@@ -68,6 +77,13 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
     if (plen > 1500) {
         serial_printf("ETH: TX payload too large (%d bytes), dropped\n",
                       (int)plen);
+        return;
+    }
+    /* An interface an administrator took down carries no IP and answers no
+       ARP. Netconsole is not gated, and that is deliberate: it is how a machine
+       with no console is read, and a machine whose network was just
+       misconfigured is exactly when its log is worth having. */
+    if (!netif_is_up() && (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP)) {
         return;
     }
 

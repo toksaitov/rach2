@@ -87,7 +87,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        ping-test packet-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
+        ping-test packet-test netif-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
         subset-test diskdiag-test reset-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
@@ -587,6 +587,24 @@ packet-test: rach2 tests krffs test-image
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PACKETPROBE OK" \
 	    "expect=Type 'help'" "send=exec /packetprobe" wait=60
+
+# `make netif-test`: the interface ioctls, which is how a program sets this
+# machine's address. Its own target, like `ping-test`: it changes the address
+# out from under the machine and puts it back, and the last thing it does is
+# ping the gateway, which needs the network to answer.
+netif-test: rach2 tests krffs test-image
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "user,id=net0,hostfwd=udp::15999-:9999" \
+	    --timeout 180 --ok "NETIFPROBE OK" \
+	    "expect=Type 'help'" "send=exec /netifprobe" \
+	    "expect=NETIFPROBE DOWN" "udp=15999:down" \
+	    "expect=NETIFPROBE UP" "udp=15999:up" wait=60
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --append "rach2.ip=none" \
+	    --timeout 120 --ok "NETIFPROBE OK" \
+	    "expect=Type 'help'" "send=exec /netifprobe" wait=60
 
 # `make netconsole-test`: the kernel log on the wire. The machine this milestone
 # targets has no serial port, so the boot log has to leave over Ethernet or not
