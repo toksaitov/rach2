@@ -342,6 +342,12 @@ ALLOWLIST = {
 # edited and is built the same way.
 ALLOWLIST["rach2-metal-disk"] = dict(ALLOWLIST["os-real"], init="init-metal")
 
+# `make grub-test` boots os-real with two marked GRUB core images staged beside
+# it, so the machine has something to install over its own boot loader. Its
+# set-id set is os-real's, and must stay so: adding a file to a manifest is not
+# a way to get a new privileged program into an image past this checker.
+ALLOWLIST["grub-test"] = dict(ALLOWLIST["os-real"])
+
 #
 # The v2 on-disk node, byte for byte. struct krffs_node (krffs/krffs_node.h) is
 # `#pragma pack(1)`, so this one format string is the whole layout: magic,

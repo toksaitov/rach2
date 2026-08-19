@@ -347,6 +347,26 @@ static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_
     return raw_window_write(&grubcore, e, buf, count);
 }
 
+/*
+ * One open of /dev/grubcore at a time.
+ *
+ * Replacing the boot loader is a sequence: read which tail is in use, write the
+ * other one, read it back, then rewrite the sector that selects between them.
+ * Two of those running at once can each verify their own tail and then leave
+ * the selector naming one image with the other one's length, and the machine
+ * does not boot. Nothing recovers from that remotely, because GRUB is what
+ * loads recovery, so the second open is refused rather than serialized. The
+ * flag clears when the last descriptor for the open file closes, which process
+ * exit does, so a tool that dies mid-install does not lock the device out.
+ */
+static int grubcore_held;
+
+static void dev_grubcore_close(fd_entry_t *e)
+{
+    (void)e;
+    grubcore_held = 0;
+}
+
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
@@ -531,7 +551,7 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
 }
 
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
-                                            dev_ioctl, NULL};
+                                             dev_ioctl, dev_grubcore_close};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
                                              dev_ioctl, NULL};
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
@@ -682,6 +702,10 @@ int devfs_open(const char *name, int flags)
         /* ctty is the console -> fall through to the FD_TYPE_CONSOLE path below. */
     }
 
+    if (dev->ops == &grubcore_ops && grubcore_held) {
+        return -EBUSY;
+    }
+
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
         return -EMFILE;
@@ -714,6 +738,9 @@ int devfs_open(const char *name, int flags)
     }
     if ((flags & DEVFS_O_NONBLOCK) && e->ofd) {
         e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    if (dev->ops == &grubcore_ops) {
+        grubcore_held = 1;
     }
 
     return fd;

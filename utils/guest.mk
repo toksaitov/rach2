@@ -69,8 +69,8 @@ adduser: adduser.c pwauth.c pwauth.h
 	$(UCC) $(UFLAGS) -o adduser adduser.c pwauth.c
 adduser-crash: adduser.c pwauth.c pwauth.h
 	$(UCC) $(UFLAGS) -DADDUSER_CRASH_POINT -o adduser-crash adduser.c pwauth.c
-bootctl: bootctl.c bootslot.c bootslot.h bootverb.c bootverb.h
-	$(UCC) $(UFLAGS) -o bootctl bootctl.c bootslot.c bootverb.c
+bootctl: bootctl.c bootslot.c bootslot.h bootverb.c bootverb.h grubslot.c grubslot.h
+	$(UCC) $(UFLAGS) -o bootctl bootctl.c bootslot.c bootverb.c grubslot.c
 
 clean:
 	rm -f $(PROGS)

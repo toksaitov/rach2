@@ -8,6 +8,7 @@
  *     bootctl status         what is installed, committed, and booting next
  *     bootctl kernel FILE    stage a kernel into the candidate slot
  *     bootctl config FILE    stage a boot menu into the rewritable slot
+ *     bootctl grub FILE      write a boot loader into the unused gap slot
  *     bootctl commit         make the booted trial the saved default
  *     bootctl trial ID       boot one entry once, on the next boot only
  *     bootctl cancel         clear an armed trial
@@ -49,6 +50,7 @@
 
 #include "bootslot.h"
 #include "bootverb.h"
+#include "grubslot.h"
 
 #define SLOT_MAX (4 * 1024 * 1024)
 
@@ -454,11 +456,106 @@ static int cmd_cancel(void)
     return 0;
 }
 
+/* The gap device's window starts at LBA 1, so a gap LBA is this many sectors
+ * into it. Sector 0 is outside the window on purpose: it carries the partition
+ * table, and a disk writes whole sectors. */
+#define GAP_OFF(lba) (((off_t)((lba) - 1u)) * BOOTSLOT_SECTOR)
+
+static uint8_t core[GRUBSLOT_MAX_IMAGE_SECTORS * BOOTSLOT_SECTOR];
+static uint8_t back[BOOTSLOT_SECTOR];
+
+/** Read or write one whole sector of /dev/grubcore at a gap LBA. */
+static int gap_io(int fd, uint32_t lba, uint8_t *buf, int writing)
+{
+    if (lseek(fd, GAP_OFF(lba), SEEK_SET) < 0) {
+        return -1;
+    }
+    if (writing) {
+        return write(fd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
+    }
+    return read(fd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
+}
+
+/**
+ * Replace GRUB's core image, writing the tail that is not in use.
+ *
+ * The order is the whole safety argument. The image goes into the inactive
+ * tail, the whole tail is read back and compared, and only then is LBA 1
+ * rewritten to point at it. A failure anywhere before that last sector leaves
+ * the old entry sector and the old tail selected, and the machine boots as it
+ * did. Sector 0 is never written, so the partition table is never at risk.
+ *
+ * What remains is one sector. A torn or bad write to LBA 1 makes GRUB
+ * unreachable, and recovery cannot help because GRUB is what loads it. That is
+ * stated rather than defended against: the exposure is a single sector written
+ * after the replacement has been verified, and removing it would take something
+ * below GRUB that this machine does not have.
+ */
+/**
+ * Read or write one gap sector through an open `/dev/grubcore`.
+ *
+ * The window's offsets are the disk's own LBAs, so this is `gap_io` with the
+ * signature `grubslot_install` calls it through.
+ */
+static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int write)
+{
+    return gap_io(*(int *)ctx, lba, buf, write);
+}
+
+static int cmd_grub(const char *path)
+{
+    FILE *f;
+    size_t size;
+    uint32_t sectors, target;
+    int fd, rc;
+
+    f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "bootctl: cannot open '%s'\n", path);
+        return 1;
+    }
+    size = fread(core, 1, sizeof(core), f);
+    if (ferror(f)) {
+        fclose(f);
+        fprintf(stderr, "bootctl: reading '%s' failed\n", path);
+        return 1;
+    }
+    if (size == sizeof(core) && fgetc(f) != EOF) {
+        fclose(f);
+        fprintf(stderr, "bootctl: '%s' does not fit a tail slot\n", path);
+        return 1;
+    }
+    fclose(f);
+    if (grubslot_prepare(core, (uint32_t)sizeof(core), (uint32_t)size, &sectors, errbuf,
+                         sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: '%s': %s\n", path, errbuf);
+        return 1;
+    }
+
+    fd = open("/dev/grubcore", O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "bootctl: this machine has no boot loader window (no /dev/grubcore)\n");
+        return 1;
+    }
+    rc = grubslot_install(&fd, grubcore_io, core, sectors, back, &target, errbuf,
+                          sizeof(errbuf));
+    close(fd);
+    if (rc != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: installed: %u sectors of boot loader in the tail at LBA %u; "
+           "the entry sector now points there\n",
+           (unsigned)sectors, (unsigned)target);
+    return 0;
+}
+
 static void usage(void)
 {
     fprintf(stderr, "usage: bootctl status\n");
     fprintf(stderr, "       bootctl kernel <file>\n");
     fprintf(stderr, "       bootctl config <file>\n");
+    fprintf(stderr, "       bootctl grub <file>\n");
     fprintf(stderr, "       bootctl commit\n");
     fprintf(stderr, "       bootctl trial <entry>\n");
     fprintf(stderr, "       bootctl cancel\n");
@@ -482,6 +579,8 @@ int main(int argc, char **argv)
         return cmd_kernel(arg);
     case BOOTVERB_CONFIG:
         return cmd_config(arg);
+    case BOOTVERB_GRUB:
+        return cmd_grub(arg);
     case BOOTVERB_TRIAL:
         return cmd_trial(arg);
     case BOOTVERB_ENV:

@@ -184,9 +184,9 @@ $(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
 
 # bootctl links the boot-slot library (bootslot.c), the pure core its
 # host seam test drives over fixture images with fault injection.
-$(BUILD)/sbin/bootctl: bootctl.c bootslot.c bootslot.h bootverb.c bootverb.h
+$(BUILD)/sbin/bootctl: bootctl.c bootslot.c bootslot.h bootverb.c bootverb.h grubslot.c grubslot.h
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) bootctl.c bootslot.c bootverb.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) bootctl.c bootslot.c bootverb.c grubslot.c $(LINK_POST)
 
 $(BUILD)/sbin/adduser-crash: adduser.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)

@@ -1,0 +1,138 @@
+# grub-test.manifest: the os-real machine, plus the two marked GRUB core images
+# `make grub-test` installs. One difference from os-real and one only: the two
+# `/core-?.img` lines at the end. They are not in os-real because a production
+# image must not depend on whether a test ran, and the marked cores are build
+# products of the harness. The rest of this file is os-real's by construction,
+# and the `grub-test` target diffs the two before it builds, so a change to one
+# that is not made to the other stops the build.
+#
+dir 0755 /bin
+# This busybox stays unprivileged. A setuid one would run every one of its
+# BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a config file
+# confined it, and that config path tripped a busybox use-after-free the
+# kernel's strict munmap faults (dev-log/15-privilege has the story). The answer
+# is busybox's own: two binaries, and the set-id bit on the one that needs it.
+# `su`, `passwd` and `login` are compiled out of THIS build, so a bare `su`
+# resolves to the set-id build staged below and to nothing else.
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+# The account tools are busybox's, from the second build: one binary holding
+# only login, passwd and su, staged three times under those names because KRFFS
+# has no symlinks and busybox dispatches on argv[0]. It carries the set-id bit
+# and the main busybox does not, which is the whole reason there are two.
+file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
+# Ours, and reachable as a bare `ping` only because busybox's applet is gone:
+# that one wants SOCK_RAW, which this kernel's socket layer does not offer.
+file 0755 /bin/ping build/utils/ping
+file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+optional-file 0755 /bin/doom build/ports/doom/doom
+
+# The compiler, and the sysroot it looks in when it runs. /bin/tcc is an
+# ordinary program: nothing here execs it as root, so it is not in the guard's
+# trusted list the way /bin/sh and /bin/login are. What it needs is the parts of
+# a C toolchain that live outside the compiler: musl's headers and library, the
+# startup objects, and tcc's own runtime and headers. Those paths are not a
+# choice made here; they were baked into the binary at configure time
+# (vendor/tcc/Readme.md), and /lib/tcc/include comes BEFORE /include because
+# musl expects the compiler to provide stdarg.h and friends.
+file 0755 /bin/tcc build/vendor/tcc/tcc
+# The same compiler under the name a makefile's built-in rules reach for. KRFFS
+# has no symlinks, so it is staged twice, the way the account tools are.
+file 0755 /bin/cc build/vendor/tcc/tcc
+# And the make that drives them, which is what turns a pile of commands into a
+# build (vendor/pdpmake/Readme.md).
+file 0755 /bin/make build/vendor/pdpmake/make
+dir 0755 /lib
+dir 0755 /lib/tcc
+file 0644 /lib/tcc/libtcc1.a build/vendor/tcc/libtcc1.a
+tree 0644 /lib/tcc/include build/vendor/tcc/include
+file 0644 /lib/libc.a vendor/musl/install/lib/libc.a
+file 0644 /lib/crt1.o vendor/musl/install/lib/crt1.o
+file 0644 /lib/crti.o vendor/musl/install/lib/crti.o
+file 0644 /lib/crtn.o vendor/musl/install/lib/crtn.o
+tree 0644 /include vendor/musl/install/include
+
+# The source of this project's own tools, staged so the machine can build them.
+# A student who changes one of these and compiles it has the shortest possible
+# loop between reading a program and running their version of it.
+tree 0644 /src/utils utils
+
+# The kernel's and the shell's sources too, each tree carrying the guest.mk
+# that pdpmake reads, so the machine can rebuild its own kernel and shell
+# (make selfbuild-test proves both from a copy of these trees). /src is
+# root-owned, read-only source media: root builds in place, every other
+# account copies its tree home first. The dir
+# lines write down the modes of the directories the trusted files sit under,
+# which the set-id sweep requires of every path root reads through.
+dir 0755 /src
+dir 0755 /src/utils
+dir 0755 /src/rach2
+dir 0755 /src/rach2/sys
+dir 0755 /src/ish
+tree 0644 /src/rach2 rach2
+tree 0644 /src/ish ish
+
+# /sbin/init (PID 1): the kernel boots it; it forks a session child that execs
+# /bin/login and nothing else, so the console is behind a password. This is the
+# init-login artifact: the one built with the shell table compiled out, so an
+# image missing /bin/login refuses rather than falling back to a root shell.
+# The way back into a broken image is booting with rach2.rescue. init reaps
+# orphans too, so the shells dropbear forks per SSH session never leak once the
+# session closes, and /bin/login execs the account's shell (/bin/sh) in place
+# after the identity drop.
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-login
+
+# bootctl puts a machine-built kernel into the boot partition's
+# candidate slot as a one-boot trial (dev-log/23-install/plan.md). It is
+# root-only by its device: /dev/bootpart is mode 0600, so no set-id bit here.
+file 0755 /bin/bootctl build/utils/sbin/bootctl
+
+# /etc: a real login + name-resolution config. dropbear reads passwd and validates
+# the login shell against shells; busybox ash reads profile on a login shell. The
+# shadow file holds the real $6$ hashes (generated by krffs/gen_demo_password.sh
+# when absent), kept 0600 root so the permission bits deny it to everyone else;
+# passwd keeps world-readable x fields, the split shadow exists for.
+dir 0755 /etc
+dir 0700 /etc/dropbear
+text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root or test; su for root.\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
+file 0600 /etc/shadow krffs/shadow
+text 0644 /etc/group root:x:0:\ntest:x:1000:\n
+text 0644 /etc/shells /bin/sh\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
+text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
+text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
+
+# /root: the home directory plus the SSH login's authorized_keys (the demo pubkey,
+# generated by krffs/gen_demo_key.sh when absent; the directory modes are the strict
+# 0755/0700/0600 dropbear's pubkey check insists on).
+dir 0755 /root
+dir 0700 /root/.ssh
+file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
+
+# /home/test: the unprivileged demo user's home and SSH login. Owned by
+# 1000:1000 with 0700/0600 modes, deliberately stricter than dropbear's pubkey
+# check requires (it only insists the files be owned by the user or root and not
+# group- or other-writable), so the permission bits protect it from root-owned
+# files and vice versa. The kernel now enforces those bits, so this is a real
+# second account, not a label.
+
+# The one sticky directory the tree ships. The bit is enforced: any account may
+# create in /tmp, and only the file's owner (or root) may remove or rename what
+# is there, which is what makes it shareable between root and test.
+dir 1777 /tmp
+dir 0755 /home
+dir 0700:1000:1000 /home/test
+dir 0700:1000:1000 /home/test/.ssh
+file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
+optional-file 0644 /doom1.wad ports/doom/doom1.wad
+
+# The two core images `make grub-test` builds, each with a marker inside it that
+# names which one it is, so a boot can be told apart by what its own boot loader
+# prints. See tools/mkgrubcore.sh.
+file 0644 /core-a.img build/images/core-a.img
+file 0644 /core-b.img build/images/core-b.img

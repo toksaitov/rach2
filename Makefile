@@ -92,7 +92,7 @@ MKDISK          = krffs/mkdisk.sh
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci rach2-metal-grub-disk \
-        rach2-sealed-disk rach2-recovery authority-test menu-test \
+        rach2-sealed-disk rach2-recovery authority-test menu-test grub-test \
         isos test-iso os-simple-iso os-real-iso rach2-metal-image rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
@@ -426,6 +426,31 @@ bootpart-test: rach2 tests krffs
 	    --drive "file=$(WIDE_TEST_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 180 --ok "BOOTPROBE WIDE OK" probe=bootprobe
+
+# `make grub-test`: the machine replacing its own boot loader. The post-MBR gap
+# holds two core-image tails and LBA 1 selects between them, so a replacement
+# writes the tail not in use, reads it back, and only then rewrites that one
+# sector. Sector 0, which carries the partition table, is never written.
+#
+# Two core images are built with a marker embedded in each and staged into the
+# root through os-real's optional-file lines, then installed in turn; every boot's marker must be the image the boot
+# before it installed. The marker comes from inside the running core, because
+# reading the pointer back would prove only bytes at rest.
+GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
+grub-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	@mkdir -p $(IMAGES_DIR)
+	sh tools/mkgrubcore.sh A $(IMAGES_DIR)/core-a.img
+	sh tools/mkgrubcore.sh B $(IMAGES_DIR)/core-b.img
+	sed -e '/^#/d' -e '/^$$/d' -e '\|^file 0644 /core-[ab]\.img|d' \
+	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
+	sed -e '/^#/d' -e '/^$$/d' krffs/manifests/os-real.manifest \
+	    | diff - $(IMAGES_DIR)/grub-test.manifest.stripped
+	sh krffs/gen_demo_password.sh
+	sh krffs/gen_demo_key.sh
+	RACH2_DISK_MANIFEST=krffs/manifests/grub-test.manifest \
+	    sh tools/mkdisk_grub.sh build/rach2/kernel $(GRUB_TEST_DISK)
+	sh tools/grub_test.sh $(GRUB_TEST_DISK) \
+	    "`cat krffs/rach2_demo_password`"
 
 # `make menu-test`: the boot menu that can be rewritten, and the stub that
 # cannot. Four boots of one GRUB disk: a two-entry menu staged through `bootctl
@@ -962,6 +987,7 @@ help:
 	@echo "  make rach2-recovery      the recovery kernel, the only build that can write the whole disk"
 	@echo "  make authority-test  only a recovery kernel writes the whole disk"
 	@echo "  make menu-test    a staged boot menu, and the stub that catches a torn one"
+	@echo "  make grub-test    the machine replacing its own boot loader"
 	@echo "  make test       boot the test image and check every probe passes"
 	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
 	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
