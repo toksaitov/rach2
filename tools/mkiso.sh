@@ -76,16 +76,20 @@ cat "$KRFFS" > "$ISODIR/boot/$IMAGE.krffs"
 # to be answerable by choosing a menu entry rather than by typing a command
 # line at a machine you cannot read.
 #
-# The address is baked in rather than typed. There is no DHCP client in this
-# kernel, so a machine on a real LAN needs its address on the command line
-# every boot, and typing one at a GRUB prompt on a laptop keyboard, correctly,
-# every time, is a tax with no teaching value. These defaults are the network
-# the machine actually lives on; override them at build time for anywhere else:
+# The default entry's address is baked in rather than typed, because a machine
+# whose network is the broken part is one you want on a known address. Typing
+# one at a GRUB prompt on a laptop keyboard, correctly, every time, is a tax
+# with no teaching value. These defaults are the network the machine actually
+# lives on; override them at build time for anywhere else:
 #
 #     RACH2_METAL_IP=10.0.0.50/24 RACH2_METAL_GATEWAY=10.0.0.1 make rach2-metal-iso
 #
-# and the last entry boots with no network configuration at all, for a network
-# nobody has told this stick about.
+# The entry after it takes an address from whatever DHCP server the network
+# has, which is what a stick carried between two buildings needs: `rach2.ip=none`
+# leaves IPv4 unconfigured at boot, and init then runs `ifup -a`, which reads
+# `/etc/network/interfaces` and runs the client. It is not the default, because
+# the default entry is the one for the network this stick was built for. The
+# last entry boots with no network configuration at all.
 METAL_IP="${RACH2_METAL_IP:-192.168.0.105/24}"
 METAL_GATEWAY="${RACH2_METAL_GATEWAY:-192.168.0.1}"
 METAL_NET="rach2.ip=$METAL_IP rach2.gateway=$METAL_GATEWAY rach2.netconsole"
@@ -103,6 +107,12 @@ if [ "$IMAGE" = rach2-metal ]; then
 
 menuentry \"Rach2 (metal) - diagnostics, held on screen\" {
     multiboot /boot/kernel $METAL_NET rach2.diag
+    module /boot/rach2-metal.krffs
+    boot
+}
+
+menuentry \"Rach2 (metal) - address from DHCP\" {
+    multiboot /boot/kernel rach2.ip=none rach2.netconsole
     module /boot/rach2-metal.krffs
     boot
 }

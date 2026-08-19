@@ -252,10 +252,16 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     dev = (uint32_t)rt[RTENTRY_DEV] | ((uint32_t)rt[RTENTRY_DEV + 1] << 8) |
           ((uint32_t)rt[RTENTRY_DEV + 2] << 16) | ((uint32_t)rt[RTENTRY_DEV + 3] << 24);
     if (dev != 0) {
-        if (copy_from_user(name, (const void __user *)dev, IFREQ_NAMESIZE) != 0) {
-            return -EFAULT;
+        /* A name is a string, and it is read as one: a fixed sixteen bytes from
+           a caller whose name is five bytes long can run off the end of the
+           page it sits in, and refusing that call would be refusing a correct
+           program. */
+        int got = strncpy_from_user((char *)name, (const char __user *)dev,
+                                    (uint32_t)IFREQ_NAMESIZE);
+
+        if (got < 0) {
+            return got == -EFAULT ? -EFAULT : -ENODEV;
         }
-        name[IFREQ_NAMESIZE - 1] = 0;
         if (!name_is_ours(name)) {
             return -ENODEV;
         }

@@ -49,6 +49,8 @@ UTILITIES = true  \
             ping  \
             nc    \
             httpd \
+            dhcpc \
+            netup \
             halt
 
 # init is PID 1, and su and sudo climb privilege; none of the three is a user tool
@@ -181,6 +183,23 @@ $(BUILD)/sbin/login: login.c pwauth.c pwauth.h
 $(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/adduser.d -o $@ $(LINK_PRE) adduser.c pwauth.c $(LINK_POST)
+
+# dhcpc links the message library (dhcpmsg.c), the half of the client that
+# needs no system call: the framing, the checksums and the option parsing that
+# its host seam test drives with the messages a server will not produce on
+# request. netup links the configuration reader (netcfg.c) for the same reason.
+# Both link ipcheck.c, the one judgement of whether an IPv4 configuration is one
+# a machine can hold, which a lease off the wire and a stanza in a file are
+# equally subject to.
+$(BUILD)/dhcpc: dhcpc.c dhcpmsg.c dhcpmsg.h ipcheck.c ipcheck.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/dhcpc.d -o $@ $(LINK_PRE) dhcpc.c dhcpmsg.c ipcheck.c \
+	    $(LINK_POST)
+
+$(BUILD)/netup: netup.c netcfg.c netcfg.h ipcheck.c ipcheck.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/netup.d -o $@ $(LINK_PRE) netup.c netcfg.c ipcheck.c \
+	    $(LINK_POST)
 
 # bootctl links the boot-slot library (bootslot.c), the pure core its
 # host seam test drives over fixture images with fault injection.

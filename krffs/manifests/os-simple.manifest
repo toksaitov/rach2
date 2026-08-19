@@ -50,6 +50,20 @@ text 0644 /etc/shells /bin/ish\n/bin/sh\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
 text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
 
+# The network, in the file os-real reads and in the same format, so one
+# description serves both machines. This image has no busybox, so `netup` reads
+# it and `dhcpc` takes the lease; `/etc/resolv.conf` above is what a machine
+# with no lease starts from, and a lease replaces it.
+dir 0755 /etc/network
+text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n
+
+# Where the DHCP client records which process holds the interface, so a second
+# `netup` is refused rather than starting a client that fights the first. Init
+# empties it at boot, so a record from a machine that was switched off does not
+# outlive it.
+dir 0755 /var
+dir 0755 /var/run
+
 # The homes. root's is root's; the test account's is owned by it and closed to
 # everyone else, which is a real second account here and not a label.
 dir 0755 /root

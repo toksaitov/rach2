@@ -646,7 +646,10 @@ DHCP_NET = user,id=net0,net=192.168.90.0/24,host=192.168.90.2,dhcpstart=192.168.
 DHCP_PCAP = $(IMAGES_DIR)/dhcp.pcap
 DHCP_DISK = $(IMAGES_DIR)/dhcp-test.disk
 METAL_PCAP = $(IMAGES_DIR)/dhcp-metal.pcap
-dhcp-test: rach2 utils busybox krffs os-real-image
+SIMPLE_PCAP = $(IMAGES_DIR)/dhcp-simple.pcap
+SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple.log
+SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
+dhcp-test: rach2 utils busybox krffs os-real-image os-simple-image
 	@rm -f $(DHCP_PCAP)
 	python3 tools/harness.py --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -729,6 +732,83 @@ dhcp-test: rach2 utils busybox krffs os-real-image
 	# it, and walking to it is what this milestone exists to avoid. The
 	# console login must still be there, so a network that never comes up
 	# does not take the local way in with it.
+	# And the same on the machine that carries none of busybox: os-simple's
+	# own `netup` reads the same `/etc/network/interfaces` and its own `dhcpc`
+	# takes the lease. Both images end up on the same network by the same
+	# exchange, which is the point of having two clients over one kernel
+	# interface.
+	#
+	# This one runs on a /16, and that is what makes the netmask provable: the
+	# classful mask for a 10.x address is /8, so a client that took the address
+	# and not the mask would reach 10.200.0.1 by ARPing for it directly. The
+	# check below requires that packet to have gone to the gateway instead,
+	# which only a machine holding the leased /16 does.
+	@rm -f $(SIMPLE_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "$(SIMPLE_NET)" \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=sp0,netdev=net0,file=$(SIMPLE_PCAP) \
+	    --append "rach2.ip=none" \
+	    --timeout 240 --steptmo 60 \
+	    --ok "lease of 10.90.0.20 netmask 255.255.0.0" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=The ISH shell" "send=netup -a" \
+	    "expect=lease of 10.90.0.20 netmask 255.255.0.0" wait=3 \
+	    "send=ping 10.90.0.2" "expect=4/4 replies" \
+	    "send=cat /etc/resolv.conf" "expect=nameserver 10.90.0.3" \
+	    "send=netup -a" "expect=is already holding it" \
+	    "send=ping 10.200.0.1" wait=20 \
+	    "send=dhcpc -i eth0 -k" "expect=stopped process" wait=2 \
+	    "send=ping 10.90.0.2" "expect=0/4 replies" \
+	    "send=netup -a" "expect=lease of 10.90.0.20 netmask 255.255.0.0" wait=3 \
+	    "send=ping 10.90.0.2" "expect=4/4 replies"
+	# The last four steps are the way back off a lease. A client holds an
+	# address for as long as it renews it, so an address is taken off by
+	# stopping its client: `dhcpc -k` signals the one that holds the interface
+	# and waits for the claim to go. The ping that follows must fail, which is
+	# what says the address really came off and not just the process; the
+	# `netup -a` after it must take a lease again, which is what says the claim
+	# was released; and the ping after that must answer, which is what says the
+	# machine is back where it started.
+	#
+	# Every `expect` above is an assertion, and a missed one fails the run.
+	# The success marker is a line only the client prints, because this image
+	# runs the ISH shell, which does not take the quotes out of an echoed
+	# token the way ash does: a token typed at it would match its own echo.
+	python3 tools/bcast_check.py $(SIMPLE_PCAP) --source 10.90.0.20 \
+	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
+
+	# And the half of the client that only time reaches: holding the lease.
+	# QEMU hands out a day, so `-l` caps what the client will act on, the
+	# renewal falls due ten seconds in, and the run must see the lease applied
+	# more than once. Without that cap nothing here could reach the renewal
+	# path at all, and a client that renewed wrongly would ship green.
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "$(SIMPLE_NET)" --append "rach2.ip=none" \
+	    --timeout 180 --steptmo 90 --log $(SIMPLE_LOG) \
+	    --ok "lease of 10.90.0.20" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=The ISH shell" "send=dhcpc -i eth0 -l 20" \
+	    "expect=renewed for 20 seconds" wait=30
+	# A renewal and a fresh lease are different things, and the difference is
+	# what this checks: the client must say it renewed, and it must have asked
+	# for an address exactly once. A client that let every lease lapse and
+	# discovered again would print the second line as often as the first.
+	@r=`grep -ac "renewed for 20 seconds" $(SIMPLE_LOG)`; \
+	 a=`grep -ac "asking for an address" $(SIMPLE_LOG)`; \
+	    if [ "$$r" -lt 1 ]; then \
+	        echo "dhcp-test: the client never renewed its lease" >&2; exit 1; \
+	    fi; \
+	    if [ "$$a" -ne 1 ]; then \
+	        echo "dhcp-test: the client asked for an address $$a times:" \
+	             "it was starting over, not renewing" >&2; exit 1; \
+	    fi; \
+	    echo "dhcp-test: ok: the client renewed $$r time(s) from one exchange"
+
 	# And a boot that was told its address on the command line, on a network
 	# with a DHCP server ready to hand out a different one. Init must not run
 	# `ifup` there at all: a machine given an address is configured already,
