@@ -12,6 +12,7 @@
  */
 
 #include "socket.h"
+#include "packet.h"
 #include "../net.h"
 #include "../udp/udp.h"
 #include "../tcp/tcp.h"
@@ -63,6 +64,7 @@ struct socket *socket_alloc(int type)
             socket_pool[i].in_use        = 1;
             socket_pool[i].refcount      = 1;
             socket_pool[i].type          = type;
+            socket_pool[i].family        = AF_INET;
             socket_pool[i].local_port    = 0;
             socket_pool[i].remote_ip     = 0;
             socket_pool[i].remote_port   = 0;
@@ -124,7 +126,9 @@ void socket_unref(struct socket *sock)
         return;
     }
 
-    if (sock->type == SOCK_DGRAM && sock->local_port != 0) {
+    if (sock->family == AF_PACKET) {
+        packet_unbind(sock);
+    } else if (sock->type == SOCK_DGRAM && sock->local_port != 0) {
         udp_unbind(sock->local_port);
     } else if (sock->type == SOCK_STREAM && sock->tcb) {
         tcp_close(sock);
@@ -176,6 +180,10 @@ void socket_udp_deliver(struct socket *sock,
 static int udp_recv_ready(void *arg)
 {
     socket_t *sock = (socket_t *)arg;
+
+    if (sock->family == AF_PACKET) {
+        return packet_ready(sock);
+    }
     return sock->recv_full;
 }
 
@@ -213,6 +221,10 @@ int socket_dgram_pending(struct socket *sock)
     int pending;
     uint32_t flags;
 
+    if (sock->family == AF_PACKET) {
+        return packet_pending(sock);
+    }
+
     flags = net_lock();
     pending = sock->recv_full ? (int)sock->recv_len : -1;
     net_unlock(flags);
@@ -240,6 +252,9 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf,
 
     if (len < 0) {
         return 0;
+    }
+    if (sock->family == AF_PACKET) {
+        return packet_peek(sock, offset, buf, len);
     }
 
     flags = net_lock();
@@ -273,6 +288,20 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip,
                           uint16_t *src_port)
 {
     uint32_t flags;
+
+    /* A packet socket has a queue instead of the slot, and no sender to
+       report: what it received is a link-layer frame's payload, and the link
+       address it came from is not kept. */
+    if (sock->family == AF_PACKET) {
+        if (src_ip) {
+            *src_ip = 0;
+        }
+        if (src_port) {
+            *src_port = 0;
+        }
+        packet_consume(sock);
+        return;
+    }
 
     flags = net_lock();
     if (src_ip) {
@@ -576,7 +605,10 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     }
 
     if (sock->type == SOCK_DGRAM) {
-        if (sock->recv_full) {
+        /* A packet socket's datagrams are in its own queue and never touch
+           `recv_full`, and this is the readiness a DHCP client waits on: it
+           polls its raw socket and only then reads it. */
+        if (sock->family == AF_PACKET ? packet_ready(sock) : sock->recv_full) {
             revents |= (short)(events & POLLIN);
         }
         revents |= (short)(events & POLLOUT); /* a datagram socket can always send */

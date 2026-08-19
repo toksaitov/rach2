@@ -1,7 +1,8 @@
 /*
  * ethernet.c - Ethernet frame parsing and construction.
  *
- * ethernet_rx dispatches a received frame to ARP or IP by EtherType.
+ * ethernet_rx dispatches a received frame to ARP or IP by EtherType, offering
+ * every IPv4 frame to the packet sockets on the way past.
  * ethernet_tx prepends the 14-byte header and hands the frame to the driver.
  */
 
@@ -10,6 +11,7 @@
 #include "../driver/netdev.h"
 #include "../arp/arp.h"
 #include "../ip/ip.h"
+#include "../socket/packet.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 
@@ -39,6 +41,10 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
         arp_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
         break;
     case ETH_TYPE_IP:
+        /* Packet sockets first, and unconditionally: they exist because ip_rx
+           drops what is not addressed to this machine, which is every reply a
+           DHCP client is waiting for. */
+        packet_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
         ip_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE), 0);
         break;
     default:

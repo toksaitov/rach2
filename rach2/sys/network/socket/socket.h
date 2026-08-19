@@ -31,6 +31,10 @@ typedef struct socket {
     int      in_use;
     int      refcount;        /* descriptors referencing this socket */
     int      type;            /* SOCK_DGRAM or SOCK_STREAM */
+    /* AF_INET, or AF_PACKET for the tap above the Ethernet layer. Nearly every
+     * path below is AF_INET's; the family is what the few that are not branch
+     * on, rather than a second socket pool. */
+    uint16_t family;
     uint16_t local_port;
 
     /* Remote endpoint (set for SOCK_STREAM connections). */

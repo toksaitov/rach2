@@ -20,6 +20,13 @@
  * does not need it. The 100 Hz timer handler is what calls it.
  */
 
+/* The machine has one network interface, and these are the two things a user
+ * program can ask about it by: the name every `SIOCGIF*` ioctl matches and the
+ * index a packet socket binds to. Linux numbers interfaces from 1 and reserves
+ * 0 for "any", which is why this is 1. */
+#define NETDEV_IFNAME  "eth0"
+#define NETDEV_IFINDEX 1
+
 /* What a driver's `init` reports. */
 #define NETDEV_ABSENT 0
 #define NETDEV_UP 1

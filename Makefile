@@ -87,7 +87,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        ping-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
+        ping-test packet-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
         subset-test diskdiag-test reset-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
@@ -577,6 +577,16 @@ ping-test: rach2 tests krffs test-image
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+
+# `make packet-test`: the packet socket, which is how a DHCP client sees a reply
+# that arrives before this machine owns an address. Its own target and not a
+# probe in the suite, for the reason `ping-test` is: it needs the network to
+# answer, and the suite's probes must not.
+packet-test: rach2 tests krffs test-image
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 120 --ok "PACKETPROBE OK" \
+	    "expect=Type 'help'" "send=exec /packetprobe" wait=60
 
 # `make netconsole-test`: the kernel log on the wire. The machine this milestone
 # targets has no serial port, so the boot log has to leave over Ethernet or not

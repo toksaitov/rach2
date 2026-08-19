@@ -36,6 +36,7 @@
 #include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
+#include "network/socket/packet.h"
 #include "network/udp/udp.h"
 #include "network/tcp/tcp.h"
 #include "network/ip/icmp.h"
@@ -2318,9 +2319,14 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
  * The message buffer is one datagram wide on a 16 KB kernel stack. That is the
  * whole of what "a kernel buffer to read into" ever needed to be.
  *
+ * `src_ip` and `src_port` report the datagram's sender for a caller that has
+ * somewhere to put it, and are NULL for one that has not; the sender is read
+ * under the same hold as the copy, since consuming is what publishes it.
+ *
  * Returns the bytes copied, or a negative errno.
  */
-static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
+static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt,
+                           uint32_t *src_ip, uint16_t *src_port)
 {
     uint8_t message[SOCK_RECV_BUF_SIZE];
     struct kernel_iovec iov;
@@ -2349,7 +2355,7 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt)
     if (taken < 0) {
         taken = 0;  /* it went between the wait and the hold */
     }
-    socket_dgram_consume(entry->sock, 0, 0);
+    socket_dgram_consume(entry->sock, src_ip, src_port);
     net_unlock(held);
 
     for (i = 0; i < iovcnt && (int)offset < taken; i++) {
@@ -2474,7 +2480,7 @@ static int32_t sys_readv(isr_params_t *params)
     entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
     if (entry && entry->type == FD_TYPE_SOCKET && entry->sock &&
         entry->sock->type == SOCK_DGRAM) {
-        return readv_dgram(entry, iov_user, iovcnt);
+        return readv_dgram(entry, iov_user, iovcnt, 0, 0);
     }
     walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
 
@@ -7701,6 +7707,20 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
     return user_access_ok(addr, len) && vm_prefault_range(addr, len, write);
 }
 
+/* Read and write the little-endian words of a caller's own structures (a
+ * msghdr's pointers and lengths), which are host order and not wire order. */
+#define SC_LE32(p) \
+    (((uint32_t)((uint8_t *)(p))[0]) | \
+     ((uint32_t)((uint8_t *)(p))[1] <<  8) | \
+     ((uint32_t)((uint8_t *)(p))[2] << 16) | \
+     ((uint32_t)((uint8_t *)(p))[3] << 24))
+#define SC_WLE32(p, v) do { \
+    ((uint8_t *)(p))[0] = (uint8_t)(v); \
+    ((uint8_t *)(p))[1] = (uint8_t)((v) >>  8); \
+    ((uint8_t *)(p))[2] = (uint8_t)((v) >> 16); \
+    ((uint8_t *)(p))[3] = (uint8_t)((v) >> 24); \
+} while (0)
+
 /* Read and write big-endian sockaddr fields (sin_port, sin_addr). */
 #define SC_BE16(p) \
     ((uint16_t)(((uint8_t *)(p))[0] << 8 | ((uint8_t *)(p))[1]))
@@ -7735,6 +7755,7 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 #define SC_SHUTDOWN    13
 #define SC_SETSOCKOPT  14
 #define SC_GETSOCKOPT  15
+#define SC_RECVMSG     17
 /* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it used
  * to squat on 15 == Linux getsockopt, which a real server needs). Userspace
  * callers (utils/ping.c, tests/pingtest.c) use the same value. */
@@ -7757,8 +7778,25 @@ static uint32_t canonical_dst_ip(uint32_t ip)
 /* recv flags: only MSG_DONTWAIT is honored. */
 #define MSG_DONTWAIT 0x40
 
+/* setsockopt levels and the one packet option that is answered. */
+#define SOL_PACKET      263
+#define PACKET_AUXDATA  8
+
 /* We read sin_family/sin_port/sin_addr from the first 8 sockaddr bytes. */
 #define SOCKADDR_MIN 8
+
+/* The whole of a struct sockaddr_in: family (2), port (2), address (4), and
+ * eight bytes of padding. `SOCKADDR_MIN` above is only the part that is read. */
+#define SOCKADDR_IN_LEN 16
+
+/* struct sockaddr_ll, the address a packet socket binds and sends to, with the
+ * offset of each field beside it: family 0 (2 bytes), protocol 2 (2), ifindex
+ * 4 (4), hatype 8 (2), pkttype 10 (1), halen 11 (1), addr 12 (8), for 20 in
+ * all. A caller declaring fewer bytes is refused rather than read past. */
+#define SOCKADDR_LL_LEN      20
+#define SOCKADDR_LL_IFINDEX  4
+#define SOCKADDR_LL_HALEN    11
+#define SOCKADDR_LL_ADDR     12
 
 /**
  * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen) pair.
@@ -7817,21 +7855,35 @@ static int32_t do_socket(int domain, int type, int protocol)
     fd_entry_t    *entry;
     int            fd;
 
-    (void)protocol;
-
-    /* Only IPv4 (AF_INET == 2) is implemented; reject other families instead of
-     * silently creating an unusable socket. */
-    if (domain != 2) {
+    /* IPv4, and the packet family the DHCP client needs to see replies that
+     * arrive before this machine owns an address. Any other family is refused
+     * rather than made into a socket that cannot work. */
+    if (domain != AF_INET && domain != AF_PACKET) {
         return -EAFNOSUPPORT;
     }
     if (type != SOCK_DGRAM && type != SOCK_STREAM) {
         return -EINVAL;
+    }
+    if (domain == AF_PACKET) {
+        /* It reads every IPv4 frame the machine receives and sends frames the
+         * IP layer never saw, so it is root's. The protocol is in network byte
+         * order, as Linux takes it, and only IPv4 is offered. */
+        if (!current_proc || current_proc->euid != 0) {
+            return -EPERM;
+        }
+        if (type != SOCK_DGRAM) {
+            return -ESOCKTNOSUPPORT;
+        }
+        if ((uint16_t)protocol != PACKET_PROTO_IP) {
+            return -EINVAL;
+        }
     }
 
     sock = socket_alloc(type);
     if (!sock) {
         return -ENOMEM;
     }
+    sock->family = (uint16_t)domain;
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
@@ -7871,6 +7923,25 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+
+    /* A packet socket binds to an interface, not to a port: the address is a
+     * sockaddr_ll and binding is what puts it in the delivery table. */
+    if (entry->sock->family == AF_PACKET) {
+        uint8_t sll[SOCKADDR_LL_LEN];
+        int32_t ifindex;
+
+        if (addrlen < SOCKADDR_LL_LEN) {
+            return -EINVAL;
+        }
+        if (copy_from_user(sll, (const void __user *)sa_ptr, SOCKADDR_LL_LEN) != 0) {
+            return -EFAULT;
+        }
+        ifindex = (int32_t)((uint32_t)sll[SOCKADDR_LL_IFINDEX] |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 1] << 8) |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
+        return packet_bind(entry->sock, (int)ifindex);
     }
 
     port = SC_BE16(sa + 2);
@@ -7935,6 +8006,30 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
             nonblock);
     }
 
+    /* A packet socket sends an IP packet the caller built, to a MAC address it
+     * names: this layer adds the Ethernet header and nothing else. */
+    if (entry->sock->family == AF_PACKET) {
+        uint8_t sll[SOCKADDR_LL_LEN];
+
+        if (len > 1500) {
+            return -EMSGSIZE;
+        }
+        if (addrlen < SOCKADDR_LL_LEN) {
+            return -EINVAL;
+        }
+        if (copy_from_user(sll, (const void __user *)sa_ptr, SOCKADDR_LL_LEN) != 0) {
+            return -EFAULT;
+        }
+        if (sll[SOCKADDR_LL_HALEN] != 6) {
+            return -EINVAL;
+        }
+        /* The payload is read where it lies, as the UDP path reads it: the
+           range above was validated, and __force strips __user at the call. */
+        return (int32_t)packet_send(entry->sock, sll + SOCKADDR_LL_ADDR,
+                                    (const uint8_t __force *)(const void __user *)buf_ptr,
+                                    (uint16_t)len);
+    }
+
     /* The payload must fit one unfragmented UDP packet (this stack does not
      * fragment; udp_tx caps it at 1500). Reject an oversize datagram with
      * -EMSGSIZE rather than truncate it through the uint16_t wire length or let
@@ -7977,20 +8072,41 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
                            int flags, uint32_t sa_ptr, uint32_t salen_ptr)
 {
     fd_entry_t *entry;
-    uint32_t    src_ip;
-    uint16_t    src_port;
+    uint32_t    src_ip = 0;
+    uint16_t    src_port = 0;
+    uint32_t    addr_len = 0;
+    uint32_t    addr_give = 0;
+    int         want_addr;
     int         bytes;
     int         nonblock;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
     }
-    /* The source-address writeback is validated and truncated to the caller's
-     * declared length by copy_sockaddr_to_user below. */
-
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+    /* Where the source address will land is settled here, before a datagram is
+     * taken: taking one destroys it, and a fault found afterwards would report
+     * an error for a message that no longer exists. The caller's capacity is
+     * read once and kept, so that a caller whose length word overlaps its own
+     * receive buffer cannot change it under the writeback. What is checked is
+     * what will actually be written, which for a packet socket is nothing: it
+     * has no sender to report. */
+    want_addr = (sa_ptr != 0 && salen_ptr != 0);
+    if (want_addr) {
+        uint32_t cap = 0;
+
+        if (!user_buffer_ok(salen_ptr, sizeof(cap), 1) ||
+            copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0) {
+            return -EFAULT;
+        }
+        addr_len = (entry->sock->family == AF_PACKET) ? 0u : (uint32_t)SOCKADDR_IN_LEN;
+        addr_give = cap < addr_len ? cap : addr_len;
+        if (addr_give > 0 && !user_buffer_ok(sa_ptr, addr_give, 1)) {
+            return -EFAULT;
+        }
     }
 
     /* Receive without blocking when the caller asked per-call (MSG_DONTWAIT) or
@@ -8018,18 +8134,36 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
         bytes = socket_try_recv(entry->sock,
                                 (uint8_t __force *)(void __user *)buf_ptr, len,
                                 &src_ip, &src_port);
-        if (bytes < 0) {
-            return bytes;   /* SOCK_EAGAIN: leave the caller's sockaddr alone */
-        }
     } else {
         bytes = socket_recv(entry->sock,
                             (uint8_t __force *)(void __user *)buf_ptr, len,
                             &src_ip, &src_port);
     }
 
-    /* Report the source address, truncated to the caller's declared capacity. */
-    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, src_port, src_ip) != 0) {
-        return -EFAULT;
+    /* A receive that failed leaves the caller's address arguments alone: there
+     * is no sender to report, and the values that would be written are the ones
+     * this frame never set. */
+    if (bytes < 0) {
+        return bytes;
+    }
+
+    /* Report the source address, truncated to the capacity read before the
+     * datagram was taken. A packet socket has no sender to report, so the
+     * length comes back zero rather than an AF_INET sender of 0.0.0.0 port 0
+     * that no such packet had. */
+    if (want_addr) {
+        uint8_t sa[SOCKADDR_IN_LEN];
+
+        k_memset(sa, 0, sizeof(sa));
+        sa[0] = (uint8_t)(AF_INET & 0xff);
+        SC_WBE16(sa + 2, src_port);
+        SC_WBE32(sa + 4, src_ip);
+        if (addr_give > 0 && copy_to_user((void __user *)sa_ptr, sa, addr_give) != 0) {
+            return -EFAULT;
+        }
+        if (copy_to_user((void __user *)salen_ptr, &addr_len, sizeof(addr_len)) != 0) {
+            return -EFAULT;
+        }
     }
     return bytes;
 }
@@ -8260,15 +8394,27 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
-    if (entry->sock->type != SOCK_STREAM) {
-        return -EOPNOTSUPP;
-    }
-
     /* Don't block when the caller asked per-call (MSG_DONTWAIT) or the descriptor
      * is O_NONBLOCK. socket_tcp_*recv write into the validated user buffer;
      * __force strips __user at the boundary. */
     nonblock = (flags & MSG_DONTWAIT) ||
                (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+
+    /* A datagram socket reads one message with no sender reported, which is
+     * what `recv` is: `recvfrom` without the address. Refusing it here would
+     * leave one of the four ways of reading a socket disagreeing with the
+     * other three about whether the same queued datagram exists. */
+    if (entry->sock->type == SOCK_DGRAM) {
+        if (nonblock) {
+            return (int32_t)socket_try_recv(
+                entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, 0, 0);
+        }
+        return (int32_t)socket_recv(entry->sock,
+                                    (uint8_t __force *)(void __user *)buf_ptr, len, 0, 0);
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -EOPNOTSUPP;
+    }
     if (nonblock) {
         return (int32_t)socket_tcp_try_recv(
             entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
@@ -8364,11 +8510,19 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
     fd_entry_t *entry = fd_get(&current_proc->fds, fd);
     int val = 0;
 
-    (void)level;
-    (void)optname;
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
+    /* The one option this stack answers with a refusal rather than a blanket
+     * success. A DHCP client asks a packet socket for PACKET_AUXDATA so that it
+     * can be told the kernel has not checked a datagram's UDP checksum; there
+     * is no such offload here and no ancillary data at all, and a success would
+     * promise data that never arrives. Refused, the client verifies the
+     * checksum itself, which is the outcome that is true. */
+    if (level == SOL_PACKET && optname == PACKET_AUXDATA) {
+        return -ENOPROTOOPT;
+    }
+    (void)optname;
     /* A declared int-sized option with a NULL value is a bad pointer, not a
      * silently-accepted no-op. */
     if (optlen >= (int)sizeof(int)) {
@@ -8427,6 +8581,135 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
     return 0;
 }
 
+/*
+ * struct msghdr on i386: name (4), namelen (4), iov (4), iovlen (4), control
+ * (4), controllen (4), flags (4). The offsets are the ABI and are written out
+ * rather than modelled, because a struct here would have to match a layout
+ * this kernel does not otherwise depend on.
+ */
+#define MSGHDR_LEN         28
+#define MSGHDR_NAME        0
+#define MSGHDR_NAMELEN     4
+#define MSGHDR_IOV         8
+#define MSGHDR_IOVLEN      12
+#define MSGHDR_CONTROLLEN  20
+#define MSGHDR_FLAGS       24
+
+/**
+ * Receive one datagram into a scatter list (recvmsg, socketcall 17).
+ *
+ * The DHCP client is what needs this: it reads its raw socket through
+ * `recvmsg` rather than `read` so that it can look for `PACKET_AUXDATA` in the
+ * control data, and finding none it verifies the UDP checksum itself. So the
+ * scatter half is the whole of the work here. The control buffer is answered
+ * with a length of zero, which is the true answer: this stack attaches no
+ * ancillary data to anything.
+ *
+ * The sender is reported through `msg_name` for an AF_INET socket. A packet
+ * socket's sender is a link address this stack does not keep, so its
+ * `msg_namelen` comes back zero rather than filled with something invented.
+ */
+static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
+{
+    uint8_t hdr[MSGHDR_LEN];
+    fd_entry_t *entry;
+    uint32_t iov_user, name_ptr, namelen;
+    uint32_t addr_len, addr_give;
+    uint32_t iovlen;
+    uint32_t src_ip = 0;
+    uint16_t src_port = 0;
+    uint32_t i;
+    int32_t taken;
+
+    if (copy_from_user(hdr, (const void __user *)msg_ptr, MSGHDR_LEN) != 0) {
+        return -EFAULT;
+    }
+    entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type != SOCK_DGRAM) {
+        return -EOPNOTSUPP;
+    }
+
+    name_ptr = SC_LE32(hdr + MSGHDR_NAME);
+    namelen  = SC_LE32(hdr + MSGHDR_NAMELEN);
+    iov_user = SC_LE32(hdr + MSGHDR_IOV);
+    iovlen   = SC_LE32(hdr + MSGHDR_IOVLEN);
+    if (iovlen > (uint32_t)IOV_MAX_LOCAL) {
+        return -EINVAL;
+    }
+
+    /* Every destination is checked before the datagram is taken, because
+       taking it is what destroys it: a fault discovered half way through the
+       copy would report an error for a message the machine no longer has.
+       This is the pass `sys_readv` makes for the same reason. */
+    if (!user_buffer_ok(msg_ptr, MSGHDR_LEN, 1)) {
+        return -EFAULT;
+    }
+    /* Only what will be written is checked, and it is settled here rather than
+       after the datagram is taken: a packet socket reports no address at all,
+       and an AF_INET one reports sixteen bytes however much the caller
+       declared. Validating the whole declared capacity would refuse a call
+       whose address fits perfectly. */
+    addr_len = (entry->sock->family == AF_PACKET) ? 0u : (uint32_t)SOCKADDR_IN_LEN;
+    addr_give = namelen < addr_len ? namelen : addr_len;
+    if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
+        return -EFAULT;
+    }
+    for (i = 0; i < iovlen; i++) {
+        struct kernel_iovec iov;
+
+        if (copy_from_user(&iov,
+                           (const void __user *)(iov_user +
+                                                 i * (uint32_t)sizeof(struct kernel_iovec)),
+                           sizeof(iov)) != 0) {
+            return -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        if (iov.iov_len > 0x7FFFFFFFu || !user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
+            return -EFAULT;
+        }
+    }
+
+    if ((flags & MSG_DONTWAIT) && socket_dgram_pending(entry->sock) < 0) {
+        return -EAGAIN;
+    }
+
+    taken = readv_dgram(entry, iov_user, (int)iovlen, &src_ip, &src_port);
+    if (taken < 0) {
+        return taken;
+    }
+
+    /* A struct sockaddr_in is 16 bytes: family, port, address, and eight bytes
+       of padding a caller may compare against sizeof. It is written whole where
+       it fits, truncated where the caller's buffer is smaller, and the true
+       length is reported either way, which is what Linux does. */
+    if (name_ptr && addr_len > 0) {
+        uint8_t sa[SOCKADDR_IN_LEN];
+
+        k_memset(sa, 0, sizeof(sa));
+        sa[0] = (uint8_t)(AF_INET & 0xff);
+        SC_WBE16(sa + 2, src_port);
+        SC_WBE32(sa + 4, src_ip);
+        if (addr_give > 0 && copy_to_user((void __user *)name_ptr, sa, addr_give) != 0) {
+            return -EFAULT;
+        }
+    }
+    /* The true length, whatever the caller's capacity was: that is how a caller
+       learns its buffer was too small. Zero for a packet socket, which has no
+       sender to report. */
+    SC_WLE32(hdr + MSGHDR_NAMELEN, name_ptr ? addr_len : 0u);
+    SC_WLE32(hdr + MSGHDR_CONTROLLEN, 0);
+    SC_WLE32(hdr + MSGHDR_FLAGS, 0);
+    if (copy_to_user((void __user *)msg_ptr, hdr, MSGHDR_LEN) != 0) {
+        return -EFAULT;
+    }
+    return taken;
+}
+
 /**
  * Multiplexed socket syscall (socketcall, syscall 102).
  *
@@ -8449,6 +8732,7 @@ static int32_t sys_socketcall(isr_params_t *params)
     case SC_CONNECT: case SC_ACCEPT:
     case SC_GETSOCKNAME:
     case SC_GETPEERNAME:                nargs = 3; break;
+    case SC_RECVMSG:                    nargs = 3; break;
     case SC_SEND: case SC_RECV:         nargs = 4; break;
     case SC_SETSOCKOPT:
     case SC_GETSOCKOPT:                 nargs = 5; break;
@@ -8498,6 +8782,8 @@ static int32_t sys_socketcall(isr_params_t *params)
         return do_send((int)args[0], args[1], (int)args[2], (int)args[3]);
     case SC_RECV:
         return do_recv((int)args[0], args[1], (int)args[2], (int)args[3]);
+    case SC_RECVMSG:
+        return do_recvmsg((int)args[0], args[1], (int)args[2]);
     default:
         return -EINVAL;
     }
