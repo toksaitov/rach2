@@ -326,10 +326,18 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 # takes whatever the network there gives it, through `ifup -a` and udhcpc, which
 # init runs before it starts the SSH server. A fixed address on the boot line
 # would be one more thing to edit at the desk, and editing it is the thing this
-# milestone exists to avoid.
+# milestone exists to avoid. The two static-address entries in the menu are the
+# answer to a network with no server at all, and they carry a fixed address
+# instead: a line cannot carry both, since the kernel refuses an address given
+# twice and the machine would come up with none.
 #
 # This target is the geometry and the boot line. The boot menu, the GRUB core
 # slots and the recovery contents are added by the phases that own them.
+# The fixed address the two static entries carry, for the day the network this
+# machine is plugged into has no server: the same defaults the metal stick uses,
+# overridable at build time for anywhere else.
+SEALED_IP ?= 192.168.0.105/24
+SEALED_GATEWAY ?= 192.168.0.1
 SEALED_DISK = build/images/rach2-sealed.disk
 rach2-sealed-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
@@ -339,7 +347,9 @@ rach2-sealed-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check
 	RACH2_DISK_CLUSTER=8 \
 	RACH2_DISK_KRFFS_MB=500 \
 	RACH2_DISK_RECOVERY_MB=64 \
-	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=none rach2.netconsole" \
+	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole" \
+	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
+	RACH2_DISK_STATIC_APPEND="rach2.ip=$(SEALED_IP) rach2.gateway=$(SEALED_GATEWAY)" \
 	    sh tools/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
@@ -648,6 +658,8 @@ DHCP_DISK = $(IMAGES_DIR)/dhcp-test.disk
 METAL_PCAP = $(IMAGES_DIR)/dhcp-metal.pcap
 SIMPLE_PCAP = $(IMAGES_DIR)/dhcp-simple.pcap
 SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple.log
+STATIC_PCAP = $(IMAGES_DIR)/static-simple.pcap
+RSTATIC_PCAP = $(IMAGES_DIR)/static-real.pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
 dhcp-test: rach2 utils busybox krffs os-real-image os-simple-image
 	@rm -f $(DHCP_PCAP)
@@ -778,6 +790,63 @@ dhcp-test: rach2 utils busybox krffs os-real-image os-simple-image
 	# runs the ISH shell, which does not take the quotes out of an echoed
 	# token the way ash does: a token typed at it would match its own echo.
 	python3 tools/bcast_check.py $(SIMPLE_PCAP) --source 10.90.0.20 \
+	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
+
+	# And the other half of the file: a fixed address, on both machines. The
+	# format has two methods and only one of them has been exercised above.
+	# This is also the sequence an administrator runs to move a machine off
+	# DHCP, and every step of it is asserted: the configurator must refuse
+	# while a client holds the interface, the client must let go when it is
+	# stopped, and the fixed address must then be applied and work. os-simple
+	# copies the stanza it stages, since it has no editor; os-real writes one
+	# with its shell.
+	@rm -f $(STATIC_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "$(SIMPLE_NET)" \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=st0,netdev=net0,file=$(STATIC_PCAP) \
+	    --append "rach2.ip=none" \
+	    --timeout 240 --steptmo 60 --ok "4/4 replies" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=The ISH shell" "send=netup -a" \
+	    "expect=lease of 10.90.0.20 netmask 255.255.0.0" wait=3 \
+	    "send=cp /etc/network/interfaces.static /etc/network/interfaces" \
+	    "send=netup -a" "expect=is holding it with a lease" \
+	    "send=dhcpc -i eth0 -k" "expect=stopped process" wait=2 \
+	    "send=netup -a" "expect=configured from /etc/network/interfaces" wait=2 \
+	    "send=ping 10.90.0.2" "expect=4/4 replies" \
+	    "send=ping 10.200.0.1" wait=20
+	# The address is the fixed one and not the leased one, which the capture
+	# says: packets sent FROM 10.90.0.50, and the off-subnet packet addressed
+	# to the gateway's hardware address, which is the route the stanza asked
+	# for. Neither is possible from a machine still holding the lease.
+	python3 tools/bcast_check.py $(STATIC_PCAP) --source 10.90.0.50 \
+	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
+	# The same stanza on os-real, through busybox's `ifup`, which is the whole
+	# reason the file has this format: one description of a network, two
+	# machines that read it. On the same /16 as the run above, and for the same
+	# reason: on a 192.168.x network the mask the stanza asks for is the one the
+	# kernel would derive anyway, so skipping the netmask directive entirely
+	# would look identical. Here it does not.
+	@rm -f $(RSTATIC_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "$(SIMPLE_NET)" \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=rs0,netdev=net0,file=$(RSTATIC_PCAP) \
+	    --append "rach2.ip=none" \
+	    --timeout 240 --steptmo 60 --ok "REALSTATICOK" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=# " \
+	    "send=printf 'auto eth0\niface eth0 inet static\naddress 10.90.0.50\nnetmask 255.255.0.0\ngateway 10.90.0.2\n' > /etc/network/interfaces" \
+	    "send=ifup -a" wait=5 \
+	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:10.90.0.50' /tmp/if && grep -q 'Mask:255.255.0.0' /tmp/if && ping 10.90.0.2 > /dev/null && echo REALSTATIC\"\"OK" \
+	    "expect=REALSTATICOK" "send=ping 10.200.0.1 > /dev/null 2>&1; echo DONE" \
+	    "expect=DONE" wait=5
+	python3 tools/bcast_check.py $(RSTATIC_PCAP) --source 10.90.0.50 \
 	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
 
 	# And the half of the client that only time reaches: holding the lease.

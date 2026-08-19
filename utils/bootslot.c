@@ -524,6 +524,34 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     return 0;
 }
 
+/** Say which pair of menu entries this machine is running from; see the
+ *  header for what that decides. */
+void bootslot_use_static_entries(struct bootslot *bs, int on)
+{
+    bs->static_entries = on ? 1 : 0;
+}
+
+/**
+ * The menu id for one half of the pair this machine is running from.
+ *
+ * `base` is `candidate` or `fallback`, and the answer is that name or that name
+ * with `-static` after it. The buffer must hold BOOTSLOT_ENTRY_MAX bytes.
+ */
+static const char *entry_id(const struct bootslot *bs, const char *base, char *buf, size_t n)
+{
+    size_t len = strlen(base);
+
+    if (!bs->static_entries) {
+        return base;
+    }
+    if (len + 8 >= n) {
+        return base;
+    }
+    memcpy(buf, base, len);
+    memcpy(buf + len, "-static", 8);
+    return buf;
+}
+
 /**
  * Set `key=value` in the environment block: read the 1024 bytes, require
  * GRUB's header line, drop any existing `key=` line, append the new one, pad
@@ -686,6 +714,7 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
 {
     static uint8_t sector[BOOTSLOT_SECTOR];
     static uint8_t head[MULTIBOOT_SEARCH];
+    char idbuf[BOOTSLOT_ENTRY_MAX];
     uint32_t slot_bytes = bs->kernel.size;
     uint32_t nsectors = slot_bytes / BOOTSLOT_SECTOR;
     uint32_t s, b, want;
@@ -716,7 +745,8 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
     /* One transition: the saved default moves to the fallback AND any stale
        next_entry from an earlier install is dropped, so a retry cannot leave
        a half-written slot armed for the next boot. */
-    if (env_edit(bs, "saved_entry", "fallback", "next_entry", err, errlen) != 0) {
+    if (env_edit(bs, "saved_entry", entry_id(bs, "fallback", idbuf, sizeof(idbuf)), "next_entry",
+                 err, errlen) != 0) {
         return -1;
     }
 
@@ -748,41 +778,47 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
         }
     }
 
-    return env_edit(bs, "next_entry", "candidate", NULL, err, errlen);
+    return env_edit(bs, "next_entry", entry_id(bs, "candidate", idbuf, sizeof(idbuf)), NULL, err,
+                    errlen);
 }
 
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];
+    char idbuf[BOOTSLOT_ENTRY_MAX];
     uint32_t i;
 
     int consumed = 0;
 
-    /* Three trial states live in the block. An armed line
-       (next_entry=candidate) means an install happened after this machine
-       booted, so the slot no longer holds the running kernel. The consumed
-       line (next_entry=, the empty value GRUB's scripted consumption saves)
-       means the running candidate came through a trial boot; only that state
-       may commit. No line at all is a fresh disk or an interrupted install,
-       and an interrupted install's slot holds partial bytes, so committing
-       without the consumed marker would save bytes that never booted.
+    /* Three trial states live in the block. A line with a value
+       (next_entry=candidate, or candidate-static on the machine running from
+       the fixed-address pair) means an install happened after this machine
+       booted, so the slot no longer holds the running kernel. The empty line
+       (next_entry=, the value GRUB's scripted consumption saves) means the
+       running candidate came through a trial boot; only that state may commit.
+       No line at all is a fresh disk or an interrupted install, and an
+       interrupted install's slot holds partial bytes, so committing without the
+       consumed marker would save bytes that never booted.
 
-       Both patterns carry a leading newline so they match a whole line and not
-       a suffix of some other key: the writer preserves lines it does not know,
-       so a block could hold an `x_next_entry=candidate` that is nobody's trial
+       What is matched is the key and not any particular value, so a trial of
+       either pair is seen. The leading newline makes it a whole line and not a
+       suffix of some other key: the writer preserves lines it does not know, so
+       a block could hold an `x_next_entry=candidate` that is nobody's trial
        state, and the block's header line guarantees every real variable has a
        newline before it. */
     if (bootslot_read_env(bs, env, err, errlen) != 0) {
         return -1;
     }
     for (i = 0; i + 13 <= ENV_BYTES; i++) {
-        if (i + 22 <= ENV_BYTES && memcmp(env + i, "\nnext_entry=candidate\n", 22) == 0) {
+        if (memcmp(env + i, "\nnext_entry=", 12) != 0) {
+            continue;
+        }
+        if (env[i + 12] == '\n') {
+            consumed = 1;
+        } else {
             return fail(err, errlen,
                         "an installed candidate has not booted; boot it "
                         "before committing");
-        }
-        if (memcmp(env + i, "\nnext_entry=\n", 13) == 0) {
-            consumed = 1;
         }
     }
     if (!consumed) {
@@ -790,5 +826,6 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
                     "no consumed trial in the environment block; install and "
                     "boot a candidate before committing");
     }
-    return env_edit(bs, "saved_entry", "candidate", NULL, err, errlen);
+    return env_edit(bs, "saved_entry", entry_id(bs, "candidate", idbuf, sizeof(idbuf)), NULL, err,
+                    errlen);
 }

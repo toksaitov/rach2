@@ -47,10 +47,14 @@ KRFFS_BIN="$REPO/build/images/grub-krffs.bin"
 # the manifest staged into the KRFFS partition, that partition's size, and
 # extra kernel command-line tokens appended to every menu entry (a real
 # machine needs its address and its disk driver named; QEMU's defaults need
-# neither).
+# neither). The network tokens are separate from those, and in two sets: the
+# ordinary entries take one and the static-address entries take the other,
+# because the kernel refuses an address given twice, so a line carrying
+# `rach2.ip=none` cannot have a fixed address appended to it.
 MANIFEST="${RACH2_DISK_MANIFEST:-$REPO/krffs/manifests/os-real.manifest}"
 KRFFS_MB="${RACH2_DISK_KRFFS_MB:-47}"
 EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
+DHCP_APPEND="${RACH2_DISK_DHCP_APPEND:-}"
 STATIC_APPEND="${RACH2_DISK_STATIC_APPEND:-}"
 
 # Three more for the sealed disk, each defaulting to what this script always
@@ -141,12 +145,12 @@ load_env
 #   4 debug       5 recovery
 
 menuentry "Rach2" --id candidate {
-    multiboot /boot/kernel rach2.root=disk rach2.slot=candidate RACH2_APPEND_TOKENS
+    multiboot /boot/kernel rach2.root=disk rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
 menuentry "Rach2 (fallback kernel)" --id fallback {
-    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback RACH2_APPEND_TOKENS
+    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
@@ -161,7 +165,7 @@ menuentry "Rach2 (fallback kernel, static address)" --id fallback-static {
 }
 
 menuentry "Rach2 (kernel debug shell)" --id debug {
-    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback rach2.rescue RACH2_APPEND_TOKENS
+    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback rach2.rescue RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
@@ -203,8 +207,23 @@ fi
 # and any other value selects the fallback entry, because the block has no
 # checksum and a torn write can still load; next_entry is consumed here, the
 # one-boot trial, since this GRUB does not consume it built-in.
+# The fallback is set before the choices below, so the static entries can move
+# it: GRUB reads this file top to bottom and the last assignment wins.
 set default=fallback
+set fallback=1
 if [ "${saved_entry}" = "candidate" ]; then set default=candidate; fi
+# A machine whose network has no DHCP server is left on a static entry, so the
+# saved default takes those two as well; each also moves the fallback to the
+# static one, since falling back from a fixed address to no address is the
+# failure these entries exist to prevent.
+if [ "${saved_entry}" = "candidate-static" ]; then
+    set default=candidate-static
+    set fallback=3
+fi
+if [ "${saved_entry}" = "fallback-static" ]; then
+    set default=fallback-static
+    set fallback=3
+fi
 if [ "${next_entry}" = "candidate" ]; then
     set default=candidate
     set next_entry=
@@ -215,13 +234,19 @@ if [ "${next_entry}" = "fallback" ]; then
     set next_entry=
     save_env next_entry
 fi
+# A trial on a network with no DHCP server falls back to the kernel that also
+# has the fixed address, entry 3. Falling back to entry 1 there is a machine
+# that boots and cannot be reached, which is the one thing a fallback exists to
+# prevent.
 if [ "${next_entry}" = "candidate-static" ]; then
     set default=candidate-static
+    set fallback=3
     set next_entry=
     save_env next_entry
 fi
 if [ "${next_entry}" = "fallback-static" ]; then
     set default=fallback-static
+    set fallback=3
     set next_entry=
     save_env next_entry
 fi
@@ -236,17 +261,29 @@ if [ "${next_entry}" = "recovery" ]; then
     save_env next_entry
 fi
 
-set fallback=1
 set timeout=3
 CFG
 
-# The per-machine tokens ride into the entries through two placeholders, so the
-# heredoc above stays quoted and GRUB's own ${...} variables never reach the
-# shell. The static-address entries take their own set, which is empty until the
-# phase that gives this machine an address; they exist now to hold their numbers.
+# The per-machine tokens ride into the entries through three placeholders, so
+# the heredoc above stays quoted and GRUB's own ${...} variables never reach the
+# shell. The two network sets are what keeps the static entries honest: the
+# ordinary entries take the DHCP set and the static ones take the fixed address,
+# and neither line ever carries both, since the kernel refuses an address given
+# twice and would come up with no address at all.
 sed -e "s|RACH2_STATIC_TOKENS|$STATIC_APPEND|" \
+    -e "s|RACH2_DHCP_TOKENS|$DHCP_APPEND|" \
     -e "s|RACH2_APPEND_TOKENS|$EXTRA_APPEND|" "$GRUB_CFG" > "$GRUB_CFG.new"
 mv "$GRUB_CFG.new" "$GRUB_CFG"
+
+# No entry may name the address twice. The kernel refuses a command line that
+# does, and refuses it by coming up with no address at all, so a build that
+# composed the two token sets wrongly would produce a disk whose menu offers a
+# machine nobody can reach. It stops here instead.
+if ! awk '/^[[:space:]]*multiboot /{ n = gsub(/rach2\.ip=/, "&"); if (n > 1) exit 1 }' \
+        "$GRUB_CFG"; then
+    echo "mkdisk_grub: a menu entry names rach2.ip more than once" >&2
+    exit 1
+fi
 
 # Assemble with mtools (FAT) and a hand embed of GRUB's boot code, never a loop
 # mount: loop devices destabilize Docker Desktop. The FAT boot partition is

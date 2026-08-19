@@ -42,6 +42,7 @@
  * writes, /dev/bootpart, exists only on such a disk and opens for root alone.
  */
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,24 +79,82 @@ static int dev_write(void *ctx, uint32_t lba, const void *buf)
     return write(devfd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
 }
 
+static char cmdline[512];
+static int cmdline_ready;
+
+/**
+ * Read `/proc/cmdline` once; everything that asks about it asks this copy.
+ *
+ * Once, because a second read can fail where the first succeeded: a process
+ * here has sixteen descriptors, and the slot device is open across most of
+ * this program. A caller that read that failure as "the token is not there"
+ * would install the wrong menu entries on the one machine that could not spare
+ * a descriptor.
+ *
+ * @return 0 when the copy is there to read.
+ */
+static int cmdline_load(void)
+{
+    FILE *f;
+    size_t n;
+
+    if (cmdline_ready) {
+        return 0;
+    }
+    f = fopen("/proc/cmdline", "r");
+    if (!f) {
+        return -1;
+    }
+    n = fread(cmdline, 1, sizeof(cmdline) - 1, f);
+    fclose(f);
+    cmdline[n] = '\0';
+    cmdline_ready = 1;
+    return 0;
+}
+
 /** Whether /proc/cmdline carries `token` as a whole word. */
 static int cmdline_has(const char *token)
 {
-    static char line[512];
-    FILE *f = fopen("/proc/cmdline", "r");
-    size_t n, tlen = strlen(token);
+    size_t tlen = strlen(token);
     char *p;
 
-    if (!f) {
+    if (cmdline_load() != 0) {
         return 0;
     }
-    n = fread(line, 1, sizeof(line) - 1, f);
-    fclose(f);
-    line[n] = '\0';
-    for (p = line; *p != '\0'; p++) {
-        if ((p == line || p[-1] == ' ') && strncmp(p, token, tlen) == 0 &&
+    for (p = cmdline; *p != '\0'; p++) {
+        if ((p == cmdline || p[-1] == ' ') && strncmp(p, token, tlen) == 0 &&
             (p[tlen] == ' ' || p[tlen] == '\n' || p[tlen] == '\0')) {
             return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Whether this machine is running from the fixed-address pair of menu entries.
+ *
+ * The menu's four kernel entries are two pairs: one takes whatever the network
+ * gives it (`rach2.ip=none`) and one carries a fixed address for a network with
+ * no DHCP server. Which pair is running is read off the command line rather
+ * than from a token of its own, because the address IS the difference between
+ * them: a line naming an address that is not `none` is the fixed-address pair,
+ * and a line naming none of it at all is a disk built without network tokens,
+ * which has one pair in effect.
+ */
+static int running_static_entries(void)
+{
+    char *p;
+
+    if (cmdline_load() != 0) {
+        return 0; /* callers load it first and refuse if it is not there */
+    }
+    for (p = cmdline; *p != '\0'; p++) {
+        if ((p == cmdline || p[-1] == ' ') && strncmp(p, "rach2.ip=", 9) == 0) {
+            const char *v = p + 9;
+            int is_none =
+                strncmp(v, "none", 4) == 0 && (v[4] == ' ' || v[4] == '\n' || v[4] == '\0');
+
+            return !is_none;
         }
     }
     return 0;
@@ -107,6 +166,16 @@ static int open_slot(void)
 {
     struct bootslot_io io;
 
+    /* Before the device is open, while there is still a descriptor to read it
+       with: which pair of menu entries this machine is running from decides
+       what an install and a commit write, and guessing it is how a machine on
+       a network with no DHCP server ends up on the entries that ask for a
+       lease. */
+    if (cmdline_load() != 0) {
+        fprintf(stderr, "bootctl: cannot read /proc/cmdline, so which menu entries this "
+                        "machine booted from is unknown: %s\n", strerror(errno));
+        return -1;
+    }
     devfd = open("/dev/bootpart", O_RDWR);
     if (devfd < 0) {
         fprintf(stderr, "bootctl: this machine has no boot partition "
@@ -120,6 +189,10 @@ static int open_slot(void)
         fprintf(stderr, "bootctl: %s\n", errbuf);
         return -1;
     }
+    /* An install and a commit keep the machine in the pair it is running from:
+       moving a machine on a network with no DHCP server back to the pair that
+       asks for a lease would leave it with no address at all. */
+    bootslot_use_static_entries(&bs, running_static_entries());
     return 0;
 }
 
@@ -181,10 +254,12 @@ static void print_env(const uint8_t *env, const char *key, int trial_marker)
 /** Report the slot this boot came from, which is menu text, not a kernel flag. */
 static void print_booted(void)
 {
+    const char *pair = running_static_entries() ? " (the fixed-address entries)" : "";
+
     if (cmdline_has("rach2.slot=candidate")) {
-        printf("bootctl: booted: candidate\n");
+        printf("bootctl: booted: candidate%s\n", pair);
     } else if (cmdline_has("rach2.slot=fallback")) {
-        printf("bootctl: booted: fallback\n");
+        printf("bootctl: booted: fallback%s\n", pair);
     } else {
         printf("bootctl: booted: not from a slot (no rach2.slot= on /proc/cmdline)\n");
     }

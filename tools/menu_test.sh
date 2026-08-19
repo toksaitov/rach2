@@ -264,6 +264,55 @@ if grep -a "Falling back to" "$LOG" | grep -aq "staged"; then
     fail "a truncated menu still reached one of its own entries"
 fi
 
+# A trial of the static-address candidate must fall back to the static-address
+# fallback, entry 3, and not to the ordinary one. The two carry different
+# command lines on a machine whose network has no DHCP server, which is the only
+# reason the static entries exist, so falling back to entry 1 there is a machine
+# that boots and cannot be reached. The candidate is still corrupt from above,
+# so arming the trial is enough to reach the fallback.
+LOG="$DISK.log.armstatic"
+: > "$STEPS"
+step "rach2 login:" 1 "root"
+step "Password:" 1 "$ROOTPASSWORD"
+step "Password:" 1 "bootctl trial candidate-static > /dev/null && echo ARMED\"\"OK"
+step "ARMEDOK" 1 "poweroff -f"
+boot_feed
+wait_count "ARMEDOK" 1 600 || fail "the static trial was never armed"
+cleanup_boot
+
+LOG="$DISK.log.staticfallback"
+boot_watch "rach2 login:"
+grep -aq "Falling back to .Rach2 (fallback kernel, static address)" "$LOG" || \
+    fail "a static-address trial fell back to the ordinary fallback entry"
+
+# The other way a static entry is chosen: not one boot but every boot, which is
+# a machine left on a network with no DHCP server. The saved default has to
+# name it, and its fallback has to be the static one for the same reason.
+LOG="$DISK.log.savestatic"
+: > "$STEPS"
+step "rach2 login:" 1 "root"
+step "Password:" 1 "$ROOTPASSWORD"
+step "Password:" 1 "bootctl env saved_entry candidate-static > /dev/null && echo SAVED\"\"OK"
+step "SAVEDOK" 1 "poweroff -f"
+boot_feed
+wait_count "SAVEDOK" 1 600 || fail "the static default was never saved"
+cleanup_boot
+
+LOG="$DISK.log.savedstaticboot"
+boot_watch "rach2 login:"
+grep -aq "Falling back to .Rach2 (fallback kernel, static address)" "$LOG" || \
+    fail "a saved static default did not select the static entries"
+
+LOG="$DISK.log.savedback"
+: > "$STEPS"
+step "rach2 login:" 1 "root"
+step "Password:" 1 "$ROOTPASSWORD"
+step "Password:" 1 "bootctl env saved_entry candidate > /dev/null && echo BACK\"\"OK"
+step "BACKOK" 1 "poweroff -f"
+boot_feed
+wait_count "BACKOK" 1 600 || fail "the saved default was never put back"
+cleanup_boot
+
 # The slot's extent, read back after all of it: bootctl overwrote bytes in place
 # rather than rewriting a file, so the chain found when the volume opened is the
 # chain still there.
@@ -283,5 +332,5 @@ if [ -z "$SLOTA" ] || [ "$SLOTA" != "$SLOTB" ]; then
     fail "the menu slot's extent changed across a staged write: [$SLOTA] then [$SLOTB]"
 fi
 
-echo "menu-test: a staged menu's entries reached the menu, the fallback number still named the stub's own entry, a truncated menu left the machine booting, and the slot never moved: OK"
+echo "menu-test: a staged menu's entries reached the menu, the fallback number still named the stub's own entry, a static trial and a saved static default both fell back to the static fallback, a truncated menu left the machine booting, and the slot never moved: OK"
 echo "menu-test: PASS"
