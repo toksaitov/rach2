@@ -18,6 +18,8 @@
 #include "../io/poll.h"
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
+#include "../network/ethernet/ethernet.h"
+#include "../network/driver/netdev.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
@@ -29,6 +31,8 @@
 #define PROCFS_INO_DIR 0x100u
 #define PROCFS_INO_CMDLINE 0x101u
 #define PROCFS_INO_DISK    0x102u
+#define PROCFS_INO_NETDIR  0x103u
+#define PROCFS_INO_NETDEV  0x104u
 #define PROCFS_INO_PID_BASE 0x200u
 
 /* A /proc text file, snapshotted at open and served through file_ops. */
@@ -284,6 +288,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                     ap_str(buf, cap, &len, "/proc/disk");
                     break;
                 }
+                if (pf->origin_file == SYNTH_PROC_NETDEV) {
+                    ap_str(buf, cap, &len, "/proc/net/dev");
+                    break;
+                }
                 ap_str(buf, cap, &len, "/proc/");
                 ap_int(buf, cap, &len, pf->origin_pid);
                 ap_ch(buf, cap, &len, '/');
@@ -338,6 +346,16 @@ uint32_t procfs_ino_disk(void)
     return PROCFS_INO_DISK;
 }
 
+uint32_t procfs_ino_netdir(void)
+{
+    return PROCFS_INO_NETDIR;
+}
+
+uint32_t procfs_ino_netdev(void)
+{
+    return PROCFS_INO_NETDEV;
+}
+
 /**
  * The inode of an open /proc snapshot descriptor, from its origin, so fstat
  * reports the same identity as the stat of the path it was opened by.
@@ -357,12 +375,71 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     if (pf->origin_file == SYNTH_PROC_DISKINFO) {
         return PROCFS_INO_DISK;
     }
+    if (pf->origin_file == SYNTH_PROC_NETDEV) {
+        return PROCFS_INO_NETDEV;
+    }
     return procfs_ino_pid(pf->origin_pid);
 }
 
 uint32_t procfs_ino_pid(int pid)
 {
     return PROCFS_INO_PID_BASE + (uint32_t)(pid & 0xffff);
+}
+
+/** Append `v` as unsigned decimal; the counters are 32-bit and wrap. */
+static void ap_u32(char *buf, int cap, int *len, uint32_t v)
+{
+    char tmp[12];
+    int n = 0;
+
+    if (v == 0) {
+        ap_ch(buf, cap, len, '0');
+        return;
+    }
+    while (v && n < (int)sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (n > 0) {
+        ap_ch(buf, cap, len, tmp[--n]);
+    }
+}
+
+/**
+ * Render /proc/net/dev.
+ *
+ * The two header lines and one line per interface, in the order and with the
+ * sixteen counters Linux prints, because `ifconfig` and everything like it
+ * parses this file by counting fields. This machine has one interface and
+ * lists it only when a device was found: an interface that is not there is not
+ * one a program should be told about. The counters it does not keep are zero,
+ * which is what a device with no errors and no collisions reports anyway.
+ */
+static int procfs_gen_netdev(char *buf, int cap)
+{
+    const struct eth_counts *c = ethernet_counts();
+    int len = 0;
+
+    ap_str(buf, cap, &len,
+           "Inter-|   Receive                                                |"
+           "  Transmit\n"
+           " face |bytes    packets errs drop fifo frame compressed multicast|"
+           "bytes    packets errs drop fifo colls carrier compressed\n");
+    if (!netdev) {
+        return len;
+    }
+    ap_str(buf, cap, &len, "  ");
+    ap_str(buf, cap, &len, NETDEV_IFNAME);
+    ap_str(buf, cap, &len, ": ");
+    ap_u32(buf, cap, &len, c->rx_bytes);
+    ap_ch(buf, cap, &len, ' ');
+    ap_u32(buf, cap, &len, c->rx_packets);
+    ap_str(buf, cap, &len, " 0 0 0 0 0 0 ");
+    ap_u32(buf, cap, &len, c->tx_bytes);
+    ap_ch(buf, cap, &len, ' ');
+    ap_u32(buf, cap, &len, c->tx_packets);
+    ap_str(buf, cap, &len, " 0 0 0 0 0 0\n");
+    return len;
 }
 
 /* the /proc file backing: a snapshot served through file_ops */
@@ -445,7 +522,8 @@ int procfs_open(const struct vpath *vp, int flags)
 
     /* /proc/cmdline and /proc/disk are global; every other proc file lives
      * under a pid. */
-    if (vp->kind != VNODE_PROC_CMDLINE && vp->kind != VNODE_PROC_DISK) {
+    if (vp->kind != VNODE_PROC_CMDLINE && vp->kind != VNODE_PROC_DISK &&
+        vp->kind != VNODE_PROC_NET_DEV) {
         pid = procfs_resolve_pid(vp->pid);
         if (pid < 0) {
             return -ENOENT;
@@ -481,6 +559,8 @@ int procfs_open(const struct vpath *vp, int flags)
         /* Rendered from the record taken at boot, so opening this file issues
          * no command to the device. */
         len = diskinfo_format(diskinfo_get(), f->data, (int)sizeof(f->data));
+    } else if (vp->kind == VNODE_PROC_NET_DEV) {
+        len = procfs_gen_netdev(f->data, (int)sizeof(f->data));
     } else if (vp->procfile == SYNTH_PROC_STAT) {
         len = procfs_gen_stat(pid, f->data, (int)sizeof(f->data));
     } else {
@@ -496,6 +576,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_BOOTLINE;
     } else if (vp->kind == VNODE_PROC_DISK) {
         f->origin_file = SYNTH_PROC_DISKINFO;
+    } else if (vp->kind == VNODE_PROC_NET_DEV) {
+        f->origin_file = SYNTH_PROC_NETDEV;
     } else {
         f->origin_file = vp->procfile;
     }

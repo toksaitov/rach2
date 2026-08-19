@@ -28,6 +28,12 @@
 #include <sys/reboot.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <dirent.h>
+#include <stdio.h>
+#include <limits.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
 
 extern char **environ;
 
@@ -189,6 +195,100 @@ static pid_t spawn_shell(void)
 
 #ifdef INIT_METAL
 /**
+ * Whether the boot line handed the network to userland.
+ *
+ * `rach2.ip=none` means the kernel came up with the device probed and IPv4
+ * unset because a program will set it. Any other boot line either named an
+ * address or accepted the default, and in both cases the machine is already
+ * configured: running a DHCP client over that would begin by unconfiguring the
+ * address somebody put on the command line, and on a network with no server it
+ * would never put one back.
+ */
+static int boot_wants_userland_network(void)
+{
+    char line[512];
+    int fd = open("/proc/cmdline", O_RDONLY);
+    ssize_t n;
+    const char *want = "rach2.ip=none";
+    size_t wlen = strlen(want);
+    size_t i;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    /* A whole token and not a prefix: `rach2.ip=none` and `rach2.ip=none.x` are
+       different things, and only the first one asks for this. */
+    for (i = 0; i + wlen <= (size_t)n; i++) {
+        if ((i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t' || line[i - 1] == '\n') &&
+            strncmp(&line[i], want, wlen) == 0) {
+            char after = line[i + wlen];
+
+            if (after == '\0' || after == ' ' || after == '\t' || after == '\n') {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ * Configure the network, once, before the SSH server is started.
+ *
+ * A machine across the room is reached over the network, and on a machine that
+ * is carried between two buildings the address is not something the boot line
+ * can name: it comes from whatever server is on the wire there. So init runs
+ * `ifup -a`, which reads `/etc/network/interfaces` and does whatever it says,
+ * a lease or a fixed address.
+ *
+ * It runs after the console login has been started and before the SSH server,
+ * which is the order that matters: a network that fails to come up must not
+ * take the local way in with it, and a server started before there is an
+ * address would be listening on one it is about to lose.
+ *
+ * It runs only where the boot line said userland owns the address. A machine
+ * told its address on the command line is configured already, and a DHCP
+ * client would begin by taking that address off.
+ *
+ * The result is reported and not acted on. There is nothing useful to do with
+ * a failure here: the machine is up, the console works, and a later `ifup` by
+ * hand is the repair.
+ */
+static void configure_network(void)
+{
+    pid_t pid = fork();
+    int status = 0;
+
+    if (pid < 0) {
+        fprintf(stderr, "init: network: cannot fork ifup\n");
+        return;
+    }
+    if (pid == 0) {
+        char *argv[3];
+
+        argv[0] = (char *)"ifup";
+        argv[1] = (char *)"-a";
+        argv[2] = NULL;
+        execv("/bin/ifup", argv);
+        execv("/bin/busybox", argv); /* the applet, where there is no /bin/ifup */
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return;
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fprintf(stderr, "init: network: ifup -a did not configure the interface\n");
+    }
+}
+
+/**
  * Fork the SSH server and return its pid (-1 on failure).
  *
  * Unlike the console session this child does NOT call `setsid` or claim a
@@ -225,6 +325,62 @@ static pid_t spawn_sshd(void)
 }
 #endif
 
+/*
+ * Empty /var/run.
+ *
+ * What is in it describes the machine as it was running, not as it is: `ifup`
+ * records there which interfaces it has configured, and a DHCP client leaves
+ * its pid. On a machine whose /var/run survives a reboot, the next `ifup -a`
+ * reads the last boot's record, decides the interface is already configured,
+ * and takes no lease at all, while a stale pid file names a process that is
+ * either gone or somebody else. Linux keeps this directory in memory for the
+ * same reason. This file system has nowhere to put it that a reboot clears, so
+ * init clears it, first, before anything reads it. What it removes is one
+ * level of ordinary entries: nothing here makes a directory under it, and one
+ * that appears is reported rather than descended into.
+ */
+static void clear_var_run(void)
+{
+    DIR *d = opendir("/var/run");
+    struct dirent *e;
+
+    if (!d) {
+        return; /* an image without it has nothing to clear */
+    }
+    while ((e = readdir(d)) != NULL) {
+        char path[NAME_MAX + 16];
+        const char *n = e->d_name;
+        size_t i;
+
+        if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'))) {
+            continue;
+        }
+        /* One component and nothing else. A name is read from a file system
+         * that may have been damaged, and a stored name carrying a slash would
+         * otherwise be joined into a path that leaves this directory: pid one
+         * would then delete a file elsewhere on the machine at every boot. */
+        for (i = 0; n[i]; i++) {
+            if (n[i] == '/') {
+                break;
+            }
+        }
+        if (n[i] == '/') {
+            fprintf(stderr, "init: /var/run: refusing a name that is not one: %s\n", n);
+            continue;
+        }
+        if (snprintf(path, sizeof(path), "/var/run/%s", n) >= (int)sizeof(path)) {
+            fprintf(stderr, "init: /var/run: name too long to remove: %s\n", n);
+            continue;
+        }
+        /* A file first, then a directory: nothing here creates one, and one
+         * that is there is reported rather than left silently. */
+        if (unlink(path) != 0 && rmdir(path) != 0) {
+            fprintf(stderr, "init: /var/run: cannot remove %s\n", n);
+        }
+    }
+    closedir(d);
+}
+
 int main(void)
 {
     pid_t shell = -1;
@@ -232,6 +388,7 @@ int main(void)
 #ifdef INIT_METAL
     pid_t sshd = -1;
     time_t sshd_spawned = 0;
+    int network_done = 0;
 #endif
 
     /* The three shutdown requests, installed before the first child so a
@@ -240,6 +397,8 @@ int main(void)
     signal(SIGUSR1, shutdown_handler);
     signal(SIGUSR2, shutdown_handler);
     signal(SIGTERM, shutdown_handler);
+
+    clear_var_run();
 
     for (;;) {
         int status;
@@ -259,6 +418,15 @@ int main(void)
         }
 
 #ifdef INIT_METAL
+        /* The network comes up once, after the console login and before the
+         * server that needs it. */
+        if (!network_done) {
+            network_done = 1;
+            if (boot_wants_userland_network()) {
+                configure_network();
+            }
+        }
+
         /* And keep an SSH server running beside it. A failed fork is left for
          * the next time round the loop rather than retried here: the console
          * session above is the machine's other way in, and holding this loop

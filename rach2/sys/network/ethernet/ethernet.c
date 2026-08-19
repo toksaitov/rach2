@@ -20,6 +20,15 @@
 /* TX assembly buffer at file scope: the kernel keeps no large stack frames. */
 static uint8_t eth_tx_frame[ETH_HDR_SIZE + 1500];
 
+/* What the interface has carried, for /proc/net/dev. Counted here rather than
+   in the drivers, because this is the one place every frame passes. */
+static struct eth_counts counts;
+
+const struct eth_counts *ethernet_counts(void)
+{
+    return &counts;
+}
+
 /**
  * Dispatch a received Ethernet frame to ARP or IP by EtherType.
  *
@@ -42,6 +51,9 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
     if (!netif_is_up()) {
         return;
     }
+
+    counts.rx_packets++;
+    counts.rx_bytes += len;
 
     etype = (uint16_t)(((uint16_t)data[12] << 8) | data[13]);
 
@@ -94,5 +106,7 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
     k_memcpy(eth_tx_frame + ETH_HDR_SIZE, payload, plen);
 
     total = (uint16_t)(ETH_HDR_SIZE + plen);
+    counts.tx_packets++;
+    counts.tx_bytes += total;
     netdev_tx(eth_tx_frame, total);
 }

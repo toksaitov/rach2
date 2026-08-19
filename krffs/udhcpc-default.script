@@ -1,0 +1,92 @@
+#!/bin/sh
+#
+# The script udhcpc runs when a lease arrives, is renewed, or ends.
+#
+# udhcpc does not configure anything itself: it learns a lease and calls this
+# with the answer in the environment. So this is where a lease becomes an
+# address, a route and a resolver, and it uses the same commands an
+# administrator would: busybox's `ifconfig` and `route`.
+#
+# The three cases are the ones udhcpc has. `deconfig` runs before the first
+# request and when a lease is lost, and leaves the interface with no address.
+# `bound` is a new lease and `renew` an extension of one; both apply the whole
+# answer, because a renewal may carry a different router or resolver than the
+# lease before it.
+
+RESOLV=/etc/resolv.conf
+
+fail=0
+
+# Build the new resolver, reporting the first write that fails. Every line is
+# checked: a disk with no room left can create the file and then fail to write
+# it, and publishing that would leave a machine that resolves nothing while
+# reporting a lease.
+write_resolv() {
+	: > "$RESOLV.new" || return 1
+	if [ -n "$domain" ]; then
+		echo "search $domain" >> "$RESOLV.new" || return 1
+	fi
+	for s in $dns; do
+		echo "nameserver $s" >> "$RESOLV.new" || return 1
+	done
+	return 0
+}
+
+case "$1" in
+	deconfig)
+		/bin/busybox ifconfig "$interface" 0.0.0.0 || fail=1
+		;;
+
+	bound|renew)
+		# The netmask is given only when the lease carries one. Without it
+		# `ifconfig` derives the classful mask, which is the right answer;
+		# inventing a /24 here would make a gateway on a wider subnet
+		# unreachable.
+		if [ -n "$subnet" ]; then
+			/bin/busybox ifconfig "$interface" "$ip" netmask "$subnet" || fail=1
+		else
+			/bin/busybox ifconfig "$interface" "$ip" || fail=1
+		fi
+
+		# Old default routes go before the new one. The loop ends when the
+		# removal fails, which is what a machine with no default route
+		# answers.
+		while /bin/busybox route del default gw 0.0.0.0 dev "$interface" 2>/dev/null; do
+			:
+		done
+
+		# The lease decides the route, including a lease that names none:
+		# the old default route goes whether or not this one replaces it,
+		# because a gateway from the network this machine was on before is
+		# not a gateway here. A lease with no router leaves the machine with
+		# its subnet and nothing beyond it, which is what the lease said, and
+		# it is said out loud because a machine reachable only from its own
+		# subnet looks like a machine that is down.
+		if [ -n "$router" ]; then
+			for r in $router; do
+				/bin/busybox route add default gw "$r" dev "$interface" || fail=1
+				break
+			done
+		else
+			echo "udhcpc: the lease names no router: nothing off this subnet is reachable" >&2
+		fi
+
+		# The resolver is written on every lease, whether or not this one
+		# names a server: leaving the last lease's servers behind would
+		# point this machine at a network it is no longer on. It is written
+		# through a temporary beside it, so a reader never sees half of one,
+		# and a write that fails leaves the old file rather than publishing
+		# a resolver with nothing in it.
+		if write_resolv; then
+			/bin/busybox mv "$RESOLV.new" "$RESOLV" || fail=1
+		else
+			echo "udhcpc: resolver: writing $RESOLV.new failed" >&2
+			/bin/busybox rm -f "$RESOLV.new"
+			fail=1
+		fi
+		;;
+esac
+
+# What failed is reported rather than swallowed: udhcpc logs a script that
+# fails, and a machine configured by halves should say so.
+exit $fail

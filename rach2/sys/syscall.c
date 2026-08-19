@@ -1367,6 +1367,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
             return pty_open_slave(vp->pts_index, flags);
         case VNODE_PROC_FILE:
         case VNODE_PROC_CMDLINE:
+        case VNODE_PROC_NET_DEV:
             return procfs_open(vp, flags);
         case VNODE_PROC_DISK:
             /* Root only. The file carries the drive's serial number, and an
@@ -1381,6 +1382,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_DEV_DIR:
         case VNODE_PTS_DIR:
         case VNODE_PROC_DIR:
+        case VNODE_PROC_NET_DIR:
         case VNODE_PROC_PID:
         case VNODE_PROC_FD_DIR:
             return synth_open_dir(vp, flags);
@@ -2698,7 +2700,8 @@ static int32_t sys_chdir(isr_params_t *params)
                 }
             }
             if (kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR ||
-                kind == VNODE_PROC_DIR || kind == VNODE_PROC_PID ||
+                kind == VNODE_PROC_DIR || kind == VNODE_PROC_NET_DIR ||
+                kind == VNODE_PROC_PID ||
                 kind == VNODE_PROC_FD_DIR) {
                 synth_dir_path(kind, rpid, current_proc->cwd, sizeof(current_proc->cwd));
                 return 0;
@@ -2957,6 +2960,17 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_cmdline();
+            return 0;
+        case VNODE_PROC_NET_DIR:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFDIR | 0555;
+            kst->st_ino = procfs_ino_netdir();
+            return 0;
+        case VNODE_PROC_NET_DEV:
+            /* /proc/net/dev: what the interface has carried, anyone's to read. */
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_netdev();
             return 0;
         case VNODE_PROC_DISK:
             /* /proc/disk: what the disk reported, root-readable only. */
@@ -4574,6 +4588,13 @@ static char *_exec_argv_bufs[EXEC_MAX_ENTRIES + 1];
 static char _exec_envp_storage[EXEC_MAX_STRINGS];
 static char *_exec_envp_bufs[EXEC_MAX_ENTRIES + 1];
 
+/* A script's first line, and the script's own path, which becomes an argument
+ * to its interpreter. Both static, because the argv pointers handed on point
+ * into them and the caller's memory is gone by the time they are read. */
+#define EXEC_SHEBANG_MAX 128
+static char _exec_shebang_line[EXEC_SHEBANG_MAX + 1];
+static char _exec_script_path[sizeof(_exec_path_buf)];
+
 /**
  * Kill the current process after exec has destroyed its old address space.
  *
@@ -4671,6 +4692,133 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
     for (;;) {
         __asm__ __volatile__("cli; hlt");
     }
+}
+
+/**
+ * Rewrite an exec of a script into an exec of its interpreter.
+ *
+ * A file whose first two bytes are `#!` names the program that should run it,
+ * and Linux's rule is what everything expects: the rest of that line is the
+ * interpreter and at most one argument, and the program then runs as
+ * `interpreter [argument] script original-arguments...`. Without this, an exec
+ * of a script fails with `ENOEXEC` and only a shell, which reads the file
+ * itself, can run one. A DHCP client execs its lease script directly, so the
+ * machine needs it.
+ *
+ * One level only. A script whose interpreter is itself a script is refused
+ * rather than followed, because a chain of them is a loop nobody can see the
+ * end of, and nothing here needs one.
+ *
+ * `_exec_path_buf` and `_exec_argv_bufs` are rewritten in place on success.
+ *
+ * @param argc the argument count, updated when the vector grows.
+ * @return 1 when rewritten, 0 when the file is not a script, or a negative
+ *         errno for one whose first line names nothing.
+ */
+static int32_t exec_shebang(int *argc)
+{
+    char *interp;
+    char *arg = NULL;
+    char *p;
+    int n;
+    int i;
+    int extra;
+    int count;
+    char *rebuilt[EXEC_MAX_ENTRIES + 1];
+
+    n = exec_krffs_read((void *)(_exec_path_buf + (_exec_path_buf[0] == '/' ? 1 : 0)),
+                        _exec_shebang_line, EXEC_SHEBANG_MAX, 0);
+    if (n < 3 || _exec_shebang_line[0] != '#' || _exec_shebang_line[1] != '!') {
+        return 0;
+    }
+    _exec_shebang_line[n] = '\0';
+    for (i = 2; i < n; i++) {
+        if (_exec_shebang_line[i] == '\n') {
+            _exec_shebang_line[i] = '\0';
+            break;
+        }
+    }
+    /* A line that filled the buffer without ending is refused rather than cut:
+       a truncated interpreter name may name a different program that exists,
+       and the kernel would then check and run that one. */
+    if (i == n && n == EXEC_SHEBANG_MAX) {
+        return -ENOEXEC;
+    }
+
+    p = _exec_shebang_line + 2;
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p == '\0') {
+        return -ENOEXEC; /* `#!` and nothing after it names no interpreter */
+    }
+    interp = p;
+    while (*p && *p != ' ' && *p != '\t') {
+        p++;
+    }
+    if (*p) {
+        *p++ = '\0';
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p) {
+            /* The remainder is ONE argument, trailing blanks removed, which is
+               what Linux passes and what every `#!/bin/sh -e` line means. */
+            char *end = p;
+
+            while (*end) {
+                end++;
+            }
+            while (end > p && (end[-1] == ' ' || end[-1] == '\t')) {
+                end--;
+            }
+            *end = '\0';
+            arg = p;
+        }
+    }
+    if (interp[0] != '/') {
+        return -ENOEXEC; /* an interpreter is named by an absolute path */
+    }
+
+    /* The script's own path becomes an argument, so it must outlive the buffer
+       the interpreter's path is about to be written into. The two buffers are
+       the same size, so this is a copy and never a truncation: handing the
+       interpreter a shortened name would run a different file from the one
+       whose permissions were just checked. */
+    k_strncpy(_exec_script_path, _exec_path_buf, sizeof(_exec_script_path) - 1);
+    _exec_script_path[sizeof(_exec_script_path) - 1] = '\0';
+
+    extra = arg ? 2 : 1;
+    count = extra + (*argc > 0 ? *argc - 1 : 0);
+    if (count >= EXEC_MAX_ENTRIES) {
+        return -E2BIG;
+    }
+    rebuilt[0] = interp;
+    i = 1;
+    if (arg) {
+        rebuilt[i++] = arg;
+    }
+    rebuilt[i++] = _exec_script_path;
+    for (n = 1; n < *argc; n++) {
+        rebuilt[i++] = _exec_argv_bufs[n];
+    }
+    rebuilt[i] = NULL;
+    for (n = 0; n <= i; n++) {
+        _exec_argv_bufs[n] = rebuilt[n];
+    }
+    *argc = i;
+
+    k_strncpy(_exec_path_buf, interp, sizeof(_exec_path_buf) - 1);
+    _exec_path_buf[sizeof(_exec_path_buf) - 1] = '\0';
+    /* Normalized the way a path from a caller is normalized. The check that
+       keeps an exec out of the synthetic mounts reads the first component and
+       does not collapse `.` or `..`, so an interpreter named
+       `/bin/../dev/something` would pass it while the file system resolved the
+       name it really wrote. */
+    if (canonicalize_abs(_exec_path_buf) < 0) {
+        return -ENOENT;
+    }
+    return 1;
 }
 
 /**
@@ -4899,13 +5047,61 @@ static int32_t sys_execve(isr_params_t *params)
     }
 
     /* Validate the ELF header BEFORE tearing down the old image, so the common
-     * "not a valid executable" failure leaves the calling process intact. */
+     * "not a valid executable" failure leaves the calling process intact. A file
+     * that is not an ELF may still be a script naming its interpreter, and then
+     * what runs is the interpreter, checked here exactly as the script was. */
     {
         Elf32_Ehdr ehdr;
 
         if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
             !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-            return -ENOEXEC;
+            int32_t sb = exec_shebang(&argc);
+
+            if (sb < 0) {
+                return sb;
+            }
+            if (sb == 0) {
+                return -ENOEXEC;
+            }
+            /* A set-id script runs as its invoker. The interpreter is what
+             * actually runs, it is not set-id, and honouring the script's bits
+             * is a hole Unix closed long ago: the interpreter can be made to
+             * read a different file than the one whose bits were checked. */
+            setid_mode = 0;
+            file_uid = 0;
+            file_gid = 0;
+
+            name = _exec_path_buf;
+            if (name[0] == '/') {
+                name++;
+            }
+            {
+                struct vpath vp;
+                if (synth_classify(name, &vp) != VNODE_KRFFS) {
+                    return -EACCES;
+                }
+            }
+            {
+                int perr = 0;
+                krffs_node_t *interp = krffs_resolve_x(name, &perr, cred_may_search);
+                int32_t rc;
+
+                if (!interp) {
+                    return perr;
+                }
+                if (krffs_open(name) != 0) {
+                    return -ENOENT;
+                }
+                rc = cred_access_node(interp, CRED_X, 0);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+            if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+                !elf_valid_exec(&ehdr, sizeof(ehdr))) {
+                /* One level only: an interpreter that is itself a script. */
+                return -ENOEXEC;
+            }
         }
     }
 
@@ -6121,6 +6317,19 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         }
         return 0;
     }
+    /* /proc/net holds one file. */
+    if (kind == VNODE_PROC_NET_DIR) {
+        if (n == 0) {
+            name[0] = 'd';
+            name[1] = 'e';
+            name[2] = 'v';
+            name[3] = '\0';
+            *ino = procfs_ino_netdev();
+            *dtype = DT_REG;
+            return 1;
+        }
+        return 0;
+    }
     if (kind == VNODE_PROC_DIR) {
         if (n == 0) {
             name[0] = 'c';
@@ -6146,6 +6355,15 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
             return 1;
         }
         if (n == 2) {
+            name[0] = 'n';
+            name[1] = 'e';
+            name[2] = 't';
+            name[3] = '\0';
+            *ino = procfs_ino_netdir();
+            *dtype = DT_DIR;
+            return 1;
+        }
+        if (n == 3) {
             name[0] = 's';
             name[1] = 'e';
             name[2] = 'l';
@@ -6156,7 +6374,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
             return 1;
         }
         {
-            int p = procfs_nth_pid(n - 3);
+            int p = procfs_nth_pid(n - 4);
             if (p < 0) {
                 return 0;
             }

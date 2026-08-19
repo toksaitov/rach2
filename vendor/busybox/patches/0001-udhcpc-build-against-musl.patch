@@ -1,0 +1,44 @@
+Rach2: make udhcpc build against the ported musl.
+
+`networking/udhcp/dhcpc.c` includes two Linux user ABI headers the ported musl
+does not have. `<linux/filter.h>` is needed only by a BPF block upstream has
+kept inside `#if 0` for years, so it goes. `<linux/if_packet.h>` becomes musl's
+own `<netpacket/packet.h>`, which carries `sockaddr_ll` and `PACKET_AUXDATA`
+but neither the auxiliary-data structure this file reads nor the status bit it
+tests, so those two are supplied behind guards. The guard for the structure is
+its own and not `PACKET_AUXDATA`, because musl defines that macro and the
+original guard would skip the structure along with it.
+
+Copying the Linux headers in instead was tried and does not work: they pull in
+`linux/compiler.h`, `linux/types.h`, `linux/bpf_common.h` and
+`asm/byteorder.h`, none of which the ported musl has.
+
+--- a/networking/udhcp/dhcpc.c
++++ b/networking/udhcp/dhcpc.c
+@@ -32,11 +32,24 @@
+ #include "dhcpc.h"
+ 
+ #include <netinet/if_ether.h>
+-#include <linux/filter.h>
+-#include <linux/if_packet.h>
++#include <netpacket/packet.h>
+ 
++/* Rach2: the ported musl has no <linux/filter.h> and no <linux/if_packet.h>.
++ * The filter header is only needed by the BPF block below, which upstream has
++ * had inside #if 0 for years, so it is dropped rather than supplied. The packet
++ * header is musl's <netpacket/packet.h>, which carries sockaddr_ll and
++ * PACKET_AUXDATA but not the auxiliary-data structure or the status bit this
++ * file reads out of it, so those two are supplied here. The guard is on the
++ * structure and not on PACKET_AUXDATA, because musl defines that macro and
++ * would otherwise skip the structure with it. */
+ #ifndef PACKET_AUXDATA
+ # define PACKET_AUXDATA 8
++#endif
++#ifndef TP_STATUS_CSUMNOTREADY
++# define TP_STATUS_CSUMNOTREADY (1 << 3)
++#endif
++#ifndef RACH2_HAVE_TPACKET_AUXDATA
++# define RACH2_HAVE_TPACKET_AUXDATA
+ struct tpacket_auxdata {
+ 	uint32_t tp_status;
+ 	uint32_t tp_len;

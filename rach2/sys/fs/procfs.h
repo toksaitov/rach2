@@ -32,6 +32,10 @@ int procfs_nth_pid(int n);
 /* Stable synthetic inodes for stat. */
 uint32_t procfs_ino_dir(void);
 uint32_t procfs_ino_cmdline(void);
+
+/** The inode of /proc/net and of /proc/net/dev. */
+uint32_t procfs_ino_netdir(void);
+uint32_t procfs_ino_netdev(void);
 uint32_t procfs_ino_disk(void);
 uint32_t procfs_fd_ino(struct fd_entry *e);
 uint32_t procfs_ino_pid(int pid);

@@ -19,6 +19,12 @@ Usage:
     expect=REGEX   wait until REGEX appears (per-step cap = --steptmo)
     send=TEXT      write TEXT + newline to the guest serial
     wait=SECS      sleep SECS, draining serial
+    tcp=PORT       open a TCP connection to 127.0.0.1:PORT and close it, which a
+                   `hostfwd=tcp::PORT-:GUESTPORT` in --net carries to a server
+                   inside the guest. This provokes traffic; it does not prove the
+                   guest answered, because QEMU's user network accepts the host
+                   side of the connection before it knows whether anything is
+                   there. What the guest did is read from a capture of the wire.
     udp=PORT:TEXT  send TEXT as one UDP datagram to 127.0.0.1:PORT, which a
                    `hostfwd=udp::PORT-:GUESTPORT` in --net carries into the
                    guest. This is the only way a test can put a frame on the
@@ -164,6 +170,18 @@ def main():
             send(step[len("send="):])
         elif step.startswith("wait="):
             pump(time.time() + float(step[len("wait="):]))
+        elif step.startswith("tcp="):
+            port = int(step[len("tcp="):])
+            sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sk.settimeout(15)
+            try:
+                sk.connect(("127.0.0.1", port))
+                print("HARNESS: knocked on port %d" % port)
+            except OSError as e:
+                print("HARNESS: nothing answered on port %d (%s)" % (port, e))
+                step_failures += 1
+            finally:
+                sk.close()
         elif step.startswith("udp="):
             port, _, text = step[len("udp="):].partition(":")
             sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

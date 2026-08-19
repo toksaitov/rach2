@@ -6,22 +6,23 @@ A static BusyBox 1.36.1 linked against the ported musl (`vendor/musl/install`), 
 
     ./build_busybox.sh
 
-Or build it through the top level (`make full`, or `make deps DEPS=full`); either builds BusyBox on demand behind a stamp file (it relinks only when the tarball, `rach2.config`, the `muslgcc` wrapper, or libc changes).
+Or build it through the top level (`make full`, or `make deps DEPS=full`); either builds BusyBox on demand behind a stamp file (it relinks only when the tarball, `rach2.config`, the `muslgcc` wrapper, libc, or a file under `patches/` changes; the directory itself is a prerequisite too, so removing the last patch invalidates the stamp rather than leaving a binary built from it).
 
-It verifies the pinned tarball (`busybox-1.36.1.tar.bz2`, sha256 gated), extracts it, applies `rach2.config`, and builds with `muslgcc` (the wrapper that bridges the bare `i686-elf-gcc` cross compiler to the ported musl: musl headers on compile, musl crt1/crti/crtn + `libc.a` + libgcc on the final link, and `-nostdlib` without crt on busybox's `ld -r` partial links). GNU binutils come from `CROSS_COMPILE=i686-elf-`; `HOSTCC=cc` builds the host-side kconfig tools. The stripped binary is staged out of tree to `build/vendor/busybox/busybox` (staged into the os-real image as `/bin/busybox` and `/bin/sh`).
+It verifies the pinned tarball (`busybox-1.36.1.tar.bz2`, sha256 gated), extracts it, applies every patch under `patches/` in name order, applies `rach2.config`, and builds with `muslgcc` (the wrapper that bridges the bare `i686-elf-gcc` cross compiler to the ported musl: musl headers on compile, musl crt1/crti/crtn + `libc.a` + libgcc on the final link, and `-nostdlib` without crt on busybox's `ld -r` partial links). GNU binutils come from `CROSS_COMPILE=i686-elf-`; `HOSTCC=cc` builds the host-side kconfig tools. The stripped binary is staged out of tree to `build/vendor/busybox/busybox` (staged into the os-real image as `/bin/busybox` and `/bin/sh`).
 
 ## Updating from upstream
 
-The only Rach2-owned files here are this Readme, `build_busybox.sh`, the `muslgcc` wrapper, and `rach2.config`; BusyBox itself is the pinned, unmodified tarball. To move to a new release:
+The Rach2-owned files here are this Readme, `build_busybox.sh`, the `muslgcc` wrapper, `rach2.config`, and the patches under `patches/`. BusyBox itself is the pinned tarball, and it is not quite unmodified: one patch is applied at build time, described below. To move to a new release:
 
 1. Download the new `busybox-X.Y.Z.tar.bz2` from https://busybox.net and replace the tarball here.
 2. Set `VERSION` and `TARBALL_SHA256` in `build_busybox.sh` to the new release and its sha256, and `BUSYBOX_TARBALL` in the root `Makefile`, which names the tarball the stamp depends on: leave it and the build stops looking for the file you just replaced.
-3. Rebuild with `make full` (or `./build_busybox.sh`), then re-run a boot and the SSH capstone.
-4. If the new release renamed or dropped a config symbol, adjust `rach2.config` (it is `defconfig` with the applets Rach2 cannot run turned off, so a `make oldconfig` against the new tree shows what changed).
+3. Rebase every patch under `patches/` onto the new tree. `build_busybox.sh` applies them before configuring and stops the build on a patch that does not apply, so a stale one is loud rather than silent; a patch upstream has since fixed is deleted, and the stamp notices that too.
+4. Rebuild with `make full` (or `./build_busybox.sh`), then re-run a boot, the SSH capstone, and `make dhcp-test`, which is what proves `udhcpc` still builds and still takes a lease.
+5. If the new release renamed or dropped a config symbol, adjust `rach2.config` (it is `defconfig` with the applets Rach2 cannot run turned off, so a `make oldconfig` against the new tree shows what changed).
 
 The SHA hardware-acceleration options (`CONFIG_SHA1_HWACCEL`, `CONFIG_SHA256_HWACCEL`) are off. The accelerated paths dispatch on CPUID, which reports what the CPU has, and this kernel never enables what those paths need: `CR4.OSFXSR` stays clear and no context switch saves the XMM registers, so the first SSE instruction of the accelerated routine raises an invalid-opcode fault and the process is killed. `sha256sum` died exactly that way on the machine this image boots. The plain C paths use no vector state and run everywhere; the suid build always had these options off. The kernel-side gap (advertised CPU features the kernel does not enable state for) is recorded in the milestone 22 record as deferred.
 
-There are no source patches; all customization is `rach2.config`. If a patch ever becomes unavoidable, add `patches/NNNN-reason.patch` (applied after extraction by `build_busybox.sh`) and explain it here.
+There is one source patch, `patches/0001-udhcpc-build-against-musl.patch`, applied after extraction by `build_busybox.sh`; everything else is `rach2.config`. `networking/udhcp/dhcpc.c` includes `<linux/filter.h>` and `<linux/if_packet.h>`, and the ported musl has neither. The filter header is needed only by a BPF block upstream has kept inside `#if 0` for years, so the patch drops it; the packet header becomes musl's `<netpacket/packet.h>`, which carries `sockaddr_ll` and `PACKET_AUXDATA` but neither the auxiliary-data structure the file reads nor the status bit it tests, so the patch supplies those two behind guards. Copying the Linux headers in instead was tried and does not work: they pull in `linux/compiler.h`, `linux/types.h`, `linux/bpf_common.h` and `asm/byteorder.h`, none of which the ported musl has. A tarball bump must carry this patch forward or `udhcpc` stops building, and with it the machine stops taking an address.
 
 ## Config rationale (`rach2.config`, from `defconfig` minus what Rach2 cannot run)
 
@@ -36,7 +37,9 @@ Earlier builds carried a hand-curated `allnoconfig` with a short coreutils list.
 `defconfig` also enables applets that include `<linux/...>`, `<asm/...>`, or `<mtd/...>`, or that drive Linux-only syscalls and ioctls. None can run on the Rach2 kernel, and most do not compile against the freestanding musl, which ships no `linux/` header tree; they are off:
 
 * Console and VT: `kbd_mode openvt showkey deallocvt chvt loadkmap dumpkmap loadfont setfont conspy` (linux/kd.h, linux/vt.h).
-* Netlink and Linux networking: the `ip` family, `ifconfig brctl ifenslave nameif tunctl zcip ether-wake slattach`, `udhcpc`/`udhcpd` (packet BPF), `tc`.
+* Netlink and Linux networking: the `ip` family, `brctl ifenslave nameif tunctl zcip ether-wake slattach`, `udhcpd`, `tc`.
+
+`ifconfig` and `udhcpc` moved off that list in milestone 25. The machine this project seals into a laptop is carried between buildings and takes its address from whatever network it is plugged into, so `udhcpc` is the client and `ifconfig` and `route` are what its lease script uses. `CONFIG_FEATURE_IFUPDOWN_IP` is off with them: it selects the `ip` backend for `ifup`, every `ip` applet is off, and `ifup` would call a command that is not there.
 * Block, flash, RAID, i2c: `losetup`, the MTD `ubi*`/`nandwrite`, `raidautorun`, `i2c*`, `hdparm`, `blockdev fstrim fsfreeze blkdiscard`, `mkfs.ext2`/`mkfs.vfat`, `eject`.
 * Other Linux-only: `mdev acpid ionice setpriv switch_root watchdog fbsplash beep seedrng`, and `free`/`uptime` (both want `sysinfo(2)`).
 

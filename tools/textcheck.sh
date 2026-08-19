@@ -41,10 +41,12 @@ md_files() {
     prune_find -name '*.md' -print
 }
 
-# Shell, make, and the two extensionless muslgcc wrappers.
+# Shell, make, the two extensionless muslgcc wrappers, and the shell scripts
+# this project ships inside its images, which end in .script rather than .sh.
 script_files() {
     ls ./Makefile vendor/busybox/muslgcc vendor/dropbear/muslgcc 2>/dev/null
-    prune_find '(' -name '*.sh' -o -name '*.mk' -o -name 'Makefile' ')' -print
+    prune_find '(' -name '*.sh' -o -name '*.mk' -o -name '*.script' \
+                   -o -name 'Makefile' ')' -print
 }
 
 ch_files() {

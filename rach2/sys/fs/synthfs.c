@@ -147,6 +147,8 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
         synth_put(out, cap, &pos, "/dev/pts");
     } else if (kind == VNODE_PROC_DIR) {
         synth_put(out, cap, &pos, "/proc");
+    } else if (kind == VNODE_PROC_NET_DIR) {
+        synth_put(out, cap, &pos, "/proc/net");
     } else if (kind == VNODE_PROC_PID) {
         synth_put(out, cap, &pos, "/proc/");
         synth_put_uint(out, cap, &pos, (unsigned int)pid);
@@ -244,6 +246,18 @@ int synth_classify(const char *path, struct vpath *vp)
         /* /proc/disk: the same shape, a global file beside the pid tree. */
         if (comp_eq(c[1], "disk")) {
             vp->kind = (n == 2) ? VNODE_PROC_DISK : VNODE_ENOTDIR;
+            return vp->kind;
+        }
+        /* /proc/net/dev: the one file in the one directory `ifconfig` reads to
+           learn that an interface exists and what it has carried. */
+        if (comp_eq(c[1], "net")) {
+            if (n == 2) {
+                vp->kind = VNODE_PROC_NET_DIR;
+            } else if (n == 3 && comp_eq(c[2], "dev")) {
+                vp->kind = VNODE_PROC_NET_DEV;
+            } else {
+                vp->kind = (n == 3) ? VNODE_ENOENT : VNODE_ENOTDIR;
+            }
             return vp->kind;
         }
         if (comp_eq(c[1], "self")) {

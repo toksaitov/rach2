@@ -18,4 +18,17 @@ void ethernet_rx(const uint8_t *data, uint16_t len);
 void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
                  const uint8_t *payload, uint16_t plen);
 
+/* What the interface has carried since boot: every frame passes ethernet_rx or
+ * ethernet_tx, so this is where it is counted, and /proc/net/dev is where it is
+ * read. The counts are 32-bit and wrap, as Linux's do on a 32-bit machine. */
+struct eth_counts {
+    uint32_t rx_packets;
+    uint32_t rx_bytes;
+    uint32_t tx_packets;
+    uint32_t tx_bytes;
+};
+
+/** The interface's counters, live. */
+const struct eth_counts *ethernet_counts(void);
+
 #endif /* _ETHERNET_H_ */

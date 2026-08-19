@@ -87,7 +87,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        ping-test packet-test netif-test dgram-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
+        ping-test packet-test netif-test dgram-test dhcp-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
         subset-test diskdiag-test reset-test \
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
@@ -142,9 +142,18 @@ $(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
 	@test -s vendor/musl/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }
 	@touch $@
 
+# The patches are a prerequisite for the same reason musl's are: `build_busybox.sh`
+# applies everything under vendor/busybox/patches/ after it extracts, so a stamp
+# that did not depend on them would keep shipping a binary built from the patch
+# before the edit.
+# The directory is a prerequisite beside the wildcard: the wildcard notices an
+# edit to a patch that exists, and the directory's own timestamp notices one
+# being added or taken away, including the last one.
+BUSYBOX_PATCHES = vendor/busybox/patches $(wildcard vendor/busybox/patches/*.patch)
+
 $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
                   vendor/busybox/rach2-suid.config vendor/busybox/muslgcc \
-                  $(BUSYBOX_TARBALL) $(LIBC_STAMP)
+                  $(BUSYBOX_TARBALL) $(BUSYBOX_PATCHES) $(LIBC_STAMP)
 	@rm -f $@ $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
 	    build/vendor/busybox/applet_tables-main.h \
 	    build/vendor/busybox/applet_tables-suid.h \
@@ -313,9 +322,14 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 # partition whose kernel and RAM image GRUB can reach when partition 1 cannot be
 # read at all. The image is 630 MiB, 1290240 sectors.
 #
-# This target is the geometry only. The boot menu, the GRUB core slots, the
-# network configuration and the recovery contents are added by the phases that
-# own them; until then it boots the same machine the metal disk does.
+# The address is `rach2.ip=none`: this machine is carried between buildings and
+# takes whatever the network there gives it, through `ifup -a` and udhcpc, which
+# init runs before it starts the SSH server. A fixed address on the boot line
+# would be one more thing to edit at the desk, and editing it is the thing this
+# milestone exists to avoid.
+#
+# This target is the geometry and the boot line. The boot menu, the GRUB core
+# slots and the recovery contents are added by the phases that own them.
 SEALED_DISK = build/images/rach2-sealed.disk
 rach2-sealed-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
@@ -325,7 +339,7 @@ rach2-sealed-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check
 	RACH2_DISK_CLUSTER=8 \
 	RACH2_DISK_KRFFS_MB=500 \
 	RACH2_DISK_RECOVERY_MB=64 \
-	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole" \
+	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=none rach2.netconsole" \
 	    sh tools/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
@@ -622,6 +636,124 @@ dgram-test: rach2 tests krffs test-image
 	    "expect=Type 'help'" "send=exec /dgramprobe" \
 	    "expect=DGRAMPROBE OUTSIDE" "udp=15998:outsider" wait=30
 	python3 tools/bcast_check.py $(DGRAM_PCAP) --port 7500 --dst-ip 255.255.255.255
+
+# `make dhcp-test`: the machine taking an address it was not told, with the
+# client os-real carries. It boots with `rach2.ip=none`, so IPv4 is unset and
+# nothing is configured until userland does it, and QEMU's user network is
+# given a network of its own so the address that arrives cannot be the one the
+# machine would have had anyway.
+DHCP_NET = user,id=net0,net=192.168.90.0/24,host=192.168.90.2,dhcpstart=192.168.90.20,dns=192.168.90.3
+DHCP_PCAP = $(IMAGES_DIR)/dhcp.pcap
+DHCP_DISK = $(IMAGES_DIR)/dhcp-test.disk
+METAL_PCAP = $(IMAGES_DIR)/dhcp-metal.pcap
+dhcp-test: rach2 utils busybox krffs os-real-image
+	@rm -f $(DHCP_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "$(DHCP_NET)" \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=dh0,netdev=net0,file=$(DHCP_PCAP) \
+	    --append "rach2.ip=none" \
+	    --timeout 240 --steptmo 60 --ok "DHCPOK" --log $(IMAGES_DIR)/dhcp.log \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=# " "send=ifconfig eth0 | grep -q 'addr:0.0.0.0' && echo UNSET\"\"OK" \
+	    "expect=UNSETOK" "send=ifup -a" \
+	    "expect=lease of 192.168.90.20 obtained" wait=3 \
+	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:192.168.90.20' /tmp/if && grep -q 'Bcast:192.168.90.255' /tmp/if && grep -q 'Mask:255.255.255.0' /tmp/if && grep -q '192.168.90.3' /etc/resolv.conf && ping 192.168.90.2 > /dev/null && echo LEASE\"\"OK" \
+	    "expect=LEASEOK" "send=ping 10.9.9.9 > /dev/null 2>&1; echo ROUTE\"\"TRIED" \
+	    "expect=ROUTETRIED" "send=echo DHCP\"\"OK" \
+	    wait=10
+	# The address, the netmask and the broadcast are asserted above, and the
+	# route below: a packet for an address on no subnet of this machine's must
+	# leave addressed to the gateway's hardware address, which is what a
+	# default route means. Nothing answers 10.9.9.9, and nothing needs to.
+	python3 tools/bcast_check.py $(DHCP_PCAP) \
+	    --routed-via 192.168.90.2 --routed-dst 10.9.9.9
+	# And twice on a disk, where /var/run survives a reboot. `ifup` records
+	# there which interfaces it has configured, and the second boot must take
+	# a lease rather than read the first boot's record and decide it is
+	# already configured. Init empties that directory, and this is what says
+	# so: two boots of one disk, each of which must reach a lease.
+	$(MKDISK) krffs/manifests/os-real.manifest $(DHCP_DISK) 64 48
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.ip=none" \
+	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
+	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
+	    --timeout 240 --steptmo 60 --ok "FIRSTLEASE" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=# " "send=ifup -a" \
+	    "expect=lease of 192.168.90.20 obtained" wait=3 \
+	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo FIRST\"\"LEASE" \
+	    "expect=FIRSTLEASE" "send=poweroff -f" wait=5
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --append "rach2.fsdisk rach2.ip=none" \
+	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
+	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
+	    --timeout 240 --steptmo 60 --ok "SECONDLEASE" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=# " "send=ifup -a" \
+	    "expect=lease of 192.168.90.20 obtained" wait=3 \
+	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo SECOND\"\"LEASE" \
+	    "expect=SECONDLEASE" "send=poweroff -f" wait=5
+	# And unattended, which is how the sealed machine comes up: nothing is
+	# typed at all. The metal init runs `ifup -a` itself, after the console
+	# login and before the SSH server, so the lease must arrive with no
+	# console session in it.
+	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $(METAL_IMAGE) 4
+	@rm -f $(METAL_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "$(DHCP_NET),hostfwd=tcp::2224-:22" \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=mt0,netdev=net0,file=$(METAL_PCAP) \
+	    --append "rach2.ip=none" \
+	    --timeout 180 --steptmo 60 --ok "lease of 192.168.90.20 obtained" \
+	    "expect=lease of 192.168.90.20 obtained" wait=8 \
+	    "tcp=2224" wait=5
+	# The lease line is printed before the script runs, so on its own it proves
+	# only that a lease arrived. What proves the machine was configured is the
+	# wire: the step above knocks on the SSH port through the address the lease
+	# gave it, and the capture must then hold packets sent FROM that address,
+	# which only a machine holding it can send. The knock alone proves nothing,
+	# because QEMU's user network accepts the host side of a connection before
+	# it knows whether the guest is there. Nothing was typed at the console in
+	# any of it.
+	python3 tools/bcast_check.py $(METAL_PCAP) --source 192.168.90.20
+	# And on a network with no server at all, which is a cable plugged in
+	# later or a switch that has not started forwarding. The client must go
+	# to the background and keep asking rather than give up, because a
+	# machine that gave up is one nobody can reach until somebody walks to
+	# it, and walking to it is what this milestone exists to avoid. The
+	# console login must still be there, so a network that never comes up
+	# does not take the local way in with it.
+	# And a boot that was told its address on the command line, on a network
+	# with a DHCP server ready to hand out a different one. Init must not run
+	# `ifup` there at all: a machine given an address is configured already,
+	# and a client would begin by taking that address off and might never put
+	# one back. This one is asked at the console rather than read off the
+	# wire, because what is being tested is that nothing happened.
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "$(DHCP_NET)" \
+	    --append "rach2.ip=192.168.90.50/24 rach2.gateway=192.168.90.2" \
+	    --timeout 180 --steptmo 60 --ok "STATICKEPT" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=# " wait=20 \
+	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.50' && echo STATIC\"\"KEPT" \
+	    wait=10
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "hubport,id=net0,hubid=1" --append "rach2.ip=none" \
+	    --timeout 180 --steptmo 90 --ok "no lease, forking to background" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=# " "send=echo CONSOLE\"\"UP" \
+	    "expect=CONSOLEUP" \
+	    "expect=no lease, forking to background" wait=30
 
 # `make netconsole-test`: the kernel log on the wire. The machine this milestone
 # targets has no serial port, so the boot log has to leave over Ethernet or not
