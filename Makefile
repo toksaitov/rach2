@@ -93,7 +93,7 @@ MKDISK          = krffs/mkdisk.sh
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci rach2-metal-grub-disk \
         rach2-sealed-disk rach2-recovery rach2-recovery-image authority-test menu-test grub-test \
-        drill-test \
+        drill-test sealed-test \
         isos test-iso os-simple-iso os-real-iso rach2-metal-image rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
@@ -563,6 +563,19 @@ install-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-seti
 	sh tools/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
 	sh tools/install_test.sh $(INSTALL_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
+
+# `make sealed-test`: the disk that goes into the laptop, operated the way it
+# will be operated once it is in there. Two runs of one artifact on separate
+# copies: a fault run that walks the whole life of the machine over SSH (a
+# kernel sent down the connection, installed, tried and committed; a destroyed
+# candidate caught by the fallback and repaired; a menu staged and then torn; the
+# boot loader replaced with a marked core; the root destroyed and rewritten from
+# recovery), and a control run that injects nothing and asserts that no fallback
+# and no recovery appears anywhere. Docker builds the artifact; the runs are
+# QEMU and ssh.
+sealed-test: rach2-sealed-disk
+	sh tools/sealed_test.sh $(SEALED_DISK) \
+	    "`cat krffs/rach2_demo_password`" 2297
 
 # `make drill-test`: the recovery drill, boots of one disk that carries the same
 # three partitions the sealed disk has. The everyday kernel must refuse to write
@@ -1369,6 +1382,7 @@ help:
 	@echo "  make rach2-recovery      the recovery kernel, the only build that can write the whole disk"
 	@echo "  make rach2-recovery-image  the RAM root that kernel loads, with reflash and bootctl"
 	@echo "  make drill-test      the recovery drill: a destroyed root repaired over SSH"
+	@echo "  make sealed-test     the sealed disk, operated over SSH the way it will be"
 	@echo "  make authority-test  only a recovery kernel writes the whole disk"
 	@echo "  make menu-test    a staged boot menu, and the stub that catches a torn one"
 	@echo "  make grub-test    the machine replacing its own boot loader"

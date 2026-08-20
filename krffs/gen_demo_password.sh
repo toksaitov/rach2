@@ -22,7 +22,9 @@ cd "$SCRIPT_DIR"
 
 MKHASH=../build/krffs/mkhash.krffs
 
-if [ -f shadow ]; then
+# Already minted, and nobody asked for them to be replaced: the common case, and
+# the fast one, since every image target calls this.
+if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ]; then
     exit 0
 fi
 
@@ -38,8 +40,25 @@ until mkdir .gen_demo_password.lock 2>/dev/null; do
     sleep 1
 done
 trap 'rmdir .gen_demo_password.lock' EXIT
-if [ -f shadow ]; then
+
+# The credentials are minted once and then left alone: every build calls this,
+# and a script that reminted on each call would change the machine's passwords
+# under whoever was using them. Replacing them is therefore something to ask for
+# by name, which is what the sealing session does when it gives a machine
+# passwords of its own.
+if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ]; then
     exit 0
+fi
+if [ -f shadow ]; then
+    # The old hashes go before the new plaintext arrives, and not after. The
+    # publication is three files and one rename, so an interruption in the
+    # middle of it leaves something; what it must not leave is new passwords in
+    # the plaintext files beside the old hashes in `shadow`, because the next
+    # ordinary build takes `shadow` being there as the whole answer and would
+    # ship credentials nobody has. With it removed first, an interruption leaves
+    # no `shadow` at all, and the next build mints a complete set.
+    echo "gen_demo_password: replacing the credentials already in krffs/"
+    rm -f shadow
 fi
 
 # The demo passwords. These are development credentials for a teaching system:
@@ -52,6 +71,11 @@ fi
 # token for either if this machine is somewhere a demo account matters:
 #
 #     RACH2_ROOT_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)"
+#
+# Those take effect on a tree that has no credentials yet. To replace ones that
+# are already there, which is what a machine going onto a real network needs,
+# set RACH2_REPLACE_PASSWORDS=1 as well; without it this script leaves an
+# existing krffs/shadow alone whatever else is set.
 #
 # The salts stay random regardless, since nobody types a salt.
 DEFAULT_ROOT_PASSWORD="1qA2wS3eD"

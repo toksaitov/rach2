@@ -428,6 +428,16 @@ The sequence is `grubslot_install`, which takes the reader and writer as a callb
 One risk remains and the project does not claim otherwise. A torn or bad write to LBA 1 makes GRUB unreachable, and the recovery image cannot help, because GRUB is what loads recovery. It is accepted for three reasons: updating GRUB from the everyday machine is a requirement, the exposure is one sector written after the replacement beneath it has been read back and verified, and nothing short of firmware network boot or removable media would remove it.
 
 
+## The sealed disk, rehearsed
+
+`sealed_test.sh` (`make sealed-test`) is the disk that goes into the laptop, operated the way it will be operated once it is in there: on the controller it will use, over SSH, with nothing typed at the console after the machine is switched on. Every other harness proves one mechanism on a disk built for it; this one proves the finished article.
+
+Two runs of one artifact, on separate copies. The fault run walks the machine's whole life: it comes up and answers a key login; a kernel arrives down the same connection, is installed as a one-boot trial, proves itself by a marker in its own boot, and is committed; a candidate destroyed from the host is caught by the fallback and repaired from the machine that fell back; a menu is staged and then truncated from the host, which the stub must survive; the boot loader is replaced with a marked core; and the root is destroyed with the machine stopped and rewritten from recovery through one `ssh` pipe, after which the machine boots from what arrived. The control run is the same artifact with nothing injected, and it asserts that no fallback and no recovery appears anywhere. That absence is why it is a second run: a machine sent to recovery on purpose can never say that recovery was not reached.
+
+Two details in it are worth carrying to any harness that operates a machine over SSH. A command that stops the machine (`reboot -f`, `poweroff -f`) has no answer to wait for, since the connection dies with it, so those calls are bounded tightly and their result ignored while the QEMU process is what is watched. And arming a boot from the host means editing the environment block the way `grub-editenv` does, one key set and every other line kept: writing the block from nothing drops the saved default with it, and the machine then comes back on the fallback for a reason that has nothing to do with the test.
+
+The physical write that follows the rehearsal is a document rather than a script, `dev-log/25-sealed/checklist.md`, because it names a drive by model and serial and asks for that to be confirmed twice before anything is written.
+
 ## Image builders (need Docker)
 
 * `mkdisk_grub.sh` (`make os-real-grub-disk`): builds a BIOS-bootable partitioned
