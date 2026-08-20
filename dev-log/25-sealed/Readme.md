@@ -528,8 +528,65 @@ And the sealed network was two numbers that could disagree: the menu takes a pre
 
 Every one of these was run on its own, on the tree built from nothing, and every one passed: `verify-style`, `verify-host`, `test` (62 probes), `test-addressed`, `test-disk`, `test-disk-ahci`, `packet-test`, `netif-test`, `dgram-test`, `ping-test`, `dhcp-test`, `netconsole-test`, `bootpart-test`, `authority-test`, `diskpolicy-test`, `diskdiag-test`, `reset-test`, `shutdown-test`, `account-test`, `login-test`, `cred-persist-test`, `menu-test`, `grub-test`, `install-test`, `drill-test`, `ssh-test`, `selfbuild-test`, `tcc-test`, `make-test`, `sealed-test`.
 
+## The hardware session
+
+Written after the milestone shipped, from a session with the drive and the laptop in hand. This section is what the next machine and the next person work from, so it is stated in numbers, and the commands that produced them are at the end of it. Everything here is an operator's record of one session: the numbers can be re-derived from the tree and the drive, and where they cannot, the text says so.
+
+The artifact on the SSD is `a7f7d76e550761e69a92d7a6d18b46aa5649001e8bf14287a7040ead07361bbf`, 660602880 bytes, and 630 MiB read back off the drive hashes to the same value. It is the second image written: the first was `a6155446b6eef802074d81df2e0d62835b38dfde1a4956f86f895c013cce64e9`, identical except that the second also carries the owner's own SSH public key beside the project's demo key, so an ordinary workstation can reach the machine without the project's private material.
+
+The target was identified without a serial, and that is a property of the adapter rather than of the drive. `diskutil info` reports the model as `Generic` and no serial number at all, because the USB-to-SATA bridge answers about itself. What identified it instead: the only external physical disk attached, USB, whole disk, 250059350016 bytes, and already carrying the layout a previous write had put there.
+
+`checklist.md` in this directory still requires the drive's model and serial to match a label, so it cannot be followed with this adapter, and it says such an adapter must be replaced. That is an open decision, not a corrected document: milestone 26 settles it, and until it does, the checklist and the way these writes were actually approved disagree.
+
+Booted in QEMU from the physical drive rather than from the image file, the machine reached a login in five seconds, answered SSH by key, and reported `booted: candidate`, `saved_entry: candidate`, `next_entry: absent`, with the candidate slot at first sector 312 (4096 sectors, 512 clusters) and the fallback at 4408 (1568 sectors, 196 clusters). Its root mounted from partition 2 through AHCI with 575 files, and `tcc -static` compiled and ran a program on it. Three such boots left the drive hashing identically, because they ran under `-snapshot`.
+
+Booted on the Lenovo G50-70 over the USB adapter, the machine took `192.168.0.107` from the building's router, which is a reservation matched against `28:D2:44:7E:E0:AF`, the station address `dev-log/24-metal/baseline.md` recorded. The netconsole capture holds the whole exchange, discover through lease, and the lease is an infinite one, 4294967295 seconds. The resolver was written from the lease and `nslookup` answered. Root logged in by key, a pty came up as `/dev/pts/0`, and `TERM` arrived correctly from a client that sends one.
+
+The laptop's own disk was found and left alone, which is the promise milestone 24 made and this session measured again: `Samsung SSD 870 EVO 1TB`, serial `S74ZNX0Y927920A`, firmware `SVT04B6Q`, 1953525168 sectors, reported unmounted, and its first sector still hashing to `652ad40fe72061185cf3a69c1a9a45394f68374f409153e082b7c1fa04c107d3`, the value Windows measured before Rach2 ever ran on the machine.
+
+Two things about that session limit what it proved. Only the recovery entries can run from a USB adapter, because this kernel has no USB driver and cannot see the drive it booted from; the ordinary entries would look for a root on the AHCI bus, where the laptop's Windows disk is. The drive has been on that adapter for every boot in this session, so no boot of the ordinary root has happened on the laptop, and there is as yet no `bootctl status` from that machine and no persistent SSH host key for it. That is a statement about this session and the adapter, not a guarantee about the drive's whole history. Recovery mints a fresh host key on every boot because its root is a RAM image, so nothing seen in that session can be pinned. The ordinary system's host key will be minted on its first boot from the SATA bay and must be read off the laptop's own screen then, which is the one moment the checklist says is worth walking to the machine for.
+
+Six diagnostic programs were found broken on that machine, each on one missing file: `ps` on `/proc/uptime`, `top` on `/proc/stat`, `route -n` on `/proc/net/route`, `netstat` on `/proc/net/tcp`, `arp` on `/proc/net/arp`, `df` on `/proc/mounts`. `dmesg` fails on `klogctl`, and `stty` fails on a pty where `tty` answers correctly. Milestone 27 owns all of them.
+
+### The commands behind those numbers
+
+Kept so a reader can repeat them rather than believe them. The host commands ran on the Mac the drive was attached to; the machine commands ran over SSH into the booted system.
+
+    shasum -a 256 build/images/rach2-sealed.disk
+    a7f7d76e550761e69a92d7a6d18b46aa5649001e8bf14287a7040ead07361bbf
+
+    sudo dd if=/dev/rdiskN bs=1m count=630 | shasum -a 256
+    a7f7d76e550761e69a92d7a6d18b46aa5649001e8bf14287a7040ead07361bbf
+
+    diskutil info /dev/diskN
+    Device / Media Name:  Generic          (the adapter, not the drive)
+    Protocol:             USB
+    Disk Size:            250059350016 Bytes
+    Device Location:      External
+    Whole:                Yes
+
+The lease, from a netconsole capture on the same segment (`tcpdump -i en0 -nn -e -s0 'ether proto 0x88b5'`). Netconsole is unauthenticated broadcast and is evidence of what was said on the wire, not of who said it:
+
+    udhcpc: broadcasting discover
+    udhcpc: broadcasting select for 192.168.0.107, server 192.168.0.1
+    udhcpc: lease of 192.168.0.107 obtained from 192.168.0.1, lease time 4294967295
+
+The laptop's own disk, read from the recovery system over SSH, with `/proc/disk` and then its first sector:
+
+    model Samsung SSD 870 EVO 1TB
+    serial S74ZNX0Y927920A
+    sectors 1953525168
+    mounted 0
+
+    dd if=/dev/disk0 bs=512 count=1 | sha256sum
+    652ad40fe72061185cf3a69c1a9a45394f68374f409153e082b7c1fa04c107d3
+
+That last value is the one `dev-log/24-metal/baseline.md` recorded from Windows before Rach2 ran on the machine. The baseline is what it is compared against; the comparison itself is this session's observation.
+
 ### What is left, and for whom
 
-The hardware is the owner's, and two things wait on it. The first is the pair of boots phase F asked for, one at home and one at the office, each taking an address with no boot line edited: the machine and the network are the only things that can answer whether the client works on a real router. The second is the sealing session itself, `dev-log/25-sealed/checklist.md`, which is written to be worked through with the drive in hand.
+The pair of boots phase F asked for is half done: the machine took an address from a real router at home, with no boot line edited, and the client works. The office half has not been run.
+
+What still waits on the hardware is the sealing session itself, `dev-log/25-sealed/checklist.md`, which is written to be worked through with the drive in hand. The SSD is out of the machine, on a USB adapter, holding the artifact named above; the laptop still has its original Windows disk inside it.
 
 What this milestone deliberately did not build is what the plan said it would not: a second root partition, a configuration partition, a watchdog, network boot, and redundancy below GRUB. Two more were decided during the work and are written where they matter rather than here: a root that will not mount while the boot partition is healthy still needs somebody at the console, because nothing in the boot path can see a kernel that loaded and then stopped, and closing that means counting boot attempts in the environment block; and recovery's SSH identity changes at every recovery boot, because its root is a RAM image and staging a fixed host key would need a host-side `dropbearkey` this project does not build.

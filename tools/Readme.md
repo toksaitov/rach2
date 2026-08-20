@@ -11,13 +11,13 @@ the supporting scripts.
   optional tool as PASS / MISSING / OPTIONAL with an install hint, and exits
   non-zero if a required tool is absent, so a fresh machine sees a checklist
   instead of a cryptic mid-build failure.
-* `check.sh` (`make verify-style`): the style and quality gate, in twelve steps.
+* `check.sh` (`make verify-style`): the style and quality gate, in thirteen steps.
   Runs the `-Werror` kernel build, a scoped cppcheck (with `cppcheck.suppress`),
   shellcheck, the convention grep (no `//`, ASCII only, header guards),
   clang-format on new code, a readelf ABI check, the source-list guard, the
   text-style check, the probe runner's own scoring selftest, the set-id manifest
-  sweep, the image-reproducibility check, and the kernel structural checker's
-  selftest.
+  sweep, the image-reproducibility check, the structural checkers' selftests, and
+  the dev-log index check.
 * `textcheck.sh` (invoked by `check.sh`): the mechanical prose checks (ASCII only, no em-dash, `*` bullets, and the rest of the writing standard). Its roots are the source trees and the top-level `*.md`; `dev-log` is deliberately not one. The milestone records are frozen at the style of the day they were written, and the early ones would fail these checks: editing them to satisfy a later checker would destroy the only account of what each milestone actually proved, which is the whole reason they are kept. So a new record is held to the same rules the way voice is, by review, and this is the statement of that rather than a gap nobody noticed. The mechanical half of the gate covers the code and the current documentation; it does not cover the history.
 * `check_sources.sh` (`make check-sources`, also run inside the gate): fails if a
   kernel `.c` on disk is missing from `C_SRC`, so a new source cannot be silently
@@ -252,6 +252,7 @@ the supporting scripts.
   stages every byte correctly into a compiler only root can use.
   `--selftest` (run inside the gate) covers every directive form
   and failure mode, including each hole the guard has had.
+* `check_devlog.py` (run inside the gate): `dev-log/Readme.md` against the milestone directories beside it. `AGENTS.md` tells a reader that the last entry there is where the tree stands, and nothing else holds that sentence true, since the index is not what a milestone's own work touches. A milestone directory is finished when it carries the record of what was built: `Readme.md`, or `results.md`, which is what milestone 6 called it. Every finished milestone must have an entry, the entries must appear in the same numeric order as the directories, and a directory holding only a `plan.md` must have no entry at all, because an entry states that the work is done. Bullets inside fenced code blocks are examples and are not read as entries. `--selftest` (run inside the gate) drives each rule from a temporary tree.
 * `check_repro.py` (run inside the gate): one tree, one image. A staged image is
   built from a manifest and a set of host artifacts, and nothing about the
   machine that built it may show through. Two things used to: `mkfs.krffs`
