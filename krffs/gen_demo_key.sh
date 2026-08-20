@@ -9,7 +9,9 @@
 # git-ignored host-side test credentials; the public halves (authorized_keys and
 # test_authorized_keys) the os-real manifest stages into each account's ~/.ssh.
 # Each keypair is generated only when its public half is absent, so a present
-# key is left as is (idempotent).
+# key is left as is (idempotent). Set RACH2_REPLACE_KEYS=1 to mint new ones over
+# whatever is there, which is what a machine going somewhere real needs: the
+# keys a development tree has been using are the keys every demo has used.
 #
 #   ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 #   ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
@@ -27,8 +29,11 @@ gen_key() {
     pub="$2"
     user="$3"
 
-    if [ -f "$pub" ]; then
+    if [ -f "$pub" ] && [ -z "${RACH2_REPLACE_KEYS:-}" ]; then
         return 0
+    fi
+    if [ -f "$pub" ]; then
+        echo "gen_demo_key: replacing the keypair already in krffs/"
     fi
     if ! command -v ssh-keygen >/dev/null 2>&1; then
         echo "gen_demo_key: no krffs/$pub and no ssh-keygen to make one." >&2

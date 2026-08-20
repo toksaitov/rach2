@@ -48,9 +48,48 @@ build that follows and wrong for the next ordinary day's work: to go back to the
 development credentials, run the same command with `RACH2_REPLACE_PASSWORDS=1`
 and neither password variable set.
 
-The private key is the other half and is already per-machine:
-`krffs/rach2_demo_ed25519` is generated once and is the only thing that opens a
-root session over SSH.
+The keys are the other half, and they are not per-machine by default:
+`gen_demo_key.sh` leaves a keypair alone once it exists, so a tree that has ever
+built an image is carrying the key every demo on that machine has used. The
+sealing build mints new ones the same way:
+
+```sh
+RACH2_REPLACE_KEYS=1 sh krffs/gen_demo_key.sh
+```
+
+`krffs/rach2_demo_ed25519` is then the only thing that opens a root session on
+this machine, and the old one opens nothing. Keep it where the machine is not,
+and take a copy: it cannot be replaced afterwards without writing the disk
+again.
+
+## The machine's own identity
+
+The server mints a host key on its first boot and keeps it, so the ordinary
+system has one identity from then on and `ssh` can pin it in the usual way. The
+first connection is the one with nothing to compare against, and the machine
+prints the fingerprint as it generates the key:
+
+```
+Generated hostkey /etc/dropbear/dropbear_ed25519_host_key, fingerprint is SHA256:...
+```
+
+Read that off the laptop's own screen, at the machine, and write it into the
+session record. This is the one moment in the whole procedure when the screen is
+worth walking to: it is the only channel here that nobody else on the network
+can write to. The netconsole capture carries the same line, and it is useful for
+seeing what the machine did, but it is unauthenticated broadcast: anyone on the
+segment can send a frame carrying whatever fingerprint they like. Do not verify
+an identity from it.
+
+Recovery is different and it is worth knowing before the day it is needed: its
+root is a RAM image, so it mints a new host key on every recovery boot and `ssh`
+will say the identity changed. The screen is the same answer, if the machine can
+be reached; if it cannot, then the honest position is that the connection is
+unauthenticated, and what goes down it should be judged on that basis. A whole
+root partition sent to a machine that turns out to be somebody else is a bad
+day, but so is a machine that stays broken. The mitigation this project has is
+that the image sent is not a secret and its arrival is verified by a hash read
+back off the drive, so a wrong destination is detected rather than trusted.
 
 ## Before starting
 

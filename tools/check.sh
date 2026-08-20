@@ -287,11 +287,14 @@ fi
 # 12. the checkers' own selftests. Each runs on every build of the thing it
 #     guards, so what is verified here is the checker itself: the kernel one
 #     must accept a well-formed kernel and refuse each malformed variant a
-#     loader would misload, and the GRUB one must accept the configuration a
-#     core image carries and refuse every way of losing the recovery path.
+#     loader would misload, the GRUB one must accept the configuration a core
+#     image carries and refuse every way of losing the recovery path, and the
+#     sealed-network one must refuse every way the menu and the recovery script
+#     can come to describe two different machines.
 hr "12/12 checker selftests"
 if python3 "$REPO/tools/check_kernel.py" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
-   python3 "$REPO/tools/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
+   python3 "$REPO/tools/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   python3 "$REPO/tools/check_sealednet.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_kernelck.log"; fail=1

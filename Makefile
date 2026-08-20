@@ -345,9 +345,11 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 # slots and the recovery contents are added by the phases that own them.
 # The fixed address the two static entries carry, for the day the network this
 # machine is plugged into has no server: the same defaults the metal stick uses,
-# overridable at build time for anywhere else. The recovery image falls back to
-# the same address when no lease arrives, and its script carries its own copy,
-# so the build below refuses a disk whose menu and script disagree.
+# overridable at build time for anywhere else. The menu takes a prefix and the
+# recovery script takes a dotted mask, and the two must be the same subnet with
+# the gateway inside it; tools/check_sealednet.py holds them to that before a
+# disk is written, since a machine whose menu and fallback disagree is one
+# nobody can reach by either.
 SEALED_ADDRESS ?= 192.168.0.105
 SEALED_MASK ?= 255.255.255.0
 SEALED_PREFIX ?= 24
@@ -357,13 +359,8 @@ SEALED_DISK = build/images/rach2-sealed.disk
 rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
-	@grep -q "ifconfig eth0 $(SEALED_ADDRESS) netmask $(SEALED_MASK)" \
-	    krffs/rescue-static.script && \
-	 grep -q "route add default gw $(SEALED_GATEWAY)" krffs/rescue-static.script || { \
-	    echo "rach2-sealed-disk: krffs/rescue-static.script does not carry" \
-	         "$(SEALED_ADDRESS) netmask $(SEALED_MASK) through $(SEALED_GATEWAY)," \
-	         "so recovery would fall back to a different address than the menu" >&2; \
-	    exit 1; }
+	@python3 tools/check_sealednet.py $(SEALED_ADDRESS) $(SEALED_PREFIX) \
+	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
 	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
