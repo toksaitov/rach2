@@ -15,6 +15,14 @@
 # list is the one tools/mkdisk_grub.sh uses, because a core image with
 # different modules would be testing something else.
 #
+# The marker goes in FRONT of `tools/grub-embed.cfg`, which is the whole of what
+# a core image on this project's disks has to carry: the ordered pair of
+# `configfile` calls that reaches the menu on partition 1 and, failing that, the
+# recovery menu on partition 3. Those lines are in one file because a core built
+# without them takes the recovery path away from a machine that had it, and does
+# it silently. The marker has to print first, since a `configfile` that finds a
+# menu never comes back.
+#
 # Usage: mkgrubcore.sh <marker> <output>
 #
 
@@ -37,6 +45,11 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
+# The lines whose absence is silent: a replacement core that cannot reach
+# partition 3 boots every ordinary machine and no damaged one. The same checker
+# the disk builder runs, on the same file.
+python3 "$REPO/tools/check_grubembed.py" "$REPO/tools/grub-embed.cfg"
+
 docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
     ubuntu:24.04 sh -e -c "
     apt-get update -qq && apt-get install -y -qq grub-pc-bin grub-common >/dev/null 2>&1
@@ -47,6 +60,7 @@ docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
         printf 'serial --unit=0 --speed=115200\n'
         printf 'terminal_output serial console\n'
         printf 'echo GRUBCORE=%s\n' '$MARKER'
+        cat '$REPO/tools/grub-embed.cfg'
     } > /tmp/embed.cfg
     grub-mkimage -O i386-pc -p '(hd0,msdos1)/boot/grub' -c /tmp/embed.cfg \
         -o '$OUTDIR/$OUTBASE' \

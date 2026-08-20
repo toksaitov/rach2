@@ -56,6 +56,7 @@ typedef unsigned int size_t;
 #define EINVAL    22
 #define EOVERFLOW 75
 #define ENOSPC    28
+#define EBUSY     16
 
 /* i386 struct stat64: st_mode at offset 16, the 64-bit st_ino (the field musl
  * reads) at 88 (96 bytes total). */
@@ -237,6 +238,31 @@ static void auth_case(int recovery)
 
     fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDWR, 0);
     check(fd >= 0, "root opens /dev/disk0 read-write");
+
+    /* One writer at a time, across every window onto this disk. Two reflashes
+       over ranges that overlap each write their whole length and each report
+       success, and what is on the platter is neither image; and the windows are
+       not three disks, since the boot partition and the loader's gap are both
+       inside the whole one. So the second writer is refused whichever name it
+       asks by. A reader is not a writer and is not counted. */
+    {
+        int second = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDWR, 0);
+
+        check(second == -EBUSY, "a second writer of the whole disk is refused");
+        second = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_WRONLY, 0);
+        check(second == -EBUSY, "however it asks for the write");
+        second = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDWR, 0);
+        check(second == -EBUSY || second == -ENOENT,
+              "a writer of the boot partition is refused while the whole disk is held");
+        second = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDWR, 0);
+        check(second == -EBUSY || second == -ENOENT, "and so is a writer of the loader's gap");
+        second = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDONLY, 0);
+        check(second >= 0, "but a reader alongside it is not");
+        if (second >= 0) {
+            syscall1(SYS_CLOSE, second);
+        }
+    }
+
     rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
     check(rc == 0 && pos == at, "seek to 3 GiB");
 

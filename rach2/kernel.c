@@ -43,6 +43,7 @@
 #include "sys/network/netconf.h"
 #include "sys/block/diskcmd.h"
 #include "sys/block/diskinfo.h"
+#include "sys/block/recovery.h"
 #include "sys/board.h"
 #include "sys/network/driver/netdev.h"
 #include "sys/network/netconsole.h"
@@ -3040,8 +3041,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * mount above did not, publishes /proc/disk and /dev/disk0, and issues
      * nothing but IDENTIFY and a sector read, so the read-only build runs it
      * unchanged. Without the flag neither object exists, so no image grows a
-     * raw whole-disk node by accident. */
-    if (kcmdline_has("rach2.diskdiag")) {
+     * raw whole-disk node by accident. The recovery build is the exception and
+     * needs no flag: the whole-disk window is what that build is for. */
+    if (kcmdline_has("rach2.diskdiag") || recovery_publishes_disk()) {
         k_printf("  Disk diagnostic...");
         serial_printf("  Disk diagnostic...");
         if (diskinfo_probe(_krffs_on_disk) == 0) {

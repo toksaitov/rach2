@@ -72,6 +72,8 @@ GAP_MB=1
 BOOT_MB="${RACH2_DISK_BOOT_MB:-16}"
 CLUSTER="${RACH2_DISK_CLUSTER:-}"
 RECOVERY_MB="${RACH2_DISK_RECOVERY_MB:-0}"
+RECOVERY_KERNEL="${RACH2_DISK_RECOVERY_KERNEL:-}"
+RECOVERY_IMAGE="${RACH2_DISK_RECOVERY_IMAGE:-}"
 
 # The FAT half of this disk used to differ between two builds of one tree, in
 # two places that have nothing to do with its contents: mformat picks a random
@@ -117,6 +119,8 @@ sh "$REPO/krffs/mkimage.sh" "$MANIFEST" \
 # leaves a half-written disk that passes a later file-existence check. The trap
 # clears both temporaries on any exit.
 GRUB_CFG="$REPO/build/images/grub-disk.cfg"
+RECOVERY_CFG="$REPO/build/images/grub-recovery.cfg"
+EMBED_CFG="$REPO/build/images/grub-embed.cfg"
 trap 'rm -f "$GRUB_CFG" "$OUT.new"' EXIT
 
 # The install contract (dev-log/23-install/plan.md): /boot/kernel is the
@@ -136,45 +140,68 @@ load_env
 # Every entry this file owns is defined before the rewritable half is read, and
 # the order below is a contract. `source` merges the second file's entries onto
 # the tail of this list, so these keep the low indices whatever that file holds;
+# Every entry names its own root. GRUB does not put `root` back when an entry
+# fails: the recovery entries set it to partition 3, and a fallback that assumed
+# the root it started with would look for the ordinary kernel there and fail
+# too, which is a machine that stops instead of falling back.
+#
 # `set fallback` takes an entry NUMBER and an id does not resolve, so a menu
 # supplied later cannot move what the fallback points at. A boot.cfg that is
 # missing, truncated mid-write or wrong leaves these standing and the machine
 # still boots.
 #
 #   0 candidate   1 fallback   2 candidate-static   3 fallback-static
-#   4 debug       5 recovery
+#   4 debug       5 recovery   6 recovery-static
 
 menuentry "Rach2" --id candidate {
+    set root=(hd0,msdos1)
     multiboot /boot/kernel rach2.root=disk rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
 menuentry "Rach2 (fallback kernel)" --id fallback {
+    set root=(hd0,msdos1)
     multiboot /boot/fallback rach2.root=disk rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
 menuentry "Rach2 (static address)" --id candidate-static {
+    set root=(hd0,msdos1)
     multiboot /boot/kernel rach2.root=disk rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     boot
 }
 
 menuentry "Rach2 (fallback kernel, static address)" --id fallback-static {
+    set root=(hd0,msdos1)
     multiboot /boot/fallback rach2.root=disk rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     boot
 }
 
 menuentry "Rach2 (kernel debug shell)" --id debug {
+    set root=(hd0,msdos1)
     multiboot /boot/fallback rach2.root=disk rach2.slot=fallback rach2.rescue RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
-# Not bootable until the phase that builds it: the kernel and RAM image it names
-# live on partition 3 and are staged later. It is defined now because the
-# numbers above are a contract and adding an entry afterwards would move them.
-menuentry "Rach2 (recovery, not yet built)" --id recovery {
+# The recovery kernel and its RAM image, on partition 3. It mounts nothing from
+# this disk, which is what lets it rewrite the root; its title says so when the
+# two files are there and says they are not when they are not, since the entry
+# is defined either way (the numbers above are a contract and adding an entry
+# afterwards would move them). There are two of it, for the same reason the
+# ordinary entries come in pairs: a machine whose root will not mount has to be
+# reachable, and on a network with no DHCP server the first one is not. Both
+# carry `rach2.slot=recovery`, which is how `bootctl` running there knows it is
+# running from neither kernel slot and may therefore install into either.
+menuentry "RACH2_RECOVERY_TITLE" --id recovery {
     set root=(hd0,msdos3)
-    multiboot /boot/recovery rach2.root=ram RACH2_APPEND_TOKENS
+    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    module /boot/recovery.krffs
+    boot
+}
+
+menuentry "RACH2_RECOVERY_STATIC_TITLE" --id recovery-static {
+    set root=(hd0,msdos3)
+    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     module /boot/recovery.krffs
     boot
 }
@@ -224,6 +251,19 @@ if [ "${saved_entry}" = "fallback-static" ]; then
     set default=fallback-static
     set fallback=3
 fi
+# A repair is not one boot. Rewriting a root takes minutes, and a machine that
+# lost power in the middle of one would come back to a kernel that cannot mount
+# what is there and starts no way in; the boot partition is healthy, so nothing
+# falls through to partition 3 either. So recovery can be the saved default as
+# well as a one-boot trial, and an administrator leaves it there until the
+# repair is finished. Each falls back to the kernel pair with its own network.
+if [ "${saved_entry}" = "recovery" ]; then
+    set default=recovery
+fi
+if [ "${saved_entry}" = "recovery-static" ]; then
+    set default=recovery-static
+    set fallback=3
+fi
 if [ "${next_entry}" = "candidate" ]; then
     set default=candidate
     set next_entry=
@@ -237,7 +277,9 @@ fi
 # A trial on a network with no DHCP server falls back to the kernel that also
 # has the fixed address, entry 3. Falling back to entry 1 there is a machine
 # that boots and cannot be reached, which is the one thing a fallback exists to
-# prevent.
+# prevent. The static recovery entry answers to the same rule: a recovery
+# payload that will not load must not drop the machine onto a kernel that asks
+# for a lease nobody answers.
 if [ "${next_entry}" = "candidate-static" ]; then
     set default=candidate-static
     set fallback=3
@@ -260,6 +302,12 @@ if [ "${next_entry}" = "recovery" ]; then
     set next_entry=
     save_env next_entry
 fi
+if [ "${next_entry}" = "recovery-static" ]; then
+    set default=recovery-static
+    set fallback=3
+    set next_entry=
+    save_env next_entry
+fi
 
 set timeout=3
 CFG
@@ -270,17 +318,61 @@ CFG
 # ordinary entries take the DHCP set and the static ones take the fixed address,
 # and neither line ever carries both, since the kernel refuses an address given
 # twice and would come up with no address at all.
+RECOVERY_TITLE="Rach2 (recovery, not yet built)"
+RECOVERY_STATIC_TITLE="Rach2 (recovery, static address, not yet built)"
+if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
+    RECOVERY_TITLE="Rach2 (recovery, rewrites this disk)"
+    RECOVERY_STATIC_TITLE="Rach2 (recovery, static address)"
+fi
 sed -e "s|RACH2_STATIC_TOKENS|$STATIC_APPEND|" \
     -e "s|RACH2_DHCP_TOKENS|$DHCP_APPEND|" \
+    -e "s|RACH2_RECOVERY_STATIC_TITLE|$RECOVERY_STATIC_TITLE|" \
+    -e "s|RACH2_RECOVERY_TITLE|$RECOVERY_TITLE|" \
     -e "s|RACH2_APPEND_TOKENS|$EXTRA_APPEND|" "$GRUB_CFG" > "$GRUB_CFG.new"
 mv "$GRUB_CFG.new" "$GRUB_CFG"
+
+# The menu on partition 3. Everything above lives on partition 1, and a machine
+# whose boot partition is damaged cannot read any of it: no menu, no entry, no
+# recovery. What reaches this file is the configuration built into the core
+# image, `tools/grub-embed.cfg`, which says there why it is shaped as it is;
+# `configfile` does not retarget the root, which is why this file sets its own.
+cat > "$RECOVERY_CFG" <<'RCFG'
+set root=(hd0,msdos3)
+set timeout=3
+set default=0
+
+menuentry "Rach2 (recovery, partition 1 unreadable)" --id recovery {
+    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    module /boot/recovery.krffs
+    boot
+}
+
+menuentry "Rach2 (recovery, partition 1 unreadable, static address)" --id recovery-static {
+    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    module /boot/recovery.krffs
+    boot
+}
+RCFG
+
+sed -e "s|RACH2_STATIC_TOKENS|$STATIC_APPEND|" \
+    -e "s|RACH2_DHCP_TOKENS|$DHCP_APPEND|" \
+    -e "s|RACH2_APPEND_TOKENS|$EXTRA_APPEND|" "$RECOVERY_CFG" > "$RECOVERY_CFG.new"
+mv "$RECOVERY_CFG.new" "$RECOVERY_CFG"
+
+cp "$REPO/tools/grub-embed.cfg" "$EMBED_CFG"
+
+# The lines whose absence is silent: a core that cannot reach partition 3 boots
+# every ordinary machine and no damaged one, and one that reaches it first sends
+# every healthy machine to recovery. Both builders check the same file with the
+# same checker.
+python3 "$REPO/tools/check_grubembed.py" "$EMBED_CFG"
 
 # No entry may name the address twice. The kernel refuses a command line that
 # does, and refuses it by coming up with no address at all, so a build that
 # composed the two token sets wrongly would produce a disk whose menu offers a
 # machine nobody can reach. It stops here instead.
 if ! awk '/^[[:space:]]*multiboot /{ n = gsub(/rach2\.ip=/, "&"); if (n > 1) exit 1 }' \
-        "$GRUB_CFG"; then
+        "$GRUB_CFG" "$RECOVERY_CFG"; then
     echo "mkdisk_grub: a menu entry names rach2.ip more than once" >&2
     exit 1
 fi
@@ -406,6 +498,7 @@ print(\"mkdisk_grub: boot files verified at %d bytes per cluster:\" % cbytes,
     dd if=/tmp/p1.img of='$OUT.new' bs=1M seek=$GAP_MB conv=notrunc status=none
 
     grub-mkimage -O i386-pc -p '(hd0,msdos1)/boot/grub' -o /tmp/core.img \
+        -c '$EMBED_CFG' \
         biosdisk part_msdos fat normal multiboot configfile loadenv echo \
         test serial terminal
     python3 '$REPO/tools/grub_embed.py' '$OUT.new' \
@@ -414,11 +507,11 @@ print(\"mkdisk_grub: boot files verified at %d bytes per cluster:\" % cbytes,
     dd if='$KRFFS_BIN' of='$OUT.new' bs=1M seek=$((GAP_MB + BOOT_MB)) \
         conv=notrunc status=none
 
-    # Partition 3, when asked for: an empty FAT32 volume with the directories
-    # its contents will live in. parted's filesystem argument only sets the MBR
+    # Partition 3, when asked for: a FAT32 volume holding the recovery kernel
+    # and its RAM image, or the empty directories they will live in when this
+    # build was not given them. parted's filesystem argument only sets the MBR
     # type byte, so without this the entry would name a filesystem that is not
     # there, and GRUB could not read the partition the recovery entry needs.
-    # What goes into it belongs to the phase that builds recovery.
     if [ $RECOVERY_MB -gt 0 ]; then
         dd if=/dev/zero of=/tmp/p3.img bs=1M count=$RECOVERY_MB status=none
         if [ -n '$CLUSTER' ]; then
@@ -428,6 +521,13 @@ print(\"mkdisk_grub: boot files verified at %d bytes per cluster:\" % cbytes,
         fi
         mmd -i /tmp/p3.img ::/boot
         mmd -i /tmp/p3.img ::/boot/grub
+        if [ -n '$RECOVERY_KERNEL' ]; then
+            mcopy -i /tmp/p3.img '$RECOVERY_KERNEL' ::/boot/recovery
+        fi
+        if [ -n '$RECOVERY_IMAGE' ]; then
+            mcopy -i /tmp/p3.img '$RECOVERY_IMAGE' ::/boot/recovery.krffs
+        fi
+        mcopy -i /tmp/p3.img '$RECOVERY_CFG' ::/boot/grub/recovery.cfg
         dd if=/tmp/p3.img of='$OUT.new' bs=1M \
             seek=$((GAP_MB + BOOT_MB + KRFFS_MB)) conv=notrunc status=none
     fi

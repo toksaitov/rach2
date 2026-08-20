@@ -1,0 +1,58 @@
+#!/bin/sh
+#
+# The address recovery falls back to when nothing hands one out.
+#
+# The recovery image asks for a lease first, because the machine this disk is
+# in lives on a network that has a server. What this covers is the compound
+# case the milestone cannot otherwise answer: a boot partition damaged badly
+# enough that the machine reached recovery through the core image's own
+# configuration, on a network with no DHCP server. There is no menu entry to
+# choose there without somebody at the keyboard, and walking to the machine is
+# what this whole milestone exists to avoid.
+#
+# So the lease is waited for, once, and the fixed address is taken if none
+# arrives. The wait is bounded and the check is on what the interface holds
+# rather than on what the client said, since a client that is still asking has
+# said nothing either way.
+#
+# The address is the one the static menu entries carry. They are set in the
+# Makefile (SEALED_ADDRESS, SEALED_MASK, SEALED_GATEWAY) and the sealed disk's
+# build refuses to write a disk whose script and menu disagree. Taking it also
+# leaves a marker in /var/run, because a kernel installed from a machine running
+# on this address has to be armed in the menu entries that carry it.
+
+sleep 25
+
+ifconfig eth0 | grep -q 'addr:0.0.0.0' || exit 0
+echo "rescue: no lease arrived; taking the fixed address" >&2
+
+# The client is still asking, and it must stop before the address is taken: a
+# lease that arrived afterwards would replace this address and the route, while
+# the marker below went on saying the machine was on the fixed one. A kernel
+# installed on the strength of that would be armed for an address the machine no
+# longer had. So the client goes first, and the address is taken after it has.
+pid=$(cat /var/run/udhcpc.eth0.pid 2>/dev/null)
+if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null
+    n=0
+    while [ "$n" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        n=$((n + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "rescue: the DHCP client will not stop; leaving the address alone" >&2
+        exit 1
+    fi
+fi
+ifconfig eth0 192.168.0.105 netmask 255.255.255.0 || exit 1
+route add default gw 192.168.0.1 || exit 1
+
+# The marker says which of the two menu pairs this machine is effectively
+# running on. Nothing on the command line does: the entry that booted asked for
+# a lease and did not get one, so a kernel installed from here would otherwise
+# be armed in the pair that asks for a lease, and the machine would come back
+# with no address at all. `bootctl` reads this; init empties /var/run at boot,
+# so it never outlives the boot that wrote it.
+echo 192.168.0.105 > /var/run/rescue-static
+
+echo "rescue: eth0: 192.168.0.105 through 192.168.0.1" >&2

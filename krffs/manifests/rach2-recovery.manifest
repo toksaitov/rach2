@@ -1,0 +1,101 @@
+# The recovery profile: the image partition 3 holds, for the day the machine's
+# own root will not mount.
+#
+# It is the metal profile with two more programs and one fewer assumption. The
+# kernel it boots with is the recovery build, the only one that may write the
+# whole disk; this image mounts nothing from that disk, which is what lets it
+# rewrite the root from underneath. Everything it needs arrives over SSH, so
+# what it carries is a shell, a server, the account files, the keys, and the two
+# programs that repair a disk: `reflash` for the raw device and `bootctl` for
+# the boot partition.
+#
+# The account files are os-real's, so one password opens either image, and the
+# authorized keys are the same pair the SSH capstone uses.
+
+dir 0755 /bin
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+
+# The three applets that need the set-id bit come from busybox's second build,
+# which holds only login, passwd and su, exactly as os-real stages them.
+file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
+
+file 0755 /bin/ping build/utils/ping
+
+# The two repair programs. `reflash` writes a declared number of bytes from an
+# ssh pipe onto a raw device, which is how a whole root partition arrives;
+# `bootctl` repairs the boot partition, the kernel slots and the menu, which the
+# metal profile deliberately leaves out because it has no boot partition to
+# repair and this image is booted from one.
+file 0755 /bin/reflash build/utils/reflash
+file 0755 /bin/bootctl build/utils/sbin/bootctl
+file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-metal
+
+dir 0755 /etc
+dir 0700 /etc/dropbear
+text 0644 /etc/motd Rach2 recovery. This machine mounts nothing from the disk it is repairing: /dev/disk0 is the whole drive and reflash writes it.\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
+file 0600 /etc/shadow krffs/shadow
+text 0644 /etc/group root:x:0:\ntest:x:1000:\n
+text 0644 /etc/shells /bin/sh\n
+# The stub resolver reads these two (utils/resolv.c). Without them a name is
+# unresolvable and only numeric addresses work, which is what the first LAN
+# session found. The nameserver is the one this LAN's router hands out rather
+# than the router itself, because that router forwards nothing: it gives
+# clients Cloudflare's resolvers, and a machine that assumed the gateway would
+# answer would fail for a reason nobody could see. The resolver reads the first
+# `nameserver` line; the second is here for a reader, not for the code.
+# Numeric addresses never touch this file.
+text 0644 /etc/resolv.conf nameserver 1.1.1.1\nnameserver 1.0.0.1\n
+text 0644 /etc/hosts 127.0.0.1 localhost\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
+
+# The network configuration `ifup -a` reads, in the file Debian put it in and
+# busybox's ifup expects. `dhcp` is what the sealed machine carries: it comes up
+# wherever it is plugged in, which is the whole reason DHCP is here. A static
+# stanza is the other half of the same file and is what a machine with a fixed
+# address would say instead.
+dir 0755 /etc/network
+text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n    post-up /bin/rescue-static &\n
+
+# What the line above runs. A recovery image that took no address is a machine
+# nobody can reach, and the one case where nothing can hand one out and nothing
+# can be chosen at a menu is a damaged boot partition on a network with no DHCP
+# server. This waits for the lease and takes the fixed address if none arrives.
+file 0755 /bin/rescue-static krffs/rescue-static.script
+
+# The four directories `ifup` runs through run-parts. It treats a failure of any
+# of them as a failed method, and run-parts on a directory that is not there is
+# a failure, so they exist and are empty.
+dir 0755 /etc/network/if-pre-up.d
+dir 0755 /etc/network/if-up.d
+dir 0755 /etc/network/if-down.d
+dir 0755 /etc/network/if-post-down.d
+
+# The script udhcpc runs when a lease arrives or ends. udhcpc learns the lease
+# and this turns it into an address, a route and a resolver.
+# /var/run: where `ifup` records which interfaces it has brought up. It writes
+# the file through a temporary beside it, so the directory must be there.
+dir 0755 /var
+dir 0755 /var/run
+
+dir 0755 /usr
+dir 0755 /usr/share
+dir 0755 /usr/share/udhcpc
+file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+
+dir 0755 /root
+dir 0700 /root/.ssh
+file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
+
+dir 1777 /tmp
+dir 0755 /home
+dir 0700:1000:1000 /home/test
+dir 0700:1000:1000 /home/test/.ssh
+file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys

@@ -79,6 +79,9 @@ static int dev_write(void *ctx, uint32_t lba, const void *buf)
     return write(devfd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
 }
 
+/* Where the recovery image records that it took the fixed address itself. */
+#define RESCUE_MARKER "/var/run/rescue-static"
+
 static char cmdline[512];
 static int cmdline_ready;
 
@@ -140,6 +143,11 @@ static int cmdline_has(const char *token)
  * them: a line naming an address that is not `none` is the fixed-address pair,
  * and a line naming none of it at all is a disk built without network tokens,
  * which has one pair in effect.
+ *
+ * The one case the command line cannot answer is recovery on a network with no
+ * DHCP server: that entry asked for a lease, did not get one, and took the
+ * fixed address anyway. The image leaves a marker in `/var/run` when it does
+ * that, and this reads it.
  */
 static int running_static_entries(void)
 {
@@ -147,6 +155,15 @@ static int running_static_entries(void)
 
     if (cmdline_load() != 0) {
         return 0; /* callers load it first and refuse if it is not there */
+    }
+    /* The recovery image takes the fixed address itself when no lease arrives,
+       and says so here. Its command line asked for a lease, so nothing else
+       would tell: a kernel installed from such a machine has to be armed in the
+       entries that carry that address, or the machine comes back with none.
+       `access` opens nothing, so this costs no descriptor at the moment the
+       slot device wants one. */
+    if (access(RESCUE_MARKER, F_OK) == 0) {
+        return 1;
     }
     for (p = cmdline; *p != '\0'; p++) {
         if ((p == cmdline || p[-1] == ' ') && strncmp(p, "rach2.ip=", 9) == 0) {
@@ -251,7 +268,13 @@ static void print_env(const uint8_t *env, const char *key, int trial_marker)
     printf("bootctl: %s: absent\n", key);
 }
 
-/** Report the slot this boot came from, which is menu text, not a kernel flag. */
+/**
+ * Report the slot this boot came from, which is menu text, not a kernel flag.
+ *
+ * `recovery` is the third answer: that kernel comes off partition 3 and runs
+ * neither slot, which is what makes installing into the candidate safe from
+ * there. Committing is still the running candidate's alone.
+ */
 static void print_booted(void)
 {
     const char *pair = running_static_entries() ? " (the fixed-address entries)" : "";
@@ -260,6 +283,8 @@ static void print_booted(void)
         printf("bootctl: booted: candidate%s\n", pair);
     } else if (cmdline_has("rach2.slot=fallback")) {
         printf("bootctl: booted: fallback%s\n", pair);
+    } else if (cmdline_has("rach2.slot=recovery")) {
+        printf("bootctl: booted: recovery%s, from partition 3 and neither slot\n", pair);
     } else {
         printf("bootctl: booted: not from a slot (no rach2.slot= on /proc/cmdline)\n");
     }
@@ -315,7 +340,8 @@ static int cmd_kernel(const char *path)
     FILE *f;
     size_t size;
 
-    if (!cmdline_has("rach2.slot=candidate") && !cmdline_has("rach2.slot=fallback")) {
+    if (!cmdline_has("rach2.slot=candidate") && !cmdline_has("rach2.slot=fallback") &&
+        !cmdline_has("rach2.slot=recovery")) {
         fprintf(stderr, "bootctl: this boot did not come from a kernel slot "
                         "(no rach2.slot= on /proc/cmdline)\n");
         return 1;
@@ -361,12 +387,28 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
 /* The menu ids `trial` may arm. Every one of these is an entry the stub both
  * defines and consumes a trial for; a value the stub does not consume would
  * stay in the block forever, arming nothing and blocking every later commit.
- * `recovery` is deliberately absent: the stub defines and consumes it, but the
- * kernel and RAM image it names are staged by a later phase, so arming it today
- * would promise a boot that cannot happen. */
-static const char *const ENTRY_IDS[] = {"candidate", "fallback", "candidate-static",
-                                        "fallback-static", "debug"};
+ * The two recovery ids are here now that partition 3 carries the kernel and the
+ * RAM image they name: arming one is how a machine that still boots is sent to
+ * the image that can rewrite its root, which is the only way in when the root
+ * is damaged but the machine is not yet stopped. A disk built without those
+ * files still defines the entries, and arming one there costs a boot that
+ * falls back rather than a machine that will not start. */
+static const char *const ENTRY_IDS[] = {"candidate",       "fallback", "candidate-static",
+                                        "fallback-static", "debug",    "recovery",
+                                        "recovery-static"};
+
+/* What `saved_entry` may hold, which is not quite the same set. The stub reads
+ * the saved default for the four kernel entries and for the two recovery ones,
+ * because a repair is not one boot: rewriting a root takes minutes, and a
+ * machine that lost power in the middle of one has to come back to the image
+ * that was doing the rewriting rather than to a kernel that cannot mount what is
+ * there. `debug` is the one entry that is a boot and never a default: leaving a
+ * machine saved into the kernel shell would leave it with no init and no way
+ * in. */
+static const char *const SAVED_IDS[] = {"candidate", "fallback",        "candidate-static",
+                                        "fallback-static", "recovery", "recovery-static"};
 #define ENTRY_ID_COUNT ((int)(sizeof(ENTRY_IDS) / sizeof(ENTRY_IDS[0])))
+#define SAVED_ID_COUNT ((int)(sizeof(SAVED_IDS) / sizeof(SAVED_IDS[0])))
 
 static int allowed(const char *const *list, int count, const char *word)
 {
@@ -471,6 +513,14 @@ static int cmd_env(const char *key, const char *value)
         }
         if (!allowed(ENTRY_IDS, ENTRY_ID_COUNT, value)) {
             fprintf(stderr, "bootctl: not a menu entry this tool arms: '%s'\n", value);
+            return 1;
+        }
+        /* And the saved default takes fewer of them than a trial does. The stub
+           reads it for the four kernel entries alone, so saving anything else
+           would report a default the machine then ignores. */
+        if (strcmp(key, "saved_entry") == 0 && !allowed(SAVED_IDS, SAVED_ID_COUNT, value)) {
+            fprintf(stderr, "bootctl: '%s' is a boot and not a default; arm it for one "
+                            "boot with `bootctl trial %s`\n", value, value);
             return 1;
         }
     }

@@ -51,6 +51,7 @@ UTILITIES = true  \
             httpd \
             dhcpc \
             netup \
+            reflash \
             halt
 
 # init is PID 1, and su and sudo climb privilege; none of the three is a user tool
@@ -194,6 +195,13 @@ $(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
 $(BUILD)/dhcpc: dhcpc.c dhcpmsg.c dhcpmsg.h ipcheck.c ipcheck.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/dhcpc.d -o $@ $(LINK_PRE) dhcpc.c dhcpmsg.c ipcheck.c \
+	    $(LINK_POST)
+
+# reflash links the copy library (sectorcopy.c): the numbers that decide where
+# a write lands, and the loop that turns a stream into whole sectors.
+$(BUILD)/reflash: reflash.c sectorcopy.c sectorcopy.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/reflash.d -o $@ $(LINK_PRE) reflash.c sectorcopy.c \
 	    $(LINK_POST)
 
 $(BUILD)/netup: netup.c netcfg.c netcfg.h ipcheck.c ipcheck.h

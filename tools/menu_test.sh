@@ -220,7 +220,8 @@ python3 -c "
 import re, sys
 want = ['Rach2', 'Rach2 (fallback kernel)', 'Rach2 (static address)',
         'Rach2 (fallback kernel, static address)', 'Rach2 (kernel debug shell)',
-        'Rach2 (recovery, not yet built)', 'stagedone', 'stagedtwo']
+        'Rach2 (recovery, not yet built)',
+        'Rach2 (recovery, static address, not yet built)', 'stagedone', 'stagedtwo']
 text = open('$LOG', 'rb').read().decode('latin-1')
 # GRUB draws one title per screen row, positioned with a cursor escape, and
 # marks the highlighted one with a leading asterisk.

@@ -348,6 +348,32 @@ static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_
 }
 
 /*
+ * One writer at a time across every raw window on the disk.
+ *
+ * A reflash is a sequence of writes at an offset each descriptor carries for
+ * itself. Two of them at once, over ranges that overlap, each write their whole
+ * declared length and each report success, and what is on the platter
+ * afterwards is neither image. Nothing detects that: the bytes are a mixture,
+ * and a hash taken by either writer disagrees with what it sent.
+ *
+ * The three windows are not three disks. `/dev/disk0` is the whole drive,
+ * `/dev/bootpart` is a partition inside it and `/dev/grubcore` is the gap
+ * before the first one, so a whole-disk write and a kernel install address the
+ * same sectors by different names. One reservation covers all three, and the
+ * second writer is refused rather than serialized. Readers are not counted: a
+ * read alongside a write returns a torn region, which is the reader's business,
+ * and hashing a region after a write is what a repair does.
+ */
+static int raw_writer_held;
+
+static void raw_close(fd_entry_t *e)
+{
+    if (e->flags & FD_FLAG_WRITE) {
+        raw_writer_held = 0;
+    }
+}
+
+/*
  * One open of /dev/grubcore at a time.
  *
  * Replacing the boot loader is a sequence: read which tail is in use, write the
@@ -363,8 +389,18 @@ static int grubcore_held;
 
 static void dev_grubcore_close(fd_entry_t *e)
 {
-    (void)e;
     grubcore_held = 0;
+    raw_close(e);
+}
+
+static void dev_disk0_close(fd_entry_t *e)
+{
+    raw_close(e);
+}
+
+static void dev_bootpart_close(fd_entry_t *e)
+{
+    raw_close(e);
 }
 
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
@@ -372,8 +408,11 @@ static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 /*
- * The whole disk as a raw window. It exists only on a boot that asked for it
- * (`rach2.diskdiag`), so no image grows one by accident.
+ * The whole disk as a raw window. On an everyday kernel it exists only on a
+ * boot that asked for it (`rach2.diskdiag`), so no image grows one by accident;
+ * on the recovery build it exists on every boot, because rewriting this disk is
+ * the only reason that build exists and the day it is needed is no time to
+ * discover that a menu entry was missing a token.
  *
  * Reads serve the milestone 24 diagnostic, which answers what this machine's
  * drive is and what it holds without mounting it, since mounting stamps a dirty
@@ -553,11 +592,11 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
                                              dev_ioctl, dev_grubcore_close};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
-                                             dev_ioctl, NULL};
+                                             dev_ioctl, dev_bootpart_close};
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
                                             NULL};
 static const struct file_ops disk0_ops = {dev_disk0_read, dev_disk0_write, dev_poll, dev_ioctl,
-                                          NULL};
+                                          dev_disk0_close};
 
 /*
  * The registry. major/minor are the real Linux mem-device numbers (major 1) so
@@ -705,6 +744,10 @@ int devfs_open(const char *name, int flags)
     if (dev->ops == &grubcore_ops && grubcore_held) {
         return -EBUSY;
     }
+    if ((flags & 3) != 0 && raw_writer_held &&
+        (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops)) {
+        return -EBUSY;
+    }
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
@@ -741,6 +784,10 @@ int devfs_open(const char *name, int flags)
     }
     if (dev->ops == &grubcore_ops) {
         grubcore_held = 1;
+    }
+    if ((e->flags & FD_FLAG_WRITE) &&
+        (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops)) {
+        raw_writer_held = 1;
     }
 
     return fd;

@@ -356,7 +356,55 @@ The parts worth reusing when a probe has to reach a real board:
 * A restart claim is checked by pid, not by liveness: the server's pid is read, that pid is killed, and a DIFFERENT pid must answer. A kill that silently failed would otherwise leave the original process answering and the check would pass having proved nothing.
 * The transfer is compared by checksum in both directions. A file that arrives readable is not the same as a file that arrives.
 
-## GRUB in the gap, and replacing it from the running machine
+## Recovery: rewriting a disk nothing is mounting
+
+The day a machine's root will not mount, nobody is going to open the case. What repairs it is a kernel that boots from somewhere else and a device that reaches every sector of the drive, and the disk this project builds carries both on partition 3: `make rach2-recovery` builds the kernel, the only build whose `/dev/disk0` accepts a write (`rach2/sys/block/recovery.h` says why that is a build switch and not a boot flag), and `make rach2-recovery-image` builds the RAM root it loads, which is the metal profile plus `reflash` and `bootctl`. `mkdisk_grub.sh` stages both when it is given `RACH2_DISK_RECOVERY_KERNEL` and `RACH2_DISK_RECOVERY_IMAGE`, and menu entry 5 boots them with `set root=(hd0,msdos3)`. That kernel publishes the whole-disk window on every boot; the everyday one publishes it only under `rach2.diskdiag`, so no ordinary image grows a raw whole-disk node by accident.
+
+Recovery mounts nothing from the disk it is repairing. That is the whole point: a partition nothing has open can be overwritten from underneath.
+
+`reflash DEVICE OFFSET BYTES` is the receiver, and `ssh` is the whole transport:
+
+The two numbers come off the machine and not out of a memory. `/proc/disk`
+reports every partition as `partN TYPE START_LBA SECTORS`, so the root's offset
+and length are its two numbers multiplied by 512:
+
+```
+ssh -p 2222 root@machine 'grep ^part2 /proc/disk'
+part2 83 133120 1024000
+gzip -c root.img | ssh -p 2222 root@machine 'gunzip | reflash /dev/disk0 68157440 524288000'
+```
+
+A correct image written at a wrong offset is a repair that reports success and
+leaves a machine that still will not boot, which is why the drill reads the
+extent out of the disk's own partition table rather than recomputing it from the
+sizes the build was given.
+
+The length is an argument because a stream's length is not known until it ends: a tool that read first and checked afterwards would already have written part of a disk it was never allowed to touch. With the count declared, `reflash` measures the device, judges the offset and the count against it by subtraction (`offset + count` is exactly the sum that wraps on a drive this size), and only then reads a byte. It coalesces the stream into whole sectors, since a pipe hands out whatever has arrived and the raw devices take sectors, and it requires the stream to end exactly where it said: a short one fails and reports how far it got, and a longer one is not written past the count. `utils/sectorcopy.c` is the half of it with no device in it, and `tests/host/sectorcopy_hosttest.c` drives that half with the streams a pipe cannot be asked to produce.
+
+What comes back is checked on the platter and not in the writer: read the region through the same device and hash it on the machine.
+
+```
+ssh -p 2222 root@machine 'dd if=/dev/disk0 bs=512 skip=133120 count=1024000 2>/dev/null | sha256sum'
+```
+
+`make drill-test` is that whole sequence, five boots of one disk: the everyday kernel refusing to write its own disk and shown to have written nothing, a root destroyed with the machine stopped, the ordinary entry failing to mount, the recovery entry coming up on partition 3 and answering SSH with nothing typed at the console, the root arriving through one pipe, the hash compared, and the machine booting from what arrived.
+
+Recovery is reachable three ways, in the order the damage gets worse. On a machine that still boots, `bootctl trial recovery` (or `recovery-static`) arms it for one boot and a reboot takes it; for a repair that will take minutes, `bootctl env saved_entry recovery` leaves it there across restarts, which is what a machine that loses power mid-rewrite needs. Read the saved default before changing it and put that same value back afterwards, because it is not always `candidate`: a machine on a network with no DHCP server runs from the fixed-address entries, and restoring `candidate` there would boot a kernel that asks for a lease nobody answers.
+
+```
+ssh -p 2222 root@machine 'bootctl env saved_entry'    # note what it says
+ssh -p 2222 root@machine 'bootctl env saved_entry recovery'
+...  the repair, however many boots it takes  ...
+ssh -p 2222 root@machine 'bootctl env saved_entry candidate-static'   # whatever it said
+``` On a machine that will not mount its root, the menu on partition 1 still draws and the entry is there to choose at the console. On a machine whose boot partition is damaged badly enough that none of that can be read, the core image in the gap carries its own configuration: `tools/grub-embed.cfg`, two `configfile` calls, partition 1's menu and then partition 3's, checked by `tools/check_grubembed.py` in both core builders because a core without those lines takes the path away silently.
+
+The network is the other half of being reachable. Both recovery entries exist twice, once taking whatever DHCP gives and once carrying the fixed address, for the same reason the ordinary entries do. And where no menu can be chosen from at all, the image answers by itself: `krffs/rescue-static.script` runs after `ifup`, waits the lease out once, and takes the fixed address if none arrived. That address is the menu's, and the sealed disk's build refuses to write a disk whose script and menu disagree.
+
+What recovery cannot repair is stated rather than hidden: LBA 0, which nothing writes after the disk is built; LBA 1, whose torn write makes GRUB unreachable and which is what loads recovery; and an active core image too damaged to read partition 3.
+
+One more limit belongs beside those, because it is about reaching recovery rather than about what recovery can do. A root that will not mount while the boot partition is healthy is the one damage that strands the machine without a console: GRUB reads partition 1, finds its menu, and boots the ordinary kernel, which stops at a mount failure and starts no network. GRUB's `fallback` cannot see that, since the kernel loaded and ran; the embedded configuration cannot either, since partition 1 answered. Somebody has to select recovery at the machine, or arm it before the disk becomes unmountable. Closing that would mean counting boot attempts in the environment block and having a machine that reached userland clear the count, which is a mechanism of its own and is not built here.
+
+## GRUB in the gap, and replacing it from the running machine## GRUB in the gap, and replacing it from the running machine
 
 The 2048 sectors between the MBR and the first partition are GRUB's, and this project treats them as a fixed layout rather than as whatever `grub-bios-setup` last wrote there. `mkdisk_grub.sh` builds the disk to it and `bootctl grub` maintains it afterwards; `utils/grubslot.h` is the same arithmetic in code, and `tests/host/grubslot_hosttest.c` checks every number in it.
 

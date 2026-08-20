@@ -92,7 +92,8 @@ MKDISK          = krffs/mkdisk.sh
         ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci rach2-metal-grub-disk \
-        rach2-sealed-disk rach2-recovery authority-test menu-test grub-test \
+        rach2-sealed-disk rach2-recovery rach2-recovery-image authority-test menu-test grub-test \
+        drill-test \
         isos test-iso os-simple-iso os-real-iso rach2-metal-image rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
@@ -279,6 +280,15 @@ rach2-metal-image: krffs rach2 rach2-metal utils check-busybox check-setid check
 	sh krffs/gen_demo_password.sh
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $(METAL_IMAGE) 4
 
+# The recovery RAM image: what the recovery kernel loads as its root. It is the
+# metal profile plus the two programs that repair a disk, and it mounts nothing
+# from the disk it is repairing, which is what lets it rewrite that disk's root.
+RECOVERY_IMAGE = $(IMAGES_DIR)/rach2-recovery.krffs
+rach2-recovery-image: krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti
+	sh krffs/gen_demo_key.sh
+	sh krffs/gen_demo_password.sh
+	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $(RECOVERY_IMAGE) 4
+
 # The os-real disk: the same os-real tree, but on a real disk image instead of a
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
 # partition is larger than the 32 MB resident page-cache cap on purpose, so it can
@@ -335,13 +345,25 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 # slots and the recovery contents are added by the phases that own them.
 # The fixed address the two static entries carry, for the day the network this
 # machine is plugged into has no server: the same defaults the metal stick uses,
-# overridable at build time for anywhere else.
-SEALED_IP ?= 192.168.0.105/24
+# overridable at build time for anywhere else. The recovery image falls back to
+# the same address when no lease arrives, and its script carries its own copy,
+# so the build below refuses a disk whose menu and script disagree.
+SEALED_ADDRESS ?= 192.168.0.105
+SEALED_MASK ?= 255.255.255.0
+SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
+SEALED_IP = $(SEALED_ADDRESS)/$(SEALED_PREFIX)
 SEALED_DISK = build/images/rach2-sealed.disk
-rach2-sealed-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
+	@grep -q "ifconfig eth0 $(SEALED_ADDRESS) netmask $(SEALED_MASK)" \
+	    krffs/rescue-static.script && \
+	 grep -q "route add default gw $(SEALED_GATEWAY)" krffs/rescue-static.script || { \
+	    echo "rach2-sealed-disk: krffs/rescue-static.script does not carry" \
+	         "$(SEALED_ADDRESS) netmask $(SEALED_MASK) through $(SEALED_GATEWAY)," \
+	         "so recovery would fall back to a different address than the menu" >&2; \
+	    exit 1; }
 	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
@@ -350,6 +372,8 @@ rach2-sealed-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check
 	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole" \
 	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
 	RACH2_DISK_STATIC_APPEND="rach2.ip=$(SEALED_IP) rach2.gateway=$(SEALED_GATEWAY)" \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
@@ -507,7 +531,7 @@ menu-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 # different object trees, and check_recovery.py reads the authority back off
 # each artifact so a mislabelled one cannot reach this test.
 AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
-authority-test: rach2 rach2-recovery tests krffs
+authority-test: rach2 rach2-recovery tests krffs test-image
 	python3 tools/mkwidefixture.py $(AUTH_TEST_IMAGE)
 	python3 tools/check_recovery.py build/rach2/kernel ordinary
 	python3 tools/check_recovery.py $(RECOVERY_KERNEL) recovery
@@ -539,6 +563,38 @@ install-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-seti
 	sh tools/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
 	sh tools/install_test.sh $(INSTALL_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
+
+# `make drill-test`: the recovery drill, boots of one disk that carries the same
+# three partitions the sealed disk has. The everyday kernel must refuse to write
+# its own disk and be shown to have written nothing; a root destroyed with the
+# machine stopped must stop the boot; the recovery entry must come up from
+# partition 3, take an address and answer SSH with nothing typed at the console;
+# the whole root partition must arrive through one `ssh` pipe and hash
+# identically when read back through the same device; the machine must then boot
+# from it; a recovery payload that will not load must fall back to partition 1;
+# and a disk whose boot partition is destroyed must still reach recovery through
+# the core image's own configuration. The disk is small so the drill is quick.
+#
+# Its entries carry `rach2.diskdiag`, which is what publishes /dev/disk0 on an
+# everyday kernel: the refusal is worth proving on a machine that HAS the device
+# rather than on one where the node is simply absent. The sealed disk carries no
+# such flag, so there the everyday entries have no whole-disk node at all, and
+# the recovery build publishes its own whatever the command line says.
+DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
+drill-test: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid
+	@mkdir -p $(IMAGES_DIR)
+	sh krffs/gen_demo_password.sh
+	sh krffs/gen_demo_key.sh
+	RACH2_DISK_MANIFEST=krffs/manifests/os-simple.manifest \
+	RACH2_DISK_KRFFS_MB=16 \
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_APPEND="rach2.diskdiag" \
+	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
+	sh tools/drill_test.sh $(DRILL_DISK) \
+	    "`cat krffs/rach2_demo_password`" 2298
 
 # `make persist-test`: fsync durability across a reboot. Builds a disk holding
 # persistprobe, boots it twice against the SAME image: the first boot writes and
@@ -1311,6 +1367,8 @@ help:
 	@echo "  make os-real-grub-disk   a BIOS-bootable GRUB disk (needs Docker)"
 	@echo "  make rach2-sealed-disk   the sealed laptop disk: 64 MiB boot, 500 MiB root, 64 MiB recovery"
 	@echo "  make rach2-recovery      the recovery kernel, the only build that can write the whole disk"
+	@echo "  make rach2-recovery-image  the RAM root that kernel loads, with reflash and bootctl"
+	@echo "  make drill-test      the recovery drill: a destroyed root repaired over SSH"
 	@echo "  make authority-test  only a recovery kernel writes the whole disk"
 	@echo "  make menu-test    a staged boot menu, and the stub that catches a torn one"
 	@echo "  make grub-test    the machine replacing its own boot loader"

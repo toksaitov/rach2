@@ -14,7 +14,7 @@ UCC = cc
 UFLAGS = -static
 
 PROGS = true false echo yes cat pwd touch mkdir rm mv cp ls ping nc \
-        httpd dhcpc netup halt init-shell init-login init-metal login su sudo passwd adduser \
+        httpd dhcpc netup reflash halt init-shell init-login init-metal login su sudo passwd adduser \
         adduser-crash bootctl
 
 all: $(PROGS)
@@ -53,6 +53,8 @@ dhcpc: dhcpc.c dhcpmsg.c dhcpmsg.h ipcheck.c ipcheck.h
 	$(UCC) $(UFLAGS) -o dhcpc dhcpc.c dhcpmsg.c ipcheck.c
 netup: netup.c netcfg.c netcfg.h ipcheck.c ipcheck.h
 	$(UCC) $(UFLAGS) -o netup netup.c netcfg.c ipcheck.c
+reflash: reflash.c sectorcopy.c sectorcopy.h
+	$(UCC) $(UFLAGS) -o reflash reflash.c sectorcopy.c
 halt: halt.c
 	$(UCC) $(UFLAGS) -o halt halt.c
 init-shell: init.c

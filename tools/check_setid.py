@@ -335,6 +335,24 @@ ALLOWLIST = {
     },
 }
 
+# The recovery profile: the metal profile's surface with the two programs that
+# repair a disk pinned beside it. Neither carries a set-id bit, but both run as
+# root against raw disk devices in the one image whose whole purpose is writing
+# any sector of the drive, so what they are built from is named here the way
+# os-real names its own bootctl. The metal map is copied rather than mutated, so
+# adding to this profile cannot quietly add to that one.
+ALLOWLIST["rach2-recovery"] = dict(
+    ALLOWLIST["rach2-metal"],
+    trusted=dict(
+        ALLOWLIST["rach2-metal"]["trusted"],
+        **{
+            "/bin/reflash": (0o755, 0, 0, "file", "build/utils/reflash"),
+            "/bin/rescue-static": (0o755, 0, 0, "file", "krffs/rescue-static.script"),
+            "/bin/bootctl": (0o755, 0, 0, "file", "build/utils/sbin/bootctl"),
+        }
+    ),
+)
+
 # The laptop's own-disk profile: os-real's surface with the metal init and
 # nothing else changed. Derived rather than duplicated so the two cannot
 # drift: a privilege change to os-real is a change to this profile too, which

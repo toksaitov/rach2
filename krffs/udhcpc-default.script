@@ -38,6 +38,14 @@ case "$1" in
 		;;
 
 	bound|renew)
+		# A lease is now what this interface holds, so the recovery image's
+		# record of having taken a fixed address is no longer true. It is
+		# removed here rather than where it was written, because this is
+		# where the address changes hands; `bootctl` reads that record to
+		# decide which pair of menu entries a kernel is installed for, and a
+		# stale one would arm a machine for an address it no longer has.
+		/bin/busybox rm -f /var/run/rescue-static
+
 		# The netmask is given only when the lease carries one. Without it
 		# `ifconfig` derives the classful mask, which is the right answer;
 		# inventing a /24 here would make a gateway on a wider subnet

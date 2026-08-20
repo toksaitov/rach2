@@ -20,7 +20,7 @@
 #   9. the probe runner's scoring rule (tools/runtests.py --selftest)
 #  10. the set-id manifest sweep (tools/check_setid.py)
 #  11. image reproducibility (tools/check_repro.py): one tree, one image
-#  12. the kernel structural checker selftest (tools/check_kernel.py)
+#  12. the checker selftests (tools/check_kernel.py, tools/check_grubembed.py)
 #
 # Usage:
 #     ./check.sh [file.c ...]      # extra files to hard clang-format check
@@ -284,12 +284,14 @@ else
 fi
 
 
-# 12. the kernel structural checker's own selftest. The checker runs on every
-#     kernel link (rach2/Makefile), so what is verified here is the checker
-#     itself: it must accept a well-formed kernel and refuse each malformed
-#     variant a loader would misload.
-hr "12/12 kernel checker selftest"
-if python3 "$REPO/tools/check_kernel.py" --selftest >"$VDIR/verify_kernelck.log" 2>&1; then
+# 12. the checkers' own selftests. Each runs on every build of the thing it
+#     guards, so what is verified here is the checker itself: the kernel one
+#     must accept a well-formed kernel and refuse each malformed variant a
+#     loader would misload, and the GRUB one must accept the configuration a
+#     core image carries and refuse every way of losing the recovery path.
+hr "12/12 checker selftests"
+if python3 "$REPO/tools/check_kernel.py" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
+   python3 "$REPO/tools/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_kernelck.log"; fail=1
