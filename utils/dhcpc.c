@@ -392,25 +392,6 @@ static int write_claim(int fd, long pid, unsigned long addr)
 
 
 /**
- * Claim the interface, or report who has it.
- *
- * Two clients on one interface fight: each renews, either may be refused, and
- * either one's expiry takes an address the other still holds. The claim is the
- * creation of the file, which either happens or does not, so two clients
- * starting at the same moment cannot both believe they won. The pid goes in
- * before the descriptor is let go, so the file is never there and empty, and a
- * file that IS empty is read as a claim being made by somebody else rather than
- * as one to take over.
- *
- * A claim naming a process that is not there is taken over once. Anything else
- * that goes wrong is a refusal: a client that cannot say it has an interface
- * must not act as though it does.
- *
- * Init empties `/var/run` at boot, so a claim does not outlive the machine.
- *
- * @return 0 when the interface is this client's.
- */
-/**
  * Whether a process exists.
  *
  * A signal of zero delivers nothing and reports whether it could have been
@@ -767,6 +748,25 @@ static int claim_is_ours(int strict)
     return !strict;
 }
 
+/**
+ * Claim the interface, or report who has it.
+ *
+ * Two clients on one interface fight: each renews, either may be refused, and
+ * either one's expiry takes an address the other still holds. The claim is the
+ * creation of the file, which either happens or does not, so two clients
+ * starting at the same moment cannot both believe they won. The pid goes in
+ * before the descriptor is let go, so the file is never there and empty, and a
+ * file that IS empty is read as a claim being made by somebody else rather than
+ * as one to take over.
+ *
+ * A claim naming a process that is not there is taken over once. Anything else
+ * that goes wrong is a refusal: a client that cannot say it has an interface
+ * must not act as though it does.
+ *
+ * Init empties `/var/run` at boot, so a claim does not outlive the machine.
+ *
+ * @return 0 when the interface is this client's.
+ */
 static int claim_interface(void)
 {
     int tries;

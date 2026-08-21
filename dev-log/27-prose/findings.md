@@ -185,6 +185,12 @@ findings up to where it stopped.
   new image" -- reworded to "an exec carries an ignored disposition into the new
   image" (the file's own `pwauth_read_password` doc already says "an exec passes
   into the next image", the correct form).
+* `utils/dhcpc.c`: another orphaned doc, at a large distance. The block "Claim
+  the interface, or report who has it" (with its `@return 0 when the interface is
+  this client's`) documents `claim_interface`, but sat stranded above `pid_alive`
+  (which had its own doc below it), while `claim_interface` -- defined ~360 lines
+  further down after many functions were inserted between -- was undocumented.
+  Moved the block onto `claim_interface`.
 
 ## Cross-checks to settle against code later in set one
 
