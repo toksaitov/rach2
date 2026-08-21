@@ -335,6 +335,11 @@ findings up to where it stopped.
 * `tests/permprobe.c`: the header first sentence orphaned "site." onto its own
   line ("at every wired / site.", which fits at 80 joined). Reflowed.
 
+* `tests/mvtest.c`: the header stranded "A test" on a short line ("under a plain
+  source / is -EISDIR. A test / that accepted..."). Reflowed the sentence.
+* `tests/host/elf_hosttest.c`: two comment continuation lines of the e_phnum-cap
+  case ran to 81 and 85 columns. Reflowed the block at 80.
+
 Many test files read clean, prose and code alike accurate to what they
 exercise: bootprobe, loginmusl, stampmusl, n_tty_hosttest, packetprobe,
 grubslot_hosttest, dirtyprobe, dgramprobe, spawnmusl, execargmusl, statmusl,
@@ -342,7 +347,8 @@ dhcpmsg_hosttest, jobprobe, netconf_hosttest, poll_select_hosttest, pingtest,
 tlsprobe, ownprobe, sectorcopy_hosttest, dirprobe, pwauthatexit_hosttest,
 unlinkdirprobe, suidprobe, pollprobe, netcfg_hosttest, mkfatfixture.py,
 modlayout_hosttest, ishmusl, diskinfo_hosttest, vmamusl, suidhelper, waitprobe,
-clockmusl, rcvwnd_hosttest.
+clockmusl, rcvwnd_hosttest, readfile_hosttest, pipeprobe, ttyprobe, permmusl,
+vmprobe, credprobe.
 
 ### Set two: the Doom port and the rest
 

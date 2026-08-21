@@ -7,9 +7,8 @@
  * reports every refusal as a bare -1, which userspace decodes as EPERM whatever
  * went wrong, so the two directory cases are the ones that matter: a
  * directory SOURCE is -EPERM, the errno POSIX reserves for a rename the file
- * system cannot perform, while a directory DESTINATION under a plain source
- * is -EISDIR. A test
- * that accepted any negative return could not tell them apart.
+ * system cannot perform, while a directory DESTINATION under a plain source is
+ * -EISDIR. A test that accepted any negative return could not tell them apart.
  *
  * Freestanding; direct int 0x80.
  */
