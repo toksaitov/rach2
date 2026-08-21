@@ -205,6 +205,11 @@ findings up to where it stopped.
 * `utils/dhcpmsg.c`: a doubled word across a line break in the `dhcp_boundaries`
   doc: "...into zero. The / The lease must be at least DHCP_MIN_LEASE". Removed
   the repeated "The".
+* `krffs/manifests/grub-test.manifest` and `krffs/manifests/os-real.manifest`: a
+  garbled sentence in the shared `/etc` comment, "passwd keeps world-readable x
+  fields, the split shadow exists for." -- a comma splice ending on a dangling
+  "for". Reworded to "...which is what the split shadow exists for." Fixed in both
+  because `make grub-test` diffs the two and a change to one alone stops the build.
 * `utils/adduser.c`: a badly-wrapped comment. The `ADDUSER_CRASH_POINT` block
   broke as "...never in a shipped / image. It / takes a leading count", leaving
   "It" orphaned on its own short line. Reflowed the block (all lines under 80).
