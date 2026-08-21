@@ -1304,6 +1304,82 @@ static void exec_program(int argc, char *argv[])
 }
 
 /**
+ * Halt a boot that mounted no root at all, rather than open the debug shell.
+ *
+ * The kernel falls to the debug shell when it cannot start `/sbin/init`, and
+ * that shell authenticates nobody. There is one case where it is the right
+ * home and not a way in: an image whose mounted root simply has no init, which
+ * is the test image, and which the harness drives. Every other way to get
+ * there is a root that did not mount: a disk root on a machine whose disk is
+ * absent, damaged or skipped, or a module that would not mount. Those halt
+ * here with a line saying so. `rach2.rescue` is the way to ask for the shell
+ * on purpose, and this runs only when it was not asked for.
+ *
+ * Never returns when it refuses.
+ */
+static void refuse_unmounted_root(void)
+{
+    if (krffs_fs) {
+        return;
+    }
+
+    set_fore_color(light_red);
+    k_puts("");
+    k_puts("boot: refused: no file system mounted");
+    set_fore_color(light_grey);
+    k_puts("  Nothing mounted, so /sbin/init cannot be reached and this");
+    k_puts("  machine would fall to a shell that authenticates nobody.");
+    k_puts("  Check the root this boot line asks for, or add rach2.rescue");
+    k_puts("  to ask for that shell deliberately.");
+    serial_printf("boot: refused: no file system mounted and no rach2.rescue: "
+                  "the debug shell authenticates nobody\n");
+    for (;;) {
+        __asm__ __volatile__("cli; hlt");
+    }
+}
+
+/**
+ * Halt a boot whose command line asks for two things that cannot both hold.
+ *
+ * `rach2.nodisk` skips the disk probe, and it is a diagnostic: an editable
+ * token is not an authority boundary, and this project settled that in
+ * milestone 25. What it must not become is a way past the login. Discovery
+ * runs before the root is mounted, so on an image whose root is the disk, the
+ * skip leaves nothing to mount, `/sbin/init` cannot be reached, and the kernel
+ * falls to the debug shell, which authenticates nobody. That is the one
+ * combination refused here, and the exemption is the token that asks for the
+ * debug shell on purpose: a person skipping a suspected disk probe on the way
+ * to rescue is doing exactly what these tokens are for.
+ *
+ * Never returns when it refuses.
+ */
+static void refuse_contradictory_boot_line(void)
+{
+    int skipping_disk = kcmdline_has("rach2.nodisk");
+    int root_on_disk = kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk");
+    int wants_rescue = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
+
+    if (!skipping_disk || !root_on_disk || wants_rescue) {
+        return;
+    }
+
+    set_fore_color(light_red);
+    k_puts("");
+    k_puts("boot: refused: rach2.nodisk with a root on the disk");
+    set_fore_color(light_grey);
+    k_puts("  rach2.nodisk skips the disk this boot line asks to mount, so");
+    k_puts("  nothing would mount and the machine would fall to a shell that");
+    k_puts("  authenticates nobody. Drop one of the two, or add rach2.rescue");
+    k_puts("  to ask for that shell deliberately.");
+    serial_printf("boot: refused: rach2.nodisk with rach2.fsdisk or "
+                  "rach2.root=disk and no rach2.rescue: nothing would mount "
+                  "and the debug shell authenticates nobody\n");
+    for (;;) {
+        __asm__ __volatile__("cli; hlt");
+    }
+}
+
+/**
  * Halt the machine because init died. Never returns.
  *
  * On a normal boot /sbin/init is PID 1 and must run forever; if it exits or
@@ -3013,6 +3089,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         set_fore_color(light_grey);
     }
 
+    refuse_contradictory_boot_line();
+
     discover_boot_devices();
 
     k_printf("  File system...");
@@ -3172,6 +3250,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 
     if (!rescue_mode) {
+        refuse_unmounted_root();
         boot_init_process();
     }
 

@@ -270,6 +270,16 @@ the supporting scripts.
   `--selftest` (run inside the gate) covers every directive form
   and failure mode, including each hole the guard has had.
 * `check_devlog.py` (run inside the gate): `dev-log/Readme.md` against the milestone directories beside it. `AGENTS.md` tells a reader that the last entry there is where the tree stands, and nothing else holds that sentence true, since the index is not what a milestone's own work touches. A milestone directory is finished when it has the record of what was built: `Readme.md`, or `results.md`, which is what milestone 6 called it. Every finished milestone must have an entry, the entries must appear in the same numeric order as the directories, and a directory holding only a `plan.md` must have no entry at all, because an entry states that the work is done. Bullets inside fenced code blocks are examples and are not read as entries. `--selftest` (run inside the gate) drives each rule from a temporary tree.
+* `bootline_test.sh` (`make bootline-test`): the boot line that contradicts
+  itself, in five boots. `rach2.nodisk` with a root on the disk and no rescue
+  must halt with a diagnostic naming both tokens, in each of the two spellings
+  of a disk root; a disk root on a blank disk must halt too, which is the wider
+  case the same fall-through opens; and the first two lines with rescue asked
+  for must reach the debug shell, since that is what the token is for. Each
+  refusal is asserted twice, the diagnostic and the absence of any shell ten
+  seconds later, because a kernel that printed the line and carried on would
+  satisfy the first alone, and a test that killed the machine at the line could
+  not tell the two apart.
 * `rawwire_check.py` (run by `make raw-test`) reads a capture for the two
   things about a raw socket no program inside the machine can see: that each
   datagram left with the hop limit its socket was given (1, 2 and 3 from a raw

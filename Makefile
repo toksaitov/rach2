@@ -87,7 +87,7 @@ MKDISK          = krffs/mkdisk.sh
         test-noentropy \
         test-image os-simple-image os-real-image os-real-disk persist-test \
         cred-persist-test \
-        ping-test packet-test netif-test dgram-test dhcp-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
+        ping-test packet-test raw-test bootline-test netif-test dgram-test dhcp-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
         subset-test diskdiag-test reset-test \
         ping-test account-test shutdown-test login-test exitline-test procfiles-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
@@ -658,6 +658,9 @@ cred-persist-test: rach2 musl-programs krffs
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 # The capture `make raw-test` reads the hop limits and the checksum out of.
 RAW_PCAP = $(IMAGES_DIR)/raw.pcap
+# Its own disk image, so `make -j` cannot have this target and `test-disk`
+# rewriting one file while the other boots it.
+BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # `make ping-test`: the ICMP path against the SLIRP gateway, which is why it is
 # its own target rather than a probe in the suite. The explicit wait= is
 # required: after its last step harness.py drains only --grace and then
@@ -679,6 +682,16 @@ packet-test: rach2 tests krffs test-image
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PACKETPROBE OK" \
 	    "expect=Type 'help'" "send=exec /packetprobe" wait=60
+
+# `make bootline-test`: the boot line that contradicts itself. `rach2.nodisk`
+# skips the disk an image rooted on it needs, and the machine would fall to a
+# shell that authenticates nobody, so the kernel refuses that combination; with
+# `rach2.rescue` it is allowed, since asking for that shell is what the token is
+# for. Four boots, and each refusal is asserted twice: the diagnostic, and that
+# no shell was reached after it.
+bootline-test: rach2 tests krffs
+	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTLINE_TEST_IMAGE) 64 48
+	sh tools/bootline_test.sh build/rach2/kernel $(BOOTLINE_TEST_IMAGE)
 
 # `make raw-test`: the raw ICMP socket, which is what `ping` and `traceroute`
 # are. Three boots, because the three things it must show cannot be shown in
@@ -1464,6 +1477,8 @@ help:
 	@echo "  make install-test   the machine installs its own kernel (Docker)"
 	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
 	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
+	@echo "  make raw-test   raw ICMP sockets, IP_TTL, and traceroute on the machine"
+	@echo "  make bootline-test  a boot line that contradicts itself is refused"
 	@echo "  make netconsole-test  the boot log leaves over Ethernet, captured and checked"
 	@echo "  make test-addressed   the same suite with the network named on the boot line"
 	@echo "  make metal-test  the metal image reached over SSH with nobody at its console"
