@@ -83,6 +83,12 @@ findings up to where it stopped.
   grew (v2 added `parent_id`). No check verifies a size written in a comment.
   Corrected to 357.
 
+* `rach2/sys/network/net.h`: the header comment said "The stack targets QEMU's
+  SLIRP user network only", but the same file (and the metal milestone's RTL8168
+  work) contradicts it -- a real LAN is configured through netconf.h. Removed the
+  stale "only". Also generalized "filled in by the RTL8139 driver at init" to
+  "the bound NIC driver", since the RTL8168 driver fills `net_mac` too.
+
 ## Cross-checks to settle against code later in set one
 
 These are numeric or path claims in documents that read plausibly but can only

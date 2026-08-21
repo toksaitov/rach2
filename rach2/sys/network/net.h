@@ -6,9 +6,10 @@
 /*
  * Network subsystem entry point and static configuration.
  *
- * The stack targets QEMU's SLIRP user network only. All addresses below are in
- * host byte order; the protocol layers convert to network byte order as they
- * build packets.
+ * The stack defaults to QEMU's SLIRP user network; a real LAN is configured
+ * through netconf.h (the RTL8168 on the Lenovo, the boot line's address). All
+ * addresses below are in host byte order; the protocol layers convert to
+ * network byte order as they build packets.
  *
  * Concurrency invariant (transmit path and shared state) Every layer assembles
  * outgoing packets in a file-static buffer (eth_tx_frame, ip_tx_buf,
@@ -41,7 +42,7 @@
 #define NET_IP_MASK_DEFAULT     0xFFFFFF00UL  /* 255.255.255.0 */
 #define NET_IP_GATEWAY_DEFAULT  0x0A000202UL  /* 10.0.2.2      */
 
-/* Our hardware address, filled in by the RTL8139 driver at init; the Ethernet
+/* Our hardware address, filled in by the bound NIC driver at init; the Ethernet
    and ARP layers read it. */
 extern uint8_t net_mac[6];
 
