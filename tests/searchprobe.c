@@ -86,7 +86,7 @@
  * could not have been made on any kernel, and its -EACCES against the
  * baseline's -EPERM is the whole of the evidence.
  *
- * Every wait checks WIFEXITED before WEXITSTATUS: a signal death carries the
+ * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
  * crashed child as a passing one. Prints "SEARCHPROBE OK" and exits 0 only
  * when every case passed; any failure names the step and the answer it got,
@@ -143,7 +143,7 @@ typedef unsigned int u32;
 #define ST_MODE 16
 
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
- * code in bits 8-15; a signal death carries the signal in the low 7 bits. */
+ * code in bits 8-15; a signal death has the signal in the low 7 bits. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
@@ -252,7 +252,7 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line carries the answer it got. */
+/* Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];
@@ -627,7 +627,7 @@ static void moved_child(void)
 }
 
 /* Run one child to completion and require a clean exit 0. WIFEXITED comes
- * first: a signal death carries the signal in the low bits and would otherwise
+ * first: a signal death has the signal in the low bits and would otherwise
  * decode as exit 0. The child has already named the case it failed. */
 static void run_child(void (*body)(void), const char *what)
 {

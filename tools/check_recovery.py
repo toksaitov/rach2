@@ -13,7 +13,7 @@ rather than a boot flag, because a flag on the kernel command line is editable
 at the GRUB prompt by anyone standing at the machine. A build switch is only as
 good as the check that the artifact actually got built with it, and there is
 nothing useful to check for by absence: the two kernels differ by which body of
-one function was compiled, not by a symbol. So recovery.c carries an explicit
+one function was compiled, not by a symbol. So recovery.c has an explicit
 banner naming the authority, and this reads it out of the binary and requires
 BOTH halves: the expected banner present, and the other one absent. An everyday
 kernel offered as recovery fails this, and so does a recovery kernel shipped as
@@ -69,7 +69,7 @@ def main(argv):
         return 1
     if has_other:
         sys.stderr.write(
-            "check-recovery: %s carries the %s banner as well as the %s one, so "
+            "check-recovery: %s has the %s banner as well as the %s one, so "
             "which policy it enforces cannot be read off it\n" % (path, other, want))
         return 1
 

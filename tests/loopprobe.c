@@ -230,7 +230,7 @@ static void udp_loop(void)
         fail("udp source port");
     }
 
-    /* A datagram of no bytes is a datagram. UDP carries an empty payload, and a
+    /* A datagram of no bytes is a datagram. UDP has an empty payload, and a
      * receive slot that read its own emptiness as "nothing here" would build
      * this one, send it, accept it, deliver it to the right socket, and drop it
      * at the last step, leaving the recvfrom below blocked forever. A hang here
@@ -675,7 +675,7 @@ static void tcp_simultaneous(void)
          * connect's answer: a socket this stack reset keeps its block attached
          * in CLOSED, and a repeated connect reports -EISCONN for any attached
          * block that is not still in SYN_SENT, so the two outcomes are
-         * indistinguishable from there. A connection that carries a payload
+         * indistinguishable from there. A connection that has a payload
          * crossed; anything else is a lost round. */
         n = 0;
         args[0] = (uint32_t)a;
@@ -706,7 +706,7 @@ static void tcp_simultaneous(void)
         sys_close(b);
     }
     if (!crossed)
-        fail("the crossing SYNs never established a connection that carries data");
+        fail("the crossing SYNs never established a connection that has data");
 }
 
 void _start(void)

@@ -102,7 +102,7 @@
  * rmdir and the two answers, since a freed node the allocator hands out again
  * would be a live node under that descriptor.
  *
- * Every wait checks WIFEXITED before WEXITSTATUS: a signal death carries the
+ * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
  * crashed child as a passing one. Every fixture is minted and removed here, so
  * the probe hands the image back as it found it and runs twice in one boot.
@@ -156,7 +156,7 @@ typedef unsigned int u32;
 #define D_NAME   19
 
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
- * code in bits 8-15; a signal death carries the signal in the low 7 bits. */
+ * code in bits 8-15; a signal death has the signal in the low 7 bits. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
@@ -243,7 +243,7 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line carries the answer it got. */
+/* Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];
@@ -413,7 +413,7 @@ static int dir_entries(const char *step, const char *dirpath, const char *forbid
     return seen;
 }
 
-/* The rendezvous: up carries the child's "I am holding it", down the parent's
+/* The rendezvous: up has the child's "I am holding it", down the parent's
  * "I have replaced it". */
 static int up[2];
 static int down[2];

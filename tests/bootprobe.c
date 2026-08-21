@@ -2,7 +2,7 @@
  * Exercises /proc/cmdline and the /dev/bootpart boot-partition window.
  *
  * Two boots share this one probe, told apart by the command line the harness
- * passes. With `rach2.bootprobe=fixture` the disk carries a FAT-typed
+ * passes. With `rach2.bootprobe=fixture` the disk has a FAT-typed
  * partition 1 of known bytes (sector k holds byte j = (k * 7 + j) & 0xff), and
  * the probe proves the device end to end: the 0600 mode from stat and fstat
  * both, seeks resolved against the partition size, a read of known bytes at a
@@ -417,7 +417,7 @@ void _start(void)
         contains(cmdline, "rach2.bootprobe=auth")) {
         check(!contains(cmdline, "rach2.fsdisk"), "a RAM-root boot asks for no disk root");
     } else {
-        check(contains(cmdline, "rach2.fsdisk"), "cmdline carries rach2.fsdisk");
+        check(contains(cmdline, "rach2.fsdisk"), "cmdline has rach2.fsdisk");
     }
     check(n > 0 && cmdline[n - 1] == '\n', "cmdline ends with a newline");
     {

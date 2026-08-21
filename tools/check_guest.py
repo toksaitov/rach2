@@ -20,8 +20,8 @@ the verify gate, and holds the four contracts:
      room in the 16-descriptor table for the compiler's own files, and no
      guest recipe line approaches the 3072-byte exec string budget.
   5. The os-real manifest stages all three source trees at /src, root-owned
-     and read-only, so the machine actually carries what the makefiles
-     build, and each staged tree carries its guest.mk.
+     and read-only, so the machine actually has what the makefiles
+     build, and each staged tree has its guest.mk.
 
 Usage: check_guest.py [REPO_ROOT]
 """

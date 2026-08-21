@@ -18,7 +18,7 @@
  * differ here, so the inheritance is a real assertion rather than a tautology),
  * no temporary file is left behind, and a reader holding a descriptor across
  * the rename goes on reading the file it opened, whole. That last one is the
- * guarantee the whole reader-never-locks rule rests on. A second row carries a
+ * guarantee the whole reader-never-locks rule rests on. A second row has a
  * set-id bit, which only this test can: the owner must be set before the mode
  * because a chown clears those bits, and both an owner the writer is not and a
  * set-id bit are needed to see it.
@@ -138,7 +138,7 @@ static const char *Fixtures[] = {"/credtxn.txt", "/credbusy.txt", "/credmode.txt
 /* No file any of these is replaced through may be left behind: a temporary file
  * outlives a replacement only after a crash. A replacement writes through
  * `<path>.tmp.<pid>`, so each of these is a prefix to sweep for and not a name
- * to look up: a temporary left by one of this probe's children carries that
+ * to look up: a temporary left by one of this probe's children has that
  * child's pid. The lock is checked beside them, since a lock outlives its
  * holder
  * only after a kill. */

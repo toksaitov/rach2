@@ -8,7 +8,7 @@
  * SIGFPE for #DE) and leave the parent and the kernel running. Without it an
  * unhandled exception returns into the faulting instruction, re-faults, and
  * triple-faults the machine with no diagnostic. The probe reaps each child and
- * checks the wait status carries the expected signal.
+ * checks the wait status has the expected signal.
  *
  * Prints "TRAPPROBE OK" and exits 0. Freestanding; direct int 0x80.
  */
@@ -94,7 +94,7 @@ static void raise_divide_error(void)
 
 /*
  * Fork a child that runs `fault`, reap it, and return whether it was killed by
- * `expect_signo`. The Linux wait status carries the terminating signal in its
+ * `expect_signo`. The Linux wait status has the terminating signal in its
  * low seven bits.
  */
 static int faulted_with(void (*fault)(void), int expect_signo)

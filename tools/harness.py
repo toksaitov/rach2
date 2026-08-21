@@ -20,13 +20,13 @@ Usage:
     send=TEXT      write TEXT + newline to the guest serial
     wait=SECS      sleep SECS, draining serial
     tcp=PORT       open a TCP connection to 127.0.0.1:PORT and close it, which a
-                   `hostfwd=tcp::PORT-:GUESTPORT` in --net carries to a server
+                   `hostfwd=tcp::PORT-:GUESTPORT` in --net forwards to a server
                    inside the guest. This provokes traffic; it does not prove the
                    guest answered, because QEMU's user network accepts the host
                    side of the connection before it knows whether anything is
                    there. What the guest did is read from a capture of the wire.
     udp=PORT:TEXT  send TEXT as one UDP datagram to 127.0.0.1:PORT, which a
-                   `hostfwd=udp::PORT-:GUESTPORT` in --net carries into the
+                   `hostfwd=udp::PORT-:GUESTPORT` in --net forwards into the
                    guest. This is the only way a test can put a frame on the
                    guest's wire that the guest did not ask for.
     exec=NAME|MARK run "exec NAME", re-sending if the shell drops it, until MARK

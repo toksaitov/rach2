@@ -235,7 +235,7 @@ static void check_build(void)
         CHECK(found, "a transaction id whose checksum comes out zero was found");
     }
 
-    /* A request carries the two options a discover does not. */
+    /* A request has the two options a discover does not. */
     memset(&r, 0, sizeof(r));
     r.type = DHCP_REQUEST;
     r.xid = XID;

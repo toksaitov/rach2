@@ -484,7 +484,7 @@ void _start(void)
         fail("an interface that is up and running did not say so");
     }
 
-    /* The query descriptor carries ioctls and refuses everything else, rather
+    /* The query descriptor has ioctls and refuses everything else, rather
        than answering with a silence a caller would wait in. */
     args[0] = (uint32_t)fd;
     args[1] = (uint32_t)sa_listen;

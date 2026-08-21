@@ -293,7 +293,7 @@ d = open('$REPO/build/rach2/kernel', 'rb').read()
 old = b'======= Rach2 Booting... ======='
 new = b'======= Rach2 SEALEDMARK ======='
 if d.count(old) == 0:
-    raise SystemExit('sealed-test: the kernel carries no banner to mark')
+    raise SystemExit('sealed-test: the kernel has no banner to mark')
 open('$MARKED', 'wb').write(d.replace(old, new))
 "
 python3 "$REPO/tools/check_kernel.py" "$MARKED" > /dev/null || \
@@ -324,7 +324,7 @@ if grep -aq "Falling back to" "$LOG"; then
     fail "the first boot of a good disk took the fallback"
 fi
 # The address is the building's to give, and the machine asked for it: the disk
-# carries rach2.ip=none and init runs the client.
+# has rach2.ip=none and init runs the client.
 grep -aq "lease of" "$LOG" || fail "the machine did not take a lease"
 
 phase "kernel over ssh, trial, commit"
@@ -519,7 +519,7 @@ python3 -c "
 d = open('$WORK', 'rb').read()
 i = d.find(b'# GRUB Environment Block')
 if i < 0:
-    raise SystemExit('sealed-test: the disk carries no environment block')
+    raise SystemExit('sealed-test: the disk has no environment block')
 old = d[i:i + 1024]
 keep = []
 for line in old.split(b'\n'):

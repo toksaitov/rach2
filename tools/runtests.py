@@ -6,7 +6,7 @@ Boots qemu-system-i386 headless with the kernel and the test RAM disk, waits for
 the kernel shell, then `exec`s each probe in turn and scores it from the line
 that hands the shell back: `sys_exit: init process N exited with status M` or
 `terminate: init process N killed by signal S`. A probe passes when that line
-carries status 0.
+has status 0.
 
 Not the bare "Process exited with status N", which the kernel prints for every
 process exit including a forked child's, so neither the first nor the last of

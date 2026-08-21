@@ -84,7 +84,7 @@
 #define SALT_ALPHABET "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 /* The replaced file's base name, and what every temporary of it begins with. A
- * temporary carries the writer's pid, so "is the directory clean" is a question
+ * temporary has the writer's pid, so "is the directory clean" is a question
  * about a prefix and not about one name. */
 #define TARGET_BASE "shadow"
 #define TEMP_PREFIX TARGET_BASE ".tmp"
@@ -361,7 +361,7 @@ int tcsetattr(int fd, int actions, const struct termios *modes)
  *
  * The real answer comes from the raw system call, which is what musl's own
  * `getpid` is; going through the libc entry point here would be this function
- * calling itself. It carries no sanitizer instrumentation, because the
+ * calling itself. It has no sanitizer instrumentation, because the
  * library's own death handler reaches `getpid` through `cred_txn_mine`, and a
  * function a signal handler reaches must not enter the sanitizer runtime to
  * allocate a shadow frame on its way to a system call. Everything it shares
@@ -494,7 +494,7 @@ static int present(const char *path)
 /**
  * How many temporary files of the replaced file's the directory still holds.
  *
- * The name a replacement writes through carries the writer's pid, so a case
+ * The name a replacement writes through has the writer's pid, so a case
  * that
  * checked one fixed name and called the directory clean would miss a temporary
  * left under any other. This counts every name that begins the way one of them
@@ -2286,7 +2286,7 @@ static void check_release(void)
  * fails the write instead of killing the writer with its lock still in `/etc`.
  * The disposition is this library's business and no other program's, and the
  * two ways to arrange it part company at exactly that point: an exec resets a
- * caught signal to the default and carries an ignored one into the new image.
+ * caught signal to the default and has an ignored one into the new image.
  * A child forked under a transaction holds none of it and has no way to give
  * back what it inherited, so with `SIG_IGN` the next program it runs would find
  * `SIGPIPE` ignored, having linked nothing that asked for it, and a pipeline
@@ -2359,7 +2359,7 @@ static void report_restore_count(void)
  * Two bytes: whether the disposition this image installed before the acquire is
  * back, and whether the death signals are back to the default. Registered
  * before the library's, so it runs after them, and it runs in the child because
- * a `fork` carries the registrations across while the parent leaves through
+ * a `fork` has the registrations across while the parent leaves through
  * `_exit` and runs none of them.
  */
 static void report_heir(void)
@@ -2839,7 +2839,7 @@ static void check_masked(void)
  * Whose temporary file a replacement writes through, and when it may touch one
  * at all.
  *
- * The name carries the writer's pid, and that is what keeps two writers apart.
+ * The name has the writer's pid, and that is what keeps two writers apart.
  * A
  * fixed `<path>.tmp` is shared, so a writer whose lock had been removed by hand
  * could unlink and recreate the file a successor already had open and had

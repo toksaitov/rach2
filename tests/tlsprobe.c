@@ -300,7 +300,7 @@ void probe_main(u32 *sp)
                 break;
             }
         }
-        /* Exit status carries the child verdict to the parent (0 == clean). */
+        /* Exit status has the child verdict to the parent (0 == clean). */
         sys_exit(cbad == 0 ? 0 : 1);
     } else {
         /* Parent: keep tcb_parent and verify its sentinels across switches. */

@@ -404,7 +404,7 @@ static void m_w32(unsigned off, unsigned v)
        read by the flag going high with the data readable; a window the test
        has stuck never reaches the state its caller polls for. */
     if (off == R8168_OCPDR) {
-        /* The command word carries the register in bits 30:16 as reg/2 (the
+        /* The command word has the register in bits 30:16 as reg/2 (the
            driver forms it as reg << 15 and the register is always even), so
            the data's top bit does not reach the address field. */
         unsigned reg = ((v >> 16) & 0x7fffu) << 1;
@@ -775,7 +775,7 @@ int main(void)
     CHECK((r8168_rx_ring[0].opts1 & R8168_DESC_OWN) != 0,
           "every receive descriptor is owned by the chip");
     CHECK((r8168_rx_ring[0].opts1 & R8168_DESC_LEN_MASK) == R8168_RX_BUF_SIZE,
-          "a receive descriptor carries the buffer size");
+          "a receive descriptor has the buffer size");
     CHECK((r8168_rx_ring[R8168_RING_SIZE - 1].opts1 & R8168_DESC_EOR) != 0,
           "the last receive descriptor ends the ring");
     CHECK((r8168_rx_ring[0].opts1 & R8168_DESC_EOR) == 0,
@@ -848,7 +848,7 @@ int main(void)
                   (R8168_DESC_FS | R8168_DESC_LS),
               "the descriptor marks one whole frame");
         CHECK((r8168_tx_ring[0].opts1 & R8168_DESC_LEN_MASK) == sizeof(frame),
-              "the descriptor carries the frame length");
+              "the descriptor has the frame length");
         CHECK(r8168_tx_buf[0][0] == 0 && r8168_tx_buf[0][99] == 99,
               "the frame was copied into the buffer");
     }

@@ -222,12 +222,12 @@ int main(void)
     /* ---- enabling sends what was held ---- */
     netconsole_enable();
     CHECK(frame_count == 1, "enabling drains the buffer in one frame");
-    CHECK(frame_type[0] == NETCONSOLE_ETHERTYPE, "the frame carries the netconsole ethertype");
+    CHECK(frame_type[0] == NETCONSOLE_ETHERTYPE, "the frame has the netconsole ethertype");
     CHECK(frame_dst[0][0] == 0xFF && frame_dst[0][5] == 0xFF, "the frame is broadcast");
     CHECK(frame_len[0] == NETCONSOLE_HDR_LEN + 28, "the frame is header plus the held bytes");
     CHECK(frame_data[0][0] == 'R' && frame_data[0][1] == 'C' && frame_data[0][2] == 'H' &&
               frame_data[0][3] == '2',
-          "the frame carries the magic");
+          "the frame has the magic");
     CHECK(frame_be32(0, 4) == krandom_value, "the boot id is the drawn value");
     CHECK(frame_be32(0, 8) == 0, "the first frame is sequence zero");
     CHECK(frame_be16(0, 12) == 28, "the length field is the payload length");
@@ -253,7 +253,7 @@ int main(void)
     CHECK(frame_count == 3, "each completed line is a frame");
     CHECK(frame_be32(0, 8) == 0 && frame_be32(1, 8) == 1 && frame_be32(2, 8) == 2,
           "the sequence numbers count up");
-    CHECK(frame_be32(0, 4) == frame_be32(2, 4), "every frame carries the same boot id");
+    CHECK(frame_be32(0, 4) == frame_be32(2, 4), "every frame has the same boot id");
     CHECK(frame_sum(0) == 0 && frame_sum(1) == 0 && frame_sum(2) == 0, "every frame sums to zero");
 
     /* ---- an unterminated line waits, and is not lost ---- */
@@ -276,7 +276,7 @@ int main(void)
         }
         CHECK(frame_count == 1, "a payload's worth is sent without waiting for a newline");
         CHECK(frame_len[0] == NETCONSOLE_HDR_LEN + NETCONSOLE_PAYLOAD_MAX,
-              "the frame carries a full payload and no more");
+              "the frame has a full payload and no more");
         CHECK(frame_sum(0) == 0, "the full frame sums to zero");
     }
 

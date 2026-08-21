@@ -3,7 +3,7 @@
 
 The sealed disk names its fixed address twice, and in two shapes. The two static
 menu entries carry `rach2.ip=ADDRESS/PREFIX rach2.gateway=GATEWAY`, which is what
-the kernel parses at boot. `krffs/rescue-static.script` carries the same address
+the kernel parses at boot. `krffs/rescue-static.script` has the same address
 as a dotted mask and applies it from userland when a recovery boot gets no lease.
 Two shapes of one fact drift, and a machine whose menu and fallback disagree is
 one that is unreachable by whichever of the two is wrong.
@@ -70,7 +70,7 @@ def network_commands(text, want):
             if tokens in want:
                 found.append(tokens)
                 continue
-            return None, "carries a network command this does not recognise: %r" % segment
+            return None, "has a network command this does not recognise: %r" % segment
     return found, None
 
 
@@ -83,7 +83,7 @@ def commands_disagree(text, address_s, mask_s, gateway_s):
     found, why = network_commands(text, want)
     if why:
         return why
-    # The `|| exit 1` each of them carries is a separator away and never reaches
+    # The `|| exit 1` each of them has is a separator away and never reaches
     # the tokens; anything else on the line is another command and is counted.
     if found != want:
         return "runs %r, not exactly %r" % (found, want)

@@ -38,7 +38,7 @@
  *   opened on "/"               -EBADF, a directory descriptor has no writer
  *
  * `fchmod` and `fchown` on that same descriptor are absent on purpose: a
- * descriptor on the root carries a NULL node, so both take the fixed-metadata
+ * descriptor on the root has a NULL node, so both take the fixed-metadata
  * branch and never reach the node at all.
  *
  * Prints "DIRTYPROBE OK" and exits 0 only when every answer held; any failure
@@ -101,7 +101,7 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line carries the answer it got. */
+/* Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];

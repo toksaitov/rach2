@@ -36,7 +36,7 @@ static int fail(const char *what)
 /**
  * Run `line` through `ish -c` and return the shell's exit status, or -1.
  *
- * The environment is the one this probe was given, which carries the `PATH` the
+ * The environment is the one this probe was given, which has the `PATH` the
  * shell resolves against.
  */
 static int ish_status(const char *line)

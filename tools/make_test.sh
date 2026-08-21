@@ -236,7 +236,7 @@ if ! wait_token "CLEANDONE=0 LEFT=0" 120; then
 fi
 
 # One of this project's own programs, built here from the source the image
-# carries and compared with the one this machine actually uses.
+# has and compared with the one this machine actually uses.
 if ! wait_token "UTILRC=0" 240; then
     fail "make could not build this project's own cat"
 fi

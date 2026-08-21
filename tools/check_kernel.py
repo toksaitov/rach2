@@ -20,10 +20,10 @@ overwrite itself, is refused on the host before a machine is started:
     memory), `p_filesz <= p_memsz`, the file range inside the file, and the
     file offset congruent to the address modulo the alignment.
   * The entry point inside the file-backed bytes of a load, not its
-    zero-fill; and, where the file carries a symbol table, the entry equal
+    zero-fill; and, where the file has a symbol table, the entry equal
     to the `_start` symbol's address and `_end` equal to the highest
     `p_vaddr + p_memsz`, since the boot allocator starts reserving physical
-    memory at that symbol. The GNU-linked kernel carries its table and is
+    memory at that symbol. The GNU-linked kernel has its table and is
     held to both; tcc's linker emits none, so under `--tcc` the image end is
     derived from the segments alone and the symbol assertions do not run.
 
@@ -139,10 +139,10 @@ def check(data, tcc_profile):
         # tcc's linker emits no symbol table; the entry and image-end
         # addresses are baked into the code at link time, so the layout and
         # containment rules below are what an artifact without symbols can be
-        # held to. A GNU-linked kernel carries its table and is held to the
+        # held to. A GNU-linked kernel has its table and is held to the
         # symbol rules too.
         if not tcc_profile:
-            fail("no symbol table (the GNU-linked kernel carries one)")
+            fail("no symbol table (the GNU-linked kernel has one)")
         symbols = {}
     if not tcc_profile:
         if "_start" not in symbols:
@@ -362,7 +362,7 @@ def selftest():
 
     # No symbol table at all, which is what tcc's linker emits: the tcc
     # profile accepts it (the addresses are baked into the code) and the
-    # common profile refuses it, because the GNU build carries its table.
+    # common profile refuses it, because the GNU build has its table.
     d = bytearray(good)
     set32(d, 32, 0)
     check(bytes(d), tcc_profile=True)

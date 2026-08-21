@@ -11,7 +11,7 @@ newest and the ones before it read as the history they claim to be. A directory
 holding only a `plan.md` is work that is planned and not yet built, and it must
 have no entry, because an entry states that the milestone happened.
 
-A milestone is finished when it carries the record of what was built. That file
+A milestone is finished when it has the record of what was built. That file
 is `Readme.md`, or `results.md`, which is what milestone 6 called its record.
 
 Bullets inside fenced code blocks are examples rather than entries and are
@@ -87,7 +87,7 @@ def check(dirs, entries):
                 "the index names %s, which is not a directory" % name)
         elif not known[name]:
             problems.append(
-                "the index names %s, which carries a plan and no "
+                "the index names %s, which has a plan and no "
                 "record, so the work is not done and the entry states "
                 "that it is" % name)
 
@@ -166,7 +166,7 @@ def selftest():
          ["dev-log/25-sealed is finished and has no entry in the index"]),
         ("an in-flight milestone indexed as done", spec,
          entry("24-metal") + entry("25-sealed") + entry("26-portable"),
-         ["the index names 26-portable, which carries a plan and no record, so "
+         ["the index names 26-portable, which has a plan and no record, so "
           "the work is not done and the entry states that it is"]),
         ("entries out of order", spec,
          entry("25-sealed") + entry("24-metal"),

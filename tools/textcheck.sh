@@ -95,7 +95,7 @@ py_files() {
     done
 
     # A spaced "--" used as an em-dash in the Python tools (a docstring, a
-    # comment, or a stderr message). An argparse "--flag" carries no surrounding
+    # comment, or a stderr message). An argparse "--flag" has no surrounding
     # spaces, so it is not matched; only the spaced prose form is.
     py_files | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue

@@ -27,7 +27,7 @@
  * the root parent copies the staged `/suidhelper` byte for byte to
  * `/mp_sgid0`, which keeps the fixture out of the manifest and out of phase
  * 3's set-id allowlist. It is chmod'd 02700 and chowned `1000:0`, in that
- * order, and the mode must survive the chown: 02700 carries no group-execute,
+ * order, and the mode must survive the chown: 02700 has no group-execute,
  * so the clear spares its setgid bit. A uid-1000 child rewrites a byte of the
  * copy and stats it back at 02700, the survival the clear rule deliberately
  * allows, and a grandchild execs it with `suidhelper`'s `plain` scenario,
@@ -44,7 +44,7 @@
  * would buy itself a green run by breaking a later probe's premise.
  *
  * Every operation's return value is checked before its mode is asserted, and
- * every wait checks WIFEXITED before WEXITSTATUS: a signal death carries the
+ * every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
  * crashed child as a passing one. Prints "MODEPROBE OK" and exits 0 only when
  * every case passed; any failure names the step and the answer it got, and
@@ -87,7 +87,7 @@ typedef unsigned int u32;
 #define ST_SIZE 44
 
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
- * code in bits 8-15; a signal death carries the signal in the low 7 bits. */
+ * code in bits 8-15; a signal death has the signal in the low 7 bits. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
@@ -150,7 +150,7 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line carries the answer it got. */
+/* Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];
@@ -452,7 +452,7 @@ static void escalation_child(void)
 }
 
 /* Run one child to completion and require a clean exit 0. WIFEXITED comes
- * first: a signal death carries the signal in the low bits and would otherwise
+ * first: a signal death has the signal in the low bits and would otherwise
  * decode as exit 0. The child has already named the case it failed. */
 static void run_child(void (*body)(void), const char *what)
 {
@@ -539,7 +539,7 @@ void _start(void)
     run_child(user_child, "the uid-1000 child");
 
     /* The escalation's fixture. The chmod comes before the chown on purpose:
-     * 02700 carries no group-execute, so the clear the chown runs must spare
+     * 02700 has no group-execute, so the clear the chown runs must spare
      * its setgid bit, and the assertion after it says so. */
     copy_file(HELPER, SGID0);
     want_eq("arm the helper copy", syscall3(SYS_CHMOD, (int)SGID0, 02700, 0), 0);

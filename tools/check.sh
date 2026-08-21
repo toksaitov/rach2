@@ -294,7 +294,7 @@ fi
 #     guards, so what is verified here is the checker itself: the kernel one
 #     must accept a well-formed kernel and refuse each malformed variant a
 #     loader would misload, the GRUB one must accept the configuration a core
-#     image carries and refuse every way of losing the recovery path, and the
+#     image has and refuse every way of losing the recovery path, and the
 #     sealed-network one must refuse every way the menu and the recovery script
 #     can come to describe two different machines.
 hr "12/13 checker selftests"

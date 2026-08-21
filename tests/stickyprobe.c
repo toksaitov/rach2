@@ -1,5 +1,5 @@
 /**
- * Verify the sticky bit: in a directory that carries it, write permission is no
+ * Verify the sticky bit: in a directory that has it, write permission is no
  * longer enough to take another user's entry out.
  *
  * The rule under test: with the bit set on a directory, an entry may be removed
@@ -67,7 +67,7 @@
  * refusal reported after the work was done. The destination victims are
  * checked by mode rather than by existence, because a rename that clobbered
  * one would leave the name in place carrying the source's 0640. Every wait
- * checks WIFEXITED before WEXITSTATUS: a signal death carries the signal in
+ * checks WIFEXITED before WEXITSTATUS: a signal death has the signal in
  * the low bits and would otherwise decode as exit 0. Prints "STICKYPROBE OK"
  * and exits 0 only when every case passed; any failure names the step and
  * the answer it got, and exits 1. Freestanding; direct int 0x80.
@@ -101,7 +101,7 @@ typedef unsigned int u32;
 #define ST_MODE 16
 
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
- * code in bits 8-15; a signal death carries the signal in the low 7 bits. */
+ * code in bits 8-15; a signal death has the signal in the low 7 bits. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
@@ -176,7 +176,7 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
 }
 
-/* Print a signed decimal, so a failing line carries the answer it got. */
+/* Print a signed decimal, so a failing line has the answer it got. */
 static void putd(int v)
 {
     char buf[13];
@@ -385,7 +385,7 @@ static void other_child(void)
 }
 
 /* Run one child to completion and require a clean exit 0. WIFEXITED comes
- * first: a signal death carries the signal in the low bits and would otherwise
+ * first: a signal death has the signal in the low bits and would otherwise
  * decode as exit 0. The child has already named the case it failed. */
 static void run_child(void (*body)(void), const char *what)
 {

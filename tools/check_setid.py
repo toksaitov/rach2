@@ -39,7 +39,7 @@ and because `exec-dir` expands to a set of files the manifest never names. It
 walks the staged node chain the way fsck.krffs does, rebuilds every reserved
 node's path from `parent_id`, and compares the nodes carrying 04000 or 02000
 against the allowlist the named manifest owns. The manifest is an argument and
-not an inference: the allowlist is per manifest and an image carries no record
+not an inference: the allowlist is per manifest and an image has no record
 of which one staged it. Every declared entry must be found, every unprivileged
 path must be present without a bit, and a manifest that declares no set-id
 entry names one ordinary node instead, so a walk that finds nothing fails the
@@ -196,13 +196,13 @@ ALLOWLIST = {
         },
         "sentinel": None,
         "init": "init-login",
-        # This image carries the compiler, so the inventory also checks the
+        # This image has the compiler, so the inventory also checks the
         # sysroot it was built to look in.
         "sysroot": True,
     },
     # The metal profile the Lenovo boots from a USB stick. Its privilege model
     # is os-real's, because the account tools are the same busybox pair, but it
-    # carries no compiler, no /src and no installer: a machine with no writable
+    # has no compiler, no /src and no installer: a machine with no writable
     # disk cannot use them, and every byte it does carry costs RAM under the
     # kernel's direct map.
     "rach2-metal": {
@@ -339,7 +339,7 @@ ALLOWLIST = {
 }
 
 # The recovery profile: the metal profile's surface with the two programs that
-# repair a disk pinned beside it. Neither carries a set-id bit, but both run as
+# repair a disk pinned beside it. Neither has a set-id bit, but both run as
 # root against raw disk devices in the one image whose whole purpose is writing
 # any sector of the drive, so what they are built from is named here the way
 # os-real names its own bootctl. The metal map is copied rather than mutated, so
@@ -1028,7 +1028,7 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
 
     Returns (problems, summary). The root node is deliberately not inventoried:
     KRFFS_MODE_DIRTY is 0004000, the setuid bit's own place, and the root is
-    the one node that carries it, so a dirty image would otherwise report its
+    the one node that has it, so a dirty image would otherwise report its
     root as setuid root.
 
     The allowlist entry is checked here and not only in the sweep, because this
@@ -1067,11 +1067,11 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
     init_node = paths.get("/sbin/init")
     if allow.get("init") is None:
         if init_node is not None:
-            problems.append("%s: carries /sbin/init and the allowlist declares "
+            problems.append("%s: has /sbin/init and the allowlist declares "
                             "none for this image; the kernel runs that as pid 1"
                             % os.path.basename(image))
     elif init_node is None:
-        problems.append("%s: carries no /sbin/init and the allowlist declares "
+        problems.append("%s: has no /sbin/init and the allowlist declares "
                         "%s" % (os.path.basename(image), allow["init"]))
     elif (init_node["mode"] & PERM, init_node["uid"], init_node["gid"]) != \
             (INIT_MODE, 0, 0):
@@ -1110,7 +1110,7 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
     for path in sorted(declared):
         if path not in found:
             want_mode, want_uid, want_gid, _ = declared[path]
-            problems.append("%s: %s is declared %s but the image carries no "
+            problems.append("%s: %s is declared %s but the image has no "
                             "such set-id node"
                             % (os.path.basename(image), path,
                                fmt_entry(want_mode, want_uid, want_gid)))
@@ -1168,7 +1168,7 @@ def check_image(image, manifest, offset=0, size=None, table=ALLOWLIST):
                             % (os.path.basename(image), path))
         elif (node["mode"] & PERM, node["uid"], node["gid"]) != (
                 want_mode, want_uid, want_gid):
-            problems.append("%s: %s is declared %s but the image carries %s; "
+            problems.append("%s: %s is declared %s but the image has %s; "
                             "a program root runs, and a file root reads to "
                             "decide who somebody is, are trust boundaries too"
                             % (os.path.basename(image), path,
@@ -1216,7 +1216,7 @@ def validate_table(table=ALLOWLIST):
         for path, entry in sorted(allow["setid"].items()):
             if not (entry[0] & SETID):
                 problems.append("allowlist: %s declares %s at mode 0%o, which "
-                                "carries no set-id bit"
+                                "has no set-id bit"
                                 % (stem, path, entry[0]))
 
     return problems
@@ -1480,7 +1480,7 @@ TABLE_CASES = [
     ("a declared entry carrying no set-id bit",
      {"x": {"setid": {"/x": (0o755, 0, 0, "build/x")}, "trusted": {},
             "sentinel": None}},
-     "carries no set-id bit"),
+     "has no set-id bit"),
 ]
 
 #
@@ -1912,7 +1912,7 @@ def check_applets(path=APPLET_TABLE):
     for applet in FORBIDDEN_APPLETS:
         if applet in names:
             problems.append(
-                "%s: busybox carries the `%s` applet; privilege climbs through "
+                "%s: busybox has the `%s` applet; privilege climbs through "
                 "the declared set-id programs alone" % (path, applet))
 
     return problems
@@ -1942,7 +1942,7 @@ def check_suid_applets(path=SUID_APPLET_TABLE):
     missing = sorted(set(SUID_APPLETS) - names)
     if extra:
         problems.append(
-            "%s: the set-id busybox carries %s beside the declared %s; every "
+            "%s: the set-id busybox has %s beside the declared %s; every "
             "applet in that binary runs as root"
             % (path, ", ".join("`%s`" % n for n in extra),
                ", ".join("`%s`" % n for n in SUID_APPLETS)))
@@ -2116,7 +2116,7 @@ def check_config(path=BUSYBOX_CONFIG):
 # string that names a shell. Requiring init-shell to carry BOTH is the sentinel:
 # an unreadable or empty scan then fails rather than passes, the way the applet
 # table's own scan is guarded. The check is exact in this tree because a static
-# musl util that never calls `system` carries neither string; only init's own
+# musl util that never calls `system` has neither string; only init's own
 # table puts them in a binary.
 INIT_BINARIES = os.path.join("build", "utils", "sbin")
 INIT_SHELL_STRINGS = (b"/bin/sh", b"/ish")
@@ -2155,7 +2155,7 @@ def check_inits(directory=INIT_BINARIES):
                     % (path, wanted_string.decode("ascii")))
             elif not wanted[name] and held:
                 problems.append(
-                    "%s: carries the byte string %s; the strict init must hold "
+                    "%s: has the byte string %s; the strict init must hold "
                     "no path it could fall back to, since a fall-through on an "
                     "exec failure hands the console an unauthenticated root "
                     "shell" % (path, wanted_string.decode("ascii")))
@@ -2502,10 +2502,10 @@ def header_cases(tmp):
 
 
 def check_sysroot(image, offset=0, size=None):
-    """Check a staged image carries everything the compiler looks for.
+    """Check a staged image has everything the compiler looks for.
 
     Run for the images whose allowlist entry says `sysroot`, so that a manifest
-    saying an image carries a compiler is the same statement as the image being
+    saying an image has a compiler is the same statement as the image being
     checked for one, and neither stager has to know which is which.
     """
     try:

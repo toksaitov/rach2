@@ -6,13 +6,13 @@
 # The post-MBR gap holds two core-image tails and LBA 1 selects between them.
 # `bootctl grub` writes the tail that is not in use, reads it back, and only
 # then rewrites LBA 1. Sector 0 is never written, which is the whole reason the
-# layout is shaped this way: it carries the partition table, and a disk writes
+# layout is shaped this way: it has the partition table, and a disk writes
 # whole sectors.
 #
 # Three boots of one disk. The first proves which core is running and installs
 # the other, the second proves the machine came up on it, installs the first
 # back and checks that the window admits one opener at a time, and the third
-# proves the swap goes both ways. Each core image carries a configuration that
+# proves the swap goes both ways. Each core image has a configuration that
 # prints its own marker, so what the log holds identifies the image that ran.
 # Reading the pointer back would prove only bytes at rest, and a tool that wrote
 # the pointer and nothing else would pass that.

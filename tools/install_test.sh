@@ -186,7 +186,7 @@ i = d.find(b'# GRUB Environment Block')
 print(i)
 ")"
 if [ "$ENVOFF" -lt 0 ]; then
-    fail "the disk carries no environment block"
+    fail "the disk has no environment block"
 fi
 
 # One pass of the install loop. $1 is the pass number, $2 the sed pattern the
@@ -291,7 +291,7 @@ if -1 in (cold, rb_b, slot_d, rb_c, slot_e):
 if not (cold < rb_b < slot_d < rb_c < slot_e):
     sys.exit('pass $P: the recovery tokens are out of order')
 if mark in log[rb_b:slot_d]:
-    sys.exit('pass $P: the fallback boot carries the marker')
+    sys.exit('pass $P: the fallback boot has the marker')
 if mark not in log[rb_c:slot_e]:
     sys.exit('pass $P: the repaired candidate did not print its marker')
 if b'bootctl: committed' not in log[slot_e:]:

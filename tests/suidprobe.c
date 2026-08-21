@@ -36,7 +36,7 @@ typedef unsigned int u32;
 #define ST_MODE 16
 
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
- * code in bits 8-15; a signal death carries the signal in the low 7 bits. A
+ * code in bits 8-15; a signal death has the signal in the low 7 bits. A
  * probe that read WEXITSTATUS without WIFEXITED would decode a SIGSEGV (11) as
  * exit 0 and pass on a crash, exactly the failure it exists to catch. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)

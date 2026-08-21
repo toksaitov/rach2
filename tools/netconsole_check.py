@@ -108,10 +108,10 @@ def main():
             fails.append("frame %d does not carry the magic" % i)
             continue
         boot_id, seq, length = struct.unpack(">IIH", body[4:14])
-        # A frame the chip padded to the 60-byte minimum carries trailing zeros
+        # A frame the chip padded to the 60-byte minimum has trailing zeros
         # past the payload; the length field, not the frame size, is the log.
         if HDR_LEN + length > len(body):
-            fails.append("frame %d claims %d bytes but carries %d"
+            fails.append("frame %d claims %d bytes but has %d"
                          % (i, length, len(body) - HDR_LEN))
             continue
         if ones_complement_sum(body[:HDR_LEN + length]) != 0:
@@ -126,7 +126,7 @@ def main():
     if len(boot_ids) > 1:
         fails.append("frames carry %d different boot ids" % len(boot_ids))
     if 0 in boot_ids:
-        fails.append("a frame carries a zero boot id")
+        fails.append("a frame has a zero boot id")
     if len(src_macs) > 1:
         fails.append("frames carry %d different source addresses" % len(src_macs))
     if seqs and seqs != list(range(len(seqs))):

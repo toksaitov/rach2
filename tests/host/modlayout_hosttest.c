@@ -152,7 +152,7 @@ int main(void)
     /* No modules at all is a legal boot (the kernel-only case). */
     CHECK(modlayout_check(m, 0, KEND, LIMIT, &bad) == MODLAYOUT_OK, "no modules");
 
-    /* The panic text carries the rule, the index and the range, because the
+    /* The panic text has the rule, the index and the range, because the
        target laptop has no serial port and k_panic clears the screen: what is
        not in this string is not seen on that machine. */
     {

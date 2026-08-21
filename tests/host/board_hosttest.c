@@ -181,7 +181,7 @@ int main(void)
     CHECK(board_sleep_word(ich9) == 0x2000, "and so is the ICH9's");
     CHECK(board_sleep_word(lynx) == 0x3C00,
           "the laptop's word is sleep type 7 with SLP_EN, the PCH encoding for S5");
-    CHECK((board_sleep_word(lynx) & 0x2000u) != 0, "every sleep word carries SLP_EN");
+    CHECK((board_sleep_word(lynx) & 0x2000u) != 0, "every sleep word has SLP_EN");
     CHECK(((board_sleep_word(lynx) >> 10) & 0x7u) != 5,
           "and none of them is sleep type 5, which is suspend, not off");
     CHECK(board_sleep_word(0) == 0, "no profile yields no word");

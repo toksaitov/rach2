@@ -166,7 +166,7 @@ done
 IMG_SECTORS=$(( $(wc -c < "$BASE") / 512 ))
 echo "$DISKTXT" | grep -q "^sectors $IMG_SECTORS\$" \
     || fail "/proc/disk reports a sector count that is not the image's $IMG_SECTORS"
-echo "$DISKTXT" | grep -q "^model " || fail "/proc/disk carries no model"
+echo "$DISKTXT" | grep -q "^model " || fail "/proc/disk has no model"
 echo "diskdiag-test: /proc/disk reports the drive, its geometry and its table: OK"
 
 # The sectors themselves. Each is hashed on the machine through /dev/disk0 and

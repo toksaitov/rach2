@@ -11,7 +11,7 @@
  *
  * Two of them are worth naming. ATA stores its strings big-endian WITHIN each
  * 16-bit word, which is the one detail a reader who has not checked the layout
- * gets backwards, and the field carries no terminator. And the sector count is
+ * gets backwards, and the field has no terminator. And the sector count is
  * a 48-bit number in a kernel that links no libgcc, so it is turned into
  * decimal by long division over 32-bit halves rather than by a 64-bit divide
  * that would not link.
@@ -50,7 +50,7 @@ uint64_t block_flushes(void)
 
 uint64_t devfs_raw_calls(void)
 {
-    /* The rendered text carries a live count; the fixture pins it so the
+    /* The rendered text has a live count; the fixture pins it so the
        expected bytes below are a constant rather than whatever a previous case
        happened to leave behind. */
     return 0;
@@ -119,7 +119,7 @@ int main(void)
     diskinfo_ata_string(out, 20, id, 10);
     CHECK(strcmp(out, "S5Y2NJ0RA12345X") == 0, "a serial comes back in order");
 
-    /* A field that is exactly full carries no terminator on the wire. */
+    /* A field that is exactly full has no terminator on the wire. */
     put_field(id, 27, 40, "0123456789012345678901234567890123456789");
     diskinfo_ata_string(out, 40, id, 27);
     CHECK(strlen(out) == 40, "a field that fills its width is terminated by us, not by the device");

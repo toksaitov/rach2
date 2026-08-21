@@ -6,7 +6,7 @@
  * What this decides is where a write lands on a 250 GB disk and whether the
  * thing that arrived is the whole of what was sent. Neither can be arranged on
  * demand at the other end of an `ssh` pipe: a stream that stops half way, one
- * that hands out a byte at a time, one that carries more than it said, and a
+ * that hands out a byte at a time, one that has more than it said, and a
  * device that takes short writes are all written here instead, and the numbers
  * are driven to the ends of what 64 bits hold.
  *

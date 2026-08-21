@@ -5,7 +5,7 @@ An independent implementation on purpose: this builder writes the volume from
 the FAT specification (BPB fields, two FAT copies, cluster chains, short
 directory entries), while utils/bootslot.c reads it, so the host test compares
 two implementations of the format against each other. The well-formed image
-carries the shapes the walk must skip (a volume label, a long-name sequence,
+has the shapes the walk must skip (a volume label, a long-name sequence,
 `.` and `..` entries in every subdirectory) and the four files the boot
 contract names; every malformed option breaks exactly one fact.
 

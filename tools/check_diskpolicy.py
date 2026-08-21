@@ -2,7 +2,7 @@
 """
 check_diskpolicy.py: read a kernel's disk policy off the built artifact.
 
-Milestone 24 carries Rach2 to a laptop whose SSD holds somebody's Windows, and
+Milestone 24 has Rach2 to a laptop whose SSD holds somebody's Windows, and
 until its owner has approved a carved partition after a full backup, nothing
 this kernel does may write that disk. The rule is enforced by a build switch
 (`-DRACH2_DISK_READONLY`, see rach2/sys/block/diskcmd.c), and a build switch is
@@ -11,11 +11,11 @@ only as good as the check that the artifact actually got built with it.
 There is nothing useful to check for by absence. The commands are numbers, and
 the functions that issue them are static, so a read-only kernel and a
 read-write one differ by a comparison rather than by a symbol or a string that
-happens to name a write. So diskcmd.c carries an explicit banner naming the
+happens to name a write. So diskcmd.c has an explicit banner naming the
 policy, the kernel prints it at boot, and this reads it out of the binary and
 requires BOTH halves: the expected banner present, and the other one absent. A
 kernel built without the switch fails this, which is the case worth catching,
-and so does one that somehow carries both.
+and so does one that somehow has both.
 
 Usage:
     check_diskpolicy.py <kernel> read-only|read-write
@@ -57,7 +57,7 @@ def main(argv):
         return 1
     if has_other:
         sys.stderr.write(
-            "check-diskpolicy: %s carries the %s banner as well as the %s one, so "
+            "check-diskpolicy: %s has the %s banner as well as the %s one, so "
             "which policy it enforces cannot be read off it\n" % (path, other, want))
         return 1
 

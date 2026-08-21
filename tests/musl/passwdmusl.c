@@ -548,7 +548,7 @@ static int check_change(void)
  *
  * Two accounts first, where both changes must survive: the writer that
  * published second re-read the other's result and carried it through. The image
- * carries `probe2` at uid 1001 for exactly this, since a lost update is only
+ * has `probe2` at uid 1001 for exactly this, since a lost update is only
  * visible when two accounts change.
  *
  * Then one account changed by two writers, where the second must be refused.

@@ -316,7 +316,7 @@ CFG
 # the heredoc above stays quoted and GRUB's own ${...} variables never reach the
 # shell. The two network sets are what keeps the static entries honest: the
 # ordinary entries take the DHCP set and the static ones take the fixed address,
-# and neither line ever carries both, since the kernel refuses an address given
+# and neither line ever has both, since the kernel refuses an address given
 # twice and would come up with no address at all.
 RECOVERY_TITLE="Rach2 (recovery, not yet built)"
 RECOVERY_STATIC_TITLE="Rach2 (recovery, static address, not yet built)"
