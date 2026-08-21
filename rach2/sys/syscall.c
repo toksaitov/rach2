@@ -37,11 +37,13 @@
 #include "audio/audio.h"
 #include "network/socket/socket.h"
 #include "network/socket/packet.h"
+#include "network/socket/raw.h"
 #include "network/ethernet/ethernet.h"
 #include "network/netif.h"
 #include "network/driver/netdev.h"
 #include "network/udp/udp.h"
 #include "network/tcp/tcp.h"
+#include "network/ip/ip.h"
 #include "network/ip/icmp.h"
 #include "network/net.h"
 #include "network/netconf.h" /* net_ip_addr for getsockname */
@@ -2095,6 +2097,19 @@ static int32_t sys_lseek(isr_params_t *params)
 }
 
 /**
+ * Whether this is the query descriptor rather than a socket that carries data.
+ *
+ * A DHCP client opens AF_INET/SOCK_RAW/IPPROTO_RAW to ask the interface
+ * ioctls about the machine and does nothing else with it. It has no protocol,
+ * so it can send and receive nothing; a raw socket with a protocol is a real
+ * one, and the paths below tell them apart here rather than by socket type.
+ */
+static int sock_is_query(const struct socket *sock)
+{
+    return sock->type == SOCK_RAW && sock->protocol == 0;
+}
+
+/**
  * Read up to `count` bytes from descriptor `fd` (read(2)).
  *
  * EBX = fd, ECX = buf, EDX = count. Returns the bytes read, 0 at end, or
@@ -2142,13 +2157,13 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         if (!entry->sock || !user_buffer_ok((uint32_t)buf, count, 1)) {
             return -EFAULT;
         }
-        if (entry->sock->type == SOCK_RAW) {
+        if (sock_is_query(entry->sock)) {
             return -EOPNOTSUPP;
         }
         sock_nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
         /* socket_*recv write straight into the validated user buffer; __force
          * strips the __user tag at the boundary. */
-        if (entry->sock->type == SOCK_DGRAM) {
+        if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
             if (sock_nonblock) {
                 return socket_try_recv(entry->sock, (uint8_t __force *)buf,
                                        (int)count, NULL, NULL);
@@ -2344,11 +2359,15 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
     if (entry->type == FD_TYPE_SOCKET && entry->sock) {
         int32_t r;
 
-        if (entry->sock->type == SOCK_RAW) {
+        if (sock_is_query(entry->sock)) {
             return -EOPNOTSUPP;
         }
         if (!user_buffer_ok((uint32_t)buf, count, 1)) {
             return -EFAULT;
+        }
+        if (entry->sock->type == SOCK_RAW) {
+            return socket_try_recv(entry->sock, (uint8_t __force *)buf,
+                                   (int)count, NULL, NULL);
         }
         r = socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf,
                                 (int)count);
@@ -8355,6 +8374,8 @@ static uint32_t canonical_dst_ip(uint32_t ip)
 static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len)
 {
+    int r;
+
     if (!sock->broadcast && netconf_is_broadcast(dst_ip)) {
         return -EACCES;
     }
@@ -8367,9 +8388,21 @@ static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_por
     if (sock->local_port == 0 && udp_bind_ephemeral(sock) == 0) {
         return -EAGAIN;
     }
-    udp_tx(sock->local_port, dst_ip, dst_port, buf, len);
+    /* The hop limit is the socket's, which IP_TTL sets and traceroute counts
+       up. What the send layer refuses is reported here rather than counted as
+       bytes sent. */
+    r = udp_tx(sock->local_port, dst_ip, dst_port, buf, len, sock->ip_ttl);
+    if (r < 0) {
+        return r;
+    }
     return (int32_t)len;
 }
+
+/* The raw send buffer: one MTU, filled from user space in syscall context.
+   Only syscall context touches it, and this kernel runs one process there at a
+   time, so it needs no lock of its own; what needs the lock is the send, which
+   goes through the transmit buffers an interrupt also builds in. */
+static uint8_t raw_send_buf[1500];
 
 /* recv flags: only MSG_DONTWAIT is honored. */
 #define MSG_DONTWAIT 0x40
@@ -8377,6 +8410,14 @@ static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_por
 /* The query-only raw descriptor a DHCP client asks the interface through. */
 #define SOCK_RAW     3
 #define IPPROTO_RAW  255
+#define IPPROTO_ICMP   1
+
+/* setsockopt(2)/getsockopt(2) at the IP level: the hop limit a socket's
+ * datagrams leave with, and the option that would hand the caller the header,
+ * which this stack does not implement. */
+#define SOL_IP        0
+#define IP_TTL        2
+#define IP_HDRINCL    3
 
 /* setsockopt levels and the one packet option that is answered. */
 #define SOL_PACKET      263
@@ -8474,7 +8515,11 @@ static int32_t do_socket(int domain, int type, int protocol)
      * receive, because this stack has no raw IP path to offer. Root's, like
      * every raw socket. */
     if (domain == AF_INET && type == SOCK_RAW) {
-        if (protocol != IPPROTO_RAW) {
+        /* Two raw sockets, and the protocol tells them apart. IPPROTO_RAW is
+         * the query descriptor a DHCP client opens for the interface ioctls
+         * and nothing else; IPPROTO_ICMP is the one `ping` and `traceroute`
+         * send and receive on. Both are root's. */
+        if (protocol != IPPROTO_RAW && protocol != IPPROTO_ICMP) {
             return -EPROTONOSUPPORT;
         }
         if (!current_proc || current_proc->euid != 0) {
@@ -8507,6 +8552,16 @@ static int32_t do_socket(int domain, int type, int protocol)
         return -ENOMEM;
     }
     sock->family = (uint16_t)domain;
+    if (domain == AF_INET && type == SOCK_RAW && protocol == IPPROTO_ICMP) {
+        int reg;
+
+        sock->protocol = (uint16_t)protocol;
+        reg = raw_register(sock, (uint8_t)protocol);
+        if (reg != 0) {
+            socket_unref(sock);
+            return reg;
+        }
+    }
     if (domain == AF_PACKET) {
         /* The argument is in network order, as Linux takes it; the socket
          * holds it in host order, which is what the wire comparison uses. */
@@ -8595,8 +8650,24 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
         return 0;
     }
 
+    /* A raw socket binds to an address, not to a port: it says which of the
+     * machine's addresses it wants datagrams for. `traceroute` binds its
+     * receive socket to the address its send socket ended up with, and dies if
+     * it cannot. This machine has one address, so the bind is a statement
+     * about which address it is, and an address the machine does not have is
+     * refused rather than accepted and quietly ignored. */
     if (entry->sock->type == SOCK_RAW) {
-        return -EOPNOTSUPP;
+        uint32_t want;
+
+        if (sock_is_query(entry->sock)) {
+            return -EOPNOTSUPP;
+        }
+        want = SC_BE32(sa + 4);
+        if (want != 0 && want != (uint32_t)net_ip_addr &&
+            (want & 0xFF000000UL) != 0x7F000000UL) {
+            return -EADDRNOTAVAIL;
+        }
+        return 0;
     }
 
     port = SC_BE16(sa + 2);
@@ -8658,11 +8729,53 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
         return -ENOTSOCK;
     }
 
-    /* The query descriptor accepts ioctls and nothing else: this stack has no
-     * raw IP path, and a caller that got silence here would be waiting for a
+    /* The query descriptor accepts ioctls and nothing else: it has no protocol
+     * to send under, and a caller that got silence here would be waiting for a
      * datagram that cannot arrive. */
-    if (entry->sock->type == SOCK_RAW) {
+    if (sock_is_query(entry->sock)) {
         return -EOPNOTSUPP;
+    }
+
+    /* A raw socket sends the ICMP message the caller built, checksum included:
+     * this layer supplies the IPv4 header and rewrites nothing, since a
+     * program sending a wrong checksum on purpose is testing something. */
+    if (entry->sock->type == SOCK_RAW) {
+        uint8_t raw_sa[SOCKADDR_IN_LEN];
+        uint32_t raw_dst;
+        int r;
+
+        if (!sa_ptr || addrlen < SOCKADDR_MIN) {
+            return -EDESTADDRREQ;
+        }
+        k_memset(raw_sa, 0, sizeof(raw_sa));
+        if (copy_from_user(raw_sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+            return -EFAULT;
+        }
+        if ((uint16_t)((uint16_t)raw_sa[0] | ((uint16_t)raw_sa[1] << 8)) != AF_INET) {
+            return -EAFNOSUPPORT;
+        }
+        if (len > (int)sizeof(raw_send_buf)) {
+            return -EMSGSIZE;
+        }
+        raw_dst = canonical_dst_ip(SC_BE32(raw_sa + 4));
+        /* The copy runs with interrupts on, since it may fault; the send is
+           then held against a receive interrupt that would build a datagram
+           through the same transmit buffers, which is the rule in net.h and
+           what udp_tx does for the same reason. */
+        if (copy_from_user(raw_send_buf, (const void __user *)buf_ptr,
+                           (uint32_t)len) != 0) {
+            return -EFAULT;
+        }
+        {
+            uint32_t netflags = net_lock();
+            r = ip_tx(raw_dst, (uint8_t)entry->sock->protocol, raw_send_buf,
+                      (uint16_t)len, entry->sock->ip_ttl);
+            net_unlock(netflags);
+        }
+        if (r < 0) {
+            return r;
+        }
+        return (int32_t)len;
     }
 
     /* On a connected stream socket, sendto with any (or no) destination behaves
@@ -8790,10 +8903,10 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
         }
     }
 
-    /* The query descriptor accepts ioctls and nothing else: this stack has no
-     * raw IP path, and a caller that got silence here would be waiting for a
-     * datagram that cannot arrive. */
-    if (entry->sock->type == SOCK_RAW) {
+    /* The query descriptor accepts ioctls and nothing else: nothing is
+     * delivered to a descriptor with no protocol, and a caller that got
+     * silence here would be waiting for a datagram that cannot arrive. */
+    if (sock_is_query(entry->sock)) {
         return -EOPNOTSUPP;
     }
 
@@ -9400,6 +9513,27 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
         }
     }
 
+    /* The hop limit is real, because traceroute is nothing but this option
+     * counted up: a stack that accepted it and sent every probe with the same
+     * limit would answer at the first hop every time and look like a machine
+     * one hop from everywhere. */
+    if (level == SOL_IP && optname == IP_TTL) {
+        if (optlen < (int)sizeof(int)) {
+            return -EINVAL;
+        }
+        if (val < 1 || val > 255) {
+            return -EINVAL;
+        }
+        entry->sock->ip_ttl = (uint8_t)val;
+        return 0;
+    }
+    /* And the option that would hand the caller the IP header to fill in is
+     * refused rather than accepted and ignored, which would send a datagram
+     * whose header the caller believes it wrote. */
+    if (level == SOL_IP && optname == IP_HDRINCL) {
+        return -ENOPROTOOPT;
+    }
+
     /* The two flags this stack really keeps. Everything else is accepted and
      * has no effect, which is what it has always done: refusing them would
      * stop programs that set options a small stack has no use for. */
@@ -9469,6 +9603,10 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
             return -EFAULT;
         }
         return 0;
+    } else if (level == SOL_IP && optname == IP_TTL) {
+        val = (int)entry->sock->ip_ttl;
+    } else if (level == SOL_IP && optname == IP_HDRINCL) {
+        return -ENOPROTOOPT;
     } else if (level == SOL_SOCKET && optname == SO_BROADCAST) {
         val = entry->sock->broadcast;
     } else if (level == SOL_SOCKET && optname == SO_REUSEADDR) {

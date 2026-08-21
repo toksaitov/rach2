@@ -6,6 +6,7 @@
  * hands the payload to socket_udp_deliver.
  */
 
+#include "../../lib/kerrno.h"
 #include "udp.h"
 #include "../../proc/process.h"
 #include "../net.h"
@@ -238,20 +239,21 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
 /**
  * Build a UDP datagram around the payload and hand it to IP for transmission.
  *
- * Drops payloads larger than 1500 bytes; this stack does not fragment. The
+ * Refuses payloads larger than 1500 bytes; this stack does not fragment. The
  * checksum field is left zero, which the protocol permits over IPv4 to signal
  * "no checksum". The shared TX buffer is filled and queued under net_lock.
+ * The return value is the contract in udp.h.
  */
-void udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
-            const uint8_t *payload, uint16_t plen)
+int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
+           const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
     uint16_t udp_len;
     uint32_t flags;
+    int r;
 
     if (plen > 1500) {
-        serial_printf("UDP: payload too large (%d bytes), dropped\n",
-                      (int)plen);
-        return;
+        serial_printf("udp: payload too large (%d bytes), refused\n", (int)plen);
+        return -EMSGSIZE;
     }
 
     udp_len = (uint16_t)(UDP_HDR_SIZE + plen);
@@ -267,7 +269,8 @@ void udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
     write16be(udp_tx_buf + 6, 0x0000);   /* checksum disabled */
     k_memcpy(udp_tx_buf + UDP_HDR_SIZE, payload, plen);
 
-    ip_tx(dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len);
+    r = ip_tx(dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len, ttl);
 
     net_unlock(flags);
+    return r;
 }

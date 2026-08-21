@@ -656,6 +656,8 @@ cred-persist-test: rach2 musl-programs krffs
 # fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
 # test-disk on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
+# The capture `make raw-test` reads the hop limits and the checksum out of.
+RAW_PCAP = $(IMAGES_DIR)/raw.pcap
 # `make ping-test`: the ICMP path against the SLIRP gateway, which is why it is
 # its own target rather than a probe in the suite. The explicit wait= is
 # required: after its last step harness.py drains only --grace and then
@@ -677,6 +679,50 @@ packet-test: rach2 tests krffs test-image
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PACKETPROBE OK" \
 	    "expect=Type 'help'" "send=exec /packetprobe" wait=60
+
+# `make raw-test`: the raw ICMP socket, which is what `ping` and `traceroute`
+# are. Three boots, because the three things it must show cannot be shown in
+# one: the probe with the network answering, the same probe with an address and
+# no gateway (where the only truthful answer is that there is no route), and
+# `traceroute` itself on the image that has it. The capture is read by
+# tools/rawwire_check.py for the two things a program inside the machine cannot
+# see: the hop limit each datagram left with, and the caller's own checksum.
+raw-test: rach2 tests krffs test-image os-real-image
+	@rm -f $(RAW_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
+	    --timeout 200 --ok "RAWPROBE OK" \
+	    "expect=Type 'help'" "send=exec /rawprobe" wait=60
+	python3 tools/rawwire_check.py $(RAW_PCAP)
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --append "rach2.ip=10.0.2.15/24" \
+	    --timeout 200 --ok "RAWPROBE OK" \
+	    "expect=Type 'help'" "send=exec /rawprobe" wait=30
+	# And the program the socket was built for. The ping first is not a
+	# flourish: a datagram for an address whose hardware address is not known
+	# yet is dropped while the request goes out, and traceroute sends one
+	# probe per hop and does not retry, so a cold cache costs it its first
+	# answer. What is asserted is the first hop, which is the gateway
+	# answering a hop limit of one, and that is the whole mechanism.
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 300 --steptmo 90 --ok "TRACEDONE" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=# " \
+	    "send=/bin/ping 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8" \
+	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" wait=10
+	# The in-house ping is still the one an ordinary account runs: busybox's
+	# needs a raw socket, which is root's, and is not built for that reason.
+	python3 tools/harness.py --kernel build/rach2/kernel \
+	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
+	    "expect=rach2 login:" "send=test" "expect=Password:" \
+	    "send=`cat krffs/rach2_test_password`" wait=5 \
+	    "send=/bin/ping 10.0.2.2 && echo USERPING\"\"OK" wait=15
 
 # `make netif-test`: the interface ioctls, which is how a program sets this
 # machine's address. Its own target, like `ping-test`: it changes the address

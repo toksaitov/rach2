@@ -22,10 +22,24 @@
  *  martian source (our own address or 127/8) is dropped. */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
 
-/** Build an IPv4 datagram around the payload and transmit it; dst_ip is
- * host order. */
-void ip_tx(uint32_t dst_ip, uint8_t proto,
-           const uint8_t *payload, uint16_t plen);
+/* The hop limit a datagram leaves with unless the sender asked for another.
+ * A socket may set its own with IP_TTL, which is what traceroute is. */
+#define IP_TTL_DEFAULT 64
+
+/**
+ * Build an IPv4 datagram around the payload and transmit it; dst_ip is host
+ * order, and `ttl` is the hop limit.
+ *
+ * Returns 0 when the datagram left, or was queued for loopback, or was dropped
+ * for want of a hardware address the request for which has just gone out; a
+ * datagram send promises no delivery, and the next one goes out resolved.
+ * Returns a negative errno for the conditions the caller must hear about:
+ * -EMSGSIZE for a payload past the MTU (this stack does not fragment),
+ * -ENETUNREACH for an address with no route, -ENOBUFS when the loopback ring
+ * is full, and -EOPNOTSUPP for a broadcast of anything but UDP.
+ */
+int ip_tx(uint32_t dst_ip, uint8_t proto,
+          const uint8_t *payload, uint16_t plen, uint8_t ttl);
 
 /** Deliver queued loopback datagrams; called from the timer IRQ each tick. */
 void ip_loop_drain(void);

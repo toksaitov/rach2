@@ -270,6 +270,12 @@ the supporting scripts.
   `--selftest` (run inside the gate) covers every directive form
   and failure mode, including each hole the guard has had.
 * `check_devlog.py` (run inside the gate): `dev-log/Readme.md` against the milestone directories beside it. `AGENTS.md` tells a reader that the last entry there is where the tree stands, and nothing else holds that sentence true, since the index is not what a milestone's own work touches. A milestone directory is finished when it has the record of what was built: `Readme.md`, or `results.md`, which is what milestone 6 called it. Every finished milestone must have an entry, the entries must appear in the same numeric order as the directories, and a directory holding only a `plan.md` must have no entry at all, because an entry states that the work is done. Bullets inside fenced code blocks are examples and are not read as entries. `--selftest` (run inside the gate) drives each rule from a temporary tree.
+* `rawwire_check.py` (run by `make raw-test`) reads a capture for the two
+  things about a raw socket no program inside the machine can see: that each
+  datagram left with the hop limit its socket was given (1, 2 and 3 from a raw
+  send, 4, 5 and 6 from a datagram send), and that a message whose checksum was
+  deliberately wrong crossed the wire with that checksum, since a stack that
+  recomputed it would repair it on the way out.
 * `check_repro.py` (run inside the gate): one tree, one image. A staged image is
   built from a manifest and a set of host artifacts, and nothing about the
   machine that built it may show through. Two things used to: `mkfs.krffs`

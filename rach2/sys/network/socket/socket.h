@@ -49,6 +49,11 @@ typedef struct socket {
      * for nothing asked for. */
     uint16_t protocol;
 
+    /* The hop limit this socket's datagrams leave with. IP_TTL sets it, which
+     * is the whole of what traceroute does to a socket, and it applies to a
+     * UDP send and a raw send alike. */
+    uint8_t  ip_ttl;
+
     /* Remote endpoint: a stream's peer, or the address a datagram socket was
      * connected to. A connected datagram socket sends there without being told
      * again, and receives from nobody else, which is what `connect` means for

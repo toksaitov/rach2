@@ -11,6 +11,7 @@
  * nonzero fragment offset) is dropped.
  */
 
+#include "../../lib/kerrno.h"
 #include "ip.h"
 #include "icmp.h"
 #include "../udp/udp.h"
@@ -18,6 +19,7 @@
 #include "../arp/arp.h"
 #include "../core/byteorder.h"
 #include "../ethernet/ethernet.h"
+#include "../socket/raw.h"
 #include "../net.h"
 #include "../netconf.h"
 #include "../../serial.h"
@@ -137,6 +139,10 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
         return;
     }
 
+    /* Raw sockets see the whole datagram, header included, before the
+       kernel's own handler for the protocol, which still runs. */
+    raw_rx(proto, data, total_len);
+
     switch (proto) {
     case IP_PROTO_ICMP:
         icmp_rx(src_ip, data + hdr_len, (uint16_t)(total_len - hdr_len));
@@ -183,18 +189,21 @@ static uint32_t loop_head, loop_tail;
  * gateway otherwise, then resolves the next hop's MAC by ARP. On an ARP miss
  * it sends a request and drops this packet; the caller retries once the cache
  * is warm. The header is emitted with DF set and no fragmentation, so payloads
- * over the 1500-byte MTU are dropped, not split.
+ * over the 1500-byte MTU are refused, not split.
+ *
+ * The return value is contracted in ip.h: the conditions a caller must hear
+ * about are errnos, and the ARP miss is not one of them.
  */
-void ip_tx(uint32_t dst_ip, uint8_t proto,
-           const uint8_t *payload, uint16_t plen)
+int ip_tx(uint32_t dst_ip, uint8_t proto,
+          const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
     uint16_t total_len;
     uint8_t  dst_mac[6];
     uint32_t route_ip;
 
     if (plen > 1500) {
-        serial_printf("IP: payload too large (%d), dropped\n", (int)plen);
-        return;
+        serial_printf("ip: payload too large (%d), refused\n", (int)plen);
+        return -EMSGSIZE;
     }
 
     total_len = (uint16_t)(IP_HDR_SIZE + plen);
@@ -204,7 +213,7 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
     write16be(ip_tx_buf + 2,  total_len);
     write16be(ip_tx_buf + 4,  ip_id_counter++);
     write16be(ip_tx_buf + 6,  0x4000);           /* DF set, no fragments */
-    ip_tx_buf[8]  = 64;                          /* TTL */
+    ip_tx_buf[8]  = ttl;                         /* hop limit */
     ip_tx_buf[9]  = proto;
     write16be(ip_tx_buf + 10, 0x0000);           /* checksum, filled below */
     write32be(ip_tx_buf + 12, net_ip_addr);
@@ -217,14 +226,14 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
         uint32_t slot;
 
         if (loop_head - loop_tail == LOOP_RING_SLOTS) {
-            serial_printf("IP: loopback ring full, dropped\n");
-            return;
+            serial_printf("ip: loopback ring full, dropped\n");
+            return -ENOBUFS;
         }
         slot = loop_head % LOOP_RING_SLOTS;
         k_memcpy(loop_ring[slot], ip_tx_buf, total_len);
         loop_ring_len[slot] = total_len;
         loop_head++;
-        return;
+        return 0;
     }
 
     /* A broadcast goes to every machine on the wire, and the wire's own
@@ -242,10 +251,10 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
            permission, checked before it gets here. */
         if (proto != IP_PROTO_UDP) {
             serial_printf("ip: refused to broadcast a datagram that is not UDP\n");
-            return;
+            return -EOPNOTSUPP;
         }
         ethernet_tx(all_ones, ETH_TYPE_IP, ip_tx_buf, total_len);
-        return;
+        return 0;
     }
 
     /* On-subnet destinations resolve directly; otherwise via the gateway. A
@@ -257,16 +266,20 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
     } else if (net_ip_gateway != 0) {
         route_ip = net_ip_gateway;
     } else {
-        serial_printf("ip: no gateway: dropped a datagram for another subnet\n");
-        return;
+        serial_printf("ip: no gateway: refused a datagram for another subnet\n");
+        return -ENETUNREACH;
     }
 
+    /* The address is not resolved yet: the request has gone out and this
+       datagram is dropped, which is not an error a datagram sender is told
+       about. The next one leaves resolved. */
     if (!arp_lookup(route_ip, dst_mac)) {
         arp_request(route_ip);
-        return;
+        return 0;
     }
 
     ethernet_tx(dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len);
+    return 0;
 }
 
 /**

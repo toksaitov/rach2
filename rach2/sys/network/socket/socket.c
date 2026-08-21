@@ -13,7 +13,9 @@
 
 #include "socket.h"
 #include "packet.h"
+#include "raw.h"
 #include "../net.h"
+#include "../ip/ip.h"
 #include "../udp/udp.h"
 #include "../tcp/tcp.h"
 #include "../../io/poll.h"
@@ -121,6 +123,8 @@ struct socket *socket_alloc(int type)
             socket_pool[i].refcount      = 1;
             socket_pool[i].type          = type;
             socket_pool[i].family        = AF_INET;
+            socket_pool[i].protocol      = 0;
+            socket_pool[i].ip_ttl        = IP_TTL_DEFAULT;
             socket_pool[i].local_port    = 0;
             socket_pool[i].remote_ip     = 0;
             socket_pool[i].remote_port   = 0;
@@ -190,6 +194,8 @@ void socket_unref(struct socket *sock)
 
     if (sock->family == AF_PACKET) {
         packet_unbind(sock);
+    } else if (sock->type == SOCK_RAW) {
+        raw_unregister(sock);
     } else if (sock->type == SOCK_DGRAM && sock->local_port != 0) {
         udp_unbind(sock);
     } else if (sock->type == SOCK_STREAM && sock->tcb) {
@@ -254,6 +260,9 @@ static int udp_recv_ready(void *arg)
     if (sock->family == AF_PACKET) {
         return packet_ready(sock);
     }
+    if (sock->type == SOCK_RAW) {
+        return raw_ready(sock);
+    }
     return sock->recv_full;
 }
 
@@ -294,6 +303,9 @@ int socket_dgram_pending(struct socket *sock)
     if (sock->family == AF_PACKET) {
         return packet_pending(sock);
     }
+    if (sock->type == SOCK_RAW) {
+        return raw_pending(sock);
+    }
 
     flags = net_lock();
     pending = sock->recv_full ? (int)sock->recv_len : -1;
@@ -325,6 +337,9 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf,
     }
     if (sock->family == AF_PACKET) {
         return packet_peek(sock, offset, buf, len);
+    }
+    if (sock->type == SOCK_RAW) {
+        return raw_peek(sock, offset, buf, len);
     }
 
     flags = net_lock();
@@ -370,6 +385,19 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip,
             *src_port = 0;
         }
         packet_consume(sock);
+        return;
+    }
+    /* A raw socket reports the address the datagram came from, which is in
+       the header it was given; there is no port, since a raw socket is not a
+       transport. */
+    if (sock->type == SOCK_RAW) {
+        raw_consume(sock);
+        if (src_ip) {
+            *src_ip = raw_last_src(sock);
+        }
+        if (src_port) {
+            *src_port = 0;
+        }
         return;
     }
 
@@ -705,18 +733,24 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     /* The query descriptor is never readable and never writable: it has
        ioctls. POLLERR says so at once, so a caller that polls it waits on
        nothing, not forever. */
-    if (sock->type == SOCK_RAW) {
+    /* The query descriptor is never readable and never writable; a raw socket
+       with a protocol of its own is a real one and polls like a datagram
+       socket, below. */
+    if (sock->type == SOCK_RAW && sock->protocol == 0) {
         return (short)POLLERR;
     }
 
-    if (sock->type == SOCK_DGRAM) {
-        /* A packet socket's datagrams are in its own queue and never touch
-           `recv_full`, and this is the readiness a DHCP client waits on: it
-           polls its raw socket and only then reads it. */
-        if (sock->family == AF_PACKET ? packet_ready(sock) : sock->recv_full) {
+    if (sock->type == SOCK_DGRAM || sock->type == SOCK_RAW) {
+        /* A packet socket and a raw socket each have a queue of their own and
+           never touch `recv_full`, and this is the readiness their clients
+           wait on: a DHCP client polls its socket and only then reads it, and
+           so does `ping`. */
+        if (sock->family == AF_PACKET  ? packet_ready(sock)
+            : sock->type == SOCK_RAW   ? raw_ready(sock)
+                                       : sock->recv_full) {
             revents |= (short)(events & POLLIN);
         }
-        revents |= (short)(events & POLLOUT); /* a datagram socket can always send */
+        revents |= (short)(events & POLLOUT); /* it can always send */
         return revents;
     }
 

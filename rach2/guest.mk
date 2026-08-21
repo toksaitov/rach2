@@ -103,6 +103,7 @@ OBJS = loader.o \
        sys/network/tcp/rcvwnd.o \
        sys/network/socket/socket.o \
        sys/network/socket/packet.o \
+       sys/network/socket/raw.o \
        sys/lib/kctypes.o \
        sys/lib/kstd.o \
        sys/lib/kstring.o \
@@ -130,7 +131,7 @@ kernel.objs: guest.mk
 	printf '%s\n' sys/tty/tty.o sys/tty/pty.o sys/proc/elf.o sys/proc/uimage.o sys/proc/tls.o sys/fs/krffs.o >> kernel.objs.new
 	printf '%s\n' sys/fs/fd.o sys/fs/devfs.o sys/fs/synthfs.o sys/fs/procfs.o sys/network/netconf.o sys/network/netif.o sys/network/netconsole.o sys/network/core/net_core.o sys/network/driver/netdev.o sys/network/driver/rtl8139.o sys/network/driver/rtl8168.o >> kernel.objs.new
 	printf '%s\n' sys/network/ethernet/ethernet.o sys/network/arp/arp.o sys/network/ip/ip.o sys/network/ip/icmp.o sys/network/udp/udp.o sys/network/tcp/tcp.o sys/network/tcp/rcvwnd.o >> kernel.objs.new
-	printf '%s\n' sys/network/socket/socket.o sys/network/socket/packet.o sys/lib/kctypes.o sys/lib/kstd.o sys/lib/kstring.o sys/lib/krandom.o >> kernel.objs.new
+	printf '%s\n' sys/network/socket/socket.o sys/network/socket/packet.o sys/network/socket/raw.o sys/lib/kctypes.o sys/lib/kstd.o sys/lib/kstring.o sys/lib/krandom.o >> kernel.objs.new
 	mv kernel.objs.new kernel.objs
 
 .SUFFIXES: .o .c .s

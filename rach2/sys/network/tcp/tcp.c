@@ -197,7 +197,7 @@ static void tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     seg_len = hdr_len;
     write16be(tcp_tx_buf + 16,
               tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len);
+    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
 }
 
 /* Send a control segment at snd_nxt. SYN and FIN consume a sequence number and
@@ -275,7 +275,7 @@ static void tcp_output(struct tcb *tcb)
         write16be(tcp_tx_buf + 16,
                   tcp_checksum(tcb->local_ip, tcb->remote_ip,
                                tcp_tx_buf, seg_len));
-        ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len);
+        ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
 
         tcb->send_head += send_len;
         tcb->snd_nxt   += send_len;
@@ -334,7 +334,7 @@ static void tcp_retransmit(struct tcb *tcb)
     seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
     write16be(tcp_tx_buf + 16,
               tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len);
+    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
 
     tcb->rto_timer = tcb->rto;
 }
@@ -516,7 +516,7 @@ static void tcp_send_rst_unmatched(uint32_t remote_ip, uint16_t local_port,
     write16be(tcp_tx_buf + 18, 0);
     write16be(tcp_tx_buf + 16,
               tcp_checksum(net_ip_addr, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
-    ip_tx(remote_ip, IP_PROTO_TCP, tcp_tx_buf, TCP_HDR_SIZE);
+    ip_tx(remote_ip, IP_PROTO_TCP, tcp_tx_buf, TCP_HDR_SIZE, IP_TTL_DEFAULT);
 }
 
 /* Find the TCB for an incoming segment: an exact tuple match in a non-LISTEN
@@ -578,7 +578,7 @@ static void tcp_send_zwp(struct tcb *tcb)
 
     write16be(tcp_tx_buf + 16,
               tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len);
+    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
 }
 
 void tcp_local_addr_changed(uint32_t new_ip)

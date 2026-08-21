@@ -90,6 +90,7 @@ C_SRC   = $(KERNEL).c \
 	  sys/network/tcp/rcvwnd.c \
 	  sys/network/socket/socket.c \
 	  sys/network/socket/packet.c \
+	  sys/network/socket/raw.c \
 	  sys/lib/kctypes.c     \
 	  sys/lib/kstd.c        \
 	  sys/lib/kstring.c     \

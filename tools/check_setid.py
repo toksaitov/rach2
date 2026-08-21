@@ -1810,10 +1810,17 @@ def report(problems):
 # one, so an applet of that name would answer from the shell's PATH before the
 # set-id build's copy and then refuse for want of a bit it does not have.
 #
-# The last four cannot work on this kernel's socket layer: `ping`, `ping6`,
-# `traceroute` and `traceroute6` open a raw IP socket, which is not offered
-# (AF_INET/SOCK_RAW exists only as a descriptor carrying the interface ioctls
-# and refuses to send or receive).
+# The last three cannot work on this kernel's socket layer: `ping6`,
+# `traceroute6` and their family need IPv6, which this stack does not have, and
+# `ping` is a different case, below.
+#
+# `traceroute` is NOT here any more. Milestone 28 built the raw ICMP socket it
+# receives on and the `IP_TTL` it counts up, so the applet works, as root.
+#
+# `ping` stays off in the config for a reason that is not about the kernel: it
+# would answer from the shell's applet table before `/bin/ping`, the in-house
+# program an ordinary account can run (it asks the kernel to ping rather than
+# opening a raw socket, which is root's). This machine keeps that one.
 #
 # `arping` is NOT here any more. It opens a packet socket and binds it to the
 # ARP protocol, which milestone 28 completed, so the applet works; it wants no
@@ -1827,7 +1834,7 @@ def report(problems):
 # The sentinel is an applet that must be present, because a check that only ever
 # looks for absences passes just as well on a header it failed to understand.
 FORBIDDEN_APPLETS = ("su", "passwd", "login", "vlock", "wall", "crontab",
-                     "ping", "ping6", "traceroute", "traceroute6")
+                     "ping", "ping6", "traceroute6")
 APPLET_SENTINEL = "cat"
 
 # The applet table as it was STAGED, beside the binary it describes, rather than

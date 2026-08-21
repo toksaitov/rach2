@@ -18,9 +18,15 @@ struct socket;
 /** Receive and dispatch a UDP datagram to its bound socket. */
 void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
 
-/** Build and send a UDP datagram. */
-void udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
-            const uint8_t *payload, uint16_t plen);
+/**
+ * Build and send a UDP datagram with hop limit `ttl`.
+ *
+ * Returns what `ip_tx` returned: 0 when the datagram left (or was dropped for
+ * want of an address the request for which has just gone out), and a negative
+ * errno for the conditions the caller must hear about.
+ */
+int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
+           const uint8_t *payload, uint16_t plen, uint8_t ttl);
 
 /** Bind sock to port; 0 on success, -1 if full or already bound. */
 int udp_bind(uint16_t port, struct socket *sock);

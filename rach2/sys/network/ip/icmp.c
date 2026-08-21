@@ -98,7 +98,7 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         icmp_reply_buf[1] = 0;
         write16be(icmp_reply_buf + 2, 0x0000);
         write16be(icmp_reply_buf + 2, ip_checksum(icmp_reply_buf, len));
-        ip_tx(src_ip, IP_PROTO_ICMP, icmp_reply_buf, len);
+        ip_tx(src_ip, IP_PROTO_ICMP, icmp_reply_buf, len, IP_TTL_DEFAULT);
     } else if (data[0] == ICMP_ECHO_REPLY) {
         uint16_t id  = read16be(data + 4);
         uint16_t seq = read16be(data + 6);
@@ -213,7 +213,7 @@ int icmp_ping(uint32_t dst_ip)
             ping_deadline = 1;
         }
 
-        ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, 8);
+        ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, 8, IP_TTL_DEFAULT);
 
         net_unlock(flags);
 
