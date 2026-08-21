@@ -18,8 +18,11 @@ files. The Readmes and build scripts under `vendor/` ARE ours and are here.
 # Set one: what a reader consults
 
 Run this set at HIGH effort. It is the documents, the ports' own half, the
-build, every kernel header (which is where a contract is stated), and the
-syscall layer. A wrong sentence here is read by everyone who comes after.
+build, every kernel header (which is where a contract is stated), the syscall
+layer and the kernel sources. A wrong sentence here is read by everyone who
+comes after, and in a teaching kernel the explanation beside the code IS the
+material: `CLAUDE.md` names Lions' Commentary as the model, and that is a
+commentary on sources.
 
 ## Documents (22 entries, 76303 words)
 
@@ -177,20 +180,6 @@ entry is a real unit of work; read each range whole, including its code.
 * [ ] `rach2/sys/syscall.c` lines 9001-9900
 * [ ] `rach2/sys/syscall.c` lines 9901-10527
 
----
-
-# STOP HERE
-
-Set one is done. Do not start set two. Report what set one found and wait:
-the owner changes the effort setting to MEDIUM before set two begins.
-
----
-
-# Set two: the rest of what we wrote
-
-Run this set at MEDIUM effort. Same standard, same method; these are read by
-fewer people, and the tests last because their comments are read by fewest.
-
 ## Kernel sources (82 entries, 67755 words)
 
 * [ ] `rach2/kernel.c` (6020 words)
@@ -275,6 +264,22 @@ fewer people, and the tests last because their comments are read by fewest.
 * [ ] `rach2/run_from_iso.sh` (113 words)
 * [ ] `rach2/sys/pit.c`, `rach2/sys/module.c`, `rach2/sys/block/diskcmd.c`, `rach2/sys/mm/modlayout.c`, `rach2/iso/boot/grub/grub.cfg.template`, `rach2/sys/block/mbr.c`, `rach2/sys/network/tcp/rcvwnd.c`, `rach2/debug.sh` (617 words over 8 files)
 * [ ] `rach2/sys/block/recovery.c`, `rach2/sys/tables/gdt_handler.s`, `rach2/sys/tables/idt_handler.s`, `rach2/sys/panic.c`, `rach2/sys/lib/kctypes.c`, `rach2/link.ld`, `rach2/.gdbinit` (47 words over 7 files)
+
+---
+
+# STOP HERE
+
+Set one is done. Do not start set two. Report what set one found and wait:
+the owner changes the effort setting to MEDIUM before set two begins.
+
+---
+
+# Set two: the rest of what we wrote
+
+Run this set at MEDIUM effort. Same standard, same method; these are read by
+fewer people, and the tests last because their comments are read by fewest.
+The userland is here rather than in set one because the kernel is what this
+project teaches; move it up if that judgement turns out wrong.
 
 ## Utilities, shell and file system (80 entries, 64324 words)
 
