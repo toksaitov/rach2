@@ -52,5 +52,52 @@ gen_key() {
     echo "gen_demo_key: log in with ssh -i krffs/$key -p 2222 $user@localhost"
 }
 
+# Compose public-half file $2 from generated keypair $1 plus an optional local
+# addition, krffs/$2.extra: a public key belonging to whoever works on this
+# machine rather than to the project, so they can reach an image they built
+# without carrying the project's private key between machines. The file is
+# git-ignored, so a clone builds images that trust the demo key alone.
+#
+# It recomposes rather than appends, which is what makes a rebuild idempotent
+# and what lets the addition be removed again by deleting the file. Nothing
+# happens when the generated public half is absent, which is the documented case
+# of a public key dropped in by hand.
+add_local_keys() {
+    key="$1"
+    pub="$2"
+    extra="$pub.extra"
+
+    [ -f "$key.pub" ] || return 0
+
+    # A private key here would be staged into the image and served to anyone who
+    # asks for the file, so the shape is checked rather than trusted: every
+    # non-blank line must name a key type, and the word that appears in every
+    # private key format must not appear at all.
+    if [ -f "$extra" ]; then
+        if grep -q 'PRIVATE KEY' "$extra"; then
+            echo "gen_demo_key: krffs/$extra holds a PRIVATE key; use the .pub half" >&2
+            exit 1
+        fi
+        if grep -qvE '^[[:space:]]*($|#|(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)[^[:space:]]*[[:space:]])' \
+               "$extra"; then
+            echo "gen_demo_key: krffs/$extra has a line that is not a public key" >&2
+            exit 1
+        fi
+    fi
+
+    {
+        cat "$key.pub"
+        [ -f "$extra" ] && cat "$extra"
+    } > "$pub.tmp"
+    [ -s "$pub.tmp" ] || { echo "gen_demo_key: composed an empty krffs/$pub" >&2; exit 1; }
+    mv "$pub.tmp" "$pub"
+    if [ -f "$extra" ]; then
+        echo "gen_demo_key: krffs/$pub carries the demo key and krffs/$extra"
+    fi
+}
+
 gen_key rach2_demo_ed25519 authorized_keys      root
 gen_key rach2_test_ed25519 test_authorized_keys test
+
+add_local_keys rach2_demo_ed25519 authorized_keys
+add_local_keys rach2_test_ed25519 test_authorized_keys

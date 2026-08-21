@@ -32,7 +32,7 @@ than pdpmake and is not a POSIX make in practice (no archive members, no
 ## Building
 
 `make pdpmake` (or `./build_pdpmake.sh`) verifies the tarball, extracts it,
-applies the patches under `patches/`, builds it against the ported musl through
+applies the one patch, `patches/0001-platform-macros.patch`, by name, and stops if it is missing, builds it against the ported musl through
 `vendor/busybox/muslgcc`, and judges the result with `tools/check_elf.py`, which
 knows what this kernel will actually load. The output is
 `build/vendor/pdpmake/make`, staged into os-real as `/bin/make`.
@@ -74,7 +74,7 @@ implemented". Recipes run one after another whatever is asked for. Nothing here
 tries to change that, and there would be little room if it did: `MAX_PROCS` is 16
 system-wide and `MAX_FDS` 16 per process.
 
-This repository's own makefiles are GNU makefiles and pdpmake cannot read them.
+This repository's top-level makefiles are GNU makefiles and pdpmake cannot read them. Since milestone 22 it also carries three POSIX makefiles written for pdpmake, `rach2/guest.mk`, `utils/guest.mk` and `ish/guest.mk`, which are what the machine builds itself with.
 Building Rach2 on Rach2 is not what this is for; building a student's program on
 Rach2 is.
 

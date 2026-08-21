@@ -3,8 +3,14 @@
 runtests.py: boot the test image once and run every probe, checking each exits 0.
 
 Boots qemu-system-i386 headless with the kernel and the test RAM disk, waits for
-the kernel shell, then `exec`s each probe in turn and reads the kernel's
-"Process exited with status N" line for it. A probe passes when it exits 0.
+the kernel shell, then `exec`s each probe in turn and scores it from the line
+that hands the shell back: `sys_exit: init process N exited with status M` or
+`terminate: init process N killed by signal S`. A probe passes when that line
+carries status 0.
+
+Not the bare "Process exited with status N", which the kernel prints for every
+process exit including a forked child's, so neither the first nor the last of
+them is reliably the probe's own. See score_window below.
 
 This depends on the test image holding no /sbin/init: without it the kernel falls
 to the debug shell, which `exec`s each probe as a transient init that returns here

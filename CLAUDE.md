@@ -40,6 +40,18 @@ Output from tools and code uses one shape. Diagnostics go to stderr as `componen
 
 musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, verified by sha256, extracted and built by their `build_*.sh` behind stamp files. BusyBox, Dropbear, TinyCC, and pdpmake link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees.
 
+## Hardware
+
+Writing to a physical disk, or any operation on real hardware that cannot be undone by rebuilding, requires the owner's approval at the time, every time. List the candidate device and what the host reports about it: the node, its size in bytes, its bus, whether it is internal or external, whether it is a whole disk, and the partition table it currently carries. Then wait for an approval that names that node. A previous approval for the same device does not carry forward to the next run, and neither does an approval given on another machine.
+
+Nothing in this system is bound to a particular drive: the kernel probes for whatever disk is present and finds its root by scanning partition entries. Device identity is therefore a guard on the host's own destructive commands, never an operating requirement, and a person confirming the drive in front of them is the guard that counts.
+
+## Agents
+
+Do the work directly. Reading a file, judging a claim against the code, and writing prose this project will keep are the work itself, and handing them out costs more than it saves: the writing rules above exist to produce one voice, and a fan-out does not have one.
+
+Delegation is for an independent opinion, not for volume. One reviewer per diff is the shape; the review is worth having because it is independent, not because it is parallel. Where more than one agent is genuinely wanted, the total is decided before any of them starts and stated. A stage whose agent count depends on what an earlier stage found is forbidden: the number that comes back is never the number that was budgeted, and a run that exhausts a session buys nothing, because the work still has to be done afterwards by hand.
+
 ## Verification
 
 Every change passes `make verify-style` and `make verify-host`, and a real boot plus the SSH capstone when it touches anything they exercise. Substantial work gets a harsh independent Codex review with every finding fixed before commit. Voice, which no checker can judge, is part of that review.

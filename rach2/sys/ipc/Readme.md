@@ -35,4 +35,4 @@ Linux `fs/pipe.c`: a pipe is an in-kernel object behind two `struct file`s with 
 
 * `tests/pipeprobe.c` (freestanding): round-trip and EOF, `O_NONBLOCK` returning `-EAGAIN`, `SIGPIPE` and `-EPIPE`, blocking across a fork (5000 bytes through a 4 KB pipe), and a no-leak loop of create/close cycles past the pool size. Prints `PIPEPROBE OK`.
 * `tests/host/pipe_ring_hosttest.c`: the ring wrap arithmetic under ASan and UBSan.
-* `tests/musl/pipemusl.c` (installed `mpipe`): a real musl `pipe()` and `fork()` round-trip end to end.
+* `tests/musl/pipemusl.c` (staged at `/musl/pipemusl`): a real musl `pipe()` and `fork()` round-trip end to end.

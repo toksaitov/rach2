@@ -41,7 +41,8 @@ Earlier builds carried a hand-curated `allnoconfig` with a short coreutils list.
 
 `ifconfig` and `udhcpc` moved off that list in milestone 25. The machine this project seals into a laptop is carried between buildings and takes its address from whatever network it is plugged into, so `udhcpc` is the client and `ifconfig` and `route` are what its lease script uses. `CONFIG_FEATURE_IFUPDOWN_IP` is off with them: it selects the `ip` backend for `ifup`, every `ip` applet is off, and `ifup` would call a command that is not there.
 * Block, flash, RAID, i2c: `losetup`, the MTD `ubi*`/`nandwrite`, `raidautorun`, `i2c*`, `hdparm`, `blockdev fstrim fsfreeze blkdiscard`, `mkfs.ext2`/`mkfs.vfat`, `eject`.
-* Other Linux-only: `mdev acpid ionice setpriv switch_root watchdog fbsplash beep seedrng`, and `free`/`uptime` (both want `sysinfo(2)`).
+* Other Linux-only: `mdev acpid ionice setpriv switch_root watchdog fbsplash beep seedrng`.
+* `free` and `uptime` are off for a different reason and could be turned on: they want `sysinfo(2)`, which this kernel does implement, but they also read `/proc` files it does not yet publish.
 
 ## Disabled (privilege climbs elsewhere)
 
@@ -79,7 +80,7 @@ Reporting it is an open action, not yet done. The list `busybox@busybox.net` is 
 
 ## Known limits (present but constrained)
 
-* An applet that needs an unimplemented syscall is compiled in but returns its error at runtime: `df` (no `statfs64`, `-ENOSYS`), `mount`/`umount`, and date is not tz-aware (set `TZ=UTC`). The networking applets (`wget nc telnet httpd tftp`) run against the from-scratch TCP/IP stack, within its limits. `PING`, `PING6`, `TRACEROUTE`, `TRACEROUTE6` and `ARPING` are off, and not for a limit but for an absence: every one of them opens `SOCK_RAW` or `AF_PACKET`, this kernel's socket layer offers neither, and busybox's ping dies with `can't create raw socket: Invalid argument` before it sends anything. `/bin/ping` is ours (`utils/ping.c`) and reaches a bare `ping` from the shell's PATH only because the applet is gone.
+* An applet that needs an unimplemented syscall is compiled in but returns its error at runtime: `df` (no `statfs64`, `-ENOSYS`), `mount`/`umount`, and date is not tz-aware (set `TZ=UTC`). The networking applets (`wget nc telnet httpd tftp`) run against the from-scratch TCP/IP stack, within its limits. `PING`, `PING6`, `TRACEROUTE`, `TRACEROUTE6` and `ARPING` are off, and no longer all for the same reason. The first four open a raw IP socket, which this kernel does not offer: `AF_INET/SOCK_RAW` exists only as a descriptor carrying the interface ioctls and refuses to send or receive, so busybox's ping dies with `can't create raw socket: Invalid argument` before it sends anything. `ARPING` opens a packet socket, which milestone 25 built for the DHCP client, but binds it to the ARP protocol where only IPv4 is accepted, so it is a protocol away rather than a socket family away. `/bin/ping` is ours (`utils/ping.c`) and reaches a bare `ping` from the shell's PATH only because the applet is gone.
 * The static config triggers no file-backed `mmap` (Rach2's `mmap2` is anon-only, `-ENOSYS` otherwise); musl's allocator uses anonymous mmap, which works.
 * `getcwd` is capped at the PCB `CWD_MAX=64`.
 * Fixed kernel limits: `MAX_FDS=16`, `MAX_PROCS=16`, socket pool 16.

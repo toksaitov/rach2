@@ -1,6 +1,8 @@
 # The laptop as Windows measured it
 
-These are the numbers a Windows session on the Lenovo G50-70 read out of the machine before Rach2 had ever touched it. They are here because they are the only baseline the SSD half of this milestone has, and because the report they came from (`Lenovo_G50-70_report_temp.txt`, untracked in the repository root) is deleted when the hardware work concludes. Everything below was read through read-only handles; no write handle was ever opened.
+These are the numbers a Windows session on the Lenovo G50-70 read out of the machine before Rach2 had ever touched it. Everything below was read through read-only handles; no write handle was ever opened.
+
+This file is now the whole of that record. It came from a longer report that lived untracked in the repository root, and everything from it that outlives the session has been carried in here, including the four Windows-side facts at the end that no register dump reports. The report itself is gone.
 
 They exist to be compared against. On the laptop, `rach2.diskdiag` publishes `/proc/disk` and `/dev/disk0`, and the acceptance run reads the same facts back off the machine. A disagreement is the finding, whichever side is wrong.
 
@@ -50,6 +52,25 @@ dd if=/dev/disk0 bs=512 count=1 2>/dev/null | sha256sum
 ```
 
 Both sides hash the same 512 bytes with the same algorithm, so the comparison is exact. A mismatch means one of three things, in the order worth checking: the diagnostic read a different sector than the one named, the disk is not the disk this baseline describes, or something has written the first sector since. The third is what this milestone promises cannot happen, and this hash is how that promise is checked rather than asserted.
+
+## The Windows side, and what must not be undone
+
+Four facts about the installed system that no register dump reports, and that matter to anyone who opens this machine. They were read from Windows in the same session as the numbers above.
+
+SATA link power management is deliberately off, and must stay off. Under `HKLM\SYSTEM\CurrentControlSet\Services\iaStorA\Parameters\Device`:
+
+    Controller0Phy0HIPM = 0
+    Controller0Phy0DIPM = 0
+    Controller0Phy1HIPM = 0
+    Controller0Phy1DIPM = 0
+
+The stock value for all four is 1. At stock, a warm reboot left the SATA link dead: the firmware reported no disk, fell through the boot list to Realtek PXE, and reset in a loop. A full power cycle cleared it. Do not restore these to 1. The originals were exported to `C:\Users\toksa_000\Documents\boot\iaStorA-Device-BEFORE.reg` on the machine. Everything else power-related is at stock, including `EnableIdlePowerManagement = 1` on the controller's StorPort key. Rach2 makes the same choice in its own driver, writing `SCTL.IPM = 7` in the reset path, which is Linux's `ATA_LPM_MAX_POWER` policy.
+
+Fast Startup is enabled (`HiberbootEnabled = 1`, and `powercfg /a` lists it). So choosing Shut down does not fully shut the machine down: it hibernates the kernel session. Hold SHIFT while clicking Shut down for a real one. This matters before any work that changes hardware, because a hybrid shutdown leaves the previous session's view of the disks in place.
+
+BitLocker has never been enabled. `Get-BitLockerVolume` lists only C:, unencrypted, and the 500 MiB recovery partition is not a BitLocker volume either. The drive that comes out of this machine is readable as it stands.
+
+The BIOS is InsydeH2O `9ACN32WW` (SMBIOS version `9ACN32WW`, EC `9AEC32WW`), which is the final release for this board. It was flashed on 2026-08-10 from `9ACN25WW`, and the flash reset BIOS Back Flash to Disabled, so a downgrade needs that re-enabled in setup first.
 
 ## What is expected to differ
 

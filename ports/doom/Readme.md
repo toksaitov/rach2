@@ -137,10 +137,15 @@ This produces a ~390KB freestanding ELF32 executable.
    ./run.sh os-real hda    # Intel HD Audio
    ```
 
-5. Run from the shell:
+5. Log in at the console, then run it from the root directory:
    ```
-   > doom
+   cd /
+   doom
    ```
+   The directory matters. `doomgeneric_rach2.c` forces `-iwad doom1.wad`, a
+   relative name, and the WAD is staged at `/doom1.wad`, while a console login
+   starts in `/root`. Run it from anywhere else and it exits with "IWAD not
+   found", which looks exactly like a missing WAD.
 
 On supported real hardware, the same `doom` binary uses the kernel's HDA driver directly. Useful kernel-side audio debug commands during bring-up live under the `audio` command: `audio test scale`, `audio test write`, `audio test watch 440 2000 100`, `audio hda dump`, `audio hda codec`, `audio hda pins`, `audio hda stats`, and `audio hda out primary`.
 
@@ -152,14 +157,13 @@ On supported real hardware, the same `doom` binary uses the kernel's HDA driver 
 | Ctrl         | Fire weapon                        |
 | Space        | Use/open doors                     |
 | Shift        | Run                                |
-| Alt + arrows | Strafe                             |
 | 1-7          | Select weapon                      |
 | Tab          | Automap                            |
 | Escape       | Menu                               |
 | Mouse X      | Turn left/right                    |
 | Mouse Y      | Move forward/back                  |
 | Left click   | Fire                               |
-| Right click  | Use                                |
+| Right click  | Strafe                             |
 
 ## Memory Requirements
 

@@ -208,10 +208,9 @@ ssh -p 2222 test@localhost                  # password: cat krffs/rach2_test_pas
 From the shell prompt:
 
 ```
-> ls                    # List files
-> cat hello.txt         # Display file
-> echo hello > test.txt # Create file
-> doom                  # Play Doom
+ls                      # List files
+echo hello > test.txt   # Create file
+cd / && doom            # Play Doom, from the directory its WAD is staged in
 ```
 
 `doom` needs a game-data file (an IWAD), which is not committed. Put one at `ports/doom/doom1.wad` before `make full` (the Doom shareware WAD, or a license-clean `freedoom1.wad`; see [ports/doom/Readme.md](ports/doom/Readme.md) and run `ports/doom/fetch_wad.sh` to verify it). Without it, `doom` builds but starts and exits with "IWAD not found".

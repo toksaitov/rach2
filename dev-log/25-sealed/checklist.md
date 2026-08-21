@@ -126,39 +126,48 @@ What to have on hand:
 This is the step that cannot be undone by rebuilding, so it is the one written
 in the most detail.
 
-Read the target drive's model and serial off its own label, before it is
-plugged into anything, and write both into the session record. That is the
-independent source: everything below compares against what was written down
-rather than against what a tool happens to report.
+Nothing in Rach2 is bound to a particular drive. The kernel probes for whatever
+disk answers and finds its root by scanning partition entries for the KRFFS
+magic, so the image boots from any drive carrying the layout. Drive identity is
+a guard on this host's `dd` and on nothing else, which is why the guard is a
+person confirming the drive in front of them rather than a string comparison
+against a label.
 
-The milestone 24 baseline (`dev-log/24-metal/baseline.md`) describes the
-laptop's ORIGINAL drive: a Samsung SSD 870 EVO 1TB, serial S74ZNX0Y927920A,
-1953525168 sectors. That is not the drive being sealed, and writing this image
-to it would destroy the Windows installation this project has kept intact
-through two milestones.
+So the check is an approval, and `CLAUDE.md` carries it as project policy for
+any irreversible hardware operation. Whoever is about to write, a person or an
+assistant, lists the candidate and everything the host reports about it,
+presents that, and writes only after an approval naming the node. An approval
+does not carry to the next run, and one given on another machine does not carry
+at all, because the node number belongs to the host and the moment rather than
+to the drive.
 
 With the target drive on the adapter and nothing else new plugged in:
 
 ```sh
-diskutil list
-diskutil info /dev/diskN     # model, serial, size, whether it is removable
+diskutil list physical       # every disk, so the candidate is seen among them
+diskutil info /dev/diskN     # size, bus, internal or external, whole disk
 ```
 
-Then check every one of these, and stop at the first that fails:
+What is presented, and what must hold before an approval is worth asking for:
 
-* The model and the serial `diskutil info` reports are EXACTLY the ones written
-  down from the label. Not similar, and not blank: an adapter that reports no
-  serial is an adapter to replace before writing anything, because it cannot
-  tell you which drive is behind it.
-* The size is around 250 GB, not 1 TB.
-* The serial is NOT S74ZNX0Y927920A.
-* `diskutil info` reports the disk as removable or external. The Mac's own
-  internal drive never is.
+* The size is around 250 GB, not 1 TB. The laptop's original drive is a Samsung
+  SSD 870 EVO 1TB, serial S74ZNX0Y927920A, 1953525168 sectors
+  (`dev-log/24-metal/baseline.md`), and writing this image to it would destroy
+  the Windows installation this project has kept intact through two milestones.
+* `Device Location` is `External`. The Mac's own internal drive never is.
+* `Whole` is `Yes`: the node is the whole disk and not a partition.
+* The partition table the drive currently carries, stated as it is, so the owner
+  can say whether that is the drive they believe it to be.
+* The model and serial where the bridge passes them through. The adapter in use
+  reports the model as `Generic` and no serial at all, because it answers about
+  itself rather than about the drive. That is a limit of the adapter and not a
+  reason to stop; it is the reason the approval carries the weight the serial
+  comparison used to.
 
 Then unplug the adapter, run `diskutil list` again, and confirm the node has
-gone. Plug it back in and confirm it comes back, with the same model and serial.
-That is what says which node is the drive in your hand rather than which node
-was there a minute ago.
+gone. Plug it back in and confirm it returns. That is what says which node is the
+drive in your hand rather than which node was there a minute ago, and it is the
+one check that does not depend on the bridge reporting anything at all.
 
 ## The write and the readback
 
@@ -169,32 +178,38 @@ changed since: which node the drive is on, and which artifact is in the build
 directory. `set -e` means the first line that disagrees stops the block before
 anything is written.
 
-Fill in the four values from the session record, and paste the whole thing. Every
-value it reads off the machine is required to be there and to match exactly: a
-field this could not parse comes back empty and stops the block, which is the
-behaviour to want from something that is about to overwrite a disk.
+Fill in the two values, and paste the whole thing. `DISK` is the node the
+approval named, and `SEALED_SHA` is the digest `make sealed-test` printed. Both
+are deliberately empty here: a worked example carrying a real device number is
+the thing most likely to be pasted unread, and an empty one stops the block at
+its first test.
+
+The mechanical guards stay, because they cost nothing and they catch the case
+the approval cannot: a node that changed between being approved and being
+written. They no longer compare a serial, since the bridge may not report one;
+what they assert is that the node is an external whole disk of a plausible size
+and is not the host's boot disk.
 
 ```sh
 (
     set -e
-    DISK=/dev/disk4                       # the node the checks above settled on
-    MODEL='Samsung SSD 870 EVO 250GB'     # exactly as the label reads
-    SERIAL='S6PENX0T123456X'              # exactly as the label reads
-    SEALED_SHA=0000000000000000000000000000000000000000000000000000000000000000
+    DISK=                                 # the node the approval named
+    SEALED_SHA=                           # the digest sealed-test printed
+
+    test -n "$DISK" && test -n "$SEALED_SHA"
+    test "$DISK" != /dev/disk0            # never the host's own boot disk
 
     RAW="/dev/r${DISK#/dev/}"             # the same device, derived and not typed
     INFO="$(diskutil info "$DISK")"
 
-    GOT_MODEL="$(printf '%s\n' "$INFO" | awk -F': *' '/Device \/ Media Name/ {print $2; exit}')"
-    GOT_SERIAL="$(printf '%s\n' "$INFO" | awk -F': *' '/Serial Number/ {print $2; exit}')"
     GOT_BYTES="$(printf '%s\n' "$INFO" | awk -F'[()]' '/Disk Size/ {print $2; exit}' | awk '{print $1}')"
     GOT_WHERE="$(printf '%s\n' "$INFO" | awk -F': *' '/Device Location/ {print $2; exit}')"
+    GOT_PROTO="$(printf '%s\n' "$INFO" | awk -F': *' '/Protocol/ {print $2; exit}')"
+    GOT_WHOLE="$(printf '%s\n' "$INFO" | awk -F': *' '/^ *Whole/ {print $2; exit}')"
 
-    test -n "$MODEL" && test -n "$SERIAL" && test -n "$SEALED_SHA"
-    test -n "$GOT_MODEL" && test -n "$GOT_SERIAL" && test -n "$GOT_BYTES"
-    test "$GOT_MODEL" = "$MODEL"
-    test "$GOT_SERIAL" = "$SERIAL"
+    test -n "$GOT_BYTES" && test -n "$GOT_WHERE" && test -n "$GOT_PROTO"
     test "$GOT_WHERE" = "External"
+    test "$GOT_WHOLE" = "Yes"
     test "$GOT_BYTES" -ge 660602880
     test "$GOT_BYTES" -lt 600000000000
     shasum -a 256 build/images/rach2-sealed.disk | grep -q "^$SEALED_SHA "
@@ -208,13 +223,13 @@ behaviour to want from something that is about to overwrite a disk.
 )
 ```
 
-The values in the block are examples and every one of them is wrong for your
-drive; fill them in from the session record. An empty or unchanged one stops the
-block at the first `test`.
+Both values start empty and the block stops at its first `test` until they are
+filled in, which is the behaviour to want from something about to overwrite a
+disk.
 
-Run it once with the four `sudo` and `diskutil` lines commented out if you want
-to see what it parsed. A field name this awk does not match is an empty value
-and a stop, not a wrong write.
+Run it once with the `sudo` and `diskutil` lines commented out if you want to see
+what it parsed. A field name this awk does not match is an empty value and a
+stop, not a wrong write.
 
 630 MiB is 660602880 bytes, which is the whole artifact; `dd` is given the count
 so a truncated file cannot be written as if it were complete. The raw node is
@@ -260,11 +275,14 @@ If the network has no DHCP server, pick `Rach2 (static address)` at the menu; it
 * The root and test passwords minted for this machine, kept where the machine
   is not.
 * The artifact's SHA-256, from `make sealed-test`.
-* The drive's model and serial as read off its label, beside what `diskutil`
-  reported.
-* The drive's model, serial and size, as `diskutil info` reported them.
+* Everything presented for the approval: the node, the size in bytes, the bus,
+  external or internal, whole disk, the table the drive carried before the
+  write, and the model and serial where the bridge reported them.
 * The readback hash, and that it matched.
 * The address the router gave the machine, and the output of `bootctl status` from the first SSH session.
+* The SSH host key fingerprint the machine prints as it mints one, read off the
+  laptop's own screen. That is the only channel here nobody else on the segment
+  can write to, and without it the first connection authenticates nothing.
 * Anything the machine printed that this document did not predict.
 
 ## What this session does not do

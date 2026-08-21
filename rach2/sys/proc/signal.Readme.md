@@ -32,7 +32,7 @@ This is the same shape Linux uses: it builds a `rt_sigframe` on the user stack a
 
 ## Ctrl-C
 
-The PS/2 keyboard IRQ and the serial console both turn Ctrl-C into `signal_post(foreground, SIGINT)`; with the default disposition this terminates the foreground program, and a program that installs a `SIGINT` handler catches it instead. Over the polled serial console the ETX byte (`0x03`) is detected in the `sys_read` stdin path and unwinds a blocking read with `-EINTR`.
+The PS/2 keyboard IRQ and the serial console both turn Ctrl-C into `signal_post(foreground, SIGINT)`; with the default disposition this terminates the foreground program, and a program that installs a `SIGINT` handler catches it instead. The read path itself no longer looks at the data: the line discipline recognises the interrupt character, posts the signal to the foreground group, and the blocking read unwinds with `-EINTR` because a signal is pending.
 
 ## Probe
 

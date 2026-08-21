@@ -1806,11 +1806,20 @@ def report(problems):
 # What the MAIN busybox must not carry. Two reasons, and the list says which is
 # which. The first six want the set-id bit, and this binary is staged without
 # one, so an applet of that name would answer from the shell's PATH before the
-# set-id build's copy and then refuse for want of a bit it does not have. The
-# last five need a raw socket, which this kernel's socket layer does not offer,
-# so they cannot work at all. `getty` and `sulogin` are NOT here: both are
-# BB_SUID_DROP and neither wants privilege; they are simply not selected,
-# because this system's init does not use them.
+# set-id build's copy and then refuse for want of a bit it does not have.
+#
+# The last five cannot work on this kernel's socket layer, and no longer for one
+# reason. `ping`, `ping6`, `traceroute` and `traceroute6` open a raw IP socket,
+# which is not offered: AF_INET/SOCK_RAW exists only as a descriptor carrying
+# the interface ioctls and refuses to send or receive. `arping` opens a packet
+# socket, which milestone 25 did build for the DHCP client, but binds it to the
+# ARP protocol, and only IPv4 is accepted. So the rule still holds for all five;
+# what has changed is that one of them is now a protocol away rather than a
+# whole socket family away.
+#
+# `getty` and `sulogin` are NOT here: both are BB_SUID_DROP and neither wants
+# privilege; they are simply not selected, because this system's init does not
+# use them.
 #
 # The sentinel is an applet that must be present, because a check that only ever
 # looks for absences passes just as well on a header it failed to understand.
@@ -1909,7 +1918,8 @@ def check_applets(path=APPLET_TABLE):
 
 # The set-id build's table, and the rule that points the other way. Everything in
 # the main binary is unprivileged, so its rule is a blacklist: no applet that
-# wants the set-id bit and none that needs a raw socket. Everything in THIS
+# wants the set-id bit and none that needs a socket this kernel does not offer.
+# Everything in THIS
 # binary gets the bit, so its rule has to be a whitelist: exactly these three and
 # nothing else. A blacklist here would pass a binary that had quietly grown a
 # shell, which is the one thing a set-id executable must never contain, and

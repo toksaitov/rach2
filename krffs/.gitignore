@@ -17,3 +17,8 @@ shadow
 # the tree.
 shadow.tmp
 .gen_demo_password.lock
+
+# Public keys belonging to whoever works on this machine, appended to the
+# demo key by gen_demo_key.sh. Not the project's, so not committed.
+authorized_keys.extra
+test_authorized_keys.extra

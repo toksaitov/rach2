@@ -19,7 +19,7 @@ A teaching kernel could ship a linear PRNG, but `AT_RANDOM` and `getrandom` are 
 
 1. `RDSEED`: a true-random seed, if CPUID reports it (leaf 7). Preferred.
 2. `RDRAND`: the on-chip CSPRNG, if CPUID reports it (leaf 1). Used when `RDSEED` is absent, and as a per-word fallthrough when a `RDSEED` retry budget is exhausted (it can transiently fail under load).
-3. Timing jitter: when neither exists (older CPUs or some emulators), the low bits of the TSC sampled across a noisy loop. Weak, but never a constant.
+3. Timing jitter: when neither exists (older CPUs or some emulators), the TSC read once, both halves kept, mixed with the CMOS seconds and the tick count. Weak, but never a constant.
 
 A CPUID max-leaf guard precedes the leaf-7 query so a CPU that does not implement that leaf is never asked for it (`#UD` avoidance). The state is pre-keyed with the ChaCha constants and a default key so even the first block before seeding is not all-zero.
 
