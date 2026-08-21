@@ -113,6 +113,12 @@ findings up to where it stopped.
   buffer "is 64 bytes (NUL included)", but `_exec_path_buf` is `[256]` and the
   copy uses `sizeof(_exec_path_buf)` (256, matching the 255-byte path limit).
   The 64 was stale. Corrected to 256.
+* `rach2/sys/syscall.c` (do_getsockname): a comment wrote the identifier
+  `copy_sockaddr_to_user` with a stray space, "copy_sockaddr_to_ user". Removed
+  the space.
+* `rach2/sys/syscall.c` (socket-option defines): `SO_REUSEADDR 2` was defined
+  twice, a few lines apart, both to the same value (so the build did not flag
+  the redefinition). Removed the duplicate.
 
 ## Cross-checks to settle against code later in set one
 
@@ -124,9 +130,9 @@ when its source file is reached, and the document fixed retroactively if wrong.
   (against `tools/selfbuild_test.sh`, in set two tooling).
   RESOLVED: "29 utilities" is correct -- `utils/Makefile` builds 19 `UTILITIES`
   plus 10 `SBIN_PROGS` = 29 programs.
-* `rach2/Readme.md`: "over 100 syscalls" -- `syscall.h` defines ~111 `SYS_*`
-  numbers and `SYSCALL_TABLE_SIZE` is 356; will confirm the live dispatch count
-  against `syscall.c`, but the claim clearly holds.
+* `rach2/Readme.md`: RESOLVED -- "over 100 syscalls" holds. `syscall.h` defines
+  ~111 `SYS_*` numbers and `syscall.c`'s dispatch table (`init_syscall`) wires
+  well over 100 handlers.
   RESOLVED: the `cr3` field "offset 52" is correct -- in `process.h`, pid (0-3),
   state (4-7), regs (8-51, eleven uint32), cr3 (52-55).
   RESOLVED: "make subset-test boots six lines" is correct -- the recipe

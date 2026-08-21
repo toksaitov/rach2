@@ -8938,7 +8938,7 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         return -EOPNOTSUPP;
     }
     /* Unlike accept/recvfrom, getsockname requires the buffers
-     * (copy_sockaddr_to_ user treats NULL as "no address wanted"). */
+     * (copy_sockaddr_to_user treats NULL as "no address wanted"). */
     if (!sa_ptr || !salen_ptr) {
         return -EFAULT;
     }
@@ -9014,7 +9014,6 @@ static int32_t do_shutdown(int fd, int how)
 #define SO_TYPE       3
 #define SO_ERROR      4
 #define SO_BROADCAST  6
-#define SO_REUSEADDR  2
 #define SO_BINDTODEVICE 25
 #define IFNAMSIZ     16
 #define SO_KEEPALIVE  9

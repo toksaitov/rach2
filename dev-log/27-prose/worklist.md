@@ -173,12 +173,12 @@ entry is a real unit of work; read each range whole, including its code.
 * [x] `rach2/sys/syscall.c` lines 2701-3600
 * [x] `rach2/sys/syscall.c` lines 3601-4500
 * [x] `rach2/sys/syscall.c` lines 4501-5400
-* [ ] `rach2/sys/syscall.c` lines 5401-6300
-* [ ] `rach2/sys/syscall.c` lines 6301-7200
-* [ ] `rach2/sys/syscall.c` lines 7201-8100
-* [ ] `rach2/sys/syscall.c` lines 8101-9000
-* [ ] `rach2/sys/syscall.c` lines 9001-9900
-* [ ] `rach2/sys/syscall.c` lines 9901-10527
+* [x] `rach2/sys/syscall.c` lines 5401-6300
+* [x] `rach2/sys/syscall.c` lines 6301-7200
+* [x] `rach2/sys/syscall.c` lines 7201-8100
+* [x] `rach2/sys/syscall.c` lines 8101-9000
+* [x] `rach2/sys/syscall.c` lines 9001-9900
+* [x] `rach2/sys/syscall.c` lines 9901-10527
 
 ## Kernel sources (82 entries, 67755 words)
 
