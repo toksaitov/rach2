@@ -371,7 +371,9 @@ unlike blockprobe's stale bound.)
 Still more read clean: ctrlcmusl, errnoprobe, vmfault, sockfillmusl,
 bootverb_hosttest, timemusl, suidmusl, krandom_hosttest, udptest, sockettest,
 miscprobe, cowfork, tls_hosttest, vmro, rngmusl, uimage_hosttest,
-mkhash_hosttest, compat/crypt.h, persistprobe.
+mkhash_hosttest, compat/crypt.h, persistprobe, tcptest, and the small final
+files (musl/hello, compat/sys/random.h, statushelper, forktest, pipemusl,
+tests/hello, shelltest, stdintest, compat/shadow.h, filetest).
 (bootverb_hosttest's header "forever." wraps at 81 columns, so it is a real
 wrap, not an orphan.)
 

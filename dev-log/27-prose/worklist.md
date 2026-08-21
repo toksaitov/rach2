@@ -560,7 +560,7 @@ project teaches; move it up if that judgement turns out wrong.
 * [x] `tests/host/mkhash_hosttest.c` (117 words)
 * [x] `tests/host/compat/crypt.h` (117 words)
 * [x] `tests/persistprobe.c` (112 words)
-* [ ] `tests/tcptest.c` (110 words)
-* [ ] `tests/musl/hello.c`, `tests/host/compat/sys/random.h`, `tests/musl/statushelper.c`, `tests/forktest.c`, `tests/musl/pipemusl.c`, `tests/hello.c`, `tests/shelltest.c`, `tests/stdintest.c` (659 words over 8 files)
-* [ ] `tests/host/compat/shadow.h`, `tests/filetest.c` (97 words over 2 files)
+* [x] `tests/tcptest.c` (110 words)
+* [x] `tests/musl/hello.c`, `tests/host/compat/sys/random.h`, `tests/musl/statushelper.c`, `tests/forktest.c`, `tests/musl/pipemusl.c`, `tests/hello.c`, `tests/shelltest.c`, `tests/stdintest.c` (659 words over 8 files)
+* [x] `tests/host/compat/shadow.h`, `tests/filetest.c` (97 words over 2 files)
 
