@@ -30,7 +30,7 @@
 # every account in passwd have a shadow line" passes an account that was removed
 # from passwd and left in shadow, which is exactly what a partial delete leaves.
 #
-# Three traps this repo has already paid for, and which every phase here obeys:
+# Three mistakes this repo has already paid for, avoided by every phase here:
 # the console echoes what is typed, so a token that appears in a command would
 # be matched from its own echo and each is written split; a feed written all at
 # once is eaten by anything that flushes its input, so every feed is spaced; and
@@ -77,7 +77,7 @@ FPID=""
 # credentials, not secrets. The second account is a system one, so the two
 # together cover both id ranges adduser was configured for. It is given an
 # existing group with -G, because a system account made without one is put in
-# `nogroup`, and adduser exits, not invent a group that is not there.
+# `nogroup`, and adduser exits rather than invent a group that is not there.
 NEWUSER="testee"
 NEWPASS="testeepw1"
 NEXTPASS="testeepw2"

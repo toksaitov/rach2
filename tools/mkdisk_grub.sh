@@ -145,7 +145,7 @@ load_env
 
 # Every entry this file owns is defined before the rewritable half is read, and
 # the order below is a contract. `source` merges the second file's entries onto
-# the tail of this list, so these keep the low indices whatever that file has;
+# the tail of this list, so these keep the low indices whatever that file has.
 # Every entry names its own root. GRUB does not put `root` back when an entry
 # fails: the recovery entries set it to partition 3, and a fallback that assumed
 # the root it started with would look for the ordinary kernel there and fail

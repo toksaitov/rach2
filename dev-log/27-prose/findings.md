@@ -236,6 +236,19 @@ findings up to where it stopped.
   the paragraph duplicated in `applet_names` and `check_applets`. Reflowed each;
   `tools/check_comments.py` does not scan `tools/`, so the width was unchecked,
   and prose in a Python docstring wraps at 80 the same as a `#` comment.
+* `tools/mkdisk_grub.sh`: the staged `grub.cfg` header comment joined two
+  independent statements with a semicolon but kept the capital, "...whatever
+  that file has; Every entry names its own root." Changed the semicolon to a
+  period. (A `#` comment in GRUB config; the disk image already carries a
+  per-tree SSH key and salt, so it is not byte-reproducible and the edit changes
+  no test.)
+* `tools/account_test.sh`: two fixes. A comment used "Three traps this repo has
+  already paid for" -- "trap" for a difficulty is the register rule's banned
+  invented sense, and this script uses the shell `trap` builtin throughout, so
+  the word is doubly wrong here. Reworded to "Three mistakes ... avoided by every
+  phase here". And "adduser exits, not invent a group that is not there" is the
+  same mangled "not X" as the `netdev.c` probe comment; reworded to "exits rather
+  than invent a group".
 
 ## Cross-checks to settle against code later in set one
 
