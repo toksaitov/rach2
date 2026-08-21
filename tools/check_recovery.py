@@ -8,8 +8,10 @@ boot loader's gap, both bounded windows. Only a recovery image may write any
 sector of the whole device, which is what reflashing a broken root needs and
 what an everyday boot has no business being able to do at all.
 
-The split is a build switch (`-DRACH2_RECOVERY`, see rach2/sys/block/recovery.c), not a boot flag, because a flag on the kernel command line is editable
-at the GRUB prompt by anyone standing at the machine. A build switch is only as
+The split is a build switch (`-DRACH2_RECOVERY`, see
+rach2/sys/block/recovery.c), not a boot flag, because a flag on the kernel
+command line is editable at the GRUB prompt by anyone standing at the machine.
+A build switch is only as
 good as the check that the artifact actually got built with it, and there is
 nothing useful to check for by absence: the two kernels differ by which body of
 one function was compiled, not by a symbol. So recovery.c has an explicit

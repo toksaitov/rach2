@@ -283,6 +283,18 @@ findings up to where it stopped.
   listed five numbered items, and `main()` runs five checks (kernel lists, utils,
   ish, limits, staging). The staging contract was added later without updating
   the count. Corrected "four" to "five".
+* `tools/netconsole_check.py`: the docstring had the mangled-"has" again, "This
+  reads that file and has the frames to the contract the header states" -- the
+  verb is "holds" (it holds each frame to the contract). Corrected.
+* `tools/check_recovery.py`: a docstring line lost its wrap and ran to ~145
+  columns (the `rach2/sys/block/recovery.c` path was inserted without reflowing),
+  out of step with its ~78-column neighbours. Reflowed.
+* `tools/check_diskpolicy.py`: a comment read "The read-write banner is a
+  substring of nothing, but the two banners share a prefix..." -- the "substring
+  of nothing" clause is confusing, and its near-twin `check_recovery.py` states
+  the identical fact cleanly. Reworded to match: "The two banners share a prefix,
+  so each is counted whole and the pair is judged together, not one being tested
+  by itself."
 
 ## Cross-checks to settle against code later in set one
 

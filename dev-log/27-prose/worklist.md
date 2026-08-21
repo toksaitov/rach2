@@ -406,7 +406,7 @@ project teaches; move it up if that judgement turns out wrong.
 * [x] `tools/bootstrap_mac.sh` (159 words)
 * [x] `tools/check_comments.py` (116 words)
 * [x] `tools/check_devlog.py`, `tools/check_link.py`, `tools/check_guest.py`, `tools/ubuntu-image.txt`, `tools/mac-formulae.txt`, `tools/prose_upstream.txt`, `tools/prose_baseline.txt`, `tools/check_sealednet.py` (519 words over 8 files)
-* [ ] `tools/check_diskpolicy.py`, `tools/netconsole_check.py`, `tools/check_recovery.py`, `tools/mkbootfixture.py`, `tools/bcast_check.py`, `tools/mkwidefixture.py`, `tools/check_grubembed.py` (136 words over 7 files)
+* [x] `tools/check_diskpolicy.py`, `tools/netconsole_check.py`, `tools/check_recovery.py`, `tools/mkbootfixture.py`, `tools/bcast_check.py`, `tools/mkwidefixture.py`, `tools/check_grubembed.py` (136 words over 7 files)
 
 ## Everything else (15 entries, 4734 words)
 

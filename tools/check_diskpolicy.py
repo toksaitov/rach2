@@ -45,8 +45,8 @@ def main(argv):
         sys.stderr.write("check-diskpolicy: %s is empty, so this check proved nothing\n" % path)
         return 1
 
-    # The read-write banner is a substring of nothing, but the two banners share
-    # a prefix, so each is counted whole and the pair is judged together.
+    # The two banners share a prefix, so each is counted whole and the pair is
+    # judged together, not one being tested by itself.
     has_want = BANNERS[want] in image
     has_other = BANNERS[other] in image
 
