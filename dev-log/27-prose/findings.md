@@ -369,7 +369,9 @@ unlike blockprobe's stale bound.)
   the probe actually does without the false claim.
 
 Still more read clean: ctrlcmusl, errnoprobe, vmfault, sockfillmusl,
-bootverb_hosttest, timemusl, suidmusl, krandom_hosttest, udptest.
+bootverb_hosttest, timemusl, suidmusl, krandom_hosttest, udptest, sockettest,
+miscprobe, cowfork, tls_hosttest, vmro, rngmusl, uimage_hosttest,
+mkhash_hosttest, compat/crypt.h, persistprobe.
 (bootverb_hosttest's header "forever." wraps at 81 columns, so it is a real
 wrap, not an orphan.)
 
