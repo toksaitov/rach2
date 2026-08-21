@@ -1001,8 +1001,8 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
             return false;
         }
         /* optional-file skips ONLY a genuinely absent host file. A file that
-           exists but cannot be read (a permission error, a short read) is a real error for
-           both directives, never a silent skip. */
+           exists but cannot be read (a permission error, a short read) is a
+           real error for both directives, never a silent skip. */
         if (access(hostpath, F_OK) != 0) {
             if (strcmp(verb, "optional-file") == 0) {
                 printf("stageimage: optional '%s' absent (%s); skipping.\n", path, hostpath);
@@ -1205,8 +1205,8 @@ int main(int argc, char **argv)
             strlen(line);
 
         /* A line that exactly fills the buffer with no newline was truncated by
-           fgets; staging its prefix and reading the rest as a bogus directive would
-           both be wrong, so reject it. */
+           fgets; staging its prefix and reading the rest as a bogus directive
+           would both be wrong, so reject it. */
         if (n == sizeof(line) - 1 && line[n - 1] != '\n') {
             fprintf(stderr, "stageimage: manifest line too long (over %d bytes).\n",
                     (int) sizeof(line) - 2);

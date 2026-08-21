@@ -197,6 +197,11 @@ findings up to where it stopped.
   detail. A design decision."). Reworded to "That ordering is deliberate: ...",
   which states the claim plainly; the sentence already explains why (one image
   of the databases).
+* `krffs/stageimage.krffs.c`: two in-function comment lines ran past the 80-column
+  comment limit (the `optional-file` skip note and the fgets-truncation note).
+  `tools/check_comments.py` scopes its 80-column check to `rach2/`, so these
+  krffs-tool lines were never flagged. Rewrapped both; CLAUDE.md's "code comments
+  wrap at 80 columns" holds tree-wide, not only in the kernel.
 
 ## Cross-checks to settle against code later in set one
 
