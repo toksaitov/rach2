@@ -2,9 +2,10 @@
  * synthfs.c: the pure path classifier for the synthetic /dev and /proc mounts.
  *
  * No kernel dependencies: it turns a path string into a vnode kind plus the
- * coordinates the glue needs. The component splitting and the /proc/<pid>/fd/<n>
- * parsing are the fence-post-prone parts, so this compiles freestanding AND hosted
- * and is unit-tested under ASan/UBSan (tests/host/synthfs_hosttest.c).
+ * coordinates the glue needs. The component splitting and the
+ * /proc/<pid>/fd/<n> parsing are the fence-post-prone parts, so this
+ * compiles freestanding AND hosted and is unit-tested under ASan/UBSan
+ * (tests/host/synthfs_hosttest.c).
  */
 
 #include "synthfs.h"
@@ -18,10 +19,10 @@ struct comp {
 #define SYNTH_MAXC 5
 
 /*
- * Split a slash path into up to max components, skipping empty ones (so leading,
- * trailing and doubled slashes do not produce empties). Returns the count; if the
- * path has MORE than max components the surplus is left unread and the count is
- * max (the caller treats "too many" as a miss).
+ * Split a slash path into up to max components, skipping empty ones (so
+ * leading, trailing and doubled slashes do not produce empties). Returns the
+ * count; if the path has MORE than max components the surplus is left unread
+ * and the count is max (the caller treats "too many" as a miss).
  */
 static int synth_split(const char *path, struct comp *c, int max)
 {
@@ -130,9 +131,10 @@ static void synth_put_uint(char *out, int cap, int *pos, unsigned int v)
  * Render the canonical directory path for a synthetic vnode kind into `out`.
  *
  * The inverse of `synth_classify` for the directory kinds: it spells out the
- * path a directory or symlink target should report (for example `/proc/<pid>/fd`).
- * `pid` is used only for the per-process kinds. The result is always
- * NUL-terminated and never exceeds `cap` bytes; an unrecognized kind yields "/".
+ * path a directory or symlink target should report (for example
+ * `/proc/<pid>/fd`). `pid` is used only for the per-process kinds. The
+ * result is always NUL-terminated and never exceeds `cap` bytes; an
+ * unrecognized kind yields "/".
  */
 void synth_dir_path(int kind, int pid, char *out, int cap)
 {
@@ -168,18 +170,19 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
  * Splits `path` into components and decides which synthetic vnode (if any) it
  * names, filling `vp` with the kind and the coordinates the glue needs: `name`
  * for a /dev node, `pts_index` for a pty slave, and `pid`, `procfd`, `procfile`
- * for the /proc kinds. A path under neither tree, including the root, classifies
- * as VNODE_KRFFS so the caller falls through to the real file system; a
- * well-formed prefix with an unknown leaf classifies as VNODE_ENOENT so the
- * caller reports the miss rather than leaking to KRFFS. `/proc/self` maps to
- * SYNTH_PID_SELF. Returns the kind, also stored in `vp->kind`.
+ * for the /proc kinds. A path under neither tree, including the root,
+ * classifies as VNODE_KRFFS so the caller falls through to the real file
+ * system; a well-formed prefix with an unknown leaf classifies as VNODE_ENOENT
+ * so the caller reports the miss rather than leaking to KRFFS. `/proc/self`
+ * maps to SYNTH_PID_SELF. Returns the kind, also stored in `vp->kind`.
  *
  * The path must be lexically normalized: a `.` or `..` component is not
- * collapsed here (only the KRFFS resolver does that), so a dot path transiting a
- * synthetic prefix (for example `proc/../realfile`) deliberately classifies as
- * VNODE_ENOENT. This fails closed, denying a legitimate spelling rather than
- * reaching the wrong object; real programs reach /dev and /proc by absolute
- * paths. The host test locks the dot and the pid-bound cases.
+ * collapsed here (only the KRFFS resolver does that), so a dot path
+ * transiting a synthetic prefix (for example `proc/../realfile`)
+ * deliberately classifies as VNODE_ENOENT. This fails closed, denying a
+ * legitimate spelling rather than reaching the wrong object; real programs
+ * reach /dev and /proc by absolute paths. The host test locks the dot and
+ * the pid-bound cases.
  */
 int synth_classify(const char *path, struct vpath *vp)
 {

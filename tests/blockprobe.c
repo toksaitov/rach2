@@ -5,12 +5,13 @@
  * writes several files whose combined size exceeds the resident cache, each one
  * filled with a position-dependent pattern, fsyncs them, then reads every file
  * back and checks every byte. Because the working set is larger than the cache,
- * writing later files evicts and writes back the earlier files' dirty pages, and
- * reading them back re-fills from the disk; a dropped-dirty, freed-while-mapped,
- * or mis-mapped page then shows up as a checksum mismatch rather than a mere
- * crash. Each file stays well under the cache budget, so this exercises eviction
- * across files without the single-file grow-relocation limit. Prints
- * "BLOCKPROBE OK" and exits 0 on success, or exits 1 on any mismatch.
+ * writing later files evicts and writes back the earlier files' dirty pages,
+ * and reading them back re-fills from the disk; a dropped-dirty,
+ * freed-while-mapped, or mis-mapped page then shows up as a checksum mismatch
+ * rather than a mere crash. Each file stays well under the cache budget, so
+ * this exercises eviction across files without the single-file grow-relocation
+ * limit. Prints "BLOCKPROBE OK" and exits 0 on success, or exits 1 on any
+ * mismatch.
  *
  * Freestanding; direct int 0x80.
  */

@@ -1,12 +1,13 @@
 /*
  * devfs.c: a synthetic /dev built on the file_ops dispatch.
  *
- * Each character device is a tiny file_ops vtable; a registry binds a leaf name to
- * its ops and a {major,minor}. open("/dev/<name>") allocates a descriptor and
- * points its ops/priv at the registry entry (FD_TYPE_DEVICE), after which the
- * generic read/write/close paths dispatch through the vtable, so the device code
- * lives nowhere in the syscall layer. The namespace is virtual: /dev is not stored
- * in KRFFS; stat and getdents synthesize from this table.
+ * Each character device is a tiny file_ops vtable; a registry binds a leaf
+ * name to its ops and a {major,minor}. open("/dev/<name>") allocates a
+ * descriptor and points its ops/priv at the registry entry (FD_TYPE_DEVICE),
+ * after which the generic read/write/close paths dispatch through the
+ * vtable, so the device code lives nowhere in the syscall layer. The
+ * namespace is virtual: /dev is not stored in KRFFS; stat and getdents
+ * synthesize from this table.
  */
 
 #include "devfs.h"
@@ -687,11 +688,12 @@ static const struct devfs_entry *devfs_find(const char *name)
 /**
  * Open a /dev leaf by name and return its descriptor.
  *
- * `name` is the leaf under /dev, `flags` the Linux O_* set. Most entries bind an
- * fd to the registry vtable (FD_TYPE_DEVICE); three are special. /dev/ptmx is a
- * clone device that mints a fresh pty pair per open; /dev/console and /dev/tty
- * map to the kernel console (FD_TYPE_CONSOLE), except that /dev/tty resolves to
- * the caller's controlling terminal, which may be a pty rather than the console.
+ * `name` is the leaf under /dev, `flags` the Linux O_* set. Most entries bind
+ * an fd to the registry vtable (FD_TYPE_DEVICE); three are special. /dev/ptmx
+ * is a clone device that mints a fresh pty pair per open; /dev/console and
+ * /dev/tty map to the kernel console (FD_TYPE_CONSOLE), except that /dev/tty
+ * resolves to the caller's controlling terminal, which may be a pty rather than
+ * the console.
  *
  * @return the new descriptor, or a negative errno.
  */
@@ -804,8 +806,8 @@ int devfs_open(const char *name, int flags)
  * Synthesize stat fields for /dev or a device leaf.
  *
  * An empty `name` is /dev itself, a directory; otherwise it names a registry
- * leaf, a character device. Each out pointer is optional. rdev packs the entry's
- * {major,minor} the way the Linux mem devices number themselves.
+ * leaf, a character device. Each out pointer is optional. rdev packs the
+ * entry's {major,minor} the way the Linux mem devices number themselves.
  *
  * @return 0 on success, -1 if the named leaf does not exist.
  */

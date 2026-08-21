@@ -1,16 +1,18 @@
 /**
  * Dual-target seam test for k_itoa (sys/lib/kstd.c).
  *
- * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
+ * rach2/sys/lib/kctypes.c
  *
- * k_itoa is the integer formatter behind every kernel and util number print, so
- * it is exercised here natively under AddressSanitizer + UndefinedBehaviorSanitizer
- * across the bases and the signed-edge cases. INT_MIN is the case that matters:
- * negating it in signed `int` is overflow UB, which UBSan flags here in
- * milliseconds rather than as a mystery value in QEMU. The buffer-too-small and
- * out-of-range-radix rejections, the returned character count, and the force_sign
- * slot are covered too. It depends on k_strreverse and k_strtoupper, compiled in.
- * Returns the failed-check count (0 == pass).
+ * k_itoa is the integer formatter behind every kernel and util number print,
+ * so it is exercised here natively under AddressSanitizer +
+ * UndefinedBehaviorSanitizer across the bases and the signed-edge cases.
+ * INT_MIN is the case that matters: negating it in signed `int` is overflow
+ * UB, which UBSan flags here in milliseconds rather than as a mystery value
+ * in QEMU. The buffer-too-small and out-of-range-radix rejections, the
+ * returned character count, and the force_sign slot are covered too. It
+ * depends on k_strreverse and k_strtoupper, compiled in. Returns the
+ * failed-check count (0 == pass).
  */
 
 #include "kstd.h"

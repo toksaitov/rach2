@@ -1,13 +1,14 @@
 /**
  * Dual-target seam test for build_user_stack (proc/uimage.c).
  *
- * host-deps: rach2/sys/proc/uimage.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/proc/uimage.c rach2/sys/lib/kstring.c
+ * rach2/sys/lib/kctypes.c
  *
- * The SysV/i386 initial-stack layout is built into a plain buffer and verified
- * natively under ASan/UBSan: argc, the argv/envp pointer arrays and their NULL
- * terminators, the auxv pairs and AT_NULL, AT_RANDOM pointing at the supplied
- * bytes, and 16-byte ESP alignment. Returns the failed-check count (0 == all
- * passed).
+ * The SysV/i386 initial-stack layout is built into a plain buffer and
+ * verified natively under ASan/UBSan: argc, the argv/envp pointer arrays and
+ * their NULL terminators, the auxv pairs and AT_NULL, AT_RANDOM pointing at
+ * the supplied bytes, and 16-byte ESP alignment. Returns the failed-check
+ * count (0 == all passed).
  */
 
 #include "uimage.h"

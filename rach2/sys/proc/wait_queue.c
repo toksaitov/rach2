@@ -120,14 +120,15 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         schedule();
 
         /*
-         * Re-acquire interrupts-off BEFORE inspecting our state, so the decision
-         * to idle and the halt are not split by a waker IRQ. If schedule()
-         * returned because a waker made us READY (we ran again) we are no longer
-         * BLOCKED and just re-loop. If we are still BLOCKED, nothing woke us and
-         * nothing else was runnable: idle until an interrupt. `sti; hlt; cli`
-         * issued from IF=0 is atomic (a wake that became pending during the
-         * check fires the instant after hlt, never before, so it is not lost)
-         * and leaves interrupts off again for the next iteration.
+         * Re-acquire interrupts-off BEFORE inspecting our state, so the
+         * decision to idle and the halt are not split by a waker IRQ. If
+         * schedule() returned because a waker made us READY (we ran again)
+         * we are no longer BLOCKED and just re-loop. If we are still
+         * BLOCKED, nothing woke us and nothing else was runnable: idle until
+         * an interrupt. `sti; hlt; cli` issued from IF=0 is atomic (a wake
+         * that became pending during the check fires the instant after hlt,
+         * never before, so it is not lost) and leaves interrupts off again
+         * for the next iteration.
          */
         flags = irq_save();
         if (current_proc->state == PROC_BLOCKED) {
@@ -139,8 +140,9 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
     /*
      * Reached from a break with interrupts off: leave the queue and become
-     * runnable again, atomically with any waker. We are executing, so RUNNING is
-     * correct whether a wake/signal had set us READY or we never slept.
+     * runnable again, atomically with any waker. We are executing, so
+     * RUNNING is correct whether a wake/signal had set us READY or we never
+     * slept.
      */
     wq_dequeue(wq, current_proc);
     current_proc->state = PROC_RUNNING;

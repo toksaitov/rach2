@@ -5,7 +5,7 @@
  * arrives on standard input, which is what makes `ssh` the whole transport and
  * this program the whole receiver:
  *
- *     gzip -c root.img | ssh rach2 'gunzip | reflash /dev/disk0 68157440 524288000'
+ * gzip -c root.img | ssh rach2 'gunzip | reflash /dev/disk0 68157440 524288000'
  *
  * Both numbers come off the machine rather than out of a memory: `/proc/disk`
  * reports each partition as `partN TYPE START_LBA SECTORS`, and the two above
@@ -19,8 +19,9 @@
  * allowed to touch. With the count declared, where the write would land is
  * settled before a byte is read.
  *
- * Only a kernel built for recovery may write the whole disk; on any other the
- * device refuses, and this reports that refusal rather than a partial write.
+ * Only a kernel built for recovery may write the whole disk; on any other
+ * the device refuses, and this reports that refusal rather than a partial
+ * write.
  */
 
 #include <errno.h>

@@ -10,9 +10,10 @@
  * probe's `waitpid(-1)` never matches it, the round reaps only one, and the
  * grandchild leaks its frames, page directory, and zombie slot.
  *
- * The reaps block, so each round's processes run and exit before the next round,
- * keeping the live set tiny; ROUNDS far exceeds MAX_PROCS, so a leak would also
- * wedge the table. Prints "ORPHANPROBE OK" only when every round reaped both.
+ * The reaps block, so each round's processes run and exit before the next
+ * round, keeping the live set tiny; ROUNDS far exceeds MAX_PROCS, so a leak
+ * would also wedge the table. Prints "ORPHANPROBE OK" only when every round
+ * reaped both.
  *
  * Freestanding; direct int 0x80.
  */

@@ -3,10 +3,11 @@
 #ifdef PAGECACHE_HOSTTEST
 
 /*
- * Host seam-test build: no real frames, page tables, or device. Each slot points
- * at a static page, mapping is a no-op, and the backing is a fake the test
- * supplies. The bookkeeping (hash, clock, dirty tracking, eviction order) is what
- * runs. The system stdlib is avoided so it does not redefine kint.h's types.
+ * Host seam-test build: no real frames, page tables, or device. Each slot
+ * points at a static page, mapping is a no-op, and the backing is a fake the
+ * test supplies. The bookkeeping (hash, clock, dirty tracking, eviction
+ * order) is what runs. The system stdlib is avoided so it does not redefine
+ * kint.h's types.
  */
 #define PC_PAGE_SIZE 4096u
 
@@ -137,8 +138,9 @@ static int32_t pc_hash_find(uint32_t disk_off)
 }
 
 /**
- * Inserts `slot` under `disk_off`'s page. The key must be absent (callers insert
- * only after a miss), so the first empty or tombstoned bucket takes it.
+ * Inserts `slot` under `disk_off`'s page. The key must be absent (callers
+ * insert only after a miss), so the first empty or tombstoned bucket takes
+ * it.
  */
 static void pc_hash_insert(uint32_t disk_off, uint32_t slot)
 {
@@ -434,8 +436,8 @@ void *pc_test_page(uint32_t disk_off)
 #else
 
 /**
- * Sizes the window from PCWIN_BASE to the lowest device memory BAR that lands in
- * it, capped at PC_WINDOW_CAP, so the window never overlaps device MMIO.
+ * Sizes the window from PCWIN_BASE to the lowest device memory BAR that lands
+ * in it, capped at PC_WINDOW_CAP, so the window never overlaps device MMIO.
  *
  * Walks every bus the driver discovery walks (`pci_find_device_skip` scans
  * buses 0 to 255), not bus 0 alone: a BAR behind a bridge that landed in the

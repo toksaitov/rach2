@@ -4,22 +4,24 @@
 #include "../lib/kint.h"
 
 /*
- * devfs: a synthetic /dev. The device namespace is virtual (not KRFFS nodes): a
- * small registry maps a leaf name ("null", "zero", ...) to a character device
- * backed by a file_ops vtable and a {major,minor}. open() of a /dev path binds the
- * device's ops onto the descriptor (the ops dispatch then drives
- * read/write/close), exactly as pipes do; stat/getdents synthesize from the
- * registry. Two names ("console" and "tty") resolve to the kernel console and so
- * open as FD_TYPE_CONSOLE, reusing the existing terminal path.
+ * devfs: a synthetic /dev. The device namespace is virtual (not KRFFS
+ * nodes): a small registry maps a leaf name ("null", "zero", ...) to a
+ * character device backed by a file_ops vtable and a {major,minor}. open()
+ * of a /dev path binds the device's ops onto the descriptor (the ops
+ * dispatch then drives read/write/close), exactly as pipes do; stat/getdents
+ * synthesize from the registry. Two names ("console" and "tty") resolve to
+ * the kernel console and so open as FD_TYPE_CONSOLE, reusing the existing
+ * terminal path.
  */
 
 struct fd_entry;
 struct block_device;
 
 /*
- * The synthetic device the namespace lives on. KRFFS files report st_dev 0, so a
- * distinct nonzero id keeps a device's identity from ever colliding with a real
- * file's; this matters because ttyname compares (st_dev, st_ino).
+ * The synthetic device the namespace lives on. KRFFS files report st_dev 0,
+ * so a distinct nonzero id keeps a device's identity from ever colliding
+ * with a real file's; this matters because ttyname compares (st_dev,
+ * st_ino).
  */
 #define DEVFS_FSID 5u
 
@@ -129,8 +131,9 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size);
 const char *devfs_fd_name(struct fd_entry *e);
 
 /*
- * Whether lseek on this device returns offset 0 (the mem devices null/zero/full)
- * rather than -ESPIPE. Returns 1 for a seek-to-zero device, 0 otherwise.
+ * Whether lseek on this device returns offset 0 (the mem devices
+ * null/zero/full) rather than -ESPIPE. Returns 1 for a seek-to-zero device,
+ * 0 otherwise.
  */
 int devfs_lseek_zero(struct fd_entry *e);
 

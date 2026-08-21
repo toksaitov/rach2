@@ -157,15 +157,15 @@ process_t *get_process(uint32_t pid)
 /**
  * Reparent every child of `dead_pid` onto init.
  *
- * Called from a process's death path before its slot is reclaimed, so a dying
- * process never strands a child on a parent pid about to be freed (that orphan
- * would otherwise leak its frames, page directory, and zombie slot, since no
- * live process would ever match it in `do_wait`). A child that is already a
- * zombie has no future exit event to wake init, so init is signalled now to
- * reap it; `signal_post` flips a blocked init to ready itself. A no-op when
- * there is no init yet (`init_pid == 0`, the debug-shell-only boot) or when init
- * itself is the one dying (it has no surviving init to adopt to, and the kernel
- * panics on init's death anyway).
+ * Called from a process's death path before its slot is reclaimed, so a
+ * dying process never strands a child on a parent pid about to be freed
+ * (that orphan would otherwise leak its frames, page directory, and zombie
+ * slot, since no live process would ever match it in `do_wait`). A child
+ * that is already a zombie has no future exit event to wake init, so init is
+ * signalled now to reap it; `signal_post` flips a blocked init to ready
+ * itself. A no-op when there is no init yet (`init_pid == 0`, the
+ * debug-shell-only boot) or when init itself is the one dying (it has no
+ * surviving init to adopt to, and the kernel panics on init's death anyway).
  */
 void reparent_children(uint32_t dead_pid)
 {

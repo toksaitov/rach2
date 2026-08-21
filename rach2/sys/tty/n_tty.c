@@ -1,12 +1,13 @@
 /*
  * n_tty.c: the N_TTY line discipline (pure logic; host-tested).
  *
- * Input is cooked (ICANON: a line is assembled with ERASE/WERASE/KILL editing and
- * ECHO, and only becomes readable when terminated) or raw (each byte is readable at
- * once, gated by VMIN); ISIG control chars are recognized for signal delivery. Output
- * is post-processed (OPOST/ONLCR). Echo and output bytes leave through a caller sink,
- * so nothing here touches kernel I/O; the kernel points the sink at the console, the
- * host test at a buffer.
+ * Input is cooked (ICANON: a line is assembled with ERASE/WERASE/KILL
+ * editing and ECHO, and only becomes readable when terminated) or raw (each
+ * byte is readable at once, gated by VMIN); ISIG control chars are
+ * recognized for signal delivery. Output is post-processed (OPOST/ONLCR).
+ * Echo and output bytes leave through a caller sink, so nothing here touches
+ * kernel I/O; the kernel points the sink at the console, the host test at a
+ * buffer.
  */
 
 #include "n_tty.h"
@@ -126,10 +127,11 @@ static void commit_line(struct n_tty *t)
  * ISIG|ICANON with ECHO editing, plus the conventional control chars (^C, ^\,
  * DEL, ^U, ^D, ^Z, ^W) and VMIN 1.
  *
- * A raw read is gated by VMIN alone: VTIME is not implemented, so it is accepted
- * (a TCSETS storing it does not fail) but ignored. A program that sets VMIN > 0
- * with VTIME > 0 gets a plain blocking read for VMIN bytes, not an inter-byte
- * timeout; one that relies on the timeout to return short does not get it.
+ * A raw read is gated by VMIN alone: VTIME is not implemented, so it is
+ * accepted (a TCSETS storing it does not fail) but ignored. A program that
+ * sets VMIN > 0 with VTIME > 0 gets a plain blocking read for VMIN bytes,
+ * not an inter-byte timeout; one that relies on the timeout to return short
+ * does not get it.
  */
 void n_tty_init(struct n_tty *t)
 {
@@ -163,9 +165,9 @@ void n_tty_init(struct n_tty *t)
  * Process one received input byte through the line discipline.
  *
  * Applies input flags (ISTRIP, IGNCR, ICRNL, INLCR), then ISIG signal chars,
- * then either canonical line editing (ERASE/WERASE/KILL/EOF/EOL) or raw queuing.
- * Echo and any output go through `out`. `*signo` is set to a NTTY_SIG* code when
- * an ISIG char fires, else 0.
+ * then either canonical line editing (ERASE/WERASE/KILL/EOF/EOL) or raw
+ * queuing. Echo and any output go through `out`. `*signo` is set to a
+ * NTTY_SIG* code when an ISIG char fires, else 0.
  */
 void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo)
 {
@@ -266,11 +268,11 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
  * Report how many bytes a read could return now, or 0 if it would block.
  *
  * In canonical mode any queued byte means a completed line is ready, and a
- * pending EOF counts as readable (the read returns 0). In raw mode a pending EOF
- * (a hangup: the master closed) is readable too, so a blocked reader drains the
- * queue and then returns 0 rather than waiting forever for VMIN bytes that will
- * never arrive; otherwise VMIN 0 never blocks and a VMIN > 0 read waits until the
- * queue holds at least VMIN bytes.
+ * pending EOF counts as readable (the read returns 0). In raw mode a pending
+ * EOF (a hangup: the master closed) is readable too, so a blocked reader
+ * drains the queue and then returns 0 rather than waiting forever for VMIN
+ * bytes that will never arrive; otherwise VMIN 0 never blocks and a VMIN > 0
+ * read waits until the queue holds at least VMIN bytes.
  */
 int n_tty_readable(const struct n_tty *t)
 {

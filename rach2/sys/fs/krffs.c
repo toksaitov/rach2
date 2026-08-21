@@ -1,11 +1,12 @@
 /*
  * KRFFS: a K&R first-fit file system.
  *
- * The medium is one contiguous region holding a circular doubly linked list of
- * nodes. Each node carries a header (krffs_node_t) followed by its data; a node
- * is either free or reserved (a file or directory). Allocation is first-fit with
- * split-and-coalesce, after the storage allocator in The C Programming Language.
- * Directories are hierarchical (the v2 parent_id scheme described below).
+ * The medium is one contiguous region holding a circular doubly linked list
+ * of nodes. Each node carries a header (krffs_node_t) followed by its data;
+ * a node is either free or reserved (a file or directory). Allocation is
+ * first-fit with split-and-coalesce, after the storage allocator in The C
+ * Programming Language. Directories are hierarchical (the v2 parent_id
+ * scheme described below).
  */
 
 #include "krffs.h"
@@ -120,9 +121,10 @@ krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node)
 /**
  * Find a reserved node whose name hashes to that of `name`.
  *
- * Scans the whole list by DJB id, ignoring the directory hierarchy, so it can
- * collide with same-named files in different directories. The hierarchical
- * krffs_walk is the real path resolver; this remains for flat-namespace callers.
+ * Scans the whole list by DJB id, ignoring the directory hierarchy, so it
+ * can collide with same-named files in different directories. The
+ * hierarchical krffs_walk is the real path resolver; this remains for
+ * flat-namespace callers.
  */
 krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const char *name)
 {
@@ -173,12 +175,13 @@ krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, 
 /*
  * Hierarchical path resolution (the KRFFS v2 on-disk format).
  *
- * A node's parent_id is its directory's logical id (KRFFS_ROOT_ID == 0 for the
- * root, whose own node is fs->node and carries no parent reference). A directory
- * node's id is mix(parent_id, name), unique because sibling names are unique, so
- * children reference it unambiguously. Resolution matches each path component by
- * (name, parent_id), descending only into directories. Regular files' ids are
- * never referenced, so they keep the legacy DJB(name) value for compatibility.
+ * A node's parent_id is its directory's logical id (KRFFS_ROOT_ID == 0 for
+ * the root, whose own node is fs->node and carries no parent reference). A
+ * directory node's id is mix(parent_id, name), unique because sibling names
+ * are unique, so children reference it unambiguously. Resolution matches
+ * each path component by (name, parent_id), descending only into
+ * directories. Regular files' ids are never referenced, so they keep the
+ * legacy DJB(name) value for compatibility.
  */
 
 /**
@@ -197,7 +200,8 @@ static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
 }
 
 /**
- * Test whether the NUL-terminated `node_name` equals the component comp[0..len).
+ * Test whether the NUL-terminated `node_name` equals the component
+ * comp[0..len).
  */
 static int krffs_name_eq(const char *node_name, const char *comp, uint32_t len)
 {
@@ -214,8 +218,9 @@ static int krffs_name_eq(const char *node_name, const char *comp, uint32_t len)
 /**
  * Find the reserved node with logical id `id`, for ".." and directory descent.
  *
- * Returns NULL for KRFFS_ROOT_ID: the root has no reserved node (it is fs->node),
- * so callers must handle the root specially rather than expect a lookup here.
+ * Returns NULL for KRFFS_ROOT_ID: the root has no reserved node (it is
+ * fs->node), so callers must handle the root specially rather than expect a
+ * lookup here.
  */
 static krffs_node_t *krffs_find_node_by_id(krffs_file_system_t *fs, uint64_t id)
 {
@@ -254,16 +259,17 @@ static krffs_node_t *krffs_find_child(krffs_file_system_t *fs, uint64_t dir_id,
  * Resolve `path` to its node, honoring '.' and '..'.
  *
  * "/" (or "") resolves to the root node (fs->node). A non-final component that
- * is not a directory, or any missing component, fails. When `err` is non-NULL it
- * receives -ENOENT for a missing component or -ENOTDIR for a non-directory in a
- * non-final position. The thin krffs_walk wrapper below serves the common
+ * is not a directory, or any missing component, fails. When `err` is non-NULL
+ * it receives -ENOENT for a missing component or -ENOTDIR for a non-directory
+ * in a non-final position. The thin krffs_walk wrapper below serves the common
  * callers that do not care which.
  *
- * `may_search`, when non-NULL, is asked about every directory the walk enters,
- * before the component inside it is matched, and its refusal becomes the walk's
- * error. It is charged on the root and on the '.' and '..' arms too: traversing a
- * directory is what the search bit governs, whichever component names it. The
- * target itself is never charged, since reaching a name is not reading it.
+ * `may_search`, when non-NULL, is asked about every directory the walk
+ * enters, before the component inside it is matched, and its refusal becomes
+ * the walk's error. It is charged on the root and on the '.' and '..' arms
+ * too: traversing a directory is what the search bit governs, whichever
+ * component names it. The target itself is never charged, since reaching a
+ * name is not reading it.
  */
 static krffs_node_t *krffs_walk_x(krffs_file_system_t *fs, const char *path, int *err,
                                   krffs_search_fn may_search)
@@ -357,9 +363,9 @@ static krffs_node_t *krffs_walk(krffs_file_system_t *fs, const char *path)
 /**
  * Split `path` into its directory part and final component.
  *
- * `dir` receives the parent path ("/" if the target sits at the root) and `base`
- * the last component. Both buffers are KRFFS_FILE_NAME_BUFFER_SIZE and the output
- * is truncated to fit.
+ * `dir` receives the parent path ("/" if the target sits at the root) and
+ * `base` the last component. Both buffers are KRFFS_FILE_NAME_BUFFER_SIZE
+ * and the output is truncated to fit.
  */
 static void krffs_split_path(const char *path, char *dir, char *base)
 {
@@ -564,9 +570,10 @@ int krffs_open(const char *path)
 /**
  * Read up to `size` bytes at `offset` from an already-resolved node.
  *
- * The fd layer holds the node pointer, so it need not re-resolve a path, which
- * would fail for a file in a subdirectory whose node->name is only its basename.
- * Returns the number of bytes read (0 past end of file), or -1 on error.
+ * The fd layer holds the node pointer, so it need not re-resolve a path,
+ * which would fail for a file in a subdirectory whose node->name is only its
+ * basename. Returns the number of bytes read (0 past end of file), or -1 on
+ * error.
  */
 int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
                     uint32_t offset)
@@ -728,7 +735,8 @@ krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size, uint
  * Copy `name` into a reserved node and set its id to DJB(name).
  *
  * Used for regular files, whose id is never referenced by a child. Directory
- * ids must instead come from krffs_mix_id so that parent_id lookups stay unique.
+ * ids must instead come from krffs_mix_id so that parent_id lookups stay
+ * unique.
  */
 void krffs_set_reserved_node_name(krffs_node_t *node, const char *name)
 {
@@ -910,10 +918,10 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
 /**
  * Free a reserved node and coalesce it with adjacent free neighbors.
  *
- * Marks the node free, then merges forward with a free successor and backward
- * with a free predecessor, so the free list never holds two adjacent free nodes.
- * When the merged extent changes size, the following node's back link is
- * repaired to point at the new size.
+ * Marks the node free, then merges forward with a free successor and
+ * backward with a free predecessor, so the free list never holds two
+ * adjacent free nodes. When the merged extent changes size, the following
+ * node's back link is repaired to point at the new size.
  */
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
@@ -1226,9 +1234,9 @@ int krffs_unlink(const char *path)
  * its data and its parent id, so it is still a live file for whoever holds a
  * descriptor on it, and still an ordinary reserved node to the allocator.
  *
- * The scans that enumerate by `parent_id` rather than by name skip an empty name
- * for the same reason, since being unmatchable covers the resolver and nothing
- * else. The caller frees the node when the last descriptor closes.
+ * The scans that enumerate by `parent_id` rather than by name skip an empty
+ * name for the same reason, since being unmatchable covers the resolver and
+ * nothing else. The caller frees the node when the last descriptor closes.
  */
 void krffs_orphan_node(krffs_node_t *node)
 {
@@ -1255,15 +1263,17 @@ void krffs_unlink_held(krffs_node_t *node)
 /**
  * Free every orphan left on the medium by a crash. Returns how many it reaped.
  *
- * An orphan is a reserved node no path names, kept alive only by the descriptors
- * holding it, and freed by the last close. A crash between the two leaves one on
- * a persistent image with nobody left to free it: the descriptors died with the
- * machine. At mount there are no descriptors at all, so a nameless reserved node
- * is unambiguously garbage and reaping it needs no bookkeeping to consult.
+ * An orphan is a reserved node no path names, kept alive only by the
+ * descriptors holding it, and freed by the last close. A crash between the two
+ * leaves one on a persistent image with nobody left to free it: the descriptors
+ * died with the machine. At mount there are no descriptors at all, so a
+ * nameless reserved node is unambiguously garbage and reaping it needs no
+ * bookkeeping to consult.
  *
- * Without this the space is lost for good, since nothing else in the tree looks
- * for a node with no name, and a machine that crashed often enough during a
- * credential rewrite would fill its disk with files no path could reach.
+ * Without this the space is lost for good, since nothing else in the tree
+ * looks for a node with no name, and a machine that crashed often enough
+ * during a credential rewrite would fill its disk with files no path could
+ * reach.
  */
 uint32_t krffs_reap_orphans(void)
 {
@@ -1513,25 +1523,27 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out,
  * Mount a KRFFS image of `ramdisk_size` bytes whose first byte is at
  * `ramdisk_base`.
  *
- * The base is wherever the image is addressable: the RAM-disk module in place, or
- * PCWIN_BASE when the page cache demand-maps the module stub (rach2.fswindow) or a
- * real ATA partition (rach2.fsdisk). The parameter names are historical; the
- * file-system code just pointer-walks the base it is handed. The first node is the
- * root: it must carry KRFFS_FILE_SYSTEM_MAGIC and be of type KRFFS_ROOT_NODE. On
- * success the global krffs_fs points at the mounted file system. Returns 0 on
- * success, -1 if the image is too small or malformed.
+ * The base is wherever the image is addressable: the RAM-disk module in
+ * place, or PCWIN_BASE when the page cache demand-maps the module stub
+ * (rach2.fswindow) or a real ATA partition (rach2.fsdisk). The parameter
+ * names are historical; the file-system code just pointer-walks the base it
+ * is handed. The first node is the root: it must carry
+ * KRFFS_FILE_SYSTEM_MAGIC and be of type KRFFS_ROOT_NODE. On success the
+ * global krffs_fs points at the mounted file system. Returns 0 on success,
+ * -1 if the image is too small or malformed.
  */
 /**
  * Walk the whole circular node chain once, bounding every step.
  *
- * The walkers trust each node's `size` to advance, so a malformed or partially
- * written image (a node whose size overshoots the region, is below a header, or
- * a chain that never closes) would drive them out of bounds or into an infinite
- * loop. Validate the structure before publishing it: each node sits within the
- * region with a header that fits, carries the magic and a known type, has a size
- * of at least one header that does not run past the end, and a backward link
- * consistent with the previous node; the sizes must tile the region exactly and
- * the chain must close back on the root. Returns 1 if sound, 0 if not.
+ * The walkers trust each node's `size` to advance, so a malformed or
+ * partially written image (a node whose size overshoots the region, is below
+ * a header, or a chain that never closes) would drive them out of bounds or
+ * into an infinite loop. Validate the structure before publishing it: each
+ * node sits within the region with a header that fits, carries the magic and
+ * a known type, has a size of at least one header that does not run past the
+ * end, and a backward link consistent with the previous node; the sizes must
+ * tile the region exactly and the chain must close back on the root. Returns
+ * 1 if sound, 0 if not.
  */
 static int krffs_chain_is_valid(krffs_node_t *root, uint32_t size)
 {

@@ -14,12 +14,12 @@ typedef char tls_gdt_selector_matches_asm[(GDT_TLS_SELECTOR == 0x33) ? 1 : -1];
  * Validate a Linux i386 struct user_desc and return its base address.
  *
  * Checks the descriptor against the one TLS slot we model: a present, 32-bit,
- * writable data segment in GDT entry GDT_TLS_ENTRY. Anything we cannot represent
- * is rejected rather than silently misprogrammed.
+ * writable data segment in GDT entry GDT_TLS_ENTRY. Anything we cannot
+ * represent is rejected rather than silently misprogrammed.
  *
- * musl's __set_thread_area passes entry_number = -1 (allocate) with
- * flags = 0x51 (seg_32bit | limit_in_pages | useable); an explicit
- * GDT_TLS_ENTRY is also accepted so a caller can reprogram the same slot.
+ * musl's __set_thread_area passes entry_number = -1 (allocate) with flags =
+ * 0x51 (seg_32bit | limit_in_pages | useable); an explicit GDT_TLS_ENTRY is
+ * also accepted so a caller can reprogram the same slot.
  *
  * @return 0 with `*base_out` set, or -1 if the descriptor is unrepresentable.
  */

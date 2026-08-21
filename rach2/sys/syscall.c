@@ -70,8 +70,8 @@ static volatile uint32_t fb_owner_pid = 0;
 /**
  * Restore text mode if `pid` owns the framebuffer.
  *
- * Called when a process is killed (Ctrl-C) so the dead owner does not strand the
- * screen in graphics mode.
+ * Called when a process is killed (Ctrl-C) so the dead owner does not strand
+ * the screen in graphics mode.
  */
 void fb_release_if_owner(uint32_t pid)
 {
@@ -107,12 +107,12 @@ static struct synth_dir *synth_dir_alloc(int kind, int pid)
  *
  * A scan of every process's descriptor table, and deliberately not a counter on
  * the node. A counter would have to be incremented in `fork`'s table copy, in
- * `dup`, in `dup2`, and in every future path that copies an `fd_entry_t`, and one
- * missed increment is a use-after-free that no test would show. The tables are
- * the count, so there is nothing to keep in step.
+ * `dup`, in `dup2`, and in every future path that copies an `fd_entry_t`, and
+ * one missed increment is a use-after-free that no test would show. The tables
+ * are the count, so there is nothing to keep in step.
  *
- * MAX_PROCS and MAX_FDS are both 16, so this is at most 256 pointer compares of
- * kernel memory; it never touches the page-cache window.
+ * MAX_PROCS and MAX_FDS are both 16, so this is at most 256 pointer compares
+ * of kernel memory; it never touches the page-cache window.
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
@@ -152,12 +152,14 @@ int fs_node_is_held(const krffs_node_t *node)
 
 
 /**
- * Repoint every descriptor on `from` at `to`, after a resize relocated the file.
+ * Repoint every descriptor on `from` at `to`, after a resize relocated the
+ * file.
  *
- * The writer's own descriptor is updated by the write path; every other holder
- * would otherwise be left pointing at a node the allocator has already freed.
- * Without this the contract would read "a descriptor names one file, unless
- * another descriptor grows it", which is the same defect in a second place.
+ * The writer's own descriptor is updated by the write path; every other
+ * holder would otherwise be left pointing at a node the allocator has
+ * already freed. Without this the contract would read "a descriptor names
+ * one file, unless another descriptor grows it", which is the same defect in
+ * a second place.
  */
 static void fd_node_moved(const krffs_node_t *from, krffs_node_t *to)
 {
@@ -199,12 +201,12 @@ void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
  * process-exit fd-table release) so none can forget a backing kind as new ones
  * are added. It does NOT free the slot; the caller does that with fd_free.
  *
- * An ops-backed object rides the shared open-file description: dup/dup2/fork copy
- * the ops/priv pointers and bump the OFD refcount, so the object must be released
- * exactly once, when its LAST descriptor closes (the final OFD reference, refcount
- * about to reach 0). The socket reference, by contrast, is counted per descriptor
- * (socket_ref on dup/fork), so it is always dropped here. No descriptor is both an
- * ops object and a socket.
+ * An ops-backed object rides the shared open-file description: dup/dup2/fork
+ * copy the ops/priv pointers and bump the OFD refcount, so the object must
+ * be released exactly once, when its LAST descriptor closes (the final OFD
+ * reference, refcount about to reach 0). The socket reference, by contrast,
+ * is counted per descriptor (socket_ref on dup/fork), so it is always
+ * dropped here. No descriptor is both an ops object and a socket.
  */
 static void fd_release_backing(fd_entry_t *e)
 {
@@ -302,10 +304,11 @@ struct audio_write_params {
 #define KERNEL_STACK_SIZE 0x4000
 
 /*
- * Per-process kernel stacks come from a fixed arena of MAX_PROCS slots, not from
- * the never-freed bump allocator, so a fork/exit/reap cycle returns the stack to
- * the pool instead of leaking four frames each time. The arena is reserved once
- * at init; a slot is claimed on fork and released when the zombie is reaped.
+ * Per-process kernel stacks come from a fixed arena of MAX_PROCS slots, not
+ * from the never-freed bump allocator, so a fork/exit/reap cycle returns the
+ * stack to the pool instead of leaking four frames each time. The arena is
+ * reserved once at init; a slot is claimed on fork and released when the
+ * zombie is reaped.
  */
 static uintptr_t kstack_arena;
 static uint8_t kstack_in_use[MAX_PROCS];
@@ -345,9 +348,10 @@ static uintptr_t kstack_alloc(void)
 /**
  * Release the kernel stack whose top is `top`.
  *
- * A top outside the arena (the boot stack of the init-role process) is ignored,
- * so this is safe to call on any reaped process. Only a zombie may be freed: the
- * dying process is still executing on its own stack until the parent reaps it.
+ * A top outside the arena (the boot stack of the init-role process) is
+ * ignored, so this is safe to call on any reaped process. Only a zombie may
+ * be freed: the dying process is still executing on its own stack until the
+ * parent reaps it.
  */
 static void kstack_free(uintptr_t top)
 {
@@ -408,11 +412,11 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 /**
  * Release every descriptor a dying process still holds.
  *
- * Drops each socket reference and each shared open-file description (the seek
- * offset), and clears the slot. Called from both exit paths (sys_exit here and
- * terminate_current_process via an extern), so sockets, port bindings, TCBs, and
- * OFDs are freed however a process dies. Idempotent: a second call sees an empty
- * table (fd_free skips free slots).
+ * Drops each socket reference and each shared open-file description (the
+ * seek offset), and clears the slot. Called from both exit paths (sys_exit
+ * here and terminate_current_process via an extern), so sockets, port
+ * bindings, TCBs, and OFDs are freed however a process dies. Idempotent: a
+ * second call sees an empty table (fd_free skips free slots).
  */
 void release_fd_table(fd_table_t *table)
 {
@@ -890,13 +894,13 @@ static int join_abs(char *pathbuf, uint32_t size, const char *base,
 /**
  * Collapse '.', '..', and doubled slashes in the absolute path `path` in place.
  *
- * Resolution and the synthetic-mount classifier must see the same spelling of a
- * path, or a '..' that lexically lands on /dev or /proc could classify as a real
- * KRFFS path and shadow the synthetic mount (or a '..' transiting a synthetic
- * prefix would wrongly miss). Normalizing once, before classification, removes
- * that ambiguity. `path` must start with '/'. A '..' at the root stays at the
- * root. The output never grows, so the rewrite is safe in place. Returns the new
- * length.
+ * Resolution and the synthetic-mount classifier must see the same spelling
+ * of a path, or a '..' that lexically lands on /dev or /proc could classify
+ * as a real KRFFS path and shadow the synthetic mount (or a '..' transiting
+ * a synthetic prefix would wrongly miss). Normalizing once, before
+ * classification, removes that ambiguity. `path` must start with '/'. A '..'
+ * at the root stays at the root. The output never grows, so the rewrite is
+ * safe in place. Returns the new length.
  */
 static int canonicalize_abs(char *path)
 {
@@ -948,10 +952,10 @@ static int canonicalize_abs(char *path)
  * An absolute user path is taken verbatim; a relative one is joined onto the
  * process's current working directory so the root-relative resolver (which
  * already honors '.'/'..') walks the right tree. Same return contract as
- * strncpy_from_user: the resulting length on success, or a negative errno (a join
- * that overruns the buffer is -ENAMETOOLONG). The "fb"/"mouse" device names
- * resolve correctly only from cwd "/", which holds because programs open them at
- * startup.
+ * strncpy_from_user: the resulting length on success, or a negative errno (a
+ * join that overruns the buffer is -ENAMETOOLONG). The "fb"/"mouse" device
+ * names resolve correctly only from cwd "/", which holds because programs
+ * open them at startup.
  */
 static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
 {
@@ -1024,9 +1028,10 @@ static int fd_node_check(fd_entry_t *entry)
 /**
  * Copy a user path for the *at family into pathbuf as an ABSOLUTE path.
  *
- * Absolute paths are taken verbatim; a relative path resolves against AT_FDCWD
- * (the cwd) or, for a real dirfd, against that descriptor, which must be an open
- * directory (else -EBADF/-ENOTDIR). Same return contract as copy_path_cwd.
+ * Absolute paths are taken verbatim; a relative path resolves against
+ * AT_FDCWD (the cwd) or, for a real dirfd, against that descriptor, which
+ * must be an open directory (else -EBADF/-ENOTDIR). Same return contract as
+ * copy_path_cwd.
  */
 static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
                         const char __user *upath)
@@ -1118,16 +1123,16 @@ static int cred_privileged(void)
  *
  * Setuid always goes: a file whose contents or owner just changed no longer
  * grants what its owner meant it to grant. Setgid goes only when the
- * group-execute bit is set with it, matching the grant rule in `execve`: without
- * that bit the file cannot hand out a gid, and the pair means the mandatory-lock
- * mark elsewhere in Unix.
+ * group-execute bit is set with it, matching the grant rule in `execve`:
+ * without that bit the file cannot hand out a gid, and the pair means the
+ * mandatory-lock mark elsewhere in Unix.
  *
  * The root node returns untouched, and by node identity rather than by
- * `KRFFS_IS_DIR`: `mkfs` stamps the root a bare 0755 with no type bits, so the
- * directory test reads false on it, and `KRFFS_MODE_DIRTY` shares the setuid
- * position. A clear that reached the root would report an unclean image as
- * cleanly unmounted, which is file-system corruption rather than a permission
- * bug, and `chown(path, -1, -1)` is permitted to every caller.
+ * `KRFFS_IS_DIR`: `mkfs` stamps the root a bare 0755 with no type bits, so
+ * the directory test reads false on it, and `KRFFS_MODE_DIRTY` shares the
+ * setuid position. A clear that reached the root would report an unclean
+ * image as cleanly unmounted, which is file-system corruption rather than a
+ * permission bug, and `chown(path, -1, -1)` is permitted to every caller.
  */
 static void cred_kill_setid(krffs_node_t *node)
 {
@@ -1230,9 +1235,10 @@ static int cred_may_search(krffs_node_t *dir)
 /**
  * As cred_may_search, but by real ids, for access(2).
  *
- * access(2) answers for the real user, so the prefix it walks must be charged
- * the same way as the target it reports on; charging the prefix by the effective
- * ids would let a set-id program report reachability its caller does not have.
+ * access(2) answers for the real user, so the prefix it walks must be
+ * charged the same way as the target it reports on; charging the prefix by
+ * the effective ids would let a set-id program report reachability its
+ * caller does not have.
  */
 static int cred_may_search_real(krffs_node_t *dir)
 {
@@ -1407,8 +1413,8 @@ static int32_t synth_open(const struct vpath *vp, int flags)
  * True if `name` (absolute, leading '/' stripped) names a synthetic mount.
  *
  * A mutation (mkdir/rmdir/unlink/rename/...) targeting /dev or /proc must be
- * refused here, not passed to KRFFS: otherwise mkdir("/dev") would create a real
- * KRFFS directory that shadows the synthetic one.
+ * refused here, not passed to KRFFS: otherwise mkdir("/dev") would create a
+ * real KRFFS directory that shadows the synthetic one.
  */
 static int synth_is_synth(const char *name)
 {
@@ -1726,10 +1732,11 @@ static int32_t sys_open(isr_params_t *params)
 }
 
 /*
- * openat (syscall 295): EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl issues
- * openat (not the legacy open) for every <stdio.h> file open. An absolute path is
- * taken as-is, a relative path resolves against the cwd (AT_FDCWD) or against the
- * directory the dirfd refers to (see copy_path_at).
+ * openat (syscall 295): EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl
+ * issues openat (not the legacy open) for every <stdio.h> file open. An
+ * absolute path is taken as-is, a relative path resolves against the cwd
+ * (AT_FDCWD) or against the directory the dirfd refers to (see
+ * copy_path_at).
  */
 static int32_t sys_openat(isr_params_t *params)
 {
@@ -1782,13 +1789,14 @@ static int32_t sys_close(isr_params_t *params)
 /**
  * Flush a file's data to stable storage (fsync(2); also serves fdatasync).
  *
- * EBX = fd. Validates the descriptor (any open fd; the type is not checked), then
- * writes back every dirty page of the disk-backed window via `pc_sync`. The flush
- * is whole-cache rather than per-file, a safe superset of the contract. When KRFFS
- * is the RAM module the cache is empty, so the flush is a no-op and the call only
- * validates the fd. Returns 0, -EBADF for a bad descriptor, or -EIO when a disk
- * writeback fails. dropbear writes its host key with the open/write/fsync/rename
- * idiom and treats an fsync error as fatal, so the -EIO is real backpressure.
+ * EBX = fd. Validates the descriptor (any open fd; the type is not checked),
+ * then writes back every dirty page of the disk-backed window via `pc_sync`.
+ * The flush is whole-cache rather than per-file, a safe superset of the
+ * contract. When KRFFS is the RAM module the cache is empty, so the flush is
+ * a no-op and the call only validates the fd. Returns 0, -EBADF for a bad
+ * descriptor, or -EIO when a disk writeback fails. dropbear writes its host
+ * key with the open/write/fsync/rename idiom and treats an fsync error as
+ * fatal, so the -EIO is real backpressure.
  */
 static int32_t sys_fsync(isr_params_t *params)
 {
@@ -2072,10 +2080,10 @@ static int32_t sys_lseek(isr_params_t *params)
 /**
  * Read up to `count` bytes from descriptor `fd` (read(2)).
  *
- * EBX = fd, ECX = buf, EDX = count. Returns the bytes read, 0 at end, or -errno.
- * Dispatches by backing kind. A console read (stdin) blocks in the tty line
- * discipline until a cooked line or VMIN raw bytes arrive; in graphics mode it is
- * a non-blocking raw scancode read instead.
+ * EBX = fd, ECX = buf, EDX = count. Returns the bytes read, 0 at end, or
+ * -errno. Dispatches by backing kind. A console read (stdin) blocks in the
+ * tty line discipline until a cooked line or VMIN raw bytes arrive; in
+ * graphics mode it is a non-blocking raw scancode read instead.
  */
 static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 {
@@ -2167,15 +2175,16 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         }
 
         /*
-         * Park on console_tty until a line (cooked) or VMIN bytes (raw) arrive.
-         * Parking marks input_wq active, and once a session owns the console its
-         * sid is nonzero; either condition tells the keyboard IRQ to cook
-         * keystrokes into console_tty rather than the kernel shell, so the byte
-         * wakes us (or waits as type-ahead). stdin_waiting_proc, set across the
-         * read below, only suppresses the scrollback hotkeys while we are parked;
-         * tty_read drains the serial port itself. The discipline echoes, edits,
-         * and recognizes ISIG, so Ctrl-C on the console now arrives as a posted
-         * SIGINT, and a pending signal unwinds the wait with -EINTR.
+         * Park on console_tty until a line (cooked) or VMIN bytes (raw)
+         * arrive. Parking marks input_wq active, and once a session owns the
+         * console its sid is nonzero; either condition tells the keyboard
+         * IRQ to cook keystrokes into console_tty rather than the kernel
+         * shell, so the byte wakes us (or waits as type-ahead).
+         * stdin_waiting_proc, set across the read below, only suppresses the
+         * scrollback hotkeys while we are parked; tty_read drains the serial
+         * port itself. The discipline echoes, edits, and recognizes ISIG, so
+         * Ctrl-C on the console now arrives as a posted SIGINT, and a
+         * pending signal unwinds the wait with -EINTR.
          */
         /* A SESSION LEADER reading the console with no controlling terminal
          * claims it as its SOLE ctty (its group becomes the foreground, and any
@@ -2571,8 +2580,8 @@ static int32_t sys_readv(isr_params_t *params)
  * Duplicate a descriptor onto the lowest free fd (dup(2)).
  *
  * EBX = oldfd. Returns the new fd, or -errno. The duplicate SHARES oldfd's
- * open-file description (shared seek offset); a socket gains a reference; the new
- * fd's FD_CLOEXEC is clear.
+ * open-file description (shared seek offset); a socket gains a reference;
+ * the new fd's FD_CLOEXEC is clear.
  */
 static int32_t sys_dup(isr_params_t *params)
 {
@@ -2668,8 +2677,8 @@ static int32_t sys_dup2(isr_params_t *params)
  * Change the current working directory (chdir(2)).
  *
  * EBX = path. Returns 0 or -errno. Stores the canonical absolute path of the
- * resolved directory (a KRFFS directory or a synthetic /dev or /proc directory);
- * a regular file is -ENOTDIR, a missing path -ENOENT.
+ * resolved directory (a KRFFS directory or a synthetic /dev or /proc
+ * directory); a regular file is -ENOTDIR, a missing path -ENOENT.
  */
 static int32_t sys_chdir(isr_params_t *params)
 {
@@ -2899,8 +2908,8 @@ static void stat64_root_times(struct linux_stat64 *kst)
 /**
  * Fill a stat64 buffer from a resolved KRFFS node.
  *
- * Shared by stat64/fstat64/fstatat64. Reports S_IFDIR for directories and S_IFREG
- * for regular files; the node id is the inode number.
+ * Shared by stat64/fstat64/fstatat64. Reports S_IFDIR for directories and
+ * S_IFREG for regular files; the node id is the inode number.
  */
 static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
 {
@@ -2929,11 +2938,12 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
 static void fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
 
 /*
- * Fill a stat64 for a synthetic (/dev or /proc) path. Devices report a character
- * device with their major/minor; /dev itself is a directory; the /proc magic
- * symlinks (/proc/self, /proc/<pid>/fd/<n>) report S_IFLNK when NOT followed and
- * their target when followed (`follow`). st_dev is the synthetic fs id, distinct
- * from KRFFS's 0, so a device's (st_dev, st_ino) identity never aliases a file's.
+ * Fill a stat64 for a synthetic (/dev or /proc) path. Devices report a
+ * character device with their major/minor; /dev itself is a directory; the
+ * /proc magic symlinks (/proc/self, /proc/<pid>/fd/<n>) report S_IFLNK when
+ * NOT followed and their target when followed (`follow`). st_dev is the
+ * synthetic fs id, distinct from KRFFS's 0, so a device's (st_dev, st_ino)
+ * identity never aliases a file's.
  */
 /* Stable /dev/pts inodes (distinct from devfs's): the directory, then one per
  * slave (so a slave's (st_dev, st_ino) identity is consistent for ttyname). */
@@ -3080,10 +3090,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
 /**
  * readlink core (readlink(2)/readlinkat(2)).
  *
- * The only symlinks Rach2 has are /proc/self and the /proc/<pid>/fd/<n> magic
- * links (which ttyname reads). The result is the byte count and is NOT
+ * The only symlinks Rach2 has are /proc/self and the /proc/<pid>/fd/<n>
+ * magic links (which ttyname reads). The result is the byte count and is NOT
  * NUL-terminated (the readlink contract; musl appends its own terminator and
- * treats a full buffer as truncation). `name` is the path, leading '/' stripped.
+ * treats a full buffer as truncation). `name` is the path, leading '/'
+ * stripped.
  */
 static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
 {
@@ -3281,8 +3292,8 @@ static int32_t sys_lstat64(isr_params_t *params)
 /**
  * Fill a stat64 from an open descriptor by type.
  *
- * Shared by sys_fstat64 and the followed /proc/<pid>/fd/<n> path (whose target is
- * just this fd).
+ * Shared by sys_fstat64 and the followed /proc/<pid>/fd/<n> path (whose
+ * target is just this fd).
  */
 static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 {
@@ -3385,8 +3396,9 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 }
 
 /*
- * fstat64 (syscall 197): EBX = fd, ECX = stat64 buffer. The descriptor's node is
- * stat'd; a root directory fd (node == NULL) reports the root directory.
+ * fstat64 (syscall 197): EBX = fd, ECX = stat64 buffer. The descriptor's
+ * node is stat'd; a root directory fd (node == NULL) reports the root
+ * directory.
  */
 static int32_t sys_fstat64(isr_params_t *params)
 {
@@ -3410,10 +3422,10 @@ static int32_t sys_fstat64(isr_params_t *params)
 }
 
 /*
- * fstatat64 (syscall 300): EBX = dirfd, ECX = path, EDX = stat64 buffer,
- * ESI = flags. The path resolves the same way as openat (absolute, or relative to
- * AT_FDCWD/the dirfd; see copy_path_at). AT_SYMLINK_NOFOLLOW is honored for the
- * /proc magic symlinks; KRFFS has none.
+ * fstatat64 (syscall 300): EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI
+ * = flags. The path resolves the same way as openat (absolute, or relative
+ * to AT_FDCWD/the dirfd; see copy_path_at). AT_SYMLINK_NOFOLLOW is honored
+ * for the /proc magic symlinks; KRFFS has none.
  */
 static int32_t sys_fstatat64(isr_params_t *params)
 {
@@ -3958,13 +3970,14 @@ static int32_t sys_fchown(isr_params_t *params)
 /**
  * link(2): always -EPERM (KRFFS has no hard links).
  *
- * KRFFS stores exactly one name per node (no link count, no shared data), so the
- * call returns -EPERM, the POSIX errno for "the filesystem does not support the
- * creation of hard links". The source is copied and resolved first, so a bad
- * pointer (-EFAULT), bad dirfd (-EBADF), or missing source (-ENOENT) is reported
- * as itself rather than masked by EPERM. dropbear depends on the EPERM: it moves a
- * freshly generated host key with link(tmp, final) and, on EPERM/EACCES, falls
- * back to writing the key directly to the final path.
+ * KRFFS stores exactly one name per node (no link count, no shared data), so
+ * the call returns -EPERM, the POSIX errno for "the filesystem does not
+ * support the creation of hard links". The source is copied and resolved
+ * first, so a bad pointer (-EFAULT), bad dirfd (-EBADF), or missing source
+ * (-ENOENT) is reported as itself rather than masked by EPERM. dropbear
+ * depends on the EPERM: it moves a freshly generated host key with link(tmp,
+ * final) and, on EPERM/EACCES, falls back to writing the key directly to the
+ * final path.
  */
 static int32_t sys_link(isr_params_t *params)
 {
@@ -4186,8 +4199,9 @@ static int32_t sys__llseek(isr_params_t *params)
  * Descriptor control (fcntl64, syscall 221).
  *
  * EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
- * round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the close-on-exec
- * bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND, stored, not enforced).
+ * round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
+ * close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND,
+ * stored, not enforced).
  */
 static int32_t sys_fcntl64(isr_params_t *params)
 {
@@ -4326,9 +4340,9 @@ static int32_t sys_fcntl64(isr_params_t *params)
  * stat core for the old 32-bit stat struct (stat(106)/lstat(107)).
  *
  * Used by ISH and some programs; fills struct linux_stat, not linux_stat64.
- * `follow` distinguishes stat (follow symlinks) from lstat (do not), which matters
- * only for the /proc magic symlinks, since KRFFS has none. EBX = path, ECX = stat
- * buffer.
+ * `follow` distinguishes stat (follow symlinks) from lstat (do not), which
+ * matters only for the /proc magic symlinks, since KRFFS has none. EBX =
+ * path, ECX = stat buffer.
  */
 /**
  * Copy the three times out of a stat64 into the narrower old stat.
@@ -4480,11 +4494,11 @@ static int32_t sys_lstat(isr_params_t *params)
 /**
  * Duplicate the parent's user address space into the child, copy-on-write.
  *
- * Iterates the parent's page directory and, for each present user page, maps the
- * SAME physical frame into the child (bumping the frame refcount) rather than
- * copying it; writable pages are write-protected and PTE_COW-marked in both
- * directories so the first write faults into cow_fault for a private copy. Returns
- * 0 on success, -1 on failure.
+ * Iterates the parent's page directory and, for each present user page, maps
+ * the SAME physical frame into the child (bumping the frame refcount) rather
+ * than copying it; writable pages are write-protected and PTE_COW-marked in
+ * both directories so the first write faults into cow_fault for a private
+ * copy. Returns 0 on success, -1 on failure.
  */
 static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
 {
@@ -4527,15 +4541,16 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             }
 
             /*
-             * Copy-on-write: share the frame instead of copying it. The child
-             * maps the same physical frame, and the frame's reference count is
-             * bumped so it survives until both sides drop it. A WRITABLE parent
-             * page is write-protected and marked PTE_COW in BOTH directories, so
-             * the first write on either side faults into cow_fault (which makes a
-             * private copy and re-grants write). A READ-ONLY page (ELF text,
-             * PROT_READ, or an already-COW page from an earlier fork) is shared
-             * with its exact flags, no copy; a write to genuine read-only text
-             * still segfaults because it carries no PTE_COW.
+             * Copy-on-write: share the frame instead of copying it. The
+             * child maps the same physical frame, and the frame's reference
+             * count is bumped so it survives until both sides drop it. A
+             * WRITABLE parent page is write-protected and marked PTE_COW in
+             * BOTH directories, so the first write on either side faults
+             * into cow_fault (which makes a private copy and re-grants
+             * write). A READ-ONLY page (ELF text, PROT_READ, or an
+             * already-COW page from an earlier fork) is shared with its
+             * exact flags, no copy; a write to genuine read-only text still
+             * segfaults because it carries no PTE_COW.
              */
             if (pte & 0x2) {
                 uint32_t cow = 0x1u | 0x4u | PTE_COW; /* present + user + COW (RO) */
@@ -4595,17 +4610,18 @@ static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
  *
  * The sizes come from the page these end up in rather than from a round number.
  * `build_user_stack` lays the strings, both pointer arrays, the argc word, a
- * nine-entry auxv and 16 bytes of AT_RANDOM into ONE 4096-byte page, and it runs
- * AFTER the old image is freed, so a vector that fits here and not there kills
- * the caller instead of failing it. For 63 entries in each vector the fixed part
- * is 147 words of info block, 16 bytes of AT_RANDOM and up to 15 bytes of
- * alignment, about 640 bytes; the remaining space is shared by the strings of
- * BOTH vectors, which is why the budget below is one number for the two of them
- * and not one each. 3072 leaves room for an auxv entry somebody adds later.
+ * nine-entry auxv and 16 bytes of AT_RANDOM into ONE 4096-byte page, and it
+ * runs AFTER the old image is freed, so a vector that fits here and not there
+ * kills the caller instead of failing it. For 63 entries in each vector the
+ * fixed part is 147 words of info block, 16 bytes of AT_RANDOM and up to 15
+ * bytes of alignment, about 640 bytes; the remaining space is shared by the
+ * strings of BOTH vectors, which is why the budget below is one number for the
+ * two of them and not one each. 3072 leaves room for an auxv entry somebody
+ * adds later.
  *
- * The old limits were 15 entries and 512 bytes each, which a link line passes
- * without trying: a compiler, `-static`, `-o`, an output name and a dozen
- * objects is over both.
+ * The old limits were 15 entries and 512 bytes each, which a link line
+ * passes without trying: a compiler, `-static`, `-o`, an output name and a
+ * dozen objects is over both.
  */
 #define EXEC_MAX_ENTRIES 63
 #define EXEC_MAX_STRINGS 3072
@@ -4853,12 +4869,13 @@ static int32_t exec_shebang(int *argc)
 /**
  * Replace the current process image with a new program (execve(2)).
  *
- * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies the
- * path, argv, and envp into static buffers, validates the ELF header BEFORE
- * tearing the old image down (so a bad executable leaves the caller intact), then
- * frees the old user pages, streams the new program in, builds the SysV/i386
- * initial stack, and redirects the iret frame to the entry point. A failure after
- * the old image is gone routes to exec_fail_destroyed.
+ * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
+ * the path, argv, and envp into static buffers, validates the ELF header
+ * BEFORE tearing the old image down (so a bad executable leaves the caller
+ * intact), then frees the old user pages, streams the new program in, builds
+ * the SysV/i386 initial stack, and redirects the iret frame to the entry
+ * point. A failure after the old image is gone routes to
+ * exec_fail_destroyed.
  */
 static int32_t sys_execve(isr_params_t *params)
 {
@@ -5210,7 +5227,8 @@ static int32_t sys_execve(isr_params_t *params)
     k_memset((void *)stack_phys, 0, PAGE_SIZE);
 
     /*
-     * Initial user stack layout (growing down from USER_STACK_BASE + PAGE_SIZE):
+     * Initial user stack layout (growing down from USER_STACK_BASE +
+     * PAGE_SIZE):
      *
      *   [arg strings]   - null-terminated strings
      *   [NULL]          - envp terminator
@@ -5295,9 +5313,9 @@ static int32_t sys_execve(isr_params_t *params)
 /**
  * Create a child process (fork(2)).
  *
- * Clones the current process: PCB, page directory (copy-on-write user pages), and
- * fd table. The child is set up to return from fork with value 0; the parent gets
- * the child's PID. Returns -errno on failure.
+ * Clones the current process: PCB, page directory (copy-on-write user
+ * pages), and fd table. The child is set up to return from fork with value
+ * 0; the parent gets the child's PID. Returns -errno on failure.
  */
 static int32_t sys_fork(isr_params_t *params)
 {
@@ -5491,9 +5509,9 @@ static int wait_pid_match(int pid, const process_t *p)
  * Shared core of waitpid(7) and wait4(114).
  *
  * `status` (may be NULL) receives the Linux-encoded wait status that
- * sys_exit/terminate already stored in exit_code; `rusage_ptr` (0 for waitpid,
- * may be 0 for wait4) is zero-filled on reap. With WNOHANG, returns 0 instead of
- * blocking when a child exists but has not exited.
+ * sys_exit/terminate already stored in exit_code; `rusage_ptr` (0 for
+ * waitpid, may be 0 for wait4) is zero-filled on reap. With WNOHANG, returns
+ * 0 instead of blocking when a child exists but has not exited.
  */
 static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
 {
@@ -5624,9 +5642,9 @@ static int32_t sys_waitpid(isr_params_t *params)
 }
 
 /*
- * sys_wait4 - like waitpid plus an optional rusage out-pointer (zero-filled).
- * Args: EBX = pid, ECX = status, EDX = options, ESI = rusage. musl's wait/waitpid
- * are implemented on top of this.
+ * sys_wait4 - like waitpid plus an optional rusage out-pointer
+ * (zero-filled). Args: EBX = pid, ECX = status, EDX = options, ESI = rusage.
+ * musl's wait/waitpid are implemented on top of this.
  */
 static int32_t sys_wait4(isr_params_t *params)
 {
@@ -5635,8 +5653,9 @@ static int32_t sys_wait4(isr_params_t *params)
 }
 
 /*
- * creat(2): EBX = path, ECX = mode. Returns an fd open for writing, or -errno. An
- * existing file is opened (and truncated by the caller's later writes).
+ * creat(2): EBX = path, ECX = mode. Returns an fd open for writing, or
+ * -errno. An existing file is opened (and truncated by the caller's later
+ * writes).
  */
 static int32_t sys_creat(isr_params_t *params)
 {
@@ -6140,9 +6159,9 @@ static void get_current_time(int64_t *seconds, int64_t *nanoseconds)
  * Update a file's access and modification timestamps (utimensat(2)).
  *
  * EBX = dirfd, ECX = path, EDX = times, ESI = flags. `times` is a 2-element
- * timespec array [atime, mtime]; a NULL `times` sets both to the current time. A
- * tv_nsec of UTIME_NOW means "now", UTIME_OMIT means "leave unchanged". Returns 0
- * or -errno.
+ * timespec array [atime, mtime]; a NULL `times` sets both to the current
+ * time. A tv_nsec of UTIME_NOW means "now", UTIME_OMIT means "leave
+ * unchanged". Returns 0 or -errno.
  */
 static int32_t sys_utimensat(isr_params_t *params)
 {
@@ -6300,9 +6319,9 @@ static void synth_u32_str(char *out, uint32_t v)
 }
 
 /*
- * The n-th entry of a synthetic directory (kind/pid from the dir fd's cookie):
- * fills name/ino/dtype and returns 1, or 0 past the end. "." and ".." are entries
- * 0 and 1 of every directory.
+ * The n-th entry of a synthetic directory (kind/pid from the dir fd's
+ * cookie): fills name/ino/dtype and returns 1, or 0 past the end. "." and
+ * ".." are entries 0 and 1 of every directory.
  */
 static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
@@ -6512,9 +6531,9 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
 /**
  * Read directory entries (getdents64(2)).
  *
- * EBX = fd, ECX = dirp buffer, EDX = count. Packs linux_dirent64 records into the
- * buffer, one per child, and advances the fd's offset cursor. Returns the bytes
- * written, 0 at end of directory, or -errno.
+ * EBX = fd, ECX = dirp buffer, EDX = count. Packs linux_dirent64 records
+ * into the buffer, one per child, and advances the fd's offset cursor.
+ * Returns the bytes written, 0 at end of directory, or -errno.
  */
 static int32_t sys_getdents64(isr_params_t *params)
 {
@@ -6566,13 +6585,13 @@ static int32_t sys_getdents64(isr_params_t *params)
 
     /*
      * The cursor is the byte offset of the last node returned, plus one, and
-     * NOT a count of the children seen so far. That distinction is the whole
-     * of a bug this had: `rm -rf` reads a batch of names, unlinks them, and
-     * reads again, and a cursor that counted children renumbered every
-     * surviving child when one was removed, so the second read skipped as many
-     * entries as the first read had deleted. The files left behind then made
-     * the directory refuse to be removed, with `rm` reporting only that it was
-     * not empty (tests/unlinkdirprobe.c).
+     * NOT a count of the children seen so far. That distinction is the whole of
+     * a bug this had: `rm -rf` reads a batch of names, unlinks them, and reads
+     * again, and a cursor that counted children renumbered every surviving
+     * child when one was removed, so the second read skipped as many entries as
+     * the first read had deleted. The files left behind then made the directory
+     * refuse to be removed, with `rm` reporting only that it was not empty
+     * (tests/unlinkdirprobe.c).
      *
      * What an offset guarantees, exactly. Deleting an entry does not move any
      * other node: `krffs_remove_reserved_node` only widens free extents, and
@@ -6581,15 +6600,15 @@ static int32_t sys_getdents64(isr_params_t *params)
      * the one `rm` performs, sees every surviving entry once.
      *
      * What it does not guarantee. Growing a file CAN move its node: when the
-     * following extent is not free and large enough, `krffs_resize_reserved_node`
-     * allocates elsewhere, copies, and frees the old node. A child that grows
-     * that way while another descriptor is mid-listing lands at a new offset,
-     * and is missed if that offset is below the cursor or repeated if above.
-     * The same is true of a file created during a listing in space a removed
-     * one freed. Both are concurrent modifications of a directory being read,
-     * which POSIX leaves unspecified, and neither is reachable from the loop
-     * this exists for; the previous count-based cursor failed the case that
-     * was reachable.
+     * following extent is not free and large enough,
+     * `krffs_resize_reserved_node` allocates elsewhere, copies, and frees
+     * the old node. A child that grows that way while another descriptor is
+     * mid-listing lands at a new offset, and is missed if that offset is
+     * below the cursor or repeated if above. The same is true of a file
+     * created during a listing in space a removed one freed. Both are
+     * concurrent modifications of a directory being read, which POSIX leaves
+     * unspecified, and neither is reachable from the loop this exists for;
+     * the previous count-based cursor failed the case that was reachable.
      */
     target_index = entry->ofd->offset;
 
@@ -6744,10 +6763,11 @@ static int32_t sys_clock_gettime(isr_params_t *params)
 /**
  * Block-and-schedule sleep (nanosleep, syscall 162, 32-bit timespec).
  *
- * EBX = const struct timespec* req, ECX = struct timespec* rem (optional). Rounds
- * up to whole 10 ms ticks, then parks the process BLOCKED on its wakeup_tick and
- * yields; the timer wakes it at the deadline while OTHER processes keep running.
- * rem is written as zero on normal completion, or the time left on -EINTR.
+ * EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
+ * Rounds up to whole 10 ms ticks, then parks the process BLOCKED on its
+ * wakeup_tick and yields; the timer wakes it at the deadline while OTHER
+ * processes keep running. rem is written as zero on normal completion, or
+ * the time left on -EINTR.
  */
 static int32_t sys_nanosleep(isr_params_t *params)
 {
@@ -6867,10 +6887,11 @@ static int32_t sys_getegid(isr_params_t *params)
 /**
  * Fill a buffer with random bytes (getrandom, syscall 355).
  *
- * EBX = buf, ECX = buflen, EDX = flags. Backed by the kernel CSPRNG (lib/krandom,
- * ChaCha20). Returns the byte count, like Linux; musl's getrandom/arc4random sit
- * on top of this. We never block (GRND_NONBLOCK is a no-op) and have a single
- * source (GRND_RANDOM is equivalent); unknown flag bits are rejected.
+ * EBX = buf, ECX = buflen, EDX = flags. Backed by the kernel CSPRNG
+ * (lib/krandom, ChaCha20). Returns the byte count, like Linux; musl's
+ * getrandom/arc4random sit on top of this. We never block (GRND_NONBLOCK is
+ * a no-op) and have a single source (GRND_RANDOM is equivalent); unknown
+ * flag bits are rejected.
  */
 static int32_t sys_getrandom(isr_params_t *params)
 {
@@ -6974,12 +6995,12 @@ static void sig_irq_restore(uint32_t flags)
 }
 
 /*
- * Post signal `signo` to `target`: set its pending bit. If the target is blocked
- * in the scheduler (sleeping/waiting), make it runnable so it reaches a
- * return-to-user delivery point. SIGKILL/SIGSTOP cannot be caught, so a pending
- * SIGKILL is honored even before delivery by leaving it pending for the default
- * path. (Interrupting a blocked syscall with -EINTR is deferred; targets here are
- * running or self.)
+ * Post signal `signo` to `target`: set its pending bit. If the target is
+ * blocked in the scheduler (sleeping/waiting), make it runnable so it
+ * reaches a return-to-user delivery point. SIGKILL/SIGSTOP cannot be caught,
+ * so a pending SIGKILL is honored even before delivery by leaving it pending
+ * for the default path. (Interrupting a blocked syscall with -EINTR is
+ * deferred; targets here are running or self.)
  */
 void signal_post(process_t *target, int signo)
 {
@@ -7234,8 +7255,9 @@ static void sig_wait(void)
 }
 
 /*
- * sys_pause - sleep until a signal is delivered (pause(2)). Returns -EINTR once a
- * deliverable signal is pending (the signal then acts on the return to user).
+ * sys_pause - sleep until a signal is delivered (pause(2)). Returns -EINTR
+ * once a deliverable signal is pending (the signal then acts on the return
+ * to user).
  */
 static int32_t sys_pause(isr_params_t *params)
 {
@@ -7284,7 +7306,8 @@ static int32_t sys_rt_sigsuspend(isr_params_t *params)
  * Install or query a signal disposition (rt_sigaction, syscall 174).
  *
  * EBX=signo, ECX=const struct k_sigaction* act, EDX=struct k_sigaction* old,
- * ESI=sigsetsize. Stores the action per-signal; SIGKILL/SIGSTOP cannot be changed.
+ * ESI=sigsetsize. Stores the action per-signal; SIGKILL/SIGSTOP cannot be
+ * changed.
  */
 static int32_t sys_rt_sigaction(isr_params_t *params)
 {
@@ -7378,10 +7401,10 @@ static int32_t sys_rt_sigprocmask(isr_params_t *params)
 
 /*
  * The frame pushed on the user stack to run a handler, then read back by
- * rt_sigreturn. It is self-consistent (the kernel owns both ends), so it does not
- * need to match musl's ucontext byte layout: a plain handler only reads `sig`,
- * and only rt_sigreturn reads `saved`. info/uc give SA_SIGINFO handlers valid
- * (zeroed) argument pointers.
+ * rt_sigreturn. It is self-consistent (the kernel owns both ends), so it
+ * does not need to match musl's ucontext byte layout: a plain handler only
+ * reads `sig`, and only rt_sigreturn reads `saved`. info/uc give SA_SIGINFO
+ * handlers valid (zeroed) argument pointers.
  */
 struct sig_frame {
     uint32_t pretcode;     /* return address: the restorer (musl __restore_rt) */
@@ -7451,15 +7474,17 @@ static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *s
 /**
  * The shared body of sigreturn.
  *
- * Reads the frame the restorer left on the user stack, validates it, and restores
- * the saved trapframe (segment selectors and EFLAGS forced to safe user values,
- * since the frame is on the untrusted user stack) plus the pre-handler signal
- * mask. Returns the restored EAX so the dispatcher does not clobber it.
+ * Reads the frame the restorer left on the user stack, validates it, and
+ * restores the saved trapframe (segment selectors and EFLAGS forced to safe
+ * user values, since the frame is on the untrusted user stack) plus the
+ * pre-handler signal mask. Returns the restored EAX so the dispatcher does not
+ * clobber it.
  *
- * `delta` is how far below the current user esp the frame begins, which differs by
- * trampoline: musl's __restore_rt enters with esp just past `pretcode` (delta 4),
- * while the legacy __restore pops the signal word first and so enters 4 bytes
- * higher (delta 8). Both read the same kernel-built frame.
+ * `delta` is how far below the current user esp the frame begins, which
+ * differs by trampoline: musl's __restore_rt enters with esp just past
+ * `pretcode` (delta 4), while the legacy __restore pops the signal word
+ * first and so enters 4 bytes higher (delta 8). Both read the same
+ * kernel-built frame.
  */
 static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
 {
@@ -7520,9 +7545,10 @@ static int32_t sys_rt_sigreturn(isr_params_t *tf)
 
 /*
  * sigreturn (syscall 119): return through musl's legacy __restore (plain
- * handlers, no SA_SIGINFO). It pops the signal word before the `int $0x80`, so the
- * frame sits 8 bytes below the user esp. Reads the same kernel-built frame as the
- * rt path; the popped word is the handler's `sig` argument and is discarded.
+ * handlers, no SA_SIGINFO). It pops the signal word before the `int $0x80`,
+ * so the frame sits 8 bytes below the user esp. Reads the same kernel-built
+ * frame as the rt path; the popped word is the handler's `sig` argument and
+ * is discarded.
  */
 static int32_t sys_sigreturn(isr_params_t *tf)
 {
@@ -7532,10 +7558,11 @@ static int32_t sys_sigreturn(isr_params_t *tf)
 /**
  * Act on a pending signal at the return-to-user boundary.
  *
- * Called from the ISR/IRQ return path just before iret, with the trapframe about
- * to be restored. If the current process is returning to USER mode and has a
- * deliverable (pending, not blocked) signal, act on the lowest-numbered one:
- * ignore it, terminate (default), stop, or build a handler frame.
+ * Called from the ISR/IRQ return path just before iret, with the trapframe
+ * about to be restored. If the current process is returning to USER mode and
+ * has a deliverable (pending, not blocked) signal, act on the
+ * lowest-numbered one: ignore it, terminate (default), stop, or build a
+ * handler frame.
  */
 void deliver_signals(isr_params_t *tf)
 {
@@ -7654,12 +7681,12 @@ static struct tty *fd_tty(fd_entry_t *e)
 /**
  * The shared terminal ioctls operating on a GIVEN tty.
  *
- * The real termios layer plus the session/job-control requests, so the console
- * and a pty slave share one implementation. Sets *handled = 1 and returns the
- * result for a recognized terminal request; sets *handled = 0 (return value
- * unused) otherwise, so the caller falls through to its own handling. TCGETS/TCSETS
- * exchange the 36-byte kernel termios (n_tty.h); TCSETSF and TCFLSH flush the
- * unread input.
+ * The real termios layer plus the session/job-control requests, so the
+ * console and a pty slave share one implementation. Sets *handled = 1 and
+ * returns the result for a recognized terminal request; sets *handled = 0
+ * (return value unused) otherwise, so the caller falls through to its own
+ * handling. TCGETS/TCSETS exchange the 36-byte kernel termios (n_tty.h);
+ * TCSETSF and TCFLSH flush the unread input.
  */
 static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, int *handled)
 {
@@ -7807,11 +7834,11 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
 /**
  * Device control (ioctl(2)).
  *
- * EBX = fd, ECX = request, EDX = arg. A tty fd (console or pty slave) routes to
- * the shared termios/session handler first; an ops-backed object handles its own
- * remaining requests; the framebuffer and console handle their device-specific
- * ones (FB_*, KIOCSOUND, AUDIO_*). Returns 0, the request result, or -errno
- * (-ENOTTY for a terminal request on a non-terminal fd).
+ * EBX = fd, ECX = request, EDX = arg. A tty fd (console or pty slave) routes
+ * to the shared termios/session handler first; an ops-backed object handles
+ * its own remaining requests; the framebuffer and console handle their
+ * device-specific ones (FB_*, KIOCSOUND, AUDIO_*). Returns 0, the request
+ * result, or -errno (-ENOTTY for a terminal request on a non-terminal fd).
  */
 static int32_t sys_ioctl(isr_params_t *params)
 {
@@ -8004,13 +8031,14 @@ static int user_access_ok(uint32_t addr, uint32_t len)
 }
 
 /*
- * Range-check a user buffer AND back its pages before the kernel passes the raw
- * pointer to a lower layer (krffs, tcp, udp, the drivers) that dereferences it
- * directly. With demand paging a numerically valid pointer may still be unmapped
- * (a never-touched heap page, or a wild address in no VMA); vm_prefault_range
- * faults the valid pages in here and rejects the bad ones, so the lower layer's
- * raw access can never fault in kernel mode and panic. 'write' is 1 when that
- * layer writes into the buffer (so the pages need write permission).
+ * Range-check a user buffer AND back its pages before the kernel passes the
+ * raw pointer to a lower layer (krffs, tcp, udp, the drivers) that
+ * dereferences it directly. With demand paging a numerically valid pointer
+ * may still be unmapped (a never-touched heap page, or a wild address in no
+ * VMA); vm_prefault_range faults the valid pages in here and rejects the bad
+ * ones, so the lower layer's raw access can never fault in kernel mode and
+ * panic. 'write' is 1 when that layer writes into the buffer (so the pages
+ * need write permission).
  */
 static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 {
@@ -8141,11 +8169,13 @@ static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_por
 #define SOCKADDR_LL_ADDR     12
 
 /**
- * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen) pair.
+ * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen)
+ * pair.
  *
- * Respects the caller's declared buffer capacity: read the in/out socklen, copy at
- * most that many of the 16 sockaddr_in bytes, and report the true length (16), the
- * recvfrom(2)/accept(2) truncation semantics. Returns 0 or -EFAULT.
+ * Respects the caller's declared buffer capacity: read the in/out socklen,
+ * copy at most that many of the 16 sockaddr_in bytes, and report the true
+ * length (16), the recvfrom(2)/accept(2) truncation semantics. Returns 0 or
+ * -EFAULT.
  */
 static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
                                  uint16_t port, uint32_t ip)
@@ -9364,11 +9394,12 @@ static int32_t sys_socketcall(isr_params_t *params)
 /**
  * Set up thread-local storage (set_thread_area(2), Linux i386).
  *
- * EBX points at a struct user_desc. Validates it, programs the shared TLS GDT
- * descriptor (entry GDT_TLS_ENTRY) and this process's PCB base, then writes the
- * chosen entry number back so the C library can load (entry_number << 3) | 3 into
- * %gs. The base is reapplied to the GDT on every context switch (switch.s).
- * Returns 0 or a negative errno on a bad pointer/request.
+ * EBX points at a struct user_desc. Validates it, programs the shared TLS
+ * GDT descriptor (entry GDT_TLS_ENTRY) and this process's PCB base, then
+ * writes the chosen entry number back so the C library can load
+ * (entry_number << 3) | 3 into %gs. The base is reapplied to the GDT on
+ * every context switch (switch.s). Returns 0 or a negative errno on a bad
+ * pointer/request.
  */
 static int32_t sys_set_thread_area(isr_params_t *params)
 {
@@ -9422,10 +9453,10 @@ static int32_t sys_getpid(isr_params_t *params)
 /**
  * Create a new session (setsid(2)).
  *
- * The caller becomes the leader of a new session AND a new process group, both
- * numbered with its pid. Fails with -EPERM if the caller already leads a process
- * group (a group leader cannot carry its group into a new session). Returns the
- * new session id (the caller's pid).
+ * The caller becomes the leader of a new session AND a new process group,
+ * both numbered with its pid. Fails with -EPERM if the caller already leads
+ * a process group (a group leader cannot carry its group into a new
+ * session). Returns the new session id (the caller's pid).
  */
 static int32_t sys_setsid(isr_params_t *params)
 {
@@ -9445,10 +9476,10 @@ static int32_t sys_setsid(isr_params_t *params)
 /**
  * Set a process's process group (setpgid(2)).
  *
- * EBX = pid (0 = caller), ECX = pgid (0 = the target's own pid, i.e. make it a
- * group leader). The target must be the caller or a child of the caller, must not
- * be a session leader, and the destination group must live in the target's
- * session. Returns 0 or -errno.
+ * EBX = pid (0 = caller), ECX = pgid (0 = the target's own pid, i.e. make it
+ * a group leader). The target must be the caller or a child of the caller,
+ * must not be a session leader, and the destination group must live in the
+ * target's session. Returns 0 or -errno.
  */
 static int32_t sys_setpgid(isr_params_t *params)
 {
@@ -9561,8 +9592,9 @@ static int32_t sys_getppid(isr_params_t *params)
 }
 
 /*
- * sys_umask - set the file-creation mask, returning the previous value (umask(2)).
- * Args: EBX = new mask (only the low 9 permission bits are kept).
+ * sys_umask - set the file-creation mask, returning the previous value
+ * (umask(2)). Args: EBX = new mask (only the low 9 permission bits are
+ * kept).
  */
 static int32_t sys_umask(isr_params_t *params)
 {
@@ -9579,10 +9611,10 @@ static int32_t sys_umask(isr_params_t *params)
 /**
  * Process times (times(2)).
  *
- * Per-process CPU time is not tracked, so the four tms fields are reported as
- * zero; the return value is the monotonic tick count (already in CLK_TCK = 100 Hz
- * units). EBX = struct tms * (NULL is allowed: the caller may want only the return
- * value).
+ * Per-process CPU time is not tracked, so the four tms fields are reported
+ * as zero; the return value is the monotonic tick count (already in CLK_TCK
+ * = 100 Hz units). EBX = struct tms * (NULL is allowed: the caller may want
+ * only the return value).
  */
 static int32_t sys_times(isr_params_t *params)
 {
@@ -9608,9 +9640,9 @@ static int32_t sys_times(isr_params_t *params)
 /**
  * System statistics (sysinfo(2)).
  *
- * Fills the 64-byte i386 struct sysinfo: uptime in seconds, a live-process count,
- * mem_unit = 1; CPU load and memory/swap figures are reported as zero (not
- * tracked). EBX = struct sysinfo *.
+ * Fills the 64-byte i386 struct sysinfo: uptime in seconds, a live-process
+ * count, mem_unit = 1; CPU load and memory/swap figures are reported as zero
+ * (not tracked). EBX = struct sysinfo *.
  */
 static int32_t sys_sysinfo(isr_params_t *params)
 {
@@ -10110,12 +10142,12 @@ static int32_t sys_dup3(isr_params_t *params)
 #define PAGE_UP(v) (((v) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 
 /*
- * sys_brk - set the program break (heap top).
- * Arg: EBX = requested break. Returns the resulting break: the new value on
- * success, or the unchanged current break if the request is out of range. This
- * is the contract musl's __brk relies on (it compares the return to its request).
- * The heap is a single demand-paged VMA [heap_start, page_up(brk)); growing only
- * extends the region (pages fault in lazily), shrinking frees the pages above.
+ * sys_brk - set the program break (heap top). Arg: EBX = requested break.
+ * Returns the resulting break: the new value on success, or the unchanged
+ * current break if the request is out of range. This is the contract musl's
+ * __brk relies on (it compares the return to its request). The heap is a
+ * single demand-paged VMA [heap_start, page_up(brk)); growing only extends
+ * the region (pages fault in lazily), shrinking frees the pages above.
  */
 static int32_t sys_brk(isr_params_t *params)
 {
@@ -10180,11 +10212,11 @@ static int32_t sys_brk(isr_params_t *params)
 }
 
 /*
- * sys_mmap2 - map anonymous memory.
- * Args: EBX=addr (hint, ignored), ECX=length, EDX=prot, ESI=flags, EDI=fd,
- * EBP=pgoffset. Returns the mapped base address, or -errno. Only
- * MAP_ANONYMOUS|MAP_PRIVATE is supported (what musl's allocator uses); the region
- * is placed by bumping mmap_top down and is demand-paged + zero-filled on touch.
+ * sys_mmap2 - map anonymous memory. Args: EBX=addr (hint, ignored),
+ * ECX=length, EDX=prot, ESI=flags, EDI=fd, EBP=pgoffset. Returns the mapped
+ * base address, or -errno. Only MAP_ANONYMOUS|MAP_PRIVATE is supported (what
+ * musl's allocator uses); the region is placed by bumping mmap_top down and
+ * is demand-paged + zero-filled on touch.
  */
 static int32_t sys_mmap2(isr_params_t *params)
 {
@@ -10245,10 +10277,10 @@ static int32_t sys_mmap2(isr_params_t *params)
 }
 
 /*
- * sys_munmap - unmap a range.
- * Args: EBX=addr (page-aligned), ECX=length. Returns 0, or -errno. Drops the VMA
- * bookkeeping (trimming or splitting partial overlaps) and frees the backing
- * frames; unmapping never-faulted or never-mapped pages is a no-op, as on Linux.
+ * sys_munmap - unmap a range. Args: EBX=addr (page-aligned), ECX=length.
+ * Returns 0, or -errno. Drops the VMA bookkeeping (trimming or splitting
+ * partial overlaps) and frees the backing frames; unmapping never-faulted or
+ * never-mapped pages is a no-op, as on Linux.
  */
 static int32_t sys_munmap(isr_params_t *params)
 {

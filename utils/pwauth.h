@@ -214,12 +214,12 @@ int pwauth_verify(const char *user, const char *password);
  * first read, and the modes it left are the terminal's, not the process's, so
  * killing it does not undo them. The `SIGCONT` that a `fg` sends applies them
  * through the resume path instead. A death is the transaction's business, so
- * the death set is installed here only when this process holds no transaction, which leaves
- * `cred_txn_begin`'s in force when it does. Every
- * disposition is restored before returning. `SIGSTOP` cannot be caught, so a
- * stop that way leaves the console with echo off until the reader is continued
- * or killed; nothing correctness-bearing rests on it, since no lock is broken
- * and no update is lost.
+ * the death set is installed here only when this process holds no transaction,
+ * which leaves `cred_txn_begin`'s in force when it does. Every disposition is
+ * restored before returning. `SIGSTOP` cannot be caught, so a stop that way
+ * leaves the console with echo off until the reader is continued or killed;
+ * nothing correctness-bearing rests on it, since no lock is broken and no
+ * update is lost.
  *
  * A resume starts the line over, and it is the only thing that does. The line
  * discipline flushes what is queued when it recognizes the suspend character,
@@ -244,12 +244,13 @@ int pwauth_verify(const char *user, const char *password);
  * whole authentication rather than a keystroke: the line discipline stays
  * canonical, so the one-byte read returns only once the whole line has been
  * submitted, the discarded byte is that line's first, and what follows is
- * consumed as a password missing its first character. No caller retries, so
- * the attempt is refused and the user starts again. No arrangement of flags distinguishes
- * them: it would take an unblock and a wait that are one operation, which is
- * what `ppoll`'s signal mask is for and what this kernel accepts without
- * applying. The residue points the safe way, since the alternative is a byte
- * typed and echoed before the stop becoming part of a password.
+ * consumed as a password missing its first character. No caller retries, so the
+ * attempt is refused and the user starts again. No arrangement of flags
+ * distinguishes them: it would take an unblock and a wait that are one
+ * operation, which is what `ppoll`'s signal mask is for and what this kernel
+ * accepts without applying. The residue points the safe way, since the
+ * alternative is a byte typed and echoed before the stop becoming part of a
+ * password.
  *
  * A continue does not by itself return the terminal, since a shell's `bg` is
  * that signal without it, so the resume re-applies echo-off and reprints only
@@ -257,18 +258,18 @@ int pwauth_verify(const char *user, const char *password);
  * background, the reader leaves the terminal to the shell that owns it and
  * stops again on `SIGTTIN`; the `fg` that follows does the work.
  *
- * Two more dispositions, both about a terminal that must not be left silenced.
- * `SIGPIPE` is caught for the length of the call, because echo is taken away
- * before the prompt is written to file descriptor 2: a caller whose standard
- * error is a pipe with no reader would otherwise be killed at exactly that
- * point and leave the console with echo off. It is a handler that does nothing
- * rather than `SIG_IGN`, which no write can tell apart, for the reason
- * `cred_txn_begin` gives: an ignored disposition is the one an exec carries
- * into the next image. And the prompt's state is taken down with the stop and
- * continue signals blocked, since the modes go back before the handlers come
- * off and a `SIGCONT` arriving in between would re-apply echo-off through a
- * handler that is about to be removed. Both are restored before the call
- * returns.
+ * Two more dispositions, both about a terminal that must not be left
+ * silenced. `SIGPIPE` is caught for the length of the call, because echo is
+ * taken away before the prompt is written to file descriptor 2: a caller
+ * whose standard error is a pipe with no reader would otherwise be killed at
+ * exactly that point and leave the console with echo off. It is a handler
+ * that does nothing rather than `SIG_IGN`, which no write can tell apart,
+ * for the reason `cred_txn_begin` gives: an ignored disposition is the one
+ * an exec carries into the next image. And the prompt's state is taken down
+ * with the stop and continue signals blocked, since the modes go back before
+ * the handlers come off and a `SIGCONT` arriving in between would re-apply
+ * echo-off through a handler that is about to be removed. Both are restored
+ * before the call returns.
  */
 int pwauth_read_password(const char *prompt, char *buf, size_t size);
 
@@ -323,8 +324,8 @@ int pwauth_mint_salt(char *out, size_t size);
  * acquire whose registration fails is refused rather than held: `atexit`
  * allocates once its builtin slots are full and can therefore fail, and a
  * transaction with nothing left to drop it would leak the lock on the very
- * ordinary `exit` this promises to cover. So an ordinary `exit` cannot leak
- * the lock, and every signal that can kill the writer is handled for the
+ * ordinary `exit` this promises to cover. So an ordinary `exit` cannot leak the
+ * lock, and every signal that can kill the writer is handled for the
  * transaction's whole lifetime, because `atexit` runs on no signal death: the
  * handler restores the terminal, unlinks any temporary file `cred_rewrite` left
  * open, and leaves through `exit` so the registered release drops the lock
@@ -332,11 +333,11 @@ int pwauth_mint_salt(char *out, size_t size);
  * handlers of its own: the lock outlives the terminal read, and the terminal
  * read is only one part of what a signal must undo.
  *
- * Which signals those are is decided by what the kernel does, not by the four
- * a writer expects. It terminates a process by default for every signal but
- * the four it ignores and the four it stops for, and it lets a process signal
- * one whose real uid matches its own, which a setuid writer keeps from whoever
- * ran it. So the user who ran `passwd` can send it `SIGUSR1` or `SIGSEGV` as
+ * Which signals those are is decided by what the kernel does, not by the four a
+ * writer expects. It terminates a process by default for every signal but the
+ * four it ignores and the four it stops for, and it lets a process signal one
+ * whose real uid matches its own, which a setuid writer keeps from whoever ran
+ * it. So the user who ran `passwd` can send it `SIGUSR1` or `SIGSEGV` as
  * readily as `SIGTERM`, and each would otherwise leave a lock in `/etc`. The
  * library therefore takes every catchable one, the fault numbers included: a
  * real CPU exception on this kernel never reaches a disposition at all, so the
@@ -346,20 +347,20 @@ int pwauth_mint_salt(char *out, size_t size);
  * it, so no death can be served while the file exists and nothing yet says
  * whose it is.
  *
- * Two residues are left, and a caller should know both. `SIGKILL` and
- * `SIGSTOP` cannot be caught, and signals 32, 33 and 34 are reserved by this
- * libc, which refuses them from `sigaction` and `sigaddset` alike, here and on
- * Linux. A writer ended by any of those five leaves its lock behind, and the
- * next writer reports it rather than breaking it. `SIGPIPE` is caught for that same lifetime and
- * for the same reason as the deaths: a writer reports as it goes, and a
- * diagnostic written to a standard error that is a pipe with no reader would
- * otherwise kill it where no `atexit` runs and leave the lock in `/etc`. It is
- * caught rather than ignored because an exec carries an ignored disposition
- * into the new image and resets a caught one, and a child forked under a
- * transaction must not hand this library's `SIGPIPE` policy to a program that
- * never linked it. Every disposition this library installs is put back by
- * `cred_txn_end`, and `SIGPIPE` last of all, once there is nothing left to
- * report.
+ * Two residues are left, and a caller should know both. `SIGKILL` and `SIGSTOP`
+ * cannot be caught, and signals 32, 33 and 34 are reserved by this libc, which
+ * refuses them from `sigaction` and `sigaddset` alike, here and on Linux. A
+ * writer ended by any of those five leaves its lock behind, and the next writer
+ * reports it rather than breaking it. `SIGPIPE` is caught for that same
+ * lifetime and for the same reason as the deaths: a writer reports as it goes,
+ * and a diagnostic written to a standard error that is a pipe with no reader
+ * would otherwise kill it where no `atexit` runs and leave the lock in `/etc`.
+ * It is caught rather than ignored because an exec carries an ignored
+ * disposition into the new image and resets a caught one, and a child forked
+ * under a transaction must not hand this library's `SIGPIPE` policy to a
+ * program that never linked it. Every disposition this library installs is put
+ * back by `cred_txn_end`, and `SIGPIPE` last of all, once there is nothing left
+ * to report.
  *
  * An acquire that cannot record the holder pid fails and removes the lock it
  * just created, rather than holding an empty one: an empty lock is what every
@@ -367,10 +368,10 @@ int pwauth_mint_salt(char *out, size_t size);
  * which would put a live writer's lock in their hands.
  *
  * A second `cred_txn_begin` in one process is a programming error and not
- * contention, so it is refused immediately, without touching the file. The same
- * call in a child that inherited the state is neither: the child holds nothing,
- * so it drops what it inherited and goes on to acquire for itself, which finds
- * the parent's lock and waits.
+ * contention, so it is refused immediately, without touching the file. The
+ * same call in a child that inherited the state is neither: the child holds
+ * nothing, so it drops what it inherited and goes on to acquire for itself,
+ * which finds the parent's lock and waits.
  */
 int cred_txn_begin(const char *prog);
 
@@ -425,57 +426,53 @@ int cred_txn_end(void);
  * The whole replacement idiom, and the required one for any file the system
  * authenticates against. It changes nothing at all unless this process holds
  * the transaction. It then checks the lock, unlinks any leftover temporary
- * file,
- * creates `<path>.tmp.<pid>` with `O_EXCL`, writes the text, takes the owner
- * and
- * then the mode from the file being replaced, flushes, checks the lock again,
- * renames, and flushes once more through the same descriptor before closing.
- * Every step is checked.
+ * file, creates `<path>.tmp.<pid>` with `O_EXCL`, writes the text, takes the
+ * owner and then the mode from the file being replaced, flushes, checks the
+ * lock again, renames, and flushes once more through the same descriptor before
+ * closing. Every step is checked.
  *
  * Five details carry the weight. The temporary name carries the writer's pid,
- * so
- * it belongs to one process and no other: a fixed `<path>.tmp` would be shared,
- * and a writer whose lock had been removed could unlink and recreate the file a
- * successor already had open, whose rename by name would then publish it. The
- * lock is checked before that unlink for the same reason and again between the
- * first flush and the rename, since a publish is a write to the shared database
- * and may not happen without one. The descriptor stays open across the rename
- * so
- * that there is still a descriptor to flush through once the file is published:
- * `fsync` on this kernel pushes the whole page cache, but it must be reached
- * through a live descriptor, and `sync(2)` would not do since it returns 0
- * unconditionally and would throw away exactly the `-EIO` this call exists to
- * report. The owner is set before the mode because a `chown` clears the set-id
- * bits. And the temporary file's mode becomes the result's mode, because a
- * rename changes only the name and the parent, so inheriting the original's
- * mode
- * and owner is the only thing that keeps a file that exists to be unreadable
- * from becoming readable. There is no hard-link backup because this file system
- * has no links at all.
+ * so it belongs to one process and no other: a fixed `<path>.tmp` would be
+ * shared, and a writer whose lock had been removed could unlink and recreate
+ * the file a successor already had open, whose rename by name would then
+ * publish it. The lock is checked before that unlink for the same reason and
+ * again between the first flush and the rename, since a publish is a write to
+ * the shared database and may not happen without one. The descriptor stays open
+ * across the rename so that there is still a descriptor to flush through once
+ * the file is published: `fsync` on this kernel pushes the whole page cache,
+ * but it must be reached through a live descriptor, and `sync(2)` would not do
+ * since it returns 0 unconditionally and would throw away exactly the `-EIO`
+ * this call exists to report. The owner is set before the mode because a
+ * `chown` clears the set-id bits. And the temporary file's mode becomes the
+ * result's mode, because a rename changes only the name and the parent, so
+ * inheriting the original's mode and owner is the only thing that keeps a file
+ * that exists to be unreadable from becoming readable. There is no hard-link
+ * backup because this file system has no links at all.
  *
  * What the two lock checks do not buy is stated in the file header: the rename
  * that follows the second one is still by name, and no call here can bind it to
  * the file that was checked.
  *
  * The file being replaced must therefore exist: its mode and owner are the
- * result's, and there is nowhere else correct to get them. Bringing a credential
- * file into being is the image's job, not this idiom's. The inheritance is
- * faithful and has no floor: a database staged 0644, or carrying a set-id bit,
- * is reproduced as it is, and every later replacement reproduces it again. The
- * snapshot is taken by name at the top and published by name at the bottom, so
- * a `chmod` by root in between is reverted to what was read; the lock excludes
- * other writers through this library, not an operator at the console.
+ * result's, and there is nowhere else correct to get them. Bringing a
+ * credential file into being is the image's job, not this idiom's. The
+ * inheritance is faithful and has no floor: a database staged 0644, or carrying
+ * a set-id bit, is reproduced as it is, and every later replacement reproduces
+ * it again. The snapshot is taken by name at the top and published by name at
+ * the bottom, so a `chmod` by root in between is reverted to what was read; the
+ * lock excludes other writers through this library, not an operator at the
+ * console.
  *
  * The return is what the caller must report, and the three differ where it
- * matters most. A failure before the rename unlinks the temporary file, leaves
- * the target byte for byte as it was, and is `CRED_UNCHANGED`, the one a caller
- * may report as "unchanged". A failure of the second flush or of the close is
- * `CRED_UNFLUSHED`: the file system already carries the new file, the disk may
- * still carry the old one, and the caller must report a failure that says the
- * change is live but not durable, since the account now answers to the new
- * password whatever the platter holds. Both flushes are no-ops when the file
- * system is the RAM module, so the durability claim belongs to a disk-backed
- * image.
+ * matters most. A failure before the rename unlinks the temporary file,
+ * leaves the target byte for byte as it was, and is `CRED_UNCHANGED`, the
+ * one a caller may report as "unchanged". A failure of the second flush or
+ * of the close is `CRED_UNFLUSHED`: the file system already carries the new
+ * file, the disk may still carry the old one, and the caller must report a
+ * failure that says the change is live but not durable, since the account
+ * now answers to the new password whatever the platter holds. Both flushes
+ * are no-ops when the file system is the RAM module, so the durability claim
+ * belongs to a disk-backed image.
  */
 int cred_rewrite(const char *path, const char *text, size_t len);
 

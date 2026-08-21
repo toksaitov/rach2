@@ -35,10 +35,11 @@ extern block_device_t *block0;
 /**
  * Bring up the boot block device and publish it as `block0`.
  *
- * Selects the AHCI driver when `rach2.disk=ahci` is on the kernel command line
- * (falling back to ATA if no AHCI HBA is present), and the ATA driver otherwise.
- * Returns 0 when a device answered and `block0` is set, or -1 when none did.
- * Polled and IRQ-free, so it is safe to call before the scheduler runs.
+ * Selects the AHCI driver when `rach2.disk=ahci` is on the kernel command
+ * line (falling back to ATA if no AHCI HBA is present), and the ATA driver
+ * otherwise. Returns 0 when a device answered and `block0` is set, or -1
+ * when none did. Polled and IRQ-free, so it is safe to call before the
+ * scheduler runs.
  */
 int block_probe(void);
 

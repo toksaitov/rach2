@@ -117,12 +117,13 @@ static int ata_wait_not_busy(void)
 }
 
 /**
- * Spins until the drive finishes the current command (BSY and DRQ both clear),
- * then reports whether it errored. Returns 0 on a clean completion, `-EIO` on an
- * ERR/DF status or watchdog expiry. Waiting for DRQ to clear as well as BSY
- * matters after a PIO data-out write: the drive can briefly drop BSY with DRQ
- * still set, and treating that as done would issue the next command mid
- * transfer. The status bits other than BSY are read only once BSY is clear.
+ * Spins until the drive finishes the current command (BSY and DRQ both
+ * clear), then reports whether it errored. Returns 0 on a clean completion,
+ * `-EIO` on an ERR/DF status or watchdog expiry. Waiting for DRQ to clear as
+ * well as BSY matters after a PIO data-out write: the drive can briefly drop
+ * BSY with DRQ still set, and treating that as done would issue the next
+ * command mid transfer. The status bits other than BSY are read only once
+ * BSY is clear.
  */
 static int ata_wait_ready(void)
 {

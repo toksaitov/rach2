@@ -213,9 +213,9 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 }
 
 /**
- * Poll readiness for one end. POLLIN if the read end has data or the writers are
- * gone; POLLOUT if the write end has space or the readers are gone; POLLHUP when
- * the peer end is closed.
+ * Poll readiness for one end. POLLIN if the read end has data or the writers
+ * are gone; POLLOUT if the write end has space or the readers are gone;
+ * POLLHUP when the peer end is closed.
  */
 #define PIPE_POLLIN  0x001
 #define PIPE_POLLOUT 0x004
@@ -292,9 +292,9 @@ static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 
 /**
  * Release one end when its last descriptor closes (called from
- * fd_release_backing at OFD refcount 1). Mark the end closed, wake the peer so a
- * blocked reader sees EOF or a blocked writer sees the broken pipe, and return
- * the pipe to the pool once both ends are gone.
+ * fd_release_backing at OFD refcount 1). Mark the end closed, wake the peer
+ * so a blocked reader sees EOF or a blocked writer sees the broken pipe, and
+ * return the pipe to the pool once both ends are gone.
  */
 static void pipe_close(fd_entry_t *e)
 {

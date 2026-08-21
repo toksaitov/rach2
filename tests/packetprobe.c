@@ -5,13 +5,14 @@
  * is always one of those, so a client reads its replies from an
  * `AF_PACKET/SOCK_DGRAM` socket bound to the interface instead. This probe
  * opens one, checks what it refuses, and then does the exchange for real: it
- * builds a DHCP discover, sends it through the socket to the broadcast MAC,
- * and waits for the offer SLIRP broadcasts back. That proves both halves at
- * once. The frame must have been well formed or nothing would answer it, and
- * the answer is addressed to 255.255.255.255, which `ip_rx` drops, so
- * receiving it is exactly the case the socket exists for.
+ * builds a DHCP discover, sends it through the socket to the broadcast MAC, and
+ * waits for the offer SLIRP broadcasts back. That proves both halves at once.
+ * The frame must have been well formed or nothing would answer it, and the
+ * answer is addressed to 255.255.255.255, which `ip_rx` drops, so receiving it
+ * is exactly the case the socket exists for.
  *
- * Prints "PACKETPROBE OK" and exits 0 on success. Freestanding; direct int 0x80.
+ * Prints "PACKETPROBE OK" and exits 0 on success. Freestanding; direct int
+ * 0x80.
  */
 
 typedef unsigned int size_t;

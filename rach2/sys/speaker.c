@@ -7,11 +7,12 @@ static bool _speaker_on = false;
  * Drive the PC speaker at `frequency` Hz with a square wave.
  *
  * The speaker is gated by PIT channel 2: programming the channel to mode 3
- * (square wave) and connecting its output to the speaker produces a tone whose
- * pitch is the base PIT frequency divided by the loaded count. A frequency of 0
- * has no valid divisor, so it silences the speaker instead. The count is a 16-bit
- * PIT register, so a sub-19 Hz request (whose divisor exceeds 0xFFFF) is clamped
- * to the lowest representable tone rather than silently truncated to a wrong one.
+ * (square wave) and connecting its output to the speaker produces a tone
+ * whose pitch is the base PIT frequency divided by the loaded count. A
+ * frequency of 0 has no valid divisor, so it silences the speaker instead.
+ * The count is a 16-bit PIT register, so a sub-19 Hz request (whose divisor
+ * exceeds 0xFFFF) is clamped to the lowest representable tone rather than
+ * silently truncated to a wrong one.
  */
 void speaker_on(uint32_t frequency)
 {

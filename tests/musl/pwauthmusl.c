@@ -1337,12 +1337,12 @@ static void prompt_bg_leader(const char *name, int master, int report)
  * terminal and continue the reader in the background, after which acting on the
  * old answer silences a terminal the reader no longer owns. That interval
  * cannot be entered from outside, so it is entered from within. It raises
- * `SIGTSTP` rather than `SIGSTOP` deliberately: `SIGTSTP` is the one a keystroke
- * sends and the one the library can defer, and a test using the unblockable
- * signal would be asserting a promise the library does not make.
+ * `SIGTSTP` rather than `SIGSTOP` deliberately: `SIGTSTP` is the one a
+ * keystroke sends and the one the library can defer, and a test using the
+ * unblockable signal would be asserting a promise the library does not make.
  *
- * It answers from the ioctl the libc's own wrapper uses, so nothing is lost by
- * standing in for it.
+ * It answers from the ioctl the libc's own wrapper uses, so nothing is lost
+ * by standing in for it.
  */
 static volatile sig_atomic_t Tcg_stop;
 
@@ -2108,12 +2108,12 @@ static int run_su(const char *cwd, char *const argv[], char *const envp[], const
  * with the lock behind, exactly as `SIGKILL` leaves one.
  *
  * The fault numbers are here for a different reason. A real CPU exception on
- * this kernel never reaches a disposition: the exception handler and the page
- * fault path both call `terminate_current_process`, which zombifies the process
- * without consulting `sigacts`. So a `SIGSEGV` a handler can see is one that was
- * sent, which is an ordinary death, and the library handles it like one. Sending
- * them here is what proves that, since nothing in a host test can distinguish a
- * signal this kernel delivers from one it does not.
+ * this kernel never reaches a disposition: the exception handler and the
+ * page fault path both call `terminate_current_process`, which zombifies the
+ * process without consulting `sigacts`. So a `SIGSEGV` a handler can see is
+ * one that was sent, which is an ordinary death, and the library handles it
+ * like one. Sending them here is what proves that, since nothing in a host
+ * test can distinguish a signal this kernel delivers from one it does not.
  */
 static int check_high_signals(void)
 {

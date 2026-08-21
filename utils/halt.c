@@ -6,15 +6,17 @@
  *
  * It exists for the images that carry no busybox. os-simple is built out of
  * this project's own code alone, so without this it would be the one shipped
- * image with a system call to stop the machine and no program that makes it. os-real does not stage it: busybox's standalone shell dispatches
- * `halt`, `poweroff` and `reboot` as applets before it looks at the file
- * system, so a binary of the same name there would be one nobody reaches, and a
- * second implementation of the same command is worse for a reader than none.
+ * image with a system call to stop the machine and no program that makes it.
+ * os-real does not stage it: busybox's standalone shell dispatches `halt`,
+ * `poweroff` and `reboot` as applets before it looks at the file system, so a
+ * binary of the same name there would be one nobody reaches, and a second
+ * implementation of the same command is worse for a reader than none.
  *
  * There is nothing to tear down first. The kernel flushes the page cache and
- * clears the dirty-mount flag inside the call, with scheduling already off, so
- * a program that tried to stop its neighbours politely would only be adding a
- * scheduling policy of its own to the last moment of the machine's life.
+ * clears the dirty-mount flag inside the call, with scheduling already off,
+ * so a program that tried to stop its neighbours politely would only be
+ * adding a scheduling policy of its own to the last moment of the machine's
+ * life.
  */
 
 #include <stdio.h>

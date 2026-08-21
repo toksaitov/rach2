@@ -2,28 +2,29 @@
  * rtl8168.c: the RTL8168GU driver, ported from a pinned reference.
  *
  * The chip cannot be emulated by anything on this desk, so this file was
- * written against Linux v6.16 (commit 038d61fd642278bab63ee8ef722c50d10ab01e8f),
+ * written against Linux v6.16 (commit
+ * 038d61fd642278bab63ee8ef722c50d10ab01e8f),
  * drivers/net/ethernet/realtek/r8169_main.c and r8169_phy_config.c, for the
  * version that file calls RTL_GIGA_MAC_VER_42, and every sequence below names
  * the reference function it was taken from. What the reference does through
- * phylib, a firmware blob and an interrupt handler, this does directly,
- * without firmware, and polled.
+ * phylib, a firmware blob and an interrupt handler, this does directly, without
+ * firmware, and polled.
  *
  * Two deliberate departures from the reference, both stated here because
  * neither can be discovered by reading the sequences alone:
  *
- *  - Link state is read from PHYstatus (0x6c). The reference declares that
- *    register and its bits and then never reads it, because phylib reaches the
- *    PHY over MDIO instead. A kernel with no phylib has no such path, so this
- *    driver reads the MAC's own summary of the link. That is a documented
- *    register used in a way the reference does not exercise.
- *  - The PHY is powered up here. The reference suspends the PHY at the end of
- *    probe and lets phy_resume wake it at open; with no phylib nothing would
- *    ever clear BMCR power-down, and the MAC would be configured and silent.
+ * - Link state is read from PHYstatus (0x6c). The reference declares that
+ * register and its bits and then never reads it, because phylib reaches the PHY
+ * over MDIO instead. A kernel with no phylib has no such path, so this driver
+ * reads the MAC's own summary of the link. That is a documented register used
+ * in a way the reference does not exercise. - The PHY is powered up here. The
+ * reference suspends the PHY at the end of probe and lets phy_resume wake it at
+ * open; with no phylib nothing would ever clear BMCR power-down, and the MAC
+ * would be configured and silent.
  *
- * All register access goes through an indirection (`io`) so the host test can
- * drive the whole bring-up against a software model of the chip; the default
- * binding is plain MMIO on the mapped window.
+ * All register access goes through an indirection (`io`) so the host test
+ * can drive the whole bring-up against a software model of the chip; the
+ * default binding is plain MMIO on the mapped window.
  */
 
 #include "rtl8168.h"

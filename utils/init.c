@@ -6,20 +6,20 @@
  * system needs forever: reap whatever children land on it (the console session
  * and every orphan the kernel hands over), respawn that session when it exits,
  * so the console is never left without one, and continue it if it is ever
- * stopped, since nothing else can. It never exits; if it did,
- * the kernel would have no reaper, so the kernel panics if init dies.
+ * stopped, since nothing else can. It never exits; if it did, the kernel would
+ * have no reaper, so the kernel panics if init dies.
  *
  * Three artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
  * that console behind `/bin/login`, and `init-metal` is `init-login` plus a
  * supervised SSH server. The metal build exists because the machine it is for
- * is across the room: nobody is going to type a command at its console to
- * start a daemon, so the daemon has to be running when the machine finishes
- * booting. The console login stays exactly as it is beside it, and is the way
- * back in when the network is the thing that is broken.
+ * is across the room: nobody is going to type a command at its console to start
+ * a daemon, so the daemon has to be running when the machine finishes booting.
+ * The console login stays exactly as it is beside it, and is the way back in
+ * when the network is the thing that is broken.
  *
- * Built like the other utils, linked against the ported musl (see utils/Makefile),
- * and staged at /sbin/init by the image manifests.
+ * Built like the other utils, linked against the ported musl (see
+ * utils/Makefile), and staged at /sbin/init by the image manifests.
  */
 #include <unistd.h>
 #include <time.h>
@@ -151,13 +151,14 @@ static void shutdown_handler(int sig)
 /**
  * Fork the login shell into its own session and return its pid (-1 on failure).
  *
- * The child does the getty dance before exec: `setsid` makes it a new session's
- * leader (with no controlling terminal), then `ioctl(TIOCSCTTY)` claims the
- * console as that session's controlling terminal. The shell thus starts as a
- * session leader that already owns the terminal, so a job-control shell like
- * busybox ash, which checks `tcgetpgrp` at startup, finds itself the foreground.
- * That is why init must never own the console: it hands a fresh one to each
- * shell it spawns, exactly as a real init delegates a terminal through getty.
+ * The child does the getty dance before exec: `setsid` makes it a new
+ * session's leader (with no controlling terminal), then `ioctl(TIOCSCTTY)`
+ * claims the console as that session's controlling terminal. The shell thus
+ * starts as a session leader that already owns the terminal, so a
+ * job-control shell like busybox ash, which checks `tcgetpgrp` at startup,
+ * finds itself the foreground. That is why init must never own the console:
+ * it hands a fresh one to each shell it spawns, exactly as a real init
+ * delegates a terminal through getty.
  */
 static pid_t spawn_shell(void)
 {

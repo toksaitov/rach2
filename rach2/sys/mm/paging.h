@@ -18,10 +18,11 @@
 #define PAGE_SIZE 0x1000
 
 /*
- * Software-available PTE bit (bit 9; the CPU ignores bits 9-11) used to mark a
- * page as copy-on-write: present + user + read-only + PTE_COW means "shared, copy
- * on the next write". The fault handler distinguishes a COW write (copy/re-grant)
- * from a genuine write to a read-only region (segfault) by this bit.
+ * Software-available PTE bit (bit 9; the CPU ignores bits 9-11) used to mark
+ * a page as copy-on-write: present + user + read-only + PTE_COW means
+ * "shared, copy on the next write". The fault handler distinguishes a COW
+ * write (copy/re-grant) from a genuine write to a read-only region
+ * (segfault) by this bit.
  */
 #define PTE_COW 0x200u
 
@@ -95,9 +96,9 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable);
 void paging_flush_tlb(uintptr_t addr);
 
 /*
- * Clone the kernel page directory for a new process.
- * Copies kernel page table references (shared), ready for per-process user pages.
- * Returns pointer to new page directory, or NULL on failure.
+ * Clone the kernel page directory for a new process. Copies kernel page
+ * table references (shared), ready for per-process user pages. Returns
+ * pointer to new page directory, or NULL on failure.
  */
 page_dir_t *clone_page_directory(void);
 
@@ -121,12 +122,13 @@ void switch_page_directory(page_dir_t *dir);
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr);
 
 /*
- * Map an already-owned physical frame 'phys' at user virtual address 'virt' in
- * 'dir' with the given low-12-bit PTE 'flags' (present/user/write/PTE_COW, etc.),
- * creating a private page table for the slot if needed. Unlike alloc_user_page it
- * neither allocates a frame nor changes any reference count: the caller owns the
- * frame lifecycle. Used by copy-on-write fork to share a frame read-only.
- * Returns 0 on success, -1 on failure.
+ * Map an already-owned physical frame 'phys' at user virtual address 'virt'
+ * in 'dir' with the given low-12-bit PTE 'flags'
+ * (present/user/write/PTE_COW, etc.), creating a private page table for the
+ * slot if needed. Unlike alloc_user_page it neither allocates a frame nor
+ * changes any reference count: the caller owns the frame lifecycle. Used by
+ * copy-on-write fork to share a frame read-only. Returns 0 on success, -1 on
+ * failure.
  */
 int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t flags);
 

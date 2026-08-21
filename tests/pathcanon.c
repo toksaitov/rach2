@@ -5,10 +5,10 @@
  * resolver collapses '..'. If the two disagree, a spelling like /x/../proc
  * classifies as KRFFS and then resolves to /proc, so mkdir could create a real
  * KRFFS /proc that shadows the synthetic one. The kernel must canonicalize the
- * absolute path once, before classification, so such a path is recognized as the
- * synthetic mount and refused. The probe makes a real directory, then checks a
- * '..' path through it onto /proc and /dev is refused, and that a '..' path that
- * canonicalizes onto a real device or directory still works.
+ * absolute path once, before classification, so such a path is recognized as
+ * the synthetic mount and refused. The probe makes a real directory, then
+ * checks a '..' path through it onto /proc and /dev is refused, and that a '..'
+ * path that canonicalizes onto a real device or directory still works.
  *
  * Prints "PATHCANON OK". Freestanding; direct int 0x80.
  */

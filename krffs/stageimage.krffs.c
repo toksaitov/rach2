@@ -256,12 +256,12 @@ static uint64_t stage_node(
  * component as a 0755 directory.
  *
  * The root "/" is id 0. A path like "/root/.ssh" walks "root" then ".ssh",
- * find-or-creating each as a 0755 directory; an existing component that is not a
- * directory is an error (a manifest cannot place a file under a file). A `dir`
- * directive that names the same path later sets its intended mode, so an explicit
- * mode wins whether declared before or after a file places something inside.
- * Returns the final directory id (0 for the root "/"), or (uint64_t)-1 on a
- * malformed path or a non-directory component.
+ * find-or-creating each as a 0755 directory; an existing component that is
+ * not a directory is an error (a manifest cannot place a file under a file).
+ * A `dir` directive that names the same path later sets its intended mode,
+ * so an explicit mode wins whether declared before or after a file places
+ * something inside. Returns the final directory id (0 for the root "/"), or
+ * (uint64_t)-1 on a malformed path or a non-directory component.
  */
 static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *path)
 {
@@ -319,9 +319,10 @@ static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *p
 /**
  * Split an absolute guest path into its parent directory and basename.
  *
- * `dir_out` receives the parent path ("/" for a root-level name); the returned
- * pointer is the basename inside `path_buf` (which is modified in place). Returns
- * NULL on a malformed path (no slash, trailing slash, too long).
+ * `dir_out` receives the parent path ("/" for a root-level name); the
+ * returned pointer is the basename inside `path_buf` (which is modified in
+ * place). Returns NULL on a malformed path (no slash, trailing slash, too
+ * long).
  */
 static char *split_path(const char *path, char *path_buf, size_t bufsz, char *dir_out, size_t dirsz)
 {
@@ -591,13 +592,14 @@ static int compare_names(const void *a, const void *b)
  * Stage every regular, executable file directly inside host directory `hostdir`
  * into guest directory `guestdir` with `mode`.
  *
- * This stages a whole built set (the test probes in build/tests, the utils in
- * build/utils) without naming each. It is NOT recursive and skips anything that is
- * not a regular executable (via `lstat`, so a symlink is left out too), which is
- * why the GCC-written `.d` dependency files beside the binaries are not staged.
- * The names are read first and staged in sorted order, so one host directory
- * always produces one image: `readdir` order is the file system's, and on APFS
- * it is a hash of the name. Returns false on a host or staging error.
+ * This stages a whole built set (the test probes in build/tests, the utils
+ * in build/utils) without naming each. It is NOT recursive and skips
+ * anything that is not a regular executable (via `lstat`, so a symlink is
+ * left out too), which is why the GCC-written `.d` dependency files beside
+ * the binaries are not staged. The names are read first and staged in sorted
+ * order, so one host directory always produces one image: `readdir` order is
+ * the file system's, and on APFS it is a hash of the name. Returns false on
+ * a host or staging error.
  */
 static bool stage_exec_dir(
                 struct krffs_file_system *file_system,

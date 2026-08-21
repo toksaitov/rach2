@@ -705,11 +705,11 @@ static void hda_delay(int count)
 /**
  * Busy-wait `us` microseconds against the 24MHz HDA wall clock.
  *
- * Unlike a timer-driven sleep this works with interrupts disabled (for example
- * inside a syscall), since it only reads the WALCLK register. A controller whose
- * wall clock never advances (a dead or partially powered HBA) would otherwise spin
- * here forever; if it stops ticking, fall back to the POST-port busy-wait so a
- * syscall caller cannot hang.
+ * Unlike a timer-driven sleep this works with interrupts disabled (for
+ * example inside a syscall), since it only reads the WALCLK register. A
+ * controller whose wall clock never advances (a dead or partially powered
+ * HBA) would otherwise spin here forever; if it stops ticking, fall back to
+ * the POST-port busy-wait so a syscall caller cannot hang.
  */
 static void hda_delay_walclk_us(uint32_t us)
 {

@@ -5,15 +5,15 @@
 #include <stdint.h>
 
 /*
- * bootslot: the boot-slot core bootctl drives. Everything that reads or writes the boot
- * partition lives here, behind caller-supplied sector callbacks, so the host
- * seam test drives the same code over image files with fault injection while
- * the guest main binds it to /dev/bootpart. The library validates the FAT32
- * volume before trusting one field of it, walks the namespace for the four
- * files the install contract names (/boot/kernel, /boot/fallback,
- * /boot/grub/grubenv), refuses every malformed shape by name, and performs the
- * install in the interruption-matrix order documented in
- * dev-log/23-install/plan.md.
+ * bootslot: the boot-slot core bootctl drives. Everything that reads or
+ * writes the boot partition lives here, behind caller-supplied sector
+ * callbacks, so the host seam test drives the same code over image files
+ * with fault injection while the guest main binds it to /dev/bootpart. The
+ * library validates the FAT32 volume before trusting one field of it, walks
+ * the namespace for the four files the install contract names (/boot/kernel,
+ * /boot/fallback, /boot/grub/grubenv), refuses every malformed shape by
+ * name, and performs the install in the interruption-matrix order documented
+ * in dev-log/23-install/plan.md.
  */
 
 #define BOOTSLOT_SECTOR 512

@@ -49,13 +49,15 @@
 extern const char recovery_policy_banner[];
 
 /**
- * Whether this build publishes the whole-disk window without being asked for it.
+ * Whether this build publishes the whole-disk window without being asked for
+ * it.
  *
- * The everyday kernel publishes `/dev/disk0` only under `rach2.diskdiag`, so no
- * image grows a raw whole-disk node by accident. The recovery kernel publishes
- * it always: rewriting the disk is the only reason that build exists, and the
- * moment it is needed is the moment nothing else can repair the machine, which
- * is no time to discover that a menu entry was missing a token.
+ * The everyday kernel publishes `/dev/disk0` only under `rach2.diskdiag`, so
+ * no image grows a raw whole-disk node by accident. The recovery kernel
+ * publishes it always: rewriting the disk is the only reason that build
+ * exists, and the moment it is needed is the moment nothing else can repair
+ * the machine, which is no time to discover that a menu entry was missing a
+ * token.
  */
 int recovery_publishes_disk(void);
 

@@ -474,12 +474,13 @@ static int tcp_dead_error(struct tcb *tcb)
 /**
  * Blocking stream send: queue bytes, waiting for send-ring space if needed.
  *
- * tcp_send is the non-blocking primitive (it copies what fits and returns 0 when
- * the ring is full). This wraps it so a blocking socket sleeps on send-ring space
- * (woken by socket_tcp_writable when an ACK frees room) and a non-blocking one
- * returns -EAGAIN. A nonzero request thus never returns 0, which a caller would
- * misread as EOF. Returns the bytes queued, SOCK_EAGAIN, -EINTR, or -1 on a
- * connection that is no longer in a sending state.
+ * tcp_send is the non-blocking primitive (it copies what fits and returns 0
+ * when the ring is full). This wraps it so a blocking socket sleeps on
+ * send-ring space (woken by socket_tcp_writable when an ACK frees room) and
+ * a non-blocking one returns -EAGAIN. A nonzero request thus never returns
+ * 0, which a caller would misread as EOF. Returns the bytes queued,
+ * SOCK_EAGAIN, -EINTR, or -1 on a connection that is no longer in a sending
+ * state.
  */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
 {
@@ -516,10 +517,11 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
 /**
  * Copy received stream bytes into the TCB receive ring and wake a reader.
  *
- * Called from tcp_rx in IRQ context. Copies at most the ring's free space and
- * returns the count accepted; the caller advances rcv_nxt by that, so surplus
- * bytes are neither stored nor acknowledged and the peer retransmits them once
- * the window reopens. recv_head/recv_tail are free-running indices masked to size.
+ * Called from tcp_rx in IRQ context. Copies at most the ring's free space
+ * and returns the count accepted; the caller advances rcv_nxt by that, so
+ * surplus bytes are neither stored nor acknowledged and the peer retransmits
+ * them once the window reopens. recv_head/recv_tail are free-running indices
+ * masked to size.
  */
 uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
 {

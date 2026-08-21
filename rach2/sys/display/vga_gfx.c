@@ -208,12 +208,13 @@ static void vga_set_mode(uint8_t misc,
 }
 
 /**
- * Save the text-mode font from plane 2 (character generator RAM) into saved_font.
+ * Save the text-mode font from plane 2 (character generator RAM) into
+ * saved_font.
  *
- * The font lives in plane 2 at A0000. To read it as linear memory the Sequencer
- * and Graphics Controller are switched out of the odd/even text layout into
- * sequential access to plane 2 alone. Each glyph occupies 32 bytes there but
- * only the first 16 are used by the 8x16 font.
+ * The font lives in plane 2 at A0000. To read it as linear memory the
+ * Sequencer and Graphics Controller are switched out of the odd/even text
+ * layout into sequential access to plane 2 alone. Each glyph occupies 32
+ * bytes there but only the first 16 are used by the 8x16 font.
  */
 static void vga_save_font(void)
 {

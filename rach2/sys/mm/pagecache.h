@@ -5,10 +5,11 @@
 
 /*
  * The page cache lifts KRFFS off the RAM-disk module onto a real disk by
- * demand-mapping a fixed kernel-virtual window over a backing store. A fault in
- * the window is serviced by polling the backing page into a reserved cache frame
- * and mapping it; dirty frames are written back on eviction and on fsync. The
- * fault path polls and never sleeps, so it runs with interrupts off.
+ * demand-mapping a fixed kernel-virtual window over a backing store. A fault
+ * in the window is serviced by polling the backing page into a reserved
+ * cache frame and mapping it; dirty frames are written back on eviction and
+ * on fsync. The fault path polls and never sleeps, so it runs with
+ * interrupts off.
  */
 
 /* Base of the demand-paged window. It sat at USER_ADDR_MAX (0xC0000000) until
@@ -53,12 +54,12 @@ typedef int (*pc_write_fn)(uint32_t disk_off, const void *page);
 void init_pagecache(void);
 
 /*
- * Point the cache at a backing store of `fs_size` bytes and (re)start it empty.
- * This is a remount: it DROPS any frames a previous backing held WITHOUT writing
- * them back, so the caller must pc_sync() first if a previous backing held dirty
- * pages. `fs_size` is rounded up to a whole page and clamped to pc_window_size();
- * a window fault at or past that bound is a wild pointer the fault handler panics
- * on.
+ * Point the cache at a backing store of `fs_size` bytes and (re)start it
+ * empty. This is a remount: it DROPS any frames a previous backing held
+ * WITHOUT writing them back, so the caller must pc_sync() first if a
+ * previous backing held dirty pages. `fs_size` is rounded up to a whole page
+ * and clamped to pc_window_size(); a window fault at or past that bound is a
+ * wild pointer the fault handler panics on.
  */
 void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
 
@@ -67,10 +68,11 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
 int pc_has_backing(void);
 
 /*
- * Service a fault at `fault_address` in the window. Returns 1 if handled (the
- * page is now mapped, read-only on a read or read-write on a write), or 0 if the
- * address is past the backed size (a wild kernel pointer the caller must panic
- * on). `write` requests write permission and marks the page dirty.
+ * Service a fault at `fault_address` in the window. Returns 1 if handled
+ * (the page is now mapped, read-only on a read or read-write on a write), or
+ * 0 if the address is past the backed size (a wild kernel pointer the caller
+ * must panic on). `write` requests write permission and marks the page
+ * dirty.
  */
 int pc_fault(uint32_t fault_address, int write);
 
@@ -86,12 +88,13 @@ int pc_sync(void);
 uint32_t pc_window_size(void);
 
 /*
- * Cap the live cache to `slots` frames (clamped to 1..PC_SLOTS) for the eviction
- * self-test, writing back then dropping each resident frame at or above the new
- * capacity. Returns 0, or -1 if a frame's writeback failed: that frame is left
- * dirty and the capacity is held high enough to keep it reclaimable, so a later
- * sync still flushes it. The test calls it on a quiescent cache, with no window
- * fault in flight, so reclaiming those frames races nothing.
+ * Cap the live cache to `slots` frames (clamped to 1..PC_SLOTS) for the
+ * eviction self-test, writing back then dropping each resident frame at or
+ * above the new capacity. Returns 0, or -1 if a frame's writeback failed:
+ * that frame is left dirty and the capacity is held high enough to keep it
+ * reclaimable, so a later sync still flushes it. The test calls it on a
+ * quiescent cache, with no window fault in flight, so reclaiming those
+ * frames races nothing.
  */
 int pc_set_capacity(uint32_t slots);
 

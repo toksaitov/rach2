@@ -129,10 +129,10 @@ void free_process(process_t *proc);
 process_t *get_process(uint32_t pid);
 
 /**
- * Reparent every child of `dead_pid` onto init (`init_pid`), waking init to reap
- * any child that is already a zombie. Called from the death paths so an exiting
- * process never orphans a child onto a slot about to be freed. No-op when there
- * is no init or when init itself is dying.
+ * Reparent every child of `dead_pid` onto init (`init_pid`), waking init to
+ * reap any child that is already a zombie. Called from the death paths so an
+ * exiting process never orphans a child onto a slot about to be freed. No-op
+ * when there is no init or when init itself is dying.
  */
 void reparent_children(uint32_t dead_pid);
 
@@ -149,9 +149,9 @@ void proc_wake_sleepers(uint32_t now);
 void signal_post(process_t *target, int signo);
 
 /**
- * Non-zero if the current process has a deliverable (pending, unblocked) signal.
- * Blocking syscall loops poll it to break out so the signal is acted on. Defined
- * in syscall.c.
+ * Non-zero if the current process has a deliverable (pending, unblocked)
+ * signal. Blocking syscall loops poll it to break out so the signal is acted
+ * on. Defined in syscall.c.
  */
 int signal_pending(void);
 

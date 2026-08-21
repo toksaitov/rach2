@@ -1,17 +1,18 @@
 /*
  * poll.c - I/O multiplexing (poll/ppoll/select/_newselect/pselect6).
  *
- * The poll core scans the polled descriptors for readiness; if none is ready and
- * the timeout has not expired, it parks the process on EVERY polled object's wait
- * queue at once (wq_poll_add), yields, and on any wake re-scans. This is the
- * lost-wakeup-safe discipline generalized to many queues. Each backing answers
- * readiness through its file_ops poll op (pipes, ttys, ptys) or, for the
- * enum-dispatched descriptor types, a small per-type check here.
+ * The poll core scans the polled descriptors for readiness; if none is ready
+ * and the timeout has not expired, it parks the process on EVERY polled
+ * object's wait queue at once (wq_poll_add), yields, and on any wake re-scans.
+ * This is the lost-wakeup-safe discipline generalized to many queues. Each
+ * backing answers readiness through its file_ops poll op (pipes, ttys, ptys)
+ * or, for the enum-dispatched descriptor types, a small per-type check here.
  *
  * select() is layered on poll(): the fd_set bitmaps are translated to/from a
- * pollfd array (pure logic in poll_select.c, host-tested), then the same core
- * runs. The i386 family select(82)/_newselect(142)/poll(168)/pselect6(308)/
- * ppoll(309) all funnel here so whichever number musl emits works.
+ * pollfd array (pure logic in poll_select.c, host-tested), then the same
+ * core runs. The i386 family
+ * select(82)/_newselect(142)/poll(168)/pselect6(308)/ ppoll(309) all funnel
+ * here so whichever number musl emits works.
  */
 
 #include "poll.h"
@@ -61,9 +62,9 @@ static void irq_restore(uint32_t flags)
 /**
  * Compute the readiness of one descriptor.
  *
- * Returns the revents: a subset of `events` for POLLIN/POLLOUT, plus POLLHUP and
- * POLLERR which are always reported. Sets `*wq` to the wait queue whose wake means
- * "re-check me", or NULL if the descriptor is always ready.
+ * Returns the revents: a subset of `events` for POLLIN/POLLOUT, plus POLLHUP
+ * and POLLERR which are always reported. Sets `*wq` to the wait queue whose
+ * wake means "re-check me", or NULL if the descriptor is always ready.
  */
 static short fd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -101,13 +102,13 @@ static short fd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 /**
  * Scan all pollfds once.
  *
- * Fills revents for each entry, records each one's wait queue in `wqs[]`, and
- * returns the number that are ready. `sel` selects the readiness rule: poll()
- * counts any non-zero revents, while select() counts an fd only on a revent that
- * projects onto a direction it was selected in (so a write- or except-only fd
- * reporting only POLLHUP is not "ready", matching the fd_set projection and not
- * busy-spinning). Called with interrupts off so the readiness reads and the
- * enqueue that follows cannot be split by a waker.
+ * Fills revents for each entry, records each one's wait queue in `wqs[]`,
+ * and returns the number that are ready. `sel` selects the readiness rule:
+ * poll() counts any non-zero revents, while select() counts an fd only on a
+ * revent that projects onto a direction it was selected in (so a write- or
+ * except-only fd reporting only POLLHUP is not "ready", matching the fd_set
+ * projection and not busy-spinning). Called with interrupts off so the
+ * readiness reads and the enqueue that follows cannot be split by a waker.
  */
 static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue **wqs, int sel)
 {
@@ -140,11 +141,11 @@ static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue
 }
 
 /**
- * The poll core: block until at least one of `fds` is ready, a signal arrives, or
- * the deadline passes.
+ * The poll core: block until at least one of `fds` is ready, a signal arrives,
+ * or the deadline passes.
  *
- * `has_deadline` == 0 means wait forever. nfds is already bounded to POLL_MAX_FDS
- * by the callers.
+ * `has_deadline` == 0 means wait forever. nfds is already bounded to
+ * POLL_MAX_FDS by the callers.
  *
  * `sel` selects the select() per-direction readiness rule over poll()'s.
  *
@@ -221,8 +222,8 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
 }
 
 /**
- * Convert a poll(2) millisecond timeout to a deadline. `*has_deadline` is 0 for an
- * infinite wait (timeout_ms < 0).
+ * Convert a poll(2) millisecond timeout to a deadline. `*has_deadline` is 0
+ * for an infinite wait (timeout_ms < 0).
  */
 static uint32_t ms_deadline(int timeout_ms, int *has_deadline)
 {
@@ -245,9 +246,10 @@ static uint32_t ms_deadline(int timeout_ms, int *has_deadline)
 /**
  * Validate a user timeval: seconds non-negative and tv_usec in [0, 1000000).
  *
- * select/poll reject anything else with -EINVAL rather than silently clamping,
- * and the in-range usec also keeps the conversions below free of signed overflow.
- * musl always passes normalized values; a raw int-0x80 caller might not.
+ * select/poll reject anything else with -EINVAL rather than silently
+ * clamping, and the in-range usec also keeps the conversions below free of
+ * signed overflow. musl always passes normalized values; a raw int-0x80
+ * caller might not.
  */
 static int tv_valid(const struct poll_timeval *tv)
 {
@@ -262,11 +264,11 @@ static int ts_valid(const struct poll_timespec *ts)
 /**
  * Convert a timeval to a millisecond timeout for ms_deadline.
  *
- * Saturating: tv_sec is clamped so tv_sec*1000 cannot overflow the signed result
- * (INT_MAX ms is ~24 days, which for a select() timeout is effectively forever),
- * and a negative tv_sec degrades to a non-blocking poll rather than an accidental
- * infinite wait. A non-NULL timeval thus always yields a finite deadline; only a
- * NULL one waits forever.
+ * Saturating: tv_sec is clamped so tv_sec*1000 cannot overflow the signed
+ * result (INT_MAX ms is ~24 days, which for a select() timeout is
+ * effectively forever), and a negative tv_sec degrades to a non-blocking
+ * poll rather than an accidental infinite wait. A non-NULL timeval thus
+ * always yields a finite deadline; only a NULL one waits forever.
  */
 static int tv_to_ms(const struct poll_timeval *tv)
 {

@@ -27,9 +27,9 @@
  * timer-IRQ console drain never touches a pty.
  *
  * Each endpoint is an fd riding the file_ops layer (ops + priv = the struct
- * pty); read/write block on wait queues, and an endpoint is torn down only when
- * its last descriptor closes. The slave reuses every tty service (termios,
- * winsize, ISIG, sessions/job-control) on its struct tty.
+ * pty); read/write block on wait queues, and an endpoint is torn down only
+ * when its last descriptor closes. The slave reuses every tty service
+ * (termios, winsize, ISIG, sessions/job-control) on its struct tty.
  */
 
 #define PTY_MAX      16   /* pty pairs (one per /dev/pts/N, N in 0..15) */
@@ -61,16 +61,18 @@ struct pty {
 void pty_init_pool(void);
 
 /*
- * open("/dev/ptmx"): allocate a free pty pair and install the MASTER endpoint on a
- * fresh descriptor (locked until unlockpt). Returns the master fd (>= 0), or
- * -errno (-ENFILE if the pool is full, -EMFILE if the fd table is full).
+ * open("/dev/ptmx"): allocate a free pty pair and install the MASTER
+ * endpoint on a fresh descriptor (locked until unlockpt). Returns the master
+ * fd (>= 0), or -errno (-ENFILE if the pool is full, -EMFILE if the fd table
+ * is full).
  */
 int pty_open_master(int flags);
 
 /*
- * open("/dev/pts/N"): install the SLAVE endpoint of pty N on a fresh descriptor.
- * Returns the slave fd (>= 0), or -errno (-ENXIO if N is unallocated, -EIO if the
- * pair is still locked, -EMFILE if the fd table is full).
+ * open("/dev/pts/N"): install the SLAVE endpoint of pty N on a fresh
+ * descriptor. Returns the slave fd (>= 0), or -errno (-ENXIO if N is
+ * unallocated, -EIO if the pair is still locked, -EMFILE if the fd table is
+ * full).
  */
 int pty_open_slave(int index, int flags);
 

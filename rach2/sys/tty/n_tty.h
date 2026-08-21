@@ -4,17 +4,19 @@
 #include "../lib/kint.h"
 
 /*
- * The N_TTY line discipline: the cooked/raw input editor and output processor a
- * terminal sits behind. It is pure logic over a fixed-size state, with echo and
- * output emitted through a caller-supplied byte sink, so it compiles freestanding
- * and hosted. The kernel wires the sink to the console (VGA + serial) and acts on
- * the recognized signals; the host test captures the sink into a buffer.
+ * The N_TTY line discipline: the cooked/raw input editor and output
+ * processor a terminal sits behind. It is pure logic over a fixed-size
+ * state, with echo and output emitted through a caller-supplied byte sink,
+ * so it compiles freestanding and hosted. The kernel wires the sink to the
+ * console (VGA + serial) and acts on the recognized signals; the host test
+ * captures the sink into a buffer.
  */
 
 /*
- * Kernel termios: the TCGETS/TCSETS struct, the 19-c_cc prefix of musl's larger
- * userspace struct termios (NCCS=32 plus speeds). The kernel reads/writes only this
- * prefix; baud lives in c_cflag, so the speeds are musl's concern. 36 bytes.
+ * Kernel termios: the TCGETS/TCSETS struct, the 19-c_cc prefix of musl's
+ * larger userspace struct termios (NCCS=32 plus speeds). The kernel
+ * reads/writes only this prefix; baud lives in c_cflag, so the speeds are
+ * musl's concern. 36 bytes.
  */
 #define KNCCS 19
 struct ktermios {

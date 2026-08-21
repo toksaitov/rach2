@@ -29,19 +29,20 @@ enum krffs_node_type {
  * Reserved bit in the root node's `mode` that flags an unclean mount.
  *
  * The kernel sets it (write-through) when it mounts a disk file system for
- * writing, and clears it on every route that stops the machine on purpose: the
- * debug shell's `halt`, `poweroff` and `reboot`, and `reboot(2)`, which the
- * userland `halt`, `poweroff` and `reboot` reach, bare through init or forced
- * with `-f`. The clear is conditional on the data, since the shutdown flushes
- * the whole cache first and touches the bit only if that returned 0; a
- * write-back walks the cache by slot and fails whole, so clearing first could
- * publish the cleared root page while another frame's write failed. What leaves
- * the bit set is a boot that was killed rather than stopped, or one whose flush
- * failed, which `fsck.krffs` reads as a file system that may not have flushed.
- * `sync` flushes the cache but does not clear it. It lives in the
- * root node's `mode` at bit `0004000`, which sits above the `0777` permission
- * bits the kernel keeps and below the `0170000` file-type field that
- * `KRFFS_IS_DIR` tests, so no reader's masked comparison of `mode` ever sees it.
+ * writing, and clears it on every route that stops the machine on purpose:
+ * the debug shell's `halt`, `poweroff` and `reboot`, and `reboot(2)`, which
+ * the userland `halt`, `poweroff` and `reboot` reach, bare through init or
+ * forced with `-f`. The clear is conditional on the data, since the shutdown
+ * flushes the whole cache first and touches the bit only if that returned 0;
+ * a write-back walks the cache by slot and fails whole, so clearing first
+ * could publish the cleared root page while another frame's write failed.
+ * What leaves the bit set is a boot that was killed rather than stopped, or
+ * one whose flush failed, which `fsck.krffs` reads as a file system that may
+ * not have flushed. `sync` flushes the cache but does not clear it. It lives
+ * in the root node's `mode` at bit `0004000`, which sits above the `0777`
+ * permission bits the kernel keeps and below the `0170000` file-type field
+ * that `KRFFS_IS_DIR` tests, so no reader's masked comparison of `mode` ever
+ * sees it.
  */
 #define KRFFS_MODE_DIRTY 0004000u
 

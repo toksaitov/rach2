@@ -2,11 +2,12 @@
 #include "../lib/kstring.h"
 
 /*
- * The open-file-description pool. Each OFD carries one shared seek offset and a
- * refcount of how many descriptors point at it (dup/dup2/fork add references). A
- * slot with refcount 0 is free. The pool is sized for the worst case of every
- * descriptor in every process holding a distinct OFD, MAX_PROCS (16) * MAX_FDS,
- * since the number of live OFDs can never exceed the number of live descriptors.
+ * The open-file-description pool. Each OFD carries one shared seek offset
+ * and a refcount of how many descriptors point at it (dup/dup2/fork add
+ * references). A slot with refcount 0 is free. The pool is sized for the
+ * worst case of every descriptor in every process holding a distinct OFD,
+ * MAX_PROCS (16) * MAX_FDS, since the number of live OFDs can never exceed
+ * the number of live descriptors.
  */
 #define OFD_POOL_SIZE (16 * MAX_FDS)
 static struct open_file ofd_pool[OFD_POOL_SIZE];
@@ -145,9 +146,9 @@ int fd_alloc(fd_table_t *table)
  * Release a descriptor and its OFD reference, clearing the slot.
  *
  * A slot with no backing and no reserved OFD is already free; freeing it
- * returns -1. The OFD reference is dropped even when the slot is still typeless,
- * so a slot that `fd_alloc_from` reserved but a caller bailed on before
- * assigning a type does not leak its OFD.
+ * returns -1. The OFD reference is dropped even when the slot is still
+ * typeless, so a slot that `fd_alloc_from` reserved but a caller bailed on
+ * before assigning a type does not leak its OFD.
  */
 int fd_free(fd_table_t *table, int fd)
 {

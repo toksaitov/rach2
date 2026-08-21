@@ -1,14 +1,15 @@
 /**
- * Seam test for the MBR parse and the boot-partition judgement (sys/block/mbr.c).
+ * Seam test for the MBR parse and the boot-partition judgement
+ * (sys/block/mbr.c).
  *
  * host-deps:
  *
- * The parser and the picker are pure, so every malformed table the kernel must
- * refuse is crafted here: a missing signature, empty and zero-start entries, a
- * wrong type byte, a range past the disk, a range whose 32-bit arithmetic would
- * wrap, and a boot partition overlapping the KRFFS one. The accepted case is
- * the GRUB disk's shape (FAT first, KRFFS second). Returns the failed-check
- * count (0 == pass).
+ * The parser and the picker are pure, so every malformed table the kernel
+ * must refuse is crafted here: a missing signature, empty and zero-start
+ * entries, a wrong type byte, a range past the disk, a range whose 32-bit
+ * arithmetic would wrap, and a boot partition overlapping the KRFFS one. The
+ * accepted case is the GRUB disk's shape (FAT first, KRFFS second). Returns
+ * the failed-check count (0 == pass).
  */
 
 #include "block/mbr.c"

@@ -13,16 +13,17 @@
  * and is not defensible entropy.
  *
  * Consumers tier on krandom_is_trusted(). The crypto path fails closed:
- * getrandom(2) and /dev/[u]random refuse (-EIO) when the source is untrusted, so
- * a key is never built from jitter; GRND_INSECURE is the explicit best-effort
- * opt-out. A real hardware seed (QEMU with a CPU that has RDSEED/RDRAND, e.g.
- * -cpu max) is required for SSH keygen (dropbear). The best-effort path,
- * AT_RANDOM and the stack canary, draws straight from the stream regardless:
- * jitter is acceptable for ASLR and the canary, not for keys.
+ * getrandom(2) and /dev/[u]random refuse (-EIO) when the source is untrusted,
+ * so a key is never built from jitter; GRND_INSECURE is the explicit
+ * best-effort opt-out. A real hardware seed (QEMU with a CPU that has
+ * RDSEED/RDRAND, e.g. -cpu max) is required for SSH keygen (dropbear). The
+ * best-effort path, AT_RANDOM and the stack canary, draws straight from the
+ * stream regardless: jitter is acceptable for ASLR and the canary, not for
+ * keys.
  *
  * The CSPRNG core (reseed/u32/bytes, ChaCha) is pure and compiles both
- * freestanding and hosted, so it is unit-tested natively under the sanitizers;
- * only krandom_seed() touches hardware and is i386-only.
+ * freestanding and hosted, so it is unit-tested natively under the
+ * sanitizers; only krandom_seed() touches hardware and is i386-only.
  */
 
 /** Reseed the generator from four explicit words. */

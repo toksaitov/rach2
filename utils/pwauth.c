@@ -355,25 +355,27 @@ static int pwauth_echo_off(void)
 /**
  * Handle a signal that would otherwise kill the process outright.
  *
- * With a transaction held it leaves through `exit`, so the release registered
- * with `atexit` drops the lock; releasing it here as well would be two places
- * that must agree on what "held" means. `exit` is not on the async-signal-safe
- * list and is used anyway, deliberately: reaching the registered release is the
- * whole point, and the alternative is a lock file outliving its holder for no
- * gain. It is entered at most once, which is what `Exit_under_way` is for, and
- * that flag guards a leak rather than only an abstract rule. A handler runs
- * with just its own signal blocked, so a second death can arrive while the
- * first one's `exit` is walking the registered functions. That walk steps its
- * cursor past a function before calling it, so a second `exit` entered from
- * inside that call resumes below the one in flight: a death landing after
- * `cred_txn_atexit` has been selected and before it has been entered would skip
- * the release outright and leave the lock in `/etc`. The second death returns
- * instead, and the exit already running finishes the job. The flag is never
- * cleared, because the `exit` that set it does not return. With no transaction it restores the
- * default disposition and re-raises, so the process dies of the signal it was sent and a waiter
- * sees that rather than an invented status. Either way the terminal gets its modes back first,
- * since otherwise a `^C` at a password prompt leaves a console with echo off
- * and no program left to fix it.
+ * With a transaction held it leaves through `exit`, so the release
+ * registered with `atexit` drops the lock; releasing it here as well would
+ * be two places that must agree on what "held" means. `exit` is not on the
+ * async-signal-safe list and is used anyway, deliberately: reaching the
+ * registered release is the whole point, and the alternative is a lock file
+ * outliving its holder for no gain. It is entered at most once, which is
+ * what `Exit_under_way` is for, and that flag guards a leak rather than only
+ * an abstract rule. A handler runs with just its own signal blocked, so a
+ * second death can arrive while the first one's `exit` is walking the
+ * registered functions. That walk steps its cursor past a function before
+ * calling it, so a second `exit` entered from inside that call resumes below
+ * the one in flight: a death landing after `cred_txn_atexit` has been
+ * selected and before it has been entered would skip the release outright
+ * and leave the lock in `/etc`. The second death returns instead, and the
+ * exit already running finishes the job. The flag is never cleared, because
+ * the `exit` that set it does not return. With no transaction it restores
+ * the default disposition and re-raises, so the process dies of the signal
+ * it was sent and a waiter sees that rather than an invented status. Either
+ * way the terminal gets its modes back first, since otherwise a `^C` at a
+ * password prompt leaves a console with echo off and no program left to fix
+ * it.
  */
 static void pwauth_death_handler(int sig)
 {

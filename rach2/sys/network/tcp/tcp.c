@@ -713,14 +713,15 @@ void tcp_tick(void)
 
                 if (tcb->send_head != tcb->send_ack) {
                     /*
-                     * Sent-but-unacknowledged data (with or without a FIN queued
-                     * behind it): collapse the window (RFC 5681) and resend the
-                     * oldest unacknowledged data segment. A FIN sent by close() must
-                     * not preempt this, or a lost data segment is never
-                     * retransmitted and the teardown stalls; the FIN's own
-                     * retransmit resumes once the data is acknowledged (send_ack
-                     * reaches send_head). snd_nxt is left untouched so it stays the
-                     * high-water mark and ACKs for data in flight still validate.
+                     * Sent-but-unacknowledged data (with or without a FIN
+                     * queued behind it): collapse the window (RFC 5681) and
+                     * resend the oldest unacknowledged data segment. A FIN
+                     * sent by close() must not preempt this, or a lost data
+                     * segment is never retransmitted and the teardown
+                     * stalls; the FIN's own retransmit resumes once the data
+                     * is acknowledged (send_ack reaches send_head). snd_nxt
+                     * is left untouched so it stays the high-water mark and
+                     * ACKs for data in flight still validate.
                      */
                     uint32_t new_ss = tcb->cwnd >> 1;
                     if (new_ss < 2u * TCP_MSS) new_ss = 2u * TCP_MSS;
@@ -996,11 +997,12 @@ void tcp_window_update(struct socket *sock)
 }
 
 /*
- * Advance snd_una and send_ack for an in-window ACK in a state where our own FIN
- * may be outstanding. The FIN's sequence is not data in the ring, so send_ack is
- * advanced by the acknowledged data only (capped at the ring's sent bytes); this
- * keeps the retransmit timer from resending already-acknowledged data after the
- * FIN is sent. The caller has already checked snd_una < ack_num <= snd_nxt.
+ * Advance snd_una and send_ack for an in-window ACK in a state where our own
+ * FIN may be outstanding. The FIN's sequence is not data in the ring, so
+ * send_ack is advanced by the acknowledged data only (capped at the ring's
+ * sent bytes); this keeps the retransmit timer from resending
+ * already-acknowledged data after the FIN is sent. The caller has already
+ * checked snd_una < ack_num <= snd_nxt.
  */
 static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
 {
@@ -1012,14 +1014,14 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
 }
 
 /*
- * Accept `len` bytes of in-order received data and report how many to advance
- * rcv_nxt by. A live socket gets the data delivered (and may take less than `len`
- * when its receive ring is nearly full, so the peer retransmits the rest). Once
- * the socket is detached, which `tcp_close` does before the FIN is even sent, so
- * it holds in ESTABLISHED while queued data drains as well as in the FIN_WAIT
- * states, there is no reader: the data is accepted in full and discarded, which
- * still acknowledges it so the peer stops retransmitting and the stream stays in
- * sequence for the FIN.
+ * Accept `len` bytes of in-order received data and report how many to
+ * advance rcv_nxt by. A live socket gets the data delivered (and may take
+ * less than `len` when its receive ring is nearly full, so the peer
+ * retransmits the rest). Once the socket is detached, which `tcp_close` does
+ * before the FIN is even sent, so it holds in ESTABLISHED while queued data
+ * drains as well as in the FIN_WAIT states, there is no reader: the data is
+ * accepted in full and discarded, which still acknowledges it so the peer
+ * stops retransmitting and the stream stays in sequence for the FIN.
  */
 static uint16_t tcp_accept_data(struct tcb *tcb, const uint8_t *payload, uint16_t len)
 {

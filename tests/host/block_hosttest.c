@@ -3,13 +3,14 @@
  *
  * host-deps:
  *
- * Includes block.c directly and stubs the driver/cmdline seam that block_probe
- * references, so the static partition read/write bounds logic is reachable. A
- * fake backing device records the sector range each request reaches it with. The
- * test asserts a partition forwards an in-range request with its base added,
- * rejects an out-of-range or zero-length request without touching the backing,
- * and clamps a partition that starts or runs past the backing to an empty or
- * truncated view. Returns the failed-check count (0 == pass).
+ * Includes block.c directly and stubs the driver/cmdline seam that
+ * block_probe references, so the static partition read/write bounds logic is
+ * reachable. A fake backing device records the sector range each request
+ * reaches it with. The test asserts a partition forwards an in-range request
+ * with its base added, rejects an out-of-range or zero-length request
+ * without touching the backing, and clamps a partition that starts or runs
+ * past the backing to an empty or truncated view. Returns the failed-check
+ * count (0 == pass).
  */
 
 /* The seam block_probe links against; this test drives only the partition

@@ -3,13 +3,14 @@
  *
  * A small userspace stub resolver: it turns a host string into an IPv4 address
  * by trying, in order, a numeric dotted-quad literal, the hosts file, then a
- * DNS "A" query to the nameserver listed in the resolver config. This mirrors a libc
- * stub resolver: the kernel stays transport-only and naming lives here.
+ * DNS "A" query to the nameserver listed in the resolver config. This mirrors a
+ * libc stub resolver: the kernel stays transport-only and naming lives here.
  *
  * All addresses are host byte order. These functions are implemented in
- * resolv.c, linked into each program that needs them (ping, nc, and the dnstest
- * test). Prototypes use plain C types so the header stays self-contained and
- * never collides with a program's own fixed-width typedefs.
+ * resolv.c, linked into each program that needs them (ping, nc, and the
+ * dnstest test). Prototypes use plain C types so the header stays
+ * self-contained and never collides with a program's own fixed-width
+ * typedefs.
  */
 #ifndef _NETDB_H_
 #define _NETDB_H_
@@ -56,8 +57,8 @@ int dns_parse_a(const unsigned char *resp, int len, unsigned short id,
                 unsigned int *out_ip);
 
 /**
- * Resolve `host` (numeric literal, then the hosts file, then DNS) to a host-order
- * IPv4.
+ * Resolve `host` (numeric literal, then the hosts file, then DNS) to a
+ * host-order IPv4.
  *
  * Returns 0 and stores the address in `*out_ip`; -1 on failure.
  */

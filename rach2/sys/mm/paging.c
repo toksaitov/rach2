@@ -7,12 +7,12 @@
 #include "../proc/process.h"
 
 /**
- * Defined in kernel.c: tear the current user process down with a signal death
- * (`signo`; SIGSEGV here): free its pages, wake a waiting parent, reparent its
- * children to init, and schedule the parent to collect the zombie. A real init's
- * death panics instead (a rescue/no-init debug shell regains control). Kills a
- * process that faulted illegally without taking the machine down. Mirrors the
- * CTRL+C kill path.
+ * Defined in kernel.c: tear the current user process down with a signal
+ * death (`signo`; SIGSEGV here): free its pages, wake a waiting parent,
+ * reparent its children to init, and schedule the parent to collect the
+ * zombie. A real init's death panics instead (a rescue/no-init debug shell
+ * regains control). Kills a process that faulted illegally without taking
+ * the machine down. Mirrors the CTRL+C kill path.
  */
 extern void terminate_current_process(int32_t signo);
 
@@ -278,10 +278,10 @@ static int pte_writable(page_dir_t *dir, uint32_t addr)
 }
 
 /**
- * Is the page containing `addr` already present in `dir`? Keeps the demand-paging
- * resolver idempotent: an eager-loaded code/data page, or one the pre-fault path
- * already backed, must not be allocated a second time (which would leak the old
- * frame and wipe the page's contents).
+ * Is the page containing `addr` already present in `dir`? Keeps the
+ * demand-paging resolver idempotent: an eager-loaded code/data page, or one
+ * the pre-fault path already backed, must not be allocated a second time
+ * (which would leak the old frame and wipe the page's contents).
  */
 static int pte_present(page_dir_t *dir, uint32_t addr)
 {
@@ -303,12 +303,13 @@ static int pte_present(page_dir_t *dir, uint32_t addr)
 /**
  * Demand-paging resolver. Decide whether an access at the (not necessarily
  * aligned) `addr` is legal for the current process and, if so, make sure the
- * page is backed. `write` is 1 for a write. Returns 1 if the page is now mapped,
- * 0 if the access is illegal (no VMA covers it and it is not a valid stack
- * growth, or it writes a read-only region); so the caller faults or segfaults.
+ * page is backed. `write` is 1 for a write. Returns 1 if the page is now
+ * mapped, 0 if the access is illegal (no VMA covers it and it is not a valid
+ * stack growth, or it writes a read-only region); so the caller faults or
+ * segfaults.
  *
- * The current process always has a user address space here (the handler and the
- * pre-fault path both gate on `current_proc->cr3 != 0`).
+ * The current process always has a user address space here (the handler and
+ * the pre-fault path both gate on `current_proc->cr3 != 0`).
  */
 static int vm_resolve(uint32_t addr, int write)
 {
@@ -407,11 +408,11 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
 
 /**
  * Copy-on-write resolver for a write fault on a present, PTE_COW page in the
- * current address space. If this process is the frame's last owner (refcount 1)
- * the page is just made writable in place; otherwise a private writable copy is
- * allocated, the shared bytes are copied in, and the shared frame's reference is
- * dropped. Returns 1 if it handled a COW page, 0 if the page is not COW (the
- * caller continues to demand paging / segfault).
+ * current address space. If this process is the frame's last owner (refcount
+ * 1) the page is just made writable in place; otherwise a private writable
+ * copy is allocated, the shared bytes are copied in, and the shared frame's
+ * reference is dropped. Returns 1 if it handled a COW page, 0 if the page is
+ * not COW (the caller continues to demand paging / segfault).
  */
 static int cow_fault(uint32_t addr)
 {
@@ -607,12 +608,13 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
  * Reserve one free physical frame for kernel-internal use and return its
  * physical address, or 0 if none is free.
  *
- * The frame is marked used at reference count 1 and never carries the user bit,
- * so `alloc_user_page` and `free_user_pages` skip it; the caller owns it for the
- * life of the kernel. The scan runs from the top of the pool down, away from the
- * bottom-up user-page scan, so a kernel reservation and user pages rarely
- * contend. The returned address is also the frame's identity-mapped virtual
- * address, since the kernel identity-maps the whole pool.
+ * The frame is marked used at reference count 1 and never carries the user
+ * bit, so `alloc_user_page` and `free_user_pages` skip it; the caller owns
+ * it for the life of the kernel. The scan runs from the top of the pool
+ * down, away from the bottom-up user-page scan, so a kernel reservation and
+ * user pages rarely contend. The returned address is also the frame's
+ * identity-mapped virtual address, since the kernel identity-maps the whole
+ * pool.
  */
 uintptr_t alloc_kernel_frame(void)
 {
@@ -658,12 +660,13 @@ uint32_t frame_free_count(void)
  * Pre-allocate every page table spanning [`va_start`, `va_start` + `size`) in
  * the kernel directory, leaving all of their PTEs not-present.
  *
- * `clone_page_directory` copies the kernel PDEs by value into each new process,
- * so a window page table first installed after a fork would be invisible to that
- * process. Installing them all up front, before the first fork, lets
- * `map_kernel_frame` later write a leaf PTE into a table every directory already
- * shares. `va_start` must be 4 MiB-aligned. Returns 0, or -1 if a page table
- * could not be allocated or the range runs past the address space.
+ * `clone_page_directory` copies the kernel PDEs by value into each new
+ * process, so a window page table first installed after a fork would be
+ * invisible to that process. Installing them all up front, before the first
+ * fork, lets `map_kernel_frame` later write a leaf PTE into a table every
+ * directory already shares. `va_start` must be 4 MiB-aligned. Returns 0, or
+ * -1 if a page table could not be allocated or the range runs past the
+ * address space.
  */
 int premap_kernel_window(uintptr_t va_start, size_t size)
 {
@@ -691,13 +694,14 @@ int premap_kernel_window(uintptr_t va_start, size_t size)
 }
 
 /**
- * Map physical frame `phys` at the page-aligned kernel virtual address `va` with
- * a supervisor-only leaf PTE: present, no user bit, writable iff `writable`.
+ * Map physical frame `phys` at the page-aligned kernel virtual address `va`
+ * with a supervisor-only leaf PTE: present, no user bit, writable iff
+ * `writable`.
  *
- * The page table for `va` must already exist (see `premap_kernel_window`). The
- * page cache maps a frame read-only on a read fault so the first write faults
- * again and can be recorded dirty, and read-write on a write fault. No-op if the
- * table is somehow absent.
+ * The page table for `va` must already exist (see `premap_kernel_window`).
+ * The page cache maps a frame read-only on a read fault so the first write
+ * faults again and can be recorded dirty, and read-write on a write fault.
+ * No-op if the table is somehow absent.
  */
 void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
 {
@@ -719,8 +723,9 @@ void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
 }
 
 /**
- * Clear the leaf PTE for the page-aligned kernel virtual address `va` and flush
- * its TLB entry. No-op if the page table is absent. Used by page-cache eviction.
+ * Clear the leaf PTE for the page-aligned kernel virtual address `va` and
+ * flush its TLB entry. No-op if the page table is absent. Used by page-cache
+ * eviction.
  */
 void unmap_kernel_frame(uintptr_t va)
 {
@@ -869,12 +874,13 @@ uint32_t frame_unref(uintptr_t phys)
 }
 
 /**
- * Ensure `dir` has a PRIVATE (not kernel-shared) page table for `table_index` and
- * return it, or NULL on allocation failure. A table inherited from the kernel
- * directory by clone_page_directory is copied so per-process mappings stay
- * isolated; a missing table is allocated; an existing private table is made
- * user-accessible. Factored out of alloc_user_page so map_user_frame (and thus
- * copy-on-write) shares exactly the same table-management logic.
+ * Ensure `dir` has a PRIVATE (not kernel-shared) page table for
+ * `table_index` and return it, or NULL on allocation failure. A table
+ * inherited from the kernel directory by clone_page_directory is copied so
+ * per-process mappings stay isolated; a missing table is allocated; an
+ * existing private table is made user-accessible. Factored out of
+ * alloc_user_page so map_user_frame (and thus copy-on-write) shares exactly
+ * the same table-management logic.
  */
 static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
 {
@@ -960,10 +966,10 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     }
 
     /*
-     * CRITICAL: ensure the page table FIRST, before finding a free frame. This
-     * advances mem_reserve()'s pointer (if a new table is allocated) before we
-     * scan for free frames, preventing the same physical address from being used
-     * for both the page table and the user page.
+     * CRITICAL: ensure the page table FIRST, before finding a free frame.
+     * This advances mem_reserve()'s pointer (if a new table is allocated)
+     * before we scan for free frames, preventing the same physical address
+     * from being used for both the page table and the user page.
      */
     table = ensure_user_table(dir, table_index);
     if (!table) {
@@ -1004,9 +1010,9 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 }
 
 /**
- * Free all user pages in a page directory. Walks every page directory entry and
- * frees the user-accessible pages above the kernel region (`HARD_MEMORY_LIMIT`),
- * clearing the private page table entries as it goes.
+ * Free all user pages in a page directory. Walks every page directory entry
+ * and frees the user-accessible pages above the kernel region
+ * (`HARD_MEMORY_LIMIT`), clearing the private page table entries as it goes.
  */
 void free_user_pages(page_dir_t *dir)
 {
@@ -1117,10 +1123,11 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
 
 /**
  * Free a page directory and all its private page tables. Call this after
- * free_user_pages() to release the directory structures themselves; the directory
- * and its private page tables go onto free lists for reuse.
+ * free_user_pages() to release the directory structures themselves; the
+ * directory and its private page tables go onto free lists for reuse.
  *
- * Must NOT be called on the kernel directory or the currently active directory.
+ * Must NOT be called on the kernel directory or the currently active
+ * directory.
  */
 void free_page_directory(page_dir_t *dir)
 {

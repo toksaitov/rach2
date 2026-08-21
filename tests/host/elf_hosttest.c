@@ -5,13 +5,14 @@
  *
  * Includes elf.c directly and stubs the page/VMA seam, then drives
  * elf_load_image with crafted in-memory images through a readfn over a byte
- * buffer. Every malformed image must be rejected during validation, BEFORE any
- * page is allocated. The alloc stub records whether allocation was reached, so a
- * test tells a validation reject (alloc never reached) from an image that passed
- * validation (reached alloc, which the stub then fails). A multi-segment defect
- * (an overlapping pair) needs the first segment to load fully, which the 32-bit
- * physical-pointer model cannot fake natively, so that case is left to a guest
- * exec test. Returns the failed-check count (0 == pass).
+ * buffer. Every malformed image must be rejected during validation, BEFORE
+ * any page is allocated. The alloc stub records whether allocation was
+ * reached, so a test tells a validation reject (alloc never reached) from an
+ * image that passed validation (reached alloc, which the stub then fails). A
+ * multi-segment defect (an overlapping pair) needs the first segment to load
+ * fully, which the 32-bit physical-pointer model cannot fake natively, so
+ * that case is left to a guest exec test. Returns the failed-check count (0
+ * == pass).
  */
 
 #include "proc/elf.c"

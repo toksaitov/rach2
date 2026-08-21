@@ -5,11 +5,11 @@
 #include "../proc/wait_queue.h"
 
 /*
- * Anonymous pipe: the original Unix IPC primitive. A pipe is a bounded FIFO with
- * a read end and a write end, each handed to user space as a descriptor. Bytes
- * written at the write end are read, in order, at the read end; a reader blocks
- * while the FIFO is empty and a writer blocks while it is full, so a pipeline
- * `a | b` flows at the rate the slower side can keep up with.
+ * Anonymous pipe: the original Unix IPC primitive. A pipe is a bounded FIFO
+ * with a read end and a write end, each handed to user space as a descriptor.
+ * Bytes written at the write end are read, in order, at the read end; a reader
+ * blocks while the FIFO is empty and a writer blocks while it is full, so a
+ * pipeline `a | b` flows at the rate the slower side can keep up with.
  *
  * The end-of-stream contract is what makes pipelines terminate cleanly:
  *   * read() returns 0 (EOF) once every write-end descriptor is closed and the
@@ -17,14 +17,15 @@
  *   * write() raises SIGPIPE and returns -EPIPE once every read-end descriptor is
  *     closed (nobody will ever read the bytes).
  *
- * The pipe rides the file-backing layer: each end is a descriptor whose `ops` is
- * pipe_ops and whose `priv` is the struct pipe; dup/dup2/fork share the end
+ * The pipe rides the file-backing layer: each end is a descriptor whose `ops`
+ * is pipe_ops and whose `priv` is the struct pipe; dup/dup2/fork share the end
  * through the refcounted open-file description, and the end is torn down (via
- * pipe_ops->close) only when its last descriptor closes. read/write block on the
- * wait queues, so other processes run while a pipe stage waits.
+ * pipe_ops->close) only when its last descriptor closes. read/write block on
+ * the wait queues, so other processes run while a pipe stage waits.
  *
- * The byte FIFO is a power-of-two ring with monotonically increasing head/tail
- * counters (count = tail - head); the index math is pure and host-tested.
+ * The byte FIFO is a power-of-two ring with monotonically increasing
+ * head/tail counters (count = tail - head); the index math is pure and
+ * host-tested.
  */
 #define PIPE_BUF_SIZE 4096 /* one page; must stay a power of two for the ring mask */
 

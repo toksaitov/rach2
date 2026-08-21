@@ -1,11 +1,13 @@
 /*
  * tty.c: the terminal object, an N_TTY line discipline over a wait-queue of
- * readers, plus the one console_tty wired to the VGA screen and the serial port.
+ * readers, plus the one console_tty wired to the VGA screen and the serial
+ * port.
  *
- * The discipline (n_tty.c) is pure and host-tested; this file is the kernel glue
- * that blocks/wakes readers, posts ISIG signals, and drives real hardware. A
- * reader parks in tty_read until tty_input_char (from the keyboard IRQ or the
- * serial pump) completes a line; output and echo flow through a per-tty sink.
+ * The discipline (n_tty.c) is pure and host-tested; this file is the kernel
+ * glue that blocks/wakes readers, posts ISIG signals, and drives real
+ * hardware. A reader parks in tty_read until tty_input_char (from the
+ * keyboard IRQ or the serial pump) completes a line; output and echo flow
+ * through a per-tty sink.
  */
 
 #include "tty.h"
@@ -97,9 +99,9 @@ static void tty_deliver_signal(struct tty *t, int signo)
 /**
  * Report whether the caller is a background process on this tty.
  *
- * True when this tty is the caller's controlling terminal (same session) but the
- * caller's group is not the foreground group: a background process whose tty I/O
- * must be gated by SIGTTIN/SIGTTOU.
+ * True when this tty is the caller's controlling terminal (same session) but
+ * the caller's group is not the foreground group: a background process whose
+ * tty I/O must be gated by SIGTTIN/SIGTTOU.
  */
 int tty_is_background(struct tty *t, int sid, int pgid)
 {
@@ -128,17 +130,17 @@ void tty_set_session(struct tty *t, int sid, int pgid)
 /**
  * Report whether (sid, pid) is the session leader that owns the console.
  *
- * True iff the session holds the controlling terminal (console_tty.sid == sid)
- * and the process is that session's leader (sid == pid). This is the exact
- * condition under which a process exiting, being killed, or replacing its image
- * must release (and on a successful exec re-publish) the controlling terminal,
- * so the timer-IRQ serial drain never targets a session that is vanishing. It is
- * true for the session leader that owns the console: the login shell a real init
- * spawned (which `setsid`s and claims the console via TIOCSCTTY), a program the
- * kernel debug shell exec'd (for which `exec_program` publishes the sid), or any
- * later leader that claimed it via TIOCSCTTY; it is false for a mere job-group
- * member of the owning session, whose exit must not pull the terminal out from
- * under the shell.
+ * True iff the session holds the controlling terminal (console_tty.sid ==
+ * sid) and the process is that session's leader (sid == pid). This is the
+ * exact condition under which a process exiting, being killed, or replacing
+ * its image must release (and on a successful exec re-publish) the
+ * controlling terminal, so the timer-IRQ serial drain never targets a
+ * session that is vanishing. It is true for the session leader that owns the
+ * console: the login shell a real init spawned (which `setsid`s and claims
+ * the console via TIOCSCTTY), a program the kernel debug shell exec'd (for
+ * which `exec_program` publishes the sid), or any later leader that claimed
+ * it via TIOCSCTTY; it is false for a mere job-group member of the owning
+ * session, whose exit must not pull the terminal out from under the shell.
  */
 int tty_console_owned_by_leader(int sid, int pid)
 {
@@ -205,11 +207,11 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
             return rc; /* -EINTR: a signal cut the wait short */
         }
         /*
-         * Re-test readiness and drain in one interrupts-off step: an input IRQ
-         * cannot then mutate the queue mid-read, and no other reader woken by the
-         * same line can slip in and consume it first (which would leave us seeing
-         * an empty queue and wrongly returning 0 == EOF). If the line was taken,
-         * loop back and wait again.
+         * Re-test readiness and drain in one interrupts-off step: an input
+         * IRQ cannot then mutate the queue mid-read, and no other reader
+         * woken by the same line can slip in and consume it first (which
+         * would leave us seeing an empty queue and wrongly returning 0 ==
+         * EOF). If the line was taken, loop back and wait again.
          */
         flags = tty_irq_save();
         if (n_tty_readable(&t->ldisc)) {
@@ -236,12 +238,12 @@ short tty_poll(struct tty *t, short events, wait_queue_t **wq)
     short revents = 0;
 
     /*
-     * Only an input query touches the input side: park on input_wq, drain the
-     * polled source (surfacing input that arrived but was not yet drained), and
-     * (because draining claims foreground) it must NOT run for a POLLOUT-only
-     * poll on a write-only console fd, or that process would pull in serial input
-     * and could be signalled by a serial ^C. The poll core calls this with
-     * interrupts off.
+     * Only an input query touches the input side: park on input_wq, drain
+     * the polled source (surfacing input that arrived but was not yet
+     * drained), and (because draining claims foreground) it must NOT run for
+     * a POLLOUT-only poll on a write-only console fd, or that process would
+     * pull in serial input and could be signalled by a serial ^C. The poll
+     * core calls this with interrupts off.
      */
     if (events & POLLIN) {
         *wq = &t->input_wq;
@@ -387,13 +389,14 @@ void tty_console_init(void)
 void tty_console_poll(void)
 {
     /*
-     * Called from the timer IRQ. COM1 has no receive interrupt here, so a reader
-     * or poller parked on the console would never learn of serial input while
-     * another process runs; the wait queue is its only waker. When someone is
-     * waiting AND a byte has arrived, wake them; the woken thread drains and
-     * echoes the port itself (console_pump in its own context), so no draining,
-     * echoing, or signal delivery happens in this IRQ. Gated on a waiter so it
-     * never steals bytes from the kernel debug shell, which polls COM1 itself.
+     * Called from the timer IRQ. COM1 has no receive interrupt here, so a
+     * reader or poller parked on the console would never learn of serial
+     * input while another process runs; the wait queue is its only waker.
+     * When someone is waiting AND a byte has arrived, wake them; the woken
+     * thread drains and echoes the port itself (console_pump in its own
+     * context), so no draining, echoing, or signal delivery happens in this
+     * IRQ. Gated on a waiter so it never steals bytes from the kernel debug
+     * shell, which polls COM1 itself.
      */
     if (!serial_data_available()) {
         return;

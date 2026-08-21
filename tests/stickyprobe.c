@@ -1,6 +1,6 @@
 /**
- * Verify the sticky bit: in a directory that carries it, write permission is
- * no longer enough to take another user's entry out.
+ * Verify the sticky bit: in a directory that carries it, write permission is no
+ * longer enough to take another user's entry out.
  *
  * The rule under test: with the bit set on a directory, an entry may be removed
  * or renamed only by the entry's owner, by the directory's owner, or by a
@@ -48,29 +48,29 @@
  * `/st_sticky` every entry the two children were refused.
  *
  * The fixtures split two ways. Only `/st_sticky` and `/st_plain` are staged, by
- * `krffs/manifests/test.manifest`, and only because the manifest's `dir` verb is
- * how the shipped `1777 /tmp` gets its bit and nothing else in the tree reads
- * that bit back: the probe asserts both staged modes before it touches
+ * `krffs/manifests/test.manifest`, and only because the manifest's `dir` verb
+ * is how the shipped `1777 /tmp` gets its bit and nothing else in the tree
+ * reads that bit back: the probe asserts both staged modes before it touches
  * anything, so a staging tool that dropped 01000 fails here rather than quietly
  * shipping an inert /tmp. Everything else the root parent mints and removes,
  * the other two sticky directories included, since chmod and chown can make
- * those directly and a probe that leaves nothing behind rests on no other probe's file
- * and can be run again in the same boot.
+ * those directly and a probe that leaves nothing behind rests on no other
+ * probe's file and can be run again in the same boot.
  *
  * Exact errnos throughout, never a sign. That rests on the errno translation at
  * unlink and rename: before it both returned a bare -1, which userspace reads
  * as EPERM, so a refusal and a missing file answered alike and -EPERM proved
  * nothing.
  *
- * Each denial is checked to have done nothing and each permission to have been
- * carried out, since an errno alone cannot tell a refusal from a refusal
- * reported after the work was done. The destination victims are checked by mode
- * rather than by existence, because a rename that clobbered one would leave the
- * name in place carrying the source's 0640. Every wait checks WIFEXITED before
- * WEXITSTATUS: a signal death carries the signal in the low bits and would
- * otherwise decode as exit 0. Prints "STICKYPROBE OK" and exits 0 only when
- * every case passed; any failure names the step and the answer it got, and
- * exits 1. Freestanding; direct int 0x80.
+ * Each denial is checked to have done nothing and each permission to have
+ * been carried out, since an errno alone cannot tell a refusal from a
+ * refusal reported after the work was done. The destination victims are
+ * checked by mode rather than by existence, because a rename that clobbered
+ * one would leave the name in place carrying the source's 0640. Every wait
+ * checks WIFEXITED before WEXITSTATUS: a signal death carries the signal in
+ * the low bits and would otherwise decode as exit 0. Prints "STICKYPROBE OK"
+ * and exits 0 only when every case passed; any failure names the step and
+ * the answer it got, and exits 1. Freestanding; direct int 0x80.
  */
 
 typedef unsigned int u32;

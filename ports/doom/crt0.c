@@ -1143,13 +1143,14 @@ unsigned long long __umoddi3(unsigned long long a, unsigned long long b)
 /*
  * _start - ELF entry point.
  *
- * The SysV i386 ABI hands control here with argc at 0(%esp) and the argv vector
- * at 4(%esp); %ebp is undefined. This is raw assembly because a C function would
- * run a prologue that moves %esp before any statement could read the arguments.
- * The previous version read them through %ebp and survived only when the %ebp
- * left over from the preceding exec happened to address mapped memory; the ABI
- * does not hand the arguments through %ebp, and Doom is built
- * -fomit-frame-pointer, so _start never established it either.
+ * The SysV i386 ABI hands control here with argc at 0(%esp) and the argv
+ * vector at 4(%esp); %ebp is undefined. This is raw assembly because a C
+ * function would run a prologue that moves %esp before any statement could
+ * read the arguments. The previous version read them through %ebp and
+ * survived only when the %ebp left over from the preceding exec happened to
+ * address mapped memory; the ABI does not hand the arguments through %ebp,
+ * and Doom is built -fomit-frame-pointer, so _start never established it
+ * either.
  */
 __asm__(
     ".text\n\t"

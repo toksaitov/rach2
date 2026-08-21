@@ -11,9 +11,9 @@
  * never from an interrupt handler; a nested call would corrupt a half-dispensed
  * block. krandom_seed() runs once at boot before any user.
  *
- * The state is initialized with the ChaCha constants and a non-zero default key,
- * so even a draw before krandom_seed() yields a non-zero (deterministic) stream
- * rather than an all-zero block.
+ * The state is initialized with the ChaCha constants and a non-zero default
+ * key, so even a draw before krandom_seed() yields a non-zero
+ * (deterministic) stream rather than an all-zero block.
  */
 static uint32_t cc_state[16] = {
     0x61707865u, 0x3320646eu, 0x79622d32u, 0x6b206574u, /* "expand 32-byte k" */
@@ -122,9 +122,10 @@ static uint8_t cc_next_byte(void)
 /**
  * Reseed the CSPRNG from four seed words.
  *
- * The four words expand to a full eight-word key deterministically (each high
- * word a distinct mix), so a reseed is a pure function of its inputs. ChaCha has
- * no all-zero lock state, so even a zero seed yields a non-zero stream.
+ * The four words expand to a full eight-word key deterministically (each
+ * high word a distinct mix), so a reseed is a pure function of its inputs.
+ * ChaCha has no all-zero lock state, so even a zero seed yields a non-zero
+ * stream.
  */
 void krandom_reseed(uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 {

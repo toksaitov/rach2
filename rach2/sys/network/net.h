@@ -6,15 +6,15 @@
 /*
  * Network subsystem entry point and static configuration.
  *
- * The stack targets QEMU's SLIRP user network only. All addresses below are
- * in host byte order; the protocol layers convert to network byte order as
- * they build packets.
+ * The stack targets QEMU's SLIRP user network only. All addresses below are in
+ * host byte order; the protocol layers convert to network byte order as they
+ * build packets.
  *
- * Concurrency invariant (transmit path and shared state)
- * Every layer assembles outgoing packets in a file-static buffer (eth_tx_frame,
- * ip_tx_buf, tcp_tx_buf, the ARP/ICMP/UDP buffers), the driver shares four TX
- * descriptors, and the TCB pool, socket pool and ARP cache are all shared. None
- * of it is locked, so it is only safe when no two accesses interleave:
+ * Concurrency invariant (transmit path and shared state) Every layer assembles
+ * outgoing packets in a file-static buffer (eth_tx_frame, ip_tx_buf,
+ * tcp_tx_buf, the ARP/ICMP/UDP buffers), the driver shares four TX descriptors,
+ * and the TCB pool, socket pool and ARP cache are all shared. None of it is
+ * locked, so it is only safe when no two accesses interleave:
  *
  *   * IRQ-context senders (the NIC RX handler replying with ACK/RST/ARP/ICMP,
  *     and the timer driving tcp_tick retransmissions) run inside IRQ handlers,
@@ -28,9 +28,9 @@
  *     for the duration. (IRQ-context callers already run with IF=0, so the same
  *     bracketing is a harmless no-op there.)
  *
- * The driver's descriptor handoff additionally guards itself (see rtl8139_tx).
- * Do not transmit, allocate a TCB or socket, or touch the ARP cache from
- * syscall context without holding net_lock().
+ * The driver's descriptor handoff additionally guards itself (see
+ * rtl8139_tx). Do not transmit, allocate a TCB or socket, or touch the ARP
+ * cache from syscall context without holding net_lock().
  */
 
 /* The IPv4 configuration a machine boots with when the command line says

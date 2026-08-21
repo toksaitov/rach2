@@ -310,12 +310,13 @@ void terminate_current_process(int32_t signo)
 /**
  * Deliver SIGINT for a PS/2-keyboard Ctrl+C to the console's foreground group.
  *
- * The target is the controlling terminal's foreground process group, the same
- * one the serial ^C reaches through the line discipline, not current_proc:
- * inside this keyboard IRQ the running process may be unrelated. With no
- * foreground group yet, falls back to the running user process only when it
- * belongs to the console's session, so a lone program is still interruptible
- * while a stray ^C never signals an unrelated daemon that happened to be running.
+ * The target is the controlling terminal's foreground process group, the
+ * same one the serial ^C reaches through the line discipline, not
+ * current_proc: inside this keyboard IRQ the running process may be
+ * unrelated. With no foreground group yet, falls back to the running user
+ * process only when it belongs to the console's session, so a lone program
+ * is still interruptible while a stray ^C never signals an unrelated daemon
+ * that happened to be running.
  */
 static void kill_foreground_process(void)
 {
@@ -334,13 +335,13 @@ static void kill_foreground_process(void)
  * Reads the scancode from port 0x60 and pushes the raw byte to the games
  * scancode ring before any early return. Tracks the 0xE0 extended prefix and
  * the shift/ctrl modifier keys, swallows key-release events, and intercepts
- * Ctrl+C to signal the foreground group. A live keystroke routes one of three
- * ways: to the tty line discipline when a user process waits on the console or
- * a session owns it, to the shell's command buffer when the debug shell is
- * active, or to scrollback navigation for the extended arrow/page keys. Runs in
- * interrupt context with an arbitrary process's page directory loaded, so it
- * switches to the kernel directory around any access to kernel data and restores
- * CR3 on exit.
+ * Ctrl+C to signal the foreground group. A live keystroke routes one of
+ * three ways: to the tty line discipline when a user process waits on the
+ * console or a session owns it, to the shell's command buffer when the debug
+ * shell is active, or to scrollback navigation for the extended arrow/page
+ * keys. Runs in interrupt context with an arbitrary process's page directory
+ * loaded, so it switches to the kernel directory around any access to kernel
+ * data and restores CR3 on exit.
  */
 static void keyboard_handler(isr_params_t *params)
 {
@@ -439,22 +440,23 @@ static void keyboard_handler(isr_params_t *params)
 
     if (wq_active(&console_tty.input_wq) || console_tty.sid != 0) {
         /*
-         * A session owns the console: feed the keystroke to the line discipline
-         * whether or not a reader is parked. tty_input_char queues the byte,
-         * echoes it, and wakes any waiter; with nobody parked the wake is a
-         * no-op and the byte waits as type-ahead for the next read, the way the
-         * serial drain (console_pump_irq) queues input that arrives un-parked.
-         * Unlike that drain, which suppresses echo (null_sink) to keep
-         * serial_putc's busy-wait out of the serial RX IRQ, this echoes through
-         * the sink here: a keypress is one byte (a single line edit at worst, ^U
-         * erasing a line), not a UART-driven burst, so the in-IRQ wait is bounded.
-         * Without the sid arm a keystroke is lost whenever no reader sits on the
-         * console, as when busybox ash waits at its prompt, so the QEMU-window
-         * keyboard goes dead while the serial console still works. The PS/2
-         * keyboard sends '\b' for Backspace; map it to the discipline's ERASE
-         * (DEL), and turn Ctrl+letter into its control byte so line editing
-         * (^U/^W) and EOF (^D) reach the discipline like a real terminal. Ctrl+C
-         * is intercepted earlier.
+         * A session owns the console: feed the keystroke to the line
+         * discipline whether or not a reader is parked. tty_input_char
+         * queues the byte, echoes it, and wakes any waiter; with nobody
+         * parked the wake is a no-op and the byte waits as type-ahead for
+         * the next read, the way the serial drain (console_pump_irq) queues
+         * input that arrives un-parked. Unlike that drain, which suppresses
+         * echo (null_sink) to keep serial_putc's busy-wait out of the serial
+         * RX IRQ, this echoes through the sink here: a keypress is one byte
+         * (a single line edit at worst, ^U erasing a line), not a
+         * UART-driven burst, so the in-IRQ wait is bounded. Without the sid
+         * arm a keystroke is lost whenever no reader sits on the console, as
+         * when busybox ash waits at its prompt, so the QEMU-window keyboard
+         * goes dead while the serial console still works. The PS/2 keyboard
+         * sends '\b' for Backspace; map it to the discipline's ERASE (DEL),
+         * and turn Ctrl+letter into its control byte so line editing (^U/^W)
+         * and EOF (^D) reach the discipline like a real terminal. Ctrl+C is
+         * intercepted earlier.
          */
         if (c != 0) {
             unsigned char tc = (unsigned char)c;
@@ -1262,16 +1264,16 @@ static void exec_program(int argc, char *argv[])
      * job-control shell (busybox ash) checks tcgetpgrp() against its own group
      * at startup and SIGTTIN-stops itself if it is not the foreground, so a
      * shell launched here must already own the terminal; the kernel debug shell
-     * hands the terminal over for the program's lifetime. tty_set_session is one
-     * interrupts-off update so the timer-IRQ serial drain never sees sid set
-     * while fg_pgid is still the stale 0, which would route a serial ^C/^Z to
-     * group 0 and drop it.
+     * hands the terminal over for the program's lifetime. tty_set_session is
+     * one interrupts-off update so the timer-IRQ serial drain never sees sid
+     * set while fg_pgid is still the stale 0, which would route a serial ^C/^Z
+     * to group 0 and drop it.
      *
-     * The exception is a real /sbin/init: it must not own the console, so that
-     * each login shell it spawns can `setsid` and claim the (still leaderless)
-     * console itself, the way getty hands a terminal to a login session. Skip
-     * the publish for init; every other program (including the debug shell's
-     * own `exec`) still gets it.
+     * The exception is a real /sbin/init: it must not own the console, so
+     * that each login shell it spawns can `setsid` and claim the (still
+     * leaderless) console itself, the way getty hands a terminal to a login
+     * session. Skip the publish for init; every other program (including the
+     * debug shell's own `exec`) still gets it.
      */
     if (!init_is_starting) {
         tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
@@ -1299,11 +1301,12 @@ static void exec_program(int argc, char *argv[])
 /**
  * Halt the machine because init died. Never returns.
  *
- * On a normal boot /sbin/init is PID 1 and must run forever; if it exits or is
- * killed there is no reaper and no login shell left, so the kernel stops here
- * rather than fall to an unauthenticated debug shell. Boot `rach2.rescue` to get
- * the debug shell deliberately. Called from the is-init branch of every death
- * path (here and in syscall.c) when the debug shell is not the supervisor.
+ * On a normal boot /sbin/init is PID 1 and must run forever; if it exits or
+ * is killed there is no reaper and no login shell left, so the kernel stops
+ * here rather than fall to an unauthenticated debug shell. Boot
+ * `rach2.rescue` to get the debug shell deliberately. Called from the
+ * is-init branch of every death path (here and in syscall.c) when the debug
+ * shell is not the supervisor.
  */
 void panic_init_died(uint32_t pid)
 {
@@ -1320,12 +1323,12 @@ void panic_init_died(uint32_t pid)
 /**
  * Boot `/sbin/init` as PID 1.
  *
- * `/sbin/init` is the only program the kernel starts as a real init: it does the
- * getty dance (a real init must own no controlling terminal, and a bare shell
- * launched here would neither claim the console nor survive its own exit, which
- * would panic). Execs it through exec_program, which does not return on success.
- * Returns here only when the mounted file system holds no `/sbin/init` (the test
- * image), so the caller can fall to the debug shell.
+ * `/sbin/init` is the only program the kernel starts as a real init: it does
+ * the getty dance (a real init must own no controlling terminal, and a bare
+ * shell launched here would neither claim the console nor survive its own
+ * exit, which would panic). Execs it through exec_program, which does not
+ * return on success. Returns here only when the mounted file system holds no
+ * `/sbin/init` (the test image), so the caller can fall to the debug shell.
  */
 static void boot_init_process(void)
 {
@@ -1396,11 +1399,12 @@ static int pc_test_backing_write(uint32_t off, const void *page)
 
 /**
  * Exercises the page cache over a RAM stub through the real window and fault
- * handler: reads every stub page back, writes a distinct marker to each, flushes,
- * and confirms each marker survives a real fault, eviction, writeback, and
- * re-read. A capacity of four frames forces eviction; a misaligned store crosses
- * a page boundary to fault two adjacent pages. Prints the VMPROBE token, then
- * restores the cache so the default module path never faults the window.
+ * handler: reads every stub page back, writes a distinct marker to each,
+ * flushes, and confirms each marker survives a real fault, eviction,
+ * writeback, and re-read. A capacity of four frames forces eviction; a
+ * misaligned store crosses a page boundary to fault two adjacent pages.
+ * Prints the VMPROBE token, then restores the cache so the default module
+ * path never faults the window.
  */
 static bool test_pagecache(void)
 {
@@ -1527,13 +1531,13 @@ static int _krffs_on_disk;
  * Returns 0 when the flag is cleared and -1 when it is not, so a caller cannot
  * announce a clean unmount the data did not earn.
  *
- * The kernel sets the root node's dirty bit on a disk mount and only this clears
- * it, write-through. A no-op unless KRFFS is mounted from a disk.
+ * The kernel sets the root node's dirty bit on a disk mount and only this
+ * clears it, write-through. A no-op unless KRFFS is mounted from a disk.
  *
- * The two flushes are the whole of it, and the order is the correction. Clearing
- * the flag and then flushing once, which is what this did, can publish the
- * cleared root page while a later frame's write-back fails: `pc_sync` walks the
- * slots by index and fails whole, having already written the ones that
+ * The two flushes are the whole of it, and the order is the correction.
+ * Clearing the flag and then flushing once, which is what this did, can publish
+ * the cleared root page while a later frame's write-back fails: `pc_sync` walks
+ * the slots by index and fails whole, having already written the ones that
  * succeeded, so the platter is left reading CLEAN with data missing while the
  * caller reports a failure. Flushing first makes the flag conditional on the
  * data: if that flush fails the bit is never touched, the platter keeps the bit
@@ -1548,14 +1552,15 @@ static int _krffs_on_disk;
  * frame, which is a remap. `pc_sync` re-protects but never evicts, so the frame
  * is still there when the store arrives.
  *
- * It does not make the read itself safe, and nothing here can. Bringing a page
- * in needs a free frame, taking a frame needs an eviction, and an eviction
- * needs a write; on a disk that can no longer be written, with the root evicted
- * and every slot dirty, the fill fails and the machine panics here instead of
- * reporting. That is a machine which has already lost its disk, the panic stops
- * it with the flag still set, which is the direction this function exists to
- * protect, and closing the window would mean pinning the root frame for the
- * life of the mount, which is a page-cache change and not a shutdown one.
+ * It does not make the read itself safe, and nothing here can. Bringing a
+ * page in needs a free frame, taking a frame needs an eviction, and an
+ * eviction needs a write; on a disk that can no longer be written, with the
+ * root evicted and every slot dirty, the fill fails and the machine panics
+ * here instead of reporting. That is a machine which has already lost its
+ * disk, the panic stops it with the flag still set, which is the direction
+ * this function exists to protect, and closing the window would mean pinning
+ * the root frame for the life of the mount, which is a page-cache change and
+ * not a shutdown one.
  */
 static int krffs_disk_mark_clean(void)
 {
@@ -1589,8 +1594,8 @@ static int krffs_disk_mark_clean(void)
  * shell or from a `reboot(2)`. It disables scheduling, flushes the page cache,
  * clears the dirty-mount flag when there is a disk mount to clear it on, says
  * on the serial line which of those happened, and stops. The clean-unmount line
- * is printed only when the flag was actually cleared; a failure has already said
- * why, and a token that appeared either way would be a claim no test could
+ * is printed only when the flag was actually cleared; a failure has already
+ * said why, and a token that appeared either way would be a claim no test could
  * trust.
  *
  * A failed flush does not stop the machine from stopping. An unwritable disk
@@ -1598,12 +1603,13 @@ static int krffs_disk_mark_clean(void)
  * other one: reporting a clean unmount the data did not earn. What a failure
  * costs is the flag, which stays set, so the next boot invites `fsck.krffs`.
  *
- * A second concurrent caller cannot exist, which is the first thing a reader of
- * a function that never returns wants to know. Preemption is already off inside
- * a syscall, since the timer skips `schedule()` while `in_syscall` is set;
- * `sched_disable()` closes the debug-shell and kernel-thread cases where it is
- * not; and nothing returns from here to enter it again. `sched_disable()` has
- * to stay ahead of the flush for that reason and not merely for tidiness.
+ * A second concurrent caller cannot exist, which is the first thing a reader
+ * of a function that never returns wants to know. Preemption is already off
+ * inside a syscall, since the timer skips `schedule()` while `in_syscall` is
+ * set; `sched_disable()` closes the debug-shell and kernel-thread cases
+ * where it is not; and nothing returns from here to enter it again.
+ * `sched_disable()` has to stay ahead of the flush for that reason and not
+ * merely for tidiness.
  */
 void kernel_shutdown(int how)
 {
@@ -2660,10 +2666,10 @@ void shell_loop(void)
  *
  * Initializes every subsystem in order (serial, GDT/TSS/IDT/ISR, memory and
  * paging, timer, entropy, keyboard and console tty, mouse, syscalls, the
- * process table and scheduler, audio, the RAM disk and KRFFS, the pipe and pty
- * pools, and the network), runs the self-tests, then runs `/sbin/init` as PID 1
- * (or, in rescue mode or on an init-less image, the kernel debug shell). Does not
- * return.
+ * process table and scheduler, audio, the RAM disk and KRFFS, the pipe and
+ * pty pools, and the network), runs the self-tests, then runs `/sbin/init`
+ * as PID 1 (or, in rescue mode or on an init-less image, the kernel debug
+ * shell). Does not return.
  */
 void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 {
@@ -3130,15 +3136,16 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     serial_printf("\n---\n\n");
 
     /*
-     * Decide the boot home. A normal boot runs the persistent /sbin/init as PID
-     * 1: boot_init_process execs it and does not return while it runs, and init's
-     * later death is a panic (panic_init_died), so a normal box never falls to
-     * the debug shell. boot_init_process returns here only when the image holds
-     * no init (the test image); that case, like an explicit `rach2.rescue` boot,
-     * makes the kernel debug shell the supervisor. The shell loops reading
-     * commands and `exec`s programs as transient inits that return to it on exit
-     * (an is-init death path jmps back to shell_loop while the debug shell is
-     * home), which is the contract the test harness drives.
+     * Decide the boot home. A normal boot runs the persistent /sbin/init as
+     * PID 1: boot_init_process execs it and does not return while it runs,
+     * and init's later death is a panic (panic_init_died), so a normal box
+     * never falls to the debug shell. boot_init_process returns here only
+     * when the image holds no init (the test image); that case, like an
+     * explicit `rach2.rescue` boot, makes the kernel debug shell the
+     * supervisor. The shell loops reading commands and `exec`s programs as
+     * transient inits that return to it on exit (an is-init death path jmps
+     * back to shell_loop while the debug shell is home), which is the
+     * contract the test harness drives.
      */
     /* The diagnostic numbers once more, on a screen nothing will scroll, before
      * init takes the console. */

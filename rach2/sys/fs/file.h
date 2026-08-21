@@ -11,12 +11,13 @@ struct wait_queue;
  * Backing operations for a descriptor, the kernel's `struct file_operations`.
  *
  * A backing object installs a `file_ops` vtable on its descriptor and the
- * syscall layer calls through it, alongside the enum dispatch on fd_entry_t.type
- * used for the older types (CONSOLE, FILE, SOCKET, ...). Pipes, ttys, and ptys
- * all hang off this one uniform dispatch.
+ * syscall layer calls through it, alongside the enum dispatch on
+ * fd_entry_t.type used for the older types (CONSOLE, FILE, SOCKET, ...). Pipes,
+ * ttys, and ptys all hang off this one uniform dispatch.
  *
- * Any op may be NULL: a NULL read/write means the object cannot be read/written
- * that way (the caller returns -EBADF); a NULL close needs no teardown.
+ * Any op may be NULL: a NULL read/write means the object cannot be
+ * read/written that way (the caller returns -EBADF); a NULL close needs no
+ * teardown.
  */
 struct file_ops {
     /* Read up to count bytes into the user buffer; bytes read (>=0) or

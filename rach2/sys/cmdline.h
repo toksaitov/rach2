@@ -15,8 +15,8 @@ void kcmdline_capture(const char *cmdline);
 /**
  * Non-zero if the captured command line contains `flag` as a whole token.
  *
- * Tokens are whitespace-delimited, so `kcmdline_has("rach2.rescue")` matches the
- * standalone argument and not a substring of a longer one.
+ * Tokens are whitespace-delimited, so `kcmdline_has("rach2.rescue")` matches
+ * the standalone argument and not a substring of a longer one.
  */
 int kcmdline_has(const char *flag);
 

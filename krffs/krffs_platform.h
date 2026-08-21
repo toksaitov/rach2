@@ -98,12 +98,12 @@ void krffs_get_time_of_day(struct timeval *time_of_day);
  * of the file after the offset, but a nonzero `--offset` names a partition that
  * does not extend to the end of the disk, so it requires an explicit `--size`.
  * The region must fit in the file and be at least `min_size` bytes (the caller
- * passes the smallest file system it can hold). A flag with no following value is
- * an error rather than a silent default. Other arguments are ignored, so each
- * tool keeps its own option parsing.
+ * passes the smallest file system it can hold). A flag with no following value
+ * is an error rather than a silent default. Other arguments are ignored, so
+ * each tool keeps its own option parsing.
  *
- * On success returns 0 and writes `*out_offset` and `*out_size`; on a bad or out
- * of range region returns -1 with a `krffs: detail` message on stderr.
+ * On success returns 0 and writes `*out_offset` and `*out_size`; on a bad or
+ * out of range region returns -1 with a `krffs: detail` message on stderr.
  */
 int krffs_parse_region_args(
         int argc,

@@ -19,8 +19,8 @@
  * firmware/e820 memory map (Linux memblock then the buddy allocator).
  *
  * These two constants mirror HARD_MEMORY_LIMIT and PAGE_SIZE in mm/paging.h;
- * they are kept local so this file stays pure and host-linkable, and init_paging
- * asserts they still agree at boot.
+ * they are kept local so this file stays pure and host-linkable, and
+ * init_paging asserts they still agree at boot.
  */
 #define FRAME_PAGE_SIZE        0x1000u
 #define FRAME_DIRECT_MAP_LIMIT 0x2000000u  /* 32 MB; == HARD_MEMORY_LIMIT */

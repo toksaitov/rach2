@@ -25,10 +25,11 @@
  * Run `program` on `path` without a shell and return its exit status.
  *
  * The path is passed as a distinct argv element, so no byte of it is ever
- * interpreted by a shell: this is what closes the command injection a `system()`
- * with the path concatenated into the command string would open. Returns the
- * utility's exit status, or 127 when it could not be launched (so the caller can
- * fall back to a `./`-prefixed name), or -1 on a fork/wait failure.
+ * interpreted by a shell: this is what closes the command injection a
+ * `system()` with the path concatenated into the command string would open.
+ * Returns the utility's exit status, or 127 when it could not be launched
+ * (so the caller can fall back to a `./`-prefixed name), or -1 on a
+ * fork/wait failure.
  */
 static int krffs_run_check_utility(const char *program, const char *path)
 {

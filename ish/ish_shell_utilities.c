@@ -79,15 +79,15 @@ char *ish_extract_last_stdout_redirection_file(char **arguments)
 }
 
 /**
- * Strip the first `argument_lexeme` and its filename from `arguments`, returning
- * that filename.
+ * Strip the first `argument_lexeme` and its filename from `arguments`,
+ * returning that filename.
  *
  * Scans the NULL-terminated `arguments` for the first entry equal to
- * `argument_lexeme` (compared without case) and clears both it and the following
- * filename slot to NULL. That terminates the argv the command runs with at the
- * redirection, so the lexeme and anything after it are removed (one redirection
- * per stream is the supported case). Returns the filename, or NULL when the
- * lexeme is absent or carries no filename.
+ * `argument_lexeme` (compared without case) and clears both it and the
+ * following filename slot to NULL. That terminates the argv the command runs
+ * with at the redirection, so the lexeme and anything after it are removed
+ * (one redirection per stream is the supported case). Returns the filename,
+ * or NULL when the lexeme is absent or carries no filename.
  */
 char *_ish_extract_next_parameter_for_argument_lexeme(char **arguments, const char *argument_lexeme)
 {

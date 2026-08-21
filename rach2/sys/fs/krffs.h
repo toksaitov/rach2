@@ -150,10 +150,10 @@ krffs_node_t *krffs_resolve_e(const char *path, int *err);
 /**
  * As krffs_resolve_e, but charging `may_search` on every directory entered.
  *
- * The predicate dereferences the calling process's credentials, so this may only
- * be installed from syscall context. A NULL predicate is exactly krffs_resolve_e,
- * which is what the boot self-test, the debug shell, and the three re-resolves
- * that must not re-charge rely on.
+ * The predicate dereferences the calling process's credentials, so this may
+ * only be installed from syscall context. A NULL predicate is exactly
+ * krffs_resolve_e, which is what the boot self-test, the debug shell, and
+ * the three re-resolves that must not re-charge rely on.
  */
 krffs_node_t *krffs_resolve_x(const char *path, int *err, krffs_search_fn may_search);
 

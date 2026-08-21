@@ -32,15 +32,15 @@ int sched_is_enabled(void)
  * Pick the next READY process round-robin and switch to it.
  *
  * Does nothing if scheduling is disabled, there is no current process, or no
- * other process is READY. The switch runs with interrupts disabled: a timer IRQ
- * landing between publishing current_proc and the stack and CR3 swap inside
- * switch_context would see current_proc == next with next->in_syscall == 0,
- * pass the timer handler's reschedule gate, and re-enter schedule() on the old
- * stack with the TLS descriptor already rewritten, corrupting next->regs.esp.
- * So schedule() saves
- * the caller's IF, clears it across the switch, and restores it afterward. Each
- * process does this symmetrically and resumes with its own IF; a process entered
- * for the first time skips the restore and takes its IF from iret instead.
+ * other process is READY. The switch runs with interrupts disabled: a timer
+ * IRQ landing between publishing current_proc and the stack and CR3 swap
+ * inside switch_context would see current_proc == next with next->in_syscall
+ * == 0, pass the timer handler's reschedule gate, and re-enter schedule() on
+ * the old stack with the TLS descriptor already rewritten, corrupting
+ * next->regs.esp. So schedule() saves the caller's IF, clears it across the
+ * switch, and restores it afterward. Each process does this symmetrically
+ * and resumes with its own IF; a process entered for the first time skips
+ * the restore and takes its IF from iret instead.
  */
 void schedule(void)
 {

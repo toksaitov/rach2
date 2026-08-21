@@ -289,12 +289,13 @@ static void sb16_start_auto_init(void)
     uint8_t dsp_cmd;
 
     /*
-     * The DSP block-size register counts transfer units per IRQ (one byte for
-     * 8-bit DMA, one 16-bit word for 16-bit DMA), set to one DMA half. Stereo only
-     * interleaves L/R into consecutive units (signalled by the mode bit), so it
-     * does NOT change the unit count: halving block_size again for stereo would
-     * fire the DSP IRQ twice per half, out of phase with the DMA, and the handler
-     * would refill the half the DAC is still reading.
+     * The DSP block-size register counts transfer units per IRQ (one byte
+     * for 8-bit DMA, one 16-bit word for 16-bit DMA), set to one DMA half.
+     * Stereo only interleaves L/R into consecutive units (signalled by the
+     * mode bit), so it does NOT change the unit count: halving block_size
+     * again for stereo would fire the DSP IRQ twice per half, out of phase
+     * with the DMA, and the handler would refill the half the DAC is still
+     * reading.
      */
     if (is_16bit) {
         dma_channel = SB16_DMA_16BIT;

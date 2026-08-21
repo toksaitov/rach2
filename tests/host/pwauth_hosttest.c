@@ -1423,23 +1423,25 @@ static void check_death_set_installed(void)
 }
 
 /**
- * A password reader started in the background, and the terminal it does not own.
+ * A password reader started in the background, and the terminal it does not
+ * own.
  *
- * `su &` is one keystroke, and this kernel raises nothing for a `tcsetattr` from
- * a background process group: only the read is guarded, by `SIGTTIN`. So a
+ * `su &` is one keystroke, and this kernel raises nothing for a `tcsetattr`
+ * from a background process group: only the read is guarded, by `SIGTTIN`. So a
  * reader that took echo away before reading would silence a terminal belonging
  * to the shell that started it and then stop at the first byte, leaving that
  * shell echoing nothing and no program running that knows how to put it back.
  * Killing the stopped job does not undo it either, since the modes are the
  * terminal's and not the process's.
  *
- * The reader must therefore leave the modes alone until it owns the terminal,
- * and pick them up on the resume that a `fg` sends, which is the path that
- * already asks the question. The case builds the shape a shell builds: a
- * session leader holding the terminal, and the reader in a process group of its
- * own. Both halves are asserted, because either alone would pass for the wrong
- * reason: the terminal still echoes, and the reader stopped on `SIGTTIN` rather
- * than getting a byte it should not have been given.
+ * The reader must therefore leave the modes alone until it owns the
+ * terminal, and pick them up on the resume that a `fg` sends, which is the
+ * path that already asks the question. The case builds the shape a shell
+ * builds: a session leader holding the terminal, and the reader in a process
+ * group of its own. Both halves are asserted, because either alone would
+ * pass for the wrong reason: the terminal still echoes, and the reader
+ * stopped on `SIGTTIN` rather than getting a byte it should not have been
+ * given.
  */
 static void check_background_prompt(void)
 {

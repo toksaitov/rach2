@@ -6,10 +6,10 @@
  * Built with PAGECACHE_HOSTTEST and PC_SLOTS=4, which includes pagecache.c
  * directly (so the static hash, clock, and eviction logic are reachable) and
  * swaps the frame/mapping layer for static pages. A fake array stands in for
- * the disk: a fault must fill the right page once, a re-touch within residency
- * must hit (not re-read), an eviction must write back iff dirty, and a dirty page
- * thrashed out and re-read must come back with its bytes intact. Returns the
- * failed-check count (0 == pass).
+ * the disk: a fault must fill the right page once, a re-touch within
+ * residency must hit (not re-read), an eviction must write back iff dirty,
+ * and a dirty page thrashed out and re-read must come back with its bytes
+ * intact. Returns the failed-check count (0 == pass).
  */
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u

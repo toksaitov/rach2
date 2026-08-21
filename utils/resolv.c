@@ -4,15 +4,15 @@
  *
  * `resolve_host` tries, in order, a numeric literal, the hosts file, then a DNS
  * A query to the nameserver in the resolver config, each looked for under
- * `/etc` first and at the root after, since the test image has no `/etc`. The pure helpers
- * (`rach2_inet_aton`, `hosts_find`, `dns_build_query`, `dns_parse_a`) take
- * buffers and touch no syscalls, so the `dnstest` program can exercise them
- * directly; only `resolve_host` does file and socket I/O.
+ * `/etc` first and at the root after, since the test image has no `/etc`. The
+ * pure helpers (`rach2_inet_aton`, `hosts_find`, `dns_build_query`,
+ * `dns_parse_a`) take buffers and touch no syscalls, so the `dnstest` program
+ * can exercise them directly; only `resolve_host` does file and socket I/O.
  *
- * Only the functions declared in `netdb.h` are external; every other symbol is
- * static, so this object links cleanly into each program that needs it (ping,
- * nc, and the dnstest test). Its file and socket I/O goes through the ported
- * musl, the same libc the rest of the utilities link.
+ * Only the functions declared in `netdb.h` are external; every other symbol
+ * is static, so this object links cleanly into each program that needs it
+ * (ping, nc, and the dnstest test). Its file and socket I/O goes through the
+ * ported musl, the same libc the rest of the utilities link.
  */
 
 #include "netdb.h"

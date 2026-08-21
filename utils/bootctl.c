@@ -26,20 +26,22 @@
  * contract: `tools/install_test.sh` reads the candidate's first sector from
  * them to corrupt it, so their field order is fixed.
  *
- * `config` writes the boot menu GRUB reads after its own stub entries. That file
- * is GRUB script and whoever writes it can direct the boot, which is the same
- * authority `kernel` already has. What the immutable stub guarantees is that a
- * menu which is damaged rather than written leaves a bootable machine: every
- * entry the machine needs is defined before the staged file is read. `env` and `trial` write the two grubenv keys the
- * trial and commit state machine turns on, through an allowlist rather than as
- * a general editor, because that block has no checksum and GRUB parses it at
- * boot with no recourse if it is malformed.
+ * `config` writes the boot menu GRUB reads after its own stub entries. That
+ * file is GRUB script and whoever writes it can direct the boot, which is the
+ * same authority `kernel` already has. What the immutable stub guarantees is
+ * that a menu which is damaged rather than written leaves a bootable machine:
+ * every entry the machine needs is defined before the staged file is read.
+ * `env` and `trial` write the two grubenv keys the trial and commit state
+ * machine turns on, through an allowlist rather than as a general editor,
+ * because that block has no checksum and GRUB parses it at boot with no
+ * recourse if it is malformed.
  *
- * The tool runs only on a machine that GRUB booted from a slot: it requires a
- * `rach2.slot=` token on /proc/cmdline before installing and
+ * The tool runs only on a machine that GRUB booted from a slot: it requires
+ * a `rach2.slot=` token on /proc/cmdline before installing and
  * `rach2.slot=candidate` before committing, which also covers a QEMU -kernel
  * boot that happens to have a boot-partition disk attached. The device it
- * writes, /dev/bootpart, exists only on such a disk and opens for root alone.
+ * writes, /dev/bootpart, exists only on such a disk and opens for root
+ * alone.
  */
 
 #include <errno.h>

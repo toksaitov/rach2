@@ -2,19 +2,19 @@
  * rtl8139.c - Realtek RTL8139 PCI NIC driver.
  *
  * TX: four round-robin descriptors, each with its own buffer. Writing the
- *     length to a TSD register starts the DMA. Before reusing a slot we wait
- *     for its previous transmission to report TOK, so a burst of frames cannot
- *     overwrite a buffer that is still in flight.
+ * length to a TSD register starts the DMA. Before reusing a slot we wait for
+ * its previous transmission to report TOK, so a burst of frames cannot
+ * overwrite a buffer that is still in flight.
  *
- * RX: one linear ring buffer. The chip prefixes each frame with a 4-byte
- *     header (little-endian status word and length word). We validate that
- *     header before trusting the length, and resync the receiver if it ever
- *     looks wrong or the ring overflows.
+ * RX: one linear ring buffer. The chip prefixes each frame with a 4-byte header
+ * (little-endian status word and length word). We validate that header before
+ * trusting the length, and resync the receiver if it ever looks wrong or the
+ * ring overflows.
  *
- * IRQ: registered at vector 32 + IRQ line. The shared IRQ router sends the PIC
- *      EOI before calling us, so this driver must not touch the PIC. The card
- *      sits on a PCI line that can be shared (e.g. with the HDA device); see the
- *      service-loop note in rtl8139_irq for the shared-line handling.
+ * IRQ: registered at vector 32 + IRQ line. The shared IRQ router sends the
+ * PIC EOI before calling us, so this driver must not touch the PIC. The card
+ * sits on a PCI line that can be shared (e.g. with the HDA device); see the
+ * service-loop note in rtl8139_irq for the shared-line handling.
  */
 
 #include "rtl8139.h"

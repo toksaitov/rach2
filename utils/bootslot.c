@@ -1,14 +1,15 @@
 /*
- * bootslot.c: the boot-slot core bootctl drives, over caller-supplied sector I/O.
+ * bootslot.c: the boot-slot core bootctl drives, over caller-supplied sector
+ * I/O.
  *
  * The shape follows dev-log/23-install/plan.md. Nothing here trusts the
  * volume: the BPB is validated field by field with subtraction-based bounds,
  * the two FAT copies must be identical, every chain the namespace reaches is
  * walked under a visited bitmap (a cluster reached twice is a cross-link and
- * an error), a regular file's chain length must match its directory size, and
- * the three named files must exist as short directory entries. Only then does
- * an install write anything, in the order the interruption matrix documents,
- * so a power cut at any point leaves a machine that boots.
+ * an error), a regular file's chain length must match its directory size,
+ * and the three named files must exist as short directory entries. Only then
+ * does an install write anything, in the order the interruption matrix
+ * documents, so a power cut at any point leaves a machine that boots.
  */
 
 #include "bootslot.h"

@@ -300,10 +300,11 @@ uint64_t krffs_get_node_relative_position(
  * Reports whether the whole of `node`'s header lies within the file system's
  * mapping `[base, base + size)`.
  *
- * The header must fit in full, not merely start inside: a node positioned in the
- * last few bytes of a corrupt image would otherwise pass the check and then read
- * its `size`/`next` tail fields past the end of the mapping. The remaining-space
- * test is written as a subtraction so a position past `limit` cannot wrap it.
+ * The header must fit in full, not merely start inside: a node positioned in
+ * the last few bytes of a corrupt image would otherwise pass the check and
+ * then read its `size`/`next` tail fields past the end of the mapping. The
+ * remaining-space test is written as a subtraction so a position past
+ * `limit` cannot wrap it.
  */
 bool krffs_is_node_in_file_system(
          struct krffs_file_system *file_system,

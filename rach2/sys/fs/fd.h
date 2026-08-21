@@ -3,12 +3,13 @@
 
 /*
  * The per-process file descriptor table: the small array of slots a process
- * indexes by descriptor number to reach whatever it has open. A slot names what
- * it points at (a console, a KRFFS file or directory, a socket, a pipe or tty or
- * pty, a devfs or procfs node) and carries the per-descriptor flags; the seek
- * offset and the POSIX status flags live one level down in the shared open-file
- * description so dup, dup2, and fork can hand several descriptors the same open.
- * fd 0/1/2 are wired to the console as stdin, stdout, and stderr.
+ * indexes by descriptor number to reach whatever it has open. A slot names
+ * what it points at (a console, a KRFFS file or directory, a socket, a pipe
+ * or tty or pty, a devfs or procfs node) and carries the per-descriptor
+ * flags; the seek offset and the POSIX status flags live one level down in
+ * the shared open-file description so dup, dup2, and fork can hand several
+ * descriptors the same open. fd 0/1/2 are wired to the console as stdin,
+ * stdout, and stderr.
  */
 
 #include "../lib/kint.h"
@@ -56,9 +57,10 @@ typedef enum {
 
 /*
  * Open-file-description status flags. POSIX keeps these on the open-file
- * description (so dup/dup2/fork share them, and fcntl(F_SETFL) on one descriptor
- * is visible through its duplicates), unlike FD_CLOEXEC which is per-descriptor.
- * The values are the Linux i386 O_* bits so fcntl passes them straight through.
+ * description (so dup/dup2/fork share them, and fcntl(F_SETFL) on one
+ * descriptor is visible through its duplicates), unlike FD_CLOEXEC which is
+ * per-descriptor. The values are the Linux i386 O_* bits so fcntl passes
+ * them straight through.
  */
 #define OFD_APPEND    02000     /* O_APPEND: every write goes to end-of-file */
 #define OFD_NONBLOCK  04000     /* O_NONBLOCK: a would-block returns -EAGAIN */
@@ -74,19 +76,21 @@ struct file_ops;
  * Open-file description (OFD): the shared, refcounted state behind one or more
  * descriptors, the seek offset plus the POSIX status flags. dup/dup2/fork copy
  * the fd's pointer to this and bump the refcount, so the duplicates share one
- * offset and one set of status flags (the POSIX open-file description semantics)
- * instead of each carrying its own. Allocated from a fixed pool (see fd.c);
- * refcount 0 means the slot is free, and the last referencing close frees it.
+ * offset and one set of status flags (the POSIX open-file description
+ * semantics) instead of each carrying its own. Allocated from a fixed pool (see
+ * fd.c); refcount 0 means the slot is free, and the last referencing close
+ * frees it.
  *
  * There are two offsets because there are two ranges. Everything this kernel
  * opens as a file is under 4 GiB, so `offset` is 32 bits and every path that
- * reads or writes one stays in 32-bit arithmetic. The raw disk windows are not:
- * a whole 250 GB drive needs a 64-bit offset to address its far end, and
- * widening the field every other subsystem uses to reach it would put the whole
- * file, procfs and terminal layer in the blast radius of a change that only the
- * disk windows need. `raw_offset` belongs to those windows alone; nothing else
- * reads it, and it lives here rather than in the descriptor so `dup` and `fork`
- * keep sharing one offset the way POSIX says they must.
+ * reads or writes one stays in 32-bit arithmetic. The raw disk windows are
+ * not: a whole 250 GB drive needs a 64-bit offset to address its far end,
+ * and widening the field every other subsystem uses to reach it would put
+ * the whole file, procfs and terminal layer in the blast radius of a change
+ * that only the disk windows need. `raw_offset` belongs to those windows
+ * alone; nothing else reads it, and it lives here rather than in the
+ * descriptor so `dup` and `fork` keep sharing one offset the way POSIX says
+ * they must.
  */
 struct open_file {
     uint32_t refcount;           /* Number of descriptors sharing this OFD */
@@ -96,10 +100,10 @@ struct open_file {
 };
 
 /*
- * File descriptor entry. The backing object (type/node/sock, or an ops vtable
- * for pipes/ttys/ptys) and its own reference (sockets are refcounted per
- * descriptor) live here; the seek offset and status flags are shared through the
- * open-file description ofd.
+ * File descriptor entry. The backing object (type/node/sock, or an ops
+ * vtable for pipes/ttys/ptys) and its own reference (sockets are refcounted
+ * per descriptor) live here; the seek offset and status flags are shared
+ * through the open-file description ofd.
  */
 typedef struct fd_entry {
     fd_type_t type;              /* Type of this fd (NONE, CONSOLE, FILE) */
@@ -141,10 +145,10 @@ int fd_free(fd_table_t *table, int fd);
 fd_entry_t *fd_get(fd_table_t *table, int fd);
 
 /*
- * Add or drop a reference to an open-file description. dup/dup2/fork point a new
- * descriptor at an existing OFD and call fd_ofd_ref so the shared seek offset
- * outlives the original; fd_free calls fd_ofd_unref. (The OFD frees itself back
- * to the pool when its last reference goes.)
+ * Add or drop a reference to an open-file description. dup/dup2/fork point a
+ * new descriptor at an existing OFD and call fd_ofd_ref so the shared seek
+ * offset outlives the original; fd_free calls fd_ofd_unref. (The OFD frees
+ * itself back to the pool when its last reference goes.)
  */
 void fd_ofd_ref(struct open_file *ofd);
 void fd_ofd_unref(struct open_file *ofd);

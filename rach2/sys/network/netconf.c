@@ -179,12 +179,13 @@ static int mask_provisional;
 /*
  * An address accepted but not yet in force.
  *
- * Some addresses are hosts only under a mask wider than the classful one, and
- * the mask is the caller's next call. Putting such an address in force meanwhile
- * would leave a machine answering for a network address for as long as it takes
- * the next call to arrive, and forever if it never does, because the program
- * making the calls was killed. So it waits here instead and the machine stays
- * unconfigured, which is a state anyone can see and nobody mistakes for working.
+ * Some addresses are hosts only under a mask wider than the classful one,
+ * and the mask is the caller's next call. Putting such an address in force
+ * meanwhile would leave a machine answering for a network address for as
+ * long as it takes the next call to arrive, and forever if it never does,
+ * because the program making the calls was killed. So it waits here instead
+ * and the machine stays unconfigured, which is a state anyone can see and
+ * nobody mistakes for working.
  */
 static uint32_t pending_addr;
 

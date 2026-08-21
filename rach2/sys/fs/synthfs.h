@@ -5,13 +5,14 @@
 
 /*
  * synthfs: the one place that knows /dev and /proc are synthetic. Every
- * path-taking syscall classifies its (already absolute, leading-'/'-stripped) path
- * through synth_classify(); a VNODE_KRFFS result means "ordinary file, resolve
- * through KRFFS", anything else routes to the devfs/procfs glue. Keeping the
- * classification here (instead of scattering "does the path start with dev/?"
- * checks before each krffs_resolve) is what stops the two namespaces from rotting
- * into special cases. The classifier is pure string logic with no kernel state, so
- * the fence-post-prone component parsing is exercised natively under ASan in
+ * path-taking syscall classifies its (already absolute,
+ * leading-'/'-stripped) path through synth_classify(); a VNODE_KRFFS result
+ * means "ordinary file, resolve through KRFFS", anything else routes to the
+ * devfs/procfs glue. Keeping the classification here (instead of scattering
+ * "does the path start with dev/?" checks before each krffs_resolve) is what
+ * stops the two namespaces from rotting into special cases. The classifier
+ * is pure string logic with no kernel state, so the fence-post-prone
+ * component parsing is exercised natively under ASan in
  * tests/host/synthfs_hosttest.c.
  */
 
@@ -64,9 +65,10 @@ struct vpath {
 int synth_classify(const char *path, struct vpath *vp);
 
 /*
- * A synthetic directory fd's identity (kind + full pid). It does not fit packed in
- * the fd's priv pointer, so it lives in a pool (in syscall.c) and priv points at
- * the slot; defined here so /proc/<pid>/fd readlink can render it.
+ * A synthetic directory fd's identity (kind + full pid). It does not fit
+ * packed in the fd's priv pointer, so it lives in a pool (in syscall.c) and
+ * priv points at the slot; defined here so /proc/<pid>/fd readlink can
+ * render it.
  */
 struct synth_dir {
     int kind;

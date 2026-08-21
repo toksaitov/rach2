@@ -106,10 +106,12 @@ static uint32_t opl_sample_remainder = 0;
 /* Cap catch-up to avoid overflowing the kernel ring buffer */
 /*
  * Real hardware can run Doom slower than expected, which makes the elapsed time
- * between PCSoundUpdate() calls larger and causes underruns if we clamp too low.
+ * between PCSoundUpdate() calls larger and causes underruns if we clamp too
+ * low.
  *
- * Keep this comfortably below the kernel's audio ring capacity (currently 8KB)
- * but large enough to absorb occasional long frames without audible gaps.
+ * Keep this comfortably below the kernel's audio ring capacity (currently
+ * 8KB) but large enough to absorb occasional long frames without audible
+ * gaps.
  */
 #define MAX_CATCHUP_SAMPLES (MIX_BUFFER_SIZE * 16)
 

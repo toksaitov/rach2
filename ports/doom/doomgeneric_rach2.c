@@ -301,8 +301,8 @@ void DG_DrawFrame(void)
 }
 
 /*
- * DG_SleepMs - Sleep for a number of milliseconds
- * Since we don't have a real sleep syscall, just busy-wait or return immediately
+ * DG_SleepMs - Sleep for a number of milliseconds Since we don't have a real
+ * sleep syscall, just busy-wait or return immediately
  */
 void DG_SleepMs(uint32_t ms)
 {

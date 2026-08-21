@@ -1,8 +1,8 @@
 /**
  * Probes that a file keeps its directory when a write relocates it.
  *
- * KRFFS grows a file in place when the following block is free, but relocates it
- * to a fresh allocation (copying the header and data) when the next block is
+ * KRFFS grows a file in place when the following block is free, but relocates
+ * it to a fresh allocation (copying the header and data) when the next block is
  * taken. The copy must carry the file's parent_id, or the relocated file
  * silently leaves its directory and re-parents under the root, corrupting the
  * tree on disk. The probe makes /dg/f, then /dg/g right after it so f has no

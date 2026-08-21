@@ -6,14 +6,14 @@
 #include "../proc/wait_queue.h"
 
 /*
- * A terminal: the kernel object a console (or a pty) sits behind. The N_TTY line
- * discipline (see n_tty.h) does the cooked/raw editing, echo, and ISIG
- * recognition over an input ring; readers block on input_wq until a line (or a
- * raw byte) is ready; an input source (the keyboard IRQ, the serial poll) feeds
- * bytes in via tty_input_char, and write output and echo leave through `sink`.
- * `pump`, when set, is a polled input source (the console's serial port) drained
- * before each read-sleep, so a headless host with no input IRQ still makes
- * progress on each timer wake.
+ * A terminal: the kernel object a console (or a pty) sits behind. The N_TTY
+ * line discipline (see n_tty.h) does the cooked/raw editing, echo, and ISIG
+ * recognition over an input ring; readers block on input_wq until a line (or
+ * a raw byte) is ready; an input source (the keyboard IRQ, the serial poll)
+ * feeds bytes in via tty_input_char, and write output and echo leave through
+ * `sink`. `pump`, when set, is a polled input source (the console's serial
+ * port) drained before each read-sleep, so a headless host with no input IRQ
+ * still makes progress on each timer wake.
  */
 
 /* The TIOCGWINSZ/TIOCSWINSZ window size (Linux `struct winsize`). */
