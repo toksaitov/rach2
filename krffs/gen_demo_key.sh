@@ -92,7 +92,7 @@ add_local_keys() {
     [ -s "$pub.tmp" ] || { echo "gen_demo_key: composed an empty krffs/$pub" >&2; exit 1; }
     mv "$pub.tmp" "$pub"
     if [ -f "$extra" ]; then
-        echo "gen_demo_key: krffs/$pub carries the demo key and krffs/$extra"
+        echo "gen_demo_key: krffs/$pub has the demo key and krffs/$extra"
     fi
 }
 

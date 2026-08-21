@@ -6,7 +6,7 @@
  * into writes of whole sectors. It is separate because the numbers decide
  * whether a write lands inside the disk or past its end, and because the loop
  * has to be driven with a stream that stops early, one that hands out a byte at
- * a time, and one that carries more than it said, none of which an `ssh` pipe
+ * a time, and one that has more than it said, none of which an `ssh` pipe
  * can be asked to do on request. `tests/host/sectorcopy_hosttest.c` drives it
  * with all of them.
  */

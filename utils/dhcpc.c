@@ -1,5 +1,5 @@
 /**
- * A DHCP client for the machine that carries no busybox.
+ * A DHCP client for the machine that has no busybox.
  *
  * os-real takes its address with busybox's `udhcpc`; this is the same job done
  * with this project's own code, for the image that has only this project's own

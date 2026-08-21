@@ -2,7 +2,7 @@
 #
 # The POSIX makefile pdpmake reads in the guest, driving the staged tcc
 # through /bin/cc; the GNU Makefile beside it stays the host build. ish
-# carries its own crt0 and raw syscall stubs, so it links -nostdlib the way
+# has its own crt0 and raw syscall stubs, so it links -nostdlib the way
 # the host build does; the one host flag that is dropped is -Ttext, because
 # tcc's default i386 text base is the same 0x08048000 the host build names
 # explicitly. The object list below must equal the host Makefile's;

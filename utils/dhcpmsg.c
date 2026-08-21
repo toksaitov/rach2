@@ -56,7 +56,7 @@ static void put_be32(unsigned char *p, unsigned long v)
 /**
  * The one's-complement sum every IP checksum is made of.
  *
- * `start` carries the running sum, so a UDP checksum can add its pseudo-header
+ * `start` has the running sum, so a UDP checksum can add its pseudo-header
  * before its own bytes.
  */
 static unsigned long ones_sum(const unsigned char *p, unsigned int len, unsigned long start)

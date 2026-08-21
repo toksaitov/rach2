@@ -55,7 +55,7 @@ extern char **environ;
 /* The login shell, tried in order: /bin/sh then /ish. Neither shipped image
  * boots this build any more, since both put the console behind a login; it is
  * kept for an image that wants a shell without one, and for the contrast the
- * two artifacts draw. The matching argv[0] carries a leading '-' so the shell
+ * two artifacts draw. The matching argv[0] has a leading '-' so the shell
  * runs as a login shell and reads /etc/profile. */
 static const char *const Shells[] = {"/bin/sh", "/ish", 0};
 static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};

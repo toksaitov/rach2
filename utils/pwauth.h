@@ -34,13 +34,13 @@
  * restores the first one's old hash. The kernel offers no help, since every
  * `F_SETLK` is granted and `F_GETLK` always answers `F_UNLCK` (documented
  * no-conflict semantics dropbear depends on), so an advisory lock records
- * nothing at all. The library therefore carries its own transaction, and it is
+ * nothing at all. The library therefore has its own transaction, and it is
  * a lock file: `cred_txn_begin` creates `CRED_LOCK_PATH` with
  * `O_CREAT|O_EXCL|O_WRONLY` at mode 0600 and writes the holder's pid as one
  * decimal line. The exclusive create is the whole of the exclusion, because a
  * syscall on this kernel does not yield, so nothing can interleave between the
  * existence test and the create. A file rather than a directory because it
- * carries the holder's pid, and the pid is what lets a refusal name the process
+ * has the holder's pid, and the pid is what lets a refusal name the process
  * an operator has to deal with. Every writer takes it before its first read and
  * holds it through its last rename; `cred_rewrite` refuses outright when it is
  * not held, so a caller that forgot cannot ship quietly.
@@ -50,7 +50,7 @@
  * `cred_txn_end`, its `cred_rewrite` and its death are all no-ops against its
  * parent's lock, and an acquire of its own goes through the ordinary wait and
  * refusal, naming the parent. A transaction does not survive an `exec` either,
- * since the new image carries neither the state nor the registered release, so
+ * since the new image has neither the state nor the registered release, so
  * a writer must not exec while holding one. Both halves of that carry weight: a
  * child that merely exits must not drop its parent's lock, and the pid in the
  * file is the only thing that says which of the two the holder is.
@@ -265,7 +265,7 @@ int pwauth_verify(const char *user, const char *password);
  * exactly that point and leave the console with echo off. It is a handler
  * that does nothing rather than `SIG_IGN`, which no write can tell apart,
  * for the reason `cred_txn_begin` gives: an ignored disposition is the one
- * an exec carries into the next image. And the prompt's state is taken down
+ * an exec passes into the next image. And the prompt's state is taken down
  * with the stop and continue signals blocked, since the modes go back before
  * the handlers come off and a `SIGCONT` arriving in between would re-apply
  * echo-off through a handler that is about to be removed. Both are restored
@@ -355,7 +355,7 @@ int pwauth_mint_salt(char *out, size_t size);
  * lifetime and for the same reason as the deaths: a writer reports as it goes,
  * and a diagnostic written to a standard error that is a pipe with no reader
  * would otherwise kill it where no `atexit` runs and leave the lock in `/etc`.
- * It is caught rather than ignored because an exec carries an ignored
+ * It is caught rather than ignored because an exec has an ignored
  * disposition into the new image and resets a caught one, and a child forked
  * under a transaction must not hand this library's `SIGPIPE` policy to a
  * program that never linked it. Every disposition this library installs is put
@@ -431,7 +431,7 @@ int cred_txn_end(void);
  * lock again, renames, and flushes once more through the same descriptor before
  * closing. Every step is checked.
  *
- * Five details carry the weight. The temporary name carries the writer's pid,
+ * Five details carry the weight. The temporary name has the writer's pid,
  * so it belongs to one process and no other: a fixed `<path>.tmp` would be
  * shared, and a writer whose lock had been removed could unlink and recreate
  * the file a successor already had open, whose rename by name would then
@@ -467,7 +467,7 @@ int cred_txn_end(void);
  * matters most. A failure before the rename unlinks the temporary file,
  * leaves the target byte for byte as it was, and is `CRED_UNCHANGED`, the
  * one a caller may report as "unchanged". A failure of the second flush or
- * of the close is `CRED_UNFLUSHED`: the file system already carries the new
+ * of the close is `CRED_UNFLUSHED`: the file system already has the new
  * file, the disk may still carry the old one, and the caller must report a
  * failure that says the change is live but not durable, since the account
  * now answers to the new password whatever the platter holds. Both flushes

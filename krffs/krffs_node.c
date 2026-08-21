@@ -124,7 +124,7 @@ struct krffs_node *krffs_wrap_node_position(
 /**
  * Stamps `node` as the root node of the file system.
  *
- * The root carries the reserved root name and the djb2 hash of that name as its
+ * The root has the reserved root name and the djb2 hash of that name as its
  * `id`, the root mode, and the owning uid and gid (zero on Windows, the
  * effective ids of the host process otherwise). `parent_id` is stamped to the
  * reserved root id (0): the kernel resolves ".." from the root by reading this
@@ -395,7 +395,7 @@ struct krffs_node *krffs_find_reserved_or_root_node_by_name(
     struct krffs_node *node = file_system->node;
     do {
         /* Same orphan rule as above. The root is exempt from the name test:
-           it carries no name and is matched by its own type. */
+           it has no name and is matched by its own type. */
         if ((node->type == KRFFS_Root_Node ||
              (node->type == KRFFS_Reserved_Node && node->name[0] != '\0')) &&
                 node->id == hash) {

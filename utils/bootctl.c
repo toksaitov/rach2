@@ -117,7 +117,7 @@ static int cmdline_load(void)
     return 0;
 }
 
-/** Whether /proc/cmdline carries `token` as a whole word. */
+/** Whether /proc/cmdline has `token` as a whole word. */
 static int cmdline_has(const char *token)
 {
     size_t tlen = strlen(token);
@@ -139,7 +139,7 @@ static int cmdline_has(const char *token)
  * Whether this machine is running from the fixed-address pair of menu entries.
  *
  * The menu's four kernel entries are two pairs: one takes whatever the network
- * gives it (`rach2.ip=none`) and one carries a fixed address for a network with
+ * gives it (`rach2.ip=none`) and one has a fixed address for a network with
  * no DHCP server. Which pair is running is read off the command line rather
  * than from a token of its own, because the address IS the difference between
  * them: a line naming an address that is not `none` is the fixed-address pair,
@@ -229,7 +229,7 @@ static void print_extent(const char *name, const struct bootslot_file *f, uint32
  * Print one environment value, or a stated absence.
  *
  * The block is 1024 bytes of `key=value` lines with no checksum, so a torn
- * write still parses. `trial_marker` says whether an empty value carries the
+ * write still parses. `trial_marker` says whether an empty value has the
  * consumed-trial meaning `bootslot_commit` looks for, which is true of
  * `next_entry` and of nothing else: an empty `saved_entry` says only that the
  * key is there with no value.
@@ -389,7 +389,7 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
 /* The menu ids `trial` may arm. Every one of these is an entry the stub both
  * defines and consumes a trial for; a value the stub does not consume would
  * stay in the block forever, arming nothing and blocking every later commit.
- * The two recovery ids are here now that partition 3 carries the kernel and the
+ * The two recovery ids are here now that partition 3 has the kernel and the
  * RAM image they name: arming one is how a machine that still boots is sent to
  * the image that can rewrite its root, which is the only way in when the root
  * is damaged but the machine is not yet stopped. A disk built without those
@@ -584,7 +584,7 @@ static int cmd_cancel(void)
 }
 
 /* The gap device's window starts at LBA 1, so a gap LBA is this many sectors
- * into it. Sector 0 is outside the window on purpose: it carries the partition
+ * into it. Sector 0 is outside the window on purpose: it has the partition
  * table, and a disk writes whole sectors. */
 #define GAP_OFF(lba) (((off_t)((lba) - 1u)) * BOOTSLOT_SECTOR)
 

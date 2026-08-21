@@ -2,7 +2,7 @@
  * login: authenticate whoever is at the console and become them.
  *
  * init's session child execs this, so the console is behind a password rather
- * than in front of one. It carries no set-id bit and needs none: init is root,
+ * than in front of one. It has no set-id bit and needs none: init is root,
  * so this program starts as root and spends that authority once, dropping to
  * the account it just authenticated and never climbing back.
  *
@@ -204,7 +204,7 @@ static void print_motd(void)
  * Become `pw` and exec its shell. Returns only on failure.
  *
  * The environment is the one this builds, the working directory is the
- * account's home, and `argv[0]` carries the leading dash that tells a shell it
+ * account's home, and `argv[0]` has the leading dash that tells a shell it
  * is a login shell. A home that cannot be entered is reported and the root
  * directory is used instead, since a missing home is a reason to complain and
  * not a reason to refuse a login the password already earned.

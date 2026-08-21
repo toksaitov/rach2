@@ -287,7 +287,7 @@ static void pwauth_death_set(sigset_t *set)
  *
  * A handler rather than `SIG_IGN`, though the two are indistinguishable to the
  * write itself (this kernel posts the signal and returns `-EPIPE` either way),
- * because an exec resets a caught disposition to the default and carries an
+ * because an exec resets a caught disposition to the default and has an
  * ignored one into the new image. A child forked under a transaction inherits
  * this library's state and holds none of it; what it must not also inherit is a
  * `SIGPIPE` that stays ignored into whatever program it goes on to run, since
@@ -1402,7 +1402,7 @@ static int cred_rewrite_abort(int fd, const char *path, const char *detail, mode
  * first is what keeps a transaction whose lock is already gone from destroying
  * work that is not its own, since the create begins by removing whatever stands
  * at the temporary name. Between them the temporary belongs to this writer
- * alone: its name carries the pid, so two writers loose at once (which takes a
+ * alone: its name has the pid, so two writers loose at once (which takes a
  * broken lock to arrange) still cannot meet on one file.
  */
 int cred_rewrite(const char *path, const char *text, size_t len)

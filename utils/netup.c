@@ -1,8 +1,8 @@
 /**
  * Bring the interfaces up from `/etc/network/interfaces`.
  *
- * `ifup -a` on the machine that carries busybox; this is the same job for the
- * machine that carries only this project's own code. It reads the same file,
+ * `ifup -a` on the machine that has busybox; this is the same job for the
+ * machine that has only this project's own code. It reads the same file,
  * in the same format, so one description of a network serves both images:
  *
  *     auto eth0

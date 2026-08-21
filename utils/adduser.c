@@ -462,7 +462,7 @@ int main(int argc, char **argv)
 
         return 1;
     }
-    /* The real uid, although this program carries no set-id bit and the two are
+    /* The real uid, although this program has no set-id bit and the two are
      * the same here. The rule is the rule: a program that decides an identity
      * question decides it from the identity of whoever ran it. */
     if (getuid() != 0) {

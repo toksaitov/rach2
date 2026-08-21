@@ -187,7 +187,7 @@ static uint64_t stage_node(
                 )
 {
     struct krffs_node *node;
-    /* Every staged node carries this one fixed instant: one second past the
+    /* Every staged node has this one fixed instant: one second past the
        epoch. Constant, because an image built twice from one tree must be one
        image; nonzero, because pdpmake reads a modification time of zero as a
        file that does not exist, and a student must be able to run make over

@@ -11,7 +11,7 @@
  * sectors, so the eight bytes of boot code that point at the core image cannot
  * be touched without rewriting the table beside them. So they are never
  * touched: `boot.img[0x5c]` says LBA 1 for the life of the disk, and LBA 1 is
- * GRUB's `diskboot` sector, which carries at offset 0x1f4 the blocklist naming
+ * GRUB's `diskboot` sector, which has at offset 0x1f4 the blocklist naming
  * where the rest of the image lives and how long it is.
  *
  * That makes LBA 1 a selector. The gap holds two tails, and replacing the core
@@ -95,7 +95,7 @@ uint32_t grubslot_other(uint32_t active);
  * Writes the blocklist the image will be read through: the tail's first LBA and
  * the number of sectors after the entry sector. The image is judged first, so a
  * caller that gets a refusal here has written nothing. Judged means: it fits a
- * slot, it is read through one extent and not several, it carries GRUB's
+ * slot, it is read through one extent and not several, it has GRUB's
  * blocklist segment, and the tail length it declares for itself matches its
  * length in sectors.
  *
@@ -104,7 +104,7 @@ uint32_t grubslot_other(uint32_t active);
  * no field in it records the byte length grub-mkimage gave it. So a transfer
  * cut short by enough to lose a whole sector is refused, and one cut inside
  * the final sector cannot be told from the whole file. Nor does any of this
- * establish that the image carries the modules this disk needs; the shape is
+ * establish that the image has the modules this disk needs; the shape is
  * checked, not the ability to boot. Check the transfer where it can be
  * checked, with `sha256sum` at both ends, before installing.
  *
