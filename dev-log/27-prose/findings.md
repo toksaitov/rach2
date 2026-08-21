@@ -102,6 +102,11 @@ findings up to where it stopped.
   `pollfd_select_ready` had been inserted between the doc and its function. Moved
   the block down to `pollfds_to_fdsets`, the same orphaned-doc pattern as the
   `pci.h` bus-master comment.
+* `rach2/sys/network/arp/arp.c`: the same orphaned-doc pattern. The block "Store
+  or refresh an IP-to-MAC mapping" (learning from every ARP packet, entries not
+  aging out) describes `arp_cache_update`, but sat above `arp_flush` (which only
+  clears the cache), leaving `arp_cache_update` undocumented. Moved the block to
+  `arp_cache_update` and wrote `arp_flush` its own one-line doc.
 * `rach2/sys/isr.h`: a comment read "First 15 interrupt request handlers" above
   the declarations `irq0` through `irq15`, which are 16 handlers (IRQ0-15). The
   "First 32 interrupt handlers" comment above it correctly counts isr0-isr31.
@@ -140,6 +145,10 @@ findings up to where it stopped.
   current process on `wq` until `cond` has or a signal arrives" -- the same
   mangled-"has" defect; the verb is "holds" (the function's own later line says
   "when the condition became true"). Corrected.
+* `rach2/sys/lib/kstring.c`: the standard-memory-wrapper comment ended "the type
+  each compiler's builtin prototype expects, which `-Werror` has these
+  definitions to" -- the same mangled-"has"; the verb is "holds" (`-Werror`
+  holds these definitions to that type). Corrected.
 * `rach2/sys/rtc.c`: a decode comment read "a clock that reports month 0 is not
   a clock to build a build on" -- the doubled "build a build" is a slip no
   careful author writes. Reworded to "not a clock to base a build on" (the RTC

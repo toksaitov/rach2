@@ -30,12 +30,10 @@ static uint8_t arp_reply_buf[28];
 static uint8_t arp_req_buf[28];
 
 /**
- * Store or refresh an IP-to-MAC mapping.
+ * Drop every cached IP-to-MAC mapping, so later traffic re-resolves.
  *
- * We learn from every ARP packet, including unsolicited ones, which is a
- * cache-poisoning surface; that is acceptable on QEMU's SLIRP network.
- * Entries do not age out, which is fine for the handful of SLIRP peers
- * (gateway, DNS, one client).
+ * Called when this machine's own address changes, since a mapping learned at
+ * the old address may no longer hold.
  */
 void arp_flush(void)
 {
@@ -46,6 +44,14 @@ void arp_flush(void)
     }
 }
 
+/**
+ * Store or refresh an IP-to-MAC mapping.
+ *
+ * We learn from every ARP packet, including unsolicited ones, which is a
+ * cache-poisoning surface; that is acceptable on QEMU's SLIRP network.
+ * Entries do not age out, which is fine for the handful of SLIRP peers
+ * (gateway, DNS, one client).
+ */
 static void arp_cache_update(uint32_t ip, const uint8_t *mac)
 {
     int i;
