@@ -315,6 +315,10 @@ findings up to where it stopped.
 * `tests/idreport.c`: the header had a mangled wrap that left "non-login" alone
   on a line ("told apart from a / non-login / one by nothing"). Reflowed the two
   lines.
+* `tests/host/netconsole_hosttest.c`: the header sentence dropped a verb, "the
+  test can reach its statics back to their initial state" (and lacked the comma
+  after "not linked"). Reworded to "so the test can put its statics back to
+  their initial state between cases".
 
 ### Set two: the Doom port and the rest
 
