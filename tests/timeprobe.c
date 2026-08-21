@@ -112,8 +112,7 @@ void _start(void)
 
     /* 2. getrandom returns the count and varying bytes. Pre-zero both buffers
      * so the difference test can actually fail (a broken getrandom that writes
-     * nothing
-     * leaves them equal) and so they are visibly written. */
+     * nothing leaves them equal) and so they are visibly written. */
     for (i = 0; i < 16; i++) {
         r1[i] = 0;
         r2[i] = 0;

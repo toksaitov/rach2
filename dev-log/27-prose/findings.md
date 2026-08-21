@@ -346,6 +346,14 @@ findings up to where it stopped.
 * `tests/blockprobe.c`: the `path_of` comment said `"/bpN" for file N (N < 10)`,
   but `NFILES` grew to 24, so N reaches 23. Rewrote the comment to describe what
   the code actually builds; the underlying fragility is noted for milestone 28.
+* `tests/timeprobe.c`: the getrandom comment orphaned "nothing" onto its own
+  line ("a broken getrandom that writes / nothing / leaves them equal").
+  Reflowed.
+
+A further run read clean: catfile, devtest, synthfs_hosttest, ptyprobe,
+dup2test, diskcmd_hosttest, budgetmusl, pathcanon, kstd_hosttest, sudoprobe,
+touchtest, wait_queue_hosttest, trapprobe, cowprobe, sigmusl, ofdmusl,
+frame_hosttest.
 
 Many test files read clean, prose and code alike accurate to what they
 exercise: bootprobe, loginmusl, stampmusl, n_tty_hosttest, packetprobe,
