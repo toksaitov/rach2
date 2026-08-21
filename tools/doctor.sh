@@ -83,6 +83,9 @@ req i686-elf-gcc     cross
 req i686-elf-ld      binutils
 req i686-elf-strip   binutils
 req i686-elf-readelf binutils
+req i686-elf-ar      binutils
+req i686-elf-ranlib  binutils
+req i686-elf-nm      binutils
 req qemu-system-i386 qemu
 req pkg-config       pkgconf
 req make             make
@@ -116,6 +119,8 @@ echo "Optional (only some tasks need these):"
 opt docker       "make isos / os-real-grub-disk" docker
 opt ssh-keygen   "the SSH capstone demo key" openssh
 opt git          "cloning and committing" git
+opt expect       "make ssh-test" expect
+opt gtimeout     "make sealed-test (coreutils on macOS)" coreutils
 
 echo
 if [ "$missing" -eq 0 ]; then

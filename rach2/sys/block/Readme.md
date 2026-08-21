@@ -1,6 +1,6 @@
 # `block/`: the disk layer and its two drivers
 
-One disk, reached two ways. Every byte of a file system in Rach2 that does not live in the RAM module comes off a real disk through a single device, `block0`, behind a four-call vtable. Two drivers can publish that device: `ata.c`, the readable polled-PIO bring-up driver for the legacy IDE channel, and `ahci.c`, the modern SATA driver that covers most real hardware. They are siblings the way the audio drivers are: the PC speaker and SB16 are to the HD Audio controller what ATA PIO is to AHCI. The readable one shipped first and stays as the documented fallback; the modern one goes in beside it, behind the same interface, and nothing above the interface can tell which is underneath.
+One disk, reached two ways. Every byte of a file system in Rach2 that does not live in the RAM module comes off a real disk through a single device, `block0`, whose record holds two operations, `read` and `write`, beside the sector size, the sector count and the driver's private pointer. Two drivers can publish that device: `ata.c`, the readable polled-PIO bring-up driver for the legacy IDE channel, and `ahci.c`, the modern SATA driver that covers most real hardware. They are siblings the way the audio drivers are: the PC speaker and SB16 are to the HD Audio controller what ATA PIO is to AHCI. The readable one shipped first and stays as the documented fallback; the modern one goes in beside it, behind the same interface, and nothing above the interface can tell which is underneath.
 
 ## The interface
 

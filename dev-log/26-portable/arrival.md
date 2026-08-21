@@ -4,7 +4,9 @@
 
 ## The credentials
 
-Ten files, git-ignored by `krffs/.gitignore`, in three groups. `make` mints whatever is absent, so a clone that builds an image gets working credentials of its own on the first run.
+Eleven files, git-ignored by `krffs/.gitignore`, in three groups.
+
+On a clone where all of them are absent, `make` mints a working set on the first build, and that is the ordinary case. A PARTIAL set is the one to be careful with: each generator stops on a sentinel rather than filling gaps, so `gen_demo_key.sh` does nothing once the aggregate `authorized_keys` exists, `gen_demo_password.sh` does nothing once `shadow` exists, and neither ever creates the two optional `.extra` files. Carry all of a group or none of it; half a group survives a build unrepaired.
 
 The root SSH key, minted by `krffs/gen_demo_key.sh`:
 
@@ -15,6 +17,7 @@ The root SSH key, minted by `krffs/gen_demo_key.sh`:
 The test account's SSH key, the same shape:
 
 * `krffs/rach2_test_ed25519` and `.pub`, and `krffs/test_authorized_keys`.
+* `krffs/test_authorized_keys.extra`, the same optional hand-made addition as the root one.
 
 The passwords, minted by `krffs/gen_demo_password.sh`:
 

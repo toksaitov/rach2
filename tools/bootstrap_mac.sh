@@ -20,6 +20,17 @@ DRY=0
     echo "bootstrap_mac: this is for macOS; on Linux see the hints in make doctor" >&2
     exit 1
 }
+# Homebrew's installer does not put brew on PATH; its own post-install step
+# does, and a person following a printed sequence has not run it yet. Look in
+# both places it installs to (Apple Silicon, then Intel) before giving up, so
+# the line after "install Homebrew" works in the shell that ran it.
+if ! command -v brew >/dev/null 2>&1; then
+    for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        [ -x "$b" ] || continue
+        eval "$("$b" shellenv)"
+        break
+    done
+fi
 command -v brew >/dev/null 2>&1 || {
     echo "bootstrap_mac: Homebrew is not installed; see https://brew.sh" >&2
     exit 1

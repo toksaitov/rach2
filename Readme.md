@@ -50,6 +50,7 @@ On a fresh Mac, from nothing to a built system:
 ```sh
 xcode-select --install                 # make, cc, python3, perl
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+eval "$(/opt/homebrew/bin/brew shellenv)"   # Apple Silicon; /usr/local on Intel
 git clone <this repository> rach2 && cd rach2
 sh tools/bootstrap_mac.sh              # --dry-run first if you want to see the list
 make doctor                            # must say: all required tools present
@@ -155,15 +156,16 @@ place:
 
 ```sh
 # cd /src/rach2
-# make -f guest.mk        # 71 objects, then the link through @kernel.objs
+# make -f guest.mk        # 87 objects, then the link through @kernel.objs
 ```
 
 The unprivileged account copies first, `/src` being root-owned read-only
 source media: `cp -r /src/rach2 ~ && cd ~/rach2 && make -f guest.mk`.
 
 `make selfbuild-test` is that as a gate: it builds the kernel twice from
-clean workspaces and requires the two to hash equal, builds the 25 utilities
-and ish with a smoke check each, then extracts the exact kernel bytes from
+clean workspaces and requires the two to hash equal, builds the 29 utilities
+and ish, runs eighteen smoke checks over the ones a shell session can exercise,
+then extracts the exact kernel bytes from
 the disk image, runs `tools/check_kernel.py --tcc` on them, and boots them
 through the full probe suite; where Docker is available the same bytes boot once more
 through GRUB.
