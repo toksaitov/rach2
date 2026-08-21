@@ -421,10 +421,10 @@ project teaches; move it up if that judgement turns out wrong.
 * [x] `.clangd` (154 words)
 * [x] `ports/doom/opl3.h` (149 words)
 * [x] `ports/doom/midifile.h` (119 words)
-* [ ] `.gitignore`, `ports/doom/i_oplmusic.h`, `ports/doom/include/math.h`, `.clang-format`, `ports/doom/include/SDL_mixer.h`, `ports/doom/mus2mid.h`, `ports/doom/.gitignore`, `ports/doom/include/stdio.h` (435 words over 8 files)
-* [ ] `ports/doom/include/stdlib.h`, `ports/doom/include/setjmp.h`, `ports/doom/include/string.h`, `ports/doom/include/strings.h`, `ports/doom/include/unistd.h`, `ports/doom/include/stdbool.h`, `ports/doom/include/inttypes.h`, `ports/doom/include/sys/time.h` (167 words over 8 files)
-* [ ] `ports/doom/include/sys/stat.h`, `ports/doom/include/signal.h`, `ports/doom/include/ctype.h`, `ports/doom/include/time.h`, `ports/doom/include/sys/types.h`, `ports/doom/include/limits.h`, `ports/doom/include/fcntl.h`, `ports/doom/include/errno.h` (83 words over 8 files)
-* [ ] `ports/doom/include/assert.h` (3 words over 1 file)
+* [x] `.gitignore`, `ports/doom/i_oplmusic.h`, `ports/doom/include/math.h`, `.clang-format`, `ports/doom/include/SDL_mixer.h`, `ports/doom/mus2mid.h`, `ports/doom/.gitignore`, `ports/doom/include/stdio.h` (435 words over 8 files)
+* [x] `ports/doom/include/stdlib.h`, `ports/doom/include/setjmp.h`, `ports/doom/include/string.h`, `ports/doom/include/strings.h`, `ports/doom/include/unistd.h`, `ports/doom/include/stdbool.h`, `ports/doom/include/inttypes.h`, `ports/doom/include/sys/time.h` (167 words over 8 files)
+* [x] `ports/doom/include/sys/stat.h`, `ports/doom/include/signal.h`, `ports/doom/include/ctype.h`, `ports/doom/include/time.h`, `ports/doom/include/sys/types.h`, `ports/doom/include/limits.h`, `ports/doom/include/fcntl.h`, `ports/doom/include/errno.h` (83 words over 8 files)
+* [x] `ports/doom/include/assert.h` (3 words over 1 file)
 
 ## Tests (135 entries, 69747 words)
 
