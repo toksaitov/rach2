@@ -122,6 +122,13 @@ findings up to where it stopped.
 * `rach2/kernel.c`: an isolation-test comment read "isolation has if each reads
   back its own value" -- "has if" is a mangled verb (the same pattern as the
   copy_path_cwd comment); the word is "holds". Corrected.
+* `rach2/sys/network/tcp/tcp.c`: two more of the same mangled-"has" defect. In
+  `tcp_accept_data`'s block comment, "so it has in ESTABLISHED while queued data
+  drains" was missing its verb; reworded to "so it happens in ESTABLISHED".
+  And in `tcp_rx`'s ESTABLISHED FIN handling, "seq + payload_len == rcv_nxt has
+  only when the whole payload was accepted" should read "holds only when".
+  Corrected both. (The "surfaced by SO_ERROR" comments are the sanctioned
+  error-surfacing sense, left as is.)
 
 ## Cross-checks to settle against code later in set one
 

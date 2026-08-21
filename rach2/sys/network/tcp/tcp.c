@@ -1018,7 +1018,7 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
  * advance rcv_nxt by. A live socket gets the data delivered (and may take
  * less than `len` when its receive ring is nearly full, so the peer
  * retransmits the rest). Once the socket is detached, which `tcp_close` does
- * before the FIN is even sent, so it has in ESTABLISHED while queued data
+ * before the FIN is even sent, so it happens in ESTABLISHED while queued data
  * drains as well as in the FIN_WAIT states, there is no reader: the data is
  * accepted in full and discarded, which still acknowledges it so the peer
  * stops retransmitting and the stream stays in sequence for the FIN.
@@ -1311,7 +1311,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
 
         /* A FIN is honored only in order and only once. seq + payload_len ==
-         * rcv_nxt has only when the whole payload was accepted, so a FIN
+         * rcv_nxt holds only when the whole payload was accepted, so a FIN
          * riding a truncated segment does not signal EOF before its data is
          * delivered. */
         if ((flags & TCP_FIN) && !tcb->fin_received &&
