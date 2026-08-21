@@ -8,7 +8,7 @@ object writes every frame the guest sends to a libpcap file, so a boot with
 `rach2.netconsole` on the command line leaves the whole log on disk in the form
 a machine with no serial port would put it on the wire.
 
-This reads that file and holds the frames to the contract the header states:
+This reads that file and has the frames to the contract the header states:
 one boot id, sequence numbers from zero with no gaps, a length that matches the
 frame, a checksum that sums to zero, and a broadcast destination. It then
 requires a caller-named string in the reassembled log, which is what proves the

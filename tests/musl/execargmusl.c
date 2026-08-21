@@ -34,7 +34,7 @@
 #include <unistd.h>
 
 /*
- * What the kernel holds: EXEC_MAX_ENTRIES arguments in each vector, and
+ * What the kernel has: EXEC_MAX_ENTRIES arguments in each vector, and
  * EXEC_MAX_STRINGS bytes of strings across argv and envp TOGETHER, each string
  * counted with its terminator (rach2/sys/syscall.c). Written out here rather
  * than derived, so a change to either is a change to this test.
@@ -127,7 +127,7 @@ int main(int argc, char *argv[])
     two_env[0] = (char *)"PATH=/bin";
     two_env[1] = (char *)0;
 
-    /* The largest argv that must work: every entry the kernel holds. */
+    /* The largest argv that must work: every entry the kernel has. */
     args[0] = (char *)SELF;
     args[1] = (char *)"full";
     for (i = 2; i < KERNEL_MAX_ENTRIES - 1; i++) {

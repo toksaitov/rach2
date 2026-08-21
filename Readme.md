@@ -168,7 +168,7 @@ the kernel it built, and the next boot runs it:
 # bootctl commit          # the booted kernel becomes the saved default
 ```
 
-The boot partition holds two kernels: the candidate slot the installer
+The boot partition has two kernels: the candidate slot the installer
 rewrites and an untouched fallback. Every install is a trial GRUB revokes on
 the next power cycle unless the booted kernel is committed, so a kernel that
 does not boot costs a reboot, not the machine; `bootctl status` shows

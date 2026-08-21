@@ -15,7 +15,7 @@
  * write.
  *
  * So the answer is split in two. The identity comes from an ATA IDENTIFY
- * response, which no sector holds; both drivers already ask for it and both
+ * response, which no sector has; both drivers already ask for it and both
  * threw the answer away, so it is kept here and published as `/proc/disk`. The
  * sectors come through `/dev/disk0`, a root-only read-only window over the
  * whole disk, and are hashed in userland by the busybox the image already
@@ -99,7 +99,7 @@ struct diskinfo {
 void diskinfo_ata_string(char *out, int chars, const volatile uint16_t *id, int first_word);
 
 /**
- * Write `v` as decimal into `out`, which holds `cap` bytes including the NUL.
+ * Write `v` as decimal into `out`, which has `cap` bytes including the NUL.
  *
  * Written by hand because the kernel links no libgcc: dividing a `uint64_t` by
  * ten would emit a call to `__udivdi3` that does not exist. The sector count
@@ -114,7 +114,7 @@ int diskinfo_u64_dec(char *out, int cap, uint64_t v);
 uint64_t diskinfo_window(uint64_t sectors);
 
 /**
- * Render `d` as the text of `/proc/disk` into `buf`, which holds `cap` bytes.
+ * Render `d` as the text of `/proc/disk` into `buf`, which has `cap` bytes.
  *
  * One fact per line, a single-token key then values. Truncates rather than
  * overruns, and always terminates.

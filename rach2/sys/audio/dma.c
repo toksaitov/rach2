@@ -142,7 +142,7 @@ int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode)
         mode_port = DMA1_MODE;
         flipflop_port = DMA1_FLIPFLOP;
         addr = buffer;
-        count = length - 1;  /* count register holds N-1 */
+        count = length - 1;  /* count register has N-1 */
     } else {
         mask_port = DMA2_SINGLEMASK;
         mode_port = DMA2_MODE;
@@ -168,7 +168,7 @@ int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode)
     outb(addr_port, addr & 0xFF);
     outb(addr_port, (addr >> 8) & 0xFF);
 
-    /* page register holds bits 16-23 of the physical address */
+    /* page register has bits 16-23 of the physical address */
     outb(dma_page_ports[channel], page);
 
     outb(flipflop_port, 0);
@@ -202,7 +202,7 @@ void dma_stop(uint8_t channel)
  * Return the bytes remaining in the current transfer on `channel`.
  *
  * The count register reads back low byte then high byte under the same
- * flip-flop discipline as writing it, and holds one less than the residual.
+ * flip-flop discipline as writing it, and has one less than the residual.
  * For 16-bit channels the register counts words, so the result is doubled to
  * report bytes.
  */

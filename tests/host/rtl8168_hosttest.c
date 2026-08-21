@@ -585,7 +585,7 @@ static void model_reset(void)
      * the driver must take it from rather than from the register pair. */
     model_eri[0xe0] = 0x7E44D228u;
     model_eri[0xe4] = 0x0000AFE0u;
-    /* The register pair holds a plausible but WRONG address, so a driver that
+    /* The register pair has a plausible but WRONG address, so a driver that
      * reads it instead of the permanent one is visible. */
     model_w32_raw(R8168_MAC0, 0xDEADBEEFu);
     model_w32_raw(R8168_MAC4, 0x0000BEEFu);

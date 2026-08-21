@@ -89,7 +89,7 @@ volatile uint32_t init_pid = 0;
 static bool rescue_mode = false;
 
 /* True once the kernel debug shell becomes the supervisor: rescue mode, or a
- * normal boot whose image holds no init (the test image). It decides what the
+ * normal boot whose image has no init (the test image). It decides what the
  * death of an init-role process MEANS: when the debug shell is home, an exited
  * init returns to it (today's behavior, which the test harness drives); when a
  * real /sbin/init is PID 1 (debug shell NOT home), init's death is a panic. */
@@ -392,7 +392,7 @@ static void keyboard_handler(isr_params_t *params)
     }
 
     /* 'C' is scancode 0x2E. When a session owns the console (a reader is parked
-     * or a session holds it), let ^C flow through the line discipline below
+     * or a session has it), let ^C flow through the line discipline below
      * like every other key: n_tty's ISIG path posts SIGINT to the foreground
      * group AND flushes pending input, matching a serial ^C, so the two console
      * input sources agree. Only with no session (the kernel debug shell, which
@@ -905,7 +905,7 @@ static void test_preempt(void)
 
 /*
  * Memory-isolation test state. The two processes write different values to the
- * same virtual address through different page directories; isolation holds if
+ * same virtual address through different page directories; isolation has if
  * each reads back its own value.
  *
  * The test address must lie ABOVE the identity-mapped region so each process
@@ -1327,7 +1327,7 @@ void panic_init_died(uint32_t pid)
  * the getty dance (a real init must own no controlling terminal, and a bare
  * shell launched here would neither claim the console nor survive its own
  * exit, which would panic). Execs it through exec_program, which does not
- * return on success. Returns here only when the mounted file system holds no
+ * return on success. Returns here only when the mounted file system has no
  * `/sbin/init` (the test image), so the caller can fall to the debug shell.
  */
 static void boot_init_process(void)
@@ -1733,11 +1733,11 @@ static int init_krffs_disk(void)
     }
 
     /* Find the KRFFS partition by reading each non-empty entry's first sector
-       and accepting the first that holds a real KRFFS root: the 16-bit magic,
+       and accepting the first that has a real KRFFS root: the 16-bit magic,
        the root type, and a size that is non-zero and fits the partition.
        Checking the actual root tightens the weak 16-bit magic and works
        whatever the MBR type byte says, so a GRUB-partitioned disk (boot partition first, KRFFS second)
-       still mounts. LBA 0 is never probed; it holds the boot code. */
+       still mounts. LBA 0 is never probed; it has the boot code. */
     for (i = 0; i < MBR_PART_COUNT; ++i) {
         krffs_node_t *root;
 
@@ -1844,7 +1844,7 @@ static int init_krffs_disk(void)
     /* The boot partition was judged and published before any root was chosen
        (discover_boot_devices), so a machine that mounts nothing still has it.
        What the mount adds is the one fact discovery cannot know: which entry
-       holds the root, and therefore whether entry 0 overlaps it. A disk whose
+       has the root, and therefore whether entry 0 overlaps it. A disk whose
        boot partition sits over its own root loses the device again. */
     if (mbr_bootpart_pick(parts, found, block0->sector_count) != 0) {
         devfs_bootpart_withdraw();
@@ -2387,7 +2387,7 @@ static void process_command(const char *cmd)
         } else if (filename[0] == '\0') {
             k_puts("Usage: rm <filename>");
         } else {
-            /* Orphan a node some descriptor still holds rather than free it,
+            /* Orphan a node some descriptor still has rather than free it,
                the same rule the unlink syscall follows. The rescue shell runs
                with no process of its own, but a transient init can be blocked
                holding a file when the shell resumes, and freeing that node
@@ -2426,7 +2426,7 @@ static void process_command(const char *cmd)
             k_puts("Usage: mv <oldname> <newname>");
         } else {
             /* Same rule at the destination: renaming over a name some
-               descriptor still holds orphans the node it replaces instead of
+               descriptor still has orphans the node it replaces instead of
                freeing it. Last, and only once the source is known good: an
                orphan taken before the rename could fail is a refusal that
                destroyed the file it refused to touch, so `mv missing held`
@@ -3140,7 +3140,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * PID 1: boot_init_process execs it and does not return while it runs,
      * and init's later death is a panic (panic_init_died), so a normal box
      * never falls to the debug shell. boot_init_process returns here only
-     * when the image holds no init (the test image); that case, like an
+     * when the image has no init (the test image); that case, like an
      * explicit `rach2.rescue` boot, makes the kernel debug shell the
      * supervisor. The shell loops reading commands and `exec`s programs as
      * transient inits that return to it on exit (an is-init death path jmps

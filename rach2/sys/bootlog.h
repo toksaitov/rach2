@@ -7,7 +7,7 @@
  * bootlog: what the machine printed, kept so it can be asked for afterwards.
  *
  * A machine with no serial port has three bad ways to be read and this is the
- * fourth. The screen scrolls the whole log past in under a second and holds
+ * fourth. The screen scrolls the whole log past in under a second and has
  * about twenty-five lines of it, so reading it means filming the boot. The
  * netconsole broadcasts every line, but only to whoever was already capturing
  * when the power came on, so a question thought of afterwards is a reboot.

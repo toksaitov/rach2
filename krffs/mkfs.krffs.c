@@ -23,7 +23,7 @@
  * `struct krffs_node` records long. Its contents are mapped, initialized as an
  * empty file system, and synced back through the mapping.
  *
- * Refuses to overwrite a file that already holds a valid KRFFS unless the force
+ * Refuses to overwrite a file that already has a valid KRFFS unless the force
  * (`-f`) option is given. With `-h`, or no arguments, it prints usage and
  * exits successfully.
  *

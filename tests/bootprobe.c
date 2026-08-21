@@ -3,7 +3,7 @@
  *
  * Two boots share this one probe, told apart by the command line the harness
  * passes. With `rach2.bootprobe=fixture` the disk has a FAT-typed
- * partition 1 of known bytes (sector k holds byte j = (k * 7 + j) & 0xff), and
+ * partition 1 of known bytes (sector k has byte j = (k * 7 + j) & 0xff), and
  * the probe proves the device end to end: the 0600 mode from stat and fstat
  * both, seeks resolved against the partition size, a read of known bytes at a
  * seek, a written sector read back, exactly 0 at the end, -ENOSPC past it,
@@ -80,7 +80,7 @@ static int syscall3(int n, int a, int b, int c)
     return r;
 }
 
-/** Whether `buf` holds the 512-byte marker this fixture writes at `gib` GiB. */
+/** Whether `buf` has the 512-byte marker this fixture writes at `gib` GiB. */
 static int pattern_ok(const char *buf, int gib)
 {
     int j;
@@ -365,7 +365,7 @@ static void auth_case(int recovery)
  * The whole-disk window is the one a reflash uses, but all three share the same
  * loops, and a batching regression in the two bounded ones would be just as
  * slow and just as invisible in the result. This drives /dev/grubcore, which
- * every boot with a readable disk has, over more sectors than one batch holds.
+ * every boot with a readable disk has, over more sectors than one batch has.
  */
 static void window_batch_case(void)
 {
@@ -591,13 +591,13 @@ void _start(void)
         check(rc == 0 && pos == near_at, "_llseek to 5 GiB lands where it was asked");
         n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
         check(n == SECTOR, "a sector reads at 5 GiB");
-        check(pattern_ok(sector, 5), "and holds the bytes written there");
+        check(pattern_ok(sector, 5), "and has the bytes written there");
 
         rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (int)(size_t)&pos, SEEK_SET);
         check(rc == 0 && pos == far_at, "_llseek to 258 GiB lands where it was asked");
         n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
         check(n == SECTOR, "a sector reads at 258 GiB");
-        check(pattern_ok(sector, 258), "and holds the bytes written there");
+        check(pattern_ok(sector, 258), "and has the bytes written there");
 
         rc = syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&pos, SEEK_SET);
         check(rc == 0 && pos == 0, "seek back to the start");
@@ -687,7 +687,7 @@ void _start(void)
                 break;
             }
         }
-        check(ok, "sector 5 holds the pattern");
+        check(ok, "sector 5 has the pattern");
     }
 
     /* The end: SEEK_END lands on the partition size, a read there is exactly

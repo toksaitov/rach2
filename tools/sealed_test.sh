@@ -94,7 +94,7 @@ phase() {
     PHASE_AT="$now"
 }
 
-# Wait up to $3 seconds until the log holds at least $2 occurrences of $1.
+# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
     i=0
     while [ "$i" -lt "$3" ]; do
@@ -180,7 +180,7 @@ stop_machine() {
 }
 
 # The machine restarts inside the same QEMU; what says it came back is another
-# login prompt, counted rather than matched, since the log holds every boot.
+# login prompt, counted rather than matched, since the log has every boot.
 reboot_machine() {
     want="$1"
     # Bounded and its result ignored, for the reason stopping is: the connection
@@ -246,7 +246,7 @@ echo "sealed-test: artifact $DISK_SHA ($(wc -c < "$DISK") bytes)"
 # or destroys is placed by these numbers and not by the sizes the build was
 # given, because what is being rehearsed is the disk as it is.
 # The root is found the way the kernel finds it: by reading each entry's first
-# sector and taking the first that holds a KRFFS root node, not by trusting an
+# sector and taking the first that has a KRFFS root node, not by trusting an
 # entry number or a type byte. What is destroyed below has to be the partition
 # the machine actually mounts.
 EXTENTS="$(python3 -c "
@@ -268,7 +268,7 @@ for i in range(4):
     if magic == 0x4B52 and kind == 0 and root is None:
         root = (start, count)
 if root is None:
-    sys.exit('sealed-test: no partition on the artifact holds a KRFFS root')
+    sys.exit('sealed-test: no partition on the artifact has a KRFFS root')
 print('%d %d %d' % (boot, root[0], root[1]))
 ")"
 BOOT_LBA="$(echo "$EXTENTS" | cut -d' ' -f1)"
@@ -466,7 +466,7 @@ case "$OUT" in
     *) fail "the machine did not boot its candidate through the new loader: $OUT" ;;
 esac
 
-# And back again. The gap holds two tails and an install writes the one that is
+# And back again. The gap has two tails and an install writes the one that is
 # not running, so a second install has to land in the other one: a defect in
 # that direction alone would leave a machine whose next loader update makes GRUB
 # unreachable, and recovery with it.

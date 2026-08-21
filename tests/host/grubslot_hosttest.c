@@ -3,10 +3,10 @@
  *
  * host-deps: utils/grubslot.c
  *
- * Sector 0 holds the partition table, and a disk writes whole sectors, so the
+ * Sector 0 has the partition table, and a disk writes whole sectors, so the
  * boot code's pointer at byte 0x5c can never be rewritten without rewriting the
  * table beside it. The arithmetic here is what lets it stay untouched forever:
- * LBA 1 is a selector, the gap holds two tails, and a replacement goes into the
+ * LBA 1 is a selector, the gap has two tails, and a replacement goes into the
  * one not in use. Getting the tail boundaries or the blocklist offsets wrong
  * produces a disk that does not boot and cannot be repaired remotely, so every
  * number below is checked rather than assumed.
@@ -167,7 +167,7 @@ int main(void)
                   (unsigned char)((GRUBSLOT_BLOCKLIST_SEG >> 8) & 0xff),
           "and the segment after it, which GRUB's boot code reads, is left alone");
 
-    /* The bounds. A tail holds 1023 sectors, so a whole image of 1024 fills one
+    /* The bounds. A tail has 1023 sectors, so a whole image of 1024 fills one
        exactly and 1025 does not fit. */
     make_core(image, GRUBSLOT_MAX_IMAGE_SECTORS);
     CHECK(grubslot_patch(image, GRUBSLOT_MAX_IMAGE_SECTORS, GRUBSLOT_TAIL_A_LBA, err,
@@ -197,7 +197,7 @@ int main(void)
     CHECK(target == GRUBSLOT_TAIL_B_LBA, "into the tail that was not in use");
     CHECK(get_blocklist(gap + 512) == GRUBSLOT_TAIL_B_LBA, "and the entry sector names it");
     CHECK(memcmp(gap + (size_t)GRUBSLOT_TAIL_B_LBA * 512, image + 512, 308u * 512u) == 0,
-          "the tail holds every sector after the entry sector");
+          "the tail has every sector after the entry sector");
     CHECK(gap[(size_t)(GRUBSLOT_TAIL_B_LBA + 308u) * 512] == 0, "the rest of the slot is zeroed");
     CHECK(gap[(size_t)GRUBSLOT_TAIL_A_LBA * 512] == 0xa0, "and the old tail is untouched");
 

@@ -43,7 +43,7 @@ extern char **environ;
  * standing at it, and narrowing the fall-through to ENOENT inverts the danger
  * rather than removing it, since ENOENT is exactly the case of an image built
  * without /bin/login, which is the image that must refuse hardest. So the
- * fallback is not narrowed, it is compiled out: this artifact holds no code
+ * fallback is not narrowed, it is compiled out: this artifact has no code
  * path and no string that names a shell. */
 #define LOGIN_PROGRAM "/bin/login"
 

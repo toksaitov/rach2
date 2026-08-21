@@ -74,7 +74,7 @@ static void wq_dequeue(wait_queue_t *wq, process_t *p)
 }
 
 /**
- * Block the current process on `wq` until `cond` holds or a signal arrives.
+ * Block the current process on `wq` until `cond` has or a signal arrives.
  *
  * Re-checks `cond(arg)` and re-enqueues on every wakeup, so it is robust to
  * spurious wakes and to the condition flipping back before we run. Returns 0

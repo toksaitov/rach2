@@ -93,7 +93,7 @@ fail() {
     exit 1
 }
 
-# Wait up to $3 seconds until the log holds at least $2 occurrences of $1.
+# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
     i=0
     while [ "$i" -lt "$3" ]; do
@@ -111,7 +111,7 @@ wait_count() {
 }
 
 # step <pattern> <count> <command>: the feeder sends <command> once the log
-# holds at least <count> occurrences of <pattern>.
+# has at least <count> occurrences of <pattern>.
 step() {
     printf '%s\t%s\t%s\n' "$2" "$1" "$3" >> "$STEPS"
 }

@@ -10,7 +10,7 @@
  *     pid);
  *   * the controlling terminal, stop/continue/kill cycle, group signals, and
  *     background-read SIGTTIN all behave;
- *   * the error contract holds: setsid by a group leader is -EPERM, getpgid of
+ *   * the error contract has: setsid by a group leader is -EPERM, getpgid of
  *     a missing pid is -ESRCH, setpgid with a negative pgid is -EINVAL.
  *
  * Children report each check via exit status; the parent decodes WEXITSTATUS.

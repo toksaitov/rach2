@@ -7,14 +7,14 @@
  * grubslot: where GRUB's core image lives in the post-MBR gap, and how one is
  * replaced without ever writing sector 0.
  *
- * Sector 0 holds the partition table at byte 446, and a disk writes whole
+ * Sector 0 has the partition table at byte 446, and a disk writes whole
  * sectors, so the eight bytes of boot code that point at the core image cannot
  * be touched without rewriting the table beside them. So they are never
  * touched: `boot.img[0x5c]` says LBA 1 for the life of the disk, and LBA 1 is
  * GRUB's `diskboot` sector, which has at offset 0x1f4 the blocklist naming
  * where the rest of the image lives and how long it is.
  *
- * That makes LBA 1 a selector. The gap holds two tails, and replacing the core
+ * That makes LBA 1 a selector. The gap has two tails, and replacing the core
  * image means writing the one that is not in use, verifying it, and then
  * rewriting LBA 1 to point at it. Everything before that last sector leaves the
  * old image selected and the machine booting as it did.

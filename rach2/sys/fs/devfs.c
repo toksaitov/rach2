@@ -182,7 +182,7 @@ static struct raw_window bootpart;
  * the boot loader needs a device and /dev/bootpart cannot be it: that one is
  * relative to partition 1 and the gap is before it. The range is a constant of
  * the layout rather than anything the partition table says, so a damaged table
- * cannot widen it. Sector 0 is deliberately outside: it holds the partition
+ * cannot widen it. Sector 0 is deliberately outside: it has the partition
  * table, and a disk writes whole sectors.
  */
 static struct raw_window grubcore;
@@ -418,7 +418,7 @@ static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll
  * discover that a menu entry was missing a token.
  *
  * Reads serve the milestone 24 diagnostic, which answers what this machine's
- * drive is and what it holds without mounting it, since mounting stamps a dirty
+ * drive is and what it has without mounting it, since mounting stamps a dirty
  * flag and that is a write. Writes belong to the recovery build alone: an
  * ordinary kernel compiles a handler that returns `-EPERM`, and the rescue
  * shell's own destructive command is compiled out of it too, so the refusal is
@@ -936,7 +936,7 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
 /**
  * Withdraw /dev/disk0.
  *
- * The window holds a pointer to the block device it reads through, and a
+ * The window has a pointer to the block device it reads through, and a
  * driver that is re-initialised clears the state behind that pointer. Anything
  * that resets a controller takes this node down with the other two raw
  * windows. A no-op when the device was never published.
@@ -966,7 +966,7 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    /* The log seeks like a file whose size is what it currently holds, so
+    /* The log seeks like a file whose size is what it currently has, so
      * SEEK_END and a plain `cat` both behave. It is not a raw window: it reads
      * through the ordinary 32-bit offset, and a ring of kilobytes has no use
      * for a wider one. */
@@ -998,14 +998,14 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, ui
  *
  * Discovery publishes the device before any root is chosen, judging entry 0
  * against the whole partition table. One fact is only knowable after the mount:
- * which entry holds the root. Entry 0 can be FAT-typed and still be the entry
+ * which entry has the root. Entry 0 can be FAT-typed and still be the entry
  * the root was found in, and a boot partition sitting over the root is not one
  * this machine should offer. A no-op when the device was never published.
  */
 void devfs_bootpart_withdraw(void)
 {
     if (bootpart.present) {
-        serial_printf("devfs: entry 0 holds the root; /dev/bootpart withdrawn\n");
+        serial_printf("devfs: entry 0 has the root; /dev/bootpart withdrawn\n");
         bootpart.present = 0;
     }
 }

@@ -12,11 +12,11 @@
  * Every denial is paired against the same call in a non-sticky control
  * directory, which is what makes it mean anything: a lone -EPERM could be
  * coming from ownership or from a missing write bit rather than from the sticky
- * bit. `/st_plain` holds the same fixtures at the same modes and the same
+ * bit. `/st_plain` has the same fixtures at the same modes and the same
  * owners as `/st_sticky` and differs from it in exactly one bit, so the four
  * denials and the four permissions below are the same four calls asked twice.
  *
- * The victims are 0666, so the caller holds write permission on every file it
+ * The victims are 0666, so the caller has write permission on every file it
  * is refused. That is deliberate: the SVR4 relaxation, which also permits the
  * removal when the caller can write the file, would let all four denials
  * through, and this kernel does not adopt it.
@@ -307,7 +307,7 @@ static void drop_to(int uid)
 }
 
 /* Create a file of the caller's own at `path` and take it away again. In a
- * sticky directory that pair proves two things at once: the caller holds write
+ * sticky directory that pair proves two things at once: the caller has write
  * permission there, so nothing below can be refused for want of it, and the
  * entry-owner clause lets a caller remove what it owns. */
 static void own_round_trip(const char *step, const char *path)
@@ -428,7 +428,7 @@ void _start(void)
     want_mode("staged /st_plain", PLAIN, 0777);
 
     /* The sticky directory's fixtures. The root-owned ones are 0666, so uid
-     * 1000 holds write on the file it is refused and the SVR4 relaxation this
+     * 1000 has write on the file it is refused and the SVR4 relaxation this
      * kernel does not adopt would let every refusal through. Each case is given
      * a fixture of its own, so that no later "the name is gone" can rest on an
      * earlier case having taken it. */

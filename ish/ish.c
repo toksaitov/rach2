@@ -192,7 +192,7 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
      * redirection descriptors it opened, or the shell, which runs as init,
      * leaks one descriptor per redirected command. The same guards as the
      * child's dup2 skip the standard fds, which open never returns since the
-     * shell holds them. */
+     * shell has them. */
     if (stdin_descriptor > 0) {
         close(stdin_descriptor);
     }

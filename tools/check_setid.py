@@ -664,14 +664,14 @@ def check_ancestors(where, allow, look):
             seen.append(parent)
             found = look(parent)
             if found is None:
-                problems.append("%s: %s holds a program root runs and no 'dir' "
+                problems.append("%s: %s has a program root runs and no 'dir' "
                                 "line stages it; a directory that comes into "
                                 "being on the way to a file takes a mode "
                                 "nobody wrote down" % (where, parent))
                 continue
             mode, uid, gid = found
             if (uid, gid) != (0, 0) or (mode & 0o022) != 0:
-                problems.append("%s: %s is staged %s and holds a program root "
+                problems.append("%s: %s is staged %s and has a program root "
                                 "runs; a directory anyone else may write is a "
                                 "way to replace what is in it"
                                 % (where, parent, fmt_entry(mode, uid, gid)))
@@ -1251,7 +1251,7 @@ def sweep(paths, table=ALLOWLIST, require_all=False):
 # The fixtures' declared lines come from the table they are checked against, so
 # a mutation below is the one thing that varies. What they prove is that the
 # parser and the rules read a manifest the way stageimage does, not that the
-# table holds any particular value.
+# table has any particular value.
 def trusted_lines(stem, table=None):
     """The directive lines a manifest needs to satisfy one entry's trusted list."""
     entry = (table or ALLOWLIST)[stem]
@@ -1816,7 +1816,7 @@ def report(problems):
 # which is not offered: AF_INET/SOCK_RAW exists only as a descriptor carrying
 # the interface ioctls and refuses to send or receive. `arping` opens a packet
 # socket, which milestone 25 did build for the DHCP client, but binds it to the
-# ARP protocol, and only IPv4 is accepted. So the rule still holds for all five;
+# ARP protocol, and only IPv4 is accepted. So the rule still has for all five;
 # what has changed is that one of them is now a protocol away rather than a
 # whole socket family away.
 #
@@ -1859,7 +1859,7 @@ def applet_names(path):
 
     # The whole initializer or nothing. A file truncated part way through it
     # would otherwise read as a shorter applet set, and the names are sorted, so
-    # a prefix that still holds the `cat` sentinel can have lost `passwd` and
+    # a prefix that still has the `cat` sentinel can have lost `passwd` and
     # `su` from the tail: the guard would find no forbidden applet because it
     # never read as far as one. The declared count is the other half of that,
     # since a file can end in the right punctuation and still be short.
@@ -2112,7 +2112,7 @@ def check_config(path=BUSYBOX_CONFIG):
 
 # The two init artifacts, and the byte strings that tell them apart. init-login
 # execs /bin/login and nothing else; the shell table and the loop that walks it
-# live inside an `#ifndef`, so the strict artifact holds no code path and no
+# live inside an `#ifndef`, so the strict artifact has no code path and no
 # string that names a shell. Requiring init-shell to carry BOTH is the sentinel:
 # an unreadable or empty scan then fails rather than passes, the way the applet
 # table's own scan is guarded. The check is exact in this tree because a static
@@ -2166,7 +2166,7 @@ def check_inits(directory=INIT_BINARIES):
 # The sysroot the compiler was configured to look in, which is a different
 # question from whether a path is privileged: tcc's search paths were baked into
 # the binary at configure time (vendor/tcc/Readme.md), so an image missing any
-# of them holds a compiler that fails at the last step, with a message about a
+# of them has a compiler that fails at the last step, with a message about a
 # file rather than about the image. Checked here because this is the tool that
 # already reads a staged image node by node.
 #
@@ -2348,13 +2348,13 @@ def compare_headers(staged, wanted, name, dirs=None):
     unexpected = set(staged) - set(wanted)
     if unexpected:
         problems.append("%s: %d files under %s are not in %s (%s); the tree "
-                        "holds something it was not staged from"
+                        "has something it was not staged from"
                         % (name, len(unexpected), SYSROOT_HEADER_ROOT,
                            SYSROOT_HEADER_SOURCE, some(unexpected)))
     differing = set(path for path in set(staged) & set(wanted)
                     if staged[path][1] != wanted[path])
     if differing:
-        problems.append("%s: %d staged headers do not hold what %s holds (%s); "
+        problems.append("%s: %d staged headers do not hold what %s has (%s); "
                         "a header that is there and wrong is worse than one "
                         "that is missing"
                         % (name, len(differing), SYSROOT_HEADER_SOURCE,
@@ -2392,7 +2392,7 @@ def check_sysroot_paths(paths, region, name):
             # library or a startup object may not, and an empty one is what a
             # truncated copy looks like.
             problems.append("%s: %s is staged empty; a library or a startup "
-                            "object that holds nothing is a link that fails "
+                            "object that has nothing is a link that fails "
                             "at the last step" % (name, path))
         else:
             want = WORLD_READ
@@ -2543,7 +2543,7 @@ def main(argv):
         if problems:
             return report(problems)
         print("check-setid: OK (%s: no forbidden applet or feature; the set-id build "
-              "holds only %s; the strict init names no shell)"
+              "has only %s; the strict init names no shell)"
               % (args.applets, ", ".join(SUID_APPLETS)))
         return 0
 

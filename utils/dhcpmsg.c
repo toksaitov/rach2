@@ -86,7 +86,7 @@ static unsigned int fold(unsigned long sum)
  * Build one DHCP message into `out` and return its length.
  *
  * `r` names the message type, the transaction id and hardware address that
- * make an answer this machine's, the address it already holds (zero unless it
+ * make an answer this machine's, the address it already has (zero unless it
  * is renewing), and the options a request has. The IP and UDP headers are
  * built here too, because a machine with no address cannot ask the IP layer to
  * build them.

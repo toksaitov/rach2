@@ -408,7 +408,7 @@ static void tcp_refused(void)
 }
 
 /*
- * The local port a client bound, and the exclusivity a listener holds.
+ * The local port a client bound, and the exclusivity a listener has.
  *
  * `bind` before `connect` is how a client pins its source port, and a
  * `tcp_connect` that allocated a fresh ephemeral regardless made that
@@ -516,7 +516,7 @@ static void tcp_ports(void)
     args[1] = (uint32_t)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
-        fail("a port a closed session still holds could not be bound");
+        fail("a port a closed session still has could not be bound");
     args[0] = (uint32_t)second;
     args[1] = 4;
     if (socketcall(SC_LISTEN, args) != 0)

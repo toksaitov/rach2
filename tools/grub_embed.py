@@ -46,7 +46,7 @@ first_lba = min((s for s in starts if s), default=0)
 if first_lba and core_sectors >= first_lba:
     sys.stderr.write(
         "grub_embed: core.img needs %d sectors but the gap before LBA %d "
-        "holds only %d\n" % (core_sectors, first_lba, first_lba - 1))
+        "has only %d\n" % (core_sectors, first_lba, first_lba - 1))
     sys.exit(1)
 
 # The gap is two tail slots of 1023 sectors, LBA 2 through 1024 and LBA 1025
@@ -57,7 +57,7 @@ if first_lba and core_sectors >= first_lba:
 MAX_IMAGE_SECTORS = 1024
 if core_sectors > MAX_IMAGE_SECTORS:
     sys.stderr.write(
-        "grub_embed: core.img is %d sectors and a tail slot holds %d; the disk "
+        "grub_embed: core.img is %d sectors and a tail slot has %d; the disk "
         "would boot but could not have its boot loader replaced\n"
         % (core_sectors, MAX_IMAGE_SECTORS - 1))
     sys.exit(1)

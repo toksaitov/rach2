@@ -158,7 +158,7 @@ void socket_unref(struct socket *sock)
 /**
  * Deliver a received datagram into a UDP socket and wake its waiter.
  *
- * Called from the IRQ-side receive path. The single-datagram buffer holds at
+ * Called from the IRQ-side receive path. The single-datagram buffer has at
  * most SOCK_RECV_BUF_SIZE bytes; a longer payload is truncated. The source
  * address is recorded for a later recvfrom.
  */

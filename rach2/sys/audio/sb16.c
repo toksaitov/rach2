@@ -278,7 +278,7 @@ static void mixer_write(uint8_t reg, uint8_t value)
  *   16-bit uses DMA channel 5, command 0xB6, block size counted in words.
  *
  * Mode byte: bit 4 = signed sample encoding, bit 5 = stereo. The block-size
- * register holds the count minus one.
+ * register has the count minus one.
  */
 static void sb16_start_auto_init(void)
 {

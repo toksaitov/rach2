@@ -15,7 +15,7 @@ extern void terminate_current_process(int32_t signo);
 static volatile uint32_t irq_count = 0;
 
 /*
- * Each vector holds a short chain of handlers rather than a single slot, so
+ * Each vector has a short chain of handlers rather than a single slot, so
  * devices that share one PIC line can each install their own. Level-triggered
  * PCI INTx lines are routinely shared: under QEMU's i440fx the HD Audio
  * controller and the RTL8139 NIC both land on IRQ 11. On a shared line every

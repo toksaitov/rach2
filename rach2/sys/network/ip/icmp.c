@@ -161,7 +161,7 @@ static void ping_release(void)
  * cache.
  *
  * @return round-trip time in ticks, `-ETIMEDOUT` if every attempt expired,
- *         `-EBUSY` if another ping holds the slot, or `-EINTR` on a signal.
+ *         `-EBUSY` if another ping has the slot, or `-EINTR` on a signal.
  */
 int icmp_ping(uint32_t dst_ip)
 {

@@ -73,7 +73,7 @@ static bool mouse_initialized = false;
  * @return 0 when the buffer drains, -1 on timeout.
  */
 /* How many bytes the initial drain will read before calling the controller
-   stuck. A PS/2 output buffer holds one byte, so anything past a handful is a
+   stuck. A PS/2 output buffer has one byte, so anything past a handful is a
    controller that is not answering. */
 #define PS2_DRAIN_LIMIT 4096
 
@@ -89,7 +89,7 @@ static int ps2_wait_input(void)
 }
 
 /**
- * Spin until the 8042 output buffer holds a byte, ready to read.
+ * Spin until the 8042 output buffer has a byte, ready to read.
  *
  * @return 0 when data is present, -1 on timeout.
  */

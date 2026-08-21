@@ -5,7 +5,7 @@
 # program is one hosted static link against the compiler's own sysroot
 # (musl's headers and libc.a, the crt objects), which is exactly what the
 # host build produces through the muslgcc wrapper. The per-program source
-# map below must equal the host Makefile's; tools/check_guest.py holds the
+# map below must equal the host Makefile's; tools/check_guest.py has the
 # two maps equal on the host.
 #
 # Run from a writable copy of this tree: make -f guest.mk

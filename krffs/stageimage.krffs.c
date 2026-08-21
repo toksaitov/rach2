@@ -149,7 +149,7 @@ static struct krffs_node *find_child(
 /**
  * Total free space, in bytes (the sum of every free block including headers).
  *
- * Reported at the end so a manifest author sees how much slack an image holds.
+ * Reported at the end so a manifest author sees how much slack an image has.
  */
 static uint64_t total_free_space(struct krffs_file_system *file_system)
 {

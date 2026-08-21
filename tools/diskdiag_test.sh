@@ -4,7 +4,7 @@
 # diskdiag_test.sh: read a disk without mounting it, and without writing a byte.
 #
 # This is the instrument the phase E carve decision rests on. The laptop's SSD
-# holds a Windows installation, so the machine must be able to report what the
+# has a Windows installation, so the machine must be able to report what the
 # drive is, how big it is and what its partition table says, and to hand out
 # any sector for hashing, while leaving the platter exactly as it found it.
 #
@@ -178,7 +178,7 @@ check_sector() {
              | tr -d '\r' | awk '{print $1}')"
     host="$(dd if="$BASE" bs=512 skip="$lba" count=1 2>/dev/null | shasum -a 256 | awk '{print $1}')"
     if [ -z "$guest" ] || [ "$guest" != "$host" ]; then
-        fail "sector $lba read back as $guest and the image holds $host"
+        fail "sector $lba read back as $guest and the image has $host"
     fi
 }
 check_sector 0

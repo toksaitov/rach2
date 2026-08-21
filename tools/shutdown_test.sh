@@ -165,7 +165,7 @@ wait_token() {
 # Everything this run started, ended. It is written to be safe to call twice,
 # because the ordinary paths call it and the trap calls it again: a script that
 # only killed its machine when it succeeded or failed its own checks leaves
-# QEMU running for a cancelled build, and that QEMU still holds the disk copy
+# QEMU running for a cancelled build, and that QEMU still has the disk copy
 # whose name has just been removed.
 #
 # Each pid is taken and forgotten BEFORE it is signalled, so a trap that fires

@@ -492,7 +492,7 @@ static int present(const char *path)
 }
 
 /**
- * How many temporary files of the replaced file's the directory still holds.
+ * How many temporary files of the replaced file's the directory still has.
  *
  * The name a replacement writes through has the writer's pid, so a case
  * that
@@ -653,7 +653,7 @@ static int wait_bounded(pid_t pid, int *status, long ms)
 }
 
 /**
- * Read from `fd` until what has arrived holds `needle` or `ms` milliseconds
+ * Read from `fd` until what has arrived has `needle` or `ms` milliseconds
  * pass. Returns 1 when the text arrived.
  *
  * `fd` must be non-blocking: a prompt that never comes has to fail the case
@@ -868,7 +868,7 @@ static void check_rewrite(void)
         return;
     }
 
-    /* The capture window holds the library call and nothing else: a `fail`
+    /* The capture window has the library call and nothing else: a `fail`
      * inside it would be written into the file the report is read from. */
     capture_start();
     rc = cred_rewrite(Target, "usurped\n", 8);
@@ -1807,7 +1807,7 @@ static void check_pipe_during_acquire(void)
  *
  * Every diagnostic is a write, and a write to a standard error that is a full
  * pipe with a reader that is not reading BLOCKS: `SIGPIPE` answers a reader
- * that has gone, not one that is merely slow. The library holds the four death
+ * that has gone, not one that is merely slow. The library has the four death
  * signals across the acquire, so a report issued before the repair would leave
  * the writer stopped inside that write, holding a lock it had already decided
  * to give up, and deaf to everything but `SIGKILL`, which is the one signal
@@ -2944,7 +2944,7 @@ static void check_temp_name(void)
  * then returns with the terminal silenced and nothing installed that would ever
  * undo it. Any process in the same session may send that signal, so the window
  * is forced rather than waited for: the reader's standard error is a pipe this
- * test fills, so the newline in the middle of the teardown blocks and holds the
+ * test fills, so the newline in the middle of the teardown blocks and has the
  * reader inside the window until the signal has been delivered.
  *
  * The verdict is the reader's own, read off the terminal after the call returns

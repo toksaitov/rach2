@@ -417,14 +417,14 @@ static int tcp_local_port_in_use(uint16_t port)
 }
 
 /**
- * Whether a live listener already holds `port`. Caller holds `net_lock`.
+ * Whether a live listener already has `port`. Caller has `net_lock`.
  *
  * The scope is `TCP_LISTEN` and not every in-use TCB, deliberately. An accepted
  * connection and a TIME_WAIT remnant both hold a local port in this table, and
  * `setsockopt` is a no-op here, so `SO_REUSEADDR` buys nothing: a scan that
  * counted them would make restarting dropbear or httpd after a session fail at
  * `bind(22)` or `bind(80)` where today it succeeds. What a connecting, closing
- * or TIME_WAIT connection holds is a port against nobody.
+ * or TIME_WAIT connection has is a port against nobody.
  *
  * Answers 0 when the pool was never reserved, since this runs before the
  * allocator that would otherwise catch it.
@@ -448,7 +448,7 @@ static int tcp_port_has_listener(uint16_t port)
 
 /**
  * Whether the exact four-tuple this stack keys on is already taken. Caller
- * holds `net_lock`.
+ * has `net_lock`.
  *
  * `tcp_find` keys on the local port, the remote address and the remote port, so
  * two TCBs sharing all three would have one connection's segments delivered to
@@ -775,7 +775,7 @@ int tcp_port_listening(uint16_t port)
  * `tcp_find_listen_sock` to disagree about. So the scan and the publish are one
  * `net_lock` region, and the check `bind` still makes is advisory.
  *
- * @return 0, `-EADDRINUSE` if a listener already holds the port,
+ * @return 0, `-EADDRINUSE` if a listener already has the port,
  *         `-EDESTADDRREQ` if the socket never bound one, or `-ENOBUFS` if the
  *         connection pool is full.
  */
@@ -1018,7 +1018,7 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
  * advance rcv_nxt by. A live socket gets the data delivered (and may take
  * less than `len` when its receive ring is nearly full, so the peer
  * retransmits the rest). Once the socket is detached, which `tcp_close` does
- * before the FIN is even sent, so it holds in ESTABLISHED while queued data
+ * before the FIN is even sent, so it has in ESTABLISHED while queued data
  * drains as well as in the FIN_WAIT states, there is no reader: the data is
  * accepted in full and discarded, which still acknowledges it so the peer
  * stops retransmitting and the stream stays in sequence for the FIN.
@@ -1311,7 +1311,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
 
         /* A FIN is honored only in order and only once. seq + payload_len ==
-         * rcv_nxt holds only when the whole payload was accepted, so a FIN
+         * rcv_nxt has only when the whole payload was accepted, so a FIN
          * riding a truncated segment does not signal EOF before its data is
          * delivered. */
         if ((flags & TCP_FIN) && !tcb->fin_received &&

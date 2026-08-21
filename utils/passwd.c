@@ -26,7 +26,7 @@
  * wherever it found the account.
  *
  * A name that appears more than once in either database is refused, naming the
- * file that holds it, and nothing is changed. musl's parsers all stop at the
+ * file that has it, and nothing is changed. musl's parsers all stop at the
  * first match, so a duplicate is an error nowhere and an ambiguity everywhere:
  * which line authenticates a login and which one a change rewrites would be
  * decided by file order, and the two decisions can pick different lines, so the
@@ -132,7 +132,7 @@ static long slurp(const char *path, char *buffer, size_t size)
      * database with the remainder cut off. A credential file is text; one that
      * is not is refused rather than silently shortened. */
     if (strlen(buffer) != held) {
-        fprintf(stderr, "passwd: %s holds a NUL byte and is not a text database\n", path);
+        fprintf(stderr, "passwd: %s has a NUL byte and is not a text database\n", path);
         return -1;
     }
 

@@ -177,7 +177,7 @@ static void tls_fill(u32 magic)
 }
 
 /**
- * Re-read every slot through %gs and confirm it still holds magic^slot.
+ * Re-read every slot through %gs and confirm it still has magic^slot.
  * Returns the number of mismatches (0 == intact).
  */
 static int tls_check(u32 magic)

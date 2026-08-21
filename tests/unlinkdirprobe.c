@@ -12,7 +12,7 @@
  * the kernel source tree it had just copied, and only once that tree had grown
  * enough files that listing it took more than one call.
  *
- * So this makes a directory with more entries than one modest buffer holds,
+ * So this makes a directory with more entries than one modest buffer has,
  * removes them the way `rm` does, and requires the directory to be empty and
  * removable afterwards. A single large read would not reproduce it, which is
  * why the buffer here is deliberately small.

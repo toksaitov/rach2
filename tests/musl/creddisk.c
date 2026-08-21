@@ -120,8 +120,8 @@ static int present(const char *path)
     return stat(path, &st) == 0;
 }
 
-/** True if `path` holds exactly `text` at mode `mode`, owned by root. */
-static int holds(const char *path, const char *text, mode_t mode)
+/** True if `path` has exactly `text` at mode `mode`, owned by root. */
+static int has(const char *path, const char *text, mode_t mode)
 {
     char content[64];
     struct stat st;
@@ -180,10 +180,10 @@ static int read_boot(void)
     if (temps_left(TARGET) != 0 || temps_left(ALSO) != 0) {
         return fail("a temporary file outlived the boot that published");
     }
-    if (!holds(TARGET, AFTER, 0600)) {
+    if (!has(TARGET, AFTER, 0600)) {
         return fail("the released replacement did not survive the boot");
     }
-    if (!holds(ALSO, AFTER, 0640)) {
+    if (!has(ALSO, AFTER, 0640)) {
         return fail("the cut-off writer's replacement did not survive the boot");
     }
     if (!present(CRED_LOCK_PATH)) {
@@ -240,7 +240,7 @@ static int release_boot(void)
     if (temps_left(TARGET) != 0) {
         return fail("a temporary file outlived the boot that published");
     }
-    if (!holds(TARGET, RELEASED, 0600)) {
+    if (!has(TARGET, RELEASED, 0600)) {
         return fail("the second replacement did not survive the boot");
     }
     printf("CREDDISK OK (read back)\n");
@@ -265,5 +265,5 @@ int main(void)
         return release_boot();
     }
 
-    return fail("the staged file holds none of the three texts this probe writes");
+    return fail("the staged file has none of the three texts this probe writes");
 }

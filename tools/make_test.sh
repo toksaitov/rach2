@@ -23,7 +23,7 @@
 # that reads the whole log can be satisfied by a LATER step's success.
 #
 # Every line is sent only after the previous one has finished. The console's
-# line discipline holds a bounded amount of unread input, and a build takes
+# line discipline has a bounded amount of unread input, and a build takes
 # seconds to minutes, so a feed on a fixed timer silently loses commands on a
 # slow host. Each command ends by printing a marker, and the feeder waits for
 # it.

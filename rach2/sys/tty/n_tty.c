@@ -272,7 +272,7 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
  * EOF (a hangup: the master closed) is readable too, so a blocked reader
  * drains the queue and then returns 0 rather than waiting forever for VMIN
  * bytes that will never arrive; otherwise VMIN 0 never blocks and a VMIN > 0
- * read waits until the queue holds at least VMIN bytes.
+ * read waits until the queue has at least VMIN bytes.
  */
 int n_tty_readable(const struct n_tty *t)
 {
@@ -300,7 +300,7 @@ int n_tty_readable(const struct n_tty *t)
  * Return the count of bytes the next read can return (the TIOCINQ value).
  *
  * Only completed lines reach the queue (the edit line is not counted), and a
- * pending EOF holds no bytes, so the ready-queue count is exact, EOF reading
+ * pending EOF has no bytes, so the ready-queue count is exact, EOF reading
  * as 0.
  */
 int n_tty_inq(const struct n_tty *t)

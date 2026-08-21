@@ -146,7 +146,7 @@ static uint32_t r8168_rx_cur;  /* next descriptor to inspect */
  * The condition is ALL of the mask, not any of it, which is what the
  * reference's conditions say and the only reading that is right for a
  * multi-bit mask: the FIFO drain waits on two bits, and one FIFO empty while
- * the other still holds data is not a drained chip. For a single-bit mask the
+ * the other still has data is not a drained chip. For a single-bit mask the
  * two readings are the same.
  *
  * The reference checks the condition BEFORE the first delay and up to `n`
@@ -1085,7 +1085,7 @@ static void r8168_tx_reclaim(void)
  * `net_lock`, and every one of them does; guarding here as well means the
  * interface's contract does not rest on each caller remembering, and the two
  * drivers behind that interface follow the same rule. The bracket nests, so a
- * caller that already holds it pays nothing.
+ * caller that already has it pays nothing.
  */
 static void rtl8168_tx(const uint8_t *data, uint16_t len)
 {

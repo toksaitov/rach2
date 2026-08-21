@@ -255,7 +255,7 @@ def main(argv):
     extradir[0:32 * len(ents)] = b"".join(ents)
     img[cluster_off(EXTRADIR):cluster_off(EXTRADIR) + cbytes] = extradir
 
-    # File contents: the candidate slot holds a valid padded kernel, the
+    # File contents: the candidate slot has a valid padded kernel, the
     # fallback a valid kernel, grubenv GRUB's block.
     slot = minimal_kernel(4096) + bytes(kernel_size - 4096)
     if opt == "--fragmented":

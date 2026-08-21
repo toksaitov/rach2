@@ -6,7 +6,7 @@
 # build/rach2/kernel beside build/rach2/sys/mm/paging.o, the utilities at
 # build/utils/cat, and so on. mk/rules.mk's `$(BUILD)/%.o` compile rule and each
 # component's own link rule both write through $(BUILD), so the source tree
-# never holds an object or a binary, and one `rm -rf build/` cleans everything.
+# never has an object or a binary, and one `rm -rf build/` cleans everything.
 #
 # BUILDROOT is kept relative (`$(TOP)/build`). Each sub-make runs with CURDIR
 # set to its own component directory, whether built standalone (`make -C utils`)

@@ -67,7 +67,7 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Whether every byte of a canary still holds its value. */
+/** Whether every byte of a canary still has its value. */
 static int canary_intact(const unsigned char *bytes, int count)
 {
     int i;

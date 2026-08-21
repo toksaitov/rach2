@@ -36,7 +36,7 @@ Keep the test free of host `<stdio.h>`/`<string.h>` so kernel and host type defi
 
 ## The compat headers
 
-`compat/` holds stand-ins for the three musl headers a `utils/` source includes that a native host need not have: `<crypt.h>`, `<shadow.h>` and `<sys/random.h>`. They exist because a host test may compile a guest source, and a guest source is written against the ported musl; Darwin, for one, declares `crypt` in `<unistd.h>` and ships neither of the other two. `hosttest.sh` puts the directory on the include path, so on a host that does have those headers these declarations are the ones used; they are musl's, so the interface is the same either way. Nothing the guest builds ever sees them, and the symbols themselves are the test's to define.
+`compat/` has stand-ins for the three musl headers a `utils/` source includes that a native host need not have: `<crypt.h>`, `<shadow.h>` and `<sys/random.h>`. They exist because a host test may compile a guest source, and a guest source is written against the ported musl; Darwin, for one, declares `crypt` in `<unistd.h>` and ships neither of the other two. `hosttest.sh` puts the directory on the include path, so on a host that does have those headers these declarations are the ones used; they are musl's, so the interface is the same either way. Nothing the guest builds ever sees them, and the symbols themselves are the test's to define.
 
 Current tests:
 

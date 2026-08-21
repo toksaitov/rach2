@@ -57,7 +57,7 @@ struct timespec krffs_get_timespec_from_node_time(
  *
  * The KRFFS magic and the `KRFFS_Free_Node` type are written so the block can
  * be walked as part of the on-disk ring; `data_size` is cleared because a free
- * node holds no payload. Returns `node`.
+ * node has no payload. Returns `node`.
  */
 struct krffs_node *krffs_initialize_free_node(
                        struct krffs_node *node,
@@ -335,7 +335,7 @@ bool krffs_is_node_in_file_system(
  *
  * The walk hashes `name` with djb2 and compares it against each node's `id`,
  * matching only `KRFFS_Reserved_Node` blocks. Returns the matching node, or
- * `NULL` if the ring holds no such node.
+ * `NULL` if the ring has no such node.
  */
 struct krffs_node *krffs_find_reserved_node_by_name(
                        struct krffs_file_system *file_system,
@@ -378,7 +378,7 @@ struct krffs_node *krffs_find_reserved_node_by_name(
  *
  * The walk hashes `name` with djb2 and compares it against each node's `id`,
  * matching `KRFFS_Reserved_Node` and `KRFFS_Root_Node` blocks. Returns the
- * matching node, or `NULL` if the ring holds no such node.
+ * matching node, or `NULL` if the ring has no such node.
  */
 struct krffs_node *krffs_find_reserved_or_root_node_by_name(
                        struct krffs_file_system *file_system,

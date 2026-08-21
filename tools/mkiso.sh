@@ -30,7 +30,7 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 # The metal profile has the kernel that cannot write a disk, and no other
-# profile does. This is the stick that goes into a laptop whose SSD holds
+# profile does. This is the stick that goes into a laptop whose SSD has
 # somebody's Windows, so the artifact is checked here rather than assumed:
 # staging the ordinary kernel under the metal name would produce exactly the
 # image this milestone promises not to make.

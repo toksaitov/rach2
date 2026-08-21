@@ -42,7 +42,7 @@ cp "$DISK" "$CLEAN"
 cp "$DISK" "$DIRTY"
 cp "$DISK" "$OFF"
 # Removed here and not only in the trap. An uncatchable kill leaves a previous
-# run's logs, and each holds the token its phase waits for; the redirect that
+# run's logs, and each has the token its phase waits for; the redirect that
 # would truncate one is performed by the backgrounded child, which the parent's
 # grep is not ordered after. The clean phase is the one that would then lie: a
 # stale halt token ends its wait before the boot, and its fresh copy of the

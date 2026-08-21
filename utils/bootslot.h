@@ -74,7 +74,7 @@ struct bootslot {
 /**
  * Say that this machine is running from the fixed-address menu entries.
  *
- * The menu holds two pairs: `candidate` and `fallback` take whatever the
+ * The menu has two pairs: `candidate` and `fallback` take whatever the
  * network gives them, and `candidate-static` and `fallback-static` carry a
  * fixed address for a network with no DHCP server. Which pair a machine is
  * running from is the caller's to determine (`bootctl` reads it off

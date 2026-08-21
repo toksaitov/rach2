@@ -108,7 +108,7 @@ int main(void)
     CHECK(b.state == PROC_READY);
     CHECK(total_queued(&wq) == 0);
 
-    /* The fixed array holds exactly WQ_MAX_WAITERS distinct waiters. */
+    /* The fixed array has exactly WQ_MAX_WAITERS distinct waiters. */
     wait_queue_init(&wq);
     {
         static process_t pool[WQ_MAX_WAITERS];

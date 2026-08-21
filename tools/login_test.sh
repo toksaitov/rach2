@@ -43,7 +43,7 @@ fi
 
 LOGS="$STRICT.log $SHELL_IMAGE.log $REAL.stop.log $REAL.rescue.log"
 # Removed here and not only in the trap. An uncatchable kill leaves a previous
-# run's logs, and each holds the token its phase waits for; the redirect that
+# run's logs, and each has the token its phase waits for; the redirect that
 # would truncate one is performed by the backgrounded child, which the parent's
 # grep is not ordered after, so a wait could end before its boot began.
 # shellcheck disable=SC2086

@@ -27,7 +27,7 @@
    host: a compile faults the 269 KiB compiler, the sources, the headers and
    the objects through this window, and under 1 MiB every compile re-read
    most of that working set from the disk, which measured at more than a
-   minute per file. Four MiB holds the toolchain's hot set and leaves the
+   minute per file. Four MiB has the toolchain's hot set and leaves the
    32 MiB pool most of its memory. */
 #ifndef PC_SLOTS
 #define PC_SLOTS 1024u

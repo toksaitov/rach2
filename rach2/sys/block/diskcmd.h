@@ -6,7 +6,7 @@
 /*
  * diskcmd: which ATA commands this kernel is allowed to issue.
  *
- * The machine this kernel is being carried to holds somebody's Windows
+ * The machine this kernel is being carried to has somebody's Windows
  * installation on its SSD, and until its owner has approved a carved partition
  * after a full backup, the rule is that nothing this kernel does may write that
  * disk. A rule of that weight cannot rest on remembering not to call the write

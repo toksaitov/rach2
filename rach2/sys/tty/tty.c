@@ -130,7 +130,7 @@ void tty_set_session(struct tty *t, int sid, int pgid)
 /**
  * Report whether (sid, pid) is the session leader that owns the console.
  *
- * True iff the session holds the controlling terminal (console_tty.sid ==
+ * True iff the session has the controlling terminal (console_tty.sid ==
  * sid) and the process is that session's leader (sid == pid). This is the
  * exact condition under which a process exiting, being killed, or replacing
  * its image must release (and on a successful exec re-publish) the

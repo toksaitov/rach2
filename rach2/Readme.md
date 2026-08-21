@@ -442,7 +442,7 @@ reading on.
   past the last one is dropped, exactly as a plain `read` too small for it drops
   the tail. The next read starts the next message.
 * A pipe, a stream socket, a device or a `/proc` file is read again only while
-  it says it holds more, so a walk never parks for input nobody has written.
+  it says it has more, so a walk never parks for input nobody has written.
   Asking and then reading is safe for two reasons together: a syscall is not
   preemptible here, so no other process runs in between, and the interrupts that
   do run can only add to what is readable. Nothing else empties a pipe or a
@@ -679,7 +679,7 @@ Four limits, stated rather than discovered:
   disk, so the file system is not what would have to change.
 
 The century is inferred as 2000 plus the two-digit year rather than read from
-CMOS register 0x32, which holds a century on machines whose firmware maintains
+CMOS register 0x32, which has a century on machines whose firmware maintains
 one and an unrelated byte on machines whose firmware does not.
 
 ### getdents64 (syscall 220)
@@ -805,12 +805,12 @@ The kernel maintains a fixed-size process table (`MAX_PROCS = 16`). At boot, pro
 
 ### Init, the rescue shell, and CTRL+C
 
-After boot and self-tests, the kernel runs a real init as PID 1, and it is pid 1 in fact and not only in the prose: pid numbering is restarted at 1 on the way into `boot_init_process`, past the point where the boot is certainly starting init, so the self-tests that ran first no longer consume the numbering while the rescue and init-less boots keep it. That matters beyond tidiness, because `kill(1, ...)` is how `halt`, `poweroff` and `reboot` ask for a shutdown: before it, pid 1 was a dead self-test process and all three failed with `No such process`. Pid 0 is the kernel's first process, which is why `/proc` lists a 0 beside the 1. `boot_init_process` execs `/sbin/init` if the RAM disk holds it (the os-simple and os-real images do). That init is a small userland program, `utils/init.c`: it forks the login shell, reaps every orphan the kernel reparents onto it, and respawns the shell when it exits, so the shell never disappears and an exited login leaves you at a fresh prompt rather than at a kernel shell.
+After boot and self-tests, the kernel runs a real init as PID 1, and it is pid 1 in fact and not only in the prose: pid numbering is restarted at 1 on the way into `boot_init_process`, past the point where the boot is certainly starting init, so the self-tests that ran first no longer consume the numbering while the rescue and init-less boots keep it. That matters beyond tidiness, because `kill(1, ...)` is how `halt`, `poweroff` and `reboot` ask for a shutdown: before it, pid 1 was a dead self-test process and all three failed with `No such process`. Pid 0 is the kernel's first process, which is why `/proc` lists a 0 beside the 1. `boot_init_process` execs `/sbin/init` if the RAM disk has it (the os-simple and os-real images do). That init is a small userland program, `utils/init.c`: it forks the login shell, reaps every orphan the kernel reparents onto it, and respawns the shell when it exits, so the shell never disappears and an exited login leaves you at a fresh prompt rather than at a kernel shell.
 
 Because init is persistent, the kernel's built-in debug shell is no longer the home you land in. It is the rescue/developer environment, reached two ways:
 
 * Boot with the `rach2.rescue` kernel command line (the run scripts take `RESCUE=1`, and each ISO has a rescue menu entry). The kernel then skips init and runs the debug shell directly; `exec <name>` launches a program, which returns to the shell on exit.
-* Boot an image that holds no init at all (the test image). With nothing to exec, the kernel falls to the debug shell unconditionally; this is what the automated test harness drives.
+* Boot an image that has no init at all (the test image). With nothing to exec, the kernel falls to the debug shell unconditionally; this is what the automated test harness drives.
 
 If a real `/sbin/init` ever exits or is killed, there is no reaper or login shell left, so the kernel halts with `kernel panic: init died` rather than fall to an unauthenticated shell (boot `rach2.rescue` to get the debug shell deliberately).
 
@@ -961,7 +961,7 @@ This ensures all processes can access kernel memory while having separate user-s
 
 ### CR3 Switching
 
-The CR3 register holds the physical address of the current page directory. During context switch, `switch_context()` in `switch.s`:
+The CR3 register has the physical address of the current page directory. During context switch, `switch_context()` in `switch.s`:
 1. Compares `old->cr3` with `new->cr3`
 2. If different and `new->cr3 != 0`, loads the new value into CR3
 3. The TLB is automatically flushed on CR3 write

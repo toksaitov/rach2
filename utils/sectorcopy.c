@@ -27,7 +27,7 @@ static void say(char *err, size_t errlen, const char *what)
  * a large number to wrap into. Overflow is caught before it happens, so a
  * number longer than the disk is refused rather than silently reduced.
  *
- * @return 0 when `out` holds the number, -1 when the text is not one.
+ * @return 0 when `out` has the number, -1 when the text is not one.
  */
 int sectorcopy_parse_u64(const char *text, unsigned long long *out)
 {
@@ -171,7 +171,7 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
 
     /* One more read, and only an end of stream will do. A stream longer than
        the length it was given means the two ends disagree about what is being
-       written, and the disk now holds the first part of something whose size
+       written, and the disk now has the first part of something whose size
        nobody knows; a read that failed here proves nothing either way, and
        reporting a whole image written on the strength of a failed check is the
        one answer that must not be given. */

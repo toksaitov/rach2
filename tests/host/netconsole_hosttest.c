@@ -289,7 +289,7 @@ int main(void)
             netconsole_putc('z');
         }
         CHECK(nc_dropped == 101, "the overflow is counted, not written past the ring");
-        CHECK(nc_pending() == NETCONSOLE_RING - 1, "the ring holds its capacity and no more");
+        CHECK(nc_pending() == NETCONSOLE_RING - 1, "the ring has its capacity and no more");
         CHECK(nc_head < NETCONSOLE_RING && nc_tail < NETCONSOLE_RING,
               "both indices stay inside the ring");
     }

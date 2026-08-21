@@ -328,7 +328,7 @@ int main(void)
     CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
           "leaving the pair that works");
 
-    /* Reapplying the pair the machine already holds must change nothing. A DHCP
+    /* Reapplying the pair the machine already has must change nothing. A DHCP
        client runs the same `ifconfig` on a renewal as on a lease, and a machine
        that tore its connections down every renewal would drop every session on
        it at the lease interval. */

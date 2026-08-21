@@ -18,7 +18,7 @@
  * or not `auto` names it, which is how one is brought up by hand.
  *
  * A `dhcp` stanza runs `dhcpc`, which stays in the foreground until the first
- * answer and then holds the lease from the background. A `static` stanza is
+ * answer and then has the lease from the background. A `static` stanza is
  * applied here, through the same ioctls.
  */
 

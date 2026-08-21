@@ -95,7 +95,7 @@ int main(void)
     CHECK(rcvwnd_update(0, 1u, 0u, MSS) == 0,
           "a zero ring announces nothing instead of underflowing");
     CHECK(rcvwnd_update(0, RING + 1u, RING, MSS) == 0,
-          "more buffered than the ring holds announces nothing instead of wrapping");
+          "more buffered than the ring has announces nothing instead of wrapping");
     CHECK(rcvwnd_update(0, 0, 1u, 0) == 1u,
           "a zero segment size still makes progress rather than dividing by nothing");
 

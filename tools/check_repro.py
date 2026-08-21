@@ -66,7 +66,7 @@ def stage(mkfs, stager, manifest, image):
 
 
 def staged_names(image, guestdir):
-    """The names under `guestdir`, in the order the image holds them."""
+    """The names under `guestdir`, in the order the image has them."""
     region = check_setid.read_region(image, 0, None)
     nodes = check_setid.walk_nodes(region)
     paths = check_setid.node_paths(nodes)

@@ -230,7 +230,7 @@ void _start(void)
         syscall3(SYS_CHOWN32, (int)"/perm.own", 1000, 1000) != 0) {
         fail("stage directories");
     }
-    /* The 0666 fixture: world-writable, so the child holds write but not
+    /* The 0666 fixture: world-writable, so the child has write but not
      * ownership, the pair the utimensat split judges apart. chmod pins the
      * mode against whatever umask the boot shell has. */
     fd = syscall3(SYS_CREAT, (int)"/perm.rw", 0666, 0);

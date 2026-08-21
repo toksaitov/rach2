@@ -319,7 +319,7 @@ int main(void)
         CHECK(small[full] == (char)0x7E, "and writes nothing past the cap it was given");
 
         n = diskinfo_format(&d, small, 1);
-        CHECK(n == 0 && small[0] == '\0', "a one-byte buffer holds only the terminator");
+        CHECK(n == 0 && small[0] == '\0', "a one-byte buffer has only the terminator");
         n = diskinfo_format(&d, small, 0);
         CHECK(n == 0, "a zero-byte buffer writes nothing at all");
     }

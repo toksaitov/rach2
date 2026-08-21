@@ -27,7 +27,7 @@ static int fails;
         }              \
     } while (0)
 
-/** A BCD byte from a two-digit value, the way the CMOS holds one. */
+/** A BCD byte from a two-digit value, the way the CMOS has one. */
 static unsigned char bcd(int value)
 {
     return (unsigned char)(((value / 10) << 4) | (value % 10));

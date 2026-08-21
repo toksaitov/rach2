@@ -107,7 +107,7 @@ int krffs_chown(
         gid_t gid
     );
 
-/** Returns file system information for the store that holds `path`. */
+/** Returns file system information for the store that has `path`. */
 int krffs_statfs(
         const char *path,
         struct statvfs *statvfs_buffer

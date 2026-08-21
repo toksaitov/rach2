@@ -5,7 +5,7 @@
  *
  * The credential library promises that an ordinary `exit` cannot leak the
  * writer's lock, and it keeps that promise with `atexit`. `atexit` can fail:
- * musl holds thirty-two registrations in `.bss` and allocates a block for the
+ * musl has thirty-two registrations in `.bss` and allocates a block for the
  * next thirty-two, so a writer that arrives when that allocation cannot be made
  * gets a refusal. An acquire that shrugged one off would hold a lock with
  * nothing left to drop it, and the next writer would wait ten seconds, refuse,

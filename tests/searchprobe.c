@@ -692,7 +692,7 @@ void _start(void)
     want_mode("staged /sp_denied/prog", PROG, 0755);
 
     /* The targets the mutations aim at. `victim` and the two movers are
-     * root-owned and 0666, so uid 1000 holds write on them but not ownership;
+     * root-owned and 0666, so uid 1000 has write on them but not ownership;
      * `mine` is uid 1000's own, so the chmod cases are refused by the ancestor
      * and by nothing else. Each rename has a source of its own, so that no
      * later "the destination is not there" can rest on an earlier case having

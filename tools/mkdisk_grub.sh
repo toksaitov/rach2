@@ -84,7 +84,7 @@ RECOVERY_IMAGE="${RACH2_DISK_RECOVERY_IMAGE:-}"
 #
 # What is still not fixed, and is not pretended to be: the container is the
 # floating ubuntu:24.04 tag and installs whatever GRUB and mtools the archive
-# holds that day, and the machine's SSH host key and password salt are
+# has that day, and the machine's SSH host key and password salt are
 # generated per tree. Those are inputs to the artifact, not noise in it.
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
 export SOURCE_DATE_EPOCH
@@ -139,7 +139,7 @@ load_env
 
 # Every entry this file owns is defined before the rewritable half is read, and
 # the order below is a contract. `source` merges the second file's entries onto
-# the tail of this list, so these keep the low indices whatever that file holds;
+# the tail of this list, so these keep the low indices whatever that file has;
 # Every entry names its own root. GRUB does not put `root` back when an entry
 # fails: the recovery entries set it to partition 3, and a fallback that assumed
 # the root it started with would look for the ordinary kernel there and fail
@@ -414,7 +414,7 @@ docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
 
     KBYTES=\$(stat -c %s '$KERNEL')
     if [ \"\$KBYTES\" -gt $SLOT_BYTES ]; then
-        echo \"mkdisk_grub: the kernel is \$KBYTES bytes and the slot holds $SLOT_BYTES\" >&2
+        echo \"mkdisk_grub: the kernel is \$KBYTES bytes and the slot has $SLOT_BYTES\" >&2
         exit 1
     fi
     dd if=/dev/zero of=/tmp/candidate.pad bs=$SLOT_BYTES count=1 status=none

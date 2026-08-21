@@ -8,7 +8,7 @@ as a dotted mask and applies it from userland when a recovery boot gets no lease
 Two shapes of one fact drift, and a machine whose menu and fallback disagree is
 one that is unreachable by whichever of the two is wrong.
 
-So this holds them together before a disk is written: the prefix and the mask
+So this has them together before a disk is written: the prefix and the mask
 must describe the same subnet, the address must be a host in it, the gateway
 must be a different host in the same subnet, and the script must RUN exactly
 those numbers. What is compared is the script's commands and not its text: a

@@ -6,7 +6,7 @@ sources by hand, because pdpmake reads none of the GNU makefiles that are the
 host build's authority. A list that drifts builds a kernel missing a file or
 a program missing its companion source, and the failure would surface inside
 a booted guest, late and hard to read. This guard runs on the host, inside
-the verify gate, and holds the four contracts:
+the verify gate, and has the four contracts:
 
   1. rach2/guest.mk's OBJS equals the host ASM_SRC plus C_SRC, object for
      object, and the kernel.objs recipe writes exactly that list, loader.o
@@ -36,7 +36,7 @@ FD_RESERVED = 4  # stdin, stdout, stderr, and the output file
 # The kernel's execve budget is 3072 bytes across the argv and environment
 # strings together. A recipe reaches the kernel as `sh -c <expanded text>`
 # plus the build environment, so the check below expands each recipe the way
-# pdpmake will and holds the result under the budget minus this allowance for
+# pdpmake will and has the result under the budget minus this allowance for
 # the environment a login shell exports.
 EXEC_BUDGET = 3072
 ENV_ALLOWANCE = 500
@@ -256,7 +256,7 @@ def check_limits(repo):
     depth = include_depth(repo)
     if depth + FD_RESERVED > FD_LIMIT:
         fail("the deepest kernel include chain is %d files; with the %d "
-             "descriptors a compile holds besides its includes that exceeds "
+             "descriptors a compile has besides its includes that exceeds "
              "the %d-descriptor table" % (depth, FD_RESERVED, FD_LIMIT))
     for name in ("rach2/guest.mk", "utils/guest.mk", "ish/guest.mk"):
         text = open(os.path.join(repo, name)).read()

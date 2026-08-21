@@ -34,7 +34,7 @@
 #define ATA_CMD_FLUSH    0xE7
 #define ATA_CMD_IDENTIFY 0xEC
 
-/* Drive-select byte for the master in LBA mode; the low nibble holds LBA bits
+/* Drive-select byte for the master in LBA mode; the low nibble has LBA bits
    24-27. */
 #define ATA_DRIVE_LBA_MASTER 0xE0
 #define ATA_DRIVE_MASTER     0xA0

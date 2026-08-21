@@ -8,7 +8,7 @@
  * arrive before this machine owns an address, the `SIOCxIF*` ioctls to put the
  * answer on the interface, and a route for the gateway the lease names.
  *
- * `dhcpc [-i INTERFACE] [-b] [-l SECONDS]`. It holds the lease for as long as
+ * `dhcpc [-i INTERFACE] [-b] [-l SECONDS]`. It has the lease for as long as
  * it runs: it renews at half the lease time, rebinds at seven eighths, and
  * when a lease finally expires it takes the address off and starts again,
  * because an address whose lease has run out belongs to somebody else now.
@@ -19,10 +19,10 @@
  *
  * With `-b` it stays in the foreground until the first answer, so whatever
  * started it learns whether the machine is configured, and then goes to the
- * background and holds the lease. A boot that found no server backgrounds too
+ * background and has the lease. A boot that found no server backgrounds too
  * rather than giving up, because a machine that gave up is one nobody can
  * reach until somebody walks to it. `dhcpc -i eth0 -k` stops the client that
- * holds an interface and waits for the address to come off, which is what a
+ * has an interface and waits for the address to come off, which is what a
  * machine being moved to a fixed address needs first.
  *
  * Everything it sends it builds: the Ethernet payload is an IP header, a UDP
@@ -358,7 +358,7 @@ static int write_resolv(const struct dhcp_lease *l)
     return 0;
 }
 
-/** Where this client records that it holds the interface. */
+/** Where this client records that it has the interface. */
 static char pidpath[64];
 static int holds_interface;
 
@@ -374,7 +374,7 @@ static unsigned long holding;
  * cleaned up after. Nothing runs on SIGKILL, so such a client leaves its
  * address on the interface with no lease behind it; whoever takes the claim
  * over reads what was configured and takes it off, but only if the interface
- * still holds exactly that address, since an administrator may have set
+ * still has exactly that address, since an administrator may have set
  * another one in the meantime.
  */
 static int write_claim(int fd, long pid, unsigned long addr)
@@ -403,7 +403,7 @@ static int write_claim(int fd, long pid, unsigned long addr)
  * as one to take over.
  *
  * A claim naming a process that is not there is taken over once. Anything else
- * that goes wrong is a refusal: a client that cannot say it holds an interface
+ * that goes wrong is a refusal: a client that cannot say it has an interface
  * must not act as though it does.
  *
  * Init empties `/var/run` at boot, so a claim does not outlive the machine.
@@ -579,12 +579,12 @@ static int drop_recorded_address(unsigned long addr)
  * Stop the client holding this interface and wait for it to let go.
  *
  * There is no other way to take a leased address off this machine: the client
- * that holds it renews it, so an address that is to be replaced by a fixed one,
+ * that has it renews it, so an address that is to be replaced by a fixed one,
  * or by none, needs its client stopped first. The signal is TERM, which the
  * client answers by unconfiguring the interface and dropping its claim, and
  * this waits for the claim to go so that whatever runs next does not race it.
  *
- * @return 0 when nothing holds the interface afterwards.
+ * @return 0 when nothing has the interface afterwards.
  */
 static int stop_client(void)
 {
@@ -675,10 +675,10 @@ static int stop_client(void)
 
 /**
  * Confirm this client still holds the interface, and take the claim back if
- * nothing holds it.
+ * nothing has it.
  *
  * Two clients started at the same instant over a claim left by a machine that
- * lost power can both find it dead and both take it; one of them then holds a
+ * lost power can both find it dead and both take it; one of them then has a
  * claim the other removed. This is what makes that visible: the claim is read
  * again before the interface is touched, and a client that finds another live
  * client named there leaves without configuring anything and without removing
@@ -930,7 +930,7 @@ static int apply(int fd, const struct dhcp_lease *l, int strict)
 /**
  * Take the address off, which is what an expired lease leaves behind.
  *
- * Through the socket this client already holds, not a new one: the machine has
+ * Through the socket this client already has, not a new one: the machine has
  * a fixed number of sockets and this runs at the moment things are going wrong,
  * which is exactly when there may be none left. A removal that fails is said
  * out loud, because an address left behind is one the server will hand to
@@ -1272,7 +1272,7 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
  * Let the caller go and carry on in a child.
  *
  * The parent exits reporting success, so a boot script learns the machine is
- * configured (or that it will keep trying) and moves on; the child holds the
+ * configured (or that it will keep trying) and moves on; the child has the
  * lease for as long as the machine runs.
  *
  * The child does not begin holding the lease until the parent has published
@@ -1459,7 +1459,7 @@ int main(int argc, char **argv)
     signal(SIGINT, stop_handler);
     signal(SIGHUP, stop_handler);
     /* And a write to a console nobody is reading any more must not kill a
-       client that holds a lease: the default action for SIGPIPE terminates,
+       client that has a lease: the default action for SIGPIPE terminates,
        and a client that printed its lease line into a closed pipe would leave
        the address on the interface with nothing to take it off. */
     signal(SIGPIPE, SIG_IGN);
@@ -1493,7 +1493,7 @@ int main(int argc, char **argv)
 
         if (obtain(fd, &l, &asked) == 0) {
             if (!claim_is_ours(1)) {
-                /* Another client holds the interface, or this one could not
+                /* Another client has the interface, or this one could not
                    write its claim. Nothing is configured yet, so there is
                    nothing to undo and nothing to promise. */
                 close(fd);

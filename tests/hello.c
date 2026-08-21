@@ -53,7 +53,7 @@ static void puts(const char *s)
 /**
  * ELF entry point: the address the loader jumps to (no libc, no main).
  *
- * The stack on entry holds argc at `[ESP+0]`, then the argv pointers; this
+ * The stack on entry has argc at `[ESP+0]`, then the argv pointers; this
  * probe ignores them and prints a fixed message.
  */
 void _start(void)

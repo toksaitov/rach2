@@ -27,7 +27,7 @@
  * The orphan is hidden from the scans that enumerate by parent id, not only
  * from the resolver. After such an unlink, getdents64 on the parent directory
  * lists neither the name nor a nameless entry, and rmdir of a directory whose
- * only child is an orphan this probe still holds succeeds, which is what POSIX
+ * only child is an orphan this probe still has succeeds, which is what POSIX
  * says. Both fail on an orphan that keeps its parent id and nothing else
  * changes, the second with -ENOTEMPTY.
  *
@@ -57,7 +57,7 @@
  * so a failed open reports itself through the exit status instead of hanging
  * the parent on a byte that never comes.
  *
- * Two descriptors on one orphan, and a child that holds the last one, cover
+ * Two descriptors on one orphan, and a child that has the last one, cover
  * the release itself: closing one of a dup'd pair leaves the other reading, so
  * the release counts descriptors and not files, and a child that _exits
  * without closing proves release_fd_table reaches the same release sys_close
@@ -72,7 +72,7 @@
  * free node is ever smaller than a header, and the second creat then takes the
  * remainder split off right behind the first file. Where there was no
  * remainder to split, the first file absorbed its whole free node, and what
- * followed that node was already reserved, because the free list never holds
+ * followed that node was already reserved, because the free list never has
  * two adjacent free nodes. Either way the first write past the capacity must
  * move the file, and 1024 bytes is past it: a creat leaves room for no data at
  * all beyond the slack too small to split off, which is under one 357-byte
@@ -166,7 +166,7 @@ typedef unsigned int u32;
 #define KID   "/fdstale.odir/kid"
 #define KEEP  "/fdstale.keep" /* the destination a refused rename must spare */
 #define RDIR  "/fdstale.rdir" /* the directory both refusals rest on */
-#define OLD   "/fdstale.old"  /* renamed over while the child holds it */
+#define OLD   "/fdstale.old"  /* renamed over while the child has it */
 #define NEW   "/fdstale.new"  /* the replacement, before the rename */
 #define GONE  "/fdstale.gone" /* re-created at its own name under the child */
 #define EXITF "/fdstale.exit" /* held by a child that _exits without closing */
@@ -176,9 +176,9 @@ typedef unsigned int u32;
 #define XGROW "/fdstale.xgrw" /* the same, moved by another process */
 #define XWALL "/fdstale.xwal" /* and its wall */
 #define LEAK  "/fdstale.leak" /* the unlink-under-a-descriptor leak loop */
-#define SOLO  "/fdstale.solo" /* the loop that removes what nothing holds */
+#define SOLO  "/fdstale.solo" /* the loop that removes what nothing has */
 #define STAGE "/fdstale.stg"  /* the rename loop's new file */
-#define REPL  "/fdstale.repl" /* the name it lands on, which nobody holds */
+#define REPL  "/fdstale.repl" /* the name it lands on, which nobody has */
 #define DDIR  "/fdstale.ddir" /* rmdir'd under an open directory descriptor */
 
 /* The pairs a torn read would betray are the same length, so that only their
@@ -625,15 +625,15 @@ static void cross_process_case(void)
     reap(pid, "the reader child");
 
     /* What the names hold now is the writer's, whatever the reader saw. */
-    want_named_bytes("the renamed-onto name holds the replacement", OLD, NEW_LINE,
+    want_named_bytes("the renamed-onto name has the replacement", OLD, NEW_LINE,
                      (int)slen(NEW_LINE));
-    want_named_bytes("the re-created name holds the new file", GONE, FRESH_LINE,
+    want_named_bytes("the re-created name has the new file", GONE, FRESH_LINE,
                      (int)slen(FRESH_LINE));
     want_eq("remove the renamed-onto name", syscall3(SYS_UNLINK, (int)OLD, 0, 0), 0);
     want_eq("remove the re-created name", syscall3(SYS_UNLINK, (int)GONE, 0, 0), 0);
 }
 
-/* The child of the release case: it holds the only descriptor on an orphan and
+/* The child of the release case: it has the only descriptor on an orphan and
  * exits without closing it. */
 static void holder_child(void)
 {
@@ -709,7 +709,7 @@ static void cross_reloc_case(void)
     want_eq("remove the wall behind it", syscall3(SYS_UNLINK, (int)XWALL, 0, 0), 0);
 }
 
-/* The release counts descriptors, not files: a dup'd pair holds one orphan and
+/* The release counts descriptors, not files: a dup'd pair has one orphan and
  * the survivor goes on reading. */
 static void dup_case(void)
 {
@@ -826,7 +826,7 @@ static void leak_by_unlink_case(void)
     }
 }
 
-/* The shape every credential replacement has, onto a name no descriptor holds.
+/* The shape every credential replacement has, onto a name no descriptor has.
  * An orphan made unconditionally is never closed and never released, so this
  * is the loop that catches it. */
 static void leak_by_rename_case(void)

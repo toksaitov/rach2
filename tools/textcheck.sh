@@ -74,7 +74,7 @@ py_files() {
 
     # A spaced "--" used as an em-dash in C and H comments. Double-quoted
     # strings are removed first so a usage string is not flagged; bare code
-    # never holds a spaced "--", so what remains is in a comment.
+    # never has a spaced "--", so what remains is in a comment.
     ch_files | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         sed 's/"[^"]*"//g' "$f" | grep -n ' -- ' | sed "s|^|$f:|; s|\$|  [prose em-dash]|"

@@ -112,7 +112,7 @@ static void diag_eth_probe(struct diag_eth *out)
     }
 
     /* The first memory BAR by index, which is what the reference driver takes.
-     * A 64-bit BAR's upper half occupies the next slot and holds address bits,
+     * A 64-bit BAR's upper half occupies the next slot and has address bits,
      * not a window of its own, so it is stepped over rather than considered. */
     for (i = 0; i < 6; i++) {
         if (!pci_bar_is_memory(dev.bar[i])) {

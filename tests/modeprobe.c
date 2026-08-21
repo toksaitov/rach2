@@ -372,7 +372,7 @@ static void user_child(void)
     want_eq("chown(0, 0) on a root-owned setuid file", syscall3(SYS_CHOWN32, (int)NOCHG, 0, 0), 0);
     want_mode("naming the ids it already had disarmed the file", NOCHG, 04755);
 
-    /* A write that stays inside the node the descriptor already holds. */
+    /* A write that stays inside the node the descriptor already has. */
     write_bytes("write in place", INPLACE, 8);
     want_mode("an in-place write kept setuid", INPLACE, 0755);
 
@@ -426,7 +426,7 @@ static void escalation_child(void)
 
     drop_to_1000();
 
-    /* Rewrite one byte with the value it already holds. The clear rule cares
+    /* Rewrite one byte with the value it already has. The clear rule cares
      * that a write moved bytes, not which, and the copy has to stay a valid
      * ELF for the exec below. */
     fd = syscall3(SYS_OPEN, (int)SGID0, O_RDONLY, 0);

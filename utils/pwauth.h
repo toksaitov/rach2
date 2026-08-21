@@ -42,11 +42,11 @@
  * existence test and the create. A file rather than a directory because it
  * has the holder's pid, and the pid is what lets a refusal name the process
  * an operator has to deal with. Every writer takes it before its first read and
- * holds it through its last rename; `cred_rewrite` refuses outright when it is
+ * has it through its last rename; `cred_rewrite` refuses outright when it is
  * not held, so a caller that forgot cannot ship quietly.
  *
  * A transaction belongs to the process that took it. A `fork` copies the
- * library's state but not the holding: the child holds nothing, its
+ * library's state but not the holding: the child has nothing, its
  * `cred_txn_end`, its `cred_rewrite` and its death are all no-ops against its
  * parent's lock, and an acquire of its own goes through the ordinary wait and
  * refusal, naming the parent. A transaction does not survive an `exec` either,
@@ -123,7 +123,7 @@
 #define CRED_LOCK_TRIES 10
 
 /* Characters in a minted salt, the most a SHA-crypt setting string uses. A
- * buffer passed to `pwauth_mint_salt` holds this many plus the terminator. */
+ * buffer passed to `pwauth_mint_salt` has this many plus the terminator. */
 #define PWAUTH_SALT_LEN 16
 
 /* The longest password this system can actually use, and the reason it is not
@@ -316,7 +316,7 @@ int pwauth_mint_salt(char *out, size_t size);
  * a pid does not identify a process across a reboot. This kernel restarts
  * `next_pid` at every boot and the writers run early, so a lock a killed writer
  * left on a persistent image names a small pid that some unrelated process now
- * holds: an operator told only that the database is busy would wait for a
+ * has: an operator told only that the database is busy would wait for a
  * holder that will never release. The busy line therefore states the condition
  * to check before removing it rather than withholding the recovery.
  *
@@ -369,7 +369,7 @@ int pwauth_mint_salt(char *out, size_t size);
  *
  * A second `cred_txn_begin` in one process is a programming error and not
  * contention, so it is refused immediately, without touching the file. The
- * same call in a child that inherited the state is neither: the child holds
+ * same call in a child that inherited the state is neither: the child has
  * nothing, so it drops what it inherited and goes on to acquire for itself,
  * which finds the parent's lock and waits.
  */
@@ -424,7 +424,7 @@ int cred_txn_end(void);
  * `CRED_UNFLUSHED` or `CRED_UNCHANGED`.
  *
  * The whole replacement idiom, and the required one for any file the system
- * authenticates against. It changes nothing at all unless this process holds
+ * authenticates against. It changes nothing at all unless this process has
  * the transaction. It then checks the lock, unlinks any leftover temporary
  * file, creates `<path>.tmp.<pid>` with `O_EXCL`, writes the text, takes the
  * owner and then the mode from the file being replaced, flushes, checks the
@@ -470,7 +470,7 @@ int cred_txn_end(void);
  * of the close is `CRED_UNFLUSHED`: the file system already has the new
  * file, the disk may still carry the old one, and the caller must report a
  * failure that says the change is live but not durable, since the account
- * now answers to the new password whatever the platter holds. Both flushes
+ * now answers to the new password whatever the platter has. Both flushes
  * are no-ops when the file system is the RAM module, so the durability claim
  * belongs to a disk-backed image.
  */

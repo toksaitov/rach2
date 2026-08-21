@@ -369,7 +369,7 @@ static int ahci_discover(void)
  * This is the recovery the laptop needs and the reason the HBA reset above can
  * be issued at all. A warm reboot on that machine leaves its SATA link in a
  * state where the port reports a device and the device never becomes ready,
- * and the only way back is to take the link down and bring it up: DET=1 holds
+ * and the only way back is to take the link down and bring it up: DET=1 has
  * COMRESET asserted, and the specification requires it held for at least one
  * millisecond, after which DET=0 releases it and the PHY negotiates again.
  *
@@ -571,7 +571,7 @@ static int ahci_quiesce_ports(void)
  *
  * After a COMRESET the device runs its own reset and then posts a D2H FIS
  * carrying its signature; until that has happened the task file reports busy
- * and the signature register holds nothing worth reading. Bounded, because a
+ * and the signature register has nothing worth reading. Bounded, because a
  * device that never becomes ready is a device this driver must move past
  * rather than wait on.
  */

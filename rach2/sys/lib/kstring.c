@@ -87,7 +87,7 @@ void* k_memmove(void *dest, const void *src, size_t n)
  * under AddressSanitizer, which rewrites every call to a standard memory
  * name into its own checked copy; a body under the standard name would be
  * unreachable there. The size parameter is `__SIZE_TYPE__`, the type each
- * compiler's builtin prototype expects, which `-Werror` holds these
+ * compiler's builtin prototype expects, which `-Werror` has these
  * definitions to.
  */
 void* memset(void *ptr, int c, __SIZE_TYPE__ n)

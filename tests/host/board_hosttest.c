@@ -171,7 +171,7 @@ int main(void)
     CHECK(board_sci_irq(lynx, 0x04) == -1, "selection 4 is an IOAPIC input this kernel cannot see");
     CHECK(board_sci_irq(lynx, 0x07) == -1, "and so is selection 7");
     CHECK(board_sci_irq(lynx, 0x82) == 11,
-          "the selection is the low three bits, whatever the rest of the register holds");
+          "the selection is the low three bits, whatever the rest of the register has");
     CHECK(board_sci_irq(0, 0x00) == -1, "no profile has no line");
 
     /* ---- the sleep word, the one value that is believed rather than read

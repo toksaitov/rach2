@@ -4,7 +4,7 @@
  * host-deps: rach2/sys/block/diskcmd.c
  *
  * What this guards is the one promise milestone 24 makes about somebody else's
- * property: a Rach2 built for the laptop must not write its SSD, which holds a
+ * property: a Rach2 built for the laptop must not write its SSD, which has a
  * Windows installation nobody has backed up. So the interesting half of the
  * table is not the commands it permits but the ones it does not, and the
  * sweep below is exhaustive rather than a sample: all 256 command bytes are

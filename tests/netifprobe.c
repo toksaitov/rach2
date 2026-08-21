@@ -349,7 +349,7 @@ static void set_sockaddr(uint8_t *sa, uint32_t ip, uint16_t port)
 /*
  * Configure a machine that came up with nothing, in the order `ifconfig` does
  * it: an address, then a mask, then a route. Between the first two the machine
- * holds an address with the classful mask its first byte implies, which is the
+ * has an address with the classful mask its first byte implies, which is the
  * state a machine that refused to hold it could never get out of.
  */
 static void configure_from_nothing(int fd)
@@ -598,7 +598,7 @@ void _start(void)
     /* The connection opened from the old address must be gone, and every way of
        finding that out must say why. A bare failure reads as a permission error
        in the C library, which is not what happened to a program whose machine
-       changed address under it. Each end holds the reason once, and the first
+       changed address under it. Each end has the reason once, and the first
        reader takes it, as `SO_ERROR` does on Linux, so each check below uses an
        end whose reason nothing has taken yet. */
     if (sys_write(conn, ifr, 1) != -ENETRESET) {
@@ -646,7 +646,7 @@ void _start(void)
         fail("the listener did not accept after the address changed");
     }
 
-    /* And reapplying the pair the machine already holds must not disturb the
+    /* And reapplying the pair the machine already has must not disturb the
        connection: a DHCP client runs the same `ifconfig` on every renewal, and
        a machine that reset its sessions each time would drop them at the lease
        interval. The connection accepted a moment ago is the witness. */

@@ -139,7 +139,7 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 }
 
 /**
- * Whether any descriptor anywhere holds `node`. For callers outside this file.
+ * Whether any descriptor anywhere has `node`. For callers outside this file.
  *
  * The debug shell removes and renames through the file system directly, below
  * the syscall layer that owns the holder rule, so it asks here rather than
@@ -410,7 +410,7 @@ typedef int32_t (*syscall_fn_t)(isr_params_t *);
 static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 
 /**
- * Release every descriptor a dying process still holds.
+ * Release every descriptor a dying process still has.
  *
  * Drops each socket reference and each shared open-file description (the
  * seek offset), and clears the slot. Called from both exit paths (sys_exit
@@ -438,7 +438,7 @@ void release_fd_table(fd_table_t *table)
 /**
  * Terminate the current process (exit(2)/exit_group(2)). Does not return.
  *
- * EBX holds the exit status. Marks the process a zombie, reparents its children
+ * EBX has the exit status. Marks the process a zombie, reparents its children
  * to init, wakes the parent if it waits, and reschedules. A real init's exit is
  * fatal (panic_init_died); an init exiting under the debug shell returns to it.
  */
@@ -954,7 +954,7 @@ static int canonicalize_abs(char *path)
  * already honors '.'/'..') walks the right tree. Same return contract as
  * strncpy_from_user: the resulting length on success, or a negative errno (a
  * join that overruns the buffer is -ENAMETOOLONG). The "fb"/"mouse" device
- * names resolve correctly only from cwd "/", which holds because programs
+ * names resolve correctly only from cwd "/", which has because programs
  * open them at startup.
  */
 static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
@@ -996,7 +996,7 @@ static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
  * The old round-trip could not tell a freed node from a different file the
  * allocator later placed at the same address. That hole is closed for every
  * regular-file descriptor by the lifetime rather than by this check: no address
- * a descriptor holds is handed out while it holds it.
+ * a descriptor has is handed out while it has it.
  *
  * A NULL node is the root directory and needs no check. Directories are
  * deliberately out of scope: `rmdir` still frees the node under an open
@@ -1112,7 +1112,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
 
-/** Non-zero when the caller holds appropriate privilege (effective uid 0). */
+/** Non-zero when the caller has appropriate privilege (effective uid 0). */
 static int cred_privileged(void)
 {
     return current_proc->euid == 0;
@@ -2299,7 +2299,7 @@ static struct tty *fd_tty(fd_entry_t *e);
  * question and the read, since a system call here runs with interrupts off from
  * end to end.
  *
- * A terminal answers 0 whatever it holds. Its read returns one line, and a
+ * A terminal answers 0 whatever it has. Its read returns one line, and a
  * second line into the next buffer would answer a question the reader did not
  * ask.
  */
@@ -4509,7 +4509,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
     if (parent->cr3 == 0) {
         parent_dir = _kernel_dir;
     } else {
-        /* cr3 holds &page_dir->phys_page_tables (get_page_dir_phys); recover
+        /* cr3 has &page_dir->phys_page_tables (get_page_dir_phys); recover
          * the page_dir_t* by subtracting that offset. The layout is
          * logical_page_tables[1024] then phys_page_tables[1024], so the offset
          * is 1024 * sizeof(page_table_t*) = 4096 bytes. */
@@ -4600,7 +4600,7 @@ static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 }
 
 /*
- * Where execve holds the new image's arguments while it destroys the old one.
+ * Where execve has the new image's arguments while it destroys the old one.
  *
  * Static, and safe to be static: one process at a time is between filling these
  * and using them, because `in_syscall` stops the timer from scheduling and no
@@ -4957,7 +4957,7 @@ static int32_t sys_execve(isr_params_t *params)
             }
             argv_offset += (uint32_t)r + 1;
         }
-        /* The bufs array holds EXEC_MAX_ENTRIES args plus a NULL terminator;
+        /* The bufs array has EXEC_MAX_ENTRIES args plus a NULL terminator;
          * one more non-NULL pointer is too many args, not a silent truncation.
          */
         if (argc == EXEC_MAX_ENTRIES) {
@@ -5271,9 +5271,9 @@ static int32_t sys_execve(isr_params_t *params)
         params->edi = 0;
 
         /* Reset thread-local storage for the new image. exec replaces the
-         * program in place, so the trapframe still holds the old program's
+         * program in place, so the trapframe still has the old program's
          * segment selectors (its %gs may be the 0x33 TLS selector) and the PCB
-         * still holds its TLS base. A fresh image has no TLS until its libc
+         * still has its TLS base. A fresh image has no TLS until its libc
          * calls set_thread_area, so restore the plain user-data selector (0x23,
          * as enter_usermode does for a brand-new process) in all four slots and
          * clear the base in both the PCB and the live GDT descriptor. */
@@ -6377,7 +6377,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         }
         return 0;
     }
-    /* /proc/net holds one file. */
+    /* /proc/net has one file. */
     if (kind == VNODE_PROC_NET_DIR) {
         if (n == 0) {
             name[0] = 'd';

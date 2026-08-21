@@ -97,7 +97,7 @@ int main(int argc, char **argv)
     }
     device = (unsigned long long)end;
     if (sectorcopy_bounds(device, offset, count, err, sizeof(err)) != 0) {
-        fprintf(stderr, "reflash: %s (%s holds %llu bytes)\n", err, argv[1], device);
+        fprintf(stderr, "reflash: %s (%s has %llu bytes)\n", err, argv[1], device);
         close(devfd);
         return 1;
     }

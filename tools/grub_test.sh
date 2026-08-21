@@ -3,7 +3,7 @@
 #
 # grub_test.sh: replacing the boot loader from the running machine.
 #
-# The post-MBR gap holds two core-image tails and LBA 1 selects between them.
+# The post-MBR gap has two core-image tails and LBA 1 selects between them.
 # `bootctl grub` writes the tail that is not in use, reads it back, and only
 # then rewrites LBA 1. Sector 0 is never written, which is the whole reason the
 # layout is shaped this way: it has the partition table, and a disk writes
@@ -76,7 +76,7 @@ fail() {
     exit 1
 }
 
-# Wait up to $3 seconds until the log holds at least $2 occurrences of $1.
+# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
     i=0
     while [ "$i" -lt "$3" ]; do
@@ -94,7 +94,7 @@ wait_count() {
 }
 
 # step <pattern> <count> <command>: the feeder sends <command> once the log
-# holds at least <count> occurrences of <pattern>.
+# has at least <count> occurrences of <pattern>.
 step() {
     printf '%s\t%s\t%s\n' "$2" "$1" "$3" >> "$STEPS"
 }

@@ -3,7 +3,7 @@
 # This is the POSIX makefile pdpmake reads in the guest, driving the staged
 # tcc through its /bin/cc name; the GNU Makefile beside it stays the host
 # build and pdpmake cannot read it. The object list below must equal the
-# host Makefile's ASM_SRC plus C_SRC; tools/check_guest.py holds the two
+# host Makefile's ASM_SRC plus C_SRC; tools/check_guest.py has the two
 # lists equal on the host, so they cannot drift apart.
 #
 # The link reads the object list from kernel.objs, a response file, because

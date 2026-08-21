@@ -61,7 +61,7 @@ struct tcb {
      * simultaneous-open arm, and there the socket is the caller's already: it
      * must be woken as a completed `connect` rather than queued on a listener
      * that does not exist, and never unref'd on a reset, since the descriptor
-     * still holds it. */
+     * still has it. */
     int         passive;
 
     uint32_t local_ip;
@@ -130,13 +130,13 @@ void tcb_free(struct tcb *tcb);
 /** Process an inbound TCP segment; called by ip_rx for IP protocol 6. */
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 
-/** Whether a live listener holds `port`; for `bind`'s advisory refusal. */
+/** Whether a live listener has `port`; for `bind`'s advisory refusal. */
 int tcp_port_listening(uint16_t port);
 
 /**
  * Bind a socket to a port in LISTEN for passive opens.
  *
- * 0, `-EADDRINUSE` if a listener already holds the port, `-EDESTADDRREQ` if the
+ * 0, `-EADDRINUSE` if a listener already has the port, `-EDESTADDRREQ` if the
  * socket bound none, or `-ENOBUFS` if the connection pool is full. A bare -1
  * would reach userland as `EPERM` through musl's return convention.
  */

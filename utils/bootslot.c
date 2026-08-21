@@ -109,7 +109,7 @@ static int walk_chain(struct bootslot *bs, uint32_t first, struct bootslot_file 
         len++;
         if (file) {
             if (file->chain_len >= BOOTSLOT_MAX_FILE_CLUSTERS) {
-                return fail(err, errlen, "a chain is longer than the walk holds");
+                return fail(err, errlen, "a chain is longer than the walk has");
             }
             file->chain[file->chain_len++] = cluster;
         }
@@ -468,7 +468,7 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     /* The flags decide HOW the loader reads the image; both Rach2 layouts
        carry exactly ALIGN|MEMINFO (3), and anything else (the a.out kludge
        above all) would change the load. The same rule tools/check_kernel.py
-       holds on the host. */
+       has on the host. */
     if (le32(image + off + 4) != 3) {
         return fail(err, errlen, "the multiboot flags are not ALIGN|MEMINFO");
     }
@@ -587,7 +587,7 @@ static int env_edit(struct bootslot *bs, const char *set_key, const char *set_va
         }
     }
     if (end == 0) {
-        return fail(err, errlen, "the environment block holds no lines");
+        return fail(err, errlen, "the environment block has no lines");
     }
     i = 0;
     while ((uint32_t)i < end) {
@@ -794,11 +794,11 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
     /* Three trial states live in the block. A line with a value
        (next_entry=candidate, or candidate-static on the machine running from
        the fixed-address pair) means an install happened after this machine
-       booted, so the slot no longer holds the running kernel. The empty line
+       booted, so the slot no longer has the running kernel. The empty line
        (next_entry=, the value GRUB's scripted consumption saves) means the
        running candidate came through a trial boot; only that state may commit.
        No line at all is a fresh disk or an interrupted install, and an
-       interrupted install's slot holds partial bytes, so committing without the
+       interrupted install's slot has partial bytes, so committing without the
        consumed marker would save bytes that never booted.
 
        What is matched is the key and not any particular value, so a trial of

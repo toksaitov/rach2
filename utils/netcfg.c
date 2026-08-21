@@ -112,7 +112,7 @@ void netcfg_set_name(char *dst, const char *src)
  * line becomes two directives and the second one is whatever the first one
  * happened to end in.
  *
- * `want` holds `count` interfaces named on the command line already; the ones
+ * `want` has `count` interfaces named on the command line already; the ones
  * an `auto` line names are appended when `add_auto` is set, up to `max`.
  *
  * @return the number of interfaces to bring up, or -1 on a file that cannot be

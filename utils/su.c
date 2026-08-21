@@ -59,7 +59,7 @@ static int usage(void)
 
 /**
  * Return the base name of `path`: `sh` for `/bin/sh`, the whole string when it
- * holds no slash.
+ * has no slash.
  *
  * A trailing slash is not special-cased, since a shell path that ends in one
  * cannot be executed anyway and would fail at the exec with its own message.

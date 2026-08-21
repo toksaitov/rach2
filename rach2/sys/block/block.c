@@ -62,7 +62,7 @@ void block_partition_init(
          uint64_t sector_count
      )
 {
-    /* Clamp the view to what the backing device actually holds, so a forwarded
+    /* Clamp the view to what the backing device actually has, so a forwarded
        `start_lba + lba` can never run past it or overflow. A start beyond the
        device yields an empty (zero-sector) view whose every request fails. */
     if (start_lba > backing->sector_count) {
@@ -94,7 +94,7 @@ int block_probe(void)
 {
     /* rach2.nodisk skips the probe entirely, which is the switch a first boot
        on unfamiliar hardware needs: a controller that does not answer its
-       reset holds this path for the whole of its bounded wait, and on a
+       reset has this path for the whole of its bounded wait, and on a
        machine with no serial port the way to find out whether that is what
        stopped the boot is to leave the disk alone and see. */
     if (kcmdline_has("rach2.nodisk")) {

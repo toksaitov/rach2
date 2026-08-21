@@ -5,7 +5,7 @@
  *   (a) round-trip + EOF: bytes written at one end read back in order at the
  *       other, and once the write end closes the drained read end returns 0;
  *   (b) O_NONBLOCK: a read of an empty pipe and a write to a full one return
- *       -EAGAIN instead of blocking, and the FIFO holds a full page;
+ *       -EAGAIN instead of blocking, and the FIFO has a full page;
  *   (c) SIGPIPE / -EPIPE: a write with the read end closed raises SIGPIPE and
  *       (with the signal caught) returns -EPIPE;
  *   (d) blocking across a fork: a writer of more than one buffer blocks until
@@ -176,7 +176,7 @@ void _start(void)
         big[i] = (char)(i & 0x7f);
     }
 
-    /* (a) round-trip + EOF, in one process (the page-sized buffer holds it). */
+    /* (a) round-trip + EOF, in one process (the page-sized buffer has it). */
     check(do_pipe(p) == 0, "pipe()");
     check(wr(p[1], "hello pipe", 10) == 10, "write 10 bytes");
     n = rd(p[0], buf, 10);
@@ -185,7 +185,7 @@ void _start(void)
     check(rd(p[0], buf, 10) == 0, "read returns 0 (EOF) after write end closed");
     syscall1(SYS_CLOSE, p[0]);
 
-    /* (b) O_NONBLOCK: empty read -> EAGAIN; the FIFO holds a full page; a write
+    /* (b) O_NONBLOCK: empty read -> EAGAIN; the FIFO has a full page; a write
      * past full -> EAGAIN. */
     check(do_pipe2(p, O_NONBLOCK) == 0, "pipe2(O_NONBLOCK)");
     check(rd(p[0], buf, 8) == -EAGAIN, "nonblocking read of empty pipe -> -EAGAIN");

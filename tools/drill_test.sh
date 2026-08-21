@@ -6,7 +6,7 @@
 # This is the day the machine's root will not mount. Nobody is going to open the
 # case, so the repair has to arrive over the network, and the only thing that
 # can write a partition nothing is mounting is a kernel that boots from
-# somewhere else. That is what partition 3 holds: the recovery build, which is
+# somewhere else. That is what partition 3 has: the recovery build, which is
 # the only one whose /dev/disk0 accepts a write, and a RAM image with an SSH
 # server and two tools in it.
 #
@@ -87,7 +87,7 @@ fail() {
     exit 1
 }
 
-# Wait up to $3 seconds until the log holds at least $2 occurrences of $1.
+# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
     i=0
     while [ "$i" -lt "$3" ]; do
@@ -105,7 +105,7 @@ wait_count() {
 }
 
 # step <pattern> <count> <command>: the feeder sends <command> once the log
-# holds at least <count> occurrences of <pattern>.
+# has at least <count> occurrences of <pattern>.
 step() {
     printf '%s\t%s\t%s\n' "$2" "$1" "$3" >> "$STEPS"
 }
@@ -260,7 +260,7 @@ grep -aq "cannot open a redirection" "$LOG" || \
 # Both refused writes aimed at the first sector, and that is what is compared:
 # the machine mounted its root read-write on the way to the prompt, so the
 # partition it is running on is not the same bytes it started as, but sector 0
-# is nobody's to touch and holds the partition table an accident here would
+# is nobody's to touch and has the partition table an accident here would
 # destroy.
 dd if="$WORK" of="$WORK.sector0" bs=512 count=1 status=none
 dd if="$DISK" of="$DISK.sector0" bs=512 count=1 status=none

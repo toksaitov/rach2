@@ -14,7 +14,7 @@
 
 # Objects, the GCC-written .d beside them, and the final binary the component
 # links all land under $(BUILD)/ (build/<component>/), so the source tree never
-# holds a build product.
+# has a build product.
 $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<

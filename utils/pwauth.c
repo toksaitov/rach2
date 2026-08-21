@@ -289,7 +289,7 @@ static void pwauth_death_set(sigset_t *set)
  * write itself (this kernel posts the signal and returns `-EPIPE` either way),
  * because an exec resets a caught disposition to the default and has an
  * ignored one into the new image. A child forked under a transaction inherits
- * this library's state and holds none of it; what it must not also inherit is a
+ * this library's state and has none of it; what it must not also inherit is a
  * `SIGPIPE` that stays ignored into whatever program it goes on to run, since
  * that is this library quietly changing the signal semantics of an image that
  * never linked it.
@@ -728,7 +728,7 @@ int pwauth_mint_salt(char *out, size_t size)
  * Returns 1 when one decimal pid was read, 0 when the file records none, and -1
  * when the file could not be read at all.
  *
- * A file that is empty, holds no digits, or holds anything after them but
+ * A file that is empty, has no digits, or has anything after them but
  * blanks
  * records no holder. That is what a writer killed between the create and the
  * write leaves, and it must read as "no holder" rather than as some pid the
@@ -1079,7 +1079,7 @@ static void cred_txn_atexit(void)
      * parent's to do, and it must still drop what it inherited, which is a
      * descriptor on `/etc/.pwlock` and five dispositions that are not its
      * program's. Leaving those installed hands every later registered function
-     * and the flush of every stream a signal policy nobody chose, and holds a
+     * and the flush of every stream a signal policy nobody chose, and has a
      * descriptor in a table of sixteen. */
     mine = cred_txn_mine();
     installed = Txn_held;
@@ -1185,7 +1185,7 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
     if (Txn_held) {
         sigset_t inherited, previous;
 
-        /* Inherited across a fork: this process holds nothing, and must put the
+        /* Inherited across a fork: this process has nothing, and must put the
          * dispositions back before it takes a transaction of its own. Blocked
          * while it does, for the reason `cred_txn_atexit` blocks the same set:
          * the teardown restores four dispositions one call at a time, and a

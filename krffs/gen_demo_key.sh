@@ -75,7 +75,7 @@ add_local_keys() {
     # private key format must not appear at all.
     if [ -f "$extra" ]; then
         if grep -q 'PRIVATE KEY' "$extra"; then
-            echo "gen_demo_key: krffs/$extra holds a PRIVATE key; use the .pub half" >&2
+            echo "gen_demo_key: krffs/$extra has a PRIVATE key; use the .pub half" >&2
             exit 1
         fi
         if grep -qvE '^[[:space:]]*($|#|(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)[^[:space:]]*[[:space:]])' \

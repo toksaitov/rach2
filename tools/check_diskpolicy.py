@@ -2,7 +2,7 @@
 """
 check_diskpolicy.py: read a kernel's disk policy off the built artifact.
 
-Milestone 24 has Rach2 to a laptop whose SSD holds somebody's Windows, and
+Milestone 24 has Rach2 to a laptop whose SSD has somebody's Windows, and
 until its owner has approved a carved partition after a full backup, nothing
 this kernel does may write that disk. The rule is enforced by a build switch
 (`-DRACH2_DISK_READONLY`, see rach2/sys/block/diskcmd.c), and a build switch is

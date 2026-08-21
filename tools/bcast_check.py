@@ -63,7 +63,7 @@ def main():
                     help="the off-subnet destination to look for")
     ap.add_argument("--source", default=None, metavar="A.B.C.D",
                     help="require an IP packet the guest sent FROM this address, which "
-                         "only a machine that holds it can do")
+                         "only a machine that has it can do")
     ap.add_argument("--owns", default=None, metavar="A.B.C.D",
                     help="require an ARP reply from the guest claiming this address, "
                          "which is the only way a machine can answer for one")
@@ -149,7 +149,7 @@ def check_owns(capture, address):
                   "its interface" % address)
             return 0
 
-    sys.stderr.write("bcast_check: nothing answered ARP for %s in %s, so no machine holds "
+    sys.stderr.write("bcast_check: nothing answered ARP for %s in %s, so no machine has "
                      "that address\n" % (address, capture))
     return 1
 

@@ -571,7 +571,7 @@ int krffs_open(const char *path)
 /**
  * Read up to `size` bytes at `offset` from an already-resolved node.
  *
- * The fd layer holds the node pointer, so it need not re-resolve a path,
+ * The fd layer has the node pointer, so it need not re-resolve a path,
  * which would fail for a file in a subdirectory whose node->name is only its
  * basename. Returns the number of bytes read (0 past end of file), or -1 on
  * error.
@@ -920,7 +920,7 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
  * Free a reserved node and coalesce it with adjacent free neighbors.
  *
  * Marks the node free, then merges forward with a free successor and
- * backward with a free predecessor, so the free list never holds two
+ * backward with a free predecessor, so the free list never has two
  * adjacent free nodes. When the merged extent changes size, the following
  * node's back link is repaired to point at the new size.
  */
@@ -1232,7 +1232,7 @@ int krffs_unlink(const char *path)
  * rather than of a hash, which is why an empty name is used and not a sentinel
  * `parent_id`: `krffs_mix_id` may return any nonzero value, so a reserved id
  * would rest on a collision that cannot be ruled out. The node keeps its type,
- * its data and its parent id, so it is still a live file for whoever holds a
+ * its data and its parent id, so it is still a live file for whoever has a
  * descriptor on it, and still an ordinary reserved node to the allocator.
  *
  * The scans that enumerate by `parent_id` rather than by name skip an empty
@@ -1289,7 +1289,7 @@ uint32_t krffs_reap_orphans(void)
     }
     /* Bounded so a malformed chain cannot spin, and derived from the image the
      * way the mount validator derives its own: a fixed cap would silently stop
-     * short of an orphan on a large disk (the shipped 48 MB partition holds far
+     * short of an orphan on a large disk (the shipped 48 MB partition has far
      * more than any round number one would pick) and leak it on every boot. */
     max_steps = krffs_fs->size / sizeof(krffs_node_t) + 1;
     /* One bounded pass. Removing a node coalesces it with whichever of its

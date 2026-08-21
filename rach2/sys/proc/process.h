@@ -80,7 +80,7 @@ struct process {
     /* Job-control status pending for the parent's wait4: 0 = none, a Linux
      * WIFSTOPPED value ((stopsig<<8)|0x7f) when stopped, or 0xffff when
      * continued. Consumed (cleared) by a matching wait4(WUNTRACED/WCONTINUED).
-     * This single slot holds one event: a second transition (a stop just after
+     * This single slot has one event: a second transition (a stop just after
      * an unreaped continue, or the reverse) supersedes the first, so a parent
      * that does not reap promptly can miss one stop or continue report. */
     uint32_t jc_status;

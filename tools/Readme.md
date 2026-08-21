@@ -131,7 +131,7 @@ the supporting scripts.
   `sulogin` are not on it: neither wants privilege, and neither is selected.
   Three rules cover what a set-id bit alone does not. The TRUSTED list is
   declared the same four ways the set-id one is, mode, owner and host source
-  included, and it holds two kinds of file: a program root runs (`/bin/login`,
+  included, and it has two kinds of file: a program root runs (`/bin/login`,
   which init execs; `/bin/sh`, which login and dropbear exec for root;
   `/bin/dropbearmulti`, which root starts) and a file root READS to decide who
   somebody is (`/etc/shadow`, `/etc/passwd`, `/etc/group`, `/etc/shells`,
@@ -340,7 +340,7 @@ a pid a script no longer owns is one the host may since have given away.
   where the check could not see it. Each phase waits on the token the kernel or
   the probe prints, never on a sleep, and the three logs are removed before the
   first boot rather than only in the trap: an uncatchable kill leaves them, each
-  holds the token its phase waits for, and the redirect that would truncate one
+  has the token its phase waits for, and the redirect that would truncate one
   belongs to the backgrounded child, which the parent's grep is not ordered
   after. The clean phase is the one that would lie if that race were ever won,
   since its image is a fresh copy and fsck would agree with a stale halt token.
@@ -475,7 +475,7 @@ The physical write that follows the rehearsal is a document rather than a script
   stamps into each directory entry from the clock, which mtools takes from
   `SOURCE_DATE_EPOCH`. Two inputs are deliberately not pinned, because they are
   inputs rather than noise: the container is the floating `ubuntu:24.04` tag
-  with whatever GRUB and mtools the archive holds that day, and the machine's
+  with whatever GRUB and mtools the archive has that day, and the machine's
   SSH host key and password salt are generated per tree.
 * `mkgrubcore.sh`: builds one GRUB core image with a marker inside it, for
   `grub_test.sh`. `grub-mkimage -c` embeds a configuration file the core runs

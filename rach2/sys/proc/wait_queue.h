@@ -38,7 +38,7 @@ typedef int (*wq_cond_fn)(void *arg);
 /* Clear a wait queue to empty. Call once before first use. */
 void wait_queue_init(wait_queue_t *wq);
 
-/** Block the current process on wq until cond(arg) holds; 0, or -EINTR on
+/** Block the current process on wq until cond(arg) has; 0, or -EINTR on
  * signal. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 

@@ -7,7 +7,7 @@
 #include "lib/kint.h"
 #include "lib/kdef.h"
 
-/* US layout, scancode to ASCII; the shift table holds the shifted glyphs. */
+/* US layout, scancode to ASCII; the shift table has the shifted glyphs. */
 extern uint8_t EN_us[128];
 extern uint8_t EN_us_shift[128];
 

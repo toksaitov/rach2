@@ -136,7 +136,7 @@ void _start(void)
     }
 
     /* The setuid-root exec: 1000 in, root out, gids untouched, and the saved
-     * id lets it swing back. The helper returns 0 only if every step holds. */
+     * id lets it swing back. The helper returns 0 only if every step has. */
     rc = run_helper("/suidhelper.suid", "suid");
     if (rc != 0) {
         fail("setuid-root exec did not grant root (see helper step in the code)");

@@ -168,7 +168,7 @@ int netconf_gateway_ok(uint32_t gw, uint32_t ip, uint32_t mask)
  * Whether the mask in force was derived rather than given.
  *
  * `ifconfig` sets an address and then a mask, two calls, and between them the
- * machine holds the classful mask the address implies. That pair is not judged,
+ * machine has the classful mask the address implies. That pair is not judged,
  * because the address may be a host only under the mask still to come. But if
  * the mask to come is refused, the unjudged pair is what would be left running,
  * and a machine answering for a network address is worse than a machine with no
@@ -398,7 +398,7 @@ int netconf_set_address(uint32_t ip, uint32_t mask)
 
         /* Unless nothing is changing. A DHCP client runs the same `ifconfig`
            on a renewal as on a lease, so this call arrives again with the
-           address the machine already holds; taking it apart and putting it
+           address the machine already has; taking it apart and putting it
            back would abort every connection on the machine, every renewal. */
         if (ip == net_ip_addr && net_ip_mask != 0 && !mask_provisional && pending_addr == 0) {
             net_unlock(flags);

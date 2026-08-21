@@ -3,7 +3,7 @@
 #
 # diskpolicy_test.sh: the read-only kernel does not write the disk.
 #
-# Milestone 24 has Rach2 to a laptop whose SSD holds a Windows installation
+# Milestone 24 has Rach2 to a laptop whose SSD has a Windows installation
 # its owner has not backed up, and the promise made about it is absolute:
 # nothing this kernel does writes that disk until the owner has approved a
 # carved partition. The promise is kept by a build switch, so what has to be

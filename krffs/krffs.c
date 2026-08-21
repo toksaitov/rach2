@@ -13,7 +13,7 @@
 #include <unistd.h>
 #endif
 
-/** Capacity of the on-stack buffer that holds the file system file path. */
+/** Capacity of the on-stack buffer that has the file system file path. */
 #define KRFFS_PATH_BUFFER_LENGTH 1024
 
 /**

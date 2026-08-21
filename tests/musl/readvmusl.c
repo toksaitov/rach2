@@ -11,7 +11,7 @@
  * The buffers are filled in order, and the probe pins what that costs behind
  * each kind of descriptor. A regular file is read again per buffer, since its
  * read returns at once and its bytes carry no boundary. A pipe is read again
- * only while it says it holds more, so a walk never parks for input nobody has
+ * only while it says it has more, so a walk never parks for input nobody has
  * written. A datagram socket is not read again at all: one message is copied
  * out across the buffers it reaches, and the next read starts the next message.
  * A terminal is not read again either, for the same kind of reason: the line is
@@ -222,9 +222,9 @@ static int check_file(void)
 }
 
 /**
- * A pipe, which fills every buffer the bytes it holds reach and stops there.
+ * A pipe, which fills every buffer the bytes it has reach and stops there.
  *
- * The case that matters is the second one: the pipe holds exactly what the
+ * The case that matters is the second one: the pipe has exactly what the
  * first buffer takes and its writer is still open, so reading on would have
  * nothing to return and would park until something wrote again. The walk asks
  * whether there is more before it takes any, so it stops. If that regressed
@@ -353,7 +353,7 @@ static int check_datagram(void)
     if (memcmp(one, "0123", 4) != 0 || memcmp(two, "45", 2) != 0) {
         close(fd);
 
-        return fail("the truncated datagram holds the wrong bytes");
+        return fail("the truncated datagram has the wrong bytes");
     }
 
     /* A caller may point a buffer AT its own vector list, so that the message

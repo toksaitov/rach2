@@ -17,7 +17,7 @@ void init_pit(uint32_t frequency);
  *
  * Published because `udelay.c` measures against that same counter and has to
  * know where it wraps, and computing the divisor a second time there would be
- * a copy that a change to the tick rate would silently leave behind. It holds
+ * a copy that a change to the tick rate would silently leave behind. It has
  * the 100 Hz value before `init_pit` runs, so a wait taken during early boot
  * is measured rather than undefined.
  */

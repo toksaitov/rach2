@@ -377,7 +377,7 @@ static int check_salt(void)
  * reading what it opened.
  *
  * The reader is the assertion the library's whole reader-never-locks rule rests
- * on. It holds a descriptor across the rename and must read the old file
+ * on. It has a descriptor across the rename and must read the old file
  * entire, not a prefix of it and not a mixture of the two.
  *
  * The second row is the one place in the tree where the set-id rule and the
@@ -923,7 +923,7 @@ static int check_recovery(void)
 }
 
 /**
- * Read from `fd` until `buffer` holds `needle` or `ms` milliseconds pass.
+ * Read from `fd` until `buffer` has `needle` or `ms` milliseconds pass.
  * Returns 1 when the text arrived and 0 otherwise.
  *
  * Every read of the master is bounded, because a probe that blocks on a

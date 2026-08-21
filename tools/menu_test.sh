@@ -83,7 +83,7 @@ fail() {
     exit 1
 }
 
-# Wait up to $3 seconds until the log holds at least $2 occurrences of $1.
+# Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
     i=0
     while [ "$i" -lt "$3" ]; do
@@ -101,7 +101,7 @@ wait_count() {
 }
 
 # step <pattern> <count> <command>: the feeder sends <command> once the log
-# holds at least <count> occurrences of <pattern>.
+# has at least <count> occurrences of <pattern>.
 step() {
     printf '%s\t%s\t%s\n' "$2" "$1" "$3" >> "$STEPS"
 }
@@ -214,7 +214,7 @@ grep -aq "Falling back to .Rach2 (fallback kernel)" "$LOG" || \
 
 # The whole list, in order, because every index is a contract and only one of
 # them is checked by the fallback above. The menu is drawn on the serial console
-# with one title per line, so the order they appear in is the order GRUB holds
+# with one title per line, so the order they appear in is the order GRUB has
 # them in.
 python3 -c "
 import re, sys

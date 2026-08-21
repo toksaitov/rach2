@@ -6,7 +6,7 @@
 # the host build does; the one host flag that is dropped is -Ttext, because
 # tcc's default i386 text base is the same 0x08048000 the host build names
 # explicitly. The object list below must equal the host Makefile's;
-# tools/check_guest.py holds the two equal on the host.
+# tools/check_guest.py has the two equal on the host.
 #
 # Run from a writable copy of this tree: make -f guest.mk
 

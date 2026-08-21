@@ -6,8 +6,8 @@
 #define RTC_EPOCH_YEAR         1970
 
 /*
- * The century is inferred rather than read. Register 0x32 holds one on machines
- * whose firmware maintains it and holds whatever was in that CMOS byte on
+ * The century is inferred rather than read. Register 0x32 has one on machines
+ * whose firmware maintains it and has whatever was in that CMOS byte on
  * machines whose firmware does not, and an unrelated byte decodes to a
  * plausible-looking century as easily as to an absurd one. A two-digit year
  * plus this base is wrong in 2100; reading a byte nobody wrote is wrong now.
@@ -177,7 +177,7 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
     }
 
     /* What the clock says about itself, before anything it says about the time.
-     * A machine whose battery went reports VRT clear and holds whatever was in
+     * A machine whose battery went reports VRT clear and has whatever was in
      * those bytes, which can be stable and in range and completely wrong; a
      * clock with SET raised or a divider that is not the running one is not
      * advancing; and DSE means the clock shifts itself twice a year, which this

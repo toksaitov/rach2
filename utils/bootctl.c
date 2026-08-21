@@ -21,7 +21,7 @@
  * proved itself, `commit` makes it the saved default.
  *
  * `status` is the only window onto this disk. It prints the four files' sector
- * extents, what the environment block holds, whether a trial is armed or
+ * extents, what the environment block has, whether a trial is armed or
  * consumed, and which slot this boot came from. Its extent lines are a test
  * contract: `tools/install_test.sh` reads the candidate's first sector from
  * them to corrupt it, so their field order is fixed.
@@ -470,7 +470,7 @@ static int cmd_config(const char *path)
         return 1;
     }
     if (size > bs.menu.size) {
-        fprintf(stderr, "bootctl: '%s' is %u bytes and the menu slot holds %u\n", path,
+        fprintf(stderr, "bootctl: '%s' is %u bytes and the menu slot has %u\n", path,
                 (unsigned)size, (unsigned)bs.menu.size);
         return 1;
     }

@@ -48,7 +48,7 @@ hr() { printf -- '---- %s ----\n' "$*"; }
 inhouse_ch()
 {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
-    # vendor/musl/ holds only the vendored musl tree (install/, musl-*/) plus
+    # vendor/musl/ has only the vendored musl tree (install/, musl-*/) plus
     # any future in-house shim; prune the vendored parts so they are never
     # checked.
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \

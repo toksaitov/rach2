@@ -186,7 +186,7 @@ def check(path):
 # The addresses are LITERAL and not written in terms of the constants above,
 # which is the whole point: a case built out of ELF_USER_MAX moves when
 # ELF_USER_MAX is wrong, passes, and proves nothing. These are the numbers
-# rach2/sys/proc/elf.c:16-17 actually holds, written out.
+# rach2/sys/proc/elf.c:16-17 actually has, written out.
 #
 # Each is (name, e_entry, p_vaddr, p_memsz, want_ok).
 BOUNDARY_CASES = [

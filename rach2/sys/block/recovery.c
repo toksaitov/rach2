@@ -1,5 +1,5 @@
 /*
- * recovery.c: the string a built kernel holds to say whether it may write its
+ * recovery.c: the string a built kernel embeds to say whether it may write its
  * own disk, and the one thing that string implies at boot. The decision about
  * writing itself is where the handler is, in sys/fs/devfs.c.
  */

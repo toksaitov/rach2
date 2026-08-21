@@ -255,7 +255,7 @@ int main(void)
     CHECK(bootslot_install(&bs, kernel, 40000, err, sizeof(err)) == 0,
           "install on the fragmented chain");
     CHECK(memcmp(img.data + (long)(160 + 16 - 2) * 512, kernel, 40000) == 0,
-          "the first run holds the kernel's bytes");
+          "the first run has the kernel's bytes");
     CHECK(img.data[(long)(160 + 16 - 2) * 512 + 40000] == 0 &&
               img.data[(long)(160 + 16 + 2048 + 8 - 2) * 512] == 0,
           "the padding continues across the hole into the second run");
@@ -339,7 +339,7 @@ int main(void)
     expect_open_error("--cfg-short", "size does not match its chain");
 
     /* A stale armed trial is dropped by the install's first transition: cut
-       mid-slot, the block holds the fallback and no armed line. */
+       mid-slot, the block has the fallback and no armed line. */
     load("");
     {
         long env_off = (long)(160 + 4160 - 2) * 512;
@@ -442,7 +442,7 @@ int main(void)
         for (i = 0; i < sizeof(menu); i++) {
             menu[i] = (uint8_t)('a' + (i % 26));
         }
-        /* A long menu first, so the slot holds something other than its fill,
+        /* A long menu first, so the slot has something other than its fill,
            and then a short one over it. A writer that touched only the sectors
            the new text reaches would leave the long menu's tail behind, and
            GRUB reads the whole file. */
@@ -553,7 +553,7 @@ int main(void)
 
     /* A commit with no trial state at all is refused too: a fresh block has
        no consumed marker, and neither does an interrupted install, whose slot
-       holds partial bytes the running kernel never was. */
+       has partial bytes the running kernel never was. */
     load("");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for fresh commit");
     CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1, "a commit on a fresh block is refused");

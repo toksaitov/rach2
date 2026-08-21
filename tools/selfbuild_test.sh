@@ -173,7 +173,7 @@ nodes = check_setid.walk_nodes(region)
 print(sum(n['size'] for n in nodes if n['type'] == 1))
 ")"
 if [ -z "$FREE_BYTES" ] || [ "$FREE_BYTES" -lt "$NEED_BYTES" ]; then
-    fail "the disk holds $FREE_BYTES free bytes and two kernel builds need $NEED_BYTES"
+    fail "the disk has $FREE_BYTES free bytes and two kernel builds need $NEED_BYTES"
 fi
 
 # The build, twice, from a workspace deleted and recreated each time. There is

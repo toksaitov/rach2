@@ -131,7 +131,7 @@ static long slurp(const char *path, char *buffer, size_t size)
     close(fd);
     buffer[total] = '\0';
     if (memchr(buffer, '\0', total) != NULL) {
-        fprintf(stderr, "adduser: %s holds a NUL byte\n", path);
+        fprintf(stderr, "adduser: %s has a NUL byte\n", path);
 
         return -1;
     }
