@@ -262,8 +262,8 @@ entry is a real unit of work; read each range whole, including its code.
 * [x] `rach2/sys/bootlog.c` (126 words)
 * [x] `rach2/grub_install.sh` (126 words)
 * [x] `rach2/run_from_iso.sh` (113 words)
-* [ ] `rach2/sys/pit.c`, `rach2/sys/module.c`, `rach2/sys/block/diskcmd.c`, `rach2/sys/mm/modlayout.c`, `rach2/iso/boot/grub/grub.cfg.template`, `rach2/sys/block/mbr.c`, `rach2/sys/network/tcp/rcvwnd.c`, `rach2/debug.sh` (617 words over 8 files)
-* [ ] `rach2/sys/block/recovery.c`, `rach2/sys/tables/gdt_handler.s`, `rach2/sys/tables/idt_handler.s`, `rach2/sys/panic.c`, `rach2/sys/lib/kctypes.c`, `rach2/link.ld`, `rach2/.gdbinit` (47 words over 7 files)
+* [x] `rach2/sys/pit.c`, `rach2/sys/module.c`, `rach2/sys/block/diskcmd.c`, `rach2/sys/mm/modlayout.c`, `rach2/iso/boot/grub/grub.cfg.template`, `rach2/sys/block/mbr.c`, `rach2/sys/network/tcp/rcvwnd.c`, `rach2/debug.sh` (617 words over 8 files)
+* [x] `rach2/sys/block/recovery.c`, `rach2/sys/tables/gdt_handler.s`, `rach2/sys/tables/idt_handler.s`, `rach2/sys/panic.c`, `rach2/sys/lib/kctypes.c`, `rach2/link.ld`, `rach2/.gdbinit` (47 words over 7 files)
 
 ---
 

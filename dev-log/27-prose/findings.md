@@ -219,6 +219,11 @@ when its source file is reached, and the document fixed retroactively if wrong.
 
 ## Noticed in the code, left for milestone 28
 
+* `rach2/.gdbinit`: line 1 is `file kernel`, which loads `./kernel`, but the
+  build now emits the kernel at `build/rach2/kernel` (the build-directory
+  unification noted in the milestone-22 record). Run from `rach2/` this loads no
+  symbols. A config-path fix (point it at `../build/rach2/kernel`), so left for
+  milestone 28.
 * `rach2/sys/kio.c` (`vga_putc_raw`): the control-byte guard is `if (c < 31 ||
   c == 127)`, so byte 0x1F (31, the unit separator) is not caught and is drawn
   as a glyph, while the function's own comment says "any other control byte is
