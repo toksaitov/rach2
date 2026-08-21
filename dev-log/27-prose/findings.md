@@ -28,6 +28,10 @@ findings up to where it stopped.
   other `make *-disk` commands in the code block above. Moved it up to join
   them. Also rewrote a Build sentence with two grammar faults ("builds with
   host version", "to allow to create").
+* `ish/Readme.md`: the guest-build sentence said tcc "compiles the five objects
+  and links them ... with ish's own `crt0.o`", which counts crt0.o twice:
+  `ish/guest.mk` links exactly five objects and crt0.o is one of them. Reworded
+  so crt0.o is named as among the five, not linked as a sixth.
 
 ## Cross-checks to settle against code later in set one
 
@@ -42,6 +46,11 @@ when its source file is reached, and the document fixed retroactively if wrong.
   "make subset-test boots six lines" (against the `Makefile`); "over 100
   syscalls" (against `syscall.c`).
 * `rach2/sys/network/Readme.md`: "all 61 probes" (against `tools/runtests.py`).
+* `rach2/Readme.md`: the GDT table lists 6 descriptors (indices 0-5), but
+  `tls.Readme.md` uses GDT entry 6 for TLS, so the table has 7 slots. The
+  kernel Readme scopes itself to the foundation kernel and sends later
+  subsystems elsewhere, so this may be deliberate; confirm against `gdt.c` /
+  `gdt.h` and add a note in `rach2/Readme.md` only if the omission misleads.
 * `krffs/Readme.md`: whether `make images` builds three or four images, given
   four `*-image` targets are listed above an "all three" comment (against the
   `Makefile`).
