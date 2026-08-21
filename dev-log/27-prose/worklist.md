@@ -171,8 +171,8 @@ entry is a real unit of work; read each range whole, including its code.
 * [x] `rach2/sys/syscall.c` lines 901-1800
 * [x] `rach2/sys/syscall.c` lines 1801-2700
 * [x] `rach2/sys/syscall.c` lines 2701-3600
-* [ ] `rach2/sys/syscall.c` lines 3601-4500
-* [ ] `rach2/sys/syscall.c` lines 4501-5400
+* [x] `rach2/sys/syscall.c` lines 3601-4500
+* [x] `rach2/sys/syscall.c` lines 4501-5400
 * [ ] `rach2/sys/syscall.c` lines 5401-6300
 * [ ] `rach2/sys/syscall.c` lines 6301-7200
 * [ ] `rach2/sys/syscall.c` lines 7201-8100

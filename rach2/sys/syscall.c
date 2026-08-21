@@ -4909,7 +4909,7 @@ static int32_t sys_execve(isr_params_t *params)
     /* Resolve the program path (relative names against the cwd) into the static
      * buffer. A bad user pointer, an over-long path, or an empty path is
      * rejected by the return value, so a kernel-range pointer cannot leak
-     * kernel memory. The buffer is 64 bytes (NUL included). */
+     * kernel memory. The buffer is 256 bytes (NUL included). */
     if (!user_path) {
         return -EFAULT;
     }

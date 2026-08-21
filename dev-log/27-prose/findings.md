@@ -109,6 +109,10 @@ findings up to where it stopped.
   stale since the multi-user milestone. The code below it judges access(2) by
   the caller's REAL ids (`cred_access_bits(..., 1)`), which its own later comment
   states. Reworded to describe the real credential model.
+* `rach2/sys/syscall.c` (sys_execve): a comment said the program-path copy
+  buffer "is 64 bytes (NUL included)", but `_exec_path_buf` is `[256]` and the
+  copy uses `sizeof(_exec_path_buf)` (256, matching the 255-byte path limit).
+  The 64 was stale. Corrected to 256.
 
 ## Cross-checks to settle against code later in set one
 
