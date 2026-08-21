@@ -119,6 +119,9 @@ findings up to where it stopped.
 * `rach2/sys/syscall.c` (socket-option defines): `SO_REUSEADDR 2` was defined
   twice, a few lines apart, both to the same value (so the build did not flag
   the redefinition). Removed the duplicate.
+* `rach2/kernel.c`: an isolation-test comment read "isolation has if each reads
+  back its own value" -- "has if" is a mangled verb (the same pattern as the
+  copy_path_cwd comment); the word is "holds". Corrected.
 
 ## Cross-checks to settle against code later in set one
 

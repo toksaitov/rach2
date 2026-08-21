@@ -182,7 +182,7 @@ entry is a real unit of work; read each range whole, including its code.
 
 ## Kernel sources (82 entries, 67755 words)
 
-* [ ] `rach2/kernel.c` (6020 words)
+* [x] `rach2/kernel.c` (6020 words)
 * [ ] `rach2/sys/fs/krffs.c` (3526 words)
 * [ ] `rach2/sys/block/ahci.c` (3296 words)
 * [ ] `rach2/sys/audio/hda.c` (3279 words)

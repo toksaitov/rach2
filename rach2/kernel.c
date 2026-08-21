@@ -905,7 +905,7 @@ static void test_preempt(void)
 
 /*
  * Memory-isolation test state. The two processes write different values to the
- * same virtual address through different page directories; isolation has if
+ * same virtual address through different page directories; isolation holds if
  * each reads back its own value.
  *
  * The test address must lie ABOVE the identity-mapped region so each process
