@@ -341,6 +341,11 @@ findings up to where it stopped.
   case ran to 81 and 85 columns. Reflowed the block at 80.
 * `tests/musl/build.sh`: a doubled word across a line break, "parses for the
   host / host tests". Removed the repeat.
+* `tests/cowregrant.c`: the header orphaned "counter." onto its own line ("a
+  kernel copy / counter."). Reflowed.
+* `tests/blockprobe.c`: the `path_of` comment said `"/bpN" for file N (N < 10)`,
+  but `NFILES` grew to 24, so N reaches 23. Rewrote the comment to describe what
+  the code actually builds; the underlying fragility is noted for milestone 28.
 
 Many test files read clean, prose and code alike accurate to what they
 exercise: bootprobe, loginmusl, stampmusl, n_tty_hosttest, packetprobe,
@@ -445,3 +450,10 @@ when its source file is reached, and the document fixed retroactively if wrong.
   shown as `CHAR_NON_PRINTABLE`". The bound reads as an off-by-one (`< 32` would
   match the comment). Harmless in practice (0x1F is almost never emitted to the
   console), a code fix, so left for milestone 28.
+* `tests/blockprobe.c` (`path_of`): the helper builds a file path as `'0' + n`,
+  which was correct while `NFILES` was 8 (all indices a single digit) but now
+  runs to 23, so files 10 through 23 get non-digit path characters (`:` through
+  `G`). The paths stay unique, so the probe is still correct, but a reader
+  expects decimal names; a `snprintf("/bp%u", n)` would be clearer. The stale
+  "N < 10" comment was corrected in this milestone; the code smell is left for
+  milestone 28.

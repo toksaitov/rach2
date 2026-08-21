@@ -80,7 +80,9 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
 }
 
-/* "/bpN" for file N (N < 10). */
+/* "/bp<c>" where <c> is the byte '0' + n, one distinct byte per file index (for
+   n past 9 it runs past '9', but the paths stay unique, which is all this
+   needs). */
 static void path_of(char *out, unsigned n)
 {
     out[0] = '/';
