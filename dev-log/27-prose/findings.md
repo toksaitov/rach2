@@ -202,6 +202,11 @@ findings up to where it stopped.
   detail. A design decision."). Reworded to "That ordering is deliberate: ...",
   which states the claim plainly; the sentence already explains why (one image
   of the databases).
+* `krffs/gen_demo_password.sh`: the header said it "Mints a random password per
+  demo account", but the script's default is a fixed memorable password
+  ("1qA2wS3eD"/"4rF5tG6yH"), and the body itself says "the same on every build...
+  Short and memorable beats random here" (only the salt is random, or the password
+  if `RACH2_*_PASSWORD` overrides it). Removed the false "random".
 * `utils/dhcpmsg.c`: a doubled word across a line break in the `dhcp_boundaries`
   doc: "...into zero. The / The lease must be at least DHCP_MIN_LEASE". Removed
   the repeated "The".

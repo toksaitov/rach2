@@ -4,7 +4,7 @@
 # gen_demo_password.sh: ensure the demo account passwords and their /etc/shadow
 # exist for the os-real image's logins.
 #
-# Mints a random password per demo account, writes each plaintext to a
+# Mints a password per demo account, writes each plaintext to a
 # git-ignored host-side credential file (rach2_demo_password for root,
 # rach2_test_password for the test account), and hashes both into krffs/shadow
 # (git-ignored), which the os-real manifest stages as /etc/shadow. The hashes
