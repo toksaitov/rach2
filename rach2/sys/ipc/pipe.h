@@ -31,6 +31,7 @@
 
 typedef struct pipe {
     int in_use;
+    uint32_t inode;        /* its own; never reused within a boot */
     uint8_t buf[PIPE_BUF_SIZE];
     uint32_t head;         /* total bytes consumed by the read end */
     uint32_t tail;         /* total bytes produced by the write end */

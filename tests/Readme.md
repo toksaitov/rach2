@@ -36,7 +36,7 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `dirprobe` (`DIRPROBE OK`): hierarchical KRFFS directories and the `*at` API.
 * `unlinkdirprobe` (`UNLINKDIRPROBE OK`): removing a directory's files while listing it, the way `rm -rf` does. The directory cursor used to be a count of children, so each unlink renumbered the survivors and the next read skipped one entry per file already gone; the leftovers then made `rmdir` refuse, and the only thing a user saw was "Directory not empty". `make selfbuild-test` found it, once the kernel source tree had grown enough files that listing it took more than one call, so the buffer here is deliberately small. It also checks that two descriptors on one directory keep their own cursors and that the end of a directory is reported repeatedly, not once.
 * `ofdprobe` (`OFDPROBE OK`): refcounted open-file descriptions (the shared seek offset).
-* `pipeprobe` (`PIPEPROBE OK`): the anonymous-pipe contract.
+* `pipeprobe` (`PIPEPROBE OK`): the anonymous-pipe contract, and what a pipe descriptor names: the two ends of one pipe must resolve to one inode through `/proc/self/fd`, two pipes must not resolve to the same one, and `fstat` must report the number the link does.
 * `pollprobe` (`POLLPROBE OK`): I/O multiplexing (poll and select).
 * `sigprobe` (`SIGPROBE OK`): signal delivery and the sigreturn frame.
 * `credprobe` (`CREDPROBE OK`): the process credential model (V7 with POSIX saved IDs): inheritance, the drop, the saved-id rules, no regain.
@@ -45,7 +45,7 @@ Each `*probe.c` drives one subsystem from user space through direct `int 0x80` c
 * `waitprobe` (`WAITPROBE OK`): the fd-layer blocking and dispatch substrate.
 * `jobprobe` (`JOBPROBE OK`): the session and process-group identity model, including the rule that a process leaves its group when it is reaped and not when it exits, so a terminal can be handed to a group holding one unreaped zombie (which is what a shell does when the first member of a pipeline is a command that has already finished).
 * `ttyprobe` (`TTYPROBE OK`): the tty line discipline and termios ioctls.
-* `ptyprobe` (`PTYPROBE OK`): the pseudo-terminal pair (`/dev/ptmx` and `/dev/pts/N`).
+* `ptyprobe` (`PTYPROBE OK`): the pseudo-terminal pair (`/dev/ptmx` and `/dev/pts/N`), in the order a login server drives it. The master sets the window size before the child arrives; the child then makes the slave its controlling terminal and requires `TIOCGWINSZ` to report the size the master set and `TCGETS`/`TCSETS` to read and write the termios, which is all `stty` is. Those three reach the shared terminal handler and not the slave's own `ioctl`, so a dispatch that stopped checking for a tty first would fail here. The child reports its terminal ready before the parent writes, since a test that raced the echo against a termios write would pass or fail by timing; the parent's wait for that line is bounded, so a child that died reports a failure instead of hanging.
 * `devprobe` (`DEVPROBE OK`): the synthetic `/dev` devices and `/proc` self views.
 * `auxvprobe` (`auxvprobe: ALL OK`): the SysV/i386 initial process stack the kernel hands a new program.
 * `tlsprobe` (`All TLS checks passed!`): `%gs` thread-local storage surviving syscalls, IRQs, and context switches.

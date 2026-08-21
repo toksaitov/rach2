@@ -3505,7 +3505,10 @@ static int32_t sys_fstatfs64(isr_params_t *params)
  * Fill a stat64 from an open descriptor by type.
  *
  * Shared by sys_fstat64 and the followed /proc/<pid>/fd/<n> path (whose
- * target is just this fd).
+ * target is just this fd). Where the object has an identity of its own (a
+ * socket, a pipe, a device, a /proc snapshot, a KRFFS node), the inode
+ * reported here is that identity and is the same number the descriptor's
+ * `/proc/<pid>/fd` link carries, so a program reading one can match the other.
  */
 static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 {
@@ -3535,10 +3538,12 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_blksize = 4096;
         kst->st_ino = entry->sock ? entry->sock->inode : 0u;
     } else if (entry->type == FD_TYPE_PIPE) {
-        /* A pipe end: programs classify these with S_ISFIFO. */
+        /* A pipe end: S_ISFIFO, and the pipe's own inode (see fd.h). */
+        pipe_t *pp = (pipe_t *)entry->priv;
         kst->st_mode = 010666; /* S_IFIFO | 0666 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
+        kst->st_ino = pp ? pp->inode : 0u;
     } else if (entry->type == FD_TYPE_DEVICE) {
         /* A devfs character device: report its identity so fstat matches the
          * stat of its /dev path (what ttyname compares), the mode included. */

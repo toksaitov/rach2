@@ -38,10 +38,38 @@ void socket_init(void)
     }
 }
 
-/* The next inode to hand out. Monotonic within a boot: a slot reused by a
- * later socket gets a new number, so a stale row cannot be mistaken for a live
- * one. */
 static uint32_t next_socket_inode = 1;
+
+/**
+ * The next inode to give a socket: rising, nonzero, and not one in use.
+ *
+ * A slot reused by a later socket must not read as the socket that had it, so
+ * the number rises rather than being the slot. The counter is 32 bits and
+ * wraps, so the pool is checked and a number a live socket already has is
+ * stepped over. Zero is skipped because it is what an unset field reads as.
+ * Called with net_lock held.
+ */
+static uint32_t socket_next_inode(void)
+{
+    int i, tries;
+
+    for (tries = 0; tries <= MAX_SOCKETS + 1; tries++) {
+        uint32_t candidate = next_socket_inode++;
+
+        if (candidate == 0) {
+            continue;
+        }
+        for (i = 0; i < MAX_SOCKETS; i++) {
+            if (socket_pool[i].in_use && socket_pool[i].inode == candidate) {
+                break;
+            }
+        }
+        if (i == MAX_SOCKETS) {
+            return candidate;
+        }
+    }
+    return 0; /* unreachable: the pool is smaller than the tries above */
+}
 
 /**
  * The socket carrying `inode`, or NULL if no live socket has it.
@@ -106,11 +134,7 @@ struct socket *socket_alloc(int type)
             socket_pool[i].listening     = 0;
             socket_pool[i].last_src_ip   = 0;
             socket_pool[i].last_src_port = 0;
-            /* Zero is skipped: it is what an unset field reads as. */
-            socket_pool[i].inode         = next_socket_inode++;
-            if (socket_pool[i].inode == 0) {
-                socket_pool[i].inode     = next_socket_inode++;
-            }
+            socket_pool[i].inode         = socket_next_inode();
             socket_pool[i].uid           = 0;
             socket_pool[i].recv_len      = 0;
             socket_pool[i].recv_full     = 0;

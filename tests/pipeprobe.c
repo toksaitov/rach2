@@ -25,6 +25,11 @@ typedef unsigned int size_t;
 #define SYS_PIPE         42
 #define SYS_PIPE2        331
 #define SYS_RT_SIGACTION 174
+#define SYS_READLINK     85
+#define SYS_FSTAT64      197
+
+/* i386 struct stat64: st_ino is the 64-bit field at offset 88. */
+#define ST_INO64 88
 
 #define O_NONBLOCK 04000
 
@@ -82,6 +87,63 @@ static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+}
+
+/** Build "/proc/self/fd/<fd>" for a small descriptor. */
+static void fd_path_of(char *dst, int fd)
+{
+    const char *head = "/proc/self/fd/";
+    int i = 0, k = 0;
+    char digits[8];
+
+    while (head[i]) {
+        dst[i] = head[i];
+        i++;
+    }
+    do {
+        digits[k++] = (char)('0' + fd % 10);
+        fd /= 10;
+    } while (fd > 0);
+    while (k > 0) {
+        dst[i++] = digits[--k];
+    }
+    dst[i] = '\0';
+}
+
+/**
+ * Parse a pipe link, which is exactly `pipe:[<digits>]` and nothing else.
+ *
+ * Stores the inode through `out` and returns 1, or returns 0 for any other
+ * text: a loose parse would accept a link that named the wrong thing, which is
+ * what this case exists to catch. `n` is the length readlink reported, so no
+ * byte past it is read.
+ */
+static int parse_pipe_link(const char *s, int n, unsigned int *out)
+{
+    const char *head = "pipe:[";
+    unsigned int v = 0;
+    int i = 0, digits = 0;
+
+    while (head[i]) {
+        if (i >= n || s[i] != head[i]) {
+            return 0;
+        }
+        i++;
+    }
+    while (i < n && s[i] >= '0' && s[i] <= '9') {
+        unsigned int d = (unsigned int)(s[i] - '0');
+        if (v > (0xffffffffu - d) / 10u) {
+            return 0; /* wider than any number the kernel handed out */
+        }
+        v = v * 10u + d;
+        digits++;
+        i++;
+    }
+    if (digits == 0 || i != n - 1 || s[i] != ']') {
+        return 0;
+    }
+    *out = v;
+    return 1;
 }
 
 static int fails = 0;
@@ -254,6 +316,50 @@ void _start(void)
         }
         syscall1(SYS_CLOSE, q[0]);
         syscall1(SYS_CLOSE, q[1]);
+    }
+
+    /* (f) identity: each pipe is one object with two ends, and the link a
+     * descriptor resolves to carries its inode. The two ends of one pipe must
+     * give the same number, two pipes must give different ones, and fstat must
+     * agree with the link. Every pipe here read as `pipe:[1]` before. */
+    {
+        int a[2], b[2];
+        unsigned int ino[4];
+        char link[64];
+        char fdpath[32];
+        char st[128] = {0}; /* fstat64 fills it through an int-cast pointer */
+        int k, ends[4];
+
+        check(do_pipe(a) == 0 && do_pipe(b) == 0, "two pipes open");
+        ends[0] = a[0];
+        ends[1] = a[1];
+        ends[2] = b[0];
+        ends[3] = b[1];
+        for (k = 0; k < 4; k++) {
+            int ln;
+
+            ino[k] = 0;
+            fd_path_of(fdpath, ends[k]);
+            ln = syscall3(SYS_READLINK, (int)(size_t)fdpath, (int)(size_t)link,
+                          (int)sizeof(link) - 1);
+            check(ln > 0, "a pipe end has a link to read");
+            if (ln > 0) {
+                link[ln] = '\0';
+                check(parse_pipe_link(link, ln, &ino[k]),
+                      "and it is a pipe link, spelled exactly as one");
+            }
+            check(syscall3(SYS_FSTAT64, ends[k], (int)(size_t)st, 0) == 0, "fstat a pipe end");
+            /* Both words of the 64-bit inode: a match in the low one alone is
+               a different number. */
+            check(*(unsigned int *)(st + ST_INO64) == ino[k] &&
+                      *(unsigned int *)(st + ST_INO64 + 4) == 0u && ino[k] != 0,
+                  "and fstat reports the number the link does");
+        }
+        check(ino[0] == ino[1] && ino[2] == ino[3], "the two ends of one pipe name one pipe");
+        check(ino[0] != ino[2], "and two pipes are not the same pipe");
+        for (k = 0; k < 4; k++) {
+            syscall1(SYS_CLOSE, ends[k]);
+        }
     }
 
     if (fails == 0) {

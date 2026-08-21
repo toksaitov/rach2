@@ -200,6 +200,11 @@ ssh_password() {
 set timeout 60
 log_user 0
 set asked 0
+# The size the client will ask the server for. expect gives the spawned ssh a
+# terminal of its own, and a terminal with no size asks for none: the session
+# then has a zero window, which is not a fault in the machine but is
+# indistinguishable from one in a test.
+set stty_init "rows 40 columns 100"
 spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=$env(RACH2_KNOWN) \
     -o ConnectTimeout=20 -o PubkeyAuthentication=no \
     -o PreferredAuthentications=password \
@@ -254,6 +259,28 @@ case "$OUT" in
     *"PROMPTED=1"*) ;;
     *) fail "the test account got in without ever being asked for a password: $OUT" ;;
 esac
+
+# The window size, and the termios under it. A login server takes the size the
+# client asked for and sets it on the master before the shell starts; the shell
+# and everything it runs read it off the slave, which is a different descriptor
+# and a different path through the kernel. `stty` is those two ioctls and
+# nothing else, so it is what proves the path: `size` is TIOCGWINSZ, and `-a`
+# is TCGETS as well.
+OUT=$(ssh_password test "$TESTPASSWORD" 3 'stty size; stty -a')
+require_ran "$OUT" "the session that reads its terminal"
+case "$OUT" in
+    *"40 100"*) ;;
+    *) fail "stty size did not report the window the client asked for: $OUT" ;;
+esac
+case "$OUT" in
+    *"rows 40; columns 100"*) ;;
+    *) fail "stty -a did not report the window the client asked for: $OUT" ;;
+esac
+case "$OUT" in
+    *"icanon"*) ;;
+    *) fail "stty -a did not report the termios of the session's terminal: $OUT" ;;
+esac
+echo "ssh-test: the session's terminal reports the window and the termios: OK"
 
 # What must be refused. Each of these is asserted twice: that no session ran,
 # and that the server SAID no. The absence of a token is not a refusal, since a

@@ -148,6 +148,12 @@ Identity is the part worth explaining. `netstat` parses a uid and an inode, and 
 
 `/proc/net/tcp6` stays absent. There is no IPv6 here, and `netstat` says so for that family alone after printing the IPv4 table, which is the intended answer: a file that existed and was empty would tell it the family is present with nothing on it.
 
+## What a descriptor names
+
+`/proc/<pid>/fd/N` is a symbolic link, and what it resolves to is meant to identify the object, not just its kind. A file names its path, a device its `/dev` name, a pty slave `/dev/pts/N`, a `/proc` snapshot the path it was opened by. A socket names `socket:[<inode>]` and a pipe `pipe:[<inode>]`, each the object's own number, monotonic within a boot so a reused pool slot never reads as the thing that had it before; `fstat` on the same descriptor reports that same number. Both were the constant 1 before, which told a reader that every socket on the machine was one socket and every pipe one pipe.
+
+In a login over SSH all three standard descriptors name the session's pty slave, since the server hands the shell the same terminal three times; a session that asked for no terminal is on pipes instead, and names them. Listing that directory has one entry the listing program cannot resolve, its own descriptor on the directory, which it has closed by the time it prints: the kernel is right to say it is gone, and `ls` reports the miss rather than inventing a name.
+
 ## Testing
 
 * `tests/dirprobe`: `mkdir`, nested create/write/read, duplicate-`mkdir` and create-in-missing-dir rejection, non-empty `rmdir` refusal, `getdents` listing exactly a subdir's children, the `*at` calls (`openat`, `fstat64`, `fstatat64`, `_llseek`, `fcntl64`), `O_APPEND`/`F_DUPFD`/`O_CREAT`-mode, `chdir` plus `getcwd` plus relative resolution plus a dirfd-relative `openat`, `ENOTDIR` versus `ENOENT`, and `/x/..` resolving to the root. Prints `DIRPROBE OK`.

@@ -25,6 +25,7 @@
 #include "../network/netconf.h"
 #include "../network/net.h"
 #include "../network/socket/socket.h"
+#include "../ipc/pipe.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
@@ -414,9 +415,13 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             ap_str(t, "/dev/");
             ap_str(t, devfs_fd_name(e));
             break;
-        case FD_TYPE_PIPE:
-            ap_str(t, "pipe:[1]");
+        case FD_TYPE_PIPE: {
+            pipe_t *pp = (pipe_t *)e->priv;
+            ap_str(t, "pipe:[");
+            ap_u32(t, pp ? pp->inode : 0u);
+            ap_ch(t, ']');
             break;
+        }
         case FD_TYPE_PTS:
             /* a pty slave: /dev/pts/N (so musl ttyname_r can match it). */
             ap_str(t, "/dev/pts/");

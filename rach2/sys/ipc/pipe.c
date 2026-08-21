@@ -44,6 +44,39 @@ void pipe_init_pool(void)
     }
 }
 
+static uint32_t next_pipe_inode = 1;
+
+/**
+ * The next inode to give a pipe: rising, nonzero, and not one a live pipe has.
+ *
+ * Two pipes must not be one thing to a program reading `/proc/<pid>/fd`, and a
+ * reused slot must not read as the pipe that had it, so the number rises
+ * rather than being the slot. Rising is not enough by itself: the counter is
+ * 32 bits and wraps, so the pool is checked and a number in use is stepped
+ * over. Zero is skipped because it is what an unset field reads as.
+ */
+static uint32_t pipe_next_inode(void)
+{
+    int i, tries;
+
+    for (tries = 0; tries <= MAX_PIPES + 1; tries++) {
+        uint32_t candidate = next_pipe_inode++;
+
+        if (candidate == 0) {
+            continue;
+        }
+        for (i = 0; i < MAX_PIPES; i++) {
+            if (pipe_pool[i].in_use && pipe_pool[i].inode == candidate) {
+                break;
+            }
+        }
+        if (i == MAX_PIPES) {
+            return candidate;
+        }
+    }
+    return 0; /* unreachable: the pool is smaller than the tries above */
+}
+
 static pipe_t *pipe_alloc(void)
 {
     int i;
@@ -56,6 +89,7 @@ static pipe_t *pipe_alloc(void)
             pipe_t *p = &pipe_pool[i];
             k_memset(p, 0, sizeof(*p));
             p->in_use = 1;
+            p->inode = pipe_next_inode();
             p->read_open = 1;
             p->write_open = 1;
             wait_queue_init(&p->read_wq);
