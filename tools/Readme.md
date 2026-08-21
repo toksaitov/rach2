@@ -396,7 +396,9 @@ ssh -p 2222 root@machine 'bootctl env saved_entry'    # note what it says
 ssh -p 2222 root@machine 'bootctl env saved_entry recovery'
 ...  the repair, however many boots it takes  ...
 ssh -p 2222 root@machine 'bootctl env saved_entry candidate-static'   # whatever it said
-``` On a machine that will not mount its root, the menu on partition 1 still draws and the entry is there to choose at the console. On a machine whose boot partition is damaged badly enough that none of that can be read, the core image in the gap has its own configuration: `tools/grub-embed.cfg`, two `configfile` calls, partition 1's menu and then partition 3's, checked by `tools/check_grubembed.py` in both core builders because a core without those lines takes the path away silently.
+```
+
+On a machine that will not mount its root, the menu on partition 1 still draws and the entry is there to choose at the console. On a machine whose boot partition is damaged badly enough that none of that can be read, the core image in the gap has its own configuration: `tools/grub-embed.cfg`, two `configfile` calls, partition 1's menu and then partition 3's, checked by `tools/check_grubembed.py` in both core builders because a core without those lines takes the path away silently.
 
 The network is the other half of being reachable. Both recovery entries exist twice, once taking whatever DHCP gives and once carrying the fixed address, for the same reason the ordinary entries do. And where no menu can be chosen from at all, the image answers by itself: `krffs/rescue-static.script` runs after `ifup`, waits the lease out once, and takes the fixed address if none arrived. That address is the menu's, and the sealed disk's build refuses to write a disk whose script and menu disagree.
 
@@ -406,7 +408,7 @@ Recovery's SSH identity is not stable, and that is worth stating where the recov
 
 One more limit belongs beside those, because it is about reaching recovery, not about what recovery can do. A root that will not mount while the boot partition is healthy is the one damage that strands the machine without a console: GRUB reads partition 1, finds its menu, and boots the ordinary kernel, which stops at a mount failure and starts no network. GRUB's `fallback` cannot see that, since the kernel loaded and ran; the embedded configuration cannot either, since partition 1 answered. Somebody has to select recovery at the machine, or arm it before the disk becomes unmountable. Closing that would mean counting boot attempts in the environment block and having a machine that reached userland clear the count, which is a mechanism of its own and is not built here.
 
-## GRUB in the gap, and replacing it from the running machine## GRUB in the gap, and replacing it from the running machine
+## GRUB in the gap, and replacing it from the running machine
 
 The 2048 sectors between the MBR and the first partition are GRUB's, and this project treats them as a fixed layout, not as whatever `grub-bios-setup` last wrote there. `mkdisk_grub.sh` builds the disk to it and `bootctl grub` maintains it afterwards; `utils/grubslot.h` is the same arithmetic in code, and `tests/host/grubslot_hosttest.c` checks every number in it.
 
