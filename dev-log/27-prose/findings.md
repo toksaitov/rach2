@@ -129,6 +129,10 @@ findings up to where it stopped.
   only when the whole payload was accepted" should read "holds only when".
   Corrected both. (The "surfaced by SO_ERROR" comments are the sanctioned
   error-surfacing sense, left as is.)
+* `rach2/sys/proc/wait_queue.c`: `wq_wait_event`'s summary read "Block the
+  current process on `wq` until `cond` has or a signal arrives" -- the same
+  mangled-"has" defect; the verb is "holds" (the function's own later line says
+  "when the condition became true"). Corrected.
 * `rach2/sys/rtc.c`: a decode comment read "a clock that reports month 0 is not
   a clock to build a build on" -- the doubled "build a build" is a slip no
   careful author writes. Reworded to "not a clock to base a build on" (the RTC
