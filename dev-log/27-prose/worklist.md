@@ -293,7 +293,7 @@ project teaches; move it up if that judgement turns out wrong.
 * [x] `krffs/stageimage.krffs.c` (1908 words)
 * [x] `utils/bootctl.c` (1890 words)
 * [x] `utils/adduser.c` (1574 words)
-* [ ] `utils/grubslot.h` (1363 words)
+* [x] `utils/grubslot.h` (1363 words)
 * [ ] `utils/login.c` (1172 words)
 * [ ] `utils/bootslot.c` (1164 words)
 * [ ] `utils/dhcpmsg.c` (1112 words)

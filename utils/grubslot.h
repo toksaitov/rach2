@@ -116,12 +116,6 @@ uint32_t grubslot_other(uint32_t active);
 int grubslot_patch(uint8_t *image, uint32_t sectors, uint32_t tail_lba, char *err, size_t errlen);
 
 /**
- * Read or write one 512-byte sector of the gap.
- *
- * `write` is 1 to write `buf` to `lba` and 0 to read `lba` into it. A return of
- * 0 is success and anything else is a failure `grubslot_install` reports.
- */
-/**
  * Round a core image file up to whole sectors and zero the padding.
  *
  * A core image is not a whole number of sectors and the gap is written in
@@ -139,6 +133,12 @@ int grubslot_patch(uint8_t *image, uint32_t sectors, uint32_t tail_lba, char *er
 int grubslot_prepare(uint8_t *image, uint32_t capacity, uint32_t bytes, uint32_t *sectors,
                      char *err, size_t errlen);
 
+/**
+ * Read or write one 512-byte sector of the gap.
+ *
+ * `write` is 1 to write `buf` to `lba` and 0 to read `lba` into it. A return of
+ * 0 is success and anything else is a failure `grubslot_install` reports.
+ */
 typedef int (*grubslot_io_fn)(void *ctx, uint32_t lba, uint8_t *buf, int write);
 
 /**

@@ -205,6 +205,10 @@ findings up to where it stopped.
 * `utils/adduser.c`: a badly-wrapped comment. The `ADDUSER_CRASH_POINT` block
   broke as "...never in a shipped / image. It / takes a leading count", leaving
   "It" orphaned on its own short line. Reflowed the block (all lines under 80).
+* `utils/grubslot.h`: another orphaned doc. The block "Read or write one 512-byte
+  sector of the gap" documents the `grubslot_io_fn` typedef (the sector read/write
+  callback), but sat above `grubslot_prepare`'s own doc while the typedef was
+  undocumented. Moved the block onto the typedef.
 * `krffs/stageimage.krffs.c`: two in-function comment lines ran past the 80-column
   comment limit (the `optional-file` skip note and the fgets-truncation note).
   `tools/check_comments.py` scopes its 80-column check to `rach2/`, so these
