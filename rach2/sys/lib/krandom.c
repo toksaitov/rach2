@@ -248,10 +248,10 @@ static int collect_key(int (*draw)(uint32_t *), uint32_t key[8])
  * Gather an eight-word key from hardware entropy.
  *
  * RDSEED (CPUID leaf 7, EBX bit 18) is preferred, then RDRAND (leaf 1, ECX bit
- * 30). Each is gated by BOTH its feature bit and a CPUID max-leaf check: probing
- * an unsupported leaf returns junk that could falsely advertise the bit, then
- * #UD when the instruction runs. If RDSEED is present but does not deliver, the
- * code falls through to RDRAND.
+ * 30). Each is gated by BOTH its feature bit and a CPUID max-leaf check:
+ * probing an unsupported leaf returns junk that could falsely advertise the
+ * bit, then #UD when the instruction runs. If RDSEED is present but does not
+ * deliver, the code falls through to RDRAND.
  *
  * @return The KRANDOM_SRC_* of the source that filled the key, or
  *         KRANDOM_SRC_JITTER if neither delivered.

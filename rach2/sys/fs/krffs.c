@@ -318,8 +318,9 @@ static krffs_node_t *krffs_walk_x(krffs_file_system_t *fs, const char *path, int
         } else if (len == 2 && start[0] == '.' && start[1] == '.') {
             /* krffs_find_node_by_id cannot return the root (it owns reserved id
              * 0), so resolve a root parent to fs->node directly; otherwise ".."
-             * back to the root would yield NULL. The continuing id is ROOT_ID so
-             * the root's children (parent_id == 0) still resolve after the "..".
+             * back to the root would yield NULL. The continuing id is ROOT_ID
+             * so the root's children (parent_id == 0) still resolve after the
+             * "..".
              */
             uint64_t parent = node ? node->parent_id : (uint64_t)KRFFS_ROOT_ID;
             if (parent == (uint64_t)KRFFS_ROOT_ID) {
