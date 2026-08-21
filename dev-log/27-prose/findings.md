@@ -191,6 +191,12 @@ findings up to where it stopped.
   (which had its own doc below it), while `claim_interface` -- defined ~360 lines
   further down after many functions were inserted between -- was undocumented.
   Moved the block onto `claim_interface`.
+* `utils/passwd.c`: a register-rule (person-judged half) fix. The header read
+  "That ordering is the point, not a detail: ..." -- the "not a detail" reversal
+  is the exact construction CLAUDE.md names as an example to avoid ("Not a
+  detail. A design decision."). Reworded to "That ordering is deliberate: ...",
+  which states the claim plainly; the sentence already explains why (one image
+  of the databases).
 
 ## Cross-checks to settle against code later in set one
 
@@ -231,6 +237,15 @@ when its source file is reached, and the document fixed retroactively if wrong.
   sector is the largest one such an offset can name", which is off by one (the
   byte just past is 2^32, the first UNnameable) -- changed both to "that
   sector's last byte is the largest one such an offset can name".
+
+## Vendored upstream, read but not edited
+
+* `krffs/vendor/termbox2.h` and `krffs/vendor/termbox2_win.h`: the MIT-licensed
+  termbox2 single-header library (nsf / Adam Saponara), vendored for krffs's
+  `fsviz` tool. Confirmed upstream by the license header; the project's writing
+  rules and the register rule do not apply to third-party code, and CLAUDE.md
+  forbids churning the vendored trees, so these were read for provenance and
+  left byte-for-byte as they are.
 
 ## What was refuted
 

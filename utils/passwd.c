@@ -16,7 +16,7 @@
  *
  * Everything happens inside one credential transaction, taken before any file
  * is opened and dropped only after the replacement is published. That ordering
- * is the point, not a detail: the account is found, the old password is
+ * is deliberate: the account is found, the old password is
  * checked, and the new file is built from ONE image of the databases, read
  * under the lock. `getspnam` is not called anywhere here, since it would be a
  * second, independent read that can see a different file than the one about to
