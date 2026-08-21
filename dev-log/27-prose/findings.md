@@ -361,6 +361,18 @@ header, which relocated the window there when the machine became its own build
 host; stressprobe's `path_of` handles three digits, so its "N < 1000" is right,
 unlike blockprobe's stale bound.)
 
+* `tests/dirtest.c`: the header claimed "KRFFS has no directories, so only `/`
+  exists", which was true of the flat file system this probe predates but false
+  since KRFFS became hierarchical (the same milestone `dirprobe`, `dirgrow`, and
+  `mkdir` all exercise). The probe itself only touches root-relative paths, so it
+  still passes, but the premise was wrong. Rewrote the header to describe what
+  the probe actually does without the false claim.
+
+Still more read clean: ctrlcmusl, errnoprobe, vmfault, sockfillmusl,
+bootverb_hosttest, timemusl, suidmusl, krandom_hosttest, udptest.
+(bootverb_hosttest's header "forever." wraps at 81 columns, so it is a real
+wrap, not an orphan.)
+
 Many test files read clean, prose and code alike accurate to what they
 exercise: bootprobe, loginmusl, stampmusl, n_tty_hosttest, packetprobe,
 grubslot_hosttest, dirtyprobe, dgramprobe, spawnmusl, execargmusl, statmusl,

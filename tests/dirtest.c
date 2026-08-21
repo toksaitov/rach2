@@ -1,7 +1,9 @@
 /**
- * Exercises the getcwd and chdir syscalls. KRFFS has no directories, so only
- * "/" exists: chdir("/"), chdir("."), and chdir("..") succeed, and every other
- * path fails. Freestanding; direct int 0x80.
+ * Exercises the getcwd and chdir syscalls at the root. getcwd reports the
+ * current directory; chdir to "/", ".", and ".." (whose parent at the root is
+ * the root itself) all succeed and leave the working directory at "/"; a
+ * nonexistent name fails, and a plain file fails because it is not a directory.
+ * Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;
