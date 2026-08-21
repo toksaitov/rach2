@@ -14,8 +14,8 @@
 #   ./grub_install.sh /path/to/grub/boot
 #
 # Example (Linux, mounted USB at /mnt/usb):
-#   make os-simple-image              # from the repo root: build the image to
-#   copy cd rach2 && make                  # build the kernel
+#   make os-simple-image    # from the repo root: build the image to copy
+#   cd rach2 && make        # build the kernel
 #   ./grub_install.sh /mnt/usb/boot
 #
 # It copies the os-simple image by default; set RACH2_IMAGE=os-real for another.

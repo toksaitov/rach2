@@ -162,6 +162,11 @@ findings up to where it stopped.
   careful author writes. Reworded to "not a clock to base a build on" (the RTC
   time anchors reproducible-build timestamps, so the build reference is kept).
 
+* `rach2/grub_install.sh`: the same mangled-wrap defect as `run.sh`. A usage
+  example's comment "build the image to copy" wrapped so "copy" fell to the
+  start of the next line, turning that example command into "copy cd rach2 &&
+  make". Reflowed the two lines so "copy" ends its comment and the command reads
+  "cd rach2 && make".
 * `rach2/run.sh`: a usage-comment line wrap split "Sound Blaster 16" so the
   "16" fell to the start of the next example line, which then read
   "#   16 ./run.sh test" -- a broken command and misaligned with the other
