@@ -48,6 +48,8 @@ Output from tools and code uses one shape. Diagnostics go to stderr as `componen
 
 musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, verified by sha256, extracted and built by their `build_*.sh` behind stamp files. BusyBox, Dropbear, TinyCC, and pdpmake link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees.
 
+When a capability is missing, look in BusyBox before writing it. That is the owner's standing decision, and it is why the account tools (`adduser`, `addgroup`, `chpasswd`, `deluser`, `delgroup`) are BusyBox's rather than this project's.
+
 ## Hardware
 
 Any operation on real hardware that cannot be undone by rebuilding requires the owner's approval at the time, every time. Present what the host reports about the target, enough that the owner can recognise it, and wait for an approval that names it. A previous approval for the same target does not carry forward to the next run, and neither does one given on another machine, because the name a host gives a device belongs to that host and that moment.
@@ -60,15 +62,17 @@ Nothing in this system is bound to a particular drive: the kernel probes for wha
 
 Do the work directly. Reading a file, judging a claim against the code, and writing prose this project will keep are the work itself, and handing them out costs more than it saves: the writing rules above exist to produce one voice, and a fan-out does not have one.
 
-Delegation is for an independent opinion, not for volume. One reviewer per diff. The review is worth having because it is independent, not because it is parallel. Where more than one agent is genuinely wanted, the total is decided before any of them starts and stated. Scope a delegated review to at most six files, and give it a deadline of ten minutes. That bound is measured, not guessed: reviews of two and of five files returned real findings in eight and ten minutes, while a review of twenty-six files and a procedure failed three times and returned nothing at all. Never tell the user a delegated job is running without a command in the same turn that reads its state. A stage whose agent count depends on what an earlier stage found is forbidden, because the number that comes back is never the number that was budgeted: one such run reached two hundred agents and exhausted the session, and the work still had to be done afterwards by hand.
+Delegation is for an independent opinion, not for volume. One reviewer per diff. The review is worth having because it is independent, not because it is parallel. Where more than one agent is genuinely wanted, the total is decided before any of them starts and stated. Scope a delegated review to at most six files, and give it a deadline of ten minutes. That bound is measured, not guessed: reviews of two and of five files returned real findings in eight and ten minutes, while a review of twenty-six files and a procedure failed three times and returned nothing at all. Never tell the user a delegated job is running without a command in the same turn that reads its state. Tell the reviewer to state its findings early and most serious first, because a report that trails off loses the findings and keeps the summary; do not ask it to write or tee a file, which its sandbox refuses, and do not launch it where a tool timeout can kill the process group. A stage whose agent count depends on what an earlier stage found is forbidden, because the number that comes back is never the number that was budgeted: one such run reached two hundred agents and exhausted the session, and the work still had to be done afterwards by hand.
 
 ## Verification
+
+A test is proved by making it fail. Drive a mutation from a script that restores the source in a trap, because a mutation can hang the suite and outlive the command that applied it, leaving the tree mutated. Restoring the source is not enough on its own: a `cp` back does not make `make` rebuild, so several runs here re-tested a stale binary and reported PASS for a mutation that had never been compiled. Touch the file, or rebuild explicitly, before believing the result.
 
 Every change passes `make verify-style` and `make verify-host`, and a real boot plus the SSH capstone when it touches anything they exercise. Substantial work gets a harsh independent Codex review with every finding fixed before commit. The half of the register rule that a person decides is part of that review; `tools/prose_check.py` decides the other half before the review starts.
 
 ## Git
 
-Commit in scoped units, one logical change each, directly on the branch in the repo's one-line house style, with no attribution of any kind. A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.
+Commit in scoped units, one logical change each, directly on the branch, with no attribution of any kind. The house style is one line, no trailing period, beginning with a capitalised verb in the imperative, saying what the commit does and not how it was arrived at; `git log --oneline -20` is the reference. A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.
 
 ## Documentation
 

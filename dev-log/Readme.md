@@ -2,6 +2,8 @@
 
 The record of how each Rach2 milestone was planned and built, one subdirectory per milestone. Milestone 1 keeps the prompts that drove it; later milestones keep the plan they were built from.
 
+A milestone is run from its `plan.md` and does not stop at a comfortable checkpoint: the only stops are the goal being met, or a phase that cannot be met after three honest attempts, reported with its evidence. The prompt that starts one is a single short line naming the plan file, under thirty words, because a longer one is truncated where it is sent.
+
 These records are evidence of what was decided and when. They are not a model for how to write. Milestones before 26 were written before the register rule was measurable, and they carry the habits milestone 26 exists to remove: read them for what happened, and take the writing standard from `CLAUDE.md` instead. Their wording is left alone because changing it would falsify the record.
 
 The list below is the finished work, and its last entry is where the tree stands. A directory holding only a `plan.md` is work that is planned and not yet built, and it is deliberately absent from the list, because an entry here says a milestone happened. `tools/check_devlog.py` holds the two together on every `make verify-style`.
