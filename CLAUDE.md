@@ -72,7 +72,7 @@ Every change passes `make verify-style` and `make verify-host`, and a real boot 
 
 ## Git
 
-Commit in scoped units, one logical change each, directly on the branch, with no attribution of any kind. The house style is one line, no trailing period, beginning with a capitalised verb in the imperative, saying what the commit does and not how it was arrived at; `git log --oneline -20` is the reference. A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.
+Commit in scoped units, one logical change each, directly on the branch, with no attribution of any kind. Never push. The remote is the owner's to update, and a push cannot be taken back once anyone has fetched it; ask, and let the owner do it. The house style is one line, no trailing period, beginning with a capitalised verb in the imperative, saying what the commit does and not how it was arrived at; `git log --oneline -20` is the reference. A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.
 
 ## Documentation
 

@@ -1,4 +1,4 @@
-# Milestone 27: the diagnostics
+# Milestone 28: the diagnostics
 
 ## The goal
 
@@ -211,9 +211,9 @@ Give a person on the machine an ordinary command that prints it. If that means a
 
 Done when the boot log is readable from a shell on the machine and the Readme names the command and the reason.
 
-## Phase K: the gate, the record, and the disk
+## Phase K: the checks, the record, and the disk
 
-Run the whole gate from a clean tree: `make verify-style`, `make verify-host`, the full suite, `make selfbuild-test`, `make sealed-test`. Rebuild the sealed disk and write the record in `dev-log/27-polish/Readme.md`.
+Run every check from a clean tree: `make verify-style`, `make verify-host`, the full suite, `make selfbuild-test`, `make sealed-test`. Rebuild the sealed disk and write the record in `dev-log/28-polish/Readme.md`.
 
 Then rewrite the physical drive, because a milestone that improves the machine and leaves the old artifact on the disk has not finished.
 
