@@ -339,6 +339,8 @@ findings up to where it stopped.
   source / is -EISDIR. A test / that accepted..."). Reflowed the sentence.
 * `tests/host/elf_hosttest.c`: two comment continuation lines of the e_phnum-cap
   case ran to 81 and 85 columns. Reflowed the block at 80.
+* `tests/musl/build.sh`: a doubled word across a line break, "parses for the
+  host / host tests". Removed the repeat.
 
 Many test files read clean, prose and code alike accurate to what they
 exercise: bootprobe, loginmusl, stampmusl, n_tty_hosttest, packetprobe,
@@ -348,7 +350,8 @@ tlsprobe, ownprobe, sectorcopy_hosttest, dirprobe, pwauthatexit_hosttest,
 unlinkdirprobe, suidprobe, pollprobe, netcfg_hosttest, mkfatfixture.py,
 modlayout_hosttest, ishmusl, diskinfo_hosttest, vmamusl, suidhelper, waitprobe,
 clockmusl, rcvwnd_hosttest, readfile_hosttest, pipeprobe, ttyprobe, permmusl,
-vmprobe, credprobe.
+vmprobe, credprobe, vm_hosttest, board_hosttest, authmusl, kstring_hosttest,
+ofdprobe, rebootprobe, rmtest, orphanprobe, mbr_hosttest.
 
 ### Set two: the Doom port and the rest
 
