@@ -42,16 +42,15 @@
  * `poweroff` and `reboot` reach, bare through init or forced with `-f`. What
  * leaves it set is a boot that was killed rather than stopped, or one whose
  * flush failed, which fsck reads as a mount that may not have flushed. `sync`
- * flushes the cache but does not clear it. The clear is conditional on the data:
- * the shutdown path flushes the whole cache first and touches this bit only if
- * that flush returned 0, because a write-back walks the cache by slot and fails
- * whole, so clearing first can publish the cleared root page while another
- * frame's write fails and leave an image that reads clean with data missing. It
- * sits
- * above the nine permission bits and below the 0170000 type field KRFFS_IS_DIR
- * tests. On the root node it is safe from every masked mode comparison: stat
- * reports the root with a fixed mode, chmod never touches it, and the access
- * check uses a fixed 0755 there. */
+ * flushes the cache but does not clear it. The clear is conditional on the
+ * data: the shutdown path flushes the whole cache first and touches this bit
+ * only if that flush returned 0, because a write-back walks the cache by slot
+ * and fails whole, so clearing first can publish the cleared root page while
+ * another frame's write fails and leave an image that reads clean with data
+ * missing. It sits above the nine permission bits and below the 0170000 type
+ * field KRFFS_IS_DIR tests. On the root node it is safe from every masked mode
+ * comparison: stat reports the root with a fixed mode, chmod never touches it,
+ * and the access check uses a fixed 0755 there. */
 #define KRFFS_MODE_DIRTY 0004000u
 
 /* The set-id and sticky bits on ordinary nodes, stored and reported through
@@ -70,8 +69,8 @@
 #define KRFFS_PATH_MAX_DEPTH 64 /* max directory nesting krffs_node_path reconstructs */
 
 /* A directory's mode is S_IFDIR | 0755; a regular file is just its perm bits
- * (S_IFREG is implied when no type bits are set, for backward compatibility with
- * v1 images that stored bare permission modes). */
+ * (S_IFREG is implied when no type bits are set, for backward compatibility
+ * with v1 images that stored bare permission modes). */
 #define KRFFS_IS_DIR(mode) (((mode) & KRFFS_S_IFMT) == KRFFS_S_IFDIR)
 
 /* Node types in the file system. */

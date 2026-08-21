@@ -4,12 +4,13 @@
 # mkdisk.sh: build one bootable-layout KRFFS disk image out of tree.
 #
 # Where mkimage.sh writes a bare KRFFS that fills a file (the RAM-disk module),
-# this writes a real disk image: a 512-byte MBR with one primary KRFFS partition,
-# then a fresh KRFFS laid down inside that partition and staged from a manifest.
-# The partition starts at LBA 2048 (a 1 MiB offset), which is both sector- and
-# page-aligned, so the host mmap the KRFFS tools use is always valid. mkfs.krffs
-# and stageimage.krffs are pointed at the partition with their --offset/--size
-# region arguments; the KRFFS bytes are byte-identical to a module image.
+# this writes a real disk image: a 512-byte MBR with one primary KRFFS
+# partition, then a fresh KRFFS laid down inside that partition and staged from
+# a manifest. The partition starts at LBA 2048 (a 1 MiB offset), which is both
+# sector- and page-aligned, so the host mmap the KRFFS tools use is always
+# valid. mkfs.krffs and stageimage.krffs are pointed at the partition with their
+# --offset/--size region arguments; the KRFFS bytes are byte-identical to a
+# module image.
 #
 # Usage: ./mkdisk.sh <manifest> <output.disk> [disk_mb] [partition_mb]
 #
@@ -37,12 +38,13 @@ PART_OFFSET=$((PART_LBA * SECTOR))
 PART_SIZE=$((PART_MB * 1048576))
 DISK_SIZE=$((DISK_MB * 1048576))
 
-# The kernel maps the KRFFS partition through a fixed virtual window; a partition
-# larger than that window cannot be mounted from disk. The window is capped at
-# 512 MiB (PC_WINDOW_CAP in sys/mm/pagecache.c), so cap the partition to match.
-# This said 256 until milestone 25: the cap was raised when the window moved
-# above the region real firmware uses for MMIO, and this copy of the number was
-# left behind, which put a 500 MiB root out of reach of its own builder.
+# The kernel maps the KRFFS partition through a fixed virtual window; a
+# partition larger than that window cannot be mounted from disk. The window is
+# capped at 512 MiB (PC_WINDOW_CAP in sys/mm/pagecache.c), so cap the partition
+# to match. This said 256 until milestone 25: the cap was raised when the window
+# moved above the region real firmware uses for MMIO, and this copy of the
+# number was left behind, which put a 500 MiB root out of reach of its own
+# builder.
 WINDOW_MB=512
 
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
@@ -106,8 +108,8 @@ PY
 "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP" --offset "$PART_OFFSET" --size "$PART_SIZE"
 
 # Both halves, as mkimage.sh runs them, the inventory over the partition rather
-# than the whole file: the region is the partition, so the walk needs both bounds
-# or it runs off the wrong end.
+# than the whole file: the region is the partition, so the walk needs both
+# bounds or it runs off the wrong end.
 python3 "$REPO/tools/check_setid.py" "$MANIFEST"
 python3 "$REPO/tools/check_setid.py" --image "$TMP" --manifest "$MANIFEST" \
     --offset "$PART_OFFSET" --size "$PART_SIZE"

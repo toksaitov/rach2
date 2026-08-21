@@ -5,13 +5,14 @@
 #
 # Stages the kernel and the image as GRUB multiboot modules and runs
 # grub-mkrescue (in a throwaway Docker container, so no host GRUB toolchain is
-# needed) to produce build/images/<image>.iso. Each image gets its own ISO and its
-# own staging dir, so `make isos` can build all three in parallel without a race.
+# needed) to produce build/images/<image>.iso. Each image gets its own ISO and
+# its own staging dir, so `make isos` can build all three in parallel without a
+# race.
 #
 # Usage: ./mkiso.sh <test|os-simple|os-real|rach2-metal>
 #
-# Requires Docker (the only step that does). Build the kernel and the image first
-# (make / make <image>-image).
+# Requires Docker (the only step that does). Build the kernel and the image
+# first (make / make <image>-image).
 #
 
 set -e
@@ -82,10 +83,10 @@ cat "$KRFFS" > "$ISODIR/boot/$IMAGE.krffs"
 # with no teaching value. These defaults are the network the machine actually
 # lives on; override them at build time for anywhere else:
 #
-#     RACH2_METAL_IP=10.0.0.50/24 RACH2_METAL_GATEWAY=10.0.0.1 make rach2-metal-iso
+# RACH2_METAL_IP=10.0.0.50/24 RACH2_METAL_GATEWAY=10.0.0.1 make rach2-metal-iso
 #
-# The entry after it takes an address from whatever DHCP server the network
-# has, which is what a stick carried between two buildings needs: `rach2.ip=none`
+# The entry after it takes an address from whatever DHCP server the network has,
+# which is what a stick carried between two buildings needs: `rach2.ip=none`
 # leaves IPv4 unconfigured at boot, and init then runs `ifup -a`, which reads
 # `/etc/network/interfaces` and runs the client. It is not the default, because
 # the default entry is the one for the network this stick was built for. The
@@ -147,10 +148,11 @@ menuentry "Rach2 ($IMAGE) - rescue (kernel debug shell)" {
 }
 CFG
 
-# Mount the repo at its own absolute path so the absolute build/ paths resolve in
-# the container; grub-mkrescue gets absolute, quoted paths. grub-mkrescue's stderr
-# is kept (its diagnostics name a missing module or a broken layout), and a build
-# failure is fatal rather than a silent "wrote" line over a missing or stale ISO.
+# Mount the repo at its own absolute path so the absolute build/ paths resolve
+# in the container; grub-mkrescue gets absolute, quoted paths. grub-mkrescue's
+# stderr is kept (its diagnostics name a missing module or a broken layout), and
+# a build failure is fatal rather than a silent "wrote" line over a missing or
+# stale ISO.
 if ! docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" ubuntu:24.04 sh -c \
     "apt-get update -qq && \
      apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && \

@@ -561,8 +561,8 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
      * Echo is taken away only while this process group owns the terminal, which
      * is the same question the resume asks before it re-applies them. A reader
      * started in the background (`su &` is one keystroke) would otherwise
-     * silence a terminal belonging to the shell that started it and then stop on
-     * `SIGTTIN` at the first read, since this kernel raises nothing for the
+     * silence a terminal belonging to the shell that started it and then stop
+     * on `SIGTTIN` at the first read, since this kernel raises nothing for the
      * `tcsetattr` and only the read is guarded: the shell would come back to a
      * console that echoes nothing, and killing the stopped job would not undo
      * it. The modes are still prepared and `Tty_have_modes` still set, so the
@@ -1210,8 +1210,8 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
      * first rather than unwinding afterwards costs nothing, since neither
      * registered function does anything at all unless a transaction is held.
      * The order is itself a contract: the release goes in first so that it runs
-     * last, and `cred_exit_started` second so that it runs first and every death
-     * served during the walk finds an exit already under way. */
+     * last, and `cred_exit_started` second so that it runs first and every
+     * death served during the walk finds an exit already under way. */
     if (!Txn_atexit_done) {
         if (atexit(cred_txn_atexit) != 0 || atexit(cred_exit_started) != 0) {
             fprintf(stderr, "%s: cannot register the release of %s\n", prog, lock_path);
@@ -1220,15 +1220,15 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
         Txn_atexit_done = 1;
     }
 
-    /* `SIGPIPE` joins the deaths here, and only here. Its default action is fatal
-     * and its handler does not go in until several calls after the lock exists,
-     * so a `SIGPIPE` delivered in that window kills the writer where no
+    /* `SIGPIPE` joins the deaths here, and only here. Its default action is
+     * fatal and its handler does not go in until several calls after the lock
+     * exists, so a `SIGPIPE` delivered in that window kills the writer where no
      * registered function runs and leaves the lock in `/etc`. The window is
      * reachable on purpose rather than by accident: this kernel lets a process
      * signal one whose real uid matches its own, and a setuid program keeps the
-     * real uid of whoever ran it, so the user who started `passwd` may signal it
-     * as often as they like. Everywhere else in the library `SIGPIPE` is already
-     * caught, which is why no other stretch needs it blocked. */
+     * real uid of whoever ran it, so the user who started `passwd` may signal
+     * it as often as they like. Everywhere else in the library `SIGPIPE` is
+     * already caught, which is why no other stretch needs it blocked. */
     pwauth_death_set(&deaths);
     sigaddset(&deaths, SIGPIPE);
     for (attempt = 0;; attempt++) {
@@ -1443,9 +1443,10 @@ int cred_rewrite(const char *path, const char *text, size_t len)
      * It goes in with the deaths blocked because the copy is not one store, and
      * a handler that read it half-written would read `path` itself: the
      * temporary's name is the target's with a suffix, so the truncation at one
-     * particular length is exactly the credential database, and `cred_drop_temp`
-     * would unlink it. Clearing the name needs no mask, since only the first
-     * byte is cleared and a handler either sees the whole name or none of it. */
+     * particular length is exactly the credential database, and
+     * `cred_drop_temp` would unlink it. Clearing the name needs no mask, since
+     * only the first byte is cleared and a handler either sees the whole name
+     * or none of it. */
     saved_umask = umask(077);
     pwauth_death_set(&deaths);
     sigprocmask(SIG_BLOCK, &deaths, &saved_mask);

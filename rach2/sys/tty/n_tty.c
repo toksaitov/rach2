@@ -190,19 +190,20 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
         }
     }
 
-    /* ISIG: an INTR/QUIT/SUSP char is recognized, echoed, flushes the line, and is
-     * reported for delivery to the foreground group. */
+    /* ISIG: an INTR/QUIT/SUSP char is recognized, echoed, flushes the line, and
+     * is reported for delivery to the foreground group. */
     if (tio->c_lflag & ISIG) {
-        /* A control char set to 0 is disabled (the _POSIX_VDISABLE convention), so
-         * it must not match an incoming NUL; guard each comparison against the
-         * disabled value the way the VEOL match below does. */
+        /* A control char set to 0 is disabled (the _POSIX_VDISABLE convention),
+         * so it must not match an incoming NUL; guard each comparison against
+         * the disabled value the way the VEOL match below does. */
         if ((tio->c_cc[VINTR] && c == tio->c_cc[VINTR]) ||
             (tio->c_cc[VQUIT] && c == tio->c_cc[VQUIT]) ||
             (tio->c_cc[VSUSP] && c == tio->c_cc[VSUSP])) {
             echo(t, out, ctx, c);
-            /* Flush ALL unread input (the edit line AND any committed-but-unread
-             * lines and a pending EOF) so input typed before the signal does not
-             * survive it (the default !NOFLSH behaviour). */
+            /* Flush ALL unread input (the edit line AND any
+             * committed-but-unread lines and a pending EOF) so input typed
+             * before the signal does not survive it (the default !NOFLSH
+             * behaviour). */
             t->line_len = 0;
             t->rq_head = t->rq_tail;
             t->eof = 0;
@@ -213,8 +214,8 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
     }
 
     if (tio->c_lflag & ICANON) {
-        /* As with the ISIG chars, a c_cc of 0 disables the editing function, so a
-         * NUL byte must not trigger it. */
+        /* As with the ISIG chars, a c_cc of 0 disables the editing function, so
+         * a NUL byte must not trigger it. */
         if (tio->c_cc[VERASE] && c == tio->c_cc[VERASE]) {
             erase_one(t, out, ctx);
             return;
@@ -274,7 +275,8 @@ int n_tty_readable(const struct n_tty *t)
 {
     if (t->tio.c_lflag & ICANON) {
         /* bytes reach the queue only when a line completes, so any queued byte
-         * means a line is ready; a pending EOF is "readable" (read returns 0). */
+         * means a line is ready; a pending EOF is "readable" (read returns 0).
+         */
         if (rq_count(t) > 0) {
             return (int)rq_count(t);
         }
@@ -319,9 +321,10 @@ int n_tty_read(struct n_tty *t, unsigned char *buf, int count)
         return 0;
     }
     if (canon) {
-        /* A pending EOF is delivered (read returns 0) only once the read head has
-         * reached the position it was typed at; so input committed before the
-         * EOF is returned first, and input committed after is returned next. */
+        /* A pending EOF is delivered (read returns 0) only once the read head
+         * has reached the position it was typed at; so input committed before
+         * the EOF is returned first, and input committed after is returned
+         * next. */
         if (t->eof && t->rq_head == t->eof_pos) {
             t->eof = 0;
             return 0;

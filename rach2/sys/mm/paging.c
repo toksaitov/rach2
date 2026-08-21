@@ -128,8 +128,8 @@ void init_paging(size_t usable_frames)
 
     page_table_t *table;
 
-    /* frame.h mirrors these two values so it can stay host-linkable; fail loudly
-     * if the mirror ever drifts from the real definitions. */
+    /* frame.h mirrors these two values so it can stay host-linkable; fail
+     * loudly if the mirror ever drifts from the real definitions. */
     if (FRAME_DIRECT_MAP_LIMIT != HARD_MEMORY_LIMIT || FRAME_PAGE_SIZE != PAGE_SIZE) {
         k_panic("frame.h constants drifted from paging.h");
     }
@@ -183,8 +183,9 @@ void init_paging(size_t usable_frames)
 
         /* Mark frames below mem_reserved_ptr as used (kernel, heap, modules).
          * The `frame < _frames_number` bound matches the final pass and the
-         * other bitmap writes; it only matters when real RAM is smaller than the
-         * direct-mapped window, but the guard keeps every write in range. */
+         * other bitmap writes; it only matters when real RAM is smaller than
+         * the direct-mapped window, but the guard keeps every write in range.
+         */
         if (phys_address < mem_reserved_ptr && frame < _frames_number) {
             _frames[frame] = 1;
         }
@@ -235,12 +236,12 @@ static void _load_page_dir(page_dir_t *dir)
 
     /* Enable paging (PG, bit 31) and supervisor write-protect (WP, bit 16). WP
      * makes a ring-0 write to a read-only page fault instead of silently
-     * succeeding; the page cache's dirty tracking depends on it, mapping a clean
-     * frame read-only so the next write re-faults and re-marks it dirty. A kernel
-     * write to a user text page uses the physical alias or pre-faults first, so
-     * it never traps. A kernel write to a present copy-on-write page does trap:
-     * the WP fault routes to cow_fault, which makes the page private and
-     * writable, and the instruction retries. WP affects nothing else. */
+     * succeeding; the page cache's dirty tracking depends on it, mapping a
+     * clean frame read-only so the next write re-faults and re-marks it dirty.
+     * A kernel write to a user text page uses the physical alias or pre-faults
+     * first, so it never traps. A kernel write to a present copy-on-write page
+     * does trap: the WP fault routes to cow_fault, which makes the page private
+     * and writable, and the instruction retries. WP affects nothing else. */
     cr0 |= 0x80000000u | 0x00010000u;
 
     __asm__ __volatile__ ("mov %0, %%cr0" :: "r"(cr0));
@@ -368,8 +369,8 @@ static int vm_resolve(uint32_t addr, int write)
 
     /* Honor a read-only region's protection in the PTE, so a later write faults
      * as a protection violation, which the handler segfaults, and which
-     * copy-on-write uses to tell a write fault from a demand fault. A grown stack
-     * page (vma == NULL here) is left writable. */
+     * copy-on-write uses to tell a write fault from a demand fault. A grown
+     * stack page (vma == NULL here) is left writable. */
     if (vma && !(vma->prot & VM_PROT_WRITE)) {
         paging_set_writable(_curr_dir, addr, false);
     }
@@ -478,10 +479,11 @@ static void _page_fault_handler(isr_params_t *params)
         }
     }
 
-    /* Demand paging: a fault on a user-space address owned by a live user process
-     * is resolved by lazily backing the page (heap/stack/anon) or growing the
-     * stack. Keyed on the faulting *address* being in user space, not on the CPU
-     * mode, so a kernel touch of a lazy user page would resolve here too. */
+    /* Demand paging: a fault on a user-space address owned by a live user
+     * process is resolved by lazily backing the page (heap/stack/anon) or
+     * growing the stack. Keyed on the faulting *address* being in user space,
+     * not on the CPU mode, so a kernel touch of a lazy user page would resolve
+     * here too. */
     if (have_user_proc && in_user_range) {
         if (vm_resolve(fault_address, write)) {
             return; /* page mapped; iret retries the faulting instruction */
@@ -493,10 +495,10 @@ static void _page_fault_handler(isr_params_t *params)
      * is a kernel-only mapping the file system touches in supervisor mode, so
      * this serves supervisor faults only: a user-mode fault at a window address
      * is a wild ring-3 access that falls through to the segfault below. Without
-     * the `!user_mode` gate a ring-3 touch would loop on the supervisor-only page
-     * the fill maps, or, with no disk backing, panic the kernel. The poll-only
-     * fill is safe with IF=0. A fault past the backed size, or one the fill
-     * cannot serve, is a real bug. */
+     * the `!user_mode` gate a ring-3 touch would loop on the supervisor-only
+     * page the fill maps, or, with no disk backing, panic the kernel. The
+     * poll-only fill is safe with IF=0. A fault past the backed size, or one
+     * the fill cannot serve, is a real bug. */
     if (!user_mode &&
         fault_address >= PCWIN_BASE &&
         fault_address < PCWIN_BASE + pc_window_size()) {
@@ -521,8 +523,8 @@ static void _page_fault_handler(isr_params_t *params)
     }
 
     /* A fault in kernel mode (or with no user context) is a kernel bug. The
-     * fault-aware usercopy path returns -EFAULT before the kernel ever touches a
-     * bad user pointer, so reaching here means the kernel itself faulted. */
+     * fault-aware usercopy path returns -EFAULT before the kernel ever touches
+     * a bad user pointer, so reaching here means the kernel itself faulted. */
     k_printf("Kernel message: page fault at 0x%X with error code 0x%X\n",
              fault_address, params->error_code);
 
@@ -547,7 +549,8 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     uintptr_t addr;
 
     /* Reject an empty or wrapping region: a `phys_addr + size` that overflowed
-     * would leave end_addr below start_page, map nothing, and falsely succeed. */
+     * would leave end_addr below start_page, map nothing, and falsely succeed.
+     */
     if (size == 0 || end_addr < phys_addr) {
         serial_printf("map_mmio: bad region 0x%x size 0x%x\n", phys_addr, size);
         return 0;

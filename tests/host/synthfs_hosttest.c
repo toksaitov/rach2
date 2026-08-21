@@ -97,8 +97,8 @@ int main(void)
     CHECK(synth_classify("proc/7/.", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("dev/./null", &vp) == VNODE_ENOENT);
 
-    /* A pid that would overflow or wrap a 32-bit int is rejected, never folded to
-     * a small pid another process might own; the boundary is 2147483639. */
+    /* A pid that would overflow or wrap a 32-bit int is rejected, never folded
+     * to a small pid another process might own; the boundary is 2147483639. */
     CHECK(synth_classify("proc/99999999999", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/4294967297", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/2147483639", &vp) == VNODE_PROC_PID && vp.pid == 2147483639);

@@ -79,8 +79,8 @@ void _start(void)
         fail("mkdir /cx");
     }
 
-    /* A '..' path that canonicalizes onto a synthetic mount must be refused, not
-     * create a shadowing KRFFS node. */
+    /* A '..' path that canonicalizes onto a synthetic mount must be refused,
+     * not create a shadowing KRFFS node. */
     if (sys2(SYS_MKDIR, (int)"/cx/../proc", 0755) == 0) {
         fail("mkdir /cx/../proc created a KRFFS shadow of synthetic /proc");
     }

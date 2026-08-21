@@ -139,9 +139,10 @@ void socket_unref(struct socket *sock)
     }
 
     /* A listener still owns every connection queued for accept but never picked
-     * up; release each so its socket slot and TCB are not leaked for the life of
-     * the system. Each queued conn_sock is an established (non-listening) socket,
-     * so this recurses at most one level, and net_lock is save/restore reentrant. */
+     * up; release each so its socket slot and TCB are not leaked for the life
+     * of the system. Each queued conn_sock is an established (non-listening)
+     * socket, so this recurses at most one level, and net_lock is save/restore
+     * reentrant. */
     if (sock->type == SOCK_STREAM && sock->listening) {
         while (sock->accept_head != sock->accept_tail) {
             struct socket *conn = sock->accept_queue[sock->accept_head];
@@ -436,8 +437,8 @@ void socket_tcp_writable(struct socket *sock)
     wq_wake_all(&sock->waiters);
 }
 
-/* Wait predicate: the send ring has room, or the connection left a sending state
- * (so a blocked sender stops waiting and reports the result). */
+/* Wait predicate: the send ring has room, or the connection left a sending
+ * state (so a blocked sender stops waiting and reports the result). */
 static int send_space_ready(void *arg)
 {
     struct socket *sock = (struct socket *)arg;
@@ -673,14 +674,16 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
             revents |= (short)(events & POLLIN); /* buffered data, or EOF (FIN) */
         }
         /* Writable only in a sending state AND with send-ring space free, so a
-         * poll-then-send loop blocks instead of spinning when the ring is full. */
+         * poll-then-send loop blocks instead of spinning when the ring is full.
+         */
         if ((tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
             (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0) {
             revents |= (short)(events & POLLOUT);
         }
         if (tcb->so_error != 0) {
-            /* A failed connection: report the error, and POLLOUT so a poll(POLLOUT)
-             * on a non-blocking connect wakes and the caller then reads SO_ERROR. */
+            /* A failed connection: report the error, and POLLOUT so a
+             * poll(POLLOUT) on a non-blocking connect wakes and the caller then
+             * reads SO_ERROR. */
             revents |= POLLERR;
             revents |= (short)(events & POLLOUT);
         }

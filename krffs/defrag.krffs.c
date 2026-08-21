@@ -135,9 +135,9 @@ int main(int argc, char **argv)
     char *path =
         argv[1];
 
-    /* Refuse to defragment a file system that fails `fsck.krffs`. Try the utility
-     * by name first (a PATH lookup), then the `./`-prefixed form for a build that
-     * runs the tools out of the current directory. */
+    /* Refuse to defragment a file system that fails `fsck.krffs`. Try the
+     * utility by name first (a PATH lookup), then the `./`-prefixed form for a
+     * build that runs the tools out of the current directory. */
     int fsck_result =
         krffs_run_check_utility(KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path);
 

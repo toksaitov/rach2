@@ -33,8 +33,8 @@
 static pipe_t *pipe_pool;
 
 /* The pure ring helpers (pipe_available/pipe_free_space/pipe_ring_put/
- * pipe_ring_get) live in pipe_ring.c so the host-seam test can exercise the wrap
- * arithmetic natively under ASan without pulling in the syscall glue. */
+ * pipe_ring_get) live in pipe_ring.c so the host-seam test can exercise the
+ * wrap arithmetic natively under ASan without pulling in the syscall glue. */
 
 void pipe_init_pool(void)
 {
@@ -226,9 +226,9 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     pipe_t *p = (pipe_t *)e->priv;
     short revents = 0;
 
-    /* A readiness change for this end is signaled on its own wait queue: the read
-     * end's read_wq (data arrives / writer closes), the write end's write_wq
-     * (space frees / reader closes). The poll core parks on it. */
+    /* A readiness change for this end is signaled on its own wait queue: the
+     * read end's read_wq (data arrives / writer closes), the write end's
+     * write_wq (space frees / reader closes). The poll core parks on it. */
     if (wq) {
         *wq = (e->flags & FD_FLAG_READ) ? &p->read_wq : &p->write_wq;
     }
@@ -237,8 +237,8 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
      * exactly what unblocks read/write: a read end is readable when data is
      * buffered OR the writers are gone (read then returns 0/EOF, not blocks); a
      * write end is "writable" when space exists OR the readers are gone (the
-     * write would immediately EPIPE). POLLHUP/POLLERR are reported regardless of
-     * the requested events. */
+     * write would immediately EPIPE). POLLHUP/POLLERR are reported regardless
+     * of the requested events. */
     if (e->flags & FD_FLAG_READ) {
         if (pipe_available(p) != 0 || !p->write_open) {
             revents |= (short)(events & PIPE_POLLIN);
@@ -357,9 +357,9 @@ int32_t sys_pipe2(struct isr_params *params)
     }
 
     /* Set up the read end before allocating the write end: fd_alloc leaves a
-     * slot type==FD_TYPE_NONE (the caller assigns the type), so reserving rfd via
-     * pipe_setup_end is what stops the second fd_alloc from handing back the very
-     * same slot. */
+     * slot type==FD_TYPE_NONE (the caller assigns the type), so reserving rfd
+     * via pipe_setup_end is what stops the second fd_alloc from handing back
+     * the very same slot. */
     rfd = fd_alloc(&current_proc->fds);
     if (rfd < 0) {
         pipe->in_use = 0;

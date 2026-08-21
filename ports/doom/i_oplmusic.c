@@ -915,9 +915,10 @@ void OPLMusic_PlaySong(void *handle, boolean looping)
 
     us_per_beat = 500000;  // Default 120 BPM
 
-    /* Calculate samples per tick with proper 64-bit math
-     * Formula: samples_per_tick = sample_rate * us_per_beat / (ticks_per_beat * 1000000)
-     * At 120 BPM with 96 ticks/beat: 49716 * 500000 / (96 * 1000000) = 259 samples/tick */
+    /* Calculate samples per tick with proper 64-bit math Formula:
+     * samples_per_tick = sample_rate * us_per_beat / (ticks_per_beat * 1000000)
+     * At 120 BPM with 96 ticks/beat: 49716 * 500000 / (96 * 1000000) = 259
+     * samples/tick */
     samples_per_tick = ((uint64_t)sample_rate * us_per_beat) / ((uint64_t)ticks_per_beat * 1000000);
 
     /* Guard against zero to avoid infinite loops on bad headers. */

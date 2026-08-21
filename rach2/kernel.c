@@ -216,10 +216,10 @@ void terminate_current_process(int32_t signo)
     is_init = (pid == init_pid && init_pid != 0);
 
     /* If the console-owning session leader is dying (init, or a later TIOCSCTTY
-     * leader, not only init), release the controlling terminal before zombifying
-     * so the timer-IRQ serial drain does not target this vanishing session during
-     * teardown. shell_reset_input on the is_init path below releases again, which
-     * is idempotent. */
+     * leader, not only init), release the controlling terminal before
+     * zombifying so the timer-IRQ serial drain does not target this vanishing
+     * session during teardown. shell_reset_input on the is_init path below
+     * releases again, which is idempotent. */
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
         tty_set_session(&console_tty, 0, 0);
     }
@@ -390,12 +390,13 @@ static void keyboard_handler(isr_params_t *params)
         return;
     }
 
-    /* 'C' is scancode 0x2E. When a session owns the console (a reader is parked or
-     * a session holds it), let ^C flow through the line discipline below like every
-     * other key: n_tty's ISIG path posts SIGINT to the foreground group AND flushes
-     * pending input, matching a serial ^C, so the two console input sources agree.
-     * Only with no session (the kernel debug shell, which reads through its own
-     * buffer, not the discipline) is the signal delivered out of band. */
+    /* 'C' is scancode 0x2E. When a session owns the console (a reader is parked
+     * or a session holds it), let ^C flow through the line discipline below
+     * like every other key: n_tty's ISIG path posts SIGINT to the foreground
+     * group AND flushes pending input, matching a serial ^C, so the two console
+     * input sources agree. Only with no session (the kernel debug shell, which
+     * reads through its own buffer, not the discipline) is the signal delivered
+     * out of band. */
     if (_kbd_ctrl && scancode == 0x2E &&
         !(wq_active(&console_tty.input_wq) || console_tty.sid != 0)) {
         kill_foreground_process();
@@ -404,7 +405,8 @@ static void keyboard_handler(isr_params_t *params)
 
     /* The running process's page directory may not map the kernel data this
      * handler touches (EN_us, stdin_buffer). Set CR3 directly rather than
-     * switch_page_directory(), whose _curr_dir check may be out of sync here. */
+     * switch_page_directory(), whose _curr_dir check may be out of sync here.
+     */
     __asm__ __volatile__("mov %%cr3, %0" : "=r"(saved_cr3));
     {
         uint32_t kernel_cr3 = get_page_dir_phys(_kernel_dir);
@@ -1245,8 +1247,8 @@ static void exec_program(int argc, char *argv[])
     elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH);
 
     /* The first user process of a normal boot is the persistent /sbin/init.
-     * Capture that before claiming init_pid, because a real init must NOT own the
-     * console (see the gated publish below). */
+     * Capture that before claiming init_pid, because a real init must NOT own
+     * the console (see the gated publish below). */
     init_is_starting = (init_pid == 0 && !debug_shell_is_home);
 
     if (init_pid == 0) {
@@ -1351,10 +1353,11 @@ static void boot_init_process(void)
     init_argv[1] = NULL;
     exec_program(1, init_argv);
 
-    /* exec_program returned: /sbin/init is present but failed to load (a bad ELF,
-     * or out of memory). There is no init and no login shell, and falling to an
-     * unauthenticated debug shell would hide the failure, so halt. A genuinely
-     * init-less image (the test one) took the early return above instead. */
+    /* exec_program returned: /sbin/init is present but failed to load (a bad
+     * ELF, or out of memory). There is no init and no login shell, and falling
+     * to an unauthenticated debug shell would hide the failure, so halt. A
+     * genuinely init-less image (the test one) took the early return above
+     * instead. */
     k_puts("");
     k_puts("kernel panic: init failed to start");
     serial_printf("panic: %s present but failed to load; halting "
@@ -1498,8 +1501,8 @@ static int init_krffs_window(uint8_t *disk_base, uint32_t disk_size)
     _krffs_stub_size = disk_size;
     pc_set_backing(krffs_stub_read, krffs_stub_write, disk_size);
     if (init_krffs((void *) PCWIN_BASE, disk_size) != 0) {
-        /* Roll the backing back so a later fault cannot read stub data for a file
-           system that never mounted. */
+        /* Roll the backing back so a later fault cannot read stub data for a
+         * file system that never mounted. */
         pc_set_backing(0, 0, 0);
         _krffs_stub_base = 0;
         _krffs_stub_size = 0;
@@ -1511,8 +1514,9 @@ static int init_krffs_window(uint8_t *disk_base, uint32_t disk_size)
 /* The KRFFS partition on the real disk, sliced out of the whole-disk device. */
 static block_partition_t _krffs_disk_part;
 
-/* Set once KRFFS is mounted from a real disk, so the dirty-mount flag is managed
-   only on the persistent path (the RAM paths have no on-disk dirty state). */
+/* Set once KRFFS is mounted from a real disk, so the dirty-mount flag is
+ * managed only on the persistent path (the RAM paths have no on-disk dirty
+ * state). */
 static int _krffs_on_disk;
 
 /**
@@ -2568,8 +2572,9 @@ void shell_reset_input(void)
     stdin_waiting_proc = NULL;
     stdin_ready = false;
     stdin_pos = 0;
-    /* A launched program re-claims the terminal (exec_program sets sid/fg_pgid).
-     * One interrupts-off update so the timer-IRQ drain never sees a torn owner. */
+    /* A launched program re-claims the terminal (exec_program sets
+     * sid/fg_pgid). One interrupts-off update so the timer-IRQ drain never sees
+     * a torn owner. */
     tty_set_session(&console_tty, 0, 0);
 }
 
@@ -2670,10 +2675,11 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     /* Push the bump allocator past the modules so it does not overwrite their
      * data when it carves out page tables and other structures. The modules are
      * not guaranteed to be address-ordered, so take the highest end across all
-     * of them. A module that ends above the 32 MiB direct-mapped limit cannot be
-     * addressed or managed and would drive the reservation break past the limit,
-     * so fail the boot closed with a clear diagnostic rather than let init_paging
-     * corrupt low memory when its first reservation comes back empty. */
+     * of them. A module that ends above the 32 MiB direct-mapped limit cannot
+     * be addressed or managed and would drive the reservation break past the
+     * limit, so fail the boot closed with a clear diagnostic rather than let
+     * init_paging corrupt low memory when its first reservation comes back
+     * empty. */
     if (num_modules > 0) {
         static struct modlayout_range ranges[MAX_MODULES];
         uint32_t m;
@@ -2717,7 +2723,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     }
 
     /* Capture the kernel command line now, before paging remaps low memory and
-     * before the bump allocator can carve over the string the bootloader left. */
+     * before the bump allocator can carve over the string the bootloader left.
+     */
     if ((info->flags & MULTIBOOT_INFO_CMDLINE) && info->cmdline != 0) {
         kcmdline_capture((const char *)info->cmdline);
     }

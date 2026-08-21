@@ -3,11 +3,11 @@
 # tools/doctor.sh: Rach2 build/run toolchain preflight (run via `make doctor`).
 #
 # Reports each tool as PASS / MISSING / OPTIONAL with an install hint, and exits
-# non-zero if a REQUIRED tool is absent (or present but broken), so a student or a
-# fresh CI box sees a clear checklist instead of a cryptic failure mid-build.
+# non-zero if a REQUIRED tool is absent (or present but broken), so a student or
+# a fresh CI box sees a clear checklist instead of a cryptic failure mid-build.
 #
-# ASCII-only output: the convention gate (tools/check.sh) forbids non-ASCII bytes in
-# in-house files, so no checkmarks/Unicode here.
+# ASCII-only output: the convention gate (tools/check.sh) forbids non-ASCII
+# bytes in in-house files, so no checkmarks/Unicode here.
 #
 set -u
 
@@ -16,9 +16,9 @@ case "$(uname -s)" in
     *)      MAC=0 ;;
 esac
 
-# hint KEY: an OS-appropriate install suggestion. The i686-elf cross toolchain is
-# NOT a stock apt package on Linux, so its hint is spelled out rather than assuming
-# a package manager.
+# hint KEY: an OS-appropriate install suggestion. The i686-elf cross toolchain
+# is NOT a stock apt package on Linux, so its hint is spelled out rather than
+# assuming a package manager.
 hint() {
     case "$1" in
     cross)    [ "$MAC" = 1 ] && echo "brew install i686-elf-gcc" \
@@ -47,9 +47,9 @@ missing=0
 # row STATUS NAME DETAIL: one aligned line.
 row() { printf '  %-10s %-18s %s\n' "$1" "$2" "$3"; }
 
-# req NAME HINTKEY: a tool the build/run needs. It must both EXIST and RUN (a bare
-# `command -v` would PASS a broken Xcode shim that has no real Command Line Tools),
-# so it is probed with --version. Absence/breakage is a failure.
+# req NAME HINTKEY: a tool the build/run needs. It must both EXIST and RUN (a
+# bare `command -v` would PASS a broken Xcode shim that has no real Command Line
+# Tools), so it is probed with --version. Absence/breakage is a failure.
 req() {
     if command -v "$1" >/dev/null 2>&1 && "$1" --version >/dev/null 2>&1; then
         row "[PASS]" "$1" "$(command -v "$1")"

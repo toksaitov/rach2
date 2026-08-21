@@ -63,10 +63,11 @@ for t in tests/host/*_hosttest.c; do
     out="$VDIR/$base"
     # Name a missing dep here: passed on to the compiler it would surface as a
     # bare "no such file", which reads as a broken test. A dep under the
-    # extracted musl tree has one specific cause and one specific repair, and the
-    # repair names the stamp rather than `make deps`, because a copied worktree
-    # carries a stamp whose tree is gone and make reads that stamp as current. An
-    # in-house dep is a typo or a rename, so say only that it is missing.
+    # extracted musl tree has one specific cause and one specific repair, and
+    # the repair names the stamp rather than `make deps`, because a copied
+    # worktree carries a stamp whose tree is gone and make reads that stamp as
+    # current. An in-house dep is a typo or a rename, so say only that it is
+    # missing.
     missing=""
     missing_musl=""
     for d in $deps; do

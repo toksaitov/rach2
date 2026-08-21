@@ -256,8 +256,9 @@ void udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
 
     udp_len = (uint16_t)(UDP_HDR_SIZE + plen);
 
-    /* Build and transmit atomically: the shared TX buffers must not be re-entered
-     * by an IRQ-context sender (see the concurrency note in net.h). */
+    /* Build and transmit atomically: the shared TX buffers must not be
+     * re-entered by an IRQ-context sender (see the concurrency note in net.h).
+     */
     flags = net_lock();
 
     write16be(udp_tx_buf + 0, src_port);

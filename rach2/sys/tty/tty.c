@@ -15,9 +15,10 @@
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 
-/* Most serial bytes drained into the discipline per pump call, so a flood cannot
- * hold interrupts off (the drain runs under cli) for an unbounded stretch; a
- * caller that still has input loops and drains the rest on the next pass. */
+/* Most serial bytes drained into the discipline per pump call, so a flood
+ * cannot hold interrupts off (the drain runs under cli) for an unbounded
+ * stretch; a caller that still has input loops and drains the rest on the next
+ * pass. */
 #define TTY_PUMP_BUDGET 64
 
 /* The kernel termios is the 36-byte TCGETS/TCSETS ABI prefix (see n_tty.h). Pin
@@ -263,8 +264,8 @@ int tty_inq(struct tty *t)
     int n;
 
     /* Drain a polled source and read the count in one interrupts-off step: the
-     * drain (echo, queue updates) cannot then race an input IRQ, and the count is
-     * a consistent snapshot. */
+     * drain (echo, queue updates) cannot then race an input IRQ, and the count
+     * is a consistent snapshot. */
     flags = tty_irq_save();
     if (t->pump) {
         t->pump(t);
@@ -307,10 +308,10 @@ void tty_hangup(struct tty *t)
 {
     uint32_t flags;
 
-    /* Mark end-of-file at the current queue tail (so any already-cooked input is
-     * still read first, then reads return 0) and wake every parked reader/poller.
-     * A pty slave whose master has closed uses this so its blocked readers return
-     * EOF instead of hanging forever. */
+    /* Mark end-of-file at the current queue tail (so any already-cooked input
+     * is still read first, then reads return 0) and wake every parked
+     * reader/poller. A pty slave whose master has closed uses this so its
+     * blocked readers return EOF instead of hanging forever. */
     flags = tty_irq_save();
     t->ldisc.eof = 1;
     t->ldisc.eof_pos = t->ldisc.rq_tail;
@@ -321,8 +322,9 @@ void tty_hangup(struct tty *t)
 /* the system console: VGA screen + COM1 serial */
 
 /* Echo and output bytes go to both the screen and the serial line, so a serial
- * terminal mirrors what is on the VGA console. OPOST/ONLCR in the discipline has
- * already expanded '\n' to CR LF, which k_putc and serial_putc emit verbatim. */
+ * terminal mirrors what is on the VGA console. OPOST/ONLCR in the discipline
+ * has already expanded '\n' to CR LF, which k_putc and serial_putc emit
+ * verbatim. */
 static void console_sink(void *ctx, unsigned char c)
 {
     (void)ctx;
@@ -335,7 +337,8 @@ static void console_sink(void *ctx, unsigned char c)
  * where current_proc is the reader/poller, so an ISIG signal targets the right
  * process) from tty_ready_cond before each read-sleep and from tty_poll; the
  * timer only wakes a waiter so this drain happens here, not in the IRQ. Bounded
- * per call so a flood cannot hold interrupts off indefinitely; the caller loops. */
+ * per call so a flood cannot hold interrupts off indefinitely; the caller
+ * loops. */
 static void console_pump(struct tty *t)
 {
     int budget = TTY_PUMP_BUDGET;
@@ -351,12 +354,12 @@ static void console_pump(struct tty *t)
 
 /* The timer-IRQ drain: like console_pump but with echo SUPPRESSED. Echo runs
  * through serial_putc, which busy-waits on the UART transmit-holding register:
- * unacceptable in interrupt context, where a 64-byte burst could mask interrupts
- * for milliseconds. n_tty_receive still recognizes ISIG chars and queues
- * type-ahead independent of the (here null) sink, so a serial ^C/^Z reaches the
- * foreground group and ordinary bytes are queued un-echoed for the next reader;
- * the echoing drain (console_pump) runs only in thread context. Bounded by the
- * pump budget so a flood cannot hold the IRQ off. */
+ * unacceptable in interrupt context, where a 64-byte burst could mask
+ * interrupts for milliseconds. n_tty_receive still recognizes ISIG chars and
+ * queues type-ahead independent of the (here null) sink, so a serial ^C/^Z
+ * reaches the foreground group and ordinary bytes are queued un-echoed for the
+ * next reader; the echoing drain (console_pump) runs only in thread context.
+ * Bounded by the pump budget so a flood cannot hold the IRQ off. */
 static void console_pump_irq(struct tty *t)
 {
     int budget = TTY_PUMP_BUDGET;
@@ -402,11 +405,11 @@ void tty_console_poll(void)
     } else if (console_tty.sid != 0) {
         /* A session owns the console but nobody is parked reading it: a
          * foreground job is running while the shell waits in wait4. Drain here,
-         * echo suppressed (console_pump_irq avoids blocking serial TX in the IRQ),
-         * so a serial ^C/^Z still reaches the foreground group; type-ahead is
-         * queued un-echoed for the next reader. The shell releases the console
-         * (tty_set_session 0) when it regains control, so this never steals the
-         * kernel debug shell's own serial input. */
+         * echo suppressed (console_pump_irq avoids blocking serial TX in the
+         * IRQ), so a serial ^C/^Z still reaches the foreground group;
+         * type-ahead is queued un-echoed for the next reader. The shell
+         * releases the console (tty_set_session 0) when it regains control, so
+         * this never steals the kernel debug shell's own serial input. */
         console_pump_irq(&console_tty);
     }
 }

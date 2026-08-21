@@ -481,7 +481,8 @@ int netconf_set_gateway(uint32_t gw)
         net_ip_gateway = 0;
     } else if (net_ip_addr == 0 || net_ip_mask == 0) {
         /* A machine with no address has no subnet, and every address is on the
-           subnet of an all-zero mask, so the check below would take anything. */
+         * subnet of an all-zero mask, so the check below would take anything.
+         */
         rc = -EINVAL;
     } else if (!netconf_gateway_ok(gw, net_ip_addr, net_ip_mask)) {
         rc = -EINVAL;

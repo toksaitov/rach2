@@ -222,8 +222,8 @@ int main(int argc, char **argv)
 
         goto cleanup;  /* help requested: a success exit */
     } else if (argc <= 2 || failed_to_parse_options) {
-        /* A missing or unparseable argument must report failure, not exit 0 as if
-         * the edit succeeded; a calling script relies on the status. */
+        /* A missing or unparseable argument must report failure, not exit 0 as
+         * if the edit succeeded; a calling script relies on the status. */
         fprintf(
             stderr,
             "edfs.krffs: an option or its argument was missing or invalid\n"

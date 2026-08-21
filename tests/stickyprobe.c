@@ -130,7 +130,8 @@ typedef unsigned int u32;
 #define S_OTHOWN "/st_sticky/otherown"
 
 /* The same five fixtures in the non-sticky control, at the same modes and the
- * same owners: the four calls the sticky directory refuses must all work here. */
+ * same owners: the four calls the sticky directory refuses must all work here.
+ */
 #define P_VICTIM "/st_plain/victim"
 #define P_MOVER  "/st_plain/mover"
 #define P_MOVED  "/st_plain/moved"

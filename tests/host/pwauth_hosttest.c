@@ -336,8 +336,9 @@ int tcsetattr(int fd, int actions, const struct termios *modes)
     rc = ioctl(fd, how[actions], modes);
     /* After the modes are in force, not before. The window being entered is the
      * one between a restore taking effect and the flag that records it being
-     * cleared; a signal raised ahead of the `ioctl` would run while the terminal
-     * was still quiet, which is a different moment and not the one at issue. */
+     * cleared; a signal raised ahead of the `ioctl` would run while the
+     * terminal was still quiet, which is a different moment and not the one at
+     * issue. */
     if (Tcs_raise_at != 0 && Tcs_calls == Tcs_raise_at) {
         raise(Tcs_raise_sig);
     }
@@ -1629,9 +1630,9 @@ static void check_restore_reentry(const char *inject)
     } else if (strcmp(inject, "cont") == 0 && (int)answer != 2) {
         char said[128];
 
-        /* Two: the echo-off and the restore. A third would be the resume putting
-         * echo back off inside the dying process's restore, which is what
-         * disarming it before the restore exists to prevent. */
+        /* Two: the echo-off and the restore. A third would be the resume
+         * putting echo back off inside the dying process's restore, which is
+         * what disarming it before the restore exists to prevent. */
         snprintf(said, sizeof(said),
                  "a resume inside a restore touched the terminal (%d calls where two were due)",
                  (int)answer);
@@ -2717,7 +2718,8 @@ static void check_masked(void)
      * of them would then pass on a library that never gave the mask back;
      * assuming it empty would instead blame the library whenever a harness ran
      * this test with a signal already blocked. So it is captured once, in main,
-     * and a discrepancy on arrival is an earlier case's fault and is said so. */
+     * and a discrepancy on arrival is an earlier case's fault and is said so.
+     */
     caller = Start_mask;
     if (mask_changed(&caller) != 0) {
         fail("a case before this one left the signal mask altered");
@@ -3099,9 +3101,9 @@ int main(int argc, char **argv)
         return inherited.sa_handler == SIG_DFL ? 0 : 92;
     }
     /* Run as the helper of check_background_prompt: become the session leader
-     * that owns the terminal, then run the reader in a process group of its own,
-     * which is what a shell's `&` produces. The reader must leave the terminal
-     * alone and stop on SIGTTIN at its first read. */
+     * that owns the terminal, then run the reader in a process group of its
+     * own, which is what a shell's `&` produces. The reader must leave the
+     * terminal alone and stop on SIGTTIN at its first read. */
     if (argc > 2 && strcmp(argv[1], HELPER_BG) == 0) {
         struct termios seen;
         char answer[2];

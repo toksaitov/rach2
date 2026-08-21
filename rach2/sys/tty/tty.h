@@ -78,7 +78,8 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock);
 int tty_write(struct tty *t, const unsigned char *kbuf, int count);
 
 /* Install a new termios (TCSETS family). Done with interrupts off so an input
- * IRQ never reads a half-updated termios; flush_input also drops pending input. */
+ * IRQ never reads a half-updated termios; flush_input also drops pending input.
+ */
 void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input);
 
 /* poll(2) readiness: POLLIN when a read would not block, plus the writable bit;
@@ -86,7 +87,8 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input);
 short tty_poll(struct tty *t, short events, wait_queue_t **wq);
 
 /* FIONREAD: bytes a read would return now. Drains the polled source (serial)
- * first, interrupts off, so input already arrived is counted (matching tty_poll). */
+ * first, interrupts off, so input already arrived is counted (matching
+ * tty_poll). */
 int tty_inq(struct tty *t);
 
 /* TCFLSH / TCSETSF input flush: discard the cooked line under edit and every

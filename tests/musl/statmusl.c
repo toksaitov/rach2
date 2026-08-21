@@ -214,8 +214,8 @@ int main(void)
      * whether two synthetic nodes agree, so the value is computed here.
      *
      * On a machine whose clock could not be read this comes out at zero, and
-     * that is the documented fallback rather than a failure: the two clocks then
-     * report the same thing and the difference between them is nothing. */
+     * that is the documented fallback rather than a failure: the two clocks
+     * then report the same thing and the difference between them is nothing. */
     if (clock_gettime(CLOCK_REALTIME, &now) != 0 || clock_gettime(CLOCK_MONOTONIC, &uptime) != 0) {
         return fail("clock_gettime failed");
     }

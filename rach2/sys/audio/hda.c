@@ -697,8 +697,8 @@ static void hda_delay(int count)
 }
 
 /* Consecutive non-advancing WALCLK reads after which it is judged dead. A live
- * 24MHz clock changes between reads (one MMIO read is slower than a 41ns tick), so
- * this many identical reads means the wall clock is stuck. */
+ * 24MHz clock changes between reads (one MMIO read is slower than a 41ns tick),
+ * so this many identical reads means the wall clock is stuck. */
 #define HDA_WALCLK_STUCK_READS 100000u
 
 /**

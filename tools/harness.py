@@ -65,16 +65,16 @@ def main():
     ap.add_argument("--log", default=None)
     ap.add_argument("--no-debug-exit", action="store_true")
     # --ok PATTERN passes iff PATTERN appears in the serial output, regardless of
-    # the QEMU exit code. For a probe run in the debug shell (which returns to the
-    # shell rather than stopping QEMU via isa-debug-exit), the printed success
-    # token is the result.
+    # the QEMU exit code. For a probe run in the debug shell (which returns to
+    # the shell rather than stopping QEMU via isa-debug-exit), the printed
+    # success token is the result.
     ap.add_argument("--ok", default=None)
     ap.add_argument("steps", nargs="*")
     a = ap.parse_args()
 
     # -no-reboot so a triple-fault exits QEMU (the harness reads it as failure)
-    # rather than looping; NOT -no-shutdown, which would block the isa-debug-exit
-    # device from actually stopping the VM.
+    # rather than looping; NOT -no-shutdown, which would block the
+    # isa-debug-exit device from actually stopping the VM.
     cmd = ["qemu-system-i386", "-kernel", a.kernel,
            "-serial", "stdio", "-display", "none", "-no-reboot",
            "-netdev", a.net, "-device", a.device]
@@ -94,9 +94,9 @@ def main():
     for s in a.steps:
         if s.startswith("probe="):
             probe = s[len("probe="):]
-            # Wait for the kernel shell prompt (robust against boot jitter), exec
-            # the probe, then drain until the kernel's harness_exit stops QEMU
-            # (bounded by the global deadline).
+            # Wait for the kernel shell prompt (robust against boot jitter),
+            # exec the probe, then drain until the kernel's harness_exit stops
+            # QEMU (bounded by the global deadline).
             steps += ["expect=Type 'help'", "execq=" + probe]
         else:
             steps.append(s)
@@ -157,8 +157,8 @@ def main():
             pass
 
     # A step that does not do what it asked (an unseen expect= pattern, an exec=
-    # whose marker never appears, an unknown step) is a real failure: without this
-    # an --ok token matching coincidentally would turn a broken run green.
+    # whose marker never appears, an unknown step) is a real failure: without
+    # this an --ok token matching coincidentally would turn a broken run green.
     step_failures = 0
     for step in steps:
         if p.poll() is not None:
@@ -245,9 +245,10 @@ def main():
     # Decode the result from the kernel's SERIAL status print, not from QEMU's
     # exit code: the host truncates exit codes to 8 bits, so ((status<<1)|1)
     # aliases (e.g. status 128 -> host 1) and a QEMU launch error also yields 1;
-    # either would false-PASS. The serial line is the true, untruncated status and
-    # also proves the guest actually ran. The exit code is used only to confirm
-    # QEMU stopped via isa-debug-exit (an odd code) rather than hanging or crashing.
+    # either would false-PASS. The serial line is the true, untruncated status
+    # and also proves the guest actually ran. The exit code is used only to
+    # confirm QEMU stopped via isa-debug-exit (an odd code) rather than hanging
+    # or crashing.
     last = None
     for mm in re.finditer(rb"Process exited with status (-?\d+)", buf):
         last = mm

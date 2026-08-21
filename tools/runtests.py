@@ -53,10 +53,10 @@ PROBES = [
     "musl/permmusl",
     "musl/suidmusl",
     # After those three, because it rewrites files they read and puts them back.
-    # It is also the slowest probe here by a wide margin, and deliberately so: it
-    # waits out the credential lock's real retry budget twice and sleeps inside a
-    # held transaction once, which is why `make test` gives every step a window
-    # wide enough for it.
+    # It is also the slowest probe here by a wide margin, and deliberately so:
+    # it waits out the credential lock's real retry budget twice and sleeps
+    # inside a held transaction once, which is why `make test` gives every step
+    # a window wide enough for it.
     "musl/pwauthmusl",
     # After it, and for the same reasons doubled: it drives the shipped setuid
     # passwd, which takes the same lock and rewrites the same files, and it
@@ -93,11 +93,11 @@ PROBES = [
 # terminate_current_process the signal that killed the process.
 #
 # Matched from the start of the line through the whole kernel diagnostic, not on
-# the trailing phrase alone. A probe writes to the same serial console the kernel
-# does, so a pattern that accepts the suffix anywhere lets a probe print
-# "exited with status 0, returning to kernel shell" itself and be credited before
-# it then crashes or hangs. Requiring the component prefix and the pid keeps the
-# verdict the kernel's to give.
+# the trailing phrase alone. A probe writes to the same serial console the
+# kernel does, so a pattern that accepts the suffix anywhere lets a probe print
+# "exited with status 0, returning to kernel shell" itself and be credited
+# before it then crashes or hangs. Requiring the component prefix and the pid
+# keeps the verdict the kernel's to give.
 EXIT_RE = (r"^sys_exit: init process \d+ exited with status (-?\d+), "
            r"returning to kernel shell")
 KILL_RE = (r"^terminate: init process \d+ killed by signal (\d+), "
@@ -191,8 +191,8 @@ def main():
     # The step window is generous because only a failing probe ever waits it
     # out: a passing probe returns on its serial match, so the green path costs
     # nothing, and the overall --timeout still bounds a run full of hangs. A
-    # tight window read as speed was really a bet on the host: 8 s was calibrated
-    # on one machine and flaked on a slower one.
+    # tight window read as speed was really a bet on the host: 8 s was
+    # calibrated on one machine and flaked on a slower one.
     ap.add_argument("--timeout", type=float, default=180.0)
     ap.add_argument("--steptmo", type=float, default=20.0)
     # Boot-to-shell gets its own window: the whole self-test sequence runs
@@ -279,11 +279,12 @@ def main():
         # The probe runs AS the init process, and only its own exit returns the
         # kernel shell, so that marker bounds the window. Score the status the
         # marker itself carries: "Process exited with status N" is printed for
-        # EVERY process exit, a forked child's included, and neither the first nor
-        # the last of them is reliably the probe's own. A child that outlives its
-        # parent prints after it, and a probe that reaps a clean child and then dies
-        # on a signal prints no status of its own at all. The marker is on serial,
-        # so it survives a probe that left the console tty in raw mode (ttyprobe).
+        # EVERY process exit, a forked child's included, and neither the first
+        # nor the last of them is reliably the probe's own. A child that
+        # outlives its parent prints after it, and a probe that reaps a clean
+        # child and then dies on a signal prints no status of its own at all.
+        # The marker is on serial, so it survives a probe that left the console
+        # tty in raw mode (ttyprobe).
         m = expect(SHELL_RETURN)
         if m is None:
             results.append((name, "no shell return (hang?)", False))

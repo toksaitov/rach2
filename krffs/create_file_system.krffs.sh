@@ -13,8 +13,9 @@
 #
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# The host tools build out of tree to build/krffs/ (mk/build.mk); create the scratch
-# image there too, with the build/krffs mkfs, so nothing lands in the source tree.
+# The host tools build out of tree to build/krffs/ (mk/build.mk); create the
+# scratch image there too, with the build/krffs mkfs, so nothing lands in the
+# source tree.
 BUILD="$(cd "$SCRIPT_DIR/.." && pwd)/build/krffs"
 FILE_SYSTEM_FILE="$BUILD/file_system.krffs"
 BLOCK_SIZE="1048576"

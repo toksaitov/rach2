@@ -5,15 +5,16 @@
 #
 # Boots two images that differ only in the init they declare, neither staging
 # /bin/login, and then two boots of the real image: one that stops the login at
-# its prompt, which only init can undo, and one that proves the way back in. The strict one (init-login) must report that it cannot exec
-# /bin/login, must report it more than once, since once is a failure and not a
-# retry, and must never print uid=0. The permissive one (init-shell) must print
-# uid=0, and that half is what makes the strict half's silence mean something: a
-# strict image that failed to boot at all for an unrelated reason would
-# otherwise pass by printing nothing. `id` is a standalone-ash applet, so uid=0
-# at a console nobody authenticated at is an unauthenticated root shell and
-# nothing else. A third boot proves the way back into a broken image still
-# works: rach2.rescue must reach the kernel debug shell.
+# its prompt, which only init can undo, and one that proves the way back in. The
+# strict one (init-login) must report that it cannot exec /bin/login, must
+# report it more than once, since once is a failure and not a retry, and must
+# never print uid=0. The permissive one (init-shell) must print uid=0, and that
+# half is what makes the strict half's silence mean something: a strict image
+# that failed to boot at all for an unrelated reason would otherwise pass by
+# printing nothing. `id` is a standalone-ash applet, so uid=0 at a console
+# nobody authenticated at is an unauthenticated root shell and nothing else. A
+# third boot proves the way back into a broken image still works: rach2.rescue
+# must reach the kernel debug shell.
 #
 # The ENOENT case is the one that matters and the one an earlier draft never
 # reached, having tested a chmod 0000 /bin/login instead, which yields EACCES.

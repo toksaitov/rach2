@@ -418,10 +418,11 @@ void rtc_init(void)
         if (rtc_sample(&first) != 0 || rtc_sample(&second) != 0) {
             break;
         }
-        /* The uptime is taken with the sample and not before it. Interrupts
-         * are on here, and waiting out an update can cost a tick or two, so a
+        /* The uptime is taken with the sample and not before it. Interrupts are
+         * on here, and waiting out an update can cost a tick or two, so a
          * reading taken before the sampling would date the clock earlier than
-         * it was and put the machine that far ahead for the rest of the boot. */
+         * it was and put the machine that far ahead for the rest of the boot.
+         */
         uptime = kernel_uptime_seconds;
         disposition = rtc_pair_disposition(&first, &second);
         if (disposition == RTC_PAIR_STOP) {

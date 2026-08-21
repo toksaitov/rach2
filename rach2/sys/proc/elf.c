@@ -9,10 +9,11 @@
 #include "../serial.h"
 
 /* The user image window: a PT_LOAD segment must fit between the user/kernel
- * boundary and the bottom of the user stack (matching the kernel's user_access_ok
- * range). Segments outside it are rejected so a hostile ELF cannot request
- * kernel- or stack-range mappings. The floor is below the conventional ELF base
- * (a freestanding -Ttext=0x08048000 binary maps its header page at 0x08047000). */
+ * boundary and the bottom of the user stack (matching the kernel's
+ * user_access_ok range). Segments outside it are rejected so a hostile ELF
+ * cannot request kernel- or stack-range mappings. The floor is below the
+ * conventional ELF base (a freestanding -Ttext=0x08048000 binary maps its
+ * header page at 0x08047000). */
 #define ELF_USER_MIN 0x02000000u
 #define ELF_USER_MAX 0xBFFFF000u
 
@@ -151,8 +152,8 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
             continue;
         }
 
-        /* Reject a segment that runs past the image, rejecting the wrap first so
-         * a crafted p_offset cannot pass the bound by overflowing. */
+        /* Reject a segment that runs past the image, rejecting the wrap first
+         * so a crafted p_offset cannot pass the bound by overflowing. */
         if (phdr->p_offset + phdr->p_filesz < phdr->p_offset ||
             phdr->p_offset + phdr->p_filesz > size) {
             return -1;
@@ -264,10 +265,10 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
         const Elf32_Phdr *p = &phdrs[i];
 
         /* The WHOLE program header table, not just its first byte, must lie
-         * within one PT_LOAD, so AT_PHDR names a real, complete table the loader
-         * can read. The subtractions run only after the bounds that keep them
-         * from underflowing; `table_bytes` cannot overflow because `phnum` is
-         * already capped at ELF_MAX_PHNUM. */
+         * within one PT_LOAD, so AT_PHDR names a real, complete table the
+         * loader can read. The subtractions run only after the bounds that keep
+         * them from underflowing; `table_bytes` cannot overflow because `phnum`
+         * is already capped at ELF_MAX_PHNUM. */
         if (p->p_type == PT_LOAD && phoff >= p->p_offset &&
             p->p_filesz >= table_bytes &&
             phoff - p->p_offset <= p->p_filesz - table_bytes) {
@@ -346,8 +347,9 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
          * segments that overlap or precede an earlier one; valid static ELFs
          * have ascending, disjoint PT_LOADs. The overlap test is page-granular:
          * two PT_LOADs that merely share a page would have their common page
-         * allocated twice (leaking a frame and losing the first segment's bytes),
-         * so a segment must start on or after the previous one's page-aligned end. */
+         * allocated twice (leaking a frame and losing the first segment's
+         * bytes), so a segment must start on or after the previous one's
+         * page-aligned end. */
         if (vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
             return -1;
         }
@@ -360,12 +362,12 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
         prev_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
         nload++;
 
-        /* Record the page-aligned segment so exec can build a VMA for it with the
-         * right protection, and track the top of the image (the heap base). Every
-         * PT_LOAD must get a slot: an untracked segment would be loaded
-         * present+writable with no VMA, so a read-only segment past the cap would
-         * be silently writable. Reject rather than under-protect: the static
-         * binaries we target have only a few PT_LOADs. */
+        /* Record the page-aligned segment so exec can build a VMA for it with
+         * the right protection, and track the top of the image (the heap base).
+         * Every PT_LOAD must get a slot: an untracked segment would be loaded
+         * present+writable with no VMA, so a read-only segment past the cap
+         * would be silently writable. Reject rather than under-protect: the
+         * static binaries we target have only a few PT_LOADs. */
         {
             uint32_t seg_start = vaddr & ~(PAGE_SIZE - 1);
             uint32_t seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
@@ -428,12 +430,12 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     /* Apply real PTE permissions now that every segment's bytes are in place.
      * alloc_user_page mapped each page writable; a page covered only by
      * non-writable segments (text: read + execute) is now made read-only, so a
-     * user write to it faults as a protection violation, which the fault handler
-     * turns into a segfault and which copy-on-write keys on to tell a write fault
-     * from a demand fault. A page shared with any writable segment stays writable
-     * (writable wins), so a text/data boundary page is never wrongly protected.
-     * Only the recorded (capped) segments participate; an image with more
-     * PT_LOADs than slots simply leaves the rest writable. */
+     * user write to it faults as a protection violation, which the fault
+     * handler turns into a segfault and which copy-on-write keys on to tell a
+     * write fault from a demand fault. A page shared with any writable segment
+     * stays writable (writable wins), so a text/data boundary page is never
+     * wrongly protected. Only the recorded (capped) segments participate; an
+     * image with more PT_LOADs than slots simply leaves the rest writable. */
     {
         int si, sj;
 
@@ -462,8 +464,8 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     }
 
     /* A loadable image needs at least one PT_LOAD, its program headers must lie
-     * inside one (so AT_PHDR is real, which TLS setup depends on), and the entry
-     * point must be in the user window. */
+     * inside one (so AT_PHDR is real, which TLS setup depends on), and the
+     * entry point must be in the user window. */
     out->phdr_vaddr = elf_phdr_vaddr(phdrs, ehdr.e_phnum, ehdr.e_phoff);
     if (nload == 0 || out->phdr_vaddr == 0) {
         return -1;

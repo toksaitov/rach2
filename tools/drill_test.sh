@@ -375,9 +375,9 @@ esac
 # must come back to the image that was doing the repairing: the boot partition
 # is healthy, so nothing falls through to partition 3, and the ordinary kernel
 # cannot mount what is half written. So recovery can be the saved default too,
-# and this leaves it there before stopping the machine the way a power cut would.
-# The default to put back afterwards is whatever this machine had, which is not
-# always `candidate`: one on a network with no DHCP server runs from the
+# and this leaves it there before stopping the machine the way a power cut
+# would. The default to put back afterwards is whatever this machine had, which
+# is not always `candidate`: one on a network with no DHCP server runs from the
 # fixed-address entries, and restoring the wrong one would boot a kernel that
 # asks for a lease nobody answers. So it is read first, the way the instructions
 # say to.

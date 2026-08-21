@@ -482,8 +482,8 @@ static int check_change(void)
     if (status != 0) {
         char said[640];
 
-        /* The program's own line, not just the status: a refusal here has half a
-         * dozen causes and the message names which. */
+        /* The program's own line, not just the status: a refusal here has half
+         * a dozen causes and the message names which. */
         snprintf(said, sizeof(said), "passwd refused a correct old password (status %d, said: %s)",
                  status, report);
 
@@ -1231,9 +1231,9 @@ static int check_refusals(void)
         }
     }
 
-    /* A NUL is not a password byte: `strcmp` and `crypt` both stop there, so two
-     * entries differing only past it would confirm each other and the stored
-     * secret would be the prefix alone. */
+    /* A NUL is not a password byte: `strcmp` and `crypt` both stop there, so
+     * two entries differing only past it would confirm each other and the
+     * stored secret would be the prefix alone. */
     {
         char feed[256];
         size_t n = 0;
@@ -1384,9 +1384,9 @@ int main(void)
     }
     /* Two gates read this, and neither can be satisfied by the side the other
      * expects. The suite scores on the kernel's exit line, so the status is 0
-     * only on the trusted side and a fail-closed boot under `-cpu max` fails it.
-     * `make test-noentropy` matches a token and never reads the status, so the
-     * fail-closed side is named and exits non-zero. */
+     * only on the trusted side and a fail-closed boot under `-cpu max` fails
+     * it. `make test-noentropy` matches a token and never reads the status, so
+     * the fail-closed side is named and exits non-zero. */
     if (!trusted) {
         printf("PASSWDMUSL OK (fail-closed)\n");
 

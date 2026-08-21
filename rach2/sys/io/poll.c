@@ -80,10 +80,10 @@ static short fd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         return (short)(events & (POLLIN | POLLOUT));
     }
     if (e->type == FD_TYPE_CONSOLE) {
-        /* The console answers through its tty, but masked to what THIS descriptor
-         * can do: only a readable fd queries (and drains) input; only a writable
-         * fd reports POLLOUT. So poll(stdout, POLLOUT) never drains serial input
-         * or claims the console foreground. */
+        /* The console answers through its tty, but masked to what THIS
+         * descriptor can do: only a readable fd queries (and drains) input;
+         * only a writable fd reports POLLOUT. So poll(stdout, POLLOUT) never
+         * drains serial input or claims the console foreground. */
         short want = 0;
         if (e->flags & FD_FLAG_READ) {
             want = (short)(events & POLLIN);
@@ -175,12 +175,13 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
 
         /* Park on every polled object's wait queue, then yield. Done under the
          * same cli as the scan, so a readiness change cannot be lost. A finite
-         * timeout also arms the timer wake (the nanosleep mechanism): with another
-         * process runnable, schedule() switches away and never returns here on its
-         * own, and a poll on no ready queue (nfds == 0) or one whose objects never
-         * fire would otherwise sleep past its deadline forever. proc_wake_sleepers
-         * makes us READY at the deadline. A computed tick of 0 maps to 1, the
-         * value 0 being the "not sleeping" sentinel. */
+         * timeout also arms the timer wake (the nanosleep mechanism): with
+         * another process runnable, schedule() switches away and never returns
+         * here on its own, and a poll on no ready queue (nfds == 0) or one
+         * whose objects never fire would otherwise sleep past its deadline
+         * forever. proc_wake_sleepers makes us READY at the deadline. A
+         * computed tick of 0 maps to 1, the value 0 being the "not sleeping"
+         * sentinel. */
         for (i = 0; i < nfds; i++) {
             wq_poll_add(wqs[i], current_proc);
         }
@@ -207,7 +208,8 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
 
     /* On a break we still hold the loop's cli but may be enqueued (broke right
      * after a scan that ran before any sleep this iteration, in which case we
-     * never enqueued, so the removes are no-ops). Belt-and-suspenders dequeue. */
+     * never enqueued, so the removes are no-ops). Belt-and-suspenders dequeue.
+     */
     current_proc->wakeup_tick = 0; /* disarm the timer wake */
     for (i = 0; i < nfds; i++) {
         wq_poll_remove(wqs[i], current_proc);
@@ -311,8 +313,8 @@ static int32_t poll_common(uint32_t ufds, uint32_t nfds, int has_deadline, uint3
     if (nfds > POLL_MAX_FDS) {
         return -EINVAL; /* a process has at most MAX_FDS descriptors */
     }
-    /* nfds == 0 is valid: a pure sleep until the deadline (do_poll finds nothing
-     * ready, parks on no queues, and waits out the timeout). */
+    /* nfds == 0 is valid: a pure sleep until the deadline (do_poll finds
+     * nothing ready, parks on no queues, and waits out the timeout). */
     bytes = nfds * (uint32_t)sizeof(struct kernel_pollfd);
     if (nfds > 0 && copy_from_user(fds, (const void __user *)ufds, bytes) != 0) {
         return -EFAULT;
@@ -360,8 +362,8 @@ int32_t sys_ppoll(struct isr_params *params)
         deadline = ts_deadline(NULL, &has_deadline);
     }
     /* The sigmask argument (esi) is accepted but not applied: the kernel has no
-     * pending-mask swap primitive, and busybox/dropbear pass NULL or their normal
-     * mask here. Documented limitation. */
+     * pending-mask swap primitive, and busybox/dropbear pass NULL or their
+     * normal mask here. Documented limitation. */
     return poll_common(ufds, nfds, has_deadline, deadline);
 }
 
@@ -382,8 +384,8 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
         return -EINVAL; /* nfds is bounded by the fd_set width (FD_SETSIZE = 1024) */
     }
     /* A large nfds is fine as long as no bit is set for an fd the kernel cannot
-     * have: we scan the whole [0, nfds) range and only fail (below, -EBADF) if a
-     * selected bit names fd >= MAX_FDS, never a silent truncation. */
+     * have: we scan the whole [0, nfds) range and only fail (below, -EBADF) if
+     * a selected bit names fd >= MAX_FDS, never a silent truncation. */
     setbytes = (uint32_t)FDSET_WORDS * (uint32_t)sizeof(uint32_t);
 
     k_memset(rset, 0, setbytes);
@@ -410,10 +412,11 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
         return ready;
     }
 
-    /* select() fails wholesale if any selected fd is invalid. poll_scan flags such
-     * an fd POLLNVAL (an in-range bit whose descriptor was closed), which has no
-     * fd_set projection, so surface it as -EBADF; never a silent success. An
-     * invalid fd always makes the scan "ready", so this never masks a real block. */
+    /* select() fails wholesale if any selected fd is invalid. poll_scan flags
+     * such an fd POLLNVAL (an in-range bit whose descriptor was closed), which
+     * has no fd_set projection, so surface it as -EBADF; never a silent
+     * success. An invalid fd always makes the scan "ready", so this never masks
+     * a real block. */
     {
         int i;
         for (i = 0; i < npoll; i++) {
@@ -504,8 +507,8 @@ int32_t sys_pselect6(struct isr_params *params)
     int has_deadline;
     uint32_t deadline;
 
-    /* pselect6's 6th arg (the sigmask) is passed on the stack; like ppoll, it is
-     * accepted but not applied (documented). */
+    /* pselect6's 6th arg (the sigmask) is passed on the stack; like ppoll, it
+     * is accepted but not applied (documented). */
     if (uts) {
         if (copy_from_user(&ts, (const void __user *)uts, sizeof(ts)) != 0) {
             return -EFAULT;

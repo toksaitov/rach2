@@ -84,8 +84,9 @@ void tty_make_sole_ctty(struct tty *keep, int sid, int pgid);
  * NULL if e is not a pty slave. */
 struct tty *pty_slave_tty(struct fd_entry *e);
 
-/* The slave index N (in /dev/pts/N) behind a FD_TYPE_PTS descriptor, or -1 if e is
- * not a pty slave; lets /proc/<pid>/fd readlink and fstat report the right name. */
+/* The slave index N (in /dev/pts/N) behind a FD_TYPE_PTS descriptor, or -1 if e
+ * is not a pty slave; lets /proc/<pid>/fd readlink and fstat report the right
+ * name. */
 int pty_slave_index(struct fd_entry *e);
 
 /* Whether slot `index` is an allocated pty pair (for /dev/pts stat/getdents). */

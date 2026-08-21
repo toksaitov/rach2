@@ -42,8 +42,9 @@ static int tx_idx = 0;
 static uint8_t *rx_buf;
 static uint32_t rx_ptr = 0;
 
-/* Reason the most recent rtl8139_init() returned 0, surfaced via rtl8139_error()
- * for the boot banner. The success path prints nothing (see net_print_info). */
+/* Reason the most recent rtl8139_init() returned 0, surfaced via
+ * rtl8139_error() for the boot banner. The success path prints nothing (see
+ * net_print_info). */
 static const char *rtl_err = "no card";
 
 static void rtl8139_irq(isr_params_t *params);

@@ -313,7 +313,8 @@ static krffs_node_t *krffs_walk_x(krffs_file_system_t *fs, const char *path, int
             /* krffs_find_node_by_id cannot return the root (it owns reserved id
              * 0), so resolve a root parent to fs->node directly; otherwise ".."
              * back to the root would yield NULL. The continuing id is ROOT_ID so
-             * the root's children (parent_id == 0) still resolve after the "..". */
+             * the root's children (parent_id == 0) still resolve after the "..".
+             */
             uint64_t parent = node ? node->parent_id : (uint64_t)KRFFS_ROOT_ID;
             if (parent == (uint64_t)KRFFS_ROOT_ID) {
                 node = fs->node;
@@ -1406,8 +1407,9 @@ int krffs_mkdir(const char *path)
         return -1;
     }
 
-    /* A directory carries its name, the S_IFDIR mode, an empty body, and a unique
-     * id (mix of parent and name) that its children reference as their parent_id. */
+    /* A directory carries its name, the S_IFDIR mode, an empty body, and a
+     * unique id (mix of parent and name) that its children reference as their
+     * parent_id. */
     _krffs_strncpy((char *)node->name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     node->name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     node->parent_id = parent_id;
@@ -1548,7 +1550,8 @@ static int krffs_chain_is_valid(krffs_node_t *root, uint32_t size)
         }
         /* pos stays in [base, limit] (it starts at base and only advances by a
          * size already bounded below), so limit - pos never underflows. Compare
-         * by subtraction so a hostile 64-bit size cannot wrap pos past limit. */
+         * by subtraction so a hostile 64-bit size cannot wrap pos past limit.
+         */
         if (limit - pos < sizeof(krffs_node_t)) {
             return 0;
         }

@@ -49,9 +49,10 @@
 #define KSIG_IGN 1u /* ignore */
 
 /* sa_flags bits (Linux i386 values). The kernel honors SA_RESTORER, SA_NODEFER,
- * and SA_RESETHAND. SA_RESTART is accepted and round-trips through sigaction but
- * is NOT honored: an interrupted slow syscall always returns -EINTR rather than
- * restarting, so a handler must not rely on the kernel re-issuing the call. */
+ * and SA_RESETHAND. SA_RESTART is accepted and round-trips through sigaction
+ * but is NOT honored: an interrupted slow syscall always returns -EINTR rather
+ * than restarting, so a handler must not rely on the kernel re-issuing the
+ * call. */
 #define SA_SIGINFO   0x00000004u
 #define SA_RESTORER  0x04000000u
 #define SA_RESTART   0x10000000u

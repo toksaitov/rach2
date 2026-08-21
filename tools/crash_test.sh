@@ -3,15 +3,15 @@
 #
 # crash_test.sh: prove KRFFS's dirty-mount flag detects an unclean shutdown.
 #
-# Boots a disk-backed KRFFS three times against scratch copies. The first boot is
-# killed after the mount (which sets the dirty bit write-through to the disk),
-# simulating a crash; offline fsck must then report "not cleanly unmounted". The
-# second boot halts cleanly (clearing the bit); offline fsck must find it clean.
-# The third runs dirtyprobe, which attacks the root node with every operation
-# that could clear a mode bit, and the flag must survive: KRFFS_MODE_DIRTY and
-# KRFFS_MODE_SUID are the same bit, so a set-id clear that reached the root would
-# report an unclean image as cleanly unmounted. That claim needs a disk, since
-# the RAM mount never sets the flag.
+# Boots a disk-backed KRFFS three times against scratch copies. The first boot
+# is killed after the mount (which sets the dirty bit write-through to the
+# disk), simulating a crash; offline fsck must then report "not cleanly
+# unmounted". The second boot halts cleanly (clearing the bit); offline fsck
+# must find it clean. The third runs dirtyprobe, which attacks the root node
+# with every operation that could clear a mode bit, and the flag must survive:
+# KRFFS_MODE_DIRTY and KRFFS_MODE_SUID are the same bit, so a set-id clear that
+# reached the root would report an unclean image as cleanly unmounted. That
+# claim needs a disk, since the RAM mount never sets the flag.
 #
 # Usage: crash_test.sh <kernel> <disk> <fsck.krffs>
 #
@@ -21,10 +21,10 @@ set -e
 KERNEL="$1"
 DISK="$2"
 FSCK="$3"
-# The KRFFS partition geometry, which must match the disk the Makefile crash-test
-# target builds with `mkdisk.sh ... 64 48`: krffs/mkdisk.sh places the partition at
-# LBA 2048 (1 MiB) and sizes it at 48 MiB. fsck.krffs reads the partition at this
-# offset/size; a drift here silently misreads the dirty byte.
+# The KRFFS partition geometry, which must match the disk the Makefile
+# crash-test target builds with `mkdisk.sh ... 64 48`: krffs/mkdisk.sh places
+# the partition at LBA 2048 (1 MiB) and sizes it at 48 MiB. fsck.krffs reads the
+# partition at this offset/size; a drift here silently misreads the dirty byte.
 OFFSET=$((2048 * 512))
 SIZE=$((48 * 1024 * 1024))
 
@@ -45,11 +45,11 @@ cp "$DISK" "$OFF"
 # run's logs, and each holds the token its phase waits for; the redirect that
 # would truncate one is performed by the backgrounded child, which the parent's
 # grep is not ordered after. The clean phase is the one that would then lie: a
-# stale halt token ends its wait before the boot, and its fresh copy of the image
-# is clean, so the fsck below agrees. The window is narrow (the parent's grep
-# costs a fork and an exec while the child's truncate costs an open, and it was
-# not won in 600 trials of both background forms used here), which is a reason to
-# spend one line closing it rather than a reason to argue about it.
+# stale halt token ends its wait before the boot, and its fresh copy of the
+# image is clean, so the fsck below agrees. The window is narrow (the parent's
+# grep costs a fork and an exec while the child's truncate costs an open, and it
+# was not won in 600 trials of both background forms used here), which is a
+# reason to spend one line closing it rather than a reason to argue about it.
 rm -f "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"
 
 QPID=""

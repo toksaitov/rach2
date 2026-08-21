@@ -252,9 +252,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         case FD_TYPE_DIR:
             if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
                 char path[256]; /* the same path capacity the syscall layer uses */
-                /* Reconstruct the path only from a node still live and reachable;
-                 * a stale fd (its node unlinked or relocated) would otherwise
-                 * parse freed free-list bytes into the link target. */
+                /* Reconstruct the path only from a node still live and
+                 * reachable; a stale fd (its node unlinked or relocated) would
+                 * otherwise parse freed free-list bytes into the link target.
+                 */
                 if (krffs_node_path(e->node, path, sizeof(path)) == 0 &&
                     krffs_resolve(path) == e->node) {
                     ap_str(buf, cap, &len, path); /* the full absolute path */

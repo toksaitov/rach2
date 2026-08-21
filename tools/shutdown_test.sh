@@ -112,10 +112,11 @@ require_clean_halt() {
 
 # Start a boot on the working image, with $1 as the shell line typed at the
 # console. The copy is a separate step, because the phase that reads a file back
-# has to boot the image the previous phase WROTE, not a pristine one. The fixture's init drops straight to a root shell, so there is no
-# login to get past. Set EXTRA_QEMU beforehand for a flag a phase needs; it is
-# deliberately unquoted, and empty by default, because a quoted empty expansion
-# would hand QEMU an empty argument and QEMU refuses one.
+# has to boot the image the previous phase WROTE, not a pristine one. The
+# fixture's init drops straight to a root shell, so there is no login to get
+# past. Set EXTRA_QEMU beforehand for a flag a phase needs; it is deliberately
+# unquoted, and empty by default, because a quoted empty expansion would hand
+# QEMU an empty argument and QEMU refuses one.
 EXTRA_QEMU=""
 fresh_image() {
     rm -f "$WORK"

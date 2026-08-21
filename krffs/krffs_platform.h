@@ -84,7 +84,8 @@ void krffs_get_time_of_day(struct timeval *time_of_day);
 #define KRFFS_REGION_ALIGN (1024 * 1024)
 
 /* The largest KRFFS region: its size is stored in a uint32_t, so it must stay
- * under 4 GiB. Capped at 4095 MiB to leave the value clear of the 32-bit edge. */
+ * under 4 GiB. Capped at 4095 MiB to leave the value clear of the 32-bit edge.
+ */
 #define KRFFS_MAX_REGION_SIZE (4095u * 1024u * 1024u)
 
 /**

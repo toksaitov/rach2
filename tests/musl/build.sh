@@ -4,10 +4,11 @@
 # Build the musl-linked test programs in this directory.
 #
 # These differ from the freestanding probes in tests/: they are ordinary hosted
-# C programs linked statically against the ported musl (see vendor/musl/build_libc.sh).
-# Each <name>.c here becomes a guest binary build/tests/musl/<name> (out of tree, like
-# every other component), staged into the test image under /musl by its manifest (so
-# /musl/hello, /musl/mallocqsort, ...). `make musl-programs` runs this.
+# C programs linked statically against the ported musl (see
+# vendor/musl/build_libc.sh). Each <name>.c here becomes a guest binary
+# build/tests/musl/<name> (out of tree, like every other component), staged into
+# the test image under /musl by its manifest (so /musl/hello, /musl/mallocqsort,
+# ...). `make musl-programs` runs this.
 #
 # A program that must link a source from elsewhere in the tree names it in a
 # "link-deps:" comment, the convention tools/hosttest.sh parses for the host

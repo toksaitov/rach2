@@ -59,8 +59,8 @@ static int comp_eq(struct comp c, const char *lit)
     return lit[c.len] == '\0';
 }
 
-/* Parse a non-negative decimal from a component; -1 if empty or non-digit, or if
- * it overflows a sane bound (so a giant /proc/<n> cannot wrap). */
+/* Parse a non-negative decimal from a component; -1 if empty or non-digit, or
+ * if it overflows a sane bound (so a giant /proc/<n> cannot wrap). */
 static int comp_uint(struct comp c)
 {
     int v = 0;

@@ -171,11 +171,12 @@ int vm_grow_stack(vm_space_t *vm, uint32_t page)
         /* The faulting page must sit just below the stack region (which grows
          * down) and stay at or above the limit set when the stack was created.
          * Extending start covers every page from here up to the old start; the
-         * intervening pages fault in lazily as the stack is actually touched. */
+         * intervening pages fault in lazily as the stack is actually touched.
+         */
         if (r->type == VM_STACK && page < r->start && page >= vm->stack_limit) {
-            /* The new span [page, r->start) must be clear of every other region:
-             * a (possibly hostile) ELF segment or mmap inside the growth window
-             * must not be swallowed by the stack. */
+            /* The new span [page, r->start) must be clear of every other
+             * region: a (possibly hostile) ELF segment or mmap inside the
+             * growth window must not be swallowed by the stack. */
             for (j = 0; j < vm->count; j++) {
                 if (j != i && page < vm->vmas[j].end &&
                     r->start > vm->vmas[j].start) {

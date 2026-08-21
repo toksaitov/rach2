@@ -28,10 +28,11 @@
 # told apart by the marker with no login (the banner prints before one).
 #
 # The feeder paces on log patterns with occurrence counts, because a reboot
-# brings a second "login:" a plain grep would match the first of; assertions over the log are made post-hoc on token byte offsets,
-# each boot's claims checked only inside its own interval. Docker is required
-# (the disk is assembled in a container): its absence fails the run, because
-# this harness is the milestone's proof, not an optional half.
+# brings a second "login:" a plain grep would match the first of; assertions
+# over the log are made post-hoc on token byte offsets, each boot's claims
+# checked only inside its own interval. Docker is required (the disk is
+# assembled in a container): its absence fails the run, because this harness is
+# the milestone's proof, not an optional half.
 #
 # Usage: install_test.sh <grub-disk> <root password>
 #

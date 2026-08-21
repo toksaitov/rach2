@@ -25,7 +25,8 @@
 # Every line is sent only after the previous one has finished. The console's
 # line discipline holds a bounded amount of unread input, and a build takes
 # seconds to minutes, so a feed on a fixed timer silently loses commands on a
-# slow host. Each command ends by printing a marker, and the feeder waits for it.
+# slow host. Each command ends by printing a marker, and the feeder waits for
+# it.
 #
 # Two traps this repo has already paid for, and which every line here obeys: the
 # console echoes what is typed, so a token that appears in a command would be

@@ -51,7 +51,8 @@ PROVIDED_BY_THE_LINKER = (
 )
 
 # Members no ordinary link pulls in, so what they reference is not owed. See the
-# header: this one is the bounds-checking alloca, and `-b` is not available here.
+# header: this one is the bounds-checking alloca, and `-b` is not available
+# here.
 UNREACHED_MEMBERS = ("alloca86-bt.o", "alloca86_64-bt.o")
 
 

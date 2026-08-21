@@ -26,8 +26,9 @@ static int alloc_reached;
         }              \
     } while (0)
 
-/* The kernel seam elf.c links against; only alloc_user_page is reached, and only
-   once an image has passed validation (which is exactly what it records). */
+/* The kernel seam elf.c links against; only alloc_user_page is reached, and
+ * only once an image has passed validation (which is exactly what it records).
+ */
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 {
     (void)dir;

@@ -225,10 +225,11 @@ int main(void)
         CHECK(get_bit(r2, 0) && get_bit(r2, 31) && get_bit(r2, 32));
     }
 
-    /* pollfd_select_ready is the per-fd form of the projection rule, so the poll
-     * core's readiness test agrees with what pollfds_to_fdsets scatters. The crux
-     * case: a write- or except-only fd reporting only POLLHUP is NOT ready (so
-     * select blocks rather than returning 0 with empty sets and busy-spinning). */
+    /* pollfd_select_ready is the per-fd form of the projection rule, so the
+     * poll core's readiness test agrees with what pollfds_to_fdsets scatters.
+     * The crux case: a write- or except-only fd reporting only POLLHUP is NOT
+     * ready (so select blocks rather than returning 0 with empty sets and
+     * busy-spinning). */
     CHECK(pollfd_select_ready(POLLOUT, POLLHUP) == 0); /* HUP does not satisfy write */
     CHECK(pollfd_select_ready(POLLPRI, POLLHUP) == 0); /* nor except */
     CHECK(pollfd_select_ready(POLLIN, POLLHUP) != 0);  /* but HUP reads as readable */

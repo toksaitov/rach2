@@ -304,10 +304,10 @@ static void tcp_retransmit(struct tcb *tcb)
     uint16_t seg_len;
 
     /* Bound by the SENT-but-unacknowledged data, [send_ack, send_head): not
-     * snd_nxt - snd_una (which also counts an outstanding FIN's sequence) and not
-     * send_tail - send_ack (which also counts queued-but-unsent data past snd_nxt).
-     * Either would transmit bytes the peer could ACK beyond snd_nxt, wedging the
-     * stream. */
+     * snd_nxt - snd_una (which also counts an outstanding FIN's sequence) and
+     * not send_tail - send_ack (which also counts queued-but-unsent data past
+     * snd_nxt). Either would transmit bytes the peer could ACK beyond snd_nxt,
+     * wedging the stream. */
     data_len = tcb->send_head - tcb->send_ack;
     if (data_len == 0) {
         return;
@@ -935,16 +935,17 @@ int tcp_is_connected(struct socket *sock)
     if (!sock || sock->type != SOCK_STREAM || sock->listening) {
         return 0;
     }
-    /* Snapshot the TCB pointer once (an IRQ-side tcp_close detaches it by NULLing
-     * sock->tcb); re-reading sock->tcb after the NULL check could deref NULL. This
-     * is the same access discipline as socket_tcp_recv. */
+    /* Snapshot the TCB pointer once (an IRQ-side tcp_close detaches it by
+     * NULLing sock->tcb); re-reading sock->tcb after the NULL check could deref
+     * NULL. This is the same access discipline as socket_tcp_recv. */
     tcb = sock->tcb;
     if (!tcb) {
         return 0;
     }
     /* A peer exists from ESTABLISHED through every closing state; the handshake
-     * states (SYN_SENT/RCVD), LISTEN, and CLOSED have no peer to name. The state
-     * enum is ordered so ESTABLISHED and later compare >= TCP_ESTABLISHED. */
+     * states (SYN_SENT/RCVD), LISTEN, and CLOSED have no peer to name. The
+     * state enum is ordered so ESTABLISHED and later compare >=
+     * TCP_ESTABLISHED. */
     return tcb->state >= TCP_ESTABLISHED;
 }
 
@@ -1131,8 +1132,9 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
         default:
             serial_printf("TCP: reset, connection closed\n");
-            /* A reset during the active open is a refused connect; later it is a
-             * reset connection. Either is surfaced by SO_ERROR and POLLERR. */
+            /* A reset during the active open is a refused connect; later it is
+             * a reset connection. Either is surfaced by SO_ERROR and POLLERR.
+             */
             tcb->so_error   = (tcb->state == TCP_SYN_SENT) ? ECONNREFUSED : ECONNRESET;
             tcb->state      = TCP_CLOSED;
             tcb->retx_flags = 0;
@@ -1293,9 +1295,10 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             }
         }
 
-        /* Deliver in-order data; a gap is dropped but still acknowledged so
-         * the sender retransmits. Only the bytes that fit the recv ring advance
-         * rcv_nxt, so a truncated tail is not acknowledged and is retransmitted. */
+        /* Deliver in-order data; a gap is dropped but still acknowledged so the
+         * sender retransmits. Only the bytes that fit the recv ring advance
+         * rcv_nxt, so a truncated tail is not acknowledged and is
+         * retransmitted. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
                 tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
@@ -1304,17 +1307,18 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
 
         /* A FIN is honored only in order and only once. seq + payload_len ==
-         * rcv_nxt holds only when the whole payload was accepted, so a FIN riding
-         * a truncated segment does not signal EOF before its data is delivered. */
+         * rcv_nxt holds only when the whole payload was accepted, so a FIN
+         * riding a truncated segment does not signal EOF before its data is
+         * delivered. */
         if ((flags & TCP_FIN) && !tcb->fin_received &&
             seq + payload_len == tcb->rcv_nxt) {
             tcb->rcv_nxt++;
             tcb->fin_received = 1;
-            /* The ACK handling above may have already drained a close's queued data
-             * and let tcp_pump send our own FIN, moving us to FIN_WAIT_1 within this
-             * same segment; the peer's FIN then completes a simultaneous close into
-             * CLOSING, not CLOSE_WAIT, so the later ACK of our FIN is handled in the
-             * state that expects it. */
+            /* The ACK handling above may have already drained a close's queued
+             * data and let tcp_pump send our own FIN, moving us to FIN_WAIT_1
+             * within this same segment; the peer's FIN then completes a
+             * simultaneous close into CLOSING, not CLOSE_WAIT, so the later ACK
+             * of our FIN is handled in the state that expects it. */
             tcb->state = (tcb->state == TCP_FIN_WAIT_1) ? TCP_CLOSING
                                                         : TCP_CLOSE_WAIT;
             socket_tcp_fin(tcb->sock);
@@ -1335,10 +1339,11 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         const uint8_t *payload     = data + hdr_len;
         int            needs_ack   = 0;
 
-        /* Accept only an ACK within the window (snd_una < ack <= snd_nxt); a higher
-         * ack_num would push snd_una past the transmit high-water mark. Advance
-         * send_ack by the acknowledged DATA only (capped at the ring's sent bytes),
-         * so a lost FIN does not leave RTO retransmitting already-acked data. */
+        /* Accept only an ACK within the window (snd_una < ack <= snd_nxt); a
+         * higher ack_num would push snd_una past the transmit high-water mark.
+         * Advance send_ack by the acknowledged DATA only (capped at the ring's
+         * sent bytes), so a lost FIN does not leave RTO retransmitting
+         * already-acked data. */
         if ((flags & TCP_ACK) &&
             (int32_t)(ack_num - tcb->snd_una) > 0 &&
             (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
@@ -1354,8 +1359,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         /* The peer may keep sending after our close. The application is usually
          * gone by now (close detached tcb->sock), so accept and discard its
          * in-order data, advancing rcv_nxt to acknowledge it so the peer stops
-         * retransmitting and the FIN below is consumed in order; a still-attached
-         * socket gets it delivered. */
+         * retransmitting and the FIN below is consumed in order; a
+         * still-attached socket gets it delivered. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
                 tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
@@ -1363,8 +1368,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             needs_ack = 1;
         }
 
-        /* Consume the peer's FIN only in order; a duplicate or early FIN is just
-         * re-acknowledged so the peer stops retransmitting it. */
+        /* Consume the peer's FIN only in order; a duplicate or early FIN is
+         * just re-acknowledged so the peer stops retransmitting it. */
         if (flags & TCP_FIN) {
             if (seq + payload_len == tcb->rcv_nxt) {
                 tcb->rcv_nxt++;
@@ -1391,9 +1396,9 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         const uint8_t *payload     = data + hdr_len;
         int            needs_ack   = 0;
 
-        /* As in FIN_WAIT_1, the application is usually gone, so accept and discard
-         * in-order data (advancing rcv_nxt to acknowledge it); a still-attached
-         * socket gets it delivered. */
+        /* As in FIN_WAIT_1, the application is usually gone, so accept and
+         * discard in-order data (advancing rcv_nxt to acknowledge it); a
+         * still-attached socket gets it delivered. */
         if (payload_len > 0) {
             if (seq == tcb->rcv_nxt) {
                 tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
@@ -1471,8 +1476,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
     case TCP_TIME_WAIT:
         if (flags & TCP_FIN) {
-            /* The peer retransmits its FIN because our ACK of it was lost; re-ACK
-             * and restart the 2MSL quarantine. */
+            /* The peer retransmits its FIN because our ACK of it was lost;
+             * re-ACK and restart the 2MSL quarantine. */
             tcp_send_flags(tcb, TCP_ACK);
             tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
         }

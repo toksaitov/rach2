@@ -24,8 +24,9 @@ static uint32_t cc_state[16] = {
 static uint32_t cc_out[16];     /* current keystream block */
 static uint32_t cc_byte_pos = 64; /* byte cursor into cc_out (64 == exhausted) */
 
-/* The entropy source the last krandom_seed() used (KRANDOM_SRC_*); the fail-closed
- * policy reads it. Starts at JITTER so a draw before seeding is never "trusted". */
+/* The entropy source the last krandom_seed() used (KRANDOM_SRC_*); the
+ * fail-closed policy reads it. Starts at JITTER so a draw before seeding is
+ * never "trusted". */
 static int cc_src = KRANDOM_SRC_JITTER;
 
 #define ROTL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))

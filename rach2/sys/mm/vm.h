@@ -91,8 +91,8 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
 /** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no slot. */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end);
 
-/** Grow the stack VMA down to cover 'page' (page-aligned; the fault handler floors
- *  the fault address); 1 if grown, 0 if not. */
+/** Grow the stack VMA down to cover 'page' (page-aligned; the fault handler
+ * floors the fault address); 1 if grown, 0 if not. */
 int vm_grow_stack(vm_space_t *vm, uint32_t page);
 
 #endif /* _VM_H_ */

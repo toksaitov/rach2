@@ -70,7 +70,8 @@ fi
 # Set RACH2_ROOT_PASSWORD or RACH2_TEST_PASSWORD to override, and use a random
 # token for either if this machine is somewhere a demo account matters:
 #
-#     RACH2_ROOT_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)"
+# RACH2_ROOT_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c
+# 20)"
 #
 # Those take effect on a tree that has no credentials yet. To replace ones that
 # are already there, which is what a machine going onto a real network needs,
@@ -89,8 +90,9 @@ random_token() {
 
 # Mint account $1's password $3 into credential file $2 and append the shadow
 # line to shadow.tmp. The password never reaches mkhash's argument list: it is
-# read from stdin, so it stays out of the process table. The credential file is removed first so it is recreated
-# fresh under the 077 umask, never rewritten through a stale loose mode.
+# read from stdin, so it stays out of the process table. The credential file is
+# removed first so it is recreated fresh under the 077 umask, never rewritten
+# through a stale loose mode.
 mint() {
     user="$1"
     file="$2"

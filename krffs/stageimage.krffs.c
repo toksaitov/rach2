@@ -485,8 +485,9 @@ static bool stage_file(
         return false;
     }
 
-    /* Each image is built fresh, so a name that already exists means the manifest
-       stages the same path twice; that is an authoring error, not an update. */
+    /* Each image is built fresh, so a name that already exists means the
+     * manifest stages the same path twice; that is an authoring error, not an
+     * update. */
     if (find_child(file_system, dir_id, name) != NULL) {
         fprintf(stderr, "stageimage: '%s' is staged more than once.\n", path);
 
@@ -682,8 +683,8 @@ static bool stage_exec_dir(
                 false;
             break;
         }
-        /* lstat, not stat, so a symlink is left out: only a real regular file with
-           an execute bit (the built binaries are 0755) is staged. */
+        /* lstat, not stat, so a symlink is left out: only a real regular file
+         * with an execute bit (the built binaries are 0755) is staged. */
         if (lstat(hostpath, &st) != 0 || !S_ISREG(st.st_mode) ||
             !(st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
             continue;

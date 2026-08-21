@@ -48,13 +48,15 @@ hr() { printf -- '---- %s ----\n' "$*"; }
 inhouse_ch()
 {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
-    # vendor/musl/ holds only the vendored musl tree (install/, musl-*/) plus any
-    # future in-house shim; prune the vendored parts so they are never checked.
+    # vendor/musl/ holds only the vendored musl tree (install/, musl-*/) plus
+    # any future in-house shim; prune the vendored parts so they are never
+    # checked.
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     # The other hand-written programs: the krffs host tools (minus the vendored
     # termbox2 and vs-dokany), the utils, the ish shell, and every test (the
-    # probes, the vm family, the musl integration tests, and the host seam tests).
+    # probes, the vm family, the musl integration tests, and the host seam
+    # tests).
     find krffs utils ish tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
          -o \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
 }
@@ -62,12 +64,12 @@ inhouse_ch()
 # New code the port introduces; must be clang-format clean (unlike the legacy
 # tree, which we never reformat).
 #
-# The globs do not reach tests/musl/ or utils/, and must not be widened to: those
-# are legacy trees the gate deliberately leaves unformatted, and a wholesale
-# extension fails today on files nobody is asking to reformat. So a new source
-# under either is listed here BY NAME, in the commit that creates it. Adding the
-# file without adding it here leaves it ungated, which is the failure this comment
-# exists to prevent.
+# The globs do not reach tests/musl/ or utils/, and must not be widened to:
+# those are legacy trees the gate deliberately leaves unformatted, and a
+# wholesale extension fails today on files nobody is asking to reformat. So a
+# new source under either is listed here BY NAME, in the commit that creates it.
+# Adding the file without adding it here leaves it ungated, which is the failure
+# this comment exists to prevent.
 newcode_ch()
 {
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
@@ -173,7 +175,7 @@ done
 if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 
 # 5. clang-format. HARD on new-code dirs + named args; advisory on the legacy
-#    tree. Uses --Werror so a real run failure is a real failure (not a 0 count).
+# tree. Uses --Werror so a real run failure is a real failure (not a 0 count).
 hr "5/13 clang-format"
 strict_fail=0
 # shellcheck disable=SC2046
@@ -231,8 +233,9 @@ else
     echo "  FAIL: see $VDIR/verify_sources.log"; fail=1
 fi
 
-# Text style: the mechanical natural-text checks (tools/textcheck.sh). It catches
-# non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house tree.
+# Text style: the mechanical natural-text checks (tools/textcheck.sh). It
+# catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
+# tree.
 hr "8/13 text style"
 if "$REPO/tools/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS"
@@ -252,14 +255,15 @@ else
     echo "  FAIL: see $VDIR/verify_score.log"; fail=1
 fi
 
-# Every set-id line in every image manifest, against the per-image allowlist. This
-# half reads sources only, so it belongs in the source gate; the image inventory
-# that reads a built artifact runs from mkimage.sh and mkdisk.sh instead.
+# Every set-id line in every image manifest, against the per-image allowlist.
+# This half reads sources only, so it belongs in the source gate; the image
+# inventory that reads a built artifact runs from mkimage.sh and mkdisk.sh
+# instead.
 hr "10/13 set-id guard (selftest + manifest sweep)"
 setid=0
-# The self-test first: it covers the failure cases no current manifest exercises,
-# so without it a regression in, say, the image walk or the path decoding would
-# leave every real manifest passing and the gate green.
+# The self-test first: it covers the failure cases no current manifest
+# exercises, so without it a regression in, say, the image walk or the path
+# decoding would leave every real manifest passing and the gate green.
 python3 "$REPO/tools/check_setid.py" --selftest >"$VDIR/verify_setid.log" 2>&1 || setid=1
 python3 "$REPO/tools/check_setid.py" >>"$VDIR/verify_setid.log" 2>&1 || setid=1
 if [ "$setid" -eq 0 ]; then

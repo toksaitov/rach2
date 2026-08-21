@@ -404,10 +404,10 @@ int main(void)
         int status;
         pid_t reaped;
 
-        /* Keep a login shell running. If the fork failed (a full process table),
-         * back off a second before retrying rather than spin: wait() returns
-         * immediately with ECHILD while init has no children, so retrying without
-         * a pause would peg the CPU. */
+        /* Keep a login shell running. If the fork failed (a full process
+         * table), back off a second before retrying rather than spin: wait()
+         * returns immediately with ECHILD while init has no children, so
+         * retrying without a pause would peg the CPU. */
         if (shell < 0) {
             shell = spawn_shell();
             if (shell < 0) {

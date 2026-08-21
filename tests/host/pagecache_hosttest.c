@@ -149,8 +149,8 @@ int main(void)
         CHECK(fake_writes[p] == 0);
     }
 
-    /* pc_sync writes back a dirty page and re-protects it, so a second sync with
-       no new write does nothing. */
+    /* pc_sync writes back a dirty page and re-protects it, so a second sync
+     * with no new write does nothing. */
     touch(40, 1, 0xBBu);
     pc_sync();
     CHECK(fake_writes[40] == 1);

@@ -200,7 +200,8 @@ static int pc_evict(uint32_t slot)
     }
     pc_platform_unmap(PCWIN_BASE + e->disk_off);
     /* Clear valid before removing from the hash: pc_hash_remove may rebuild the
-       table, which scans the valid slots, and must not re-insert this victim. */
+     * table, which scans the valid slots, and must not re-insert this victim.
+     */
     e->valid = 0;
     pc_hash_remove(e->disk_off);
     ++pc_evicts;
@@ -368,7 +369,8 @@ int pc_set_capacity(uint32_t slots)
         if (pc_slots[i].valid && pc_evict(i) != 0) {
             /* The writeback failed, so this slot is still dirty. Note it: the
              * capacity must keep covering it, or the reclaim scan would never
-             * revisit it and its dirty page would be stranded above capacity. */
+             * revisit it and its dirty page would be stranded above capacity.
+             */
             stuck = i + 1;
             rc = -1;
         }

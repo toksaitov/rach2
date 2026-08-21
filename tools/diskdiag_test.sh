@@ -24,7 +24,8 @@
 #
 # The third is absence: the same kernel with no drive at all.
 #
-# Usage: diskdiag_test.sh <read-write kernel> <read-only kernel> <metal image> [port]
+# Usage: diskdiag_test.sh <read-write kernel> <read-only kernel> <metal image>
+# [port]
 #
 
 set -e

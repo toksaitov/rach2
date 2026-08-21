@@ -289,9 +289,10 @@ int main(int argc, char **argv)
     }
     file_descriptor = -1;
 
-    /* Validate the file system before walking it: without a correct signature and
-     * root node the node-size fields are garbage, and the chain walk below would
-     * follow them out of the mapping. The size check guards the magic read itself. */
+    /* Validate the file system before walking it: without a correct signature
+     * and root node the node-size fields are garbage, and the chain walk below
+     * would follow them out of the mapping. The size check guards the magic
+     * read itself. */
     if (file_system.size < sizeof(struct krffs_node) ||
             file_system.node->magic != KRFFS_File_System_Magic ||
             file_system.node->type != KRFFS_Root_Node) {

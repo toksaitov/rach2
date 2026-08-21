@@ -841,7 +841,8 @@ void _start(void)
     }
 
     /* Routes. A default route sets the gateway; one off the subnet is not a
-       gateway; a route this stack cannot hold is refused rather than forgotten. */
+     * gateway; a route this stack cannot hold is refused rather than forgotten.
+     */
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("a default route was not taken");
@@ -967,7 +968,8 @@ void _start(void)
     }
 
     /* Put the machine back where it was, and prove it still works: the ARP
-       cache was emptied by the change, so this exchange had to learn it again. */
+     * cache was emptied by the change, so this exchange had to learn it again.
+     */
     set_name("eth0");
     set_ifr_addr(SLIRP_IP);
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {

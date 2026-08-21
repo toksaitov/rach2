@@ -84,9 +84,10 @@ static int32_t dev_zero_read(fd_entry_t *e, char __user *buf, uint32_t count)
 
 static int32_t dev_rand_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    /* Fail closed: /dev/random and /dev/urandom refuse with -EIO when the CSPRNG
-     * was seeded only from boot jitter, so no weak randomness is handed out for a
-     * key. With RDSEED/RDRAND present the source is trusted and reads succeed. */
+    /* Fail closed: /dev/random and /dev/urandom refuse with -EIO when the
+     * CSPRNG was seeded only from boot jitter, so no weak randomness is handed
+     * out for a key. With RDSEED/RDRAND present the source is trusted and reads
+     * succeed. */
     if (!krandom_is_trusted()) {
         return -EIO;
     }
@@ -621,9 +622,9 @@ struct devfs_entry {
     const struct file_ops *ops;
 };
 
-/* ops == NULL marks a console-backed entry: opening it yields an FD_TYPE_CONSOLE
- * descriptor (the existing terminal I/O), not an ops-driven device. bootpart's
- * major is 240, the local/experimental block, minor 0. */
+/* ops == NULL marks a console-backed entry: opening it yields an
+ * FD_TYPE_CONSOLE descriptor (the existing terminal I/O), not an ops-driven
+ * device. bootpart's major is 240, the local/experimental block, minor 0. */
 static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops},
                                                {"zero", 1, 5, 1, 0666, &zero_ops},
                                                {"full", 1, 7, 1, 0666, &full_ops},
@@ -659,8 +660,8 @@ static int devfs_entry_present(int i)
 #define DEVFS_INO_BASE 16u
 #define DEVFS_INO(idx) (DEVFS_INO_BASE + (uint32_t)(idx))
 
-/* Equal NUL-terminated strings? (The kernel has no strcmp; do_open compares device
- * names by hand too.) */
+/* Equal NUL-terminated strings? (The kernel has no strcmp; do_open compares
+ * device names by hand too.) */
 static int name_eq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -698,8 +699,9 @@ int devfs_open(const char *name, int flags)
     fd_entry_t *e;
     int fd;
 
-    /* /dev/ptmx is a clone device: each open mints a NEW pty pair and returns its
-     * master fd (pty_open_master does its own fd allocation and ops binding). */
+    /* /dev/ptmx is a clone device: each open mints a NEW pty pair and returns
+     * its master fd (pty_open_master does its own fd allocation and ops
+     * binding). */
     if (name_eq(name, "ptmx")) {
         if (flags & DEVFS_O_DIRECTORY) {
             return -ENOTDIR;
@@ -721,14 +723,15 @@ int devfs_open(const char *name, int flags)
         return -ENOTDIR;
     }
 
-    /* /dev/tty is the CALLER's controlling terminal (POSIX), not unconditionally
-     * the console. A job-control shell over a pty (dropbear's busybox ash) opens
-     * /dev/tty to read/set the foreground process group; it must get its pty, or
-     * its setjobctl loop never sees itself as foreground and stops on SIGTTIN. The
-     * console owns the session whose leader holds console_tty.sid; otherwise a pty
-     * slave owns the caller's session; otherwise the caller has no ctty (-ENXIO,
-     * which is also what makes dropbear's post-setsid /dev/tty probe come back
-     * empty as it expects). /dev/console (dev->ops==NULL too) is unaffected. */
+    /* /dev/tty is the CALLER's controlling terminal (POSIX), not
+     * unconditionally the console. A job-control shell over a pty (dropbear's
+     * busybox ash) opens /dev/tty to read/set the foreground process group; it
+     * must get its pty, or its setjobctl loop never sees itself as foreground
+     * and stops on SIGTTIN. The console owns the session whose leader holds
+     * console_tty.sid; otherwise a pty slave owns the caller's session;
+     * otherwise the caller has no ctty (-ENXIO, which is also what makes
+     * dropbear's post-setsid /dev/tty probe come back empty as it expects).
+     * /dev/console (dev->ops==NULL too) is unaffected. */
     if (dev->ops == NULL && name_eq(name, "tty")) {
         int sid = current_proc ? (int)current_proc->sid : 0;
         if (console_tty.sid == 0 || console_tty.sid != sid) {

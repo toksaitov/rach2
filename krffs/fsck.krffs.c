@@ -224,9 +224,9 @@ int main(int argc, char **argv)
     struct krffs_node *node =
         previous_node;
 
-    /* A node whose size is zero (or too small) does not advance the walk, so cap
-     * the iterations at the most nodes the mapping could hold; a chain that does
-     * not return to the root within that bound is corrupt, not endless. */
+    /* A node whose size is zero (or too small) does not advance the walk, so
+     * cap the iterations at the most nodes the mapping could hold; a chain that
+     * does not return to the root within that bound is corrupt, not endless. */
     uint64_t steps =
         0;
     uint64_t max_steps =

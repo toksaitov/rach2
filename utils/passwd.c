@@ -254,10 +254,11 @@ static int name_of_uid(const char *text, uid_t uid, char *out, size_t size)
                 *walk++ = '\0';
             }
             if (record_uid(field, n, &parsed) && parsed == uid) {
-                /* A name that does not fit is a refusal and not a match. Counting
-                 * it while copying nothing would leave the caller's buffer
-                 * uninitialized and this function reporting success, and every
-                 * use of that buffer below is a C string in a setuid program. */
+                /* A name that does not fit is a refusal and not a match.
+                 * Counting it while copying nothing would leave the caller's
+                 * buffer uninitialized and this function reporting success, and
+                 * every use of that buffer below is a C string in a setuid
+                 * program. */
                 if (strlen(field[0]) >= size) {
                     return -1;
                 }

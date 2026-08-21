@@ -333,11 +333,12 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (want > sizeof(kbuf)) {
         want = sizeof(kbuf);
     }
-    /* A session LEADER reading its pts with no controlling terminal claims it as
-     * its SOLE ctty (dropping the console or any other pty it held), so a
+    /* A session LEADER reading its pts with no controlling terminal claims it
+     * as its SOLE ctty (dropping the console or any other pty it held), so a
      * job-control shell on the pty receives ^C and /dev/tty resolves to it; a
      * background process is stopped with SIGTTIN below, the same rules as the
-     * console. An explicit TIOCSCTTY already claimed it, so this is then a no-op. */
+     * console. An explicit TIOCSCTTY already claimed it, so this is then a
+     * no-op. */
     if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid,
                            (int)current_proc->pgid);
@@ -425,8 +426,8 @@ static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 
     /* tty_poll registers the wait queue only for a POLLIN query, but a master
      * close wakes that same input queue (tty_hangup). A poller waiting only for
-     * the hangup (events without POLLIN, e.g. a bare POLLHUP wait) must park on it
-     * too, or it would sleep through ptm_close and never see POLLHUP. */
+     * the hangup (events without POLLIN, e.g. a bare POLLHUP wait) must park on
+     * it too, or it would sleep through ptm_close and never see POLLHUP. */
     if (!*wq) {
         *wq = &p->slave.input_wq;
     }

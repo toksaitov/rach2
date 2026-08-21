@@ -129,9 +129,9 @@ void _start(void)
         }
 
         /* Block-reap both this round's processes: the child directly, and the
-         * grandchild only because the kernel reparented it onto us. The blocking
-         * waits also yield the CPU so the round runs to completion before the
-         * next fork, keeping the live set to a handful. */
+         * grandchild only because the kernel reparented it onto us. The
+         * blocking waits also yield the CPU so the round runs to completion
+         * before the next fork, keeping the live set to a handful. */
         got = 0;
         while (got < 2 && sys_waitpid(-1, &status, 0) > 0) {
             got++;

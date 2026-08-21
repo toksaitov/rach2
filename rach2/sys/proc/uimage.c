@@ -54,7 +54,8 @@ uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, i
     }
 
     /* `cur - base_vaddr` is the room still free below `cur`; comparing the
-     * needed length against it bounds the copy and avoids unsigned underflow. */
+     * needed length against it bounds the copy and avoids unsigned underflow.
+     */
     for (i = 0; i < argc; i++) {
         uint32_t len = (uint32_t)k_strlen(argv[i]) + 1;
 

@@ -3,14 +3,15 @@
 # check_sources.sh: kernel source-list guard (run via `make check-sources`, and
 # wired into the quality gate, tools/check.sh).
 #
-# Every C source on disk in the kernel tree (rach2/kernel.c + rach2/sys/**/*.c) must
-# appear in the explicit C_SRC list in rach2/Makefile, and every C_SRC entry must
-# exist on disk. A new kernel .c that is not added to C_SRC would be silently left out
-# of the build (and out of the ABI/boot tests), so this fails loudly instead. Doom
-# and the vendored musl/busybox/dropbear trees keep their own source lists and are
-# intentionally NOT gated here.
+# Every C source on disk in the kernel tree (rach2/kernel.c + rach2/sys/**/*.c)
+# must appear in the explicit C_SRC list in rach2/Makefile, and every C_SRC
+# entry must exist on disk. A new kernel .c that is not added to C_SRC would be
+# silently left out of the build (and out of the ABI/boot tests), so this fails
+# loudly instead. Doom and the vendored musl/busybox/dropbear trees keep their
+# own source lists and are intentionally NOT gated here.
 #
-# Exits non-zero (and prints the offending files) if the list and the disk disagree.
+# Exits non-zero (and prints the offending files) if the list and the disk
+# disagree.
 #
 set -u
 

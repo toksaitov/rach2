@@ -101,45 +101,48 @@ LINE_BUFFER = 2048
 MAX_LINE = LINE_BUFFER - 2
 
 #
-# The allowlist. One table per manifest, named by the manifest's stem, because
-# a manifest this table does not name is a hard error and a new manifest must
+# The allowlist. One table per manifest, named by the manifest's stem, because a
+# manifest this table does not name is a hard error and a new manifest must
 # therefore arrive through the guard. `setid` declares every set-id path with
 # the mode, the owner and the host file it is staged from; the owner is per
 # entry rather than an assertion that root owns them all, since the test image
 # deliberately stages a setuid file owned by uid 5 and a setgid file owned by
 # gid 5 to prove the bit grants the file's owner whoever that is, and the host
-# source is declared because a path alone does not say what runs there:
-# pointing /bin/su at build/vendor/busybox/busybox satisfies every other rule
-# and hands a setuid-root busybox to the image. `trusted` names the files that
-# must be staged, must NOT be set-id, and must be at exactly the mode, owner and
-# host source named here, because "not set-id" is not the whole of what an image
-# has to get right. Two kinds are in it. The first is a program root runs:
+# source is declared because a path alone does not say what runs there: pointing
+# /bin/su at build/vendor/busybox/busybox satisfies every other rule and hands a
+# setuid-root busybox to the image. `trusted` names the files that must be
+# staged, must NOT be set-id, and must be at exactly the mode, owner and host
+# source named here, because "not set-id" is not the whole of what an image has
+# to get right. Two kinds are in it. The first is a program root runs:
 # `/bin/login` is exec'd by init as root, and `/bin/sh` is what login and
 # dropbear exec for root, so either one staged 0777 lets any account replace the
 # program root runs next, with no set-id bit anywhere in sight. The second is a
 # file root READS to decide who somebody is: `/etc/shadow` writable by anyone is
-# a root password anyone may choose, and so, one step removed, are `/etc/passwd`,
-# `/etc/group`, `/etc/shells`, `/etc/profile` and root's `authorized_keys`.
-# An entry is (mode, uid, gid, verb, value). The verb is declared rather than
-# guessed, because the two verbs mean different things and a value alone cannot
-# tell them apart: `text 0600 /etc/shadow krffs/shadow` stages the LITERAL words
-# `krffs/shadow` into the file the system authenticates against, and a check
-# that only compared the value would read it as the host copy it is not.
+# a root password anyone may choose, and so, one step removed, are
+# `/etc/passwd`, `/etc/group`, `/etc/shells`, `/etc/profile` and root's
+# `authorized_keys`. An entry is (mode, uid, gid, verb, value). The verb is
+# declared rather than guessed, because the two verbs mean different things and
+# a value alone cannot tell them apart: `text 0600 /etc/shadow krffs/shadow`
+# stages the LITERAL words `krffs/shadow` into the file the system authenticates
+# against, and a check that only compared the value would read it as the host
+# copy it is not.
 #
 # The image half checks the three fields an image records; the manifest half
 # checks the verb and the value as well, the value being for a `file` the host
 # path it is staged from and for a `text` the payload itself, byte for byte
-# before the escapes are expanded. Pinning the content is the point for the inline ones: a
-# credential file's MEANING is its text, and `test:x:0:0:` in a manifest hands
-# root to an account whose password is written on the host, with every mode,
-# owner and set-id bit in the image exactly as declared. The cost is that adding
-# an account to a shipped image is a change to two files, deliberately.
+# before the escapes are expanded. Pinning the content is the point for the
+# inline ones: a credential file's MEANING is its text, and `test:x:0:0:` in a
+# manifest hands root to an account whose password is written on the host, with
+# every mode, owner and set-id bit in the image exactly as declared. The cost is
+# that adding an account to a shipped image is a change to two files,
+# deliberately.
 #
 # The test account's own `authorized_keys` is deliberately NOT here: it is that
-# account's file, under a home the account owns, and replacing it is not a climb. `sentinel` names one ordinary
-# node the image inventory must report exactly; it is required of a manifest
-# that declares no set-id entry, which would otherwise have nothing positive to
-# find and would read a misparsed image as clean.
+# account's file, under a home the account owns, and replacing it is not a
+# climb. `sentinel` names one ordinary node the image inventory must report
+# exactly; it is required of a manifest that declares no set-id entry, which
+# would otherwise have nothing positive to find and would read a misparsed image
+# as clean.
 #
 ALLOWLIST = {
     "os-real": {
@@ -1916,15 +1919,14 @@ def check_applets(path=APPLET_TABLE):
 
 
 
-# The set-id build's table, and the rule that points the other way. Everything in
-# the main binary is unprivileged, so its rule is a blacklist: no applet that
+# The set-id build's table, and the rule that points the other way. Everything
+# in the main binary is unprivileged, so its rule is a blacklist: no applet that
 # wants the set-id bit and none that needs a socket this kernel does not offer.
-# Everything in THIS
-# binary gets the bit, so its rule has to be a whitelist: exactly these three and
-# nothing else. A blacklist here would pass a binary that had quietly grown a
-# shell, which is the one thing a set-id executable must never contain, and
-# `allnoconfig` leaves `CONFIG_SH_IS_ASH` set, so that is a mistake a config
-# written by omission actually makes.
+# Everything in THIS binary gets the bit, so its rule has to be a whitelist:
+# exactly these three and nothing else. A blacklist here would pass a binary
+# that had quietly grown a shell, which is the one thing a set-id executable
+# must never contain, and `allnoconfig` leaves `CONFIG_SH_IS_ASH` set, so that
+# is a mistake a config written by omission actually makes.
 SUID_APPLET_TABLE = os.path.join(
     "build", "vendor", "busybox", "applet_tables-suid.h")
 SUID_APPLETS = ("login", "passwd", "su")
@@ -2009,13 +2011,13 @@ SUID_CONFIG_OFF = ("CONFIG_FEATURE_SUID_CONFIG", "CONFIG_FEATURE_PREFER_APPLETS"
 #
 # `FEATURE_SUID_CONFIG` reads /etc/busybox.conf as root and frees the parsed
 # table while a global still points into it; that bug is upstream and this
-# config's answer to it is not to compile the parser.
-# `FEATURE_PREFER_APPLETS` and `FEATURE_SH_STANDALONE` make a name resolve to an
-# applet inside this binary rather than to the program on disk, which is how a
-# set-id process quietly reaches code it was not staged to run.
-# `LOGIN_SCRIPTS` runs a program named by a variable at login.
-# `BUSYBOX`, `ASH`, `HUSH` and the two `SH_IS_` selectors are the shell, which is
-# the one thing a set-id executable must never contain.
+# config's answer to it is not to compile the parser. `FEATURE_PREFER_APPLETS`
+# and `FEATURE_SH_STANDALONE` make a name resolve to an applet inside this
+# binary rather than to the program on disk, which is how a set-id process
+# quietly reaches code it was not staged to run. `LOGIN_SCRIPTS` runs a program
+# named by a variable at login. `BUSYBOX`, `ASH`, `HUSH` and the two `SH_IS_`
+# selectors are the shell, which is the one thing a set-id executable must never
+# contain.
 
 
 def check_suid_config(path=SUID_BUSYBOX_CONFIG):

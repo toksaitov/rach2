@@ -6,17 +6,17 @@
 #
 # It runs one of two arcs, named by the flavor argument, because the two images
 # do not have the same tools and pretending otherwise would prove less about
-# both. `real` is os-real, whose account tools are busybox's, on a disk. `simple`
-# is os-simple, whose account tools are this project's own, in RAM: it has no
-# `deluser`, so its arc creates, authenticates, climbs and changes a password
-# and stops there. Deleting an account in that image is root editing three
-# files, which is what it was everywhere before busybox arrived.
+# both. `real` is os-real, whose account tools are busybox's, on a disk.
+# `simple` is os-simple, whose account tools are this project's own, in RAM: it
+# has no `deluser`, so its arc creates, authenticates, climbs and changes a
+# password and stops there. Deleting an account in that image is root editing
+# three files, which is what it was everywhere before busybox arrived.
 #
-# The real arc boots a disk three times. The first boot makes the accounts and uses them,
-# the second authenticates again from a cold start and reads the databases back,
-# the third looks at what is left after the delete. Splitting them that way is
-# the point: what is asserted is what survived to the platter, not what one
-# process had in its cache.
+# The real arc boots a disk three times. The first boot makes the accounts and
+# uses them, the second authenticates again from a cold start and reads the
+# databases back, the third looks at what is left after the delete. Splitting
+# them that way is the point: what is asserted is what survived to the platter,
+# not what one process had in its cache.
 #
 # The authentication is done from an unprivileged account and not from root.
 # Root's `su` never asks for a password, so a test that only ran `su testee`
@@ -369,9 +369,9 @@ run_simple_arc() {
 # The arc for os-real, whose account tools are busybox's.
 run_real_arc() {
 
-    # The first boot: make the accounts, then use them. The creating commands are
-    # joined with `&&` and not `;`, so the token cannot be printed by a run in which
-    # one of them failed.
+    # The first boot: make the accounts, then use them. The creating commands
+    # are joined with `&&` and not `;`, so the token cannot be printed by a run
+    # in which one of them failed.
     boot_with \
         "adduser -D $NEWUSER && addgroup $EXTRAGROUP && addgroup $NEWUSER $EXTRAGROUP && echo MADE\"\"IT" \
         "adduser -S -D -H -G $EXTRAGROUP $SYSUSER && echo SYS\"\"IT" \
@@ -402,15 +402,16 @@ run_real_arc() {
         fail "chpasswd did not report changing the password"
     fi
 
-    # The authentication itself. The outer su is root's and asks nothing; the inner
-    # one is the account's own and must ask, so what this proves is that the hash
-    # chpasswd wrote is the hash su reads back and checks.
+    # The authentication itself. The outer su is root's and asks nothing; the
+    # inner one is the account's own and must ask, so what this proves is that
+    # the hash chpasswd wrote is the hash su reads back and checks.
     #
-    # Every token here is behind an `&&` rather than a `;`. A token printed by the
-    # next command in a list says only that the shell got that far, which a refused
-    # `su` also allows; behind `&&` it is printed by the run that succeeded and by
-    # no other. That is also why `id` is not run anywhere else in this boot: a `uid=`
-    # line from some other command would answer this assertion just as well.
+    # Every token here is behind an `&&` rather than a `;`. A token printed by
+    # the next command in a list says only that the shell got that far, which a
+    # refused `su` also allows; behind `&&` it is printed by the run that
+    # succeeded and by no other. That is also why `id` is not run anywhere else
+    # in this boot: a `uid=` line from some other command would answer this
+    # assertion just as well.
     if ! wait_token "AUTHIT" 120; then
         fail "the account never authenticated with its own password"
     fi
@@ -430,8 +431,8 @@ run_real_arc() {
         fail "a wrong password reached root anyway"
     fi
 
-    # And the set-id binary, exercised as the unprivileged account it exists for.
-    # What it must refuse comes first: a wrong old password, and another
+    # And the set-id binary, exercised as the unprivileged account it exists
+    # for. What it must refuse comes first: a wrong old password, and another
     # account's record. Each token is printed by a `grep` of the program's own
     # complaint, so a `passwd` that changed the password without saying anything
     # prints neither. The refusal of another account's record needs no password
@@ -454,9 +455,9 @@ run_real_arc() {
     cleanup_boot
 
     # The second boot. The password set through `passwd` must still authenticate
-    # from a cold start, which is the difference between a change that reached the
-    # platter and one that lived in a cache. Then the databases are read back, and
-    # the accounts deleted.
+    # from a cold start, which is the difference between a change that reached
+    # the platter and one that lived in a cache. Then the databases are read
+    # back, and the accounts deleted.
     boot_with \
         "su $NEWUSER -c \"su $NEWUSER -c id && echo AGAIN\"\"IT\"" \
         "$NEXTPASS" \
@@ -516,16 +517,16 @@ run_real_arc() {
         fail "mkpasswd did not produce the hash this system's own crypt gives"
     fi
 
-    # Each database is the text between the marker before it and the marker after,
-    # and every marker is written split, so a section can never be delimited by the
-    # console's echo of the command that printed it.
+    # Each database is the text between the marker before it and the marker
+    # after, and every marker is written split, so a section can never be
+    # delimited by the console's echo of the command that printed it.
     PASSWD_TEXT=$(sed -n '/BEGIN/,/PWEND/p' "$LOG")
     SHADOW_TEXT=$(sed -n '/PWEND/,/SHEND/p' "$LOG")
     GROUP_TEXT=$(sed -n '/SHEND/,/GREND/p' "$LOG")
 
-    # What the databases hold while the accounts are still there. The membership is
-    # asserted here rather than inferred from the delete, since a group the account
-    # never joined is also a group it cannot be left in.
+    # What the databases hold while the accounts are still there. The membership
+    # is asserted here rather than inferred from the delete, since a group the
+    # account never joined is also a group it cannot be left in.
     case "$PASSWD_TEXT" in
         *"$NEWUSER:"*) ;;
         *) fail "the account is not in /etc/passwd" ;;
@@ -560,15 +561,16 @@ run_real_arc() {
     fi
     cleanup_boot
 
-    # Each database is the text between the marker before it and the marker after,
-    # and every marker is written split, so a section can never be delimited by the
-    # console's echo of the command that printed it.
+    # Each database is the text between the marker before it and the marker
+    # after, and every marker is written split, so a section can never be
+    # delimited by the console's echo of the command that printed it.
     PASSWD_TEXT=$(sed -n '/BEGIN/,/PWEND/p' "$LOG")
     SHADOW_TEXT=$(sed -n '/PWEND/,/SHEND/p' "$LOG")
     GROUP_TEXT=$(sed -n '/SHEND/,/GREND/p' "$LOG")
 
-    # The delete is two-way: gone from every database and from every member list,
-    # not merely gone from passwd, since a partial delete leaves exactly that.
+    # The delete is two-way: gone from every database and from every member
+    # list, not merely gone from passwd, since a partial delete leaves exactly
+    # that.
     for who in "$NEWUSER" "$SYSUSER"; do
         case "$PASSWD_TEXT" in
             *"$who:"*) fail "the deleted account $who is still in /etc/passwd" ;;
@@ -583,8 +585,8 @@ run_real_arc() {
         esac
     done
 
-    # The second group survived the delete, which is the difference between removing
-    # a member and removing the group somebody was a member of.
+    # The second group survived the delete, which is the difference between
+    # removing a member and removing the group somebody was a member of.
     case "$GROUP_TEXT" in
         *"$EXTRAGROUP:"*) ;;
         *) fail "deleting the account took the shared group with it" ;;

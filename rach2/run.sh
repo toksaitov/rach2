@@ -5,10 +5,9 @@
 #
 # Usage: ./run.sh [image] [audio_device]
 #   image:        test | os-simple | os-real  (boots build/images/<image>.krffs as
-#                 the RAM disk). Omit it to boot the kernel alone, into the kernel
-#                 debug shell.
-#   audio_device: sb16, hda, or speaker (default: speaker)
-# Audio and networking devices are attached (see qemu_devices.sh).
+# the RAM disk). Omit it to boot the kernel alone, into the kernel debug shell.
+# audio_device: sb16, hda, or speaker (default: speaker) Audio and networking
+# devices are attached (see qemu_devices.sh).
 #
 # Examples:
 #   ./run.sh os-simple        # our login, the ish shell, and our Unix tools
@@ -58,7 +57,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG seeds from trusted hardware
 # entropy; without it getrandom + /dev/[u]random fail closed and SSH key
-# generation (dropbear, in the os-real image) cannot run. Override CPU=... to test.
+# generation (dropbear, in the os-real image) cannot run. Override CPU=... to
+# test.
 CPU="${CPU:-max}"
 
 KERNEL="$SCRIPT_DIR/../build/rach2/kernel"

@@ -123,8 +123,8 @@ void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors);
  */
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size);
 
-/* The leaf name ("null", ...) of an open device fd, for /proc/<pid>/fd readlink.
- * Returns "?" if e is not a devfs device. */
+/* The leaf name ("null", ...) of an open device fd, for /proc/<pid>/fd
+ * readlink. Returns "?" if e is not a devfs device. */
 const char *devfs_fd_name(struct fd_entry *e);
 
 /*

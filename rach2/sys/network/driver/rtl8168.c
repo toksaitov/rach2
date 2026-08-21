@@ -112,7 +112,8 @@ static int r8168_up;
 static uint32_t r8168_ocp_base = R8168_OCP_STD_PHY_BASE;
 
 /* Counters the diagnostic line reports; the polling budget is judged by them
- * (dev-log/24-metal/plan.md), so they are part of the contract, not decoration. */
+ * (dev-log/24-metal/plan.md), so they are part of the contract, not decoration.
+ */
 static uint32_t r8168_rx_packets;
 static uint32_t r8168_rx_errors;
 static uint32_t r8168_rx_dropped;

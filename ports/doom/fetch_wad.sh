@@ -16,10 +16,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# The id Software Doom shareware WAD (v1.9) is freely redistributable; this is its
-# canonical sha256. Any other IWAD the port recognizes (retail doom.wad, the
-# BSD-licensed freedoom1.wad, and the rest in src/d_iwad.c) also works, placed at
-# this same path; it is simply not hash-pinned here.
+# The id Software Doom shareware WAD (v1.9) is freely redistributable; this is
+# its canonical sha256. Any other IWAD the port recognizes (retail doom.wad, the
+# BSD-licensed freedoom1.wad, and the rest in src/d_iwad.c) also works, placed
+# at this same path; it is simply not hash-pinned here.
 WAD="doom1.wad"
 SHAREWARE_SHA256="1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771"
 

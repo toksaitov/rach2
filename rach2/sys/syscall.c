@@ -52,9 +52,10 @@
 /* Validate a user-space address range (defined with the socketcall helpers). */
 static int user_access_ok(uint32_t addr, uint32_t len);
 
-/* Validate AND fault in a user buffer before the kernel hands the raw pointer to
- * a lower layer that dereferences it directly (krffs, tcp, udp, drivers). 'write'
- * is 1 if that layer writes into the buffer. Defined with user_access_ok. */
+/* Validate AND fault in a user buffer before the kernel hands the raw pointer
+ * to a lower layer that dereferences it directly (krffs, tcp, udp, drivers).
+ * 'write' is 1 if that layer writes into the buffer. Defined with
+ * user_access_ok. */
 static int user_buffer_ok(uint32_t addr, uint32_t len, int write);
 
 /* Send one datagram from `sock`, judging the destination against the socket's
@@ -221,13 +222,14 @@ static void fd_release_backing(fd_entry_t *e)
         krffs_remove_reserved_node(krffs_fs, e->node);
         e->node = NULL;
     }
-    /* A synthetic directory fd's pooled cookie is freed when its last descriptor
-     * closes (dup/fork share it via the OFD refcount, like an ops backing). */
+    /* A synthetic directory fd's pooled cookie is freed when its last
+     * descriptor closes (dup/fork share it via the OFD refcount, like an ops
+     * backing). */
     if (e->type == FD_TYPE_SYNTH_DIR && e->priv && e->ofd && e->ofd->refcount == 1) {
         ((struct synth_dir *)e->priv)->used = 0;
     }
-    /* Restore text mode only if THIS process actually owns the framebuffer, so a
-     * fork child that merely inherited the fb descriptor cannot clear the
+    /* Restore text mode only if THIS process actually owns the framebuffer, so
+     * a fork child that merely inherited the fb descriptor cannot clear the
      * parent's graphics mode when the child closes the fd or exits. */
     if (e->type == FD_TYPE_FRAMEBUFFER && current_proc &&
         fb_owner_pid == current_proc->pid && e->ofd && e->ofd->refcount == 1) {
@@ -383,7 +385,8 @@ extern void shell_reset_input(void);
 
 /* Boot-home policy from kernel.c. debug_shell_is_home is true when the debug
  * shell supervises (an exited init returns to it); false when a real /sbin/init
- * is PID 1, in which case its death is fatal (panic_init_died, never returns). */
+ * is PID 1, in which case its death is fatal (panic_init_died, never returns).
+ */
 extern bool debug_shell_is_home;
 extern void panic_init_died(uint32_t pid);
 extern void kernel_shutdown(int how);
@@ -462,39 +465,41 @@ static int32_t sys_exit(isr_params_t *params)
     exiting_pid = current_proc->pid;
     is_init = (exiting_pid == init_pid && init_pid != 0);
 
-    /* If the dying process is the console-owning session leader (init, or a later
-     * leader that claimed the console via TIOCSCTTY, NOT only init), release the
-     * controlling terminal NOW, before it zombifies and the teardown below runs
-     * with interrupts on. Otherwise the timer-IRQ serial drain (tty_console_poll)
-     * keeps draining COM1 against this vanishing session, dropping a ^C/^Z and
-     * stealing bytes the kernel debug shell should read. shell_reset_input on the
-     * is_init path releases again (idempotent). */
+    /* If the dying process is the console-owning session leader (init, or a
+     * later leader that claimed the console via TIOCSCTTY, NOT only init),
+     * release the controlling terminal NOW, before it zombifies and the
+     * teardown below runs with interrupts on. Otherwise the timer-IRQ serial
+     * drain (tty_console_poll) keeps draining COM1 against this vanishing
+     * session, dropping a ^C/^Z and stealing bytes the kernel debug shell
+     * should read. shell_reset_input on the is_init path releases again
+     * (idempotent). */
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
         tty_set_session(&console_tty, 0, 0);
     }
-    /* A dying session leader also disassociates any pty slave it controlled, so a
-     * later session can claim the same /dev/pts/N. */
+    /* A dying session leader also disassociates any pty slave it controlled, so
+     * a later session can claim the same /dev/pts/N. */
     pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
 #ifdef RACH2_HARNESS
-    /* Harness build: the instant the probe (run as init) exits, report its status
-     * to QEMU's isa-debug-exit device and stop, BEFORE schedule() can switch to
-     * a still-READY child and bypass this path, so the runner always reads a real
-     * exit code. */
+    /* Harness build: the instant the probe (run as init) exits, report its
+     * status to QEMU's isa-debug-exit device and stop, BEFORE schedule() can
+     * switch to a still-READY child and bypass this path, so the runner always
+     * reads a real exit code. */
     if (is_init) {
         harness_exit((uint8_t)status);
     }
 #endif
 
-    /* Mark process a zombie and store the Linux wait-status encoding of a normal
-     * exit (the parent's waitpid/wait4 copies exit_code straight out): the low 8
-     * bits of the code go in bits 8-15, so WIFEXITED is true and WEXITSTATUS
-     * returns the code. (harness_exit above still gets the raw status byte.) */
+    /* Mark process a zombie and store the Linux wait-status encoding of a
+     * normal exit (the parent's waitpid/wait4 copies exit_code straight out):
+     * the low 8 bits of the code go in bits 8-15, so WIFEXITED is true and
+     * WEXITSTATUS returns the code. (harness_exit above still gets the raw
+     * status byte.) */
     current_proc->state = PROC_ZOMBIE;
     current_proc->exit_code = (status & 0xFF) << 8;
 
-    /* Notify the parent: post SIGCHLD (ignored by default, but a shell installs a
-     * reaper handler) and wake it if it is blocked in waitpid. */
+    /* Notify the parent: post SIGCHLD (ignored by default, but a shell installs
+     * a reaper handler) and wake it if it is blocked in waitpid. */
     parent = get_process(current_proc->parent_pid);
     if (parent) {
         signal_post(parent, SIGCHLD);
@@ -503,15 +508,16 @@ static int32_t sys_exit(isr_params_t *params)
         }
     }
 
-    /* Hand any surviving children to init before this slot is reaped, so an exit
-     * never strands an orphan on a dead parent (the MAX_PROCS zombie leak). */
+    /* Hand any surviving children to init before this slot is reaped, so an
+     * exit never strands an orphan on a dead parent (the MAX_PROCS zombie
+     * leak). */
     reparent_children(exiting_pid);
 
     /* A real /sbin/init must never exit; if it does there is no reaper, so the
-     * kernel panics. Halt BEFORE schedule(), or a still-READY process would take
-     * the CPU and the system would run on with a dead PID 1. Only when the debug
-     * shell is the supervisor (rescue, or the no-init test image) does an exited
-     * init instead return to it, below. */
+     * kernel panics. Halt BEFORE schedule(), or a still-READY process would
+     * take the CPU and the system would run on with a dead PID 1. Only when the
+     * debug shell is the supervisor (rescue, or the no-init test image) does an
+     * exited init instead return to it, below. */
     if (is_init && !debug_shell_is_home) {
         panic_init_died(exiting_pid);   /* never returns */
     }
@@ -527,9 +533,9 @@ static int32_t sys_exit(isr_params_t *params)
         k_puts("Init process exited. Returning to kernel debug shell.");
 
         /* Clean up the init process resources. Switch off its address space
-         * BEFORE freeing the page directory: free_page_directory refuses to free
-         * whatever CR3 currently points at, so freeing while still loaded would
-         * leak the directory and its private page tables. */
+         * BEFORE freeing the page directory: free_page_directory refuses to
+         * free whatever CR3 currently points at, so freeing while still loaded
+         * would leak the directory and its private page tables. */
         if (current_proc->cr3 != 0) {
             page_dir_t *init_dir;
             init_dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
@@ -549,13 +555,13 @@ static int32_t sys_exit(isr_params_t *params)
         sched_disable();
 
         /* Clear the shell's command line + stdin-wait state BEFORE re-enabling
-         * interrupts below, so a keyboard IRQ during the jump cannot append to a
-         * stale command buffer or see a dangling stdin waiter. shell_loop resets
-         * again on entry as the catch-all. */
+         * interrupts below, so a keyboard IRQ during the jump cannot append to
+         * a stale command buffer or see a dangling stdin waiter. shell_loop
+         * resets again on entry as the catch-all. */
         shell_reset_input();
 
-        /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe because
-         * we are in kernel mode and init has been torn down. */
+        /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe
+         * because we are in kernel mode and init has been torn down. */
         __asm__ __volatile__(
             "movl %0, %%esp\n\t"
             "sti\n\t"
@@ -601,10 +607,10 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return -EBADF;
     }
 
-    /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable, but
-     * only if the descriptor was opened for writing (a read-only fd -> -EBADF, as
-     * Linux reports). The plain file and enum types below have no ops and fall
-     * through to the enum dispatch. */
+    /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable,
+     * but only if the descriptor was opened for writing (a read-only fd ->
+     * -EBADF, as Linux reports). The plain file and enum types below have no
+     * ops and fall through to the enum dispatch. */
     if (entry->ops) {
         if (!(entry->flags & FD_FLAG_WRITE)) {
             return -EBADF;
@@ -621,8 +627,8 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
                 return -EFAULT;
             }
             /* socket_tcp_send copies the user buffer into the socket send ring
-             * itself, blocking on send-ring space unless the fd is non-blocking;
-             * __force strips the __user tag at this boundary. */
+             * itself, blocking on send-ring space unless the fd is
+             * non-blocking; __force strips the __user tag at this boundary. */
             return socket_tcp_send(entry->sock, (const uint8_t __force *)buf,
                                    (int)count,
                                    entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
@@ -655,8 +661,9 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         }
 
         /* A background process writing its controlling terminal is stopped with
-         * SIGTTOU only when TOSTOP is set (otherwise background output is allowed).
-         * As with SIGTTIN, a blocked/ignored SIGTTOU makes it -EIO instead. */
+         * SIGTTOU only when TOSTOP is set (otherwise background output is
+         * allowed). As with SIGTTIN, a blocked/ignored SIGTTOU makes it -EIO
+         * instead. */
         if ((console_tty.ldisc.tio.c_lflag & TOSTOP) &&
             tty_is_background(&console_tty, (int)current_proc->sid,
                               (int)current_proc->pgid)) {
@@ -668,12 +675,13 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EINTR;
         }
 
-        /* Pull the user bytes in through a small kernel bounce buffer, then emit
-         * from kernel memory through the tty output processor (OPOST/ONLCR, so a
-         * bare '\n' becomes CR LF on both the VGA screen and the serial line),
-         * looping until count bytes are done. A bad user pointer yields -EFAULT
-         * only if nothing has been written yet (otherwise report the bytes
-         * already emitted, matching the return-count convention). */
+        /* Pull the user bytes in through a small kernel bounce buffer, then
+         * emit from kernel memory through the tty output processor
+         * (OPOST/ONLCR, so a bare '\n' becomes CR LF on both the VGA screen and
+         * the serial line), looping until count bytes are done. A bad user
+         * pointer yields -EFAULT only if nothing has been written yet
+         * (otherwise report the bytes already emitted, matching the
+         * return-count convention). */
         while (done < count) {
             uint32_t chunk = count - done;
 
@@ -704,13 +712,14 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         }
 
         /* krffs_write reads the user buffer directly, so range-check AND fault
-         * its pages in first (as the socket path does) before stripping __user. */
+         * its pages in first (as the socket path does) before stripping __user.
+         */
         if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
             return -EFAULT;
         }
         /* O_APPEND: every write lands at the current end of file, regardless of
-         * any intervening seek (the POSIX append contract). The flag lives on the
-         * shared open-file description. */
+         * any intervening seek (the POSIX append contract). The flag lives on
+         * the shared open-file description. */
         if (entry->ofd && (entry->ofd->status_flags & OFD_APPEND)) {
             entry->ofd->offset = (uint32_t)entry->node->data_size;
         }
@@ -799,9 +808,9 @@ static int32_t sys_writev(isr_params_t *params)
     for (i = 0; i < iovcnt; i++) {
         int32_t r;
 
-        /* On any fault once bytes were already emitted, report the partial total
-         * (a caller that retried would otherwise duplicate output); only report
-         * the error itself when nothing has been written yet. */
+        /* On any fault once bytes were already emitted, report the partial
+         * total (a caller that retried would otherwise duplicate output); only
+         * report the error itself when nothing has been written yet. */
         if (copy_from_user(&iov,
                            (const void __user *)(iov_user +
                                (uint32_t)i * sizeof(struct kernel_iovec)),
@@ -1055,7 +1064,8 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
         return -EBADF;
     }
     /* A synthetic directory fd (/dev, /proc, /proc/<pid>[/fd]): reconstruct its
-     * absolute path from the pooled kind/pid and resolve the relative name there. */
+     * absolute path from the pooled kind/pid and resolve the relative name
+     * there. */
     if (entry->type == FD_TYPE_SYNTH_DIR) {
         struct synth_dir *sd = (struct synth_dir *)entry->priv;
         if (!sd) {
@@ -1072,10 +1082,10 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
     }
     dnode = entry->node; /* NULL marks the root directory */
     if (dnode) {
-        /* KRFFS nodes are not refcounted, so a directory fd can outlive its node
-         * if the directory is rmdir'd. Reject a stale fd defensively: the node
-         * must still be a live reserved node, and its reconstructed path must
-         * round-trip back to the same node. */
+        /* KRFFS nodes are not refcounted, so a directory fd can outlive its
+         * node if the directory is rmdir'd. Reject a stale fd defensively: the
+         * node must still be a live reserved node, and its reconstructed path
+         * must round-trip back to the same node. */
         if (dnode->type != KRFFS_RESERVED_NODE) {
             return -EBADF;
         }
@@ -1342,9 +1352,9 @@ static int32_t synth_open(const struct vpath *vp, int flags)
             return devfs_open(vp->name, flags);
         }
         case VNODE_PTS:
-            /* /dev/pts/N: the slave end of pty N (pty_open_slave does its own fd
-             * allocation, and rejects an unallocated/locked pair). The open is
-             * permission-checked against the pty's ownership, so one user
+            /* /dev/pts/N: the slave end of pty N (pty_open_slave does its own
+             * fd allocation, and rejects an unallocated/locked pair). The open
+             * is permission-checked against the pty's ownership, so one user
              * cannot open another's terminal. */
             if (flags & O_DIRECTORY) {
                 return -ENOTDIR;
@@ -1423,9 +1433,9 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
         }
     }
     /* The directory exists, so honour flags that contradict that. An exclusive
-     * create of an existing object is -EEXIST regardless of access mode (the usual
-     * O_CREAT|O_EXCL form carries write access), so that check comes first; then a
-     * directory cannot be opened for writing. */
+     * create of an existing object is -EEXIST regardless of access mode (the
+     * usual O_CREAT|O_EXCL form carries write access), so that check comes
+     * first; then a directory cannot be opened for writing. */
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         return -EEXIST;
     }
@@ -1566,8 +1576,8 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     }
 
     /* Find the file in KRFFS. resolve_e distinguishes a missing component
-     * (-ENOENT) from a non-directory in the path (-ENOTDIR) so open() reports the
-     * Linux errno; only a genuine ENOENT continues to the O_CREAT path. */
+     * (-ENOENT) from a non-directory in the path (-ENOTDIR) so open() reports
+     * the Linux errno; only a genuine ENOENT continues to the O_CREAT path. */
     {
         int rerr = 0;
         node = krffs_resolve_x(name, &rerr, cred_may_search);
@@ -1605,7 +1615,8 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
                 return -EEXIST;
             }
             /* A directory cannot be opened for writing or truncated into a file
-             * (the access mode is the low two bits); O_DIRECTORY requires one. */
+             * (the access mode is the low two bits); O_DIRECTORY requires one.
+             */
             if (is_dir && (((unsigned)flags & 3u) != 0 || (flags & O_TRUNC))) {
                 return -EISDIR;
             }
@@ -1652,9 +1663,9 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     }
 
     /* Set up the fd entry. A directory opens as a FD_TYPE_DIR (its node is the
-     * directory whose children getdents lists); a regular file as FD_TYPE_FILE. A
-     * path that resolved to the root (e.g. "x/..") is the root directory, stored
-     * with a NULL node like the literal-root open above. */
+     * directory whose children getdents lists); a regular file as FD_TYPE_FILE.
+     * A path that resolved to the root (e.g. "x/..") is the root directory,
+     * stored with a NULL node like the literal-root open above. */
     entry = &current_proc->fds.entries[fd];
     if (node == krffs_fs->node) {
         entry->type = FD_TYPE_DIR;
@@ -1757,9 +1768,9 @@ static int32_t sys_close(isr_params_t *params)
     /* Closing stdin/stdout/stderr is legal; a shell or daemon closes fd 0/1/2
      * and reopens onto the freed (lowest) number to redirect them. */
 
-    /* Release the descriptor's backing (framebuffer/socket/ops object), then free
-     * the slot. fd_free reports a bad/unallocated descriptor with -1; translate
-     * to the close(2) errno. */
+    /* Release the descriptor's backing (framebuffer/socket/ops object), then
+     * free the slot. fd_free reports a bad/unallocated descriptor with -1;
+     * translate to the close(2) errno. */
     entry = fd_get(&current_proc->fds, fd);
     fd_release_backing(entry);
     if (fd_free(&current_proc->fds, fd) != 0) {
@@ -2013,8 +2024,8 @@ static int32_t sys_lseek(isr_params_t *params)
             entry->ofd->offset = (uint32_t)new_offset;
             return new_offset;
         }
-        /* mem devices (null/zero/full) accept a seek that always lands at 0; the
-         * stream devices (random/urandom) are not seekable. */
+        /* mem devices (null/zero/full) accept a seek that always lands at 0;
+         * the stream devices (random/urandom) are not seekable. */
         if (devfs_lseek_zero(entry)) {
             entry->ofd->offset = 0;
             return 0;
@@ -2079,8 +2090,8 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         return -EBADF;
     }
 
-    /* A zero-length read is a no-op that returns 0 (even with a NULL buffer, per
-     * POSIX) once the fd is known valid; do not touch buf. */
+    /* A zero-length read is a no-op that returns 0 (even with a NULL buffer,
+     * per POSIX) once the fd is known valid; do not touch buf. */
     if (count == 0) {
         return 0;
     }
@@ -2088,10 +2099,10 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         return -EFAULT;
     }
 
-    /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable, but
-     * only if the descriptor was opened for reading (a write-only fd -> -EBADF).
-     * The plain file and enum types below have no ops and fall through to the
-     * enum dispatch. */
+    /* Backing-ops object (pipe/tty/pty/device): dispatch through its vtable,
+     * but only if the descriptor was opened for reading (a write-only fd ->
+     * -EBADF). The plain file and enum types below have no ops and fall through
+     * to the enum dispatch. */
     if (entry->ops) {
         if (!(entry->flags & FD_FLAG_READ)) {
             return -EBADF;
@@ -2099,8 +2110,8 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         return entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
     }
 
-    /* read() honors O_NONBLOCK (an OFD status flag) exactly like recv(), routing
-     * to the non-blocking variant. */
+    /* read() honors O_NONBLOCK (an OFD status flag) exactly like recv(),
+     * routing to the non-blocking variant. */
     if (entry->type == FD_TYPE_SOCKET) {
         int sock_nonblock;
         if (!entry->sock || !user_buffer_ok((uint32_t)buf, count, 1)) {
@@ -2166,19 +2177,20 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
          * and recognizes ISIG, so Ctrl-C on the console now arrives as a posted
          * SIGINT, and a pending signal unwinds the wait with -EINTR.
          */
-        /* A SESSION LEADER reading the console with no controlling terminal claims
-         * it as its SOLE ctty (its group becomes the foreground, and any pty it held
-         * is dropped), so a lone program receives ^C; a non-leader does not (it would
-         * strand the tty on its since-dead leader). Once a session owns the console,
-         * the foreground is set by TIOCSPGRP. */
+        /* A SESSION LEADER reading the console with no controlling terminal
+         * claims it as its SOLE ctty (its group becomes the foreground, and any
+         * pty it held is dropped), so a lone program receives ^C; a non-leader
+         * does not (it would strand the tty on its since-dead leader). Once a
+         * session owns the console, the foreground is set by TIOCSPGRP. */
         if (console_tty.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
             tty_make_sole_ctty(&console_tty, (int)current_proc->sid,
                                (int)current_proc->pgid);
         }
         /* A BACKGROUND process reading its controlling terminal is stopped with
          * SIGTTIN (POSIX), unless that would wedge it (SIGTTIN blocked or
-         * ignored), in which case the read fails with -EIO. Decided BEFORE marking
-         * ourselves the console reader, so an early return leaves no stale flag. */
+         * ignored), in which case the read fails with -EIO. Decided BEFORE
+         * marking ourselves the console reader, so an early return leaves no
+         * stale flag. */
         if (tty_is_background(&console_tty, (int)current_proc->sid,
                               (int)current_proc->pgid)) {
             if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
@@ -2211,7 +2223,8 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         }
 
         /* Read packets from the mouse ring buffer. mouse_read_packets writes
-         * into the user buffer; range-check it, then __force at the boundary. */
+         * into the user buffer; range-check it, then __force at the boundary.
+         */
         if (!user_buffer_ok((uint32_t)buf,
                             (uint32_t)packets_requested * sizeof(struct mouse_packet),
                             1)) {
@@ -2629,9 +2642,10 @@ static int32_t sys_dup2(isr_params_t *params)
         fd_free(&current_proc->fds, newfd);
     }
 
-    /* Duplicate the descriptor: it SHARES the open-file description (so the seek
-     * offset is shared, per POSIX), gaining a reference; a duplicated socket gains
-     * another reference too; and dup2 leaves the new fd's CLOEXEC clear. */
+    /* Duplicate the descriptor: it SHARES the open-file description (so the
+     * seek offset is shared, per POSIX), gaining a reference; a duplicated
+     * socket gains another reference too; and dup2 leaves the new fd's CLOEXEC
+     * clear. */
     new_entry = &current_proc->fds.entries[newfd];
     new_entry->type  = old_entry->type;
     new_entry->node  = old_entry->node;
@@ -2685,9 +2699,9 @@ static int32_t sys_chdir(isr_params_t *params)
         return 0;
     }
 
-    /* A synthetic directory becomes the cwd (its canonical path, self resolved to
-     * a real pid, so later relative opens re-classify correctly); a synthetic
-     * leaf is ENOTDIR, a missing one ENOENT. */
+    /* A synthetic directory becomes the cwd (its canonical path, self resolved
+     * to a real pid, so later relative opens re-classify correctly); a
+     * synthetic leaf is ENOTDIR, a missing one ENOENT. */
     {
         struct vpath vp;
         int kind = synth_classify(name, &vp);
@@ -2734,8 +2748,8 @@ static int32_t sys_chdir(isr_params_t *params)
     }
 
     /* Store the canonical absolute path (krffs_node_path follows real parent
-     * links, so any '.'/'..' in the request is collapsed). If it does not fit the
-     * fixed cwd buffer the cwd is left unchanged. */
+     * links, so any '.'/'..' in the request is collapsed). If it does not fit
+     * the fixed cwd buffer the cwd is left unchanged. */
     if (krffs_node_path(node, current_proc->cwd, sizeof(current_proc->cwd)) != 0) {
         return -ENAMETOOLONG;
     }
@@ -2769,9 +2783,9 @@ static int32_t sys_getcwd(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Linux getcwd(2) returns the length including the NUL on success. (Returning
-     * the buffer pointer would be misread as an errno for high user addresses
-     * whose top bit is set.) */
+    /* Linux getcwd(2) returns the length including the NUL on success.
+     * (Returning the buffer pointer would be misread as an errno for high user
+     * addresses whose top bit is set.) */
     return (int32_t)(cwd_len + 1);
 }
 
@@ -2983,9 +2997,9 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             if (procfs_resolve_pid(vp->pid) < 0) {
                 return -ENOENT;
             }
-            /* /proc/self is a symlink: an un-followed stat (lstat) sees the link,
-             * a followed one resolves to the pid directory. /proc/<numeric> and
-             * /proc/<pid>/fd are real directories. */
+            /* /proc/self is a symlink: an un-followed stat (lstat) sees the
+             * link, a followed one resolves to the pid directory.
+             * /proc/<numeric> and /proc/<pid>/fd are real directories. */
             if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && !follow) {
                 kst->st_dev = PROCFS_FSID;
                 kst->st_mode = 0120777; /* S_IFLNK | 0777 */
@@ -3010,8 +3024,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             if (rpid < 0) {
                 return -ENOENT;
             }
-            /* The link exists only if descriptor procfd is actually open (the same
-             * check readlink makes), so stat and readlink agree. */
+            /* The link exists only if descriptor procfd is actually open (the
+             * same check readlink makes), so stat and readlink agree. */
             if (procfs_readlink_fd(rpid, vp->procfd, scratch, (int)sizeof(scratch)) < 0) {
                 return -ENOENT;
             }
@@ -3037,9 +3051,10 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_ino = PTS_INO_DIR;
             return 0;
         case VNODE_PTS: {
-            /* /dev/pts/N: a slave terminal (S_IFCHR), only if pty N is allocated.
-             * The rdev is the Linux Unix98 pty slave major 136. Ownership lives
-             * on the pty, where the login server's chown/chmod put it. */
+            /* /dev/pts/N: a slave terminal (S_IFCHR), only if pty N is
+             * allocated. The rdev is the Linux Unix98 pty slave major 136.
+             * Ownership lives on the pty, where the login server's chown/chmod
+             * put it. */
             struct pty *pt = pty_get(vp->pts_index);
             if (!pt) {
                 return -ENOENT;
@@ -3245,8 +3260,9 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
 }
 
 /* stat64(195) follows symlinks; lstat64(196) does not. On i386 musl maps its
- * stat()/lstat() onto these (via the statx -> *stat64 fallback), so lstat() only
- * works once 196 exists. The follow flag matters only for the /proc magic links. */
+ * stat()/lstat() onto these (via the statx -> *stat64 fallback), so lstat()
+ * only works once 196 exists. The follow flag matters only for the /proc magic
+ * links. */
 static int32_t sys_stat64(isr_params_t *params)
 {
     return do_stat64((const char __user *)params->ebx,
@@ -3313,7 +3329,8 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_ino = procfs_fd_ino(entry);
     } else if (entry->type == FD_TYPE_CONSOLE) {
         /* stdin/stdout/stderr and /dev/console: report the same identity as
-         * stat("/dev/console") so ttyname's (st_dev, st_ino) comparison matches. */
+         * stat("/dev/console") so ttyname's (st_dev, st_ino) comparison
+         * matches. */
         uint32_t cmode = 0, crdev = 0, cino = 0;
         (void)devfs_stat("console", &cmode, &crdev, &cino);
         kst->st_mode = 020666; /* S_IFCHR | 0666 */
@@ -3324,8 +3341,8 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_ino = cino;
     } else if (entry->type == FD_TYPE_SYNTH_DIR) {
         /* A /dev or /proc directory fd: report the SAME identity its path stat
-         * would (so fstat and stat agree on the directory), reconstructed from the
-         * fd's pooled kind/pid. */
+         * would (so fstat and stat agree on the directory), reconstructed from
+         * the fd's pooled kind/pid. */
         struct vpath vp;
         struct synth_dir *sd = (struct synth_dir *)entry->priv;
         k_memset(&vp, 0, sizeof(vp));
@@ -3338,8 +3355,9 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
             kst->st_dev = PROCFS_FSID;
         }
     } else if (entry->type == FD_TYPE_PTS) {
-        /* A pty slave: report the SAME identity as stat("/dev/pts/N") so ttyname's
-         * (st_dev, st_ino) comparison matches the /proc/self/fd readlink. */
+        /* A pty slave: report the SAME identity as stat("/dev/pts/N") so
+         * ttyname's (st_dev, st_ino) comparison matches the /proc/self/fd
+         * readlink. */
         struct vpath vp;
         k_memset(&vp, 0, sizeof(vp));
         vp.kind = VNODE_PTS;
@@ -3425,9 +3443,10 @@ static int32_t sys_fstatat64(isr_params_t *params)
         if (name[0] == '/') {
             name++;
         }
-        /* /dev and /proc are synthetic; classified before the KRFFS mount check,
-         * so they stat even on a kernel with no RAM disk. AT_SYMLINK_NOFOLLOW
-         * (lstat) reports the magic symlinks; otherwise they are followed. */
+        /* /dev and /proc are synthetic; classified before the KRFFS mount
+         * check, so they stat even on a kernel with no RAM disk.
+         * AT_SYMLINK_NOFOLLOW (lstat) reports the magic symlinks; otherwise
+         * they are followed. */
         if (synth_classify(name, &vp) != VNODE_KRFFS) {
             int follow = !((int)params->esi & AT_SYMLINK_NOFOLLOW);
             int32_t rc = synth_stat(&vp, &kst, follow);
@@ -3568,14 +3587,14 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
 
         /* chmod(2)'s own rule: an unprivileged caller storing a mode on a file
          * whose group is not one of theirs does not get to keep setgid. This is
-         * the third place POSIX names a set-id clear, after write and chown, and
-         * it is the one no write-clear can stand in for: an owner may mint 02710
-         * on a gid-0 file they own by chmod alone, with no write ever running.
-         * Deliberately NOT conditioned on group-execute the way cred_kill_setid
-         * is, because the caller is choosing that bit in this same call, so
-         * reading it back as a reason to spare the mode would defeat the rule.
-         * Setuid needs no rule here: only the owner may chmod, and the setuid
-         * grant is that owner's own identity. */
+         * the third place POSIX names a set-id clear, after write and chown,
+         * and it is the one no write-clear can stand in for: an owner may mint
+         * 02710 on a gid-0 file they own by chmod alone, with no write ever
+         * running. Deliberately NOT conditioned on group-execute the way
+         * cred_kill_setid is, because the caller is choosing that bit in this
+         * same call, so reading it back as a reason to spare the mode would
+         * defeat the rule. Setuid needs no rule here: only the owner may chmod,
+         * and the setuid grant is that owner's own identity. */
         if (!cred_privileged() && !KRFFS_IS_DIR(node->mode) &&
             !cred_in_group(node->gid)) {
             want &= ~(uint32_t) KRFFS_MODE_SGID;
@@ -3795,7 +3814,8 @@ static int32_t sys_fchmodat(isr_params_t *params)
 }
 
 /* fchmod(fd, mode): the descriptor form. A KRFFS-backed regular file's stored
- * perms are updated; any other descriptor (device/pipe/socket/tty) is a no-op. */
+ * perms are updated; any other descriptor (device/pipe/socket/tty) is a no-op.
+ */
 static int32_t sys_fchmod(isr_params_t *params)
 {
     int fd = (int) params->ebx;
@@ -3956,9 +3976,10 @@ static int32_t sys_link(isr_params_t *params)
     if (!current_proc || !uold || !unew) {
         return -EFAULT;
     }
-    /* Validate BOTH paths (copy_path_cwd faults a bad pointer to -EFAULT) and that
-     * the source exists, before reporting that the filesystem cannot hard-link --
-     * link(valid, bad_ptr) is -EFAULT, link(missing, x) is -ENOENT, not -EPERM. */
+    /* Validate BOTH paths (copy_path_cwd faults a bad pointer to -EFAULT) and
+     * that the source exists, before reporting that the filesystem cannot
+     * hard-link: link(valid, bad_ptr) is -EFAULT, link(missing, x) is
+     * -ENOENT, not -EPERM. */
     len = copy_path_cwd(oldbuf, sizeof(oldbuf), uold);
     if (len < 0) {
         return len;
@@ -3998,9 +4019,9 @@ static int32_t sys_linkat(isr_params_t *params)
     if (flags & ~(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) {
         return -EINVAL;
     }
-    /* Resolve the source against olddirfd and the destination against newdirfd, so
-     * a bad dirfd (-EBADF) or pointer (-EFAULT) and a missing source (-ENOENT) are
-     * reported before the "no hard links" -EPERM. */
+    /* Resolve the source against olddirfd and the destination against newdirfd,
+     * so a bad dirfd (-EBADF) or pointer (-EFAULT) and a missing source
+     * (-ENOENT) are reported before the "no hard links" -EPERM. */
     len = copy_path_at(oldbuf, sizeof(oldbuf), olddirfd, uold);
     if (len < 0) {
         return len;
@@ -4139,8 +4160,9 @@ static int32_t sys__llseek(isr_params_t *params)
     if (new_off < 0) {
         return -EINVAL;
     }
-    /* The descriptor offset is 32-bit (KRFFS files are well under 4 GB); refuse a
-     * seek it cannot represent rather than silently truncating to a wrong place. */
+    /* The descriptor offset is 32-bit (KRFFS files are well under 4 GB); refuse
+     * a seek it cannot represent rather than silently truncating to a wrong
+     * place. */
     if (new_off > (long long)0xFFFFFFFFu) {
         return -EINVAL;
     }
@@ -4222,10 +4244,10 @@ static int32_t sys_fcntl64(isr_params_t *params)
             return fl;
         }
         case F_SETFL:
-            /* O_APPEND and O_NONBLOCK are the settable status flags; they live on
-             * the open-file description (shared by dup/fork), not the descriptor.
-             * Other bits in arg (access mode, O_CLOEXEC) are accepted and ignored
-             * per POSIX. */
+            /* O_APPEND and O_NONBLOCK are the settable status flags; they live
+             * on the open-file description (shared by dup/fork), not the
+             * descriptor. Other bits in arg (access mode, O_CLOEXEC) are
+             * accepted and ignored per POSIX. */
             if (entry->ofd) {
                 entry->ofd->status_flags = arg & (OFD_APPEND | OFD_NONBLOCK);
             }
@@ -4247,8 +4269,9 @@ static int32_t sys_fcntl64(isr_params_t *params)
             dst = &current_proc->fds.entries[newfd];
             /* The duplicate SHARES oldfd's open-file description (so the seek
              * offset is shared, per POSIX). fd_alloc_from just gave dst a fresh
-             * OFD; drop it and point dst at oldfd's, taking a reference. A shared
-             * socket gains a reference too; FD_CLOEXEC is per-descriptor. */
+             * OFD; drop it and point dst at oldfd's, taking a reference. A
+             * shared socket gains a reference too; FD_CLOEXEC is
+             * per-descriptor. */
             fd_ofd_unref(dst->ofd);
             dst->type  = entry->type;
             dst->node  = entry->node;
@@ -4272,14 +4295,15 @@ static int32_t sys_fcntl64(isr_params_t *params)
         case F_SETLKW:
         case F_SETLK64:
         case F_SETLKW64:
-            /* Advisory POSIX locks. Rach2 is single-user with no competing locker,
-             * so every lock request is granted (documented no-conflict semantics) --
-             * dropbear/musl lock utmp/lastlog and must not see -EINVAL/-ENOSYS. */
+            /* Advisory POSIX locks. Rach2 is single-user with no competing
+             * locker, so every lock request is granted (documented no-conflict
+             * semantics), because dropbear and musl lock utmp and lastlog
+             * and must not see -EINVAL or -ENOSYS. */
             return 0;
         case F_GETLK:
         case F_GETLK64:
-            /* Report that no lock would conflict: set l_type (the first short of
-             * the struct flock the caller passed) to F_UNLCK (2). */
+            /* Report that no lock would conflict: set l_type (the first short
+             * of the struct flock the caller passed) to F_UNLCK (2). */
             if (!arg) {
                 return -EFAULT;
             }
@@ -4377,8 +4401,8 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         name++;
     }
 
-    /* /dev and /proc are synthetic. The old stat(2) ABI is a narrower struct, so
-     * translate the synthetic stat64 result down into it. */
+    /* /dev and /proc are synthetic. The old stat(2) ABI is a narrower struct,
+     * so translate the synthetic stat64 result down into it. */
     {
         struct vpath vp;
         if (synth_classify(name, &vp) != VNODE_KRFFS) {
@@ -4435,8 +4459,9 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     return 0;
 }
 
-/* stat(106) follows symlinks; lstat(107) does not. musl falls back to these from
- * statx for AT_FDCWD paths, so both must exist for stat()/lstat() to work. */
+/* stat(106) follows symlinks; lstat(107) does not. musl falls back to these
+ * from statx for AT_FDCWD paths, so both must exist for stat()/lstat() to work.
+ */
 static int32_t sys_stat(isr_params_t *params)
 {
     return do_old_stat((const char __user *)params->ebx,
@@ -4467,10 +4492,10 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
     if (parent->cr3 == 0) {
         parent_dir = _kernel_dir;
     } else {
-        /* cr3 holds &page_dir->phys_page_tables (get_page_dir_phys); recover the
-         * page_dir_t* by subtracting that offset. The layout is
-         * logical_page_tables[1024] then phys_page_tables[1024], so the offset is
-         * 1024 * sizeof(page_table_t*) = 4096 bytes. */
+        /* cr3 holds &page_dir->phys_page_tables (get_page_dir_phys); recover
+         * the page_dir_t* by subtracting that offset. The layout is
+         * logical_page_tables[1024] then phys_page_tables[1024], so the offset
+         * is 1024 * sizeof(page_table_t*) = 4096 bytes. */
         parent_dir = (page_dir_t *)(parent->cr3 - 1024 * sizeof(page_table_t *));
     }
 
@@ -4609,16 +4634,16 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
     page_dir_t *dir;
     int was_init = (current_proc->pid == init_pid && init_pid != 0);
 
-    /* If the console-owning session leader is the one whose exec failed, release
-     * the controlling terminal before zombifying so the timer-IRQ serial drain
-     * does not target this dead session during the teardown window (mirrors
-     * sys_exit; usually a no-op here because sys_execve already released before
-     * free_user_pages; kept as a defensive backstop). */
+    /* If the console-owning session leader is the one whose exec failed,
+     * release the controlling terminal before zombifying so the timer-IRQ
+     * serial drain does not target this dead session during the teardown window
+     * (mirrors sys_exit; usually a no-op here because sys_execve already
+     * released before free_user_pages; kept as a defensive backstop). */
     if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
         tty_set_session(&console_tty, 0, 0);
     }
-    /* A dying session leader also disassociates any pty slave it controlled, so a
-     * later session can claim the same /dev/pts/N. */
+    /* A dying session leader also disassociates any pty slave it controlled, so
+     * a later session can claim the same /dev/pts/N. */
     pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
     current_proc->state = PROC_ZOMBIE;
@@ -4653,8 +4678,9 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
 
     /* schedule() returned -> nothing else is runnable. Reparenting guarantees
      * every process has a live parent (init at worst), and a blocked parent was
-     * woken above, so the scheduler always has the parent as a target: this point
-     * is reached only for the init-role process itself, under the debug shell. */
+     * woken above, so the scheduler always has the parent as a target: this
+     * point is reached only for the init-role process itself, under the debug
+     * shell. */
     if (current_proc->pid == init_pid) {
         init_pid = 0;
     }
@@ -4672,9 +4698,9 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
     current_proc->state = PROC_RUNNING;
     /* Fresh command line + drop stdin-wait state before re-enabling IRQs. */
     shell_reset_input();
-    /* Return to the debug shell only when it is the supervisor; on a normal boot
-     * (which the reasoning above makes unreachable here) halt rather than expose
-     * the shell. */
+    /* Return to the debug shell only when it is the supervisor; on a normal
+     * boot (which the reasoning above makes unreachable here) halt rather than
+     * expose the shell. */
     if (!debug_shell_is_home) {
         for (;;) {
             __asm__ __volatile__("cli; hlt");
@@ -4860,9 +4886,9 @@ static int32_t sys_execve(isr_params_t *params)
     }
 
     /* Resolve the program path (relative names against the cwd) into the static
-     * buffer. A bad user pointer, an over-long path, or an empty path is rejected
-     * by the return value, so a kernel-range pointer cannot leak kernel memory.
-     * The buffer is 64 bytes (NUL included). */
+     * buffer. A bad user pointer, an over-long path, or an empty path is
+     * rejected by the return value, so a kernel-range pointer cannot leak
+     * kernel memory. The buffer is 64 bytes (NUL included). */
     if (!user_path) {
         return -EFAULT;
     }
@@ -4873,9 +4899,9 @@ static int32_t sys_execve(isr_params_t *params)
 
     /* Copy argv from user space, range-checking every user pointer and bounding
      * the cumulative offset so _exec_argv_storage cannot overflow. An argument
-     * that does not fit fails the exec rather than being silently truncated. The
-     * pointer array and each string are read through the copy helpers, which
-     * fault-check each access.
+     * that does not fit fails the exec rather than being silently truncated.
+     * The pointer array and each string are read through the copy helpers,
+     * which fault-check each access.
      *
      * The two vectors share one string budget, which is checked after both are
      * in: the page they are laid into is one page whichever of them fills it,
@@ -4911,8 +4937,9 @@ static int32_t sys_execve(isr_params_t *params)
             }
             argv_offset += (uint32_t)r + 1;
         }
-        /* The bufs array holds EXEC_MAX_ENTRIES args plus a NULL terminator; one
-         * more non-NULL pointer is too many args, not a silent truncation. */
+        /* The bufs array holds EXEC_MAX_ENTRIES args plus a NULL terminator;
+         * one more non-NULL pointer is too many args, not a silent truncation.
+         */
         if (argc == EXEC_MAX_ENTRIES) {
             uint32_t arg_ptr = 0;
             if (copy_from_user(&arg_ptr,
@@ -4955,8 +4982,8 @@ static int32_t sys_execve(isr_params_t *params)
             }
             envp_offset += (uint32_t)r + 1;
         }
-        /* As with argv: one more non-NULL envp pointer overflows the bufs array;
-         * fail rather than silently drop the tail of the environment. */
+        /* As with argv: one more non-NULL envp pointer overflows the bufs
+         * array; fail rather than silently drop the tail of the environment. */
         if (envc == EXEC_MAX_ENTRIES) {
             uint32_t env_ptr = 0;
             if (copy_from_user(&env_ptr,
@@ -4986,8 +5013,8 @@ static int32_t sys_execve(isr_params_t *params)
 
     /* The synthetic /dev and /proc mounts hold no executables. Classify the
      * canonicalized path the way open does and refuse a synthetic-classified
-     * name, so execve sees the same mount boundary and cannot reach a KRFFS file
-     * that a hostile image placed below the synthetic prefix. */
+     * name, so execve sees the same mount boundary and cannot reach a KRFFS
+     * file that a hostile image placed below the synthetic prefix. */
     {
         struct vpath vp;
         if (synth_classify(name, &vp) != VNODE_KRFFS) {
@@ -5001,11 +5028,11 @@ static int32_t sys_execve(isr_params_t *params)
 
     {
         int perr = 0;
-        /* Resolved before the existence probe below, not after: krffs_open walks
-         * with no predicate, so asking it first would answer -ENOENT for a
-         * missing program under a directory the caller may not search, telling
-         * that caller the name is absent. The denied ancestor outranks the
-         * question. */
+        /* Resolved before the existence probe below, not after: krffs_open
+         * walks with no predicate, so asking it first would answer -ENOENT for
+         * a missing program under a directory the caller may not search,
+         * telling that caller the name is absent. The denied ancestor outranks
+         * the question. */
         krffs_node_t *prog = krffs_resolve_x(name, &perr, cred_may_search);
         int32_t rc;
         if (!prog) {
@@ -5047,9 +5074,10 @@ static int32_t sys_execve(isr_params_t *params)
     }
 
     /* Validate the ELF header BEFORE tearing down the old image, so the common
-     * "not a valid executable" failure leaves the calling process intact. A file
-     * that is not an ELF may still be a script naming its interpreter, and then
-     * what runs is the interpreter, checked here exactly as the script was. */
+     * "not a valid executable" failure leaves the calling process intact. A
+     * file that is not an ELF may still be a script naming its interpreter, and
+     * then what runs is the interpreter, checked here exactly as the script
+     * was. */
     {
         Elf32_Ehdr ehdr;
 
@@ -5132,9 +5160,10 @@ static int32_t sys_execve(isr_params_t *params)
     /* Record the program's basename as comm for /proc/<pid>/stat and ps. */
     proc_set_comm(current_proc, name);
 
-    /* Reset caught signal dispositions to default: their handler addresses point
-     * into the OLD image that is about to be replaced. SIG_IGN dispositions and
-     * the blocked mask are preserved (POSIX exec semantics). */
+    /* Reset caught signal dispositions to default: their handler addresses
+     * point into the OLD image that is about to be replaced. SIG_IGN
+     * dispositions and the blocked mask are preserved (POSIX exec semantics).
+     */
     {
         int s;
         for (s = 1; s <= KSIG_MAX; s++) {
@@ -5147,13 +5176,13 @@ static int32_t sys_execve(isr_params_t *params)
     }
 
     /* If this process owns the console, release the controlling terminal across
-     * the destructive load below: once free_user_pages runs the old image is gone
-     * and a load/stack failure routes to exec_fail_destroyed (death), so leaving
-     * sid set would let the timer-IRQ serial drain target a destroyed image in
-     * that window (the same class as the sys_exit teardown bug). On success it is
-     * re-published with the unchanged session/group before returning to userspace,
-     * preserving exec's keep-the-controlling-terminal semantics; on failure
-     * exec_fail_destroyed releases again (idempotent). */
+     * the destructive load below: once free_user_pages runs the old image is
+     * gone and a load/stack failure routes to exec_fail_destroyed (death), so
+     * leaving sid set would let the timer-IRQ serial drain target a destroyed
+     * image in that window (the same class as the sys_exit teardown bug). On
+     * success it is re-published with the unchanged session/group before
+     * returning to userspace, preserving exec's keep-the-controlling-terminal
+     * semantics; on failure exec_fail_destroyed releases again (idempotent). */
     owned_console = tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid);
     if (owned_console) {
         tty_set_session(&console_tty, 0, 0);
@@ -5234,9 +5263,9 @@ static int32_t sys_execve(isr_params_t *params)
         current_proc->tls_base = 0;
         gdt_set_tls(0);
 
-        /* Build the address-space map (VMAs) for the new image so the page-fault
-         * handler can demand-page, grow the stack, or segfault. The ELF code/data
-         * pages themselves are still eagerly loaded above. */
+        /* Build the address-space map (VMAs) for the new image so the
+         * page-fault handler can demand-page, grow the stack, or segfault. The
+         * ELF code/data pages themselves are still eagerly loaded above. */
         elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
                        VM_STACK_MAX_GROWTH);
     }
@@ -5250,9 +5279,9 @@ static int32_t sys_execve(isr_params_t *params)
         ::: "eax", "memory"
     );
 
-    /* Exec succeeded: re-publish the controlling terminal we released above, with
-     * the unchanged session/group (exec keeps the controlling terminal), so the
-     * new image owns the console exactly as the old one did. */
+    /* Exec succeeded: re-publish the controlling terminal we released above,
+     * with the unchanged session/group (exec keeps the controlling terminal),
+     * so the new image owns the console exactly as the old one did. */
     if (owned_console) {
         tty_set_session(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
     }
@@ -5285,9 +5314,10 @@ static int32_t sys_fork(isr_params_t *params)
         return -EAGAIN;
     }
 
-    /* alloc_process gave the child its own stdio open-file descriptions; release
-     * them now (before any failure path or the fd-table copy below overwrites the
-     * table), or those OFDs would be orphaned and leak the pool on every fork. */
+    /* alloc_process gave the child its own stdio open-file descriptions;
+     * release them now (before any failure path or the fd-table copy below
+     * overwrites the table), or those OFDs would be orphaned and leak the pool
+     * on every fork. */
     release_fd_table(&child->fds);
 
     child_dir = clone_page_directory();
@@ -5299,7 +5329,8 @@ static int32_t sys_fork(isr_params_t *params)
     /* Copy user pages from parent to child. On failure, release the frames
      * copy_user_pages already allocated and the cloned directory (not just the
      * PCB) or each failed fork leaks a directory and its private page tables.
-     * child_dir is never the running (parent) directory, so it frees cleanly. */
+     * child_dir is never the running (parent) directory, so it frees cleanly.
+     */
     if (copy_user_pages(parent, child_dir) != 0) {
         free_user_pages(child_dir);
         free_page_directory(child_dir);
@@ -5319,9 +5350,9 @@ static int32_t sys_fork(isr_params_t *params)
     child->cr3 = get_page_dir_phys(child_dir);
     child->parent_pid = parent->pid;
 
-    /* Inherit the parent's session and process group: a forked child stays in the
-     * parent's job-control group until it (or the parent) calls setsid/setpgid.
-     * alloc_process defaulted these to the child's own pid. */
+    /* Inherit the parent's session and process group: a forked child stays in
+     * the parent's job-control group until it (or the parent) calls
+     * setsid/setpgid. alloc_process defaulted these to the child's own pid. */
     child->sid = parent->sid;
     child->pgid = parent->pgid;
     child->umask = parent->umask; /* the file-creation mask is inherited */
@@ -5338,7 +5369,8 @@ static int32_t sys_fork(isr_params_t *params)
      * parent's %gs selector, and its address space is a copy at the same
      * virtual addresses, so the same base is correct. Without this the context
      * switch would reprogram the TLS descriptor to 0 for the child and its
-     * %gs-relative reads (errno, the stack canary) would fault or read garbage. */
+     * %gs-relative reads (errno, the stack canary) would fault or read garbage.
+     */
     child->tls_base = parent->tls_base;
 
     /* The child's address space is a copy of the parent's at the same virtual
@@ -5351,8 +5383,8 @@ static int32_t sys_fork(isr_params_t *params)
     /* The child inherits the parent's current working directory. */
     k_memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
 
-    /* Signals: the child inherits the dispositions and the blocked mask, but its
-     * pending set starts empty (POSIX fork semantics). */
+    /* Signals: the child inherits the dispositions and the blocked mask, but
+     * its pending set starts empty (POSIX fork semantics). */
     k_memcpy(child->sigacts, parent->sigacts, sizeof(child->sigacts));
     child->sig_blocked = parent->sig_blocked;
     child->sig_pending = 0;
@@ -5426,8 +5458,8 @@ static int32_t sys_fork(isr_params_t *params)
  * as all zero. */
 #define RUSAGE_BYTES 72
 
-/* Interrupts-off helpers (defined below with the signal code); used here for the
- * lost-wakeup-safe sleep in do_wait. */
+/* Interrupts-off helpers (defined below with the signal code); used here for
+ * the lost-wakeup-safe sleep in do_wait. */
 static uint32_t sig_irq_save(void);
 static void sig_irq_restore(uint32_t flags);
 
@@ -5471,8 +5503,8 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     }
 
     /* Validate AND fault in the status (and rusage) pointers up front (a NULL
-     * status means "don't report status"), so a bad or not-yet-present address is
-     * rejected before any child is reaped; otherwise the copy_to_user below
+     * status means "don't report status"), so a bad or not-yet-present address
+     * is rejected before any child is reaped; otherwise the copy_to_user below
      * could fail after free_process() has destroyed the zombie, losing it.
      * Prefault for write, since that is how the results are delivered. */
     if (status &&
@@ -5486,8 +5518,8 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     while (1) {
         int have_child = 0;
 
-        /* Scan ALL matching children for a reportable event (a zombie to reap, or
-         * a stop/continue to report), not just the first non-zombie. */
+        /* Scan ALL matching children for a reportable event (a zombie to reap,
+         * or a stop/continue to report), not just the first non-zombie. */
         for (i = 0; i < MAX_PROCS; i++) {
             process_t *p = &proc_table[i];
 
@@ -5509,9 +5541,9 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
                     free_user_pages(child_dir);
                     free_page_directory(child_dir);
                 }
-                /* The zombie no longer runs on its kernel stack, so return it to
-                 * the arena for the next fork; this is the single release point
-                 * for a per-fork stack. */
+                /* The zombie no longer runs on its kernel stack, so return it
+                 * to the arena for the next fork; this is the single release
+                 * point for a per-fork stack. */
                 kstack_free(p->kernel_stack);
                 free_process(p);
                 if (status) {
@@ -5525,8 +5557,9 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
                 return (int32_t)child_pid;
             }
 
-            /* A stop (WUNTRACED) or continue (WCONTINUED) is REPORTED, not reaped;
-             * jc_status is consumed so the same event is not delivered twice. */
+            /* A stop (WUNTRACED) or continue (WCONTINUED) is REPORTED, not
+             * reaped; jc_status is consumed so the same event is not delivered
+             * twice. */
             if ((options & WUNTRACED) && p->state == PROC_STOPPED &&
                 (p->jc_status & 0xff) == 0x7f) {
                 exit_code = (int)p->jc_status;
@@ -5549,11 +5582,12 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
         if (!have_child) {
             return -ECHILD;
         }
-        /* A child exists but has no reportable event. WNOHANG returns 0; otherwise
-         * block until a child changes state (exit/stop/continue wakes us) or a
-         * signal interrupts. Lost-wakeup-safe: the signal_pending check and the
-         * PROC_BLOCKED transition are one interrupts-off step, so a signal posted
-         * from an IRQ either is seen here or finds us BLOCKED and wakes us. */
+        /* A child exists but has no reportable event. WNOHANG returns 0;
+         * otherwise block until a child changes state (exit/stop/continue wakes
+         * us) or a signal interrupts. Lost-wakeup-safe: the signal_pending
+         * check and the PROC_BLOCKED transition are one interrupts-off step, so
+         * a signal posted from an IRQ either is seen here or finds us BLOCKED
+         * and wakes us. */
         if (options & WNOHANG) {
             return 0;
         }
@@ -5638,9 +5672,10 @@ static int32_t sys_creat(isr_params_t *params)
         return -ENOENT;
     }
 
-    /* creat on an existing directory must fail with -EISDIR, not fall through to
-     * overwrite the directory node's mode and corrupt it into a file. A denied
-     * ancestor outranks both: the caller may not learn what is in there. */
+    /* creat on an existing directory must fail with -EISDIR, not fall through
+     * to overwrite the directory node's mode and corrupt it into a file. A
+     * denied ancestor outranks both: the caller may not learn what is in there.
+     */
     {
         int rerr = 0;
 
@@ -5790,9 +5825,9 @@ static int32_t sys_unlink(isr_params_t *params)
         /* The last decision, never the first: orphaning bypasses the refusals
          * krffs_unlink would have made, so every one of them is decided above.
          * With a holder the node stays live and nameless until the last close;
-         * with none it is freed now, because the release lives at that close and
-         * an unconditional orphan would leak an extent on every removal made
-         * while nothing happened to be reading. */
+         * with none it is freed now, because the release lives at that close
+         * and an unconditional orphan would leak an extent on every removal
+         * made while nothing happened to be reading. */
         if (fd_node_holders(node, NULL) > 0) {
             krffs_unlink_held(node);
             return 0;
@@ -6122,8 +6157,8 @@ static int32_t sys_utimensat(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Copy the path (resolved against AT_FDCWD/the dirfd) and, if given, the two
-     * timespecs into kernel memory through the fault-safe helpers. */
+    /* Copy the path (resolved against AT_FDCWD/the dirfd) and, if given, the
+     * two timespecs into kernel memory through the fault-safe helpers. */
     len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, user_path);
     if (len < 0) {
         return len;
@@ -6493,9 +6528,9 @@ static int32_t sys_getdents64(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Records are packed straight into the user buffer below, so range-check AND
-     * fault in the whole [buf, buf+count) span once; every record write then
-     * stays inside present, validated user memory. */
+    /* Records are packed straight into the user buffer below, so range-check
+     * AND fault in the whole [buf, buf+count) span once; every record write
+     * then stays inside present, validated user memory. */
     if (!user_buffer_ok((uint32_t)buf, count, 1)) {
         return -EFAULT;
     }
@@ -6505,9 +6540,9 @@ static int32_t sys_getdents64(isr_params_t *params)
         return -EBADF;
     }
 
-    /* A synthetic directory (/dev, /proc, /proc/<pid>[/fd]) lists from the process
-     * table or device registry, not KRFFS. Bare `ls /` does not merge these mount
-     * names; they are reached by their absolute paths. */
+    /* A synthetic directory (/dev, /proc, /proc/<pid>[/fd]) lists from the
+     * process table or device registry, not KRFFS. Bare `ls /` does not merge
+     * these mount names; they are reached by their absolute paths. */
     if (entry->type == FD_TYPE_SYNTH_DIR) {
         return synth_getdents(entry, buf, count);
     }
@@ -6585,8 +6620,8 @@ static int32_t sys_getdents64(isr_params_t *params)
                     break;
                 }
 
-                /* Build the record in kernel memory, then copy it out through the
-                 * helper (no raw write into user space). */
+                /* Build the record in kernel memory, then copy it out through
+                 * the helper (no raw write into user space). */
                 k_memset(recbuf, 0, rec_len);
                 dirent = (struct linux_dirent64 *)recbuf;
                 dirent->d_ino = node->id;                      /* the DJB hash is the inode */
@@ -6753,8 +6788,9 @@ static int32_t sys_nanosleep(isr_params_t *params)
         current_proc->wakeup_tick = target;
         current_proc->state = PROC_BLOCKED;
         schedule(); /* yield to any other READY process; the timer wakes us */
-        /* A signal cuts the sleep short: stop sleeping, report the time left, and
-         * return -EINTR so it is acted on when the syscall returns to user. */
+        /* A signal cuts the sleep short: stop sleeping, report the time left,
+         * and return -EINTR so it is acted on when the syscall returns to user.
+         */
         if (signal_pending()) {
             uint32_t left = ((int32_t)(target - kernel_ticks) > 0)
                                 ? (target - kernel_ticks) : 0u;
@@ -6769,8 +6805,9 @@ static int32_t sys_nanosleep(isr_params_t *params)
             return -EINTR;
         }
         if ((int32_t)(target - kernel_ticks) > 0) {
-            /* schedule() found nobody else to run: idle until the next interrupt
-             * (the tick) rather than busy-spinning on the scheduler. */
+            /* schedule() found nobody else to run: idle until the next
+             * interrupt (the tick) rather than busy-spinning on the scheduler.
+             */
             __asm__ __volatile__("sti; hlt");
         }
     }
@@ -6848,10 +6885,10 @@ static int32_t sys_getrandom(isr_params_t *params)
     if (!buf) {
         return -EFAULT;
     }
-    /* Fail closed: with no trusted hardware entropy (RDSEED/RDRAND), refuse rather
-     * than hand out the weak boot-jitter stream for a key. A caller that explicitly
-     * accepts insecure bytes passes GRND_INSECURE (the same tier as AT_RANDOM / the
-     * stack canary). */
+    /* Fail closed: with no trusted hardware entropy (RDSEED/RDRAND), refuse
+     * rather than hand out the weak boot-jitter stream for a key. A caller that
+     * explicitly accepts insecure bytes passes GRND_INSECURE (the same tier as
+     * AT_RANDOM / the stack canary). */
     if (!krandom_is_trusted() && !(flags & GRND_INSECURE)) {
         return -EIO;
     }
@@ -6909,9 +6946,9 @@ static uint32_t safe_user_seg(uint32_t sel)
 }
 
 /* The signal masks are 64-bit, so a read-modify-write is two stores on i386;
- * signal_post runs from IRQ context (Ctrl-C) as well as syscalls, so guard every
- * pending/blocked mutation with interrupts off to avoid a lost update. Returns
- * the prior IF so the caller can restore it. */
+ * signal_post runs from IRQ context (Ctrl-C) as well as syscalls, so guard
+ * every pending/blocked mutation with interrupts off to avoid a lost update.
+ * Returns the prior IF so the caller can restore it. */
 static uint32_t sig_irq_save(void)
 {
     uint32_t flags;
@@ -6981,9 +7018,9 @@ void signal_post(process_t *target, int signo)
     }
 }
 
-/* Non-zero if the current process has a deliverable (pending, unblocked) signal.
- * Blocking syscall loops poll this so a signal interrupts the wait (the signal is
- * then delivered/acts on the syscall's return to user). */
+/* Non-zero if the current process has a deliverable (pending, unblocked)
+ * signal. Blocking syscall loops poll this so a signal interrupts the wait (the
+ * signal is then delivered/acts on the syscall's return to user). */
 int signal_pending(void)
 {
     uint64_t deliverable;
@@ -6994,7 +7031,8 @@ int signal_pending(void)
         return 0;
     }
     /* Snapshot the 64-bit masks with IRQs off: on i386 a 64-bit read is two
-     * 32-bit loads, and a signal posted from an IRQ in between could tear it. */
+     * 32-bit loads, and a signal posted from an IRQ in between could tear it.
+     */
     flags = sig_irq_save();
     deliverable = current_proc->sig_pending & ~current_proc->sig_blocked;
     sig_irq_restore(flags);
@@ -7092,9 +7130,9 @@ static int32_t kill_group(int pgid, int signo)
     return allowed ? 0 : -EPERM;
 }
 
-/* kill(2): pid > 0 a single process; pid == 0 the caller's process group; pid < -1
- * the group (-pid). (pid == -1 "all processes" is not supported here.) signo 0
- * just probes existence and permission. */
+/* kill(2): pid > 0 a single process; pid == 0 the caller's process group; pid <
+ * -1 the group (-pid). (pid == -1 "all processes" is not supported here.) signo
+ * 0 just probes existence and permission. */
 static int32_t do_kill(int pid, int signo)
 {
     process_t *target;
@@ -7166,10 +7204,11 @@ static int32_t sys_tgkill(isr_params_t *params)
     return do_kill(tid, sig);
 }
 
-/* Block until a deliverable signal is pending. Lost-wakeup-safe: the pending check
- * and the BLOCKED transition are one interrupts-off critical section, so a signal
- * posted from an IRQ either is seen here or finds us BLOCKED and wakes us (the
- * wait_queue.c discipline). IF is re-enabled only while yielding/idling. */
+/* Block until a deliverable signal is pending. Lost-wakeup-safe: the pending
+ * check and the BLOCKED transition are one interrupts-off critical section, so
+ * a signal posted from an IRQ either is seen here or finds us BLOCKED and wakes
+ * us (the wait_queue.c discipline). IF is re-enabled only while
+ * yielding/idling. */
 static void sig_wait(void)
 {
     uint32_t flags = sig_irq_save();
@@ -7432,9 +7471,10 @@ static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
         return 0;
     }
 
-    /* Restore the general registers and instruction/stack pointers, but FORCE the
-     * segment selectors to ring-3 user values and sanitize EFLAGS (keep IF set,
-     * mask the privileged/IOPL bits) so a tampered frame cannot escalate. */
+    /* Restore the general registers and instruction/stack pointers, but FORCE
+     * the segment selectors to ring-3 user values and sanitize EFLAGS (keep IF
+     * set, mask the privileged/IOPL bits) so a tampered frame cannot escalate.
+     */
     tf->edi = frame.saved.edi;
     tf->esi = frame.saved.esi;
     tf->ebp = frame.saved.ebp;
@@ -7447,9 +7487,10 @@ static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
     tf->cs = 0x1b;      /* privilege-critical: always the user code selector */
     tf->user_ss = 0x23; /* privilege-critical: always the user data selector */
     /* Restore the saved data/TLS selectors so %gs keeps the per-process TLS
-     * selector (0x33) the handler ran with; coerce anything that is not a ring-3
-     * selector to flat user data so a forged frame cannot smuggle a kernel
-     * selector to iret (a bogus ring-3 selector at worst faults the process). */
+     * selector (0x33) the handler ran with; coerce anything that is not a
+     * ring-3 selector to flat user data so a forged frame cannot smuggle a
+     * kernel selector to iret (a bogus ring-3 selector at worst faults the
+     * process). */
     tf->ds = safe_user_seg(frame.saved.ds);
     tf->es = safe_user_seg(frame.saved.es);
     tf->fs = safe_user_seg(frame.saved.fs);
@@ -7527,24 +7568,24 @@ void deliver_signals(isr_params_t *tf)
             }
             if (def == KSIG_DEFAULT_STOP) {
                 process_t *parent;
-                /* The real init (PID 1) is unstoppable, like Unix init: stopping
-                 * it would freeze the system with no reaper and no way back. Drop
-                 * a job-control stop aimed at it. */
+                /* The real init (PID 1) is unstoppable, like Unix init:
+                 * stopping it would freeze the system with no reaper and no way
+                 * back. Drop a job-control stop aimed at it. */
                 if (current_proc->pid == init_pid && !debug_shell_is_home) {
                     continue;
                 }
                 /* Job-control stop: park as PROC_STOPPED until a SIGCONT (or a
-                 * SIGKILL, to die) flips us back to READY. Record the stop for the
-                 * parent's wait4(WUNTRACED) and nudge it with SIGCHLD. */
+                 * SIGKILL, to die) flips us back to READY. Record the stop for
+                 * the parent's wait4(WUNTRACED) and nudge it with SIGCHLD. */
                 parent = get_process(current_proc->parent_pid);
                 current_proc->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
                 current_proc->state = PROC_STOPPED;
                 if (parent) {
                     signal_post(parent, SIGCHLD);
                 }
-                /* Yield to others; if none are runnable, idle. The scheduler keeps
-                 * us STOPPED (it only flips RUNNING->READY); signal_post resumes us.
-                 * `sti;hlt;cli` from IF=0 is lost-wakeup-safe. */
+                /* Yield to others; if none are runnable, idle. The scheduler
+                 * keeps us STOPPED (it only flips RUNNING->READY); signal_post
+                 * resumes us. `sti;hlt;cli` from IF=0 is lost-wakeup-safe. */
                 while (current_proc->state == PROC_STOPPED) {
                     schedule();
                     if (current_proc->state == PROC_STOPPED) {
@@ -7589,7 +7630,8 @@ static int pgrp_in_session(int pgid, int sid)
 }
 
 /* The tty behind a descriptor for the shared terminal ioctls: the console for a
- * FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd, else NULL. */
+ * FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd, else
+ * NULL. */
 static struct tty *fd_tty(fd_entry_t *e)
 {
     if (e->type == FD_TYPE_CONSOLE) {
@@ -7626,9 +7668,9 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
             return 0;
 
         case FIONREAD: {
-            /* Bytes a read would return right now (a complete cooked line, or the
-             * queued count in raw mode); a pending EOF counts as 0. Drains the
-             * input source first so freshly arrived input is counted. */
+            /* Bytes a read would return right now (a complete cooked line, or
+             * the queued count in raw mode); a pending EOF counts as 0. Drains
+             * the input source first so freshly arrived input is counted. */
             int navail;
             if (!arg) {
                 return -EFAULT;
@@ -7658,8 +7700,9 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
         }
 
         case TCFLSH:
-            /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input; we
-             * hold no output queue, so TCOFLUSH(1) is a no-op. Else invalid. */
+            /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input;
+             * we hold no output queue, so TCOFLUSH(1) is a no-op. Else invalid.
+             */
             if (arg > 2) {
                 return -EINVAL;
             }
@@ -7724,19 +7767,19 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
         }
 
         case TIOCSCTTY:
-            /* A session leader with no controlling tty claims this terminal for its
-             * session; re-claiming by the same session is idempotent. */
+            /* A session leader with no controlling tty claims this terminal for
+             * its session; re-claiming by the same session is idempotent. */
             if ((int)current_proc->sid != (int)current_proc->pid) {
                 return -EPERM; /* not a session leader */
             }
             if (t->sid != 0 && t->sid != (int)current_proc->sid) {
                 return -EPERM; /* owned by another session */
             }
-            /* Claim t as this session's SOLE controlling terminal: one atomic step
-             * publishes t (sid + foreground group) AND drops every other terminal
-             * the session held (the console and any other pty), so the timer-IRQ
-             * serial drain never sees a torn or doubled ctty and /dev/tty resolves
-             * to t. */
+            /* Claim t as this session's SOLE controlling terminal: one atomic
+             * step publishes t (sid + foreground group) AND drops every other
+             * terminal the session held (the console and any other pty), so the
+             * timer-IRQ serial drain never sees a torn or doubled ctty and
+             * /dev/tty resolves to t. */
             tty_make_sole_ctty(t, (int)current_proc->sid, (int)current_proc->pgid);
             return 0;
 
@@ -7811,8 +7854,8 @@ static int32_t sys_ioctl(isr_params_t *params)
         }
     }
 
-    /* A backing-ops object (pipe/pty/device) owns its remaining ioctls: FIONBIO,
-     * and (for the pty master) TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ. */
+    /* A backing-ops object (pipe/pty/device) owns its remaining ioctls:
+     * FIONBIO, and (for the pty master) TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ. */
     if (entry->ops) {
         return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg)
                                  : -ENOTTY;
@@ -7824,10 +7867,10 @@ static int32_t sys_ioctl(isr_params_t *params)
         return -ENOTTY; /* terminal-only requests on a non-terminal fd */
     }
 
-    /* KIOCSOUND is handled by the console-type block below, keyed on the backing
-     * object's type (not the fd number) so it cannot fire on an fd 1/2 that
-     * has been closed and reopened onto a regular file (now that close(0/1/2) is
-     * legal). */
+    /* KIOCSOUND is handled by the console-type block below, keyed on the
+     * backing object's type (not the fd number) so it cannot fire on an fd 1/2
+     * that has been closed and reopened onto a regular file (now that
+     * close(0/1/2) is legal). */
 
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
         switch (request) {
@@ -8015,9 +8058,9 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 #define SC_SETSOCKOPT  14
 #define SC_GETSOCKOPT  15
 #define SC_RECVMSG     17
-/* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it used
- * to squat on 15 == Linux getsockopt, which a real server needs). Userspace
- * callers (utils/ping.c, tests/pingtest.c) use the same value. */
+/* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it
+ * used to squat on 15 == Linux getsockopt, which a real server needs).
+ * Userspace callers (utils/ping.c, tests/pingtest.c) use the same value. */
 #define SC_PING     0x1000
 
 /**
@@ -8076,7 +8119,8 @@ static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_por
 #define SOCKADDR_MIN 8
 
 /* The whole of a struct sockaddr_in: family (2), port (2), address (4), and
- * eight bytes of padding. `SOCKADDR_MIN` above is only the part that is read. */
+ * eight bytes of padding. `SOCKADDR_MIN` above is only the part that is read.
+ */
 #define SOCKADDR_IN_LEN 16
 
 /* struct sockaddr_ll, the address a packet socket binds and sends to, with the
@@ -8137,8 +8181,8 @@ static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
     return 0;
 }
 
-/* socket(2): only AF_INET (domain 2), SOCK_STREAM, and SOCK_DGRAM. Returns a new
- * socket fd or -errno. */
+/* socket(2): only AF_INET (domain 2), SOCK_STREAM, and SOCK_DGRAM. Returns a
+ * new socket fd or -errno. */
 static int32_t do_socket(int domain, int type, int protocol)
 {
     struct socket *sock;
@@ -8262,8 +8306,8 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 
     if (entry->sock->type == SOCK_DGRAM) {
         /* A datagram send before bind auto-binds an ephemeral source port; drop
-         * that registration before claiming the requested one, or its port-table
-         * slot leaks for the socket's life. */
+         * that registration before claiming the requested one, or its
+         * port-table slot leaks for the socket's life. */
         if (entry->sock->local_port != 0) {
             udp_unbind(entry->sock);
             entry->sock->local_port = 0;
@@ -8291,7 +8335,8 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 }
 
 /* sendto(2): a stream socket ignores the destination and behaves like send; a
- * datagram socket sends to the sockaddr, binding an ephemeral source port first. */
+ * datagram socket sends to the sockaddr, binding an ephemeral source port
+ * first. */
 static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
                          int flags, uint32_t sa_ptr, int addrlen)
 {
@@ -8318,7 +8363,8 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
 
     /* On a connected stream socket, sendto with any (or no) destination behaves
      * like send; the connection's peer is the destination, so the sockaddr is
-     * ignored (this is the path musl's send() takes: sendto with a NULL addr). */
+     * ignored (this is the path musl's send() takes: sendto with a NULL addr).
+     */
     if (entry->sock->type == SOCK_STREAM) {
         int nonblock = (flags & MSG_DONTWAIT) ||
                        (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
@@ -8390,9 +8436,9 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
                       (uint16_t)len);
 }
 
-/* recvfrom(2): a stream socket behaves like recv (no source writeback); a datagram
- * socket reports the source address, truncated to the caller's capacity. Honors
- * MSG_DONTWAIT and O_NONBLOCK. */
+/* recvfrom(2): a stream socket behaves like recv (no source writeback); a
+ * datagram socket reports the source address, truncated to the caller's
+ * capacity. Honors MSG_DONTWAIT and O_NONBLOCK. */
 static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
                            int flags, uint32_t sa_ptr, uint32_t salen_ptr)
 {
@@ -8447,9 +8493,9 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
                (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
     /* On a connected stream socket, recvfrom behaves like recv; the peer is the
-     * connection's, so the optional source-address writeback is skipped and a NULL
-     * sockaddr is fine (this is the path musl's recv() takes: recvfrom with a NULL
-     * addr). */
+     * connection's, so the optional source-address writeback is skipped and a
+     * NULL sockaddr is fine (this is the path musl's recv() takes: recvfrom
+     * with a NULL addr). */
     if (entry->sock->type == SOCK_STREAM) {
         if (nonblock) {
             return (int32_t)socket_tcp_try_recv(
@@ -8460,8 +8506,8 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
                                         len);
     }
 
-    /* socket_recv/socket_try_recv write straight into the validated user buffer;
-     * __force strips __user at the boundary. */
+    /* socket_recv/socket_try_recv write straight into the validated user
+     * buffer; __force strips __user at the boundary. */
     if (nonblock) {
         bytes = socket_try_recv(entry->sock,
                                 (uint8_t __force *)(void __user *)buf_ptr, len,
@@ -8522,8 +8568,8 @@ static int accept_ready(void *arg)
     return sock->accept_head != sock->accept_tail;
 }
 
-/* connect(2): start the TCP handshake to the sockaddr. A blocking socket waits it
- * out (-EINTR on a signal); a non-blocking one returns 0 or -EINPROGRESS. */
+/* connect(2): start the TCP handshake to the sockaddr. A blocking socket waits
+ * it out (-EINTR on a signal); a non-blocking one returns 0 or -EINPROGRESS. */
 static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
@@ -8618,9 +8664,9 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
         return -EOPNOTSUPP;
     }
     if (entry->sock->listening || entry->sock->tcb) {
-        /* A socket that is already listening, connecting, or connected keeps its
-         * TCB; a second tcp_connect would allocate another and leak the first,
-         * whose stale delivery could reach a since-reused socket. */
+        /* A socket that is already listening, connecting, or connected keeps
+         * its TCB; a second tcp_connect would allocate another and leak the
+         * first, whose stale delivery could reach a since-reused socket. */
         return (entry->sock->tcb && entry->sock->tcb->state == TCP_SYN_SENT)
                    ? -EALREADY
                    : -EISCONN;
@@ -8693,7 +8739,8 @@ static int32_t do_listen(int fd, int backlog)
 }
 
 /* accept(2): dequeue a completed connection (blocking, or -EAGAIN on a
- * non-blocking listener), install a new fd for it, and report the peer address. */
+ * non-blocking listener), install a new fd for it, and report the peer address.
+ */
 static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
     fd_entry_t    *entry;
@@ -8720,8 +8767,8 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         return -EAGAIN;
     }
 
-    /* Block until a connection is queued, yielding to other processes; a pending
-     * signal unwinds with -EINTR. */
+    /* Block until a connection is queued, yielding to other processes; a
+     * pending signal unwinds with -EINTR. */
     {
         int rc = wq_wait_event(&listen_sock->waiters, accept_ready, listen_sock);
         if (rc < 0) {
@@ -8747,9 +8794,10 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     new_entry->ofd->offset = 0;
     new_entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
 
-    /* Report the peer address, truncated to the caller's declared capacity. On a
-     * bad user pointer, tear down the descriptor we just installed (releasing its
-     * socket reference) rather than leaking the accepted fd and its socket. */
+    /* Report the peer address, truncated to the caller's declared capacity. On
+     * a bad user pointer, tear down the descriptor we just installed (releasing
+     * its socket reference) rather than leaking the accepted fd and its socket.
+     */
     if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port,
                               conn_sock->remote_ip) != 0) {
         fd_release_backing(new_entry);
@@ -8807,9 +8855,9 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
     }
-    /* Don't block when the caller asked per-call (MSG_DONTWAIT) or the descriptor
-     * is O_NONBLOCK. socket_tcp_*recv write into the validated user buffer;
-     * __force strips __user at the boundary. */
+    /* Don't block when the caller asked per-call (MSG_DONTWAIT) or the
+     * descriptor is O_NONBLOCK. socket_tcp_*recv write into the validated user
+     * buffer; __force strips __user at the boundary. */
     nonblock = (flags & MSG_DONTWAIT) ||
                (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
@@ -8849,8 +8897,8 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
     }
-    /* Unlike accept/recvfrom, getsockname requires the buffers (copy_sockaddr_to_
-     * user treats NULL as "no address wanted"). */
+    /* Unlike accept/recvfrom, getsockname requires the buffers
+     * (copy_sockaddr_to_ user treats NULL as "no address wanted"). */
     if (!sa_ptr || !salen_ptr) {
         return -EFAULT;
     }
@@ -8886,10 +8934,11 @@ static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
                                  entry->sock->remote_ip);
 }
 
-/* shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2). Any direction that includes
- * the write side drives the TCP active close (a FIN, so the peer reads EOF);
- * SHUT_RD alone is accepted as a no-op. We have no lingering half-open state, so a
- * write-side shutdown sends the FIN exactly as close() would (documented). */
+/* shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2). Any direction that
+ * includes the write side drives the TCP active close (a FIN, so the peer reads
+ * EOF); SHUT_RD alone is accepted as a no-op. We have no lingering half-open
+ * state, so a write-side shutdown sends the FIN exactly as close() would
+ * (documented). */
 #define SHUT_RD   0
 #define SHUT_WR   1
 #define SHUT_RDWR 2
@@ -8907,8 +8956,8 @@ static int32_t do_shutdown(int fd, int how)
         return -EINVAL;
     }
     /* Only a connected stream socket can be shut down, NOT a listener (which
-     * would free its LISTEN TCB and silently stop accepting), an unconnected, or a
-     * UDP socket. */
+     * would free its LISTEN TCB and silently stop accepting), an unconnected,
+     * or a UDP socket. */
     if (!tcp_is_connected(entry->sock)) {
         return -ENOTCONN;
     }
@@ -8933,8 +8982,9 @@ static int32_t do_shutdown(int fd, int how)
 
 /* setsockopt: accept the boolean options a forking server sets (SO_REUSEADDR,
  * TCP_NODELAY, SO_KEEPALIVE) so its setup succeeds. The stack already reuses
- * listen ports and sends promptly, so these are honored-by-behavior or documented
- * no-ops; an unknown option is accepted rather than failing a server's startup. */
+ * listen ports and sends promptly, so these are honored-by-behavior or
+ * documented no-ops; an unknown option is accepted rather than failing a
+ * server's startup. */
 static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr,
                              int optlen)
 {
@@ -8962,7 +9012,8 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
 
         /* The name is at the start of whatever the caller passed, and busybox
          * passes a whole `struct ifreq` for it, 32 bytes on this machine. So
-         * only the name's worth is read and a larger buffer is not a refusal. */
+         * only the name's worth is read and a larger buffer is not a refusal.
+         */
         if (take == 0) {
             return -EINVAL;
         }
@@ -9014,8 +9065,8 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
 }
 
 /* getsockopt: report the integer options programs read at setup: SO_ERROR (no
- * async error is tracked, so 0), SO_TYPE (the real socket type), and the boolean
- * options as 0 (off). Always reports a 4-byte int result. */
+ * async error is tracked, so 0), SO_TYPE (the real socket type), and the
+ * boolean options as 0 (off). Always reports a 4-byte int result. */
 static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
                              uint32_t optlen_ptr)
 {
@@ -9320,7 +9371,8 @@ static int32_t sys_set_thread_area(isr_params_t *params)
     }
 
     /* Read the descriptor through the fault-checked helper (it range-checks the
-     * full struct internally, so the prior explicit user_access_ok is redundant). */
+     * full struct internally, so the prior explicit user_access_ok is
+     * redundant). */
     if (copy_from_user(&desc, (const void __user *)uptr, sizeof(user_desc_t)) != 0) {
         return -EFAULT;
     }
@@ -9417,8 +9469,8 @@ static int32_t sys_setpgid(isr_params_t *params)
     }
     /* The destination group must be in the target's session: either the target
      * creates its own group, or a process is ALREADY in group `pgid` within the
-     * same session (an existing group, regardless of whether its leader is still
-     * alive, not merely "a process whose pid == pgid"). */
+     * same session (an existing group, regardless of whether its leader is
+     * still alive, not merely "a process whose pid == pgid"). */
     if ((uint32_t)pgid != target->pid && !pgrp_in_session(pgid, (int)target->sid)) {
         return -EPERM;
     }
@@ -9974,9 +10026,9 @@ static int32_t sys_getrlimit(isr_params_t *params)
 }
 
 /* prlimit64(340): EBX=pid (0/self), ECX=resource, EDX=new (rlimit64* or NULL),
- * ESI=old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }. New limits
- * are accepted (validated readable) but not enforced; old limits report the
- * real caps. This is the form modern musl getrlimit/setrlimit issue. */
+ * ESI=old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }. New
+ * limits are accepted (validated readable) but not enforced; old limits report
+ * the real caps. This is the form modern musl getrlimit/setrlimit issue. */
 static int32_t sys_prlimit64(isr_params_t *params)
 {
     uint32_t resource = params->ecx;
@@ -10004,8 +10056,8 @@ static int32_t sys_prlimit64(isr_params_t *params)
     return 0;
 }
 
-/* dup3(330): like dup2 but oldfd == newfd is -EINVAL and a flag can set O_CLOEXEC
- * on the new descriptor. */
+/* dup3(330): like dup2 but oldfd == newfd is -EINVAL and a flag can set
+ * O_CLOEXEC on the new descriptor. */
 static int32_t sys_dup3(isr_params_t *params)
 {
     int oldfd = (int)params->ebx;
@@ -10084,8 +10136,9 @@ static int32_t sys_brk(isr_params_t *params)
 
     if (new_top > old_top) {
         /* Grow: the new pages [old_top, new_top) must not collide with mmap or
-         * any other region. The heap's own [heap_start, old_top) abuts that span
-         * without overlapping, so vm_overlaps tests only the *other* regions. */
+         * any other region. The heap's own [heap_start, old_top) abuts that
+         * span without overlapping, so vm_overlaps tests only the *other*
+         * regions. */
         if (vm_overlaps(vm, old_top, new_top)) {
             return (int32_t)vm->brk;
         }
@@ -10154,16 +10207,17 @@ static int32_t sys_mmap2(isr_params_t *params)
     if (prot & PROT_WRITE) {
         /* On i386 a present page is always readable (there is no write-only
          * PTE) so writable implies readable. Record that in the VMA prot so the
-         * fault check agrees with the hardware (a read of a PROT_WRITE page does
-         * not wrongly segfault). */
+         * fault check agrees with the hardware (a read of a PROT_WRITE page
+         * does not wrongly segfault). */
         vmprot |= VM_PROT_WRITE | VM_PROT_READ;
     }
     if (prot & PROT_EXEC) {
         vmprot |= VM_PROT_EXEC;
     }
 
-    /* Bump down from mmap_top; refuse if it would underflow or hit the heap. The
-     * addr hint is ignored (no MAP_FIXED support), which suits musl's malloc. */
+    /* Bump down from mmap_top; refuse if it would underflow or hit the heap.
+     * The addr hint is ignored (no MAP_FIXED support), which suits musl's
+     * malloc. */
     if (len > vm->mmap_top || vm->mmap_top - len < PAGE_UP(vm->brk)) {
         return -ENOMEM;
     }
@@ -10249,7 +10303,8 @@ static void _syscall_handler(isr_params_t *params)
      * stub keeps IF=0 through entry (segments/%gs are still being saved), so
      * setting in_syscall here and only then doing sti closes the window in
      * which a timer IRQ could reschedule a process whose trapframe is still
-     * half-built. The timer handler skips scheduling while in_syscall is set. */
+     * half-built. The timer handler skips scheduling while in_syscall is set.
+     */
     if (current_proc) {
         current_proc->in_syscall = 1;
     }

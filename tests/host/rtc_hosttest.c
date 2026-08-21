@@ -163,7 +163,8 @@ int main(void)
     /* The anchor. A clock read at tick 500 saying 1000, asked again at tick
      * 700, is 1002: two seconds later, not seven. Adding every tick since boot
      * would answer 1007 here, and on a real boot that error is under a second,
-     * which is why it is stated as arithmetic rather than left to a tolerance. */
+     * which is why it is stated as arithmetic rather than left to a tolerance.
+     */
     {
         long long sec = 0;
         long long nsec = 0;
