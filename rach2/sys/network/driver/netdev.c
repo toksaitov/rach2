@@ -42,7 +42,7 @@ int netdev_probe(void)
         }
         if (verdict == NETDEV_FAILED) {
             /* The card is in the machine and would not start. That reason is
-             * the whole diagnostic, and probing stops here, not let
+             * the whole diagnostic, and probing stops here rather than let
              * the next driver configure a machine whose card already failed. */
             if (drivers[i]->error) {
                 probe_error = drivers[i]->error();

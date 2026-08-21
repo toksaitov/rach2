@@ -149,6 +149,10 @@ findings up to where it stopped.
   each compiler's builtin prototype expects, which `-Werror` has these
   definitions to" -- the same mangled-"has"; the verb is "holds" (`-Werror`
   holds these definitions to that type). Corrected.
+* `rach2/sys/network/driver/netdev.c`: a probe comment read "probing stops here,
+  not let the next driver configure a machine whose card already failed" -- "not
+  let" is ungrammatical; reworded to "stops here rather than let the next
+  driver...".
 * `rach2/sys/rtc.c`: a decode comment read "a clock that reports month 0 is not
   a clock to build a build on" -- the doubled "build a build" is a slip no
   careful author writes. Reworded to "not a clock to base a build on" (the RTC
