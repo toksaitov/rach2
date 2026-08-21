@@ -68,6 +68,18 @@ What replaced it compares the source with all comments stripped, token by token.
 
 The proof is a clean clone into an empty directory: `make doctor` passes, `make` and `make full` build every capstone from the tarballs with nothing fetched, and `make verify-style` and `make verify-host` both pass there.
 
+## What the documentation review found
+
+The prose passes were reviewed as they went. The documents themselves were reviewed last, against the code rather than for how they read, and that pass found eight things wrong. Two mattered.
+
+The fresh-Mac sequence did not work. It installed Homebrew and then called a script that aborts unless `brew` is already on PATH, which after a fresh install it is not: the installer leaves that to its own `shellenv` step. Anyone following the printed sequence would have stopped at the first command that mattered. The Readme now runs `shellenv`, and `bootstrap_mac.sh` looks in both places Homebrew installs to before giving up.
+
+`make doctor` did not check `i686-elf-ar`, `i686-elf-ranlib` or `i686-elf-nm`, all of which the build invokes, so a partial cross toolchain could pass the toolchain check and fail during `make`.
+
+The rest were counts and lists that had drifted: eleven credential files rather than ten, and each generator stops on a sentinel rather than filling gaps, so a partial transfer stays broken through a build; eighty-seven guest kernel objects rather than seventy-one and twenty-nine utilities rather than twenty-five, with four of them built and never exercised where the document claimed a check for each; eight of the thirty-five host tests missing from the list that claims to be all of them; a tooling reference naming seven of the ten inputs the GRUB builder reads; a path to an executable that the out-of-tree build moved; and a block device described as a four-call interface when it has two operations and three data fields.
+
+One finding was partly wrong and checking it mattered: the review said three GRUB inputs were undocumented, and two of the three were documented elsewhere in the same file. Only one was actually missing.
+
 ## What is deferred, and why
 
 The contrast density above, which needs sentence-by-sentence judgement rather than another pass of rules.
@@ -75,5 +87,7 @@ The contrast density above, which needs sentence-by-sentence judgement rather th
 `which is` at 8.2 times upstream and `not a` at 5.2. The review of the plan established that these mostly measure sentence complexity and negated contracts, which is the difference between explaining and implementing; teaching prose legitimately does more of both. They are watched and not acted on.
 
 The `dev-log` records before this milestone keep their wording, because rewriting them would falsify the record of what was decided when. `dev-log/Readme.md` now tells a reader that they are evidence and not a model to write from.
+
+Reproducibility of the GRUB disk across time. Two builds of one tree on one day are byte-identical, and the base image is now pinned by digest, but the build still runs `apt-get install` against a mutable archive, so the GRUB and mtools inside it are whatever that archive serves. The document no longer claims more than that; pinning package versions or an archive snapshot is the work that would.
 
 The arrival check on the destination machine itself. The clean-clone build here is a smoke test; the proof is the same clone built on the Mac mini, and it belongs to whoever runs it there.
