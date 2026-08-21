@@ -78,6 +78,7 @@ The milestone-9 through -12 audits added focused regression probes that boot the
 * `pathcanon` (`PATHCANON OK`): absolute-path canonicalization before the synthetic `/dev` and `/proc` classifier.
 * `trapprobe` (`TRAPPROBE OK`): the default handler for the CPU exceptions.
 * `orphanprobe` (`ORPHANPROBE OK`): orphan reparenting to `/sbin/init`.
+* `procprobe` (`PROCPROBE OK`): the `/proc` snapshot is taken at open, not regenerated on read, proved by killing and reaping the process a still-open `/proc/<pid>/stat` describes; and every file it can open comes back ending where its last line ends, which a bound set too small turns into a refusal rather than a short read.
 
 The memory-protection probes provoke a deliberate fault. `forkro` forks a child that writes a read-only page, confirms the child is killed by SIGSEGV while the page's protection survived the fork, and prints `FORKRO OK`. `vmro` (a read-only page faulting on write) and `vmfault` (a wild-pointer write) are themselves killed by the fault they trigger, so the kernel surviving a faulting user process is the pass. `winprobe` (run by hand as a standalone boot) reads the kernel-only page-cache window at `PCWIN_BASE` (0xD0000000) from ring 3; the window fault branch is for the supervisor faults the file system raises, not for user code, so the read must segfault the process. Its `winprobe: ERROR still alive` line must never appear; the kernel surviving and the shell returning is the pass.
 

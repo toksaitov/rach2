@@ -23,6 +23,7 @@
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
+#include "../serial.h"
 
 #define PROCFS_O_CLOEXEC 02000000
 
@@ -35,47 +36,123 @@
 #define PROCFS_INO_NETDEV  0x104u
 #define PROCFS_INO_PID_BASE 0x200u
 
+/*
+ * The room a snapshot is built in, and the bound each file is allowed of it.
+ *
+ * Every file declares a worst case that can be argued from a fixed pool: the
+ * process table, the ARP cache and the tcb pool all have a size the kernel
+ * chose, so the largest text each can produce is a number and not a guess. The
+ * buffer is the largest of those bounds, written out rather than derived so
+ * that declaring a larger file without raising it stops the build instead of
+ * borrowing another file's room. A text that would exceed its own bound is
+ * reported and refused rather than served short, which is what the appenders
+ * used to do: a sixteen-row table read back as a nine-row one with nothing
+ * anywhere saying so.
+ */
+#define PROCFS_TEXT_MAX 640
+
+/* Per-file bounds. Each is the file's own worst case, and each is checked
+   against the buffer below at compile time. */
+#define PROCFS_MAX_BOOTLINE 320  /* the 256-byte boot line, a newline, slack */
+#define PROCFS_MAX_DISK     640  /* diskinfo_format's widest record */
+#define PROCFS_MAX_NETDEV   512  /* two header lines and one interface */
+#define PROCFS_MAX_PIDSTAT  256  /* one line of small fields plus comm */
+#define PROCFS_MAX_PIDCMD    64  /* comm and its terminator */
+
+/* C89 has no static assert: a bound that does not fit makes this array size
+   negative and the build stops here rather than truncating at run time. */
+typedef char procfs_bounds_fit[(PROCFS_MAX_BOOTLINE <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_DISK <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_NETDEV <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_PIDSTAT <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_PIDCMD <= PROCFS_TEXT_MAX)
+                                   ? 1
+                                   : -1];
+
+/** The file's name, for the one diagnostic a text over its bound prints. */
+static const char *procfs_kind_name(const struct vpath *vp)
+{
+    if (vp->kind == VNODE_PROC_CMDLINE) {
+        return "/proc/cmdline";
+    }
+    if (vp->kind == VNODE_PROC_DISK) {
+        return "/proc/disk";
+    }
+    if (vp->kind == VNODE_PROC_NET_DEV) {
+        return "/proc/net/dev";
+    }
+    if (vp->procfile == SYNTH_PROC_STAT) {
+        return "/proc/<pid>/stat";
+    }
+    return "/proc/<pid>/cmdline";
+}
+
 /* A /proc text file, snapshotted at open and served through file_ops. */
 struct procfs_file {
-    char data[512];
+    char data[PROCFS_TEXT_MAX];
     int len;
     int used;
     int origin_pid;  /* the /proc/<pid> this snapshot came from (for fd readlink) */
     int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
 };
 
+/*
+ * One text under construction: where it goes, how much of it this file is
+ * allowed, how much is written, and whether an append did not fit.
+ *
+ * `cap` is the file's declared bound rather than the buffer's size, so a file
+ * that outgrows what was argued for it fails on its own terms instead of
+ * quietly borrowing another file's room.
+ */
+struct procfs_text {
+    char *buf;
+    int cap;
+    int len;
+    int over;
+};
+
+static void procfs_text_init(struct procfs_text *t, char *buf, int cap)
+{
+    t->buf = buf;
+    t->cap = cap;
+    t->len = 0;
+    t->over = 0;
+}
+
 /* bounded text builders (no snprintf; cap leaves room for a NUL) */
 
-static void ap_ch(char *buf, int cap, int *len, char c)
+static void ap_ch(struct procfs_text *t, char c)
 {
-    if (*len < cap - 1) {
-        buf[*len] = c;
-        (*len)++;
+    if (t->len < t->cap - 1) {
+        t->buf[t->len] = c;
+        t->len++;
+    } else {
+        t->over = 1;
     }
 }
 
-static void ap_str(char *buf, int cap, int *len, const char *s)
+static void ap_str(struct procfs_text *t, const char *s)
 {
     while (*s) {
-        ap_ch(buf, cap, len, *s++);
+        ap_ch(t, *s++);
     }
 }
 
 /* Append a signed decimal. INT_MIN is handled by negating in unsigned space. */
-static void ap_int(char *buf, int cap, int *len, int v)
+static void ap_int(struct procfs_text *t, int v)
 {
     char tmp[12];
     int n = 0;
     unsigned int uv;
 
     if (v < 0) {
-        ap_ch(buf, cap, len, '-');
+        ap_ch(t, '-');
         uv = (unsigned int)(-(v + 1)) + 1u;
     } else {
         uv = (unsigned int)v;
     }
     if (uv == 0) {
-        ap_ch(buf, cap, len, '0');
+        ap_ch(t, '0');
         return;
     }
     while (uv) {
@@ -83,7 +160,7 @@ static void ap_int(char *buf, int cap, int *len, int v)
         uv /= 10u;
     }
     while (n) {
-        ap_ch(buf, cap, len, tmp[--n]);
+        ap_ch(t, tmp[--n]);
     }
 }
 
@@ -128,17 +205,16 @@ static char proc_state_char(proc_state_t s)
 }
 
 /**
- * Format /proc/<pid>/stat into `buf`, returning its length or -ENOENT.
+ * Format /proc/<pid>/stat into `t`, returning its length or -ENOENT.
  *
  * Emits the space-separated fields ps and friends parse. comm (field 2) is
  * wrapped in parentheses, with any stray parens scrubbed so a naive parser that
  * scans for the closing ')' is not fooled. Accounting fields we do not track
  * (faults, cpu time, sizes) are zero, but every field is present and in order.
  */
-static int procfs_gen_stat(int pid, char *buf, int cap)
+static int procfs_gen_stat(struct procfs_text *t, int pid)
 {
     process_t *p;
-    int len = 0;
     int i;
 
     p = get_process((uint32_t)pid);
@@ -146,46 +222,45 @@ static int procfs_gen_stat(int pid, char *buf, int cap)
         return -ENOENT;
     }
 
-    ap_int(buf, cap, &len, pid);             /* 1 pid */
-    ap_str(buf, cap, &len, " (");            /* 2 comm */
+    ap_int(t, pid);             /* 1 pid */
+    ap_str(t, " (");            /* 2 comm */
     if (p->comm[0]) {
         for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
             char c = p->comm[i];
-            ap_ch(buf, cap, &len, (c == '(' || c == ')') ? '_' : c);
+            ap_ch(t, (c == '(' || c == ')') ? '_' : c);
         }
     } else {
-        ap_ch(buf, cap, &len, '?');
+        ap_ch(t, '?');
     }
-    ap_str(buf, cap, &len, ") ");
-    ap_ch(buf, cap, &len, proc_state_char(p->state)); /* 3 state */
-    ap_ch(buf, cap, &len, ' ');
-    ap_int(buf, cap, &len, (int)p->parent_pid); /* 4 ppid */
-    ap_ch(buf, cap, &len, ' ');
-    ap_int(buf, cap, &len, (int)p->pgid); /* 5 pgrp */
-    ap_ch(buf, cap, &len, ' ');
-    ap_int(buf, cap, &len, (int)p->sid); /* 6 session */
-    ap_str(buf, cap, &len, " 0 -1"); /* 7 tty_nr, 8 tpgid (not modeled) */
+    ap_str(t, ") ");
+    ap_ch(t, proc_state_char(p->state)); /* 3 state */
+    ap_ch(t, ' ');
+    ap_int(t, (int)p->parent_pid); /* 4 ppid */
+    ap_ch(t, ' ');
+    ap_int(t, (int)p->pgid); /* 5 pgrp */
+    ap_ch(t, ' ');
+    ap_int(t, (int)p->sid); /* 6 session */
+    ap_str(t, " 0 -1"); /* 7 tty_nr, 8 tpgid (not modeled) */
     /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
        14..17 utime,stime,cutime,cstime */
-    ap_str(buf, cap, &len, " 0 0 0 0 0 0 0 0 0");
-    ap_str(buf, cap, &len, " 20 0"); /* 18 priority, 19 nice */
-    ap_str(buf, cap, &len, " 1 0 0"); /* 20 num_threads, 21 itrealvalue, 22 starttime */
-    ap_str(buf, cap, &len, " 0 0"); /* 23 vsize, 24 rss */
-    ap_ch(buf, cap, &len, '\n');
-    buf[len] = '\0';
-    return len;
+    ap_str(t, " 0 0 0 0 0 0 0 0 0");
+    ap_str(t, " 20 0"); /* 18 priority, 19 nice */
+    ap_str(t, " 1 0 0"); /* 20 num_threads, 21 itrealvalue, 22 starttime */
+    ap_str(t, " 0 0"); /* 23 vsize, 24 rss */
+    ap_ch(t, '\n');
+    t->buf[t->len] = '\0';
+    return t->len;
 }
 
 /**
- * Format /proc/<pid>/cmdline into `buf`, returning its length or -ENOENT.
+ * Format /proc/<pid>/cmdline into `t`, returning its length or -ENOENT.
  *
  * argv is NUL-separated. We do not retain the full argv, so the program name is
  * emitted as the single argument (busybox falls back to comm).
  */
-static int procfs_gen_cmdline(int pid, char *buf, int cap)
+static int procfs_gen_cmdline(struct procfs_text *t, int pid)
 {
     process_t *p;
-    int len = 0;
     int i;
 
     p = get_process((uint32_t)pid);
@@ -193,12 +268,12 @@ static int procfs_gen_cmdline(int pid, char *buf, int cap)
         return -ENOENT;
     }
     for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
-        ap_ch(buf, cap, &len, p->comm[i]);
+        ap_ch(t, p->comm[i]);
     }
-    if (len > 0) {
-        ap_ch(buf, cap, &len, '\0'); /* argv[0] terminator */
+    if (t->len > 0) {
+        ap_ch(t, '\0'); /* argv[0] terminator */
     }
-    return len;
+    return t->len;
 }
 
 /**
@@ -211,9 +286,12 @@ static int procfs_gen_cmdline(int pid, char *buf, int cap)
  */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
+    struct procfs_text text;
+    struct procfs_text *t = &text;
     process_t *p;
     fd_entry_t *e;
-    int len = 0;
+
+    procfs_text_init(t, buf, cap);
 
     p = get_process((uint32_t)pid);
     if (!p || p->state == PROC_UNUSED) {
@@ -229,25 +307,25 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 
     switch (e->type) {
         case FD_TYPE_CONSOLE:
-            ap_str(buf, cap, &len, "/dev/console");
+            ap_str(t, "/dev/console");
             break;
         case FD_TYPE_DEVICE:
-            ap_str(buf, cap, &len, "/dev/");
-            ap_str(buf, cap, &len, devfs_fd_name(e));
+            ap_str(t, "/dev/");
+            ap_str(t, devfs_fd_name(e));
             break;
         case FD_TYPE_PIPE:
-            ap_str(buf, cap, &len, "pipe:[1]");
+            ap_str(t, "pipe:[1]");
             break;
         case FD_TYPE_PTS:
             /* a pty slave: /dev/pts/N (so musl ttyname_r can match it). */
-            ap_str(buf, cap, &len, "/dev/pts/");
-            ap_int(buf, cap, &len, pty_slave_index(e));
+            ap_str(t, "/dev/pts/");
+            ap_int(t, pty_slave_index(e));
             break;
         case FD_TYPE_PTM:
-            ap_str(buf, cap, &len, "/dev/ptmx");
+            ap_str(t, "/dev/ptmx");
             break;
         case FD_TYPE_SOCKET:
-            ap_str(buf, cap, &len, "socket:[1]");
+            ap_str(t, "socket:[1]");
             break;
         case FD_TYPE_FILE:
         case FD_TYPE_DIR:
@@ -259,12 +337,12 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                  */
                 if (krffs_node_path(e->node, path, sizeof(path)) == 0 &&
                     krffs_resolve(path) == e->node) {
-                    ap_str(buf, cap, &len, path); /* the full absolute path */
+                    ap_str(t, path); /* the full absolute path */
                 } else {
-                    ap_ch(buf, cap, &len, '/'); /* unresolvable or stale */
+                    ap_ch(t, '/'); /* unresolvable or stale */
                 }
             } else {
-                ap_ch(buf, cap, &len, '/'); /* the root directory, or a stale fd */
+                ap_ch(t, '/'); /* the root directory, or a stale fd */
             }
             break;
         case FD_TYPE_SYNTH_DIR: {
@@ -273,7 +351,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             char path[64];
             if (sd) {
                 synth_dir_path(sd->kind, sd->pid, path, (int)sizeof(path));
-                ap_str(buf, cap, &len, path);
+                ap_str(t, path);
             }
             break;
         }
@@ -283,30 +361,29 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             struct procfs_file *pf = (struct procfs_file *)e->priv;
             if (pf) {
                 if (pf->origin_file == SYNTH_PROC_BOOTLINE) {
-                    ap_str(buf, cap, &len, "/proc/cmdline");
+                    ap_str(t, "/proc/cmdline");
                     break;
                 }
                 if (pf->origin_file == SYNTH_PROC_DISKINFO) {
-                    ap_str(buf, cap, &len, "/proc/disk");
+                    ap_str(t, "/proc/disk");
                     break;
                 }
                 if (pf->origin_file == SYNTH_PROC_NETDEV) {
-                    ap_str(buf, cap, &len, "/proc/net/dev");
+                    ap_str(t, "/proc/net/dev");
                     break;
                 }
-                ap_str(buf, cap, &len, "/proc/");
-                ap_int(buf, cap, &len, pf->origin_pid);
-                ap_ch(buf, cap, &len, '/');
-                ap_str(buf, cap, &len,
-                       pf->origin_file == SYNTH_PROC_CMDLINE ? "cmdline" : "stat");
+                ap_str(t, "/proc/");
+                ap_int(t, pf->origin_pid);
+                ap_ch(t, '/');
+                ap_str(t, pf->origin_file == SYNTH_PROC_CMDLINE ? "cmdline" : "stat");
             }
             break;
         }
         default:
-            ap_str(buf, cap, &len, "anon_inode:[device]"); /* fb/mouse: best effort */
+            ap_str(t, "anon_inode:[device]"); /* fb/mouse: best effort */
             break;
     }
-    return len;
+    return t->len;
 }
 
 /**
@@ -389,13 +466,13 @@ uint32_t procfs_ino_pid(int pid)
 }
 
 /** Append `v` as unsigned decimal; the counters are 32-bit and wrap. */
-static void ap_u32(char *buf, int cap, int *len, uint32_t v)
+static void ap_u32(struct procfs_text *t, uint32_t v)
 {
     char tmp[12];
     int n = 0;
 
     if (v == 0) {
-        ap_ch(buf, cap, len, '0');
+        ap_ch(t, '0');
         return;
     }
     while (v && n < (int)sizeof(tmp)) {
@@ -403,7 +480,7 @@ static void ap_u32(char *buf, int cap, int *len, uint32_t v)
         v /= 10u;
     }
     while (n > 0) {
-        ap_ch(buf, cap, len, tmp[--n]);
+        ap_ch(t, tmp[--n]);
     }
 }
 
@@ -417,31 +494,30 @@ static void ap_u32(char *buf, int cap, int *len, uint32_t v)
  * one a program should be told about. The counters it does not keep are zero,
  * which is what a device with no errors and no collisions reports anyway.
  */
-static int procfs_gen_netdev(char *buf, int cap)
+static int procfs_gen_netdev(struct procfs_text *t)
 {
     const struct eth_counts *c = ethernet_counts();
-    int len = 0;
 
-    ap_str(buf, cap, &len,
+    ap_str(t,
            "Inter-|   Receive                                                |"
            "  Transmit\n"
            " face |bytes    packets errs drop fifo frame compressed multicast|"
            "bytes    packets errs drop fifo colls carrier compressed\n");
     if (!netdev) {
-        return len;
+        return t->len;
     }
-    ap_str(buf, cap, &len, "  ");
-    ap_str(buf, cap, &len, NETDEV_IFNAME);
-    ap_str(buf, cap, &len, ": ");
-    ap_u32(buf, cap, &len, c->rx_bytes);
-    ap_ch(buf, cap, &len, ' ');
-    ap_u32(buf, cap, &len, c->rx_packets);
-    ap_str(buf, cap, &len, " 0 0 0 0 0 0 ");
-    ap_u32(buf, cap, &len, c->tx_bytes);
-    ap_ch(buf, cap, &len, ' ');
-    ap_u32(buf, cap, &len, c->tx_packets);
-    ap_str(buf, cap, &len, " 0 0 0 0 0 0\n");
-    return len;
+    ap_str(t, "  ");
+    ap_str(t, NETDEV_IFNAME);
+    ap_str(t, ": ");
+    ap_u32(t, c->rx_bytes);
+    ap_ch(t, ' ');
+    ap_u32(t, c->rx_packets);
+    ap_str(t, " 0 0 0 0 0 0 ");
+    ap_u32(t, c->tx_bytes);
+    ap_ch(t, ' ');
+    ap_u32(t, c->tx_packets);
+    ap_str(t, " 0 0 0 0 0 0\n");
+    return t->len;
 }
 
 /* the /proc file backing: a snapshot served through file_ops */
@@ -514,11 +590,20 @@ static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procf
  * ordered to report the conventional errno: O_CREAT|O_EXCL on an existing file
  * is -EEXIST first, then O_DIRECTORY is -ENOTDIR, then any write or create
  * intent is -EACCES.
+ *
+ * The text is built once, here, against the bound its file declared. A text
+ * that did not fit is refused with `-EOVERFLOW` and one line on the serial log
+ * naming the file: a table read back with rows missing and nothing saying so is
+ * the failure the bounds exist to prevent. `/proc/disk` is rendered from the
+ * record taken at boot, so opening it issues no command to the device, and
+ * `diskinfo_format` truncates to the cap it is given rather than reporting, so
+ * its bound is tested against what it returned.
  */
 int procfs_open(const struct vpath *vp, int flags)
 {
     int pid = 0;
     struct procfs_file *f = NULL;
+    struct procfs_text text;
     fd_entry_t *e;
     int slot, fd, len;
 
@@ -554,22 +639,33 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind == VNODE_PROC_CMDLINE) {
         /* The captured boot line and a newline, the Linux shape. */
         const char *line = kcmdline_get();
-        len = 0;
-        ap_str(f->data, (int)sizeof(f->data), &len, line);
-        ap_ch(f->data, (int)sizeof(f->data), &len, '\n');
+        procfs_text_init(&text, f->data, PROCFS_MAX_BOOTLINE);
+        ap_str(&text, line);
+        ap_ch(&text, '\n');
+        len = text.len;
     } else if (vp->kind == VNODE_PROC_DISK) {
-        /* Rendered from the record taken at boot, so opening this file issues
-         * no command to the device. */
-        len = diskinfo_format(diskinfo_get(), f->data, (int)sizeof(f->data));
+        procfs_text_init(&text, f->data, PROCFS_MAX_DISK);
+        len = diskinfo_format(diskinfo_get(), f->data, PROCFS_MAX_DISK);
+        if (len >= PROCFS_MAX_DISK - 1) {
+            text.over = 1;
+        }
     } else if (vp->kind == VNODE_PROC_NET_DEV) {
-        len = procfs_gen_netdev(f->data, (int)sizeof(f->data));
+        procfs_text_init(&text, f->data, PROCFS_MAX_NETDEV);
+        len = procfs_gen_netdev(&text);
     } else if (vp->procfile == SYNTH_PROC_STAT) {
-        len = procfs_gen_stat(pid, f->data, (int)sizeof(f->data));
+        procfs_text_init(&text, f->data, PROCFS_MAX_PIDSTAT);
+        len = procfs_gen_stat(&text, pid);
     } else {
-        len = procfs_gen_cmdline(pid, f->data, (int)sizeof(f->data));
+        procfs_text_init(&text, f->data, PROCFS_MAX_PIDCMD);
+        len = procfs_gen_cmdline(&text, pid);
     }
     if (len < 0) {
         return len;
+    }
+    if (text.over) {
+        serial_printf("procfs: %s: text exceeds its %d-byte bound, refusing\n",
+                      procfs_kind_name(vp), text.cap);
+        return -EOVERFLOW;
     }
     f->len = len;
     f->used = 1;

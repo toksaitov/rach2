@@ -8,6 +8,7 @@ A small hierarchical file system with real directories and the modern `*at` file
 |-----------|-------------------------------------------------------------------------------------------------------------------------------------------------|
 | `krffs.*` | The on-disk format, the linear node list, and the v2 path resolver (`krffs_walk`/`krffs_resolve`, `krffs_node_path`, `mkdir`/`rmdir`/`readdir`) |
 | `fd.*`    | The per-process descriptor table: type, the resolved node or socket, offset, and flags (READ/WRITE/APPEND/CLOEXEC)                              |
+| `procfs.*`| The synthetic `/proc`: each file snapshotted into a bounded buffer at open and served from there                                                |
 
 The descriptor, path, directory, and `*at` syscalls live in `../syscall.c`; this directory is the file system itself plus the descriptor table it attaches to.
 
@@ -115,8 +116,17 @@ A shutdown that does not close descriptors strands an orphan on a persistent ima
 Directories stay out, as a scope line and not an oversight: `rmdir` still frees the node under an open directory descriptor, and a relative path through one still answers `-EBADF`. A directory descriptor here is a name, which is what the per-component search check rests on, and an orphan directory has no name for a relative path to join.
 * The interactive host FUSE mount stays flat. Images gain directories through `krffs/stageimage.krffs` (the manifest-driven builder, which writes v2 directory nodes directly) and the in-guest `mkdir`; teaching the 1100-line FUSE mount to browse directories is a later convenience, not needed by the kernel or the integration.
 
+## The /proc snapshot, and its bounds
+
+A `/proc` file is generated into a buffer when it is OPENED and read back from there, so one descriptor shows one moment. Regenerating on each read is the other way to build it, and it is the wrong one here: a table that changed between two reads would be spliced together across the boundary, and every pool these files describe has a size the kernel chose, so a worst case can be argued instead of measured.
+
+That is what the bounds are. Each file declares its own maximum (`PROCFS_MAX_*`), the buffer is the largest of them, written out rather than derived, and a `typedef` of a negative array size stops the build if a declared bound will not fit, since C89 has no static assert. The appenders no longer stop when they run out of room: they record it, and a text that exceeded its bound is refused with `-EOVERFLOW` and one line on the serial log naming the file. A sixteen-row table read back as a nine-row one with nothing anywhere saying so is the failure this replaced.
+
+`tests/procprobe` proves both halves: it opens `/proc/<pid>/stat` for a child, kills and reaps the child, and requires the still-open descriptor to answer what it took at open, which a generator asked at that moment could not; and it requires each file it can open to come back ending where its last line ends, which a bound set too small turns into a refusal rather than a short read.
+
 ## Testing
 
 * `tests/dirprobe`: `mkdir`, nested create/write/read, duplicate-`mkdir` and create-in-missing-dir rejection, non-empty `rmdir` refusal, `getdents` listing exactly a subdir's children, the `*at` calls (`openat`, `fstat64`, `fstatat64`, `_llseek`, `fcntl64`), `O_APPEND`/`F_DUPFD`/`O_CREAT`-mode, `chdir` plus `getcwd` plus relative resolution plus a dirfd-relative `openat`, `ENOTDIR` versus `ENOENT`, and `/x/..` resolving to the root. Prints `DIRPROBE OK`.
 * `tests/musl/catfile`: a musl program that reads a host-staged `/etc/motd`, `opendir`s `/etc`, then `mkdir`s a directory, writes and reads a file inside it, `stat`s it, lists it, and cleans up, all through `<stdio.h>` and `<dirent.h>`. Prints `CATFILE OK`.
+* `tests/procprobe`: the `/proc` snapshot and its bounds; see the section above. Prints `PROCPROBE OK`.
 * `krffs/stageimage.krffs` stages an `/etc` tree (`/etc/motd`, `/etc/hostname`) into an image from its manifest at build time, proving the host tools speak the hierarchical format.
