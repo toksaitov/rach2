@@ -494,8 +494,7 @@ static int present(const char *path)
 /**
  * How many temporary files of the replaced file's the directory still has.
  *
- * The name a replacement writes through has the writer's pid, so a case
- * that
+ * The name a replacement writes through has the writer's pid, so a case that
  * checked one fixed name and called the directory clean would miss a temporary
  * left under any other. This counts every name that begins the way one of them
  * does, which is also what proves the library never writes through the shared
@@ -627,8 +626,7 @@ static void nap(long ms)
  * was reaped, 0 on a timeout, having killed it.
  *
  * The cases below hand a child a descriptor it is meant to block on, so a
- * blocking wait would turn a regression into a hung gate, not a failed
- * one.
+ * blocking wait would turn a regression into a hung gate, not a failed one.
  */
 static int wait_bounded(pid_t pid, int *status, long ms)
 {
@@ -1442,8 +1440,7 @@ static void check_death_set_installed(void)
  * builds: a session leader holding the terminal, and the reader in a process
  * group of its own. Both halves are asserted, because either alone would
  * pass for the wrong reason: the terminal still echoes, and the reader
- * stopped on `SIGTTIN` instead of getting a byte it should not have been
- * given.
+ * stopped on `SIGTTIN` instead of getting a byte it should not have been given.
  */
 static void check_background_prompt(void)
 {
@@ -2839,8 +2836,7 @@ static void check_masked(void)
  * Whose temporary file a replacement writes through, and when it may touch one
  * at all.
  *
- * The name has the writer's pid, and that is what keeps two writers apart.
- * A
+ * The name has the writer's pid, and that is what keeps two writers apart. A
  * fixed `<path>.tmp` is shared, so a writer whose lock had been removed by hand
  * could unlink and recreate the file a successor already had open and had
  * written; the successor's rename is by name, and it would publish the other

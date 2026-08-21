@@ -326,6 +326,12 @@ findings up to where it stopped.
 * `tests/musl/saltnoent.c`: the `shadow_temps` doc block had the same orphaned
   "not" on a line of its own as `creddisk.c` ("a question this could / not /
   answer"). Reflowed the two lines.
+* `tests/host/pwauth_hosttest.c`: a grep for the orphaned-word wrap pattern (a
+  continuation word alone on a comment line that would have fit on the line
+  above) found four more in this already-read file: "so a case / that", "not a
+  failed / one.", "should not have been / given.", and "two writers apart. / A /
+  fixed". Reflowed each. The same grep confirmed the rest of the tree's
+  single-word comment lines are ordinary sentence-final wraps, not orphans.
 
 ### Set two: the Doom port and the rest
 
