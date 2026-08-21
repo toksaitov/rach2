@@ -55,19 +55,6 @@ int fdsets_to_pollfds(uint32_t nfds, const uint32_t *r, const uint32_t *w,
 }
 
 /**
- * Project poll results back into select()'s three fd_sets and count them.
- *
- * Each fd is scattered only onto the direction(s) the caller selected, read
- * from .events as set by fdsets_to_pollfds (POLLIN<->readfds, POLLOUT<->
- * writefds, POLLPRI<->exceptfds). Following select()'s POLLIN_SET/POLLOUT_SET
- * rule, POLLHUP and POLLERR count as readable and POLLERR also as writable, but
- * only for an fd that was in that set, so a hangup on a write-only-selected fd
- * is not invented into a read set the caller may have passed as NULL.
- *
- * @return select()'s ready count: each direction set counts once, so an fd
- *         ready for both read and write contributes 2.
- */
-/**
  * Whether select() counts one already-scanned pollfd as ready.
  *
  * The per-fd form of `pollfds_to_fdsets`'s rule, so the poll core's
@@ -94,6 +81,19 @@ int pollfd_select_ready(short events, short revents)
     return 0;
 }
 
+/**
+ * Project poll results back into select()'s three fd_sets and count them.
+ *
+ * Each fd is scattered only onto the direction(s) the caller selected, read
+ * from .events as set by fdsets_to_pollfds (POLLIN<->readfds, POLLOUT<->
+ * writefds, POLLPRI<->exceptfds). Following select()'s POLLIN_SET/POLLOUT_SET
+ * rule, POLLHUP and POLLERR count as readable and POLLERR also as writable, but
+ * only for an fd that was in that set, so a hangup on a write-only-selected fd
+ * is not invented into a read set the caller may have passed as NULL.
+ *
+ * @return select()'s ready count: each direction set counts once, so an fd
+ *         ready for both read and write contributes 2.
+ */
 int pollfds_to_fdsets(const struct kernel_pollfd *fds, int n, uint32_t *r,
                       uint32_t *w, uint32_t *e)
 {

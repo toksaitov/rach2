@@ -95,6 +95,13 @@ findings up to where it stopped.
   below with no comment. The PCIe functions had been inserted between the two.
   Moved the comment back down to its function.
 
+* `rach2/sys/io/poll_select.c`: the doxygen block for `pollfds_to_fdsets`
+  ("Project poll results back into select()'s three fd_sets", with the
+  ready-count `@return`) was stranded above `pollfd_select_ready`, which had its
+  own doc below it, while `pollfds_to_fdsets` itself was left undocumented --
+  `pollfd_select_ready` had been inserted between the doc and its function. Moved
+  the block down to `pollfds_to_fdsets`, the same orphaned-doc pattern as the
+  `pci.h` bus-master comment.
 * `rach2/sys/isr.h`: a comment read "First 15 interrupt request handlers" above
   the declarations `irq0` through `irq15`, which are 16 handlers (IRQ0-15). The
   "First 32 interrupt handlers" comment above it correctly counts isr0-isr31.
