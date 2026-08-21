@@ -428,7 +428,7 @@ project teaches; move it up if that judgement turns out wrong.
 
 ## Tests (135 entries, 69747 words)
 
-* [ ] `tests/host/pwauth_hosttest.c` (7935 words)
+* [x] `tests/host/pwauth_hosttest.c` (7935 words)
 * [ ] `tests/musl/pwauthmusl.c` (4754 words)
 * [ ] `tests/fdstale.c` (2417 words)
 * [ ] `tests/musl/passwdmusl.c` (2199 words)

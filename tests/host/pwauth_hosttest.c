@@ -251,10 +251,6 @@ int fsync(int fd)
 }
 
 /**
- * Read at most `size - 1` bytes of `path` into `buffer`, terminating it.
- * Returns the byte count, or -1 if the file could not be read.
- */
-/**
  * The number of the first signal whose blocked state differs between `before`
  * and the mask in force now, 0 when every one of them agrees, and -1 when the
  * mask cannot be read.
@@ -441,6 +437,10 @@ int snprintf(char *buffer, size_t size, const char *format, ...)
     return n;
 }
 
+/**
+ * Read at most `size - 1` bytes of `path` into `buffer`, terminating it.
+ * Returns the byte count, or -1 if the file could not be read.
+ */
 static ssize_t slurp(const char *path, char *buffer, size_t size)
 {
     ssize_t n;
@@ -2286,7 +2286,7 @@ static void check_release(void)
  * fails the write instead of killing the writer with its lock still in `/etc`.
  * The disposition is this library's business and no other program's, and the
  * two ways to arrange it part company at exactly that point: an exec resets a
- * caught signal to the default and has an ignored one into the new image.
+ * caught signal to the default and carries an ignored one into the new image.
  * A child forked under a transaction holds none of it and has no way to give
  * back what it inherited, so with `SIG_IGN` the next program it runs would find
  * `SIGPIPE` ignored, having linked nothing that asked for it, and a pipeline

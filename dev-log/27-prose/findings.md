@@ -296,6 +296,16 @@ findings up to where it stopped.
   so each is counted whole and the pair is judged together, not one being tested
   by itself."
 
+### Set two: the tests
+
+* `tests/host/pwauth_hosttest.c`: two fixes. The `slurp` doc block ("Read at most
+  `size - 1` bytes...") was orphaned above `mask_changed`, with the interposed
+  `fsync`/`tcsetattr`/`getpid`/`snprintf` functions inserted between it and the
+  real `slurp` far below, which had lost its comment. Moved the block onto
+  `slurp`. And the `check_sigpipe_exec` doc carried the same mangled-"has" as
+  `pwauth.c`/`.h`: "an exec resets a caught signal to the default and has an
+  ignored one into the new image" -- reworded to "carries an ignored one".
+
 ### Set two: the Doom port and the rest
 
 * `ports/doom/doomgeneric_rach2.c`: the `DG_SleepMs` comment ran two sentences
