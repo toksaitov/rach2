@@ -3503,8 +3503,8 @@ static int32_t sys_fstatat64(isr_params_t *params)
  *
  * R/W/X are checked against the object's mode bits by the caller's REAL ids
  * (the credential model access(2) uniquely uses), which is what makes
- * /proc/<pid>/stat reject W_OK while granting F_OK/R_OK. `name` is absolute with
- * the leading '/' stripped.
+ * /proc/<pid>/stat reject W_OK while granting F_OK/R_OK. `name` is absolute
+ * with the leading '/' stripped.
  */
 static int32_t do_access(const char *name, int mode)
 {
