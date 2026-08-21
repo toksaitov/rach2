@@ -21,7 +21,7 @@
  * the same function, the same offsets, the same mask, and sleep type 0, which
  * is what QEMU's PIIX4 model takes as soft off.
  *
- * ich9 exists for one reason and it is worth stating: it is the only
+ * ich9 exists for one reason, and it is the only
  * PCH-shaped power controller available here, so it is what makes the
  * derivation, the decode check, the SCI selection read and the enable
  * handshake provable in QEMU at all (`-machine q35`). Its sleep type is
