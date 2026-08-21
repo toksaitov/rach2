@@ -95,7 +95,6 @@ bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *sk
  * match. */
 bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t *out);
 
-/** Set the Bus Master bit so the device can drive DMA. */
 /*
  * PCIe capability walk. The capability list starts at the pointer in config
  * space and is a singly linked list of (id, next) pairs; a bounded walk is
@@ -125,6 +124,7 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8
  */
 bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out);
 
+/** Set the Bus Master bit so the device can drive DMA. */
 void pci_enable_bus_master(pci_device_t *dev);
 
 /** Set the Memory Space bit so the device responds to its memory BARs

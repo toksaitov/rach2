@@ -89,6 +89,12 @@ findings up to where it stopped.
   stale "only". Also generalized "filled in by the RTL8139 driver at init" to
   "the bound NIC driver", since the RTL8168 driver fills `net_mac` too.
 
+* `rach2/sys/pci.h`: the doxygen comment "Set the Bus Master bit so the device
+  can drive DMA" was orphaned above the PCIe-capability-walk block comment and
+  its defines, while the function it documents, `pci_enable_bus_master`, sat far
+  below with no comment. The PCIe functions had been inserted between the two.
+  Moved the comment back down to its function.
+
 ## Cross-checks to settle against code later in set one
 
 These are numeric or path claims in documents that read plausibly but can only
