@@ -5530,6 +5530,9 @@ static int32_t sys_execve(isr_params_t *params)
          * ELF code/data pages themselves are still eagerly loaded above. */
         elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
                        VM_STACK_MAX_GROWTH);
+        /* A new program in an old process: what the last one ran out of is not
+         * this one's, so it may say so once too. */
+        current_proc->vma_reported = 0;
     }
 
     /* Reload CR3 to flush the whole TLB: after freeing the old user pages and
@@ -10680,19 +10683,16 @@ static int32_t sys_brk(isr_params_t *params)
  * replaces, and it cost hours: a program whose library ran out of mappings
  * looks exactly like a program whose library failed for its own reasons. Said
  * once per process, because a program that meets the ceiling meets it in a
- * loop and a flood of lines would bury the first one.
+ * loop and a flood of lines would bury the first one. The mark is in the
+ * process, not a remembered pid: a pid is reused, and the next process to hold
+ * that number would be silenced by a report it never made.
  */
 static void vma_exhausted(const char *what)
 {
-    static uint32_t last_pid = 0;
-
-    if (!current_proc) {
+    if (!current_proc || current_proc->vma_reported) {
         return;
     }
-    if (current_proc->pid == last_pid) {
-        return;
-    }
-    last_pid = current_proc->pid;
+    current_proc->vma_reported = 1;
     serial_printf("vm: %s: pid %d (%s) has used all %d of its mappings\n", what,
                   (int)current_proc->pid, current_proc->comm, VMA_MAX);
 }
@@ -10794,7 +10794,7 @@ static int32_t sys_munmap(isr_params_t *params)
     end = PAGE_UP(addr + length);
 
     if (vm_remove(vm, start, end) != 0) {
-        vma_exhausted("munmap"); /* a hole-punch split would exceed VMA_MAX */
+        vma_exhausted("munmap");
         return -ENOMEM;
     }
     unmap_user_range(_curr_dir, start, end);

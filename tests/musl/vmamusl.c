@@ -20,14 +20,16 @@
  * hold what was written after the last was taken, which is what would break if
  * the regions overlapped instead of being distinct.
  *
- * The second half of the probe is the case that found the ceiling too low a
- * third time: a program that never calls `mmap` itself, asking the allocator
- * for 1 KB at a time. musl takes a mapping for each block it cannot fit in
- * what it holds, so such a walk stops at the table, not at memory, and it
- * stopped at about 3.1 MB while a single 64 MB request succeeded. What made
- * that hard to see was silence: the kernel refused the mapping and said
- * nothing, so the failure looked like the library's own. The kernel now says
- * which process ran out, on the serial log.
+ * The second half of the probe keeps its blocks in a chain, so nothing is
+ * freed until the end and every one is still held when the ceiling is met. It
+ * is the case that found the ceiling too low a third time: a program that
+ * never calls `mmap` itself, asking the allocator for 1 KB at a time. musl
+ * takes a mapping for each block it cannot fit in what it holds, so such a
+ * walk stops at the table, not at memory, and it stopped at about 3.1 MB while
+ * a single 64 MB request succeeded. What made that hard to see was silence:
+ * the kernel refused the mapping and said nothing, so the failure looked like
+ * the library's own. The kernel now says which process ran out, on the serial
+ * log.
  *
  * Prints "VMAMUSL OK" on success and "VMAMUSL FAIL (detail)" otherwise.
  */
@@ -76,10 +78,12 @@ int main(void)
         if (maps[i] == MAP_FAILED) {
             break;
         }
-        /* Write a byte that says which mapping this is, so a later read can
-         * tell them apart, not merely find memory. */
-        maps[i][0] = (char)('A' + i);
-        maps[i][4095] = (char)('a' + i);
+        /* Write the mapping's own index, both bytes of it, so a later read
+         * tells them apart rather than merely finding memory: one byte would
+         * repeat every 256 mappings and let a later one alias an earlier. */
+        maps[i][0] = (char)(i & 0xff);
+        maps[i][1] = (char)((i >> 8) & 0xff);
+        maps[i][4095] = (char)(0xff - (i & 0xff));
         taken++;
     }
 
@@ -95,7 +99,8 @@ int main(void)
     }
 
     for (i = 0; i < taken; i++) {
-        if (maps[i][0] != (char)('A' + i) || maps[i][4095] != (char)('a' + i)) {
+        if (maps[i][0] != (char)(i & 0xff) || maps[i][1] != (char)((i >> 8) & 0xff) ||
+            maps[i][4095] != (char)(0xff - (i & 0xff))) {
             return fail("a mapping does not hold what was written into it");
         }
     }
@@ -105,9 +110,6 @@ int main(void)
         }
     }
 
-    /* And the walk a program takes without asking for a mapping at all. What
-     * is kept is a chain, so nothing is freed until the end and every block
-     * is still held when the ceiling is met. */
     {
         void *head = 0;
         unsigned long total = 0;

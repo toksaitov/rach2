@@ -102,6 +102,11 @@ struct process {
     uint32_t sgid;
     uint32_t ngroups;               /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX];   /* supplementary gids */
+    /* Set once this process has been reported for running out of mappings, so
+     * the diagnostic is said once and not once per failed call. It belongs to
+     * the process and not to a remembered pid, which a later process reusing
+     * that pid would silence. */
+    uint32_t vma_reported;
 };
 
 typedef struct process process_t;
