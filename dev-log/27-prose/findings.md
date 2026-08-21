@@ -202,6 +202,9 @@ findings up to where it stopped.
   detail. A design decision."). Reworded to "That ordering is deliberate: ...",
   which states the claim plainly; the sentence already explains why (one image
   of the databases).
+* `utils/dhcpmsg.c`: a doubled word across a line break in the `dhcp_boundaries`
+  doc: "...into zero. The / The lease must be at least DHCP_MIN_LEASE". Removed
+  the repeated "The".
 * `utils/adduser.c`: a badly-wrapped comment. The `ADDUSER_CRASH_POINT` block
   broke as "...never in a shipped / image. It / takes a leading count", leaving
   "It" orphaned on its own short line. Reflowed the block (all lines under 80).

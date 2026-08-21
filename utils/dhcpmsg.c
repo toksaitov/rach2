@@ -435,7 +435,7 @@ unsigned long dhcp_sane_lease(unsigned long seconds, unsigned long max)
  * with: those are the times this client would have chosen anyway. Seven
  * eighths is computed as `(seconds * 7) / 8` and not the other way around,
  * because dividing first turns every lease under eight seconds into zero. The
- * The lease must be at least `DHCP_MIN_LEASE`, which is what `dhcp_sane_lease`
+ * lease must be at least `DHCP_MIN_LEASE`, which is what `dhcp_sane_lease`
  * guarantees; shorter than that, the two defaults are the same moment.
  */
 void dhcp_boundaries(const struct dhcp_lease *l, time_t from, time_t *t1,
