@@ -1,160 +1,134 @@
-# Milestone 26: the documentation, the comments, and the move to another machine
+# Milestone 26: the prose, the documentation, and the move to another machine
 
 ## The goal
 
-The work moves to a second machine. A Mac mini M4 replaces the laptop as the machine this project is built on, because the milestones now run for days and a machine that stays powered and reachable is worth more than a portable one. Milestone 27 runs there.
+Two things at once. The project must read as if one careful engineer wrote it, and it must be possible to clone it onto another Mac and carry on. The second was the whole of this milestone when it was first written. The first was one phase inside it, and the measurement below shows it is the larger job.
 
-For that to work the repository has to describe itself accurately, and it does not. `AGENTS.md` tells a new reader that the last entry in `dev-log/Readme.md` is where the tree stands; that entry is milestone 24, and two milestones have shipped since. Anyone following the instruction lands two milestones in the past without knowing it.
+## What the measurement showed, and what it does not show
 
-So this milestone is three passes and no new features: the documentation, the comments, and the arrangements a second machine needs. It ends with the tree pushed, and the first thing milestone 27 does is prove the new machine can build and test what it cloned.
+This repository vendors upstream sources written by other people: musl, busybox, dropbear, tinycc, pdpmake, and the Doom engine. Comparing our own comment prose against theirs, per thousand words of C and header comments:
 
-## What was measured before this plan
+    phrase          upstream/1k   ours/1k   ratio
+    carries               0.01      0.59     59x
+    rather than           0.06      2.10     35x
+    holds                 0.05      0.97     19x
+    seam                  0.03      0.29    9.6x
+    which is              1.77      0.22      8x
+    not a                 0.15      0.76      5x
 
-Both machines are Apple Silicon macOS, so nothing here bridges an architecture. This laptop is `arm64` on macOS 26.6.2 and the Mac mini is an M4. `qemu-system-i386` here is a native arm64 build, so no Intel emulation is involved in running the OS. The one cross-architecture dependency is Docker: three scripts run a Debian container with `--platform linux/amd64` (`tools/mkiso.sh:154`, `tools/mkgrubcore.sh:53`, `tools/mkdisk_grub.sh:390`).
+Those numbers came from a line-prefix grep over extracted trees, which is not what the checker will use, so they are a first look and not a baseline. The Codex review of this plan established what they are worth phrase by phrase, and the distinction governs how each is treated below.
 
-The vendored tarballs are committed and `.git` is 25 MB, so the source needs no downloads. The build does: Homebrew formulae, a Docker image pull, and the packages that image installs with `apt-get` at build time.
+`carries` and `holds` are anomalies worth acting on: the ratios are large, and two outside readers named those exact words without seeing this repository. `rather than` is a fair signal of repetition, though teaching prose does compare things more often than terse implementation comments, so upstream's rate is not the target. `seam` is not fairly measured at all, because the count mixes an established test-suite name, genuine architectural boundaries, an identifier, and loose figurative prose. `which is` and `not a` mostly measure sentence complexity and negated contracts, which is the difference between explaining and implementing, so they are watched and reported, never gated. No phrase has a fair Markdown comparison at all, because there is no upstream documentation corpus to compare against.
 
-`make doctor` passes here with every tool present. Its classification is wrong in a way that matters on a fresh machine: it marks `cppcheck`, `shellcheck`, `clang-format`, `perl`, Docker and `ssh-keygen` optional, and `tools/check.sh` needs the first four, `krffs/gen_demo_key.sh` exits fatally without `ssh-keygen`, and `make sealed-test` cannot build its disk without Docker. It also omits `i686-elf-ar`, `i686-elf-ranlib` and `i686-elf-nm`, which the Dropbear and TinyCC builds invoke by name, and `expect` and `timeout`, which two harnesses require outright.
+The named vocabulary from the old register rule is small in the shipping tree and large in `dev-log`: `load-bearing` 1 against 28, `honest` 5 against 53, `caveat` 2 against 4.
 
-The in-house tree has 991 comment lines longer than 80 columns: 847 in `rach2`, 80 in `tests`, 33 in `utils`, 28 in `krffs`, 3 in `ish`. `CLAUDE.md` requires 80 and `tools/check.sh` does not check it. `tools/` and `mk/` have over-width comments too and were not in that count.
+## What is already done
 
-The kernel is built with `-g` (`rach2/Makefile:118`, `:188`), so the host kernel carries DWARF line tables and an absolute compilation directory. Milestone 21 made staged images reproducible, not the host kernel binary. Any proof that a comment change did not alter code has to compare loadable content, not the whole ELF.
+The eighty-column comment work is finished and committed (4814e3e, cf36e31, d2fb84b, e58989e): 1,392 over-width comment lines down to 16, every in-house binary hashing the same before and after.
 
-Nine generated files are git-ignored, not five: two private keys, their two public halves, two staged authorized-keys files, two plaintext passwords, and `shadow`.
+The dev-log index and the twenty-six current-contract Readmes were checked for stale contracts (98b625a, f5e9961) but not for voice. That sweep also never got an independent review: three attempts died, one on a ten-minute limit and two without producing anything, and only its checklist half was reviewed later (b412783, seven defects found and fixed). The twenty-six verdicts therefore stand on one reading by one writer, and this milestone re-reviews them.
 
-## Phase A: the index, and the facts the next machine needs
+## Phase A: the instrument
 
-`AGENTS.md` sends a new reader to `dev-log/Readme.md` and says its last entry is where the tree stands. Make that true: add milestone 25 in the form the other entries take.
+`tools/prose_check.py`, with these properties, each of which the first draft of this plan got wrong.
 
-Then record the hardware session that happened after milestone 25 was written and is nowhere in the tree. A prose account is not enough, because the next person to touch that drive needs to know which drive and which artifact. The milestone 25 record takes the non-secret results the sealing checklist already asks for: the artifact's SHA-256 and byte count, the readback hash and that it matched, how the target was identified and that the adapter reports no serial, the address the router assigned and the MAC it matched, the ordinary system's SSH host-key fingerprint, the first `bootctl status`, and where the SSD physically is. Passwords and private keys are not written into the repository; phase E says what carrying them buys and what it does not.
+It reads the vendored upstream prose from the pinned tarballs with Python's `tarfile`, not from extracted directories. The extracted trees appear only after a build, so a checker that needs them cannot run on a fresh clone, which is the machine this milestone exists to serve.
 
-`dev-log/25-sealed/Readme.md` says the hardware is untouched. True when written, false now. It is corrected rather than appended to.
+It uses one extractor for both corpora, and it is the lexer already written for `tools/check_comments.py`, which tracks block-comment state and string literals. A line-prefix grep counts a C line beginning with `*` as prose and misses every inline comment, so the two corpora must not be extracted differently.
 
-Done when a reader following `AGENTS.md` from a clean clone can say where the tree stands, which artifact is on the SSD, how to recognise that drive, and how to authenticate the machine it becomes.
+It reports three populations separately and never pools them: C and header comments, shell, make and Python comments, and Markdown. Only the first has an upstream counterpart. It reports raw counts and word totals per upstream project, not one blended ratio, so a single project cannot skew the baseline.
 
-## Phase B: the current-contract Readmes
+It states whether user-visible string literals are in scope. They are: a person reads a test failure message, and phase C changes four of them.
 
-The tree tracks 51 Readmes. Twenty-five are milestone records under `dev-log/` and are history, not rewritten. Twenty-six describe current contracts and are swept: each read against the code it describes, every false statement corrected in place, a verdict recorded for every file including the accurate ones. Four are easy to miss because their names carry a prefix (`rach2/sys/fs/synthfs.Readme.md`, `rach2/sys/lib/krandom.Readme.md`, `rach2/sys/proc/signal.Readme.md`, `rach2/sys/proc/tls.Readme.md`), so the sweep enumerates from `git ls-files`.
+Two modes. `--banned` fails on terms that are wrong at any frequency. `--report` prints rates and multiples for a watch list and never fails anything until phase E says which parts gate. An n-gram mode lists the most repeated three- and four-word sequences that are not on the watch list, so the next habit is discoverable instead of waiting for another outside reader to name it.
 
-Two are already known wrong. `vendor/busybox/Readme.md:82` says this kernel offers neither raw nor packet sockets; packet sockets arrived in milestone 25. `rach2/Readme.md:61` says `make subset-test` boots every combination of the four device-skip tokens; it boots six lines, being none, each alone, and all four together.
+A selftest drives every rule from a temporary tree: a banned word in a comment, the same word in a string literal, the same word inside this rule's own definition, and a block comment spanning lines.
 
-Tool and script prose states contracts too and is in scope. `tools/runtests.py`'s header still describes an older scoring scheme.
+done-when: the selftest passes, the tool runs against a tree with no extracted vendor directories, and its C-comment output matches a committed fixture computed from the tarballs.
 
-One document is corrected to a policy the owner has now decided. `dev-log/25-sealed/checklist.md` requires the target drive's model and serial from `diskutil info`, and the adapter in use reports `Generic` with no serial, so that check cannot run and the procedure stops.
+## Phase B: the rule
 
-The replacement is a confirmation rather than a comparison, and `CLAUDE.md` now carries it as project policy so it reaches whoever or whatever runs the procedure next, on any machine. Before any destructive write, the operator lists the candidate drive and everything the host can say about it (node, size in bytes, bus, internal or external, whole disk, and the partition table it currently carries), presents that to the owner, and writes only on an explicit approval naming that node. An approval does not carry forward to the next run, and one given on another machine does not carry at all, because the node number is a property of the host and the moment rather than of the drive. The mechanical guards in the block stay as they are, since they cost nothing: not the boot disk, external, USB, whole disk, a size within bounds, and the artifact's hash checked before and after.
+`CLAUDE.md`'s register rule asks for a judgement, and it did not hold across twenty-five milestones. Rewrite it in two explicitly separated parts: what a script decides, and what a person decides in review. The current draft fails this, and the Codex review found the ways.
 
-The checklist stops naming a specific node in its example, since a copied example is the thing most likely to be pasted unread.
+A script decides: literal banned phrases, ASCII, dash forms, phrase rates, and a stored budget. A person decides: whether "honest" is applied to code, whether a reversal is rhetorical, whether a fragment is written for effect, whether a metaphor is established, whether a caveat sits where it belongs, and whether a term of art was defined when first used.
 
-Worth stating in the checklist alongside it, because it is the question the old wording invited: nothing in Rach2 is bound to a particular drive. The kernel probes AHCI for whatever is there and finds its root by scanning partition entries for the KRFFS magic, so the image boots from any drive carrying the layout. The serial was never an operating requirement; it was a guard on the host's `dd`, and a person confirming the drive in front of them is a stronger guard than a string comparison against a label.
+Three specific corrections. "Objects do not act" is impossible as a general rule of English, and `CLAUDE.md` itself says the kernel probes, the shared logic lives in `mk/`, and a file fails the build; the rule is about giving hardware and code intentions, and must say so. "Banned at any frequency, no exceptions" is contradicted by the rule itself, which prints every banned term, so the definition, the checker's data, and its fixtures are exempt by name. The Verification section still says voice is what no checker can judge, which now contradicts the register rule, and the same sentence appears in the header of `tools/textcheck.sh`.
 
-`dev-log/24-metal/baseline.md` gains the four facts about the Lenovo's Windows side that exist only in an untracked report: the SATA link power management values that must stay at zero and why, Fast Startup being enabled so a shutdown is hybrid, BitLocker never having been enabled, and the BIOS version and date with back-flashing disabled. The report is then deleted.
+Measurements and the name of an unbuilt tool do not belong in a normative file, because they go stale the moment this milestone succeeds. They live in the milestone record; `CLAUDE.md` states the rule and names the check that enforces it.
 
-The files are independent, so this phase spreads across parallel readers.
+The `seam` and `gate` question is settled here, on an inventory rather than a global replace, because the word is doing four different jobs: the name of the host test suite, a genuine architectural boundary (`rach2/sys/block/Readme.md:37` calls `block_probe` one), the identifier `SEAM_UNINSTRUMENTED` at `tests/host/pwauth_hosttest.c:378`, and loose prose. The suite becomes "the host tests". A boundary is named for what it bounds. The identifier is renamed with its uses. `gate` goes the same way: the suites are `make verify-style` and `make verify-host`, and naming the target is shorter than naming an abstraction.
 
-Done when every one of the twenty-six has a verdict, every correction is committed, the checklist states a decided policy, the four facts are in the baseline, and the report is gone.
+`AGENTS.md` gains the two working rules this session paid for, stated as limits a person can check rather than as advice: never report the state of a delegated job without a command in the same turn that reads it, and scope a review so one reviewer finishes inside ten minutes.
 
-## Phase C: the comments
+done-when: every rule in both files sits under a heading that says whether a script or a person decides it, no rule contradicts another, and the files obey themselves.
 
-Bring the in-house comments to the 80-column rule the project already states, and add the check that keeps them there.
+## Phase C: the banned vocabulary
 
-Scope is named exactly, because "the in-house tree" is ambiguous and the ambiguity would decide what gets skipped. Covered: `rach2`, `utils`, `ish`, `krffs`, `tests`, `tools`, `mk`, and `ports/doom`, which `Readme.md:29` calls code this project owns. Not covered: `vendor/`, whose trees are upstream, and `build/`. C and header comments in both syntaxes, and shell and Python comments in the scripts. The checker is lexer-aware, so a comment delimiter inside a string literal is not mistaken for a comment.
+Fix every banned term in the shipping tree; the counts are small. Then the `seam` inventory from phase B, category by category, including `tools/hosttest.sh:4`, its message at line 112, and the four failure strings in `pwauth_hosttest.c`.
 
-The safety proof has to survive the fact that the kernel is built with `-g`. Adding or removing a comment line moves DWARF line tables and declaration-line attributes, so the whole ELF changes even when no instruction does, and the compilation directory is absolute so two clones in different paths differ anyway. The comparison is therefore between copies stripped of debug information, built by the same compiler with the same flags in the same working directory, before and after.
+Those four strings are user-visible output, so changing them is a behavioural change and not a text-only one. They are tested, and they are committed apart from the text-only work so the binary proof in phase D is not muddied by them.
 
-It rests on no in-house source using `__LINE__` or `__FILE__`, which is true today outside Doom. A pass that introduced either would invalidate the proof it depends on.
+`dev-log` records are what was decided when, and rewriting them would falsify the record. They keep their wording. Two consequences the first draft missed: a future reader rebuilding context from `dev-log` will imitate what it reads unless told not to, so `dev-log/Readme.md` says plainly that the records are evidence of what happened and not a model for how to write; and milestone 27's plan, which is not yet executed, is in the enforced range and is corrected with the rest.
 
-The artifact list is everything the pass can reach, not one binary. Three kernels, since the metal and recovery builds compile the same sources into their own trees (`Makefile:258`, `Makefile:271`). The utilities and `ish`. Every executable under `build/tests` and `build/tests/musl` whose sources were edited. The KRFFS host tools. And Doom.
+done-when: `prose_check.py --banned` reports nothing in the shipping tree, the four output strings have a test, and the same term has not reappeared under a synonym.
 
-Two toolchains mean two normalizations, and conflating them would report a code change where there is none. The cross-built ELF artifacts take `i686-elf-strip --strip-debug`, which is enough here: those outputs carry no build-id and no timestamp note, and the link adds nothing but the script. The KRFFS tools are built by the host compiler and are arm64 Mach-O, which `i686-elf-strip` cannot read at all; they also carry an `LC_UUID` the linker derives from output content and an ad-hoc signature, so stripping after the link does not necessarily normalize what the link already computed. They are compared either by linking the proof copies with the UUID and ad-hoc signing suppressed and then running the native `strip -S`, or by extracting and hashing the loadable sections alone.
+## Phase D: the repetition
 
-Before either normalization is trusted it is checked against itself: build twice with no source change at all and require the hashes to match. A procedure that cannot produce equal hashes for identical input proves nothing about unequal ones, and discovering that at the end of a 991-line pass is the expensive way to learn it.
+The first draft proposed a ratchet on raw counts with a target of three times the upstream rate per source root. Both halves were wrong and the review showed why, so this phase is narrower and more honest about what it can prove.
 
-Two artifacts stay behavioural rather than byte-compared, for stated reasons. Doom expands `__FILE__` and `__LINE__` (`ports/doom/include/assert.h:12`, `ports/doom/src/z_zone.h:69`), so a reflow there changes its binary legitimately. The host tests built with the sanitizers embed source locations for the same reason, so they are judged by running them.
+Three times upstream is not a criterion at these rates. At `carries`, three times upstream is 0.03 per thousand words, so every root under about 33,000 words would have to contain zero, which is a zero-tolerance rule wearing a ratio. Zero tolerance is therefore stated where it is meant, for `carries` and `holds` used of an object acting, and the ordinary phrases stay report-only through this milestone.
 
-The guest build is a second compiler over the same sources and is not covered by any of that. `tools/check_guest.py` compares lists and recipes, not output, and `make selfbuild-test` hashes two builds of the same tree, so it cannot see a TinyCC-specific difference introduced by the pass. So a TinyCC kernel hash is taken before the pass begins and compared after.
+A raw-count ratchet rewards deleting a useful sentence, punishes adding a file that legitimately needs one occurrence, lets one root pay for another when the budget is global, and is defeated by a synonym. What replaces it: `tools/prose_baseline.txt` records counts and word totals per root, the report prints the rate and the direction of travel, and phase E decides what actually fails a build.
 
-Beyond width, since the pass reads every comment anyway: a comment describing behaviour the last three milestones changed is corrected, and a comment narrating inside a function body, which `CLAUDE.md` allows only for a hardware or ABI fact that cannot be named away, is removed or moved into the block above the function.
+The work is the rewriting. `rather than` at 2.10 per thousand words is a habit visible to any reader, and the goal is prose that no longer announces its author, not a number. One source root per commit, worst first: `rach2/sys`, the rest of the kernel, `utils` and `ish`, `krffs`, `tests`, `tools` and `mk`, then the Markdown.
 
-Done when no covered comment line exceeds 80 columns, the gate fails if one does, the stripped kernel and every other affected in-house binary hash the same before and after, the TinyCC kernel hash is unchanged, and Doom still runs.
+The proof from the eighty-column work does not transfer, and this is the most important correction in this phase. That work compared comment text with markers and spacing stripped, which was exactly right when the words could not change. Here the words change on purpose, so an equality check would reject every intended edit, and a check that permits differences proves nothing about meaning. What replaces it: the source with all comments stripped is compared token by token, which proves no code moved while the prose changes freely, and the binary comparison is restored in the form the previous revision of this plan specified, since that detail was lost and is not obvious. That form is: the kernel is built with `-g`, so debug tables shift when a comment line count changes and normalization is required; three kernels, not one, because the metal and recovery builds are separate; two toolchains mean two normalizations, i686-elf ELF and host Mach-O, and conflating them reports a code change where there is none; each normalization is checked against itself by building twice with no source change before it is trusted; Doom and any artifact expanding `__FILE__` are compared behaviourally instead; and the guest build is a second compiler over the same sources that none of it covers, which `tools/check_guest.py` and `make selfbuild-test` are for.
 
-## Phase D: the toolchain check, and what a fresh Mac actually needs
+No hash proves that prose still means what it meant. The paired before-and-after comment text is read, per root, by a reviewer who is not the writer.
 
-`make doctor` is corrected to match what the verification sequence really requires, and the repository gains the bootstrap the Readme currently assumes.
+done-when: each root's commit shows identical normalized artifacts, an identical comment-stripped token stream, and a reviewed before-and-after of its prose; and the report shows every watched phrase moving down.
 
-Reclassify as required, because a gate target cannot run without them: `cppcheck`, `shellcheck`, `clang-format`, `perl`, Docker and `ssh-keygen`. Add checks that do not exist: `i686-elf-ar`, `i686-elf-ranlib`, `i686-elf-nm`, `expect`, `ssh`, `timeout` or `gtimeout`, `strings`, `gzip`, a SHA-256 program, and `git`. Assert GNU Make rather than any make. For Docker, check that the daemon answers and that an `amd64` container actually runs, since the command being present proves neither. Record the ordinary shell utilities the scripts use as macOS base or Xcode-provided, so the list is complete rather than partly unexamined.
+## Phase E: wiring the checks into make verify-style
 
-The bootstrap is written down as a sequence a person can follow on a machine with nothing on it: Xcode Command Line Tools, Homebrew, the formulae and casks (from a tracked manifest rather than prose, so it cannot drift from doctor), start Docker and confirm it answers, confirm an amd64 container runs, confirm free space, then clone and run doctor. The space figure is measured, not guessed: the sealed artifact alone is 630 MiB and `sealed-test` keeps a working copy and an extracted root beside it.
+`tools/check_comments.py` from the eighty-column work is still unwired, at 16 remaining over-width lines. Fix those, wire it in, and wire in `prose_check.py --banned` beside `textcheck.sh`. Correct the header of `textcheck.sh`, which tells the reader voice is not checked here.
 
-Two external facts go in the same place. The build is not offline: it pulls a Docker image and that image installs packages with `apt-get` at build time, from a floating tag. Pin the image by digest so a rebuild is not at the mercy of an upstream retag. And pushing needs GitHub write authentication, which is per-machine and not part of a clone.
+What gates and what only reports is decided here, with the phase D numbers in hand, and written down with its reason. The banned list gates. The ordinary phrases report. Anything promoted from report to gate later is a policy change, made deliberately, not by editing a baseline file in the same commit as the prose that raised it.
 
-On this machine the phase proves what it can: a clone into a scratch directory, `make doctor`, `make`, `make full`, and doctor failing when a required tool is made unavailable. That is a smoke test and the plan says so, because a clone here still sits on this machine's Homebrew, Xcode, Docker and caches, and `make full` does not run QEMU at all.
+done-when: `make verify-style` fails on an introduced banned term, on an over-width comment line, and on a raised banned count; passes on the tree; and runs on a clone with no extracted vendor directories.
 
-Done when doctor's classification matches what the gate needs, the bootstrap manifest exists and agrees with doctor, the Ubuntu image is pinned, and the scratch clone builds `make full` while a deliberately absent required tool makes doctor fail.
+## Phase F: the move to another machine
 
-## Phase E: the arrival, and what a clone does not carry
+The acceptance criteria here are the ones the first revision of this plan set, which the rewrite had quietly weakened.
 
-The real proof that the move worked cannot be produced on this machine. It is an arrival check on the Mac mini, from a fresh clone: `make doctor`, `make full`, `make verify-style`, `make verify-host`, the full test list, `make selfbuild-test`, and `make sealed-test`. Milestone 26 cannot contain it, so it is milestone 27's first act and a precondition to everything after it, written into that plan rather than assumed.
+* `make doctor` names every tool the build needs, marks each required or optional correctly, and says what to install when one is missing. It is proved by a deliberate negative test: hide a tool, confirm `doctor` says so and names the fix.
+* A bootstrap section in the root Readme taking a fresh Mac from a clone to `make full`, with the Homebrew formulae in a manifest a script reads.
+* The Ubuntu image used for the GRUB step pinned by digest.
+* A clean-clone build into a scratch directory on this machine. This is a smoke test, not the arrival proof: the arrival proof is the same clone built on the Mac mini, and it belongs to whoever runs it there.
+* One page listing what a clone does not carry: the nine credential files in three groups, how each is transferred and what carrying it buys, the SSH host-key fingerprint, the GitHub authentication, and the Doom WAD.
+* An independent review of the twenty-six Readme verdicts from `f5e9961`, split into batches small enough that each finishes, checking every claim against the code it describes.
 
-What a clone does not carry, and what that costs:
+Seven facts are held only in this machine's memory directory and a clone loses them. Each is written into the file that owns the rule, not collected in one page:
 
-The nine generated credential files, in three groups. Two open the existing machine and cannot be regenerated: `krffs/rach2_demo_ed25519` and `krffs/rach2_test_ed25519`. Three reproduce an image with the same credentials: `krffs/rach2_demo_password`, `krffs/rach2_test_password`, `krffs/shadow`. Four are derived public copies that the generator rebuilds: the two `.pub` files and the two authorized-keys files. Copying the first five brings the rest with them. One trap: `gen_demo_key.sh` decides whether to mint from the presence of the authorized-keys file, not the private key, so copying a private key without its staged public half causes the generator to replace the key that was just copied.
+* Prefer busybox to in-house code when a capability is missing. The owner decided this; it belongs in `CLAUDE.md` under Ports.
+* How a mutation is proved to fail, which the verification policy demands and never explains: drive it from a script with a restoring trap, because a mutation can hang the suite and outlive the command that applied it.
+* That a `cp` restore does not make `make` rebuild, so several runs re-tested a stale binary and a mutation reported PASS when it had never been compiled.
+* How to run an independent review so its findings survive: `tee` it to a file, tell the reviewer to state findings early, and scope it to what one reviewer finishes inside ten minutes.
+* How a milestone run is conducted: it does not stop at a comfortable checkpoint; the only stops are the goal being met or a phase failing three honest attempts.
+* That a goal prompt is one short line naming the plan file, under thirty words, because a longer one is truncated where it is sent.
+* The commit message shape this history uses now, which has drifted from the early entries.
 
-The transfer is a convenience rather than a precondition, and it became one during planning. The artifact now on the SSD carries the owner's own public key beside the project's demo key, so the Mac mini reaches the laptop with the key already in its `~/.ssh`. Milestone 27's hardware tests in phases F and G therefore need none of the project's private material. Copying the five files still buys the ability to rebuild an image with identical credentials and to log in as the demo accounts, which is worth having; without them the new machine mints its own and the images it builds differ from the one on the drive until phase K rewrites it.
+done-when: a clone of the pushed tree into an empty directory builds `make full` on this machine with no undocumented step, `doctor` fails correctly when a tool is hidden, and a reader of that clone finds all seven facts in the files that own them.
 
-One mechanism already exists and needs only its documentation. `krffs/gen_demo_key.sh` now composes each authorized-keys file from the generated public half plus an optional `krffs/authorized_keys.extra`, git-ignored, so a person can add their own public key to images they build without carrying the project's private key anywhere. It recomposes rather than appends, so rebuilding never doubles a line and deleting the file removes the addition, and it refuses a file holding a private key or a line that is not a public key. That was built and tested during planning; this phase gives it its entry in `krffs/Readme.md` and commits it with that entry, as the project requires of a change that alters a contract.
+## Phase G: the record and the push
 
-Genuinely required by hand: the Dropbear host-key fingerprint of the ordinary system, so the new client can authenticate the existing machine rather than accepting whatever answers; GitHub write authentication; and the Doom WAD, which is operator-supplied and git-ignored, without which Doom does not run but nothing else is affected.
+Re-run everything from a clean tree, write `dev-log/26-portable/Readme.md` with the measurements and the fixture that phase B kept out of `CLAUDE.md`, add the milestone to `dev-log/Readme.md`, push.
 
-Everything else that is ignored is regenerable from tracked inputs: `build/`, the extracted vendor trees, the vendor stamps, the installed musl, and `compile_commands.json`.
+## What this leaves out, and what could go wrong
 
-### The knowledge that is not in the tree
+Milestone 27 is untouched in substance: the diagnostics work stays there, and only its prose is corrected in phase C. The vendored trees are never edited. `dev-log` records before this milestone keep their wording.
 
-Each assistant keeps notes outside the repository, in a directory keyed by the project's path on that machine, so they do not survive a move even if the whole directory were copied to a clone at a different path. Most of what they hold is a summary of a milestone whose record is in `dev-log/`, and those can be lost without cost. Seven items are not written down anywhere in the tree, and they are carried in:
+The watch list is a fixed list, and a fixed list is defeated by a synonym and blind to the next habit. That is what the n-gram mode in phase A is for, and it is the reason the list is reviewed by a person before any part of it fails a build.
 
-* The standing preference for busybox over in-house code, decided by the owner: when a capability is missing, look for an applet before writing a program, and keep `utils/` small. Write in-house only when busybox's version cannot work here or cannot be given the privilege it needs. The salt and locking objections were weighed and set aside, and are not to be re-argued. Goes in `CLAUDE.md` beside the ports policy.
-* How a mutation is proved to fail, which the verification policy demands but never explains. Drive it from a script that copies the file, sets a restoring `trap` on `EXIT INT TERM` before mutating, applies a hard time cap, and always restores; verify the mutation actually applied and check the tree afterwards. A mutation that leaks a blocked signal mask makes the test unkillable, the command times out, and a trailing restore never runs, which once left a source file mutated across several commits. Goes in `tests/Readme.md`.
-* That a `cp` restore does not make `make` rebuild. Several runs re-tested a stale binary, so a mutation reported PASS and a restored tree reported FAIL. `touch` the file after restoring and confirm the compiler named it. Same place.
-* How to run the independent review so its findings survive: pipe it through `tee` into a file and tell the reviewer to state each finding's file, line and reasoning early rather than in a trailing summary, because the output is repeatedly found holding only its closing lines and nothing recovers them afterwards. Goes in `AGENTS.md`, which is what the other assistant reads first.
-* How a milestone run is conducted: it does not stop at a comfortable checkpoint. The only stops are the goal being met, or a phase that cannot be met after three honest attempts, reported with evidence. "The next part is large" and "fresh context would be better" are the work, not stop conditions. Same place.
-* That a goal prompt is one short line naming the plan file, under thirty words. A longer one is silently truncated at the first paragraph break by the editor plugin, and renders an overlay that hides the whole chat for the duration of the run, so the owner cannot watch the work or tell that it has died. Same place.
-* The commit message shape the history actually uses now, which has drifted from the early entries: one capitalized verb-led sentence saying what the change does and why, ending with a period, no body, no attribution. `CLAUDE.md` says scoped units and no attribution but not the shape; the shape goes beside it.
+A rewrite can change meaning while every artifact stays identical. This is the real hazard of phase D, and no hash addresses it, which is why the prose is read in pairs by someone other than the writer.
 
-Two more belong in `CLAUDE.md` because they are about how the work is written rather than what it does. The register rule there covers invented jargon; it does not cover the opposite failure, which is explaining an ordinary term to a reader who has known it for twenty years. And chat replies are held to the same standard as committed prose, which the file says, but the standard is "no decoding required", not "simpler".
-
-Done when `dev-log/26-portable/Readme.md` lists each of these with which group it belongs to and says plainly which are required and which are a convenience, and milestone 27's plan carries the arrival check as the act before its first phase.
-
-## Phase F: the gate, the record, and the push
-
-Run the whole gate from a clean tree: `make verify-style`, `make verify-host`, the full suite, `make selfbuild-test`, `make sealed-test`. Write the record in `dev-log/26-portable/Readme.md` and add this milestone to `dev-log/Readme.md` so the index is current the moment the work ends.
-
-Push, since the next machine gets everything by clone and work committed locally does not travel.
-
-Done when every gate passes from a clean tree, the record is written, the index names this milestone last, and the remote holds it.
-
-## Risks, in expected order
-
-Phase C is a very large mechanical diff across eight directories. The stripped-binary comparison is what makes it safe, and it is worth running after each scoped commit rather than once at the end.
-
-Phase D can pass on this machine because this machine has everything. The deliberate-absence test and the tracked bootstrap manifest are what carry the weight; the arrival check in milestone 27 is what actually settles it.
-
-Phase E is the one whose omissions are invisible until the new machine needs something. The host-key fingerprint, the WAD and the push credential are checked by milestone 27's arrival check rather than trusted to have been read here.
-
-Phase B can turn into a rewrite. The rule is correction in place with a verdict per file.
-
-Phase A is short and is the one a reader depends on most.
-
-## What this milestone deliberately leaves out
-
-* Every code change milestone 27 owns. Nothing here touches the kernel or the userland except comments.
-* Installing anything on the Mac mini. This milestone produces the list and the sequence; someone at that machine follows it.
-* CI. The clone build is run by hand.
-* Any change to the disk layout, the boot menu, the two levels of disk authority, or the sealing procedure other than the checklist decision in phase B.
-
-## What must not be broken
-
-* The build. Phase C changes comments only, proved on stripped binaries and on the TinyCC output as well as the host one.
-* The dev-log records as history. They are corrected only where they state something false about the present, as phase A does for milestone 25's hardware claim.
-* The guest build's equality with the host lists, held by `tools/check_guest.py`.
-* Access to the machine currently on the SSD, until milestone 27 rewrites it.
-* ASCII only, and the voice rules, in every line of prose this milestone touches, which is most of them.
+Phase D is large and boring, and the temptation is a clever script. Three scripts corrupted comments during the eighty-column work, two of them in ways the binary hash could not see. Every automated pass is read as a diff before it is committed.
