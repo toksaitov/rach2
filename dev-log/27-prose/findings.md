@@ -191,6 +191,11 @@ findings up to where it stopped.
   (which had its own doc below it), while `claim_interface` -- defined ~360 lines
   further down after many functions were inserted between -- was undocumented.
   Moved the block onto `claim_interface`.
+* `utils/bootctl.c`: another orphaned doc. The block "Replace GRUB's core image,
+  writing the tail that is not in use" (the write-verify-then-flip-LBA-1 safety
+  argument) documents `cmd_grub`, but sat above the `grubcore_io` helper -- which
+  has its own doc -- while `cmd_grub` was undocumented. Moved the block onto
+  `cmd_grub`.
 * `utils/passwd.c`: a register-rule (person-judged half) fix. The header read
   "That ordering is the point, not a detail: ..." -- the "not a detail" reversal
   is the exact construction CLAUDE.md names as an example to avoid ("Not a

@@ -291,7 +291,7 @@ project teaches; move it up if that judgement turns out wrong.
 * [x] `utils/passwd.c` (2271 words)
 * [x] `utils/init.c` (2246 words)
 * [x] `krffs/stageimage.krffs.c` (1908 words)
-* [ ] `utils/bootctl.c` (1890 words)
+* [x] `utils/bootctl.c` (1890 words)
 * [ ] `utils/adduser.c` (1574 words)
 * [ ] `utils/grubslot.h` (1363 words)
 * [ ] `utils/login.c` (1172 words)

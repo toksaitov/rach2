@@ -604,6 +604,17 @@ static int gap_io(int fd, uint32_t lba, uint8_t *buf, int writing)
 }
 
 /**
+ * Read or write one gap sector through an open `/dev/grubcore`.
+ *
+ * The window's offsets are the disk's own LBAs, so this is `gap_io` with the
+ * signature `grubslot_install` calls it through.
+ */
+static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int write)
+{
+    return gap_io(*(int *)ctx, lba, buf, write);
+}
+
+/**
  * Replace GRUB's core image, writing the tail that is not in use.
  *
  * The order is the whole safety argument. The image goes into the inactive
@@ -618,17 +629,6 @@ static int gap_io(int fd, uint32_t lba, uint8_t *buf, int writing)
  * after the replacement has been verified, and removing it would take something
  * below GRUB that this machine does not have.
  */
-/**
- * Read or write one gap sector through an open `/dev/grubcore`.
- *
- * The window's offsets are the disk's own LBAs, so this is `gap_io` with the
- * signature `grubslot_install` calls it through.
- */
-static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int write)
-{
-    return gap_io(*(int *)ctx, lba, buf, write);
-}
-
 static int cmd_grub(const char *path)
 {
     FILE *f;
