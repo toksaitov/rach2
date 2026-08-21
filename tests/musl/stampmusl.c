@@ -127,7 +127,8 @@ int main(void)
     int fd;
     int i;
 
-    /* Create: the file is born now, and the directory it appeared in changed. */
+    /* Create: the file is born now, and the directory it appeared in
+     * changed. */
     if (mkdir(DIR, 0755) != 0 || mkdir(OTHER, 0755) != 0) {
         return fail("could not create the directories");
     }

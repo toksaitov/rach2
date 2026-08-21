@@ -55,10 +55,10 @@ AUDIO_DEVICE="${2:-speaker}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/qemu_devices.sh"
 
-# -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG seeds from trusted hardware
-# entropy; without it getrandom + /dev/[u]random fail closed and SSH key
-# generation (dropbear, in the os-real image) cannot run. Override CPU=... to
-# test.
+# -cpu max exposes RDSEED/RDRAND so the kernel CSPRNG seeds from trusted
+# hardware entropy; without it getrandom + /dev/[u]random fail closed and SSH
+# key generation (dropbear, in the os-real image) cannot run. Override CPU=...
+# to test.
 CPU="${CPU:-max}"
 
 KERNEL="$SCRIPT_DIR/../build/rach2/kernel"

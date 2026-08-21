@@ -52,7 +52,8 @@ struct isr_params;
 int32_t sys_pipe(struct isr_params *params);
 int32_t sys_pipe2(struct isr_params *params);
 
-/* Pure ring helpers; pipe_ring_put/pipe_ring_get are contracted in pipe_ring.c. */
+/* Pure ring helpers; pipe_ring_put/pipe_ring_get are contracted in
+ * pipe_ring.c. */
 uint32_t pipe_available(const pipe_t *p);
 uint32_t pipe_free_space(const pipe_t *p);
 uint32_t pipe_ring_put(pipe_t *p, const uint8_t *src, uint32_t n);

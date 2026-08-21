@@ -152,7 +152,8 @@ int main(void)
     CHECK(out[0] == '?' && out[1] == '?' && out[2] == '?' && out[3] == 'A',
           "a NUL, a newline and a DEL each become '?', so no line can be split");
 
-    /* ---- decimal, over 32-bit halves, in a kernel with no 64-bit divide ---- */
+    /* ---- decimal, over 32-bit halves, in a kernel with no 64-bit divide
+     * ---- */
     CHECK(diskinfo_u64_dec(out, (int)sizeof(out), 0) == 1 && strcmp(out, "0") == 0, "zero");
     CHECK(diskinfo_u64_dec(out, (int)sizeof(out), 9) == 1 && strcmp(out, "9") == 0, "nine");
     CHECK(diskinfo_u64_dec(out, (int)sizeof(out), 10) == 2 && strcmp(out, "10") == 0, "ten");

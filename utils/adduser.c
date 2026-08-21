@@ -67,7 +67,8 @@
 #define SHADOW_FILE "/etc/shadow"
 #define GROUP_FILE  "/etc/group"
 
-/* Room for a database read whole; a file past this is refused, not truncated. */
+/* Room for a database read whole; a file past this is refused, not
+ * truncated. */
 #define TEXT_MAX 16384
 
 /* Where an automatic number search starts, and where it gives up. */

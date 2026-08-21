@@ -152,10 +152,12 @@ void free_user_pages(page_dir_t *dir);
  */
 void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end);
 
-/** Free a page directory and its private page tables; call after free_user_pages(). */
+/** Free a page directory and its private page tables; call after
+ * free_user_pages(). */
 void free_page_directory(page_dir_t *dir);
 
-/** Identity-map an MMIO region; returns its virtual address (== physical), or 0. */
+/** Identity-map an MMIO region; returns its virtual address (== physical),
+ * or 0. */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
 
 /** Reserve one free physical frame for kernel use (never user); 0 if none. */

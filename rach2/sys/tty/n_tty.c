@@ -248,7 +248,8 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
             commit_line(t);
             return;
         }
-        /* an ordinary character joins the line (dropped if the line is full). */
+        /* an ordinary character joins the line (dropped if the line is
+         * full). */
         if (t->line_len < N_TTY_LINE_MAX - 1) {
             t->line[t->line_len++] = c;
             echo(t, out, ctx, c);

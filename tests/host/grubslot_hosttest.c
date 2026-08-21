@@ -343,7 +343,8 @@ int main(void)
     CHECK(strstr(err, "more than one extent") != NULL, "and says so");
     CHECK(writes == 0, "with nothing written");
 
-    /* And an extent beginning nowhere near a tail is not written over either. */
+    /* And an extent beginning nowhere near a tail is not written over
+     * either. */
     model_reset(GRUBSLOT_TAIL_A_LBA);
     set_blocklist(gap + 512, 900);
     CHECK(grubslot_install(NULL, model_io, image, 309, entry, &target, err, sizeof(err)) == -1,

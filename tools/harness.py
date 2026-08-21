@@ -64,9 +64,9 @@ def main():
     ap.add_argument("--bootwait", type=float, default=9.0)
     ap.add_argument("--log", default=None)
     ap.add_argument("--no-debug-exit", action="store_true")
-    # --ok PATTERN passes iff PATTERN appears in the serial output, regardless of
-    # the QEMU exit code. For a probe run in the debug shell (which returns to
-    # the shell rather than stopping QEMU via isa-debug-exit), the printed
+    # --ok PATTERN passes iff PATTERN appears in the serial output, regardless
+    # of the QEMU exit code. For a probe run in the debug shell (which returns
+    # to the shell rather than stopping QEMU via isa-debug-exit), the printed
     # success token is the result.
     ap.add_argument("--ok", default=None)
     ap.add_argument("steps", nargs="*")

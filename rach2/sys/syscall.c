@@ -2593,7 +2593,8 @@ static int32_t sys_dup(isr_params_t *params)
     if (newfd < 0) {
         return -EMFILE;
     }
-    /* entry still points at entries[oldfd] (a fixed array; alloc did not move it). */
+    /* entry still points at entries[oldfd] (a fixed array; alloc did not
+     * move it). */
     dst = &current_proc->fds.entries[newfd];
     fd_ofd_unref(dst->ofd); /* drop the fresh OFD; share oldfd's instead */
     dst->type  = entry->type;
@@ -2756,8 +2757,8 @@ static int32_t sys_chdir(isr_params_t *params)
     return 0;
 }
 
-/* getcwd(2): EBX = buf, ECX = size. Returns the path length including the NUL, or
- * -errno. */
+/* getcwd(2): EBX = buf, ECX = size. Returns the path length including the
+ * NUL, or -errno. */
 static int32_t sys_getcwd(isr_params_t *params)
 {
     char __user *buf = (char __user *)params->ebx;
@@ -2970,7 +2971,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_ino = procfs_ino_dir();
             return 0;
         case VNODE_PROC_CMDLINE:
-            /* /proc/cmdline: the boot command line, a read-only regular file. */
+            /* /proc/cmdline: the boot command line, a read-only regular
+             * file. */
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_cmdline();
@@ -2981,7 +2983,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_ino = procfs_ino_netdir();
             return 0;
         case VNODE_PROC_NET_DEV:
-            /* /proc/net/dev: what the interface has carried, anyone's to read. */
+            /* /proc/net/dev: what the interface has carried, anyone's to
+             * read. */
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_netdev();
@@ -3648,10 +3651,10 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
     return 0;
 }
 
-/* Does an object exist at `name` (absolute, leading '/' stripped)? 0 if so, else
- * -ENOENT/-ENOTDIR, the same synthetic-vs-KRFFS resolution do_access uses. link()
- * resolves its source through this so a missing source is reported as ENOENT before
- * the "no hard links" -EPERM. */
+/* Does an object exist at `name` (absolute, leading '/' stripped)? 0 if so,
+ * else -ENOENT/-ENOTDIR, the same synthetic-vs-KRFFS resolution do_access
+ * uses. link() resolves its source through this so a missing source is
+ * reported as ENOENT before the "no hard links" -EPERM. */
 static int32_t path_exists(const char *name)
 {
     struct vpath vp;
@@ -5423,7 +5426,8 @@ static int32_t sys_fork(isr_params_t *params)
      */
     child_sp = (uint32_t *)child->kernel_stack;
 
-    /* The ISR frame, copied from the parent, with eax (fork's return) set to 0. */
+    /* The ISR frame, copied from the parent, with eax (fork's return) set
+     * to 0. */
     child_sp -= sizeof(isr_params_t) / sizeof(uint32_t);
     child_frame = (isr_params_t *)child_sp;
     k_memcpy(child_frame, params, sizeof(isr_params_t));
@@ -5663,7 +5667,8 @@ static int32_t sys_creat(isr_params_t *params)
         return -EINVAL; /* empty filename */
     }
 
-    /* A synthetic mount is read-only: never create/shadow under /dev or /proc. */
+    /* A synthetic mount is read-only: never create/shadow under /dev or
+     * /proc. */
     if (synth_is_synth(name)) {
         return -EROFS;
     }
@@ -5979,7 +5984,8 @@ static int32_t sys_rename(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Copy both paths into kernel buffers, resolving relative names against cwd. */
+    /* Copy both paths into kernel buffers, resolving relative names against
+     * cwd. */
     len = copy_path_cwd(old_buf, sizeof(old_buf), old_path);
     if (len < 0) {
         return len;
@@ -6144,7 +6150,7 @@ static int32_t sys_utimensat(isr_params_t *params)
     const char __user *user_path = (const char __user *)params->ecx;
     struct kernel_timespec __user *user_times =
         (struct kernel_timespec __user *)params->edx;
-    /* int flags = (int)params->esi; */  /* AT_SYMLINK_NOFOLLOW: inert, no symlinks */
+    /* int flags = (int)params->esi; */
     char pathbuf[256];
     struct kernel_timespec ktimes[2];
     const struct kernel_timespec *times = NULL;
@@ -6609,7 +6615,8 @@ static int32_t sys_getdents64(isr_params_t *params)
                 uint8_t recbuf[KRFFS_FILE_NAME_BUFFER_SIZE + 32];
 
                 name_len = k_strlen((const char *)node->name);
-                /* Fixed fields (19 bytes) + name + NUL, padded to 8-byte align. */
+                /* Fixed fields (19 bytes) + name + NUL, padded to 8-byte
+                 * align. */
                 rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) + name_len + 1;
                 rec_len = (rec_len + 7) & ~7;
 
@@ -7422,7 +7429,8 @@ static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *s
         return -1;
     }
 
-    /* Block the handler's mask, plus this signal unless SA_NODEFER, for the run. */
+    /* Block the handler's mask, plus this signal unless SA_NODEFER, for the
+     * run. */
     newblock = current_proc->sig_blocked | sigact_mask(sa);
     if (!(sa->flags & SA_NODEFER)) {
         newblock |= KSIG_BIT(signo);
@@ -8807,7 +8815,8 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     return new_fd;
 }
 
-/* send(2): write to a connected stream socket (the peer is the connection's). */
+/* send(2): write to a connected stream socket (the peer is the
+ * connection's). */
 static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
@@ -8906,7 +8915,8 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
                                  (uint32_t)net_ip_addr);
 }
 
-/* getpeername: the connected peer's address (a connected stream socket only). */
+/* getpeername: the connected peer's address (a connected stream socket
+ * only). */
 static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(&current_proc->fds, fd);
@@ -9478,7 +9488,8 @@ static int32_t sys_setpgid(isr_params_t *params)
     return 0;
 }
 
-/* Resolve a getpgid/getsid target: the caller for pid 0, else the named process. */
+/* Resolve a getpgid/getsid target: the caller for pid 0, else the named
+ * process. */
 static process_t *pgrp_target(int pid)
 {
     if (pid == 0) {
@@ -9690,7 +9701,8 @@ struct kernel_utsname {
  * sets). Single global; Rach2 is one host. */
 static char k_hostname[65] = "rach2";
 
-/* Copy a C string into a fixed 65-byte utsname field (always NUL-terminated). */
+/* Copy a C string into a fixed 65-byte utsname field (always
+ * NUL-terminated). */
 static void uname_field(char *dst, const char *src)
 {
     uint32_t n = k_strlen(src);
@@ -10008,7 +10020,8 @@ static void rlimit_for(uint32_t resource, uint32_t *cur, uint32_t *max)
     *max = v;
 }
 
-/* getrlimit(76)/ugetrlimit(191): 32-bit struct rlimit { u32 rlim_cur, rlim_max }. */
+/* getrlimit(76)/ugetrlimit(191): 32-bit struct rlimit { u32 rlim_cur,
+ * rlim_max }. */
 static int32_t sys_getrlimit(isr_params_t *params)
 {
     uint32_t resource = params->ebx;
@@ -10150,7 +10163,8 @@ static int32_t sys_brk(isr_params_t *params)
             return (int32_t)vm->brk;
         }
     } else if (new_top < old_top) {
-        /* Shrink: free the pages above the new top, then trim or drop the VMA. */
+        /* Shrink: free the pages above the new top, then trim or drop the
+         * VMA. */
         unmap_user_range(_curr_dir, new_top, old_top);
         if (heap) {
             if (new_top <= vm->heap_start) {

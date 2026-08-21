@@ -14,11 +14,13 @@
  */
 #define RTC_CENTURY_BASE 2000
 
-/* The timer runs at 100 Hz (kernel.c calls init_pit(100)), so a tick is 10 ms. */
+/* The timer runs at 100 Hz (kernel.c calls init_pit(100)), so a tick is 10
+ * ms. */
 #define RTC_TICKS_PER_SECOND     100
 #define RTC_NANOSECONDS_PER_TICK 10000000
 
-/** Whether `year` (a full year, not the two-digit register) has a February 29. */
+/** Whether `year` (a full year, not the two-digit register) has a February
+ * 29. */
 static int rtc_is_leap(int32_t year)
 {
     if (year % 400 == 0) {

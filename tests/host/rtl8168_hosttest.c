@@ -594,7 +594,8 @@ static void model_reset(void)
     model_bridge_present = 1;
 }
 
-/** The index of the first write of `width` to `off` at or after `from`, or -1. */
+/** The index of the first write of `width` to `off` at or after `from`, or
+ * -1. */
 static int find_write(unsigned from, unsigned char width, unsigned off)
 {
     unsigned i;
@@ -958,7 +959,8 @@ int main(void)
         CHECK(r8168_rx_errors == 1, "an error frame is counted");
     }
 
-    /* A frame split across descriptors is dropped rather than half-delivered. */
+    /* A frame split across descriptors is dropped rather than
+     * half-delivered. */
     {
         unsigned before = rx_calls;
 

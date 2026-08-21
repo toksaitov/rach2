@@ -76,7 +76,8 @@ static short fd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         return socket_poll(e->sock, events, wq);
     }
     if (e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) {
-        /* A regular file/directory never blocks: always readable, and writable. */
+        /* A regular file/directory never blocks: always readable, and
+         * writable. */
         return (short)(events & (POLLIN | POLLOUT));
     }
     if (e->type == FD_TYPE_CONSOLE) {
@@ -300,7 +301,8 @@ static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
     return kernel_ticks + ticks;
 }
 
-/** Shared poll(2) implementation: ufds/nfds plus an already-computed deadline. */
+/** Shared poll(2) implementation: ufds/nfds plus an already-computed
+ * deadline. */
 static int32_t poll_common(uint32_t ufds, uint32_t nfds, int has_deadline, uint32_t deadline)
 {
     struct kernel_pollfd fds[POLL_MAX_FDS];
@@ -426,7 +428,8 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
         }
     }
 
-    /* pollfds -> fd_sets (pure), then write back only the sets the caller gave. */
+    /* pollfds -> fd_sets (pure), then write back only the sets the caller
+     * gave. */
     k_memset(orset, 0, setbytes);
     k_memset(owset, 0, setbytes);
     k_memset(oeset, 0, setbytes);

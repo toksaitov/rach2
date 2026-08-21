@@ -124,10 +124,12 @@ void fd_table_init(fd_table_t *table);
 /** Wire fd 0/1/2 as console stdin/stdout/stderr; call after fd_table_init. */
 void fd_init_stdio(fd_table_t *table);
 
-/** Reserve the lowest free descriptor; fd (>= 0) on success, -1 if table full. */
+/** Reserve the lowest free descriptor; fd (>= 0) on success, -1 if table
+ * full. */
 int fd_alloc(fd_table_t *table);
 
-/** Reserve the lowest free descriptor >= minfd (the fcntl(F_DUPFD) contract). */
+/** Reserve the lowest free descriptor >= minfd (the fcntl(F_DUPFD)
+ * contract). */
 int fd_alloc_from(fd_table_t *table, int minfd);
 
 /** Release a descriptor and its OFD reference; 0 ok, -1 if fd invalid. */

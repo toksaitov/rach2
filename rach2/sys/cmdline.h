@@ -36,7 +36,8 @@ int kcmdline_has(const char *flag);
  */
 int kcmdline_value(const char *key, char *out, unsigned int outlen);
 
-/** How many `key=` tokens the line carries; more than one is a contradiction. */
+/** How many `key=` tokens the line carries; more than one is a
+ * contradiction. */
 int kcmdline_count(const char *key);
 
 /** The captured command line, a NUL-terminated string (empty if none). */

@@ -26,7 +26,8 @@ struct block_device;
 /** Open a /dev leaf by name; the new fd, or a negative errno. */
 int devfs_open(const char *name, int flags);
 
-/** Synthesize stat fields for /dev or a device leaf; 0 ok, -1 if no such leaf. */
+/** Synthesize stat fields for /dev or a device leaf; 0 ok, -1 if no such
+ * leaf. */
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
 
 /*

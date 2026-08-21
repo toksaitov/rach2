@@ -13,7 +13,8 @@ process_t proc_table[MAX_PROCS];
 
 process_t *current_proc = NULL;
 
-/* The pid of init, owned by kernel.c; reparent_children adopts orphans onto it. */
+/* The pid of init, owned by kernel.c; reparent_children adopts orphans onto
+ * it. */
 extern volatile uint32_t init_pid;
 
 static uint32_t next_pid = 0;

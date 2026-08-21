@@ -253,7 +253,8 @@ static void r8168_mac_ocp_modify(uint32_t reg, uint16_t clear, uint16_t set)
     r8168_mac_ocp_write(reg, (uint16_t)((v & ~clear) | set));
 }
 
-/** Read the PHY-OCP word at `reg` (r8168_phy_ocp_read); `*ok` reports timeout. */
+/** Read the PHY-OCP word at `reg` (r8168_phy_ocp_read); `*ok` reports
+ * timeout. */
 static uint16_t r8168_phy_ocp_read(uint32_t reg, int *ok)
 {
     io->w32(R8168_GPHY_OCP, reg << 15);
@@ -625,7 +626,8 @@ static int r8168_hw_start_8168g(void)
     int ok = 0;
     uint32_t v;
 
-    /* FIFO sizes, static and dynamic (rtl_set_fifo_size 0x08,0x10,0x02,0x06). */
+    /* FIFO sizes, static and dynamic (rtl_set_fifo_size
+     * 0x08,0x10,0x02,0x06). */
     if (!r8168_eri_write(0xc8, R8168_ERIAR_MASK_1111, 0x00080002) ||
         !r8168_eri_write(0xe8, R8168_ERIAR_MASK_1111, 0x00100006)) {
         return 0;
@@ -747,7 +749,8 @@ static int r8168_hw_start(void)
 /* Rings.                                                              */
 /* ------------------------------------------------------------------ */
 
-/** Hand every receive descriptor to the chip, the last one marked end-of-ring. */
+/** Hand every receive descriptor to the chip, the last one marked
+ * end-of-ring. */
 static void r8168_rx_fill(void)
 {
     uint32_t i;

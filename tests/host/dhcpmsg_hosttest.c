@@ -158,7 +158,8 @@ static unsigned int reply(unsigned char *f, unsigned long xid, const unsigned ch
     return total;
 }
 
-/* An offer of 192.168.90.20/24, router .2, one nameserver, a 600 second lease. */
+/* An offer of 192.168.90.20/24, router .2, one nameserver, a 600 second
+ * lease. */
 static const unsigned char GOOD_OPTS[] = {
     53, 1,  DHCP_OFFER, 1, 4, 255, 255, 255, 0, 3,   4,   192, 168, 90, 2, 6,   4,   192, 168, 90,
     3,  51, 4,          0, 0, 2,   88,  54,  4, 192, 168, 90,  2,   15, 4, 'l', 'a', 'n', '.', 255};

@@ -37,7 +37,8 @@
  * exists on this desk is QEMU's.
  */
 
-/** One chipset's power-management registers, and what may be written to them. */
+/** One chipset's power-management registers, and what may be written to
+ * them. */
 typedef struct {
     const char *name;
     uint8_t bus, device, function;
@@ -65,7 +66,8 @@ typedef struct {
 #define BOARD_FOUND   1
 #define BOARD_REFUSED 2 /* something matched and a check failed */
 
-/** A profile by name, or NULL. Used by the boot line's override and the test. */
+/** A profile by name, or NULL. Used by the boot line's override and the
+ * test. */
 const board_profile_t *board_lookup(const char *name);
 
 /** Whether the identity read out of configuration space is this profile's. */

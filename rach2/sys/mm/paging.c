@@ -317,7 +317,8 @@ static int vm_resolve(uint32_t addr, int write)
     uintptr_t phys;
 
     if (!vma) {
-        /* The one legal access outside every region is growing the stack down. */
+        /* The one legal access outside every region is growing the stack
+         * down. */
         if (!vm_grow_stack(vm, addr & ~(PAGE_SIZE - 1))) {
             return 0;
         }
@@ -927,7 +928,8 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t fla
         return -1;
     }
 
-    /* The caller owns the frame and its reference count; we only write the PTE. */
+    /* The caller owns the frame and its reference count; we only write the
+     * PTE. */
     table->pages[page_index] = (phys & ~0xFFFu) | (flags & 0xFFFu);
     if (dir == _curr_dir) {
         paging_flush_tlb(virt);
@@ -1102,7 +1104,8 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
             continue; /* not present: a never-faulted lazy page, nothing to free */
         }
 
-        /* Drop the mapping's reference (frees the frame on the last reference). */
+        /* Drop the mapping's reference (frees the frame on the last
+         * reference). */
         phys = pte & ~0xFFF;
         frame_unref(phys);
         table->pages[page_index] = 0;

@@ -39,7 +39,8 @@ typedef struct {
 /* The PM flag, which rides in the high bit of the hour in 12-hour mode. */
 #define RTC_HOUR_PM 0x80
 
-/* A sample decoded into fields, in UTC: what the clock meant, not what it held. */
+/* A sample decoded into fields, in UTC: what the clock meant, not what it
+ * held. */
 typedef struct {
     int32_t year;
     int32_t month;

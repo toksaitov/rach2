@@ -39,7 +39,8 @@ void init_gdt(void)
     _gdt_set_descriptor(2, 0, 0xFFFFFFFF, 0x92, 0xCF); /* Kernel data */
     _gdt_set_descriptor(3, 0, 0xFFFFFFFF, 0xFA, 0xCF); /* User code */
     _gdt_set_descriptor(4, 0, 0xFFFFFFFF, 0xF2, 0xCF); /* User data */
-    /* TSS descriptor: access 0x89 = present, DPL 0, type 0x9 (32-bit TSS available) */
+    /* TSS descriptor: access 0x89 = present, DPL 0, type 0x9 (32-bit TSS
+     * available) */
     _gdt_set_descriptor(5, tss_base, tss_limit, 0x89, 0x00);
     /* TLS descriptor (entry 6): same shape as user data (present, DPL 3, 4 GB
      * R/W data); base is reprogrammed at runtime by set_thread_area and the

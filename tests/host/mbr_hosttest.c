@@ -24,7 +24,8 @@ static int fails;
         }              \
     } while (0)
 
-/* The named form, for cases where one failure among many needs telling apart. */
+/* The named form, for cases where one failure among many needs telling
+ * apart. */
 #define CHECKN(cond, what)                  \
     do {                                    \
         if (!(cond)) {                      \

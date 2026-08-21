@@ -128,7 +128,8 @@ static void vt_apply_color(void)
     set_back_color((display_color_t)(bg & 7));
 }
 
-/** Apply one Select-Graphic-Rendition sequence from the collected parameters. */
+/** Apply one Select-Graphic-Rendition sequence from the collected
+ * parameters. */
 static void vt_do_sgr(void)
 {
     unsigned int i, n, code;

@@ -34,7 +34,8 @@ typedef struct user_desc user_desc_t;
 #define UD_SEG_NOT_PRESENT 0x20u  /* bit 5    : descriptor not present     */
 #define UD_USEABLE         0x40u  /* bit 6    : AVL bit                    */
 
-/** Validate a user_desc and output its TLS base; 0 ok, -1 if unrepresentable. */
+/** Validate a user_desc and output its TLS base; 0 ok, -1 if
+ * unrepresentable. */
 int tls_resolve_base(const user_desc_t *u, uint32_t *base_out);
 
 #endif /* _TLS_H_ */

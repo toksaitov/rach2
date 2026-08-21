@@ -64,7 +64,8 @@ int32_t netif_ioctl(uint32_t request, uint32_t arg, int *handled);
  */
 int netif_name_is_ours(const char *name);
 
-/** Whether the interface is administratively up; frames are dropped when not. */
+/** Whether the interface is administratively up; frames are dropped when
+ * not. */
 int netif_is_up(void);
 
 #endif /* _NETIF_H_ */

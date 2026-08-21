@@ -74,7 +74,8 @@ int pty_open_master(int flags);
  */
 int pty_open_slave(int index, int flags);
 
-/** Index of the pty whose slave is session `sid`'s controlling terminal, or -1. */
+/** Index of the pty whose slave is session `sid`'s controlling terminal, or
+ * -1. */
 int pty_session_slave(int sid);
 
 /** Atomically make `keep` the sole controlling terminal of session `sid`. */
@@ -89,14 +90,16 @@ struct tty *pty_slave_tty(struct fd_entry *e);
  * name. */
 int pty_slave_index(struct fd_entry *e);
 
-/* Whether slot `index` is an allocated pty pair (for /dev/pts stat/getdents). */
+/* Whether slot `index` is an allocated pty pair (for /dev/pts
+ * stat/getdents). */
 int pty_is_allocated(int index);
 
 /* The allocated pty behind /dev/pts/N, or NULL: the ownership fields for the
  * stat/chown/chmod paths. */
 struct pty *pty_get(int index);
 
-/** Release any pty slave controlled by dying session leader `sid` (sid == pid). */
+/** Release any pty slave controlled by dying session leader `sid` (sid ==
+ * pid). */
 void pty_release_leader(int sid, int pid);
 
 #endif /* _PTY_H_ */

@@ -45,8 +45,9 @@
    and ARP layers read it. */
 extern uint8_t net_mac[6];
 
-/** Bring the network stack up once at boot, after PCI enumeration and interrupts are
- *  ready so the NIC can be probed; 1 if the NIC is up, 0 otherwise. */
+/** Bring the network stack up once at boot, after PCI enumeration and
+ * interrupts are ready so the NIC can be probed; 1 if the NIC is up, 0
+ * otherwise. */
 int init_network(void);
 
 /* One-line description of the running stack, for the boot banner. */

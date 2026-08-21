@@ -62,7 +62,8 @@ void init_pagecache(void);
  */
 void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
 
-/* Whether a backing store is currently set (the window is a live file system). */
+/* Whether a backing store is currently set (the window is a live file
+ * system). */
 int pc_has_backing(void);
 
 /*
@@ -80,7 +81,8 @@ int pc_fault(uint32_t fault_address, int write);
  */
 int pc_sync(void);
 
-/* The pre-mapped window span in bytes (the page-table coverage in the window). */
+/* The pre-mapped window span in bytes (the page-table coverage in the
+ * window). */
 uint32_t pc_window_size(void);
 
 /*

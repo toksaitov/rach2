@@ -186,10 +186,12 @@ typedef struct {
 /** Validate just the ELF header of a streamed image; true if loadable. */
 bool elf_valid_exec(const void *ehdr, uint32_t len);
 
-/** Run-time vaddr of the program header table (AT_PHDR), or 0 if none covers `phoff`. */
+/** Run-time vaddr of the program header table (AT_PHDR), or 0 if none
+ * covers `phoff`. */
 uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff);
 
-/** Stream an ELF into `dir` via `read`, recording layout in `out`; 0 ok, -1 on error. */
+/** Stream an ELF into `dir` via `read`, recording layout in `out`; 0 ok, -1
+ * on error. */
 int elf_load_image(elf_read_fn read, void *ctx, page_dir_t *dir, elf_image_t *out);
 
 struct vm_space; /* mm/vm.h */
@@ -198,7 +200,8 @@ struct vm_space; /* mm/vm.h */
 void elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
                     uint32_t stack_top, uint32_t stack_growth);
 
-/** Load PT_LOAD segments of an in-memory image into `dir`; 0 ok, -1 on error. */
+/** Load PT_LOAD segments of an in-memory image into `dir`; 0 ok, -1 on
+ * error. */
 int elf_load(const void *data, uint32_t size, page_dir_t *dir);
 
 #endif /* _ELF_H_ */

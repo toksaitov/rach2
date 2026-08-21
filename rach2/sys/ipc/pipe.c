@@ -176,7 +176,8 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         uint32_t space;
         uint32_t chunk;
 
-        /* A vanished reader is fatal to the write regardless of buffer space. */
+        /* A vanished reader is fatal to the write regardless of buffer
+         * space. */
         if (!p->read_open) {
             signal_post(current_proc, SIGPIPE);
             return (done > 0) ? (int32_t)done : -EPIPE;

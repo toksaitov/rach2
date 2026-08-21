@@ -18,7 +18,8 @@
 /* Maximum file name length, including the NUL terminator. */
 #define KRFFS_FILE_NAME_BUFFER_SIZE 256
 
-/* The root node's name is the empty string (it represents the "/" directory). */
+/* The root node's name is the empty string (it represents the "/"
+ * directory). */
 #define KRFFS_FILE_SYSTEM_ROOT_NODE_NAME ""
 
 /* Default root node permissions (rwxr-xr-x). */
@@ -120,7 +121,8 @@ typedef struct krffs_file_system {
 /* The mounted file system, or NULL before init_krffs. */
 extern krffs_file_system_t *krffs_fs;
 
-/* Node traversal: the next, previous, and wrapped position in the circular list. */
+/* Node traversal: the next, previous, and wrapped position in the circular
+ * list. */
 krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node);
 krffs_node_t *krffs_get_previous_node(krffs_file_system_t *fs, krffs_node_t *node);
 krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *node);
@@ -162,7 +164,8 @@ uint32_t krffs_reap_orphans(void);
 void krffs_orphan_node(krffs_node_t *node);
 void krffs_unlink_held(krffs_node_t *node);
 
-/** Build the absolute, canonical path of `node` into buf; 0 ok, -1 if it does not fit. */
+/** Build the absolute, canonical path of `node` into buf; 0 ok, -1 if it
+ * does not fit. */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
 
 /* Read and write through a resolved node pointer, for the fd layer.
@@ -191,7 +194,8 @@ int krffs_truncate(const char *path, uint32_t new_size);
 int krffs_unlink(const char *path);
 int krffs_rename(const char *old_path, const char *new_path);
 
-/* Directory operations: create, remove (must be empty), and enumerate children. */
+/* Directory operations: create, remove (must be empty), and enumerate
+ * children. */
 int krffs_mkdir(const char *path);
 int krffs_rmdir(const char *path);
 int krffs_readdir(const char *path, uint32_t index, char *name_out,

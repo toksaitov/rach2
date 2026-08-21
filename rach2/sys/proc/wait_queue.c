@@ -40,7 +40,8 @@ void wait_queue_init(wait_queue_t *wq)
     }
 }
 
-/* Add p to wq if not already queued (idempotent). Caller holds interrupts off. */
+/* Add p to wq if not already queued (idempotent). Caller holds interrupts
+ * off. */
 static void wq_enqueue(wait_queue_t *wq, process_t *p)
 {
     int i;

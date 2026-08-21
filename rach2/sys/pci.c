@@ -210,7 +210,8 @@ bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *sk
                 if (skip_dev != NULL && bus == skip_dev->bus && device == skip_dev->device &&
                     function == skip_dev->function) {
                     past_skip = true;
-                    /* Bit 7 of the header type marks a multi-function device. */
+                    /* Bit 7 of the header type marks a multi-function
+                     * device. */
                     if (function == 0) {
                         uint8_t header_type =
                             pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
@@ -222,7 +223,8 @@ bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *sk
                 }
 
                 if (!past_skip) {
-                    /* Bit 7 of the header type marks a multi-function device. */
+                    /* Bit 7 of the header type marks a multi-function
+                     * device. */
                     if (function == 0) {
                         uint8_t header_type =
                             pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);

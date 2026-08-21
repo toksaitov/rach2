@@ -179,7 +179,8 @@ extern void outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 extern volatile uint32_t kernel_ticks;
 
-/** Execute CPUID for `leaf`, sub-leaf 0, into *a, *b, *c, *d (EAX, EBX, ECX, EDX). */
+/** Execute CPUID for `leaf`, sub-leaf 0, into *a, *b, *c, *d (EAX, EBX,
+ * ECX, EDX). */
 static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
     __asm__ __volatile__("cpuid"

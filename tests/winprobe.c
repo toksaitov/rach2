@@ -63,7 +63,8 @@ void _start(void)
     sink = *win; /* illegal from ring 3: the kernel must kill us, not panic */
     (void)sink;
 
-    /* If the window branch wrongly served a ring-3 fault, we would reach here. */
+    /* If the window branch wrongly served a ring-3 fault, we would reach
+     * here. */
     puts("winprobe: ERROR still alive after window read");
     sys_exit(0);
 }

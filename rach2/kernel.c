@@ -970,7 +970,8 @@ static bool test_isolation(void)
         return false;
     }
 
-    /* Same virtual address in each directory must map distinct physical pages. */
+    /* Same virtual address in each directory must map distinct physical
+     * pages. */
     phys_a = alloc_user_page(dir_a, ISOLATION_TEST_ADDR);
     phys_b = alloc_user_page(dir_b, ISOLATION_TEST_ADDR);
     if (!phys_a || !phys_b || phys_a == phys_b) {
@@ -1146,7 +1147,8 @@ static bool test_elf(void)
     return true;
 }
 
-/* elf_read_fn over a KRFFS file; ctx is the path. Used by the segment loader. */
+/* elf_read_fn over a KRFFS file; ctx is the path. Used by the segment
+ * loader. */
 static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     return krffs_read((const char *)ctx, (char *)dst, count, off);
@@ -1437,7 +1439,8 @@ static bool test_pagecache(void)
         }
     }
 
-    /* A misaligned store across the page-0/page-1 boundary faults both pages. */
+    /* A misaligned store across the page-0/page-1 boundary faults both
+     * pages. */
     *(volatile uint32_t *) (win + PAGE_SIZE - 2) = 0x44443333u;
     pc_sync();
     if (win[PAGE_SIZE - 1] != 0x33u || win[PAGE_SIZE] != 0x44u) {
@@ -2333,7 +2336,8 @@ static void process_command(const char *cmd)
             k_strncpy(exec_cmd_buf, args, sizeof(exec_cmd_buf) - 1);
             exec_cmd_buf[sizeof(exec_cmd_buf) - 1] = '\0';
 
-            /* Split on spaces and tabs in place, building argv into the buffer. */
+            /* Split on spaces and tabs in place, building argv into the
+             * buffer. */
             for (p = exec_cmd_buf; *p && exec_argc < 15; p++) {
                 if (*p == ' ' || *p == '\t') {
                     if (in_arg) {
@@ -3065,7 +3069,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         set_fore_color(light_grey);
     }
 
-    /* Allocate the pipe pool (kept out of BSS) before user processes can pipe(). */
+    /* Allocate the pipe pool (kept out of BSS) before user processes can
+     * pipe(). */
     pipe_init_pool();
 
     /* Allocate the pty pool before user processes can open /dev/ptmx. */

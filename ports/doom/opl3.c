@@ -57,7 +57,8 @@
 #define OPL_SIN(x) ((int32_t)(sin((x) * M_PI / 512.0) * 65536.0))
 #endif
 
-/* Quirk: Some FM channels are output one sample later on the left side than the right. */
+/* Quirk: Some FM channels are output one sample later on the left side than
+ * the right. */
 #ifndef OPL_QUIRK_CHANNELSAMPLEDELAY
 #define OPL_QUIRK_CHANNELSAMPLEDELAY (!OPL_ENABLE_STEREOEXT)
 #endif

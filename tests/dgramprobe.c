@@ -716,7 +716,8 @@ void _start(void)
         fail("SO_REUSEADDR did not read back as set");
     }
 
-    /* A socket can be tied to the interface this machine has, and to no other. */
+    /* A socket can be tied to the interface this machine has, and to no
+     * other. */
     args[0] = (uint32_t)client;
     args[1] = SOL_SOCKET;
     args[2] = SO_BINDTODEVICE;

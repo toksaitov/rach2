@@ -222,14 +222,16 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
     /* Check for real audio hardware */
     if (ioctl(0, AUDIO_GET_INFO, &info) == 0 && info.has_real_audio) {
         audio_sample_rate = OUTPUT_SAMPLE_RATE;
-        /* Start audio playback - use original mono 8-bit format that was working */
+        /* Start audio playback - use original mono 8-bit format that was
+         * working */
         params.sample_rate = audio_sample_rate;
         params.format = AUDIO_U8;     /* 8-bit unsigned (Doom native format) */
         params.channels = 1;          /* Mono */
 
         if (ioctl(0, AUDIO_START, &params) == 0) {
             use_real_audio = true;
-            /* Ensure hardware amps are unmuted on real devices (HDA codecs can boot muted). */
+            /* Ensure hardware amps are unmuted on real devices (HDA codecs
+             * can boot muted). */
             ioctl(0, AUDIO_SET_VOLUME, 80);
 
             /* Initialize OPL music subsystem at higher rate for quality,
@@ -361,7 +363,8 @@ static void PCSoundUpdate(void)
                 sample_sum = 0;
                 active_count = 0;
 
-                /* Add OPL music (downsample from ~49716 Hz stereo 16-bit to 11025 Hz mono 8-bit) */
+                /* Add OPL music (downsample from ~49716 Hz stereo 16-bit to
+                 * 11025 Hz mono 8-bit) */
                 if (opl_samples_needed > 0) {
                     int32_t mono_sum = 0;
                     int count = 0;
@@ -385,7 +388,8 @@ static void PCSoundUpdate(void)
 
                     if (count > 0) {
                         int32_t mono = mono_sum / count;
-                        /* Scale from 16-bit to 8-bit range (volume handled by OPL) */
+                        /* Scale from 16-bit to 8-bit range (volume handled
+                         * by OPL) */
                         mono = mono / 256;
                         mono = (mono * MUSIC_MIX_GAIN_NUM) / MUSIC_MIX_GAIN_DEN;
                         if (mono > 127) mono = 127;

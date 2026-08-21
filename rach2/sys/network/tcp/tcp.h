@@ -151,13 +151,15 @@ int tcp_listen(struct socket *sock, uint16_t port);
  */
 int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port);
 
-/** Queue up to len bytes for sending; returns the count accepted, -1 on error. */
+/** Queue up to len bytes for sending; returns the count accepted, -1 on
+ * error. */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 
 /** Detach the socket and begin closing the connection. */
 void tcp_close(struct socket *sock);
 
-/** Report whether a stream socket has a peer (ESTABLISHED or any later state). */
+/** Report whether a stream socket has a peer (ESTABLISHED or any later
+ * state). */
 int tcp_is_connected(struct socket *sock);
 
 /**

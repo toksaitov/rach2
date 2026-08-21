@@ -83,13 +83,16 @@ void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
 /** Write a 16-bit word to PCI configuration space. */
 void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint16_t value);
 
-/** Find the first device by class and subclass; true and fills `out` on a match. */
+/** Find the first device by class and subclass; true and fills `out` on a
+ * match. */
 bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out);
 
-/** Find the next class/subclass match after `skip_dev`; NULL `skip_dev` starts from the first slot. */
+/** Find the next class/subclass match after `skip_dev`; NULL `skip_dev`
+ * starts from the first slot. */
 bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev, pci_device_t *out);
 
-/** Find the first device by vendor and device ID; true and fills `out` on a match. */
+/** Find the first device by vendor and device ID; true and fills `out` on a
+ * match. */
 bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t *out);
 
 /** Set the Bus Master bit so the device can drive DMA. */
@@ -124,10 +127,12 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out);
 
 void pci_enable_bus_master(pci_device_t *dev);
 
-/** Set the Memory Space bit so the device responds to its memory BARs (MMIO). */
+/** Set the Memory Space bit so the device responds to its memory BARs
+ * (MMIO). */
 void pci_enable_memory_space(pci_device_t *dev);
 
-/** Clear the Interrupt Disable bit to re-enable the device's legacy INTx line. */
+/** Clear the Interrupt Disable bit to re-enable the device's legacy INTx
+ * line. */
 void pci_enable_interrupts(pci_device_t *dev);
 
 /** Recover a BAR's base address by masking off its type bits. */

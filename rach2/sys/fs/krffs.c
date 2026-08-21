@@ -681,7 +681,8 @@ void krffs_list_files(void)
     }
 }
 
-/* Freestanding: no libc, so the write path carries its own memcpy and strncpy. */
+/* Freestanding: no libc, so the write path carries its own memcpy and
+ * strncpy. */
 
 static void _krffs_memcpy(void *dest, const void *src, uint32_t n)
 {

@@ -139,7 +139,8 @@ int main(void)
     CHECK(!board_id_matches(lynx, 0x8086, 0x8C60, 0x06, 0x01), "one above the range does not");
     CHECK(!board_id_matches(0, 0x8086, 0x8C49, 0x06, 0x01), "no profile matches nothing");
 
-    /* ---- the base, which is the number a mistake turns into a wrong port ---- */
+    /* ---- the base, which is the number a mistake turns into a wrong port
+     * ---- */
     CHECK(board_pm_base(piix4, 0x00001001u) == 0x1000, "the PIIX4 base is masked to its bits");
     CHECK(board_pm_base(piix4, 0x00000001u) == 0,
           "a register holding only the I/O indicator is refused, not read as port 0");
@@ -159,7 +160,8 @@ int main(void)
     CHECK(!board_pm_decoding(lynx, 0x7F), "and the low bits do not stand in for it");
     CHECK(!board_pm_decoding(0, 0xFF), "no profile decodes nothing");
 
-    /* ---- the SCI line, which is masked and must never be the wrong one ---- */
+    /* ---- the SCI line, which is masked and must never be the wrong one
+     * ---- */
     CHECK(board_sci_irq(piix4, 0x00) == 9, "the PIIX4's SCI line is fixed at 9");
     CHECK(board_sci_irq(piix4, 0xFF) == 9, "and no register value changes it");
     CHECK(board_sci_irq(lynx, 0x00) == 9, "selection 0 is IRQ 9");
@@ -172,7 +174,8 @@ int main(void)
           "the selection is the low three bits, whatever the rest of the register holds");
     CHECK(board_sci_irq(0, 0x00) == -1, "no profile has no line");
 
-    /* ---- the sleep word, the one value that is believed rather than read ---- */
+    /* ---- the sleep word, the one value that is believed rather than read
+     * ---- */
     CHECK(board_sleep_word(piix4) == 0x2000,
           "the PIIX4 word is sleep type 0 with SLP_EN, which is what QEMU takes as off");
     CHECK(board_sleep_word(ich9) == 0x2000, "and so is the ICH9's");
@@ -183,7 +186,8 @@ int main(void)
           "and none of them is sleep type 5, which is suspend, not off");
     CHECK(board_sleep_word(0) == 0, "no profile yields no word");
 
-    /* ---- whether anything answered, and whether ACPI must be asked for ---- */
+    /* ---- whether anything answered, and whether ACPI must be asked for
+     * ---- */
     CHECK(!board_pm_answers(0xFFFF), "an all-ones read is an unclaimed port, not a register");
     CHECK(board_pm_answers(0x0000), "a zero read is a register reporting zero");
     CHECK(board_pm_answers(0x0001), "and so is one with SCI_EN set");

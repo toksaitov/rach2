@@ -18,7 +18,8 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 
-/* Linux ioctls. The pty-number requests are pinned exactly (musl uses these). */
+/* Linux ioctls. The pty-number requests are pinned exactly (musl uses
+ * these). */
 #define FIONREAD   0x541B
 #define FIONBIO    0x5421
 #define TIOCGWINSZ 0x5413
@@ -411,7 +412,8 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
-        /* Output processing (OPOST/ONLCR) lands the bytes in m_buf via the sink. */
+        /* Output processing (OPOST/ONLCR) lands the bytes in m_buf via the
+         * sink. */
         tty_write(&p->slave, kbuf, (int)chunk);
         done += chunk;
     }

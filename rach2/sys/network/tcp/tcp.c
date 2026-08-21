@@ -637,7 +637,8 @@ void tcp_local_addr_changed(uint32_t new_ip)
     }
 }
 
-/* Abandon a connection that timed out: reset it and wake any blocked syscall. */
+/* Abandon a connection that timed out: reset it and wake any blocked
+ * syscall. */
 static void tcp_giveup(struct tcb *tcb)
 {
     serial_printf("TCP: connection timed out, giving up\n");
@@ -728,7 +729,8 @@ void tcp_tick(void)
                     tcb->rtt_start = 0;   /* Karn: no RTT sample on a retransmit */
                     tcp_retransmit(tcb);
                 } else if (tcb->retx_flags) {
-                    /* No data in flight; a control segment (SYN/SYN-ACK/FIN). */
+                    /* No data in flight; a control segment
+                     * (SYN/SYN-ACK/FIN). */
                     tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq);
                     tcb->rto_timer = tcb->rto;
                 }

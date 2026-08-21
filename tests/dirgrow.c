@@ -111,7 +111,8 @@ void _start(void)
     sys2(SYS_CLOSE, fd_f, 0);
     sys2(SYS_CLOSE, fd_g, 0);
 
-    /* The relocated f must still live under /dg (not re-parented to the root). */
+    /* The relocated f must still live under /dg (not re-parented to the
+     * root). */
     fd = sys3(SYS_OPEN, (int)"/dg/f", O_RDONLY, 0);
     if (fd < 0) {
         fail("/dg/f vanished from its directory after a relocating grow");

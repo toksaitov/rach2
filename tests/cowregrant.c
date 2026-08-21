@@ -32,7 +32,8 @@ typedef unsigned int size_t;
 
 #define CYCLES 200
 
-/* A global lives in the writable data segment, so after fork it is a COW page. */
+/* A global lives in the writable data segment, so after fork it is a COW
+ * page. */
 static volatile unsigned shared_val;
 
 static int sys_write(int fd, const void *buf, size_t count)

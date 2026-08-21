@@ -38,10 +38,12 @@ struct tty {
 /* The system console: VGA + serial, bound to every process's fds 0/1/2. */
 extern struct tty console_tty;
 
-/* Bring a tty up: cooked defaults, empty queue, 25x80 window, the given sink. */
+/* Bring a tty up: cooked defaults, empty queue, 25x80 window, the given
+ * sink. */
 void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx);
 
-/* Bring up console_tty (sink = VGA + serial, pump = serial drain). Boot-time. */
+/* Bring up console_tty (sink = VGA + serial, pump = serial drain).
+ * Boot-time. */
 void tty_console_init(void);
 
 /** Post `signo` to every live member of process group `pgid`. */
@@ -53,7 +55,8 @@ void tty_set_session(struct tty *t, int sid, int pgid);
 /** True iff (sid, pid) is the session leader that owns the console. */
 int tty_console_owned_by_leader(int sid, int pid);
 
-/** True if the caller is a background process on this tty (gated by SIGTTIN/SIGTTOU). */
+/** True if the caller is a background process on this tty (gated by
+ * SIGTTIN/SIGTTOU). */
 int tty_is_background(struct tty *t, int sid, int pgid);
 
 /* Timer-tick hook: drain the console's (interrupt-less) serial port into the

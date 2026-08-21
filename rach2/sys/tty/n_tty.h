@@ -26,7 +26,8 @@ struct ktermios {
     uint8_t c_cc[KNCCS];
 };
 
-/* c_cc indices (i386/asm-generic; verified against the vendored musl headers). */
+/* c_cc indices (i386/asm-generic; verified against the vendored musl
+ * headers). */
 #define VINTR 0
 #define VQUIT 1
 #define VERASE 2
@@ -91,7 +92,8 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
 /** Bytes a read could return now, or 0 if it would block. */
 int n_tty_readable(const struct n_tty *t);
 
-/** Copy available input into `buf`; returns the byte count, 0 at end-of-file. */
+/** Copy available input into `buf`; returns the byte count, 0 at
+ * end-of-file. */
 int n_tty_read(struct n_tty *t, unsigned char *buf, int count);
 
 /** Count of bytes the next read can return (the TIOCINQ value). */

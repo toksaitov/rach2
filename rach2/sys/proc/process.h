@@ -115,7 +115,8 @@ extern process_t *current_proc;
 /** Reset the process table to its boot state and verify the PCB layout. */
 void init_proc(void);
 
-/** Claim the first unused process slot; returns it, or NULL if the table is full. */
+/** Claim the first unused process slot; returns it, or NULL if the table is
+ * full. */
 /** Restart pid numbering at 1, for the boot that is about to start init. */
 void proc_reclaim_boot_pids(void);
 

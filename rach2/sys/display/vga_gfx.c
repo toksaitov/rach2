@@ -21,11 +21,13 @@ gfx_info_t gfx_current = {
     .size = 0
 };
 
-/* 8x16 text font (256 chars * 16 bytes), saved before Mode 13h, restored on exit. */
+/* 8x16 text font (256 chars * 16 bytes), saved before Mode 13h, restored on
+ * exit. */
 #define VGA_FONT_SIZE (256 * 16)
 static uint8_t saved_font[VGA_FONT_SIZE];
 
-/* Standard register values for BIOS Mode 13h: 320x200, 256 colors, linear A0000. */
+/* Standard register values for BIOS Mode 13h: 320x200, 256 colors, linear
+ * A0000. */
 
 /* Miscellaneous Output Register */
 static const uint8_t mode13h_misc = 0x63;
@@ -131,7 +133,8 @@ static void vga_crtc_write(uint8_t index, uint8_t value)
     outb(VGA_CRTC_DATA, value);
 }
 
-/** Write a Graphics Controller register: index to GC_INDEX, then value to GC_DATA. */
+/** Write a Graphics Controller register: index to GC_INDEX, then value to
+ * GC_DATA. */
 static void vga_gc_write(uint8_t index, uint8_t value)
 {
     outb(VGA_GC_INDEX, index);
@@ -153,7 +156,8 @@ static void vga_ac_write(uint8_t index, uint8_t value)
     outb(VGA_AC_WRITE, value);
 }
 
-/** Clear the write-protect bit (bit 7) of CRTC register 0x11 so CRTC 0x00-0x07 are writable. */
+/** Clear the write-protect bit (bit 7) of CRTC register 0x11 so CRTC
+ * 0x00-0x07 are writable. */
 static void vga_crtc_unlock(void)
 {
     uint8_t val;
@@ -434,7 +438,8 @@ uint8_t *vga_mode13h_get_framebuffer(void)
     return (uint8_t *)VGA_GFX_FRAMEBUFFER;
 }
 
-/** Copy a full VGA_GFX_SIZE frame to the framebuffer; ignored unless in graphics mode and src is non-NULL. */
+/** Copy a full VGA_GFX_SIZE frame to the framebuffer; ignored unless in
+ * graphics mode and src is non-NULL. */
 void vga_mode13h_blit(const uint8_t *src)
 {
     if (src && vga_graphics_mode) {

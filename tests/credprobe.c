@@ -115,7 +115,8 @@ static void child_main(void)
         fail("saved id after excursion back");
     }
 
-    /* A distinct triple, so a getter that swapped or duplicated fields shows. */
+    /* A distinct triple, so a getter that swapped or duplicated fields
+     * shows. */
     if (syscall3(SYS_SETRESGID32, 1000, 2000, 3000) != 0 ||
         syscall3(SYS_GETRESGID32, (int)&back[0], (int)&back[1], (int)&back[2]) != 0 ||
         back[0] != 1000 || back[1] != 2000 || back[2] != 3000) {

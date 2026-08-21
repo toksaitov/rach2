@@ -21,7 +21,8 @@ void kbd_push_scancode(uint8_t sc);
 /** Empty the scancode ring; call when entering graphics mode. */
 void kbd_clear_scancodes(void);
 
-/** Read up to `max_count` scancodes into `buf`; returns the count (0 if empty). */
+/** Read up to `max_count` scancodes into `buf`; returns the count (0 if
+ * empty). */
 int kbd_read_scancodes(uint8_t *buf, int max_count);
 
 #endif

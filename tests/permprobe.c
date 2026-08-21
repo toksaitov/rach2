@@ -50,7 +50,8 @@ typedef unsigned int u32;
 #define W_OK     2
 #define AT_FDCWD (-100)
 
-/* utimensat tv_nsec sentinels (each timespec is {sec, nsec}, [atime, mtime]). */
+/* utimensat tv_nsec sentinels (each timespec is {sec, nsec}, [atime,
+ * mtime]). */
 #define UTIME_NOW  ((1 << 30) - 1)
 #define UTIME_OMIT ((1 << 30) - 2)
 

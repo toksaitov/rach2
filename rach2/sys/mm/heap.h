@@ -18,7 +18,8 @@ extern uintptr_t mem_reserved_ptr;
 /** Anchor the bump allocator at the end of the kernel image. */
 void init_mm(void);
 
-/** Reserve `size` bytes of physical memory, page-aligned if `align`; 0 on failure. */
+/** Reserve `size` bytes of physical memory, page-aligned if `align`; 0 on
+ * failure. */
 uintptr_t mem_reserve(size_t size, bool align);
 
 #endif

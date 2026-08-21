@@ -104,7 +104,8 @@ int main(int argc, char *argv[])
     char *two_env[2];
     int i;
 
-    /* The child half. Handed the full vector, it must have received all of it. */
+    /* The child half. Handed the full vector, it must have received all of
+     * it. */
     if (argc > 1 && strcmp(argv[1], "full") == 0) {
         if (argc != KERNEL_MAX_ENTRIES) {
             printf("EXECARG CHILD saw %d arguments, wanted %d\n", argc, KERNEL_MAX_ENTRIES);

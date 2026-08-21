@@ -293,7 +293,8 @@ void _start(void)
             check(ioctl(0, TIOCSPGRP, &child) == 0,
                   "TIOCSPGRP to a group holding only an unreaped zombie");
             check(waitpid(child, &status, 0) == child, "the zombie is reaped");
-            /* And once reaped the group is gone, so the same claim is refused. */
+            /* And once reaped the group is gone, so the same claim is
+             * refused. */
             check(ioctl(0, TIOCSPGRP, &child) == -EPERM,
                   "TIOCSPGRP to a group whose zombie was reaped -> -EPERM");
             pgrp = getpgrp();

@@ -92,7 +92,8 @@ int main(int argc, char **argv)
         close(fd);
     }
 
-    /* Assume root fully; the saved uid is already 0, so the real uid moves too. */
+    /* Assume root fully; the saved uid is already 0, so the real uid moves
+     * too. */
     if (setresuid(0, 0, 0) != 0 || setresgid(0, 0, 0) != 0) {
         fprintf(stderr, "sudo: could not assume root\n");
         return 1;

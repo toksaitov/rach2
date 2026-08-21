@@ -16,14 +16,17 @@
 #define FDSET_BITS  1024
 #define FDSET_WORDS (FDSET_BITS / 32) /* 32 x 32-bit words = 128 bytes */
 
-/** Translate three select() fd_sets into a packed pollfd array; pollfd count, or -1 if the selected fds exceed max_pollfds. */
+/** Translate three select() fd_sets into a packed pollfd array; pollfd
+ * count, or -1 if the selected fds exceed max_pollfds. */
 int fdsets_to_pollfds(uint32_t nfds, const uint32_t *r, const uint32_t *w,
                       const uint32_t *e, struct kernel_pollfd *fds, int max_pollfds);
 
-/** Whether select() counts one scanned pollfd ready (the per-fd projection rule). */
+/** Whether select() counts one scanned pollfd ready (the per-fd projection
+ * rule). */
 int pollfd_select_ready(short events, short revents);
 
-/** Project poll results back into select()'s three fd_sets; returns the ready count. */
+/** Project poll results back into select()'s three fd_sets; returns the
+ * ready count. */
 int pollfds_to_fdsets(const struct kernel_pollfd *fds, int n, uint32_t *r,
                       uint32_t *w, uint32_t *e);
 

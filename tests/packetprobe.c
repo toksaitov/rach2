@@ -235,7 +235,8 @@ static void fail(const char *what)
     sys_exit(1);
 }
 
-/* struct sockaddr_ll: family, protocol, ifindex, hatype, pkttype, halen, addr. */
+/* struct sockaddr_ll: family, protocol, ifindex, hatype, pkttype, halen,
+ * addr. */
 struct sockaddr_ll_probe {
     uint16_t sll_family;
     uint16_t sll_protocol;

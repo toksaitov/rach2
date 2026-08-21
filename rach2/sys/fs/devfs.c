@@ -24,7 +24,8 @@
 #include "../block/block.h"
 #include "../serial.h"
 
-/* Linux O_* bits devfs_open honours (the rest are irrelevant to a char device). */
+/* Linux O_* bits devfs_open honours (the rest are irrelevant to a char
+ * device). */
 #define DEVFS_O_CLOEXEC   02000000
 #define DEVFS_O_NONBLOCK  04000
 #define DEVFS_O_CREAT     0100
@@ -655,7 +656,8 @@ static int devfs_entry_present(int i)
     return 1;
 }
 
-/* Stable inode namespace for /dev: the directory itself, then one per device. */
+/* Stable inode namespace for /dev: the directory itself, then one per
+ * device. */
 #define DEVFS_INO_DIR  2u
 #define DEVFS_INO_BASE 16u
 #define DEVFS_INO(idx) (DEVFS_INO_BASE + (uint32_t)(idx))
@@ -741,7 +743,8 @@ int devfs_open(const char *name, int flags)
             }
             return -ENXIO; /* the caller has no controlling terminal */
         }
-        /* ctty is the console -> fall through to the FD_TYPE_CONSOLE path below. */
+        /* ctty is the console -> fall through to the FD_TYPE_CONSOLE path
+         * below. */
     }
 
     if (dev->ops == &grubcore_ops && grubcore_held) {
@@ -766,7 +769,8 @@ int devfs_open(const char *name, int flags)
         e->ops = dev->ops;
         e->priv = (void *)dev;
     } else {
-        /* /dev/console and /dev/tty reuse the kernel console (enum dispatch). */
+        /* /dev/console and /dev/tty reuse the kernel console (enum
+         * dispatch). */
         e->type = FD_TYPE_CONSOLE;
         e->ops = NULL;
         e->priv = NULL;

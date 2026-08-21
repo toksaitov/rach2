@@ -63,7 +63,8 @@ void k_printf(const char *format, ...);
 void outb(uint16_t port, uint8_t  val);
 
 #ifdef RACH2_HARNESS
-/** Report a process exit status to QEMU's isa-debug-exit device (harness only). */
+/** Report a process exit status to QEMU's isa-debug-exit device (harness
+ * only). */
 void harness_exit(uint8_t status);
 #endif
 

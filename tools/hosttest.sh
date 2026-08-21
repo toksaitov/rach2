@@ -85,7 +85,8 @@ for t in tests/host/*_hosttest.c; do
         fail=1
         continue
     fi
-    # -Wno-empty-body tolerates the kernel's `for(...);` idiom in linked sources.
+    # -Wno-empty-body tolerates the kernel's `for(...);` idiom in linked
+    # sources.
     # shellcheck disable=SC2086
     if $CC -std=c99 $SAN -g -O1 -Wno-empty-body $INC -o "$out" "$t" $deps \
          >"$VDIR/$base.clog" 2>&1; then

@@ -89,7 +89,8 @@ int krffs_parse_region_args(
                 (unsigned long long) min_size, (unsigned long long) file_size);
         return -1;
     }
-    /* KRFFS stores its size in a uint32_t, so a region must stay under 4 GiB. */
+    /* KRFFS stores its size in a uint32_t, so a region must stay under 4
+     * GiB. */
     if (size > KRFFS_MAX_REGION_SIZE) {
         fprintf(stderr, "krffs: region size %llu exceeds the %u-byte KRFFS limit\n",
                 (unsigned long long) size, (unsigned) KRFFS_MAX_REGION_SIZE);

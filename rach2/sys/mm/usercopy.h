@@ -22,16 +22,20 @@
 #define USER_ADDR_MIN 0x02000000UL
 #define USER_ADDR_MAX 0xC0000000UL
 
-/** Report whether [addr, addr+len) lies wholly within user space; 1 yes, 0 no. */
+/** Report whether [addr, addr+len) lies wholly within user space; 1 yes, 0
+ * no. */
 int user_range_ok(uint32_t addr, uint32_t len);
 
-/** Copy n bytes from a user pointer into kernel memory; 0 ok, -EFAULT on a bad range. */
+/** Copy n bytes from a user pointer into kernel memory; 0 ok, -EFAULT on a
+ * bad range. */
 int copy_from_user(void *dst, const void __user *src, uint32_t n);
 
-/** Copy n bytes from kernel memory to a user pointer; 0 ok, -EFAULT on a bad range. */
+/** Copy n bytes from kernel memory to a user pointer; 0 ok, -EFAULT on a
+ * bad range. */
 int copy_to_user(void __user *dst, const void *src, uint32_t n);
 
-/** Copy a NUL-terminated string from user space into dst, at most n bytes; returns its length, or a negative errno. */
+/** Copy a NUL-terminated string from user space into dst, at most n bytes;
+ * returns its length, or a negative errno. */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n);
 
 #endif /* _USERCOPY_H_ */

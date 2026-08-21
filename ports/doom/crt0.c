@@ -753,7 +753,8 @@ int sprintf(char *buf, const char *fmt, ...)
     int ret;
 
     va_start(ap, fmt);
-    /* Use a large size - caller's responsibility to ensure buffer is big enough */
+    /* Use a large size - caller's responsibility to ensure buffer is big
+     * enough */
     ret = vsnprintf(buf, 4096, fmt, ap);
     va_end(ap);
     return ret;

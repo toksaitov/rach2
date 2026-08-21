@@ -604,7 +604,8 @@ static int check_concurrent(void)
         return fail("the overlapping writer never reached its new-password prompt");
     }
 
-    /* The first writer runs to completion while the second holds its pre-image. */
+    /* The first writer runs to completion while the second holds its
+     * pre-image. */
     snprintf(script, sizeof(script), "%s\nfirst-new-pw\nfirst-new-pw\n", PROBE_PASS);
     if (run_passwd(PROBE_UID, NULL, script, report, sizeof(report)) != 0) {
         kill(b, SIGKILL);

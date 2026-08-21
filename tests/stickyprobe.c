@@ -228,7 +228,8 @@ static void want_eq(const char *step, int got, int want)
     }
 }
 
-/* The one stat64 buffer: the kernel writes it, the readers below take it apart. */
+/* The one stat64 buffer: the kernel writes it, the readers below take it
+ * apart. */
 static char statbuf[144];
 
 static int stat_rc(const char *path)
@@ -236,7 +237,8 @@ static int stat_rc(const char *path)
     return syscall3(SYS_STAT64, (int)path, (int)statbuf, 0);
 }
 
-/* The name must still be there: the check a refused call's errno cannot make. */
+/* The name must still be there: the check a refused call's errno cannot
+ * make. */
 static void want_there(const char *step, const char *path)
 {
     want_eq(step, stat_rc(path), 0);
@@ -444,7 +446,8 @@ void _start(void)
     mint_file(S_MYSRC, 0640);
     give_to(S_MYSRC, 1000);
 
-    /* The control, staged the same way in a directory that differs by one bit. */
+    /* The control, staged the same way in a directory that differs by one
+     * bit. */
     mint_file(P_VICTIM, 0666);
     mint_file(P_MOVER, 0666);
     mint_file(P_TARGET, 0666);

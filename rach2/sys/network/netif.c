@@ -68,7 +68,8 @@ static void put_be32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)v;
 }
 
-/** Whether `name` (NUL-terminated inside 16 bytes) is this machine's interface. */
+/** Whether `name` (NUL-terminated inside 16 bytes) is this machine's
+ * interface. */
 static int name_is_ours(const uint8_t *name)
 {
     const char *want = NETDEV_IFNAME;

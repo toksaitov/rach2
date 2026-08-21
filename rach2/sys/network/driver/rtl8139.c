@@ -143,7 +143,8 @@ int rtl8139_init(void)
 
     register_isr_handler((uint8_t)(32 + rtl_pci.irq), rtl8139_irq);
 
-    /* Enable the receiver and transmitter (after the buffers are configured). */
+    /* Enable the receiver and transmitter (after the buffers are
+     * configured). */
     outb(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 
     return NETDEV_UP;

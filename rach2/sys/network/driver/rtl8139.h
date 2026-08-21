@@ -88,7 +88,8 @@ uint16_t rtl8139_iobase(void);
 /** Configured IRQ line. */
 uint8_t  rtl8139_irq_line(void);
 
-/** Reason the most recent rtl8139_init() returned 0; valid only after a 0 return. */
+/** Reason the most recent rtl8139_init() returned 0; valid only after a 0
+ * return. */
 const char *rtl8139_error(void);
 
 /** This driver's entry in the device table (see driver/netdev.h). Its `poll`

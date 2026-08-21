@@ -100,7 +100,8 @@ int main(void)
     init_pagecache();
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
 
-    /* A read fault fills its page once; a re-touch within residency is a hit. */
+    /* A read fault fills its page once; a re-touch within residency is a
+     * hit. */
     touch(0, 0, 0);
     CHECK(fake_reads[0] == 1);
     CHECK(pc_stat_reads() == 1);

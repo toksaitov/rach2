@@ -12,7 +12,8 @@
  * truncated view. Returns the failed-check count (0 == pass).
  */
 
-/* The seam block_probe links against; this test drives only the partition view. */
+/* The seam block_probe links against; this test drives only the partition
+ * view. */
 int ata_init(void)
 {
     return -1;

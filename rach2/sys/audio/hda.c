@@ -34,7 +34,8 @@ static uint16_t num_input_streams = 0;
 static uint16_t num_output_streams = 0;
 static uint16_t num_bidir_streams = 0;
 
-/* DMA position buffer (optional; more reliable than LPIB on some controllers). */
+/* DMA position buffer (optional; more reliable than LPIB on some
+ * controllers). */
 #define HDA_MAX_STREAMS 32
 static volatile uint32_t dma_posbuf[HDA_MAX_STREAMS * 2] __attribute__((aligned(128)));
 static volatile bool dma_posbuf_enabled = false;
@@ -863,7 +864,8 @@ static void hda_setup_corb(void)
 
     hda_write8(HDA_CORBSIZE, 0x02);  /* 256 entries */
 
-    /* Reset read pointer: set bit 15, wait for the controller to acknowledge. */
+    /* Reset read pointer: set bit 15, wait for the controller to
+     * acknowledge. */
     hda_write16(HDA_CORBRP, 0x8000);
     timeout = 1000;
     while (!(hda_read16(HDA_CORBRP) & 0x8000) && timeout-- > 0) {
@@ -904,7 +906,8 @@ static void hda_setup_rirb(void)
 
     hda_write8(HDA_RIRBSIZE, 0x02);  /* 256 entries */
 
-    /* Reset write pointer: set bit 15, wait for the controller to acknowledge. */
+    /* Reset write pointer: set bit 15, wait for the controller to
+     * acknowledge. */
     hda_write16(HDA_RIRBWP, 0x8000);
     timeout = 1000;
     while ((hda_read16(HDA_RIRBWP) & 0x8000) && timeout-- > 0) {
@@ -1190,7 +1193,8 @@ static bool hda_find_output(void)
     codec_vendor_id = vendor;
     hda_probe_log("HDA: Using codec %d: 0x%x\n", codec_addr, vendor);
 
-    /* Conexant laptop codecs are often picky about jack routing; default to primary output. */
+    /* Conexant laptop codecs are often picky about jack routing; default to
+     * primary output. */
     if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
         hda_output_mode = HDA_OUTMODE_PRIMARY;
     } else {
@@ -1272,7 +1276,8 @@ static bool hda_find_output(void)
         }
     }
 
-    /* Select output pin: prefer speaker > line out > headphone > any fallback */
+    /* Select output pin: prefer speaker > line out > headphone > any
+     * fallback */
     if (speaker_pin != 0) {
         pin_nid = speaker_pin;
         hda_probe_log("HDA: Selected speaker pin 0x%x\n", pin_nid);
@@ -1305,7 +1310,8 @@ static bool hda_find_output(void)
         uint8_t pin_sel;
         int pass;
 
-        /* Prefer BIOS/default connection selection first (important on real hardware) */
+        /* Prefer BIOS/default connection selection first (important on real
+         * hardware) */
         pin_sel = (uint8_t)(hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
         if (pin_sel >= (uint8_t)num_conn) {
             pin_sel = 0;
@@ -1410,7 +1416,8 @@ static bool hda_find_output(void)
                 hp_dac_nid = hp_conn[hp_sel];
                 hp_conn_sel_idx = hp_sel;
             } else if (wtype0 == HDA_WIDGET_AUDIO_MIX || wtype0 == HDA_WIDGET_AUDIO_SEL) {
-                /* Keep the selected upstream widget; DAC will be configured later opportunistically */
+                /* Keep the selected upstream widget; DAC will be configured
+                 * later opportunistically */
                 hp_conn_sel_idx = hp_sel;
             } else {
                 hp_conn_sel_idx = hp_sel;
@@ -1524,7 +1531,8 @@ static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
             return true;
         }
     }
-    /* Nvidia and AMD GPUs also have HDMI audio, but they have different vendor IDs */
+    /* Nvidia and AMD GPUs also have HDMI audio, but they have different
+     * vendor IDs */
     if (vendor_id == 0x10de || vendor_id == 0x1002) {
         return true;  /* Nvidia or AMD GPU audio */
     }
@@ -2441,7 +2449,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         mix_wcap = hda_get_param(mixer_nid, HDA_PARAM_AUDIO_CAPS);
         mix_type = (mix_wcap >> 20) & 0xF;
 
-        /* If this is a selector widget, ensure it selects the DAC we discovered */
+        /* If this is a selector widget, ensure it selects the DAC we
+         * discovered */
         if (mix_type == HDA_WIDGET_AUDIO_SEL) {
             uint8_t mix_conn[16];
             int mix_num = hda_get_connections(mixer_nid, mix_conn, 16);
@@ -2456,7 +2465,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 
         /* Unmute amps on the widget if present */
         if (mix_wcap & 0x02) { /* AC_WCAP_IN_AMP */
-            /* If it's a mixer, unmute all input indices; if it's a selector, unmute selected index */
+            /* If it's a mixer, unmute all input indices; if it's a
+             * selector, unmute selected index */
             uint8_t mix_conn[16];
             int mix_num = hda_get_connections(mixer_nid, mix_conn, 16);
             int start = (mix_type == HDA_WIDGET_AUDIO_MIX) ? 0 : (int)mix_conn_sel;
@@ -2486,7 +2496,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         /* Read current BIOS-selected connection and keep it for Conexant. */
         pin_conn_sel = (uint8_t)(hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
 
-        /* Select the discovered source (DAC or mixer) in the pin's connection list */
+        /* Select the discovered source (DAC or mixer) in the pin's
+         * connection list */
         {
             uint8_t pin_conn[16];
             int pin_num;
@@ -2500,7 +2511,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
                     pin_conn_sel = 0;
                 }
 
-                /* For Conexant, don't fight BIOS routing; just use current selection. */
+                /* For Conexant, don't fight BIOS routing; just use current
+                 * selection. */
                 if (!is_conexant) {
                     if (pin_conn[pin_conn_sel] != target) {
                         pin_conn_sel = 0;
@@ -2524,7 +2536,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
          * 0x40 = OUT_EN, 0xC0 = OUT_EN | HP_EN (for headphones) */
         hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_PIN_CTRL | 0x40);
 
-        /* Unmute pin amps (some real codecs gate output via AMP-in on the pin) */
+        /* Unmute pin amps (some real codecs gate output via AMP-in on the
+         * pin) */
         pin_wcap = hda_get_param(pin_nid, HDA_PARAM_AUDIO_CAPS);
         if (pin_wcap & 0x02) { /* AC_WCAP_IN_AMP */
             uint8_t max_gain_in = hda_get_in_amp_max(pin_nid);
@@ -2543,7 +2556,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_AMP_GAIN | amp);
         }
 
-        /* Many laptops gate internal speaker amp behind EAPD/BTL; enable aggressively. */
+        /* Many laptops gate internal speaker amp behind EAPD/BTL; enable
+         * aggressively. */
         if (pin_nid == speaker_pin_nid) {
             hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_EAPD | 0x03);
         } else {
@@ -2562,7 +2576,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 
         hp_present = false;
         if (have_hp) {
-            /* Some codecs need the pin powered before pin sense is meaningful. */
+            /* Some codecs need the pin powered before pin sense is
+             * meaningful. */
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_POWER | 0x00);
             hda_delay(5);
             hp_sense = hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_PIN_SENSE);
@@ -2595,7 +2610,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             }
 
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_POWER | 0x00);
-            /* Read current BIOS-selected connection and keep it for Conexant. */
+            /* Read current BIOS-selected connection and keep it for
+             * Conexant. */
             hp_conn_sel = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
             {
                 uint8_t hp_conn[16];
@@ -2645,7 +2661,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             /* Headphone outputs typically only need EAPD */
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_EAPD | 0x02);
         } else if (have_hp) {
-            /* Disable HP pin output to avoid speaker auto-mute / phantom routing. */
+            /* Disable HP pin output to avoid speaker auto-mute / phantom
+             * routing. */
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
         }
     }
@@ -2701,7 +2718,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             hda_log("  DMA: WARNING: LPIB did not move (PCI BM/D0/IOMMU/BDL?)\n");
         }
 
-        /* Decide whether to use the DMA position buffer for pointer reporting. */
+        /* Decide whether to use the DMA position buffer for pointer
+         * reporting. */
         if (dma_posbuf_enabled) {
             if (lpib1 != lpib0 && pos1 == pos0) {
                 dma_posbuf_use = false;

@@ -339,7 +339,8 @@ static uint32_t classful_mask(uint32_t ip)
 }
 
 
-/** Publish a new address and mask, and tell everything that held the old one. */
+/** Publish a new address and mask, and tell everything that held the old
+ * one. */
 static void addr_publish(uint32_t ip, uint32_t mask)
 {
     uint32_t old = net_ip_addr;

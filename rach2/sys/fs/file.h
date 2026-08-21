@@ -19,7 +19,8 @@ struct wait_queue;
  * that way (the caller returns -EBADF); a NULL close needs no teardown.
  */
 struct file_ops {
-    /* Read up to count bytes into the user buffer; bytes read (>=0) or -errno. */
+    /* Read up to count bytes into the user buffer; bytes read (>=0) or
+     * -errno. */
     int32_t (*read)(fd_entry_t *e, char __user *buf, uint32_t count);
     /* Write up to count bytes from the user buffer; bytes written or -errno. */
     int32_t (*write)(fd_entry_t *e, const char __user *buf, uint32_t count);
@@ -30,7 +31,8 @@ struct file_ops {
     short (*poll)(fd_entry_t *e, short events, struct wait_queue **wq);
     /* Device/terminal control; request value and arg are the ioctl ABI. */
     int32_t (*ioctl)(fd_entry_t *e, uint32_t request, uint32_t arg);
-    /* Release the backing object when its last referencing descriptor closes. */
+    /* Release the backing object when its last referencing descriptor
+     * closes. */
     void (*close)(fd_entry_t *e);
 };
 

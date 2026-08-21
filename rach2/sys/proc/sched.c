@@ -1,6 +1,7 @@
 #include "sched.h"
 
-/** Nonzero once preemptive scheduling is enabled; schedule() is a no-op until then. */
+/** Nonzero once preemptive scheduling is enabled; schedule() is a no-op
+ * until then. */
 static volatile int _sched_enabled = 0;
 
 /** Index of the last process scheduled, advanced for round-robin fairness. */

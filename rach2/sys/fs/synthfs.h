@@ -15,7 +15,8 @@
  * tests/host/synthfs_hosttest.c.
  */
 
-/* What a path resolves to. KRFFS is the ordinary case; the rest are synthetic. */
+/* What a path resolves to. KRFFS is the ordinary case; the rest are
+ * synthetic. */
 enum vnode_kind {
     VNODE_KRFFS = 0,    /* not synthetic: resolve through KRFFS */
     VNODE_DEV_DIR,      /* /dev */
@@ -42,7 +43,8 @@ enum vnode_kind {
 #define SYNTH_PROC_DISKINFO 4
 #define SYNTH_PROC_NETDEV   5
 
-/* PID sentinel meaning "the calling process" (/proc/self), resolved by the glue. */
+/* PID sentinel meaning "the calling process" (/proc/self), resolved by the
+ * glue. */
 #define SYNTH_PID_SELF (-1)
 
 /*

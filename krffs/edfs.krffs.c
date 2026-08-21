@@ -87,7 +87,8 @@ int main(int argc, char **argv)
     char *end_ptr = NULL;
     int base = 10;
 
-    /* `-h` anywhere requests help, even on its own without a file and position. */
+    /* `-h` anywhere requests help, even on its own without a file and
+     * position. */
     {
         int i;
         for (i = 1; i < argc; ++i) {

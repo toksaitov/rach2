@@ -151,7 +151,8 @@ static void check_numbers(void)
               "the whole disk one sector in does not");
     }
 
-    /* The sum that wraps: offset + count is exactly what must not be computed. */
+    /* The sum that wraps: offset + count is exactly what must not be
+     * computed. */
     CHECK(sectorcopy_bounds(1024, 0xFFFFFFFFFFFFFE00ull, 1024, err, sizeof(err)) != 0,
           "an offset near the top of 64 bits cannot reach a small disk");
     CHECK(sectorcopy_bounds(0xFFFFFFFFFFFFFE00ull, 0xFFFFFFFFFFFFFC00ull, 1024, err, sizeof(err)) !=
