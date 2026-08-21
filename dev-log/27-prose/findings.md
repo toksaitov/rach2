@@ -353,7 +353,8 @@ findings up to where it stopped.
 A further run read clean: catfile, devtest, synthfs_hosttest, ptyprobe,
 dup2test, diskcmd_hosttest, budgetmusl, pathcanon, kstd_hosttest, sudoprobe,
 touchtest, wait_queue_hosttest, trapprobe, cowprobe, sigmusl, ofdmusl,
-frame_hosttest.
+frame_hosttest, forkleak, pollmusl, ttymusl, block_hosttest, usercopyfault,
+forkro, rngprobe, stattest, lstest, dirgrow.
 
 Many test files read clean, prose and code alike accurate to what they
 exercise: bootprobe, loginmusl, stampmusl, n_tty_hosttest, packetprobe,
