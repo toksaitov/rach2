@@ -2,7 +2,7 @@
 
 ## The goal
 
-One person reads every document and every comment this project owns, judges it against the code it describes, and fixes what is wrong or badly written. Milestone 26 built the checks a script can make and found that they reach only part of the way: a machine can see a banned word and an over-wide line, and it cannot see a sentence that is well formed and false. Eight such sentences were found by hand in six documents at the end of that milestone, including a fresh-machine setup sequence that did not work. There are 602 entries.
+One person reads every document and every comment this project owns, judges it against the code it describes, and fixes what is wrong or badly written. Milestone 26 built the checks a script can make and found that they reach only part of the way: a machine can see a banned word and an over-wide line, and it cannot see a sentence that is well formed and false. Eight such sentences were found by hand in six documents at the end of that milestone, including a fresh-machine setup sequence that did not work. There are 485 entries over 589 files.
 
 ## How this milestone is run, which matters more than usual
 
