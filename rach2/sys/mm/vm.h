@@ -29,12 +29,18 @@
  * barely touched and the address space almost entirely free. The table was the
  * ceiling, not the machine. Then 64 ran out the same way when the machine
  * linked its own `login` (two sources whose SHA-512 crypt pulls more libc.a
- * members than any one-source link), so it is 128. An entry is 16 bytes
- * (three words and the kind), so all 128 across the 16-process table cost
- * 32 KB of kernel .bss, 16 KB more than 64 did. The boundary is guarded by
- * `tests/musl/vmamusl.c`, which requires more mappings than 64 could ever
- * grant. */
-#define VMA_MAX 128
+ * members than any one-source link), so it became 128.
+ *
+ * It is 512 now, and this time from a measurement rather than from one link
+ * that ran out. A process asking for 1 KB at a time got about 3.1 MB before
+ * malloc began to fail, while a single 64 MB request succeeded: musl's
+ * allocator carves many small mappings and each one is a VMA, so the ceiling
+ * a program meets is the table, not the memory. At 512 the same walk reached
+ * past 8 MiB. An entry is 16 bytes (three words and the kind), so all 512
+ * across the 16-process table cost 128 KB of kernel .bss against 32 KB at 128.
+ * The boundary is guarded by `tests/musl/vmamusl.c`, which asks for more
+ * mappings than 128 could grant while staying below this maximum. */
+#define VMA_MAX 512
 
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
 #define VM_STACK_MAX_GROWTH 0x800000u

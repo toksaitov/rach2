@@ -10672,6 +10672,31 @@ static int32_t sys_brk(isr_params_t *params)
     return (int32_t)req;
 }
 
+/**
+ * Say on the serial log that a process ran out of mappings, once per process.
+ *
+ * `vm.c` is deliberately independent of the kernel's globals, so it cannot
+ * name the process it refused; here the caller is known. Silence is what this
+ * replaces, and it cost hours: a program whose library ran out of mappings
+ * looks exactly like a program whose library failed for its own reasons. Said
+ * once per process, because a program that meets the ceiling meets it in a
+ * loop and a flood of lines would bury the first one.
+ */
+static void vma_exhausted(const char *what)
+{
+    static uint32_t last_pid = 0;
+
+    if (!current_proc) {
+        return;
+    }
+    if (current_proc->pid == last_pid) {
+        return;
+    }
+    last_pid = current_proc->pid;
+    serial_printf("vm: %s: pid %d (%s) has used all %d of its mappings\n", what,
+                  (int)current_proc->pid, current_proc->comm, VMA_MAX);
+}
+
 /*
  * sys_mmap2 - map anonymous memory. Args: EBX=addr (hint, ignored),
  * ECX=length, EDX=prot, ESI=flags, EDI=fd, EBP=pgoffset. Returns the mapped
@@ -10731,6 +10756,7 @@ static int32_t sys_mmap2(isr_params_t *params)
     base = vm->mmap_top - len;
 
     if (vm_insert(vm, base, base + len, vmprot, VM_ANON) != 0) {
+        vma_exhausted("mmap");
         return -ENOMEM;
     }
     vm->mmap_top = base;
@@ -10768,7 +10794,8 @@ static int32_t sys_munmap(isr_params_t *params)
     end = PAGE_UP(addr + length);
 
     if (vm_remove(vm, start, end) != 0) {
-        return -ENOMEM; /* a hole-punch split would exceed VMA_MAX */
+        vma_exhausted("munmap"); /* a hole-punch split would exceed VMA_MAX */
+        return -ENOMEM;
     }
     unmap_user_range(_curr_dir, start, end);
     return 0;

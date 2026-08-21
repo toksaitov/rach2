@@ -20,23 +20,42 @@
  * hold what was written after the last was taken, which is what would break if
  * the regions overlapped instead of being distinct.
  *
+ * The second half of the probe is the case that found the ceiling too low a
+ * third time: a program that never calls `mmap` itself, asking the allocator
+ * for 1 KB at a time. musl takes a mapping for each block it cannot fit in
+ * what it holds, so such a walk stops at the table, not at memory, and it
+ * stopped at about 3.1 MB while a single 64 MB request succeeded. What made
+ * that hard to see was silence: the kernel refused the mapping and said
+ * nothing, so the failure looked like the library's own. The kernel now says
+ * which process ran out, on the serial log.
+ *
  * Prints "VMAMUSL OK" on success and "VMAMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
 
-/* More mappings than the 64-entry table could ever grant, and comfortably
- * under what the 128-entry one does: this is the boundary that regressing the
- * table to 64 fails, without asking for the exact maximum, which would make
- * the probe fail the day somebody adds a region for a good reason. The table
- * has been outgrown twice, both times by the compiler on the machine: 16
- * died reading the 1.9 MB libc.a, and 64 died linking login, whose crypt
- * pulls more archive members than any one-source link. */
-#define WANTED 96
+/* More mappings than the 128-entry table could grant, and comfortably under
+ * what the 512-entry one does: this is the boundary that regressing the table
+ * to 128 fails, without asking for the exact maximum, which would make the
+ * probe fail the day somebody adds a region for a good reason. The table has
+ * been outgrown three times: 16 died reading the 1.9 MB libc.a and 64 died
+ * linking login, both on the machine's own compiler, and 128 was met by an
+ * ordinary program asking for small blocks, which is the case below. */
+#define WANTED 300
+
+/* The other half of the same limit, and the one a program meets without ever
+ * calling mmap: musl carves a mapping for each small block it cannot fit in
+ * what it already has, so a walk of 1 KB allocations stops at the table long
+ * before it stops at memory. It stopped at about 3.1 MB with a table of 128.
+ * Eight MiB is the floor asked for here, which 128 cannot reach and 512
+ * passes with room to spare. */
+#define SMALL_BLOCK 1024
+#define SMALL_FLOOR (8 * 1024 * 1024)
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -83,6 +102,41 @@ int main(void)
     for (i = 0; i < taken; i++) {
         if (munmap(maps[i], 4096) != 0) {
             return fail("a mapping could not be given back");
+        }
+    }
+
+    /* And the walk a program takes without asking for a mapping at all. What
+     * is kept is a chain, so nothing is freed until the end and every block
+     * is still held when the ceiling is met. */
+    {
+        void *head = 0;
+        unsigned long total = 0;
+
+        for (;;) {
+            void **block = malloc(SMALL_BLOCK);
+
+            if (!block) {
+                break;
+            }
+            block[0] = head;
+            head = block;
+            total += SMALL_BLOCK;
+            if (total >= SMALL_FLOOR) {
+                break;
+            }
+        }
+        while (head) {
+            void **block = head;
+            head = block[0];
+            free(block);
+        }
+        if (total < SMALL_FLOOR) {
+            char detail[96];
+
+            snprintf(detail, sizeof(detail), "small allocations stopped at %lu bytes, short of %lu",
+                     total, (unsigned long)SMALL_FLOOR);
+
+            return fail(detail);
         }
     }
 
