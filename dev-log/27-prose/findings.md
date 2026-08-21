@@ -308,6 +308,14 @@ findings up to where it stopped.
   in the database -- but only for drivers you allow", which CLAUDE.md forbids in
   prose. The file is scanned by neither `textcheck.sh` nor `prose_check.py`.
   Recast to a comma.
+* The Doom sound and music sources are third-party ports and were read for
+  provenance, not edited: `ports/doom/opl3.c` and `opl3.h` are Nuke.YKT's Nuked
+  OPL3 (LGPL 2.1); `mus2mid.c`, `midifile.c`/`.h` and `i_oplmusic.c` are Chocolate
+  Doom (Simon Howard and others, with Id Software and Ben Ryves on mus2mid). Each
+  carries a "Ported to Rach2 freestanding environment" note as the only local
+  change to its header. They use `//` comments and a first-person register the
+  in-house rules do not govern; the project-added guard comments (the underflow
+  and zero-divisor guards in `i_oplmusic.c`) are accurate to the code.
 
 ## Cross-checks to settle against code later in set one
 
