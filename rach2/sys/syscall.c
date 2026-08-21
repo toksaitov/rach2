@@ -37,6 +37,7 @@
 #include "audio/audio.h"
 #include "network/socket/socket.h"
 #include "network/socket/packet.h"
+#include "network/ethernet/ethernet.h"
 #include "network/netif.h"
 #include "network/driver/netdev.h"
 #include "network/udp/udp.h"
@@ -8394,7 +8395,10 @@ static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_por
  * 4 (4), hatype 8 (2), pkttype 10 (1), halen 11 (1), addr 12 (8), for 20 in
  * all. A caller declaring fewer bytes is refused, not read past. */
 #define SOCKADDR_LL_LEN      20
+#define SOCKADDR_LL_PROTOCOL 2
 #define SOCKADDR_LL_IFINDEX  4
+#define SOCKADDR_LL_HATYPE   8
+#define ARPHRD_ETHER         1  /* sll_hatype for an Ethernet interface */
 #define SOCKADDR_LL_HALEN    11
 #define SOCKADDR_LL_ADDR     12
 
@@ -8480,16 +8484,20 @@ static int32_t do_socket(int domain, int type, int protocol)
         return -EINVAL;
     }
     if (domain == AF_PACKET) {
-        /* It reads every IPv4 frame the machine receives and sends frames the
-         * IP layer never saw, so it is root's. The protocol is in network byte
-         * order, as Linux takes it, and only IPv4 is offered. */
+        /* It reads every frame of its protocol the machine receives and sends
+         * frames the IP layer never saw, so it is root's. The protocol is in
+         * network byte order, as Linux takes it, and the two this stack has
+         * frames for are IPv4 and ARP. */
         if (!current_proc || current_proc->euid != 0) {
             return -EPERM;
         }
         if (type != SOCK_DGRAM) {
             return -ESOCKTNOSUPPORT;
         }
-        if ((uint16_t)protocol != PACKET_PROTO_IP) {
+        /* Zero is legal and means the socket has no protocol yet: `arping`
+         * opens one that way and names ARP in its bind. */
+        if ((uint16_t)protocol != 0 && (uint16_t)protocol != PACKET_PROTO_IP &&
+            (uint16_t)protocol != PACKET_PROTO_ARP) {
             return -EINVAL;
         }
     }
@@ -8499,6 +8507,12 @@ static int32_t do_socket(int domain, int type, int protocol)
         return -ENOMEM;
     }
     sock->family = (uint16_t)domain;
+    if (domain == AF_PACKET) {
+        /* The argument is in network order, as Linux takes it; the socket
+         * holds it in host order, which is what the wire comparison uses. */
+        sock->protocol = (uint16_t)(((uint32_t)protocol & 0xffu) << 8 |
+                                    (((uint32_t)protocol >> 8) & 0xffu));
+    }
     sock->uid = current_proc->euid;
 
     fd = fd_alloc(&current_proc->fds);
@@ -8546,6 +8560,8 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
     if (entry->sock->family == AF_PACKET) {
         uint8_t sll[SOCKADDR_LL_LEN];
         int32_t ifindex;
+        uint16_t proto;
+        int32_t r;
 
         if (addrlen < SOCKADDR_LL_LEN) {
             return -EINVAL;
@@ -8557,7 +8573,26 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 1] << 8) |
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
-        return packet_bind(entry->sock, (int)ifindex);
+        /* A protocol named here replaces the one `socket` was given, which is
+         * Linux's rule and is how a client that opened with 0 says what it
+         * wants. Naming none leaves the socket's own. The change is made only
+         * after the bind is accepted: a bind that fails must leave the socket
+         * receiving exactly what it received before. */
+        proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
+        if (proto != 0 && proto != ETH_TYPE_IP && proto != ETH_TYPE_ARP) {
+            return -EINVAL;
+        }
+        r = packet_bind(entry->sock, (int)ifindex);
+        if (r != 0) {
+            return r;
+        }
+        if (proto != 0 && proto != entry->sock->protocol) {
+            entry->sock->protocol = proto;
+            /* What is queued arrived under the old protocol. A reader would
+               be given it labelled with the new one, so it goes. */
+            packet_flush(entry->sock);
+        }
+        return 0;
     }
 
     if (entry->sock->type == SOCK_RAW) {
@@ -8646,6 +8681,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
      * names: this layer adds the Ethernet header and nothing else. */
     if (entry->sock->family == AF_PACKET) {
         uint8_t sll[SOCKADDR_LL_LEN];
+        uint16_t proto;
 
         if (len > 1500) {
             return -EMSGSIZE;
@@ -8659,9 +8695,13 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
         if (sll[SOCKADDR_LL_HALEN] != 6) {
             return -EINVAL;
         }
+        proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
+        if (proto == 0) {
+            proto = entry->sock->protocol;
+        }
         /* The payload is read where it lies, as the UDP path reads it: the
            range above was validated, and __force strips __user at the call. */
-        return (int32_t)packet_send(entry->sock, sll + SOCKADDR_LL_ADDR,
+        return (int32_t)packet_send(entry->sock, sll + SOCKADDR_LL_ADDR, proto,
                                     (const uint8_t __force *)(const void __user *)buf_ptr,
                                     (uint16_t)len);
     }
@@ -8732,8 +8772,8 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
      * an error for a message that no longer exists. The caller's capacity is
      * read once and kept, so that a caller whose length word overlaps its own
      * receive buffer cannot change it under the writeback. What is checked is
-     * what will actually be written, which for a packet socket is nothing: it
-     * has no sender to report. */
+     * what will actually be written: twenty bytes for a packet socket's
+     * sockaddr_ll, sixteen for an AF_INET sender. */
     want_addr = (sa_ptr != 0 && salen_ptr != 0);
     if (want_addr) {
         uint32_t cap = 0;
@@ -8742,7 +8782,8 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
             copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0) {
             return -EFAULT;
         }
-        addr_len = (entry->sock->family == AF_PACKET) ? 0u : (uint32_t)SOCKADDR_IN_LEN;
+        addr_len = (entry->sock->family == AF_PACKET) ? (uint32_t)SOCKADDR_LL_LEN
+                                                      : (uint32_t)SOCKADDR_IN_LEN;
         addr_give = cap < addr_len ? cap : addr_len;
         if (addr_give > 0 && !user_buffer_ok(sa_ptr, addr_give, 1)) {
             return -EFAULT;
@@ -8795,16 +8836,22 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
     }
 
     /* Report the source address, truncated to the capacity read before the
-     * datagram was taken. A packet socket has no sender to report, so the
-     * length comes back zero, not an AF_INET sender of 0.0.0.0 port 0
-     * that no such packet had. */
+     * datagram was taken. A packet socket reports the link address the frame
+     * came from, a sockaddr_ll; an AF_INET one reports the sender. */
     if (want_addr) {
-        uint8_t sa[SOCKADDR_IN_LEN];
+        uint8_t sa[SOCKADDR_LL_LEN];
 
         k_memset(sa, 0, sizeof(sa));
-        sa[0] = (uint8_t)(AF_INET & 0xff);
-        SC_WBE16(sa + 2, src_port);
-        SC_WBE32(sa + 4, src_ip);
+        if (entry->sock->family == AF_PACKET) {
+            if (packet_last_addr(entry->sock, sa) == 0) {
+                addr_len = 0;
+                addr_give = 0;
+            }
+        } else {
+            sa[0] = (uint8_t)(AF_INET & 0xff);
+            SC_WBE16(sa + 2, src_port);
+            SC_WBE32(sa + 4, src_ip);
+        }
         if (addr_give > 0 && copy_to_user((void __user *)sa_ptr, sa, addr_give) != 0) {
             return -EFAULT;
         }
@@ -9172,6 +9219,43 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     if (!sa_ptr || !salen_ptr) {
         return -EFAULT;
     }
+    /* A packet socket's own address is a sockaddr_ll: the interface it is
+     * bound to and the hardware address it sends from. `arping` reads the MAC
+     * back from here and refuses to run without one, so the fields are the
+     * machine's real ones and not a shape with zeroes in it. */
+    if (entry->sock->family == AF_PACKET) {
+        uint8_t   sll[SOCKADDR_LL_LEN];
+        uint32_t  caller_len, copy_len;
+        int       i;
+
+        if (copy_from_user(&caller_len, (const void __user *)salen_ptr,
+                           sizeof(caller_len)) != 0) {
+            return -EFAULT;
+        }
+        k_memset(sll, 0, sizeof(sll));
+        sll[0] = (uint8_t)(AF_PACKET & 0xff);
+        sll[1] = (uint8_t)((AF_PACKET >> 8) & 0xff);
+        sll[SOCKADDR_LL_PROTOCOL] = (uint8_t)((entry->sock->protocol >> 8) & 0xff);
+        sll[SOCKADDR_LL_PROTOCOL + 1] = (uint8_t)(entry->sock->protocol & 0xff);
+        sll[SOCKADDR_LL_IFINDEX] = (uint8_t)NETDEV_IFINDEX;
+        sll[SOCKADDR_LL_HATYPE] = (uint8_t)ARPHRD_ETHER; /* the low byte of 1 */
+        sll[SOCKADDR_LL_HALEN] = 6;
+        for (i = 0; i < 6; i++) {
+            sll[SOCKADDR_LL_ADDR + i] = net_mac[i];
+        }
+        copy_len = caller_len < (uint32_t)SOCKADDR_LL_LEN ? caller_len
+                                                         : (uint32_t)SOCKADDR_LL_LEN;
+        if (copy_len > 0 &&
+            copy_to_user((void __user *)sa_ptr, sll, copy_len) != 0) {
+            return -EFAULT;
+        }
+        caller_len = (uint32_t)SOCKADDR_LL_LEN; /* the true length, as Linux reports */
+        if (copy_to_user((void __user *)salen_ptr, &caller_len,
+                         sizeof(caller_len)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
     return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port,
                                  (uint32_t)net_ip_addr);
 }
@@ -9437,9 +9521,9 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
  * with a length of zero, which is the true answer: this stack attaches no
  * ancillary data to anything.
  *
- * The sender is reported through `msg_name` for an AF_INET socket. A packet
- * socket's sender is a link address this stack does not keep, so its
- * `msg_namelen` comes back zero, not filled with something invented.
+ * The sender is reported through `msg_name`: a `sockaddr_in` for an AF_INET
+ * socket, and for a packet socket the `sockaddr_ll` the frame came from, with
+ * the sender's hardware address and who the frame was addressed to.
  */
 static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
 {
@@ -9480,11 +9564,12 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
         return -EFAULT;
     }
     /* Only what will be written is checked, and it is settled here rather than
-       after the datagram is taken: a packet socket reports no address at all,
-       and an AF_INET one reports sixteen bytes however much the caller
-       declared. Validating the whole declared capacity would refuse a call
-       whose address fits perfectly. */
-    addr_len = (entry->sock->family == AF_PACKET) ? 0u : (uint32_t)SOCKADDR_IN_LEN;
+       after the datagram is taken: a packet socket reports twenty bytes and an
+       AF_INET one sixteen, however much the caller declared. Validating the
+       whole declared capacity would refuse a call whose address fits
+       perfectly. */
+    addr_len = (entry->sock->family == AF_PACKET) ? (uint32_t)SOCKADDR_LL_LEN
+                                                  : (uint32_t)SOCKADDR_IN_LEN;
     addr_give = namelen < addr_len ? namelen : addr_len;
     if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
         return -EFAULT;
@@ -9515,17 +9600,25 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
         return taken;
     }
 
-    /* A struct sockaddr_in is 16 bytes: family, port, address, and eight bytes
-       of padding a caller may compare against sizeof. It is written whole where
-       it fits, truncated where the caller's buffer is smaller, and the true
-       length is reported either way, which is what Linux does. */
+    /* A struct sockaddr_in is 16 bytes (family, port, address, and eight bytes
+       of padding a caller may compare against sizeof) and a sockaddr_ll is 20.
+       Either is written whole where it fits, truncated where the caller's
+       buffer is smaller, and the true length is reported either way, which is
+       what Linux does. */
     if (name_ptr && addr_len > 0) {
-        uint8_t sa[SOCKADDR_IN_LEN];
+        uint8_t sa[SOCKADDR_LL_LEN];
 
         k_memset(sa, 0, sizeof(sa));
-        sa[0] = (uint8_t)(AF_INET & 0xff);
-        SC_WBE16(sa + 2, src_port);
-        SC_WBE32(sa + 4, src_ip);
+        if (entry->sock->family == AF_PACKET) {
+            if (packet_last_addr(entry->sock, sa) == 0) {
+                addr_len = 0;
+                addr_give = 0;
+            }
+        } else {
+            sa[0] = (uint8_t)(AF_INET & 0xff);
+            SC_WBE16(sa + 2, src_port);
+            SC_WBE32(sa + 4, src_ip);
+        }
         if (addr_give > 0 && copy_to_user((void __user *)name_ptr, sa, addr_give) != 0) {
             return -EFAULT;
         }

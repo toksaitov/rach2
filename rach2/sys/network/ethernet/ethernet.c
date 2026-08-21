@@ -33,9 +33,10 @@ const struct eth_counts *ethernet_counts(void)
  * Dispatch a received Ethernet frame to ARP or IP by EtherType.
  *
  * The EtherType is the big-endian 16-bit field at bytes 12..13 of the header.
- * Each handler receives only the payload (the bytes after the 14-byte header),
- * so it never needs to know about Ethernet. Frames shorter than a header are
- * dropped.
+ * Each protocol handler receives only the payload (the bytes after the 14-byte
+ * header), so it never needs to know about Ethernet; the packet-socket tap is
+ * given the whole frame, since the addresses in the header are part of what it
+ * reports. Frames shorter than a header are dropped.
  */
 void ethernet_rx(const uint8_t *data, uint16_t len)
 {
@@ -59,13 +60,15 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
 
     switch (etype) {
     case ETH_TYPE_ARP:
+        packet_rx(etype, data, len);
         arp_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
         break;
     case ETH_TYPE_IP:
         /* Packet sockets first, and unconditionally: they exist because ip_rx
            drops what is not addressed to this machine, which is every reply a
-           DHCP client is waiting for. */
-        packet_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
+           DHCP client is waiting for. The kernel's own handler still runs, so
+           a program watching ARP does not stop the machine answering it. */
+        packet_rx(etype, data, len);
         ip_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE), 0);
         break;
     default:

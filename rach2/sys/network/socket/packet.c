@@ -28,10 +28,23 @@ static struct socket *bound[PACKET_MAX_BOUND];
 struct packet_queue {
     uint8_t buf[PACKET_QUEUE_SLOTS][PACKET_SLOT_SIZE];
     uint16_t len[PACKET_QUEUE_SLOTS];
+    /* The link address each datagram came from, kept beside it: the sender's
+       MAC, and whether the frame was addressed to this machine, to everyone,
+       or to a group. A reader is given this with the datagram, which is what
+       `arping` decides on. */
+    uint8_t src[PACKET_QUEUE_SLOTS][6];
+    uint8_t pkttype[PACKET_QUEUE_SLOTS];
+    uint16_t proto[PACKET_QUEUE_SLOTS];
     int head;  /* the next datagram to be read */
     int count; /* how many are waiting */
     int dropped;
     int reported;
+    /* The address of the datagram most recently taken, since a receive reports
+       the sender after the datagram it belongs to has gone. */
+    uint8_t last_src[6];
+    uint8_t last_pkttype;
+    uint16_t last_proto;
+    int have_last;
 };
 
 static struct packet_queue queues[PACKET_MAX_BOUND];
@@ -78,6 +91,7 @@ int packet_bind(struct socket *sock, int ifindex)
     queues[free_slot].count = 0;
     queues[free_slot].dropped = 0;
     queues[free_slot].reported = 0;
+    queues[free_slot].have_last = 0;
     net_unlock(flags);
     return 0;
 }
@@ -93,15 +107,63 @@ void packet_unbind(struct socket *sock)
             bound[i] = NULL;
             queues[i].count = 0;
             queues[i].head = 0;
+            queues[i].have_last = 0;
         }
     }
     net_unlock(flags);
 }
 
-void packet_rx(const uint8_t *payload, uint16_t len)
+/** Which of PACKET_HOST/BROADCAST/MULTICAST/OTHERHOST a destination MAC is. */
+static uint8_t packet_type_of(const uint8_t *dst)
 {
-    uint16_t copy_len = len > PACKET_SLOT_SIZE ? PACKET_SLOT_SIZE : len;
     int i;
+
+    for (i = 0; i < 6; i++) {
+        if (dst[i] != 0xff) {
+            break;
+        }
+    }
+    if (i == 6) {
+        return PACKET_BROADCAST;
+    }
+    for (i = 0; i < 6; i++) {
+        if (dst[i] != net_mac[i]) {
+            break;
+        }
+    }
+    if (i == 6) {
+        return PACKET_HOST;
+    }
+    return (dst[0] & 1) ? PACKET_MULTICAST : PACKET_OTHERHOST;
+}
+
+void packet_flush(struct socket *sock)
+{
+    struct packet_queue *q;
+    uint32_t flags;
+
+    flags = net_lock();
+    q = queue_of(sock);
+    if (q) {
+        q->count = 0;
+        q->head = 0;
+        q->have_last = 0;
+    }
+    net_unlock(flags);
+}
+
+void packet_rx(uint16_t ethertype, const uint8_t *frame, uint16_t frame_len)
+{
+    const uint8_t *payload;
+    uint16_t len, copy_len;
+    int i;
+
+    if (frame_len < ETH_HDR_SIZE) {
+        return;
+    }
+    payload = frame + ETH_HDR_SIZE;
+    len = (uint16_t)(frame_len - ETH_HDR_SIZE);
+    copy_len = len > PACKET_SLOT_SIZE ? PACKET_SLOT_SIZE : len;
 
     /* Runs in the receive interrupt, where interrupts are already off; the
        table and the queues are touched without taking net_lock again. */
@@ -111,6 +173,9 @@ void packet_rx(const uint8_t *payload, uint16_t len)
 
         if (!bound[i]) {
             continue;
+        }
+        if (bound[i]->protocol != ethertype) {
+            continue; /* another EtherType, or a socket that asked for none */
         }
         if (q->count == PACKET_QUEUE_SLOTS) {
             /* The newest is dropped, so a client that is behind still finds
@@ -126,6 +191,9 @@ void packet_rx(const uint8_t *payload, uint16_t len)
         slot = (q->head + q->count) % PACKET_QUEUE_SLOTS;
         k_memcpy(q->buf[slot], payload, copy_len);
         q->len[slot] = copy_len;
+        k_memcpy(q->src[slot], frame + 6, 6);
+        q->pkttype[slot] = packet_type_of(frame);
+        q->proto[slot] = ethertype;
         q->count++;
         wq_wake_all(&bound[i]->waiters);
     }
@@ -188,13 +256,50 @@ void packet_consume(struct socket *sock)
     flags = net_lock();
     q = queue_of(sock);
     if (q && q->count > 0) {
+        k_memcpy(q->last_src, q->src[q->head], 6);
+        q->last_pkttype = q->pkttype[q->head];
+        q->last_proto = q->proto[q->head];
+        q->have_last = 1;
         q->head = (q->head + 1) % PACKET_QUEUE_SLOTS;
         q->count--;
     }
     net_unlock(flags);
 }
 
-int packet_send(struct socket *sock, const uint8_t *dst_mac, const uint8_t *data, uint16_t len)
+int packet_last_addr(struct socket *sock, uint8_t *sll)
+{
+    struct packet_queue *q;
+    uint32_t flags;
+    int i;
+
+    flags = net_lock();
+    q = queue_of(sock);
+    if (!q || !q->have_last) {
+        net_unlock(flags);
+        return 0;
+    }
+    for (i = 0; i < PACKET_SLL_LEN; i++) {
+        sll[i] = 0;
+    }
+    sll[0] = (uint8_t)(AF_PACKET & 0xff);
+    sll[1] = (uint8_t)((AF_PACKET >> 8) & 0xff);
+    /* The frame's own EtherType, not the socket's: a socket rebound to another
+       protocol must not relabel a datagram that arrived under the first. */
+    sll[2] = (uint8_t)((q->last_proto >> 8) & 0xff); /* network order */
+    sll[3] = (uint8_t)(q->last_proto & 0xff);
+    sll[4] = (uint8_t)NETDEV_IFINDEX;
+    sll[8] = (uint8_t)PACKET_HATYPE_ETHER;
+    sll[10] = q->last_pkttype;
+    sll[11] = 6;
+    for (i = 0; i < 6; i++) {
+        sll[12 + i] = q->last_src[i];
+    }
+    net_unlock(flags);
+    return PACKET_SLL_LEN;
+}
+
+int packet_send(struct socket *sock, const uint8_t *dst_mac, uint16_t ethertype,
+                const uint8_t *data, uint16_t len)
 {
     uint32_t flags;
 
@@ -202,6 +307,9 @@ int packet_send(struct socket *sock, const uint8_t *dst_mac, const uint8_t *data
 
     if (len == 0 || len > 1500) {
         return -EMSGSIZE;
+    }
+    if (ethertype != ETH_TYPE_IP && ethertype != ETH_TYPE_ARP) {
+        return -EINVAL;
     }
     /* The Ethernet transmit buffer is one buffer for the machine, and this call
        runs in syscall context with interrupts on, so the device check and the
@@ -212,7 +320,7 @@ int packet_send(struct socket *sock, const uint8_t *dst_mac, const uint8_t *data
         net_unlock(flags);
         return -ENETDOWN;
     }
-    ethernet_tx(dst_mac, ETH_TYPE_IP, data, len);
+    ethernet_tx(dst_mac, ethertype, data, len);
     net_unlock(flags);
     return (int)len;
 }

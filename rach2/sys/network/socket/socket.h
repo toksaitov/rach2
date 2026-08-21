@@ -42,6 +42,13 @@ typedef struct socket {
     uint16_t family;
     uint16_t local_port;
 
+    /* AF_PACKET only: the EtherType this socket sends and receives, in HOST
+     * order, or 0 for none. Linux takes it in network order at `socket` and
+     * again in the `sockaddr_ll` at `bind`, and the later one wins; a socket
+     * whose protocol is 0 receives nothing, which is what a client that asked
+     * for nothing asked for. */
+    uint16_t protocol;
+
     /* Remote endpoint: a stream's peer, or the address a datagram socket was
      * connected to. A connected datagram socket sends there without being told
      * again, and receives from nobody else, which is what `connect` means for

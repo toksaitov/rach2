@@ -742,7 +742,12 @@ dhcp-test: rach2 utils busybox krffs os-real-image os-simple-image
 	    "expect=UNSETOK" "send=ifup -a" \
 	    "expect=lease of 192.168.90.20 obtained" wait=3 \
 	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:192.168.90.20' /tmp/if && grep -q 'Bcast:192.168.90.255' /tmp/if && grep -q 'Mask:255.255.255.0' /tmp/if && grep -q '192.168.90.3' /etc/resolv.conf && ping 192.168.90.2 > /dev/null && echo LEASE\"\"OK" \
-	    "expect=LEASEOK" "send=ping 10.9.9.9 > /dev/null 2>&1; echo ROUTE\"\"TRIED" \
+	    "expect=LEASEOK" \
+	    "send=arping -f -w 5 192.168.90.2 > /tmp/ap 2>&1; echo ARPING\"\"-STATUS:$$?; cat /tmp/ap" \
+	    "expect=ARPING-STATUS:0" "expect=Received 1 response" \
+	    "send=arp -n | grep -q '(192.168.90.2)' && echo ARP\"\"CACHED" \
+	    "expect=ARPCACHED" \
+	    "send=ping 10.9.9.9 > /dev/null 2>&1; echo ROUTE\"\"TRIED" \
 	    "expect=ROUTETRIED" "send=echo DHCP\"\"OK" \
 	    wait=10
 	# The address, the netmask and the broadcast are asserted above, and the

@@ -1810,14 +1810,15 @@ def report(problems):
 # one, so an applet of that name would answer from the shell's PATH before the
 # set-id build's copy and then refuse for want of a bit it does not have.
 #
-# The last five cannot work on this kernel's socket layer, and no longer for one
-# reason. `ping`, `ping6`, `traceroute` and `traceroute6` open a raw IP socket,
-# which is not offered: AF_INET/SOCK_RAW exists only as a descriptor carrying
-# the interface ioctls and refuses to send or receive. `arping` opens a packet
-# socket, which milestone 25 did build for the DHCP client, but binds it to the
-# ARP protocol, and only IPv4 is accepted. So the rule still holds for all
-# five; what has changed is that one of them is now a protocol away, not a
-# whole socket family away.
+# The last four cannot work on this kernel's socket layer: `ping`, `ping6`,
+# `traceroute` and `traceroute6` open a raw IP socket, which is not offered
+# (AF_INET/SOCK_RAW exists only as a descriptor carrying the interface ioctls
+# and refuses to send or receive).
+#
+# `arping` is NOT here any more. It opens a packet socket and binds it to the
+# ARP protocol, which milestone 28 completed, so the applet works; it wants no
+# set-id bit either (BB_SUID_DROP), and opening the socket at all is root's, as
+# it is on Linux.
 #
 # `getty` and `sulogin` are NOT here: both are BB_SUID_DROP and neither wants
 # privilege; they are simply not selected, because this system's init does not
@@ -1826,7 +1827,7 @@ def report(problems):
 # The sentinel is an applet that must be present, because a check that only ever
 # looks for absences passes just as well on a header it failed to understand.
 FORBIDDEN_APPLETS = ("su", "passwd", "login", "vlock", "wall", "crontab",
-                     "ping", "ping6", "traceroute", "traceroute6", "arping")
+                     "ping", "ping6", "traceroute", "traceroute6")
 APPLET_SENTINEL = "cat"
 
 # The applet table as it was STAGED, beside the binary it describes, rather than
