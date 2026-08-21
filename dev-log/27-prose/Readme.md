@@ -465,7 +465,22 @@ when its source file is reached, and the document fixed retroactively if wrong.
 
 ## What was refuted
 
-(none yet)
+Nothing read as a defect that turned out, against the code, to be correct as
+written and reverted. What this section records instead is three claims the
+reading suspected and then checked against the source, and left because they
+were right:
+
+* `tests/winprobe.c` uses `PCWIN_BASE == 0xD0000000`, which looked wrong against
+  an older recollection of the page-cache window at `0xC0000000`. The kernel
+  header (`rach2/sys/mm/pagecache.h`) confirms `0xD0000000`: the window was
+  relocated there when the machine became its own build host and user space was
+  capped at `0xC0000000`. The probe and its comment are correct.
+* `tests/host/bootverb_hosttest.c` wraps "forever." onto its own line, which
+  fits the orphaned-word pattern. Measured, the line above is 72 columns and
+  "forever." would carry it to 81, so it is an ordinary wrap, not an orphan.
+* `tests/stressprobe.c` has a `path_of` helper whose "N < 1000" comment looked
+  like it might be stale the way `blockprobe.c`'s was. It is not: this helper
+  writes three digits, so it is accurate for its `NFILES` of 132.
 
 ## Noticed in the code, left for milestone 28
 
