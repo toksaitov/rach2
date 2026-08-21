@@ -89,7 +89,7 @@ MKDISK          = krffs/mkdisk.sh
         cred-persist-test \
         ping-test packet-test netif-test dgram-test dhcp-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
         subset-test diskdiag-test reset-test \
-        ping-test account-test shutdown-test login-test crash-test stress-test os-real-grub-disk \
+        ping-test account-test shutdown-test login-test exitline-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci rach2-metal-grub-disk \
         rach2-sealed-disk rach2-recovery rach2-recovery-image authority-test menu-test grub-test \
@@ -1148,6 +1148,19 @@ login-test: rach2 utils krffs busybox os-real-image
 	sh tools/login_test.sh build/rach2/kernel $(LOGIN_TEST_STRICT) \
 	    $(LOGIN_TEST_SHELL) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`"
 
+# `make exitline-test`: the plain process-exit line is printed under the debug
+# shell and nowhere else. Four boots: an init image that must stay quiet while
+# a forked program runs, the test image that must still print it for a child
+# and a probe, a killed probe whose dedicated marker must survive, and a
+# harness.py run with no token, which has only the plain line to read.
+HARNESS_KERNEL = build/rach2-harness/kernel
+
+exitline-test: rach2 tests utils krffs busybox os-real-image test-image
+	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
+	sh tools/exitline_test.sh build/rach2/kernel $(TEST_IMAGE) \
+	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
+	    $(HARNESS_KERNEL)
+
 crash-test: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(CRASH_TEST_IMAGE) 64 48
 	sh tools/crash_test.sh build/rach2/kernel $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
@@ -1405,6 +1418,7 @@ help:
 	@echo "  make account-test   accounts created, authenticated and deleted, on both images"
 	@echo "  make shutdown-test  userland stops the machine, and only root can"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
+	@echo "  make exitline-test  the plain exit line prints under the debug shell only"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make rach2-metal-image / rach2-metal-iso   the RAM-only image the Lenovo boots"

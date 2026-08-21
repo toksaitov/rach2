@@ -204,6 +204,23 @@ the supporting scripts.
   also names WHICH stop happened and which must not have, because under
   `-no-reboot` a reset and a power-off both end QEMU with a clean image: without
   that, a `reboot` wired to power the machine off instead would pass.
+* `exitline_test.sh` (`make exitline-test`): the proof that the plain
+  `Process exited with status N` line is printed where the debug shell is the
+  supervisor and nowhere else, in the shape of `login_test.sh`. Four boots,
+  because the two ways to get it wrong are opposite: printing it everywhere is
+  a line of noise per command on a machine running `/sbin/init`, and printing
+  it nowhere breaks `harness.py`, which decodes a probe's status from it when
+  no token is given. So the quiet boot runs a forked program on `os-real` and
+  must print the program's output and no status line, waiting on a token an ash
+  builtin writes after the child is reaped, since the child's own output
+  precedes its exit; the test image must print the line for the forked child
+  and for the probe, named by their statuses rather than counted, because the
+  command is re-sent and two copies of one exit would otherwise pass; a probe
+  killed on purpose must still print the whole marker `runtests.py` matches,
+  prefix and tail included; and a `harness.py` run against a `HARNESS=1` kernel
+  with no token must still decode a status. The two markers that hand the shell
+  back are not gated and are asserted whole here, because a probe that stopped
+  being SCORED would look like a passing run rather than a failing one.
 * `login_test.sh` (`make login-test`): the proof that the console cannot fall
   back to an unauthenticated shell, in the shape of `crash_test.sh`. It boots
   two committed fixtures, `krffs/manifests/login-test-strict.manifest` and
@@ -287,7 +304,9 @@ a pid a script no longer owns is one the host may since have given away.
   or a signal from the kill path, in which case the probe fails whatever its
   children did. It is deliberately not scored on a bare `Process exited with
   status N`, printed for every process exit including a forked child's, where
-  neither the first nor the last is reliably the probe's own. A run cut short by
+  neither the first nor the last is reliably the probe's own. That line is
+  printed only where the debug shell is the supervisor; an image running
+  `/sbin/init` prints none. A run cut short by
   a hang fails and names the probes it never reached. `--selftest` checks that
   scoring rule against recorded serial shapes and needs no QEMU; `check.sh` runs
   it, so the rule that decides every probe's verdict is itself gated. `make test`

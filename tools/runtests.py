@@ -10,7 +10,9 @@ has status 0.
 
 Not the bare "Process exited with status N", which the kernel prints for every
 process exit including a forked child's, so neither the first nor the last of
-them is reliably the probe's own. See score_window below.
+them is reliably the probe's own. See score_window below. That line is printed
+only where the debug shell is the supervisor, which every image this runner
+boots is; an image running /sbin/init prints none at all.
 
 This depends on the test image holding no /sbin/init: without it the kernel falls
 to the debug shell, which `exec`s each probe as a transient init that returns here

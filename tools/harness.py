@@ -36,6 +36,11 @@ Usage:
 Exit code: 0 if the guest process exited 0 (QEMU returned 1 via isa-debug-exit);
 1 if it exited non-zero; 2 if QEMU failed to launch; 3 on timeout/hang (QEMU
 never self-exited), an unambiguous failure.
+
+With no --ok token the status is read off the kernel's "Process exited with
+status N" line, which `sys_exit` prints only where the debug shell is the
+supervisor. That is every image this harness boots; an image running /sbin/init
+prints no such line, so drive one of those with --ok instead.
 """
 import argparse, os, re, select, socket, subprocess, sys, time
 

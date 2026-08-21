@@ -441,6 +441,13 @@ void release_fd_table(fd_table_t *table)
  * EBX has the exit status. Marks the process a zombie, reparents its children
  * to init, wakes the parent if it waits, and reschedules. A real init's exit is
  * fatal (panic_init_died); an init exiting under the debug shell returns to it.
+ *
+ * The plain status line goes out only where the debug shell is the supervisor.
+ * There it is how a person, and `tools/harness.py` in its no-token mode, read a
+ * transient init's outcome. On an image running `/sbin/init` and a login shell
+ * every process exit would print it, a forked child's included, and the shell
+ * already answers the question through `$?`. The line that hands the shell back
+ * below is not gated: `tools/runtests.py` scores probes from that one.
  */
 static int32_t sys_exit(isr_params_t *params)
 {
@@ -458,8 +465,10 @@ static int32_t sys_exit(isr_params_t *params)
         release_fd_table(&current_proc->fds);
     }
 
-    k_printf("\nProcess exited with status %d\n", status);
-    serial_printf("\nProcess exited with status %d\n", status);
+    if (debug_shell_is_home) {
+        k_printf("\nProcess exited with status %d\n", status);
+        serial_printf("\nProcess exited with status %d\n", status);
+    }
 
     if (!current_proc) {
         __asm__ __volatile__("cli; hlt");

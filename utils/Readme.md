@@ -142,7 +142,7 @@ cd build/utils/linux
 
 ## Usage (Rach2)
 
-Add compiled binaries to a KRFFS file system image, boot Rach2, and run from the shell:
+Add compiled binaries to a KRFFS file system image, boot Rach2, and run from the kernel debug shell, which is where the status line below comes from; an image running `/sbin/init` prints no such line and its shell reports the status through `$?`:
 
 ```
 > exec echo hello world
