@@ -95,6 +95,11 @@ findings up to where it stopped.
   below with no comment. The PCIe functions had been inserted between the two.
   Moved the comment back down to its function.
 
+* `rach2/sys/isr.h`: a comment read "First 15 interrupt request handlers" above
+  the declarations `irq0` through `irq15`, which are 16 handlers (IRQ0-15). The
+  "First 32 interrupt handlers" comment above it correctly counts isr0-isr31.
+  Corrected the IRQ count to 16.
+
 ## Cross-checks to settle against code later in set one
 
 These are numeric or path claims in documents that read plausibly but can only
@@ -114,11 +119,13 @@ when its source file is reached, and the document fixed retroactively if wrong.
   (`Makefile:1018`) loops over "", noaudio, nomouse, nonet, nodisk, and all
   four together, which is six.
 * `rach2/sys/network/Readme.md`: "all 61 probes" (against `tools/runtests.py`).
-* `rach2/Readme.md`: the GDT table lists 6 descriptors (indices 0-5), but
-  `tls.Readme.md` uses GDT entry 6 for TLS, so the table has 7 slots. The
-  kernel Readme scopes itself to the foundation kernel and sends later
-  subsystems elsewhere, so this may be deliberate; confirm against `gdt.c` /
-  `gdt.h` and add a note in `rach2/Readme.md` only if the omission misleads.
+* `rach2/Readme.md`: RESOLVED. `gdt.h` defines `GDT_ENTRY_COUNT` as 7 (null,
+  kernel code/data, user code/data, TSS, TLS), with the TLS entry at index 6, so
+  the GDT has 7 descriptors. rach2/Readme said "The GDT contains 6 segment
+  descriptors" (its foundation-scoped table lists indices 0-5). Reworded to
+  "The foundation GDT has 6 segment descriptors (the TLS subsystem adds a 7th at
+  index 6...)", pointing at tls.Readme, so the count is no longer false in
+  absolute terms.
 * `krffs/Readme.md`: RESOLVED -- `make images` builds three (test, os-simple,
   os-real; `Makefile:213`), so the "all three" comment is correct; the metal
   image is a separate target.

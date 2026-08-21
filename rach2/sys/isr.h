@@ -63,7 +63,7 @@ extern void isr30(void);
 extern void isr31(void);
 
 /*
- * First 15 interrupt request handlers
+ * First 16 interrupt request handlers
  */
 extern void irq0(void);
 extern void irq1(void);

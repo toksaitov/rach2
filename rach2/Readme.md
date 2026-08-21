@@ -204,7 +204,7 @@ The window at 0xD0000000 (PCWIN_BASE) is the page cache's view of a disk-backed 
 
 ## Global Descriptor Table (GDT)
 
-The GDT contains 6 segment descriptors:
+The foundation GDT has 6 segment descriptors (the TLS subsystem adds a 7th at index 6; see [sys/proc/tls.Readme.md](sys/proc/tls.Readme.md)):
 
 | Index | Selector | Description     | DPL |
 |-------|----------|-----------------|-----|
