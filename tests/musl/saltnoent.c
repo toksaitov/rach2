@@ -79,7 +79,7 @@ static int present(const char *path)
 }
 
 /**
- * How many temporary files of `/etc/shadow`'s the directory still carries.
+ * How many temporary files of `/etc/shadow`'s the directory still has.
  *
  * A replacement writes through `<path>.tmp.<pid>`, so the question is about a
  * prefix and not one name: a temporary this program's own run left behind would

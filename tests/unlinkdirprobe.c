@@ -278,7 +278,7 @@ void _start(void)
         fail("the listing did not name every file, so unlinking during it lost entries");
     }
 
-    /* Two descriptors on one directory must not share a cursor: each carries
+    /* Two descriptors on one directory must not share a cursor: each has
      * its own offset in its open file description, and a listing that consumed
      * another's position would skip entries for reasons no caller could see.
      * The directory is rebuilt for this, since the loop above emptied it. */

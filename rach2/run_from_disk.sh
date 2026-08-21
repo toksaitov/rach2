@@ -14,7 +14,7 @@
 AUDIO_DEVICE="${1:-speaker}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# This image carries the SSH capstone, so forward host port 2222 to guest port
+# This image has the SSH capstone, so forward host port 2222 to guest port
 # 22 by default. NET_HOSTFWD must be set before sourcing qemu_devices.sh, whose
 # own default (8080 -> 80) would otherwise win; an exported NET_HOSTFWD still
 # overrides.

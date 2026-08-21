@@ -2,7 +2,7 @@
 
 ![First Versions of Rach2 Booting](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), compiles C on itself (TinyCC), builds it with a make of its own (pdpmake), rebuilds its own kernel, utilities and shell from the source it carries, and can run Doom.
+An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), compiles C on itself (TinyCC), builds it with a make of its own (pdpmake), rebuilds its own kernel, utilities and shell from the source it has, and can run Doom.
 
 Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements a broad set of Linux-compatible syscalls, enough to host a ported musl libc, a static BusyBox `ash`, and a Dropbear SSH server. It has a custom file system (KRFFS), which runs from a RAM module or persists on a real ATA disk through a kernel page cache, audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and a from-scratch TCP/IP network stack (RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets).
 
@@ -94,11 +94,11 @@ os-simple and os-real, so one password opens either.
 
 ### Building on the machine itself
 
-os-real carries a C compiler and a make, so a program can be written, compiled
+os-real has a C compiler and a make, so a program can be written, compiled
 and BUILT on Rach2 rather than on the machine that built Rach2:
 
 ```sh
-make full                                   # os-real carries tcc, make and the sysroot
+make full                                   # os-real has tcc, make and the sysroot
 cd rach2 && DISK=../build/images/os-real.disk ./run.sh   # after: make os-real-disk
 
 # then, at the machine's own prompt, as any account:
@@ -135,7 +135,7 @@ memory.
 ### The machine builds itself
 
 The kernel's own source is staged at `/src/rach2`, the shell's at `/src/ish`,
-the utilities' at `/src/utils`, and each tree carries a `guest.mk` that
+the utilities' at `/src/utils`, and each tree has a `guest.mk` that
 pdpmake reads (the `Makefile` beside it is the host build's, in GNU syntax
 pdpmake cannot parse). As root, the machine rebuilds any of the three in
 place:

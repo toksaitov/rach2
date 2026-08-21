@@ -27,7 +27,7 @@
 
 /*
  * Hierarchical KRFFS (v2): a node's directory membership is its parent
- * directory's unique id, and a directory is a reserved node whose mode carries
+ * directory's unique id, and a directory is a reserved node whose mode has
  * the S_IFDIR type bit. The root directory has a fixed id KRFFS_ROOT_ID. A
  * node's own id is mix(parent_id, name), unique because sibling names are
  * unique, so parent_id references are unambiguous and survive node moves.

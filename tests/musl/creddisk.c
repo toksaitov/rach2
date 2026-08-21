@@ -81,7 +81,7 @@ static ssize_t slurp(const char *path, char *buffer, size_t size)
 }
 
 /**
- * How many temporary files of `path`'s the root directory still carries.
+ * How many temporary files of `path`'s the root directory still has.
  *
  * A replacement writes through `<path>.tmp.<pid>`, so a boot that asks whether
  * the one before it left a temporary behind is asking about a prefix: the pid

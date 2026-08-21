@@ -87,7 +87,7 @@ static unsigned int fold(unsigned long sum)
  *
  * `r` names the message type, the transaction id and hardware address that
  * make an answer this machine's, the address it already holds (zero unless it
- * is renewing), and the options a request carries. The IP and UDP headers are
+ * is renewing), and the options a request has. The IP and UDP headers are
  * built here too, because a machine with no address cannot ask the IP layer to
  * build them.
  *

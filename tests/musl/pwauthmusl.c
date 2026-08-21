@@ -261,7 +261,7 @@ static int present(const char *path)
 }
 
 /**
- * How many temporary files of `path`'s the directory holding it still carries.
+ * How many temporary files of `path`'s the directory holding it still has.
  *
  * A replacement writes through `<path>.tmp.<pid>`, so no single name answers
  * whether the directory is clean: a temporary left behind by one of this

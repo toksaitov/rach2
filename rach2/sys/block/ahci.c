@@ -597,7 +597,7 @@ static int ahci_port_ready(int port)
  * otherwise select it and then fail on the identify. A port that comes back
  * empty is skipped without comment, since most machines have some.
  *
- * The signature decides what the port carries, and only a disk is taken. An
+ * The signature decides what the port has, and only a disk is taken. An
  * optical drive answers the ATAPI signature and would fail every command this
  * driver knows; a port multiplier and an enclosure service answer their own.
  * Naming the one signature this driver drives, rather than excluding the ones

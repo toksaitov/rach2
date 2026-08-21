@@ -117,7 +117,7 @@ uint16_t elf_program_header_count(const void *data)
  *
  * This is a self-test helper for a trusted, project-built image: it does not
  * apply the full hostile-image hardening (user-window bounds, segment overlap,
- * `p_filesz <= p_memsz`, protect-after-copy) that `elf_load_image` carries. The
+ * `p_filesz <= p_memsz`, protect-after-copy) that `elf_load_image` has. The
  * real `execve` path streams through `elf_load_image`; an untrusted image must
  * never be loaded here.
  *

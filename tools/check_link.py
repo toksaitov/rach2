@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-check_link.py: ask whether a program could link against what an image carries.
+check_link.py: ask whether a program could link against what an image has.
 
 The guest compiles with tcc, and tcc links what the guest has: musl's `libc.a`,
 tcc's runtime `libtcc1.a`, and the startup objects. Nothing appends libgcc there

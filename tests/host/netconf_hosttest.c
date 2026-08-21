@@ -80,7 +80,7 @@ static int fails;
         }                                   \
     } while (0)
 
-/** The dotted quad `a.b.c.d` as the host-order number the stack carries. */
+/** The dotted quad `a.b.c.d` as the host-order number the stack has. */
 #define IP4(a, b, c, d) \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (uint32_t)(d))
 
@@ -264,7 +264,7 @@ int main(void)
     CHECK(netconf_set_address(IP4(192, 168, 90, 20), IP4(255, 255, 255, 0)) == 0,
           "a host address on a real subnet is taken");
     CHECK(net_ip_addr == IP4(192, 168, 90, 20) && net_ip_mask == IP4(255, 255, 255, 0),
-          "and is what the stack now carries");
+          "and is what the stack now has");
     CHECK(arp_flushes == 1, "the ARP cache is forgotten, since every entry was learned "
                             "by a machine at the old address");
     CHECK(tcp_told == 1 && tcp_told_of == IP4(192, 168, 90, 20),

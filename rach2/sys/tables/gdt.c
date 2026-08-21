@@ -72,7 +72,7 @@ void gdt_set_tls(uint32_t base)
  *
  * The descriptor format scatters the 32-bit `base` across three fields and the
  * 20-bit `limit` across two, with the high limit nibble sharing a byte with the
- * `flags`. `access` is the full access byte (present/DPL/type); `flags` carries
+ * `flags`. `access` is the full access byte (present/DPL/type); `flags` has
  * the granularity and size bits in its high nibble.
  */
 static void _gdt_set_descriptor(size_t index, uint32_t base,

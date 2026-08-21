@@ -232,7 +232,7 @@ void _start(void)
     }
     /* The 0666 fixture: world-writable, so the child holds write but not
      * ownership, the pair the utimensat split judges apart. chmod pins the
-     * mode against whatever umask the boot shell carries. */
+     * mode against whatever umask the boot shell has. */
     fd = syscall3(SYS_CREAT, (int)"/perm.rw", 0666, 0);
     if (fd < 0 || syscall3(SYS_CLOSE, fd, 0, 0) != 0 ||
         syscall3(SYS_CHMOD, (int)"/perm.rw", 0666, 0) != 0) {

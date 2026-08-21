@@ -18,7 +18,7 @@
  * on a root-owned 04755 file and the mode must come back untouched.
  *
  * Setgid is dropped only when the group-execute bit is set with it, matching
- * the grant: `execve` honors `KRFFS_MODE_SGID` only on a mode that carries
+ * the grant: `execve` honors `KRFFS_MODE_SGID` only on a mode that has
  * group-execute, so 02645 is an inert mark and survives while 02755 goes. A
  * directory keeps both bits whatever happens to it, since neither is an
  * execution grant there.

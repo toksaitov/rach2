@@ -138,7 +138,7 @@ struct raw_window {
 
 /*
  * The staging buffer every raw transfer passes through, and the number of
- * sectors one driver call carries.
+ * sectors one driver call has.
  *
  * A user pointer can never go to a driver: AHCI programs the buffer's physical
  * address into its PRDT, so the bytes must be somewhere the kernel knows the

@@ -152,7 +152,7 @@ void _start(void)
 
     /* Two chowns that stop at the change gate, and one that does not. The
      * first changes nothing and needs no right; the second names the ids the
-     * root node already carries, so it too moves no field. Neither enters the
+     * root node already has, so it too moves no field. Neither enters the
      * clear at all, which means neither can show whether the clear would spare
      * the root: the gate answers first. The third moves the group, so it is the
      * only call in this probe that reaches the helper with the root node, and

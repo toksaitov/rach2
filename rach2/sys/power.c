@@ -21,7 +21,7 @@
 #include "pci.h"
 #include "serial.h"
 
-/* The PIIX4 the QEMU `pc` machine carries, at 00:01.3, and the two registers
+/* The PIIX4 the QEMU `pc` machine has, at 00:01.3, and the two registers
  * that say where its ACPI power management block lives and whether that block
  * is decoding. */
 #define PIIX4_BUS           0

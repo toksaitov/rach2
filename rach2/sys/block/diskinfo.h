@@ -19,7 +19,7 @@
  * threw the answer away, so it is kept here and published as `/proc/disk`. The
  * sectors come through `/dev/disk0`, a root-only read-only window over the
  * whole disk, and are hashed in userland by the busybox the image already
- * carries, because a SHA-256 in the kernel would duplicate `sha256sum` to no
+ * has, because a SHA-256 in the kernel would duplicate `sha256sum` to no
  * purpose.
  *
  * Nothing here writes. The only commands this path issues are IDENTIFY and a

@@ -36,7 +36,7 @@ int kcmdline_has(const char *flag);
  */
 int kcmdline_value(const char *key, char *out, unsigned int outlen);
 
-/** How many `key=` tokens the line carries; more than one is a
+/** How many `key=` tokens the line has; more than one is a
  * contradiction. */
 int kcmdline_count(const char *key);
 

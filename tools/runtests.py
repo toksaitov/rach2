@@ -108,7 +108,7 @@ SHELL_RETURN = "(%s|%s)" % (EXIT_RE[1:], KILL_RE[1:])
 def score_window(window):
     """Decide one probe's result from the serial bytes its marker bounds.
 
-    Scores the status the marker line itself carries, never a bare "Process
+    Scores the status the marker line itself has, never a bare "Process
     exited with status N": the kernel prints that for every process exit, a
     forked child's included, so neither the first nor the last of them is
     reliably the probe's own. A child that outlives its parent prints after it,
@@ -278,7 +278,7 @@ def main():
         send("exec " + name)
         # The probe runs AS the init process, and only its own exit returns the
         # kernel shell, so that marker bounds the window. Score the status the
-        # marker itself carries: "Process exited with status N" is printed for
+        # marker itself has: "Process exited with status N" is printed for
         # EVERY process exit, a forked child's included, and neither the first
         # nor the last of them is reliably the probe's own. A child that
         # outlives its parent prints after it, and a probe that reaps a clean

@@ -65,7 +65,7 @@ int diskcmd_allowed(uint8_t command);
  */
 int diskcmd_allowed_under(int policy, uint8_t command);
 
-/** The string the artifact carries, naming the policy it was built with. */
+/** The string the artifact has, naming the policy it was built with. */
 extern const char diskcmd_policy_banner[];
 
 #endif /* _DISKCMD_H_ */

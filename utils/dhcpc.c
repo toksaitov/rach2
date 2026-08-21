@@ -177,7 +177,7 @@ static int read_interface(void)
  *
  * The transaction id and the hardware address are the client's, so only what
  * differs between messages is passed in: the type, the address in hand, and
- * the two options a request carries.
+ * the two options a request has.
  */
 static unsigned int build(int type, unsigned long ciaddr, unsigned long server,
                           unsigned long requested, unsigned long dst)

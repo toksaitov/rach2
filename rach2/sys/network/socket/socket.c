@@ -644,7 +644,7 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
         *wq = &sock->waiters;
     }
 
-    /* The query descriptor is never readable and never writable: it carries
+    /* The query descriptor is never readable and never writable: it has
        ioctls. POLLERR says so at once, so a caller that polls it waits on
        nothing rather than forever. */
     if (sock->type == SOCK_RAW) {

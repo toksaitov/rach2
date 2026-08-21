@@ -35,7 +35,7 @@
 /* Local experimental EtherType 1 (IEEE Std 802), which is what this is. */
 #define NETCONSOLE_ETHERTYPE 0x88b5
 
-/* The header above, and the most log bytes one frame carries. */
+/* The header above, and the most log bytes one frame has. */
 #define NETCONSOLE_HDR_LEN     16
 #define NETCONSOLE_PAYLOAD_MAX 512
 

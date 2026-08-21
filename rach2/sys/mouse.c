@@ -164,7 +164,7 @@ static int mouse_send_command(uint8_t cmd)
  * Append a completed packet to the ring buffer, dropping it when full.
  *
  * Runs in IRQ context (the producer); the consumer is mouse_read_packets.
- * Deltas are clamped to the int8_t range the packet struct carries.
+ * Deltas are clamped to the int8_t range the packet struct has.
  */
 static void mouse_push_packet(uint8_t buttons, int dx, int dy)
 {

@@ -149,7 +149,7 @@ static int sys_waitpid(int pid, int *status, int options)
     return r;
 }
 
-/* The one's-complement sum an IP header carries; SLIRP checks it, so a wrong
+/* The one's-complement sum an IP header has; SLIRP checks it, so a wrong
    one is an offer that never comes rather than a visible failure. */
 static uint16_t ip_checksum(const uint8_t *p, unsigned int len)
 {

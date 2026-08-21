@@ -532,7 +532,7 @@ static int r8168_read_mac(uint8_t *mac)
  * The reference asks the PCI layer to disable L1 and says why: on these parts
  * the link state can stop the device and hang the bus. A link has two ends,
  * and clearing the bit in the card alone leaves the state negotiated by the
- * port above it, so this also walks to the bridge whose secondary bus carries
+ * port above it, so this also walks to the bridge whose secondary bus has
  * the card. The target machine's inventory reports this card running with
  * ASPM enabled under its previous operating system, so the bits really are
  * set when this kernel arrives.

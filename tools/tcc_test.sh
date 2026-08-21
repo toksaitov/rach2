@@ -216,7 +216,7 @@ if ! wait_token "OBJECTOK" 120; then
 fi
 
 # And a program of this project's own, compiled from the source the image
-# carries. The proof is behavioural rather than a byte comparison of the two
+# has. The proof is behavioural rather than a byte comparison of the two
 # binaries: the shipped one was linked against libgcc on the host and this one
 # against libtcc1.a on the machine, so they are different objects that must do
 # the same thing.

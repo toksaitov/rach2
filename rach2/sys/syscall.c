@@ -5774,7 +5774,7 @@ static int32_t sys_creat(isr_params_t *params)
  * whatever went wrong. A missing component gives `-ENOENT` and a plain file
  * in the middle of the path `-ENOTDIR`, both from the reporting resolver;
  * the root and any directory give `-EISDIR`, which is what tells a caller
- * to use `rmdir`. The root is tested by node identity because it carries
+ * to use `rmdir`. The root is tested by node identity because it has
  * 0755 with no type bits and would otherwise read as a plain file.
  */
 static int32_t sys_unlink(isr_params_t *params)

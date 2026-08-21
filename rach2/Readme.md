@@ -316,7 +316,7 @@ back a private copy-on-write image would be reporting semantics it does not
 provide, which is the kind of lie this project refuses elsewhere (see the
 compiler's output policy).
 
-So the vendored musl carries one pinned patch instead
+So the vendored musl has one pinned patch instead
 (`vendor/musl/patches/0001-posix-spawn-forks.patch`): `posix_spawn` forks. Its
 child function never returns and reports failure through a pipe rather than
 through shared memory, so a forked child serves it exactly as a cloned one did.
@@ -602,7 +602,7 @@ Special values for `tv_nsec`:
 
 If `times` is NULL, both timestamps are set to current time.
 
-The time written is the one `get_current_time()` reports: the CMOS clock read at boot, carried forward by the 100 Hz PIT, so a file this call stamps carries a real date on a machine whose clock could be read, and time since boot on one whose could not. See "The clock" below.
+The time written is the one `get_current_time()` reports: the CMOS clock read at boot, carried forward by the 100 Hz PIT, so a file this call stamps has a real date on a machine whose clock could be read, and time since boot on one whose could not. See "The clock" below.
 
 Returns 0 on success, -1 on error (file not found).
 

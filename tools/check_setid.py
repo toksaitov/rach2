@@ -990,7 +990,7 @@ def node_paths(nodes):
             walker = by_id.get(parent)
             if walker is None:
                 raise ImageError("node '%s' at offset %d names parent id %u, "
-                                 "which no node carries"
+                                 "which no node has"
                                  % (node["name"], node["offset"], parent))
         path = "/" + "/".join(reversed(parts))
         if path in paths:
