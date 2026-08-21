@@ -1,6 +1,5 @@
 /**
- * Verify permission enforcement: the nine-bit access check at every wired
- * site.
+ * Verify permission enforcement: the nine-bit access check at every wired site.
  *
  * A root parent stages the fixtures (a 0600 root file, a 0666 root file, a
  * 0700 root directory, a 0700 directory owned by uid 1000), then a child
