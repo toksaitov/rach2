@@ -92,7 +92,7 @@ int main(void)
      * nonsense digit. 2026-08-14 13:05:07 UTC is 1786712707. */
     bcd_sample(&raw, 26, 8, 14, 1, 5, 7);
     raw.hour = (unsigned char)(bcd(1) | RTC_HOUR_PM);
-    raw.status_b = 0; /* 12-hour, BCD */ /* 12-hour, BCD */
+    raw.status_b = 0; /* 12-hour, BCD */
     CHECK(rtc_decode(&raw, &seconds, &when) == 0);
     CHECK(when.hour == 13);
     CHECK(seconds == 1786712707LL);

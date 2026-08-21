@@ -305,6 +305,9 @@ findings up to where it stopped.
   `slurp`. And the `check_sigpipe_exec` doc carried the same mangled-"has" as
   `pwauth.c`/`.h`: "an exec resets a caught signal to the default and has an
   ignored one into the new image" -- reworded to "carries an ignored one".
+* `tests/host/rtc_hosttest.c`: a doubled inline comment on the twelve-hour PM
+  case, `raw.status_b = 0; /* 12-hour, BCD */ /* 12-hour, BCD */`. Removed the
+  repeat.
 
 ### Set two: the Doom port and the rest
 
