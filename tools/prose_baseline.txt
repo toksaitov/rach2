@@ -1,0 +1,8 @@
+# Watched phrases, per population, at the end of milestone 26.
+# A record, not a budget: only --banned fails a build.
+# Regenerate: prose_check.py --baseline --write
+#
+# population words carries holds rather_than which_is not_a honest the_point in_practice worth note_that
+c 217938 0 54 66 443 265 0 17 4 38 1
+hash 31392 0 7 7 91 46 2 4 0 2 0
+md 71939 0 48 5 148 89 2 11 0 11 0

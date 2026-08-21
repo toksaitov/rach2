@@ -21,6 +21,9 @@
 #  10. the set-id manifest sweep (tools/check_setid.py)
 #  11. image reproducibility (tools/check_repro.py): one tree, one image
 #  12. the checker selftests (tools/check_kernel.py, tools/check_grubembed.py)
+#   8. text style, in three parts: tools/textcheck.sh for non-ASCII and dashes,
+#      tools/check_comments.py for the 80-column comment rule, and
+#      tools/prose_check.py --banned for the vocabulary a script can decide.
 #  13. the dev-log index (tools/check_devlog.py): it names every finished
 #      milestone, and names the newest last
 #
@@ -238,11 +241,34 @@ fi
 # tree.
 hr "8/13 text style"
 if "$REPO/tools/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
-    echo "  PASS"
+    echo "  PASS (textcheck)"
 else
     tc=$(sed -n 's/^textcheck: \([0-9]*\) finding.*/\1/p' "$VDIR/verify_text.log")
     [ -n "$tc" ] || tc='?'
     echo "  FAIL: $tc text-style finding(s); see $VDIR/verify_text.log"; fail=1
+fi
+
+# Comment width. Written for milestone 26 and left unwired until the tree
+# reached zero, because a check that fails on the day it lands teaches everyone
+# to ignore it.
+if python3 "$REPO/tools/check_comments.py" >"$VDIR/verify_cols.log" 2>&1; then
+    echo "  PASS (comments at 80 columns)"
+else
+    cc=$(sed -n 's/^check_comments: \([0-9]*\) comment.*/\1/p' "$VDIR/verify_cols.log")
+    [ -n "$cc" ] || cc='?'
+    echo "  FAIL: $cc over-width comment line(s); see $VDIR/verify_cols.log"; fail=1
+fi
+
+# Vocabulary. Only the half of the register rule a script can decide: terms with
+# no legitimate use in this tree, in comments AND in the strings a person reads.
+# The other half, and the repetition report, are for review; see CLAUDE.md.
+if python3 "$REPO/tools/prose_check.py" --selftest >"$VDIR/verify_prose.log" 2>&1 &&
+   python3 "$REPO/tools/prose_check.py" --banned >>"$VDIR/verify_prose.log" 2>&1; then
+    echo "  PASS (banned vocabulary)"
+else
+    pc=$(sed -n 's/^prose_check: \([0-9]*\) banned.*/\1/p' "$VDIR/verify_prose.log")
+    [ -n "$pc" ] || pc='?'
+    echo "  FAIL: $pc banned term use(s); see $VDIR/verify_prose.log"; fail=1
 fi
 
 # The probe runner's scoring rule, checked against recorded serial shapes rather

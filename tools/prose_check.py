@@ -43,6 +43,7 @@ What a ratio is worth differs by phrase, and the report says so rather than
 implying every multiple means the same thing. See `dev-log/26-portable/`.
 
 Usage: prose_check.py --banned [PATH ...]
+       prose_check.py --baseline [--write]
        prose_check.py --fixture [--write]
        prose_check.py --report
        prose_check.py --ngrams [N]
@@ -413,6 +414,38 @@ def cmd_fixture(argv):
     return 0
 
 
+BASELINE = os.path.join(TOP, "tools", "prose_baseline.txt")
+
+
+def cmd_baseline(argv):
+    """Record, or check, where the watched phrases stand.
+
+    This is a record and not a limit. Milestone 26 brought `carries` from 35
+    times the upstream rate to none, `holds` from 17 to 4 and `rather than` from
+    34 to 4; what is left is mostly ordinary English that upstream happens to
+    use less, and freezing it as a budget would turn a report into a rule
+    nobody agreed to. `--banned` is what fails a build. This says which way the
+    prose is moving, and a person reads it.
+    """
+    pops = ours()
+    lines = ["# Watched phrases, per population, at the end of milestone 26.",
+             "# A record, not a budget: only --banned fails a build.",
+             "# Regenerate: prose_check.py --baseline --write",
+             "#",
+             "# population words " + " ".join(w.replace(" ", "_")
+                                              for w in WATCH)]
+    for pop in ("c", "hash", "md"):
+        spans = [x for _, ss in pops[pop] for x in ss]
+        counts = [str(count(spans, w)) for w in WATCH]
+        lines.append("%s %d %s" % (pop, words(spans), " ".join(counts)))
+    if "--write" in argv:
+        open(BASELINE, "w").write("\n".join(lines) + "\n")
+        print("prose_check: wrote %s" % rel(BASELINE))
+        return 0
+    print("\n".join(lines))
+    return 0
+
+
 def cmd_ngrams(argv):
     """The most repeated 3- and 4-word sequences that are not on the watch list.
 
@@ -564,6 +597,8 @@ def main(argv):
         return cmd_banned(rest)
     if mode == "--report":
         return cmd_report(rest)
+    if mode == "--baseline":
+        return cmd_baseline(rest)
     if mode == "--fixture":
         return cmd_fixture(rest)
     if mode == "--ngrams":
