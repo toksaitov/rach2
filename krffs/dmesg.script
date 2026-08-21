@@ -1,0 +1,17 @@
+#!/bin/sh
+#
+# dmesg: what this machine printed while it was starting.
+#
+# Linux's `dmesg` reads a ring buffer through `klogctl`, a system call this
+# kernel does not have and is not going to grow: the boot log here is a device,
+# `/dev/bootlog`, which the kernel fills as it starts and anything that can
+# read a file can read. So this is the command a person expects, doing the
+# thing this machine actually does. busybox's own `dmesg` applet is turned off
+# for the same reason: it can only fail here, and it would answer from the
+# shell's applet table before this file.
+#
+# Arguments are not taken, because the options Linux's dmesg has (clearing the
+# buffer, following it, levels) are about the ring buffer this kernel does not
+# keep.
+
+exec cat /dev/bootlog

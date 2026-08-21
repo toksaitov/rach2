@@ -1817,10 +1817,13 @@ def report(problems):
 # `traceroute` is NOT here any more. Milestone 28 built the raw ICMP socket it
 # receives on and the `IP_TTL` it counts up, so the applet works, as root.
 #
-# `ping` stays off in the config for a reason that is not about the kernel: it
-# would answer from the shell's applet table before `/bin/ping`, the in-house
-# program an ordinary account can run (it asks the kernel to ping rather than
-# opening a raw socket, which is root's). This machine keeps that one.
+# `ping` and `dmesg` stay off in the config for a reason that is not about a
+# privilege: each would answer from the shell's applet table before the file
+# staged under the same name. `/bin/ping` is the in-house program an ordinary
+# account can run (it asks the kernel to ping rather than opening a raw socket,
+# which is root's), and `/bin/dmesg` is a two-line script that prints
+# `/dev/bootlog`, since Linux's dmesg reads a ring buffer through `klogctl`
+# that this kernel does not have. This machine keeps both.
 #
 # `arping` is NOT here any more. It opens a packet socket and binds it to the
 # ARP protocol, which milestone 28 completed, so the applet works; it wants no
@@ -1834,7 +1837,7 @@ def report(problems):
 # The sentinel is an applet that must be present, because a check that only ever
 # looks for absences passes just as well on a header it failed to understand.
 FORBIDDEN_APPLETS = ("su", "passwd", "login", "vlock", "wall", "crontab",
-                     "ping", "ping6", "traceroute6")
+                     "ping", "ping6", "traceroute6", "dmesg")
 APPLET_SENTINEL = "cat"
 
 # The applet table as it was STAGED, beside the binary it describes, rather than

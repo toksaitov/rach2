@@ -150,6 +150,7 @@ echo "procfiles-test: the three mounts each name their own source: OK"
   printf 'df / > /tmp.df; echo DF""-STATUS:$?; tail -1 /tmp.df\n'; sleep 3;
   printf 'free > /tmp.free; echo FREE""-STATUS:$?; cat /tmp.free\n'; sleep 3;
   printf 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up\n'; sleep 4;
+  printf 'dmesg > /tmp.dm; echo DM""ESG-STATUS:$?; head -1 /tmp.dm\n'; sleep 4;
   printf 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP\n'; sleep 10;
   printf 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt\n'; sleep 10;
   printf 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6\n'; sleep 4;
@@ -167,15 +168,18 @@ QPID=$!
 # its peer as QEMU's gateway, 10.0.2.2: an address the guest did not choose and
 # the host end really has, which is what makes the row worth checking. The
 # forward reaches the SSH server started above, so this is the shape of a live
-# login and not a contrivance. The server is started by hand because the image
+# login and not a contrivance. The wait before it is longer than the steps that
+# come first, since a connection made before the server is listening reaches
+# nothing: QEMU accepts the host side of it either way.
+# The server is started by hand because the image
 # does not run one at boot, and QEMU's user network accepts the host side of a
 # connection whether or not anything inside is listening: without a real
 # listener the row would simply never appear and the check would fail for a
 # reason that has nothing to do with netstat.
-( sleep 34; python3 -c "
+( sleep 42; python3 -c "
 import socket, time
 s = socket.create_connection(('127.0.0.1', $FWD_PORT), timeout=10)
-time.sleep(20)
+time.sleep(40)
 s.close()
 " >/dev/null 2>&1 ) &
 PEER_PID=$!
@@ -196,7 +200,8 @@ tr -d '\r' <"$REAL.applets.log" >"$PLAIN_LOG"
 # Each applet's own exit status, captured before anything reads its output. An
 # applet that printed a plausible row and then failed passed the earlier version
 # of this test, which looked only at the text.
-for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "RT:route" "ARP:arp" "NS:netstat"; do
+for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "DMESG:dmesg" "RT:route" \
+            "ARP:arp" "NS:netstat"; do
     token="${pair%%:*}"
     word="${pair#*:}"
     status=$(sed -n "s/^$token-STATUS:\([0-9][0-9]*\).*/\1/p" "$PLAIN_LOG" | head -1)
@@ -257,6 +262,18 @@ if ! grep -qE "up +[0-9]" "$PLAIN_LOG"; then
     exit 1
 fi
 echo "procfiles-test: uptime prints a time: OK"
+
+# The boot log, under the name a person reaches for. busybox's own dmesg reads
+# a ring buffer through klogctl, which this kernel does not have, so /bin/dmesg
+# is a script that prints /dev/bootlog and the applet is off: what this checks
+# is that the name reaches the log, and the first line of the log is the banner
+# the kernel prints before anything else can have written to it.
+if ! grep -q "Rach2 Booting" "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: dmesg did not print the boot log" >&2
+    grep -A3 "DMESG-STATUS" "$PLAIN_LOG" | head -4 >&2
+    exit 1
+fi
+echo "procfiles-test: dmesg prints the machine's own boot log: OK"
 
 # route: the machine's real state, not a plausible one. Under QEMU's user
 # network the address is 10.0.2.15 and the gateway 10.0.2.2, both of which this
