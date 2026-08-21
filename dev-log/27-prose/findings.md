@@ -268,6 +268,11 @@ findings up to where it stopped.
   message read "the six stub entries are not in the order..." while the `want`
   list it checks has seven (the recovery-static entry was added). Corrected to
   seven.
+* `tools/diskdiag_test.sh`: the header opened "This is the instrument the phase E
+  carve decision rests on" -- "phase E" is an undefined reference to a milestone-24
+  dev-log phase (the deliberately-unbuilt SSD carve) and means nothing to a reader
+  of the script. Reworded to "the decision to carve the laptop's SSD rests on",
+  which names the decision plainly.
 
 ## Cross-checks to settle against code later in set one
 

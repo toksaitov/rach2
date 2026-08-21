@@ -3,8 +3,8 @@
 #
 # diskdiag_test.sh: read a disk without mounting it, and without writing a byte.
 #
-# This is the instrument the phase E carve decision rests on. The laptop's SSD
-# has a Windows installation, so the machine must be able to report what the
+# This is the instrument the decision to carve the laptop's SSD rests on. That
+# SSD has a Windows installation, so the machine must be able to report what the
 # drive is, how big it is and what its partition table says, and to hand out
 # any sector for hashing, while leaving the platter exactly as it found it.
 #
