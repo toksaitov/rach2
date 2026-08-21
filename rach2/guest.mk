@@ -7,7 +7,7 @@
 # lists equal on the host, so they cannot drift apart.
 #
 # The link reads the object list from kernel.objs, a response file, because
-# naming 71 objects on one command line would exceed the machine's 63-entry
+# naming 87 objects on one command line would exceed the machine's 63-entry
 # execve limit. The file is written whole, loader.o first: the multiboot
 # header lives in loader.o and the linker keeps input order, so the header
 # stays inside the first 8192 bytes of the kernel where the loaders search

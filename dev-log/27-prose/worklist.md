@@ -73,20 +73,20 @@ How each upstream project is pinned, patched, configured and built.
 
 The root `Makefile` is a third comments.
 
-* [ ] `Makefile` (7173 words)
-* [ ] `utils/Makefile` (946 words)
-* [ ] `rach2/Makefile` (535 words)
-* [ ] `krffs/Makefile` (343 words)
-* [ ] `mk/toolchain.mk` (315 words)
-* [ ] `rach2/guest.mk` (265 words)
-* [ ] `tests/Makefile` (256 words)
-* [ ] `mk/rules.mk` (225 words)
-* [ ] `mk/build.mk` (209 words)
-* [ ] `ports/doom/Makefile` (141 words)
-* [ ] `mk/deps.mk` (132 words)
+* [x] `Makefile` (7173 words)
+* [x] `utils/Makefile` (946 words)
+* [x] `rach2/Makefile` (535 words)
+* [x] `krffs/Makefile` (343 words)
+* [x] `mk/toolchain.mk` (315 words)
+* [x] `rach2/guest.mk` (265 words)
+* [x] `tests/Makefile` (256 words)
+* [x] `mk/rules.mk` (225 words)
+* [x] `mk/build.mk` (209 words)
+* [x] `ports/doom/Makefile` (141 words)
+* [x] `mk/deps.mk` (132 words)
 * [x] `ish/guest.mk` (112 words)
-* [ ] `utils/guest.mk` (102 words)
-* [ ] `ish/Makefile` (90 words over 1 files)
+* [x] `utils/guest.mk` (102 words)
+* [x] `ish/Makefile` (90 words over 1 files)
 
 ## Kernel headers (71 entries, 26831 words)
 

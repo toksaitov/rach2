@@ -3,7 +3,7 @@
 # way. A component sets CC, CFLAGS (with $(DEPFLAGS) from mk/deps.mk) and
 # OBJECTS as $(SRC:%.c=$(BUILD)/%.o), where $(BUILD) (its output dir under
 # build/) comes from mk/build.mk, then `include ../mk/rules.mk`. ish/ uses it
-#directly. 
+# directly.
 # Two components keep their OWN compile rules instead of including this file, by
 # design: ports/doom (it compiles from two source dirs, the local dir and src/)
 # and the krffs host tools (the FUSE objects need extra cflags the standalone

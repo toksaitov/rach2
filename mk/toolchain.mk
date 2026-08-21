@@ -10,8 +10,8 @@
 #
 # Override on the command line if your toolchain is named differently, e.g.
 #   make CROSS_CC=/path/to/i686-elf-gcc
-#   make CROSS_CC=/path/to/i686-elf-gcc CROSS_LD=/path/to/i686-elf-ld   # odd
-#names 
+#   make CROSS_CC=/path/to/i686-elf-gcc CROSS_LD=/path/to/i686-elf-ld
+#     (a toolchain whose names do not follow the pattern)
 # CROSS_CC : the freestanding cross C compiler
 # CROSS_LD : the matching linker (used for the kernel's `-T link.ld` link)
 # CROSS_AR / CROSS_STRIP / CROSS_OBJCOPY : the matching binutils

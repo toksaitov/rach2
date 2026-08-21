@@ -66,7 +66,7 @@ PDPMAKE_PATCHES  = vendor/pdpmake/patches/0001-platform-macros.patch
 # The two musl artifacts consumers depend on, both derived from the tarball name so
 # the pinned version is written once: the installed static libc the cross-compiled
 # userland links against, and the extracted source, which the host-compiled mkhash
-# and its seam test read the SHA-512 crypt from.
+# and its host test read the SHA-512 crypt from.
 LIBC_A         = vendor/musl/install/lib/libc.a
 MUSL_CRYPT_SRC = $(LIBC_TARBALL:.tar.gz=)/src/crypt/crypt_sha512.c
 
@@ -1306,7 +1306,7 @@ check-dropbearmulti: $(DROPBEAR_STAMP)
 
 # musl's stamp guards two artifacts, not one: the installed libc the cross links
 # against, and the EXTRACTED source tree, which krffs (mkhash's crypt) and the
-# mkhash seam test compile from directly. A copied worktree carries the stamp
+# mkhash host test compile from directly. A copied worktree carries the stamp
 # without either, so check both here rather than let a consumer fail later on a
 # missing file with no cause named.
 check-libc: $(LIBC_STAMP)

@@ -19,6 +19,27 @@ findings up to where it stopped.
   shows `tools/prose_check.py` does not scan the `vendor/*/Readme.md` files;
   the vendor Readmes are therefore hand-checked for the banned vocabulary in
   this milestone. Replaced with "essential".
+* Scope of `tools/prose_check.py` (read to bound the gap): it scans `.c .h .py
+  .sh .mk .md` under `rach2 utils ish krffs tests tools mk ports/doom` plus the
+  three top-level `.md`, and skips `vendor/` entirely. So the banned-vocabulary
+  check never reaches: files literally named `Makefile` (no extension), anything
+  under `vendor/`, `dev-log/`, or the non-scanned extensions (`.s`, `.ld`,
+  `.manifest`, `.cfg`, `.template`, `.script`, `.txt`). Those are hand-checked
+  for banned vocabulary in this milestone; the scanned files are already clean
+  by the gate.
+* The `Makefile`s used "seam" (a mechanically banned term) in build comments,
+  as "seam test" for a host test -- root `Makefile` (2), `utils/Makefile` (2),
+  `krffs/Makefile` (1), none caught because `Makefile` has no scanned extension.
+  Changed each to "host test" / "test".
+* `rach2/guest.mk`: a comment said the link names "71 objects on one command
+  line", but `OBJS` is 87 (5 assembly + 82 C, matching `rach2/Makefile` and
+  rach2/Readme's "87 objects"). The count went stale as the kernel grew; no
+  checker verifies a number in a comment. Corrected to 87.
+* `mk/toolchain.mk`: an override example's inline annotation was mangled by a
+  line wrap into "# odd" then "#names " (no space after `#`, trailing space).
+  Rewrote it as a clean parenthetical line.
+* `mk/rules.mk`: a comment wrap left "#directly." (no space after `#`, trailing
+  space) on its own line. Fixed to "# directly."
 * `vendor/pdpmake/build_pdpmake.sh`: its comment called pdpmake's POSIX makefile
   "26-line" while `vendor/pdpmake/Readme.md` called the same file "30-line". The
   extracted `pdpmake-2.0.4/Makefile` is 30 lines, so the Readme was right and
@@ -61,21 +82,24 @@ These are numeric or path claims in documents that read plausibly but can only
 be judged against source read later in this same set. Each is to be confirmed
 when its source file is reached, and the document fixed retroactively if wrong.
 
-* `Readme.md`, `tools/Readme.md`, `tests/Readme.md`: "29 utilities" and
-  "eighteen smoke checks" (against `utils/Makefile`, `rach2/guest.mk`,
-  `tools/selfbuild_test.sh`).
-* `rach2/Readme.md`: the `cr3` field "offset 52" (against `process.h`);
-  "make subset-test boots six lines" (against the `Makefile`); "over 100
-  syscalls" (against `syscall.c`).
+* `Readme.md`, `tools/Readme.md`, `tests/Readme.md`: "eighteen smoke checks"
+  (against `tools/selfbuild_test.sh`, in set two tooling).
+  RESOLVED: "29 utilities" is correct -- `utils/Makefile` builds 19 `UTILITIES`
+  plus 10 `SBIN_PROGS` = 29 programs.
+* `rach2/Readme.md`: the `cr3` field "offset 52" (against `process.h`); "over
+  100 syscalls" (against `syscall.c`).
+  RESOLVED: "make subset-test boots six lines" is correct -- the recipe
+  (`Makefile:1018`) loops over "", noaudio, nomouse, nonet, nodisk, and all
+  four together, which is six.
 * `rach2/sys/network/Readme.md`: "all 61 probes" (against `tools/runtests.py`).
 * `rach2/Readme.md`: the GDT table lists 6 descriptors (indices 0-5), but
   `tls.Readme.md` uses GDT entry 6 for TLS, so the table has 7 slots. The
   kernel Readme scopes itself to the foundation kernel and sends later
   subsystems elsewhere, so this may be deliberate; confirm against `gdt.c` /
   `gdt.h` and add a note in `rach2/Readme.md` only if the omission misleads.
-* `krffs/Readme.md`: whether `make images` builds three or four images, given
-  four `*-image` targets are listed above an "all three" comment (against the
-  `Makefile`).
+* `krffs/Readme.md`: RESOLVED -- `make images` builds three (test, os-simple,
+  os-real; `Makefile:213`), so the "all three" comment is correct; the metal
+  image is a separate target.
 * `rach2/sys/block/Readme.md`: the raw-window limit "the first 8388607 sectors"
   and its "byte just past that sector" clause (against the raw-window seek code
   in the page cache / `diskinfo.c`). The 4 GiB substance is right; the exact

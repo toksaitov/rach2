@@ -187,7 +187,7 @@ $(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
 
 # dhcpc links the message library (dhcpmsg.c), the half of the client that
 # needs no system call: the framing, the checksums and the option parsing that
-# its host seam test drives with the messages a server will not produce on
+# its host test drives with the messages a server will not produce on
 # request. netup links the configuration reader (netcfg.c) for the same reason.
 # Both link ipcheck.c, the one judgement of whether an IPv4 configuration is one
 # a machine can hold, which a lease off the wire and a stanza in a file are
@@ -210,7 +210,7 @@ $(BUILD)/netup: netup.c netcfg.c netcfg.h ipcheck.c ipcheck.h
 	    $(LINK_POST)
 
 # bootctl links the boot-slot library (bootslot.c), the pure core its
-# host seam test drives over fixture images with fault injection.
+# host test drives over fixture images with fault injection.
 $(BUILD)/sbin/bootctl: bootctl.c bootslot.c bootslot.h bootverb.c bootverb.h grubslot.c grubslot.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) bootctl.c bootslot.c bootverb.c grubslot.c $(LINK_POST)

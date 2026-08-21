@@ -69,7 +69,7 @@ $(BUILD)/stageimage.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/stageima
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-# readfile also links the reader, the path walk the host seam test runs on
+# readfile also links the reader, the path walk the host test runs on
 # crafted regions (tests/host/readfile_hosttest.c).
 $(BUILD)/readfile.krffs : $(CORE) $(BUILD)/krffs_reader.o $(BUILD)/readfile.krffs.o
 	@mkdir -p $(dir $@)
