@@ -277,6 +277,11 @@ when its source file is reached, and the document fixed retroactively if wrong.
   rules and the register rule do not apply to third-party code, and CLAUDE.md
   forbids churning the vendored trees, so these were read for provenance and
   left byte-for-byte as they are.
+* `krffs/vendor/windows.sh`: the upstream termbox2 generator that sed-patches
+  `termbox2.h` into the Windows `termbox2_win.h` (same origin as the two headers
+  above). It emits a misspelled error string, "Unsupporrted (Windows)" (double
+  `r`), but it is upstream and generates a vendored header, so it is left as is
+  for the same reason.
 
 ## What was refuted
 

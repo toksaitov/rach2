@@ -360,9 +360,9 @@ project teaches; move it up if that judgement turns out wrong.
 * [x] `utils/rm.c` (100 words)
 * [x] `utils/Makefile.linux`, `utils/nc.c`, `ish/ish_cstring_utilities.h`, `ish/ish_syscalls.i386.c`, `krffs/krffs_file_system.h`, `utils/bootverb.c`, `krffs/create_file_system.krffs.sh`, `ish/ish_syscalls.h` (697 words over 8 files)
 * [x] `krffs/manifests/stress-test.manifest`, `krffs/manifests/persist-test.manifest`, `krffs/krffs_allocator.c`, `utils/touch.c`, `ish/ish_shell_utilities.h`, `ish/ish_common.h`, `ish/Makefile.linux`, `utils/ls.c` (387 words over 8 files)
-* [ ] `krffs/krffs_utilities.h`, `utils/mv.c`, `utils/echo.c`, `utils/yes.c`, `krffs/krffs.h`, `ish/ish_syscalls.c`, `utils/cp.c`, `utils/cat.c` (88 words over 8 files)
-* [ ] `utils/pwd.c`, `utils/mkdir.c`, `krffs/vs-dokany/krffs.sln`, `krffs/vendor/windows.sh`, `utils/true.c`, `utils/false.c`, `krffs/vs-dokany/mkfs.krffs.vcxproj`, `krffs/vs-dokany/krffs.vcxproj` (17 words over 8 files)
-* [ ] `krffs/vs-dokany/fsviz.krffs.vcxproj`, `krffs/vs-dokany/fsck.krffs.vcxproj`, `krffs/vs-dokany/edfs.krffs.vcxproj`, `krffs/vs-dokany/defrag.krffs.vcxproj`, `krffs/krffs_file_system.c`, `krffs/.gitattributes` (0 words over 6 files)
+* [x] `krffs/krffs_utilities.h`, `utils/mv.c`, `utils/echo.c`, `utils/yes.c`, `krffs/krffs.h`, `ish/ish_syscalls.c`, `utils/cp.c`, `utils/cat.c` (88 words over 8 files)
+* [x] `utils/pwd.c`, `utils/mkdir.c`, `krffs/vs-dokany/krffs.sln`, `krffs/vendor/windows.sh`, `utils/true.c`, `utils/false.c`, `krffs/vs-dokany/mkfs.krffs.vcxproj`, `krffs/vs-dokany/krffs.vcxproj` (17 words over 8 files)
+* [x] `krffs/vs-dokany/fsviz.krffs.vcxproj`, `krffs/vs-dokany/fsck.krffs.vcxproj`, `krffs/vs-dokany/edfs.krffs.vcxproj`, `krffs/vs-dokany/defrag.krffs.vcxproj`, `krffs/krffs_file_system.c`, `krffs/.gitattributes` (0 words over 6 files)
 
 ## Tooling (41 entries, 30694 words)
 
