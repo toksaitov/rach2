@@ -86,10 +86,8 @@ static ssize_t slurp(const char *path, char *buffer, size_t size)
  * A replacement writes through `<path>.tmp.<pid>`, so a boot that asks whether
  * the one before it left a temporary behind is asking about a prefix: the pid
  * that named it belonged to a machine that is gone. A root directory that
- * cannot
- * be opened counts as one temporary, since a question this could not answer
- * must
- * not read as a clean disk.
+ * cannot be opened counts as one temporary, since a question this could not
+ * answer must not read as a clean disk.
  */
 static int temps_left(const char *path)
 {

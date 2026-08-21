@@ -308,6 +308,10 @@ findings up to where it stopped.
 * `tests/host/rtc_hosttest.c`: a doubled inline comment on the twelve-hour PM
   case, `raw.status_b = 0; /* 12-hour, BCD */ /* 12-hour, BCD */`. Removed the
   repeat.
+* `tests/musl/creddisk.c`: the `temps_left` doc block was mangled by two bad
+  wraps, orphaning "cannot" and "must" each onto a line of its own ("A root
+  directory that / cannot / be opened..."). Reflowed the paragraph at 80
+  columns.
 
 ### Set two: the Doom port and the rest
 
