@@ -954,7 +954,7 @@ static int canonicalize_abs(char *path)
  * already honors '.'/'..') walks the right tree. Same return contract as
  * strncpy_from_user: the resulting length on success, or a negative errno (a
  * join that overruns the buffer is -ENAMETOOLONG). The "fb"/"mouse" device
- * names resolve correctly only from cwd "/", which has because programs
+ * names resolve correctly only from cwd "/", which is the case because programs
  * open them at startup.
  */
 static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
@@ -3501,9 +3501,10 @@ static int32_t sys_fstatat64(isr_params_t *params)
 /**
  * access core: does the path exist and grant the requested mode?
  *
- * There is no real uid/credential model, so R/W/X are checked against the
- * object's mode bits (which is what makes /proc/<pid>/stat reject W_OK while
- * granting F_OK/R_OK). `name` is absolute with the leading '/' stripped.
+ * R/W/X are checked against the object's mode bits by the caller's REAL ids
+ * (the credential model access(2) uniquely uses), which is what makes
+ * /proc/<pid>/stat reject W_OK while granting F_OK/R_OK. `name` is absolute with
+ * the leading '/' stripped.
  */
 static int32_t do_access(const char *name, int mode)
 {

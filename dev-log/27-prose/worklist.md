@@ -167,10 +167,10 @@ The root `Makefile` is a third comments.
 `rach2/sys/syscall.c` is ten times the next file. It is read in ranges so an
 entry is a real unit of work; read each range whole, including its code.
 
-* [ ] `rach2/sys/syscall.c` lines 1-900
-* [ ] `rach2/sys/syscall.c` lines 901-1800
-* [ ] `rach2/sys/syscall.c` lines 1801-2700
-* [ ] `rach2/sys/syscall.c` lines 2701-3600
+* [x] `rach2/sys/syscall.c` lines 1-900
+* [x] `rach2/sys/syscall.c` lines 901-1800
+* [x] `rach2/sys/syscall.c` lines 1801-2700
+* [x] `rach2/sys/syscall.c` lines 2701-3600
 * [ ] `rach2/sys/syscall.c` lines 3601-4500
 * [ ] `rach2/sys/syscall.c` lines 4501-5400
 * [ ] `rach2/sys/syscall.c` lines 5401-6300

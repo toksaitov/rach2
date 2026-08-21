@@ -100,6 +100,16 @@ findings up to where it stopped.
   "First 32 interrupt handlers" comment above it correctly counts isr0-isr31.
   Corrected the IRQ count to 16.
 
+* `rach2/sys/syscall.c` (copy_path_cwd doc): a comment read "resolve correctly
+  only from cwd `/`, which has because programs open them at startup" -- "which
+  has" is a garbled clause missing a word. Reworded to "which is the case
+  because programs open them at startup".
+* `rach2/sys/syscall.c` (do_access doc): the comment claimed "There is no real
+  uid/credential model, so R/W/X are checked against the object's mode bits" --
+  stale since the multi-user milestone. The code below it judges access(2) by
+  the caller's REAL ids (`cred_access_bits(..., 1)`), which its own later comment
+  states. Reworded to describe the real credential model.
+
 ## Cross-checks to settle against code later in set one
 
 These are numeric or path claims in documents that read plausibly but can only
