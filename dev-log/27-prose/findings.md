@@ -354,7 +354,12 @@ A further run read clean: catfile, devtest, synthfs_hosttest, ptyprobe,
 dup2test, diskcmd_hosttest, budgetmusl, pathcanon, kstd_hosttest, sudoprobe,
 touchtest, wait_queue_hosttest, trapprobe, cowprobe, sigmusl, ofdmusl,
 frame_hosttest, forkleak, pollmusl, ttymusl, block_hosttest, usercopyfault,
-forkro, rngprobe, stattest, lstest, dirgrow.
+forkro, rngprobe, stattest, lstest, dirgrow, tcpsendrecv, mallocqsort, winprobe,
+pipe_ring_hosttest, sigprobe, dnstest, auxvprobe, devprobe, stressprobe,
+ptymusl. (winprobe's `PCWIN_BASE == 0xD0000000` was checked against the kernel
+header, which relocated the window there when the machine became its own build
+host; stressprobe's `path_of` handles three digits, so its "N < 1000" is right,
+unlike blockprobe's stale bound.)
 
 Many test files read clean, prose and code alike accurate to what they
 exercise: bootprobe, loginmusl, stampmusl, n_tty_hosttest, packetprobe,
