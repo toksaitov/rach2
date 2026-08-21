@@ -255,8 +255,8 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
  * The whole request is judged before the first sector goes down: a write that
  * starts at or crosses the end writes nothing, because these windows are fixed
  * in size and a half-written boot loader or kernel slot helps nobody. The range
- * arithmetic subtracts, not adds so a count near the 32-bit edge cannot
- * wrap past the check.
+ * arithmetic subtracts instead of adding, so a count near the 32-bit edge
+ * cannot wrap past the check.
  *
  * A short return divides the request into three parts, and only the first is a
  * guarantee. The sectors it counts are written. The batch that failed begins at
@@ -731,8 +731,9 @@ int devfs_open(const char *name, int flags)
      * unconditionally the console. A job-control shell over a pty (dropbear's
      * busybox ash) opens /dev/tty to read/set the foreground process group; it
      * must get its pty, or its setjobctl loop never sees itself as foreground
-     * and stops on SIGTTIN. The console owns the session whose leader holds
-     * console_tty.sid; otherwise a pty slave owns the caller's session;
+     * and stops on SIGTTIN. The console owns the session
+     * identified by console_tty.sid; otherwise a pty slave owns the
+     * caller's session;
      * otherwise the caller has no ctty (-ENXIO, which is also what makes
      * dropbear's post-setsid /dev/tty probe come back empty as it expects).
      * /dev/console (dev->ops==NULL too) is unaffected. */

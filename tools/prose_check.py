@@ -97,6 +97,11 @@ BANNED = (
 WATCH = (
     "carries", "holds", "rather than", "which is", "not a", "honest",
     "the point", "in practice", "worth", "note that",
+    # The forms milestone 26 recast `rather than` INTO. They are watched for
+    # the obvious reason: a cure that concentrates in one phrase is the same
+    # fault wearing different words, and the first measurement of this rewrite
+    # found `, not` at six times the upstream rate.
+    ", not", "instead of",
 )
 
 # This file states the rule, so it must be able to name what it bans.
@@ -418,7 +423,11 @@ BASELINE = os.path.join(TOP, "tools", "prose_baseline.txt")
 
 
 def cmd_baseline(argv):
-    """Record, or check, where the watched phrases stand.
+    """Print where the watched phrases stand, or write that down.
+
+    Without `--write` this compares against the committed record and prints the
+    change, so the file is worth something between regenerations; with it, the
+    file is replaced.
 
     This is a record and not a limit. Milestone 26 brought `carries` from 35
     times the upstream rate to none, `holds` from 17 to 4 and `rather than` from
@@ -442,7 +451,29 @@ def cmd_baseline(argv):
         open(BASELINE, "w").write("\n".join(lines) + "\n")
         print("prose_check: wrote %s" % rel(BASELINE))
         return 0
-    print("\n".join(lines))
+
+    if not os.path.exists(BASELINE):
+        print("\n".join(lines))
+        return 0
+    was = {}
+    for l in open(BASELINE):
+        if l.startswith("#") or not l.strip():
+            continue
+        f = l.split()
+        was[f[0]] = [int(x) for x in f[1:]]
+    print("%-10s %-14s %8s %8s %8s" % ("population", "phrase", "then", "now",
+                                       "change"))
+    for l in lines[5:]:
+        f = l.split()
+        pop, now = f[0], [int(x) for x in f[1:]]
+        then = was.get(pop)
+        if then is None:
+            continue
+        for i, name in enumerate(["words"] + list(WATCH)):
+            if i < len(now) and i < len(then) and now[i] != then[i]:
+                print("%-10s %-14s %8d %8d %+8d"
+                      % (pop, name, then[i], now[i], now[i] - then[i]))
+    print("prose_check: compared against %s" % rel(BASELINE))
     return 0
 
 

@@ -38,12 +38,12 @@
 /**
  * The policy string built into the artifact, for `tools/check_recovery.py`.
  *
- * This file holds no decision of its own. Whether the whole-disk write exists
+ * This file makes no decision of its own. Whether the whole-disk write exists
  * is settled by `#ifdef RACH2_RECOVERY` where that handler is written, in
  * `sys/fs/devfs.c`, because the choice is which function body to compile and
  * not a value to test at run time. What lives here is the string that lets the
  * choice be read back off a built kernel, and it is a second conditional on the
- * same macro, not the same one, which is why the checker catches a
+ * same macro, which is why the checker catches a
  * mis-built artifact and not a tampered one.
  */
 extern const char recovery_policy_banner[];

@@ -16,7 +16,6 @@
 #      and on any files named as arguments; advisory across the legacy tree
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC)
-#   8. the text-style check (no non-ASCII, no faked em-dashes, no `-` bullets)
 #   9. the probe runner's scoring rule (tools/runtests.py --selftest)
 #  10. the set-id manifest sweep (tools/check_setid.py)
 #  11. image reproducibility (tools/check_repro.py): one tree, one image
