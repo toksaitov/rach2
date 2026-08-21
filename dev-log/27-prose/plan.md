@@ -2,11 +2,11 @@
 
 ## The goal
 
-One person reads every document and every comment this project owns, judges it against the code it describes, and fixes what is wrong or badly written. Milestone 26 built the checks a script can make and found that they reach only part of the way: a machine can see a banned word and an over-wide line, and it cannot see a sentence that is well formed and false. Eight such sentences were found by hand in six documents at the end of that milestone, including a fresh-machine setup sequence that did not work. There are 511 files.
+One person reads every document and every comment this project owns, judges it against the code it describes, and fixes what is wrong or badly written. Milestone 26 built the checks a script can make and found that they reach only part of the way: a machine can see a banned word and an over-wide line, and it cannot see a sentence that is well formed and false. Eight such sentences were found by hand in six documents at the end of that milestone, including a fresh-machine setup sequence that did not work. There are 602 entries.
 
 ## How this milestone is run, which matters more than usual
 
-`worklist.md` lists every file, in order, with a box beside it. The order is by reading value, so an interrupted run leaves the useful part done.
+`worklist.md` lists every entry, in order, with a box beside it. It is built from `git ls-files`, so it is what this project owns: the Readmes and build scripts under `vendor/` are ours and are on it, and so are the seven Makefiles, the root one being a third comments. The order is by reading value, so an interrupted run leaves the useful part done.
 
 Work one entry at a time. Read the file whole, including the code the comments sit on. Fix what is wrong. Then mark the entry `[x]`, and only then start the next one.
 
