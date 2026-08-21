@@ -7,7 +7,7 @@
 /*
  * The copy-from/to-user contract. These helpers range-check a user pointer,
  * fault in any not-yet-present user page, and copy, so that a kernel touch of
- * an unmapped user address becomes -EFAULT in one place rather than a panic
+ * an unmapped user address becomes -EFAULT in one place, not a panic
  * from a raw dereference scattered across every syscall. User pointers are
  * annotated __user (see lib/kuser.h) so a sparse pass proves every access goes
  * through these helpers.

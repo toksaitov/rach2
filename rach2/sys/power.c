@@ -4,7 +4,7 @@
  * The kernel knew one way to stop before this file: a single `cli; hlt` in the
  * debug shell's halt command, which an NMI or an SMI resumes straight into
  * whatever follows. A stop has to be a loop, and a machine that can be asked
- * to power off should be asked rather than parked.
+ * to power off should be asked, not parked.
  *
  * Neither the power-off nor the reset is synchronous. An `out` has no
  * completion signal and the platform acts in its own time, so control returning
@@ -63,7 +63,7 @@
 #define KBC_INPUT_FULL   0x02
 #define KBC_PULSE_RESET  0xFE
 
-/* Between reset attempts, rather than after the last one. A reset that is
+/* Between reset attempts, not after the last one. A reset that is
  * going to happen happens within milliseconds, so waiting the full settle
  * three times over would only delay the fallback. */
 #define POWER_RESET_SPINS 2000000UL
@@ -112,7 +112,7 @@ static void power_reset_settle(void)
  * Ask a PIIX4 to remove power. Returns only if the machine is still running.
  *
  * This is QEMU's power-off and not a general one, and the difference is worth
- * stating rather than implying. The three checks below establish where the PM
+ * stating instead of implying. The three checks below establish where the PM
  * block is; they do not establish that sleep type 0 means soft-off, which on
  * real hardware is a value firmware publishes in the ACPI tables this kernel
  * does not parse. On QEMU's PIIX4 model the write below powers the machine off;
@@ -121,7 +121,7 @@ static void power_reset_settle(void)
  * that the fallback cannot catch. Reading S5 properly needs an AML interpreter,
  * which is a milestone of its own.
  *
- * The PM block's base is read out of configuration space rather than assumed,
+ * The PM block's base is read out of configuration space, not assumed,
  * because this kernel also boots real hardware from a GRUB disk and the port
  * that means power-off on a PIIX4 means something else, or nothing, elsewhere.
  * Three things are checked and each rules out a different way of being wrong:
@@ -145,7 +145,7 @@ static void power_acpi_off(void)
         const board_profile_t *p = board_current();
 
         /* The token stays exactly what it was: tools/shutdown_test.sh watches
-         * for it, so the board's name goes on its own line rather than into
+         * for it, so the board's name goes on its own line, not into
          * the middle of a string another program reads. */
         serial_printf("poweroff: board %s\n", board_name());
         serial_printf("poweroff: powering off\n");
@@ -198,7 +198,7 @@ static int kbc_ready(void)
 /**
  * Ask the machine to reset, three ways. Returns only if it is still running.
  *
- * All three ports are fixed rather than discovered, and the asymmetry with the
+ * All three ports are fixed, not discovered, and the asymmetry with the
  * power-off above is deliberate: that one derives an address, and a wrong
  * address would put a sleep word into a live device, so it refuses unless it
  * knows the address is right. Each of these writes a byte to a port that is a
@@ -229,7 +229,7 @@ static void power_reset(void)
 
     /* `rach2.resetskip=N` leaves out the first N mechanisms. It exists so the
      * later ones can be shown to work on their own, which is the only way to
-     * know the sequence is a real fallback chain rather than a first method
+     * know the sequence is a real fallback chain, not a first method
      * that happens to work everywhere it has been tried; `make reset-test`
      * boots each value. It is also the switch to reach for on a machine where
      * an earlier method makes things worse. */

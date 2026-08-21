@@ -58,12 +58,12 @@
  * to rewrite any region of a 250 GB drive, and a window that stopped at 4 GiB
  * could not reach most of one.
  *
- * The bound that remains is this window's own, chosen rather than forced: 2^32
+ * The bound that remains is this window's own, chosen, not forced: 2^32
  * sectors, which is 2 TiB, comfortably past any disk this project is aimed at
  * and past what the ATA driver's 28-bit LBA could reach anyway. AHCI programs a
  * 48-bit LBA and could go further; the ceiling is here so the window has one,
  * not because a driver imposes it. A larger disk is reported at its true size
- * beside the window's, so the two disagree visibly rather than one quietly
+ * beside the window's, so the two disagree visibly, not one quietly
  * lying. This is a COUNT, not the largest LBA: a count of 0xFFFFFFFF would
  * leave the last addressable sector unreachable.
  */
@@ -130,7 +130,7 @@ void diskinfo_record_identify(const char *driver, int port, const volatile uint1
 /**
  * Find a disk, read its first sector once, and publish `/dev/disk0`.
  *
- * Adopts an already-published `block0` rather than probing again, so a machine
+ * Adopts an already-published `block0` instead of probing again, so a machine
  * whose root is on the disk does not get its controller reset underneath a
  * mounted file system. `mounted` says whether that is the case, for the
  * report.

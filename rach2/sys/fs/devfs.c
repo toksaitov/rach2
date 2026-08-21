@@ -164,7 +164,7 @@ static uint8_t raw_batch[RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE] __attribute__((a
 /* How many driver calls the raw windows have made. Batching is otherwise
  * invisible from outside: a transfer of any size returns the same answer
  * whether it took one command or two hundred, and only the time differs. This
- * is reported by /proc/disk so a test can require the batching rather than the
+ * is reported by /proc/disk so a test can require the batching, not the
  * result, which is the difference between a 500 MiB reflash taking sixteen
  * thousand driver calls and a million. */
 static uint64_t raw_calls;
@@ -181,7 +181,7 @@ static struct raw_window bootpart;
  * window. GRUB's core image lives there, outside every partition, so updating
  * the boot loader needs a device and /dev/bootpart cannot be it: that one is
  * relative to partition 1 and the gap is before it. The range is a constant of
- * the layout rather than anything the partition table says, so a damaged table
+ * the layout instead of anything the partition table says, so a damaged table
  * cannot widen it. Sector 0 is deliberately outside: it has the partition
  * table, and a disk writes whole sectors.
  */
@@ -193,8 +193,8 @@ static struct raw_window grubcore;
  *
  * Offsets and counts must be whole sectors: a partial sector has no meaning to
  * a disk, and rounding one would either read a neighbour's bytes or write
- * them. The end is handled the way a regular file's is, with a short read
- * rather than an error, because a reader walking a window to its end is
+ * them. The end is handled the way a regular file's is, with a short read,
+ * not an error, because a reader walking a window to its end is
  * ordinary. Sectors are staged through a kernel buffer because the AHCI driver
  * programs the buffer's physical address into its PRDT and must never be given
  * a user pointer.
@@ -255,7 +255,7 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
  * The whole request is judged before the first sector goes down: a write that
  * starts at or crosses the end writes nothing, because these windows are fixed
  * in size and a half-written boot loader or kernel slot helps nobody. The range
- * arithmetic subtracts rather than adds so a count near the 32-bit edge cannot
+ * arithmetic subtracts, not adds so a count near the 32-bit edge cannot
  * wrap past the check.
  *
  * A short return divides the request into three parts, and only the first is a
@@ -271,7 +271,7 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
  * interface that can say how much of a command completed, which this one
  * cannot.
  *
- * The effective uid is checked here rather than trusted from the open. The
+ * The effective uid is checked here, not trusted from the open. The
  * mode stops a non-root caller at open time and nothing else: the generic
  * credential check returns success the moment the uid is zero, so a process
  * can open this device while privileged, drop privilege, and keep the
@@ -363,7 +363,7 @@ static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_
  * `/dev/bootpart` is a partition inside it and `/dev/grubcore` is the gap
  * before the first one, so a whole-disk write and a kernel install address the
  * same sectors by different names. One reservation covers all three, and the
- * second writer is refused rather than serialized. Readers are not counted: a
+ * second writer is refused, not serialized. Readers are not counted: a
  * read alongside a write returns a torn region, which is the reader's business,
  * and hashing a region after a write is what a repair does.
  */
@@ -384,7 +384,7 @@ static void raw_close(fd_entry_t *e)
  * Two of those running at once can each verify their own tail and then leave
  * the selector naming one image with the other one's length, and the machine
  * does not boot. Nothing recovers from that remotely, because GRUB is what
- * loads recovery, so the second open is refused rather than serialized. The
+ * loads recovery, so the second open is refused, not serialized. The
  * flag clears when the last descriptor for the open file closes, which process
  * exit does, so a tool that dies mid-install does not lock the device out.
  */
@@ -422,12 +422,12 @@ static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll
  * flag and that is a write. Writes belong to the recovery build alone: an
  * ordinary kernel compiles a handler that returns `-EPERM`, and the rescue
  * shell's own destructive command is compiled out of it too, so the refusal is
- * a property of the kernel rather than of one function. `sys/block/recovery.h`
+ * a property of the kernel, not of one function. `sys/block/recovery.h`
  * says why that is decided when the kernel is built and not when it boots.
  *
  * The mode is the weakest of the barriers and is not one at all for root, whose
  * credential check passes whatever the mode says. That is why the recovery
- * write handler asks the effective uid again at write time rather than trusting
+ * write handler asks the effective uid again at write time instead of trusting
  * the open.
  */
 static struct {
@@ -610,7 +610,7 @@ static const struct file_ops disk0_ops = {dev_disk0_read, dev_disk0_write, dev_p
  * always had is 0666, the Linux modes for these devices, and only the two raw
  * disk windows are root-only. `bootpart` and `disk0` are both dynamically
  * present, which is why enumeration goes through `devfs_dirent` and skips
- * absent entries rather than stopping at the first one: with two of them, a
+ * absent entries instead of stopping at the first one: with two of them, a
  * machine that has the second and not the first (the metal profile, which
  * never mounts) would otherwise have a device it could open and could not
  * list.

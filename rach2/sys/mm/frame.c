@@ -5,7 +5,7 @@
  *
  * Each entry's `size` field gives the bytes that follow it, so the next entry
  * is at `p + size + sizeof(size)`. The walk is defensive: it stops on a short
- * or non-advancing entry rather than read past the buffer or loop forever.
+ * or non-advancing entry, not read past the buffer or loop forever.
  * Returns 0 when `mmap_buf` is NULL or no AVAILABLE region is found.
  */
 uint64_t frame_top_available(const void *mmap_buf, uint32_t mmap_len)

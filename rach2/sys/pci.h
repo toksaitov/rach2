@@ -112,7 +112,7 @@ bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t 
  * Find a capability by id; its configuration-space offset, or 0 if absent.
  *
  * The walk is bounded and refuses an offset outside the capability region, so
- * a malformed list ends the search rather than the machine.
+ * a malformed list ends the search, not the machine.
  */
 uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id);
 

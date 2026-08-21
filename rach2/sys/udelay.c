@@ -3,7 +3,7 @@
  *
  * The device bring-up sequences in this kernel ask for waits in
  * microseconds and milliseconds, and every one of them is a hardware
- * requirement rather than a convenience: a wait that comes up short leaves a
+ * requirement, not a convenience: a wait that comes up short leaves a
  * chip half-configured in a way that shows on one machine and not another. A
  * loop counting instructions cannot promise a duration on a processor whose
  * speed is unknown, so this measures against the timer chip, which runs at
@@ -17,7 +17,7 @@
  * The mode matters to the arithmetic. `init_pit` writes control byte 0x36,
  * which selects mode 3, the square wave generator, and in mode 3 the counter
  * is decremented by TWO on each input clock: it sweeps the reload value down
- * to zero twice per interrupt period rather than once. So one count is half an
+ * to zero twice per interrupt period, not once. So one count is half an
  * input clock, and the conversion below uses twice the input frequency. An odd
  * reload (11931 here) makes the two half sweeps differ by one count, which is
  * under one part in ten thousand and is ignored.
@@ -28,7 +28,7 @@
 #include "pit.h"
 
 /* The 8254's input frequency. Where the counter wraps is `pit_reload`, which
- * init_pit publishes rather than this file computing the divisor a second
+ * init_pit publishes, not this file computing the divisor a second
  * time: two copies would agree today and disagree the day the tick rate
  * changes. */
 #define PIT_HZ 1193182u

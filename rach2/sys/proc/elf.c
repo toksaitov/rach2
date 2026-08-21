@@ -366,7 +366,7 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
          * the right protection, and track the top of the image (the heap base).
          * Every PT_LOAD must get a slot: an untracked segment would be loaded
          * present+writable with no VMA, so a read-only segment past the cap
-         * would be silently writable. Reject rather than under-protect: the
+         * would be silently writable. Reject, not under-protect: the
          * static binaries we target have only a few PT_LOADs. */
         {
             uint32_t seg_start = vaddr & ~(PAGE_SIZE - 1);

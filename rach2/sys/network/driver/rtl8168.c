@@ -151,7 +151,7 @@ static uint32_t r8168_rx_cur;  /* next descriptor to inspect */
  *
  * The reference checks the condition BEFORE the first delay and up to `n`
  * times in all; a handshake that is already complete costs nothing. Every
- * caller must treat a 0 return as a failed bring-up rather than continue,
+ * caller must treat a 0 return as a failed bring-up, not continue,
  * because the reference's own habit of ignoring the result relies on a later
  * interrupt-driven recovery this driver does not have.
  *
@@ -197,7 +197,7 @@ static int r8168_wait8(uint32_t reg, uint8_t mask, int high, uint32_t usec, uint
 /**
  * Read the ERI dword at `addr` (reference: rtl_eri_read).
  *
- * A timeout is reported rather than folded into the value: the reference
+ * A timeout is reported, not folded into the value: the reference
  * returns ~0 on timeout and its read-modify-write helpers feed that straight
  * back into the chip, which writes 0xffffffff into a configuration register.
  * This port refuses instead, and `*ok` says which happened.
@@ -401,8 +401,8 @@ static void r8168_irq_mask_and_ack(void)
  *
  * The two polls are the reference's rtl_wait_txrx_fifo_empty for this chip
  * version: the transmit FIFO reports empty in TxConfig, the receive side in
- * the MCU register. Both are bounded; a chip that never drains is reported
- * rather than waited on forever.
+ * the MCU register. Both are bounded; a chip that never drains is reported,
+ * not waited on forever.
  */
 static int r8168_enable_rxdvgate(void)
 {
@@ -619,7 +619,7 @@ static int r8168_ephy_init(void)
  * Twelve steps in the reference's order, and the order is the contract: the
  * packet filter is a clear THEN a set of one ERI bit, the two read-modify
  * writes of ERI 0x1b0 are separate because the reference writes the value
- * between them, and the receive gate is opened here rather than later because
+ * between them, and the receive gate is opened here, not later because
  * the receiver is enabled after this returns.
  */
 static int r8168_hw_start_8168g(void)
@@ -659,7 +659,7 @@ static int r8168_hw_start_8168g(void)
         return 0;
     }
     /* EEE on the MAC side (rtl8168_config_eee_mac). The reference configures
-     * EEE rather than disabling it, and this port follows: leaving it alone
+     * EEE instead of disabling it, and this port follows: leaving it alone
      * does not clear whatever state the previous operating system left. */
     io->w8(R8168_EEE_LED, (uint8_t)(io->r8(R8168_EEE_LED) & ~0x07));
     if (!r8168_eri_rmw(0x1b0, 0, 0x0003)) {
@@ -853,8 +853,8 @@ static int r8168_phy_init(void)
 
     /* The PHY-side energy-efficiency bit the reference applies for this chip
      * version, and the whole of its per-version PHY configuration apart from
-     * the firmware patch: page 0x0a43, register 0x11, bit 4. It is applied
-     * rather than skipped because the MAC side is configured too, and the
+     * the firmware patch: page 0x0a43, register 0x11, bit 4. It is applied,
+     * not skipped because the MAC side is configured too, and the
      * machine this runs on leaves EEE enabled under its previous operating
      * system: a PHY and a MAC that disagree about it is what makes a first
      * link flap. */
@@ -1076,7 +1076,7 @@ static void r8168_tx_reclaim(void)
  * burst outruns the chip would lose frames a 10 ms tick would have freed room
  * for, so this rings the doorbell and reclaims for a bounded interval first,
  * and counts a stall only if the oldest descriptor is still the chip's after
- * that. A wedged chip therefore costs one bounded wait per frame rather than a
+ * that. A wedged chip therefore costs one bounded wait per frame, not a
  * kernel that stops.
  *
  * The whole of it runs with interrupts disabled, as the RTL8139's transmit

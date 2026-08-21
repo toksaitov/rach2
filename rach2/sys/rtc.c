@@ -6,7 +6,7 @@
 #define RTC_EPOCH_YEAR         1970
 
 /*
- * The century is inferred rather than read. Register 0x32 has one on machines
+ * The century is inferred, not read. Register 0x32 has one on machines
  * whose firmware maintains it and has whatever was in that CMOS byte on
  * machines whose firmware does not, and an unrelated byte decodes to a
  * plausible-looking century as easily as to an absurd one. A two-digit year
@@ -113,7 +113,7 @@ int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
 /**
  * What a pair of samples is worth: use it, take another, or stop reading.
  *
- * The whole policy of the boot read is here rather than in the loop that reads,
+ * The whole policy of the boot read is here, not in the loop that reads,
  * so that it can be stated once and tested. Two rules, and the order of them is
  * the point. A clock that says it lost its contents STOPS the read, even though
  * the pair also disagrees, because taking another pair is exactly the mistake:
@@ -147,7 +147,7 @@ int rtc_pair_disposition(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
  * The order of operations is not free. The PM flag rides in the high bit of the
  * hour register, so it is taken off BEFORE the value is decoded; a BCD decode
  * of an hour with that bit still set reads as a nonsense digit and would be
- * rejected rather than corrected. A field outside its range fails the whole
+ * rejected, not corrected. A field outside its range fails the whole
  * sample: a clock that reports month 0 is not a clock to build a build on.
  *
  * @param raw the six registers and status B, as read.
@@ -278,7 +278,7 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
  * error is under a second, which no tolerance test would catch and a student
  * would never see until it mattered.
  *
- * It counts uptime SECONDS rather than ticks because the tick counter is 32
+ * It counts uptime SECONDS, not ticks because the tick counter is 32
  * bits and wraps after about 497 days, and a difference of ticks would jump
  * back by that whole cycle at the wrap. The sub-second part cannot wrap: it
  * only ever spans one second.
@@ -521,7 +521,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     }
 
     /* Three rollovers inside this loop is not a clock this code can read, so
-     * report the second without its fraction rather than an invented one. */
+     * report the second without its fraction, not an invented one. */
     rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, kernel_uptime_seconds, 0, seconds,
                          nanoseconds);
 }

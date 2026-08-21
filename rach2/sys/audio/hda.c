@@ -655,7 +655,7 @@ static void hda_sd_write8(int stream, uint32_t reg, uint8_t value)
  *
  * Stops the stream, asserts SRST and polls until the controller reflects it,
  * then deasserts and polls until it clears. Real hardware needs the poll on
- * each edge rather than a fixed delay. Returns false on either poll timeout.
+ * each edge, not a fixed delay. Returns false on either poll timeout.
  */
 static bool hda_stream_reset(int stream)
 {

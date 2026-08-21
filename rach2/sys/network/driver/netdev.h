@@ -13,7 +13,7 @@
  * one. So a driver is now a vtable and the layers above hold a pointer to it.
  *
  * The two drivers differ in how packets arrive, and the interface says so
- * rather than hiding it: the RTL8139 takes an interrupt and delivers from its
+ * instead of hiding it: the RTL8139 takes an interrupt and delivers from its
  * handler, so its `poll` is NULL; the RTL8168GU runs with its interrupts
  * masked and is driven from the timer tick, so its `poll` does the work. A
  * caller polls through `netdev_poll`, which does nothing for a device that
@@ -39,7 +39,7 @@
  * answered, `NETDEV_ABSENT` when the card is not in the machine, and
  * `NETDEV_FAILED` when the card IS there and could not be started; that last
  * distinction is what puts the real reason on the screen of a machine with no
- * network to report it over, and it stops the probe rather than let the next
+ * network to report it over, and it stops the probe, not let the next
  * driver configure a machine whose card already failed. On anything but
  * `NETDEV_UP`, `error` names the reason. `tx` sends one Ethernet frame
  * (destination MAC through payload, no FCS; the chip appends it). `poll` is

@@ -88,7 +88,7 @@ struct file_ops;
  * and widening the field every other subsystem uses to reach it would put
  * the whole file, procfs and terminal layer in reach of a change
  * that only the disk windows need. `raw_offset` belongs to those windows
- * alone; nothing else reads it, and it lives here rather than in the
+ * alone; nothing else reads it, and it lives here, not in the
  * descriptor so `dup` and `fork` keep sharing one offset the way POSIX says
  * they must.
  */

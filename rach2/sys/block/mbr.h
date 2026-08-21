@@ -43,7 +43,7 @@ int mbr_parse(const uint8_t *sector, struct mbr_part parts[MBR_PART_COUNT]);
  *
  * Everything `mbr_bootpart_ok` requires, and in addition a KRFFS entry that is
  * a different entry from entry 0 and disjoint from it. The containment and
- * overlap arithmetic subtracts rather than adds, so a crafted range near the
+ * overlap arithmetic subtracts, not adds, so a crafted range near the
  * 32-bit edge cannot wrap past a check.
  *
  * @return 0 (the accepted entry's index) or -1.
@@ -70,7 +70,7 @@ int mbr_bootpart_ok(const struct mbr_part parts[MBR_PART_COUNT], uint64_t disk_s
  * Whether every non-empty entry leaves the post-MBR gap alone.
  *
  * GRUB's core image lives in LBA 1 through 2047, outside every partition by
- * convention rather than by anything the table records. A table that puts a
+ * convention, not by anything the table records. A table that puts a
  * partition there describes a disk where the boot loader's sectors and a file
  * system's sectors are the same sectors, and a device published over the gap
  * would let a write to one destroy the other. This project's own test fixture

@@ -115,7 +115,7 @@ int block_probe(void)
  * Command counters. Batching is invisible from above: a request of any size
  * returns the same answer however many commands carried it, and only the time
  * differs. These make the difference measurable from userland through
- * /proc/disk, which is what lets a test require the batching rather than the
+ * /proc/disk, which is what lets a test require the batching, not the
  * result.
  */
 static uint64_t cmd_count;

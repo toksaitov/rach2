@@ -246,7 +246,7 @@ static uint32_t ms_deadline(int timeout_ms, int *has_deadline)
 /**
  * Validate a user timeval: seconds non-negative and tv_usec in [0, 1000000).
  *
- * select/poll reject anything else with -EINVAL rather than silently
+ * select/poll reject anything else with -EINVAL, not silently
  * clamping, and the in-range usec also keeps the conversions below free of
  * signed overflow. musl always passes normalized values; a raw int-0x80
  * caller might not.
@@ -267,7 +267,7 @@ static int ts_valid(const struct poll_timespec *ts)
  * Saturating: tv_sec is clamped so tv_sec*1000 cannot overflow the signed
  * result (INT_MAX ms is ~24 days, which for a select() timeout is
  * effectively forever), and a negative tv_sec degrades to a non-blocking
- * poll rather than an accidental infinite wait. A non-NULL timeval thus
+ * poll, not an accidental infinite wait. A non-NULL timeval thus
  * always yields a finite deadline; only a NULL one waits forever.
  */
 static int tv_to_ms(const struct poll_timeval *tv)

@@ -5,7 +5,7 @@
  * only what reaches the screen. These are the numbers that decide whether a
  * boot is worth continuing: the layout the bootloader chose (which the kernel
  * has just judged), what memory is left after the reservations, and the
- * identity of the Ethernet controller, read from the chip rather than assumed
+ * identity of the Ethernet controller, read from the chip, not assumed
  * from its PCI device id, because Realtek ships one id across a family whose
  * members need different bring-up sequences.
  *
@@ -113,7 +113,7 @@ static void diag_eth_probe(struct diag_eth *out)
 
     /* The first memory BAR by index, which is what the reference driver takes.
      * A 64-bit BAR's upper half occupies the next slot and has address bits,
-     * not a window of its own, so it is stepped over rather than considered. */
+     * not a window of its own, so it is stepped over, not considered. */
     for (i = 0; i < 6; i++) {
         if (!pci_bar_is_memory(dev.bar[i])) {
             continue;
@@ -233,7 +233,7 @@ static void diag_summary(void)
  *
  * So under `rach2.diag` the report is printed a second time at the end of the
  * boot, where the keyboard is up and nothing further will scroll, and the
- * machine waits. The wait is a polled read of the 8042 rather than anything
+ * machine waits. The wait is a polled read of the 8042 instead of anything
  * interrupt-driven, so it holds whatever else is or is not working. A byte on
  * the serial line releases it too, since that is how this project's harnesses
  * type at a machine.

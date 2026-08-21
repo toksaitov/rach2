@@ -183,7 +183,7 @@ static uint32_t loop_head, loop_tail;
  * gateway otherwise, then resolves the next hop's MAC by ARP. On an ARP miss
  * it sends a request and drops this packet; the caller retries once the cache
  * is warm. The header is emitted with DF set and no fragmentation, so payloads
- * over the 1500-byte MTU are dropped rather than split.
+ * over the 1500-byte MTU are dropped, not split.
  */
 void ip_tx(uint32_t dst_ip, uint8_t proto,
            const uint8_t *payload, uint16_t plen)

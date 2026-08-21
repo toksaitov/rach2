@@ -4,7 +4,7 @@ The pipe is the original Unix inter-process channel and the thing that makes a s
 
 ## The end-of-stream contract
 
-This is what lets a pipeline terminate cleanly rather than hang:
+This is what lets a pipeline terminate cleanly, not hang:
 
 * `read()` returns `0` (EOF) once every write-end descriptor is closed and the buffer has drained, so the reader learns the producer is done.
 * `write()` raises `SIGPIPE` and returns `-EPIPE` once every read-end descriptor is closed, since there is no longer anyone to read the bytes, so the producer is told to stop (the default `SIGPIPE` action terminates it, which is why `yes | head` exits instead of spinning forever).

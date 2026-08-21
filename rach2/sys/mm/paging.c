@@ -572,8 +572,8 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
         /* Get or create the page table. A new kernel PDE installed after the
          * first fork would be invisible to every already-cloned address space,
          * so refuse it: every real device mapping runs at boot, before any
-         * fork, and a runtime probe of a not-yet-mapped band must fail loudly
-         * rather than install a PDE only `_kernel_dir` can see. */
+         * fork, and a runtime probe of a not-yet-mapped band must fail loudly,
+         * not install a PDE only `_kernel_dir` can see. */
         table = _kernel_dir->logical_page_tables[table_index];
         if (!table) {
             if (_kernel_pdes_cloned) {

@@ -173,14 +173,14 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
  * for the /proc kinds. A path under neither tree, including the root,
  * classifies as VNODE_KRFFS so the caller falls through to the real file
  * system; a well-formed prefix with an unknown leaf classifies as VNODE_ENOENT
- * so the caller reports the miss rather than leaking to KRFFS. `/proc/self`
+ * so the caller reports the miss instead of leaking to KRFFS. `/proc/self`
  * maps to SYNTH_PID_SELF. Returns the kind, also stored in `vp->kind`.
  *
  * The path must be lexically normalized: a `.` or `..` component is not
  * collapsed here (only the KRFFS resolver does that), so a dot path
  * transiting a synthetic prefix (for example `proc/../realfile`)
  * deliberately classifies as VNODE_ENOENT. This fails closed, denying a
- * legitimate spelling rather than reaching the wrong object; real programs
+ * legitimate spelling instead of reaching the wrong object; real programs
  * reach /dev and /proc by absolute paths. The host test locks the dot and
  * the pid-bound cases.
  */

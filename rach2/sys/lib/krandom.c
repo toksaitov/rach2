@@ -13,7 +13,7 @@
  *
  * The state is initialized with the ChaCha constants and a non-zero default
  * key, so even a draw before krandom_seed() yields a non-zero
- * (deterministic) stream rather than an all-zero block.
+ * (deterministic) stream, not an all-zero block.
  */
 static uint32_t cc_state[16] = {
     0x61707865u, 0x3320646eu, 0x79622d32u, 0x6b206574u, /* "expand 32-byte k" */

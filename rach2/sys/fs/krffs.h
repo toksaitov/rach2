@@ -41,7 +41,7 @@
  * every route that stops the machine on purpose: the debug shell's `halt`,
  * `poweroff` and `reboot`, and `reboot(2)`, which the userland `halt`,
  * `poweroff` and `reboot` reach, bare through init or forced with `-f`. What
- * leaves it set is a boot that was killed rather than stopped, or one whose
+ * leaves it set is a boot that was killed, not stopped, or one whose
  * flush failed, which fsck reads as a mount that may not have flushed. `sync`
  * flushes the cache but does not clear it. The clear is conditional on the
  * data: the shutdown path flushes the whole cache first and touches this bit
@@ -59,7 +59,7 @@
  * them away again (the syscall layer owns both rules, since neither is the file
  * system's business). KRFFS_MODE_SUID shares the dirty flag's position by
  * design: the dirty flag lives only on the root node, which every permission
- * answer and every set-id clear excludes by node identity rather than by
+ * answer and every set-id clear excludes by node identity, not by
  * reading its mode, so the two can never be confused. The sticky bit is
  * enforced on a directory: with it set, only an entry's owner, the directory's
  * owner, or a privileged caller may remove or rename that entry away. */

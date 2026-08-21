@@ -4,7 +4,7 @@
  * The table below is short and every row is a claim about a real chipset. Two
  * of the three can be met on this desk; the third is the laptop's, and its row
  * is the one that has never been executed, which is why the judgements are
- * pure functions with a host test rather than code that is only read.
+ * pure functions with a host test, not code that is only read.
  */
 
 #include "board.h"
@@ -25,7 +25,7 @@
  * PCH-shaped power controller available here, so it is what makes the
  * derivation, the decode check, the SCI selection read and the enable
  * handshake provable in QEMU at all (`-machine q35`). Its sleep type is
- * QEMU's convention rather than the ICH9 datasheet's.
+ * QEMU's convention, not the ICH9 datasheet's.
  *
  * The two Lynx Point rows are the laptop's family, split because the mobile
  * parts are a different device-id range from the desktop ones and the first
@@ -197,7 +197,7 @@ int board_init(const char **why)
     board_port = 0;
     board_sci = -1;
 
-    /* `rach2.board=<name>` names a profile rather than probing for one, for a
+    /* `rach2.board=<name>` names a profile instead of probing for one, for a
      * machine whose identity this table does not yet know. It still refuses if
      * the named chipset's own registers do not check out. */
     forced = 0;
@@ -229,7 +229,7 @@ int board_init(const char **why)
         }
 
         /* From here the chipset IS this profile's, so a failed check is a
-         * refusal that gets reported rather than a silent move to the next
+         * refusal that gets reported, not a silent move to the next
          * row: something is wrong with a machine this code understands. */
         decode = pci_read_config8(p->bus, p->device, p->function, p->decode_reg);
         if (!board_pm_decoding(p, decode)) {
@@ -271,7 +271,7 @@ int board_init(const char **why)
          * here handles it: with ACPI enabled, a power button or a thermal
          * event raises a level-triggered interrupt that no handler clears, and
          * the machine then takes it forever the moment interrupts are enabled.
-         * The line comes from the chipset's own selection rather than being
+         * The line comes from the chipset's own selection instead of being
          * assumed to be 9, because masking a line the firmware put a device on
          * would silently take that device away.
          */

@@ -25,7 +25,7 @@ A CPUID max-leaf guard precedes the leaf-7 query so a CPU that does not implemen
 
 ## Trusted entropy and fail-closed
 
-The CSPRNG is trusted only when it was seeded from a real hardware source (`RDSEED` or `RDRAND`); `krandom_is_trusted()` records that. `getrandom` (without `GRND_INSECURE`) and reads of `/dev/random` and `/dev/urandom` serve the stream only when it is trusted; otherwise they fail closed with `-EIO` rather than hand out keys backed by timing jitter alone. The best-effort consumers stay served either way: `AT_RANDOM` (a stack canary only needs to be unpredictable) and `getrandom(..., GRND_INSECURE)`. This is why the run scripts default to `-cpu max`: it exposes `RDRAND`, so the CSPRNG is trusted and dropbear can generate a host key.
+The CSPRNG is trusted only when it was seeded from a real hardware source (`RDSEED` or `RDRAND`); `krandom_is_trusted()` records that. `getrandom` (without `GRND_INSECURE`) and reads of `/dev/random` and `/dev/urandom` serve the stream only when it is trusted; otherwise they fail closed with `-EIO`, not hand out keys backed by timing jitter alone. The best-effort consumers stay served either way: `AT_RANDOM` (a stack canary only needs to be unpredictable) and `getrandom(..., GRND_INSECURE)`. This is why the run scripts default to `-cpu max`: it exposes `RDRAND`, so the CSPRNG is trusted and dropbear can generate a host key.
 
 ## Probe
 

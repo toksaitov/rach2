@@ -373,7 +373,7 @@ bool pci_bar_is_64bit(uint32_t bar)
  * The list is read only when the status register says one exists, and the
  * walk is bounded twice over: a fixed hop count, and a refusal of any offset
  * outside the capability region. A device that answers its own pointer with
- * garbage therefore ends the search rather than the machine.
+ * garbage therefore ends the search, not the machine.
  *
  * @return the capability's configuration-space offset, or 0 if it is absent.
  */

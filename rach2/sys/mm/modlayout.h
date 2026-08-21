@@ -54,7 +54,7 @@ const char *modlayout_reason(int code);
  * range, as `reason: module N spans 0xSTART - 0xEND`.
  *
  * The kernel's panic screen takes a string and the target laptop has no serial
- * port, so the detail has to travel INTO the panic rather than be printed
+ * port, so the detail has to travel INTO the panic, not be printed
  * before it: `k_panic` clears the display. The formatting is self-contained
  * for the same reason the check is, so the host test can assert the exact
  * text. The result is always NUL-terminated and truncated to fit.

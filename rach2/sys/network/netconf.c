@@ -4,9 +4,9 @@
  *
  * The parsing is stricter than an address parser usually is, because the only
  * thing worse than refusing to configure is configuring something other than
- * what the operator wrote. `010.0.0.1` is rejected rather than read as 10 or
- * as 8; a quartet over 255 is rejected rather than truncated; a trailing
- * character is rejected rather than ignored. Every refusal keeps the machine
+ * what the operator wrote. `010.0.0.1` is rejected, not read as 10 or
+ * as 8; a quartet over 255 is rejected, not truncated; a trailing
+ * character is rejected, not ignored. Every refusal keeps the machine
  * on the network it already had and says so on the boot line.
  */
 
@@ -165,7 +165,7 @@ int netconf_gateway_ok(uint32_t gw, uint32_t ip, uint32_t mask)
 }
 
 /*
- * Whether the mask in force was derived rather than given.
+ * Whether the mask in force was derived, not given.
  *
  * `ifconfig` sets an address and then a mask, two calls, and between them the
  * machine has the classful mask the address implies. That pair is not judged,
@@ -393,7 +393,7 @@ int netconf_set_address(uint32_t ip, uint32_t mask)
         /* The mask is the caller's next call. The classful one its first byte
            implies stands in, and if the address is a host under it the machine
            can work at once. If it is not, it is a host only under a wider mask
-           and waits for it rather than going into force as a network address. */
+           and waits for it instead of going into force as a network address. */
         uint32_t derived = classful_mask(ip);
 
         /* Unless nothing is changing. A DHCP client runs the same `ifconfig`

@@ -74,7 +74,7 @@ int rtl8139_init(void)
         return NETDEV_ABSENT;
     }
 
-    /* Reject an unrouted interrupt line rather than register a bogus vector. */
+    /* Reject an unrouted interrupt line, not register a bogus vector. */
     if (rtl_pci.irq == 0xFF) {
         rtl_err = "RTL8139 has no usable IRQ line";
         return NETDEV_FAILED;
@@ -189,7 +189,7 @@ const struct netdev_ops rtl8139_netdev = {
  * IRQ-context senders, so the descriptor write runs with interrupts disabled
  * and the prior interrupt flag restored on return. In normal operation IF is
  * already 0 here (see the transmit concurrency note in net.h); the guard makes
- * that requirement explicit rather than trusting every caller to honor it.
+ * that requirement explicit instead of trusting every caller to honor it.
  *
  * QEMU completes each transmit synchronously when the TSD is written, so a
  * descriptor is always free again by the time the four-slot rotation returns to
@@ -248,7 +248,7 @@ static void rtl8139_rx_reset(void)
  * Reads each 4-byte ring header, validates its status and length before
  * trusting the length, hands the frame (minus its 4-byte CRC) to ethernet_rx,
  * and advances the read pointer and CAPR. A bad header means an error packet or
- * a desynced ring, so the receiver is resynced rather than advanced by garbage.
+ * a desynced ring, so the receiver is resynced, not advanced by garbage.
  */
 static void rtl8139_rx(void)
 {

@@ -70,7 +70,7 @@ static block_device_t ata_device;
  * The one place a command leaves this driver, which is what makes the build's
  * disk policy enforceable: a kernel built read-only refuses here, whatever the
  * caller believed it was doing, and says so once so a refused boot has a
- * reason on the screen rather than an unexplained error code.
+ * reason on the screen, not an unexplained error code.
  */
 static int ata_command(uint8_t command)
 {
@@ -196,7 +196,7 @@ static void ata_program_lba(uint64_t lba, uint32_t count)
  *
  * Issues READ SECTORS for up to 256 sectors per command and copies each sector
  * only after its own BSY/DRQ handshake, so a wedged or short transfer returns
- * `-EIO` rather than corrupting `buffer`. Returns 0 on success.
+ * `-EIO` instead of corrupting `buffer`. Returns 0 on success.
  */
 static int ata_read(
                block_device_t *device, uint64_t lba, uint32_t count,
@@ -246,7 +246,7 @@ static int ata_read(
  * Mirrors `ata_read` per chunk, then issues FLUSH CACHE so the device reports
  * its cached writes complete before a later fsync may treat them as durable.
  * The post-write and post-flush waits check ERR/DF, so a media or cache error
- * surfaces as `-EIO` rather than a false success. Returns 0 on success.
+ * surfaces as `-EIO`, not a false success. Returns 0 on success.
  */
 static int ata_write(
                block_device_t *device, uint64_t lba, uint32_t count,

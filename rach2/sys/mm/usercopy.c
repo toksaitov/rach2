@@ -47,7 +47,7 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
         return -EFAULT;
     }
     /* Back any demand-paged pages in the range before the kernel reads them, so
-     * a not-yet-present (but valid) user page faults in here rather than from
+     * a not-yet-present (but valid) user page faults in here, not from
      * the raw k_memcpy below; a page outside every VMA returns -EFAULT, not a
      * panic. */
     if (!vm_prefault_range(addr, n, 0))

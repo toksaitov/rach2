@@ -59,7 +59,7 @@ struct tcb {
      * for an incoming SYN and no descriptor owns its socket until `accept`
      * hands one over. An active open reaches SYN_RCVD too, through the
      * simultaneous-open arm, and there the socket is the caller's already: it
-     * must be woken as a completed `connect` rather than queued on a listener
+     * must be woken as a completed `connect`, not queued on a listener
      * that does not exist, and never unref'd on a reset, since the descriptor
      * still has it. */
     int         passive;

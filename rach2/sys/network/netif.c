@@ -189,7 +189,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         uint16_t flags = (uint16_t)((uint16_t)ifr[IFREQ_UNION] |
                                     ((uint16_t)ifr[IFREQ_UNION + 1] << 8));
 
-        /* Returns here rather than falling through to the writeback: this
+        /* Returns here instead of falling through to the writeback: this
            request only reads its argument, and a copy back that failed would
            report a refusal for a change already made. */
         netif_up = (flags & IFF_UP) ? 1 : 0;
@@ -206,7 +206,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
     case SIOCSIFBRDADDR:
         /* The broadcast address of a subnet is the subnet's, not a choice, so
          * this accepts the one this machine already derives and refuses any
-         * other rather than storing a second answer to the same question. */
+         * other instead of storing a second answer to the same question. */
         if (be32(ifr + IFREQ_SA_ADDR) != netconf_broadcast()) {
             return -EINVAL;
         }
@@ -227,8 +227,8 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
  * This stack has one route it can hold, the default gateway, and it reaches
  * everything else by being on its subnet. So a default route sets or clears
  * the gateway; a route to the subnet this machine is already on is accepted
- * and does nothing, because it is already true; anything else is refused
- * rather than accepted and forgotten.
+ * and does nothing, because it is already true; anything else is refused,
+ * not accepted and forgotten.
  */
 static int32_t route_ioctl(uint32_t request, uint32_t arg)
 {

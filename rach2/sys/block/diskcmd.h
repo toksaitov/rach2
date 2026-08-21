@@ -11,7 +11,7 @@
  * after a full backup, the rule is that nothing this kernel does may write that
  * disk. A rule of that weight cannot rest on remembering not to call the write
  * path, so it is enforced where commands leave the drivers and it is decided at
- * build time rather than at boot: a kernel built read-only has no way to be
+ * build time, not at boot: a kernel built read-only has no way to be
  * asked nicely, and a command line edited at the GRUB prompt cannot undo it.
  *
  * It is an allowlist and not a list of forbidden commands. A list of what is
@@ -56,7 +56,7 @@ int diskcmd_policy(void);
 int diskcmd_allowed(uint8_t command);
 
 /**
- * As `diskcmd_allowed`, for a policy named rather than compiled in.
+ * As `diskcmd_allowed`, for a policy named, not compiled in.
  *
  * The table lives here so that one build can be held to both policies: the
  * kernel picks its policy at compile time, and a host test that could only

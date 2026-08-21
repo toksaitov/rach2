@@ -424,7 +424,7 @@ void outb(uint16_t port, uint8_t val)
  *
  * Writing the status to I/O port 0xF4 makes the test harness read a real exit
  * code instead of scraping the serial log: a hang or triple-fault then surfaces
- * as a wall-clock timeout rather than a missing marker. Only ring 0 may write
+ * as a wall-clock timeout, not a missing marker. Only ring 0 may write
  * this port, so a ring-3 probe cannot fake it. QEMU exits with the value
  * `((status << 1) | 1)`, so an exit code of 1 means a status of 0.
  */

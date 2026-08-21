@@ -81,8 +81,8 @@ void devfs_grubcore_withdraw(void);
  *
  * Reported by `/proc/disk`, because batching is otherwise invisible from
  * outside: a transfer of any size returns the same answer whether it took one
- * driver command or two hundred. A test that wants to require the batching
- * rather than the result reads this before and after.
+ * driver command or two hundred. A test that wants to require the batching,
+ * not the result reads this before and after.
  */
 uint64_t devfs_raw_calls(void);
 
@@ -116,7 +116,7 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size);
  *
  * The window is `window_sectors` sectors, which is the disk's size clamped to
  * this window's chosen ceiling; `/proc/disk` prints both numbers so the clamp
- * is visible rather than silent.
+ * is visible, not silent.
  */
 void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors);
 
@@ -132,7 +132,7 @@ const char *devfs_fd_name(struct fd_entry *e);
 
 /*
  * Whether lseek on this device returns offset 0 (the mem devices
- * null/zero/full) rather than -ESPIPE. Returns 1 for a seek-to-zero device,
+ * null/zero/full), not -ESPIPE. Returns 1 for a seek-to-zero device,
  * 0 otherwise.
  */
 int devfs_lseek_zero(struct fd_entry *e);
@@ -144,7 +144,7 @@ int devfs_lseek_zero(struct fd_entry *e);
 /**
  * The `n`-th device that exists right now: its name and its stable inode.
  *
- * Absent entries are skipped rather than ending the walk, because two of them
+ * Absent entries are skipped instead of ending the walk, because two of them
  * are dynamic and a machine can have the later one without the earlier: the
  * metal profile never mounts, so it has `disk0` and no `bootpart`. The inode
  * is the registry index and not the listing position, so a device's identity

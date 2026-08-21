@@ -53,7 +53,7 @@ void packet_unbind(struct socket *sock);
  * Called from `ethernet_rx` with the frame's payload, before `ip_rx` judges
  * the destination address.
  *
- * Each socket has a queue rather than the one slot the rest of the datagram
+ * Each socket has a queue, not the one slot the rest of the datagram
  * path has, and the difference is the point of the socket. Everything the
  * machine receives arrives here, not just what is addressed to it, so on a
  * real network the reply a client is waiting for is followed by other

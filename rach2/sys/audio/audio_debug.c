@@ -79,7 +79,7 @@ static int audio_tokenize(char *buffer, char **argv, int max_args)
  *
  * The whole string must be digits; anything else (including an empty string or
  * a null `str` or `out`) fails and leaves `*out` unchanged. Overflow past 32
- * bits wraps rather than being rejected.
+ * bits wraps instead of being rejected.
  *
  * @return true on success, false on a malformed input.
  */

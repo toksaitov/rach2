@@ -20,7 +20,7 @@
 /* A descriptor that accepts the interface ioctls and nothing else. A DHCP
  * client opens one to ask this machine about itself (busybox's
  * `udhcp_read_interface`); this stack has no raw IP path, so every other
- * operation on it is refused rather than answered with silence. */
+ * operation on it is refused, not answered with silence. */
 #define SOCK_RAW             3
 #define AF_INET              2      /* IPv4 address family */
 #define MAX_SOCKETS          16    /* static pool size */
@@ -38,7 +38,7 @@ typedef struct socket {
     int      type;            /* SOCK_DGRAM, SOCK_STREAM or SOCK_RAW */
     /* AF_INET, or AF_PACKET for the tap above the Ethernet layer. Nearly every
      * path below is AF_INET's; the family is what the few that are not branch
-     * on, rather than a second socket pool. */
+     * on, not a second socket pool. */
     uint16_t family;
     uint16_t local_port;
 

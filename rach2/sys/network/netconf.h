@@ -15,7 +15,7 @@
  * With no options on the command line the machine keeps the full SLIRP tuple
  * it has always had, so every existing test boots into the same network it
  * did. With `rach2.ip=` given and `rach2.gateway=` absent, there is NO default
- * gateway at all, rather than the SLIRP one: 10.0.2.2 beside a real LAN
+ * gateway at all, not the SLIRP one: 10.0.2.2 beside a real LAN
  * address is a router that does not exist, and a stack that quietly kept it
  * would send every off-subnet packet into nothing. Off-subnet traffic is
  * refused instead, which is a diagnosable failure.
@@ -78,7 +78,7 @@ int netconf_gateway_ok(uint32_t gw, uint32_t ip, uint32_t mask);
  * Read `rach2.ip=` and `rach2.gateway=` and set the configuration.
  *
  * A gateway without an address is refused, since there is nothing to be on the
- * subnet of. Either option given twice is refused rather than resolved by a
+ * subnet of. Either option given twice is refused, not resolved by a
  * first-wins rule nobody would remember. On refusal the SLIRP tuple stays in
  * force and `*why` names what was wrong, for the boot line to print.
  *
@@ -109,7 +109,7 @@ int netconf_is_broadcast(uint32_t ip);
  * Changing the address is not just a number. Every ARP mapping was learned by
  * a machine at the old address and is dropped, and every TCP connection
  * recorded the address it was opened from: those are aborted, with `ENETRESET`
- * on their sockets, rather than left to send from an address this machine no
+ * on their sockets, not left to send from an address this machine no
  * longer has. A gateway that is no longer on the subnet is dropped too.
  *
  * @return 0, or a negative errno.

@@ -15,7 +15,7 @@ typedef char tls_gdt_selector_matches_asm[(GDT_TLS_SELECTOR == 0x33) ? 1 : -1];
  *
  * Checks the descriptor against the one TLS slot we model: a present, 32-bit,
  * writable data segment in GDT entry GDT_TLS_ENTRY. Anything we cannot
- * represent is rejected rather than silently misprogrammed.
+ * represent is rejected, not silently misprogrammed.
  *
  * musl's __set_thread_area passes entry_number = -1 (allocate) with flags =
  * 0x51 (seg_32bit | limit_in_pages | useable); an explicit GDT_TLS_ENTRY is

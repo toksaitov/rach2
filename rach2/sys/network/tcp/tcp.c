@@ -31,7 +31,7 @@
 #include "../../mm/heap.h"
 
 /*
- * TCB pool, allocated from kernel memory at init rather than living in BSS:
+ * TCB pool, allocated from kernel memory at init instead of living in BSS:
  * the rings make it large (tens of KB), and keeping it out of the kernel image
  * leaves room for the boot ramdisk module just past the kernel.
  */
@@ -100,7 +100,7 @@ static void tcb_init(struct tcb *tcb)
  *
  * Returns a free, initialized TCB, or NULL if none can be had. When every
  * slot is in use, the soonest-to-expire TIME_WAIT or FIN_WAIT_2 connection is
- * recycled rather than failing the new connection (see the reclaim note below).
+ * recycled instead of failing the new connection (see the reclaim note below).
  */
 struct tcb *tcb_alloc(void)
 {
@@ -222,7 +222,7 @@ static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
 /*
  * Transmit data from the send ring. Send as many segments as the advertised
  * and congestion windows allow (minus the bytes already in flight), so a
- * multi-segment response leaves in one burst rather than one segment per round
+ * multi-segment response leaves in one burst, not one segment per round
  * trip.
  */
 static void tcp_output(struct tcb *tcb)

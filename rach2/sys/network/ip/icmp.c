@@ -26,7 +26,7 @@
  * There is one in-flight request for the whole machine, which is the raw-socket
  * non-goal made visible: with a real SOCK_RAW each caller would own its own
  * socket. The slot is claimed under net_lock and released on every exit path,
- * and a second caller is refused with -EBUSY rather than queued, since a queue
+ * and a second caller is refused with -EBUSY, not queued, since a queue
  * needs a fairness rule to give a shell command a wait it cannot see.
  *
  * The first request on a cold ARP cache is dropped, so we retry a few times:

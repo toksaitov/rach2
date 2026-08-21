@@ -154,7 +154,7 @@ void fb_release_if_owner(uint32_t pid);
 
 /* Whether any open descriptor holds this KRFFS node. The debug shell asks
    before removing or renaming, since it goes below the syscall layer that owns the
-   rule that a held node is orphaned rather than freed. */
+   rule that a held node is orphaned, not freed. */
 struct krffs_node;
 int fs_node_is_held(const struct krffs_node *node);
 void fs_node_moved(const struct krffs_node *from, struct krffs_node *to);

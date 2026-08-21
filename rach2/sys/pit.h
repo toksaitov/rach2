@@ -19,7 +19,7 @@ void init_pit(uint32_t frequency);
  * know where it wraps, and computing the divisor a second time there would be
  * a copy that a change to the tick rate would silently leave behind. It has
  * the 100 Hz value before `init_pit` runs, so a wait taken during early boot
- * is measured rather than undefined.
+ * is measured, not undefined.
  */
 extern uint32_t pit_reload;
 

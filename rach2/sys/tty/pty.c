@@ -356,7 +356,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
      * cooked input still buffered, then read 0 on every call. The discipline's
      * hangup EOF is one-shot in canonical mode (n_tty_read clears it after the
      * first zero-length read), so once the master is gone read without blocking
-     * and report an empty result as EOF rather than parking forever (no waker
+     * and report an empty result as EOF instead of parking forever (no waker
      * remains) or returning -EAGAIN. A normal read parks unless the fd is
      * nonblocking. */
     {

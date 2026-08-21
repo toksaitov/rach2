@@ -216,7 +216,7 @@ static void fd_release_backing(fd_entry_t *e)
     /* A KRFFS node is a backing kind like any other here. An orphan (a reserved
      * node no path names) is freed by its LAST holder, and this runs while the
      * closing slot is still populated, which is what `except` is for: the
-     * closing descriptor is skipped rather than cleared first, so "last holder"
+     * closing descriptor is skipped, not cleared first, so "last holder"
      * needs no ordering rule between two functions. */
     if (e->type == FD_TYPE_FILE && e->node && krffs_fs &&
         e->node != krffs_fs->node && e->node->name[0] == '\0' &&
@@ -995,7 +995,7 @@ static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
  *
  * The old round-trip could not tell a freed node from a different file the
  * allocator later placed at the same address. That hole is closed for every
- * regular-file descriptor by the lifetime rather than by this check: no address
+ * regular-file descriptor by the lifetime, not by this check: no address
  * a descriptor has is handed out while it has it.
  *
  * A NULL node is the root directory and needs no check. Directories are
@@ -1127,11 +1127,11 @@ static int cred_privileged(void)
  * without that bit the file cannot hand out a gid, and the pair means the
  * mandatory-lock mark elsewhere in Unix.
  *
- * The root node returns untouched, and by node identity rather than by
+ * The root node returns untouched, and by node identity, not by
  * `KRFFS_IS_DIR`: `mkfs` stamps the root a bare 0755 with no type bits, so
  * the directory test reads false on it, and `KRFFS_MODE_DIRTY` shares the
  * setuid position. A clear that reached the root would report an unclean
- * image as cleanly unmounted, which is file-system corruption rather than a
+ * image as cleanly unmounted, which is file-system corruption, not a
  * permission bug, and `chown(path, -1, -1)` is permitted to every caller.
  */
 static void cred_kill_setid(krffs_node_t *node)
@@ -1177,7 +1177,7 @@ static int cred_in_group(uint32_t gid)
  * bits, else a group match (primary or supplementary) by the group bits, else
  * the other bits; an effective uid of 0 passes everything. `use_real` judges
  * by the real ids instead, for access(2), the one call that asks who the
- * process really is rather than who it is acting as.
+ * process really is, not who it is acting as.
  */
 static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode,
                                 int want, int use_real)
@@ -1301,7 +1301,7 @@ static int32_t cred_parent_writable(const char *name)
  * is not POSIX and is not adopted here: it would let a mode a victim chose for
  * their own file decide who may delete it.
  *
- * The root is non-sticky by node identity rather than by reading its mode, the
+ * The root is non-sticky by node identity, not by reading its mode, the
  * same fixed-mode rule `cred_access_node` uses, so `KRFFS_MODE_DIRTY` never
  * enters a permission answer.
  */
@@ -1791,7 +1791,7 @@ static int32_t sys_close(isr_params_t *params)
  *
  * EBX = fd. Validates the descriptor (any open fd; the type is not checked),
  * then writes back every dirty page of the disk-backed window via `pc_sync`.
- * The flush is whole-cache rather than per-file, a safe superset of the
+ * The flush is whole-cache, not per-file, a safe superset of the
  * contract. When KRFFS is the RAM module the cache is empty, so the flush is
  * a no-op and the call only validates the fd. Returns 0, -EBADF for a bad
  * descriptor, or -EIO when a disk writeback fails. dropbear writes its host
@@ -1910,7 +1910,7 @@ static int32_t sys_reboot(isr_params_t *params)
  * seeked forward by one has no defined result to test. So the base is unsigned,
  * the delta's magnitude is taken without ever negating it (negating the most
  * negative value is itself undefined), and both directions are bounds-checked
- * before the arithmetic rather than after.
+ * before the arithmetic, not after.
  *
  * @param cur    the window's current offset.
  * @param size   the window's byte size, for SEEK_END.
@@ -2178,7 +2178,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
          * Park on console_tty until a line (cooked) or VMIN bytes (raw)
          * arrive. Parking marks input_wq active, and once a session owns the
          * console its sid is nonzero; either condition tells the keyboard
-         * IRQ to cook keystrokes into console_tty rather than the kernel
+         * IRQ to cook keystrokes into console_tty, not the kernel
          * shell, so the byte wakes us (or waits as type-ahead).
          * stdin_waiting_proc, set across the read below, only suppresses the
          * scrollback hotkeys while we are parked; tty_read drains the serial
@@ -2293,7 +2293,7 @@ static struct tty *fd_tty(fd_entry_t *e);
  * read, 0 when there are none, or a negative errno.
  *
  * This is what fills the second and later buffers of a `readv` on anything
- * whose bytes arrive rather than sit there. Readiness is asked of the backing
+ * whose bytes arrive, not sit there. Readiness is asked of the backing
  * object itself: the ops vtable answers `poll`, and a stream socket has a
  * non-blocking read of its own. Nothing can consume the bytes between the
  * question and the read, since a system call here runs with interrupts off from
@@ -2365,7 +2365,7 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
  * its own vector list and have the datagram rewrite the destinations behind it.
  * Those addresses were never checked by the pass that ran before the read.
  * `copy_to_user` refuses an address it cannot fault in, which makes such a
- * caller a process scribbling on itself rather than a raw kernel write to
+ * caller a process scribbling on itself, not a raw kernel write to
  * whatever it named.
  *
  * The message buffer is one datagram wide on a 16 KB kernel stack. That is the
@@ -2454,7 +2454,7 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt,
  *
  * The whole vector list is checked before a byte is taken, because a read
  * cannot be undone: a caller that named a bad destination in its last buffer
- * gets -EFAULT with its input still queued, rather than a partial total over
+ * gets -EFAULT with its input still queued, not a partial total over
  * data that is now gone. The check is the one `write` makes of a buffer it is
  * about to hand a driver, `user_buffer_ok` with write access, so an address
  * that is merely inside the user window but unmapped or read-only is refused
@@ -3974,7 +3974,7 @@ static int32_t sys_fchown(isr_params_t *params)
  * the call returns -EPERM, the POSIX errno for "the filesystem does not
  * support the creation of hard links". The source is copied and resolved
  * first, so a bad pointer (-EFAULT), bad dirfd (-EBADF), or missing source
- * (-ENOENT) is reported as itself rather than masked by EPERM. dropbear
+ * (-ENOENT) is reported as itself, not masked by EPERM. dropbear
  * depends on the EPERM: it moves a freshly generated host key with link(tmp,
  * final) and, on EPERM/EACCES, falls back to writing the key directly to the
  * final path.
@@ -4177,7 +4177,7 @@ static int32_t sys__llseek(isr_params_t *params)
         return -EINVAL;
     }
     /* The descriptor offset is 32-bit (KRFFS files are well under 4 GB); refuse
-     * a seek it cannot represent rather than silently truncating to a wrong
+     * a seek it cannot represent, not silently truncating to a wrong
      * place. */
     if (new_off > (long long)0xFFFFFFFFu) {
         return -EINVAL;
@@ -4608,7 +4608,7 @@ static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
  * 16 KB) and cannot be in the caller's address space (that is what is being
  * torn down).
  *
- * The sizes come from the page these end up in rather than from a round number.
+ * The sizes come from the page these end up in, not from a round number.
  * `build_user_stack` lays the strings, both pointer arrays, the argc word, a
  * nine-entry auxv and 16 bytes of AT_RANDOM into ONE 4096-byte page, and it
  * runs AFTER the old image is freed, so a vector that fits here and not there
@@ -4668,7 +4668,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
     current_proc->state = PROC_ZOMBIE;
     /* A failed exec destroyed the image; report it as a SIGKILL death (Linux
      * wait-status: low 7 bits = the signal) so the parent's waitpid sees an
-     * abnormal termination rather than a bogus exit code. */
+     * abnormal termination, not a bogus exit code. */
     current_proc->exit_code = SIGKILL & 0x7F;
 
     /* Wake a parent blocked in wait() so the scheduler has a target. */
@@ -4750,8 +4750,8 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
  * itself, can run one. A DHCP client execs its lease script directly, so the
  * machine needs it.
  *
- * One level only. A script whose interpreter is itself a script is refused
- * rather than followed, because a chain of them is a loop nobody can see the
+ * One level only. A script whose interpreter is itself a script is refused,
+ * not followed, because a chain of them is a loop nobody can see the
  * end of, and nothing here needs one.
  *
  * `_exec_path_buf` and `_exec_argv_bufs` are rewritten in place on success.
@@ -4783,7 +4783,7 @@ static int32_t exec_shebang(int *argc)
             break;
         }
     }
-    /* A line that filled the buffer without ending is refused rather than cut:
+    /* A line that filled the buffer without ending is refused, not cut:
        a truncated interpreter name may name a different program that exists,
        and the kernel would then check and run that one. */
     if (i == n && n == EXEC_SHEBANG_MAX) {
@@ -4919,7 +4919,7 @@ static int32_t sys_execve(isr_params_t *params)
 
     /* Copy argv from user space, range-checking every user pointer and bounding
      * the cumulative offset so _exec_argv_storage cannot overflow. An argument
-     * that does not fit fails the exec rather than being silently truncated.
+     * that does not fit fails the exec instead of being silently truncated.
      * The pointer array and each string are read through the copy helpers,
      * which fault-check each access.
      *
@@ -5003,7 +5003,7 @@ static int32_t sys_execve(isr_params_t *params)
             envp_offset += (uint32_t)r + 1;
         }
         /* As with argv: one more non-NULL envp pointer overflows the bufs
-         * array; fail rather than silently drop the tail of the environment. */
+         * array; fail, not silently drop the tail of the environment. */
         if (envc == EXEC_MAX_ENTRIES) {
             uint32_t env_ptr = 0;
             if (copy_from_user(&env_ptr,
@@ -5769,7 +5769,7 @@ static int32_t sys_creat(isr_params_t *params)
 /**
  * unlink(2): EBX = path. Returns 0 or -errno.
  *
- * Every refusal is decided here rather than below, because `krffs_unlink`
+ * Every refusal is decided here, not below, because `krffs_unlink`
  * answers all of them with a bare -1 that userspace decodes as `EPERM`
  * whatever went wrong. A missing component gives `-ENOENT` and a plain file
  * in the middle of the path `-ENOTDIR`, both from the reporting resolver;
@@ -6595,7 +6595,7 @@ static int32_t sys_getdents64(isr_params_t *params)
      *
      * What an offset guarantees, exactly. Deleting an entry does not move any
      * other node: `krffs_remove_reserved_node` only widens free extents, and
-     * allocation splits a free node rather than shifting a reserved one. So a
+     * allocation splits a free node instead of shifting a reserved one. So a
      * listing interleaved with deletions, which is the case that matters and
      * the one `rm` performs, sees every surviving entry once.
      *
@@ -6618,7 +6618,7 @@ static int32_t sys_getdents64(isr_params_t *params)
 
     node = krffs_fs->node;
     do {
-        /* Through uintptr_t rather than as a pointer difference: a signed
+        /* Through uintptr_t, not as a pointer difference: a signed
          * ptrdiff_t on a 32-bit kernel cannot represent a distance above 2 GiB,
          * and a KRFFS image may be larger than that. Every node begins inside
          * the filesystem's own extent, so the unsigned distance always fits. */
@@ -6833,7 +6833,7 @@ static int32_t sys_nanosleep(isr_params_t *params)
         }
         if ((int32_t)(target - kernel_ticks) > 0) {
             /* schedule() found nobody else to run: idle until the next
-             * interrupt (the tick) rather than busy-spinning on the scheduler.
+             * interrupt (the tick), not busy-spinning on the scheduler.
              */
             __asm__ __volatile__("sti; hlt");
         }
@@ -6913,8 +6913,8 @@ static int32_t sys_getrandom(isr_params_t *params)
     if (!buf) {
         return -EFAULT;
     }
-    /* Fail closed: with no trusted hardware entropy (RDSEED/RDRAND), refuse
-     * rather than hand out the weak boot-jitter stream for a key. A caller that
+    /* Fail closed: with no trusted hardware entropy (RDSEED/RDRAND), refuse,
+     * not hand out the weak boot-jitter stream for a key. A caller that
      * explicitly accepts insecure bytes passes GRND_INSECURE (the same tier as
      * AT_RANDOM / the stack canary). */
     if (!krandom_is_trusted() && !(flags & GRND_INSECURE)) {
@@ -7851,7 +7851,7 @@ static int32_t sys_ioctl(isr_params_t *params)
         return -ESRCH;
     }
 
-    /* Validate the fd first, so a bad fd reports -EBADF rather than a request-
+    /* Validate the fd first, so a bad fd reports -EBADF, not a request-
      * specific status (e.g. ioctl(-1, TCGETS) must be -EBADF, not -ENOTTY). */
     entry = fd_get(&current_proc->fds, fd_num);
     if (!entry) {
@@ -7873,7 +7873,7 @@ static int32_t sys_ioctl(isr_params_t *params)
 
     /* tty-family fds (the console and a pty slave) share the termios/session
      * ioctls, handled here, BEFORE the generic ops dispatch, so a pty slave's
-     * TCGETS/TIOCSCTTY reach the shared handler rather than its FIONBIO-only
+     * TCGETS/TIOCSCTTY reach the shared handler, not its FIONBIO-only
      * ops->ioctl. On a non-terminal fd the terminal-only requests stay -ENOTTY
      * (the fallthrough below), as Linux reports. */
     {
@@ -8162,7 +8162,7 @@ static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_por
 /* struct sockaddr_ll, the address a packet socket binds and sends to, with the
  * offset of each field beside it: family 0 (2 bytes), protocol 2 (2), ifindex
  * 4 (4), hatype 8 (2), pkttype 10 (1), halen 11 (1), addr 12 (8), for 20 in
- * all. A caller declaring fewer bytes is refused rather than read past. */
+ * all. A caller declaring fewer bytes is refused, not read past. */
 #define SOCKADDR_LL_LEN      20
 #define SOCKADDR_LL_IFINDEX  4
 #define SOCKADDR_LL_HALEN    11
@@ -8228,8 +8228,8 @@ static int32_t do_socket(int domain, int type, int protocol)
     int            fd;
 
     /* IPv4, and the packet family the DHCP client needs to see replies that
-     * arrive before this machine owns an address. Any other family is refused
-     * rather than made into a socket that cannot work. */
+     * arrive before this machine owns an address. Any other family is refused,
+     * not made into a socket that cannot work. */
     if (domain != AF_INET && domain != AF_PACKET) {
         return -EAFNOSUPPORT;
     }
@@ -8437,7 +8437,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
 
     /* The payload must fit one unfragmented UDP packet (this stack does not
      * fragment; udp_tx caps it at 1500). Reject an oversize datagram with
-     * -EMSGSIZE rather than truncate it through the uint16_t wire length or let
+     * -EMSGSIZE, not truncate it through the uint16_t wire length or let
      * udp_tx silently drop it while this call reports a full send. */
     if (len > 1500) {
         return -EMSGSIZE;
@@ -8565,7 +8565,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
 
     /* Report the source address, truncated to the capacity read before the
      * datagram was taken. A packet socket has no sender to report, so the
-     * length comes back zero rather than an AF_INET sender of 0.0.0.0 port 0
+     * length comes back zero, not an AF_INET sender of 0.0.0.0 port 0
      * that no such packet had. */
     if (want_addr) {
         uint8_t sa[SOCKADDR_IN_LEN];
@@ -8622,7 +8622,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
      * how a program lets go of a peer, and requiring a whole address for it
      * would leave that program connected. */
     /* The descriptor is resolved before its argument is read, so that a call on
-     * something that is not a socket says so rather than reporting whatever was
+     * something that is not a socket says so instead of reporting whatever was
      * wrong with an address it was never going to use. */
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
@@ -8834,7 +8834,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 
     /* Report the peer address, truncated to the caller's declared capacity. On
      * a bad user pointer, tear down the descriptor we just installed (releasing
-     * its socket reference) rather than leaking the accepted fd and its socket.
+     * its socket reference) instead of leaking the accepted fd and its socket.
      */
     if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port,
                               conn_sock->remote_ip) != 0) {
@@ -9023,7 +9023,7 @@ static int32_t do_shutdown(int fd, int how)
 /* setsockopt: accept the boolean options a forking server sets (SO_REUSEADDR,
  * TCP_NODELAY, SO_KEEPALIVE) so its setup succeeds. The stack already reuses
  * listen ports and sends promptly, so these are honored-by-behavior or
- * documented no-ops; an unknown option is accepted rather than failing a
+ * documented no-ops; an unknown option is accepted instead of failing a
  * server's startup. */
 static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr,
                              int optlen)
@@ -9034,7 +9034,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
-    /* The one option this stack answers with a refusal rather than a blanket
+    /* The one option this stack answers with a refusal, not a blanket
      * success. A DHCP client asks a packet socket for PACKET_AUXDATA so that it
      * can be told the kernel has not checked a datagram's UDP checksum; there
      * is no such offload here and no ancillary data at all, and a success would
@@ -9185,8 +9185,8 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
 
 /*
  * struct msghdr on i386: name (4), namelen (4), iov (4), iovlen (4), control
- * (4), controllen (4), flags (4). The offsets are the ABI and are written out
- * rather than modelled, because a struct here would have to match a layout
+ * (4), controllen (4), flags (4). The offsets are the ABI and are written out,
+ * not modelled, because a struct here would have to match a layout
  * this kernel does not otherwise depend on.
  */
 #define MSGHDR_LEN         28
@@ -9201,7 +9201,7 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
  * Receive one datagram into a scatter list (recvmsg, socketcall 17).
  *
  * The DHCP client is what needs this: it reads its raw socket through
- * `recvmsg` rather than `read` so that it can look for `PACKET_AUXDATA` in the
+ * `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the
  * control data, and finding none it verifies the UDP checksum itself. So the
  * scatter half is the whole of the work here. The control buffer is answered
  * with a length of zero, which is the true answer: this stack attaches no
@@ -9209,7 +9209,7 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
  *
  * The sender is reported through `msg_name` for an AF_INET socket. A packet
  * socket's sender is a link address this stack does not keep, so its
- * `msg_namelen` comes back zero rather than filled with something invented.
+ * `msg_namelen` comes back zero, not filled with something invented.
  */
 static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
 {
@@ -10239,7 +10239,7 @@ static int32_t sys_mmap2(isr_params_t *params)
     }
     if (flags & MAP_FIXED) {
         /* We choose the address ourselves; honoring a fixed hint would need
-         * overlap/replace handling we do not have. Reject rather than silently
+         * overlap/replace handling we do not have. Reject, not silently
          * return a different address the caller would then fault on. */
         return -ENOSYS;
     }
@@ -10314,7 +10314,7 @@ static int32_t sys_munmap(isr_params_t *params)
 }
 
 /* Name each missing syscall behind `rach2.trace=enosys`, once per number PER
- * PROCESS rather than once per boot. Per boot was the first shape and it hides
+ * PROCESS, not once per boot. Per boot was the first shape and it hides
  * exactly what such a trace is for: `login` asks for setitimer early, so a
  * later program asking for the same number would say nothing, and a reader
  * comparing before and after would conclude the later program asked for
@@ -10342,7 +10342,7 @@ static void _syscall_handler(isr_params_t *params)
     uint32_t syscall_num = params->eax;
     /* Default to -ENOSYS so an unimplemented or out-of-range number reports the
      * real "no such syscall" errno; musl relies on -ENOSYS to fall back to an
-     * alternate path rather than treating it as a generic -EPERM failure. */
+     * alternate path instead of treating it as a generic -EPERM failure. */
     int32_t ret = -ENOSYS;
 
     /* Mark this process non-preemptible BEFORE enabling interrupts. The ISR

@@ -28,7 +28,7 @@ int kcmdline_has(const char *flag);
  * occurrence wins; a second one is a contradiction the caller should refuse,
  * so `kcmdline_count` is there to notice it.
  *
- * A value too long for `out` is refused rather than truncated: half an address
+ * A value too long for `out` is refused, not truncated: half an address
  * parses into a different address, and a machine that quietly used one the
  * operator did not write is worse than one that refuses to configure.
  *

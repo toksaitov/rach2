@@ -226,7 +226,7 @@ int diskinfo_probe(int mounted)
     int i;
 
     info.mounted = mounted;
-    /* Adopt a device the mount already published rather than probing again: a
+    /* Adopt a device the mount already published instead of probing again: a
      * second bring-up would reset the controller under a mounted file
      * system. */
     if (!block0 && block_ready() != 0) {

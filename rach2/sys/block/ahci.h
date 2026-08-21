@@ -7,7 +7,7 @@
  *
  * Driven by polled completion, with no interrupt: the page-cache window fault
  * runs with interrupts off and cannot sleep, so a transfer spins on the
- * command-issue bit (`PxCI`) rather than waiting on the AHCI completion
+ * command-issue bit (`PxCI`) instead of waiting on the AHCI completion
  * interrupt. The HBA still does the DMA in hardware; the CPU only polls a
  * status bit. See `sys/block/Readme.md` for the rationale and the
  * polled-vs-IRQ-vs-async trade-off.

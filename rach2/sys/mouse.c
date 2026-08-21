@@ -123,7 +123,7 @@ static int ps2_send_command(uint8_t cmd)
  * controller routes the following data byte to the auxiliary device.
  * A MOUSE_RESEND reply means the mouse saw a framing error; retry up
  * to three times. Any other non-ACK byte is returned to the caller,
- * since some commands answer with data rather than an ACK.
+ * since some commands answer with data, not an ACK.
  *
  * @return the mouse's response byte, or -1 after the retries are spent.
  */

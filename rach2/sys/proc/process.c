@@ -59,9 +59,9 @@ void init_proc(void)
  * pid 1 was a dead self-test process, so the request went nowhere and the
  * programs failed.
  *
- * Safe by construction rather than by timing: `alloc_process` already skips any
+ * Safe by construction, not by timing: `alloc_process` already skips any
  * pid that is still live, so a self-test slot that outlived its test would push
- * init to the next free number rather than collide with it.
+ * init to the next free number, not collide with it.
  */
 void proc_reclaim_boot_pids(void)
 {

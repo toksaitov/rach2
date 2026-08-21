@@ -14,7 +14,7 @@
  * `struct ifreq` naming the interface.
  *
  * The interface is `eth0` and there is one of it. A request naming anything
- * else is `ENODEV` rather than quietly applied to the only one there is.
+ * else is `ENODEV`, not quietly applied to the only one there is.
  *
  * Reading is anyone's; changing is root's. A program that could set this
  * machine's address could take another machine's, and could send from it.

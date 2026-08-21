@@ -13,7 +13,7 @@
  * (ERI, MAC-OCP, PHY-OCP, EPHY), and QEMU does not emulate it, so this driver
  * cannot be tested before it meets the hardware.
  *
- * It is therefore a port of one pinned reference rather than a reading of a
+ * It is therefore a port of one pinned reference, not a reading of a
  * datasheet: Linux v6.16, commit 038d61fd642278bab63ee8ef722c50d10ab01e8f,
  * drivers/net/ethernet/realtek/r8169_main.c and r8169_phy_config.c, for the
  * chip that file calls RTL_GIGA_MAC_VER_42. Every register sequence below
@@ -108,7 +108,7 @@
 #define R8168_CSIAR_FLAG        0x80000000u
 #define R8168_CSIAR_BYTE_ENABLE 0x0000f000u
 
-/* The descriptor ring. 64 entries rather than the reference's 256: this
+/* The descriptor ring. 64 entries, not the reference's 256: this
  * kernel's whole direct map is 32 MiB, and 64 entries with the reference's
  * buffer size already cost a megabyte. The deviation is the one number in
  * this driver the reference does not vouch for, so the model burst-tests it

@@ -97,7 +97,7 @@
 #define AHCI_SIG_ATA   0x00000101u
 #define AHCI_SIG_ATAPI 0xEB140101u
 
-/* Every wait is measured against the timer chip rather than counted, because
+/* Every wait is measured against the timer chip, not counted, because
    an iteration count is really a bet on the processor's speed: ten million raw
    register reads are a moment on the QEMU loop and several seconds on the
    laptop this drives. The budgets: one second for a handshake (the host reset
@@ -109,8 +109,8 @@
 #define AHCI_CMD_POLL_US  10u
 #define AHCI_CMD_STEPS    100000u
 
-/* The two waits that follow a COMRESET are measured rather than counted, since
-   what they wait for happens on the wire and in the device rather than at the
+/* The two waits that follow a COMRESET are measured, not counted, since
+   what they wait for happens on the wire and in the device, not at the
    processor's speed. The poll interval is 100 us; the budgets are one second
    for the PHY to negotiate, which is what the specification allows, and five
    for the device to finish its own reset and post its signature, which is
@@ -158,7 +158,7 @@ static volatile uint8_t ahci_cmdtable[AHCI_CMDTABLE_SIZE] __attribute__((aligned
 
 /* One PRDT entry transfers up to 4 MiB, so cap a single command there; every
    exercised caller (the page cache, 8 sectors) is far under it, and a larger
-   request fails closed rather than silently truncating the byte count. */
+   request fails closed, not silently truncating the byte count. */
 #define AHCI_MAX_SECTORS_PER_CMD 8192u
 
 /* The single polled command slot, its 5-dword H2D FIS, and the PRDT offset
@@ -388,8 +388,8 @@ static int ahci_port_comreset(int port)
 
     /* The device answers a reset with a FIS carrying its signature, and a FIS
      * arrives only if the port has somewhere to put it and is listening. So
-     * the received-FIS area is programmed and FRE turned on before the reset
-     * rather than in the start path afterwards; without this the task file
+     * the received-FIS area is programmed and FRE turned on before the reset,
+     * not in the start path afterwards; without this the task file
      * never updates and every port looks like a device that will not answer.
      * The command engine stays off: nothing is being issued here. */
     ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)(uintptr_t)ahci_cmdlist);
@@ -466,7 +466,7 @@ static int ahci_hba_own(void)
 {
     /* BIOS/OS handoff, only when the HBA advertises it (QEMU does not). The
      * request is made and the answer waited for, but an unanswered request is
-     * a warning rather than a refusal: Linux never performs this handoff at
+     * a warning, not a refusal: Linux never performs this handoff at
      * all (BOHC appears in its AHCI driver only as a capability bit's name),
      * so firmware with a broken handoff semaphore would fail only us, on a
      * controller Linux would simply take. Asking first is still the polite
@@ -572,8 +572,8 @@ static int ahci_quiesce_ports(void)
  * After a COMRESET the device runs its own reset and then posts a D2H FIS
  * carrying its signature; until that has happened the task file reports busy
  * and the signature register has nothing worth reading. Bounded, because a
- * device that never becomes ready is a device this driver must move past
- * rather than wait on.
+ * device that never becomes ready is a device this driver must move past,
+ * not wait on.
  */
 static int ahci_port_ready(int port)
 {
@@ -600,7 +600,7 @@ static int ahci_port_ready(int port)
  * The signature decides what the port has, and only a disk is taken. An
  * optical drive answers the ATAPI signature and would fail every command this
  * driver knows; a port multiplier and an enclosure service answer their own.
- * Naming the one signature this driver drives, rather than excluding the ones
+ * Naming the one signature this driver drives instead of excluding the ones
  * it happens to know about, means an unfamiliar device is skipped rather than
  * driven as if it were a disk.
  *
@@ -725,7 +725,7 @@ static int ahci_io_error(void)
  * over the static DMA regions, waits for the task file to go idle, sets the
  * slot's `PxCI` bit, and busy-polls it clear, watching the fatal `PxIS` bits
  * and `PxTFD` ERR/DF for failure, then verifies the byte count the HBA reports
- * so a short transfer fails rather than passing. The HBA performs the DMA; the
+ * so a short transfer fails instead of passing. The HBA performs the DMA; the
  * CPU only spins
  * on memory-mapped status, bounded by the iteration watchdog. So it
  * neither sleeps nor allocates and is callable with interrupts off, the

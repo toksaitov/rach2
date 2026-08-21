@@ -8,8 +8,8 @@
  * and the boot loader's gap, bounded windows every image may write, because
  * installing a kernel or updating GRUB is ordinary work. Level two is the whole
  * device at any offset, which is what reflashing a broken root needs and what
- * no everyday boot has any business doing: a mistake there destroys the machine
- * rather than one file.
+ * no everyday boot has any business doing: a mistake there destroys the
+ * machine, not one file.
  *
  * The two are told apart at build time, not at boot. A token on the kernel
  * command line would be editable at the GRUB prompt by anyone standing at the
@@ -43,7 +43,7 @@
  * `sys/fs/devfs.c`, because the choice is which function body to compile and
  * not a value to test at run time. What lives here is the string that lets the
  * choice be read back off a built kernel, and it is a second conditional on the
- * same macro rather than the same one, which is why the checker catches a
+ * same macro, not the same one, which is why the checker catches a
  * mis-built artifact and not a tampered one.
  */
 extern const char recovery_policy_banner[];

@@ -219,7 +219,7 @@ static int krffs_name_eq(const char *node_name, const char *comp, uint32_t len)
  * Find the reserved node with logical id `id`, for ".." and directory descent.
  *
  * Returns NULL for KRFFS_ROOT_ID: the root has no reserved node (it is
- * fs->node), so callers must handle the root specially rather than expect a
+ * fs->node), so callers must handle the root specially, not expect a
  * lookup here.
  */
 static krffs_node_t *krffs_find_node_by_id(krffs_file_system_t *fs, uint64_t id)
@@ -505,7 +505,7 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
 
     /* Collect basenames from the node up toward the root. krffs_find_node_by_id
      * cannot return the root (it has the reserved id 0), so stop as soon as a
-     * node's parent IS the root rather than try to look the root up. */
+     * node's parent IS the root, not try to look the root up. */
     for (;;) {
         if (cur == krffs_fs->node || cur->id == (uint64_t)KRFFS_ROOT_ID) {
             break;
@@ -980,7 +980,7 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
  * attribute-change time both move, because changing a file changes the file.
  * `KRFFS_STAMP_ATTR` is what a chmod does: only the attribute-change time.
  *
- * Access time is never stamped here, and that is a decision rather than an
+ * Access time is never stamped here, and that is a decision, not an
  * omission. This file system lives behind a write-back page cache, so touching
  * a node on every READ would dirty a page on every read and turn a reading
  * workload into a writing one. An atime set on purpose through `utimensat` is
@@ -1010,7 +1010,7 @@ void krffs_stamp(krffs_node_t *node, int what)
  *
  * A parent id of `KRFFS_ROOT_ID` names the root, which is not in the node table
  * as a child of anything. Returns NULL only when the chain is broken, which is
- * a corrupt image rather than an ordinary case.
+ * a corrupt image, not an ordinary case.
  */
 krffs_node_t *krffs_parent_node(krffs_node_t *node)
 {
@@ -1228,14 +1228,14 @@ int krffs_unlink(const char *path)
  *
  * Clears the name, which is what makes it unreachable: `krffs_walk` never hands
  * `krffs_find_child` a component shorter than one character, so a node with an
- * empty name cannot be matched by any path. That is a property of the parser
- * rather than of a hash, which is why an empty name is used and not a sentinel
+ * empty name cannot be matched by any path. That is a property of the parser,
+ * not of a hash, which is why an empty name is used and not a sentinel
  * `parent_id`: `krffs_mix_id` may return any nonzero value, so a reserved id
  * would rest on a collision that cannot be ruled out. The node keeps its type,
  * its data and its parent id, so it is still a live file for whoever has a
  * descriptor on it, and still an ordinary reserved node to the allocator.
  *
- * The scans that enumerate by `parent_id` rather than by name skip an empty
+ * The scans that enumerate by `parent_id`, not by name skip an empty
  * name for the same reason, since being unmatchable covers the resolver and
  * nothing else. The caller frees the node when the last descriptor closes.
  */
@@ -1250,7 +1250,7 @@ void krffs_orphan_node(krffs_node_t *node)
  * Remove a name whose file somebody still holds open, and stamp the directory
  * it left.
  *
- * The stamp belongs here rather than at the call sites, because there are two
+ * The stamp belongs here, not at the call sites, because there are two
  * of them (the `unlink` syscall and the rescue shell's own `rm`) and that is
  * precisely how one of them ends up not stamping. Removing a name changes the
  * directory whether or not the file it named goes with it.

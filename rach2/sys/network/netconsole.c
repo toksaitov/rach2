@@ -31,7 +31,7 @@
  * character only joins the ring. That alone is not enough, because the
  * characters it adds would extend the drain that is running; so a drain also
  * fixes its end at the ring's head when it starts, and a chip that fails every
- * transmit costs one bounded pass rather than an endless one.
+ * transmit costs one bounded pass, not an endless one.
  */
 
 #include "netconsole.h"

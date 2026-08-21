@@ -27,7 +27,7 @@ static socket_t *socket_pool;
 /**
  * Reserve the socket pool from kernel memory.
  *
- * Allocated rather than placed in BSS so the table does not bloat the kernel
+ * Allocated, not placed in BSS so the table does not bloat the kernel
  * image. A failed reservation leaves the pool NULL; socket_alloc then fails.
  */
 void socket_init(void)
@@ -399,7 +399,7 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
  * Queue an established connection on a listener and wake an accept waiter.
  *
  * Called from tcp_rx in IRQ context. The accept queue is a power-of-two ring;
- * a full queue refuses the connection (see the body) rather than overrun.
+ * a full queue refuses the connection (see the body), not overrun.
  */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
 {
@@ -410,7 +410,7 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
     next_tail = (listen_sock->accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1);
     if (next_tail == listen_sock->accept_head) {
         /* Queue full: tear the new connection down (it sends a FIN and frees
-         * the socket and TCB) rather than orphaning it in the pool. */
+         * the socket and TCB) instead of orphaning it in the pool. */
         serial_printf("socket: accept queue full, connection refused\n");
         socket_unref(conn_sock);
         return;
@@ -646,7 +646,7 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
 
     /* The query descriptor is never readable and never writable: it has
        ioctls. POLLERR says so at once, so a caller that polls it waits on
-       nothing rather than forever. */
+       nothing, not forever. */
     if (sock->type == SOCK_RAW) {
         return (short)POLLERR;
     }

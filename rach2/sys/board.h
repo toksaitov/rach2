@@ -21,8 +21,8 @@
  * could land on are the DMA controller, the interrupt controller, the timer,
  * the keyboard controller, the CMOS index and data pair, and the reset control
  * register. A wrong base does not fail quietly; it resets the machine or
- * corrupts its clock. So the base is derived from the chipset's own register
- * rather than assumed, and four separate checks must pass.
+ * corrupts its clock. So the base is derived from the chipset's own register,
+ * not assumed, and four separate checks must pass.
  *
  * One value cannot be derived and is not: which sleep type means "off". That
  * lives in the firmware's ACPI tables, in AML this kernel does not interpret.
@@ -97,7 +97,7 @@ int board_sci_irq(const board_profile_t *p, uint8_t sci_reg_value);
 /** The word that asks for soft off: the sleep type in place, plus SLP_EN. */
 uint16_t board_sleep_word(const board_profile_t *p);
 
-/** Whether a PM1_CNT read came from a chipset rather than from an empty bus. */
+/** Whether a PM1_CNT read came from a chipset, not from an empty bus. */
 int board_pm_answers(uint16_t pm1_cnt_value);
 
 /** Whether ACPI still has to be asked for, given what PM1_CNT reports. */

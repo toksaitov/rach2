@@ -270,7 +270,7 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
  * In canonical mode any queued byte means a completed line is ready, and a
  * pending EOF counts as readable (the read returns 0). In raw mode a pending
  * EOF (a hangup: the master closed) is readable too, so a blocked reader
- * drains the queue and then returns 0 rather than waiting forever for VMIN
+ * drains the queue and then returns 0 instead of waiting forever for VMIN
  * bytes that will never arrive; otherwise VMIN 0 never blocks and a VMIN > 0
  * read waits until the queue has at least VMIN bytes.
  */

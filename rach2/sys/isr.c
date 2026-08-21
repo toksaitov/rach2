@@ -15,7 +15,7 @@ extern void terminate_current_process(int32_t signo);
 static volatile uint32_t irq_count = 0;
 
 /*
- * Each vector has a short chain of handlers rather than a single slot, so
+ * Each vector has a short chain of handlers, not a single slot, so
  * devices that share one PIC line can each install their own. Level-triggered
  * PCI INTx lines are routinely shared: under QEMU's i440fx the HD Audio
  * controller and the RTL8139 NIC both land on IRQ 11. On a shared line every
@@ -150,7 +150,7 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler)
  * Replace a vector's entire chain with a single `handler`.
  *
  * For a deliberate sole owner of a vector, where no other handler must share
- * it: the keyboard IRQ installs its handler this way rather than chaining.
+ * it: the keyboard IRQ installs its handler this way instead of chaining.
  */
 void set_isr_handler(uint8_t vector, isr_handler_t handler)
 {
