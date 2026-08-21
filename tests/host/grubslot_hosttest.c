@@ -246,11 +246,11 @@ int main(void)
     CHECK(strstr(err, "not the length it declares") != NULL, "and says so");
     CHECK(writes == 0, "with nothing written");
 
-    /* The boundary of that check, over the rounding the tool really does. A core
-       image is not a whole number of sectors: the one this project builds is
-       157703 bytes and declares 308 tail sectors. Cutting up to six bytes off
-       it still rounds to 309 sectors and is accepted, because nothing in the
-       image records its byte length; cutting seven crosses into 308 and is
+    /* The boundary of that check, over the rounding the tool really does. A
+       core image is not a whole number of sectors: the one this project builds
+       is 157703 bytes and declares 308 tail sectors. Cutting up to six bytes
+       off it still rounds to 309 sectors and is accepted, because nothing in
+       the image records its byte length; cutting seven crosses into 308 and is
        refused. Both halves are asserted so that neither is assumed. */
     for (cut = 0; cut <= 7u; cut++) {
         uint32_t bytes = 157703u - cut;

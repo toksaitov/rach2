@@ -169,8 +169,8 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
         return -1;
     }
 
-    /* One more read, and only an end of stream will do. A stream longer than the
-       length it was given means the two ends disagree about what is being
+    /* One more read, and only an end of stream will do. A stream longer than
+       the length it was given means the two ends disagree about what is being
        written, and the disk now holds the first part of something whose size
        nobody knows; a read that failed here proves nothing either way, and
        reporting a whole image written on the strength of a failed check is the

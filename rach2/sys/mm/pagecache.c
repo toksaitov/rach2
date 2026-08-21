@@ -340,9 +340,9 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
 
     pc_read = read;
     pc_write = write;
-    /* Clamp to the window first (so the round-up cannot overflow), then round up
-       to whole pages: the window maps page-grained, so the file system's last
-       partial page is a full mappable page. The window span is page-aligned, so
+    /* Clamp to the window first (so the round-up cannot overflow), then round
+       up to whole pages: the window maps page-grained, so the file system's
+       last partial page is a full mappable page. The window span is page-aligned, so
        the rounded size never exceeds it. */
     if (fs_size > pc_window_span) {
         fs_size = pc_window_span;
@@ -486,8 +486,8 @@ static uint32_t pc_probe_window_size(void)
         }
     }
 
-    /* Floor to a page: a clamping BAR base need only be 16-byte aligned, but the
-       window span must be page-aligned so a page-rounded file-system size never
+    /* Floor to a page: a clamping BAR base need only be 16-byte aligned, but
+       the window span must be page-aligned so a page-rounded file-system size never
        exceeds it. */
     limit &= ~(uint32_t) (PC_PAGE_SIZE - 1u);
 

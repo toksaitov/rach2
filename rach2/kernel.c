@@ -1732,11 +1732,11 @@ static int init_krffs_disk(void)
         return -1;
     }
 
-    /* Find the KRFFS partition by reading each non-empty entry's first sector and
-       accepting the first that holds a real KRFFS root: the 16-bit magic, the
-       root type, and a size that is non-zero and fits the partition. Checking the
-       actual root tightens the weak 16-bit magic and works whatever the MBR type
-       byte says, so a GRUB-partitioned disk (boot partition first, KRFFS second)
+    /* Find the KRFFS partition by reading each non-empty entry's first sector
+       and accepting the first that holds a real KRFFS root: the 16-bit magic,
+       the root type, and a size that is non-zero and fits the partition.
+       Checking the actual root tightens the weak 16-bit magic and works
+       whatever the MBR type byte says, so a GRUB-partitioned disk (boot partition first, KRFFS second)
        still mounts. LBA 0 is never probed; it holds the boot code. */
     for (i = 0; i < MBR_PART_COUNT; ++i) {
         krffs_node_t *root;
@@ -1792,8 +1792,8 @@ static int init_krffs_disk(void)
         return -1;
     }
 
-    /* Observe the previous mount state, then mark this mount dirty and write the
-       flag straight through to the disk (pc_sync), so a crash before the clean
+    /* Observe the previous mount state, then mark this mount dirty and write
+       the flag straight through to the disk (pc_sync), so a crash before the clean
        shutdown clears it leaves the evidence on the device for fsck.krffs. */
     {
         krffs_node_t *root = (krffs_node_t *) PCWIN_BASE;

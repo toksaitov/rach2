@@ -70,8 +70,8 @@ int krffs_parse_region_args(
                 (unsigned long long) offset, (unsigned long long) file_size);
         return -1;
     }
-    /* A nonzero offset means a partition, which does not extend to the end of the
-       disk, so its size must be given rather than defaulted to the rest of the
+    /* A nonzero offset means a partition, which does not extend to the end of
+       the disk, so its size must be given rather than defaulted to the rest of the
        file. The size defaults to the rest of the file only for a whole-file FS. */
     if (offset > 0 && !have_size) {
         fprintf(stderr, "krffs: --offset requires an explicit --size\n");

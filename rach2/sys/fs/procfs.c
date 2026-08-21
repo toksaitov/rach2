@@ -165,7 +165,8 @@ static int procfs_gen_stat(int pid, char *buf, int cap)
     ap_ch(buf, cap, &len, ' ');
     ap_int(buf, cap, &len, (int)p->sid); /* 6 session */
     ap_str(buf, cap, &len, " 0 -1"); /* 7 tty_nr, 8 tpgid (not modeled) */
-    /* 9..13 flags,minflt,cminflt,majflt,cmajflt; 14..17 utime,stime,cutime,cstime */
+    /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
+       14..17 utime,stime,cutime,cstime */
     ap_str(buf, cap, &len, " 0 0 0 0 0 0 0 0 0");
     ap_str(buf, cap, &len, " 20 0"); /* 18 priority, 19 nice */
     ap_str(buf, cap, &len, " 1 0 0"); /* 20 num_threads, 21 itrealvalue, 22 starttime */

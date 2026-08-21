@@ -69,8 +69,8 @@ static int fake_write(uint32_t disk_off, const void *page)
     return 0;
 }
 
-/* Stand in for the CPU touching window page `p`: fault it (read or write), and on
-   a write scribble `marker` into the cached bytes, as a store through the window
+/* Stand in for the CPU touching window page `p`: fault it (read or write), and
+   on a write scribble `marker` into the cached bytes, as a store through the window
    would. */
 static void touch(uint32_t p, int write, uint8_t marker)
 {
@@ -128,9 +128,9 @@ int main(void)
     CHECK(pc_stat_evictions() == 1);
     CHECK(pc_stat_writebacks() == 0);
 
-    /* The eviction probe: write a distinct marker to pages 0..7, thrash the cache
-       by reading pages 8..31 (a working set far past the 4-frame capacity), then
-       re-read 0..7. Each dirty page must have been written back and must read
+    /* The eviction probe: write a distinct marker to pages 0..7, thrash the
+       cache by reading pages 8..31 (a working set far past the 4-frame
+       capacity), then re-read 0..7. Each dirty page must have been written back and must read
        back with its marker; the clean pages must never be written. */
     for (p = 0; p < 8; ++p) {
         touch(p, 1, (uint8_t)(0x80u + p));
@@ -162,8 +162,8 @@ int main(void)
         CHECK(pc_stat_writebacks() == wb);
     }
 
-    /* Writeback-failure paths: a failed disk write must never drop a dirty page.
-       A failed writeback on sync is reported and the page stays dirty; once the
+    /* Writeback-failure paths: a failed disk write must never drop a dirty
+       page. A failed writeback on sync is reported and the page stays dirty; once the
        disk recovers, a later sync flushes it with its bytes intact. */
     init_pagecache();
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);

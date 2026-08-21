@@ -1000,8 +1000,8 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
 
             return false;
         }
-        /* optional-file skips ONLY a genuinely absent host file. A file that exists
-           but cannot be read (a permission error, a short read) is a real error for
+        /* optional-file skips ONLY a genuinely absent host file. A file that
+           exists but cannot be read (a permission error, a short read) is a real error for
            both directives, never a silent skip. */
         if (access(hostpath, F_OK) != 0) {
             if (strcmp(verb, "optional-file") == 0) {

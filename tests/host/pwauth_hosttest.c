@@ -34,15 +34,15 @@
  * release's own flush is a lock gone from the file system that may come back
  * with the next boot.
  *
- * The last two are interposed calls rather than stand-ins, and both read the signal mask
- * from inside a stretch the library blocks it across, since restoring a mask
- * and never taking one look the same from outside a function. `snprintf`
- * forwards to `vsnprintf` and is the only call inside either window where the
- * library publishes state a death handler acts on; `getpid` goes to the raw
- * system call and is the only one inside the release registered with `atexit`,
- * which runs after the last case here and can be watched no other way. The mask
- * is a property of the thread, so reading it at a call reads it for the
- * statement.
+ * The last two are interposed calls rather than stand-ins, and both read the
+ * signal mask from inside a stretch the library blocks it across, since
+ * restoring a mask and never taking one look the same from outside a function.
+ * `snprintf` forwards to `vsnprintf` and is the only call inside either window
+ * where the library publishes state a death handler acts on; `getpid` goes to
+ * the raw system call and is the only one inside the release registered with
+ * `atexit`, which runs after the last case here and can be watched no other
+ * way. The mask is a property of the thread, so reading it at a call reads it
+ * for the statement.
  *
  * Returns the failed-check count (0 == pass).
  */
@@ -209,9 +209,9 @@ ssize_t getrandom(void *buffer, size_t length, unsigned int flags)
  *
  * And in a release it is the one call inside the window between the unlink and
  * the flush, so with `Fsync_mask_watch` set it reads the signal mask there, the
- * way the interposed `snprintf` reads it in the other two windows. Restoring a mask
- * and never taking it are indistinguishable from outside a function; this is
- * what tells them apart.
+ * way the interposed `snprintf` reads it in the other two windows. Restoring a
+ * mask and never taking it are indistinguishable from outside a function; this
+ * is what tells them apart.
  */
 static int Fsync_fail_at;
 static int Fsync_calls;
@@ -263,8 +263,8 @@ int fsync(int fd)
  * is the claim being checked and a test of the four alone would pass a library
  * that put three of them back and kept the fourth, or that blocked something it
  * was never asked to. It is also the difference between a restore and a mask
- * that was never taken, which is why the interposed calls above read the mask from inside
- * each window rather than only around it.
+ * that was never taken, which is why the interposed calls above read the mask
+ * from inside each window rather than only around it.
  */
 #ifndef NSIG
 #define NSIG 32
@@ -288,8 +288,8 @@ static int mask_changed(const sigset_t *before)
 }
 
 /**
- * The host's `tcsetattr(3)`, and the interposed call that delivers a death inside a
- * restore.
+ * The host's `tcsetattr(3)`, and the interposed call that delivers a death
+ * inside a restore.
  *
  * `pwauth_tty_restore` puts the saved modes back and clears the flag that says
  * it must. A handler runs with only its own signal blocked, so a second death
@@ -318,7 +318,8 @@ int tcsetattr(int fd, int actions, const struct termios *modes)
 {
 /* unsigned long, not int: these request numbers carry the high bit, and an int
  * array would sign-extend them into a request no driver answers, so every
- * forwarded call would fail and the interposition would quietly stop working. */
+ * forwarded call would fail and the interposition would quietly stop
+ * working. */
 #ifdef TIOCSETA
     static const unsigned long how[] = {TIOCSETA, TIOCSETAW, TIOCSETAF};
 #else
@@ -347,8 +348,8 @@ int tcsetattr(int fd, int actions, const struct termios *modes)
 }
 
 /**
- * The host's `getpid(2)`, and the interposed call that reaches inside the registered
- * release.
+ * The host's `getpid(2)`, and the interposed call that reaches inside the
+ * registered release.
  *
  * That release blocks the four deaths for its own length so a death cannot call
  * `exit` from within `exit`, and it runs after the last case in this process,
@@ -402,8 +403,8 @@ pid_t getpid(void)
 }
 
 /**
- * The host's `snprintf(3)`, and the interposed call that watches the signal mask.
- *
+ * The host's `snprintf(3)`, and the interposed call that watches the signal
+ * mask.
  * The library publishes two pieces of state a death handler then acts on: the
  * lock file's path and the temporary file's name. Neither is one store, so both
  * are written with the four deaths blocked, and this is where that is checked.
@@ -411,12 +412,13 @@ pid_t getpid(void)
  * interpose, and it is enough: the mask is a property of the thread, so reading
  * it here reads it for the statement.
  *
- * `Mask_match` arms the interposed call on the calls that produce one exact string, since
- * the replacement formats the same temporary name twice, once into a local
- * before the mask is taken and once into the state the handler reads. Recording
- * both in order is what makes a blocked reading mean something: the first must
- * come back deliverable and the second blocked, so an interposed call that had stopped
- * looking would fail the case rather than pass it.
+ * `Mask_match` arms the interposed call on the calls that produce one exact
+ * string, since the replacement formats the same temporary name twice, once
+ * into a local before the mask is taken and once into the state the handler
+ * reads. Recording both in order is what makes a blocked reading mean
+ * something: the first must come back deliverable and the second blocked, so an
+ * interposed call that had stopped looking would fail the case rather than
+ * pass it.
  */
 #define MASK_OBS_MAX 4
 static const char *Mask_match;
@@ -1527,14 +1529,14 @@ static void check_background_prompt(void)
  * the restore itself, at the cost of one repeated `tcsetattr`.
  *
  * The window is two instructions wide, so the signal comes from inside it: the
- * interposed `tcsetattr` raises one on the call the restore makes. It is run twice,
- * with a death and with a resume, and the second is the harder half. A resume
- * is not another restore: `pwauth_cont_handler` exists to put a prompt back
- * after a stop, so it re-applies the echo-off modes, and delivered inside the
- * fatal restore it silences the terminal the dying process was in the middle of
- * giving back. The verdict is therefore the terminal's own `ECHO` bit once the
- * reader is gone, read from the slave while this process still holds the
- * master, rather than a count of calls that a resume would inflate.
+ * interposed `tcsetattr` raises one on the call the restore makes. It is run
+ * twice, with a death and with a resume, and the second is the harder half. A
+ * resume is not another restore: `pwauth_cont_handler` exists to put a prompt
+ * back after a stop, so it re-applies the echo-off modes, and delivered inside
+ * the fatal restore it silences the terminal the dying process was in the
+ * middle of giving back. The verdict is therefore the terminal's own `ECHO` bit
+ * once the reader is gone, read from the slave while this process still holds
+ * the master, rather than a count of calls that a resume would inflate.
  *
  * The helper takes the terminal as its controlling one and its own session,
  * because the resume touches the modes only while the process is the
@@ -1758,11 +1760,11 @@ static void check_unlisted_death(void)
  * matches its own, and a setuid program keeps the real uid of whoever ran it,
  * so the user who started the writer may send it as many as they please.
  *
- * The interposed `getpid` is what makes the moment reachable: the acquire records the
- * holder pid through it, and the case arms it to raise `SIGPIPE` on the first
- * call for which the lock file already exists. A child takes the signal so that
- * the run survives to report it, and it must come back alive with the lock
- * released rather than killed with the lock left.
+ * The interposed `getpid` is what makes the moment reachable: the acquire
+ * records the holder pid through it, and the case arms it to raise `SIGPIPE` on
+ * the first call for which the lock file already exists. A child takes the
+ * signal so that the run survives to report it, and it must come back alive
+ * with the lock released rather than killed with the lock left.
  */
 static void check_pipe_during_acquire(void)
 {

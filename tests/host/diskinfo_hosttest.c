@@ -25,7 +25,7 @@ extern unsigned long strlen(const char *s);
 #include "../../rach2/sys/block/block.h"
 #include "../../rach2/sys/block/diskcmd.h"
 
-/* The stub the driver half of diskinfo.c links against; nothing here reaches it. */
+/* The stub the driver half of diskinfo.c links against; nothing reaches it. */
 block_device_t *block0 = 0;
 
 int block_probe(void)

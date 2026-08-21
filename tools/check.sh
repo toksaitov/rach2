@@ -142,11 +142,11 @@ else
     echo "  FAIL: see $VDIR/verify_cppcheck.log"; fail=1
 fi
 
-# 3. shellcheck. New in-house scripts (tools/, vendor/*/build_*.sh) are STRICT; SC2086 stays
-#    active so an accidental unquoted expansion is caught. The legacy QEMU
-#    run/build scripts waive SC2086 (option word-splitting is intentional) and
-#    SC2034 (vars shared across sourced fragments); SC1091 covers the dynamic
-#    source path in both.
+# 3. shellcheck. New in-house scripts (tools/, vendor/*/build_*.sh) are STRICT;
+#    SC2086 stays active so an accidental unquoted expansion is caught. The
+#    legacy QEMU run/build scripts waive SC2086 (option word-splitting is
+#    intentional) and SC2034 (vars shared across sourced fragments); SC1091
+#    covers the dynamic source path in both.
 hr "3/13 shellcheck"
 sc=0
 # shellcheck disable=SC2046

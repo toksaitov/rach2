@@ -417,7 +417,8 @@ void vga_mode13h_exit(void)
  * Load a 256-entry RGB palette into the DAC.
  *
  * @param data 768 bytes, 256 entries of 8-bit R, G, B. Each component is
- *   shifted right by 2 because the VGA DAC holds 6-bit values (0-63). Ignored if NULL.
+ *   shifted right by 2 because the VGA DAC holds 6-bit values (0-63).
+ *   Ignored if NULL.
  */
 void vga_mode13h_set_palette(const uint8_t *data)
 {
