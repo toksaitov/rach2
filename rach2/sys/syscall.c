@@ -7273,10 +7273,10 @@ static int32_t sys_pause(isr_params_t *params)
 /**
  * Atomically install a signal mask and wait (rt_sigsuspend(2)).
  *
- * EBX = const sigset_t *mask, ECX = sigsetsize (8). Replaces the blocked mask with
- * *mask, waits for a deliverable signal, restores the old mask, then returns
- * -EINTR. The handler runs under the RESTORED mask: a simplification, since full
- * save-the-mask-through-the-handler semantics are not modelled.
+ * EBX = const sigset_t *mask, ECX = sigsetsize (8). Replaces the blocked mask
+ * with *mask, waits for a deliverable signal, restores the old mask, then
+ * returns -EINTR. The handler runs under the RESTORED mask: a simplification,
+ * since full save-the-mask-through-the-handler semantics are not modelled.
  */
 static int32_t sys_rt_sigsuspend(isr_params_t *params)
 {

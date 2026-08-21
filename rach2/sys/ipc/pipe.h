@@ -14,8 +14,8 @@
  * The end-of-stream contract is what makes pipelines terminate cleanly:
  *   * read() returns 0 (EOF) once every write-end descriptor is closed and the
  *     buffer has drained;
- *   * write() raises SIGPIPE and returns -EPIPE once every read-end descriptor is
- *     closed (nobody will ever read the bytes).
+ *   * write() raises SIGPIPE and returns -EPIPE once every read-end descriptor
+ *     is closed (nobody will ever read the bytes).
  *
  * The pipe rides the file-backing layer: each end is a descriptor whose `ops`
  * is pipe_ops and whose `priv` is the struct pipe; dup/dup2/fork share the end

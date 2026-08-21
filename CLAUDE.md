@@ -42,7 +42,9 @@ musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, ve
 
 ## Hardware
 
-Writing to a physical disk, or any operation on real hardware that cannot be undone by rebuilding, requires the owner's approval at the time, every time. List the candidate device and what the host reports about it: the node, its size in bytes, its bus, whether it is internal or external, whether it is a whole disk, and the partition table it currently carries. Then wait for an approval that names that node. A previous approval for the same device does not carry forward to the next run, and neither does an approval given on another machine.
+Any operation on real hardware that cannot be undone by rebuilding requires the owner's approval at the time, every time. Present what the host reports about the target, enough that the owner can recognise it, and wait for an approval that names it. A previous approval for the same target does not carry forward to the next run, and neither does one given on another machine, because the name a host gives a device belongs to that host and that moment.
+
+For a disk write, what is presented is the node, its size in bytes, its bus, whether it is internal or external, whether it is a whole disk, and the table it currently carries. Other hardware has other properties; the rule is that the owner is shown enough to recognise the thing, not that these particular fields exist everywhere.
 
 Nothing in this system is bound to a particular drive: the kernel probes for whatever disk is present and finds its root by scanning partition entries. Device identity is therefore a guard on the host's own destructive commands, never an operating requirement, and a person confirming the drive in front of them is the guard that counts.
 

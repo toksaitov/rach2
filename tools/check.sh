@@ -7,10 +7,10 @@
 # shell, the tests, and the build scripts; never the vendored musl/ports trees),
 # runs:
 #
-#   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent skip)
-#   1. the kernel build with -Werror (the zero-warning policy as a hard gate)
-#   2. cppcheck (c89, warning+style) with tools/cppcheck.suppress (--error-exitcode)
-#   3. shellcheck on the in-house shell scripts
+#   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent
+#   skip) 1. the kernel build with -Werror (the zero-warning policy as a hard
+#   gate) 2. cppcheck (c89, warning+style) with tools/cppcheck.suppress
+#   (--error-exitcode) 3. shellcheck on the in-house shell scripts
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
 #   5. clang-format: HARD on new-code dirs (tools/ libc/ tests/host, *probe.c)
 #      and on any files named as arguments; advisory across the legacy tree
@@ -223,8 +223,8 @@ else
     fail=1
 fi
 
-# 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC, so a
-#    newly added kernel source cannot be silently dropped from the build.
+# 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC,
+#    so a newly added kernel source cannot be silently dropped from the build.
 hr "7/13 kernel source list (C_SRC vs disk) and the guest build lists"
 if "$REPO/tools/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
    python3 "$REPO/tools/check_guest.py" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then

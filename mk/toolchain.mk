@@ -10,15 +10,15 @@
 #
 # Override on the command line if your toolchain is named differently, e.g.
 #   make CROSS_CC=/path/to/i686-elf-gcc
-#   make CROSS_CC=/path/to/i686-elf-gcc CROSS_LD=/path/to/i686-elf-ld   # odd names
-#
+#   make CROSS_CC=/path/to/i686-elf-gcc CROSS_LD=/path/to/i686-elf-ld   # odd
+#names 
 # CROSS_CC : the freestanding cross C compiler
 # CROSS_LD : the matching linker (used for the kernel's `-T link.ld` link)
 # CROSS_AR / CROSS_STRIP / CROSS_OBJCOPY : the matching binutils
 
-# $(or ...) returns the first non-empty: a caller-supplied CROSS_CC wins; then an
-# explicit command-line `make CC=...` (so the conventional knob works too, but
-# NOT an incidental environment CC=clang, which is not a cross GCC); then
+# $(or ...) returns the first non-empty: a caller-supplied CROSS_CC wins; then
+# an explicit command-line `make CC=...` (so the conventional knob works too,
+# but NOT an incidental environment CC=clang, which is not a cross GCC); then
 # i686-elf-gcc, then x86_64-elf-gcc. ($(or) short-circuits, so a later probe
 # runs only if needed.)
 CROSS_CC := $(or $(CROSS_CC),\

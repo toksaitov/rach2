@@ -19,14 +19,14 @@
  *   * IRQ-context senders (the NIC RX handler replying with ACK/RST/ARP/ICMP,
  *     and the timer driving tcp_tick retransmissions) run inside IRQ handlers,
  *     which clear IF on entry and do not nest, so they never interleave.
- *   * Syscall-context senders (sendto, tcp_send, connect, listen, ping) run with
- *     interrupts ENABLED: the syscall stub re-enables IF so the timer and audio
- *     keep running through long syscalls. A NIC or timer IRQ can therefore fire
- *     mid-build and re-enter the stack, corrupting the shared buffers and pools.
- *     To prevent that, syscall-context code brackets every access to this shared
- *     state with net_lock()/net_unlock(), which save IF and disable interrupts
- *     for the duration. (IRQ-context callers already run with IF=0, so the same
- *     bracketing is a harmless no-op there.)
+ *   * Syscall-context senders (sendto, tcp_send, connect, listen, ping) run
+ *     with interrupts ENABLED: the syscall stub re-enables IF so the timer and
+ *     audio keep running through long syscalls. A NIC or timer IRQ can
+ *     therefore fire mid-build and re-enter the stack, corrupting the shared
+ *     buffers and pools. To prevent that, syscall-context code brackets every
+ *     access to this shared state with net_lock()/net_unlock(), which save IF
+ *     and disable interrupts for the duration. (IRQ-context callers already run
+ *     with IF=0, so the same bracketing is a harmless no-op there.)
  *
  * The driver's descriptor handoff additionally guards itself (see
  * rtl8139_tx). Do not transmit, allocate a TCB or socket, or touch the ARP

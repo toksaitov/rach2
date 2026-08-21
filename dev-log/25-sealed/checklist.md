@@ -7,7 +7,7 @@ It is written to be worked through in order. Two things make it different from t
 ## What this session does
 
 1. Build the image and rehearse it in QEMU.
-2. Identify the target drive by model and serial, twice, and confirm it is the 250 GB drive and not the laptop's original 1 TB one.
+2. List the candidate drive and everything the host reports about it, get the owner's approval naming that node, and confirm the node by unplugging and replugging it.
 3. Write 660602880 bytes to it over a USB adapter, from the Mac.
 4. Read the same count back off the drive and compare hashes.
 5. Screw the drive into the laptop, boot it, and reach it over SSH.
@@ -171,12 +171,12 @@ one check that does not depend on the bridge reporting anything at all.
 
 ## The write and the readback
 
-One block, and the device is named once. Everything the earlier steps checked by
-eye is checked again here by the shell, immediately before the write and in the
-same breath as it, because the two numbers that matter are the two that can have
-changed since: which node the drive is on, and which artifact is in the build
-directory. `set -e` means the first line that disagrees stops the block before
-anything is written.
+One block, and the device is named once. What the shell re-checks here is the
+part that can have changed since the approval was given: the node's own
+properties, and the artifact in the build directory. It does not re-check the
+drive's identity, because with this adapter there is nothing to compare; that
+rests on the approval above. `set -e` stops the block at the first line that
+disagrees, before anything is written.
 
 Fill in the two values, and paste the whole thing. `DISK` is the node the
 approval named, and `SEALED_SHA` is the digest `make sealed-test` printed. Both
@@ -193,11 +193,46 @@ and is not the host's boot disk.
 ```sh
 (
     set -e
+    set -o pipefail                       # a failing dd in a pipe must not pass
+    IMG=build/images/rach2-sealed.disk
+    BYTES=660602880
+
     DISK=                                 # the node the approval named
     SEALED_SHA=                           # the digest sealed-test printed
+    APPROVED_BYTES=                       # the size the approval was given for
 
-    test -n "$DISK" && test -n "$SEALED_SHA"
-    test "$DISK" != /dev/disk0            # never the host's own boot disk
+    # One test per line. `test a && test b` is an AND list, and a failing FIRST
+    # command in one of those is exempt from `set -e`: the shell skips the rest
+    # and carries on. Written that way, an empty DISK would not stop here.
+    test -n "$DISK"
+    test -n "$SEALED_SHA"
+    test -n "$APPROVED_BYTES"
+
+    # The digest is compared as a string, never interpolated into a pattern: a
+    # nonempty but wrong-shaped value such as `.*` matches every line grep is
+    # given, and both hash checks would then pass on any drive.
+    printf '%s' "$SEALED_SHA" | grep -Eq '^[0-9a-f]{64}$'
+
+    # The node is a whole-disk device node and not the host's boot disk, which
+    # is resolved rather than assumed to be disk0: an externally booted Mac has
+    # a different number, and `DISK=disk0` without the prefix would slip a
+    # literal comparison while `RAW` still became /dev/rdisk0.
+    printf '%s' "$DISK" | grep -Eq '^/dev/disk[0-9]+$'
+
+    # Two hops, because `/` resolves to the APFS container and not to the disk
+    # under it: on this Mac the container is disk3 and the drive is disk0, so a
+    # check that stopped at the first answer would leave the physical boot disk
+    # unguarded. The External test below is the real protection; this is the
+    # belt to its braces.
+    BOOTC="$(diskutil info / | awk -F': *' '/Part of Whole/ {print $2; exit}')"
+    test -n "$BOOTC"
+    test "$DISK" != "/dev/$BOOTC"
+    BOOTS="$(diskutil info "$BOOTC" | awk -F': *' '/APFS Physical Store/ {print $2; exit}')"
+    if [ -n "$BOOTS" ]; then
+        BOOTW="$(diskutil info "$BOOTS" | awk -F': *' '/Part of Whole/ {print $2; exit}')"
+        test -n "$BOOTW"
+        test "$DISK" != "/dev/$BOOTW"
+    fi
 
     RAW="/dev/r${DISK#/dev/}"             # the same device, derived and not typed
     INFO="$(diskutil info "$DISK")"
@@ -207,32 +242,49 @@ and is not the host's boot disk.
     GOT_PROTO="$(printf '%s\n' "$INFO" | awk -F': *' '/Protocol/ {print $2; exit}')"
     GOT_WHOLE="$(printf '%s\n' "$INFO" | awk -F': *' '/^ *Whole/ {print $2; exit}')"
 
-    test -n "$GOT_BYTES" && test -n "$GOT_WHERE" && test -n "$GOT_PROTO"
+    test -n "$GOT_BYTES"
+    test -n "$GOT_WHERE"
+    test -n "$GOT_PROTO"
     test "$GOT_WHERE" = "External"
+    test "$GOT_PROTO" = "USB"
     test "$GOT_WHOLE" = "Yes"
-    test "$GOT_BYTES" -ge 660602880
-    test "$GOT_BYTES" -lt 600000000000
-    shasum -a 256 build/images/rach2-sealed.disk | grep -q "^$SEALED_SHA "
+    # The exact size the approval named, not a range: a range accepts any other
+    # external disk that happens to be attached.
+    test "$GOT_BYTES" -eq "$APPROVED_BYTES"
+
+    # The artifact is whole before it is written. `count` is a maximum, so dd
+    # succeeds on an early end of file and would write a truncated image as if
+    # it were complete.
+    test "$(stat -f %z "$IMG")" -eq "$BYTES"
+    ACTUAL_SHA="$(shasum -a 256 "$IMG" | awk '{print $1}')"
+    test "$ACTUAL_SHA" = "$SEALED_SHA"
 
     diskutil unmountDisk "$DISK"
-    sudo dd if=build/images/rach2-sealed.disk of="$RAW" bs=1m count=630
+    sudo dd if="$IMG" of="$RAW" bs=1m count=630
     sync
 
-    sudo dd if="$RAW" bs=1m count=630 2>/dev/null | shasum -a 256 | grep -q "^$SEALED_SHA "
+    READBACK_SHA="$(sudo dd if="$RAW" bs=1m count=630 | shasum -a 256 | awk '{print $1}')"
+    echo "readback: $READBACK_SHA"        # for the session record
+    test "$READBACK_SHA" = "$SEALED_SHA"
     echo "the drive holds the artifact that was rehearsed"
 )
 ```
 
-Both values start empty and the block stops at its first `test` until they are
-filled in, which is the behaviour to want from something about to overwrite a
-disk.
+Every value starts empty and each is tested on its own line, so the block stops
+before it reads a device. What it cannot do is recognise the drive: with no
+serial to compare, the shell can only assert that the node is an external USB
+whole disk of exactly the approved size. That the drive is the right one is
+established by the approval and by the unplug and replug, not here.
 
-Run it once with the `sudo` and `diskutil` lines commented out if you want to see
-what it parsed. A field name this awk does not match is an empty value and a
+To see what it parsed before trusting it, comment out `diskutil unmountDisk`,
+both `sudo dd` lines and `sync`, and add a `printf` of the four `GOT_` values
+after they are read. Commenting out the `diskutil info` line instead leaves
+nothing to parse. A field name this awk does not match is an empty value and a
 stop, not a wrong write.
 
-630 MiB is 660602880 bytes, which is the whole artifact; `dd` is given the count
-so a truncated file cannot be written as if it were complete. The raw node is
+630 MiB is 660602880 bytes, which is the whole artifact. `dd` is given the count,
+but a count is a maximum and `dd` succeeds at an early end of file, so the size
+is asserted before the write rather than inferred from it. The raw node is
 derived from `$DISK` rather than typed again, because a raw node typed by hand
 is a second chance to name the wrong disk, and it is the one that writes at a
 usable speed.
@@ -261,6 +313,8 @@ From the Mac:
 
 ```sh
 ssh -i krffs/rach2_demo_ed25519 root@<the address the router gave it>
+# compare the SHA256 fingerprint ssh shows against the one read off the screen
+# BEFORE typing yes; if they differ, something else is answering. Abort.
 bootctl status
 ```
 

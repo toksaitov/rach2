@@ -12,9 +12,9 @@
  *   * the SLAVE is a full tty (a struct tty with the N_TTY line discipline): a
  *     process opens /dev/pts/N, makes it its controlling terminal, and reads
  *     cooked lines / writes output exactly as it would the console;
- *   * the MASTER is what the login server drives: it opens /dev/ptmx, writes the
- *     bytes the remote user typed (which the slave discipline cooks and echoes)
- *     and reads back the slave's output (and that echo).
+ *   * the MASTER is what the login server drives: it opens /dev/ptmx, writes
+ *     the bytes the remote user typed (which the slave discipline cooks and
+ *     echoes) and reads back the slave's output (and that echo).
  *
  * Data flow:
  *   master write(b) -> tty_input_char(&slave, b)   (discipline cooks + echoes)
@@ -22,8 +22,8 @@
  *   slave  write(b) -> tty_write(&slave)           (OPOST/ONLCR output)
  *   master read     <- the slave output + the echo (the m_buf ring below)
  * Both the slave's echo and its output leave through the slave's SINK, which
- * pushes into m_buf; the master reads m_buf. The slave has no polled input source
- * (pump == NULL); it is fed by master writes, not a serial port, so the
+ * pushes into m_buf; the master reads m_buf. The slave has no polled input
+ * source (pump == NULL); it is fed by master writes, not a serial port, so the
  * timer-IRQ console drain never touches a pty.
  *
  * Each endpoint is an fd riding the file_ops layer (ops + priv = the struct
