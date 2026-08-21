@@ -376,12 +376,12 @@ static char Getpid_raise_when[192];
  * rather than by feature; an unrecognized compiler simply keeps the
  * instrumentation, which costs correctness nothing here. */
 #if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 8)
-#define SEAM_UNINSTRUMENTED __attribute__((no_sanitize("address", "undefined")))
+#define INTERPOSED_UNINSTRUMENTED __attribute__((no_sanitize("address", "undefined")))
 #else
-#define SEAM_UNINSTRUMENTED
+#define INTERPOSED_UNINSTRUMENTED
 #endif
 
-SEAM_UNINSTRUMENTED
+INTERPOSED_UNINSTRUMENTED
 pid_t getpid(void)
 {
     pid_t self = (pid_t)syscall(SYS_getpid);
@@ -2501,7 +2501,7 @@ static void check_exit_mask(void)
             fail("the registered release left a signal blocked for the rest of exit");
         }
         if (answer[1] == '?') {
-            fail("the registered release never reached the seam inside it");
+            fail("the registered release never reached the interposed call inside it");
         } else if (answer[1] != 'y') {
             fail("the registered release ran with a death signal deliverable");
         }
@@ -2740,7 +2740,7 @@ static void check_masked(void)
         return;
     }
     if (Mask_obs_n == 0) {
-        fail("the acquire never reached the signal-mask seam");
+        fail("the acquire never reached the interposed signal-mask call");
     } else if (Mask_obs[0] != 1) {
         fail("the acquire recorded its lock with a death signal still deliverable");
     }
@@ -2763,10 +2763,11 @@ static void check_masked(void)
         fail("the replacement the signal-mask case watches did not publish");
     }
     if (Mask_obs_n < 2) {
-        fail("the replacement reached the signal-mask seam fewer than twice");
+        fail("the replacement reached the interposed signal-mask call fewer than twice");
     } else {
         if (Mask_obs[0] != 0) {
-            fail("the seam reads every call as blocked, so a blocked reading proves nothing");
+            fail("the interposed call reads every call as blocked, so a "
+                 "blocked reading proves nothing");
         }
         if (Mask_obs[1] != 1) {
             fail("the replacement published the temporary's name with a death deliverable");
