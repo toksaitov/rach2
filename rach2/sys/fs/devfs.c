@@ -353,7 +353,7 @@ static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_
 /*
  * One writer at a time across every raw window on the disk.
  *
- * A reflash is a sequence of writes at an offset each descriptor carries for
+ * A reflash is a sequence of writes at an offset each descriptor keeps for
  * itself. Two of them at once, over ranges that overlap, each write their whole
  * declared length and each report success, and what is on the platter
  * afterwards is neither image. Nothing detects that: the bytes are a mixture,
@@ -1028,7 +1028,7 @@ void devfs_grubcore_withdraw(void)
  *
  * The range is the layout's, not the partition table's: LBA 1 through 2047,
  * fixed, so nothing a damaged table says can widen it. Sector 0 is outside it
- * because that sector carries the partition table and a disk writes whole
+ * because that sector has the partition table and a disk writes whole
  * sectors, so there is no way to touch the eight bytes of boot code that point
  * at the core image without rewriting the table beside them.
  */

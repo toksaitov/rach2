@@ -266,7 +266,7 @@ static void audio_run_scale_test(uint32_t duration_ms)
  *
  * Uses 11025 Hz unsigned-8 mono and synthesizes samples in this thread,
  * pushing them with audio->write(). Each timer tick it computes how many frames
- * are due (sample_acc carries the fractional remainder across ticks so the rate
+ * are due (sample_acc keeps the fractional remainder across ticks so the rate
  * stays exact over time) and writes them in <= sizeof(buf) chunks, halting on a
  * short write until the driver drains. Exercises the write side that the
  * callback test bypasses.

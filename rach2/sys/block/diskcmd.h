@@ -19,7 +19,7 @@
  * entry is the disk this exists to protect; a list of what is permitted costs
  * a refused read at worst, which is a boot that stops and says so.
  *
- * `diskcmd_policy_banner` is a string the built kernel carries so the policy an
+ * `diskcmd_policy_banner` is a string the built kernel embeds so the policy an
  * artifact was built with can be read off the artifact itself. Checking for the
  * absence of a write path would prove nothing: the commands are numbers and the
  * functions that issue them are static, so there is nothing to look for. A

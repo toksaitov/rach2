@@ -2,7 +2,7 @@
  * KRFFS: a K&R first-fit file system.
  *
  * The medium is one contiguous region holding a circular doubly linked list
- * of nodes. Each node carries a header (krffs_node_t) followed by its data;
+ * of nodes. Each node has a header (krffs_node_t) followed by its data;
  * a node is either free or reserved (a file or directory). Allocation is
  * first-fit with split-and-coalesce, after the storage allocator in The C
  * Programming Language. Directories are hierarchical (the v2 parent_id
@@ -176,7 +176,7 @@ krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, 
  * Hierarchical path resolution (the KRFFS v2 on-disk format).
  *
  * A node's parent_id is its directory's logical id (KRFFS_ROOT_ID == 0 for
- * the root, whose own node is fs->node and carries no parent reference). A
+ * the root, whose own node is fs->node and has no parent reference). A
  * directory node's id is mix(parent_id, name), unique because sibling names
  * are unique, so children reference it unambiguously. Resolution matches
  * each path component by (name, parent_id), descending only into
@@ -689,7 +689,7 @@ void krffs_list_files(void)
     }
 }
 
-/* Freestanding: no libc, so the write path carries its own memcpy and
+/* Freestanding: no libc, so the write path has its own memcpy and
  * strncpy. */
 
 static void _krffs_memcpy(void *dest, const void *src, uint32_t n)
@@ -1419,7 +1419,7 @@ int krffs_mkdir(const char *path)
         return -1;
     }
 
-    /* A directory carries its name, the S_IFDIR mode, an empty body, and a
+    /* A directory has its name, the S_IFDIR mode, an empty body, and a
      * unique id (mix of parent and name) that its children reference as their
      * parent_id. */
     _krffs_strncpy((char *)node->name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
@@ -1540,7 +1540,7 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out,
  * partially written image (a node whose size overshoots the region, is below
  * a header, or a chain that never closes) would drive them out of bounds or
  * into an infinite loop. Validate the structure before publishing it: each
- * node sits within the region with a header that fits, carries the magic and
+ * node sits within the region with a header that fits, has the magic and
  * a known type, has a size of at least one header that does not run past the
  * end, and a backward link consistent with the previous node; the sizes must
  * tile the region exactly and the chain must close back on the root. Returns

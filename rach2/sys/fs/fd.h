@@ -5,7 +5,7 @@
  * The per-process file descriptor table: the small array of slots a process
  * indexes by descriptor number to reach whatever it has open. A slot names
  * what it points at (a console, a KRFFS file or directory, a socket, a pipe
- * or tty or pty, a devfs or procfs node) and carries the per-descriptor
+ * or tty or pty, a devfs or procfs node) and has the per-descriptor
  * flags; the seek offset and the POSIX status flags live one level down in
  * the shared open-file description so dup, dup2, and fork can hand several
  * descriptors the same open. fd 0/1/2 are wired to the console as stdin,

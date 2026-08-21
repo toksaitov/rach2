@@ -1202,7 +1202,7 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode,
 
 /**
  * The permission check over a KRFFS node. The root directory reads as 0755,
- * the fixed identity stat reports (its stored mode carries the dirty-mount
+ * the fixed identity stat reports (its stored mode has the dirty-mount
  * flag). Executing a regular file demands an execute bit somewhere even for
  * root: root runs programs, not data.
  */
@@ -1386,7 +1386,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_NET_DEV:
             return procfs_open(vp, flags);
         case VNODE_PROC_DISK:
-            /* Root only. The file carries the drive's serial number, and an
+            /* Root only. The file has the drive's serial number, and an
              * image that has this file also has an unprivileged account. */
             {
                 int32_t rc = cred_access_bits(0, 0, 0400u, CRED_R, 0);
@@ -1440,7 +1440,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     }
     /* The directory exists, so honour flags that contradict that. An exclusive
      * create of an existing object is -EEXIST regardless of access mode (the
-     * usual O_CREAT|O_EXCL form carries write access), so that check comes
+     * usual O_CREAT|O_EXCL form implies write access), so that check comes
      * first; then a directory cannot be opened for writing. */
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         return -EEXIST;
@@ -3652,7 +3652,7 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
      * where this started, left `chown(path, -1, gid)` unstamped. */
     /* The set-id clear is not gated on privilege: POSIX drops the bits whoever
      * asks, which is why cp and install chown before they chmod. Both are gated
-     * on a field ACTUALLY having changed, and that gate carries real weight:
+     * on a field ACTUALLY having changed, and that gate has real weight:
      * chown(path, -1, -1) succeeds for every caller by design, since a value
      * that changes nothing needs no right, so a clear that ran on it would let
      * any uid disarm /bin/su with one call. */
@@ -4061,7 +4061,7 @@ static int32_t sys_linkat(isr_params_t *params)
  * _llseek (syscall 140): 64-bit seek. EBX=fd, ECX=offset_high, EDX=offset_low,
  * ESI=result (long long*), EDI=whence. musl's lseek is implemented on top of
  * this on i386. KRFFS files are under 4 GB so offset_high is 0 for them; the
- * raw disk windows are the reason this call carries a full 64-bit offset, since
+ * raw disk windows are the reason this call has a full 64-bit offset, since
  * a whole drive's far end cannot be named in 32 bits.
  */
 static int32_t sys__llseek(isr_params_t *params)
@@ -4550,7 +4550,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
              * write). A READ-ONLY page (ELF text, PROT_READ, or an
              * already-COW page from an earlier fork) is shared with its
              * exact flags, no copy; a write to genuine read-only text still
-             * segfaults because it carries no PTE_COW.
+             * segfaults because it has no PTE_COW.
              */
             if (pte & 0x2) {
                 uint32_t cow = 0x1u | 0x4u | PTE_COW; /* present + user + COW (RO) */
@@ -5165,7 +5165,7 @@ static int32_t sys_execve(isr_params_t *params)
      * the image runs with authority its invoker lacks, the effective id
      * differing from the real one either way, so libc distrusts the
      * caller-supplied environment; it is the only such signal, since the
-     * stack carries no AT_UID/AT_EUID for libc to compare. */
+     * stack has no AT_UID/AT_EUID for libc to compare. */
     if (setid_mode & KRFFS_MODE_SUID) {
         current_proc->euid = file_uid;
     }
@@ -7858,7 +7858,7 @@ static int32_t sys_ioctl(isr_params_t *params)
         return -EBADF;
     }
 
-    /* A socket carries the interface ioctls: this is where a program sets the
+    /* A socket accepts the interface ioctls: this is where a program sets the
      * machine's address, which is what a DHCP client is for. They are checked
      * before the tty block because a socket is not a terminal and would
      * otherwise fall through to -ENOTTY. */
@@ -8236,7 +8236,7 @@ static int32_t do_socket(int domain, int type, int protocol)
     /* The query descriptor. A DHCP client opens AF_INET/SOCK_RAW/IPPROTO_RAW
      * and does nothing with it but ask the interface ioctls about the machine
      * (busybox's `udhcp_read_interface`), so that is what it is here: a
-     * descriptor that carries ioctls and closes, and refuses to send or
+     * descriptor that accepts ioctls and closes, and refuses to send or
      * receive, because this stack has no raw IP path to offer. Root's, like
      * every raw socket. */
     if (domain == AF_INET && type == SOCK_RAW) {
@@ -8392,7 +8392,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
         return -ENOTSOCK;
     }
 
-    /* The query descriptor carries ioctls and nothing else: this stack has no
+    /* The query descriptor accepts ioctls and nothing else: this stack has no
      * raw IP path, and a caller that got silence here would be waiting for a
      * datagram that cannot arrive. */
     if (entry->sock->type == SOCK_RAW) {
@@ -8518,7 +8518,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
         }
     }
 
-    /* The query descriptor carries ioctls and nothing else: this stack has no
+    /* The query descriptor accepts ioctls and nothing else: this stack has no
      * raw IP path, and a caller that got silence here would be waiting for a
      * datagram that cannot arrive. */
     if (entry->sock->type == SOCK_RAW) {

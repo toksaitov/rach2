@@ -67,7 +67,7 @@
 
 /* PCS, the Intel port control and status word in PCI CONFIG space: one enable
    bit per port. Not an AHCI register at all, which is why it is easy to miss
-   and why Linux carries a named quirk for it. */
+   and why Linux has a named quirk for it. */
 #define AHCI_INTEL_PCS 0x92
 
 /* SSTS: DET (bits 0-3) == 3 is device present + PHY ready; IPM (bits 8-11) == 1
@@ -149,7 +149,7 @@ static volatile uint8_t ahci_cmdtable[AHCI_CMDTABLE_SIZE] __attribute__((aligned
 
 /* The H2D Register FIS and the ATA commands the polled path issues. */
 #define AHCI_FIS_H2D      0x27u
-#define AHCI_FIS_H2D_C    0x80u /* C bit: this FIS carries a command */
+#define AHCI_FIS_H2D_C    0x80u /* C bit: this FIS has a command */
 #define ATA_READ_DMA_EXT  0x25u
 #define ATA_WRITE_DMA_EXT 0x35u
 #define ATA_FLUSH_EXT     0xEAu /* FLUSH CACHE EXT, durability after a write */
@@ -654,7 +654,7 @@ static int ahci_select_port(void)
         ahci_port = p;
         return 0;
     }
-    ahci_err = "no port carries a disk";
+    ahci_err = "no port has a disk";
     return -1;
 }
 
@@ -923,7 +923,7 @@ int ahci_init(void)
         ahci_select_port() != 0 || ahci_port_start() != 0 || ahci_identify() != 0) {
         serial_printf("ahci: %s\n", ahci_err);
         /* The registers behind the refusal, into the log the machine hands
-         * out afterwards (/dev/bootlog): one failed boot then carries enough
+         * out afterwards (/dev/bootlog): one failed boot then leaves enough
          * to decide between every cause the investigation named, instead of
          * costing another trip to the machine. */
         if (ahci_base) {

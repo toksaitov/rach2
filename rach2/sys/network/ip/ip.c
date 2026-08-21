@@ -1,7 +1,7 @@
 /*
  * ip.c - Internet Protocol (IPv4).
  *
- * The 20-byte header carries the source and destination addresses, the upper
+ * The 20-byte header has the source and destination addresses, the upper
  * protocol number, a TTL, and a one's complement checksum over the header.
  * Multi-byte fields are big-endian on the wire; we keep IP addresses as
  * host-endian uint32_t (net_ip_addr = 0x0A00020F = 10.0.2.15) and convert at
@@ -28,7 +28,7 @@
  *
  * Sums 16-bit big-endian words, folding each carry back into the low 16 bits,
  * and returns the one's complement of the result. An odd trailing byte is
- * padded with a zero low byte. A header that already carries a valid checksum
+ * padded with a zero low byte. A header that already has a valid checksum
  * sums to zero, so callers verify by checking the result against zero.
  */
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
@@ -65,7 +65,7 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
  * off the wire (`from_loopback == 0`) whose source is our own address or a
  * `127/8` loopback address is a martian, a spoof no real peer sends, and is
  * dropped before any reply can be steered onto the loopback ring or emitted
- * carrying a loopback source. A genuine loopback datagram carries our own
+ * carrying a loopback source. A genuine loopback datagram has our own
  * source by design, so the check is gated on the delivery path, not the value.
  */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
@@ -119,7 +119,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     src_ip = read32be(data + 12);
 
     /* Reject a martian source off the wire: our own address, or 127/8, from a
-     * peer is a spoof (only a loopback delivery legitimately carries these). */
+     * peer is a spoof (only a loopback delivery legitimately has these). */
     if (!from_loopback &&
         (src_ip == net_ip_addr || (src_ip & 0xFF000000u) == 0x7F000000u)) {
         return;
@@ -228,7 +228,7 @@ void ip_tx(uint32_t dst_ip, uint8_t proto,
     }
 
     /* A broadcast goes to every machine on the wire, and the wire's own
-       broadcast address is what carries it: there is nobody to ask for a
+       broadcast address is what reaches it: there is nobody to ask for a
        hardware address, and asking the gateway to forward it would send one
        machine's broadcast to a router that has no business with it. */
     if (netconf_is_broadcast(dst_ip)) {

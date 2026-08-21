@@ -1,7 +1,7 @@
 /*
  * udelay.c: short waits measured against the 8254 counter.
  *
- * The device bring-up sequences this kernel carries ask for waits in
+ * The device bring-up sequences in this kernel ask for waits in
  * microseconds and milliseconds, and every one of them is a hardware
  * requirement rather than a convenience: a wait that comes up short leaves a
  * chip half-configured in a way that shows on one machine and not another. A

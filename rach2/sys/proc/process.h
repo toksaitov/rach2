@@ -88,7 +88,7 @@ struct process {
     uint32_t umask;
     /* Credentials: the V7 model with POSIX saved IDs. Real, effective, and
      * saved uid and gid plus the supplementary groups; fork copies them, exec
-     * carries the real ids through, applies the file's setuid/setgid bits to
+     * passes the real ids through, applies the file's setuid/setgid bits to
      * the effective ids, and sets the saved ids to the new effective ids (the
      * POSIX exec rule, set-id or not); the id syscalls move them under the
      * textbook rules: effective uid 0 sets anything, anyone else only swaps

@@ -211,7 +211,7 @@ static void mouse_irq_handler(isr_params_t *params)
         return;
     }
 
-    /* Byte 0 carries the always-1 framing bit (bit 3). */
+    /* Byte 0 has the always-1 framing bit (bit 3). */
     if (packet_index == 0) {
         if (!(data & 0x08)) {
             return;

@@ -72,7 +72,7 @@ void proc_reclaim_boot_pids(void)
  * Claim the first unused process slot and return it ready to run.
  *
  * The new pid is bounded to the positive int range, since the /proc path
- * layer carries pid as an int, and any still-live pid is skipped so live
+ * layer has pid as an int, and any still-live pid is skipped so live
  * pids stay unique. The wrap is unreachable in practice (~2e9 spawns), so
  * the assignment is normally just `next_pid++`. The process starts as the
  * leader of its own session and process group; fork() overrides `sid` and

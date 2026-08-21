@@ -2,7 +2,7 @@
 #include "../lib/kstring.h"
 
 /*
- * The open-file-description pool. Each OFD carries one shared seek offset
+ * The open-file-description pool. Each OFD has one shared seek offset
  * and a refcount of how many descriptors point at it (dup/dup2/fork add
  * references). A slot with refcount 0 is free. The pool is sized for the
  * worst case of every descriptor in every process holding a distinct OFD,

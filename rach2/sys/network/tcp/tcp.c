@@ -176,7 +176,7 @@ static void tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     uint8_t  hdr_len;
     uint16_t seg_len;
 
-    hdr_len = (flags & TCP_SYN) ? 24 : 20;   /* SYN carries an MSS option */
+    hdr_len = (flags & TCP_SYN) ? 24 : 20;   /* SYN has an MSS option */
 
     write16be(tcp_tx_buf + 0,  tcb->local_port);
     write16be(tcp_tx_buf + 2,  tcb->remote_port);

@@ -55,7 +55,7 @@ void pic_unmask_irq(uint8_t irq)
 }
 
 /**
- * Mask one PIC line, on whichever of the two controllers carries it.
+ * Mask one PIC line, on whichever of the two controllers has it.
  *
  * Masking a slave line leaves the cascade line itself alone, since the other
  * slave lines still have to arrive.

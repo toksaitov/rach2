@@ -608,7 +608,7 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
  * Reserve one free physical frame for kernel-internal use and return its
  * physical address, or 0 if none is free.
  *
- * The frame is marked used at reference count 1 and never carries the user
+ * The frame is marked used at reference count 1 and never has the user
  * bit, so `alloc_user_page` and `free_user_pages` skip it; the caller owns
  * it for the life of the kernel. The scan runs from the top of the pool
  * down, away from the bottom-up user-page scan, so a kernel reservation and

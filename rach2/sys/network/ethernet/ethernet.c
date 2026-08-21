@@ -91,7 +91,7 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
                       (int)plen);
         return;
     }
-    /* An interface an administrator took down carries no IP and answers no
+    /* An interface an administrator took down has no IP and answers no
        ARP. Netconsole is not gated, and that is deliberate: it is how a machine
        with no console is read, and a machine whose network was just
        misconfigured is exactly when its log is worth having. */

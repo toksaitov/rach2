@@ -17,7 +17,7 @@
 
 #define SOCK_STREAM          1      /* TCP */
 #define SOCK_DGRAM           2      /* UDP */
-/* A descriptor that carries the interface ioctls and nothing else. A DHCP
+/* A descriptor that accepts the interface ioctls and nothing else. A DHCP
  * client opens one to ask this machine about itself (busybox's
  * `udhcp_read_interface`); this stack has no raw IP path, so every other
  * operation on it is refused rather than answered with silence. */
@@ -73,7 +73,7 @@ typedef struct socket {
     uint16_t last_src_port;
 
     /* UDP single-datagram receive buffer. Occupancy is `recv_full` and not the
-     * length, because a datagram of no bytes is a datagram: UDP carries an
+     * length, because a datagram of no bytes is a datagram: UDP has an
      * empty payload perfectly well, and a slot that read its own emptiness as
      * "nothing here" would build one, send it, accept it, deliver it to the
      * right socket, and then drop it at the last step, leaving a blocked
