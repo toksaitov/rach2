@@ -2,7 +2,7 @@
  * Dual-target seam test for k_itoa (sys/lib/kstd.c).
  *
  * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
- * rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
  * k_itoa is the integer formatter behind every kernel and util number print,
  * so it is exercised here natively under AddressSanitizer +

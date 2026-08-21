@@ -50,7 +50,21 @@ mkdir -p "$OUT"
 for src in *.c; do
     prog="${src%.c}"
     deps=""
-    for dep in $(grep -oE 'link-deps:[^*]*' "$src" | head -1 | sed 's/link-deps://'); do
+    # Every link-deps: line, not just the first: the declaration is repeatable
+    # for the same reason the host tests' is, and `head -1` silently dropped a
+    # second one. A wrapped declaration is refused outright, because the
+    # `[^*]*` grep stops at the next `*` and would drop the paths past the
+    # fold without saying so.
+    if ! awk '
+        /link-deps:/ && prev ~ /link-deps:/ { prev = $0; next }
+        prev ~ /link-deps:/ && $0 ~ /^[[:space:]]*\*[[:space:]]+[A-Za-z0-9_.\/-]+\.[ch]([[:space:]]|$)/ { exit 1 }
+        { prev = $0 }
+    ' "$src"; then
+        echo "error: $src has a wrapped link-deps: line; repeat the" >&2
+        echo "error: link-deps: prefix on the next line instead" >&2
+        exit 1
+    fi
+    for dep in $(grep -oE 'link-deps:[^*]*' "$src" | sed 's/link-deps://'); do
         if [ ! -f "$REPO/$dep" ]; then
             echo "error: $src names a link-deps: source that is not there: $dep" >&2
             exit 1

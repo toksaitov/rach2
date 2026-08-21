@@ -51,6 +51,21 @@ if [ -z "$WATCHDOG" ]; then
     echo "hosttest: no timeout(1) or gtimeout(1); a hung test will not be cut short" >&2
 fi
 
+wrapped_deps()
+{
+    # A wrapped declaration is silent damage: the `[^*]*` grep below stops at
+    # the next `*`, so paths past the fold are dropped and the test either
+    # fails to link for no stated reason or keeps passing because something
+    # else already pulled the file in. Checked against the PREVIOUS record
+    # rather than with `getline`, which consumes the next line and so misses a
+    # wrap that follows a second, legitimately repeated declaration.
+    awk -v tag="$2" '
+        $0 ~ tag && prev ~ tag { prev = $0; next }
+        prev ~ tag && $0 ~ /^[[:space:]]*\*[[:space:]]+[A-Za-z0-9_.\/-]+\.[ch]([[:space:]]|$)/ { exit 1 }
+        { prev = $0 }
+    ' "$1"
+}
+
 for t in tests/host/*_hosttest.c; do
     [ -f "$t" ] || continue
     any=1
@@ -60,6 +75,13 @@ for t in tests/host/*_hosttest.c; do
     # silently lose everything past the fold; a second line is how a test with
     # more dependencies than fit says so.
     deps="$(grep -oE 'host-deps:[^*]*' "$t" | sed 's/host-deps://' | tr '\n' ' ')"
+
+    if ! wrapped_deps "$t" "host-deps:"; then
+        echo "hosttest: $t: a host-deps: line is wrapped; repeat the" >&2
+        echo "hosttest: host-deps: prefix on the next line instead" >&2
+        exit 1
+    fi
+
     out="$VDIR/$base"
     # Name a missing dep here: passed on to the compiler it would surface as a
     # bare "no such file", which reads as a broken test. A dep under the

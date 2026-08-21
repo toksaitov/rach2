@@ -41,72 +41,108 @@ SKIP_DIRS = ("vendor", "build", ".git")
 SKIP_PATHS = (os.path.join("ports", "doom", "src"),)
 
 
-def c_comment_lines(text):
-    """Line numbers (1-based) that carry C comment text, literal-aware.
+def c_spans(text):
+    """Yield `(kind, line, text)` for every comment and string in C source.
 
-    A line is reported once even if it carries several comments. The scan is a
-    small state machine rather than a regular expression because a `/*` inside a
-    string and a quote inside a comment both occur in this tree.
+    `kind` is "comment" or "string"; `line` is where the span starts, 1-based;
+    `text` is the span's content without its delimiters. One state machine, so
+    a `/*` inside a string and a quote inside a comment are both read correctly,
+    and so every caller measures the same thing. `prose_check.py` counts words
+    from this; the width check below counts lines from it.
     """
-    lines = set()
     line = 1
     i = 0
     n = len(text)
-    state = "code"  # code, block, line_comment, string, char
+    state = "code"
+    start = 0
+    start_line = 1
     while i < n:
         ch = text[i]
         nxt = text[i + 1] if i + 1 < n else ""
 
-        if ch == "\n":
-            line += 1
-            if state == "line_comment":
-                state = "code"
-            i += 1
-            continue
-
         if state == "code":
+            if ch == "\n":
+                line += 1
+                i += 1
+                continue
             if ch == "/" and nxt == "*":
-                state = "block"
-                lines.add(line)
+                state, start, start_line = "block", i + 2, line
                 i += 2
                 continue
             if ch == "/" and nxt == "/":
-                state = "line_comment"
-                lines.add(line)
+                state, start, start_line = "line_comment", i + 2, line
                 i += 2
                 continue
             if ch == '"':
-                state = "string"
-            elif ch == "'":
-                state = "char"
+                state, start, start_line = "string", i + 1, line
+                i += 1
+                continue
+            if ch == "'":
+                state, start, start_line = "char", i + 1, line
+                i += 1
+                continue
             i += 1
             continue
 
         if state == "block":
-            lines.add(line)
             if ch == "*" and nxt == "/":
+                yield ("comment", start_line, text[start:i])
                 state = "code"
                 i += 2
                 continue
+            if ch == "\n":
+                line += 1
             i += 1
             continue
 
         if state == "line_comment":
-            lines.add(line)
+            if ch == "\n":
+                yield ("comment", start_line, text[start:i])
+                state = "code"
+                line += 1
+                i += 1
+                continue
             i += 1
             continue
 
-        # Inside a literal: a backslash escapes the next character, so a
-        # trailing backslash cannot end the literal early.
+        # A literal. A backslash escapes the next character, so a trailing
+        # backslash cannot end the literal early.
         if ch == "\\":
+            if i + 1 < n and text[i + 1] == "\n":
+                line += 1
             i += 2
             continue
+        if ch == "\n":
+            line += 1
+            i += 1
+            continue
         if state == "string" and ch == '"':
+            yield ("string", start_line, text[start:i])
             state = "code"
-        elif state == "char" and ch == "'":
+            i += 1
+            continue
+        if state == "char" and ch == "'":
             state = "code"
+            i += 1
+            continue
         i += 1
 
+    if state in ("block", "line_comment"):
+        yield ("comment", start_line, text[start:n])
+
+
+def c_comment_lines(text):
+    """Line numbers (1-based) that carry C comment text, literal-aware.
+
+    Derived from `c_spans` so there is one lexer in this tree, not two that
+    drift apart.
+    """
+    lines = set()
+    for kind, start_line, body in c_spans(text):
+        if kind != "comment":
+            continue
+        for k in range(start_line, start_line + body.count("\n") + 1):
+            lines.add(k)
     return lines
 
 
