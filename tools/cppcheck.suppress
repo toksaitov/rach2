@@ -1,6 +1,6 @@
 # Rach2 cppcheck suppressions.
 #
-# Each entry is a deliberate, justified exception -- this file is NOT a place to
+# Each entry is a deliberate, justified exception; this file is NOT a place to
 # silence real bugs. Bare ids suppress globally (they are systematically wrong
 # for our conventions); id:*path entries are scoped to specific legacy files so
 # the check stays live for new musl-port code. See tools/check.sh.

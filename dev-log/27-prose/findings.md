@@ -273,6 +273,12 @@ findings up to where it stopped.
   dev-log phase (the deliberately-unbuilt SSD carve) and means nothing to a reader
   of the script. Reworded to "the decision to carve the laptop's SSD rests on",
   which names the decision plainly.
+* `tools/cppcheck.suppress`: a comment used a spaced `--` as an em-dash, "a
+  deliberate, justified exception -- this file is NOT a place to silence real
+  bugs", which CLAUDE.md forbids in prose. The `.suppress` extension is scanned
+  by neither `textcheck.sh` nor `prose_check.py`, so it was never caught. Recast
+  to a semicolon. (The `# --- section --- ` dividers are triple dashes, not the
+  spaced `--` the rule names, and stay.)
 
 ## Cross-checks to settle against code later in set one
 
