@@ -279,6 +279,10 @@ findings up to where it stopped.
   by neither `textcheck.sh` nor `prose_check.py`, so it was never caught. Recast
   to a semicolon. (The `# --- section --- ` dividers are triple dashes, not the
   spaced `--` the rule names, and stay.)
+* `tools/check_guest.py`: the docstring introduced "the four contracts" and then
+  listed five numbered items, and `main()` runs five checks (kernel lists, utils,
+  ish, limits, staging). The staging contract was added later without updating
+  the count. Corrected "four" to "five".
 
 ## Cross-checks to settle against code later in set one
 

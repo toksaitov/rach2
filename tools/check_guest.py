@@ -6,7 +6,7 @@ sources by hand, because pdpmake reads none of the GNU makefiles that are the
 host build's authority. A list that drifts builds a kernel missing a file or
 a program missing its companion source, and the failure would surface inside
 a booted guest, late and hard to read. This guard runs on the host, inside
-the verify gate, and has the four contracts:
+the verify gate, and has the five contracts:
 
   1. rach2/guest.mk's OBJS equals the host ASM_SRC plus C_SRC, object for
      object, and the kernel.objs recipe writes exactly that list, loader.o
