@@ -311,7 +311,7 @@ def main():
 
     # The clock, end to end. clockmusl checks that its own date is real and
     # advancing; only this side can check it against the clock QEMU handed the
-    # machine, which is what catches a date wrong by hours rather than by years
+    # machine, which is what catches a date wrong by hours, not by years
     # (a local-time CMOS read as UTC, say). The anchor's own arithmetic is
     # pinned exactly in tests/host/rtc_hosttest.c and not here: that error is
     # under a second and no tolerance would see it.
@@ -339,7 +339,7 @@ def main():
         print("runtests: %d probe(s) never ran: %s"
               % (len(missing), " ".join(missing)))
 
-    # Reported beside the probes rather than as one, so the count stays the
+    # Reported beside the probes, not as one, so the count stays the
     # count of probes.
     print("  %-12s %-18s %s" % ("clock", clock_detail, "PASS" if clock_ok else "FAIL"))
     if not clock_ok:

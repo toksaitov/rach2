@@ -29,10 +29,10 @@
  * `config` writes the boot menu GRUB reads after its own stub entries. That
  * file is GRUB script and whoever writes it can direct the boot, which is the
  * same authority `kernel` already has. What the immutable stub guarantees is
- * that a menu which is damaged rather than written leaves a bootable machine:
+ * that a menu which is damaged, not written leaves a bootable machine:
  * every entry the machine needs is defined before the staged file is read.
  * `env` and `trial` write the two grubenv keys the trial and commit state
- * machine turns on, through an allowlist rather than as a general editor,
+ * machine turns on, through an allowlist, not as a general editor,
  * because that block has no checksum and GRUB parses it at boot with no
  * recourse if it is malformed.
  *
@@ -394,7 +394,7 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
  * the image that can rewrite its root, which is the only way in when the root
  * is damaged but the machine is not yet stopped. A disk built without those
  * files still defines the entries, and arming one there costs a boot that
- * falls back rather than a machine that will not start. */
+ * falls back, not a machine that will not start. */
 static const char *const ENTRY_IDS[] = {"candidate",       "fallback", "candidate-static",
                                         "fallback-static", "debug",    "recovery",
                                         "recovery-static"};
@@ -403,7 +403,7 @@ static const char *const ENTRY_IDS[] = {"candidate",       "fallback", "candidat
  * the saved default for the four kernel entries and for the two recovery ones,
  * because a repair is not one boot: rewriting a root takes minutes, and a
  * machine that lost power in the middle of one has to come back to the image
- * that was doing the rewriting rather than to a kernel that cannot mount what
+ * that was doing the rewriting, not to a kernel that cannot mount what
  * is there. `debug` is the one entry that is a boot and never a default:
  * leaving a machine saved into the kernel shell would leave it with no init and
  * no way in. */
@@ -614,7 +614,7 @@ static int gap_io(int fd, uint32_t lba, uint8_t *buf, int writing)
  *
  * What remains is one sector. A torn or bad write to LBA 1 makes GRUB
  * unreachable, and recovery cannot help because GRUB is what loads it. That is
- * stated rather than defended against: the exposure is a single sector written
+ * stated, not defended against: the exposure is a single sector written
  * after the replacement has been verified, and removing it would take something
  * below GRUB that this machine does not have.
  */

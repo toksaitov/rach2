@@ -216,8 +216,7 @@ int main(void)
 
     CHECK(apply("rach2.ip=192.168.1.50/24", &why) == NETCONF_APPLIED,
           "an address alone is applied");
-    CHECK(net_ip_gateway == 0,
-          "and leaves NO gateway, rather than the SLIRP one beside a real LAN");
+    CHECK(net_ip_gateway == 0, "and leaves NO gateway, not the SLIRP one beside a real LAN");
 
     CHECK(apply("rach2.gateway=192.168.1.1", &why) == NETCONF_REFUSED,
           "a gateway with no address is refused");
@@ -349,8 +348,8 @@ int main(void)
     CHECK(net_ip_mask == IP4(255, 255, 255, 0), "keeps the mask it had, not the classful one");
     CHECK(tcp_told == 1, "and told nothing beyond the one real change");
 
-    /* But a refusal while the mask is still the provisional one unconfigures,
-       rather than leaving the machine on a pair nobody judged. */
+    /* But a refusal while the mask is still the provisional one unconfigures
+     * instead of leaving the machine on a pair nobody judged. */
     CHECK(netconf_set_address(IP4(192, 168, 1, 0), 0) == 0, "the waiting address again");
     CHECK(netconf_set_netmask(IP4(255, 255, 255, 0)) == -EINVAL, "and a mask that refuses it");
     CHECK(net_ip_addr == 0 && net_ip_mask == 0,

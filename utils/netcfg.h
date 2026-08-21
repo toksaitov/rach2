@@ -19,13 +19,13 @@
  * Written out so this file needs no system header and compiles anywhere. */
 #define NETCFG_NAME_MAX 16
 
-/* The longest line the file may hold. Longer is refused rather than split. */
+/* The longest line the file may hold. Longer is refused, not split. */
 #define NETCFG_LINE_MAX 256
 
 /** One interface, as the file describes it. */
 struct netcfg_iface {
     char name[NETCFG_NAME_MAX];
-    int dhcp;  /* the method is dhcp rather than static */
+    int dhcp;  /* the method is dhcp, not static */
     int bad;   /* a line in this stanza was refused; do not configure it */
     unsigned long address;
     unsigned long netmask;

@@ -3241,7 +3241,7 @@ static int load_terminfo(void) {
     //
     // Note, empty entries are supposed to be interpretted as the "compiled-in
     // default", which is of course system-dependent. Previously /etc/terminfo
-    // was used here. Let's skip empty entries altogether rather than give
+    // was used here. Let's skip empty entries altogether, not give
     // precedence to a guess, and check common paths after this loop.
     const char *dirs = getenv("TERMINFO_DIRS");
     if (dirs) {

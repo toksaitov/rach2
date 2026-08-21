@@ -12,7 +12,7 @@ This reads that file and has the frames to the contract the header states:
 one boot id, sequence numbers from zero with no gaps, a length that matches the
 frame, a checksum that sums to zero, and a broadcast destination. It then
 requires a caller-named string in the reassembled log, which is what proves the
-buffered output from before the device existed was carried rather than lost.
+buffered output from before the device existed was carried, not lost.
 
 Usage:
     netconsole_check.py CAPTURE [--expect TEXT ...] [--min-frames N] [--print]

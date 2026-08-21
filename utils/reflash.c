@@ -7,7 +7,7 @@
  *
  * gzip -c root.img | ssh rach2 'gunzip | reflash /dev/disk0 68157440 524288000'
  *
- * Both numbers come off the machine rather than out of a memory: `/proc/disk`
+ * Both numbers come off the machine, not out of a memory: `/proc/disk`
  * reports each partition as `partN TYPE START_LBA SECTORS`, and the two above
  * are the sealed disk's root, 133120 and 1024000, multiplied by 512. Writing a
  * correct image at a wrong offset is a repair that reports success and leaves a
@@ -20,7 +20,7 @@
  * settled before a byte is read.
  *
  * Only a kernel built for recovery may write the whole disk; on any other
- * the device refuses, and this reports that refusal rather than a partial
+ * the device refuses, and this reports that refusal, not a partial
  * write.
  */
 

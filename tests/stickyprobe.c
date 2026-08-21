@@ -11,7 +11,7 @@
  *
  * Every denial is paired against the same call in a non-sticky control
  * directory, which is what makes it mean anything: a lone -EPERM could be
- * coming from ownership or from a missing write bit rather than from the sticky
+ * coming from ownership or from a missing write bit, not from the sticky
  * bit. `/st_plain` has the same fixtures at the same modes and the same
  * owners as `/st_sticky` and differs from it in exactly one bit, so the four
  * denials and the four permissions below are the same four calls asked twice.
@@ -33,7 +33,7 @@
  * uid 1000: the same caller that could not take root's entry out of
  * `/st_sticky` takes root's entry out of this one, because it owns the
  * directory. A third uid is then refused in both sticky directories, which is
- * what keeps that clause about ownership rather than about the second directory
+ * what keeps that clause about ownership, not about the second directory
  * being the more permissive one; it creates and removes a file of its own in
  * each first, so its refusal cannot be a missing write bit either, and that
  * pair of removals is the entry-owner clause under a uid that owns neither
@@ -51,7 +51,7 @@
  * `krffs/manifests/test.manifest`, and only because the manifest's `dir` verb
  * is how the shipped `1777 /tmp` gets its bit and nothing else in the tree
  * reads that bit back: the probe asserts both staged modes before it touches
- * anything, so a staging tool that dropped 01000 fails here rather than quietly
+ * anything, so a staging tool that dropped 01000 fails here, not quietly
  * shipping an inert /tmp. Everything else the root parent mints and removes,
  * the other two sticky directories included, since chmod and chown can make
  * those directly and a probe that leaves nothing behind rests on no other
@@ -65,7 +65,7 @@
  * Each denial is checked to have done nothing and each permission to have
  * been carried out, since an errno alone cannot tell a refusal from a
  * refusal reported after the work was done. The destination victims are
- * checked by mode rather than by existence, because a rename that clobbered
+ * checked by mode, not by existence, because a rename that clobbered
  * one would leave the name in place carrying the source's 0640. Every wait
  * checks WIFEXITED before WEXITSTATUS: a signal death has the signal in
  * the low bits and would otherwise decode as exit 0. Prints "STICKYPROBE OK"
@@ -399,7 +399,7 @@ static void run_child(void (*body)(void), const char *what)
     if (pid == 0) {
         body();
         /* Unreachable: every body exits itself. Non-zero so that a body that
-         * ever grew a path out the bottom would fail rather than pass. */
+         * ever grew a path out the bottom would fail, not pass. */
         syscall1(SYS_EXIT, 127);
     }
     reaped = syscall3(SYS_WAITPID, pid, (int)&status, 0);

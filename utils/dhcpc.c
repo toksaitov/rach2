@@ -20,7 +20,7 @@
  * With `-b` it stays in the foreground until the first answer, so whatever
  * started it learns whether the machine is configured, and then goes to the
  * background and has the lease. A boot that found no server backgrounds too
- * rather than giving up, because a machine that gave up is one nobody can
+ * instead of giving up, because a machine that gave up is one nobody can
  * reach until somebody walks to it. `dhcpc -i eth0 -k` stops the client that
  * has an interface and waits for the address to come off, which is what a
  * machine being moved to a fixed address needs first.
@@ -113,7 +113,7 @@ static unsigned char in[1600];
  * A transaction id nobody can guess.
  *
  * The kernel's random device fails closed unless the CPU seeded it, so a
- * machine that cannot give a random number says so rather than handing one
+ * machine that cannot give a random number says so instead of handing one
  * out; the fallback is the clock and the pid, which is weaker and is what a
  * machine without that CPU has. Two machines booted together must not choose
  * the same id, or each takes the other's answers.
@@ -225,7 +225,7 @@ static int transmit(int fd, const unsigned char *mac, unsigned int len)
  * they are made in the order that lets the cheapest one reject first.
  *
  * `want` is the message type this is waiting for, and anything else that
- * arrives is dropped rather than returned: a segment with two servers on it, or
+ * arrives is dropped, not returned: a segment with two servers on it, or
  * one server behind two relays, answers a discover twice, and a client that
  * treated the second offer as an answer to its request would abandon the
  * exchange it had just started. A refusal is returned whatever is awaited,
@@ -314,7 +314,7 @@ static void set_ifr_addr(struct ifreq *ifr, unsigned long ip)
  * Write `/etc/resolv.conf` from the lease.
  *
  * Through a temporary beside it, so a reader never sees half of one, and on
- * every lease rather than only on one that names a server: leaving the last
+ * every lease, not only on one that names a server: leaving the last
  * network's servers behind would point this machine at a network it is no
  * longer on.
  */
@@ -481,7 +481,7 @@ static int record_claim(long pid, unsigned long addr)
     if (!holds_interface) {
         return 0;
     }
-    /* Written beside the claim and renamed over it, rather than written into
+    /* Written beside the claim and renamed over it, not written into
        it. This kernel has no ftruncate, so a rewrite in place would have to
        open with O_TRUNC, and a client that died in that instant would leave a
        claim holding nothing: both the takeover and the stop path read an empty
@@ -599,7 +599,7 @@ static int stop_client(void)
        by a new client between the reading and the removing, and removing that
        one's file would leave a client nothing can find. So the claim is read
        once more immediately before it goes, and a claim that changed under
-       this is looked at again rather than removed. */
+       this is looked at again, not removed. */
     for (attempt = 0; attempt < 2; attempt++) {
         pid = claim_pid(&present);
         if (pid <= 0) {
@@ -809,7 +809,7 @@ static int claim_interface(void)
         /* Read once more, immediately before removing it: between the first
            read and here another client may have taken the claim, and removing
            its file would leave two clients on one interface. This narrows that
-           window rather than closing it; `claim_is_ours` above is what makes
+           window instead of closing it; `claim_is_ours` above is what makes
            the loss visible if it happens anyway. */
         if (claim_read(&left, 0) != other) {
             continue;
@@ -1018,7 +1018,7 @@ static int obtain(int fd, struct dhcp_lease *l, time_t *asked)
                 /* Applying it would change the address and then be refused
                    half way, leaving the machine with neither. Asking again is
                    the answer: a server that keeps saying this is one to keep
-                   asking rather than one to give up on. */
+                   asking, not one to give up on. */
                 fprintf(stderr, "dhcpc: %s: the lease cannot be used: %s\n", ifname, why);
                 continue;
             }
@@ -1180,7 +1180,7 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
             len = build(DHCP_REQUEST, l->address, 0, 0, 0xFFFFFFFFUL);
             if (transmit(fd, bcast, len) != 0) {
                 unconfigure(fd);
-                return 0; /* ask again rather than leave the machine with nothing */
+                return 0; /* ask again, not leave the machine with nothing */
             }
             /* Not the whole way to the expiry: one lost request would then cost
                the last eighth of the lease in silence, which is exactly the

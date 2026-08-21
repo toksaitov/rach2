@@ -19,9 +19,9 @@
  * The two clocks are DIFFERENT clocks. `CLOCK_MONOTONIC` reports time since
  * boot and `CLOCK_REALTIME` reports the date, so a machine that answered the
  * same number for both has one clock wearing two names. That is exactly what
- * this system did before, so it is asserted rather than assumed.
+ * this system did before, so it is asserted, not assumed.
  *
- * The bound is a literal committed with the probe rather than a build-time
+ * The bound is a literal committed with the probe, not a build-time
  * constant: a date compiled in at build time makes the binary differ on every
  * build, and a probe whose expected value moves with the thing it tests proves
  * nothing.

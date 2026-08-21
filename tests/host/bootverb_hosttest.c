@@ -4,11 +4,11 @@
  * host-deps: utils/bootverb.c
  *
  * This tool rewrites a boot partition on a machine nobody will open again, so
- * a command line it half understands is worth an error rather than a guess.
+ * a command line it half understands is worth an error, not a guess.
  * Two groups of refusals matter most. A verb given the wrong number of
- * operands must fail rather than ignore the extra, because a typo that drops
+ * operands must fail, not ignore the extra, because a typo that drops
  * an operand should not silently install something else. And the spellings the
- * tool shipped under its previous name must fail rather than work, because a
+ * tool shipped under its previous name must fail, not work, because a
  * compatibility spelling nobody documents is one that has to be carried
  * forever.
  */
@@ -70,7 +70,7 @@ int main(void)
 
     arg = (const char *)1;
     (void)parse((char *)"kernel", 0, 0, &arg);
-    CHECK(arg == 0, "a refusal clears the operand rather than leaving it stale");
+    CHECK(arg == 0, "a refusal clears the operand instead of leaving it stale");
 
     CHECK(parse(0, 0, 0, &arg) == BOOTVERB_NONE, "no verb at all is refused");
     CHECK(parse((char *)"kernel", 0, 0, &arg) == BOOTVERB_NONE,

@@ -22,7 +22,7 @@
  * The bound. The child exits 0 only if its ping returned exactly -ETIMEDOUT,
  * and a distinct code otherwise, so a wrong errno is not a pass; its whole
  * lifetime must fall between three and eight seconds. A lost wakeup fails as a
- * hung probe rather than a green one.
+ * hung probe, not a green one.
  *
  * The release. After the reap the parent's own loopback ping must return a
  * non-negative round-trip time, which proves the slot came back and is the

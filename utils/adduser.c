@@ -17,7 +17,7 @@
  * as a uid and as a gid, and with no `-u` the lowest number at or above
  * `ADDUSER_FIRST_UID` free in both is chosen. Choosing a number outside the
  * lock is exactly how two concurrent runs hand out the same uid, so the read,
- * the choice and the writes are one transaction rather than three.
+ * the choice and the writes are one transaction, not three.
  *
  * `/etc/shadow` is in the absence check and not only in the write list. It is
  * published first, so a crash after that one rename leaves the name there and
@@ -38,14 +38,14 @@
  * clears it is in `utils/Readme.md`.
  *
  * It never resumes a partial account and never rolls one back. Resuming would
- * mean deciding that a partial state is a residue rather than something an
+ * mean deciding that a partial state is a residue instead of something an
  * operator wrote by hand, and adopting a uid it did not choose; rolling back
  * would mean a second series of replacements, each able to fail the way the
  * first did, on files another writer may since have changed. So a name present
  * in some of the three files is refused, naming exactly the files that hold it.
  *
  * The transaction is dropped before the password program is exec'd, which is
- * required rather than tidy: the lock is a file, it outlives `execve`, and a
+ * required, not tidy: the lock is a file, it outlives `execve`, and a
  * transaction carried across the exec would deadlock `passwd` against its own
  * predecessor. Until that `passwd` succeeds the field stays `!` and the account
  * cannot be entered, which is why shadow is written first and why a failure
@@ -96,7 +96,7 @@
  * or -1 having said why.
  *
  * Read through `read` and not `fread`: the file is wanted whole, and a direct
- * read is one call rather than a buffered layer over the same bytes.
+ * read is one call, not a buffered layer over the same bytes.
  */
 static long slurp(const char *path, char *buffer, size_t size)
 {
@@ -273,7 +273,7 @@ static long append_line(char *text, size_t size, const char *line)
 /**
  * Say what was published and that none of it was undone, then return `status`.
  *
- * Where this program fails rather than crashing there is someone to tell, so it
+ * Where this program fails instead of crashing there is someone to tell, so it
  * tells them: a partial account is not repaired by the next run, and the files
  * it names are the ones root edits.
  */
@@ -477,7 +477,7 @@ int main(int argc, char **argv)
         return 1;
     }
     /* And short enough for the console to read: `login` refuses an over-long
-     * line rather than answering for its prefix, so an account named past that
+     * line instead of answering for its prefix, so an account named past that
      * limit is one nobody could ever enter at the keyboard. */
     if (strlen(name) > PWAUTH_MAX_NAME) {
         fprintf(stderr, "adduser: %s: longer than the %d characters a login reads\n", name,

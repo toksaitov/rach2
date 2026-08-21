@@ -193,7 +193,7 @@ static void set_sockaddr(uint32_t ip, uint16_t port)
     sa[7] = (uint8_t)ip;
 }
 
-/** Open and bind, answering -1 rather than failing when the table is full. */
+/** Open and bind, answering -1 instead of failing when the table is full. */
 static int open_bound_maybe(uint16_t port)
 {
     uint32_t args[6];
@@ -264,7 +264,7 @@ void _start(void)
         fail("the client socket did not open");
     }
 
-    /* A socket with nowhere to send says so, rather than sending nowhere. */
+    /* A socket with nowhere to send says so instead of sending nowhere. */
     if (sys_write(client, "x", 1) != -EDESTADDRREQ) {
         fail("a write with no peer was not refused");
     }
@@ -471,7 +471,7 @@ void _start(void)
     /* Two sockets on one port, which is what a DHCP client's renewal needs: it
        keeps one bound to port 68 to listen on and opens a second bound to 68 to
        send the renewal from. Both must ask for that, and the datagram must go
-       to the one connected to the sender rather than to the listener. */
+       to the one connected to the sender, not to the listener. */
     listener = open_bound(RENEW_PORT);
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
@@ -626,7 +626,7 @@ void _start(void)
 
     /* And a connect with the binding table full is answered, not searched for.
        The table is eight slots; filling it and connecting one more must come
-       back at once rather than walking sixteen thousand ports with the
+       back at once instead of walking sixteen thousand ports with the
        machine's interrupts off. */
     for (i = 0; i < 8; i++) {
         fillers[i] = open_bound_maybe((uint16_t)(7600 + i));

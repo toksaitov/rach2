@@ -1303,7 +1303,7 @@ static void exec_program(int argc, char *argv[])
  *
  * On a normal boot /sbin/init is PID 1 and must run forever; if it exits or
  * is killed there is no reaper and no login shell left, so the kernel stops
- * here rather than fall to an unauthenticated debug shell. Boot
+ * here, not fall to an unauthenticated debug shell. Boot
  * `rach2.rescue` to get the debug shell deliberately. Called from the
  * is-init branch of every death path (here and in syscall.c) when the debug
  * shell is not the supervisor.
@@ -1666,7 +1666,7 @@ static int disc_table_ok;
  * Nothing is published until sector 0 has been read and judged. `/dev/grubcore`
  * covers the post-MBR gap, which no partition may occupy; a table that puts one
  * there describes a disk where writing the boot loader would destroy a file
- * system, so both devices are withheld rather than one. `/dev/bootpart` needs
+ * system, so both devices are withheld, not one. `/dev/bootpart` needs
  * entry 0 judged against the whole table, because a machine booting a RAM image
  * has no mounted root to compare it against.
  *
@@ -1763,9 +1763,8 @@ static int init_krffs_disk(void)
     }
 
     /* Reject a malformed partition before mounting, so a bad MBR fails cleanly
-       rather than faulting past the disk or the window later: it must be
-       non-empty, a whole number of pages (the cache transfers a page at a time),
-       lie within the disk, and fit the window (which also keeps sectors * 512
+       instead of faulting past the disk or the window later: it must be
+       non-empty, a whole number of pages (the cache transfers a page at a time), lie within the disk, and fit the window (which also keeps sectors * 512
        inside 32 bits, since the window is capped well below). */
     if (sector_count == 0 ||
         sector_count % (PAGE_SIZE / BLOCK_SECTOR_SIZE) != 0) {
@@ -1805,8 +1804,7 @@ static int init_krffs_disk(void)
         root->mode |= KRFFS_MODE_DIRTY;
         if (pc_sync() != 0) {
             /* The dirty flag never reached the platter, so a later crash would
-               leave an image fsck.krffs reads as clean. Fail the mount closed
-               rather than run on a filesystem whose crash evidence is missing.
+               leave an image fsck.krffs reads as clean. Fail the mount closed, not run on a filesystem whose crash evidence is missing.
                init_krffs already published krffs_fs at the window, so unpublish
                it before dropping the backing or a later path would dereference
                the now-unbacked window. */
@@ -2208,7 +2206,7 @@ static void process_command(const char *cmd)
                the raw devices published over the old block0 would be pointing
                at a driver with no port. All three raw windows come down first
                and are rebuilt from whatever answers, which is what makes a
-               re-probe leave a usable machine rather than a half-attached one
+               re-probe leave a usable machine, not a half-attached one
                on either the success or the failure path. */
             devfs_bootpart_withdraw();
             devfs_grubcore_withdraw();
@@ -2387,7 +2385,7 @@ static void process_command(const char *cmd)
         } else if (filename[0] == '\0') {
             k_puts("Usage: rm <filename>");
         } else {
-            /* Orphan a node some descriptor still has rather than free it,
+            /* Orphan a node some descriptor still has, not free it,
                the same rule the unlink syscall follows. The rescue shell runs
                with no process of its own, but a transient init can be blocked
                holding a file when the shell resumes, and freeing that node
@@ -2687,7 +2685,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * not guaranteed to be address-ordered, so take the highest end across all
      * of them. A module that ends above the 32 MiB direct-mapped limit cannot
      * be addressed or managed and would drive the reservation break past the
-     * limit, so fail the boot closed with a clear diagnostic rather than let
+     * limit, so fail the boot closed with a clear diagnostic, not let
      * init_paging corrupt low memory when its first reservation comes back
      * empty. */
     if (num_modules > 0) {
@@ -2716,7 +2714,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
                                   (uint32_t) (uintptr_t) &_end,
                                   HARD_MEMORY_LIMIT, &bad);
         if (verdict != MODLAYOUT_OK) {
-            /* The detail travels INTO the panic rather than ahead of it: the
+            /* The detail travels INTO the panic, not ahead of it: the
              * machine this check was written for has no serial port, and
              * k_panic clears the screen, so anything printed here first would
              * be gone before a camera could read it. */

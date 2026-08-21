@@ -12,7 +12,7 @@
  * and send an operator looking for a process that has already gone.
  *
  * The case therefore needs an `atexit` that fails, and it is a program of its
- * own rather than a case inside `pwauth_hosttest` because that failure cannot
+ * own, not a case inside `pwauth_hosttest` because that failure cannot
  * be scoped: the stand-in replaces the real one for the whole process, and
  * every other case in that program needs a release that is registered. One
  * binary per contradiction is cheaper than a switch that has to be right.
@@ -52,7 +52,7 @@ static void fail(const char *what)
  *
  * The library registers two functions and needs both, so refusing the second is
  * the partial failure that leaves one of them installed with no transaction
- * behind it. The accepted one is kept rather than really registered, since this
+ * behind it. The accepted one is kept, not really registered, since this
  * program has replaced the machinery that would have run it, and is called by
  * hand at the point the walk would have reached it. Nothing else here registers
  * anything, so the count belongs entirely to the library.

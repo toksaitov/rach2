@@ -7,7 +7,7 @@
  * opening a file hands back fd 0, and closing stderr returns 0, not -EBADF;
  * (c) a blocking wait is signal-interruptible, so a child blocked in a
  * recvfrom() on the socket wait queue unwinds with -EINTR when the parent
- * signals it, rather than hanging or dying.
+ * signals it instead of hanging or dying.
  *
  * The multi-waiter wake (wq_wake_all makes every blocked waiter runnable) and
  * the lost-wakeup safety live in the host unit test (tests/host/

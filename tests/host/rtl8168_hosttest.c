@@ -267,7 +267,7 @@ unsigned char net_mac[6];
 static unsigned char model_reg[MODEL_REGS];
 
 /* What the model does out of the ordinary, so a test can break one thing at a
- * time and watch the driver refuse rather than hang. */
+ * time and watch the driver refuse, not hang. */
 static int model_stuck_eri;      /* the ERI completion flag never moves */
 static int model_stuck_ocp;      /* the PHY-OCP completion flag never moves */
 static int model_stuck_linklist; /* the link list never reports ready */
@@ -485,7 +485,7 @@ static void m_udelay(unsigned usec)
 
 static int fails;
 
-/* Declared rather than included: the kernel's kint.h and the host's headers
+/* Declared, not included: the kernel's kint.h and the host's headers
  * disagree about uintptr_t, so this test pulls in no host header and names the
  * one function it needs to say which check failed. */
 extern int printf(const char *fmt, ...);
@@ -582,7 +582,7 @@ static void model_reset(void)
     model_reg[R8168_CPLUSCMD] = 0xFF;
     model_reg[R8168_CPLUSCMD + 1] = 0xFF;
     /* The permanent station address the chip was built with, which is where
-     * the driver must take it from rather than from the register pair. */
+     * the driver must take it from, not from the register pair. */
     model_eri[0xe0] = 0x7E44D228u;
     model_eri[0xe4] = 0x0000AFE0u;
     /* The register pair has a plausible but WRONG address, so a driver that
@@ -853,8 +853,8 @@ int main(void)
               "the frame was copied into the buffer");
     }
 
-    /* A frame under the Ethernet minimum is padded, and the padding is zero
-       rather than whatever the buffer held. */
+    /* A frame under the Ethernet minimum is padded, and the padding is zero,
+     * not whatever the buffer held. */
     {
         unsigned char frame[20];
         unsigned char dirty = 0xAA;

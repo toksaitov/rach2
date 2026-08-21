@@ -54,11 +54,11 @@ gen_key() {
 
 # Compose public-half file $2 from generated keypair $1 plus an optional local
 # addition, krffs/$2.extra: a public key belonging to whoever works on this
-# machine rather than to the project, so they can reach an image they built
+# machine, not to the project, so they can reach an image they built
 # without carrying the project's private key between machines. The file is
 # git-ignored, so a clone builds images that trust the demo key alone.
 #
-# It recomposes rather than appends, which is what makes a rebuild idempotent
+# It recomposes, not appends, which is what makes a rebuild idempotent
 # and what lets the addition be removed again by deleting the file. Nothing
 # happens when the generated public half is absent, which is the documented case
 # of a public key dropped in by hand.
@@ -70,7 +70,7 @@ add_local_keys() {
     [ -f "$key.pub" ] || return 0
 
     # A private key here would be staged into the image and served to anyone who
-    # asks for the file, so the shape is checked rather than trusted: every
+    # asks for the file, so the shape is checked, not trusted: every
     # non-blank line must name a key type, and the word that appears in every
     # private key format must not appear at all.
     if [ -f "$extra" ]; then

@@ -35,7 +35,7 @@
 # be matched from its own echo and each is written split; a feed written all at
 # once is eaten by anything that flushes its input, so every feed is spaced; and
 # a previous run's logs hold every token this run waits for, so they go before
-# the first boot rather than only in the trap.
+# the first boot, not only in the trap.
 #
 # Usage: account_test.sh <kernel> <image> <password> [real|simple]
 #
@@ -77,7 +77,7 @@ FPID=""
 # credentials, not secrets. The second account is a system one, so the two
 # together cover both id ranges adduser was configured for. It is given an
 # existing group with -G, because a system account made without one is put in
-# `nogroup`, and adduser exits rather than invent a group that is not there.
+# `nogroup`, and adduser exits, not invent a group that is not there.
 NEWUSER="testee"
 NEWPASS="testeepw1"
 NEXTPASS="testeepw2"
@@ -181,7 +181,7 @@ wait_count() {
 #
 # A password answers a prompt no shell printed, so it is fed as a line of its
 # own like any other: the console's line discipline queues what is typed ahead
-# of the prompt, and `bb_ask` reads it when it gets there rather than flushing
+# of the prompt, and `bb_ask` reads it when it gets there instead of flushing
 # it away.
 boot_lines() {
     rm -f "$LOG" "$FEED"
@@ -209,9 +209,9 @@ boot_with() {
 
 # Take an account's uid from a /etc/passwd record and fail unless it lands
 # inside the range adduser was configured to allocate from. The number is read
-# and compared rather than matched against a digit pattern, which is what makes
-# the range an assertion instead of a shape, and it is read from the database
-# rather than from an `id` run, since the uid is what was written down.
+# and compared, not matched against a digit pattern, which is what makes
+# the range an assertion instead of a shape, and it is read from the database,
+# not from an `id` run, since the uid is what was written down.
 id_in_range() {
     who="$1"
     low="$2"
@@ -315,7 +315,7 @@ run_simple_arc() {
         fail "the account could not change its own password through the set-id passwd"
     fi
 
-    # And the change is used rather than believed. Three attempts follow it: the
+    # And the change is used, not believed. Three attempts follow it: the
     # old password, which must now be refused; the new password offered to the
     # OTHER account, which must be refused too, since a passwd that rewrote the
     # wrong record would leave exactly that; and the new password for its own
@@ -406,7 +406,7 @@ run_real_arc() {
     # inner one is the account's own and must ask, so what this proves is that
     # the hash chpasswd wrote is the hash su reads back and checks.
     #
-    # Every token here is behind an `&&` rather than a `;`. A token printed by
+    # Every token here is behind an `&&`, not a `;`. A token printed by
     # the next command in a list says only that the shell got that far, which a
     # refused `su` also allows; behind `&&` it is printed by the run that
     # succeeded and by no other. That is also why `id` is not run anywhere else
@@ -489,7 +489,7 @@ run_real_arc() {
     if ! grep -qE '^\$1\$[^$]+\$' "$LOG"; then
         fail "httpd -m did not mint an MD5 hash"
     fi
-    # Each request is read inside its own markers rather than from the log as a
+    # Each request is read inside its own markers, not from the log as a
     # whole. Asked of the whole log, "a 401 appears and the page appears" is
     # satisfied by an httpd that had the two the wrong way round, which is
     # exactly what a broken authentication branch looks like.
@@ -525,7 +525,7 @@ run_real_arc() {
     GROUP_TEXT=$(sed -n '/SHEND/,/GREND/p' "$LOG")
 
     # What the databases hold while the accounts are still there. The membership
-    # is asserted here rather than inferred from the delete, since a group the
+    # is asserted here, not inferred from the delete, since a group the
     # account never joined is also a group it cannot be left in.
     case "$PASSWD_TEXT" in
         *"$NEWUSER:"*) ;;

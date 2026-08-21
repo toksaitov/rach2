@@ -49,7 +49,7 @@ PART_OFFSET=1048576
 PART_SIZE=50331648
 
 # Two clean kernel builds: the copied source tree, the objects, the response
-# file and the kernel, with margin. Computed once here rather than discovered
+# file and the kernel, with margin. Computed once here, not discovered
 # as a mid-build failure inside the guest.
 NEED_BYTES=8388608
 

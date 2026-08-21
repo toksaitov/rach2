@@ -16,7 +16,7 @@
 #
 # What "restarted" means here needs saying, because the obvious check does not
 # work: the harness runs QEMU with -no-reboot, so a machine that resets exits
-# rather than booting again, and waiting for a second boot banner would fail on
+# instead of booting again, and waiting for a second boot banner would fail on
 # success. The signal is the other way round. `power_reset` falls through to a
 # halt and says so when every mechanism it tried did nothing, so a run that
 # reached the restart and never printed that fallback is a run where one of

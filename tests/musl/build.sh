@@ -23,7 +23,7 @@
 # The utils headers are on the include path for the same reason, so a probe can
 # test the library its program links. A named dependency that is not there is a
 # hard error: passed on to the compiler it would surface as a bare "no such
-# file", which reads as a broken toolchain rather than a typo.
+# file", which reads as a broken toolchain, not a typo.
 #
 # Run vendor/musl/build_libc.sh first if install/ is absent.
 #

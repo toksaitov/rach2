@@ -18,7 +18,7 @@
  * this program is still running to see it. Before the budget was checked at
  * copy-in, that case did not return at all.
  *
- * The child half asserts rather than reports: it exits nonzero unless it was
+ * The child half asserts, not reports: it exits nonzero unless it was
  * handed exactly the count and the exact last string the parent sent, so a
  * vector delivered short is a failure and not a line in a log.
  *
@@ -205,7 +205,7 @@ int main(int argc, char *argv[])
 
         /* The MODE goes first and the bulk second: a child that did not
          * recognise its first argument would run this whole sequence again,
-         * forking as it went, which is a fork bomb rather than a test. */
+         * forking as it went, which is a fork bomb, not a test. */
         args[0] = (char *)SELF;
         args[1] = (char *)"ok";
         args[2] = big_arg;

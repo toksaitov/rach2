@@ -22,7 +22,7 @@
  * hold their replacements with the modes and owners they inherited and no
  * temporary file beside either, and the lock the cut-off writer left must still
  * be there, since that is what a killed writer leaves and what the next writer
- * must report rather than break. It reports it, with a line naming the removal:
+ * must report, not break. It reports it, with a line naming the removal:
  * this kernel restarts pids at every boot, so a lock from a previous boot names
  * a pid that may well be live and unrelated, and an operator told only to wait
  * would wait forever. Then the probe does what that line says, takes a
@@ -168,7 +168,7 @@ static int write_boot(void)
 
 /**
  * The second boot: both replacements had to reach the platter, and the lock the
- * cut-off writer left is reported rather than broken.
+ * cut-off writer left is reported, not broken.
  */
 static int read_boot(void)
 {

@@ -5,7 +5,7 @@
  * makes a second descriptor alias it. This test opens a writable file, dup2's
  * it over stdout, writes "AAA" with printf through fd 1, then writes "BBB"
  * through the original descriptor. The two descriptors share one seek offset,
- * so the second write appends rather than overwriting: read back, the file is
+ * so the second write appends instead of overwriting: read back, the file is
  * "AAABBB" (6 bytes). If each descriptor had its own offset (the old bug), the
  * second write would land at offset 0 and the file would read just "BBB".
  *

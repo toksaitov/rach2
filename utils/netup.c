@@ -95,7 +95,7 @@ static void restore(int fd, const char *name, unsigned long address, unsigned lo
  *
  * A static stanza applied while one is running is undone by that client's next
  * renewal, and its next refusal or expiry takes the static address off. So the
- * static path asks first and refuses, naming the process, rather than fighting
+ * static path asks first and refuses, naming the process instead of fighting
  * something the administrator has forgotten about.
  */
 static long dhcp_holder(const char *name)
@@ -171,7 +171,7 @@ static int apply_static(const struct netcfg_iface *s)
         return -1;
     }
     /* What is there now, so a failure part way can put it back. An unset
-       interface answers 0.0.0.0 rather than failing, so a failure here is a
+       interface answers 0.0.0.0 instead of failing, so a failure here is a
        real one, and going on from it would mean restoring a machine to an
        address it never had. */
     memset(&ifr, 0, sizeof(ifr));
@@ -221,7 +221,7 @@ static int apply_static(const struct netcfg_iface *s)
            leaving it would send everything off-subnet to a machine that is not
            there. Where the stanza does name one, the route is not removed
            first: setting it replaces what is there, so a failure to set it
-           leaves whatever the machine had rather than nothing. */
+           leaves whatever the machine had instead of nothing. */
         memset(&rt, 0, sizeof(rt));
         sin = (struct sockaddr_in *)&rt.rt_dst;
         sin->sin_family = AF_INET;

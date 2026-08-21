@@ -66,14 +66,14 @@ def main():
     ap.add_argument("--no-debug-exit", action="store_true")
     # --ok PATTERN passes iff PATTERN appears in the serial output, regardless
     # of the QEMU exit code. For a probe run in the debug shell (which returns
-    # to the shell rather than stopping QEMU via isa-debug-exit), the printed
+    # to the shell instead of stopping QEMU via isa-debug-exit), the printed
     # success token is the result.
     ap.add_argument("--ok", default=None)
     ap.add_argument("steps", nargs="*")
     a = ap.parse_args()
 
     # -no-reboot so a triple-fault exits QEMU (the harness reads it as failure)
-    # rather than looping; NOT -no-shutdown, which would block the
+    # instead of looping; NOT -no-shutdown, which would block the
     # isa-debug-exit device from actually stopping the VM.
     cmd = ["qemu-system-i386", "-kernel", a.kernel,
            "-serial", "stdio", "-display", "none", "-no-reboot",
@@ -247,7 +247,7 @@ def main():
     # aliases (e.g. status 128 -> host 1) and a QEMU launch error also yields 1;
     # either would false-PASS. The serial line is the true, untruncated status
     # and also proves the guest actually ran. The exit code is used only to
-    # confirm QEMU stopped via isa-debug-exit (an odd code) rather than hanging
+    # confirm QEMU stopped via isa-debug-exit (an odd code) instead of hanging
     # or crashing.
     last = None
     for mm in re.finditer(rb"Process exited with status (-?\d+)", buf):

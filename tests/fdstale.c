@@ -36,7 +36,7 @@
  * With a descriptor open on the file, renaming a directory onto its name
  * returns -EPERM and the name stays readable, through the held descriptor and
  * through a fresh open alike. An implementation that orphans before it refuses
- * cannot pass that. The other shape refuses for the destination rather than the
+ * cannot pass that. The other shape refuses for the destination, not the
  * source: renaming a file onto an open directory returns -EISDIR, which this
  * kernel decides after it takes the orphan, so the directory's name survives
  * only because a directory descriptor is not a holder. The assertion is what
@@ -63,7 +63,7 @@
  * without closing proves release_fd_table reaches the same release sys_close
  * does.
  *
- * Relocation is forced rather than guessed at. krffs_resize_reserved_node
+ * Relocation is forced, not guessed at. krffs_resize_reserved_node
  * extends a node in place when the node that follows it is free and at least
  * `difference` bytes, and moves the file otherwise, so the trigger is the
  * neighbour and never a byte count. Two empty files created back to back put a
@@ -440,7 +440,7 @@ static int spawn(void (*body)(void), const char *what)
     if (pid == 0) {
         body();
         /* Unreachable: every body exits itself. Non-zero so that a body that
-         * ever grew a path out the bottom would fail rather than pass. */
+         * ever grew a path out the bottom would fail, not pass. */
         syscall1(SYS_EXIT, 127);
     }
     return pid;
@@ -548,7 +548,7 @@ static void orphan_scan_case(void)
  * directory source, refused before the destination is resolved, and the
  * directory destination, refused after the orphan is taken. The second name
  * survives only because a directory descriptor is not a holder, so it is
- * asserted rather than assumed. */
+ * asserted, not assumed. */
 static void failed_rename_case(void)
 {
     int len = (int)slen(KEEP_LINE);

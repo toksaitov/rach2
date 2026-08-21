@@ -36,7 +36,7 @@ enum krffs_node_type {
  * flushes the whole cache first and touches the bit only if that returned 0;
  * a write-back walks the cache by slot and fails whole, so clearing first
  * could publish the cleared root page while another frame's write failed.
- * What leaves the bit set is a boot that was killed rather than stopped, or
+ * What leaves the bit set is a boot that was killed, not stopped, or
  * one whose flush failed, which `fsck.krffs` reads as a file system that may
  * not have flushed. `sync` flushes the cache but does not clear it. It lives
  * in the root node's `mode` at bit `0004000`, which sits above the `0777`

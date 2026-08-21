@@ -386,7 +386,7 @@ int dhcp_parse(const unsigned char *msg, unsigned int len, unsigned long xid,
  * change the address, have the mask refused, and be left half configured. So
  * the whole of it is judged first, by the same rule `netup` judges a static
  * stanza by, and an unusable lease is treated as no answer: the client goes on
- * asking rather than giving up on the network.
+ * asking instead of giving up on the network.
  *
  * @param err where the refusal is written.
  * @return 0 when the lease can be applied, -1 when it cannot.
@@ -431,7 +431,7 @@ unsigned long dhcp_sane_lease(unsigned long seconds, unsigned long max)
  *
  * A server may name its own renewal and rebinding times, and RFC 2131 makes
  * half and seven eighths the answer only when it does not. A pair that is not
- * in order, or that reaches past the lease, is ignored rather than argued
+ * in order, or that reaches past the lease, is ignored, not argued
  * with: those are the times this client would have chosen anyway. Seven
  * eighths is computed as `(seconds * 7) / 8` and not the other way around,
  * because dividing first turns every lease under eight seconds into zero. The

@@ -123,7 +123,7 @@ static void check_numbers(void)
     CHECK(sectorcopy_parse_u64("18446744073709551615", &v) == 0 && v == 18446744073709551615ull,
           "the largest 64-bit number parses");
     CHECK(sectorcopy_parse_u64("18446744073709551616", &v) != 0,
-          "one past it is refused rather than wrapped");
+          "one past it is refused, not wrapped");
     CHECK(sectorcopy_parse_u64("99999999999999999999999", &v) != 0, "and so is far past it");
     CHECK(sectorcopy_parse_u64("-512", &v) != 0, "a negative number is not an offset");
     CHECK(sectorcopy_parse_u64("+512", &v) != 0, "and neither is a signed one");
@@ -265,7 +265,7 @@ static void check_copy(void)
 
     /* A count that is not a whole number of sectors. The bounds refuse one
        before any of this runs, so this is the copy on its own: the tail can
-       never form a sector, and the copy must say so rather than report a
+       never form a sector, and the copy must say so, not report a
        length it did not write. */
     load(1000);
     CHECK(sectorcopy_run(&IO, 1000, &written, err, sizeof(err)) != 0,

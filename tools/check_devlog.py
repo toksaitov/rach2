@@ -14,7 +14,7 @@ have no entry, because an entry states that the milestone happened.
 A milestone is finished when it has the record of what was built. That file
 is `Readme.md`, or `results.md`, which is what milestone 6 called its record.
 
-Bullets inside fenced code blocks are examples rather than entries and are
+Bullets inside fenced code blocks are examples, not entries and are
 skipped, so documentation that shows the index's shape does not become part of
 it.
 
@@ -29,7 +29,7 @@ import sys
 import tempfile
 
 # A milestone directory: two digits, a dash, a lowercase name. Anything else in
-# dev-log/ is ignored rather than demanded of the index.
+# dev-log/ is ignored, not demanded of the index.
 DIR_RE = re.compile(r"^(\d\d)-([a-z0-9-]+)$")
 
 # An entry: `* \`NN-name\`: ...` at the left margin. An indented bullet is a

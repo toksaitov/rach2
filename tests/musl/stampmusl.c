@@ -188,7 +188,7 @@ int main(void)
     }
 
     /* A write that DOES start past the end leaves a hole, and the hole must
-     * read as zeros rather than as whatever was in the free space.
+     * read as zeros, not as whatever was in the free space.
      *
      * The space is dirtied first, on purpose. Reading zeros out of a hole
      * proves nothing when the bytes underneath were zeros anyway: this fills a

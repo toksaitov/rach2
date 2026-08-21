@@ -41,7 +41,7 @@ extern char **environ;
 /* The one program this build may exec. There is no list and no fallback: a
  * fall-through to a shell on any exec failure hands the console to whoever is
  * standing at it, and narrowing the fall-through to ENOENT inverts the danger
- * rather than removing it, since ENOENT is exactly the case of an image built
+ * instead of removing it, since ENOENT is exactly the case of an image built
  * without /bin/login, which is the image that must refuse hardest. So the
  * fallback is not narrowed, it is compiled out: this artifact has no code
  * path and no string that names a shell. */
@@ -90,9 +90,9 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * Say on the console that the login program could not be run, and how to get
  * back in. Returns nothing.
  *
- * Written with `write` rather than `printf` because this runs in a child that
+ * Written with `write`, not `printf` because this runs in a child that
  * has just failed an `execve`, and the only thing it can still be sure of is a
- * descriptor. The way back in is stated rather than assumed: `rach2.rescue`
+ * descriptor. The way back in is stated, not assumed: `rach2.rescue`
  * boots the kernel debug shell with the filesystem mounted and writable, and it
  * is the only way back in, since nothing starts a network service at boot.
  */
@@ -338,7 +338,7 @@ static pid_t spawn_sshd(void)
  * same reason. This file system has nowhere to put it that a reboot clears, so
  * init clears it, first, before anything reads it. What it removes is one
  * level of ordinary entries: nothing here makes a directory under it, and one
- * that appears is reported rather than descended into.
+ * that appears is reported, not descended into.
  */
 static void clear_var_run(void)
 {
@@ -374,7 +374,7 @@ static void clear_var_run(void)
             continue;
         }
         /* A file first, then a directory: nothing here creates one, and one
-         * that is there is reported rather than left silently. */
+         * that is there is reported, not left silently. */
         if (unlink(path) != 0 && rmdir(path) != 0) {
             fprintf(stderr, "init: /var/run: cannot remove %s\n", n);
         }
@@ -393,7 +393,7 @@ int main(void)
 #endif
 
     /* The three shutdown requests, installed before the first child so a
-     * request that arrives early is answered rather than defaulting to a
+     * request that arrives early is answered instead of defaulting to a
      * terminating disposition, which for pid 1 is a panic. */
     signal(SIGUSR1, shutdown_handler);
     signal(SIGUSR2, shutdown_handler);
@@ -406,7 +406,7 @@ int main(void)
         pid_t reaped;
 
         /* Keep a login shell running. If the fork failed (a full process
-         * table), back off a second before retrying rather than spin: wait()
+         * table), back off a second before retrying, not spin: wait()
          * returns immediately with ECHILD while init has no children, so
          * retrying without a pause would peg the CPU. */
         if (shell < 0) {
@@ -429,7 +429,7 @@ int main(void)
         }
 
         /* And keep an SSH server running beside it. A failed fork is left for
-         * the next time round the loop rather than retried here: the console
+         * the next time round the loop, not retried here: the console
          * session above is the machine's other way in, and holding this loop
          * to retry a daemon would delay reaping the orphans that are the whole
          * reason a process table filled up. */

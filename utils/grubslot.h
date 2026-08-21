@@ -125,7 +125,7 @@ int grubslot_patch(uint8_t *image, uint32_t sectors, uint32_t tail_lba, char *er
  * Round a core image file up to whole sectors and zero the padding.
  *
  * A core image is not a whole number of sectors and the gap is written in
- * sectors, so the bytes past the file's end are zeroed rather than left holding
+ * sectors, so the bytes past the file's end are zeroed, not left holding
  * whatever the buffer had. This is also where the length check in
  * `grubslot_patch` loses its precision: a file cut short inside its last sector
  * rounds to the same sector count as the whole one.

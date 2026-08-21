@@ -39,7 +39,7 @@
  * (02755:0:5) is the paired positive that `suidprobe` still requires in the
  * same image, so the narrowed grant is pinned in both directions.
  *
- * Every fixture is minted and removed here rather than staged. The probes
+ * Every fixture is minted and removed here, not staged. The probes
  * share one boot, and a probe that disarmed `suidprobe`'s staged fixtures
  * would buy itself a green run by breaking a later probe's premise.
  *
@@ -295,7 +295,7 @@ static void mint(const char *path, u32 mode, u32 fill, u32 uid, u32 gid)
 }
 
 /* Copy `src` to `dst` byte for byte through one read/write loop. A freestanding
- * probe cannot mint an ELF, and the escalation needs a program rather than a
+ * probe cannot mint an ELF, and the escalation needs a program, not a
  * mode; copying the staged helper keeps the runnable set-id fixture out of the
  * manifest and out of phase 3's allowlist. */
 static void copy_file(const char *src, const char *dst)
@@ -364,7 +364,7 @@ static void user_child(void)
     want_eq("chown(-1, -1) on a root-owned setuid file",
             syscall3(SYS_CHOWN32, (int)NOCHG, (int)KEEP, (int)KEEP), 0);
     want_mode("a no-change chown disarmed the file", NOCHG, 04755);
-    /* The same no-change chown spelled with the ids named rather than with the
+    /* The same no-change chown spelled with the ids named, not with the
      * sentinel. A gate written against (uid != -1 || gid != -1) instead of
      * against a field actually moving passes the line above and fails this one,
      * and that kernel is the hole: chown("/bin/su", 0, 0) from uid 1000 needs
@@ -466,7 +466,7 @@ static void run_child(void (*body)(void), const char *what)
     if (pid == 0) {
         body();
         /* Unreachable: every body exits itself. Non-zero so that a body that
-         * ever grew a path out the bottom would fail rather than pass. */
+         * ever grew a path out the bottom would fail, not pass. */
         syscall1(SYS_EXIT, 127);
     }
     reaped = syscall3(SYS_WAITPID, pid, (int)&status, 0);
@@ -496,7 +496,7 @@ void _start(void)
      * the image and every hole before that block was already too small to hold
      * a node header, so the next `creat` takes that remainder. Either way
      * /mp_grow ends up followed by a reserved node, and a write that outgrows
-     * it must relocate rather than extend in place. */
+     * it must relocate, not extend in place. */
     fd = syscall3(SYS_CREAT, (int)GROW, 0644, 0);
     want_ok("mint the relocation fixture", fd);
     want_eq("close the relocation fixture", syscall3(SYS_CLOSE, fd, 0, 0), 0);

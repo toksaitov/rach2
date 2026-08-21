@@ -4,7 +4,7 @@
  * An ordinary hosted C program. It reads a monotonic timestamp with
  * `clock_gettime(CLOCK_MONOTONIC)`, sleeps 120 ms with `nanosleep`, then
  * confirms the clock advanced by at least 100 ms, so the block-and-schedule
- * sleep really suspended the thread rather than returning early. It then draws
+ * sleep really suspended the thread instead of returning early. It then draws
  * two 16-byte buffers from `getrandom` (the CSPRNG behind syscall 355) and
  * requires them to differ. musl 1.2.5 has no arc4random, so getrandom is the
  * integration point.

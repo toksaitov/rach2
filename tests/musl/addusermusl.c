@@ -8,7 +8,7 @@
  * change, so what makes an interrupted run safe is that every prefix of the
  * order is a system a reader can still make sense of. The cases, as they run:
  *
- * The end-to-end case, asserted through libc rather than on bytes alone:
+ * The end-to-end case, asserted through libc, not on bytes alone:
  * `getpwnam` and `getgrnam` must parse the new account back with one number for
  * its uid and its gid, the shadow field must be a `$6$` hash `crypt` reproduces
  * from the scripted password, the home must be 0700 owned by those numbers, and
@@ -29,7 +29,7 @@
  * dies holding the transaction, so every round leaves the lock behind: the
  * probe asserts it is there, removes it the way root would, and only then runs
  * the real `adduser`, which by the never-break rule would otherwise spend ten
- * tries refusing on the lock rather than on the residue the round is about.
+ * tries refusing on the lock, not on the residue the round is about.
  * Each round asserts what must be present, what must still be byte-identical,
  * and that the re-run refuses naming the files that hold the leftovers.
  *
@@ -343,7 +343,7 @@ static void drain(int fd, char *buffer, size_t size, long ms)
  * Run `path` with `argv`, feeding `script` to its standard input and collecting
  * its standard error into `report`. Returns the child's exit status, or -1.
  *
- * The input is a pipe rather than a terminal, which is what makes the script
+ * The input is a pipe, not a terminal, which is what makes the script
  * possible: the password prompt `adduser` execs takes the non-tty path and
  * reads the lines as they come.
  */
@@ -411,7 +411,7 @@ static int run_adduser(const char *name, const char *script, char *report, size_
 /**
  * The account made end to end, read back through libc.
  *
- * Asserting through `getpwnam` and `getgrnam` rather than on the bytes alone is
+ * Asserting through `getpwnam` and `getgrnam`, not on the bytes alone is
  * the point of this case: it proves the readers can parse what was written,
  * which is a different claim from the bytes having landed.
  */
@@ -508,7 +508,7 @@ static int check_created(void)
  *
  * `adduser` publishes the account with a locked field and hands it to `passwd`,
  * so a password that is never set leaves an account that exists and cannot be
- * entered. That is the intended end state of the last prefix rather than a
+ * entered. That is the intended end state of the last prefix, not a
  * residue, and nothing needs undoing.
  */
 static int check_failed_password(void)
@@ -649,13 +649,13 @@ static int check_refusals(void)
 }
 
 /**
- * The ordering, proved by injection rather than by a reading of the source.
+ * The ordering, proved by injection, not by a reading of the source.
  *
  * One round per publication point, each run through the crash build, which dies
  * the instant that publication has landed and inside the transaction, so it
  * leaves the lock a real crash leaves. The probe clears that lock the way root
  * would before running the shipped program, since the never-break rule would
- * otherwise make the re-run refuse on the lock rather than on the residue.
+ * otherwise make the re-run refuse on the lock, not on the residue.
  */
 static int check_injection(void)
 {
@@ -735,7 +735,7 @@ static int check_injection(void)
             if (strstr(report, "already exists") == NULL) {
                 return fail("a complete account was reported as a residue");
             }
-            /* The last prefix is finishable rather than wedged. */
+            /* The last prefix is finishable, not wedged. */
             snprintf(script, sizeof(script), "%s\n%s\n", NEW_PASS, NEW_PASS);
             argv[0] = (char *)"passwd";
             argv[1] = (char *)CRASH_USER;

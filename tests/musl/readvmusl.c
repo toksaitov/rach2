@@ -1,7 +1,7 @@
 /**
  * Buffered reading, which is `readv` seen from where a program stands.
  *
- * musl's stdio fills its buffer with `readv` rather than `read` whenever it
+ * musl's stdio fills its buffer with `readv`, not `read` whenever it
  * wants more than a single byte, so before this kernel had that call every
  * program reading through `fgets`, `fread` or `scanf` failed, and several
  * programs in this tree read a byte at a time to avoid it. busybox's `chpasswd`
@@ -55,7 +55,7 @@ static int fail(const char *what)
  * Make a pipe holding `text`, returning its read end, or -1.
  *
  * The writing end is closed before the caller reads, so a reader that asks for
- * more than was written sees end of input rather than blocking for a writer
+ * more than was written sees end of input instead of blocking for a writer
  * that will never write again. The cases that need a live writer make their own
  * pipe and keep its other end.
  */
@@ -204,7 +204,7 @@ static int check_file(void)
         return fail("the buffers around the empty one hold the wrong bytes");
     }
 
-    /* End of file stops the walk rather than reporting an error. */
+    /* End of file stops the walk instead of reporting an error. */
     fd = file_holding("ZZZZ");
     if (fd < 0) {
         return fail("could not make the file the short case uses");
@@ -362,7 +362,7 @@ static int check_datagram(void)
      * payload is built to do exactly that: four bytes for the first buffer,
      * then the eight bytes of a descriptor naming an address inside the user
      * window that no mapping backs, then four more bytes for the kernel to put
-     * there. It must come back rather than fault in kernel mode, and what it
+     * there. It must come back, not fault in kernel mode, and what it
      * returns is whatever it managed before it gave up.
      */
     {
@@ -471,7 +471,7 @@ static int check_terminal(void)
     got = readv(slave, parts, 2);
     /* Closing the master hangs the slave up, which signals the group the slave
      * belongs to, and here that is this probe's own. The terminal is finished
-     * with, so the hangup is ignored across the two closes rather than allowed
+     * with, so the hangup is ignored across the two closes, not allowed
      * to kill the run. */
     signal(SIGHUP, SIG_IGN);
     close(slave);

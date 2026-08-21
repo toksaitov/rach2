@@ -252,7 +252,7 @@ void _start(void)
      * dropbear both drop all three ids, so only a process that deliberately
      * parks an identity in its saved slot can be signalled through it. The
      * parent keeps 1000 there while staying root, and the child probes with
-     * signal 0 rather than a real one, which would land on this probe's own
+     * signal 0, not a real one, which would land on this probe's own
      * init and could end the run. */
     if (syscall3(SYS_SETRESUID32, 0, 0, 1000) != 0) {
         fail("park 1000 in the saved slot");

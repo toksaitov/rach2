@@ -14,7 +14,7 @@ between them, must be empty. A weak undefined is not a failure, since a link
 resolves those to zero, and neither is a symbol the C library itself defines
 elsewhere in the same archive.
 
-Two things are excluded, and both are stated rather than quietly dropped. `main`
+Two things are excluded, and both are stated, not quietly dropped. `main`
 is referenced by `crt1.o` and is the whole point of compiling a program: the
 program being linked provides it. And an archive member is only pulled in when
 it resolves something, so a member no ordinary link ever reaches may reference

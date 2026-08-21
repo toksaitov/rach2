@@ -8,7 +8,7 @@
  * here over crafted samples: the two encodings, the 12-hour PM flag, a leap
  * year, the fields a dead battery reports, the two reads a boot compares before
  * it believes either, and the anchor a real time is measured from. The
- * expected seconds are literal, computed by hand rather than by the code under
+ * expected seconds are literal, computed by hand, not by the code under
  * test, because a case that derives its answer the way the implementation does
  * proves only that the implementation is self-consistent.
  *
@@ -126,7 +126,7 @@ int main(void)
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
 
     /* A nibble that is not a digit is not a BCD number. 0x1A is what a byte
-     * nobody maintains looks like, and it must fail rather than decode. */
+     * nobody maintains looks like, and it must fail, not decode. */
     bcd_sample(&raw, 26, 8, 14, 0, 0, 0);
     raw.minute = 0x1A;
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
@@ -163,7 +163,7 @@ int main(void)
     /* The anchor. A clock read at tick 500 saying 1000, asked again at tick
      * 700, is 1002: two seconds later, not seven. Adding every tick since boot
      * would answer 1007 here, and on a real boot that error is under a second,
-     * which is why it is stated as arithmetic rather than left to a tolerance.
+     * which is why it is stated as arithmetic, not left to a tolerance.
      */
     {
         long long sec = 0;
@@ -185,7 +185,7 @@ int main(void)
         CHECK(nsec == 500000000LL);
 
         /* An uptime of a whole tick cycle. This is the case that made the
-         * anchor count seconds rather than ticks: 2^32 ticks after the anchor,
+         * anchor count seconds, not ticks: 2^32 ticks after the anchor,
          * a difference of TICKS is zero again and real time jumps back 497
          * days. Counted in seconds, 42949672 seconds later is 42949672 seconds
          * later. */
@@ -193,7 +193,7 @@ int main(void)
         CHECK(sec == 1000LL + 42949672LL);
 
         /* And the seconds counter's own wrap, 136 years out, still reads as
-         * elapsed time rather than as a jump backwards. */
+         * elapsed time, not as a jump backwards. */
         rtc_time_from_anchor(1000LL, 0xFFFFFFF0u, 0x00000009u, 0u, &sec, &nsec);
         CHECK(sec == 1000LL + 25LL);
     }
@@ -238,7 +238,7 @@ int main(void)
         CHECK(rtc_snapshots_agree(&a, 0) == 0);
         CHECK(rtc_snapshots_agree(0, &b) == 0);
 
-        /* A battery that went ends the read rather than earning another try.
+        /* A battery that went ends the read instead of earning another try.
          * On some parts reading register D SETS the validity bit again, so the
          * pair a dead cell produces is a disagreement (clear, then set) and the
          * pair after it agrees, is in range, and is whatever the dead cell
@@ -252,7 +252,7 @@ int main(void)
         CHECK(rtc_contents_lost(0) == 1);
     }
 
-    /* What the boot read does with a pair, which is the policy rather than the
+    /* What the boot read does with a pair, which is the policy, not the
      * comparison: a healthy pair is used, a straddled update is read again, and
      * a clock that says its battery went ends the read in either order. That
      * last one is why this is a function and not two lines in the loop: a pair

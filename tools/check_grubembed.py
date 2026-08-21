@@ -14,7 +14,7 @@ naming partition 3 first would send every healthy boot to recovery. The early
 parser these run through has no `if`, which is why they are a pair and not a
 test.
 
-This is checked on the file rather than on the image because `grub-mkimage`
+This is checked on the file, not on the image because `grub-mkimage`
 compresses what it embeds, and the text is not there to find afterwards. What
 is required is the whole command list and not the presence of two lines in it:
 GRUB takes `;` as a command separator, so anything that looked only for the two

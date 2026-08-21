@@ -18,11 +18,11 @@ the supporting scripts.
   text-style check, the probe runner's own scoring selftest, the set-id manifest
   sweep, the image-reproducibility check, the structural checkers' selftests, and
   the dev-log index check.
-* `textcheck.sh` (invoked by `check.sh`): the mechanical prose checks (ASCII only, no em-dash, `*` bullets, and the rest of the writing standard). Its roots are the source trees and the top-level `*.md`; `dev-log` is deliberately not one. The milestone records are frozen at the style of the day they were written, and the early ones would fail these checks: editing them to satisfy a later checker would destroy the only account of what each milestone actually proved, which is the whole reason they are kept. So a new record is held to the same rules the way voice is, by review, and this is the statement of that rather than a gap nobody noticed. The mechanical half of the gate covers the code and the current documentation; it does not cover the history.
+* `textcheck.sh` (invoked by `check.sh`): the mechanical prose checks (ASCII only, no em-dash, `*` bullets, and the rest of the writing standard). Its roots are the source trees and the top-level `*.md`; `dev-log` is deliberately not one. The milestone records are frozen at the style of the day they were written, and the early ones would fail these checks: editing them to satisfy a later checker would destroy the only account of what each milestone actually proved, which is the whole reason they are kept. So a new record is held to the same rules the way voice is, by review, and this is the statement of that, not a gap nobody noticed. The mechanical half of the gate covers the code and the current documentation; it does not cover the history.
 * `check_sources.sh` (`make check-sources`, also run inside the gate): fails if a
   kernel `.c` on disk is missing from `C_SRC`, so a new source cannot be silently
   dropped from the build.
-* The extraction half of the self-build proof is a KRFFS tool rather than a script here: `krffs/readfile.krffs` reads one file out of an image by path, and `make selfbuild-test` uses it to pull the guest-built kernel from the disk copy for hashing, checking and booting.
+* The extraction half of the self-build proof is a KRFFS tool, not a script here: `krffs/readfile.krffs` reads one file out of an image by path, and `make selfbuild-test` uses it to pull the guest-built kernel from the disk copy for hashing, checking and booting.
 * `check_guest.py` (inside the gate, step 7): holds the three `guest.mk` files equal to the host builds they mirror, because pdpmake reads none of the GNU makefiles and a hand-kept list drifts. Four contracts: the kernel object list equals `ASM_SRC` plus `C_SRC` with `kernel.objs` written whole, `loader.o` first, no duplicates, and the link line carrying the response file, the pinned text address and `libtcc1.a`; the utils per-program source map equals `utils/Makefile`'s, companions and `-D` builds included; the ish object list equals `ish/Makefile`'s; and the build fits the machine (the deepest kernel include chain leaves the compiler's own descriptors inside the 16-slot table, and no recipe line approaches the exec string budget).
 * `hosttest.sh` (`make verify-host`): the dual-target host tests. Compiles the
   pure kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer
@@ -58,11 +58,11 @@ the supporting scripts.
   THE GUEST over that make's own output file, and every command is sent only
   after the previous one printed its marker, because the console's input queue is
   bounded and a build takes longer than any fixed pause.
-* `menu_test.sh` (`make menu-test`): the boot menu that can be rewritten and the stub that cannot, four boots of one GRUB disk. `/boot/grub/grub.cfg` is written once when the disk is built and never again; it defines every entry the machine needs and then sources `/boot/boot.cfg`, the rewritable half `bootctl config` overwrites in place. The first boot stages a two-entry menu, round-trips a grubenv key through `bootctl env`, and corrupts the candidate kernel so the next boot must take the fallback; the second proves both staged entries reached the menu and that the fallback NUMBER still named the stub's own entry rather than a staged one, which is the property the ordering exists for; the third truncates the staged file mid-entry from the host and the machine must still boot through the stub, with GRUB's parse error in the log; the fourth reads the slot's extent back to prove bytes were overwritten in place rather than a file rewritten. A staged menu is GRUB script the stub runs, so whoever writes it can direct the boot, which is the authority replacing the candidate kernel already has; what the stub guarantees is that a damaged one still leaves a bootable machine. Docker absent fails the run, as with the installer's harness.
+* `menu_test.sh` (`make menu-test`): the boot menu that can be rewritten and the stub that cannot, four boots of one GRUB disk. `/boot/grub/grub.cfg` is written once when the disk is built and never again; it defines every entry the machine needs and then sources `/boot/boot.cfg`, the rewritable half `bootctl config` overwrites in place. The first boot stages a two-entry menu, round-trips a grubenv key through `bootctl env`, and corrupts the candidate kernel so the next boot must take the fallback; the second proves both staged entries reached the menu and that the fallback NUMBER still named the stub's own entry, not a staged one, which is the property the ordering exists for; the third truncates the staged file mid-entry from the host and the machine must still boot through the stub, with GRUB's parse error in the log; the fourth reads the slot's extent back to prove bytes were overwritten in place, not a file rewritten. A staged menu is GRUB script the stub runs, so whoever writes it can direct the boot, which is the authority replacing the candidate kernel already has; what the stub guarantees is that a damaged one still leaves a bootable machine. Docker absent fails the run, as with the installer's harness.
 * `grub_test.sh` (`make grub-test`): the machine replacing its own boot loader, three boots of one GRUB disk. `mkgrubcore.sh` builds two core images that differ only in an embedded configuration printing `GRUBCORE=A` or `GRUBCORE=B`; the first boot installs B and reboots, the second must print B and installs A, and the third must print A. The marker is printed by a configuration embedded in the core image itself, so it identifies the image that is running. Reading the blocklist back would prove only bytes at rest, and a tool that wrote the pointer and nothing else would pass that. The two installs are also required to report two different tails, since overwriting one tail twice still boots whatever was written there last, and a write into the tail the machine is running from is the case the two-slot layout exists to avoid. The embedded configuration sets the serial terminal up itself: it runs before the configuration on the partition does, so an `echo` without it reaches the screen and nothing a harness can read. Docker absent fails the run, as with the installer's harness.
-* `install_test.sh` (`make install-test`): the machine installing its own kernel, proved on the booted GRUB disk with no `-kernel` anywhere, so what boots is what the loader reads from the boot partition. The whole loop runs twice in one invocation with a distinct banner marker per pass (the second pass starts from the disk the first modified): root proves `rach2.slot=candidate` from `/proc/cmdline`, edits the pass's marker into the kernel's serial banner in `/src/rach2`, builds in place, installs, proves a commit is refused while the trial is armed, reboots into the trial and is proved running by the marker in that boot's own log interval, commits, and holds across a cold boot; then the recovery half corrupts the candidate's first sector through `/dev/bootpart` at the extent `bootctl status` names, reboots into the fallback (the marker must be absent from that interval), reinstalls from inside, and commits the repair. The interruption matrix's determinate states are then booted from host-crafted environment blocks, told apart by the marker with no login. The feeder paces on log patterns with occurrence counts (a reboot brings a second `login:`, so each wait names which occurrence it is for) and stops feeding when a step's pattern does not arrive, so a wrong turn ends the run instead of driving commands into the wrong session; every identity assertion is made post-hoc on token byte offsets, each boot's claims checked only inside its own interval, with every success token written split so a command's own echo cannot satisfy it. Docker absent fails the run rather than skipping: this harness is the milestone's proof.
+* `install_test.sh` (`make install-test`): the machine installing its own kernel, proved on the booted GRUB disk with no `-kernel` anywhere, so what boots is what the loader reads from the boot partition. The whole loop runs twice in one invocation with a distinct banner marker per pass (the second pass starts from the disk the first modified): root proves `rach2.slot=candidate` from `/proc/cmdline`, edits the pass's marker into the kernel's serial banner in `/src/rach2`, builds in place, installs, proves a commit is refused while the trial is armed, reboots into the trial and is proved running by the marker in that boot's own log interval, commits, and holds across a cold boot; then the recovery half corrupts the candidate's first sector through `/dev/bootpart` at the extent `bootctl status` names, reboots into the fallback (the marker must be absent from that interval), reinstalls from inside, and commits the repair. The interruption matrix's determinate states are then booted from host-crafted environment blocks, told apart by the marker with no login. The feeder paces on log patterns with occurrence counts (a reboot brings a second `login:`, so each wait names which occurrence it is for) and stops feeding when a step's pattern does not arrive, so a wrong turn ends the run instead of driving commands into the wrong session; every identity assertion is made post-hoc on token byte offsets, each boot's claims checked only inside its own interval, with every success token written split so a command's own echo cannot satisfy it. Docker absent fails the run instead of skipping: this harness is the milestone's proof.
 * `selfbuild_test.sh` (`make selfbuild-test`): the machine building its own kernel, which is a different claim again from building a program: the staged tcc, driven by the staged pdpmake over the staged `guest.mk`, turns `/src/rach2` into a kernel. Two boots of a disk copy, the long one as the unprivileged `test` account and a short second one as root, under the harness contract `make_test.sh` established (guest-side assertions, marker-paced feed, split tokens, bounded waits) plus one whole-run deadline over both. It builds TWICE, each time into a workspace deleted and recreated, and the two kernels must hash equal, which is the reproducibility claim made on the machine itself; the hash and size are recorded for the boot proof. The same boot then builds the whole userland from `/src`: all 25 utilities through their `guest.mk` map and the ish shell through its own, with a smoke check per program (the file tools against real files, `yes` through a pipe, `ping` against loopback, `httpd` answered by `nc`, the privileged programs run exactly far enough to refuse, the two init variants and the crash fixture as build-only artifacts, and ish running a command by absolute path, since os-real stages no `/bin/echo` for a non-busybox shell to find). After the guest half, the exact kernel bytes are extracted with `readfile.krffs`, hash-matched against the guest's own record, checked with `check_kernel.py --tcc`, and booted through the full probe suite; where Docker exists a GRUB disk is assembled around them under a bounded watchdog and must reach a login prompt, and where it does not the skip is printed with its reason. The second boot logs in as root (the password read from `krffs/rach2_demo_password` by the Makefile) and runs `make -f guest.mk` directly in the staged `/src/ish`, no copy and no touch, asserting the build's exit status is zero: that is the demonstration flow, and it is what a revert of the stager's fixed nonzero staged instant breaks, pdpmake reading a zero modification time as a file that does not exist. The space preflight runs on the host over the disk copy's free-node chain, because the guest has no `statfs` to ask. The two kernel builds together take about a minute: they did not until the kernel's page cache grew (see `rach2/sys/mm/pagecache.h`), and the first measurement, more than a minute per compile, is what forced that growth.
-* `ssh_test.sh` (`make ssh-test`): the SSH capstone with nobody at the keyboard. Boots os-real from a disk copy with the port forwarded, starts dropbear from the console session the way the manual recipe does, then logs in twice, because the two prove different things: root by key, which is what the image is set up for, and the unprivileged account by password, which is the half that reaches `/etc/shadow` and the credential library. Each login is pinned to the method it claims (the key login offers that one identity and no password; the password login offers no key and records that a password was actually asked for), because a session that merely happened proves nothing about how it was let in. Both ask for a terminal (`-tt`) and both run `test -t 0 && test -t 1` before their token, since ssh requests no pty for a session that has a command and the capstone is about a pty: without it dropbear's terminal path is never touched. Three attempts must then be refused, run after the two that must work so that the server is known to be answering: an account offering no credentials at all, the test account one character off its password, and root by password, which `-g` bars. Every wait is bounded, so a hang fails instead of sitting there. It needs `expect(1)` for the password half and says so rather than hanging without it.
+* `ssh_test.sh` (`make ssh-test`): the SSH capstone with nobody at the keyboard. Boots os-real from a disk copy with the port forwarded, starts dropbear from the console session the way the manual recipe does, then logs in twice, because the two prove different things: root by key, which is what the image is set up for, and the unprivileged account by password, which is the half that reaches `/etc/shadow` and the credential library. Each login is pinned to the method it claims (the key login offers that one identity and no password; the password login offers no key and records that a password was actually asked for), because a session that merely happened proves nothing about how it was let in. Both ask for a terminal (`-tt`) and both run `test -t 0 && test -t 1` before their token, since ssh requests no pty for a session that has a command and the capstone is about a pty: without it dropbear's terminal path is never touched. Three attempts must then be refused, run after the two that must work so that the server is known to be answering: an account offering no credentials at all, the test account one character off its password, and root by password, which `-g` bars. Every wait is bounded, so a hang fails instead of sitting there. It needs `expect(1)` for the password half and says so instead of hanging without it.
 * `check_elf.py`: judges an ELF against what this kernel will actually load, in two halves kept apart on purpose. The LOADER half is `elf_load_image`'s contract copied rule for rule (identification bytes, `ET_EXEC`, `EM_386`, the exact program-header entry size, at most 32 headers and 8 `PT_LOAD`s, the header table inside a load so `AT_PHDR` is real, `p_filesz <= p_memsz`, ascending page-disjoint non-wrapping segments in the user window, an entry point in it). The POLICY half is this project's: no `PT_INTERP`, no `PT_DYNAMIC`. The distinction is the point. The kernel REFUSES what the first half names and IGNORES what the second does, so a dynamic image would load, jump and run with nothing relocated; `file(1)` reports neither. Run from `make check-tcc` and `make check-pdpmake`, and from `build_pdpmake.sh` itself, so a make that could not be loaded fails its own build.
 * `check_kernel.py`: checks a kernel ELF against what the multiboot loaders require, and runs on every kernel link from `rach2/Makefile`. Both profiles check the load surface: an ELF32 executable for the 80386, the multiboot header with a zero-sum checksum on a four-byte boundary within the loader's search window, exactly two non-overlapping load segments at or above 0x100000 with equal physical and virtual addresses, in-file ranges and offset congruence, and the entry inside the file-backed bytes of a load. The symbol assertions (`entry == _start`, `_end` equal to the image end the segments derive) run only where a symbol table exists, which the default GNU profile requires; `--tcc` tolerates its absence, tcc's linker emitting none, and instead pins the tcc layout exactly: two loads, the first at file offset 0 with both addresses 0x100000. `check_elf.py` cannot do this job: it checks user programs and refuses loads below 0x02000000.
 * `check_link.py`: asks whether a program could link against what an image has. The guest links `libc.a`, `libtcc1.a` and the crt objects, with no libgcc appended the way the host's wrapper appends one, so a symbol musl references and neither archive defines is not a build-time question at all: it is a student's first link failing. Three exclusions, each stated in the file: `main` comes from the program being compiled, the linker provides its own section symbols, and an archive member no link reaches (tcc's bounds-checking alloca) may reference what it likes. Only an EXPORTED definition counts, which `nm` writes with an upper-case type letter: this archive holds a local `__udivmoddi4` beside the global one, and counting the local would let the global be dropped with the check none the wiser. Run from `build_tcc.sh`.
@@ -72,14 +72,13 @@ the supporting scripts.
   per-image allowlist naming each path's exact mode and owner, failing on an
   undeclared entry, a declared entry nothing stages, a mode or owner mismatch,
   a malformed mode, or a manifest the table does not name. It parses the
-  grammar rather than searching the text, because all six mode-bearing
+  grammar instead of searching the text, because all six mode-bearing
   directives can grant privilege and `exec-dir` and `tree` grant it to a set of
   paths the manifest never names: `dir`, `exec-dir` and `tree` may carry no
   set-id bit at all,
   since KRFFS has no setgid-directory inheritance and an `exec-dir` set is a
   property of what happened to be built, not of the manifest. Its tokenizing
-  follows `stageimage.krffs`'s `apply_line` exactly, down to reading bytes
-  rather than text (a lone carriage return ends a line for Python and not for
+  follows `stageimage.krffs`'s `apply_line` exactly, down to reading bytes, not text (a lone carriage return ends a line for Python and not for
   `fgets`, which is enough to hide a privileged path behind a declared one) and
   to the line-length limit and arity the stager enforces.
   The APPLET TABLE (`--applets [PATH]`, run from `check-setid`) reads the
@@ -89,7 +88,7 @@ the supporting scripts.
   top of every build, so the in-tree file is absent for most of a rebuild and
   describes the previous configuration in the window before the re-extract. The
   staged copy describes the binary that ships. It is refused when it is missing
-  and when it is empty, so an unreadable scan fails rather than reading as a
+  and when it is empty, so an unreadable scan fails instead of reading as a
   clean absence. There is a second table beside it,
   `applet_tables-suid.h`, from the set-id build, and its rule is the opposite:
   a whitelist of exactly `login`, `passwd` and `su`, because every applet in
@@ -99,11 +98,11 @@ the supporting scripts.
   programs and nowhere else and busybox is staged unprivileged: an applet of
   either name would answer from the shell's PATH before `/bin/su` and
   `/bin/passwd` and then refuse for want of a bit it does not have. It matches
-  whole NUL-delimited names rather than substrings, since `passwd` occurs
+  whole NUL-delimited names, not substrings, since `passwd` occurs
   inside `passwd_main` and inside help text, and it requires `cat` to be
-  present, so a header it could not parse fails loudly rather than reading as a
+  present, so a header it could not parse fails loudly instead of reading as a
   clean absence. It reads two configs in the same pass, for the settings that
-  live inside an applet rather than as one, where no applet name changes when
+  live inside an applet, not as one, where no applet name changes when
   they come or go. Both are the configs `oldconfig` RESOLVED and
   `build_busybox.sh` staged beside the binaries, `build/vendor/busybox/config-main`
   and `config-suid`, and not the hand-written files: the resolved file has one
@@ -150,7 +149,7 @@ the supporting scripts.
   host copy it is not. The test account's own
   `authorized_keys` is deliberately not in it: that file is the account's, under
   a home the account owns, and replacing it is not a climb. `/sbin/init` is held
-  to `0755:0:0` by a rule rather than a per-image entry, since no image has
+  to `0755:0:0` by a rule, not a per-image entry, since no image has
   cause to stage it otherwise. And every directory above a declared path must be
   staged by a `dir` line, root-owned and writable by nobody else: this kernel
   decides `unlink` and `rename` on the parent's write bit, so a `/bin` at 0777
@@ -175,7 +174,7 @@ the supporting scripts.
   `build/utils/sbin/init-login` must contain neither of the byte strings
   `/bin/sh` and `/ish`, and `init-shell` must contain both. That positive
   requirement is the sentinel, the way `cat` is the applet table's: an
-  unreadable or empty scan fails rather than passes. The check is exact in this
+  unreadable or empty scan fails, not passes. The check is exact in this
   tree because a static musl util that never calls `system` has neither
   string; only init's own table puts them in a binary. Both artifacts come from
   the `utils` sub-make, which `check-setid` therefore lists as a prerequisite:
@@ -264,7 +263,7 @@ the supporting scripts.
   be a test at all: one directory returns one order, and re-creating the same
   names in a different sequence proves nothing on a host that orders by hash, so
   what is asserted is the property the sort provides, and the check says it could
-  not test rather than passing quietly when the host's own order is already
+  not test instead of passing quietly when the host's own order is already
   sorted.
 * `cppcheck.suppress`: the cppcheck suppression list `check.sh` reads (a data
   file, not a script).
@@ -292,7 +291,7 @@ a pid a script no longer owns is one the host may since have given away.
   a hang fails and names the probes it never reached. `--selftest` checks that
   scoring rule against recorded serial shapes and needs no QEMU; `check.sh` runs
   it, so the rule that decides every probe's verdict is itself gated. `make test`
-  states both windows rather than taking the defaults: one deadline for the whole
+  states both windows instead of taking the defaults: one deadline for the whole
   run, and a per-step window wide enough for `musl/pwauthmusl`, which waits out
   the credential lock's real ten-second retry budget twice and so takes tens of
   seconds on its green path. Only a failing probe ever waits a step window out,
@@ -307,13 +306,13 @@ a pid a script no longer owns is one the host may since have given away.
   `PROBES`, since it must fail where entropy is trusted) for its `SALTNOENT OK`
   token. `harness.py` passes no `-cpu` of its own, so the passthrough is the only
   one on the command line, which is what makes the CPU contract of this target
-  hold rather than be quietly overridden.
+  hold, not be quietly overridden.
 
   `make cred-persist-test` is the other run that suite cannot make. Both of
   `cred_rewrite`'s flushes are no-ops on the RAM module `make test` boots, so a
   library that dropped either would pass every credential proof in the tree.
   This boots one disk image three times against `/musl/creddisk`, with one send
-  per boot rather than the repeating `probe=` step, since each boot must run the
+  per boot, not the repeating `probe=` step, since each boot must run the
   probe exactly once: the state the next boot reads is the state this one left.
 * `crash_test.sh` (`make crash-test`): the disk dirty-flag checks, four boots
   against scratch copies of one disk. The first is killed after the mount, so
@@ -322,7 +321,7 @@ a pid a script no longer owns is one the host may since have given away.
   attacks the root node with every operation that could take a mode bit off it,
   and the flag must still be there afterwards. The fourth types `poweroff` and
   is the only phase that asserts the machine STOPPED: it waits on the QEMU
-  process ending rather than on a token, since a token proves only that the
+  process ending, not on a token, since a token proves only that the
   kernel reached the line before the write, and `halt` cannot carry that
   assertion at all because parking the CPU leaves QEMU running by design. Its
   serial input is a FIFO held open past the wait, because EOF there stops QEMU
@@ -334,12 +333,12 @@ a pid a script no longer owns is one the host may since have given away.
   it is grep's status that survives, not fsck's. That third phase exists because
   `KRFFS_MODE_DIRTY` and `KRFFS_MODE_SUID` are the same bit: a set-id clear that
   reached the root would report an unclean image as cleanly unmounted, losing
-  the crash evidence rather than a permission. It needs a real disk, since the
+  the crash evidence, not a permission. It needs a real disk, since the
   RAM mount never sets the flag, and the probe syncs after each attempt so a
   spurious clear reaches the platter instead of sitting in a write-back frame
   where the check could not see it. Each phase waits on the token the kernel or
   the probe prints, never on a sleep, and the three logs are removed before the
-  first boot rather than only in the trap: an uncatchable kill leaves them, each
+  first boot, not only in the trap: an uncatchable kill leaves them, each
   has the token its phase waits for, and the redirect that would truncate one
   belongs to the backgrounded child, which the parent's grep is not ordered
   after. The clean phase is the one that would lie if that race were ever won,
@@ -377,7 +376,7 @@ gzip -c root.img | ssh -p 2222 root@machine 'gunzip | reflash /dev/disk0 6815744
 
 A correct image written at a wrong offset is a repair that reports success and
 leaves a machine that still will not boot, which is why the drill reads the
-extent out of the disk's own partition table rather than recomputing it from the
+extent out of the disk's own partition table instead of recomputing it from the
 sizes the build was given.
 
 The length is an argument because a stream's length is not known until it ends: a tool that read first and checked afterwards would already have written part of a disk it was never allowed to touch. With the count declared, `reflash` measures the device, judges the offset and the count against it by subtraction (`offset + count` is exactly the sum that wraps on a drive this size), and only then reads a byte. It coalesces the stream into whole sectors, since a pipe hands out whatever has arrived and the raw devices take sectors, and it requires the stream to end exactly where it said: a short one fails and reports how far it got, and a longer one is not written past the count. `utils/sectorcopy.c` is the half of it with no device in it, and `tests/host/sectorcopy_hosttest.c` drives that half with the streams a pipe cannot be asked to produce.
@@ -401,15 +400,15 @@ ssh -p 2222 root@machine 'bootctl env saved_entry candidate-static'   # whatever
 
 The network is the other half of being reachable. Both recovery entries exist twice, once taking whatever DHCP gives and once carrying the fixed address, for the same reason the ordinary entries do. And where no menu can be chosen from at all, the image answers by itself: `krffs/rescue-static.script` runs after `ifup`, waits the lease out once, and takes the fixed address if none arrived. That address is the menu's, and the sealed disk's build refuses to write a disk whose script and menu disagree.
 
-What recovery cannot repair is stated rather than hidden: LBA 0, which nothing writes after the disk is built; LBA 1, whose torn write makes GRUB unreachable and which is what loads recovery; and an active core image too damaged to read partition 3.
+What recovery cannot repair is stated, not hidden: LBA 0, which nothing writes after the disk is built; LBA 1, whose torn write makes GRUB unreachable and which is what loads recovery; and an active core image too damaged to read partition 3.
 
-Recovery's SSH identity is not stable, and that is worth stating where the recovery commands are. Its root is a RAM image, so the server mints a host key on every recovery boot and `ssh` reports a changed identity each time; the ordinary system, whose root is the disk, keeps the key it minted on its first boot. The fingerprint is printed on the console when it is generated (`Generated hostkey ... fingerprint is SHA256:...`), and the machine's own screen is where to read it: the netconsole has the same line, but it is unauthenticated broadcast and anyone on the segment can send a frame carrying any fingerprint, so it shows what happened and does not establish who is answering. Staging a fixed host key into the recovery image instead would need a host-side `dropbearkey`, which this project does not build; that is the reason it is a procedure rather than a file.
+Recovery's SSH identity is not stable, and that is worth stating where the recovery commands are. Its root is a RAM image, so the server mints a host key on every recovery boot and `ssh` reports a changed identity each time; the ordinary system, whose root is the disk, keeps the key it minted on its first boot. The fingerprint is printed on the console when it is generated (`Generated hostkey ... fingerprint is SHA256:...`), and the machine's own screen is where to read it: the netconsole has the same line, but it is unauthenticated broadcast and anyone on the segment can send a frame carrying any fingerprint, so it shows what happened and does not establish who is answering. Staging a fixed host key into the recovery image instead would need a host-side `dropbearkey`, which this project does not build; that is the reason it is a procedure, not a file.
 
-One more limit belongs beside those, because it is about reaching recovery rather than about what recovery can do. A root that will not mount while the boot partition is healthy is the one damage that strands the machine without a console: GRUB reads partition 1, finds its menu, and boots the ordinary kernel, which stops at a mount failure and starts no network. GRUB's `fallback` cannot see that, since the kernel loaded and ran; the embedded configuration cannot either, since partition 1 answered. Somebody has to select recovery at the machine, or arm it before the disk becomes unmountable. Closing that would mean counting boot attempts in the environment block and having a machine that reached userland clear the count, which is a mechanism of its own and is not built here.
+One more limit belongs beside those, because it is about reaching recovery, not about what recovery can do. A root that will not mount while the boot partition is healthy is the one damage that strands the machine without a console: GRUB reads partition 1, finds its menu, and boots the ordinary kernel, which stops at a mount failure and starts no network. GRUB's `fallback` cannot see that, since the kernel loaded and ran; the embedded configuration cannot either, since partition 1 answered. Somebody has to select recovery at the machine, or arm it before the disk becomes unmountable. Closing that would mean counting boot attempts in the environment block and having a machine that reached userland clear the count, which is a mechanism of its own and is not built here.
 
 ## GRUB in the gap, and replacing it from the running machine## GRUB in the gap, and replacing it from the running machine
 
-The 2048 sectors between the MBR and the first partition are GRUB's, and this project treats them as a fixed layout rather than as whatever `grub-bios-setup` last wrote there. `mkdisk_grub.sh` builds the disk to it and `bootctl grub` maintains it afterwards; `utils/grubslot.h` is the same arithmetic in code, and `tests/host/grubslot_hosttest.c` checks every number in it.
+The 2048 sectors between the MBR and the first partition are GRUB's, and this project treats them as a fixed layout, not as whatever `grub-bios-setup` last wrote there. `mkdisk_grub.sh` builds the disk to it and `bootctl grub` maintains it afterwards; `utils/grubslot.h` is the same arithmetic in code, and `tests/host/grubslot_hosttest.c` checks every number in it.
 
 ```
 LBA 0            the MBR: boot code, then the partition table at byte 446
@@ -439,7 +438,7 @@ Two runs of one artifact, on separate copies. The fault run walks the machine's 
 
 Two details in it are worth carrying to any harness that operates a machine over SSH. A command that stops the machine (`reboot -f`, `poweroff -f`) has no answer to wait for, since the connection dies with it, so those calls are bounded tightly and their result ignored while the QEMU process is what is watched. And arming a boot from the host means editing the environment block the way `grub-editenv` does, one key set and every other line kept: writing the block from nothing drops the saved default with it, and the machine then comes back on the fallback for a reason that has nothing to do with the test.
 
-The physical write that follows the rehearsal is a document rather than a script, `dev-log/25-sealed/checklist.md`, because it names a drive by model and serial and asks for that to be confirmed twice before anything is written.
+The physical write that follows the rehearsal is a document, not a script, `dev-log/25-sealed/checklist.md`, because it names a drive by model and serial and asks for that to be confirmed twice before anything is written.
 
 ## Image builders (need Docker)
 
@@ -461,7 +460,7 @@ The physical write that follows the rehearsal is a document rather than a script
   menu entries carry. The last four arrived with milestone 25's sealed disk.
 
   The boot size and the cluster size are coupled, and getting it wrong produces
-  a disk the installer refuses rather than one that fails later.
+  a disk the installer refuses, not one that fails later.
   `bootslot_open` rejects a volume whose FAT exceeds 512 sectors or whose
   cluster count exceeds 65536; a 64 MiB partition at one sector per cluster is
   about 130500 clusters with a 1020-sector FAT and fails both, while at eight
@@ -474,13 +473,13 @@ The physical write that follows the rehearsal is a document rather than a script
   otherwise random volume serial, and the creation and access dates mcopy
   stamps into each directory entry from the clock, which mtools takes from
   `SOURCE_DATE_EPOCH`. Two inputs are deliberately not pinned, because they are
-  inputs rather than noise: the container is the floating `ubuntu:24.04` tag
+  inputs, not noise: the container is the floating `ubuntu:24.04` tag
   with whatever GRUB and mtools the archive has that day, and the machine's
   SSH host key and password salt are generated per tree.
 * `mkgrubcore.sh`: builds one GRUB core image with a marker inside it, for
   `grub_test.sh`. `grub-mkimage -c` embeds a configuration file the core runs
   before it reads anything from a partition, which is what makes
-  the marker identify the running image rather than the contents of a file on a
+  the marker identify the running image, not the contents of a file on a
   partition.
 * `grub_embed.py` (invoked by `mkdisk_grub.sh`): writes GRUB's `boot.img` and
   embeds `core.img` into the disk directly.

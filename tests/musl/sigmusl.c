@@ -6,7 +6,7 @@
  * SA_RESTORER -> __restore -> the legacy sigreturn(119) trampoline, the common
  * path for a handler that takes no siginfo) runs when the signal is raised to
  * self, and control resumes after it. Second, a signal blocked with sigprocmask
- * stays pending rather than running, and is delivered once unblocked. Third,
+ * stays pending instead of running, and is delivered once unblocked. Third,
  * the default action terminates: a child that abort()s with no handler is
  * reaped as killed by SIGABRT (WIFSIGNALED / WTERMSIG).
  *

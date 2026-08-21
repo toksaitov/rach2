@@ -25,7 +25,7 @@ static void say(char *err, size_t errlen, const char *what)
  * Nothing here is signed: an offset into a disk and a count of bytes are both
  * quantities, and a minus sign in either is a mistake worth naming rather than
  * a large number to wrap into. Overflow is caught before it happens, so a
- * number longer than the disk is refused rather than silently reduced.
+ * number longer than the disk is refused, not silently reduced.
  *
  * @return 0 when `out` has the number, -1 when the text is not one.
  */
@@ -103,7 +103,7 @@ int sectorcopy_bounds(unsigned long long device, unsigned long long offset,
  * Copy exactly `count` bytes from the stream to the device.
  *
  * A read from a pipe returns whatever has arrived, and a raw device takes whole
- * sectors, so the two are joined here rather than passed through to each other:
+ * sectors, so the two are joined here, not passed through to each other:
  * bytes accumulate until there is a sector or the count is reached. The stream
  * must end exactly where it said it would. A short one leaves the disk holding
  * part of an image and the rest of what was there before, which is worse than

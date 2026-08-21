@@ -123,8 +123,8 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen);
  * was found once when the volume was opened and does not change. Every sector
  * is written whether the new text reaches it or not, so a shorter menu leaves
  * none of a longer one behind, and each is read back and compared before the
- * next, so a slot that does not take the write fails here rather than at the
- * next boot. The padding is '#' rather than zeros because GRUB reads the whole
+ * next, so a slot that does not take the write fails here, not at the
+ * next boot. The padding is '#', not zeros because GRUB reads the whole
  * file and a comment is what an empty tail has to look like to it.
  *
  * This is not atomic and cannot be: one slot overwritten in place can be left
@@ -144,7 +144,7 @@ int bootslot_write_menu(struct bootslot *bs, const uint8_t *text, uint32_t size,
  * The block is 1024 bytes with no checksum, which GRUB parses at boot with no
  * recourse if it is malformed, so the write is read back and compared. This
  * imposes no policy on which keys may be set; the caller decides that, because
- * the allowlist belongs with the tool a person types at rather than with the
+ * the allowlist belongs with the tool a person types at, not with the
  * library.
  */
 int bootslot_env_set(struct bootslot *bs, const char *key, const char *value, char *err,

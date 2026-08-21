@@ -224,8 +224,8 @@ static int proc_disk_field(const char *key, unsigned long long *out)
  *
  * Both boots run this against the same image and differ only in the kernel:
  * `recovery` says which one is running. An ordinary build must refuse and leave
- * the sector as it found it, so the refusal is shown to have written nothing
- * rather than merely returned an error. A recovery build must write past 2 GiB,
+ * the sector as it found it, so the refusal is shown to have written nothing,
+ * not merely returned an error. A recovery build must write past 2 GiB,
  * read it back, and take a large write in few driver calls, which is what makes
  * a whole-disk reflash finishable: batching is invisible in the result, so the
  * count of calls is read out of /proc/disk either side of it.
@@ -510,7 +510,7 @@ void _start(void)
         check(n == SECTOR, "the gap's first sector reads whole");
 
         /* The window ends at LBA 2047 and the checks are on the whole request,
-           so a write starting past the end writes nothing rather than part. */
+           so a write starting past the end writes nothing, not part. */
         rc = syscall3(SYS_LSEEK, fd, 2047 * SECTOR, SEEK_SET);
         check(rc == 2047 * SECTOR, "seek to the gap's end");
         n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);

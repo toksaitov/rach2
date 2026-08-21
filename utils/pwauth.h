@@ -17,7 +17,7 @@
  * opened before the rename or after it. Readers never lock, which is what keeps
  * a stuck writer from keeping anyone out of the box. A writer is different: it
  * holds a transaction across its whole read-modify-write, which is why
- * `pwauth_check` takes the stored hash as a string rather than resolving the
+ * `pwauth_check` takes the stored hash as a string instead of resolving the
  * account itself. The writer has already read the file it is about to replace,
  * and a second, independent lookup could answer from a different one.
  *
@@ -39,7 +39,7 @@
  * `O_CREAT|O_EXCL|O_WRONLY` at mode 0600 and writes the holder's pid as one
  * decimal line. The exclusive create is the whole of the exclusion, because a
  * syscall on this kernel does not yield, so nothing can interleave between the
- * existence test and the create. A file rather than a directory because it
+ * existence test and the create. A file, not a directory because it
  * has the holder's pid, and the pid is what lets a refusal name the process
  * an operator has to deal with. Every writer takes it before its first read and
  * has it through its last rename; `cred_rewrite` refuses outright when it is
@@ -79,11 +79,11 @@
  * later writer reclaims it the way a shared name was reclaimed. It blocks
  * nothing and it is never read; it is one more `rm`.
  * This is what `lckpwdf` does on Linux, and why `vipw` and `passwd` there
- * report a lock rather than breaking one. So: no caller breaks a lock, no
+ * report a lock instead of breaking one. So: no caller breaks a lock, no
  * caller installs handlers of its own, and a lock left behind is root's to
  * remove.
  *
- * What the library cannot promise, stated here rather than left to be
+ * What the library cannot promise, stated here, not left to be
  * discovered. Every name it acts on is resolved twice: once when it reads the
  * lock and once when it unlinks or renames, and this kernel has no call that
  * binds the second to the file the first saw. There is no `funlink`, no rename
@@ -100,7 +100,7 @@
  * between them), and it opens only after the never-break rule has already been
  * broken by hand. It is narrowed as far as the syscall surface allows and it is
  * not closed. Closing it needs a primitive this kernel does not have: an unlink
- * and a rename that name an open descriptor rather than a path.
+ * and a rename that name an open descriptor, not a path.
  *
  * Ordering, which no lock supplies. A change spanning several files can still
  * crash between two renames, and the transaction cannot fix that; the ordering
@@ -193,7 +193,7 @@ int pwauth_verify(const char *user, const char *password);
  * newline does, and end of input with nothing read is -1, which is the refusal
  * a caller reports; end of input after some bytes is a complete line.
  *
- * A line longer than the limit is refused rather than truncated, and the limit
+ * A line longer than the limit is refused, not truncated, and the limit
  * is the smaller of the caller's buffer and `PWAUTH_MAX_PASSWORD`, so every
  * caller gets the one every reader in the image agrees on without having to ask
  * for it. Keeping the prefix that fitted would store a secret the user never
@@ -241,7 +241,7 @@ int pwauth_verify(const char *user, const char *password);
  * What remains is the few instructions between that check and the `read`
  * itself. A stop served there looks, afterwards, exactly like one served while
  * the read was outstanding, so the byte in hand is dropped, and that costs a
- * whole authentication rather than a keystroke: the line discipline stays
+ * whole authentication, not a keystroke: the line discipline stays
  * canonical, so the one-byte read returns only once the whole line has been
  * submitted, the discarded byte is that line's first, and what follows is
  * consumed as a password missing its first character. No caller retries, so the
@@ -263,7 +263,7 @@ int pwauth_verify(const char *user, const char *password);
  * taken away before the prompt is written to file descriptor 2: a caller
  * whose standard error is a pipe with no reader would otherwise be killed at
  * exactly that point and leave the console with echo off. It is a handler
- * that does nothing rather than `SIG_IGN`, which no write can tell apart,
+ * that does nothing, not `SIG_IGN`, which no write can tell apart,
  * for the reason `cred_txn_begin` gives: an ignored disposition is the one
  * an exec passes into the next image. And the prompt's state is taken down
  * with the stop and continue signals blocked, since the modes go back before
@@ -289,7 +289,7 @@ void pwauth_salt_map(const unsigned char *bytes, size_t n, char *out);
  * success and -1 on failure.
  *
  * The bytes come from `getrandom(2)` with no `GRND_INSECURE`, so the kernel
- * refuses rather than hand out its untrusted boot-jitter stream when the CPU
+ * refuses, not hand out its untrusted boot-jitter stream when the CPU
  * exposes neither RDSEED nor RDRAND. On any failure no byte of `out` is
  * written, `pwauth: no trusted entropy` is printed, and -1 returned: a
  * predictable salt is worse than a refused password change, and the caller is
@@ -318,18 +318,18 @@ int pwauth_mint_salt(char *out, size_t size);
  * left on a persistent image names a small pid that some unrelated process now
  * has: an operator told only that the database is busy would wait for a
  * holder that will never release. The busy line therefore states the condition
- * to check before removing it rather than withholding the recovery.
+ * to check before removing it instead of withholding the recovery.
  *
  * The release is registered with `atexit` before the lock is created, and an
- * acquire whose registration fails is refused rather than held: `atexit`
+ * acquire whose registration fails is refused, not held: `atexit`
  * allocates once its builtin slots are full and can therefore fail, and a
  * transaction with nothing left to drop it would leak the lock on the very
  * ordinary `exit` this promises to cover. So an ordinary `exit` cannot leak the
  * lock, and every signal that can kill the writer is handled for the
  * transaction's whole lifetime, because `atexit` runs on no signal death: the
  * handler restores the terminal, unlinks any temporary file `cred_rewrite` left
- * open, and leaves through `exit` so the registered release drops the lock
- * rather than the handler duplicating it. That is why a caller installs no
+ * open, and leaves through `exit` so the registered release drops the lock,
+ * not the handler duplicating it. That is why a caller installs no
  * handlers of its own: the lock outlives the terminal read, and the terminal
  * read is only one part of what a signal must undo.
  *
@@ -351,11 +351,11 @@ int pwauth_mint_salt(char *out, size_t size);
  * cannot be caught, and signals 32, 33 and 34 are reserved by this libc, which
  * refuses them from `sigaction` and `sigaddset` alike, here and on Linux. A
  * writer ended by any of those five leaves its lock behind, and the next writer
- * reports it rather than breaking it. `SIGPIPE` is caught for that same
+ * reports it instead of breaking it. `SIGPIPE` is caught for that same
  * lifetime and for the same reason as the deaths: a writer reports as it goes,
  * and a diagnostic written to a standard error that is a pipe with no reader
  * would otherwise kill it where no `atexit` runs and leave the lock in `/etc`.
- * It is caught rather than ignored because an exec has an ignored
+ * It is caught, not ignored because an exec has an ignored
  * disposition into the new image and resets a caught one, and a child forked
  * under a transaction must not hand this library's `SIGPIPE` policy to a
  * program that never linked it. Every disposition this library installs is put
@@ -363,7 +363,7 @@ int pwauth_mint_salt(char *out, size_t size);
  * to report.
  *
  * An acquire that cannot record the holder pid fails and removes the lock it
- * just created, rather than holding an empty one: an empty lock is what every
+ * just created instead of holding an empty one: an empty lock is what every
  * later acquire reports as recording no holder and tells an operator to remove,
  * which would put a live writer's lock in their hands.
  *

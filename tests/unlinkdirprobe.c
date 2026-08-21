@@ -3,7 +3,7 @@
  *
  * This is the shape of a real failure. `rm -rf` opens a directory, reads a
  * batch of names, unlinks them, and reads again from where it left off. If the
- * kernel's directory cursor counts children rather than naming a position that
+ * kernel's directory cursor counts children instead of naming a position that
  * survives deletion, every unlink renumbers the survivors and the second read
  * skips one entry per file already removed. The skipped files stay, `rmdir`
  * then refuses, and the only thing the user sees is "Directory not empty".
@@ -232,7 +232,7 @@ void _start(void)
             char victim[32];
             int k = 0;
 
-            /* The record's own fields, checked rather than skipped past. The
+            /* The record's own fields, checked, not skipped past. The
              * cursor is what this probe is about: `d_off` names where the next
              * read resumes, so it must increase strictly, and it must keep
              * increasing across the unlinks between reads. A cursor that

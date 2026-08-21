@@ -9,7 +9,7 @@
 # compiler for the administrator: the sysroot has to be readable by an ordinary
 # user, and the program has to be written somewhere an ordinary user may write.
 #
-# The disk rather than the RAM image, because the RAM image is a 16 MB module
+# The disk, not the RAM image, because the RAM image is a 16 MB module
 # inside a 32 MB machine and the compiler wants room.
 #
 # Three traps this repo has already paid for, and which every phase here obeys:
@@ -17,11 +17,11 @@
 # be matched from its own echo and each is written split; a feed written all at
 # once is eaten by anything that flushes its input, so every feed is spaced; and
 # a previous run's logs hold every token this run waits for, so they go before
-# the boot rather than only in the trap.
+# the boot, not only in the trap.
 #
 # A fourth, which the longer commands below came close to: a line typed at this
 # console is edited in a buffer of `N_TTY_LINE_MAX` bytes (256, in
-# rach2/sys/tty/n_tty.h), and what does not fit is dropped rather than wrapped.
+# rach2/sys/tty/n_tty.h), and what does not fit is dropped, not wrapped.
 # The longest line here is about 180 characters. A command longer than the
 # buffer must be split, or it will fail in a way that looks like the compiler's
 # doing.
@@ -138,7 +138,7 @@ boot_lines() {
 rm -f "$WORK"
 cp "$DISK" "$WORK"
 
-# The program is written with printf rather than a here-document, because the
+# The program is written with printf, not a here-document, because the
 # console feed types one line at a time and a here-document would need the shell
 # to stay in a continuation across the pause between them.
 boot_lines \
@@ -216,7 +216,7 @@ if ! wait_token "OBJECTOK" 120; then
 fi
 
 # And a program of this project's own, compiled from the source the image
-# has. The proof is behavioural rather than a byte comparison of the two
+# has. The proof is behavioural, not a byte comparison of the two
 # binaries: the shipped one was linked against libgcc on the host and this one
 # against libtcc1.a on the machine, so they are different objects that must do
 # the same thing.
@@ -226,8 +226,8 @@ fi
 # in-house cat lives in the other image. So what is compared is the program the
 # machine just built against the program this machine actually uses.
 #
-# The input is 21 KB of a binary file rather than a line of text, and the second
-# comparison passes two files rather than one. A line of text is one 4096-byte
+# The input is 21 KB of a binary file, not a line of text, and the second
+# comparison passes two files, not one. A line of text is one 4096-byte
 # read and one write: a cat that returned after its first read would copy it
 # perfectly and truncate everything larger, and a cat that stopped after its
 # first argument would never be noticed. The commands are chained with `&&`, so

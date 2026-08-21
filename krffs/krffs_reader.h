@@ -13,7 +13,7 @@ struct krffs_file_system;
  * The walk trusts nothing in the region: every node it visits must carry the
  * magic, lie whole inside the region, and have a size that at least covers
  * its own header, so a truncated or corrupted image is refused with the
- * reason written to `errbuf` rather than read out of bounds. A path that
+ * reason written to `errbuf`, not read out of bounds. A path that
  * resolves to a directory is refused too; this reads files.
  *
  * On success `*data` points into the mapping and `*size` is the file's data

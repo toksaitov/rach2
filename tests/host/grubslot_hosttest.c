@@ -9,7 +9,7 @@
  * LBA 1 is a selector, the gap has two tails, and a replacement goes into the
  * one not in use. Getting the tail boundaries or the blocklist offsets wrong
  * produces a disk that does not boot and cannot be repaired remotely, so every
- * number below is checked rather than assumed.
+ * number below is checked, not assumed.
  */
 
 extern int printf(const char *fmt, ...);

@@ -13,7 +13,7 @@
  * 16-bit word, which is the one detail a reader who has not checked the layout
  * gets backwards, and the field has no terminator. And the sector count is
  * a 48-bit number in a kernel that links no libgcc, so it is turned into
- * decimal by long division over 32-bit halves rather than by a 64-bit divide
+ * decimal by long division over 32-bit halves, not by a 64-bit divide
  * that would not link.
  */
 
@@ -51,7 +51,7 @@ uint64_t block_flushes(void)
 uint64_t devfs_raw_calls(void)
 {
     /* The rendered text has a live count; the fixture pins it so the
-       expected bytes below are a constant rather than whatever a previous case
+       expected bytes below are a constant, not whatever a previous case
        happened to leave behind. */
     return 0;
 }
@@ -172,7 +172,7 @@ int main(void)
               strcmp(out, "281474976710655") == 0,
           "the largest 48-bit value, which is the field's real width");
     CHECK(diskinfo_u64_dec(out, 3, 4294967295u) == 0 && out[0] == '\0',
-          "a buffer too short writes nothing rather than half a number");
+          "a buffer too short writes nothing, not half a number");
 
     /* ---- the window clamp ---- */
     CHECK(diskinfo_window(1000) == 1000, "a small disk is not clamped");

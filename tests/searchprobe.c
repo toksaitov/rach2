@@ -43,7 +43,7 @@
  * correctly and let the second one through.
  *
  * The third child runs after the parent moves the denial one level down, so
- * the answer follows the directory that denies rather than a decision cached
+ * the answer follows the directory that denies, not a decision cached
  * from the first walk.
  *
  * Two opens must keep working throughout. `/sp_denied/../sp_up.txt` resolves,
@@ -641,7 +641,7 @@ static void run_child(void (*body)(void), const char *what)
     if (pid == 0) {
         body();
         /* Unreachable: every body exits itself. Non-zero so that a body that
-         * ever grew a path out the bottom would fail rather than pass. */
+         * ever grew a path out the bottom would fail, not pass. */
         syscall1(SYS_EXIT, 127);
     }
     reaped = syscall3(SYS_WAITPID, pid, (int)&status, 0);

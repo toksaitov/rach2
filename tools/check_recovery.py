@@ -8,8 +8,7 @@ boot loader's gap, both bounded windows. Only a recovery image may write any
 sector of the whole device, which is what reflashing a broken root needs and
 what an everyday boot has no business being able to do at all.
 
-The split is a build switch (`-DRACH2_RECOVERY`, see rach2/sys/block/recovery.c)
-rather than a boot flag, because a flag on the kernel command line is editable
+The split is a build switch (`-DRACH2_RECOVERY`, see rach2/sys/block/recovery.c), not a boot flag, because a flag on the kernel command line is editable
 at the GRUB prompt by anyone standing at the machine. A build switch is only as
 good as the check that the artifact actually got built with it, and there is
 nothing useful to check for by absence: the two kernels differ by which body of
@@ -58,7 +57,7 @@ def main(argv):
         return 1
 
     # The two banners share a prefix, so each is counted whole and the pair is
-    # judged together rather than one being tested by itself.
+    # judged together, not one being tested by itself.
     has_want = BANNERS[want] in image
     has_other = BANNERS[other] in image
 

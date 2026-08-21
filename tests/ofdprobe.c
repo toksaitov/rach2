@@ -2,7 +2,7 @@
  * Probe for refcounted open-file descriptions, from user space.
  *
  * Proves that a duplicated or forked descriptor shares one open-file
- * description (and its seek offset), the Unix way, rather than each carrying
+ * description (and its seek offset), the Unix way, not each carrying
  * its own:
  *
  *   (a) dup2 shares the offset: a read through the dup continues where the

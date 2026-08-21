@@ -17,7 +17,7 @@
  * order is the whole of it: `setgroups` and `setgid` need the privilege that
  * `setuid` gives away, so either one after it is a call that fails while the
  * process keeps a group it was never entitled to. Each is checked, and a
- * failure is fatal rather than a warning, since carrying on would mean running
+ * failure is fatal, not a warning, since carrying on would mean running
  * a shell as an identity nobody chose.
  *
  * It does not `setsid` and does not claim the terminal. init's child already
@@ -26,7 +26,7 @@
  * after the identity drop would be refused anyway, since the process is no
  * longer root and, having been the leader all along, is not a new one.
  *
- * The environment is built from nothing rather than filtered, for the reason su
+ * The environment is built from nothing, not filtered, for the reason su
  * builds one: what arrives here came from init, which got it from the kernel,
  * and a login that passed a variable through would be handing the account
  * whatever the boot happened to carry. `PATH` is part of what it builds, and
@@ -53,7 +53,7 @@
 #define MOTD_FILE "/etc/motd"
 
 /* How many names may be tried before the program gives up and init starts it
- * again. A bound rather than a loop forever, so a wedged reader cannot hold the
+ * again. A bound, not a loop forever, so a wedged reader cannot hold the
  * console: the respawn is the retry. */
 #define LOGIN_TRIES 3
 
@@ -63,7 +63,7 @@
 
 /* The longest account name that will be read, from the library, so that what
  * this reads and what `adduser` writes are one limit. An over-long line is
- * refused rather than truncated, for the reason the password reader refuses
+ * refused, not truncated, for the reason the password reader refuses
  * one: a prefix is a different name, and answering for it would either fail
  * confusingly or, worse, match somebody else. */
 #define LOGIN_NAME_MAX (PWAUTH_MAX_NAME + 1)

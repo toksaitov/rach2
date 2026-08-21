@@ -217,7 +217,7 @@ menuentry "RACH2_RECOVERY_STATIC_TITLE" --id recovery-static {
 # replaces the kernel that boots next. It is not what the entries above defend
 # against.
 #
-# What they defend against is a file that is damaged rather than written: a
+# What they defend against is a file that is damaged, not written: a
 # power cut during a write leaves a prefix of a new menu above the tail of an
 # old one, and one slot overwritten in place cannot be written atomically. Every
 # entry the machine needs is already defined by the time this line runs, so a
@@ -430,7 +430,7 @@ docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
     mcopy -i /tmp/p1.img /tmp/candidate.pad ::/boot/kernel
     mcopy -i /tmp/p1.img '$KERNEL' ::/boot/fallback
     mcopy -i /tmp/p1.img '$GRUB_CFG' ::/boot/grub/grub.cfg
-    # The rewritable menu, empty but full size. A '#' fill rather than zeros
+    # The rewritable menu, empty but full size. A '#' fill, not zeros
     # because GRUB reads the whole file and a comment is what an empty menu
     # looks like to it; the first line says so to anyone who reads the disk.
     dd if=/dev/zero bs=1 count=$MENU_BYTES status=none | tr '\\0' '#' > /tmp/boot.cfg
@@ -469,7 +469,7 @@ for line in open(\"/tmp/chains.txt\"):
     name = line.split()[0].rsplit(\"/\", 1)[-1]
     # mshowfat prints a run as <a-b> and a lone cluster as <a>; a file small
     # enough to fit one cluster only appears in the second form, which a
-    # larger cluster size makes the common case rather than the rare one.
+    # larger cluster size makes the common case, not the rare one.
     ranges = [(int(a), int(b if b else a)) for a, b in
               re.findall(r\"<(\\d+)(?:-(\\d+))?>\", line)]
     if not ranges:

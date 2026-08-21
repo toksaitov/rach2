@@ -44,11 +44,11 @@ def network_commands(text, want):
     can carry more than one command, and a checker that read only the first
     would pass a script whose second command configured something else.
 
-    It fails closed rather than pattern-matching. A segment that mentions
+    It fails closed, not pattern-matching. A segment that mentions
     `ifconfig` or `route` at all must be one of three exact forms: the read of
     the current address that the fallback tests, and the two commands this
     machine is supposed to run. Anything else, including a command hidden
-    behind `command`, `eval`, or a subshell, is refused rather than ignored,
+    behind `command`, `eval`, or a subshell, is refused, not ignored,
     because a checker that ignores what it does not recognise is a checker that
     passes what it should stop.
 

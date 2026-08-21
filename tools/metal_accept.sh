@@ -39,7 +39,7 @@ KEY="$REPO/krffs/rach2_demo_ed25519"
 KNOWN="$REPO/build/images/metal-accept.known"
 
 # The MBR's SHA-256 as Windows measured it, from dev-log/24-metal/baseline.md.
-# Kept here rather than read from the document so this script is one file to
+# Kept here, not read from the document so this script is one file to
 # copy to a development host, and stated in both places so a change to one is
 # visible against the other.
 BASELINE_MBR_SHA256="652ad40fe72061185cf3a69c1a9a45394f68374f409153e082b7c1fa04c107d3"
@@ -152,7 +152,7 @@ else
     fi
 fi
 
-# ---- the machine's own boot log, saved rather than read ----
+# ---- the machine's own boot log, saved, not read ----
 BOOTLOG_OUT="$REPO/build/images/metal-bootlog.txt"
 if run 'cat /dev/bootlog' > "$BOOTLOG_OUT" 2>/dev/null && [ -s "$BOOTLOG_OUT" ]; then
     note "boot log: $(wc -l < "$BOOTLOG_OUT" | tr -d ' ') lines saved to $BOOTLOG_OUT"

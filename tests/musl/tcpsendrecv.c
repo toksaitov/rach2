@@ -6,7 +6,7 @@
  * which the kernel must route to the TCP path on a connected stream socket, not
  * the UDP path. The test connects out through the SLIRP gateway 10.0.2.2:PORT
  * to a host echo server, then exercises the path in order: a non-blocking recv
- * before any data must fail with EAGAIN rather than block or read (the server
+ * before any data must fail with EAGAIN, not block or read (the server
  * echoes only after it receives the line); send() must write the whole known
  * line; recv() must read it back. It prints "TCPSENDRECV OK" only when the echo
  * matches, locking the regression that broke the musl httpd.

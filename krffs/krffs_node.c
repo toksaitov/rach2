@@ -128,7 +128,7 @@ struct krffs_node *krffs_wrap_node_position(
  * `id`, the root mode, and the owning uid and gid (zero on Windows, the
  * effective ids of the host process otherwise). `parent_id` is stamped to the
  * reserved root id (0): the kernel resolves ".." from the root by reading this
- * field (krffs.c), so it must be zero rather than left to whatever the backing
+ * field (krffs.c), so it must be zero, not left to whatever the backing
  * held, which a forced re-mkfs over a non-zeroed file would otherwise leave
  * stale. All three timestamps are set to the current time, `data_size` is
  * cleared, and `size` and `previous_node_size` place the node in the ring.

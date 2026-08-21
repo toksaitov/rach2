@@ -60,7 +60,7 @@ boot() {
 }
 
 # Wait until the serial log $1 contains the token $2, then return 0; give up
-# after $3 seconds and return 1. Gating on a token rather than on a fixed sleep
+# after $3 seconds and return 1. Gating on a token, not on a fixed sleep
 # keeps a loaded host from killing QEMU before the console has had its say.
 wait_serial() {
     i=0
@@ -98,7 +98,7 @@ trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
 # The permissive image first, so a failure to boot at all is reported against
-# the half that is supposed to succeed rather than as a false pass of the other.
+# the half that is supposed to succeed, not as a false pass of the other.
 boot "$SHELL_IMAGE.log" "$SHELL_IMAGE" ""
 if ! wait_serial "$SHELL_IMAGE.log" "uid=0" 60; then
     stop
@@ -111,7 +111,7 @@ echo "login-test: the permissive init reaches a root shell: OK"
 
 # And the strict one, which must refuse, and must go on refusing: the message
 # has to appear at least twice, since a single failure followed by silence is a
-# dead init rather than one that keeps the console closed.
+# dead init, not one that keeps the console closed.
 boot "$STRICT.log" "$STRICT" ""
 if ! wait_serial "$STRICT.log" "init: cannot exec /bin/login" 60; then
     stop
@@ -151,7 +151,7 @@ echo "login-test: the strict init refuses and keeps refusing: OK"
 # handled, and the token after it can only be printed by a session init brought
 # back. The token is written split, because the console echoes what is typed:
 # a command containing the whole token would put it in the log before it ran,
-# and the wait would match the echo rather than the output.
+# and the wait would match the echo, not the output.
 # The feed is spaced, and that is not politeness: `login` flushes pending input
 # when it puts the line back into canonical mode, so a script written all at
 # once is eaten by the very repair that makes the console usable, and the test

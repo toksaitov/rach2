@@ -15,7 +15,7 @@
  *
  * The replacement, where the guest can say what the host cannot: the file is
  * replaced whole, its mode and owner are the original's (root and uid 1000
- * differ here, so the inheritance is a real assertion rather than a tautology),
+ * differ here, so the inheritance is a real assertion, not a tautology),
  * no temporary file is left behind, and a reader holding a descriptor across
  * the rename goes on reading the file it opened, whole. That last one is the
  * guarantee the whole reader-never-locks rule rests on. A second row has a
@@ -50,7 +50,7 @@
  * bound itself is checked cheaply on the host, where the budget is a parameter.
  *
  * The stop and continue cycle, which needs a real terminal and so runs over a
- * pseudo-terminal rather than this probe's own console: a child in the pty's
+ * pseudo-terminal, not this probe's own console: a child in the pty's
  * foreground group reads a password, and the parent drives the master. Nothing
  * typed comes back while the prompt is up, a `^Z` stops the child with the
  * terminal's modes restored (proved by typing while it is stopped and seeing
@@ -126,8 +126,8 @@
 #define EXPECT_NON_LOGIN IDS_1000 " arg0=/idreport cwd=/musl" SU_ENVIRONMENT
 
 /* A uid-1000 caller that came back from a refused `su` with its identity
- * changed, and one whose `su` died of a signal: both are the run's own failure
- * rather than a status su chose, so they are kept clear of the small statuses
+ * changed, and one whose `su` died of a signal: both are the run's own failure,
+ * not a status su chose, so they are kept clear of the small statuses
  * su and idreport use. */
 #define CALLER_BROKEN 127
 #define CALLER_SIGNAL 126
@@ -689,7 +689,7 @@ static int check_lost_lock(void)
  * The byte on the pipe is what orders the two, and it goes out only once the
  * lock is held, so the second writer is guaranteed to find it there. The pipe
  * closes when this process leaves whatever happens, so a failure here is a
- * refused acquire in the second writer rather than a wait with no end.
+ * refused acquire in the second writer, not a wait with no end.
  */
 static void interleave_first(int notify)
 {
@@ -814,7 +814,7 @@ static int check_interleave(void)
  *
  * The acquire waits out the compiled-in retry budget, which is the point: this
  * is the path a real writer takes, with the path and the budget the shipped
- * programs carry rather than parameters a test chose.
+ * programs carry, not parameters a test chose.
  */
 static int check_refusal(const char *what, const char *body, const char *expected)
 {
@@ -927,8 +927,8 @@ static int check_recovery(void)
  * Returns 1 when the text arrived and 0 otherwise.
  *
  * Every read of the master is bounded, because a probe that blocks on a
- * terminal nobody is writing to would hang the whole suite rather than fail it.
- * A read of zero is waited through rather than taken as the end: a master whose
+ * terminal nobody is writing to would hang the whole suite, not fail it.
+ * A read of zero is waited through, not taken as the end: a master whose
  * slave is not open yet reads as end of file, and the child does its own open
  * after the fork.
  */
@@ -1061,7 +1061,7 @@ static void prompt_child(const char *name, int master)
  * the prompt is up nothing typed is echoed; a `^Z` stops the reader with the
  * modes it found put back, so a stopped process leaves a usable terminal;
  * the continue takes echo away again, discarding what was typed meanwhile
- * rather than letting it become a password byte; and the password read across
+ * instead of letting it become a password byte; and the password read across
  * the whole cycle is exactly what was typed after it.
  */
 static int check_prompt(void)
@@ -1337,7 +1337,7 @@ static void prompt_bg_leader(const char *name, int master, int report)
  * terminal and continue the reader in the background, after which acting on the
  * old answer silences a terminal the reader no longer owns. That interval
  * cannot be entered from outside, so it is entered from within. It raises
- * `SIGTSTP` rather than `SIGSTOP` deliberately: `SIGTSTP` is the one a
+ * `SIGTSTP`, not `SIGSTOP` deliberately: `SIGTSTP` is the one a
  * keystroke sends and the one the library can defer, and a test using the
  * unblockable signal would be asserting a promise the library does not make.
  *
@@ -1640,7 +1640,7 @@ static void prompt_overflow_child(int in)
 /**
  * A run too long to keep, then a stop, then a line that fits.
  *
- * The reader refuses an over-long entry rather than storing the prefix it
+ * The reader refuses an over-long entry instead of storing the prefix it
  * fitted, and it drops the line it has whenever a resume is served. Those two
  * meet here: a resume starts a fresh line, so the overflow that ended the old
  * one must go with it. Left standing, the flag rejects the perfectly good
@@ -1787,7 +1787,7 @@ static void prompt_unowned_leader(const char *name, int master, int report)
  * The host test cannot ask this question, since Darwin stops a background
  * `tcsetattr` with `SIGTTOU` before it takes effect and this kernel does not.
  * So it is asked here, where the permission is real. Both halves are asserted:
- * the reader stopped on `SIGTTIN` rather than being handed a byte, and the
+ * the reader stopped on `SIGTTIN` instead of being handed a byte, and the
  * terminal still echoes.
  */
 static int check_prompt_never_owned(void)
@@ -1935,7 +1935,7 @@ static int check_prompt_background(void)
  * same
  * write with the lock held, where the death runs no `atexit` and the lock file
  * stays in `/etc`. So the cases are the two lifetimes, and each is a child,
- * because what is being guarded against is a death rather than a return value.
+ * because what is being guarded against is a death, not a return value.
  * The writer's child leaves through `exit`, so the release must have run: a
  * lock
  * still at the name afterwards is exactly the stranded lock this is about.
@@ -2104,7 +2104,7 @@ static int run_su(const char *cwd, char *const argv[], char *const envp[], const
  * range must be handled like any other death: the writer leaves through `exit`
  * and its lock is gone. And 32, 33 and 34 must NOT be handled, because this
  * libc reserves them and refuses them from `sigaction`, which is a residue the
- * library names rather than one it hides: a writer sent one of those dies of it
+ * library names, not one it hides: a writer sent one of those dies of it
  * with the lock behind, exactly as `SIGKILL` leaves one.
  *
  * The fault numbers are here for a different reason. A real CPU exception on

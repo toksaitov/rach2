@@ -14,7 +14,7 @@
 # be matched from its own echo and each is written split; a feed written all at
 # once is eaten by anything that flushes its input, so every feed is spaced; and
 # a previous run's logs hold every token this run waits for, so they go before
-# the first boot rather than only in the trap.
+# the first boot, not only in the trap.
 #
 # The serial input is a FIFO held open past each wait, because EOF on it stops
 # QEMU by itself and would make every outcome look like a success.
@@ -266,7 +266,7 @@ fi
 cleanup_boot
 echo "shutdown-test: the write before the power-off reached the platter: OK"
 
-# The forced halt, which parks the CPU rather than stopping QEMU, so the runner
+# The forced halt, which parks the CPU instead of stopping QEMU, so the runner
 # does the killing. It still has to have flushed and cleared the flag.
 fresh_image
 start_boot 'halt -n -f'
@@ -301,7 +301,7 @@ start_boot 'halt'
 require_clean_halt "a bare halt flushes and parks the CPU"
 
 # Bare reboot exercises SIGTERM and RB_AUTOBOOT. -no-reboot makes the reset end
-# QEMU rather than start the machine again.
+# QEMU, not start the machine again.
 fresh_image
 EXTRA_QEMU="-no-reboot"
 start_boot 'reboot'

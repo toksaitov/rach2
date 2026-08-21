@@ -33,7 +33,7 @@ manifest this table does not name are hard errors, because each is one in
 `stageimage` and a guard that accepts what the stager refuses is a guard
 reading a different file.
 
-The image inventory reads the artifact rather than the text, because the sweep
+The image inventory reads the artifact, not the text, because the sweep
 trusts one thing it cannot check, that this parser agrees with `apply_line`,
 and because `exec-dir` expands to a set of files the manifest never names. It
 walks the staged node chain the way fsck.krffs does, rebuilds every reserved
@@ -105,7 +105,7 @@ MAX_LINE = LINE_BUFFER - 2
 # manifest this table does not name is a hard error and a new manifest must
 # therefore arrive through the guard. `setid` declares every set-id path with
 # the mode, the owner and the host file it is staged from; the owner is per
-# entry rather than an assertion that root owns them all, since the test image
+# entry, not an assertion that root owns them all, since the test image
 # deliberately stages a setuid file owned by uid 5 and a setgid file owned by
 # gid 5 to prove the bit grants the file's owner whoever that is, and the host
 # source is declared because a path alone does not say what runs there: pointing
@@ -121,7 +121,7 @@ MAX_LINE = LINE_BUFFER - 2
 # a root password anyone may choose, and so, one step removed, are
 # `/etc/passwd`, `/etc/group`, `/etc/shells`, `/etc/profile` and root's
 # `authorized_keys`. An entry is (mode, uid, gid, verb, value). The verb is
-# declared rather than guessed, because the two verbs mean different things and
+# declared, not guessed, because the two verbs mean different things and
 # a value alone cannot tell them apart: `text 0600 /etc/shadow krffs/shadow`
 # stages the LITERAL words `krffs/shadow` into the file the system authenticates
 # against, and a check that only compared the value would read it as the host
@@ -238,7 +238,7 @@ ALLOWLIST = {
         # suidprobe's fixtures (the same helper at several modes and owners),
         # sudoprobe's reference sudo, suidmusl's setuid copy, which proves
         # libc's view of a set-id exec, and pwauthmusl's /su, which is the
-        # shipped binary at the shipped mode rather than a copy of it.
+        # shipped binary at the shipped mode, not a copy of it.
         "setid": {
             "/suidhelper.suid": (0o4755, 0, 0, "build/tests/suidhelper"),
             "/suidhelper.u5": (0o4755, 5, 0, "build/tests/suidhelper"),
@@ -342,7 +342,7 @@ ALLOWLIST = {
 # repair a disk pinned beside it. Neither has a set-id bit, but both run as
 # root against raw disk devices in the one image whose whole purpose is writing
 # any sector of the drive, so what they are built from is named here the way
-# os-real names its own bootctl. The metal map is copied rather than mutated, so
+# os-real names its own bootctl. The metal map is copied, not mutated, so
 # adding to this profile cannot quietly add to that one.
 ALLOWLIST["rach2-recovery"] = dict(
     ALLOWLIST["rach2-metal"],
@@ -357,7 +357,7 @@ ALLOWLIST["rach2-recovery"] = dict(
 )
 
 # The laptop's own-disk profile: os-real's surface with the metal init and
-# nothing else changed. Derived rather than duplicated so the two cannot
+# nothing else changed. Derived, not duplicated so the two cannot
 # drift: a privilege change to os-real is a change to this profile too, which
 # is exactly right, since its manifest is os-real's with the one init line
 # edited and is built the same way.
@@ -385,7 +385,7 @@ NODE_RESERVED = 2
 
 # The header is 357 packed bytes. A format string that sizes differently is a
 # transcription error, and the walk would read every field from the wrong
-# place, so say so here rather than report a corrupt image.
+# place, so say so here, not report a corrupt image.
 if NODE_SIZE != 357:
     raise SystemExit("check-setid: the node layout reads as %d bytes, not the "
                      "357 of the v2 ABI" % NODE_SIZE)
@@ -414,8 +414,7 @@ def strtoul(s, base):
 
     Returns the value, the unconverted tail, and whether any digit was
     converted. Leading whitespace and a sign are consumed, and a negative value
-    wraps into 64 bits, which is what makes `-1` fail the range tests below
-    rather than read as a small number. On no conversion the tail is the whole
+    wraps into 64 bits, which is what makes `-1` fail the range tests below, not read as a small number. On no conversion the tail is the whole
     original string, so a caller comparing `end == start` sees the same thing C
     does.
     """
@@ -446,7 +445,7 @@ def parse_mode(token):
     which is the point of it: the mode is octal and at most 07777, the tail
     after it is either empty or an owner introduced by ':', and an owner is two
     complete decimal fields. So `0999` and `08` are malformed rather than
-    partly read, and `04755:0` is malformed rather than read as mode 04755
+    partly read, and `04755:0` is malformed, not read as mode 04755
     owned by 0, which is how a guard that split on ':' misread it.
     """
     if token == "":
@@ -565,9 +564,8 @@ def check_init_line(name, directives, want):
     """Check which init a manifest stages. Returns a list of problems.
 
     Neither init artifact is named plain `init`, so a manifest left on the old
-    path fails to stage rather than silently getting whichever one the tree
-    happens to build; and which one an image gets is a fact worth asserting
-    rather than reading, since the two differ in whether the console can fall
+    path fails to stage, not silently getting whichever one the tree
+    happens to build; and which one an image gets is a fact worth asserting instead of reading, since the two differ in whether the console can fall
     back to an unauthenticated root shell. A manifest whose entry declares no
     init must stage none: the test images boot no init at all, and one that
     grew an init line would be running a different system than the one its
@@ -608,7 +606,7 @@ def check_init_line(name, directives, want):
         # file as root before anything else runs, so it is the same trust
         # boundary a set-id program is, and a persistent image whose init any
         # account may rewrite hands that account root at the next boot. The mode
-        # is a rule here rather than a per-image datum: no image has a reason to
+        # is a rule here, not a per-image datum: no image has a reason to
         # stage its init any other way.
         if (mode, uid, gid) != (INIT_MODE, 0, 0):
             problems.append("%s:%d: stages /sbin/init %s; the kernel execs it "
@@ -693,12 +691,12 @@ def check_manifest(path, table=ALLOWLIST):
     directives, problems = parse_manifest(path)
     # What the image ends up holding for a path. `stage_file` refuses a path it
     # has already staged, so the first directive for a path is the only one,
-    # and a second is reported here rather than left to fail the build.
+    # and a second is reported here, not left to fail the build.
     staged = {}
 
     problems.extend(check_init_line(name, directives, allow.get("init")))
 
-    # A trusted path may sit inside a staged source tree rather than on a
+    # A trusted path may sit inside a staged source tree, not on a
     # `file` line of its own: `tree` copies every regular file under its host
     # directory, so a pinned path under a tree's guest directory resolves to
     # the host file the walk will copy, carrying the tree's mode and owner.
@@ -886,7 +884,7 @@ def walk_nodes(region):
     This is fsck.krffs's walk: each node advances by its own `size`, wrapping
     once at the region end, with the iteration capped at the most nodes the
     region could hold, so a node whose size does not advance the walk is a
-    corrupt chain rather than an endless one. Every step is checked for range,
+    corrupt chain, not an endless one. Every step is checked for range,
     signature and a known type, exactly as there.
 
     It then requires the ring to close on the size the root records in
@@ -956,7 +954,7 @@ def node_paths(nodes):
 
     The root's id is 0 as a parent, and `krffs_mix_id` never returns 0, so a
     chain terminates only at the root; anything else is an unresolvable or
-    cyclic parent and is an error rather than a skipped node, since a node the
+    cyclic parent and is an error, not a skipped node, since a node the
     inventory cannot name is a node it cannot clear. Two nodes resolving to one
     path are an error for the same reason: the second would overwrite the first
     and the inventory would never look at it.
@@ -1472,7 +1470,7 @@ SELFTEST_CASES = [
 ]
 
 # The allowlist's own cases. The table is what makes a future manifest declare
-# itself, so the rules that police it are exercised rather than assumed.
+# itself, so the rules that police it are exercised, not assumed.
 TABLE_CASES = [
     ("a table entry with nothing to find",
      {"x": {"setid": {}, "trusted": {}, "sentinel": None}},
@@ -1678,10 +1676,10 @@ INIT_CASES = [
 #
 # The set-id config's fixtures. Each is the config the set-id binary was built
 # from with one setting turned the wrong way, so what they prove is that the
-# guard reads the setting rather than the file's name. Two of them are not
+# guard reads the setting, not the file's name. Two of them are not
 # settings a person would write but shapes a hand-edited file can have, where
 # the question is whose reading wins, Kconfig's or this guard's: the answer is
-# that a file with either shape is refused rather than read. The clean case
+# that a file with either shape is refused, not read. The clean case
 # reads the file that was built, which is the sentinel: if the config were
 # regenerated under other symbol names, every mutation below would still fail
 # and this one would say so.
@@ -1817,7 +1815,7 @@ def report(problems):
 # the interface ioctls and refuses to send or receive. `arping` opens a packet
 # socket, which milestone 25 did build for the DHCP client, but binds it to the
 # ARP protocol, and only IPv4 is accepted. So the rule still has for all five;
-# what has changed is that one of them is now a protocol away rather than a
+# what has changed is that one of them is now a protocol away, not a
 # whole socket family away.
 #
 # `getty` and `sulogin` are NOT here: both are BB_SUID_DROP and neither wants
@@ -1842,8 +1840,7 @@ APPLET_TABLE = os.path.join(
 def applet_names(path):
     """Read a generated applet table. Returns (names, problems).
 
-    The names live in one NUL-delimited string, so the match is on whole tokens
-    rather than on a substring: `passwd` appears inside `passwd_main` and inside
+    The names live in one NUL-delimited string, so the match is on whole tokens, not on a substring: `passwd` appears inside `passwd_main` and inside
     a help string, and a search that did not split would find it in a busybox
     that compiled the applet out. A missing or empty table is a problem rather
     than an empty answer, so an unreadable scan fails instead of reading as a
@@ -1895,8 +1892,7 @@ def applet_names(path):
 def check_applets(path=APPLET_TABLE):
     """Check a generated busybox applet table. Returns a list of problems.
 
-    The names live in one NUL-delimited string, so the match is on whole tokens
-    rather than on a substring: `passwd` appears inside `passwd_main` and inside
+    The names live in one NUL-delimited string, so the match is on whole tokens, not on a substring: `passwd` appears inside `passwd_main` and inside
     a help string, and a search that did not split would find it in a busybox
     that compiled the applet out.
     """
@@ -1907,7 +1903,7 @@ def check_applets(path=APPLET_TABLE):
     if APPLET_SENTINEL not in names:
         problems.append(
             "%s: the applet table does not name `%s`, so this check found "
-            "nothing rather than proving an absence" % (path, APPLET_SENTINEL))
+            "nothing instead of proving an absence" % (path, APPLET_SENTINEL))
         return problems
     for applet in FORBIDDEN_APPLETS:
         if applet in names:
@@ -1955,8 +1951,8 @@ def check_suid_applets(path=SUID_APPLET_TABLE):
     return problems
 
 
-# Config symbols a shipped busybox must not carry, checked in the source config
-# rather than in the generated table because they are features inside an applet
+# Config symbols a shipped busybox must not carry, checked in the source config,
+# not in the generated table because they are features inside an applet
 # and no applet name changes when they come back.
 #
 # `FEATURE_HTTPD_AUTH_MD5` is one: `httpd -m` mints a `$1$` hash and prints it,
@@ -1971,7 +1967,7 @@ def check_suid_applets(path=SUID_APPLET_TABLE):
 # generator is not trusted. That objection was retired with the same judgment
 # that brought `cryptpw` and `mkpasswd` back: busybox's salt is weak, its own
 # comment says so, and for a teaching machine whose threat model is a student it
-# is good enough. The rule and its self-tests are kept rather than deleted,
+# is good enough. The rule and its self-tests are kept, not deleted,
 # because the next feature that returns a capability the applet names do not
 # mention will want them.
 FORBIDDEN_CONFIG = ()
@@ -2013,7 +2009,7 @@ SUID_CONFIG_OFF = ("CONFIG_FEATURE_SUID_CONFIG", "CONFIG_FEATURE_PREFER_APPLETS"
 # table while a global still points into it; that bug is upstream and this
 # config's answer to it is not to compile the parser. `FEATURE_PREFER_APPLETS`
 # and `FEATURE_SH_STANDALONE` make a name resolve to an applet inside this
-# binary rather than to the program on disk, which is how a set-id process
+# binary, not to the program on disk, which is how a set-id process
 # quietly reaches code it was not staged to run. `LOGIN_SCRIPTS` runs a program
 # named by a variable at login. `BUSYBOX`, `ASH`, `HUSH` and the two `SH_IS_`
 # selectors are the shell, which is the one thing a set-id executable must never
@@ -2114,7 +2110,7 @@ def check_config(path=BUSYBOX_CONFIG):
 # execs /bin/login and nothing else; the shell table and the loop that walks it
 # live inside an `#ifndef`, so the strict artifact has no code path and no
 # string that names a shell. Requiring init-shell to carry BOTH is the sentinel:
-# an unreadable or empty scan then fails rather than passes, the way the applet
+# an unreadable or empty scan then fails, not passes, the way the applet
 # table's own scan is guarded. The check is exact in this tree because a static
 # musl util that never calls `system` has neither string; only init's own
 # table puts them in a binary.
@@ -2167,14 +2163,14 @@ def check_inits(directory=INIT_BINARIES):
 # question from whether a path is privileged: tcc's search paths were baked into
 # the binary at configure time (vendor/tcc/Readme.md), so an image missing any
 # of them has a compiler that fails at the last step, with a message about a
-# file rather than about the image. Checked here because this is the tool that
+# file, not about the image. Checked here because this is the tool that
 # already reads a staged image node by node.
 #
 # The order of the two include directories is not checked and cannot be: it is
 # in the binary, not in the image. What is checked is that both are there.
 # The tree the headers come from. The staged headers are compared with it path
 # by path and byte by byte, so a stage that dropped one, renamed one or
-# truncated one is noticed here rather than by a student's `#include` failing.
+# truncated one is noticed here, not by a student's `#include` failing.
 SYSROOT_HEADER_SOURCE = os.path.join("vendor", "musl", "install", "include")
 
 # The guest directory that tree is staged into, from the manifest's `tree` line.
@@ -2187,7 +2183,7 @@ SYSROOT_HEADER_ROOT = "/include"
 WORLD_READ = 0o004
 WORLD_WALK = 0o001
 
-# The sysroot paths that are run rather than read.
+# The sysroot paths that are run, not read.
 SYSROOT_PROGRAMS = ("/bin/tcc", "/bin/cc", "/bin/make")
 
 SYSROOT_PATHS = (
@@ -2274,9 +2270,9 @@ def check_reachable(paths, wanted, name):
     needs; a compiler opens a header by name and never lists the directory.
 
     An ancestor that is absent, or that is there and is not a directory, is
-    reported rather than skipped. Neither should be reachable from a manifest,
+    reported, not skipped. Neither should be reachable from a manifest,
     since a path is rebuilt here from the parents the nodes name, but this check
-    exists to disagree with the stager rather than to assume it: the kernel
+    exists to disagree with the stager, not to assume it: the kernel
     answers ENOENT and ENOTDIR for those two, and either is a sysroot the
     compiler cannot open.
     """
@@ -2327,7 +2323,7 @@ def compare_headers(staged, wanted, name, dirs=None):
     wrong file. And the mode, because a `tree 0600` line stages every byte of
     the tree correctly into a compiler no ordinary account can use.
 
-    Findings name a few of the paths rather than all of them: a stage that went
+    Findings name a few of the paths, not all of them: a stage that went
     wrong tends to go wrong by hundreds, and a page of names says no more than
     three do.
     """
@@ -2425,7 +2421,7 @@ def check_sysroot_paths(paths, region, name):
 def header_cases(tmp):
     """Cases for the staged header tree, over a small pretend musl install.
 
-    They are run against `compare_headers` rather than against a crafted image,
+    They are run against `compare_headers`, not against a crafted image,
     because what is being asked is what the comparison notices and not how a
     node is decoded, and a dictionary states a wrong stage exactly: this header
     absent, this one renamed, this one holding something else.

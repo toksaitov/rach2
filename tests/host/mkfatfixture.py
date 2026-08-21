@@ -123,7 +123,7 @@ def main(argv):
     fallback_clusters = FALLBACK_CLUSTERS // spc
     kernel_first = KERNEL_FIRST
     # The layout follows the full slot, so a short candidate leaves a hole
-    # rather than moving every file after it.
+    # instead of moving every file after it.
     fallback_first = kernel_first + slot_clusters + 16
     grubenv_first = fallback_first + fallback_clusters
     # 1024 bytes is two clusters at 512 bytes each and one at 4096; the chain

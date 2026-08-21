@@ -58,11 +58,11 @@ This document covers the foundation kernel. The networking stack, the musl userl
 * `/dev/bootlog` is the machine's own copy of everything it printed while starting, root-readable, always kept, no flag to remember. `cat /dev/bootlog` over SSH answers "what did this machine say while it was booting" at any point afterwards. It exists because the alternatives all demand foresight: the screen scrolls the log past in under a second and holds a fraction of it, and the netconsole reaches only a capture that was already running when the power came on
 * `rach2.board=<name>` names a chipset power profile instead of probing for one, and `rach2.nosci` leaves the system control interrupt unmasked. Both are for a machine this kernel's table does not yet know; see `sys/board.h`
 * `rach2.diskdiag` publishes `/proc/disk` and `/dev/disk0`, a report and a whole-disk sector window, and mounts nothing. The window is read-only on every kernel but the recovery build, which is the only one that can write any sector of its own disk (`sys/block/recovery.h`). It is how a machine says what its disk is and hands out sectors for hashing without writing one; see `sys/block/Readme.md`. Off by default on an everyday kernel, so no image grows a raw whole-disk node by accident; the recovery build publishes the window on every boot, since a build that exists to rewrite a disk cannot depend on a token a menu entry might be missing
-* `rach2.nodisk`, `rach2.noaudio`, `rach2.nomouse` and `rach2.nonet` skip one device probe each, and the kernel reaches a shell with them switched off (`make subset-test` boots six lines: none of them, each one alone, and all four together). They are diagnostics and not a boundary: the GRUB command line is editable, so a token that removes access can be deleted by whoever is at the machine, and nothing about disk authority rests on one. They exist for a first boot on unfamiliar hardware, where a machine with no serial port that stops during bring-up leaves nothing but the last line on the screen, and the way to find which probe stopped it is to switch them off one at a time from the GRUB command line. A skipped device says so on the boot line rather than reporting a failure, so a screen photographed after the fact still says what was asked for
+* `rach2.nodisk`, `rach2.noaudio`, `rach2.nomouse` and `rach2.nonet` skip one device probe each, and the kernel reaches a shell with them switched off (`make subset-test` boots six lines: none of them, each one alone, and all four together). They are diagnostics and not a boundary: the GRUB command line is editable, so a token that removes access can be deleted by whoever is at the machine, and nothing about disk authority rests on one. They exist for a first boot on unfamiliar hardware, where a machine with no serial port that stops during bring-up leaves nothing but the last line on the screen, and the way to find which probe stopped it is to switch them off one at a time from the GRUB command line. A skipped device says so on the boot line instead of reporting a failure, so a screen photographed after the fact still says what was asked for
 * `rach2.netconsole` repeats the kernel log onto the wire as broadcast frames, which is the same problem answered a different way once the network is up; see `sys/network/Readme.md`
 * `rach2.diag` prints its report a second time at the end of the boot and waits for a key, because the whole boot log scrolls past in well under a second and a machine with no serial port has no other way to be read; either a keystroke or a byte on the serial line releases it. The first report still prints where it does, before any driver runs: where the kernel image ends, where the bump allocator's break sits, where the direct map ends and how many frames survived, the range and size of every boot module, and the Ethernet controller's identity read from the chip (the revision Linux calls the XID, taken from `TxConfig` through the controller's memory window). It exists for a machine with no serial port, where a camera or a capture card reading the screen is the only output; it reads and prints and configures nothing, so a boot that runs it hands the drivers that follow the same hardware state as a boot that does not. Off by default
 * Judges where the bootloader put the boot modules before reserving memory over them (`sys/mm/modlayout.c`): a module that ends past the 32 MiB direct map, that overlaps the kernel image, that overlaps another module, or whose range is empty or backwards stops the boot with a diagnostic naming the rule and the module, because GRUB promises a module's address and length and nothing about placement
-* Boots a persistent init (PID 1) that reaps orphans and respawns the console session. On both shipped images that session execs `/bin/login` and nothing else, so the console asks who is there before it offers a shell, and an image missing that program refuses rather than falling back to one. A `rach2.rescue` command line boots the kernel debug shell instead, without consulting the image's init at all, which is the way back into an image that will not offer a prompt
+* Boots a persistent init (PID 1) that reaps orphans and respawns the console session. On both shipped images that session execs `/bin/login` and nothing else, so the console asks who is there before it offers a shell, and an image missing that program refuses instead of falling back to one. A `rach2.rescue` command line boots the kernel debug shell instead, without consulting the image's init at all, which is the way back into an image that will not offer a prompt
 
 ### Device Drivers
 
@@ -125,7 +125,7 @@ The kernel loads at 1 MB (0x100000) and identity-maps physical memory up to 32 M
 
 The kernel image's contract with its linkers: the entry symbol is `_start` (the multiboot entry in `loader.s`; both GNU ld and tcc use that name for the ELF entry point), and `_end` marks the end of the image, where the boot allocator starts reserving physical memory. `link.ld` assigns `_end` for the GNU build; tcc defines it at the end of `.bss` on its own and needs no script. The two builds lay the file out differently: GNU ld places the first load segment at file offset 0x1000, tcc at file offset 0 with the ELF headers inside it and the text section at 0x100080 (tcc aligns sections to 16 bytes past its 0x74 bytes of headers). tcc's linker also emits no symbol table, so the checker's symbol assertions apply to the GNU build alone; the entry and `_end` addresses are baked into the code at link time either way. The guest build itself is `make -f guest.mk` inside a copy of `/src/rach2`, and `make selfbuild-test` proves the whole loop. Both shapes are two load segments at or above 1 MB, and `tools/check_kernel.py`, run on every link, checks the multiboot header, the segments, the entry, and `_end` against exactly this contract.
 
-The window at 0xD0000000 (PCWIN_BASE) is the page cache's view of a disk-backed KRFFS: it is supervisor-only and shared across every process's page directory. The fault handler demand-maps backing pages into the cache's reserved frames (PC_SLOTS, 4 MiB on a machine that can spare it, adapted down to a quarter of the free frames on one that cannot, with a floor of 256 frames, which is 1 MiB) and writes dirty ones back on eviction and fsync. The cache was 1 MiB until the machine became its own build host, where a compile faulted the whole toolchain through it; `rach2/sys/mm/pagecache.h` holds the measurement. The window span is fixed when the cache is initialised, before any mount, from the PCI scan alone: the lowest device MMIO BAR above the base, capped at PC_WINDOW_CAP (512 MiB), so it never overlaps the PCI MMIO hole. A partition wider than the span is refused at mount rather than shrinking it. The base sat at USER_ADDR_MAX (0xC0000000) until the first real machine, whose firmware places device MMIO from 0xC0500000; a window starting there was five megabytes long, so it starts above that region instead, and the 0xC0000000-0xD0000000 gap is where identity-mapped MMIO lives. It is inert on the default RAM-disk mount.
+The window at 0xD0000000 (PCWIN_BASE) is the page cache's view of a disk-backed KRFFS: it is supervisor-only and shared across every process's page directory. The fault handler demand-maps backing pages into the cache's reserved frames (PC_SLOTS, 4 MiB on a machine that can spare it, adapted down to a quarter of the free frames on one that cannot, with a floor of 256 frames, which is 1 MiB) and writes dirty ones back on eviction and fsync. The cache was 1 MiB until the machine became its own build host, where a compile faulted the whole toolchain through it; `rach2/sys/mm/pagecache.h` holds the measurement. The window span is fixed when the cache is initialised, before any mount, from the PCI scan alone: the lowest device MMIO BAR above the base, capped at PC_WINDOW_CAP (512 MiB), so it never overlaps the PCI MMIO hole. A partition wider than the span is refused at mount instead of shrinking it. The base sat at USER_ADDR_MAX (0xC0000000) until the first real machine, whose firmware places device MMIO from 0xC0500000; a window starting there was five megabytes long, so it starts above that region instead, and the 0xC0000000-0xD0000000 gap is where identity-mapped MMIO lives. It is inert on the default RAM-disk mount.
 
 ## Source Structure
 
@@ -365,7 +365,7 @@ The syscall, in order, and the order is the contract:
 1. Copies the path, argv and envp from user space into static kernel buffers, checking every user pointer and both limits below. Everything that can refuse the call happens here, while the caller still has an address space to return to.
 2. Validates the ELF header against `elf_load_image`'s rules (ELFCLASS32, ELFDATA2LSB, ET_EXEC, EM_386, the program header geometry, the segment bounds) before anything is destroyed, so a bad image is `-ENOEXEC` to a live process.
 3. Frees all existing user pages in the process's page directory. THIS IS THE POINT OF NO RETURN.
-4. Streams the ELF segments from KRFFS into freshly allocated user pages, one page at a time rather than through a whole-file buffer.
+4. Streams the ELF segments from KRFFS into freshly allocated user pages, one page at a time, not through a whole-file buffer.
 5. Allocates a new user stack at `USER_STACK_BASE` (0xBFFFF000) and builds the System V i386 initial stack in it: argc, the argv and envp pointer arrays, the auxiliary vector (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_PAGESZ, AT_CLKTCK, AT_SECURE, AT_RANDOM, AT_NULL) and the 16 random bytes AT_RANDOM points at.
 6. Modifies the saved ISR frame to "return" to the new program: sets EIP and ESP, zeroes the general-purpose registers inherited from the old image (EBP, EDX, EBX, ECX, ESI, EDI) so startup code reads no stale state, and resets the segment selectors and TLS.
 
@@ -417,7 +417,7 @@ Returns number of bytes read, or -1 on error.
 
 Reads into `iovcnt` buffers named by `iov`, in order, returning the total.
 
-It exists because musl's buffered stdio issues this call rather than `read`
+It exists because musl's buffered stdio issues this call, not `read`
 whenever it is filling more than a single byte, so without it every program
 reading through `fgets`, `fread` or `scanf` fails.
 
@@ -425,7 +425,7 @@ The whole vector list is checked before a byte is taken: a length past the
 signed range, or a destination that is outside the user window, unmapped or
 read-only, refuses the call with the input still queued, since a read cannot be
 undone. Every destination is also faulted in for writing, which for a page
-shared by a fork means copying it there rather than at the first store. A list that asks for nothing still checks the descriptor, so a closed fd
+shared by a fork means copying it there, not at the first store. A list that asks for nothing still checks the descriptor, so a closed fd
 is `EBADF`.
 
 The buffers are then filled in order, and what that costs depends on what is
@@ -447,7 +447,7 @@ reading on.
   preemptible here, so no other process runs in between, and the interrupts that
   do run can only add to what is readable. Nothing else empties a pipe or a
   receive ring.
-* A terminal is read exactly once, and that is its contract rather than a
+* A terminal is read exactly once, and that is its contract, not a
   limitation: the line discipline hands back one line, and a second buffer
   filled with the line behind it would consume input the reader did not ask
   for.
@@ -641,7 +641,7 @@ The date comes from the CMOS real-time clock (`sys/rtc.c`), read ONCE at boot.
 The kernel keeps an anchor: the second the clock reported, and the uptime second
 at which it was read. Real time is that second plus the seconds elapsed SINCE
 THE READ, not plus the whole uptime, which would count the stretch before the
-sample twice. It counts uptime seconds rather than ticks because `kernel_ticks`
+sample twice. It counts uptime seconds, not ticks because `kernel_ticks`
 is 32 bits and wraps after about 497 days; `kernel_uptime_seconds`, carried
 beside it by the timer, wraps after 136 years.
 
@@ -649,7 +649,7 @@ beside it by the timer, wraps after 136 years.
 since boot, unchanged, because the scheduler, the sleep path and the audio timing
 loops all mean ticks when they ask for a clock.
 
-Four limits, stated rather than discovered:
+Four limits, stated, not discovered:
 
 * There is no `settimeofday` and no NTP. The machine reads the clock once and
   then keeps its own time, so it drifts by whatever the PIT drifts by.
@@ -665,20 +665,19 @@ Four limits, stated rather than discovered:
   trusted: register D's validity bit clear (the battery went), register B's SET
   bit raised (updates inhibited), or register A's divider not the running one.
   A dead battery leaves bytes that are stable and in range and completely wrong,
-  so the date fields alone cannot decide this. The validity bit ends the read
-  rather than earning another try: on some parts READING register D sets that
+  so the date fields alone cannot decide this. The validity bit ends the read instead of earning another try: on some parts READING register D sets that
   bit again, so a dead cell shows itself in the first sample and in no sample
   after it.
 * The clock is read as UTC, because those registers carry no timezone to read.
   A machine whose CMOS keeps local time will be wrong by its offset; the daylight
-  bit (register B's DSE) is refused rather than interpreted. QEMU's default is
+  bit (register B's DSE) is refused, not interpreted. QEMU's default is
   `-rtc base=utc` and the test harness passes it explicitly.
 * The kernel offers the 32-bit `clock_gettime` (265) and `gettimeofday` (78) and
   no `clock_gettime64` (403). musl's own `time_t` is 64-bit, so the limit is this
-  ABI rather than the C library: it ends in 2038. KRFFS stores 64-bit seconds on
+  ABI, not the C library: it ends in 2038. KRFFS stores 64-bit seconds on
   disk, so the file system is not what would have to change.
 
-The century is inferred as 2000 plus the two-digit year rather than read from
+The century is inferred as 2000 plus the two-digit year, not read from
 CMOS register 0x32, which has a century on machines whose firmware maintains
 one and an unrelated byte on machines whose firmware does not.
 
@@ -736,7 +735,7 @@ KRFFS is hierarchical, so a directory fd reads the entries of that directory.
 * `sys_ioctl()` - Device control (framebuffer palette, PC speaker)
 * `sys_gettimeofday()` - Get the current real time
 * `get_current_time()` - Helper returning RTC-anchored real time (uptime alone when the CMOS clock could not be read)
-* `copy_user_pages()` - Maps the parent's user pages into the child copy-on-write, sharing each frame rather than copying it
+* `copy_user_pages()` - Maps the parent's user pages into the child copy-on-write, sharing each frame instead of copying it
 
 ---
 
@@ -805,14 +804,14 @@ The kernel maintains a fixed-size process table (`MAX_PROCS = 16`). At boot, pro
 
 ### Init, the rescue shell, and CTRL+C
 
-After boot and self-tests, the kernel runs a real init as PID 1, and it is pid 1 in fact and not only in the prose: pid numbering is restarted at 1 on the way into `boot_init_process`, past the point where the boot is certainly starting init, so the self-tests that ran first no longer consume the numbering while the rescue and init-less boots keep it. That matters beyond tidiness, because `kill(1, ...)` is how `halt`, `poweroff` and `reboot` ask for a shutdown: before it, pid 1 was a dead self-test process and all three failed with `No such process`. Pid 0 is the kernel's first process, which is why `/proc` lists a 0 beside the 1. `boot_init_process` execs `/sbin/init` if the RAM disk has it (the os-simple and os-real images do). That init is a small userland program, `utils/init.c`: it forks the login shell, reaps every orphan the kernel reparents onto it, and respawns the shell when it exits, so the shell never disappears and an exited login leaves you at a fresh prompt rather than at a kernel shell.
+After boot and self-tests, the kernel runs a real init as PID 1, and it is pid 1 in fact and not only in the prose: pid numbering is restarted at 1 on the way into `boot_init_process`, past the point where the boot is certainly starting init, so the self-tests that ran first no longer consume the numbering while the rescue and init-less boots keep it. That matters beyond tidiness, because `kill(1, ...)` is how `halt`, `poweroff` and `reboot` ask for a shutdown: before it, pid 1 was a dead self-test process and all three failed with `No such process`. Pid 0 is the kernel's first process, which is why `/proc` lists a 0 beside the 1. `boot_init_process` execs `/sbin/init` if the RAM disk has it (the os-simple and os-real images do). That init is a small userland program, `utils/init.c`: it forks the login shell, reaps every orphan the kernel reparents onto it, and respawns the shell when it exits, so the shell never disappears and an exited login leaves you at a fresh prompt, not at a kernel shell.
 
 Because init is persistent, the kernel's built-in debug shell is no longer the home you land in. It is the rescue/developer environment, reached two ways:
 
 * Boot with the `rach2.rescue` kernel command line (the run scripts take `RESCUE=1`, and each ISO has a rescue menu entry). The kernel then skips init and runs the debug shell directly; `exec <name>` launches a program, which returns to the shell on exit.
 * Boot an image that has no init at all (the test image). With nothing to exec, the kernel falls to the debug shell unconditionally; this is what the automated test harness drives.
 
-If a real `/sbin/init` ever exits or is killed, there is no reaper or login shell left, so the kernel halts with `kernel panic: init died` rather than fall to an unauthenticated shell (boot `rach2.rescue` to get the debug shell deliberately).
+If a real `/sbin/init` ever exits or is killed, there is no reaper or login shell left, so the kernel halts with `kernel panic: init died`, not fall to an unauthenticated shell (boot `rach2.rescue` to get the debug shell deliberately).
 
 CTRL+C (keyboard interrupt) sends SIGINT to every process in the terminal's foreground group:
 
@@ -1052,7 +1051,7 @@ The kernel will display the module at boot:
 
 ## File System (KRFFS)
 
-The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a hierarchical file system whose v2 directories are written by the image builder and read and written by the kernel. KRFFS mounts one of three ways: from a RAM disk module passed via multiboot (the default); from the page-cache window over the disk image embedded behind the module (`rach2.fswindow`); or from a real ATA disk through that same window (`rach2.fsdisk`, or `rach2.root=disk`, which probes the MBR for the root partition). Stopping the machine is one path with three endings, in `sys/power.c`. Every one of them disables scheduling, flushes the page cache, clears the dirty-mount flag if there is a disk mount to clear it on, and says on the serial line which of those happened. Then `halt` parks the CPU in a loop, which is the ending that cannot fail; `poweroff` reads the PIIX4's power-management base out of PCI configuration space and writes the sleep word, refusing if the device is not that chipset, if its I/O space is not decoding, or if no base was ever programmed, because a base taken on faith would send that word to a live DMA register; and `reboot` tries three mechanisms in order, an APM control write, the 0xCF9 arm-and-fire pair, then a keyboard-controller pulse, stopping at whichever one resets the machine, with `rach2.resetskip=N` leaving out the first N so each can be exercised on its own. The power-off is QEMU's and not a general one: the checks find where the PM block is, but sleep type 0 meaning soft-off is QEMU's convention, while a real board publishes S5's type in ACPI tables this kernel does not parse, so there it could ask for some other sleep state rather than fall through to the halt. Neither of the last two is synchronous, so each waits before it speaks and then reports that it asked, that it waited, and that it is parking the CPU instead. That is why `make crash-test` asserts the power-off by watching the QEMU process end rather than by reading a token: a token proves only that the kernel reached the line before the write.
+The kernel includes full read/write support for KRFFS (K&R First-Fit File System), a hierarchical file system whose v2 directories are written by the image builder and read and written by the kernel. KRFFS mounts one of three ways: from a RAM disk module passed via multiboot (the default); from the page-cache window over the disk image embedded behind the module (`rach2.fswindow`); or from a real ATA disk through that same window (`rach2.fsdisk`, or `rach2.root=disk`, which probes the MBR for the root partition). Stopping the machine is one path with three endings, in `sys/power.c`. Every one of them disables scheduling, flushes the page cache, clears the dirty-mount flag if there is a disk mount to clear it on, and says on the serial line which of those happened. Then `halt` parks the CPU in a loop, which is the ending that cannot fail; `poweroff` reads the PIIX4's power-management base out of PCI configuration space and writes the sleep word, refusing if the device is not that chipset, if its I/O space is not decoding, or if no base was ever programmed, because a base taken on faith would send that word to a live DMA register; and `reboot` tries three mechanisms in order, an APM control write, the 0xCF9 arm-and-fire pair, then a keyboard-controller pulse, stopping at whichever one resets the machine, with `rach2.resetskip=N` leaving out the first N so each can be exercised on its own. The power-off is QEMU's and not a general one: the checks find where the PM block is, but sleep type 0 meaning soft-off is QEMU's convention, while a real board publishes S5's type in ACPI tables this kernel does not parse, so there it could ask for some other sleep state, not fall through to the halt. Neither of the last two is synchronous, so each waits before it speaks and then reports that it asked, that it waited, and that it is parking the CPU instead. That is why `make crash-test` asserts the power-off by watching the QEMU process end, not by reading a token: a token proves only that the kernel reached the line before the write.
 
 The disk mount is persistent: a clean shutdown flushes the cache and, only if that flush succeeded, clears the root node's dirty-mount flag; an unclean one, or one whose flush failed, leaves it set for `fsck.krffs` to find. The order is what makes the flag mean anything, since a write-back fails whole after writing part of the cache, so clearing the flag first can leave the platter reading clean with data missing.
 
@@ -1063,7 +1062,7 @@ KRFFS uses a circular linked list of nodes, where each node represents either:
 * Free node - Available space for allocation
 * Reserved node - A file or directory (name, size, data, and the id of its parent directory)
 
-File lookup hashes the parent directory's id together with the name, so the same name under two directories resolves apart; the v2 hierarchy is walked component by component. The file system is designed for simplicity rather than performance.
+File lookup hashes the parent directory's id together with the name, so the same name under two directories resolves apart; the v2 hierarchy is walked component by component. The file system is designed for simplicity, not performance.
 
 ### Initialization
 

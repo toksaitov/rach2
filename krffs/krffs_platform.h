@@ -93,13 +93,13 @@ void krffs_get_time_of_day(struct timeval *time_of_day);
  * validate them against a backing file of `file_size` bytes.
  *
  * A region lets a tool target a KRFFS that lives inside a partition of a larger
- * disk image rather than at the start of a whole file. `--offset` defaults to 0
+ * disk image, not at the start of a whole file. `--offset` defaults to 0
  * and must be a multiple of `KRFFS_REGION_ALIGN`. `--size` defaults to the rest
  * of the file after the offset, but a nonzero `--offset` names a partition that
  * does not extend to the end of the disk, so it requires an explicit `--size`.
  * The region must fit in the file and be at least `min_size` bytes (the caller
  * passes the smallest file system it can hold). A flag with no following value
- * is an error rather than a silent default. Other arguments are ignored, so
+ * is an error, not a silent default. Other arguments are ignored, so
  * each tool keeps its own option parsing.
  *
  * On success returns 0 and writes `*out_offset` and `*out_size`; on a bad or

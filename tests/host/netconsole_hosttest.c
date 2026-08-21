@@ -11,7 +11,7 @@
  * the transmit it was asked to perform, which is the recursion the code
  * refuses and which a healthy QEMU boot never provokes.
  *
- * The file is included rather than linked so the test can reach its statics
+ * The file is included, not linked so the test can reach its statics
  * back to their initial state between cases; the kernel has one boot per run
  * and needs no such thing.
  */

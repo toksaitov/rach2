@@ -18,7 +18,7 @@
  * nothing touches proves only that a number was returned. It requires more of
  * them than the old ceiling allowed, and requires the ones it took to still
  * hold what was written after the last was taken, which is what would break if
- * the regions overlapped rather than being distinct.
+ * the regions overlapped instead of being distinct.
  *
  * Prints "VMAMUSL OK" on success and "VMAMUSL FAIL (detail)" otherwise.
  */
@@ -58,7 +58,7 @@ int main(void)
             break;
         }
         /* Write a byte that says which mapping this is, so a later read can
-         * tell them apart rather than merely find memory. */
+         * tell them apart, not merely find memory. */
         maps[i][0] = (char)('A' + i);
         maps[i][4095] = (char)('a' + i);
         taken++;

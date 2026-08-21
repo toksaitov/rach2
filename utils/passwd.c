@@ -16,7 +16,7 @@
  *
  * Everything happens inside one credential transaction, taken before any file
  * is opened and dropped only after the replacement is published. That ordering
- * is the point rather than a detail: the account is found, the old password is
+ * is the point, not a detail: the account is found, the old password is
  * checked, and the new file is built from ONE image of the databases, read
  * under the lock. `getspnam` is not called anywhere here, since it would be a
  * second, independent read that can see a different file than the one about to
@@ -62,7 +62,7 @@
 #define SHADOW_FILE "/etc/shadow"
 
 /* Room for either database read whole. The staged images hold a handful of
- * accounts; a file past this is refused rather than truncated. */
+ * accounts; a file past this is refused, not truncated. */
 #define TEXT_MAX 16384
 
 /* The longest shadow record the readers can use, and where the number comes
@@ -73,7 +73,7 @@
  * final newline. Either way the caller sees NULL, which `pwauth_verify` and
  * dropbear both read as "no such account". So a record of 255 bytes or more
  * with its newline, or a target line with no newline after it, is one this
- * program must refuse to write rather than publish and call changed. */
+ * program must refuse to write, not publish and call changed. */
 #define SHADOW_RECORD_MAX 254
 
 /* A shadow line is a name, a hash and seven aging fields. The hash is the only
@@ -130,7 +130,7 @@ static long slurp(const char *path, char *buffer, size_t size)
     /* Everything below parses with string functions, so a NUL inside the file
      * would end every one of them early and the rewrite would publish a
      * database with the remainder cut off. A credential file is text; one that
-     * is not is refused rather than silently shortened. */
+     * is not is refused, not silently shortened. */
     if (strlen(buffer) != held) {
         fprintf(stderr, "passwd: %s has a NUL byte and is not a text database\n", path);
         return -1;
@@ -142,7 +142,7 @@ static long slurp(const char *path, char *buffer, size_t size)
 /**
  * How many lines of `text` name `user` in their first colon-separated field.
  *
- * Counting rather than finding, because the count is what decides whether the
+ * Counting instead of finding, because the count is what decides whether the
  * answer means anything, and the parse is the same either way.
  */
 static int count_entries(const char *text, const char *user)
@@ -198,7 +198,7 @@ static int all_digits(const char *text)
  * and `getpwuid` answer as if the account were not there. A parser here that
  * accepted it would authenticate against a name no reader can resolve and
  * publish a password for an account nobody can enter, then report success. The
- * arithmetic wraps the way musl's does rather than saturating the way `strtoul`
+ * arithmetic wraps the way musl's does instead of saturating the way `strtoul`
  * does, so the two cannot disagree about which uid an absurd field names. An
  * empty numeric field is refused although musl reads it as 0, because a blank
  * uid silently meaning root is not a thing to carry into a credential writer.
@@ -340,7 +340,7 @@ static int line_terminated(const char *text, const char *user)
  * True when `line` is a shadow record this program may rewrite: nine
  * colon-separated fields, with every aging field empty or decimal.
  *
- * A record that does not parse is refused rather than replaced, because a
+ * A record that does not parse is refused, not replaced, because a
  * replacement that keeps a malformed line's shape publishes a file that this
  * program calls changed and that every reader goes on rejecting: `getspnam`
  * wants the nine fields, so the account would answer to no password at all and
@@ -606,7 +606,7 @@ int main(int argc, char **argv)
     }
 
     /* Only now, with nothing left to type. The lock is held across a re-read, a
-     * comparison and the publish, which is microseconds rather than however
+     * comparison and the publish, which is microseconds, not however
      * long a person takes to choose a password. */
     if (cred_txn_begin("passwd") != 0) {
         return 1;
@@ -674,7 +674,7 @@ int main(int argc, char **argv)
     }
     /* The line about to be published, measured as the reader will meet it. A
      * longer hash can push a record that fitted over the limit, so the check is
-     * on the result rather than on what was read. */
+     * on the result, not on what was read. */
     {
         char published[512];
 

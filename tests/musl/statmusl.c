@@ -5,7 +5,7 @@
  * path, `fstat_fill` for a descriptor, `do_old_stat` for the narrower stat(2)
  * ABI, and `synth_stat` for `/dev` and `/proc`. All four zeroed the three
  * times, and a fix to one of them would leave the others reporting 1970, so
- * each is asked here separately rather than trusted to share code.
+ * each is asked here separately, not trusted to share code.
  *
  * The times are SET with `utimensat`, which is the one call that already wrote
  * them before this milestone, so this probe stands on its own: it proves the
@@ -80,7 +80,7 @@ static int times_match(const struct stat *st)
 
 /**
  * Whether a stat's ctime is the moment `utimensat` ran, which is the one of the
- * three that call sets to NOW rather than to what it was handed. Bounded rather
+ * three that call sets to NOW, not to what it was handed. Bounded rather
  * than compared: it is a real instant, so the test is that it lies between two
  * readings of the clock taken around the call.
  */
@@ -208,13 +208,13 @@ int main(void)
     }
 
     /* A synthetic node reports the BOOT time, and the probe works out what that
-     * should be rather than taking the answer from the thing it is testing: the
+     * should be instead of taking the answer from the thing it is testing: the
      * real time now, minus the time since boot, is when this machine started. A
      * fill returning a stable wrong constant passes a check that only asks
      * whether two synthetic nodes agree, so the value is computed here.
      *
      * On a machine whose clock could not be read this comes out at zero, and
-     * that is the documented fallback rather than a failure: the two clocks
+     * that is the documented fallback, not a failure: the two clocks
      * then report the same thing and the difference between them is nothing. */
     if (clock_gettime(CLOCK_REALTIME, &now) != 0 || clock_gettime(CLOCK_MONOTONIC, &uptime) != 0) {
         return fail("clock_gettime failed");

@@ -11,7 +11,7 @@
  * left sending from an address the machine no longer has.
  *
  * The machine's address is put back at the end and the gateway pinged, which
- * is what proves the change was survivable rather than merely accepted.
+ * is what proves the change was survivable, not merely accepted.
  *
  * Run on a machine booted with `rach2.ip=none` it does the other half instead:
  * configures an unconfigured machine in the order `ifconfig` does it, an
@@ -841,7 +841,7 @@ void _start(void)
     }
 
     /* Routes. A default route sets the gateway; one off the subnet is not a
-     * gateway; a route this stack cannot hold is refused rather than forgotten.
+     * gateway; a route this stack cannot hold is refused, not forgotten.
      */
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
@@ -945,7 +945,7 @@ void _start(void)
     }
 
     /* And a mask refused while the classful one is still standing in leaves the
-       machine unconfigured, rather than answering for a network address that
+       machine unconfigured instead of answering for a network address that
        nothing judged. */
     set_name("eth0");
     set_ifr_addr(0);

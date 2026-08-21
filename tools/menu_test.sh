@@ -14,11 +14,11 @@
 # the stub does not have, round-trips a grubenv key through `bootctl env`, and
 # corrupts the candidate kernel so the next boot has to take the fallback. The
 # second boot proves both staged entries reached the menu and that the fallback
-# NUMBER still named the stub's own entry rather than a staged one, which is the
+# NUMBER still named the stub's own entry, not a staged one, which is the
 # property the ordering exists for. The third truncates the staged file
 # mid-entry from the host and the machine must still boot through the stub. The
 # fourth reads the slot's extent back, which says bootctl overwrote bytes in
-# place rather than rewriting a file.
+# place instead of rewriting a file.
 #
 # What no boot here does is let the staged file choose the default. It cannot:
 # a slot overwritten in place is not written atomically, so a file in a torn
@@ -196,7 +196,7 @@ grep -aq "STAGEDOK" "$LOG" || fail "the menu did not stage"
 # The two grubenv keys this tool writes are the trial state machine, so a round
 # trip through `bootctl env` is what says the block took the write.
 grep -a "ENVA=" "$LOG" | grep -aq "candidate" || fail "bootctl env did not read back the armed value"
-# Cancelling removes the key rather than emptying it: an empty next_entry is the
+# Cancelling removes the key instead of emptying it: an empty next_entry is the
 # marker a trial boot leaves, and a commit requires it.
 grep -a "ENVB=" "$LOG" | grep -aq "absent" || \
     fail "bootctl cancel did not remove the trial key, so it left the consumed marker behind"
@@ -315,7 +315,7 @@ wait_count "BACKOK" 1 600 || fail "the saved default was never put back"
 cleanup_boot
 
 # The slot's extent, read back after all of it: bootctl overwrote bytes in place
-# rather than rewriting a file, so the chain found when the volume opened is the
+# instead of rewriting a file, so the chain found when the volume opened is the
 # chain still there.
 LOG="$DISK.log.after"
 : > "$STEPS"

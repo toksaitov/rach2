@@ -132,7 +132,7 @@ cold_boot() {
     start_qemu "$1"
     wait_count "rach2 login:" 1 180 || fail "the machine never reached a login prompt"
     # The server is started by init after the network, so what is waited for is
-    # the port answering rather than a line on the console.
+    # the port answering, not a line on the console.
     i=0
     while [ "$i" -lt 60 ]; do
         if machine 'echo up' > /dev/null 2>&1; then
@@ -180,7 +180,7 @@ stop_machine() {
 }
 
 # The machine restarts inside the same QEMU; what says it came back is another
-# login prompt, counted rather than matched, since the log has every boot.
+# login prompt, counted, not matched, since the log has every boot.
 reboot_machine() {
     want="$1"
     # Bounded and its result ignored, for the reason stopping is: the connection
@@ -310,7 +310,7 @@ case "$OUT" in
     *) fail "the first boot did not come from the candidate slot: $OUT" ;;
 esac
 # Where the candidate slot is, from the machine's own report of it, so what is
-# destroyed later is the slot the machine would boot rather than a number
+# destroyed later is the slot the machine would boot, not a number
 # computed here.
 CAND_SECTOR="$(printf '%s' "$OUT" | sed -n 's/^bootctl: candidate: first sector \([0-9]*\),.*/\1/p')"
 if [ -z "$CAND_SECTOR" ]; then
@@ -444,7 +444,7 @@ stop_machine
 phase "the boot loader, replaced and put back"
 # A core image with a marker in it, installed into the tail that is not in use.
 # The marker prints before anything on a partition, so what it proves is which
-# image the machine is running rather than which bytes are at rest.
+# image the machine is running, not which bytes are at rest.
 sh "$REPO/tools/mkgrubcore.sh" SEALEDCORE1 "$CORE" > /dev/null 2>&1 || \
     fail "the marked core image could not be built"
 cold_boot core

@@ -72,7 +72,7 @@ fi
 echo "diskpolicy-test: the policy check rejects each kernel offered as the other: OK"
 
 # A disk built here and never booted, so the comparison starts from a known
-# image rather than from whatever a previous test left.
+# image, not from whatever a previous test left.
 sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$BASE" 64 48 >/dev/null 2>&1 \
     || fail "could not build the disk image"
 

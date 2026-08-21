@@ -46,7 +46,7 @@ md_files() {
 }
 
 # Shell, make, the two extensionless muslgcc wrappers, and the shell scripts
-# this project ships inside its images, which end in .script rather than .sh.
+# this project ships inside its images, which end in .script, not .sh.
 script_files() {
     ls ./Makefile vendor/busybox/muslgcc vendor/dropbear/muslgcc 2>/dev/null
     prune_find '(' -name '*.sh' -o -name '*.mk' -o -name '*.script' \

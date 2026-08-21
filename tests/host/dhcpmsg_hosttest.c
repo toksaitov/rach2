@@ -8,7 +8,7 @@
  * reading it. A server will not produce a truncated option or a wrong checksum
  * on request, so the malformed messages are written here, one field wrong at a
  * time, beside the well-formed one they are made from. The frames are built by
- * this file's own checksum routines rather than the library's, so two
+ * this file's own checksum routines, not the library's, so two
  * implementations of the same arithmetic meet over every packet.
  *
  * Returns the failed-check count (0 == pass).
@@ -34,8 +34,8 @@ static int fails;
 
 /*
  * Every message goes through the library on a heap copy of its exact length,
- * so a read one byte past what the sender sent is an AddressSanitizer report
- * rather than a byte of whatever the client had in its buffer. That is what a
+ * so a read one byte past what the sender sent is an AddressSanitizer report,
+ * not a byte of whatever the client had in its buffer. That is what a
  * declared option length longer than the message is: the checks that refuse it
  * cannot be shown to matter on a 576-byte buffer with slack after it.
  */
@@ -591,7 +591,7 @@ static void check_lease_usable(void)
 
     memset(&l, 0, sizeof(l));
     CHECK(dhcp_lease_usable(&l, why, sizeof(why)) != 0 && strstr(why, "no address") != NULL,
-          "and a lease with no address, refused for being none rather than for its class");
+          "and a lease with no address, refused for being none, not for its class");
 }
 
 static void check_lease_arithmetic(void)
@@ -607,7 +607,7 @@ static void check_lease_arithmetic(void)
     CHECK(dhcp_sane_lease(DHCP_MIN_LEASE, 1000) == DHCP_MIN_LEASE,
           "the shortest lease this acts on is acted on");
     CHECK(dhcp_sane_lease(1000, DHCP_MIN_LEASE - 1) == 0,
-          "a cap below the minimum leaves no lease rather than a short one");
+          "a cap below the minimum leaves no lease, not a short one");
 
     /* Seven eighths computed the other way around is zero for every lease
        under eight seconds, which would rebind the instant it was configured. */

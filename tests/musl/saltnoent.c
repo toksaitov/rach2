@@ -13,7 +13,7 @@
  * exposes neither instruction and runs it there.
  *
  * The precondition is asserted first, that `getrandom` really does refuse, so a
- * machine that did have the instructions reports a wrong premise rather than a
+ * machine that did have the instructions reports a wrong premise, not a
  * mystery. Then the refusal itself: `pwauth_mint_salt` returns -1 with every
  * sentinel byte of its buffer untouched, since a partly filled salt is a
  * predictable one, and its one line arrives on standard error exactly once,

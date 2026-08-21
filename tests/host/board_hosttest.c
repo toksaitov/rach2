@@ -3,7 +3,7 @@
  *
  * host-deps:
  *
- * board.c is included rather than linked, so the profile table's own rows can
+ * board.c is included, not linked, so the profile table's own rows can
  * be reached by name and judged. That matters more here than usual: of the
  * three chipsets in that table, two exist on this desk only as QEMU models and
  * the third is a laptop nobody has booted yet, so the row that will decide
@@ -150,7 +150,7 @@ int main(void)
     CHECK(board_pm_base(lynx, 0x0000183Fu) == 0x1800,
           "and the low bits below the mask are not part of it");
     CHECK(board_pm_base(lynx, 0xFFFFFFFFu) == 0xFF80,
-          "an all-ones register yields the masked value rather than a wild one");
+          "an all-ones register yields the masked value, not a wild one");
     CHECK(board_pm_base(0, 0x1801u) == 0, "no profile yields no base");
 
     /* ---- the decode bit, which says whether the block answers at all ---- */
@@ -174,7 +174,7 @@ int main(void)
           "the selection is the low three bits, whatever the rest of the register has");
     CHECK(board_sci_irq(0, 0x00) == -1, "no profile has no line");
 
-    /* ---- the sleep word, the one value that is believed rather than read
+    /* ---- the sleep word, the one value that is believed, not read
      * ---- */
     CHECK(board_sleep_word(piix4) == 0x2000,
           "the PIIX4 word is sleep type 0 with SLP_EN, which is what QEMU takes as off");

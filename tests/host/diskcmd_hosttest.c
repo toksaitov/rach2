@@ -7,7 +7,7 @@
  * property: a Rach2 built for the laptop must not write its SSD, which has a
  * Windows installation nobody has backed up. So the interesting half of the
  * table is not the commands it permits but the ones it does not, and the
- * sweep below is exhaustive rather than a sample: all 256 command bytes are
+ * sweep below is exhaustive, not a sample: all 256 command bytes are
  * offered under the read-only policy, and exactly four may be accepted.
  *
  * The compiled-in policy is only half of it. This build is whatever the host

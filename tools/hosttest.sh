@@ -32,7 +32,7 @@ INC="-I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/
 fail=0
 any=0
 
-# A test that hangs must fail the gate rather than hang it. One of these tests
+# A test that hangs must fail the gate, not hang it. One of these tests
 # drives a device that reports an error on every transmit, and the first defect
 # it caught was an unbounded loop, so this is a demonstrated case and not a
 # precaution. The test runs in the FOREGROUND under timeout(1): a background
@@ -56,8 +56,8 @@ wrapped_deps()
     # A wrapped declaration is silent damage: the `[^*]*` grep below stops at
     # the next `*`, so paths past the fold are dropped and the test either
     # fails to link for no stated reason or keeps passing because something
-    # else already pulled the file in. Checked against the PREVIOUS record
-    # rather than with `getline`, which consumes the next line and so misses a
+    # else already pulled the file in. Checked against the PREVIOUS record,
+    # not with `getline`, which consumes the next line and so misses a
     # wrap that follows a second, legitimately repeated declaration.
     awk -v tag="$2" '
         $0 ~ tag && prev ~ tag { prev = $0; next }
@@ -86,7 +86,7 @@ for t in tests/host/*_hosttest.c; do
     # Name a missing dep here: passed on to the compiler it would surface as a
     # bare "no such file", which reads as a broken test. A dep under the
     # extracted musl tree has one specific cause and one specific repair, and
-    # the repair names the stamp rather than `make deps`, because a copied
+    # the repair names the stamp, not `make deps`, because a copied
     # worktree has a stamp whose tree is gone and make reads that stamp as
     # current. An in-house dep is a typo or a rename, so say only that it is
     # missing.

@@ -236,7 +236,7 @@ void _start(void)
     }
 
     /* Test 6: Unlink "/": -EISDIR. The root has no type bits in its mode, so it
-     * is refused by identity rather than by KRFFS_IS_DIR. */
+     * is refused by identity, not by KRFFS_IS_DIR. */
     print("Test 6: unlink(\"/\") == -EISDIR... ");
     result = sys_unlink("/");
     if (result == -EISDIR) {

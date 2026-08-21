@@ -15,7 +15,7 @@
 # this system's authentication is.
 #
 # The disk is a copy, so a run leaves nothing behind, and every wait is bounded:
-# a hang has to fail rather than sit there.
+# a hang has to fail, not sit there.
 #
 # Usage: ssh_test.sh <kernel> <disk> <root password> <test password> <port>
 #
@@ -147,7 +147,7 @@ fi
 # back to a prompt after the command, and then the port answering.
 sleep 25
 
-# Root, by key. The options are written out rather than held in a variable, so
+# Root, by key. The options are written out, not held in a variable, so
 # nothing here depends on a shell splitting one, and each of the three that
 # narrow the attempt is there for a reason: `-i` alone only ADDS an identity,
 # so an agent or a default key in the runner's own ~/.ssh would still be
@@ -157,7 +157,7 @@ sleep 25
 # the one being claimed.
 #
 # `-tt` and the `test -t` in front of the command are what make this a pty
-# session rather than a command run down a pipe. ssh asks for no terminal when
+# session, not a command run down a pipe. ssh asks for no terminal when
 # it is given a command, so without them dropbear's pty path is never touched
 # and the capstone would pass on a server that could not allocate one.
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
@@ -183,7 +183,7 @@ esac
 #
 # The number of prompts is an argument: a login that is expected to work gets
 # the ordinary three, and one that is expected to be refused gets one, so a
-# wrong password is answered once and the attempt ends rather than sitting
+# wrong password is answered once and the attempt ends instead of sitting
 # through two more.
 #
 # Everything variable reaches Tcl through the environment, and the script is
@@ -214,7 +214,7 @@ puts "PROMPTED=$asked"' 2>&1
     echo "EXPECTRC=$?"
 }
 
-# Require an attempt to have been REFUSED, rather than merely to have run
+# Require an attempt to have been REFUSED, not merely to have run
 # nothing. An ssh that could not connect, a server that had died, and a Tcl
 # error all produce no session and no token; only the server saying no produces
 # this line. $1 is the output, $2 names the attempt.
@@ -224,7 +224,7 @@ require_denied() {
         *) fail "$2 did not end in a refusal from the server, so it proves nothing: $1" ;;
     esac
     case "$1" in
-        *TIMEDOUT*) fail "$2 timed out rather than being refused: $1" ;;
+        *TIMEDOUT*) fail "$2 timed out instead of being refused: $1" ;;
     esac
 }
 

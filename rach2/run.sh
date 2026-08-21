@@ -29,7 +29,7 @@
 #
 # DISK=<file> attaches a raw image as the primary master ATA disk (if=ide,
 # index=0) and mounts KRFFS from it (rach2.fsdisk), so what boots is the
-# writable Rach2 rather than the RAM module. This is the persistent machine:
+# writable Rach2, not the RAM module. This is the persistent machine:
 #   make os-real-disk
 #   DISK=../build/images/os-real.disk ./run.sh
 #
@@ -99,7 +99,7 @@ if [ -n "$RESCUE" ]; then
 fi
 # A disk that is attached is a disk that is mounted, on either bus: the two
 # flags are separate because the selector alone boots without mounting, and
-# DISKNOMOUNT is the way to ask for that on purpose rather than by forgetting.
+# DISKNOMOUNT is the way to ask for that on purpose, not by forgetting.
 if [ -n "$DISK" ]; then
     if [ "$DISKBUS" = ahci ]; then
         CMDLINE="$CMDLINE rach2.disk=ahci"

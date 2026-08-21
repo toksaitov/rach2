@@ -15,7 +15,7 @@ see the bug, since one directory returns one order; and creating the same names
 in a different sequence does not help on a host that orders by hash. So what is
 asserted is the property the sort provides: the names land in the image in NAME
 order. That is only a test where the host's own order differs from sorted, so
-this checks that first and says it could not test rather than passing quietly.
+this checks that first and says it could not test instead of passing quietly.
 
 Usage:
     check_repro.py [mkfs.krffs] [stageimage.krffs]
@@ -40,7 +40,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #
 # Every set mixes case on purpose: under `strcmp` every capital sorts before
 # every lower-case letter, and under a case-folding comparator they interleave,
-# so a stager that sorted with the wrong one is caught rather than accepted.
+# so a stager that sorted with the wrong one is caught, not accepted.
 NAME_SETS = (
     ("delta", "Foxtrot", "charlie", "Alpha", "echobox", "bravo"),
     ("Zulu", "yankee", "Xray", "whiskey", "Victor", "uniform"),
@@ -50,7 +50,7 @@ NAME_SETS = (
 
 
 def run(argv):
-    """Run a build tool, failing loudly rather than leaving a half-made image."""
+    """Run a build tool, failing loudly instead of leaving a half-made image."""
     result = subprocess.run(argv, capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit("check-repro: %s failed: %s"
@@ -140,7 +140,7 @@ def main(argv):
         # The tree half: a nested source tree, staged twice through the
         # recursive directive, must produce identical bytes AND hold its
         # entries in sorted order at every level, which is asserted against
-        # the exact expected walk rather than observed order, so an unsorted
+        # the exact expected walk, not observed order, so an unsorted
         # walk cannot pass by reading one host's directories twice in the
         # same accidental order. The tree reuses the scrambled name set the
         # exec-dir half found, at two levels. This is the shape /src/rach2
@@ -206,7 +206,7 @@ def main(argv):
         if not scrambled:
             # Every set this check knows came back already in name order on this
             # host, so the assertion above held without the stager having to
-            # sort anything. Said out loud rather than reported as a pass: the
+            # sort anything. Said out loud, not reported as a pass: the
             # clock half was tested, the ordering half was not.
             print("check-repro: OK (one tree, one image; the clock and the tree "
                   "directive excluded). "

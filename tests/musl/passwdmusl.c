@@ -4,11 +4,11 @@
  * link-deps: utils/pwauth.c
  *
  * The library's own probe covers the transaction; this covers the program built
- * on it, and it drives the shipped `/passwd` at the shipped mode rather than a
+ * on it, and it drives the shipped `/passwd` at the shipped mode, not a
  * copy, so what is proved is what a user runs. Its cases, in the order they
  * run:
  *
- * The sequential arc, asserted on the file's bytes and metadata rather than on
+ * The sequential arc, asserted on the file's bytes and metadata, not on
  * an exit status. A uid-1000 child feeds its old and new passwords to `/passwd`
  * on a pipe and the account's hash must change to a `$6$` with a different
  * salt, `crypt` must reproduce it from the new password, every other line must
@@ -26,7 +26,7 @@
  *
  * Then the concurrent case, which is what the lock exists for and what no
  * single-process test can reach: two accounts changed at once, where the loser
- * must wait rather than read a pre-image and publish over the winner's line.
+ * must wait, not read a pre-image and publish over the winner's line.
  * The rendezvous is a token on the loser's standard error and never a sleep.
  *
  * Then the entropy implication, and it is `getrandom`'s answer that decides
@@ -228,7 +228,7 @@ static const char *hash_from(const char *text, const char *user)
 /**
  * Put the three databases back as the image staged them.
  *
- * Called at the head of every case rather than only at the end, because each
+ * Called at the head of every case, not only at the end, because each
  * case is written against the staged passwords and a case that ran before it
  * has changed one. Without this the refusals would pass for the wrong reason:
  * a wrong-password case and a wrong-caller case both refuse just as readily
@@ -252,7 +252,7 @@ static void restore_databases(void)
  * process could only have printed after doing the thing being waited for. The
  * deadline bounds a failure and never decides a pass, since the pass condition
  * is the token and a build that printed a different one fails on the deadline
- * rather than passing on it.
+ * instead of passing on it.
  */
 static int read_until(int fd, const char *needle, char *buffer, size_t size, long ms)
 {
@@ -291,7 +291,7 @@ static int read_until(int fd, const char *needle, char *buffer, size_t size, lon
  * Run `/passwd` as `uid`, feeding `script` to its standard input and collecting
  * its standard error into `report`. Returns the child's exit status, or -1.
  *
- * The input is a pipe rather than a terminal, which is what makes the script
+ * The input is a pipe, not a terminal, which is what makes the script
  * possible: the prompt takes the non-tty path and reads the lines as they come.
  */
 static int run_passwd_raw(uid_t uid, const char *user, const char *script, size_t script_len,
@@ -450,7 +450,7 @@ static int run_passwd_raw(uid_t uid, const char *user, const char *script, size_
 }
 
 /**
- * The change itself, asserted on the file rather than on a status.
+ * The change itself, asserted on the file, not on a status.
  */
 static int check_change(void)
 {
@@ -537,12 +537,12 @@ static int check_change(void)
  * Two writers overlapping, which is the whole reason for the lock.
  *
  * `passwd` prompts first and takes the transaction last, so the lock is held
- * for microseconds rather than for as long as a person takes to choose a
+ * for microseconds, not for as long as a person takes to choose a
  * password. What keeps that safe is that it re-reads the database under the
- * lock and rewrites THAT, rather than the copy it surveyed before prompting,
+ * lock and rewrites THAT, not the copy it surveyed before prompting,
  * and that it refuses if the record it authenticated against is no longer the
  * one it is about to replace. Both halves are asserted here, and the sequencing
- * is exact rather than hopeful: the second writer is made to prompt first, so
+ * is exact, not hopeful: the second writer is made to prompt first, so
  * it is holding a pre-image by construction, and only then is the first writer
  * run to completion.
  *
@@ -651,7 +651,7 @@ static int check_concurrent(void)
     }
 
     /* The same account, changed by two writers. The one holding the stale
-     * record must be refused rather than publish over a change it never saw. */
+     * record must be refused, not publish over a change it never saw. */
     restore_databases();
     if (pipe(b_in) != 0 || pipe(b_err) != 0) {
         return fail("could not make the pipes the same-account case reports on");
@@ -801,7 +801,7 @@ static int check_concurrent(void)
         return fail("the revoked writer published its new password anyway");
     }
 
-    /* The same revocation done by ADDING a line rather than renaming one. The
+    /* The same revocation done by ADDING a line instead of renaming one. The
      * caller's uid still resolves to the same name, so a check that asked only
      * that question would pass; but the login now names two accounts and
      * `getpwnam` takes the first, so the hash this caller publishes would
@@ -1012,7 +1012,7 @@ static int check_concurrent(void)
  * and every database must be byte-identical.
  *
  * This case runs on both sides of that answer, which is why it asks `getrandom`
- * first rather than being two probes.
+ * first instead of being two probes.
  */
 static int check_entropy(void)
 {
@@ -1030,7 +1030,7 @@ static int check_entropy(void)
 
     /* The script ends after the old password: if the mint came later, passwd
      * would prompt for a new password here and this feed would leave it
-     * waiting, so the missing prompt is asserted rather than assumed. */
+     * waiting, so the missing prompt is asserted, not assumed. */
     snprintf(script, sizeof(script), "%s\n", PROBE_PASS);
     status = run_passwd(PROBE_UID, NULL, script, report, sizeof(report));
     if (status == 0) {
@@ -1095,7 +1095,7 @@ static int check_refusals(void)
         return fail("a refused cross-account change altered the shadow file");
     }
 
-    /* An ambiguous database is refused rather than resolved by file order. */
+    /* An ambiguous database is refused, not resolved by file order. */
     if (line_of(before, PROBE_USER, line, sizeof(line)) != 0) {
         return fail("the shadow file does not name the probe account once");
     }
@@ -1126,7 +1126,7 @@ static int check_refusals(void)
         return fail("could not put the shadow file back after the ambiguous case");
     }
 
-    /* A record that does not parse is refused rather than rewritten. A
+    /* A record that does not parse is refused, not rewritten. A
      * replacement that kept a malformed line's shape would publish a file this
      * program calls changed and every reader goes on rejecting: `getspnam`
      * wants nine fields, so the account would answer to no password at all and
@@ -1300,7 +1300,7 @@ static int check_refusals(void)
     }
 
     /* A password longer than the shortest limit any reader in the image
-     * imposes is refused rather than stored as a prefix nobody typed. */
+     * imposes is refused, not stored as a prefix nobody typed. */
     {
         char longpw[256];
         size_t i;

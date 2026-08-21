@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 # The metal profile has the kernel that cannot write a disk, and no other
 # profile does. This is the stick that goes into a laptop whose SSD has
-# somebody's Windows, so the artifact is checked here rather than assumed:
+# somebody's Windows, so the artifact is checked here, not assumed:
 # staging the ordinary kernel under the metal name would produce exactly the
 # image this milestone promises not to make.
 if [ "$IMAGE" = rach2-metal ]; then
@@ -74,10 +74,10 @@ cat "$KRFFS" > "$ISODIR/boot/$IMAGE.krffs"
 
 # The metal profile's menu. It is longer than the others' because this is the
 # stick that goes into a laptop with no serial port, where every question has
-# to be answerable by choosing a menu entry rather than by typing a command
+# to be answerable by choosing a menu entry, not by typing a command
 # line at a machine you cannot read.
 #
-# The default entry's address is baked in rather than typed, because a machine
+# The default entry's address is baked in, not typed, because a machine
 # whose network is the broken part is one you want on a known address. Typing
 # one at a GRUB prompt on a laptop keyboard, correctly, every time, is a tax
 # with no teaching value. These defaults are the network the machine actually
@@ -151,7 +151,7 @@ CFG
 # Mount the repo at its own absolute path so the absolute build/ paths resolve
 # in the container; grub-mkrescue gets absolute, quoted paths. grub-mkrescue's
 # stderr is kept (its diagnostics name a missing module or a broken layout), and
-# a build failure is fatal rather than a silent "wrote" line over a missing or
+# a build failure is fatal, not a silent "wrote" line over a missing or
 # stale ISO.
 if ! docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" ubuntu:24.04 sh -c \
     "apt-get update -qq && \

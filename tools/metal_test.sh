@@ -100,7 +100,7 @@ fi
 cp "$IMAGE" "$WORK"
 
 # The address is given on the kernel command line, as it will be on the stick,
-# and it is a LAN-style one rather than SLIRP's: what is under test includes
+# and it is a LAN-style one, not SLIRP's: what is under test includes
 # the stack running on an address nothing compiled in. SLIRP is told to serve
 # that same network, so the guest's configuration and the emulated network
 # agree, which is exactly the arrangement the real machine will be in with a
@@ -162,7 +162,7 @@ if ! ssh -i "$KEY" -p "$PORT" -tt \
 fi
 echo "metal-test: the session runs on a pty: OK"
 
-# A file each way, compared by hash rather than by eye. The content is a
+# A file each way, compared by hash, not by eye. The content is a
 # thousand lines so a truncation or a lost chunk cannot pass unnoticed.
 i=0
 while [ "$i" -lt 1000 ]; do
@@ -240,7 +240,7 @@ echo "metal-test: the machine handed over its own boot log, from the first line:
 
 # The acceptance script itself, rehearsed here so it is not being debugged on
 # the laptop. Its baseline comparisons are against a drive this machine does
-# not have, which it reports rather than fails on.
+# not have, which it reports, not fails on.
 if ! sh "$REPO/tools/metal_accept.sh" 127.0.0.1 "$PORT" >/dev/null 2>&1; then
     fail "the acceptance script did not pass against the rehearsal machine"
 fi

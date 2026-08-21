@@ -161,7 +161,7 @@ for want in "state present" "driver ahci" "policy read-only" "mounted 0" "mbr-si
     echo "$DISKTXT" | grep -q "^$want\$" || fail "/proc/disk does not say '$want'"
 done
 # The sector count the machine reports must be the image's real size, computed
-# here rather than written down, so a wrong IDENTIFY cannot agree with a
+# here, not written down, so a wrong IDENTIFY cannot agree with a
 # hardcoded number.
 IMG_SECTORS=$(( $(wc -c < "$BASE") / 512 ))
 echo "$DISKTXT" | grep -q "^sectors $IMG_SECTORS\$" \
@@ -205,6 +205,6 @@ python3 "$REPO/tools/harness.py" --kernel "$RO_KERNEL" \
     "expect=Type 'help'" wait=3 >/dev/null 2>&1 || true
 grep -q "Disk diagnostic... none" "$NOLOG" \
     || fail "with no drive the diagnostic did not report an absent disk"
-echo "diskdiag-test: with no drive at all it says so rather than pretending: OK"
+echo "diskdiag-test: with no drive at all it says so instead of pretending: OK"
 
 echo "diskdiag-test: PASS"

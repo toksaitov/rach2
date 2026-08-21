@@ -49,7 +49,7 @@ cp "$DISK" "$OFF"
 # image is clean, so the fsck below agrees. The window is narrow (the parent's
 # grep costs a fork and an exec while the child's truncate costs an open, and it
 # was not won in 600 trials of both background forms used here), which is a
-# reason to spend one line closing it rather than a reason to argue about it.
+# reason to spend one line closing it, not a reason to argue about it.
 rm -f "$CRASH.log" "$CLEAN.log" "$DIRTY.log" "$OFF.log"
 
 QPID=""
@@ -131,7 +131,7 @@ qemu_disk() {
 
 # Wait until the serial log $1 contains the token $2, then return 0; give up
 # after 60 seconds and return 1. Gating each phase on the token the kernel
-# prints, rather than on a fixed sleep, keeps a loaded or slow host from
+# prints, not on a fixed sleep, keeps a loaded or slow host from
 # killing QEMU before the phase's disk state has actually been written.
 wait_serial() {
     i=0
@@ -234,7 +234,7 @@ echo "crash-test: powered-off image is clean and QEMU stopped itself: OK"
 
 # The root node under attack: boot dirty, run dirtyprobe, kill without a halt.
 # The probe syncs after every attempt, so a spurious clear reaches the platter
-# rather than sitting in a write-back frame where this check could not see it.
+# instead of sitting in a write-back frame where this check could not see it.
 printf '\nexec /dirtyprobe\n' | qemu_disk "$DIRTY" >"$DIRTY.log" 2>&1 &
 QPID=$!
 if ! wait_serial "$DIRTY.log" "DIRTYPROBE OK"; then

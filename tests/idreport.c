@@ -23,7 +23,7 @@
  * is compared as an exact set: every `env=` item must be present and their
  * count must be the whole environment, so a variable leaked from the caller
  * fails just as a missing one does. An expectation naming no item at all is a
- * usage error rather than a vacuous pass, since a driver whose argument went
+ * usage error, not a vacuous pass, since a driver whose argument went
  * missing would otherwise be told everything matched.
  *
  * The exit status names what failed: 2 for a usage error, 10 to 15 for the six
@@ -86,7 +86,7 @@ static int streq(const char *a, const char *b)
  *
  * The expectation arrives as one argument holding many items, so nothing in it
  * is terminated where an item ends; every comparison against it is therefore
- * bounded by the caller's length rather than by a NUL.
+ * bounded by the caller's length, not by a NUL.
  */
 static int eq_n(const char *s, const char *text, u32 n)
 {

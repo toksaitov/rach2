@@ -17,7 +17,7 @@ enum bootverb {
 /**
  * Resolve a command line to one verb, or to `BOOTVERB_NONE`.
  *
- * Argument counts are exact rather than minimum: a tool that rewrites a boot
+ * Argument counts are exact, not minimum: a tool that rewrites a boot
  * partition should refuse a line it half understands, so a surplus operand is
  * an error and not something to ignore. The old spellings this tool shipped
  * under its previous name (`--commit`, `--where`, and a bare kernel path) are

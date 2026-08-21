@@ -338,7 +338,7 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
     root_cluster = le32(bpb + 44);
 
     /* The acceptance rule is the observed product (mformat's small FAT32 on
-       the 16 MiB partition), stated as bounds rather than a type threshold. */
+       the 16 MiB partition), stated as bounds, not a type threshold. */
     if (bytes_per_sector != BOOTSLOT_SECTOR) {
         return fail(err, errlen, "the volume's sector size is not 512");
     }
@@ -418,7 +418,7 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
     bs->have_menu = st.have_menu;
     /* A slot whose size is not a whole number of sectors cannot be rewritten
        whole, and one of no size cannot be rewritten at all. Either is a disk
-       built wrong rather than a menu written wrong, so it is refused here where
+       built wrong, not a menu written wrong, so it is refused here where
        the volume is judged, not later where a write would half-succeed. */
     if (bs->have_menu &&
         (bs->menu.size == 0 || (bs->menu.size % BOOTSLOT_SECTOR) != 0)) {
@@ -691,7 +691,7 @@ int bootslot_env_set(struct bootslot *bs, const char *key, const char *value, ch
 
 int bootslot_env_drop(struct bootslot *bs, const char *key, char *err, size_t errlen)
 {
-    /* The key is dropped rather than set empty, and the difference is the whole
+    /* The key is dropped, not set empty, and the difference is the whole
        trial state machine: `bootslot_commit` reads an empty `next_entry` as the
        consumed marker GRUB leaves after a trial actually booted. Writing that
        marker by hand would let a kernel that never ran be committed. */

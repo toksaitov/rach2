@@ -10,7 +10,7 @@ only as good as the check that the artifact actually got built with it.
 
 There is nothing useful to check for by absence. The commands are numbers, and
 the functions that issue them are static, so a read-only kernel and a
-read-write one differ by a comparison rather than by a symbol or a string that
+read-write one differ by a comparison, not by a symbol or a string that
 happens to name a write. So diskcmd.c has an explicit banner naming the
 policy, the kernel prints it at boot, and this reads it out of the binary and
 requires BOTH halves: the expected banner present, and the other one absent. A

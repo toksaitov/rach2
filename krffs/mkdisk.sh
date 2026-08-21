@@ -75,7 +75,7 @@ cd "$REPO"
 mkdir -p "$(dirname "$OUT")"
 
 # Build into a temp file and rename only on success, so a staging failure leaves
-# any previous disk intact rather than a half-written one.
+# any previous disk intact, not a half-written one.
 TMP="$OUT.new"
 trap 'rm -f "$TMP"' EXIT INT TERM
 dd if=/dev/zero of="$TMP" bs=1048576 count="$DISK_MB" 2>/dev/null

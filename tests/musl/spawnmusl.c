@@ -9,7 +9,7 @@
  *
  * The fix is one pinned patch to the vendored musl (see
  * vendor/musl/patches/): posix_spawn forks. The child function never returns
- * and reports failure through a pipe rather than through shared memory, so a
+ * and reports failure through a pipe, not through shared memory, so a
  * forked child serves it exactly as a cloned one did. Syscall 120 stays
  * unimplemented, which is the correct answer from a kernel with no threads and
  * no shared address spaces: a shim that accepted those flags and handed back a
@@ -24,7 +24,7 @@
  * the status, which is the pair `$(shell ...)` and a `!=` assignment need.
  *
  * The PARENT survives intact. The child is a fork now, with a copy of the
- * parent's memory rather than a share of it, so this writes a canary into its
+ * parent's memory, not a share of it, so this writes a canary into its
  * own stack and heap around the calls and requires both to be untouched.
  *
  * And `clone` is still REFUSED. A kernel that cannot share an address space
@@ -119,7 +119,7 @@ int main(void)
 
     /* Output comes back, and pclose reports the status. */
     /* Named absolutely: this shell searches no PATH, and the point here is the
-     * pipe rather than the lookup. */
+     * pipe, not the lookup. */
     pipe = popen("/bin/echo spawned-line", "r");
     if (pipe == NULL) {
         return fail("popen() could not start a command");
@@ -140,7 +140,7 @@ int main(void)
     }
 
     /* The parent's own memory is where a shared-address-space substitution
-     * would show, so it is checked rather than assumed. */
+     * would show, so it is checked, not assumed. */
     if (!canary_intact(stack_canary, sizeof(stack_canary))) {
         return fail("the parent's stack was written by the spawn");
     }
@@ -155,7 +155,7 @@ int main(void)
      * address space must be told no, not handed a copy. */
     {
         /* A REAL stack, so a kernel that answered this call would get a
-         * usable one and the refusal is about the call rather than about a
+         * usable one and the refusal is about the call, not about a
          * null pointer. */
         unsigned char *stack = malloc(4096);
         unsigned char *stack_top;

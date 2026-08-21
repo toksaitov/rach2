@@ -17,8 +17,8 @@
  * was removed, and the control that makes the refusals mean something is the
  * last case, where removing the file by hand lets the next acquire succeed.
  *
- * The library is a guest source, so three symbols it leans on are supplied here
- * rather than by the host: `crypt`, over the vendored musl SHA-512 the guest
+ * The library is a guest source, so three symbols it leans on are supplied
+ * here, not by the host: `crypt`, over the vendored musl SHA-512 the guest
  * verifies with; `getspnam`, whose reader path is proved in the guest against a
  * real `/etc/shadow`; and `getrandom`, which no host call can stand in for,
  * since the property that matters is the kernel's refusal to hand out untrusted
@@ -34,7 +34,7 @@
  * release's own flush is a lock gone from the file system that may come back
  * with the next boot.
  *
- * The last two are interposed calls rather than stand-ins, and both read the
+ * The last two are interposed calls, not stand-ins, and both read the
  * signal mask from inside a stretch the library blocks it across, since
  * restoring a mask and never taking one look the same from outside a function.
  * `snprintf` forwards to `vsnprintf` and is the only call inside either window
@@ -79,7 +79,7 @@
     "$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/" \
     "O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1"
 
-/* The salt alphabet, repeated here rather than reached for inside the library:
+/* The salt alphabet, repeated here, not reached for inside the library:
  * a mapping tested against its own table would agree with itself. */
 #define SALT_ALPHABET "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -163,7 +163,7 @@ char *crypt(const char *key, const char *setting)
  * absent.
  *
  * That is enough to check the one piece of `pwauth_verify` that is the
- * library's own, that a failed lookup denies rather than falls through to the
+ * library's own, that a failed lookup denies, not falls through to the
  * comparison. Resolving a real account is the guest's assertion.
  */
 struct spwd *getspnam(const char *name)
@@ -264,7 +264,7 @@ int fsync(int fd)
  * that put three of them back and kept the fourth, or that blocked something it
  * was never asked to. It is also the difference between a restore and a mask
  * that was never taken, which is why the interposed calls above read the mask
- * from inside each window rather than only around it.
+ * from inside each window, not only around it.
  */
 #ifndef NSIG
 #define NSIG 32
@@ -372,8 +372,8 @@ static volatile sig_atomic_t Getpid_mask_obs = -2;
 static volatile sig_atomic_t Getpid_raise;
 static char Getpid_raise_when[192];
 
-/* cppcheck cannot evaluate __has_attribute, so the support test is by compiler
- * rather than by feature; an unrecognized compiler simply keeps the
+/* cppcheck cannot evaluate __has_attribute, so the support test is by compiler,
+ * not by feature; an unrecognized compiler simply keeps the
  * instrumentation, which costs correctness nothing here. */
 #if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 8)
 #define INTERPOSED_UNINSTRUMENTED __attribute__((no_sanitize("address", "undefined")))
@@ -627,7 +627,7 @@ static void nap(long ms)
  * was reaped, 0 on a timeout, having killed it.
  *
  * The cases below hand a child a descriptor it is meant to block on, so a
- * blocking wait would turn a regression into a hung gate rather than a failed
+ * blocking wait would turn a regression into a hung gate, not a failed
  * one.
  */
 static int wait_bounded(pid_t pid, int *status, long ms)
@@ -656,8 +656,8 @@ static int wait_bounded(pid_t pid, int *status, long ms)
  * Read from `fd` until what has arrived has `needle` or `ms` milliseconds
  * pass. Returns 1 when the text arrived.
  *
- * `fd` must be non-blocking: a prompt that never comes has to fail the case
- * rather than stop the run.
+ * `fd` must be non-blocking: a prompt that never comes has to fail the case,
+ * not stop the run.
  */
 static int read_until(int fd, const char *needle, long ms)
 {
@@ -789,7 +789,7 @@ static void check_compare(void)
  * alone.
  *
  * Every byte value is mapped, so a table indexed past its end or a sign
- * extension shows up here rather than as a salt the guest cannot reproduce.
+ * extension shows up here, not as a salt the guest cannot reproduce.
  * Two bytes that differ only above the low six bits must map alike, which is
  * what "the low six bits and nothing else" means.
  */
@@ -849,7 +849,7 @@ static void check_salt_map(void)
  * Before it every failure removes the temporary file and leaves the target byte
  * for byte as it was, so each failing case checks the target as well as the
  * return; after it the replacement is live, and a flush that fails there is
- * reported as published rather than as unchanged. The refusal with no
+ * reported as published, not as unchanged. The refusal with no
  * transaction held is first, because a caller that forgot the lock must not be
  * able to publish.
  */
@@ -913,7 +913,7 @@ static void check_rewrite(void)
         fail("could not plant the stale temporary file");
     }
     if (cred_rewrite(Target, "four\n", 5) != 0) {
-        fail("cred_rewrite refused rather than removing a stale temporary file");
+        fail("cred_rewrite refused instead of removing a stale temporary file");
     }
     if (slurp(Target, content, sizeof(content)) < 0 || strcmp(content, "four\n") != 0) {
         fail("cred_rewrite published the stale temporary file's content");
@@ -924,7 +924,7 @@ static void check_rewrite(void)
 
     /* An uncreatable temporary, made so by a directory standing at its name:
      * the unlink cannot remove it and the exclusive create then finds it there,
-     * which is the EEXIST the library reports rather than retries. */
+     * which is the EEXIST the library reports, not retries. */
     if (mkdir(Target_tmp, 0700) != 0) {
         fail("could not stand a directory where the temporary file goes");
     }
@@ -1311,7 +1311,7 @@ static void check_refusal(const char *what, const char *body, const char *expect
  * returned, and this libc refuses three signals outright, so a signal the
  * library believes it covers but never installed is the worst of both: the
  * contract says a death is handled, and the writer dies with its lock held. The
- * question is therefore asked of the dispositions themselves rather than of the
+ * question is therefore asked of the dispositions themselves, not of the
  * predicate that chose them.
  *
  * Every signal is set to a known disposition first, and whatever the acquire
@@ -1323,7 +1323,7 @@ static void check_refusal(const char *what, const char *body, const char *expect
  *
  * Only the signals this host has are asked about, which is fewer than the guest
  * has: Darwin stops at 32 where the guest goes to 64, so a signal the host will
- * not accept at all is skipped rather than counted as unclaimed. What that
+ * not accept at all is skipped, not counted as unclaimed. What that
  * leaves unchecked here is the upper range, and it is checked where it matters,
  * in the guest, by `tests/musl/pwauthmusl.c`.
  */
@@ -1442,7 +1442,7 @@ static void check_death_set_installed(void)
  * builds: a session leader holding the terminal, and the reader in a process
  * group of its own. Both halves are asserted, because either alone would
  * pass for the wrong reason: the terminal still echoes, and the reader
- * stopped on `SIGTTIN` rather than getting a byte it should not have been
+ * stopped on `SIGTTIN` instead of getting a byte it should not have been
  * given.
  */
 static void check_background_prompt(void)
@@ -1536,7 +1536,7 @@ static void check_background_prompt(void)
  * the fatal restore it silences the terminal the dying process was in the
  * middle of giving back. The verdict is therefore the terminal's own `ECHO` bit
  * once the reader is gone, read from the slave while this process still holds
- * the master, rather than a count of calls that a resume would inflate.
+ * the master, not a count of calls that a resume would inflate.
  *
  * The helper takes the terminal as its controlling one and its own session,
  * because the resume touches the modes only while the process is the
@@ -1764,7 +1764,7 @@ static void check_unlisted_death(void)
  * records the holder pid through it, and the case arms it to raise `SIGPIPE` on
  * the first call for which the lock file already exists. A child takes the
  * signal so that the run survives to report it, and it must come back alive
- * with the lock released rather than killed with the lock left.
+ * with the lock released, not killed with the lock left.
  */
 static void check_pipe_during_acquire(void)
 {
@@ -1962,7 +1962,7 @@ static void check_report_blocks(void)
  * The lock protocol: what an acquire does when the file is already there, and
  * what it never does.
  *
- * The retry budget is two here rather than the compiled-in ten, so the refusal
+ * The retry budget is two here, not the compiled-in ten, so the refusal
  * arrives in about two seconds; that the wait is bounded at all is checked with
  * the clock, since a lock that never waited would pass every other assertion.
  */
@@ -2046,7 +2046,7 @@ static void check_lock(void)
         fail("a second transaction in one process waited instead of refusing");
     }
     if (strstr(report, "already locked by this program") == NULL) {
-        fail("a second transaction was refused as contention rather than as a mistake");
+        fail("a second transaction was refused as contention, not as a mistake");
     }
     if (slurp(Lock, after, sizeof(after)) != n || memcmp(before, after, (size_t)n) != 0 ||
         stat(Lock, &st_after) != 0 || st_before.st_mtime != st_after.st_mtime) {
@@ -2328,7 +2328,7 @@ static void check_sigpipe_exec(void)
 }
 
 /* The mask this program started with. Every case must give it back, and it is
- * captured rather than assumed empty: the mask is inherited, so a harness that
+ * captured, not assumed empty: the mask is inherited, so a harness that
  * ran this test with something blocked would otherwise turn every comparison
  * into a failure blaming the library for its own caller's doing. */
 static sigset_t Start_mask;
@@ -2943,7 +2943,7 @@ static void check_temp_name(void)
  * runs a handler that re-applies echo-off and reprints the prompt, and the call
  * then returns with the terminal silenced and nothing installed that would ever
  * undo it. Any process in the same session may send that signal, so the window
- * is forced rather than waited for: the reader's standard error is a pipe this
+ * is forced, not waited for: the reader's standard error is a pipe this
  * test fills, so the newline in the middle of the teardown blocks and has the
  * reader inside the window until the signal has been delivered.
  *

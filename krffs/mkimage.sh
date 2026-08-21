@@ -38,7 +38,7 @@ cd "$REPO"
 mkdir -p "$(dirname "$OUT")"
 
 # Build into a temp file and rename only on success, so a staging failure leaves
-# any previous image intact rather than a half-written one that run.sh would
+# any previous image intact, not a half-written one that run.sh would
 # boot.
 TMP="$OUT.new"
 trap 'rm -f "$TMP"' EXIT INT TERM

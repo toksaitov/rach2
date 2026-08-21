@@ -377,7 +377,7 @@ int main(void)
        A count computed as though a cluster were a sector gives 8032, which is
        larger than the volume and so bounds nothing. */
     CHECK(bs.cluster_count == 1004,
-          "the cluster count divides by the cluster size rather than counting sectors");
+          "the cluster count divides by the cluster size instead of counting sectors");
     CHECK(bs.kernel.size == 2 * 1024 * 1024, "the candidate is still 2 MiB");
     CHECK(bs.kernel.chain_len == 512,
           "2 MiB at 4 KiB per cluster is 512 clusters, not the 4096 it would be at 512 bytes");
@@ -485,7 +485,7 @@ int main(void)
     }
 
     /* A slot whose size is not a whole number of sectors cannot be rewritten
-       whole, so it is refused where the volume is judged rather than later,
+       whole, so it is refused where the volume is judged, not later,
        where a write would half-succeed. */
     expect_open_error("--menu-odd", "the menu slot is not a whole number of sectors");
     /* And a slot whose directory size does not match its chain is the ordinary

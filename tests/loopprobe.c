@@ -417,7 +417,7 @@ static void tcp_refused(void)
  * from the same bound port to a different peer port is legal and a repeat of
  * the same pairing is not.
  *
- * Listener exclusivity is checked where it is published rather than at bind,
+ * Listener exclusivity is checked where it is published, not at bind,
  * because binding both sockets first and listening afterwards walks past any
  * check that lives only in bind; both orders are tried here.
  */
@@ -501,8 +501,8 @@ static void tcp_ports(void)
 
     /* A server restarted on a port its own last session still holds. `tcp_loop`
      * above ran a whole connection on TCP_PORT and closed it, so that port is
-     * held by a TIME_WAIT remnant right now. Refusing on any in-use block
-     * rather than on a live listener would fail this, which is what restarting
+     * held by a TIME_WAIT remnant right now. Refusing on any in-use block,
+     * not on a live listener would fail this, which is what restarting
      * dropbear or httpd after a session looks like; `setsockopt` is a no-op
      * here, so `SO_REUSEADDR` would not buy the way out. */
     args[0] = AF_INET;
@@ -596,7 +596,7 @@ static void tcp_ports(void)
  * connects hung until their retransmissions gave up. The state machine now
  * answers with a SYN-ACK emitted at `iss`, which is the sequence the peer is
  * waiting on; an implementation that emitted at `iss + 1` instead would leave
- * both ends acknowledging nothing, and this case would hang rather than fail,
+ * both ends acknowledging nothing, and this case would hang, not fail,
  * which the runner reports as a probe that never returned.
  */
 static void tcp_simultaneous(void)

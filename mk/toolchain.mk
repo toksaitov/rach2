@@ -26,7 +26,7 @@ CROSS_CC := $(or $(CROSS_CC),\
                  $(shell command -v i686-elf-gcc 2>/dev/null),\
                  $(shell command -v x86_64-elf-gcc 2>/dev/null))
 
-# Fail fast with an actionable message rather than later running an empty
+# Fail fast with an actionable message, not later running an empty
 # compiler as a command. Only `clean` needs no toolchain, so error for a default
 # build (no goal) or ANY goal other than clean (but not when clean is the sole
 # goal) (`make clean` on a box without the cross GCC must work). `$(or

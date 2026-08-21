@@ -15,14 +15,14 @@
  * `idreport` prints the six ids and its `argv[0]`, which is exactly the triple
  * this program is answerable for plus the leading dash a login shell is told it
  * has. Asserting on that line is asserting on the identity a shell would start
- * with, rather than on an exit status that a refusal and a success can share.
+ * with, not on an exit status that a refusal and a success can share.
  *
  * The refusals: a wrong password, an unknown name, and an account whose shadow
  * field is empty, which busybox's login would have admitted without asking
  * anything. Each must leave the databases as they were, must not exec, and must
- * be an ordinary exit rather than a crash that happened to print nothing.
+ * be an ordinary exit, not a crash that happened to print nothing.
  *
- * Then the two ways to take the console for good rather than for a moment: a
+ * Then the two ways to take the console for good, not for a moment: a
  * login stopped by an uncatchable `SIGSTOP`, which only its parent can undo,
  * and a terminal left the way `stty -icanon min 0` leaves it, which outlives
  * the session that did it and would have every later login read nothing, exit,
@@ -343,7 +343,7 @@ static int check_refusals(void)
 /**
  * A login that was stopped, and a terminal somebody left unusable.
  *
- * Both are ways to take the console away for good rather than for a moment, and
+ * Both are ways to take the console away for good, not for a moment, and
  * neither can be fixed by the process they happen to: a stop cannot be caught
  * when it arrives as `SIGSTOP`, and the terminal's modes outlive every session
  * that changes them. So one is init's to undo and the other is the login's to

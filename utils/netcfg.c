@@ -108,7 +108,7 @@ void netcfg_set_name(char *dst, const char *src)
  * machine that only noticed stanzas for interfaces it already knew about would
  * ignore its own configuration depending on how somebody arranged the file.
  *
- * A line longer than the buffer is refused rather than split, because a split
+ * A line longer than the buffer is refused, not split, because a split
  * line becomes two directives and the second one is whatever the first one
  * happened to end in.
  *
@@ -278,7 +278,7 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
  * here; whether what it says can be applied is `ipcheck_config`, which the DHCP
  * client asks the same question of its leases.
  *
- * The refusal is written into `err` rather than printed, so the caller says it
+ * The refusal is written into `err`, not printed, so the caller says it
  * in its own voice and a test can tell one refusal from another.
  *
  * @return 0 when the stanza can be applied, -1 when it cannot.

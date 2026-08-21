@@ -26,7 +26,7 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 | [tools/](tools/)                         | Build, verify, and test scripts behind the make targets (doctor, the gates, the boot harness, image builders)          | [Readme](tools/Readme.md)             |
 | [dev-log/](dev-log/)                     | How each milestone was planned and built, and where the tree stands now                                                | [Readme](dev-log/Readme.md)           |
 
-Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear, TinyCC, pdpmake): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). Four of them carry a stated exception to "unmodified", each a single patch file applied at build time rather than an edited tree committed: TinyCC's refuses the output kinds this system cannot run; musl's makes `posix_spawn` fork, because it otherwise asks for a shared address space this kernel cannot provide and `system(3)` and `popen(3)` fail on every program; pdpmake's points its built-in macros at the compiler and the link this platform actually has; and BusyBox's makes `udhcpc` compile against the ported musl, which has neither of the two Linux headers it includes. `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
+Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear, TinyCC, pdpmake): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). Four of them carry a stated exception to "unmodified", each a single patch file applied at build time, not an edited tree committed: TinyCC's refuses the output kinds this system cannot run; musl's makes `posix_spawn` fork, because it otherwise asks for a shared address space this kernel cannot provide and `system(3)` and `popen(3)` fail on every program; pdpmake's points its built-in macros at the compiler and the link this platform actually has; and BusyBox's makes `udhcpc` compile against the ported musl, which has neither of the two Linux headers it includes. `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
 
 ## Kernel subsystems
 
@@ -95,7 +95,7 @@ os-simple and os-real, so one password opens either.
 ### Building on the machine itself
 
 os-real has a C compiler and a make, so a program can be written, compiled
-and BUILT on Rach2 rather than on the machine that built Rach2:
+and BUILT on Rach2, not on the machine that built Rach2:
 
 ```sh
 make full                                   # os-real has tcc, make and the sysroot
@@ -179,7 +179,7 @@ booted disk (Docker required).
 ### The SSH capstone: log into Rach2 with a real client
 
 `make ssh-test` runs the whole of what follows unattended, both logins included,
-and fails on a timeout rather than waiting; the recipe below is the same thing
+and fails on a timeout instead of waiting; the recipe below is the same thing
 by hand, which is how you would actually use the machine.
 
 ```sh

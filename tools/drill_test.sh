@@ -13,7 +13,7 @@
 # Five boots of one disk. The first is the machine as it shipped, and it proves
 # the everyday kernel cannot write its own disk: `reflash` is refused, a shell
 # redirect into the device is refused, and the image is compared byte for byte
-# afterwards so the refusal is shown to have written nothing rather than merely
+# afterwards so the refusal is shown to have written nothing, not merely
 # to have printed something. Then the root's first sector is destroyed from the
 # host, with the machine stopped, and the second boot must fail to mount rather
 # than answer anything. The third arms the recovery entry in the environment
@@ -271,7 +271,7 @@ fi
 rm -f "$WORK.sector0" "$DISK.sector0"
 
 # The root's first sector, destroyed with the machine stopped: this is the
-# failure the drill exists for, and it is made rather than waited for.
+# failure the drill exists for, and it is made, not waited for.
 python3 -c "
 f = open('$WORK', 'r+b')
 f.seek($ROOT_OFF)
@@ -329,7 +329,7 @@ esac
 # And the record of a fixed address does not outlive the address. A machine
 # rescued on a network with no server can be put back on DHCP by hand, and the
 # lease script is where the address changes hands, so that is where the record
-# goes. The script is run directly on its `bound` case rather than through a
+# goes. The script is run directly on its `bound` case, not through a
 # client, for two reasons: the sequence needs a server, which the isolated leg
 # by definition has not got, and a real client begins by taking the address off,
 # which would end this session before it could look.
@@ -489,7 +489,7 @@ fi
 # is left is the core image in the gap, which has two lines of its own. The
 # first opens partition 1's menu and the second opens partition 3's, and the
 # early parser those run through has no `if`, which is why they are an ordered
-# pair rather than a test. Nothing on partition 1 can boot now, so a machine
+# pair, not a test. Nothing on partition 1 can boot now, so a machine
 # that reaches a login has come through the second line.
 python3 -c "
 import struct

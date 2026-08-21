@@ -18,7 +18,7 @@ typedef unsigned int size_t;
 #define SYS_WRITE 4
 
 /* An address in the hole between the program image/heap and the mmap/stack
- * regions: no VMA covers it, so a touch must segfault rather than fault in. */
+ * regions: no VMA covers it, so a touch must segfault, not fault in. */
 #define WILD_ADDR 0x40000000u
 
 static int sys_write(int fd, const void *buf, size_t count)

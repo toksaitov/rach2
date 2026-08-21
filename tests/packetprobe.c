@@ -150,7 +150,7 @@ static int sys_waitpid(int pid, int *status, int options)
 }
 
 /* The one's-complement sum an IP header has; SLIRP checks it, so a wrong
-   one is an offer that never comes rather than a visible failure. */
+   one is an offer that never comes, not a visible failure. */
 static uint16_t ip_checksum(const uint8_t *p, unsigned int len)
 {
     unsigned long sum = 0;
@@ -290,7 +290,7 @@ void _start(void)
 
     /* What it refuses. A stream packet socket is not a thing, a protocol other
        than IPv4 is not offered, and the option a client asks for to be told
-       about checksum offload must be refused rather than promised. */
+       about checksum offload must be refused, not promised. */
     args[0] = AF_PACKET;
     args[1] = SOCK_STREAM;
     args[2] = ETH_P_IP_BE;
@@ -500,7 +500,7 @@ void _start(void)
 
     /* A failed receive must leave the caller's address arguments exactly as
        they were, and a packet socket's successful one must report no address
-       at all rather than a sender it never had. Both are checked on the same
+       at all, not a sender it never had. Both are checked on the same
        socket, which is empty again now that the offer has been read. */
     for (i = 0; i < sizeof(sender); i++) {
         sender[i] = 0xa5;

@@ -12,7 +12,7 @@
  *
  * The cases: a correct call with `RB_DISABLE_CAD` returns 0, and so does each
  * of the three alternate second magics, which is the only way to pin that they
- * are accepted rather than rejected for some other reason; `RB_ENABLE_CAD`,
+ * are accepted, not rejected for some other reason; `RB_ENABLE_CAD`,
  * `RB_KEXEC`, a zero first magic and a zero second magic each return -EINVAL;
  * and an unprivileged caller asking for a real power-off gets -EPERM.
  *

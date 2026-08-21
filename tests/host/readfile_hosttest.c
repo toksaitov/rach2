@@ -5,7 +5,7 @@
  *
  * `krffs_read_regular` is what `readfile.krffs` uses to pull a guest-built
  * artifact out of a disk image, so it must refuse a malformed or truncated
- * image with the reason named rather than read out of bounds. The regions
+ * image with the reason named, not read out of bounds. The regions
  * here are crafted by hand in memory, byte for byte in the on-disk node
  * layout, which is what lets each case hold exactly one defect: a chain the
  * real stager would never write cannot be produced by calling the real

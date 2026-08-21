@@ -178,7 +178,7 @@ int main(void)
         /* The boot loader's gap is nobody's partition. A table that puts one
            there describes a disk where writing GRUB would destroy a file
            system, and this project's own fixture did exactly that until
-           milestone 25, so the case is real rather than theoretical. */
+           milestone 25, so the case is real, not theoretical. */
         CHECKN(mbr_gap_clear(t) == 0, "a table that leaves LBA 1 through 2047 alone is clear");
         t[3].type = 0x0c;
         t[3].start_lba = 64;
