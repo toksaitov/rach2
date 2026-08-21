@@ -153,6 +153,10 @@ findings up to where it stopped.
   not let the next driver configure a machine whose card already failed" -- "not
   let" is ungrammatical; reworded to "stops here rather than let the next
   driver...".
+* `rach2/sys/tables/idt.c`: the `_load_idt` comment said it is "Defined in
+  idt_handler.asm", but the file is `idt_handler.s` (no `.asm` exists in the
+  tree; `gdt.c`'s parallel comment correctly says `gdt_handler.s`). Corrected
+  the extension.
 * `rach2/sys/rtc.c`: a decode comment read "a clock that reports month 0 is not
   a clock to build a build on" -- the doubled "build a build" is a slip no
   careful author writes. Reworded to "not a clock to base a build on" (the RTC

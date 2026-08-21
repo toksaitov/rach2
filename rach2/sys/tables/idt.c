@@ -4,7 +4,7 @@ idt_descriptor_t idt_descriptors[256];
 idt_ptr_t idt_address;
 
 /**
- * Loads `idt_address` into the IDTR with `lidt`. Defined in idt_handler.asm.
+ * Loads `idt_address` into the IDTR with `lidt`. Defined in idt_handler.s.
  */
 extern void _load_idt(idt_ptr_t*);
 
