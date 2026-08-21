@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the physical-frame-pool sizing (mm/frame.c).
+ * Dual-target host test for the physical-frame-pool sizing (mm/frame.c).
  *
  * host-deps: rach2/sys/mm/frame.c
  *

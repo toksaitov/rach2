@@ -1,5 +1,5 @@
 /**
- * Seam test for netup's configuration reader (utils/netcfg.c).
+ * Host test for netup's configuration reader (utils/netcfg.c).
  *
  * host-deps: utils/netcfg.c utils/ipcheck.c
  *

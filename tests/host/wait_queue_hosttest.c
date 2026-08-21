@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the multi-waiter queue logic of proc/wait_queue.c.
+ * Dual-target host test for the multi-waiter queue logic of proc/wait_queue.c.
  *
  * host-deps:
  *

@@ -10,7 +10,7 @@
  * signals it, rather than hanging or dying.
  *
  * The multi-waiter wake (wq_wake_all makes every blocked waiter runnable) and
- * the lost-wakeup safety live in the host-seam unit test (tests/host/
+ * the lost-wakeup safety live in the host unit test (tests/host/
  * wait_queue_hosttest.c) and the live network suite (httpd's accept and recv
  * block on the wait queue and are woken by NIC IRQs), since a datagram cannot
  * be delivered hermetically here.

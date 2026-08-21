@@ -1,5 +1,5 @@
 /**
- * Seam test for the MBR parse and the boot-partition judgement
+ * Host test for the MBR parse and the boot-partition judgement
  * (sys/block/mbr.c).
  *
  * host-deps:

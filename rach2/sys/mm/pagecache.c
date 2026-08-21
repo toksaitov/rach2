@@ -3,7 +3,7 @@
 #ifdef PAGECACHE_HOSTTEST
 
 /*
- * Host seam-test build: no real frames, page tables, or device. Each slot
+ * Host test build: no real frames, page tables, or device. Each slot
  * points at a static page, mapping is a no-op, and the backing is a fake the
  * test supplies. The bookkeeping (hash, clock, dirty tracking, eviction
  * order) is what runs. The system stdlib is avoided so it does not redefine

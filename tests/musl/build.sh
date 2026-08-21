@@ -12,7 +12,7 @@
 #
 # A program that must link a source from elsewhere in the tree names it in a
 # "link-deps:" comment, the convention tools/hosttest.sh parses for the host
-# seam tests, with the paths written from the repo root:
+# host tests, with the paths written from the repo root:
 #
 #     /**
 #      * ...

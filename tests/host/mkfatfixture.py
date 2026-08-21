@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build FAT32 fixture images for the bootctl seam test.
+"""Build FAT32 fixture images for the bootctl host test.
 
 An independent implementation on purpose: this builder writes the volume from
 the FAT specification (BPB fields, two FAT copies, cluster chains, short
-directory entries), while utils/bootslot.c reads it, so the seam test compares
+directory entries), while utils/bootslot.c reads it, so the host test compares
 two implementations of the format against each other. The well-formed image
 carries the shapes the walk must skip (a volume label, a long-name sequence,
 `.` and `..` entries in every subdirectory) and the four files the boot

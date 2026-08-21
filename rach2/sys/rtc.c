@@ -153,7 +153,7 @@ int rtc_pair_disposition(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
  * @param raw the six registers and status B, as read.
  * @param seconds set to the decoded time when the sample is good.
  * @param out when not NULL, the same instant as fields, which is what the
- *        console line prints and what the seam test reads to tell a wrong hour
+ *        console line prints and what the host test reads to tell a wrong hour
  *        from a wrong total.
  * @return 0 on success, -1 if any field is out of range.
  */

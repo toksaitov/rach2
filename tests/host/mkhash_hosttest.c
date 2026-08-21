@@ -1,5 +1,5 @@
 /**
- * Seam test for the mkhash password hasher's crypt (krffs/mkhash.krffs.c).
+ * Host test for the mkhash password hasher's crypt (krffs/mkhash.krffs.c).
  *
  * host-deps: vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
  *

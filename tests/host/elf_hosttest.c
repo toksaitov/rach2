@@ -1,9 +1,9 @@
 /**
- * Seam test for the ELF loader's hostile-image rejection (sys/proc/elf.c).
+ * Host test for the ELF loader's hostile-image rejection (sys/proc/elf.c).
  *
  * host-deps:
  *
- * Includes elf.c directly and stubs the page/VMA seam, then drives
+ * Includes elf.c directly and stubs the page and VMA calls, then drives
  * elf_load_image with crafted in-memory images through a readfn over a byte
  * buffer. Every malformed image must be rejected during validation, BEFORE
  * any page is allocated. The alloc stub records whether allocation was
@@ -27,7 +27,7 @@ static int alloc_reached;
         }              \
     } while (0)
 
-/* The kernel seam elf.c links against; only alloc_user_page is reached, and
+/* The kernel stubs elf.c links against; only alloc_user_page is reached, and
  * only once an image has passed validation (which is exactly what it records).
  */
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)

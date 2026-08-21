@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the CMOS clock's arithmetic.
+ * Dual-target host test for the CMOS clock's arithmetic.
  *
  * host-deps: rach2/sys/rtc.c
  *

@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the N_TTY line discipline (tty/n_tty.c).
+ * Dual-target host test for the N_TTY line discipline (tty/n_tty.c).
  *
  * host-deps: rach2/sys/tty/n_tty.c
  *

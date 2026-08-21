@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the kernel's ChaCha20 keystream CSPRNG.
+ * Dual-target host test for the kernel's ChaCha20 keystream CSPRNG.
  *
  * host-deps: rach2/sys/lib/krandom.c
  *

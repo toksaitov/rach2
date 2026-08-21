@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the synthetic-path classifier (fs/synthfs.c).
+ * Dual-target host test for the synthetic-path classifier (fs/synthfs.c).
  *
  * host-deps: rach2/sys/fs/synthfs.c
  *

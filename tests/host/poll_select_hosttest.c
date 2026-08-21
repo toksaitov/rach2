@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the fd_set <-> pollfd translation behind select()
+ * Dual-target host test for the fd_set <-> pollfd translation behind select()
  * (io/poll_select.c).
  *
  * host-deps: rach2/sys/io/poll_select.c

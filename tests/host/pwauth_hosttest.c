@@ -1,5 +1,5 @@
 /**
- * Seam test for the credential library (utils/pwauth.c).
+ * Host test for the credential library (utils/pwauth.c).
  *
  * host-deps: utils/pwauth.c vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
  *
@@ -34,7 +34,7 @@
  * release's own flush is a lock gone from the file system that may come back
  * with the next boot.
  *
- * The last two are seams rather than stand-ins, and both read the signal mask
+ * The last two are interposed calls rather than stand-ins, and both read the signal mask
  * from inside a stretch the library blocks it across, since restoring a mask
  * and never taking one look the same from outside a function. `snprintf`
  * forwards to `vsnprintf` and is the only call inside either window where the
@@ -209,7 +209,7 @@ ssize_t getrandom(void *buffer, size_t length, unsigned int flags)
  *
  * And in a release it is the one call inside the window between the unlink and
  * the flush, so with `Fsync_mask_watch` set it reads the signal mask there, the
- * way the `snprintf` seam reads it in the other two windows. Restoring a mask
+ * way the interposed `snprintf` reads it in the other two windows. Restoring a mask
  * and never taking it are indistinguishable from outside a function; this is
  * what tells them apart.
  */
@@ -263,7 +263,7 @@ int fsync(int fd)
  * is the claim being checked and a test of the four alone would pass a library
  * that put three of them back and kept the fourth, or that blocked something it
  * was never asked to. It is also the difference between a restore and a mask
- * that was never taken, which is why the seams above read the mask from inside
+ * that was never taken, which is why the interposed calls above read the mask from inside
  * each window rather than only around it.
  */
 #ifndef NSIG
@@ -288,7 +288,7 @@ static int mask_changed(const sigset_t *before)
 }
 
 /**
- * The host's `tcsetattr(3)`, and the seam that delivers a death inside a
+ * The host's `tcsetattr(3)`, and the interposed call that delivers a death inside a
  * restore.
  *
  * `pwauth_tty_restore` puts the saved modes back and clears the flag that says
@@ -318,7 +318,7 @@ int tcsetattr(int fd, int actions, const struct termios *modes)
 {
 /* unsigned long, not int: these request numbers carry the high bit, and an int
  * array would sign-extend them into a request no driver answers, so every
- * forwarded call would fail and the seam would quietly stop being one. */
+ * forwarded call would fail and the interposition would quietly stop working. */
 #ifdef TIOCSETA
     static const unsigned long how[] = {TIOCSETA, TIOCSETAW, TIOCSETAF};
 #else
@@ -347,7 +347,7 @@ int tcsetattr(int fd, int actions, const struct termios *modes)
 }
 
 /**
- * The host's `getpid(2)`, and the seam that reaches inside the registered
+ * The host's `getpid(2)`, and the interposed call that reaches inside the registered
  * release.
  *
  * That release blocks the four deaths for its own length so a death cannot call
@@ -402,7 +402,7 @@ pid_t getpid(void)
 }
 
 /**
- * The host's `snprintf(3)`, and the seam that watches the signal mask.
+ * The host's `snprintf(3)`, and the interposed call that watches the signal mask.
  *
  * The library publishes two pieces of state a death handler then acts on: the
  * lock file's path and the temporary file's name. Neither is one store, so both
@@ -411,11 +411,11 @@ pid_t getpid(void)
  * interpose, and it is enough: the mask is a property of the thread, so reading
  * it here reads it for the statement.
  *
- * `Mask_match` arms the seam on the calls that produce one exact string, since
+ * `Mask_match` arms the interposed call on the calls that produce one exact string, since
  * the replacement formats the same temporary name twice, once into a local
  * before the mask is taken and once into the state the handler reads. Recording
  * both in order is what makes a blocked reading mean something: the first must
- * come back deliverable and the second blocked, so a seam that had stopped
+ * come back deliverable and the second blocked, so an interposed call that had stopped
  * looking would fail the case rather than pass it.
  */
 #define MASK_OBS_MAX 4
@@ -1527,7 +1527,7 @@ static void check_background_prompt(void)
  * the restore itself, at the cost of one repeated `tcsetattr`.
  *
  * The window is two instructions wide, so the signal comes from inside it: the
- * `tcsetattr` seam raises one on the call the restore makes. It is run twice,
+ * interposed `tcsetattr` raises one on the call the restore makes. It is run twice,
  * with a death and with a resume, and the second is the harder half. A resume
  * is not another restore: `pwauth_cont_handler` exists to put a prompt back
  * after a stop, so it re-applies the echo-off modes, and delivered inside the
@@ -1758,7 +1758,7 @@ static void check_unlisted_death(void)
  * matches its own, and a setuid program keeps the real uid of whoever ran it,
  * so the user who started the writer may send it as many as they please.
  *
- * The `getpid` seam is what makes the moment reachable: the acquire records the
+ * The interposed `getpid` is what makes the moment reachable: the acquire records the
  * holder pid through it, and the case arms it to raise `SIGPIPE` on the first
  * call for which the lock file already exists. A child takes the signal so that
  * the run survives to report it, and it must come back alive with the lock
@@ -3152,7 +3152,7 @@ int main(int argc, char **argv)
     /* Run as the helper of check_restore_reentry: take a transaction so the
      * death handler leaves through exit and the reporter runs, prompt on the
      * pseudo-terminal named in argv[2] so echo is taken away, and arm the
-     * tcsetattr seam to fire a second death from inside the restore. */
+     * interposed tcsetattr to fire a second death from inside the restore. */
     if (argc > 3 && strcmp(argv[1], HELPER_TTY) == 0) {
         char secret[64];
         int slave;

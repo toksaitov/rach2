@@ -1,9 +1,9 @@
 /**
- * Seam test for the block partition view (sys/block/block.c).
+ * Host test for the block partition view (sys/block/block.c).
  *
  * host-deps:
  *
- * Includes block.c directly and stubs the driver/cmdline seam that
+ * Includes block.c directly and stubs the driver and cmdline calls that
  * block_probe references, so the static partition read/write bounds logic is
  * reachable. A fake backing device records the sector range each request
  * reaches it with. The test asserts a partition forwards an in-range request
@@ -13,7 +13,7 @@
  * count (0 == pass).
  */
 
-/* The seam block_probe links against; this test drives only the partition
+/* The stubs block_probe links against; this test drives only the partition
  * view. */
 int ata_init(void)
 {

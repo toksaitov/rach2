@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the page-cache bookkeeping (mm/pagecache.c).
+ * Dual-target host test for the page-cache bookkeeping (mm/pagecache.c).
  *
  * host-deps:
  *

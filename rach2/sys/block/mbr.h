@@ -6,7 +6,7 @@
 /*
  * mbr: the classic four-entry partition table in the disk's first sector,
  * parsed into plain records. The parser is pure (bytes in, records out, no
- * device access), so the host seam test exercises it against crafted tables;
+ * device access), so the host test exercises it against crafted tables;
  * the kernel's disk mount and the boot-partition device both read the disk
  * through this one parse.
  */

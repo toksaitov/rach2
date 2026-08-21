@@ -3,7 +3,7 @@
  *
  * link-deps: utils/pwauth.c
  *
- * The host seam test covers what is pure. This covers what is not: a real
+ * The host test covers what is pure. This covers what is not: a real
  * kernel, a real `/etc`, two processes racing for one transaction, a real
  * terminal, and the setuid-root `su` staged beside it. Its cases, in the order
  * they run:
@@ -1329,7 +1329,7 @@ static void prompt_bg_leader(const char *name, int master, int report)
 }
 
 /**
- * This image's `tcgetpgrp(3)`, and the seam that stops the reader the instant
+ * This image's `tcgetpgrp(3)`, and the stub that stops the reader the instant
  * it has its answer.
  *
  * The library asks who owns the terminal and then acts on the answer, and the
@@ -1432,7 +1432,7 @@ static void prompt_resume_leader(const char *name, int master, int report)
  * refusal, which is a fault the user cannot see the cause of: they type the
  * right thing and are told it is wrong.
  *
- * The seam stops the reader at exactly that point. Unlike the stale-owner case
+ * The stub stops the reader at exactly that point. Unlike the stale-owner case
  * the terminal stays with the reader, so what follows is an ordinary `fg` and
  * an ordinary password, and every character of it must survive.
  */
@@ -1498,7 +1498,7 @@ static int check_prompt_stop_before_read(void)
 
 /**
  * The session leader for the stop-during-acquisition case: it hands the reader
- * the terminal, waits for the seam to stop it, takes the terminal back, and
+ * the terminal, waits for the stub to stop it, takes the terminal back, and
  * continues it in the background.
  */
 static void prompt_stale_leader(const char *name, int master, int report)
@@ -1784,7 +1784,7 @@ static void prompt_unowned_leader(const char *name, int master, int report)
  * back, and killing the stopped job would not undo it because the modes belong
  * to the terminal.
  *
- * The host seam cannot ask this question, since Darwin stops a background
+ * The host test cannot ask this question, since Darwin stops a background
  * `tcsetattr` with `SIGTTOU` before it takes effect and this kernel does not.
  * So it is asked here, where the permission is real. Both halves are asserted:
  * the reader stopped on `SIGTTIN` rather than being handed a byte, and the
@@ -2098,7 +2098,7 @@ static int run_su(const char *cwd, char *const argv[], char *const envp[], const
  *
  * The library derives the set it handles from what this kernel does, which
  * terminates a process for every signal but a few, over the whole range 1..64.
- * The host seam checks that derivation against the dispositions actually
+ * The host test checks that derivation against the dispositions actually
  * installed, but Darwin stops at 32, so the upper half is unchecked there and
  * is checked here instead. Two claims are made about it. A signal in the upper
  * range must be handled like any other death: the writer leaves through `exit`

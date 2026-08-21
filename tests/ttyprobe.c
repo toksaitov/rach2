@@ -2,7 +2,7 @@
  * Exercises the tty line discipline and termios ioctls from user space.
  *
  * Proves that the console fd is wired to the kernel tty (the n_tty
- * discipline), not just that the discipline is correct (the host seam test
+ * discipline), not just that the discipline is correct (the host test
  * covers that), but that read/write/ioctl on fd 0/1/2 route through it:
  *   (a) TIOCGWINSZ: the console reports a 25x80 window;
  *   (b) TCGETS: the default is cooked with echo (ICANON|ECHO set);

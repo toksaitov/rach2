@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the kernel's pure string and memory routines.
+ * Dual-target host test for the kernel's pure string and memory routines.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *

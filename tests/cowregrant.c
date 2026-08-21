@@ -13,7 +13,7 @@
  * frames, and a re-grant of a still-shared frame shows up as the parent's bytes
  * changing under the child. It cannot tell a correct in-place re-grant from a
  * correct but wasteful always-copy, since the two are identical from user
- * space; pinning that distinction needs a host seam test or a kernel copy
+ * space; pinning that distinction needs a host test or a kernel copy
  * counter.
  *
  * Prints "COWREGRANT OK" on success. Freestanding; direct int 0x80 syscalls.

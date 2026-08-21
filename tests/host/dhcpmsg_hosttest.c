@@ -1,5 +1,5 @@
 /**
- * Seam test for the DHCP client's message half (utils/dhcpmsg.c).
+ * Host test for the DHCP client's message half (utils/dhcpmsg.c).
  *
  * host-deps: utils/dhcpmsg.c utils/ipcheck.c
  *

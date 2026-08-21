@@ -1,5 +1,5 @@
 /**
- * Seam test for the boot-slot library bootctl drives (utils/bootslot.c).
+ * Host test for the boot-slot library bootctl drives (utils/bootslot.c).
  *
  * host-deps: utils/bootslot.c
  *

@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the KRFFS path walk the extractor runs.
+ * Dual-target host test for the KRFFS path walk the extractor runs.
  *
  * host-deps: krffs/krffs_reader.c
  *

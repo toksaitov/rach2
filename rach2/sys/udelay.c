@@ -40,7 +40,7 @@
  * The longest single wait this measures in one pass. The bound is arithmetic,
  * not physical: `usec * PIT_COUNTS_PER_SEC` must stay inside 32 bits, and 1000
  * leaves it at about 2.4 billion of the 4.29 billion available. Longer waits
- * are made of repeated passes, and nothing is lost at the seam because each
+ * are made of repeated passes, and nothing is lost between passes because each
  * pass measures its own counts. What must stay short is the interval between
  * two SAMPLES, not the total: the counter sweeps every 5 ms, and a gap longer
  * than that would hide a whole sweep. The loop below samples every few port

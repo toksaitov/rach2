@@ -24,7 +24,7 @@ the supporting scripts.
   dropped from the build.
 * The extraction half of the self-build proof is a KRFFS tool rather than a script here: `krffs/readfile.krffs` reads one file out of an image by path, and `make selfbuild-test` uses it to pull the guest-built kernel from the disk copy for hashing, checking and booting.
 * `check_guest.py` (inside the gate, step 7): holds the three `guest.mk` files equal to the host builds they mirror, because pdpmake reads none of the GNU makefiles and a hand-kept list drifts. Four contracts: the kernel object list equals `ASM_SRC` plus `C_SRC` with `kernel.objs` written whole, `loader.o` first, no duplicates, and the link line carrying the response file, the pinned text address and `libtcc1.a`; the utils per-program source map equals `utils/Makefile`'s, companions and `-D` builds included; the ish object list equals `ish/Makefile`'s; and the build fits the machine (the deepest kernel include chain leaves the compiler's own descriptors inside the 16-slot table, and no recipe line approaches the exec string budget).
-* `hosttest.sh` (`make verify-host`): the dual-target seam tests. Compiles the
+* `hosttest.sh` (`make verify-host`): the dual-target host tests. Compiles the
   pure kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer
   and runs the auto-discovered `*_hosttest.c` suites. A test names the sources it
   links in a `host-deps:` comment; `utils/` and `tests/host/compat` are on the

@@ -63,7 +63,7 @@ void* k_memmove(void *dest, const void *src, size_t n)
      * case under tcc. The integer type is `__SIZE_TYPE__` because it is
      * pointer-width under every compiler that builds this file, the host's
      * included; the kernel's own `uintptr_t` is 32 bits and would truncate
-     * the host seam test's addresses. */
+     * the host test's addresses. */
     if (du > su && du - su < n) {
         d += n;
         s += n;
@@ -83,7 +83,7 @@ void* k_memmove(void *dest, const void *src, size_t n)
  * initializer, and tcc emits `memmove` for every struct assignment and
  * `memset` for initializer holes. A kernel linked without a libc must
  * define what its compiler emits, or those calls fail at link time. The
- * bodies stay in the `k_` forms because the host seam test runs this file
+ * bodies stay in the `k_` forms because the host test runs this file
  * under AddressSanitizer, which rewrites every call to a standard memory
  * name into its own checked copy; a body under the standard name would be
  * unreachable there. The size parameter is `__SIZE_TYPE__`, the type each

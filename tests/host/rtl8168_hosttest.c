@@ -1,5 +1,5 @@
 /**
- * Seam test for the RTL8168GU driver (sys/network/driver/rtl8168.c).
+ * Host test for the RTL8168GU driver (sys/network/driver/rtl8168.c).
  *
  * host-deps:
  *

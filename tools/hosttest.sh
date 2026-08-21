@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 
 #
-# hosttest.sh: run the dual-target seam tests (`make verify-host`).
+# hosttest.sh: run the dual-target host tests (`make verify-host`).
 #
 # Each tests/host/*_hosttest.c is pure kernel/util logic compiled NATIVELY on
 # the host and run under AddressSanitizer + UndefinedBehaviorSanitizer. The same
@@ -27,7 +27,7 @@ SAN="-fsanitize=address,undefined -fno-sanitize-recover=all"
 # includes that a native host need not have (<crypt.h>, <shadow.h>,
 # <sys/random.h>). Any -I precedes the system directories, so on a host that
 # does have them these declarations are the ones used; they are musl's, so the
-# seam is the same either way. See tests/host/compat/crypt.h.
+# interface is the same either way. See tests/host/compat/crypt.h.
 INC="-I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/host/compat"
 fail=0
 any=0
@@ -131,7 +131,7 @@ done
 # Zero discovered tests is a failure, not a quiet pass: the glob breaking or the
 # directory moving would otherwise turn verify-host into a silent green.
 if [ "$any" -eq 0 ]; then
-    echo "hosttest: no host seam tests discovered under tests/host/" >&2
+    echo "hosttest: no host tests discovered under tests/host/" >&2
     exit 1
 fi
 exit "$fail"

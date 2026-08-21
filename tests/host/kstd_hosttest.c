@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for k_itoa (sys/lib/kstd.c).
+ * Dual-target host test for k_itoa (sys/lib/kstd.c).
  *
  * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c

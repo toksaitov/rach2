@@ -1,5 +1,5 @@
 /**
- * Seam test for the boot-module placement check (sys/mm/modlayout.c).
+ * Host test for the boot-module placement check (sys/mm/modlayout.c).
  *
  * host-deps:
  *

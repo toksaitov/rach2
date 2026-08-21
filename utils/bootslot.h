@@ -7,7 +7,7 @@
 /*
  * bootslot: the boot-slot core bootctl drives. Everything that reads or
  * writes the boot partition lives here, behind caller-supplied sector
- * callbacks, so the host seam test drives the same code over image files
+ * callbacks, so the host test drives the same code over image files
  * with fault injection while the guest main binds it to /dev/bootpart. The
  * library validates the FAT32 volume before trusting one field of it, walks
  * the namespace for the four files the install contract names (/boot/kernel,

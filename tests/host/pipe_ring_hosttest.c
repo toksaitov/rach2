@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the pipe byte-FIFO ring (ipc/pipe_ring.c).
+ * Dual-target host test for the pipe byte-FIFO ring (ipc/pipe_ring.c).
  *
  * host-deps: rach2/sys/ipc/pipe_ring.c
  *
@@ -55,7 +55,7 @@ int main(void)
     CHECK(pipe_ring_get(&p, dst, 1) == 0); /* empty: nothing to read */
 
     /* Position the ring so the next transfer straddles the physical wrap point,
-     * then verify a put/get across the seam stays byte-correct. */
+     * then verify a put/get across the wrap stays byte-correct. */
     p.head = PIPE_BUF_SIZE - 10;
     p.tail = PIPE_BUF_SIZE - 10;
     CHECK(pipe_ring_put(&p, src, 100) == 100); /* spans the [.. wrap ..] boundary */

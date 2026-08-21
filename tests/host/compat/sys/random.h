@@ -4,7 +4,7 @@
  * See `../crypt.h` for why the compat headers exist. A host may have no
  * `getrandom(2)` at all (Darwin has `getentropy` instead), and no host call
  * could stand in for the one property that matters: this kernel refuses the
- * draw outright when the CPU exposes neither RDSEED nor RDRAND. So the seam
+ * draw outright when the CPU exposes neither RDSEED nor RDRAND. So the host
  * test defines the symbol as a refusal, and the fail-closed policy is proved in
  * the guest by `tests/musl/saltnoent.c` on a CPU that has neither.
  */

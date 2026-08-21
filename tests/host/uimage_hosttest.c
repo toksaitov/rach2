@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for build_user_stack (proc/uimage.c).
+ * Dual-target host test for build_user_stack (proc/uimage.c).
  *
  * host-deps: rach2/sys/proc/uimage.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c

@@ -378,7 +378,7 @@ int cred_txn_begin(const char *prog);
 /**
  * As `cred_txn_begin`, with the lock path and the retry budget as parameters.
  *
- * This form exists for the host seam test, which must neither touch `/etc` nor
+ * This form exists for the host test, which must neither touch `/etc` nor
  * wait ten seconds to watch an acquire refuse. The shipped programs call
  * `cred_txn_begin`, whose path is compiled in and never read from the
  * environment, because this library is linked into a setuid-root program.

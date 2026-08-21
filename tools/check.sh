@@ -55,7 +55,7 @@ inhouse_ch()
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     # The other hand-written programs: the krffs host tools (minus the vendored
     # termbox2 and vs-dokany), the utils, the ish shell, and every test (the
-    # probes, the vm family, the musl integration tests, and the host seam
+    # probes, the vm family, the musl integration tests, and the host
     # tests).
     find krffs utils ish tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
          -o \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
@@ -81,7 +81,7 @@ newcode_ch()
     ls tests/fdstale.c tests/idreport.c 2>/dev/null
     # By name, per the rule above: the credential library is new code under
     # utils/, and its two guest tests are under tests/musl/; no glob here
-    # reaches either tree. The seam test's compat headers are a directory down
+    # reaches either tree. The host test's compat headers are a directory down
     # from tests/host, which the glob above does not descend into.
     ls utils/pwauth.c utils/pwauth.h utils/passwd.c utils/adduser.c utils/login.c 2>/dev/null
     ls tests/musl/pwauthmusl.c tests/musl/saltnoent.c tests/musl/creddisk.c \

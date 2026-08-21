@@ -1,5 +1,5 @@
 /**
- * Seam test for tls_resolve_base (proc/tls.c): the user_desc validation that
+ * Host test for tls_resolve_base (proc/tls.c): the user_desc validation that
  * backs set_thread_area(2).
  *
  * host-deps: rach2/sys/proc/tls.c

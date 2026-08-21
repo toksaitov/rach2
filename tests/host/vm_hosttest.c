@@ -1,5 +1,5 @@
 /**
- * Dual-target seam test for the VMA address-space operations (mm/vm.c).
+ * Dual-target host test for the VMA address-space operations (mm/vm.c).
  *
  * host-deps: rach2/sys/mm/vm.c
  *

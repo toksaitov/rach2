@@ -17,7 +17,7 @@
  * before the start, and duplicates a descriptor to prove the wide offset is
  * shared through the open-file description. Without the flag
  * the disk has only the KRFFS partition and the device must be absent from
- * stat and open alike. /proc/cmdline is proved at each of its seams: content,
+ * stat and open alike. /proc/cmdline is proved at each of its layers: content,
  * the /proc listing, stat/fstat identity, and the fd's readlink origin.
  *
  * Prints "BOOTPROBE OK", "BOOTPROBE ABSENT OK", "BOOTPROBE RAMROOT OK" or

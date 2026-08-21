@@ -13,7 +13,7 @@
  * demand-paging fault handler consults it to decide whether a fault is a page
  * to lazily allocate, a stack to grow, or a segfault. See the Readme.
  *
- * vm.c is pure logic (no kernel globals), so the host seam test exercises the
+ * vm.c is pure logic (no kernel globals), so the host test exercises the
  * find/insert/remove/overlap operations directly.
  */
 

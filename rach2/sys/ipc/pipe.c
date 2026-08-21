@@ -33,7 +33,7 @@
 static pipe_t *pipe_pool;
 
 /* The pure ring helpers (pipe_available/pipe_free_space/pipe_ring_put/
- * pipe_ring_get) live in pipe_ring.c so the host-seam test can exercise the
+ * pipe_ring_get) live in pipe_ring.c so the host-host test can exercise the
  * wrap arithmetic natively under ASan without pulling in the syscall glue. */
 
 void pipe_init_pool(void)

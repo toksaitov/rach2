@@ -1,5 +1,5 @@
 /**
- * Seam test for reflash's copy library (utils/sectorcopy.c).
+ * Host test for reflash's copy library (utils/sectorcopy.c).
  *
  * host-deps: utils/sectorcopy.c
  *
