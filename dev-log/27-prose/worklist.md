@@ -299,7 +299,7 @@ project teaches; move it up if that judgement turns out wrong.
 * [x] `utils/dhcpmsg.c` (1112 words)
 * [x] `krffs/manifests/grub-test.manifest` (1106 words)
 * [x] `krffs/manifests/os-real.manifest` (1096 words)
-* [ ] `krffs/manifests/rach2-metal-disk.manifest` (1092 words)
+* [x] `krffs/manifests/rach2-metal-disk.manifest` (1092 words)
 * [ ] `utils/bootslot.h` (964 words)
 * [ ] `krffs/manifests/test.manifest` (894 words)
 * [ ] `utils/resolv.c` (862 words)
