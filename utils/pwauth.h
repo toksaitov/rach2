@@ -355,7 +355,7 @@ int pwauth_mint_salt(char *out, size_t size);
  * lifetime and for the same reason as the deaths: a writer reports as it goes,
  * and a diagnostic written to a standard error that is a pipe with no reader
  * would otherwise kill it where no `atexit` runs and leave the lock in `/etc`.
- * It is caught, not ignored because an exec has an ignored
+ * It is caught, not ignored because an exec carries an ignored
  * disposition into the new image and resets a caught one, and a child forked
  * under a transaction must not hand this library's `SIGPIPE` policy to a
  * program that never linked it. Every disposition this library installs is put

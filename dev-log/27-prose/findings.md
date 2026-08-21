@@ -173,6 +173,19 @@ findings up to where it stopped.
   examples. Removed the stray "16 " (the line above keeps "Sound Blaster", and
   the `sb16` argument already names the device).
 
+### Set two: the rest of what we wrote
+
+* `utils/pwauth.c`: one more mangled-"has". The `pwauth_pipe_handler` comment
+  read "an exec resets a caught disposition to the default and has an ignored one
+  into the new image" -- "has ... into" wants a motion verb, and the fact is that
+  exec carries a SIG_IGN disposition into the new image (while resetting a caught
+  one to the default). Reworded to "carries an ignored one into the new image".
+* `utils/pwauth.h`: the same mangled-"has" in the `cred_txn_begin` contract:
+  "It is caught, not ignored because an exec has an ignored disposition into the
+  new image" -- reworded to "an exec carries an ignored disposition into the new
+  image" (the file's own `pwauth_read_password` doc already says "an exec passes
+  into the next image", the correct form).
+
 ## Cross-checks to settle against code later in set one
 
 These are numeric or path claims in documents that read plausibly but can only

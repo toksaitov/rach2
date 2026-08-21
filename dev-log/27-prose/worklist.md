@@ -283,8 +283,8 @@ project teaches; move it up if that judgement turns out wrong.
 
 ## Utilities, shell and file system (80 entries, 64324 words)
 
-* [ ] `utils/pwauth.c` (7894 words)
-* [ ] `utils/pwauth.h` (5141 words)
+* [x] `utils/pwauth.c` (7894 words)
+* [x] `utils/pwauth.h` (5141 words)
 * [ ] `utils/dhcpc.c` (4532 words)
 * [ ] `krffs/vendor/termbox2.h` (3751 words)
 * [ ] `krffs/vendor/termbox2_win.h` (3639 words)

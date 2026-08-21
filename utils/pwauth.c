@@ -287,7 +287,7 @@ static void pwauth_death_set(sigset_t *set)
  *
  * A handler, not `SIG_IGN`, though the two are indistinguishable to the
  * write itself (this kernel posts the signal and returns `-EPIPE` either way),
- * because an exec resets a caught disposition to the default and has an
+ * because an exec resets a caught disposition to the default and carries an
  * ignored one into the new image. A child forked under a transaction inherits
  * this library's state and has none of it; what it must not also inherit is a
  * `SIGPIPE` that stays ignored into whatever program it goes on to run, since
