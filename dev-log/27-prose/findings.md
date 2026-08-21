@@ -312,6 +312,9 @@ findings up to where it stopped.
   wraps, orphaning "cannot" and "must" each onto a line of its own ("A root
   directory that / cannot / be opened..."). Reflowed the paragraph at 80
   columns.
+* `tests/idreport.c`: the header had a mangled wrap that left "non-login" alone
+  on a line ("told apart from a / non-login / one by nothing"). Reflowed the two
+  lines.
 
 ### Set two: the Doom port and the rest
 

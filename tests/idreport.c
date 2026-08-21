@@ -9,8 +9,7 @@
  * and then the string, and in login mode an `argv[0]` of a `-` followed by the
  * shell's base name besides. The expectation is therefore accepted either as a
  * bare argument or after a `-c`, and a login `su` is told apart from a
- * non-login
- * one by nothing but what it says here.
+ * non-login one by nothing but what it says here.
  *
  * The report is one line on standard error in the same `key=value` vocabulary
  * the expectation uses, so a run's output is a valid expectation string:
