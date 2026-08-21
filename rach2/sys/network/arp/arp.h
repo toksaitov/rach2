@@ -37,4 +37,19 @@ int arp_lookup(uint32_t ip, uint8_t *mac_out);
 /* Broadcast "who has target_ip?" to learn its MAC. */
 void arp_request(uint32_t target_ip);
 
+/* One row of the cache, copied out for a reader. */
+struct arp_row {
+    uint32_t ip;
+    uint8_t mac[6];
+};
+
+/**
+ * Copy the live entries into `out`, returning how many were written.
+ *
+ * A snapshot rather than a pointer into the cache: the table is written from
+ * receive context, and a reader walking it directly would be reading a row an
+ * interrupt is changing. Taken under the network lock for the same reason.
+ */
+int arp_snapshot(struct arp_row *out, int max);
+
 #endif /* _ARP_H_ */

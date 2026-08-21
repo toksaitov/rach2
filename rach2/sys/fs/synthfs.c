@@ -279,6 +279,12 @@ int synth_classify(const char *path, struct vpath *vp)
                 vp->kind = VNODE_PROC_NET_DIR;
             } else if (n == 3 && comp_eq(c[2], "dev")) {
                 vp->kind = VNODE_PROC_NET_DEV;
+            } else if (n == 3 && comp_eq(c[2], "route")) {
+                vp->kind = VNODE_PROC_NET_ROUTE;
+            } else if (n == 3 && comp_eq(c[2], "arp")) {
+                vp->kind = VNODE_PROC_NET_ARP;
+            } else if (n == 3 && comp_eq(c[2], "tcp")) {
+                vp->kind = VNODE_PROC_NET_TCP;
             } else {
                 vp->kind = (n == 3) ? VNODE_ENOENT : VNODE_ENOTDIR;
             }

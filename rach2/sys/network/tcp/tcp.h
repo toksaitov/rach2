@@ -113,6 +113,16 @@ struct tcb {
     uint32_t retx_seq;     /* sequence number the control occupies   */
 
     struct socket *sock;   /* owning socket (NULL once detached)     */
+
+    /*
+     * The owner and the socket number, copied here rather than read through
+     * `sock`. A row stays in this pool through the closing states, and `sock`
+     * is cleared the moment the descriptor goes, so a connection in TIME_WAIT
+     * would otherwise report owner 0 and socket 0: a row that says root owns
+     * what an ordinary account opened.
+     */
+    uint32_t uid;
+    uint32_t inode;
 };
 
 /* Allocate the TCB pool; called once from init_network. */
@@ -181,5 +191,38 @@ void tcp_window_update(struct socket *sock);
  * left to time out.
  */
 void tcp_local_addr_changed(uint32_t new_ip);
+
+/* One connection, copied out for a reader of /proc/net/tcp. */
+struct tcp_row {
+    uint32_t local_ip;
+    uint16_t local_port;
+    uint32_t remote_ip;
+    uint16_t remote_port;
+    int      state;
+    uint32_t txq;   /* bytes queued to send */
+    uint32_t rxq;   /* bytes queued to read */
+    uint32_t uid;
+    uint32_t inode;
+};
+
+/**
+ * Copy the live connections into `out`, returning how many were written.
+ *
+ * A snapshot rather than a walk of the pool: rows are created and freed from
+ * receive context, and the identity fields come from the block rather than
+ * from `sock`, which is cleared while a connection is still closing.
+ */
+int tcp_snapshot(struct tcp_row *out, int max);
+
+/**
+ * This stack's state as the number Linux's `/proc/net/tcp` uses.
+ *
+ * The two enumerations do not agree, and a reader prints the name that goes
+ * with the number it is given, so an unmapped value would name the wrong state
+ * rather than a missing one. Linux's order is ESTABLISHED 1, SYN_SENT 2,
+ * SYN_RECV 3, FIN_WAIT1 4, FIN_WAIT2 5, TIME_WAIT 6, CLOSE 7, CLOSE_WAIT 8,
+ * LAST_ACK 9, LISTEN 10, CLOSING 11.
+ */
+int tcp_state_to_linux(int state);
 
 #endif /* _TCP_H_ */

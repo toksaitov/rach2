@@ -34,6 +34,10 @@ USER_NAME="$5"
 PASSWORD="$6"
 # The megabytes the real image was built at, which is what df must report.
 IMAGE_MB="$7"
+# A host port forwarded to the guest's SSH server, so a connection can be opened
+# from outside while netstat runs.
+FWD_PORT=2298
+PEER_PID=""
 
 if [ -z "$KERNEL" ] || [ -z "$TEST_IMAGE" ] || [ -z "$DISK" ] || [ -z "$REAL" ] ||
         [ -z "$USER_NAME" ] || [ -z "$PASSWORD" ] || [ -z "$IMAGE_MB" ]; then
@@ -145,16 +149,44 @@ echo "procfiles-test: the three mounts each name their own source: OK"
   printf 'ps > /tmp.ps; echo PS""-STATUS:$?; tail -6 /tmp.ps\n'; sleep 3;
   printf 'df / > /tmp.df; echo DF""-STATUS:$?; tail -1 /tmp.df\n'; sleep 3;
   printf 'free > /tmp.free; echo FREE""-STATUS:$?; cat /tmp.free\n'; sleep 3;
-  printf 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up\n'; sleep 4 ) \
+  printf 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up\n'; sleep 4;
+  printf 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP\n'; sleep 10;
+  printf 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt\n'; sleep 10;
+  printf 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6\n'; sleep 4;
+  printf 'arp -n > /tmp.arp; echo AR""P-STATUS:$?; cat /tmp.arp\n'; sleep 6 ) \
     | qemu-system-i386 -cpu max -display none \
-    -kernel "$KERNEL" -initrd "$REAL" -serial stdio >"$REAL.applets.log" 2>&1 &
+    -kernel "$KERNEL" -initrd "$REAL" \
+    -net nic,model=rtl8139 -net "user,hostfwd=tcp::$FWD_PORT-:22" \
+    -serial stdio >"$REAL.applets.log" 2>&1 &
 QPID=$!
-if ! wait_serial "$REAL.applets.log" "UP-STATUS:" 150; then
+# A connection opened from OUTSIDE, held open while netstat runs, and still
+# resolved in the cache when `arp` runs after it. The order matters: a machine
+# that has spoken to nobody has an empty cache, and `arp` would then be asked to
+# show what is not there.
+# The guest sees
+# its peer as QEMU's gateway, 10.0.2.2: an address the guest did not choose and
+# the host end really has, which is what makes the row worth checking. The
+# forward reaches the SSH server started above, so this is the shape of a live
+# login and not a contrivance. The server is started by hand because the image
+# does not run one at boot, and QEMU's user network accepts the host side of a
+# connection whether or not anything inside is listening: without a real
+# listener the row would simply never appear and the check would fail for a
+# reason that has nothing to do with netstat.
+( sleep 34; python3 -c "
+import socket, time
+s = socket.create_connection(('127.0.0.1', $FWD_PORT), timeout=10)
+time.sleep(20)
+s.close()
+" >/dev/null 2>&1 ) &
+PEER_PID=$!
+if ! wait_serial "$REAL.applets.log" "ARP-STATUS:" 240; then
     stop
     echo "procfiles-test: FAIL: the applet run never finished" >&2
     exit 1
 fi
 stop
+kill "$PEER_PID" 2>/dev/null || true
+wait "$PEER_PID" 2>/dev/null || true
 
 # The console writes CRLF. Every check below reads this copy instead, so a
 # trailing carriage return cannot turn a field into one that matches nothing.
@@ -164,7 +196,7 @@ tr -d '\r' <"$REAL.applets.log" >"$PLAIN_LOG"
 # Each applet's own exit status, captured before anything reads its output. An
 # applet that printed a plausible row and then failed passed the earlier version
 # of this test, which looked only at the text.
-for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime"; do
+for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "RT:route" "ARP:arp" "NS:netstat"; do
     token="${pair%%:*}"
     word="${pair#*:}"
     status=$(sed -n "s/^$token-STATUS:\([0-9][0-9]*\).*/\1/p" "$PLAIN_LOG" | head -1)
@@ -177,13 +209,17 @@ for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime"; do
         grep -iE "$word: " "$PLAIN_LOG" | head -2 >&2
         exit 1
     fi
-    if grep -qiE "$word: .*(can't open|No such file|not found)" "$PLAIN_LOG"; then
+    # netstat's one complaint is about `/proc/net/tcp6`, which is the intended
+    # answer for a machine with no IPv6 and is asserted below; every other
+    # complaint of this shape is a file a program still cannot read.
+    if grep -vE "tcp6" "$PLAIN_LOG" |
+            grep -qiE "$word: .*(can't open|No such file|not found)"; then
         echo "procfiles-test: FAIL: $word still cannot read what it needs:" >&2
         grep -iE "$word: " "$PLAIN_LOG" | head -2 >&2
         exit 1
     fi
 done
-echo "procfiles-test: ps, df, free and uptime each exited 0: OK"
+echo "procfiles-test: ps, df, free, uptime, route, arp and netstat each exited 0: OK"
 
 mypid=$(sed -n 's/^MYPID:\([0-9][0-9]*\).*/\1/p' "$REAL.applets.log" | tr -d '\r' | head -1)
 if [ -z "$mypid" ]; then
@@ -221,4 +257,63 @@ if ! grep -qE "up +[0-9]" "$PLAIN_LOG"; then
     exit 1
 fi
 echo "procfiles-test: uptime prints a time: OK"
+
+# route: the machine's real state, not a plausible one. Under QEMU's user
+# network the address is 10.0.2.15 and the gateway 10.0.2.2, both of which this
+# script knows and the guest reports independently.
+if ! awk '$1 == "0.0.0.0" && $2 == "10.0.2.2" { found = 1 } END { exit !found }' "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: route -n did not print the default route" >&2
+    grep -A3 "Destination" "$PLAIN_LOG" | head -5 >&2
+    exit 1
+fi
+if ! awk '$1 == "10.0.2.0" && $3 == "255.255.255.0" { found = 1 } END { exit !found }' "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: route -n did not print the on-link subnet" >&2
+    exit 1
+fi
+echo "procfiles-test: route -n prints the real default route and subnet: OK"
+
+# arp: the machine talked to its network to boot, so the cache holds a
+# neighbour on the subnet QEMU's user network really hands out, with the MAC
+# that answered. `-n` keeps the address numeric; without it busybox prints the
+# name it resolved. The address is parenthesised either way, and the line is
+# matched on that and on the hardware address after `at`, rather than on a field
+# number, which moves depending on whether a name was found.
+if ! awk '/\(10\.0\.2\.[0-9]+\)/ && / at [0-9A-Fa-f:]+ / { found = 1 } END { exit !found }' \
+        "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: arp showed no resolved neighbour on the subnet" >&2
+    echo "procfiles-test: this machine is actually on" >&2
+    grep -A3 "HW address" "$PLAIN_LOG" | head -4 >&2
+    exit 1
+fi
+echo "procfiles-test: arp shows a resolved neighbour on the real subnet: OK"
+
+# netstat: the connection the guest opened outward, with the peer address the
+# host end really has. Nothing in the guest chose that number.
+if ! awk '$1 == "tcp" && $5 ~ /^10\.0\.2\.2:/ { found = 1 } END { exit !found }' "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: netstat did not show the outbound connection's" >&2
+    echo "procfiles-test: peer as the address the peer actually has" >&2
+    grep -A5 "Proto" "$PLAIN_LOG" | head -6 >&2
+    exit 1
+fi
+echo "procfiles-test: netstat shows a live connection's real peer: OK"
+
+# The state column, in the word netstat prints for it. The number in the file is
+# Linux's and not this stack's own, so a row that reached netstat with an
+# unmapped number would be named as some other state here.
+if ! awk '$1 == "tcp" && $5 ~ /^10\.0\.2\.2:/ && $6 == "ESTABLISHED" { found = 1 }
+          END { exit !found }' "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: netstat did not call the live connection" >&2
+    echo "procfiles-test: ESTABLISHED, so the state numbers are not Linux's" >&2
+    grep -A5 "Proto" "$PLAIN_LOG" | head -6 >&2
+    exit 1
+fi
+echo "procfiles-test: netstat names the live connection's state: OK"
+
+# And the family that is not here says so rather than being silently empty.
+if ! grep -qiE "tcp6|can't open .*/proc/net/tcp6" "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: netstat said nothing about the IPv6 family," >&2
+    echo "procfiles-test: which this machine does not have" >&2
+    exit 1
+fi
+echo "procfiles-test: netstat names the IPv6 family it cannot find: OK"
 echo "procfiles-test: PASS"

@@ -68,6 +68,19 @@ typedef struct socket {
     int accept_head, accept_tail;
     int listening;
 
+    /*
+     * Identity, for the files that report sockets.
+     *
+     * `inode` is this socket's number in the one namespace `/proc/net/tcp`,
+     * `/proc/<pid>/fd/N` and `fstat` all name it by; before this they printed a
+     * constant, so every socket on the machine looked like the same one. `uid`
+     * is who owns it, taken in syscall context where there is a caller to ask.
+     * A passive connection is allocated in receive context, where there is not,
+     * and inherits the listener's uid: that is whose socket it is.
+     */
+    uint32_t inode;
+    uint32_t uid;
+
     /* UDP: sender of the most recent datagram, returned via recvfrom. */
     uint32_t last_src_ip;
     uint16_t last_src_port;
@@ -94,6 +107,11 @@ void socket_init(void);
 
 /** Allocate a socket with refcount 1; NULL if the pool is full. */
 struct socket *socket_alloc(int type);
+
+/** The socket a given inode names, or NULL. `/proc/<pid>/fd/N` renders the
+ * number; nothing looks one up by it yet, but the pool is the only place that
+ * could. */
+struct socket *socket_by_inode(uint32_t inode);
 
 /** Add a reference (fork/dup2 sharing). */
 void socket_ref(struct socket *sock);

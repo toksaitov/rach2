@@ -1397,6 +1397,9 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_STAT_SYS:
         case VNODE_PROC_MEMINFO:
         case VNODE_PROC_MOUNTS:
+        case VNODE_PROC_NET_ROUTE:
+        case VNODE_PROC_NET_ARP:
+        case VNODE_PROC_NET_TCP:
             return procfs_open(vp, flags);
         case VNODE_PROC_DISK:
             /* Root only. The file has the drive's serial number, and an
@@ -3032,6 +3035,21 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_mounts();
             return 0;
+        case VNODE_PROC_NET_ROUTE:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_netroute();
+            return 0;
+        case VNODE_PROC_NET_ARP:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_netarp();
+            return 0;
+        case VNODE_PROC_NET_TCP:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_nettcp();
+            return 0;
         case VNODE_PROC_DISK:
             /* /proc/disk: what the disk reported, root-readable only. */
             kst->st_dev = PROCFS_FSID;
@@ -3509,10 +3527,13 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
             krffs_fill_stat64(kst, entry->node);
         }
     } else if (entry->type == FD_TYPE_SOCKET) {
-        /* A socket fd: programs classify these with S_ISSOCK. */
+        /* A socket fd: programs classify these with S_ISSOCK, and the inode is
+         * the socket's own, the same number /proc/net/tcp and the fd symlink
+         * report, so a program can match a row to a descriptor. */
         kst->st_mode = 0140666; /* S_IFSOCK | 0666 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
+        kst->st_ino = entry->sock ? entry->sock->inode : 0u;
     } else if (entry->type == FD_TYPE_PIPE) {
         /* A pipe end: programs classify these with S_ISFIFO. */
         kst->st_mode = 010666; /* S_IFIFO | 0666 */
@@ -6574,13 +6595,28 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
     }
     /* /proc/net has one file. */
     if (kind == VNODE_PROC_NET_DIR) {
-        if (n == 0) {
-            name[0] = 'd';
-            name[1] = 'e';
-            name[2] = 'v';
-            name[3] = '\0';
-            *ino = procfs_ino_netdev();
+        /* No `tcp6`: there is no IPv6 here, and a file that existed and was
+         * empty would tell netstat the family is present with nothing on it. */
+        static const char *const netfiles[] = {"dev", "route", "arp", "tcp"};
+        int count = (int)(sizeof(netfiles) / sizeof(netfiles[0]));
+
+        if (n < count) {
+            int i;
+
+            for (i = 0; netfiles[n][i] != '\0'; i++) {
+                name[i] = netfiles[n][i];
+            }
+            name[i] = '\0';
             *dtype = DT_REG;
+            if (n == 0) {
+                *ino = procfs_ino_netdev();
+            } else if (n == 1) {
+                *ino = procfs_ino_netroute();
+            } else if (n == 2) {
+                *ino = procfs_ino_netarp();
+            } else {
+                *ino = procfs_ino_nettcp();
+            }
             return 1;
         }
         return 0;
@@ -8458,6 +8494,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         return -ENOMEM;
     }
     sock->family = (uint16_t)domain;
+    sock->uid = current_proc->euid;
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {

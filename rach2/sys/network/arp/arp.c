@@ -178,3 +178,27 @@ void arp_request(uint32_t target_ip)
 
     ethernet_tx(broadcast, ETH_TYPE_ARP, arp_req_buf, 28);
 }
+
+int arp_snapshot(struct arp_row *out, int max)
+{
+    uint32_t flags;
+    int i, n = 0;
+
+    if (!out || max <= 0) {
+        return 0;
+    }
+    flags = net_lock();
+    for (i = 0; i < ARP_CACHE_SIZE && n < max; i++) {
+        if (arp_cache[i].valid) {
+            int b;
+
+            out[n].ip = arp_cache[i].ip;
+            for (b = 0; b < 6; b++) {
+                out[n].mac[b] = arp_cache[i].mac[b];
+            }
+            n++;
+        }
+    }
+    net_unlock(flags);
+    return n;
+}

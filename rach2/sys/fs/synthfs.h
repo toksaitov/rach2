@@ -37,6 +37,9 @@ enum vnode_kind {
     VNODE_PROC_STAT_SYS,/* /proc/stat: the machine's tick counters and btime */
     VNODE_PROC_MEMINFO, /* /proc/meminfo: the physical frame pool */
     VNODE_PROC_MOUNTS,  /* /proc/mounts: what was mounted, and how */
+    VNODE_PROC_NET_ROUTE, /* /proc/net/route: the on-link subnet and gateway */
+    VNODE_PROC_NET_ARP, /* /proc/net/arp: the address cache */
+    VNODE_PROC_NET_TCP, /* /proc/net/tcp: the connection pool */
     VNODE_ENOENT,       /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR       /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -51,6 +54,9 @@ enum vnode_kind {
 #define SYNTH_PROC_STATSYS  7
 #define SYNTH_PROC_MEMINFO  8
 #define SYNTH_PROC_MOUNTS   9
+#define SYNTH_PROC_NETROUTE 10
+#define SYNTH_PROC_NETARP   11
+#define SYNTH_PROC_NETTCP   12
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

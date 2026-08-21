@@ -38,12 +38,40 @@ void socket_init(void)
     }
 }
 
+/* The next inode to hand out. Monotonic within a boot: a slot reused by a
+ * later socket gets a new number, so a stale row cannot be mistaken for a live
+ * one. */
+static uint32_t next_socket_inode = 1;
+
+/**
+ * The socket carrying `inode`, or NULL if no live socket has it.
+ *
+ * The identity /proc, an fd symlink and fstat all report is this number, so a
+ * program that reads one of them can find the socket behind the other two.
+ */
+struct socket *socket_by_inode(uint32_t inode)
+{
+    int i;
+
+    if (!socket_pool || inode == 0) {
+        return NULL;
+    }
+    for (i = 0; i < MAX_SOCKETS; i++) {
+        if (socket_pool[i].in_use && socket_pool[i].inode == inode) {
+            return &socket_pool[i];
+        }
+    }
+    return NULL;
+}
+
 /**
  * Claim a free socket slot and initialize it for the given type.
  *
  * Returns a socket with refcount 1 and clean protocol state, or NULL if the
  * pool is exhausted. The scan runs under net_lock because the slot table is
  * shared with the IRQ-context allocator (an incoming SYN claims a slot too).
+ * The slot gets an inode of its own here; the owning uid is set by the caller,
+ * which is the only context that knows whether there is a caller to ask.
  *
  * @param type SOCK_DGRAM or SOCK_STREAM.
  */
@@ -78,6 +106,12 @@ struct socket *socket_alloc(int type)
             socket_pool[i].listening     = 0;
             socket_pool[i].last_src_ip   = 0;
             socket_pool[i].last_src_port = 0;
+            /* Zero is skipped: it is what an unset field reads as. */
+            socket_pool[i].inode         = next_socket_inode++;
+            if (socket_pool[i].inode == 0) {
+                socket_pool[i].inode     = next_socket_inode++;
+            }
+            socket_pool[i].uid           = 0;
             socket_pool[i].recv_len      = 0;
             socket_pool[i].recv_full     = 0;
             wait_queue_init(&socket_pool[i].waiters);

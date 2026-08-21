@@ -20,6 +20,11 @@
 #include "../block/diskinfo.h"
 #include "../network/ethernet/ethernet.h"
 #include "../network/driver/netdev.h"
+#include "../network/arp/arp.h"
+#include "../network/tcp/tcp.h"
+#include "../network/netconf.h"
+#include "../network/net.h"
+#include "../network/socket/socket.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
@@ -41,6 +46,9 @@
 #define PROCFS_INO_STATSYS 0x106u
 #define PROCFS_INO_MEMINFO 0x107u
 #define PROCFS_INO_MOUNTS  0x108u
+#define PROCFS_INO_NETROUTE 0x109u
+#define PROCFS_INO_NETARP  0x10Au
+#define PROCFS_INO_NETTCP  0x10Bu
 #define PROCFS_INO_PID_BASE 0x200u
 
 /*
@@ -56,7 +64,7 @@
  * used to do: a sixteen-row table read back as a nine-row one with nothing
  * anywhere saying so.
  */
-#define PROCFS_TEXT_MAX 640
+#define PROCFS_TEXT_MAX 3072
 
 /* Per-file bounds. Each is the file's own worst case, and each is checked
    against the buffer below at compile time. */
@@ -69,9 +77,32 @@
 #define PROCFS_MAX_STATSYS  256  /* the cpu lines, btime, and the counters */
 #define PROCFS_MAX_MEMINFO  256  /* seven sized lines */
 #define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
+#define PROCFS_MAX_NETROUTE 512  /* a header and at most two routes */
+#define PROCFS_MAX_NETARP  1024  /* a header and the eight-entry cache */
+#define PROCFS_MAX_NETTCP  3072  /* a header and the sixteen-block pool */
+
+/* The header line of each network table, named so the same text is printed and
+   measured, and the widest row each can print. A row is a fixed-width shape:
+   the decimal fields are uint32 at their widest, the addresses and queues are
+   hex of a known width, and the rest is literal. */
+#define PROCFS_NETROUTE_HEADER "Iface\tDestination\tGateway \tFlags\tRefCnt" \
+                               "\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+#define PROCFS_NETARP_HEADER   "IP address       HW type     Flags       " \
+                               "HW address            Mask     Device\n"
+#define PROCFS_NETTCP_HEADER   "  sl  local_address rem_address   st tx_queue" \
+                               " rx_queue tr tm->when retrnsmt   uid  timeout" \
+                               " inode\n"
+#define PROCFS_DEC32       10 /* a uint32 in decimal, at its widest */
+#define PROCFS_IFNAME_LEN  (sizeof(NETDEV_IFNAME) - 1)
+#define PROCFS_NETROUTE_ROW (PROCFS_IFNAME_LEN + 8 + 8 + 34)
+#define PROCFS_NETARP_ROW   (15 + 32 + 17 + 14 + PROCFS_IFNAME_LEN + 1)
+#define PROCFS_NETTCP_ROW   (3 + PROCFS_DEC32 + 2 + 13 + 1 + 13 + 1 + 2 + 1 + \
+                             17 + 22 + PROCFS_DEC32 + 10 + PROCFS_DEC32 + 33)
 
 /* C89 has no static assert: a bound that does not fit makes this array size
-   negative and the build stops here rather than truncating at run time. */
+   negative and the build stops here rather than truncating at run time. The
+   network tables are checked against the tables behind them, so growing the
+   connection pool or the ARP cache fails the build instead of truncating. */
 typedef char procfs_bounds_fit[(PROCFS_MAX_BOOTLINE <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_DISK <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_NETDEV <= PROCFS_TEXT_MAX &&
@@ -80,7 +111,19 @@ typedef char procfs_bounds_fit[(PROCFS_MAX_BOOTLINE <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_UPTIME <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_STATSYS <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_MEMINFO <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_MOUNTS <= PROCFS_TEXT_MAX)
+                                PROCFS_MAX_MOUNTS <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_NETROUTE <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_NETARP <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_NETTCP <= PROCFS_TEXT_MAX &&
+                                sizeof(PROCFS_NETROUTE_HEADER) - 1 +
+                                        2 * PROCFS_NETROUTE_ROW <=
+                                    PROCFS_MAX_NETROUTE &&
+                                sizeof(PROCFS_NETARP_HEADER) - 1 +
+                                        ARP_CACHE_SIZE * PROCFS_NETARP_ROW <=
+                                    PROCFS_MAX_NETARP &&
+                                sizeof(PROCFS_NETTCP_HEADER) - 1 +
+                                        MAX_TCP_CONNS * PROCFS_NETTCP_ROW <=
+                                    PROCFS_MAX_NETTCP)
                                    ? 1
                                    : -1];
 
@@ -107,6 +150,15 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_MOUNTS) {
         return "/proc/mounts";
+    }
+    if (vp->kind == VNODE_PROC_NET_ROUTE) {
+        return "/proc/net/route";
+    }
+    if (vp->kind == VNODE_PROC_NET_ARP) {
+        return "/proc/net/arp";
+    }
+    if (vp->kind == VNODE_PROC_NET_TCP) {
+        return "/proc/net/tcp";
     }
     if (vp->procfile == SYNTH_PROC_STAT) {
         return "/proc/<pid>/stat";
@@ -162,6 +214,25 @@ static void ap_str(struct procfs_text *t, const char *s)
 {
     while (*s) {
         ap_ch(t, *s++);
+    }
+}
+
+/** Append `v` as unsigned decimal; the counters are 32-bit and wrap. */
+static void ap_u32(struct procfs_text *t, uint32_t v)
+{
+    char tmp[12];
+    int n = 0;
+
+    if (v == 0) {
+        ap_ch(t, '0');
+        return;
+    }
+    while (v && n < (int)sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (n > 0) {
+        ap_ch(t, tmp[--n]);
     }
 }
 
@@ -308,8 +379,11 @@ static int procfs_gen_cmdline(struct procfs_text *t, int pid)
  *
  * The target string matches what each descriptor type reports through the real
  * Linux /proc: a path for files and dirs, /dev/console, /dev/pts/N, /dev/ptmx,
- * and the pipe:[1]/socket:[1]/anon_inode forms. musl ttyname_r relies on the
- * /dev/pts/N spelling.
+ * and the pipe:[1]/socket:[N]/anon_inode forms. musl ttyname_r relies on the
+ * /dev/pts/N spelling. A socket names its own inode, the same number
+ * `/proc/net/tcp` and `fstat` report, so one socket is one thing to a program
+ * reading all three; it was a constant before, which made every socket on the
+ * machine look like the same one.
  */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
@@ -352,7 +426,9 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             ap_str(t, "/dev/ptmx");
             break;
         case FD_TYPE_SOCKET:
-            ap_str(t, "socket:[1]");
+            ap_str(t, "socket:[");
+            ap_u32(t, e->sock ? e->sock->inode : 0u);
+            ap_ch(t, ']');
             break;
         case FD_TYPE_FILE:
         case FD_TYPE_DIR:
@@ -397,6 +473,18 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                 }
                 if (pf->origin_file == SYNTH_PROC_NETDEV) {
                     ap_str(t, "/proc/net/dev");
+                    break;
+                }
+                if (pf->origin_file == SYNTH_PROC_NETROUTE) {
+                    ap_str(t, "/proc/net/route");
+                    break;
+                }
+                if (pf->origin_file == SYNTH_PROC_NETARP) {
+                    ap_str(t, "/proc/net/arp");
+                    break;
+                }
+                if (pf->origin_file == SYNTH_PROC_NETTCP) {
+                    ap_str(t, "/proc/net/tcp");
                     break;
                 }
                 ap_str(t, "/proc/");
@@ -482,6 +570,21 @@ uint32_t procfs_ino_mounts(void)
     return PROCFS_INO_MOUNTS;
 }
 
+uint32_t procfs_ino_netroute(void)
+{
+    return PROCFS_INO_NETROUTE;
+}
+
+uint32_t procfs_ino_netarp(void)
+{
+    return PROCFS_INO_NETARP;
+}
+
+uint32_t procfs_ino_nettcp(void)
+{
+    return PROCFS_INO_NETTCP;
+}
+
 /**
  * The inode of an open /proc snapshot descriptor, from its origin, so fstat
  * reports the same identity as the stat of the path it was opened by.
@@ -504,6 +607,15 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     if (pf->origin_file == SYNTH_PROC_NETDEV) {
         return PROCFS_INO_NETDEV;
     }
+    if (pf->origin_file == SYNTH_PROC_NETROUTE) {
+        return PROCFS_INO_NETROUTE;
+    }
+    if (pf->origin_file == SYNTH_PROC_NETARP) {
+        return PROCFS_INO_NETARP;
+    }
+    if (pf->origin_file == SYNTH_PROC_NETTCP) {
+        return PROCFS_INO_NETTCP;
+    }
     if (pf->origin_file == SYNTH_PROC_UPTIME) {
         return PROCFS_INO_UPTIME;
     }
@@ -524,24 +636,6 @@ uint32_t procfs_ino_pid(int pid)
     return PROCFS_INO_PID_BASE + (uint32_t)(pid & 0xffff);
 }
 
-/** Append `v` as unsigned decimal; the counters are 32-bit and wrap. */
-static void ap_u32(struct procfs_text *t, uint32_t v)
-{
-    char tmp[12];
-    int n = 0;
-
-    if (v == 0) {
-        ap_ch(t, '0');
-        return;
-    }
-    while (v && n < (int)sizeof(tmp)) {
-        tmp[n++] = (char)('0' + (v % 10u));
-        v /= 10u;
-    }
-    while (n > 0) {
-        ap_ch(t, tmp[--n]);
-    }
-}
 
 /**
  * Render /proc/net/dev.
@@ -729,6 +823,155 @@ static int procfs_gen_mounts(struct procfs_text *t)
     return t->len;
 }
 
+/*
+ * The network files, in the shapes the programs that read them parse.
+ *
+ * Each format was taken from the parser rather than from a description of it:
+ * `route` reads eleven whitespace-separated fields with `fscanf` and skips one
+ * header line; `arp` reads six with `sscanf` and skips one header line; and
+ * `netstat` reads nine and rejects a line that yields fewer. A file that is
+ * nearly right fails in the reader, not here, so the numbers below are what
+ * those three call for and not what looks tidy. The columns Linux prints after
+ * the ninth are kept for fidelity: no parser here needs them, and a program
+ * that counts fields on a line would.
+ */
+
+/** Append `v` as `width` uppercase hex digits, most significant first. */
+static void ap_hex(struct procfs_text *t, uint32_t v, int width)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    int i;
+
+    for (i = width - 1; i >= 0; i--) {
+        ap_ch(t, digits[(v >> (i * 4)) & 0xFu]);
+    }
+}
+
+/**
+ * An IPv4 address as /proc writes it: the four bytes in memory order, which on
+ * this machine reads as the address reversed. Both readers undo it the same
+ * way, so writing it the human way would put every address backwards.
+ */
+static void ap_ip_hex(struct procfs_text *t, uint32_t ip)
+{
+    ap_hex(t, ((ip & 0xFFu) << 24) | ((ip & 0xFF00u) << 8) | ((ip >> 8) & 0xFF00u) |
+                  ((ip >> 24) & 0xFFu),
+           8);
+}
+
+/** An address as dotted decimal, which /proc/net/arp uses instead of hex. */
+static void ap_ip_dotted(struct procfs_text *t, uint32_t ip)
+{
+    ap_u32(t, (ip >> 24) & 0xFFu);
+    ap_ch(t, '.');
+    ap_u32(t, (ip >> 16) & 0xFFu);
+    ap_ch(t, '.');
+    ap_u32(t, (ip >> 8) & 0xFFu);
+    ap_ch(t, '.');
+    ap_u32(t, ip & 0xFFu);
+}
+
+/**
+ * Render /proc/net/route: the on-link subnet, and the default route if there
+ * is one.
+ *
+ * This stack knows exactly one subnet and at most one gateway, so the table has
+ * one or two rows and both come out of `netconf`. The flags are the ones
+ * `route` prints from: 1 is up, and 2 more says the destination is a gateway.
+ */
+static int procfs_gen_netroute(struct procfs_text *t)
+{
+    ap_str(t, PROCFS_NETROUTE_HEADER);
+    if (!netdev || net_ip_addr == 0) {
+        return t->len;
+    }
+    if (net_ip_gateway != 0) {
+        ap_str(t, NETDEV_IFNAME);
+        ap_str(t, "\t00000000\t");
+        ap_ip_hex(t, net_ip_gateway);
+        ap_str(t, "\t0003\t0\t0\t0\t00000000\t0\t0\t0\n");
+    }
+    ap_str(t, NETDEV_IFNAME);
+    ap_ch(t, '\t');
+    ap_ip_hex(t, net_ip_addr & net_ip_mask);
+    ap_str(t, "\t00000000\t0001\t0\t0\t0\t");
+    ap_ip_hex(t, net_ip_mask);
+    ap_str(t, "\t0\t0\t0\n");
+    return t->len;
+}
+
+/**
+ * Render /proc/net/arp: what the cache holds, one line each.
+ *
+ * The hardware type is 1, Ethernet, and the flag is 2, which is what `arp`
+ * prints as a complete entry; an entry this cache holds at all is complete,
+ * since a pending one is not stored.
+ */
+static int procfs_gen_netarp(struct procfs_text *t)
+{
+    static struct arp_row rows[ARP_CACHE_SIZE];
+    int n, i, b;
+
+    ap_str(t, PROCFS_NETARP_HEADER);
+    n = arp_snapshot(rows, ARP_CACHE_SIZE);
+    for (i = 0; i < n; i++) {
+        ap_ip_dotted(t, rows[i].ip);
+        ap_str(t, "        0x1         0x2         ");
+        for (b = 0; b < 6; b++) {
+            if (b) {
+                ap_ch(t, ':');
+            }
+            ap_hex(t, rows[i].mac[b], 2);
+        }
+        ap_str(t, "     *        ");
+        ap_str(t, NETDEV_IFNAME);
+        ap_ch(t, '\n');
+    }
+    return t->len;
+}
+
+/**
+ * Render /proc/net/tcp: the connection pool, in the columns netstat parses.
+ *
+ * The state numbers are Linux's, which this stack's own enumeration does not
+ * match, so they are mapped rather than cast: a reader prints the name for the
+ * number it is given, and an unmapped value would name the wrong state.
+ * `uid` and `inode` come from the block rather than from its socket, which is
+ * cleared while a connection is still closing.
+ */
+static int procfs_gen_nettcp(struct procfs_text *t)
+{
+    static struct tcp_row rows[MAX_TCP_CONNS];
+    int n, i;
+
+    ap_str(t, PROCFS_NETTCP_HEADER);
+    n = tcp_snapshot(rows, MAX_TCP_CONNS);
+    for (i = 0; i < n; i++) {
+        ap_str(t, "   ");
+        ap_u32(t, (uint32_t)i);
+        ap_str(t, ": ");
+        ap_ip_hex(t, rows[i].local_ip);
+        ap_ch(t, ':');
+        ap_hex(t, rows[i].local_port, 4);
+        ap_ch(t, ' ');
+        ap_ip_hex(t, rows[i].remote_ip);
+        ap_ch(t, ':');
+        ap_hex(t, rows[i].remote_port, 4);
+        ap_ch(t, ' ');
+        ap_hex(t, (uint32_t)tcp_state_to_linux(rows[i].state), 2);
+        ap_ch(t, ' ');
+        ap_hex(t, rows[i].txq, 8);
+        ap_ch(t, ':');
+        ap_hex(t, rows[i].rxq, 8);
+        ap_str(t, " 00:00000000 00000000 ");
+        ap_u32(t, rows[i].uid);
+        ap_str(t, "        0 ");
+        ap_u32(t, rows[i].inode);
+        ap_str(t, " 1 0000000000000000 100 0 0 10 0\n");
+    }
+    return t->len;
+}
+
 /* the /proc file backing: a snapshot served through file_ops */
 
 static struct procfs_file proc_files[8];
@@ -821,7 +1064,8 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind != VNODE_PROC_CMDLINE && vp->kind != VNODE_PROC_DISK &&
         vp->kind != VNODE_PROC_NET_DEV && vp->kind != VNODE_PROC_UPTIME &&
         vp->kind != VNODE_PROC_STAT_SYS && vp->kind != VNODE_PROC_MEMINFO &&
-        vp->kind != VNODE_PROC_MOUNTS) {
+        vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_NET_ROUTE &&
+        vp->kind != VNODE_PROC_NET_ARP && vp->kind != VNODE_PROC_NET_TCP) {
         pid = procfs_resolve_pid(vp->pid);
         if (pid < 0) {
             return -ENOENT;
@@ -875,6 +1119,15 @@ int procfs_open(const struct vpath *vp, int flags)
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         procfs_text_init(&text, f->data, PROCFS_MAX_MOUNTS);
         len = procfs_gen_mounts(&text);
+    } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_NETROUTE);
+        len = procfs_gen_netroute(&text);
+    } else if (vp->kind == VNODE_PROC_NET_ARP) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_NETARP);
+        len = procfs_gen_netarp(&text);
+    } else if (vp->kind == VNODE_PROC_NET_TCP) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_NETTCP);
+        len = procfs_gen_nettcp(&text);
     } else if (vp->procfile == SYNTH_PROC_STAT) {
         procfs_text_init(&text, f->data, PROCFS_MAX_PIDSTAT);
         len = procfs_gen_stat(&text, pid);
@@ -907,6 +1160,12 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_MEMINFO;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         f->origin_file = SYNTH_PROC_MOUNTS;
+    } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
+        f->origin_file = SYNTH_PROC_NETROUTE;
+    } else if (vp->kind == VNODE_PROC_NET_ARP) {
+        f->origin_file = SYNTH_PROC_NETARP;
+    } else if (vp->kind == VNODE_PROC_NET_TCP) {
+        f->origin_file = SYNTH_PROC_NETTCP;
     } else {
         f->origin_file = vp->procfile;
     }

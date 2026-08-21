@@ -809,6 +809,8 @@ int tcp_listen(struct socket *sock, uint16_t port)
     tcb->local_port = port;
     tcb->state      = TCP_LISTEN;
     tcb->sock       = sock;
+    tcb->uid        = sock->uid;
+    tcb->inode      = sock->inode;
     sock->tcb       = tcb;
 
     net_unlock(flags);
@@ -875,6 +877,8 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
     tcb->snd_nxt     = tcb->iss;
     tcb->snd_una     = tcb->iss;
     tcb->sock        = sock;
+    tcb->uid        = sock->uid;
+    tcb->inode      = sock->inode;
 
     sock->tcb         = tcb;
     sock->local_port  = tcb->local_port;
@@ -1168,6 +1172,9 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             return;
         }
 
+        /* Receive context has no caller, so the owner is the listener's. */
+        conn_sock->uid         = tcb->sock ? tcb->sock->uid : tcb->uid;
+
         conn_tcb->passive      = 1;
         conn_tcb->local_ip     = net_ip_addr;
         conn_tcb->local_port   = tcb->local_port;
@@ -1180,6 +1187,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         conn_tcb->snd_nxt      = conn_tcb->iss;
         conn_tcb->snd_una      = conn_tcb->iss;
         conn_tcb->sock         = conn_sock;
+        conn_tcb->uid          = conn_sock->uid;
+        conn_tcb->inode        = conn_sock->inode;
 
         conn_sock->tcb         = conn_tcb;
         conn_sock->local_port  = conn_tcb->local_port;
@@ -1489,5 +1498,53 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
     default:
         break;
+    }
+}
+
+int tcp_snapshot(struct tcp_row *out, int max)
+{
+    uint32_t flags;
+    int i, n = 0;
+
+    if (!out || max <= 0 || !tcp_table) {
+        return 0;
+    }
+    flags = net_lock();
+    for (i = 0; i < MAX_TCP_CONNS && n < max; i++) {
+        struct tcb *t = &tcp_table[i];
+
+        if (!t->in_use) {
+            continue;
+        }
+        out[n].local_ip    = t->local_ip;
+        out[n].local_port  = t->local_port;
+        out[n].remote_ip   = t->remote_ip;
+        out[n].remote_port = t->remote_port;
+        out[n].state       = (int)t->state;
+        out[n].txq         = t->send_tail - t->send_ack;
+        out[n].rxq         = t->recv_tail - t->recv_head;
+        out[n].uid         = t->uid;
+        out[n].inode       = t->inode;
+        n++;
+    }
+    net_unlock(flags);
+    return n;
+}
+
+int tcp_state_to_linux(int state)
+{
+    switch ((tcp_state_t)state) {
+        case TCP_ESTABLISHED: return 1;
+        case TCP_SYN_SENT:    return 2;
+        case TCP_SYN_RCVD:    return 3;
+        case TCP_FIN_WAIT_1:  return 4;
+        case TCP_FIN_WAIT_2:  return 5;
+        case TCP_TIME_WAIT:   return 6;
+        case TCP_CLOSED:      return 7;
+        case TCP_CLOSE_WAIT:  return 8;
+        case TCP_LAST_ACK:    return 9;
+        case TCP_LISTEN:      return 10;
+        case TCP_CLOSING:     return 11;
+        default:              return 7;
     }
 }
