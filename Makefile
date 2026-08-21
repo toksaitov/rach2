@@ -89,7 +89,7 @@ MKDISK          = krffs/mkdisk.sh
         cred-persist-test \
         ping-test packet-test netif-test dgram-test dhcp-test netconsole-test test-addressed metal-test rach2-metal diskpolicy-test \
         subset-test diskdiag-test reset-test \
-        ping-test account-test shutdown-test login-test exitline-test crash-test stress-test os-real-grub-disk \
+        ping-test account-test shutdown-test login-test exitline-test procfiles-test crash-test stress-test os-real-grub-disk \
         tcc-test ssh-test make-test selfbuild-test \
         test-disk-ahci test-disk-q35 persist-test-ahci stress-test-ahci rach2-metal-grub-disk \
         rach2-sealed-disk rach2-recovery rach2-recovery-image authority-test menu-test grub-test \
@@ -1148,6 +1148,16 @@ login-test: rach2 utils krffs busybox os-real-image
 	sh tools/login_test.sh build/rach2/kernel $(LOGIN_TEST_STRICT) \
 	    $(LOGIN_TEST_SHELL) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`"
 
+# `make procfiles-test`: the machine's own /proc files, on the boots that differ
+# and through the programs that read them. Three boots of the test image, one
+# per mount source, each of which must name its own; then `ps`, `df`, `free` and
+# `uptime` on the real image, each of which failed on a missing /proc file.
+PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
+procfiles-test: rach2 tests utils krffs busybox os-real-image test-image
+	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
+	sh tools/procfiles_test.sh build/rach2/kernel $(TEST_IMAGE) \
+	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 16
+
 # `make exitline-test`: the plain process-exit line is printed under the debug
 # shell and nowhere else. Four boots: an init image that must stay quiet while
 # a forked program runs, the test image that must still print it for a child
@@ -1419,6 +1429,7 @@ help:
 	@echo "  make shutdown-test  userland stops the machine, and only root can"
 	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
 	@echo "  make exitline-test  the plain exit line prints under the debug shell only"
+	@echo "  make procfiles-test the /proc files, on the three mounts and through ps/df/free"
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make rach2-metal-image / rach2-metal-iso   the RAM-only image the Lenovo boots"

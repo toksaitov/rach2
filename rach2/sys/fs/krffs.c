@@ -660,6 +660,67 @@ uint32_t krffs_count_files(void)
     return count;
 }
 
+/* What the root was mounted from, and with what; see krffs.h. Fixed buffers
+ * because there is one mount and it never changes after boot. */
+static char krffs_mount_src[24] = "none";
+static char krffs_mount_opt[32] = "ro";
+
+void krffs_set_mount(const char *source, const char *options)
+{
+    uint32_t i;
+
+    for (i = 0; i + 1 < sizeof(krffs_mount_src) && source && source[i]; i++) {
+        krffs_mount_src[i] = source[i];
+    }
+    krffs_mount_src[i] = '\0';
+    for (i = 0; i + 1 < sizeof(krffs_mount_opt) && options && options[i]; i++) {
+        krffs_mount_opt[i] = options[i];
+    }
+    krffs_mount_opt[i] = '\0';
+}
+
+const char *krffs_mount_source(void)
+{
+    return krffs_mount_src;
+}
+
+const char *krffs_mount_options(void)
+{
+    return krffs_mount_opt;
+}
+
+/**
+ * The bytes this region holds, and the bytes still free in it.
+ *
+ * Free space is the sum of the free nodes' capacity, which is what a write can
+ * actually use: a free node carries a header of its own, so its usable bytes
+ * are its size less that header. A region with no free node at all reports
+ * zero, which is the truth.
+ */
+uint32_t krffs_total_bytes(void)
+{
+    return krffs_fs ? (uint32_t)krffs_fs->size : 0;
+}
+
+uint32_t krffs_free_bytes(void)
+{
+    krffs_node_t *node;
+    uint32_t free_bytes = 0;
+
+    if (!krffs_fs) {
+        return 0;
+    }
+
+    node = krffs_fs->node;
+    do {
+        if (node->type == KRFFS_FREE_NODE && node->size > sizeof(krffs_node_t)) {
+            free_bytes += (uint32_t)(node->size - sizeof(krffs_node_t));
+        }
+    } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
+
+    return free_bytes;
+}
+
 /**
  * Print every reserved node's name and size to the serial console.
  */

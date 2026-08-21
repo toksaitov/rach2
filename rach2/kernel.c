@@ -139,6 +139,9 @@ static void exec_program(int argc, char *argv[]);
  * drives: waking expired nanosleep sleepers, the HDA audio tick (needed when
  * legacy IRQs are not delivered on MSI-only setups), the TCP timers, the
  * loopback delivery, and the interrupt-less console serial drain. Finally
+ * Accounts the tick as idle or busy FIRST, before anything below can wake a
+ * process: the marker names what the processor was doing when this tick
+ * arrived, not what it is about to do. Then
  * reschedules, but only when the
  * current process is not inside kernel syscall code: timer IRQs stay enabled
  * during syscalls so HDA streaming keeps running, yet preempting a process mid
@@ -154,6 +157,8 @@ static void timer_handler(isr_params_t *params)
         kernel_second_ticks = 0;
         ++kernel_uptime_seconds;
     }
+
+    sched_account_tick();
 
     /* Runs regardless of in_syscall, so a sleeper parked inside its syscall
      * still becomes runnable on time. */
@@ -3019,22 +3024,35 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         /* rach2.fsdisk (or rach2.root=disk) mounts KRFFS from the real disk
          * through the cache (and needs no module); rach2.fswindow mounts the
          * module through the cache window; the default mounts the module in
-         * place. */
+         * place. Which one it was is recorded below while the branch that chose
+         * it is still in scope: what survives afterwards is one bit, disk or
+         * not, and `/proc/mounts` has to tell a window mount from a plain
+         * module one as well. */
+        const char *source = "none";
+        const char *options = "ro";
+
         if (kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk")) {
             mounted = init_krffs_disk();
             via = " (disk)";
+            source = "/dev/disk0";
+            options = "rw,relatime";
         } else if (num_modules > 0) {
             module_info_t *ramdisk = get_ramdisk();
             if (ramdisk && kcmdline_has("rach2.fswindow")) {
                 mounted = init_krffs_window((uint8_t *) ramdisk->start,
                                             ramdisk->size);
                 via = " (window)";
+                source = "module";
+                options = "rw,relatime,window";
             } else if (ramdisk) {
                 mounted = init_krffs((void *) ramdisk->start, ramdisk->size);
+                source = "module";
+                options = "rw,relatime";
             }
         }
 
         if (mounted == 0) {
+            krffs_set_mount(source, options);
             set_fore_color(light_green);
             k_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
             serial_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);

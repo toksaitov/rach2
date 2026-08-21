@@ -68,6 +68,19 @@ void proc_reclaim_boot_pids(void)
     next_pid = 1;
 }
 
+/* The running total /proc/stat reports; see process.h. */
+static uint32_t _forks_since_boot = 0;
+
+uint32_t process_forks_since_boot(void)
+{
+    return _forks_since_boot;
+}
+
+void process_count_fork(void)
+{
+    ++_forks_since_boot;
+}
+
 /**
  * Claim the first unused process slot and return it ready to run.
  *
@@ -106,6 +119,7 @@ process_t *alloc_process(void)
             proc_table[i].cwd[0] = '/';
             proc_table[i].cwd[1] = '\0';
 
+            process_count_fork();
             return &proc_table[i];
         }
     }
@@ -251,3 +265,4 @@ void setup_process_stack(process_t *proc, void (*entry_point)(void))
 
     proc->regs.esp = (uint32_t)sp;
 }
+

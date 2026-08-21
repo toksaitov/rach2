@@ -69,6 +69,7 @@ void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32
 void rtc_init(void);
 int rtc_is_anchored(void);
 int64_t rtc_boot_time(void);
+int64_t rtc_boot_epoch(void);
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
 
 #endif

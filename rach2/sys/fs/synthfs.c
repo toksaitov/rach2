@@ -251,6 +251,27 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = (n == 2) ? VNODE_PROC_DISK : VNODE_ENOTDIR;
             return vp->kind;
         }
+        /* The machine's own files, beside the pid tree: what `ps` reads for a
+           clock to date processes against, what `top` and `uptime` read for the
+           tick counters, what `free` reads for the frame pool, and what `df`
+           reads to learn what is mounted. Each is checked before the pid parse,
+           since none of these names is a number. */
+        if (comp_eq(c[1], "uptime")) {
+            vp->kind = (n == 2) ? VNODE_PROC_UPTIME : VNODE_ENOTDIR;
+            return vp->kind;
+        }
+        if (comp_eq(c[1], "stat")) {
+            vp->kind = (n == 2) ? VNODE_PROC_STAT_SYS : VNODE_ENOTDIR;
+            return vp->kind;
+        }
+        if (comp_eq(c[1], "meminfo")) {
+            vp->kind = (n == 2) ? VNODE_PROC_MEMINFO : VNODE_ENOTDIR;
+            return vp->kind;
+        }
+        if (comp_eq(c[1], "mounts")) {
+            vp->kind = (n == 2) ? VNODE_PROC_MOUNTS : VNODE_ENOTDIR;
+            return vp->kind;
+        }
         /* /proc/net/dev: the one file in the one directory `ifconfig` reads to
            learn that an interface exists and what it has carried. */
         if (comp_eq(c[1], "net")) {

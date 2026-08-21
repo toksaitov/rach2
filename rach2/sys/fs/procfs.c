@@ -24,6 +24,9 @@
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../serial.h"
+#include "../rtc.h"
+#include "../proc/sched.h"
+#include "../mm/paging.h"
 
 #define PROCFS_O_CLOEXEC 02000000
 
@@ -34,6 +37,10 @@
 #define PROCFS_INO_DISK    0x102u
 #define PROCFS_INO_NETDIR  0x103u
 #define PROCFS_INO_NETDEV  0x104u
+#define PROCFS_INO_UPTIME  0x105u
+#define PROCFS_INO_STATSYS 0x106u
+#define PROCFS_INO_MEMINFO 0x107u
+#define PROCFS_INO_MOUNTS  0x108u
 #define PROCFS_INO_PID_BASE 0x200u
 
 /*
@@ -58,6 +65,10 @@
 #define PROCFS_MAX_NETDEV   512  /* two header lines and one interface */
 #define PROCFS_MAX_PIDSTAT  256  /* one line of small fields plus comm */
 #define PROCFS_MAX_PIDCMD    64  /* comm and its terminator */
+#define PROCFS_MAX_UPTIME    64  /* two decimal numbers */
+#define PROCFS_MAX_STATSYS  256  /* the cpu lines, btime, and the counters */
+#define PROCFS_MAX_MEMINFO  256  /* seven sized lines */
+#define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
 
 /* C89 has no static assert: a bound that does not fit makes this array size
    negative and the build stops here rather than truncating at run time. */
@@ -65,7 +76,11 @@ typedef char procfs_bounds_fit[(PROCFS_MAX_BOOTLINE <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_DISK <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_NETDEV <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_PIDSTAT <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_PIDCMD <= PROCFS_TEXT_MAX)
+                                PROCFS_MAX_PIDCMD <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_UPTIME <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_STATSYS <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_MEMINFO <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_MOUNTS <= PROCFS_TEXT_MAX)
                                    ? 1
                                    : -1];
 
@@ -80,6 +95,18 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_NET_DEV) {
         return "/proc/net/dev";
+    }
+    if (vp->kind == VNODE_PROC_UPTIME) {
+        return "/proc/uptime";
+    }
+    if (vp->kind == VNODE_PROC_STAT_SYS) {
+        return "/proc/stat";
+    }
+    if (vp->kind == VNODE_PROC_MEMINFO) {
+        return "/proc/meminfo";
+    }
+    if (vp->kind == VNODE_PROC_MOUNTS) {
+        return "/proc/mounts";
     }
     if (vp->procfile == SYNTH_PROC_STAT) {
         return "/proc/<pid>/stat";
@@ -435,6 +462,26 @@ uint32_t procfs_ino_netdev(void)
     return PROCFS_INO_NETDEV;
 }
 
+uint32_t procfs_ino_uptime(void)
+{
+    return PROCFS_INO_UPTIME;
+}
+
+uint32_t procfs_ino_statsys(void)
+{
+    return PROCFS_INO_STATSYS;
+}
+
+uint32_t procfs_ino_meminfo(void)
+{
+    return PROCFS_INO_MEMINFO;
+}
+
+uint32_t procfs_ino_mounts(void)
+{
+    return PROCFS_INO_MOUNTS;
+}
+
 /**
  * The inode of an open /proc snapshot descriptor, from its origin, so fstat
  * reports the same identity as the stat of the path it was opened by.
@@ -456,6 +503,18 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_NETDEV) {
         return PROCFS_INO_NETDEV;
+    }
+    if (pf->origin_file == SYNTH_PROC_UPTIME) {
+        return PROCFS_INO_UPTIME;
+    }
+    if (pf->origin_file == SYNTH_PROC_STATSYS) {
+        return PROCFS_INO_STATSYS;
+    }
+    if (pf->origin_file == SYNTH_PROC_MEMINFO) {
+        return PROCFS_INO_MEMINFO;
+    }
+    if (pf->origin_file == SYNTH_PROC_MOUNTS) {
+        return PROCFS_INO_MOUNTS;
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -517,6 +576,156 @@ static int procfs_gen_netdev(struct procfs_text *t)
     ap_ch(t, ' ');
     ap_u32(t, c->tx_packets);
     ap_str(t, " 0 0 0 0 0 0\n");
+    return t->len;
+}
+
+/*
+ * The machine's own files.
+ *
+ * Every number below is one the kernel already holds. Where Linux prints a
+ * field this system has no equivalent for, the field is zero and the applet
+ * that needs it is left not working rather than shown a plausible invention:
+ * `top` reads several CPU categories and a load average, and neither is here.
+ */
+
+/** Append a count of ticks as seconds with two decimals, the /proc/uptime
+ * shape. Ticks are 100 Hz, so the fraction is the remainder outright. */
+static void ap_ticks_as_seconds(struct procfs_text *t, uint32_t ticks)
+{
+    ap_u32(t, ticks / 100u);
+    ap_ch(t, '.');
+    ap_ch(t, (char)('0' + (ticks / 10u) % 10u));
+    ap_ch(t, (char)('0' + ticks % 10u));
+}
+
+/**
+ * Render /proc/uptime: seconds since boot, and seconds the processor idled.
+ *
+ * Both are counted from delivered ticks rather than timed. Interrupts are off
+ * in several paths here and a tick can be lost, so what these say is what the
+ * timer actually delivered, which is the honest number and the one that makes
+ * the two add up to each other. Both counters are read once, into locals: a
+ * tick landing between two reads of the same file would report a total and an
+ * idle from different moments, which is what the snapshot exists to prevent.
+ */
+static int procfs_gen_uptime(struct procfs_text *t)
+{
+    uint32_t idle = sched_idle_ticks();
+    uint32_t busy = sched_busy_ticks();
+
+    ap_ticks_as_seconds(t, idle + busy);
+    ap_ch(t, ' ');
+    ap_ticks_as_seconds(t, idle);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/**
+ * Render /proc/stat: the tick counters, the boot epoch, and the process count.
+ *
+ * The `cpu` line carries user, nice, system and idle in that order. This
+ * kernel does not separate user from system time, so what it knows is one
+ * busy figure and one idle figure: busy goes in the system column, since that
+ * is where a kernel's own time belongs, and user and nice are zero rather than
+ * a share invented to look plausible.
+ *
+ * `processes` is what Linux means by it, the count of processes CREATED since
+ * boot and not the count alive now, which is a different number and the one an
+ * earlier draft printed. `procs_running` and `procs_blocked` are counted from
+ * the table rather than fixed, since a machine with two runnable processes
+ * reporting one is wrong the moment anything looks.
+ */
+static int procfs_gen_statsys(struct procfs_text *t)
+{
+    uint32_t busy = sched_busy_ticks();
+    uint32_t idle = sched_idle_ticks();
+    int i;
+    uint32_t running = 0;
+    uint32_t blocked = 0;
+
+    ap_str(t, "cpu  0 0 ");
+    ap_u32(t, busy);
+    ap_ch(t, ' ');
+    ap_u32(t, idle);
+    ap_str(t, " 0 0 0 0 0 0\n");
+    ap_str(t, "cpu0 0 0 ");
+    ap_u32(t, busy);
+    ap_ch(t, ' ');
+    ap_u32(t, idle);
+    ap_str(t, " 0 0 0 0 0 0\n");
+    ap_str(t, "intr 0\n");
+    ap_str(t, "ctxt 0\n");
+    ap_str(t, "btime ");
+    ap_u32(t, (uint32_t)rtc_boot_epoch());
+    ap_ch(t, '\n');
+    ap_str(t, "processes ");
+    ap_u32(t, process_forks_since_boot());
+    ap_ch(t, '\n');
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (proc_table[i].state == PROC_RUNNING || proc_table[i].state == PROC_READY) {
+            running++;
+        } else if (proc_table[i].state == PROC_BLOCKED) {
+            blocked++;
+        }
+    }
+    ap_str(t, "procs_running ");
+    ap_u32(t, running);
+    ap_str(t, "\nprocs_blocked ");
+    ap_u32(t, blocked);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/** Append a frame count as kibibytes, which is what /proc/meminfo prints. */
+static void ap_frames_as_kb(struct procfs_text *t, uint32_t frames)
+{
+    ap_u32(t, frames * (PAGE_SIZE / 1024u));
+    ap_str(t, " kB\n");
+}
+
+/**
+ * Render /proc/meminfo from the physical frame pool.
+ *
+ * The pool is the whole of what this machine manages, so MemTotal and MemFree
+ * are the two counts outright. MemAvailable is the free count as well and not
+ * an estimate: there is no reclaimable cache to add to it, since the page cache
+ * here is a fixed reservation the pool never gets back.
+ */
+static int procfs_gen_meminfo(struct procfs_text *t)
+{
+    uint32_t total = frame_total_count();
+    uint32_t free_frames = frame_free_count();
+
+    ap_str(t, "MemTotal:       ");
+    ap_frames_as_kb(t, total);
+    ap_str(t, "MemFree:        ");
+    ap_frames_as_kb(t, free_frames);
+    ap_str(t, "MemAvailable:   ");
+    ap_frames_as_kb(t, free_frames);
+    ap_str(t, "Buffers:               0 kB\n");
+    ap_str(t, "Cached:                0 kB\n");
+    ap_str(t, "SwapTotal:             0 kB\n");
+    ap_str(t, "SwapFree:              0 kB\n");
+    return t->len;
+}
+
+/**
+ * Render /proc/mounts in the six-field fstab shape `df` and `mount` parse.
+ *
+ * The root's source and options are what the mount recorded when it succeeded,
+ * because the three branches that can mount this file system differ in ways
+ * nothing afterwards reports: a fixed line would call a RAM root a disk one on
+ * two boots out of three. The two synthetic mounts are named as well, since
+ * they are real mounts to every program that walks this file.
+ */
+static int procfs_gen_mounts(struct procfs_text *t)
+{
+    ap_str(t, krffs_mount_source());
+    ap_str(t, " / krffs ");
+    ap_str(t, krffs_mount_options());
+    ap_str(t, " 0 0\n");
+    ap_str(t, "devfs /dev devfs rw,relatime 0 0\n");
+    ap_str(t, "proc /proc proc rw,relatime 0 0\n");
     return t->len;
 }
 
@@ -610,7 +819,9 @@ int procfs_open(const struct vpath *vp, int flags)
     /* /proc/cmdline and /proc/disk are global; every other proc file lives
      * under a pid. */
     if (vp->kind != VNODE_PROC_CMDLINE && vp->kind != VNODE_PROC_DISK &&
-        vp->kind != VNODE_PROC_NET_DEV) {
+        vp->kind != VNODE_PROC_NET_DEV && vp->kind != VNODE_PROC_UPTIME &&
+        vp->kind != VNODE_PROC_STAT_SYS && vp->kind != VNODE_PROC_MEMINFO &&
+        vp->kind != VNODE_PROC_MOUNTS) {
         pid = procfs_resolve_pid(vp->pid);
         if (pid < 0) {
             return -ENOENT;
@@ -652,6 +863,18 @@ int procfs_open(const struct vpath *vp, int flags)
     } else if (vp->kind == VNODE_PROC_NET_DEV) {
         procfs_text_init(&text, f->data, PROCFS_MAX_NETDEV);
         len = procfs_gen_netdev(&text);
+    } else if (vp->kind == VNODE_PROC_UPTIME) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_UPTIME);
+        len = procfs_gen_uptime(&text);
+    } else if (vp->kind == VNODE_PROC_STAT_SYS) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_STATSYS);
+        len = procfs_gen_statsys(&text);
+    } else if (vp->kind == VNODE_PROC_MEMINFO) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_MEMINFO);
+        len = procfs_gen_meminfo(&text);
+    } else if (vp->kind == VNODE_PROC_MOUNTS) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_MOUNTS);
+        len = procfs_gen_mounts(&text);
     } else if (vp->procfile == SYNTH_PROC_STAT) {
         procfs_text_init(&text, f->data, PROCFS_MAX_PIDSTAT);
         len = procfs_gen_stat(&text, pid);
@@ -676,6 +899,14 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_DISKINFO;
     } else if (vp->kind == VNODE_PROC_NET_DEV) {
         f->origin_file = SYNTH_PROC_NETDEV;
+    } else if (vp->kind == VNODE_PROC_UPTIME) {
+        f->origin_file = SYNTH_PROC_UPTIME;
+    } else if (vp->kind == VNODE_PROC_STAT_SYS) {
+        f->origin_file = SYNTH_PROC_STATSYS;
+    } else if (vp->kind == VNODE_PROC_MEMINFO) {
+        f->origin_file = SYNTH_PROC_MEMINFO;
+    } else if (vp->kind == VNODE_PROC_MOUNTS) {
+        f->origin_file = SYNTH_PROC_MOUNTS;
     } else {
         f->origin_file = vp->procfile;
     }

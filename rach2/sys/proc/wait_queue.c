@@ -133,7 +133,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         flags = irq_save();
         if (current_proc->state == PROC_BLOCKED) {
 #ifndef WAIT_QUEUE_HOSTTEST
-            __asm__ __volatile__("sti; hlt; cli");
+            idle_wait_irq_off();
 #endif
         }
     }

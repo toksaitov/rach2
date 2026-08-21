@@ -171,4 +171,15 @@ extern void switch_context(process_t *old, process_t *new_proc);
 /** Prime a new process's kernel stack for its first context switch. */
 void setup_process_stack(process_t *proc, void (*entry_point)(void));
 
+/**
+ * How many processes have been created since boot.
+ *
+ * What Linux's `/proc/stat` calls `processes`: a running total, not the number
+ * alive now. Bumped once where a process is handed out, so a fork and an exec
+ * that replaces an image are counted the way that file counts them.
+ */
+uint32_t process_forks_since_boot(void);
+
+void process_count_fork(void);
+
 #endif

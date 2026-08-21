@@ -1,0 +1,40 @@
+free and uptime: include <sys/sysinfo.h> without asking for __linux__
+
+Both applets call sysinfo(2) and take its struct, and both include the header
+that declares them behind `#ifdef __linux__`. This tree is cross-compiled with
+i686-elf-gcc against the ported musl, and that compiler defines no `__linux__`:
+the target is a bare-metal triple, whatever libc is put in front of it. So the
+include was skipped and the two files failed to compile the moment their config
+options were turned on, on a system whose kernel has the call and whose libc
+has the header.
+
+The condition is dropped rather than widened. musl supplies <sys/sysinfo.h> on
+every target it builds for, and this tree builds against musl and nothing else,
+so there is no configuration here in which the include is wrong.
+
+--- a/procps/free.c
++++ b/procps/free.c
+@@ -52,9 +52,7 @@
+ //NB: if we implement -s or -c, need to stop being NOFORK!
+ 
+ #include "libbb.h"
+-#ifdef __linux__
+-# include <sys/sysinfo.h>
+-#endif
++#include <sys/sysinfo.h>
+ 
+ struct globals {
+ 	unsigned mem_unit;
+--- a/procps/uptime.c
++++ b/procps/uptime.c
+@@ -40,9 +40,7 @@
+ //usage:       "  1:55pm  up  2:30, load average: 0.09, 0.04, 0.00\n"
+ 
+ #include "libbb.h"
+-#ifdef __linux__
+-# include <sys/sysinfo.h>
+-#endif
++#include <sys/sysinfo.h>
+ 
+ #ifndef FSHIFT
+ # define FSHIFT 16              /* nr of bits of precision */

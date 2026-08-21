@@ -485,6 +485,24 @@ int64_t rtc_boot_time(void)
 }
 
 /**
+ * The real time at which this machine booted, which is not the same moment.
+ *
+ * `rtc_boot_time` is when the clock was READ, some way into the boot; this is
+ * that reading less the uptime it was taken at, so it names uptime zero. It is
+ * what `/proc/stat`'s `btime` needs: a value that does not move between two
+ * reads within one boot, which the read moment does not promise either, but
+ * which anything comparing boots would be misled by. Zero when the clock could
+ * not be read, the same answer the rest of this file gives.
+ */
+int64_t rtc_boot_epoch(void)
+{
+    if (!rtc_anchored) {
+        return 0;
+    }
+    return rtc_anchor_seconds - (int64_t)rtc_anchor_uptime;
+}
+
+/**
  * The current real time, in seconds and nanoseconds since the Unix epoch.
  *
  * With an anchor this is the second the clock reported plus the ticks elapsed

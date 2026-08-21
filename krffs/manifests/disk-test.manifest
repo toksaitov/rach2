@@ -7,6 +7,11 @@
 # checks every byte; its "BLOCKPROBE OK" token on the serial is the test result.
 file 0755 /blockprobe build/tests/blockprobe
 
+# And procprobe, which `make procfiles-test` runs from the same rescue shell:
+# /proc/mounts must name the disk on a boot that mounted one, and this is the
+# only image here that does.
+file 0755 /procprobe build/tests/procprobe
+
 # The same disk carries dirtyprobe, which `make crash-test` runs from the same
 # rescue shell. It proves no set-id clear reaches the root node, whose spare
 # mode bit is the dirty-mount flag, and that claim needs a disk: the flag is

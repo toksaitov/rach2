@@ -161,7 +161,7 @@ shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
 if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
-hr "4/13 conventions (no //, ASCII, header guards)"
+hr "4/13 conventions (no //, ASCII, header guards, marked idle wait)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
@@ -174,6 +174,20 @@ for h in $(inhouse_ch | grep '\.h$'); do
       || grep -qE '^[[:space:]]*#[[:space:]]*pragma[[:space:]]+once' "$h" \
       || { echo "  no header guard: $h"; cv=1; }
 done
+# Every halt in the kernel goes through the marked idle wait in
+# sys/proc/sched.c, which is what lets the timer tell an idle tick from a busy
+# one: there is no idle task, so a blocked process stays current and nothing
+# else says which was which. A site written with a bare `sti; hlt` somewhere
+# else would report its idle time as busy and no test would notice, so the
+# spelling is refused outside the helper. Comments and the header naming it are
+# not code; the asm statement is what is looked for.
+idle_bad=$(inhouse_ch | grep -vE 'sys/proc/sched\.c$' \
+    | xargs grep -nE '__asm__[^;]*"[^"]*sti;[[:space:]]*hlt' 2>/dev/null || true)
+if [ -n "$idle_bad" ]; then
+    echo "  bare sti;hlt outside idle_wait_irq_off/on:"
+    echo "$idle_bad" | head -3 | sed 's/^/    /'
+    cv=1
+fi
 if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 
 # 5. clang-format. HARD on new-code dirs + named args; advisory on the legacy

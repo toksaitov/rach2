@@ -218,6 +218,23 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size);
 
 /* Count the reserved nodes, and list them to the serial console. */
 uint32_t krffs_count_files(void);
+
+/*
+ * What the root was mounted from, and with what.
+ *
+ * Recorded at the moment a mount succeeds rather than derived afterwards: the
+ * three branches that can mount this file system differ in ways nothing left
+ * behind says, and a fixed line would call a RAM root a disk one on two boots
+ * out of three. `/proc/mounts` is the reader.
+ */
+void krffs_set_mount(const char *source, const char *options);
+const char *krffs_mount_source(void);
+const char *krffs_mount_options(void);
+
+/** Bytes the region holds, and bytes still free in it, for `statfs` and
+ * `/proc/meminfo`'s file-system half. Zero before a mount. */
+uint32_t krffs_total_bytes(void);
+uint32_t krffs_free_bytes(void);
 void krffs_list_files(void);
 
 #endif /* _KRFFS_H_ */

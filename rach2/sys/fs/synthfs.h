@@ -33,6 +33,10 @@ enum vnode_kind {
     VNODE_PROC_DISK,    /* /proc/disk: what the disk says about itself */
     VNODE_PROC_NET_DIR, /* /proc/net: the directory the interface file is in */
     VNODE_PROC_NET_DEV, /* /proc/net/dev: the interface and what it carried */
+    VNODE_PROC_UPTIME,  /* /proc/uptime: seconds up, and seconds idle */
+    VNODE_PROC_STAT_SYS,/* /proc/stat: the machine's tick counters and btime */
+    VNODE_PROC_MEMINFO, /* /proc/meminfo: the physical frame pool */
+    VNODE_PROC_MOUNTS,  /* /proc/mounts: what was mounted, and how */
     VNODE_ENOENT,       /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR       /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -43,6 +47,10 @@ enum vnode_kind {
 #define SYNTH_PROC_BOOTLINE 3
 #define SYNTH_PROC_DISKINFO 4
 #define SYNTH_PROC_NETDEV   5
+#define SYNTH_PROC_UPTIME   6
+#define SYNTH_PROC_STATSYS  7
+#define SYNTH_PROC_MEMINFO  8
+#define SYNTH_PROC_MOUNTS   9
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

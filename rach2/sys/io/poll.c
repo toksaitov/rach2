@@ -203,7 +203,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
             wq_poll_remove(wqs[i], current_proc);
         }
         if (current_proc->state == PROC_BLOCKED) {
-            __asm__ __volatile__("sti; hlt; cli");
+            idle_wait_irq_off();
         }
         current_proc->state = PROC_RUNNING;
     }

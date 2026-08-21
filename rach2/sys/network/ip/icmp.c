@@ -42,6 +42,7 @@
 #include "../../proc/process.h"
 #include "../../proc/wait_queue.h"
 #include "../../lib/kerrno.h"
+#include "../../proc/sched.h"
 
 /* Outgoing echo reply (sized for a full datagram) and request buffers. */
 static uint8_t icmp_reply_buf[1500];
@@ -233,7 +234,7 @@ int icmp_ping(uint32_t dst_ip)
         } else {
             while (!ping_replied &&
                    (int32_t)(kernel_ticks - ping_deadline) < 0) {
-                __asm__ __volatile__("sti; hlt");
+                idle_wait_irq_on();
             }
         }
 

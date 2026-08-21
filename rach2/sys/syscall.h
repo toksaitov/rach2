@@ -67,6 +67,8 @@
 #define SYS_GETCWD   183
 #define SYS_LLSEEK   140
 #define SYS_FSTAT64  197
+#define SYS_STATFS64 268
+#define SYS_FSTATFS64 269
 #define SYS_FCNTL64  221
 #define SYS_OPENAT   295
 #define SYS_FSTATAT64 300

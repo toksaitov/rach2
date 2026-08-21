@@ -1393,6 +1393,10 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_FILE:
         case VNODE_PROC_CMDLINE:
         case VNODE_PROC_NET_DEV:
+        case VNODE_PROC_UPTIME:
+        case VNODE_PROC_STAT_SYS:
+        case VNODE_PROC_MEMINFO:
+        case VNODE_PROC_MOUNTS:
             return procfs_open(vp, flags);
         case VNODE_PROC_DISK:
             /* Root only. The file has the drive's serial number, and an
@@ -3008,6 +3012,26 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_netdev();
             return 0;
+        case VNODE_PROC_UPTIME:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_uptime();
+            return 0;
+        case VNODE_PROC_STAT_SYS:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_statsys();
+            return 0;
+        case VNODE_PROC_MEMINFO:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_meminfo();
+            return 0;
+        case VNODE_PROC_MOUNTS:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_mounts();
+            return 0;
         case VNODE_PROC_DISK:
             /* /proc/disk: what the disk reported, root-readable only. */
             kst->st_dev = PROCFS_FSID;
@@ -3296,6 +3320,167 @@ static int32_t sys_lstat64(isr_params_t *params)
 {
     return do_stat64((const char __user *)params->ebx,
                      (struct linux_stat64 __user *)params->ecx, 0);
+}
+
+/*
+ * The i386 struct statfs64, as Linux writes it and musl reads it.
+ *
+ * `f_bsize` is the unit `f_blocks` and `f_bfree` are counted in. KRFFS has no
+ * block structure at all, so the unit is chosen rather than found: one byte
+ * would overflow the 64-bit counts on no disk this machine can hold, and 1024
+ * is what `df` prints in by default, so the numbers a person reads are the
+ * numbers the kernel holds divided by nothing.
+ */
+struct linux_statfs64 {
+    uint32_t f_type;
+    uint32_t f_bsize;
+    uint64_t f_blocks;
+    uint64_t f_bfree;
+    uint64_t f_bavail;
+    uint64_t f_files;
+    uint64_t f_ffree;
+    uint32_t f_fsid[2];
+    uint32_t f_namelen;
+    uint32_t f_frsize;
+    uint32_t f_flags;
+    uint32_t f_spare[4];
+};
+
+#define STATFS_BSIZE 1024u
+
+/* The three mounts /proc/mounts names, and the magic each reports. The values
+ * are Linux's for the two synthetic ones, so a program that recognises them
+ * finds what it expects; KRFFS has no assigned magic and uses its own name. */
+#define STATFS_MAGIC_KRFFS 0x4B524646u /* "KRFF" */
+#define STATFS_MAGIC_PROC  0x9FA0u
+#define STATFS_MAGIC_DEVFS 0x1373u
+
+/**
+ * Fill a statfs64 for one of the three file systems this machine mounts.
+ *
+ * Only the root has blocks: it is KRFFS, and the region's size and its free
+ * nodes' usable bytes are both real, reported in 1024-byte units because that
+ * is what `df` prints in by default. The two synthetic mounts report their own
+ * magic and no blocks at all, which is what they have and what Linux reports
+ * for them; answering with the root's numbers would tell `df` that `/proc` is
+ * a 16 MB file system 77 percent full. `f_files` is zero throughout, which says
+ * "not counted" rather than claiming an inode budget this format does not keep.
+ */
+static int32_t statfs_fill(struct linux_statfs64 __user *out, uint32_t magic)
+{
+    struct linux_statfs64 st;
+    uint32_t total = krffs_total_bytes();
+    uint32_t free_bytes = krffs_free_bytes();
+    int i;
+
+    k_memset(&st, 0, sizeof(st));
+    st.f_type = magic;
+    st.f_bsize = STATFS_BSIZE;
+    st.f_frsize = STATFS_BSIZE;
+    if (magic == STATFS_MAGIC_KRFFS) {
+        st.f_blocks = total / STATFS_BSIZE;
+        st.f_bfree = free_bytes / STATFS_BSIZE;
+        st.f_bavail = st.f_bfree;
+    }
+    st.f_files = 0;
+    st.f_ffree = 0;
+    st.f_namelen = KRFFS_FILE_NAME_BUFFER_SIZE - 1;
+    for (i = 0; i < 4; i++) {
+        st.f_spare[i] = 0;
+    }
+    if (copy_to_user(out, &st, sizeof(st)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/** Which of the three mounts a classified path belongs to. */
+static uint32_t statfs_magic_for_kind(int kind)
+{
+    if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR ||
+        kind == VNODE_PTS) {
+        return STATFS_MAGIC_DEVFS;
+    }
+    if (kind == VNODE_KRFFS) {
+        return STATFS_MAGIC_KRFFS;
+    }
+    return STATFS_MAGIC_PROC;
+}
+
+/**
+ * statfs64(2): the file system a path is on.
+ *
+ * EBX is the path, ECX the caller's sizeof(struct statfs64), EDX the buffer.
+ * The size is checked rather than ignored: a caller built against a different
+ * layout would otherwise be handed bytes it would read as different fields.
+ */
+static int32_t sys_statfs64(isr_params_t *params)
+{
+    char pathbuf[256];
+    struct vpath vp;
+    int len, kind;
+
+    if (!current_proc || !params->ebx || !params->edx) {
+        return -EFAULT;
+    }
+    if (params->ecx != sizeof(struct linux_statfs64)) {
+        return -EINVAL;
+    }
+    len = copy_path_cwd(pathbuf, sizeof(pathbuf), (const char __user *)params->ebx);
+    if (len < 0) {
+        return len;
+    }
+    /* The path has to name something. Answering for a path that does not exist
+     * would report a file system where there is no file, which is the one thing
+     * a caller uses this call to find out. */
+    kind = synth_classify(pathbuf[0] == '/' ? pathbuf + 1 : pathbuf, &vp);
+    if (kind == VNODE_ENOENT) {
+        return -ENOENT;
+    }
+    if (kind == VNODE_ENOTDIR) {
+        return -ENOTDIR;
+    }
+    if (kind == VNODE_KRFFS && pathbuf[0] != '\0' &&
+        !(pathbuf[0] == '/' && pathbuf[1] == '\0') && krffs_resolve(pathbuf) == NULL) {
+        return -ENOENT;
+    }
+    return statfs_fill((struct linux_statfs64 __user *)params->edx,
+                       statfs_magic_for_kind(kind));
+}
+
+/**
+ * fstatfs64(2): the same numbers, named by an open descriptor.
+ *
+ * EBX is the descriptor, ECX the caller's size, EDX the buffer.
+ */
+static int32_t sys_fstatfs64(isr_params_t *params)
+{
+    fd_entry_t *e;
+
+    if (params->ecx != sizeof(struct linux_statfs64)) {
+        return -EINVAL;
+    }
+    if (!current_proc || !params->edx) {
+        return -EFAULT;
+    }
+    e = fd_get(&current_proc->fds, (int)params->ebx);
+    if (!e) {
+        return -EBADF;
+    }
+    /* The descriptor's own kind decides which mount answers. A socket or a pipe
+     * is on no file system at all, and Linux answers `-ENOSYS` for those rather
+     * than handing back the root's numbers. */
+    if (e->type == FD_TYPE_PROC) {
+        return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_PROC);
+    }
+    if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE ||
+        e->type == FD_TYPE_PTM || e->type == FD_TYPE_SYNTH_DIR) {
+        return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_DEVFS);
+    }
+    if (e->type != FD_TYPE_FILE && e->type != FD_TYPE_DIR) {
+        return -ENOSYS;
+    }
+    return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_KRFFS);
 }
 
 /**
@@ -5633,7 +5818,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
         schedule();
         flags = sig_irq_save();
         if (current_proc->state == PROC_BLOCKED) {
-            __asm__ __volatile__("sti; hlt; cli"); /* idle until a waker, then re-scan */
+            idle_wait_irq_off(); /* idle until a waker, then re-scan */
         }
         current_proc->state = PROC_RUNNING;
         sig_irq_restore(flags);
@@ -6401,50 +6586,44 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         return 0;
     }
     if (kind == VNODE_PROC_DIR) {
-        if (n == 0) {
-            name[0] = 'c';
-            name[1] = 'm';
-            name[2] = 'd';
-            name[3] = 'l';
-            name[4] = 'i';
-            name[5] = 'n';
-            name[6] = 'e';
-            name[7] = '\0';
-            *ino = procfs_ino_cmdline();
+        /* The machine's own files come first, in a table so that adding one is
+         * a line here and not another index in a chain; the pid directories
+         * follow, numbered from where the table ends. */
+        static const char *const globals[] = {"cmdline", "disk",    "uptime", "stat",
+                                              "meminfo", "mounts",  "net",    "self"};
+        int count = (int)(sizeof(globals) / sizeof(globals[0]));
+
+        if (n < count) {
+            int i;
+
+            for (i = 0; globals[n][i] != '\0'; i++) {
+                name[i] = globals[n][i];
+            }
+            name[i] = '\0';
             *dtype = DT_REG;
-            return 1;
-        }
-        if (n == 1) {
-            name[0] = 'd';
-            name[1] = 'i';
-            name[2] = 's';
-            name[3] = 'k';
-            name[4] = '\0';
-            *ino = procfs_ino_disk();
-            *dtype = DT_REG;
-            return 1;
-        }
-        if (n == 2) {
-            name[0] = 'n';
-            name[1] = 'e';
-            name[2] = 't';
-            name[3] = '\0';
-            *ino = procfs_ino_netdir();
-            *dtype = DT_DIR;
-            return 1;
-        }
-        if (n == 3) {
-            name[0] = 's';
-            name[1] = 'e';
-            name[2] = 'l';
-            name[3] = 'f';
-            name[4] = '\0';
-            *ino = procfs_ino_dir();
-            *dtype = DT_LNK;
+            if (n == 0) {
+                *ino = procfs_ino_cmdline();
+            } else if (n == 1) {
+                *ino = procfs_ino_disk();
+            } else if (n == 2) {
+                *ino = procfs_ino_uptime();
+            } else if (n == 3) {
+                *ino = procfs_ino_statsys();
+            } else if (n == 4) {
+                *ino = procfs_ino_meminfo();
+            } else if (n == 5) {
+                *ino = procfs_ino_mounts();
+            } else if (n == 6) {
+                *ino = procfs_ino_netdir();
+                *dtype = DT_DIR;
+            } else {
+                *ino = procfs_ino_dir();
+                *dtype = DT_LNK;
+            }
             return 1;
         }
         {
-            int p = procfs_nth_pid(n - 4);
+            int p = procfs_nth_pid(n - count);
             if (p < 0) {
                 return 0;
             }
@@ -6845,7 +7024,7 @@ static int32_t sys_nanosleep(isr_params_t *params)
             /* schedule() found nobody else to run: idle until the next
              * interrupt (the tick), not busy-spinning on the scheduler.
              */
-            __asm__ __volatile__("sti; hlt");
+            idle_wait_irq_on();
         }
     }
     current_proc->wakeup_tick = 0;
@@ -7257,7 +7436,7 @@ static void sig_wait(void)
         schedule();
         flags = sig_irq_save();
         if (current_proc->state == PROC_BLOCKED) {
-            __asm__ __volatile__("sti; hlt; cli");
+            idle_wait_irq_off();
         }
     }
     current_proc->state = PROC_RUNNING;
@@ -7634,7 +7813,7 @@ void deliver_signals(isr_params_t *tf)
                 while (current_proc->state == PROC_STOPPED) {
                     schedule();
                     if (current_proc->state == PROC_STOPPED) {
-                        __asm__ __volatile__("sti; hlt; cli");
+                        idle_wait_irq_off();
                     }
                 }
                 continue; /* resumed: re-check pending signals */
@@ -10446,6 +10625,8 @@ void init_syscall(void)
     _syscall_table[SYS_STAT64] = sys_stat64;
     _syscall_table[SYS_LSTAT64] = sys_lstat64;
     _syscall_table[SYS_FSTAT64] = sys_fstat64;
+    _syscall_table[SYS_STATFS64] = sys_statfs64;
+    _syscall_table[SYS_FSTATFS64] = sys_fstatfs64;
     _syscall_table[SYS_FSTATAT64] = sys_fstatat64;
     _syscall_table[SYS_OPENAT] = sys_openat;
     _syscall_table[SYS_READLINK] = sys_readlink;
