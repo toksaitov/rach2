@@ -85,8 +85,7 @@ static int present(const char *path)
  * prefix and not one name: a temporary this program's own run left behind would
  * carry its pid, and one an earlier boot left behind would carry another. A
  * directory that cannot be opened counts as one, since a question this could
- * not
- * answer must not read as a clean `/etc`.
+ * not answer must not read as a clean `/etc`.
  */
 static int shadow_temps(void)
 {

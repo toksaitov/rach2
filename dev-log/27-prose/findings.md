@@ -319,6 +319,13 @@ findings up to where it stopped.
   test can reach its statics back to their initial state" (and lacked the comma
   after "not linked"). Reworded to "so the test can put its statics back to
   their initial state between cases".
+* `tests/host/pagecache_hosttest.c`: eight comment lines ran past 80 columns
+  (three block comments mangled by a too-wide wrap, plus a long inline comment on
+  a CHECK). Reflowed the blocks at 80 and moved the inline comment to its own
+  line above the statement.
+* `tests/musl/saltnoent.c`: the `shadow_temps` doc block had the same orphaned
+  "not" on a line of its own as `creddisk.c` ("a question this could / not /
+  answer"). Reflowed the two lines.
 
 ### Set two: the Doom port and the rest
 

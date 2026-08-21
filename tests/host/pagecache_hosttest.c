@@ -70,8 +70,8 @@ static int fake_write(uint32_t disk_off, const void *page)
 }
 
 /* Stand in for the CPU touching window page `p`: fault it (read or write), and
-   on a write scribble `marker` into the cached bytes, as a store through the window
-   would. */
+   on a write scribble `marker` into the cached bytes, as a store through the
+   window would. */
 static void touch(uint32_t p, int write, uint8_t marker)
 {
     uint32_t va = PCWIN_BASE + p * PC_PAGE_SIZE;
@@ -130,8 +130,9 @@ int main(void)
 
     /* The eviction probe: write a distinct marker to pages 0..7, thrash the
        cache by reading pages 8..31 (a working set far past the 4-frame
-       capacity), then re-read 0..7. Each dirty page must have been written back and must read
-       back with its marker; the clean pages must never be written. */
+       capacity), then re-read 0..7. Each dirty page must have been written back
+       and must read back with its marker; the clean pages must never be
+       written. */
     for (p = 0; p < 8; ++p) {
         touch(p, 1, (uint8_t)(0x80u + p));
     }
@@ -163,8 +164,8 @@ int main(void)
     }
 
     /* Writeback-failure paths: a failed disk write must never drop a dirty
-       page. A failed writeback on sync is reported and the page stays dirty; once the
-       disk recovers, a later sync flushes it with its bytes intact. */
+       page. A failed writeback on sync is reported and the page stays dirty;
+       once the disk recovers, a later sync flushes it with its bytes intact. */
     init_pagecache();
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
     touch(20, 1, 0xC0u);
@@ -176,9 +177,9 @@ int main(void)
     CHECK(fake_disk[20][0] == 0xC0u);
 
     /* A shrink whose writebacks all fail is reported by pc_set_capacity, which
-       must keep the capacity covering the stuck dirty frames so the RECLAIM path
-       (not just sync, which scans every slot) can still reach them. Four dirty
-       pages fill the four-frame cache with no eviction. */
+       must keep the capacity covering the stuck dirty frames so the RECLAIM
+       path (not just sync, which scans every slot) can still reach them. Four
+       dirty pages fill the four-frame cache with no eviction. */
     init_pagecache();
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
     touch(21, 1, 0xC1u);
@@ -187,12 +188,14 @@ int main(void)
     touch(24, 1, 0xC4u);
     fake_write_fail_all = 1;
     CHECK(pc_set_capacity(1) == -1);
-    CHECK(fake_writes[21] == 0 && fake_writes[24] == 0); /* the failed writes did not land */
+    /* the failed writes did not land */
+    CHECK(fake_writes[21] == 0 && fake_writes[24] == 0);
     fake_write_fail_all = 0;
     /* Drive a working set far past one frame: only if the four stuck frames
-       stayed inside the capacity can eviction reach and flush them. Had capacity
-       collapsed to 1, slots 1..3 would be unreachable here and never written. No
-       pc_sync: this proves the retain invariant through the reclaim path alone. */
+       stayed inside the capacity can eviction reach and flush them. Had
+       capacity collapsed to 1, slots 1..3 would be unreachable here and never
+       written. No pc_sync: this proves the retain invariant through the reclaim
+       path alone. */
     for (p = 30; p < 40; ++p) {
         touch(p, 0, 0);
     }
