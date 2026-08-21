@@ -10,8 +10,10 @@
 # a spaced "--" in a C or H comment, in an echo or printf message or a make
 # $(error/warning/info) directive, in a Python docstring or message, or in
 # Markdown prose; Markdown bullets that use "-"; and a leftover "Phase N" or
-# "Part N" diary tag in a C or H comment. Voice and vocabulary are judged in
-# review, not here. It uses grep, find, awk, sed, perl.
+# "Part N" diary tag in a C or H comment. Vocabulary is checked by
+# tools/prose_check.py, not here, and the half of the register rule that needs
+# a judgement is checked by a person in review. It uses grep, find, awk, sed,
+# perl.
 #
 set -u
 

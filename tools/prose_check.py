@@ -78,9 +78,14 @@ TOP_MD = ("CLAUDE.md", "AGENTS.md", "Readme.md")
 # "sight" collides with the ordinary idiom "anywhere in sight". "bench" went the
 # same way: `utils/dhcpmsg.c` describes a message that works on the bench and
 # not in the building, which is a test bench and is the right word for it.
+# So did three more of the seven shorthand nouns that rule lists. "gate" is
+# hardware here (the timer and speaker gates at port 0x61), "surface" is
+# established usage (an attack surface, a public surface, to surface an error),
+# and "era" is ordinary English. Of the seven, only "seam" and "timebox" have
+# no legitimate use in this tree; the rest are judged by a person.
 BANNED = (
     "load-bearing", "load bearing", "worth stating plainly", "worth noting",
-    "blast radius", "tripwire", "timebox",
+    "blast radius", "tripwire", "timebox", "full stop",
     "seam",
 )
 
@@ -145,9 +150,19 @@ def hash_spans(text):
             i += 1
 
 
+HEADING = re.compile(r"^ {0,3}(#{1,6})\s")
+
+
 def md_spans(text, path=None):
-    """Markdown paragraphs, with code and any exempt section removed."""
+    """Markdown paragraphs, with code and any exempt section removed.
+
+    The exempt section ends at the next heading of the same level or higher.
+    Markdown allows up to three spaces before a `#`, so a heading matched by
+    its first column alone can be indented by one space and the exemption then
+    runs to the end of the file, silencing every section after it.
+    """
     skip_heading = EXEMPT_SECTION.get(rel(path)) if path else None
+    skip_level = len(skip_heading.split()[0]) if skip_heading else 0
     para = []
     fenced = False
     exempt = False
@@ -158,10 +173,11 @@ def md_spans(text, path=None):
         if fenced or raw.startswith("    "):
             continue
         if skip_heading:
-            if raw.startswith(skip_heading):
+            m = HEADING.match(raw)
+            if raw.strip().startswith(skip_heading):
                 exempt = True
                 continue
-            if exempt and raw.startswith("#"):
+            if exempt and m and len(m.group(1)) <= skip_level:
                 exempt = False
             if exempt:
                 continue
@@ -502,6 +518,24 @@ def selftest():
         if any("load-bearing" in x for x in body):
             bad("the register rule's own text was not exempted"); fails += 1
 
+    # The exemption must end at the next heading even when that heading is
+    # indented, which Markdown allows: otherwise one space silences the file.
+    if os.path.exists(claude):
+        raw = open(claude).read()
+        doctored = raw.replace("\n## Comments\n",
+                               "\n  ## Comments\n\nA load-bearing line.\n", 1)
+        cp2 = os.path.join(d, "CLAUDE.md")
+        open(cp2, "w").write(doctored)
+        keep = EXEMPT_SECTION.copy()
+        EXEMPT_SECTION[rel(cp2)] = "### Register rule"
+        got = any("load-bearing" in x
+                  for x in prose_of(cp2, doctored, False))
+        EXEMPT_SECTION.clear()
+        EXEMPT_SECTION.update(keep)
+        if not got:
+            bad("an indented heading let the exemption swallow the file")
+            fails += 1
+
     # A scope that selects nothing is an error, not a pass: a path that does
     # not exist, and a directory holding no file this tool reads.
     empty = os.path.join(d, "empty")
@@ -515,7 +549,7 @@ def selftest():
 
     if fails:
         return 1
-    print("prose_check: selftest OK (12 cases)")
+    print("prose_check: selftest OK (13 cases)")
     return 0
 
 
