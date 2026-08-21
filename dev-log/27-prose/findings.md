@@ -296,6 +296,19 @@ findings up to where it stopped.
   so each is counted whole and the pair is judged together, not one being tested
   by itself."
 
+### Set two: the Doom port and the rest
+
+* `ports/doom/doomgeneric_rach2.c`: the `DG_SleepMs` comment ran two sentences
+  together, "Sleep for a number of milliseconds Since we don't have a real sleep
+  syscall" -- a missing period and a stranded capital `Since`. Added the period.
+  (The Doom glue is a port adaptation in its own more-verbose, first-person
+  register; its comments are accurate to the code and were not restyled, only its
+  errors fixed.)
+* `.clangd`: a `#` comment used a spaced `--` as an em-dash, "the compiler named
+  in the database -- but only for drivers you allow", which CLAUDE.md forbids in
+  prose. The file is scanned by neither `textcheck.sh` nor `prose_check.py`.
+  Recast to a comma.
+
 ## Cross-checks to settle against code later in set one
 
 These are numeric or path claims in documents that read plausibly but can only

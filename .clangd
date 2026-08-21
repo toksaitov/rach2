@@ -4,7 +4,7 @@
 # repo root; clangd reads it for each file's real compile flags. The kernel and the
 # musl guest programs are built FREESTANDING with the i686-elf cross GCC, so clangd has
 # to resolve THAT toolchain's headers (<stddef.h>, <stdint.h>, ...) and builtins, not
-# the host's. clangd does that by querying the compiler named in the database -- but
+# the host's. clangd does that by querying the compiler named in the database, but
 # only for drivers you allow, so launch clangd with:
 #
 #     --query-driver=**/i686-elf-*gcc
