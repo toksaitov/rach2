@@ -1,0 +1,9 @@
+# The Ubuntu image the GRUB steps run in, pinned by digest.
+#
+# tools/mkgrubcore.sh, tools/mkdisk_grub.sh and tools/mkiso.sh read this file.
+# A tag moves: ubuntu:24.04 in six months is not the image this project was
+# proved against, and a GRUB built from a different grub-pc would be a change
+# nobody chose. Repin deliberately, and say why in the commit.
+#
+# ubuntu:24.04 as of 2026-08-21
+ubuntu@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb

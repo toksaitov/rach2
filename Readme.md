@@ -43,7 +43,20 @@ The musl port grew the kernel into full OS subsystems. Each has its own Readme a
 
 ## Prerequisites
 
-Run `make doctor` at any time to check your toolchain. It reports each tool as PASS or MISSING with a per-OS install hint.
+Run `make doctor` at any time to check your toolchain. It reports each tool as PASS or MISSING with a per-OS install hint, and it fails if anything in either required group is absent. The second group is the one people skip: `make verify-style` refuses to start without `cppcheck`, `shellcheck`, `clang-format` and `perl`, and `CLAUDE.md` requires that suite on every change.
+
+On a fresh Mac, from nothing to a built system:
+
+```sh
+xcode-select --install                 # make, cc, python3, perl
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+git clone <this repository> rach2 && cd rach2
+sh tools/bootstrap_mac.sh              # --dry-run first if you want to see the list
+make doctor                            # must say: all required tools present
+make && make full
+```
+
+`tools/bootstrap_mac.sh` installs from `tools/mac-formulae.txt`, which is the list of formulae and casks in one readable place; it skips what is already installed, and `--dry-run` prints what it would do. Nothing else is fetched: the vendored sources are committed as tarballs, so the build is offline after the clone.
 
 | Tool           | macOS (Homebrew)             | Linux                                                                              |
 |----------------|------------------------------|------------------------------------------------------------------------------------|

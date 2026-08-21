@@ -3,8 +3,9 @@
 # tools/doctor.sh: Rach2 build/run toolchain preflight (run via `make doctor`).
 #
 # Reports each tool as PASS / MISSING / OPTIONAL with an install hint, and exits
-# non-zero if a REQUIRED tool is absent (or present but broken), so a student or
-# a fresh CI box sees a clear checklist instead of a cryptic failure mid-build.
+# non-zero if a tool in either required group is absent (or present but
+# broken), so a student or a fresh CI box sees a clear checklist instead of a
+# cryptic failure mid-build.
 #
 # ASCII-only output: the convention gate (tools/check.sh) forbids non-ASCII
 # bytes in in-house files, so no checkmarks/Unicode here.
@@ -61,6 +62,12 @@ req() {
 
 # opt NAME WHAT HINTKEY: a tool only some tasks need; absence is a note, not a
 # failure (these are dev/quality tools, so a plain presence check is enough).
+#
+# Four tools that used to sit here are required, not optional: `tools/check.sh`
+# refuses to start without cppcheck, shellcheck, clang-format and perl, and
+# `CLAUDE.md` requires `make verify-style` on every change. Calling them
+# optional told a reader on a fresh machine that they could skip the one check
+# the project insists on.
 opt() {
     if command -v "$1" >/dev/null 2>&1; then
         row "[PASS]" "$1" "$(command -v "$1")"
@@ -98,13 +105,17 @@ else
 fi
 
 echo
+echo "Required to verify (make verify-style refuses to run without these):"
+req cppcheck     cppcheck
+req shellcheck   shellcheck
+req clang-format clang-format
+req perl         perl
+
+echo
 echo "Optional (only some tasks need these):"
-opt cppcheck     "make verify-style" cppcheck
-opt shellcheck   "make verify-style" shellcheck
-opt clang-format "make verify-style" clang-format
-opt perl         "make verify-style" perl
 opt docker       "make isos / os-real-grub-disk" docker
 opt ssh-keygen   "the SSH capstone demo key" openssh
+opt git          "cloning and committing" git
 
 echo
 if [ "$missing" -eq 0 ]; then

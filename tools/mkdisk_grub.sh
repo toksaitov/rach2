@@ -36,6 +36,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# The Ubuntu image, pinned by digest in tools/ubuntu-image.txt: a tag moves,
+# and a GRUB built from a different grub-pc is a change nobody chose.
+UBUNTU_IMAGE="$(sed -n 's/^\(ubuntu@sha256:[0-9a-f]*\)$/\1/p' \
+                "$REPO/tools/ubuntu-image.txt" | head -1)"
+[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/ubuntu-image.txt has no digest" >&2; exit 1; }
+
 # The kernel and output default to the host build's, and both can be named:
 # the self-build proof hands the guest-built kernel here and boots the result.
 KERNEL="${1:-$REPO/build/rach2/kernel}"
@@ -83,7 +89,7 @@ RECOVERY_IMAGE="${RACH2_DISK_RECOVERY_IMAGE:-}"
 # disk agrees with whatever else that caller is building.
 #
 # What is still not fixed, and is not pretended to be: the container is the
-# floating ubuntu:24.04 tag and installs whatever GRUB and mtools the archive
+# floating "$UBUNTU_IMAGE" tag and installs whatever GRUB and mtools the archive
 # has that day, and the machine's SSH host key and password salt are
 # generated per tree. Those are inputs to the artifact, not noise in it.
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
@@ -388,7 +394,7 @@ fi
 # core.img and patches their pointers directly, which is all grub-bios-setup
 # would have done for a contiguous core.img in the gap.
 docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
-    ubuntu:24.04 sh -e -c "
+    "$UBUNTU_IMAGE" sh -e -c "
     apt-get update -qq && \
     apt-get install -y -qq grub-pc-bin grub-common parted mtools python3 \
         >/dev/null 2>&1

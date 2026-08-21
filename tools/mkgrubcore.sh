@@ -37,6 +37,12 @@ if [ -z "$MARKER" ] || [ -z "$OUT" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
+# The Ubuntu image, pinned by digest in tools/ubuntu-image.txt: a tag moves,
+# and a GRUB built from a different grub-pc is a change nobody chose.
+UBUNTU_IMAGE="$(sed -n 's/^\(ubuntu@sha256:[0-9a-f]*\)$/\1/p' \
+                "$REPO/tools/ubuntu-image.txt" | head -1)"
+[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/ubuntu-image.txt has no digest" >&2; exit 1; }
 OUTDIR="$(cd "$(dirname "$OUT")" && pwd)"
 OUTBASE="$(basename "$OUT")"
 
@@ -51,7 +57,7 @@ fi
 python3 "$REPO/tools/check_grubembed.py" "$REPO/tools/grub-embed.cfg"
 
 docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
-    ubuntu:24.04 sh -e -c "
+    "$UBUNTU_IMAGE" sh -e -c "
     apt-get update -qq && apt-get install -y -qq grub-pc-bin grub-common >/dev/null 2>&1
     # The serial terminal is set up here and not left to the configuration on
     # the partition, because this runs before that one: an echo before the

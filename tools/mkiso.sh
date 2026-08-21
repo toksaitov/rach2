@@ -29,6 +29,12 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# The Ubuntu image, pinned by digest in tools/ubuntu-image.txt: a tag moves,
+# and a GRUB built from a different grub-pc is a change nobody chose.
+UBUNTU_IMAGE="$(sed -n 's/^\(ubuntu@sha256:[0-9a-f]*\)$/\1/p' \
+                "$REPO/tools/ubuntu-image.txt" | head -1)"
+[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/ubuntu-image.txt has no digest" >&2; exit 1; }
 # The metal profile has the kernel that cannot write a disk, and no other
 # profile does. This is the stick that goes into a laptop whose SSD has
 # somebody's Windows, so the artifact is checked here, not assumed:
@@ -153,7 +159,7 @@ CFG
 # stderr is kept (its diagnostics name a missing module or a broken layout), and
 # a build failure is fatal, not a silent "wrote" line over a missing or
 # stale ISO.
-if ! docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" ubuntu:24.04 sh -c \
+if ! docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" "$UBUNTU_IMAGE" sh -c \
     "apt-get update -qq && \
      apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && \
      grub-mkrescue -o '$ISO_OUT' '$ISODIR'"; then
