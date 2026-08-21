@@ -16,13 +16,13 @@
 #      and on any files named as arguments; advisory across the legacy tree
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC)
+#   8. text style, in three parts: tools/textcheck.sh for non-ASCII and dashes,
+#      tools/check_comments.py for the 80-column comment rule, and
+#      tools/prose_check.py --banned for the vocabulary a script can decide.
 #   9. the probe runner's scoring rule (tools/runtests.py --selftest)
 #  10. the set-id manifest sweep (tools/check_setid.py)
 #  11. image reproducibility (tools/check_repro.py): one tree, one image
 #  12. the checker selftests (tools/check_kernel.py, tools/check_grubembed.py)
-#   8. text style, in three parts: tools/textcheck.sh for non-ASCII and dashes,
-#      tools/check_comments.py for the 80-column comment rule, and
-#      tools/prose_check.py --banned for the vocabulary a script can decide.
 #  13. the dev-log index (tools/check_devlog.py): it names every finished
 #      milestone, and names the newest last
 #

@@ -9,7 +9,7 @@
 # image afterwards. A token proves only that the kernel reached the line before
 # the write, so every phase that claims a stop waits on the process.
 #
-# Three traps this repo has already paid for, and which every phase here obeys:
+# Three mistakes this repo has already paid for, avoided by every phase here:
 # the console echoes what is typed, so a token that appears in a command would
 # be matched from its own echo and each is written split; a feed written all at
 # once is eaten by anything that flushes its input, so every feed is spaced; and

@@ -12,7 +12,7 @@
 # The disk, not the RAM image, because the RAM image is a 16 MB module
 # inside a 32 MB machine and the compiler wants room.
 #
-# Three traps this repo has already paid for, and which every phase here obeys:
+# Three mistakes this repo has already paid for, avoided by every phase here:
 # the console echoes what is typed, so a token that appears in a command would
 # be matched from its own echo and each is written split; a feed written all at
 # once is eaten by anything that flushes its input, so every feed is spaced; and

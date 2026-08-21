@@ -249,6 +249,17 @@ findings up to where it stopped.
   phase here". And "adduser exits, not invent a group that is not there" is the
   same mangled "not X" as the `netdev.c` probe comment; reworded to "exits rather
   than invent a group".
+* `tools/shutdown_test.sh`, `tools/tcc_test.sh`, `tools/make_test.sh`: the same
+  banned "traps" idiom account_test.sh carried ("Three traps this repo has
+  already paid for", "Two traps ..."). Reworded each to "mistakes". The many
+  other "trap" mentions in these harnesses ("not only in the trap", "the trap
+  calls it again") are the shell `trap` builtin and stay. `prose_check.py`'s own
+  occurrence is the rule text and is exempt.
+* `tools/check.sh`: the header's numbered summary of the thirteen checks listed
+  "8. text style" out of order, after 12, though the code runs it eighth (its
+  `hr "8/13 text style"` sits between the source-list guard and the probe-scoring
+  step). An editing artifact from a renumber. Moved the bullet to its numeric
+  place.
 
 ## Cross-checks to settle against code later in set one
 
