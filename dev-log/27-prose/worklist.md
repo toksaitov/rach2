@@ -366,7 +366,7 @@ project teaches; move it up if that judgement turns out wrong.
 
 ## Tooling (41 entries, 30694 words)
 
-* [ ] `tools/check_setid.py` (4252 words)
+* [x] `tools/check_setid.py` (4252 words)
 * [ ] `tools/mkdisk_grub.sh` (2445 words)
 * [ ] `tools/account_test.sh` (2096 words)
 * [ ] `tools/drill_test.sh` (1605 words)

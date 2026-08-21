@@ -228,6 +228,14 @@ findings up to where it stopped.
   `tools/check_comments.py` scopes its 80-column check to `rach2/`, so these
   krffs-tool lines were never flagged. Rewrapped both; CLAUDE.md's "code comments
   wrap at 80 columns" holds tree-wide, not only in the kernel.
+* `tools/check_setid.py`: one more mangled-"has". The main-busybox forbidden-applet
+  comment read "So the rule still has for all five; what has changed is that one
+  of them is now a protocol away" -- the verb is "holds". Corrected. Also four
+  docstring lines had lost their 80-column wrap (editing artifacts running to 135
+  columns among their ~72-column neighbours): `strtoul`, `check_init_line`, and
+  the paragraph duplicated in `applet_names` and `check_applets`. Reflowed each;
+  `tools/check_comments.py` does not scan `tools/`, so the width was unchecked,
+  and prose in a Python docstring wraps at 80 the same as a `#` comment.
 
 ## Cross-checks to settle against code later in set one
 

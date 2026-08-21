@@ -414,9 +414,9 @@ def strtoul(s, base):
 
     Returns the value, the unconverted tail, and whether any digit was
     converted. Leading whitespace and a sign are consumed, and a negative value
-    wraps into 64 bits, which is what makes `-1` fail the range tests below, not read as a small number. On no conversion the tail is the whole
-    original string, so a caller comparing `end == start` sees the same thing C
-    does.
+    wraps into 64 bits, which is what makes `-1` fail the range tests below,
+    not read as a small number. On no conversion the tail is the whole original
+    string, so a caller comparing `end == start` sees the same thing C does.
     """
     i = 0
     while i < len(s) and s[i] in " \t\n\v\f\r":
@@ -564,9 +564,10 @@ def check_init_line(name, directives, want):
     """Check which init a manifest stages. Returns a list of problems.
 
     Neither init artifact is named plain `init`, so a manifest left on the old
-    path fails to stage, not silently getting whichever one the tree
-    happens to build; and which one an image gets is a fact worth asserting instead of reading, since the two differ in whether the console can fall
-    back to an unauthenticated root shell. A manifest whose entry declares no
+    path fails to stage, not silently getting whichever one the tree happens to
+    build; and which one an image gets is a fact worth asserting instead of
+    reading, since the two differ in whether the console can fall back to an
+    unauthenticated root shell. A manifest whose entry declares no
     init must stage none: the test images boot no init at all, and one that
     grew an init line would be running a different system than the one its
     probes were written against.
@@ -1814,8 +1815,8 @@ def report(problems):
 # which is not offered: AF_INET/SOCK_RAW exists only as a descriptor carrying
 # the interface ioctls and refuses to send or receive. `arping` opens a packet
 # socket, which milestone 25 did build for the DHCP client, but binds it to the
-# ARP protocol, and only IPv4 is accepted. So the rule still has for all five;
-# what has changed is that one of them is now a protocol away, not a
+# ARP protocol, and only IPv4 is accepted. So the rule still holds for all
+# five; what has changed is that one of them is now a protocol away, not a
 # whole socket family away.
 #
 # `getty` and `sulogin` are NOT here: both are BB_SUID_DROP and neither wants
@@ -1840,11 +1841,12 @@ APPLET_TABLE = os.path.join(
 def applet_names(path):
     """Read a generated applet table. Returns (names, problems).
 
-    The names live in one NUL-delimited string, so the match is on whole tokens, not on a substring: `passwd` appears inside `passwd_main` and inside
-    a help string, and a search that did not split would find it in a busybox
-    that compiled the applet out. A missing or empty table is a problem rather
-    than an empty answer, so an unreadable scan fails instead of reading as a
-    clean absence.
+    The names live in one NUL-delimited string, so the match is on whole
+    tokens, not on a substring: `passwd` appears inside `passwd_main` and
+    inside a help string, and a search that did not split would find it in a
+    busybox that compiled the applet out. A missing or empty table is a problem
+    rather than an empty answer, so an unreadable scan fails instead of reading
+    as a clean absence.
     """
     if not os.path.exists(path):
         return set(), ["%s: no applet table; build busybox before checking it" % path]
@@ -1892,9 +1894,10 @@ def applet_names(path):
 def check_applets(path=APPLET_TABLE):
     """Check a generated busybox applet table. Returns a list of problems.
 
-    The names live in one NUL-delimited string, so the match is on whole tokens, not on a substring: `passwd` appears inside `passwd_main` and inside
-    a help string, and a search that did not split would find it in a busybox
-    that compiled the applet out.
+    The names live in one NUL-delimited string, so the match is on whole
+    tokens, not on a substring: `passwd` appears inside `passwd_main` and
+    inside a help string, and a search that did not split would find it in a
+    busybox that compiled the applet out.
     """
     names, problems = applet_names(path)
     if problems:
