@@ -105,7 +105,9 @@ when its source file is reached, and the document fixed retroactively if wrong.
   (against `tools/selfbuild_test.sh`, in set two tooling).
   RESOLVED: "29 utilities" is correct -- `utils/Makefile` builds 19 `UTILITIES`
   plus 10 `SBIN_PROGS` = 29 programs.
-* `rach2/Readme.md`: "over 100 syscalls" (against `syscall.c`).
+* `rach2/Readme.md`: "over 100 syscalls" -- `syscall.h` defines ~111 `SYS_*`
+  numbers and `SYSCALL_TABLE_SIZE` is 356; will confirm the live dispatch count
+  against `syscall.c`, but the claim clearly holds.
   RESOLVED: the `cr3` field "offset 52" is correct -- in `process.h`, pid (0-3),
   state (4-7), regs (8-51, eleven uint32), cr3 (52-55).
   RESOLVED: "make subset-test boots six lines" is correct -- the recipe
