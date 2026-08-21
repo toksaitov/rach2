@@ -52,7 +52,7 @@
  * The last sector `/dev/disk0` can reach.
  *
  * This was 8388607 until milestone 25, because an open file's offset was 32
- * bits and the byte just past that sector is the largest one such an offset can
+ * bits and that sector's last byte is the largest one such an offset can
  * name. The raw disk windows now seek and transfer through a 64-bit offset, so
  * the window covers whatever the drive reports. A recovery image has to be able
  * to rewrite any region of a 250 GB drive, and a window that stopped at 4 GiB

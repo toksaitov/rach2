@@ -76,6 +76,13 @@ findings up to where it stopped.
   `ish/guest.mk` links exactly five objects and crt0.o is one of them. Reworded
   so crt0.o is named as among the five, not linked as a sixth.
 
+* `rach2/sys/fs/krffs.h`: the on-disk node comment gave the header as "344
+  bytes", but the packed `krffs_node_t` is 357 bytes (confirmed by compiling a
+  `sizeof` of the struct: small fields 13 + id 8 + name[256] + three 16-byte
+  timestamps + four 8-byte size/id fields). The count went stale as the struct
+  grew (v2 added `parent_id`). No check verifies a size written in a comment.
+  Corrected to 357.
+
 ## Cross-checks to settle against code later in set one
 
 These are numeric or path claims in documents that read plausibly but can only
@@ -86,8 +93,9 @@ when its source file is reached, and the document fixed retroactively if wrong.
   (against `tools/selfbuild_test.sh`, in set two tooling).
   RESOLVED: "29 utilities" is correct -- `utils/Makefile` builds 19 `UTILITIES`
   plus 10 `SBIN_PROGS` = 29 programs.
-* `rach2/Readme.md`: the `cr3` field "offset 52" (against `process.h`); "over
-  100 syscalls" (against `syscall.c`).
+* `rach2/Readme.md`: "over 100 syscalls" (against `syscall.c`).
+  RESOLVED: the `cr3` field "offset 52" is correct -- in `process.h`, pid (0-3),
+  state (4-7), regs (8-51, eleven uint32), cr3 (52-55).
   RESOLVED: "make subset-test boots six lines" is correct -- the recipe
   (`Makefile:1018`) loops over "", noaudio, nomouse, nonet, nodisk, and all
   four together, which is six.
@@ -100,10 +108,16 @@ when its source file is reached, and the document fixed retroactively if wrong.
 * `krffs/Readme.md`: RESOLVED -- `make images` builds three (test, os-simple,
   os-real; `Makefile:213`), so the "all three" comment is correct; the metal
   image is a separate target.
-* `rach2/sys/block/Readme.md`: the raw-window limit "the first 8388607 sectors"
-  and its "byte just past that sector" clause (against the raw-window seek code
-  in the page cache / `diskinfo.c`). The 4 GiB substance is right; the exact
-  sector count and phrasing may be off by one.
+* `rach2/sys/block/Readme.md`: RESOLVED. `diskinfo.h` defines the predecessor
+  of `DISKINFO_WINDOW_MAX_SECTORS` and frames 8388607 as "the last sector
+  /dev/disk0 can reach", so 8388607 is the last reachable sector index (its last
+  byte, 8388607*512+511 = 4294967295 = 2^32-1, is exactly the largest a 32-bit
+  offset can name). Two fixes: block/Readme framed 8388607 as a count ("the
+  first 8388607 sectors") -- reworded to "the first 4 GiB, through sector
+  8388607"; and both block/Readme and `diskinfo.h` said "the byte just past that
+  sector is the largest one such an offset can name", which is off by one (the
+  byte just past is 2^32, the first UNnameable) -- changed both to "that
+  sector's last byte is the largest one such an offset can name".
 
 ## What was refuted
 

@@ -91,7 +91,7 @@ typedef struct {
 
 /*
  * On-disk KRFFS node. Every node shares this header; its data follows it
- * immediately. Layout: [node header (344 bytes)][data (variable)].
+ * immediately. Layout: [node header (357 bytes)][data (variable)].
  */
 #pragma pack(push, 1)
 typedef struct krffs_node {
