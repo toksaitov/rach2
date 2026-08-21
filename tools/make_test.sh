@@ -28,7 +28,7 @@
 # slow host. Each command ends by printing a marker, and the feeder waits for
 # it.
 #
-# Two traps this repo has already paid for, and which every line here obeys: the
+# Two mistakes this repo has already paid for, avoided by every line here: the
 # console echoes what is typed, so a token that appears in a command would be
 # matched from its own echo and each is written split; and a previous run's logs
 # hold every token this run waits for, so they go before the boot.

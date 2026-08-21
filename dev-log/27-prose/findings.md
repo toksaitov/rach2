@@ -260,6 +260,14 @@ findings up to where it stopped.
   `hr "8/13 text style"` sits between the source-list guard and the probe-scoring
   step). An editing artifact from a renumber. Moved the bullet to its numeric
   place.
+* `tools/menu_test.sh`: two stale counts left by milestone 25's additions. The
+  header said "Four boots of one disk prove it" and narrated a first/second/
+  third/fourth, but the script now runs nine boots, with the static-address
+  trial and the saved-static-default scenarios the narrative never mentions.
+  Rewrote the header to describe the boots that are actually there. And a failure
+  message read "the six stub entries are not in the order..." while the `want`
+  list it checks has seven (the recovery-static entry was added). Corrected to
+  seven.
 
 ## Cross-checks to settle against code later in set one
 

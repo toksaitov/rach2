@@ -10,14 +10,18 @@
 # entries are defined first, so they hold the low indices whatever the second
 # file contains, and `set fallback` takes a number.
 #
-# Four boots of one disk prove it. The first stages a menu defining two entries
-# the stub does not have, round-trips a grubenv key through `bootctl env`, and
-# corrupts the candidate kernel so the next boot has to take the fallback. The
-# second boot proves both staged entries reached the menu and that the fallback
-# NUMBER still named the stub's own entry, not a staged one, which is the
-# property the ordering exists for. The third truncates the staged file
-# mid-entry from the host and the machine must still boot through the stub. The
-# fourth reads the slot's extent back, which says bootctl overwrote bytes in
+# Several boots of one disk prove it. The first stages a menu defining two
+# entries the stub does not have, round-trips a grubenv key through `bootctl
+# env`, and corrupts the candidate kernel so the next boot has to take the
+# fallback. The next boot proves both staged entries reached the menu and that
+# the fallback NUMBER still named the stub's own entry, not a staged one, which
+# is the property the ordering exists for. A staged file truncated mid-entry
+# from the host must still leave the machine booting through the stub. A trial
+# of the static-address candidate must fall back to the static-address fallback
+# and not the ordinary one, and a machine left on the static default must
+# select the static entries, since on a network with no DHCP server, falling
+# back to a lease nobody answers is a machine that cannot be reached. The last
+# boot reads the slot's extent back, which says bootctl overwrote bytes in
 # place instead of rewriting a file.
 #
 # What no boot here does is let the staged file choose the default. It cannot:
@@ -232,7 +236,7 @@ for row, body in re.findall(r'\\[(\\d+);3H([^\\x1b]{0,60})', text):
         seen.append(t)
 if seen != want:
     sys.exit('menu-test: the entry order is %r, not %r' % (seen, want))
-" || fail "the six stub entries are not in the order their numbers assume, or the staged two are not after them"
+" || fail "the seven stub entries are not in the order their numbers assume, or the staged two are not after them"
 if grep -a "Falling back to" "$LOG" | grep -aq "staged"; then
     fail "the fallback number selected a staged entry, so the stub's entries no longer hold the low indices"
 fi
