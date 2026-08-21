@@ -2740,7 +2740,7 @@ static void check_masked(void)
         return;
     }
     if (Mask_obs_n == 0) {
-        fail("the acquire never reached the interposed signal-mask call");
+        fail("the acquire recorded no matching signal-mask observation");
     } else if (Mask_obs[0] != 1) {
         fail("the acquire recorded its lock with a death signal still deliverable");
     }
@@ -2763,11 +2763,12 @@ static void check_masked(void)
         fail("the replacement the signal-mask case watches did not publish");
     }
     if (Mask_obs_n < 2) {
-        fail("the replacement reached the interposed signal-mask call fewer than twice");
+        fail("the replacement recorded fewer than two matching signal-mask "
+             "observations");
     } else {
         if (Mask_obs[0] != 0) {
-            fail("the interposed call reads every call as blocked, so a "
-                 "blocked reading proves nothing");
+            fail("the first observation was already blocked, so a blocked "
+                 "reading proves nothing");
         }
         if (Mask_obs[1] != 1) {
             fail("the replacement published the temporary's name with a death deliverable");
