@@ -134,6 +134,12 @@ findings up to where it stopped.
   careful author writes. Reworded to "not a clock to base a build on" (the RTC
   time anchors reproducible-build timestamps, so the build reference is kept).
 
+* `rach2/run.sh`: a usage-comment line wrap split "Sound Blaster 16" so the
+  "16" fell to the start of the next example line, which then read
+  "#   16 ./run.sh test" -- a broken command and misaligned with the other
+  examples. Removed the stray "16 " (the line above keeps "Sound Blaster", and
+  the `sb16` argument already names the device).
+
 ## Cross-checks to settle against code later in set one
 
 These are numeric or path claims in documents that read plausibly but can only
@@ -180,4 +186,9 @@ when its source file is reached, and the document fixed retroactively if wrong.
 
 ## Noticed in the code, left for milestone 28
 
-(none yet)
+* `rach2/sys/kio.c` (`vga_putc_raw`): the control-byte guard is `if (c < 31 ||
+  c == 127)`, so byte 0x1F (31, the unit separator) is not caught and is drawn
+  as a glyph, while the function's own comment says "any other control byte is
+  shown as `CHAR_NON_PRINTABLE`". The bound reads as an off-by-one (`< 32` would
+  match the comment). Harmless in practice (0x1F is almost never emitted to the
+  console), a code fix, so left for milestone 28.

@@ -12,7 +12,7 @@
 # Examples:
 #   ./run.sh os-simple        # our login, the ish shell, and our Unix tools
 #   ./run.sh os-real sb16     # the busybox/dropbear environment, Sound Blaster
-#   16 ./run.sh test             # the automated test image (kernel debug shell)
+#   ./run.sh test             # the automated test image (kernel debug shell)
 #
 # Networking (RTL8139 on QEMU's SLIRP user network) is enabled by default:
 #   NET=off ./run.sh os-real                              # disable it
