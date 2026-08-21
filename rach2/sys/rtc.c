@@ -148,7 +148,7 @@ int rtc_pair_disposition(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
  * hour register, so it is taken off BEFORE the value is decoded; a BCD decode
  * of an hour with that bit still set reads as a nonsense digit and would be
  * rejected, not corrected. A field outside its range fails the whole
- * sample: a clock that reports month 0 is not a clock to build a build on.
+ * sample: a clock that reports month 0 is not a clock to base a build on.
  *
  * @param raw the six registers and status B, as read.
  * @param seconds set to the decoded time when the sample is good.
