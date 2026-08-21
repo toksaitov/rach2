@@ -5,7 +5,7 @@
 # so the machine can drive a build on itself rather than one command at a time.
 #
 # There is very little arranging to do here, and that is why this make was
-# chosen: pdpmake is nine C files and a 26-line POSIX makefile with no configure
+# chosen: pdpmake is nine C files and a 30-line POSIX makefile with no configure
 # script, so the cross build is the wrapper, `-static`, and nothing else. tcc's
 # port needed a fake cross prefix because its configure RUNS a program it just
 # built; there is nothing here to run.

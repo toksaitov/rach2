@@ -97,7 +97,7 @@ BUILD_TRIPLE="$(sh "$SRC/config.guess" 2>/dev/null || true)"
         >/dev/null
 )
 
-echo "dropbear: building dropbearmulti (dropbear server + dropbearkey, static)"
+echo "dropbear: building dropbearmulti (dropbear server + dbclient + dropbearkey, static)"
 make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
     PROGRAMS="dropbear dbclient dropbearkey" MULTI=1 STATIC=1 SKIP_STRIP=y dropbearmulti
 

@@ -40,7 +40,7 @@ Or build it through the top level (`make full`, or `make deps DEPS=full`); eithe
 It verifies the pinned tarball (`dropbear-2022.83.tar.bz2`, sha256 gated), extracts it, applies the curated `localoptions.h`, and configures against the ported musl with its own `muslgcc` wrapper (`vendor/dropbear/muslgcc`, tracked separately from busybox's and differing only where the two builds differ), bundled libtomcrypt/libtommath, and `CROSS_COMPILE=i686-elf-`. It builds `dropbearmulti` (the `dropbear` server, the `dbclient` client, and `dropbearkey`, MULTI=1 dispatching on `argv[1]`, so `dropbearmulti dropbear`), strips it, and stages it out of tree to `build/vendor/dropbear/dropbearmulti` (staged into the os-real image as `/bin/dropbearmulti`). Run `vendor/musl/build_libc.sh` and `vendor/busybox/build_busybox.sh` first.
 
 * `--disable-harden` is REQUIRED. With hardening on, configure adds `-Wl,-pie` and the link is a dynamic PIE (interpreter `/usr/lib/libc.so.1`) that Rach2's ELF loader cannot relocate or run. With it off the binary is static non-PIE i686.
-* `localoptions.h` curates the crypto: curve25519 + ECDH, chacha20-poly1305, aes128/256-ctr, hmac-sha256, ed25519, RSA (signkey.c needs `DROPBEAR_SIGNKEY_RSA`), pubkey + password auth, MOTD off.
+* `localoptions.h` curates the crypto: curve25519 + ECDH, chacha20-poly1305, aes128/256-ctr, hmac-sha256, ed25519, pubkey + password auth, MOTD off. RSA is not set here; it stays on from dropbear's own `default_options.h` (`DROPBEAR_RSA`), which `sysoptions.h` in turn derives `DROPBEAR_SIGNKEY_RSA` from.
 * Disabled: zlib, syslog, utmp/wtmp/lastlog, loginrec, pututline (none exist here).
 
 ## Updating from upstream

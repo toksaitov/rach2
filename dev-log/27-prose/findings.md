@@ -14,6 +14,28 @@ findings up to where it stopped.
 
 ### Set one: what a reader consults
 
+* `vendor/busybox/Readme.md`: used "load-bearing", a term `CLAUDE.md` bans at
+  any frequency in Readmes. `make verify-style` passed with it present, which
+  shows `tools/prose_check.py` does not scan the `vendor/*/Readme.md` files;
+  the vendor Readmes are therefore hand-checked for the banned vocabulary in
+  this milestone. Replaced with "essential".
+* `vendor/pdpmake/build_pdpmake.sh`: its comment called pdpmake's POSIX makefile
+  "26-line" while `vendor/pdpmake/Readme.md` called the same file "30-line". The
+  extracted `pdpmake-2.0.4/Makefile` is 30 lines, so the Readme was right and
+  the build-script comment wrong. Corrected the comment to 30.
+* `vendor/dropbear/build_dropbear.sh`: a build progress line named the multi
+  binary's contents as "dropbear server + dropbearkey", omitting `dbclient`,
+  which the `PROGRAMS` line just below and the header comment above both
+  include. Added `dbclient` to the echo.
+* `vendor/dropbear/Readme.md`: the crypto list said "`localoptions.h` curates
+  the crypto: ... RSA (signkey.c needs `DROPBEAR_SIGNKEY_RSA`) ...", but
+  `localoptions.h` sets no RSA option at all. RSA is on because dropbear's own
+  `default_options.h` defines `DROPBEAR_RSA 1` (verified in the extracted
+  `dropbear-2022.83` tree), and `sysoptions.h` derives `DROPBEAR_SIGNKEY_RSA`
+  from it. Reworded so RSA is attributed to the dropbear default, not to
+  `localoptions.h`. Found while reading `localoptions.h`, after that Readme was
+  already marked read.
+
 * `utils/Readme.md`: `init.c` was documented twice, a full entry among the
   privileged programs (after `login.c`) and a shorter recap just before the
   Credentials section. The recap repeated what the full entry and the staging

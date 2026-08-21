@@ -55,19 +55,19 @@ A document is where a claim is most often wrong and most often read.
 
 How each upstream project is pinned, patched, configured and built.
 
-* [ ] `vendor/busybox/Readme.md` (3074 words)
-* [ ] `vendor/dropbear/Readme.md` (1681 words)
-* [ ] `vendor/tcc/Readme.md` (1425 words)
-* [ ] `vendor/musl/Readme.md` (1206 words)
-* [ ] `vendor/tcc/build_tcc.sh` (982 words)
-* [ ] `vendor/pdpmake/Readme.md` (863 words)
-* [ ] `vendor/pdpmake/build_pdpmake.sh` (389 words)
-* [ ] `vendor/busybox/build_busybox.sh` (384 words)
-* [ ] `vendor/musl/build_libc.sh` (270 words)
-* [ ] `vendor/dropbear/build_dropbear.sh` (244 words)
-* [ ] `vendor/busybox/patches/Readme.md` (121 words)
-* [ ] `vendor/busybox/muslgcc` (103 words)
-* [ ] `vendor/dropbear/muslgcc`, `vendor/musl/.gitignore`, `vendor/busybox/.gitignore`, `vendor/tcc/.gitignore`, `vendor/pdpmake/.gitignore`, `vendor/dropbear/localoptions.h`, `vendor/dropbear/.gitignore` (222 words over 7 files)
+* [x] `vendor/busybox/Readme.md` (3074 words)
+* [x] `vendor/dropbear/Readme.md` (1681 words)
+* [x] `vendor/tcc/Readme.md` (1425 words)
+* [x] `vendor/musl/Readme.md` (1206 words)
+* [x] `vendor/tcc/build_tcc.sh` (982 words)
+* [x] `vendor/pdpmake/Readme.md` (863 words)
+* [x] `vendor/pdpmake/build_pdpmake.sh` (389 words)
+* [x] `vendor/busybox/build_busybox.sh` (384 words)
+* [x] `vendor/musl/build_libc.sh` (270 words)
+* [x] `vendor/dropbear/build_dropbear.sh` (244 words)
+* [x] `vendor/busybox/patches/Readme.md` (121 words)
+* [x] `vendor/busybox/muslgcc` (103 words)
+* [x] `vendor/dropbear/muslgcc`, `vendor/musl/.gitignore`, `vendor/busybox/.gitignore`, `vendor/tcc/.gitignore`, `vendor/pdpmake/.gitignore`, `vendor/dropbear/localoptions.h`, `vendor/dropbear/.gitignore` (222 words over 7 files)
 
 ## The build (14 entries, 10844 words)
 
