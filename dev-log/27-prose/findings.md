@@ -202,6 +202,9 @@ findings up to where it stopped.
   detail. A design decision."). Reworded to "That ordering is deliberate: ...",
   which states the claim plainly; the sentence already explains why (one image
   of the databases).
+* `utils/adduser.c`: a badly-wrapped comment. The `ADDUSER_CRASH_POINT` block
+  broke as "...never in a shipped / image. It / takes a leading count", leaving
+  "It" orphaned on its own short line. Reflowed the block (all lines under 80).
 * `krffs/stageimage.krffs.c`: two in-function comment lines ran past the 80-column
   comment limit (the `optional-file` skip note and the fgets-truncation note).
   `tools/check_comments.py` scopes its 80-column check to `rach2/`, so these

@@ -377,11 +377,11 @@ static int hand_to_passwd(const char *name)
 
 #ifdef ADDUSER_CRASH_POINT
 /* The crash build, staged in the test image alone and never in a shipped
- * image. It
- * takes a leading count and dies the instant that publication has landed,
- * inside the transaction and through `_exit`, so it leaves exactly the residue
- * and exactly the lock a real crash leaves. Everything it adds lives under this
- * one conditional, so the shipped binary has neither the argument nor the code.
+ * image. It takes a leading count and dies the instant that publication has
+ * landed, inside the transaction and through `_exit`, so it leaves exactly the
+ * residue and exactly the lock a real crash leaves. Everything it adds lives
+ * under this one conditional, so the shipped binary has neither the argument
+ * nor the code.
  */
 static int Crash_after = 0;
 
