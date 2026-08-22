@@ -204,6 +204,19 @@ had missed. The findings that changed the code rather than the prose:
   the same as Linux's per-datagram address on a queue read out of order; no
   program here does that.
 
+## The gate, from a clean tree
+
+`make distclean` and then the whole thing, in this order, every one green:
+`make full`, `verify-style`, `verify-host`, `test` (63 of 63 probes),
+`packet-test`, `raw-test`, `bootline-test`, `procfiles-test`, `exitline-test`,
+`dhcp-test`, `ssh-test`, `selfbuild-test` (the machine built its kernel twice
+from clean workspaces, hashed equal, and booted the result through GRUB and the
+whole probe suite). `make sealed-test` then rebuilt the sealed artifact at its
+contracted 660602880 bytes and operated it over SSH through all eight phases.
+The artifact's hash differs from build to build by design: the demo password is
+generated per build, so what is contracted is the geometry and the size, and
+the hash belongs to the copy that is about to be written.
+
 ## Waiting on hardware
 
 The laptop is not powered on for this session, so every claim that needs it
