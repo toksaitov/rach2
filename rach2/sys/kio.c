@@ -54,7 +54,7 @@ static const uint8_t vt_ansi_color[8] = {
  */
 static void vga_putc_raw(char c)
 {
-    if (c < 31 || c == 127) {
+    if (c < 32 || c == 127) {
         switch(c) {
             case CHAR_BS:
                 if (x) --x;

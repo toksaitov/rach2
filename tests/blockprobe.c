@@ -80,16 +80,17 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
 }
 
-/* "/bp<c>" where <c> is the byte '0' + n, one distinct byte per file index (for
-   n past 9 it runs past '9', but the paths stay unique, which is all this
-   needs). */
+/* "/bpNN", the file's index in two decimal digits. It was one byte, '0' + n,
+   which ran past '9' into punctuation for the files past the tenth: unique,
+   but a name nobody could read in a diagnostic. */
 static void path_of(char *out, unsigned n)
 {
     out[0] = '/';
     out[1] = 'b';
     out[2] = 'p';
-    out[3] = (char)('0' + n);
-    out[4] = '\0';
+    out[3] = (char)('0' + (n / 10u));
+    out[4] = (char)('0' + (n % 10u));
+    out[5] = '\0';
 }
 
 /* A byte that depends on the file index and the byte offset, so a page that
