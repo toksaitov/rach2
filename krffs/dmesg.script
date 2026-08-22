@@ -3,15 +3,20 @@
 # dmesg: what this machine printed while it was starting.
 #
 # Linux's `dmesg` reads a ring buffer through `klogctl`, a system call this
-# kernel does not have and is not going to grow: the boot log here is a device,
-# `/dev/bootlog`, which the kernel fills as it starts and anything that can
-# read a file can read. So this is the command a person expects, doing the
-# thing this machine actually does. busybox's own `dmesg` applet is turned off
-# for the same reason: it can only fail here, and it would answer from the
-# shell's applet table before this file.
+# kernel does not have; the boot log here is a device, `/dev/bootlog`, which
+# the kernel fills as it starts and anything that can read a file can read. So
+# this is the command a person expects, doing what this machine does. busybox's
+# own `dmesg` applet is turned off for the same reason: it can only fail here,
+# and it would answer from the shell's applet table before this file.
 #
-# Arguments are not taken, because the options Linux's dmesg has (clearing the
-# buffer, following it, levels) are about the ring buffer this kernel does not
-# keep.
+# Arguments are refused rather than ignored. Linux's options are about the ring
+# buffer this kernel does not keep (clearing it, following it, levels), and a
+# caller that passed one and got the log would have been told its request had
+# been carried out.
+
+if [ "$#" -ne 0 ]; then
+    echo "dmesg: this machine's boot log is /dev/bootlog and takes no options" >&2
+    exit 1
+fi
 
 exec cat /dev/bootlog

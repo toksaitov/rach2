@@ -1731,8 +1731,37 @@ def suid_config_cases(tmp):
         yield (name, path, False, fragment)
 
 
+# The applet half's own fixtures: a table shaped like busybox's, and the ways
+# it can lie. Each is (name, applet list, whether it must pass, a fragment of
+# the complaint). This check is only as good as its reading of that file, so
+# what is covered is a forbidden applet present, the sentinel absent (a scan
+# that proved nothing), and a declared count that disagrees with the names,
+# which is what a truncated table looks like.
+APPLET_CASES = (
+    ("a table with none of the forbidden applets",
+     ["cat", "ls", "sh", "traceroute"], True, ""),
+    ("a table that has dmesg, which would answer before /bin/dmesg",
+     ["cat", "dmesg", "ls"], False, "`dmesg` applet"),
+    ("a table that has passwd, which wants the set-id bit",
+     ["cat", "ls", "passwd"], False, "`passwd` applet"),
+    ("a table with no sentinel, so an absence proves nothing",
+     ["ls", "sh"], False, "found nothing instead of proving an absence"),
+    ("a table whose declared count is not what it names",
+     ["cat", "ls"], False, "truncated or edited"),
+)
+
+
+def write_applet_table(path, applets, declared=None):
+    """Write a file shaped like busybox's generated applet table."""
+    names = "\\0".join(applets)
+    count = len(applets) if declared is None else declared
+    with open(path, "w", encoding="latin-1", newline="\n") as handle:
+        handle.write("#define NUM_APPLETS %d\n" % count)
+        handle.write('const char applet_names[] ALIGN1 = "%s\\0";\n' % names)
+
+
 def selftest():
-    """Run both halves over the fixtures. Returns a process status."""
+    """Run all three halves over the fixtures. Returns a process status."""
     bad = 0
     ran = 0
 
@@ -1749,6 +1778,15 @@ def selftest():
                 # cases below, where the line is what varies.
                 f.write(declared_init_line(stem) + text)
             bad += run_case(name, check_manifest(path), want_ok, fragment)
+            ran += 1
+
+        for i, case in enumerate(APPLET_CASES):
+            name, applets, want_ok, fragment = case
+            path = os.path.join(tmp, "applets%d.h" % i)
+            short = "count" in name
+            write_applet_table(path, applets,
+                               declared=len(applets) + 1 if short else None)
+            bad += run_case(name, check_applets(path), want_ok, fragment)
             ran += 1
 
         for name, stem, text, want_ok, fragment in INIT_CASES:
@@ -1810,9 +1848,9 @@ def report(problems):
 # one, so an applet of that name would answer from the shell's PATH before the
 # set-id build's copy and then refuse for want of a bit it does not have.
 #
-# The last three cannot work on this kernel's socket layer: `ping6`,
-# `traceroute6` and their family need IPv6, which this stack does not have, and
-# `ping` is a different case, below.
+# Two of the rest cannot work on this kernel's socket layer: `ping6` and
+# `traceroute6` need IPv6, which this stack does not have. `ping` and `dmesg`
+# are a different case, below.
 #
 # `traceroute` is NOT here any more. Milestone 28 built the raw ICMP socket it
 # receives on and the `IP_TTL` it counts up, so the applet works, as root.

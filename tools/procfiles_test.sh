@@ -150,7 +150,7 @@ echo "procfiles-test: the three mounts each name their own source: OK"
   printf 'df / > /tmp.df; echo DF""-STATUS:$?; tail -1 /tmp.df\n'; sleep 3;
   printf 'free > /tmp.free; echo FREE""-STATUS:$?; cat /tmp.free\n'; sleep 3;
   printf 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up\n'; sleep 4;
-  printf 'dmesg > /tmp.dm; echo DM""ESG-STATUS:$?; head -1 /tmp.dm\n'; sleep 4;
+  printf 'dmesg > /tmp.dm; echo DM""ESG-STATUS:$?; sed -n "1s/^/DM""ESG-FIRST:/p" /tmp.dm\n'; sleep 4;
   printf 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP\n'; sleep 10;
   printf 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt\n'; sleep 10;
   printf 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6\n'; sleep 4;
@@ -224,7 +224,7 @@ for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "DMESG:dmesg" "RT:route" \
         exit 1
     fi
 done
-echo "procfiles-test: ps, df, free, uptime, route, arp and netstat each exited 0: OK"
+echo "procfiles-test: ps, df, free, uptime, dmesg, route, arp and netstat each exited 0: OK"
 
 mypid=$(sed -n 's/^MYPID:\([0-9][0-9]*\).*/\1/p' "$REAL.applets.log" | tr -d '\r' | head -1)
 if [ -z "$mypid" ]; then
@@ -263,12 +263,13 @@ if ! grep -qE "up +[0-9]" "$PLAIN_LOG"; then
 fi
 echo "procfiles-test: uptime prints a time: OK"
 
-# The boot log, under the name a person reaches for. busybox's own dmesg reads
-# a ring buffer through klogctl, which this kernel does not have, so /bin/dmesg
-# is a script that prints /dev/bootlog and the applet is off: what this checks
-# is that the name reaches the log, and the first line of the log is the banner
-# the kernel prints before anything else can have written to it.
-if ! grep -q "Rach2 Booting" "$PLAIN_LOG"; then
+# The boot log, under the name a person expects. busybox's own dmesg reads a
+# ring buffer through klogctl, which this kernel does not have, so /bin/dmesg
+# is a script that prints /dev/bootlog and the applet is off. The guest tags
+# the first line of what the command printed, because the same banner is on
+# this console anyway: a check that grepped the transcript for it would pass
+# with an empty log and a `cat` that read nothing.
+if ! grep -q "^DMESG-FIRST:.*Rach2 Booting" "$PLAIN_LOG"; then
     echo "procfiles-test: FAIL: dmesg did not print the boot log" >&2
     grep -A3 "DMESG-STATUS" "$PLAIN_LOG" | head -4 >&2
     exit 1

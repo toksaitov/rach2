@@ -31,10 +31,11 @@ file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 # that one opens a raw socket, which is root's here, and this one asks the
 # kernel to ping instead, so any account can run it.
 file 0755 /bin/ping build/utils/ping
-# The boot log, under the name a person reaches for. Linux's `dmesg` reads a
-# ring buffer through `klogctl`, which this kernel does not have; the log here
-# is a device anything can read, so this prints it. busybox's applet is off for
-# the same reason, and it would answer before this file if it were not.
+# The boot log, under the name a person expects. Linux's `dmesg` reads a ring
+# buffer through `klogctl`, which this kernel does not have; the log here is
+# `/dev/bootlog`, a device root can read, so this script prints that. busybox's
+# applet is off for the same reason, and it would answer before this file if it
+# were not.
 file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
