@@ -11,7 +11,7 @@ contract rewritten in the same commit, and one commit in the house style.
 
 ## What was built
 
-### A: the quiet exit line (26d8c3e)
+### A: the quiet exit line (36b6530)
 
 `sys_exit` printed `Process exited with status N` for every process that
 exited, including a forked child's, onto the console of a machine running a
@@ -23,7 +23,7 @@ because they are the scoring contract. `make exitline-test` proves it in four
 boots and asserts the whole marker line, not a fragment: two plain lines could
 otherwise be two copies of one exit, so the child exits 42 and the probe 0.
 
-### B: bounded /proc text (ea776f0)
+### B: bounded /proc text (c77b32c)
 
 A `/proc` file is generated into a buffer when it is opened and read back from
 there, so one descriptor shows one moment. The appenders used to stop when they
@@ -33,7 +33,7 @@ the largest of them, a `typedef` of a negative array size stops the build if a
 declared bound will not fit, and a text that exceeds its bound is refused with
 `-EOVERFLOW` and one line on the serial log naming the file.
 
-### C: the machine's own /proc files (82d0382)
+### C: the machine's own /proc files (0d24cb8)
 
 `/proc/uptime`, `/proc/stat`, `/proc/meminfo` and `/proc/mounts`, which is what
 `ps`, `df`, `free` and `uptime` read. Two of them needed something real behind
@@ -46,7 +46,7 @@ and options, recorded where the branch that chose them is still in scope.
 `make procfiles-test` boots the three mount sources and then runs the programs
 against numbers the guest does not hold.
 
-### D: the network files under /proc (e9dedb9)
+### D: the network files under /proc (9e0af15)
 
 `/proc/net/route`, `arp` and `tcp`, each in the shape the program that reads it
 parses, taken from the parser rather than from a description. The part worth
@@ -63,7 +63,7 @@ Send-Q column reported only unsent bytes rather than the whole write queue, and
 a descriptor opened on one of the three new files reported `/proc/0/stat`
 through its link because neither origin dispatcher had been taught about them.
 
-### E: the terminal ioctls over a pty (5bc7d86)
+### E: the terminal ioctls over a pty (daeabdb)
 
 The plan reported `stty` failing on a dropbear session and asked for a
 diagnosis before a fix. The diagnosis found no fault in the kernel: `TCGETS`,
@@ -86,7 +86,7 @@ pipe on the machine resolved to the constant `pipe:[1]`, which said they were
 all one pipe, and `fstat` reported no inode for a pipe at all. Pipes now carry
 their own, like sockets.
 
-### F: the packet socket, finished (a66ae13)
+### F: the packet socket, finished (8c06b55)
 
 The packet socket was built for one caller, a DHCP client, and stopped where
 that caller stopped: IPv4 only, no protocol filter, ARP frames never offered,
@@ -101,7 +101,7 @@ The review caught a bind that changed the socket's filter before the interface
 was validated, so a refused bind left the socket receiving something else, and
 a rebind that could hand a reader a queued IPv4 datagram labelled as ARP.
 
-### G: raw ICMP sockets and IP_TTL (9c07041)
+### G: raw ICMP sockets and IP_TTL (a99b8a5)
 
 The largest phase. `AF_INET/SOCK_RAW/IPPROTO_ICMP` is a real socket now, root's,
 receiving whole datagrams with the header included because that is what the
@@ -121,7 +121,7 @@ capture; the capture is what proves the two things no program inside the
 machine can see, the hop limit each datagram left with and the caller's own
 checksum crossing the wire unrepaired.
 
-### H: a boot line that contradicts itself (228ed8a)
+### H: a boot line that contradicts itself (203b9d2)
 
 `rach2.nodisk` skips the disk probe, and on an image whose root is that disk it
 left nothing to mount, so the kernel fell through to the debug shell, which
@@ -135,7 +135,7 @@ halts whatever asked for it, and the one case where the debug shell is a home
 and not a way in, an image whose root mounted and has no init, is untouched.
 That is the test image, and the harness still drives it.
 
-### I: the mapping ceiling (d66651a, adf1e4f)
+### I: the mapping ceiling (b3b4186, 63fc6ec)
 
 `VMA_MAX` was 128, chosen in milestone 22 for a link that ran out, and a
 process asking `malloc` for 1 KB at a time got about 3.1 MB before it began to
@@ -147,7 +147,7 @@ library's own. It now names the process, once, on the serial log. The review
 moved that mark from a remembered pid onto the process itself, since a pid is
 reused and the next process to hold the number would have been silenced.
 
-### J: the boot log, under the name a person expects (638c43b, 89c384f)
+### J: the boot log, under the name a person expects (d9a3e45, bcb27ec)
 
 `dmesg` failed on `klogctl`, a system call this kernel does not have.
 Implementing Linux's logging call for one command would be the wrong shape, and
@@ -156,7 +156,7 @@ the log is already a device, so `/bin/dmesg` is a short script that prints
 answering before the file. It refuses options rather than printing the log for
 a caller that asked to clear or follow it.
 
-### The three notes milestone 27 left (293958b)
+### The three notes milestone 27 left (6eff30d)
 
 `rach2/.gdbinit` still said `file kernel`, stale since the build directory was
 unified; `vga_putc_raw` guarded control bytes with `c < 31`, so 0x1F was drawn
