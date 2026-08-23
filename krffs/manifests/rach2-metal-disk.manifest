@@ -26,6 +26,10 @@ file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 # Ours, and reachable as a bare `ping` only because busybox's applet is gone:
 # that one wants SOCK_RAW, which this kernel's socket layer does not offer.
 file 0755 /bin/ping build/utils/ping
+# The boot log, under the name a person expects. This machine has no
+# console to watch it scroll past, so reading it afterwards is the only
+# way to see it; `klogctl` does not exist here, and the log is a device.
+file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
 
