@@ -8,8 +8,8 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 
 ### Policy and repository orientation
 
-* [ ] `AGENTS.md`
-* [ ] `CLAUDE.md`
+* [x] `AGENTS.md`
+* [x] `CLAUDE.md`
 * [ ] `Readme.md`
 
 ### Build, tools, and tests

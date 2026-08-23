@@ -1,9 +1,9 @@
 # AGENTS.md
 
-Follow `CLAUDE.md`. It is the project policy for the build, writing, comments, messages, ports, verification, and git.
+Follow `CLAUDE.md`, the project policy for the build, writing, comments, messages, ports, verification, and git.
 
-New here? For what Rach2 is, the build and run quick start, and the directory map, read `Readme.md` first. The per-milestone design and build history, and the current state of the tree, live in `dev-log/` (start at `dev-log/Readme.md`, whose last entry is where the tree stands now). Each component has its own `Readme.md`; read the owning one before changing its code. Run `make doctor` to check the toolchain and `make help` to list the targets.
+Read `Readme.md` first for the project overview, build and run instructions, and directory map. The design and build history is under `dev-log/`; its [index](dev-log/Readme.md) ends with the milestone that produced the current tree. Read a component's `Readme.md` before changing its code. Run `make doctor` to check the toolchain and `make help` to list the targets.
 
-The rule this project breaks most often is in `CLAUDE.md` under Agents, and it is worth repeating where it will be seen: never tell the user a delegated job is running without a command in the same turn that reads its state. Three reports of a review "still running" in one session were all of jobs that had already died. The bound on a review's size lives there too, and only there.
+The most frequently broken agent rule is repeated here: never tell the user that a delegated job is running without reading its state in the same turn. Three reviews reported as "still running" in one session had already died. `CLAUDE.md` defines the review size limit.
 
-Arriving on a new machine? `dev-log/26-portable/arrival.md` lists what a clone does not carry: the credentials, the machine's own SSH host key, the Doom WAD, the build tree, and the GitHub authentication. `Readme.md` has the fresh-Mac bootstrap.
+For a new machine, `dev-log/26-portable/arrival.md` lists what a clone does not provide: credentials, the machine's SSH host key, the Doom WAD, the build tree, and GitHub authentication. `Readme.md` has the fresh Mac bootstrap instructions.
