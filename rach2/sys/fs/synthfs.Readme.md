@@ -1,82 +1,107 @@
-# Synthetic file systems: `/dev` and `/proc`
+# Synthetic file systems
 
-Not every path names a file on disk. `/dev/null` is a kernel sink; `/proc/self/fd/0` is a window onto a live process. These are synthetic file systems: the names are backed by in-kernel drivers and process state, generated on demand, never stored in KRFFS. Rach2 mounts two, a `/dev` (`devfs`) and a minimal `/proc` (`procfs`), the slice musl and busybox actually read.
+Rach2 generates `/dev` and `/proc` from kernel state. Neither tree is stored in KRFFS. [synthfs.c](synthfs.c) classifies a canonical absolute path, [devfs.c](devfs.c) supplies devices, and [procfs.c](procfs.c) generates process and system files.
 
-## One classifier, many syscalls
+## Path routing
 
-The temptation is to scatter `if (path starts with "/dev")` checks in front of every `krffs_resolve`. That rots. Instead a single pure classifier, `synth_classify()` in [synthfs.c](synthfs.c), turns a path into a `vnode_kind`:
+The syscall layer joins relative paths to the current directory or a directory descriptor, then removes repeated slashes, `.` components, and `..` components. It strips the leading slash before calling `synth_classify`. Paths outside `/dev` and `/proc` continue to KRFFS. An unknown path below either synthetic mount returns `ENOENT` or `ENOTDIR`; it cannot reach a KRFFS node hidden below the same prefix.
 
-```
-""                  -> VNODE_KRFFS        (the real root; resolve via KRFFS)
-"dev"               -> VNODE_DEV_DIR
-"dev/null"          -> VNODE_DEV          (name = "null")
-"proc"              -> VNODE_PROC_DIR
-"proc/cmdline"      -> VNODE_PROC_CMDLINE (the boot command line)
-"proc/self"         -> VNODE_PROC_PID     (pid = SELF)
-"proc/7/stat"       -> VNODE_PROC_FILE
-"proc/7/fd"         -> VNODE_PROC_FD_DIR
-"proc/self/fd/0"    -> VNODE_PROC_FD_LINK (a magic symlink)
-"hello.txt"         -> VNODE_KRFFS
-```
+Synthetic directories can be opened and used by `chdir` and the `*at` calls. For example, `openat` can open `null` relative to an fd for `/dev`. Directory descriptors and the current working directory store canonical synthetic paths, with `/proc/self` resolved to the numeric pid when necessary.
 
-Every path-taking syscall (`open`, `stat`, `fstatat`, `readlink`, `getdents`, `mkdir`/`unlink`/`rename`, and the rest) calls it once: a `VNODE_KRFFS` result means "ordinary file, hand it to KRFFS", anything else routes to the devfs and procfs glue. The classifier is pure string logic, so the fence-post-prone component parsing runs natively under ASan in `tests/host/synthfs_hosttest.c`.
+The namespace is fixed. Creation, removal, rename, and timestamp operations below `/dev` or `/proc` return `EROFS`, and `execve` returns `EACCES`. A KRFFS root listing does not add `dev` or `proc`; programs must address those mount paths explicitly. `/dev` enumeration lists the device registry but does not list its accessible `pts` subdirectory.
 
-## devfs: character devices over `file_ops`
+## devfs
 
-A small registry maps a leaf name to a character device: a `file_ops` vtable plus a `{major, minor}` and a mode. `open("/dev/<name>")` checks the caller's credentials against that mode with the same nine-bit rule the file systems use (every entry is owned root:root), then binds the vtable onto the descriptor (`FD_TYPE_DEVICE`, `priv` is the registry entry), after which the generic read, write, and close paths dispatch through it, so the device code lives nowhere in the syscall layer. The set, with the real Linux device numbers:
+`/dev` has mode 0755 and file-system id 5. Its registry gives each fixed device a stable inode, a character-device number, and root ownership. Open permissions use the same owner, group, and other bits as KRFFS.
 
-| device             | major:minor | mode | behavior                                                                 |
-|--------------------|-------------|------|--------------------------------------------------------------------------|
-| `null`             | 1:3         | 0666 | read returns EOF, write is discarded                                     |
-| `zero`             | 1:5         | 0666 | read returns zeros, write is discarded                                   |
-| `full`             | 1:7         | 0666 | read returns zeros, write returns `-ENOSPC`                              |
-| `random`/`urandom` | 1:8 / 1:9   | 0666 | read returns the trusted CSPRNG, else `-EIO` (see the krandom Readme)    |
-| `console`          | 5:1         | 0666 | the kernel console (`FD_TYPE_CONSOLE`)                                   |
-| `tty`              | 5:0         | 0666 | the caller's controlling terminal: the console, a pty slave, or `-ENXIO` |
-| `ptmx`             | 5:2         | 0666 | a clone device: each open mints a new pty pair and returns the master    |
-| `bootpart`         | 240:0       | 0600 | the boot partition as a bounded raw window (below); root only            |
-| `grubcore`         | 240:3       | 0600 | the post-MBR gap, LBA 1 through 2047, as a bounded raw window; root only |
+| Path | Device | Mode | Contract |
+|------|--------|------|----------|
+| `/dev/null` | 1:3 | 0666 | Reads return EOF; writes are discarded. |
+| `/dev/zero` | 1:5 | 0666 | Reads return zero bytes; writes are discarded. |
+| `/dev/full` | 1:7 | 0666 | Reads return zero bytes; writes fail with `ENOSPC`. |
+| `/dev/random` | 1:8 | 0666 | Reads use the trusted CSPRNG and fail with `EIO` when the seed is untrusted. |
+| `/dev/urandom` | 1:9 | 0666 | Uses the same read and trust policy as `/dev/random`. |
+| `/dev/console` | 5:1 | 0666 | Opens the kernel console terminal. |
+| `/dev/tty` | 5:0 | 0666 | Opens the caller's controlling console or pty slave; a caller without one gets `ENXIO`. |
+| `/dev/ptmx` | 5:2 | 0666 | Allocates a pty pair and returns its master. |
+| `/dev/bootpart` | 240:0 | 0600 | Exposes a validated FAT boot partition as a raw sector window when one exists. |
+| `/dev/disk0` | 240:1 | 0400 | Exposes the diagnostic whole-disk window after a diagnostic probe. |
+| `/dev/bootlog` | 240:2 | 0400 | Reads the kernel's 16 KiB serial-log ring from its oldest retained byte. |
+| `/dev/grubcore` | 240:3 | 0600 | Exposes LBA 1 through 2047 when the MBR leaves that range unused. |
 
-`/dev/bootpart` and `/dev/grubcore` are the two windows a machine needs to manage its own boot without mounting anything, and both are published by disk discovery before any root is chosen, not at the end of a successful mount. That ordering is the point: a machine booting a RAM image mounts nothing from its disk and is exactly the machine that has to repair the boot partition which stopped it booting.
+`null`, `zero`, and `full` seek to offset zero. Random devices, terminals, and pty endpoints are streams and return `ESPIPE`. `/dev/bootlog` uses an ordinary offset and supports seeks relative to the current ring length. All synthetic nodes use stable timestamps from the RTC reading taken during startup, or zero when no RTC reading was accepted.
 
-Nothing is published until sector 0 has been read and its signature accepted. `/dev/grubcore` then covers LBA 1 through 2047, a constant of the disk layout instead of anything the table reports, so a damaged table cannot widen it; it is withheld when any non-empty partition entry reaches into that range, because a disk whose boot loader shares sectors with a file system is one where writing GRUB destroys the file system. Sector 0 is outside the window on purpose: it has the partition table, and a disk writes whole sectors, so the eight bytes of boot code pointing at the core image cannot be touched without rewriting the table beside them. `/dev/bootpart` needs entry 0 judged against the whole table (`mbr_bootpart_ok` in `sys/block/mbr.c`): FAT-typed, non-empty, inside the disk, starting at or after the gap, and sharing no sector with another entry. The mount adds the one fact discovery cannot know, which entry has the root, and withdraws the device if entry 0 turns out to be it.
+The pty pool has 16 pairs. Opening `/dev/ptmx` allocates a locked pair; `TIOCSPTLCK` must unlock it before `/dev/pts/N` can open. An allocated slave appears in `/dev/pts`, has device number 136:N, and starts with the opener's effective uid and gid and mode 0620. `chmod` and `chown` may change that slave for a login session. The slave uses the normal terminal discipline. Master writes become slave input, while slave output and echo enter a 4096-byte master ring. The pair is released after both endpoints close.
 
-`/dev/disk0`, the whole-disk diagnostic window, is the third of these raw nodes and the only one still gated behind `rach2.diskdiag`; anything that re-initialises a controller withdraws all three together, because each has a pointer to the device it reads through.
+`/dev/bootlog` is always present. The serial path records each byte in a fixed ring; after 16384 bytes, new output replaces the oldest bytes. The os-real `dmesg` script reads this device because Rach2 has no `klogctl` interface.
 
-Both boot windows share one implementation. They read and write whole 512-byte sectors at sector-aligned offsets (`-EINVAL` otherwise), through a kernel bounce buffer, because the AHCI driver programs physical DMA addresses and must never see a user pointer; a read at the end returns 0, a write at or past it `-ENOSPC`, and both disk drivers flush the drive cache per write, so a returned write is durable. Each seeks like a file whose size is its window's. The write path checks the effective uid instead of trusting the open: the mode stops a non-root caller at open and nothing else, since the credential check passes uid 0 whatever the mode says, so a process could otherwise open one of these while privileged, drop privilege, and keep writing through the descriptor.
+The framebuffer and mouse use the root paths `/fb` and `/mouse`. They are not devfs entries.
 
-`lseek` on the mem devices returns 0 (Linux's `null_lseek`); the stream and terminal devices are `-ESPIPE` (a valid fd, just not seekable). `stat` and `fstat` report a character device (`S_IFCHR`) with the entry's mode and a synthetic `st_dev` distinct from KRFFS's, so a device's `(st_dev, st_ino)` identity never aliases a real file's.
+## Raw disk windows
 
-## procfs: process state as files
+Disk discovery reads and validates sector 0 before publishing either boot window. `/dev/bootpart` represents MBR entry 0 only when all of these conditions hold:
 
-Generated per query from the process table:
+* its type is FAT32 `0x0b` or `0x0c`;
+* its start and nonzero length fit within the disk;
+* it starts at or after LBA 2048 and overlaps no other nonempty entry;
+* its length is less than 2 GiB;
+* it is not the partition later selected as the KRFFS root.
 
-* `/proc/<pid>/stat`: the space-separated fields ps parses (pid, `(comm)`, state, ppid, and the rest). Accounting fields the kernel does not track are zero, but the shape is exact and the `comm` parentheses are scrubbed so a naive parser is not fooled.
-* `/proc/<pid>/cmdline`: the program name (the kernel keeps `comm`, not the full argv).
-* `/proc/<pid>/fd/<n>`: a magic symlink whose `readlink` returns the descriptor's path (`/dev/console` for the console, `/dev/<name>` for a device, and so on).
-* `/proc/self` is the caller; `getdents("/proc")` lists `cmdline`, `self`, and the live PIDs.
-* `/proc/cmdline`: the boot command line the loader passed, plus a newline, a global file beside the pid tree. It is how a program learns which GRUB menu entry booted the machine (the entries carry `rach2.slot=` tokens).
+`/dev/grubcore` represents the fixed half-open range `[1, 2048)`. It requires a disk large enough for that range and no nonempty partition overlapping it. Sector 0 is excluded because it contains the partition table. Both devices are considered before root selection, so a RAM-root boot can still repair its disk.
 
-A `/proc` text file is snapshotted into a pooled buffer at open and served from there, so a read sees one consistent moment and dup and fork share the snapshot until the last descriptor closes (the open-file-description lifetime, freed by the `file_ops` close hook). Text is built with bounded append helpers and hand-rolled integer formatting: no `snprintf`, no 64-bit division (the kernel has no libgcc).
+`/dev/disk0` is published when `rach2.diskdiag` runs the disk diagnostic. A recovery build publishes it without that boot option. The window covers the device up to 2^32 sectors, or 2 TiB at 512 bytes per sector; `/proc/disk` reports both the device size and the window size. An ordinary kernel permits reads but its device write handler returns `EPERM`. Only a kernel built with `RACH2_RECOVERY` has the whole-disk write implementation, and that implementation rechecks effective uid 0 for every write.
 
-## What `ttyname(0)` exercises
+All three raw devices use a 64-bit offset shared by duplicated and inherited descriptors. `_llseek` can address the whole window. The legacy 32-bit `lseek` returns `EOVERFLOW` when it cannot return the resolved offset. A seek need not be sector-aligned, but each read and write offset and byte count must be a multiple of 512 or the transfer returns `EINVAL`.
 
-`ttyname` is the integration target, and it pulls the whole thing together. musl's `ttyname_r` (verified against the vendored `musl-1.2.5`) issues `isatty(fd)` as `ioctl(TIOCGWINSZ)`, which the console answers (so it reads as a terminal; `TCGETS` stayed `-ENOTTY` until the termios layer arrived), then `readlink("/proc/self/fd/0")` yields `/dev/console`, and `stat("/dev/console")` is compared with `fstat(0)` on `(st_dev, st_ino)`. Both paths report the same console identity, so they match and `ttyname(0)` returns `/dev/console`.
+Reads at or past the end return EOF, and a read crossing the end is shortened. A write at or across the end returns `ENOSPC` before writing any part of the request. Transfers pass through a 32 KiB kernel buffer in batches of at most 64 sectors, so a DMA driver never receives a user pointer. ATA and AHCI flush the device cache after every successful write command. A fully successful write is therefore durable when it returns. If a later batch fails, the short count covers only completed earlier batches; the block interface cannot report how much of the failed batch reached the device.
 
-## Compared to Linux
+Only one open file description may hold write access across the three raw windows. A second writer gets `EBUSY`; readers may coexist with it. `/dev/grubcore` additionally permits only one open file description at a time because replacement of the embedded loader is a multi-step transaction. A controller reprobe withdraws all three windows. Existing descriptors then receive `ENXIO` until the backing is published again.
 
-Linux's `devtmpfs` and `procfs` surface device nodes and process state as a mounted synthetic namespace, with `->poll` and `->read` driver hooks and per-task `/proc` files. Rach2's version is the same shape, a path classifier in front of driver-backed inodes, minus the VFS mount plumbing.
+## procfs
 
-## Deliberate simplifications
+`/proc` has mode 0555 and file-system id 6. Directories have mode 0555, ordinary files have mode 0444, `/proc/disk` has mode 0400, and magic links have mode 0777. Its root listing contains these global entries before the live numeric pid directories:
 
-* A bare `ls /` does not yet merge the `dev` and `proc` mount names into the KRFFS root listing; they are reached by their absolute paths (`opendir("/proc")` works).
-* `openat(dirfd, rel)` relative to a synthetic directory fd is not resolved; busybox uses absolute `/proc/<pid>/...` paths.
-* `comm` and `cmdline` carry the program basename, not the full argv; `stat`'s sizes and cpu-time fields are zero.
+* `/proc/cmdline` is the captured kernel command line followed by a newline.
+* `/proc/disk` is the disk diagnostic record and live command counters. The path always exists. Before a diagnostic probe it reports `state not-asked`; only `/dev/disk0` is conditional on the probe. Opening this file requires root.
+* `/proc/uptime` reports total and idle delivered 100 Hz ticks as seconds with two decimal places.
+* `/proc/stat` reports busy ticks in the system column, idle ticks, the boot epoch, processes created since boot, and current runnable and blocked counts. Untracked counters are zero.
+* `/proc/meminfo` reports the physical frame pool. Buffers, cache, and swap fields are zero.
+* `/proc/mounts` reports the recorded KRFFS root source and options, followed by devfs and procfs rows.
+* `/proc/net` contains `dev`, `route`, `arp`, and `tcp`. There is no `tcp6` because the kernel has no IPv6 stack.
+* `/proc/self` is a magic symlink to the caller's numeric pid.
 
-## Verify
+The network files are snapshots of fixed kernel tables. `/proc/net/dev` prints receive and transmit byte and packet counts for the interface when one is present. `/proc/net/route` prints the on-link route and an optional default gateway. `/proc/net/arp` prints the eight-entry address cache. `/proc/net/tcp` prints the 16-entry TCP pool with Linux state numbers, queue lengths, uid, and the same socket inode used by `fstat` and `/proc/<pid>/fd/N`.
 
-* `tests/devprobe.c` (freestanding): `/dev/zero` reads zeros, `/dev/null` is EOF and a sink, `/dev/full` is `-ENOSPC`, `/dev/urandom` varies (the probe runs with trusted entropy); `/proc/self/stat` reports the caller's pid and comm; `/proc/self/fd/0` resolves to `/dev/console`. Prints `DEVPROBE OK`.
-* `tests/bootprobe.c` (freestanding, `make bootpart-test`): `/proc/cmdline` at each layer (content, the `/proc` listing, stat/fstat identity, the fd's readlink origin) and the two raw windows. Three boots of one disk. Without a FAT partition, `/dev/bootpart` must be absent from stat and open alike (`BOOTPROBE ABSENT OK`). With one of known bytes, the device is driven end to end (`BOOTPROBE OK`). And a third boot mounts a RAM image instead of the disk and requires both `/dev/bootpart` and `/dev/grubcore` anyway, drives the gap window's extent and every refusal at its edges, and proves a descriptor opened as root stops accepting writes once the process drops privilege (`BOOTPROBE RAMROOT OK`).
-* `tests/host/synthfs_hosttest.c`: the path classifier under ASan and UBSan.
-* `tests/host/mbr_hosttest.c`: the MBR parse and the boot-partition judgement over crafted tables.
-* `tests/musl/devtest.c` (installed `mdevtest`): the devices, `ttyname(0)`, and `opendir` over `/dev` and `/proc`, all through real musl.
+Each live `/proc/<pid>` directory contains `stat`, `cmdline`, and `fd`:
+
+* `stat` emits fields 1 through 24. Pid, program name, parent, process group, and session come from the process table. Running and ready processes use state `R`, blocked processes use `S`, zombies use `Z`, and other states also use `R`. Terminal, fault, CPU-time, start-time, address-space, and resident-size fields that the kernel does not track are fixed values or zero.
+* `cmdline` contains one NUL-terminated argument: the stored program basename. The kernel retains no full argument vector. The basename is limited to 15 bytes, is inherited by `fork`, and is replaced by `execve`.
+* `fd` lists the process's open descriptors as magic links. Targets include KRFFS paths, `/dev` paths, pty endpoints, synthetic directories, `pipe:[inode]`, and `socket:[inode]`.
+
+Following `/proc/self` produces the numeric pid directory. Following `/proc/<pid>/fd/N` produces the target descriptor's stat identity; `lstat` sees the link itself. This is the identity check used by musl's `ttyname` implementation.
+
+## Snapshot lifetime
+
+Opening a proc text file builds it once in one of eight pooled 3072-byte buffers. Every generator has a declared bound no larger than that buffer. If the pool is full, open returns `ENFILE`. If a generator exceeds its bound, open logs the file name and returns `EOVERFLOW` instead of exposing truncated text.
+
+The descriptor reads this fixed image until EOF. Duplicated and inherited descriptors share the open-file description and its offset; the pool slot is released on the last close. A per-process snapshot therefore remains readable after that process exits. Proc text files are read-only, poll as readable, and report `st_size` as zero because their size is not generated by stat.
+
+Every synthetic directory includes `.` and `..`. `/proc` enumerates live processes, `/proc/<pid>/fd` enumerates live descriptors, and `/dev/pts` enumerates allocated slaves. These listings are snapshots only at the syscall level: another `getdents` call reads the current kernel tables from its saved index.
+
+## Verification
+
+The default `make test` boot runs these relevant probes:
+
+* [devprobe.c](../../../tests/devprobe.c) checks the memory devices, trusted `urandom`, `/proc/self/stat`, and the console fd link.
+* [ptyprobe.c](../../../tests/ptyprobe.c) checks master allocation, slave unlocking, terminal ioctls, cooked input, echo, and output.
+* [procprobe.c](../../../tests/procprobe.c) checks snapshot lifetime and bounds, process names, system files, delivered tick accounting, mount records, network formats, socket identity, and full TCP-pool output.
+* [statmusl.c](../../../tests/musl/statmusl.c) checks stable synthetic timestamps through path and descriptor stat calls.
+
+[devtest.c](../../../tests/musl/devtest.c) is built and staged as `/musl/devtest`, but the default runner does not invoke it. Its manual checks include `ttyname`, directory enumeration, access and symlink semantics, and `openat` relative to `/dev`.
+
+Specialized targets cover state that one shared test boot cannot provide:
+
+* `make bootpart-test` uses four boots to check an absent boot partition, a writable fixture, boot devices under a RAM root, and 64-bit whole-disk offsets on a sparse AHCI disk.
+* `make authority-test` compares ordinary and recovery kernels, the one-writer reservation, 64-sector batching, and driver command and cache-flush counts.
+* `make procfiles-test` checks three root-mount sources, then BusyBox `ps`, `df`, `free`, `uptime`, `dmesg`, `route`, `arp`, and `netstat` against the generated files.
+* `make verify-host` runs [synthfs_hosttest.c](../../../tests/host/synthfs_hosttest.c) for the core path classifier and [mbr_hosttest.c](../../../tests/host/mbr_hosttest.c) for MBR parsing and boot-window selection.

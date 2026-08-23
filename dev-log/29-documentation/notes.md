@@ -37,6 +37,15 @@ This is the persistent record for information needed after a compaction or betwe
 * The kernel reports `relatime` for every KRFFS root in `/proc/mounts`, although KRFFS reads never update atime. This milestone does not edit kernel output.
 * The `fcntl64` contract comment in `rach2/sys/syscall.c` says `O_APPEND` and `O_NONBLOCK` are stored but not enforced. The read, write, socket, pipe, terminal, and device paths enforce them. This milestone does not edit source comments.
 * The header of `tests/lstest.c` says KRFFS is flat and every file appears in the root. KRFFS is hierarchical, and the probe lists only the root. This milestone does not edit test comments.
+* `tests/host/synthfs_hosttest.c` does not cover classifier branches added for `/dev/pts`, `/proc/disk`, the system proc files, or `/proc/net`; its header still describes the classifier generally. This milestone does not edit tests or source comments.
+* `procfs_readlink_fd` renders fd links for `/proc/cmdline`, `/proc/disk`, and the four network snapshots, but omits `/proc/uptime`, `/proc/stat`, `/proc/meminfo`, and `/proc/mounts`. An fd link for one of those four falls through to `/proc/0/stat`. This milestone does not edit code.
+* `/proc/disk` is always classified, listed, stattable, and openable by root. Before `diskinfo_probe` it reports `state not-asked`. Comments in `rach2/kernel.c` and `rach2/sys/block/diskinfo.h` say `rach2.diskdiag` publishes the proc file and that it does not exist without the option. This milestone does not edit source comments.
+* `rach2/sys/fs/procfs.h` describes only the older per-process and cmdline subset and omits the current system and network files. This milestone does not edit source comments.
+* The registry comment in `rach2/sys/fs/devfs.c` says only two raw disk windows are root-only, but the table contains `bootpart`, `disk0`, and `grubcore`. This milestone does not edit source comments.
+* The root `Makefile` describes `make bootpart-test` as three boots, and `tests/bootprobe.c` says two boots share the probe. The target has four boot modes. This milestone does not edit Makefile or test comments.
+* The comment above `discover_boot_devices` says a partition in the GRUB gap withholds both boot devices. The implementation withholds `/dev/grubcore` but continues to judge and may publish `/dev/bootpart`. This milestone does not edit source comments.
+* `/dev/pts` is a resolvable synthetic directory but `getdents` on `/dev` does not list `pts`; it lists only the device registry. This milestone does not edit code.
+* `procfs_gen_stat` maps `PROC_STOPPED` through its default branch to `R`, so a job-control-stopped process is reported as running rather than `T`. This milestone does not edit code.
 
 ## Facts for subsystem passes
 
@@ -55,7 +64,8 @@ This is the persistent record for information needed after a compaction or betwe
 * `rach2/sys/proc/tls.Readme.md` now describes the one-slot `set_thread_area` subset, the fixed descriptor fields, caller-loaded selector, process-switch and interrupt preservation, fork and exec behavior, unsupported Linux interfaces, and the exact default and host tests. The default `make test` run also exercises the real musl startup path before each musl program's `main`.
 * `rach2/sys/lib/krandom.Readme.md` now describes the one-time seed selection, whole-key `RDSEED` to `RDRAND` fallback, global stream, trust policy, `AT_RANDOM`, `getrandom`, random devices, netconsole consumer, and exact automated and manual coverage. The native `krandom_hosttest` passed directly under AddressSanitizer and UndefinedBehaviorSanitizer. No automated test runs `rngprobe`'s untrusted branch, reads `/dev/random`, or checks the `GRND_NONBLOCK` and `GRND_RANDOM` distinctions.
 * `rach2/sys/fs/Readme.md` now describes the extent format and validator, hierarchical lookup and inconsistent regular-file IDs, allocation and relocation, path and permission rules, directory cursor, descriptor lifetime, ownership and times, mount paths, dirty-bit protocol, limits, and the actual default, manual, host, and persistence tests. The default runner includes the named freestanding and musl permission probes; `catfile` and `ofdmusl` are staged but manual.
+* `rach2/sys/fs/synthfs.Readme.md` describes canonical routing, all current devfs entries, pty allocation, raw-window publication and I/O, every current global and per-process proc file, snapshot lifetime, and the default, manual, host, and specialized tests. `/proc/disk` exists before diagnostics with `state not-asked`; only `/dev/disk0` is conditional.
 
 ## Decisions and deferred questions
 
-None recorded yet.
+* Recheck `rach2/sys/block/Readme.md` in its own pass. It says `rach2.diskdiag` publishes `/proc/disk` and `/dev/disk0` together, although the proc path always exists, and it lists a 0400 mode as a write barrier even though effective uid 0 passes the generic permission check and `make authority-test` opens `/dev/disk0` read-write on both kernels.
