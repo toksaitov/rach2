@@ -2,9 +2,9 @@
 
 ![First Versions of Rach2 Booting](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-An educational 32-bit x86 operating system that boots into a Unix-like shell, runs static musl programs and BusyBox, accepts real SSH logins (Dropbear), compiles C on itself (TinyCC), builds it with a make of its own (pdpmake), rebuilds its own kernel, utilities and shell from the source it has, and can run Doom.
+Rach2 is an educational 32-bit x86 operating system. It boots into a Unix-like shell, runs static programs linked with its musl port, provides BusyBox and Dropbear, compiles C with TinyCC, runs pdpmake, and rebuilds its kernel, utilities, and shell from source staged on the machine. It also runs a Doom port.
 
-Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. The kernel implements a broad set of Linux-compatible syscalls, enough to host a ported musl libc, a static BusyBox `ash`, and a Dropbear SSH server. It has a custom file system (KRFFS), which runs from a RAM module or persists on a real ATA disk through a kernel page cache, audio drivers for Sound Blaster 16, Intel HD Audio, and PC speaker, and a from-scratch TCP/IP network stack (RTL8139 and RTL8168, Ethernet, ARP, IPv4, ICMP, UDP, TCP, and sockets including the packet and raw-ICMP kinds).
+The kernel implements protected mode, paging, system calls, preemptive multitasking, process isolation, and device drivers. KRFFS, the native file system, can run from a RAM module or persist on an ATA or AHCI disk through a write-back page cache. The audio drivers support Sound Blaster 16, Intel HD Audio, and the PC speaker. The network stack supports RTL8139 and RTL8168 devices, Ethernet, ARP, IPv4, ICMP, UDP, TCP, packet sockets, and raw ICMP sockets.
 
 ## Components
 
@@ -12,30 +12,35 @@ Rach2 demonstrates core OS concepts from scratch: protected mode, paging, system
 |------------------------------------------|------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
 | [rach2/](rach2/)                         | 32-bit x86 kernel with syscalls, paging, preemptive scheduling                                                         | [Readme](rach2/Readme.md)             |
 | [rach2/sys/network/](rach2/sys/network/) | TCP/IP stack: RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets                                                    | [Readme](rach2/sys/network/Readme.md) |
-| [tests/](tests/)                         | Syscall test programs for kernel validation                                                                            | [Readme](tests/Readme.md)             |
-| [krffs/](krffs/)                         | K&R First-Fit File System tools and image builder (RAM disks and bootable ATA disks)                                   | [Readme](krffs/Readme.md)             |
+| [tests/](tests/)                         | Guest probes and musl integration programs                                                                             | [Readme](tests/Readme.md)             |
+| [tests/host/](tests/host/)               | Native sanitizer tests for kernel and tool logic                                                                       | [Readme](tests/host/Readme.md)        |
+| [krffs/](krffs/)                         | K&R First-Fit File System host tools and image builders                                                                | [Readme](krffs/Readme.md)             |
 | [ish/](ish/)                             | Minimal Unix shell: redirection, process management, and `-c`                                                          | [Readme](ish/Readme.md)               |
 | [utils/](utils/)                         | Core Unix utilities and the account programs (`login`, `su`, `passwd`, `adduser`), linked against the ported musl      | [Readme](utils/Readme.md)             |
 | [vendor/musl/](vendor/musl/)             | The ported musl libc: reproducible build, the SysV/auxv startup contract                                               | [Readme](vendor/musl/Readme.md)       |
-| [vendor/busybox/](vendor/busybox/)       | Static-musl BusyBox, built twice: the shell and tools, and the set-id account programs                                | [Readme](vendor/busybox/Readme.md)    |
-| [vendor/dropbear/](vendor/dropbear/)     | Static-musl Dropbear SSH server: the remote-login capstone                                                             | [Readme](vendor/dropbear/Readme.md)   |
+| [vendor/busybox/](vendor/busybox/)       | Static-musl BusyBox, built twice: the shell and tools, and the set-id account programs                                 | [Readme](vendor/busybox/Readme.md)    |
+| [vendor/dropbear/](vendor/dropbear/)     | Static-musl Dropbear SSH server and client                                                                             | [Readme](vendor/dropbear/Readme.md)   |
 | [vendor/tcc/](vendor/tcc/)               | The Tiny C Compiler, built to run on Rach2 and compile for it                                                          | [Readme](vendor/tcc/Readme.md)        |
 | [vendor/pdpmake/](vendor/pdpmake/)       | pdpmake, the POSIX make that runs on Rach2 and drives that compiler                                                    | [Readme](vendor/pdpmake/Readme.md)    |
 | [ports/doom/](ports/doom/)               | Doom port with VGA graphics, mouse, and audio                                                                          | [Readme](ports/doom/Readme.md)        |
 | [mk/](mk/)                               | Shared GNU-Make building blocks: toolchain, header-deps, `build/`, clangd/IDE setup                                    | [Readme](mk/Readme.md)                |
-| [tools/](tools/)                         | Build, verify, and test scripts behind the make targets (doctor, the gates, the boot harness, image builders)          | [Readme](tools/Readme.md)             |
+| [tools/](tools/)                         | Toolchain checks, style checks, host tests, boot harnesses, and image scripts                                          | [Readme](tools/Readme.md)             |
 | [dev-log/](dev-log/)                     | How each milestone was planned and built, and where the tree stands now                                                | [Readme](dev-log/Readme.md)           |
 
-Third-party code lives in two trees that say how it is maintained. `vendor/` holds pinned upstream releases (musl, BusyBox, Dropbear, TinyCC, pdpmake): each is a committed source tarball plus a small build recipe, used unmodified and customized only through the project's own config, so an update is a tarball bump (see each `vendor/*/Readme.md`). Four of them carry a stated exception to "unmodified", each a single patch file applied at build time, not an edited tree committed: TinyCC's refuses the output kinds this system cannot run; musl's makes `posix_spawn` fork, because it otherwise asks for a shared address space this kernel cannot provide and `system(3)` and `popen(3)` fail on every program; pdpmake's points its built-in macros at the compiler and the link this platform actually has; and BusyBox's makes `udhcpc` compile against the ported musl, which has neither of the two Linux headers it includes. `ports/` holds code Rach2 has forked and owns: the Doom port no longer tracks an upstream.
+`vendor/` has pinned source tarballs for musl, BusyBox, Dropbear, TinyCC, and pdpmake. Each build script verifies its tarball by SHA-256 before extracting it. Project configuration and patches are kept beside the tarballs instead of editing a committed extracted tree. musl, TinyCC, and pdpmake each apply one project patch; BusyBox applies two; Dropbear uses project configuration without a source patch. The integration Readmes describe those changes and the update procedure. `ports/doom/` is a project-owned fork and no longer tracks an upstream release.
 
 ## Kernel subsystems
 
-The musl port grew the kernel into full OS subsystems. Each has its own Readme and a probe that exercises it.
+The kernel subsystem documents describe the current implementation and its tests.
 
 | Subsystem            | What it provides                                                                   | Documentation                             |
 |----------------------|------------------------------------------------------------------------------------|-------------------------------------------|
 | Memory management    | Physical frames, page tables, the VMA address-space model, demand paging, COW fork | [Readme](rach2/sys/mm/Readme.md)          |
 | File system (KRFFS)  | Hierarchical directories, path resolution, the `*at` file API                      | [Readme](rach2/sys/fs/Readme.md)          |
+| Synthetic files      | `/dev` and `/proc` nodes generated by the kernel                                   | [Readme](rach2/sys/fs/synthfs.Readme.md)  |
+| IPC                  | Pipes, open-file descriptions, blocking, wakeups, and atomic writes                | [Readme](rach2/sys/ipc/Readme.md)         |
+| I/O multiplexing     | `poll`, `ppoll`, `select`, and `pselect6`                                          | [Readme](rach2/sys/io/Readme.md)          |
+| Block storage        | ATA, AHCI, MBR partitions, write policy, and disk diagnostics                      | [Readme](rach2/sys/block/Readme.md)       |
 | Thread-local storage | `%gs` TLS via `set_thread_area`, per-process and switch-safe                       | [Readme](rach2/sys/proc/tls.Readme.md)    |
 | Signals              | Dispositions, masks, delivery on return-to-user, the `sigreturn` frame             | [Readme](rach2/sys/proc/signal.Readme.md) |
 | CSPRNG (`krandom`)   | ChaCha20 seeded from `RDSEED`/`RDRAND`, backing `AT_RANDOM` and `getrandom`        | [Readme](rach2/sys/lib/krandom.Readme.md) |
@@ -43,7 +48,7 @@ The musl port grew the kernel into full OS subsystems. Each has its own Readme a
 
 ## Prerequisites
 
-Run `make doctor` at any time to check your toolchain. It reports each tool as PASS or MISSING with a per-OS install hint, and it fails if anything in either required group is absent. The second group is the one people skip: `make verify-style` refuses to start without `cppcheck`, `shellcheck`, `clang-format` and `perl`, and `CLAUDE.md` requires that suite on every change.
+Run `make doctor` to check the toolchain. It reports each tool as PASS or MISSING, prints installation hints, and fails if either required group is incomplete. The verification group contains `cppcheck`, `shellcheck`, `clang-format`, and Perl; `make verify-style` requires all four.
 
 On a fresh Mac, from nothing to a built system:
 
@@ -57,36 +62,41 @@ make doctor                            # must say: all required tools present
 make && make full
 ```
 
-`tools/bootstrap_mac.sh` installs from `tools/mac-formulae.txt`, which is the list of formulae and casks in one readable place; it skips what is already installed, and `--dry-run` prints what it would do. Nothing else is fetched: the vendored sources are committed as tarballs, so the build is offline after the clone.
+`tools/bootstrap_mac.sh` reads `tools/mac-formulae.txt`, skips installed Homebrew packages, and prints the commands without running them under `--dry-run`. These are the equivalent direct commands:
 
-| Tool           | macOS (Homebrew)             | Linux                                                                              |
-|----------------|------------------------------|------------------------------------------------------------------------------------|
-| Cross-compiler | `brew install i686-elf-gcc`  | build the OSDev `i686-elf` cross GCC (or `brew install i686-elf-gcc` via Homebrew) |
-| Emulator       | `brew install qemu`          | `sudo apt install qemu-system-x86`                                                 |
-| FUSE           | `brew install --cask fuse-t` | `sudo apt install libfuse-dev`                                                     |
-| pkg-config     | `brew install pkg-config`    | `sudo apt install pkg-config`                                                      |
+```sh
+brew install i686-elf-gcc i686-elf-binutils qemu pkg-config cppcheck shellcheck clang-format coreutils expect
+brew install --cask fuse-t
+```
 
-The kernel is freestanding and links no libgcc, so it alone also builds with `x86_64-elf-gcc`; the musl-linked utilities need a 32-bit libgcc, which only `i686-elf-gcc` supplies, so `i686-elf-gcc` is the project default.
+On Debian or Ubuntu, the corresponding emulator and FUSE packages are `qemu-system-x86`, `libfuse-dev`, and `pkg-config`; build an OSDev `i686-elf` cross GCC separately. `make doctor` prints the current hints for every required tool.
+
+The default build and `make full` fetch no source after the clone. The five upstream source archives are committed. The Doom game-data file is optional and is not committed.
+
+The kernel is freestanding and links no libgcc, so it can also build with `x86_64-elf-gcc`. The musl-linked programs use the `i686-elf` toolchain's 32-bit libgcc, and their Makefiles require `i686-elf-gcc`.
 
 ## Build
 
 ```sh
 make doctor    # check your toolchain (PASS/MISSING with install hints)
 make           # the kernel + the os-simple image (our login, shell and Unix utilities)
-make full      # all three images: test, os-simple, and the os-real (BusyBox, Dropbear
-               #   SSH, Doom, a C compiler and a make) capstone the SSH login boots
-make test      # boot the test image headless and assert every probe exits 0
+make full      # build the test, os-simple, and os-real images
+make test      # boot the test image and check each probe's declared result
 make selfbuild-test   # the machine builds its own kernel, utilities and shell
 make images    # build all three images without the test run
 make isos      # a bootable ISO per image, for real hardware (Docker grub-mkrescue)
 make deps      # just the vendored third-party (libc; DEPS=full adds busybox,
                #   dropbear, tcc and pdpmake)
 make help      # list every target
-make clean     # remove component build products
+make clean     # remove in-house build products and images
 make distclean # + every vendored build: musl, busybox, dropbear, tcc, pdpmake
 ```
 
-`make` builds everything the everyday workflow needs, in dependency order, with no manual `build_*.sh` and no `make clean` rituals. A header edit rebuilds only the objects that include it. The ported musl libc and the BusyBox, Dropbear, TinyCC and pdpmake capstones are vendored as pinned tarballs and built on demand behind stamp files; all build output lives out of tree under a single repo-root `build/` directory that mirrors the source tree, so the source tree stays clean. The three RAM-disk images build out of tree to `build/images/` from manifests in `krffs/manifests/`. The RAM module is the disposable machine: it is a copy made at boot, so every change to it dies with the process. `make os-real-disk` builds the same tree onto a real disk, and booting that (`DISK=../build/images/os-real.disk ./run.sh` from `rach2/`) gives the writable one, where an account created or a password changed is still there after the power goes off. The page cache is write-back, so an edit is on the platter after a `sync` and not before. The build system does not run QEMU; the run scripts in `rach2/` do that.
+`make` follows the dependency graph; a header edit rebuilds only the objects that include it. Do not invoke a vendor `build_*.sh` script or run `make clean` as a routine build step. In-house objects and binaries go under the repo-root `build/` directory. Vendor scripts extract working trees under `vendor/`; musl also installs its sysroot there. The image consumes staged vendor artifacts from `build/vendor/`.
+
+The three RAM images are built under `build/images/` from manifests in `krffs/manifests/`. The kernel copies a RAM module at boot, so changes to that root disappear when QEMU exits. `make os-real-disk` creates a partitioned disk image with the same os-real files. From `rach2/`, `DISK=../build/images/os-real.disk ./run.sh` mounts that disk image as the writable root. Its write-back page cache makes changes durable after `sync`.
+
+Image build targets do not run QEMU. The scripts under `rach2/` boot images directly, and the test targets invoke QEMU through their harnesses.
 
 ## Quick Start
 
@@ -100,20 +110,15 @@ cd rach2 && ./run.sh os-simple sb16         # Sound Blaster 16
 cd rach2 && ./run.sh os-simple hda          # Intel HD Audio
 ```
 
-Both images ask who is there. `make` mints the two demo passwords when they are
-absent, into `krffs/rach2_demo_password` (root) and `krffs/rach2_test_password`
-(the unprivileged `test` account), neither of which is committed; `cat` the one
-you want and type it at the login prompt. The same `/etc/shadow` is staged into
-os-simple and os-real, so one password opens either.
+os-simple and os-real both start `/bin/login`. When the password files are absent, the build generates `krffs/rach2_demo_password` for root and `krffs/rach2_test_password` for the unprivileged `test` account. Neither file is committed. The same generated `/etc/shadow` is staged in both images.
 
 ### Building on the machine itself
 
-os-real has a C compiler and a make, so a program can be written, compiled
-and BUILT on Rach2, not on the machine that built Rach2:
+os-real has TinyCC, pdpmake, and their sysroot. To compile a program on a persistent os-real disk image:
 
 ```sh
-make full                                   # os-real has tcc, make and the sysroot
-cd rach2 && DISK=../build/images/os-real.disk ./run.sh   # after: make os-real-disk
+make os-real-disk                           # os-real with tcc, make, and the sysroot
+cd rach2 && DISK=../build/images/os-real.disk ./run.sh
 
 # then, at the machine's own prompt, as any account:
 printf '#include <stdio.h>\nint main(void){puts("mine");return 0;}\n' > /tmp/m.c
@@ -121,9 +126,7 @@ tcc -static -o /tmp/m /tmp/m.c
 /tmp/m
 ```
 
-And with a makefile, which is the point of having a clock and stamped
-timestamps: the second `make` does nothing, because the machine can tell the
-object from the source it was built from.
+pdpmake compares file modification times, so the second build below does nothing and touching the source rebuilds the program:
 
 ```sh
 mkdir /tmp/p && cd /tmp/p
@@ -135,44 +138,22 @@ touch cat.c
 make                # builds again, because the source is newer now
 ```
 
-`-static` is not optional and the compiler says so: this system has no dynamic
-linker, and the kernel does not refuse a dynamic executable, it loads one and
-jumps into it unrelocated. `-run` and `-shared` are refused for their own
-reasons. The source of this project's own tools is staged at `/src/utils`, so
-`tcc -static -o /tmp/cat /src/utils/cat.c` builds a working `cat` on the machine
-that will run it. Two targets gate the two halves: `make tcc-test` compiles and
-links by hand and checks every refusal, and `make make-test` runs the makefile
-above, requires the second `make` to build nothing and the third to build again,
-and reboots to prove the timestamp it decided that on was on the disk and not in
-memory.
+Rach2 has no dynamic linker. Its TinyCC patch therefore requires `-static` for an executable and rejects `-run`, `-shared`, and non-ELF executable output. The kernel does not reject a dynamic executable; it maps its loadable segments and enters it without applying dynamic relocations. The project source is staged under `/src`, so `tcc -static -o /tmp/cat /src/utils/cat.c` builds a `cat` on the machine. `make tcc-test` checks compilation and every rejected output kind. `make make-test` checks the incremental build above and reboots before checking the resulting timestamps again.
 
 ### The machine builds itself
 
-The kernel's own source is staged at `/src/rach2`, the shell's at `/src/ish`,
-the utilities' at `/src/utils`, and each tree has a `guest.mk` that
-pdpmake reads (the `Makefile` beside it is the host build's, in GNU syntax
-pdpmake cannot parse). As root, the machine rebuilds any of the three in
-place:
+The kernel source is staged at `/src/rach2`, the shell at `/src/ish`, and the utilities at `/src/utils`. Each directory has a POSIX `guest.mk` for pdpmake; its GNU `Makefile` is for the host build. Root can build a staged tree in place:
 
 ```sh
 # cd /src/rach2
-# make -f guest.mk        # 87 objects, then the link through @kernel.objs
+# make -f guest.mk        # 88 objects, then the link through @kernel.objs
 ```
 
-The unprivileged account copies first, `/src` being root-owned read-only
-source media: `cp -r /src/rach2 ~ && cd ~/rach2 && make -f guest.mk`.
+`/src` is root-owned, so an unprivileged account first copies a tree: `cp -r /src/rach2 ~ && cd ~/rach2 && make -f guest.mk`.
 
-`make selfbuild-test` is that as a gate: it builds the kernel twice from
-clean workspaces and requires the two to hash equal, builds the 29 utilities
-and ish, runs eighteen smoke checks over the ones a shell session can exercise,
-then extracts the exact kernel bytes from
-the disk image, runs `tools/check_kernel.py --tcc` on them, and boots them
-through the full probe suite; where Docker is available the same bytes boot once more
-through GRUB.
+`make selfbuild-test` builds the kernel twice in clean guest workspaces and requires equal hashes. It also builds the 29 utility programs and ish, then runs 18 smoke checks. After stopping the guest, the script extracts the kernel from the disk image, checks it with `tools/check_kernel.py --tcc`, and boots it through the complete probe suite. If Docker is available, the same kernel also boots through GRUB. A final guest boot rebuilds the staged `/src/ish` in place as root.
 
-On the GRUB disk (`make os-real-grub-disk`, booted with
-`rach2/run_from_disk.sh`, no `-kernel` anywhere), the machine also installs
-the kernel it built, and the next boot runs it:
+`make os-real-grub-disk` creates a BIOS-bootable disk image. `rach2/run_from_disk.sh` boots its GRUB installation without QEMU's `-kernel` option. On that image, `bootctl` installs a machine-built kernel:
 
 ```sh
 # cd /src/rach2
@@ -183,42 +164,29 @@ the kernel it built, and the next boot runs it:
 # bootctl commit          # the booted kernel becomes the saved default
 ```
 
-The boot partition has two kernels: the candidate slot the installer
-rewrites and an untouched fallback. Every install is a trial GRUB revokes on
-the next power cycle unless the booted kernel is committed, so a kernel that
-does not boot costs a reboot, not the machine; `bootctl status` shows
-the slots, and the debug menu entry always boots the fallback with the
-kernel debug shell. `make install-test` proves the whole loop, twice, on the
-booted disk (Docker required).
+The FAT boot partition has a fixed-size candidate slot and an untouched fallback kernel. An installation makes the candidate the next boot only; GRUB returns to the fallback on the following power cycle unless the running candidate is committed. `bootctl status` reports the slot state. The debug menu entry boots the fallback with `rach2.rescue`. `make install-test` runs the install, trial, commit, fallback, and repair sequence twice on a GRUB disk image and requires Docker.
 
-### The SSH capstone: log into Rach2 with a real client
+### Logging in over SSH
 
-`make ssh-test` runs the whole of what follows unattended, both logins included,
-and fails on a timeout instead of waiting; the recipe below is the same thing
-by hand, which is how you would actually use the machine.
+`make ssh-test` boots a persistent os-real disk image, starts Dropbear from a console session, logs in as root by key, and logs in as `test` by password. Every wait has a timeout. The manual sequence is:
 
 ```sh
 make full                                   # build the os-real image (busybox + dropbear + Doom)
 
-# Terminal 1: boot the os-real image with SSH port-forwarding (the run scripts
-# default to -cpu max, which Dropbear needs for trusted entropy to generate a host key):
+# Terminal 1: boot os-real with SSH port forwarding. The run script defaults
+# to -cpu max so the kernel can seed its random generator before Dropbear
+# creates a host key.
 cd rach2 && NET_HOSTFWD=hostfwd=tcp::2222-:22 ./run.sh os-real
-#   the console asks who you are: log in at `rach2 login:` as root, with the
-#   password in krffs/rach2_demo_password, then start the server from that
-#   session:  dropbearmulti dropbear -R -g -p 22
-#   (-g bars root's password from the SSH authentication exchange; test also
-#   takes its generated password)
+# Log in at the console as root with krffs/rach2_demo_password, then run:
+dropbearmulti dropbear -R -g -p 22
 
-# Terminal 2: from the repo root, log in with either auto-generated demo key,
-# or as test with the password in krffs/rach2_test_password (verified against
-# the real SHA-512 crypt hashes staged in /etc/shadow, 0600 root).
-# root is the administrator; test is an unprivileged uid-1000 account whose home
-# the kernel's permission bits actually protect (try writing /etc/motd as test:
-# it is denied; as root it succeeds).
+# Terminal 2, from the repository root:
 ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
 ssh -p 2222 test@localhost                  # password: cat krffs/rach2_test_password
 ```
+
+The `-g` option disables root password authentication over SSH. `/etc/shadow` has SHA-512 crypt hashes and mode 0600. The `test` account has uid 1000 and owns its mode-0700 home directory; the kernel enforces those permissions.
 
 From the shell prompt:
 
@@ -228,7 +196,7 @@ echo hello > test.txt   # Create file
 cd / && doom            # Play Doom, from the directory its WAD is staged in
 ```
 
-`doom` needs a game-data file (an IWAD), which is not committed. Put one at `ports/doom/doom1.wad` before `make full` (the Doom shareware WAD, or a license-clean `freedoom1.wad`; see [ports/doom/Readme.md](ports/doom/Readme.md) and run `ports/doom/fetch_wad.sh` to verify it). Without it, `doom` builds but starts and exits with "IWAD not found".
+`doom` needs an IWAD game-data file, which is not committed. Put the Doom shareware WAD or Freedoom's `freedoom1.wad` at `ports/doom/doom1.wad` before `make full`. See [ports/doom/Readme.md](ports/doom/Readme.md) and run `ports/doom/fetch_wad.sh` to check the file. Without an IWAD, the program builds but exits at startup.
 
 If you fall back to the kernel debug shell, use `audio help` for the audio test and HDA diagnostic commands. In VGA text mode, `PageUp`, `PageDown`, `Home`, and `End` provide scrollback through boot logs and shell output.
 
@@ -237,8 +205,12 @@ If you fall back to the kernel debug shell, use `audio help` for the audio test 
 * `CLAUDE.md` is the normative project policy (build, writing, comments, verification, git); `AGENTS.md` points a coding agent to it.
 * `dev-log/` records how each milestone was planned and built; `dev-log/Readme.md` indexes them and its last entry is where the tree stands now.
 * Each component and kernel subsystem has its own Readme, linked in the tables above.
-* `make verify-style` and `make verify-host` are the quality gates every change must pass; `make help` lists all targets.
+* Every change must pass `make verify-style` and `make verify-host`; `make help` lists all targets.
 
 ## Moving to another machine
 
-`dev-log/26-portable/arrival.md` is the full list of what a clone does not carry and what to do about each. In short: use a clone, not a copy, since `git clone` gives a ~34M tree that rebuilds from scratch. The vendored source tarballs are committed, so the build is offline; `build/` (hundreds of MB) is git-ignored and regenerable. If you must copy the working tree instead, exclude `build/` and delete the vendored build stamps (`vendor/*/.stamp`), or run `make distclean`, first: a stamp left behind without its (deleted) `build/` output makes `make full` skip rebuilding that capstone. The demo credentials are git-ignored and do not travel: the SSH keys (`krffs/rach2_demo_ed25519` for root, `krffs/rach2_test_ed25519` for the test account) and the generated passwords and their hashes (`krffs/rach2_demo_password`, `krffs/rach2_test_password`, and the `krffs/shadow` staged as `/etc/shadow`). A fresh build mints new ones, so the SSH password login and `su` take the new passwords; copy the files out of band only if you need the old credentials to keep working. On the new machine run `make doctor`, then `make` and `make full`.
+`dev-log/26-portable/arrival.md` lists what a clone omits and how each omission behaves. Prefer a clone to a copied working tree. `build/` is ignored and regenerable. If a working tree must be copied, exclude `build/` and run `make distclean` first, or remove every `vendor/*/.stamp`; a copied stamp without its generated artifacts can make Make skip the corresponding vendor build.
+
+The generated SSH keys, passwords, shadow file, and optional authorized-key additions are ignored. A fresh build creates new demo credentials. The Doom IWAD is also ignored. Dropbear creates a machine host key on first boot of a persistent root; a recovery RAM root creates a new one on each boot. GitHub authentication belongs to the host and is not part of the repository.
+
+After cloning on the new machine, run `make doctor`, `make`, and `make full`.

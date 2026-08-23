@@ -10,7 +10,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 
 * [x] `AGENTS.md`
 * [x] `CLAUDE.md`
-* [ ] `Readme.md`
+* [x] `Readme.md`
 
 ### Build, tools, and tests
 
