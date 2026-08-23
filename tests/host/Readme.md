@@ -1,77 +1,92 @@
-# Host tests (the dual-target build)
+# Host tests
 
-These tests run pure kernel/util logic natively on the host, under AddressSanitizer + UndefinedBehaviorSanitizer, in milliseconds.
+`make verify-host` compiles project code as native C programs and runs it under AddressSanitizer and UndefinedBehaviorSanitizer. The suite tests pure kernel logic, utility libraries, parsers, and hardware models without booting Rach2. Guest probes and QEMU tests remain responsible for system calls, privilege changes, devices, and complete subsystem behavior.
 
-A dual-target build compiles syscall-free logic (string and memory routines, parsers, the VMA tree, path resolution, allocators, scheduler policy) two ways from the same `.c` file: freestanding into the kernel, where only QEMU can run it, and hosted into a native test binary, where a debugger and the sanitizers can. A bounds bug then shows up here, instantly and with a precise diagnosis, instead of as a triple fault in the guest.
+## Runner
 
-Linux unit-tests self-contained pieces the same way (`tools/testing`), and libraries keep their core logic host-verifiable.
+[`tools/hosttest.sh`](../../tools/hosttest.sh) discovers every `tests/host/*_hosttest.c` file. It uses `${CC:-cc}` with C99, `-g -O1`, `-fsanitize=address,undefined`, and `-fno-sanitize-recover=all`. The include path contains the kernel, utility, KRFFS, and compatibility-header directories.
 
-## Running
+Each test declares separately compiled project sources in one or more `host-deps:` comment lines. The runner rejects a dependency line that was wrapped without repeating the prefix, checks that every named file exists, and passes those files to the compiler. A test that includes a project `.c` file directly to reach its `static` functions leaves `host-deps:` empty.
 
-```
-make verify-host          # from the repo root
-```
+The runner stores binaries and logs under `/tmp/rach2_verify`. If `timeout` or `gtimeout` is installed, each binary runs in the foreground with a 60-second limit. Otherwise the runner warns that a hung test cannot be stopped. Exit status 0 passes; a nonzero exit, sanitizer report, compile failure, or timeout fails. Tests may print diagnostics.
 
-`tools/hosttest.sh` compiles every `tests/host/*_hosttest.c` with `-fsanitize=address,undefined -fno-sanitize-recover=all` and runs it. A test passes when it exits 0 (it returns its failed-check count as the status, capped so it never wraps to a false 0, and prints nothing); the sanitizers abort on any out-of-bounds access, overflow, or other undefined behavior in the linked kernel code.
+The `verify-host` target first runs `check-libc`. This ensures that musl's installed library and extracted SHA-512 crypt source exist before the password tests compile.
 
-## Writing a host test
+## Adding a test
 
-Name the file `*_hosttest.c` in this directory and declare the kernel sources it links with a `host-deps:` comment:
+Name the file `*_hosttest.c` and put repository-root paths on repeatable `host-deps:` lines:
 
 ```c
 /**
- * One line on what this test exercises.
+ * Host test for foo.
  *
  * host-deps: rach2/sys/lib/foo.c rach2/sys/lib/bar.c
  */
-#include "foo.h"          /* kernel prototypes; use kernel types, not host libc */
-static int fails;
-#define CHECK(c) do { if (!(c)) { fails++; } } while (0)
-int main(void) { /* ... CHECK(...) ... */ return fails; }
+
+#include "foo.h"
+
+int main(void)
+{
+    return check_foo() ? 0 : 1;
+}
 ```
 
-The `host-deps:` line may be repeated, and is: clang-format wraps a comment at 80 columns, and a wrapped list loses everything past the fold without saying so, so a test with more dependencies than fit on one line writes a second `host-deps:` line, not a continuation. The line is a build contract: `tools/hosttest.sh` reads the paths after it and hands them to the compiler, so the list names every kernel source the test links separately. A test that pulls its source in with a direct `#include` (to reach the file's `static` routines) leaves the line empty.
+Do not wrap a dependency onto an unmarked continuation line. Native tests may use host libc. A test that directly includes kernel source must avoid host headers that conflict with the kernel's type definitions. Return 0 only after every assertion passes.
 
-Keep the test free of host `<stdio.h>`/`<string.h>` so kernel and host type definitions never collide; assert via the return code; let the sanitizers do the rest.
+## Compatibility headers and fixtures
 
-## The compat headers
+`compat/crypt.h`, `compat/shadow.h`, and `compat/sys/random.h` reproduce the musl declarations needed by `utils/pwauth.c`. The runner places this directory before the system include directories, so the tests receive the same declarations on hosts that lack those headers or declare the interfaces elsewhere. The test programs provide the corresponding symbols; guest builds never use these headers.
 
-`compat/` has stand-ins for the three musl headers a `utils/` source includes that a native host need not have: `<crypt.h>`, `<shadow.h>` and `<sys/random.h>`. They exist because a host test may compile a guest source, and a guest source is written against the ported musl; Darwin, for one, declares `crypt` in `<unistd.h>` and ships neither of the other two. `hosttest.sh` puts the directory on the include path, so on a host that does have those headers these declarations are the ones used; they are musl's, so the interface is the same either way. Nothing the guest builds ever sees them, and the symbols themselves are the test's to define.
+[`mkfatfixture.py`](mkfatfixture.py) independently writes the FAT32 volumes used by `bootctl_hosttest.c`. It builds valid and malformed layouts, including one-sector and eight-sector clusters, so `utils/bootslot.c` is checked against a separate implementation of the format. The runner does not discover the fixture builder as a test.
 
-Current tests:
+## Tests
 
-* `kstring_hosttest.c`: the string and memory routines (`sys/lib/kstring.c`, with `sys/lib/kctypes.c`).
-* `krandom_hosttest.c`: the ChaCha20 keystream CSPRNG (`sys/lib/krandom.c`).
-* `vm_hosttest.c`: the VMA interval tree, its overlap search and split logic (`sys/mm/vm.c`).
-* `frame_hosttest.c`: the physical-frame pool sizing from the multiboot memory map (`sys/mm/frame.c`).
-* `synthfs_hosttest.c`: the synthetic `/dev` and `/proc` path classifier (`sys/fs/synthfs.c`).
-* `mbr_hosttest.c`: the MBR partition-table parse and the boot-partition judgement (`sys/block/mbr.c`) over crafted tables, the malformed beside the valid.
-* `rtl8168_hosttest.c`: the RTL8168GU driver (`sys/network/driver/rtl8168.c`) against a software model of the chip. The driver's first execution is on the laptop, since nothing here emulates that card, so this test has the weight a boot usually would: the model answers every register with the behavior the pinned reference documents and records each write, and the test asserts the bring-up order, the four indirect access protocols, the refusal of a chip this driver was not written for, bounded behavior on every handshake that never completes, the descriptor contract both ways, ring wrap, and the lost-doorbell path.
-* `netconsole_hosttest.c`: the kernel log on the wire (`sys/network/netconsole.c`), driven with the Ethernet layer replaced by a recorder. It covers the frame layout and the cases a booting machine will not produce on demand: a ring that fills and reports what it dropped, a payload that fills exactly, and a device that prints an error from inside the transmit it was asked to perform. That last one found the defect the file's bounded drain now exists for. Its byte-order and checksum helpers are the test's own, since the kernel's live in a file that cannot compile off x86; `make netconsole-test` checks the kernel's against an independent implementation over a real capture.
-* `board_hosttest.c`: which power controller may be written to and with what (`sys/board.c`, included directly so the profile table's rows can be reached by name, hence the empty `host-deps:`). Of the three chipsets in that table two exist here only as QEMU models and the third is the laptop's, so the row that decides whether that machine powers off has never run; the judgements are therefore pure and swept here. Most of the file is about refusing, because the value being guarded becomes an I/O port: derived wrongly it lands on the DMA controller, the interrupt controller, the timer, the keyboard controller, the CMOS index and data pair, or the reset register.
-* `diskinfo_hosttest.c`: the disk report's arithmetic and fence posts (`sys/block/diskinfo.c`). What `make diskdiag-test` cannot reach is here, because a real device will not answer with a serial number full of control bytes or a capacity above 2^32 on request: the big-endian-within-a-word IDENTIFY strings, a field that fills its width and has no terminator, an all-ones field, decimal conversion of a 48-bit sector count by long division over 32-bit halves (the kernel links no libgcc, so a 64-bit divide would not link), the window clamp at its exact boundary, and a render buffer one byte short of the text.
-* `diskcmd_hosttest.c`: the disk command allowlist (`sys/block/diskcmd.c`), swept exhaustively: all 256 command bytes are offered under each policy, and under the read-only one exactly four may be accepted. The compiled-in policy is only half the question, so the table is driven through `diskcmd_allowed_under`, which takes the policy as an argument; that the build switch actually selects it is checked on the built kernel by `tools/check_diskpolicy.py`, and on the bytes of a disk by `make diskpolicy-test`.
-* `modlayout_hosttest.c`: the boot-module placement check (`sys/mm/modlayout.c`). Three of its four refusals name placements no bootloader produces on request (a module over the kernel image, two modules overlapping, a range that wraps the address space), so they are crafted here; the accepted cases (back to back, out of order, ending exactly at the ceiling) matter as much, since refusing one would panic a legal boot.
-* `bootctl_hosttest.c`: the boot-slot library bootctl drives (`utils/bootslot.c`) over FAT32 fixtures from `mkfatfixture.py`, an independent writer of the same format; the write callback injects dropped sectors, torn sectors and cuts, so the byte-for-byte readback and the interruption-matrix order are both falsifiable.
-* `dhcpmsg_hosttest.c`: the DHCP client's message half (`utils/dhcpmsg.c`): the framing and checksums it builds, and the judgement of everything that arrives on a packet socket, where most of the traffic is somebody else's and any of it may be built to hurt the machine reading it. A server will not produce a truncated option or a wrong checksum on request, so each malformed message is written here one field at a time beside the well-formed one it is made from, and every message goes through the library on a heap copy of its exact length, so a read one byte past what the sender sent is an AddressSanitizer report, not a byte of the client's own buffer. The frames are built by the test's own checksum routines, so two implementations of the same arithmetic meet over every packet. The two length guards at the top of the frame check mask each other, and removing both is what the three-byte frame catches.
-* `bootverb_hosttest.c`: `bootctl`'s command line (`utils/bootverb.c`), every verb it takes and every spelling it refuses. The refusals carry the weight: a verb given a surplus or missing operand must fail, not guess, and the spellings the tool shipped under its previous name (`--commit`, `--where`, a bare kernel path) must fail, not work, because a compatibility spelling nobody documents has to be carried forever.
-* `sectorcopy_hosttest.c`: `reflash`'s copy library (`utils/sectorcopy.c`), the numbers that decide where a write lands on a 250 GB disk and the loop that turns a stream into whole sectors. None of what matters can be arranged at the other end of an `ssh` pipe on request, so it is arranged here: a stream that stops half way, one that hands out a byte at a time, one that has more than it declared, a device that takes a sector per call and one that refuses. The offsets are driven to the ends of 64 bits, because `offset + count` is the sum that wraps and every bound is a subtraction for that reason.
-* `netcfg_hosttest.c`: `netup`'s configuration reader (`utils/netcfg.c`), over files written for the purpose. A machine brings itself up from `/etc/network/interfaces`, so a file read wrongly is a machine that comes up wrong or does not come up at all, and the interesting files are the ones nobody would keep in `/etc`: a line with no end, a method this does not implement, a value that is not an address, a name no interface can have, more interfaces than there is room for. The judgement of a static stanza is checked the same way, each refusal matched by its own text so a mutation cannot pass by tripping a different rule.
-* `rcvwnd_hosttest.c`: the receiver's window-update rule (`rach2/sys/network/tcp/rcvwnd.c`), driven at ring and segment sizes the running kernel never uses, because which half of the RFC 1122 4.2.3.3 bar wins depends entirely on the geometry. Announcing too late cost two hundred times the throughput; announcing too eagerly is silly-window syndrome, so both directions are covered.
-* `poll_select_hosttest.c`: the `fd_set` and `pollfd` translation and the readable/writable/except projection (`sys/io/poll_select.c`).
-* `pipe_ring_hosttest.c`: the pipe ring-buffer arithmetic (`sys/ipc/pipe_ring.c`).
-* `n_tty_hosttest.c`: the N_TTY line discipline's input editing and echo (`sys/tty/n_tty.c`).
-* `tls_hosttest.c`: the `set_thread_area` user_desc validation (`sys/proc/tls.c`).
-* `rtc_hosttest.c`: the CMOS clock (`sys/rtc.c`): the BCD and binary decodings, the PM bit, the status-register cases a decode must refuse, the day count from the epoch across leap years, and the anchor arithmetic that turns a boot-time read plus a tick count into a real time. The kernel side of the clock is here, not in the guest because the error a wrong anchor makes is under a second, and no tolerance a booted probe could hold would see it.
-* `wait_queue_hosttest.c`: the wait-queue enqueue and wake logic (`sys/proc/wait_queue.c`, included directly under a build flag so its static routines are reachable, hence the empty `host-deps:`).
-* `uimage_hosttest.c`: the initial-process stack and auxv builder (`sys/proc/uimage.c`, with `sys/lib/kstring.c` and `sys/lib/kctypes.c`).
-* `pwauthatexit_hosttest.c`: what a writer does when it cannot register its release (`utils/pwauth.c`, with the vendored musl SHA-512 crypt). A program of its own because the `atexit` it needs to fail cannot be scoped: the stand-in replaces the real one for the whole process, and every case in `pwauth_hosttest` needs a release that is registered. It accepts the first registration and refuses the second, which is the partial failure that leaves one function installed with no transaction behind it: the acquire must be refused, no lock may be left at the name, the library must be seen to have attempted the second registration at all, and the accepted function, called by hand where the walk would have reached it, must put no signal disposition back, since the one it saved is a zeroed `struct sigaction` that would impose the default on the rest of `exit`.
-* `block_hosttest.c`: the partition view over a disk (`sys/block/block.c`), with the driver and cmdline calls stubbed so only the parsing is exercised.
-* `elf_hosttest.c`: the ELF loader's rejection of a hostile image (`sys/proc/elf.c`), with the page and VMA calls stubbed.
-* `grubslot_hosttest.c`: the boot-slot arithmetic the installer does over the GRUB core image.
-* `kstd_hosttest.c`: the kernel's own number formatting (`sys/lib/kstd.c`).
-* `mkhash_hosttest.c`: the password hasher's crypt (`krffs/mkhash.krffs.c`).
-* `netconf_hosttest.c`: the interface configuration the stack keeps (`sys/network/netconf.c`).
-* `pagecache_hosttest.c`: the page cache's slot choice, eviction and writeback failure paths (`sys/mm/pagecache.c`).
-* `readfile_hosttest.c`: the KRFFS reader the self-build proof extracts with (`krffs/krffs_reader.c`).
-* `pwauth_hosttest.c`: the credential library (`utils/pwauth.c`, with the vendored musl SHA-512 crypt), the one host test here that is a util, not a kernel source. It covers what is pure or can be made pure: the password comparison against the published SHA-crypt vectors and the deny cases that must refuse alike (a missing entry, an empty field, a locked `!`, a `*`, a field that is not a `crypt(3)` setting), the salt mapping over every byte value, the replacement idiom in a temporary directory (a plain replace, mode inheritance, a stale temporary removed, an uncreatable one leaving the target untouched, a missing target refused, a rename that cannot happen because a directory stands at the destination, and a call with no transaction held refused with the target untouched), the three flushes told apart by a stand-in `fsync` that fails on the call the case names (the one before the rename is a refusal that changed nothing, the one after it a replacement that is already live and must not be reported as unchanged, and the release's own is a lock gone from the running system whose removal may not have reached the disk, which is likewise not a clean finish), what a `fork` under a held transaction does, which is nothing (a child that exits and a child a signal kills both leave the lock where it is, and its `cred_txn_end`, `cred_rewrite` and acquire all decline), what a release and a publish do about a lock that is no longer this transaction's (nothing, since a name is not proof of a file), what an acquire does when it cannot write the holder pid (fails and removes the lock instead of holding one every later writer is told to clear), and the lock protocol through the `_at` forms, whose lock path and retry budget are parameters so the test neither touches `/etc` nor waits ten seconds to watch an acquire refuse. Every lock case asserts the refusal and that the file is still there afterwards with its bytes unchanged, since the rule is that a lock is reported and never broken: a live pid, a reaped child's pid, a live pid whose modification time was pushed back an hour, an empty lock and one that does not parse are all refused, and each refusal names the removal, the live one conditionally, since a pid does not identify a process across a reboot, a second transaction in one process is refused without touching the file, and the control that makes those mean something is removing the file by hand and watching the next acquire succeed. The wait is timed, too, so a budget that never waited would not pass. Thirteen more cases are deaths and states no arrangement of the file system produces, so each is forced, not waited for: a prompt, and then a writer, whose standard error is a pipe with no reader, both of which must return, not be killed by `SIGPIPE`, with the writer's lock gone afterwards, since a death there runs no `atexit`; a release from a child that has filled its descriptor table, which must still remove the lock, beside a release over a lock that cannot be read at all (a symbolic link resolving to itself), which must return -1 and say so; the temporary file's name, read out of the directory by the stand-in `fsync` at the one moment it exists, which must carry the writer's pid, with a directory standing at the shared `<path>.tmp` to show that name is never used and a replacement refused for a lost lock required to leave even its own leftover temporary byte for byte; and a `SIGCONT` inside the prompt's teardown, over a pseudo-terminal, forced by giving the reader a pipe the test fills so the newline in the middle of the teardown blocks inside the window, after which the reader reads `ECHO` off its own terminal and reports it as an exit status; the disposition a writer's child has across an `exec`, which the program answers by running itself, and which must be the default, not the `SIG_IGN` an exec would have preserved; the death-signal mask, read from inside each stretch the library blocks it across by the three calls that reach them (`snprintf` for the lock path and the temporary's name and `getpid` for the release registered with `atexit` both forward the real call and read the mask on the way through; `fsync` is the stand-in above, which records the mask on the call it is told to fail), with the caller's mask required back afterwards on the paths that fail as well as the ones that succeed, since an early return is where a restore is forgotten; and what that registered release leaves behind, which no case inside the process can watch because it runs after the last of them, so a child execs this program, which registers its own reporter before taking a transaction and therefore runs it last, and then exits holding a transaction it never ends, so the same case proves the lock is dropped at all. Three cases watch the release registered with `atexit`, and each needs a fresh image, because that release runs after the last case in this process and a reporter can only see what it left by being registered before it and therefore running after it. One exits still holding a transaction, so the release must drop the lock, keep the deaths blocked for its own length and give the caller's mask back; one ends its transaction and then installs a disposition of its own, which the release must not reach back and overwrite; and one forks under a held transaction and lets the child leave through `exit` while the middle image leaves through `_exit`, so the heir must drop the descriptor and the five dispositions it inherited and must not touch the lock, which is its parent's. A fourth case, in the same fresh-image shape, asks what a program's own `atexit` function sees if it runs after the library's: an acquire attempted there can never be released, so it must be refused. Three more cases are about signals, not locks: one holds a transaction and takes `SIGUSR1`, `SIGUSR2`, `SIGALRM`, `SIGABRT` and `SIGSYS` in turn, each of which must leave through `exit` with the lock gone, not take the default action; one sets every signal to a known disposition in a child, takes a transaction, and reports any signal whose disposition does not then match what the library means, in both directions, skipping the ones this host does not have; and one delivers a death from inside the restore that another death started, through an interposed `tcsetattr` that raises on the restore's own call, since that window is two instructions wide and cannot be entered from outside. That last one counts how many restores reached the terminal, which is the whole difference between clearing the echo-off flag before the call and after it. Two habits make those mask cases mean something. The baseline they compare against is the mask the process started with, captured once in `main`: read on arrival instead, a leak from an earlier case would become the thing every later comparison measures against and all of them would pass, and assumed empty instead, the test would blame the library whenever a harness ran it with a signal already blocked. A discrepancy on arrival is therefore an earlier case's doing, and is reported as that and repaired before the case goes on. The comparison is also of the whole mask, not of the four, since a library that put three back and kept the fourth would satisfy any test of "are the deaths blocked". Owner inheritance and the reader across a rename are asserted in the guest instead, by `tests/musl/pwauthmusl.c`, where root and uid 1000 differ and the file system is the one that makes the promise.
+The suite contains 36 native test programs.
+
+### Kernel foundations and memory
+
+* `board_hosttest.c` checks power-controller profiles, PCI identities, PM bases, decode bits, SCI routing, sleep words, ACPI enable decisions, and the uninitialized board state.
+* `frame_hosttest.c` checks the available-memory ceiling computed from crafted Multiboot memory maps, including reserved and truncated entries.
+* `krandom_hosttest.c` checks deterministic reseeding, seed separation, byte filling, the all-zero seed, and a fixed monobit sanity case for the ChaCha20 stream.
+* `kstd_hosttest.c` checks kernel integer formatting across bases, signed limits, buffer limits, return counts, and invalid radices.
+* `kstring_hosttest.c` checks the kernel string, memory, case-conversion, reverse, and overlapping `memmove` routines.
+* `modlayout_hosttest.c` checks boot-module bounds and overlap rules, accepted edge placements, and bounded diagnostic formatting.
+* `rtc_hosttest.c` checks CMOS BCD, binary, and 12-hour decoding; invalid clock state; leap dates; stable samples; and time-from-anchor arithmetic.
+* `vm_hosttest.c` checks VMA insertion, lookup, overlap detection, removal and splitting, and bounded stack growth.
+
+### Processes, files, and I/O
+
+* `block_hosttest.c` checks partition-view bounds, LBA translation, zero-length rejection, and clamping to the backing device.
+* `diskcmd_hosttest.c` checks all 256 ATA command bytes under read-write and read-only policies; exactly four commands are allowed by the read-only policy.
+* `diskinfo_hosttest.c` checks ATA string decoding, control-byte filtering, 48-bit sector-count formatting, raw-window bounds, and `/proc/disk` rendering.
+* `elf_hosttest.c` checks that malformed ELF headers and load segments are rejected before page allocation.
+* `mbr_hosttest.c` checks MBR parsing, FAT boot-partition selection, disk and overlap bounds, and whether partitions leave the post-MBR GRUB area clear.
+* `n_tty_hosttest.c` checks canonical editing, EOF and signal characters, input and output mappings, raw `VMIN` behavior, hangup, echo, and buffer limits.
+* `pagecache_hosttest.c` checks cache hits, eviction, dirty writeback, sync failure recovery, and capacity reduction when dirty pages cannot be flushed.
+* `pipe_ring_hosttest.c` checks FIFO capacity, partial transfers, full-page transfers, and byte order across ring wrap.
+* `poll_select_hosttest.c` checks `fd_set` conversion, `pollfd` projection, word boundaries, direction-specific readiness, and ready-count semantics.
+* `readfile_hosttest.c` checks KRFFS regular-file path lookup and refusal of malformed, truncated, or overflowing node regions.
+* `synthfs_hosttest.c` checks `/dev` and `/proc` path classification, slash handling, PID and descriptor bounds, and malformed synthetic paths.
+* `tls_hosttest.c` checks `user_desc` validation and TLS base resolution for `set_thread_area`.
+* `uimage_hosttest.c` checks the i386 initial stack, argument and environment arrays, auxiliary vectors, random bytes, `AT_SECURE`, alignment, and oversized input.
+* `wait_queue_hosttest.c` checks fixed-slot enqueue, idempotent dequeue, queue capacity, and wake-all state changes.
+
+### Network
+
+* `arp_hosttest.c` checks ARP cache filtering, replacement and use order, counter wrap, mapping changes, request replies, and network-lock balance.
+* `dhcpmsg_hosttest.c` checks DHCP discover and request construction, IPv4 and UDP validation, reply parsing, hostile options, lease validation, and renewal arithmetic.
+* `netcfg_hosttest.c` checks the `/etc/network/interfaces` reader for DHCP and static stanzas, selection rules, limits, malformed files, and address validation.
+* `netconf_hosttest.c` checks boot-line network parsing, address and gateway validation, live reconfiguration, provisional masks, cache invalidation, and `rach2.ip=none`.
+* `netconsole_hosttest.c` checks frame fields and checksums, buffering, sequence numbers, ring overflow, complete draining, and reentrant transmit diagnostics.
+* `rcvwnd_hosttest.c` checks TCP receive-window update thresholds, silly-window avoidance, 16-bit clamping, and invalid geometry.
+* `rtl8168_hosttest.c` runs the RTL8168GU driver against a register model. It checks supported identity, initialization order and values, indirect register protocols, bounded handshakes, transmit and receive descriptors, ring wrap, and lost-doorbell recovery.
+
+### Boot and host utilities
+
+* `bootctl_hosttest.c` checks FAT32 discovery, kernel and fallback validation, candidate installation, environment and menu updates, cluster geometry, readback, and interrupted, dropped, or torn writes.
+* `bootverb_hosttest.c` checks every `bootctl` verb, operand count, returned operand, refused old spelling, and exact name matching.
+* `grubslot_hosttest.c` checks the two GRUB core-image tails, blocklist validation and patching, alternating installation, slot clearing, and readback failure.
+* `mkhash_hosttest.c` checks the vendored musl SHA-512 crypt against published vectors and rejects a malformed setting.
+* `pwauth_hosttest.c` checks password comparison, salt-byte mapping, credential-file replacement, locking, flush failures, fork and exit cleanup, signal state, and terminal teardown.
+* `pwauthatexit_hosttest.c` checks that a transaction is refused and leaves no lock when the library cannot register both exit handlers.
+* `sectorcopy_hosttest.c` checks decimal size parsing, 64-bit disk bounds, whole-sector streaming, short and long input, partial I/O, errors, and 64-sector write batches.

@@ -17,6 +17,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `tools/textcheck.sh` does not include `ports/doom/` among its roots, so it does not check the project-owned `ports/doom/Readme.md`. This milestone checks that file explicitly and does not edit the script.
 * The default scope of `tools/prose_check.py --banned` excludes `vendor/`, so it does not check the six project-owned vendor integration Readmes or `vendor/busybox/patches/Readme.md`. This milestone checks those files explicitly and does not edit the script.
 * A comment in `tools/mkdisk_grub.sh` calls `UBUNTU_IMAGE` a floating tag. The value is a digest read from `tools/ubuntu-image.txt`. This milestone does not edit script comments.
+* The header comment in `tools/hosttest.sh` says the native tests run in milliseconds and implies that every exercised source also links into the kernel. `pwauth_hosttest.c` deliberately takes tens of seconds, and the suite also exercises utility sources and test-only hardware models. This milestone does not edit script comments.
 
 ## Facts for subsystem passes
 
@@ -27,6 +28,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `make os-real-disk` creates a partitioned disk-image file. `rach2/run.sh` can attach that image through ATA or AHCI and mount it as the persistent root.
 * The fresh-Mac manifest uses the Homebrew cask `fuse-t` and the `coreutils` formula, which provides `gtimeout`. The direct commands are `brew install --cask fuse-t` and `brew install coreutils`.
 * `tools/Readme.md` names every tracked file under `tools/`. Its checker descriptions were verified with the self-tests for comments, prose, the dev-log, kernel ELF, user ELF, set-id, embedded GRUB, sealed networking, and probe scoring. `sh tools/bootstrap_mac.sh --dry-run` and `make doctor` also passed.
+* `tests/host/Readme.md` names all 36 discovered host tests, the three compatibility headers, and the FAT32 fixture builder. `make verify-host` passed all 36 tests with the documented compiler, dependency, logging, and watchdog contract.
 
 ## Decisions and deferred questions
 
