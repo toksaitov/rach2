@@ -14,6 +14,9 @@ This is the persistent record for information needed after a compaction or betwe
 * `mk/build.mk` says a Docker `grub-mkrescue` call in `rach2/Makefile` uses `$(abspath ...)`. No `abspath` call remains in the in-house Makefiles or tools. This milestone does not edit Makefile comments.
 * The `.clangd` comment says the host KRFFS tools receive host-compiler flags from the compilation database. `tools/gen_compile_commands.sh` excludes `krffs/`, so that database supplies no such flags. This milestone does not edit configuration comments.
 * `make compile-commands` exits successfully but produces invalid JSON with the current Homebrew i686 toolchain. A wrapped recipe continuation matches the `i686-elf-*gcc` filter through its libgcc path, and `json_escape` does not escape the leading tab. The target's kernel coverage check does not parse the completed JSON. `mk/Readme.md` states the limitation; the generator needs separate code work.
+* `tools/textcheck.sh` does not include `ports/doom/` among its roots, so it does not check the project-owned `ports/doom/Readme.md`. This milestone checks that file explicitly and does not edit the script.
+* The default scope of `tools/prose_check.py --banned` excludes `vendor/`, so it does not check the six project-owned vendor integration Readmes or `vendor/busybox/patches/Readme.md`. This milestone checks those files explicitly and does not edit the script.
+* A comment in `tools/mkdisk_grub.sh` calls `UBUNTU_IMAGE` a floating tag. The value is a digest read from `tools/ubuntu-image.txt`. This milestone does not edit script comments.
 
 ## Facts for subsystem passes
 
@@ -23,6 +26,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `make test` checks each probe's declared outcome; it is not accurate to say that every special probe simply exits zero.
 * `make os-real-disk` creates a partitioned disk-image file. `rach2/run.sh` can attach that image through ATA or AHCI and mount it as the persistent root.
 * The fresh-Mac manifest uses the Homebrew cask `fuse-t` and the `coreutils` formula, which provides `gtimeout`. The direct commands are `brew install --cask fuse-t` and `brew install coreutils`.
+* `tools/Readme.md` names every tracked file under `tools/`. Its checker descriptions were verified with the self-tests for comments, prose, the dev-log, kernel ELF, user ELF, set-id, embedded GRUB, sealed networking, and probe scoring. `sh tools/bootstrap_mac.sh --dry-run` and `make doctor` also passed.
 
 ## Decisions and deferred questions
 

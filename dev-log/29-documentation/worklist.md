@@ -15,7 +15,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 ### Build, tools, and tests
 
 * [x] `mk/Readme.md`
-* [ ] `tools/Readme.md`
+* [x] `tools/Readme.md`
 * [ ] `tests/host/Readme.md`
 * [ ] `tests/Readme.md`
 
