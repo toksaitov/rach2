@@ -5560,6 +5560,11 @@ static int32_t sys_execve(isr_params_t *params)
  * Clones the current process: PCB, page directory (copy-on-write user
  * pages), and fd table. The child is set up to return from fork with value
  * 0; the parent gets the child's PID. Returns -errno on failure.
+ *
+ * Among what the child inherits is the program name, which `execve` sets and a
+ * child that never execs would otherwise never have: a daemon that forks
+ * itself into the background is exactly such a child, and without this it
+ * shows in `ps` and in /proc/<pid>/stat with no name for as long as it runs.
  */
 static int32_t sys_fork(isr_params_t *params)
 {
@@ -5629,6 +5634,7 @@ static int32_t sys_fork(isr_params_t *params)
     child->sgid = parent->sgid;
     child->ngroups = parent->ngroups;
     k_memcpy(child->groups, parent->groups, sizeof(child->groups));
+    k_memcpy(child->comm, parent->comm, sizeof(child->comm));
 
     /* Inherit the parent's TLS base: the child's copied trapframe keeps the
      * parent's %gs selector, and its address space is a copy at the same

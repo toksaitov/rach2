@@ -724,6 +724,28 @@ void _start(void)
     n = slurp("/proc/self/cmdline", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\0', "/proc/self/cmdline ends with its NUL");
 
+    /* A forked child keeps the name its parent had, which is what a daemon
+     * that backgrounds itself without ever exec'ing has to go on. */
+    {
+        int kid, kid_status = -1;
+
+        kid = syscall1(SYS_FORK, 0);
+        check(kid >= 0, "fork for the name check");
+        if (kid == 0) {
+            char mine[256];
+            int len = slurp("/proc/self/stat", mine, (int)sizeof(mine));
+
+            sys_exit(len > 0 && contains(mine, len, "(procprobe)") ? 0 : 1);
+        }
+        if (kid > 0) {
+            check(syscall3(SYS_WAITPID, kid, (int)(size_t)&kid_status, 0) == kid,
+                  "the child of the name check was reaped");
+            /* The whole status: a child killed by a signal has a zero exit
+               byte and would otherwise read as one that exited cleanly. */
+            check(kid_status == 0, "a forked child lost the name its parent had");
+        }
+    }
+
     n = slurp("/proc/disk", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/disk ends with its newline");
     check(has_line_starting(buf, n, "policy "), "/proc/disk names the build policy");
