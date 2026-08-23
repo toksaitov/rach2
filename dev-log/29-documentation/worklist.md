@@ -17,7 +17,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `mk/Readme.md`
 * [x] `tools/Readme.md`
 * [x] `tests/host/Readme.md`
-* [ ] `tests/Readme.md`
+* [x] `tests/Readme.md`
 
 ### Kernel and subsystems
 
