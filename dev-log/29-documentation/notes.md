@@ -19,6 +19,8 @@ This is the persistent record for information needed after a compaction or betwe
 * A comment in `tools/mkdisk_grub.sh` calls `UBUNTU_IMAGE` a floating tag. The value is a digest read from `tools/ubuntu-image.txt`. This milestone does not edit script comments.
 * The header comment in `tools/hosttest.sh` says the native tests run in milliseconds and implies that every exercised source also links into the kernel. `pwauth_hosttest.c` deliberately takes tens of seconds, and the suite also exercises utility sources and test-only hardware models. This milestone does not edit script comments.
 * Comments in the root `Makefile` and `krffs/manifests/test.manifest` say `make test` checks every probe's success token. `tools/runtests.py` instead runs its explicit 63-program list, scores each program's debug-shell return status, and checks the guest clock separately. The image stages 105 guest programs, including helpers and programs reserved for dedicated or manual runs. This milestone does not edit Makefile or manifest comments.
+* The header of `rach2/run.sh` says omitting the image boots the kernel into its debug shell. `k_main` refuses an unmounted root unless rescue mode was requested, so the working kernel-only command is `RESCUE=1 ./run.sh`. A direct harness boot confirmed both paths. This milestone does not edit script comments.
+* `rach2/qemu_devices.sh` says `NET=off` disables networking, but it emits no QEMU network option in that mode. QEMU 11.1.0 creates its default e1000 device and SLIRP backend. The kernel does not support e1000, so guest networking is unavailable, but the virtual NIC is not removed. This milestone does not edit the script.
 
 ## Facts for subsystem passes
 
@@ -31,6 +33,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `tools/Readme.md` names every tracked file under `tools/`. Its checker descriptions were verified with the self-tests for comments, prose, the dev-log, kernel ELF, user ELF, set-id, embedded GRUB, sealed networking, and probe scoring. `sh tools/bootstrap_mac.sh --dry-run` and `make doctor` also passed.
 * `tests/host/Readme.md` names all 36 discovered host tests, the three compatibility headers, and the FAT32 fixture builder. `make verify-host` passed all 36 tests with the documented compiler, dependency, logging, and watchdog contract.
 * `tests/Readme.md` accounts for all 70 root test programs and all 35 musl programs. The default `make test` list has 47 root programs and 16 musl programs; a fresh run passed all 63 status checks and the host-clock comparison.
+* `rach2/Readme.md` now owns only the kernel-level build, boot, option, run-script, source-map, debug-shell, hardware, and limit contracts. `make check-sources`, `tools/check_guest.py`, and `tools/check_kernel.py` passed; direct QEMU harness runs confirmed rescue mode and the no-root refusal.
 
 ## Decisions and deferred questions
 
