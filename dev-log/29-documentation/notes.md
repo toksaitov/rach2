@@ -21,6 +21,8 @@ This is the persistent record for information needed after a compaction or betwe
 * Comments in the root `Makefile` and `krffs/manifests/test.manifest` say `make test` checks every probe's success token. `tools/runtests.py` instead runs its explicit 63-program list, scores each program's debug-shell return status, and checks the guest clock separately. The image stages 105 guest programs, including helpers and programs reserved for dedicated or manual runs. This milestone does not edit Makefile or manifest comments.
 * The header of `rach2/run.sh` says omitting the image boots the kernel into its debug shell. `k_main` refuses an unmounted root unless rescue mode was requested, so the working kernel-only command is `RESCUE=1 ./run.sh`. A direct harness boot confirmed both paths. This milestone does not edit script comments.
 * `rach2/qemu_devices.sh` says `NET=off` disables networking, but it emits no QEMU network option in that mode. QEMU 11.1.0 creates its default e1000 device and SLIRP backend. The kernel does not support e1000, so guest networking is unavailable, but the virtual NIC is not removed. This milestone does not edit the script.
+* The `mmap2` comments in `rach2/sys/syscall.c` say the syscall supports only anonymous private mappings. The implementation requires `MAP_ANONYMOUS` and rejects `MAP_FIXED`, but it neither requires `MAP_PRIVATE` nor rejects `MAP_SHARED` or unknown flags. Every accepted mapping receives private COW fork behavior. This milestone does not edit source comments or code.
+* Comments in `rach2/sys/mm/vm.h` and `tests/musl/vmamusl.c` say four VMAs exist before a program runs. `elf_setup_vmas` inserts the loadable segments and one stack VMA; it records the empty heap only in `heap_start` and `brk`. The first non-empty `brk` growth inserts the heap VMA. This milestone does not edit source or test comments.
 
 ## Facts for subsystem passes
 
@@ -34,6 +36,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `tests/host/Readme.md` names all 36 discovered host tests, the three compatibility headers, and the FAT32 fixture builder. `make verify-host` passed all 36 tests with the documented compiler, dependency, logging, and watchdog contract.
 * `tests/Readme.md` accounts for all 70 root test programs and all 35 musl programs. The default `make test` list has 47 root programs and 16 musl programs; a fresh run passed all 63 status checks and the host-clock comparison.
 * `rach2/Readme.md` now owns only the kernel-level build, boot, option, run-script, source-map, debug-shell, hardware, and limit contracts. `make check-sources`, `tools/check_guest.py`, and `tools/check_kernel.py` passed; direct QEMU harness runs confirmed rescue mode and the no-root refusal.
+* `rach2/sys/mm/Readme.md` now describes the implemented physical-frame, page-table, VMA, demand-paging, COW, usercopy, and page-cache contracts. It includes the AHCI backing path, module-layout check, fixed limits, allocation-failure behavior, and the actual default and host tests. `make verify-host` passed all 36 tests.
 
 ## Decisions and deferred questions
 

@@ -22,7 +22,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 ### Kernel and subsystems
 
 * [x] `rach2/Readme.md`
-* [ ] `rach2/sys/mm/Readme.md`
+* [x] `rach2/sys/mm/Readme.md`
 * [ ] `rach2/sys/proc/signal.Readme.md`
 * [ ] `rach2/sys/proc/tls.Readme.md`
 * [ ] `rach2/sys/lib/krandom.Readme.md`

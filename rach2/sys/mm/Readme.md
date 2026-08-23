@@ -1,65 +1,96 @@
-# Rach2 Memory Management
+# Memory management
 
-Physical frames, a virtual page table, a per-process address-space map (VMAs), and a demand-paging fault handler that backs heap, stack, and anonymous `mmap` memory lazily. Together they let a real libc allocator run: a musl program can `malloc`, `qsort`, grow its stack, and fault cleanly, while a wild pointer kills only the offending process and leaves the kernel running.
+The memory subsystem manages the kernel's 32 MiB physical window, per-process page tables, virtual memory areas (VMAs), copy-on-write fork, demand paging, checked user access, and the disk page cache. Pages are 4 KiB.
 
-## Pieces
+## Physical memory
 
-| File          | Responsibility                                                                                                     |
-|---------------|--------------------------------------------------------------------------------------------------------------------|
-| `frame.*`     | Size the physical frame pool from the multiboot memory map, capped to the direct-mapped window                     |
-| `paging.*`    | 32-bit page tables, the identity map, user-page alloc/free, and the page-fault dispatcher                          |
-| `pagecache.*` | The page cache plus its demand-paged disk window at `PCWIN_BASE`, with CR0.WP dirty tracking and writeback         |
-| `vm.*`        | The VMA model: a fixed 512-entry array of `{start, end, prot, type}` regions per process, with find/insert/remove/grow |
-| `heap.*`      | The kernel's own bump and region allocator (`mem_reserve`) for kernel structures                                   |
-| `usercopy.*`  | The `copy_from_user`, `copy_to_user`, and `strncpy_from_user` boundary, fault-aware                                |
+`frame.c` reads the Multiboot memory map and takes the highest end of an available region. It falls back to `mem_upper` when no usable map is present, then caps the result at `HARD_MEMORY_LIMIT` (32 MiB). `init_paging` creates one reference-count byte per managed frame. Zero means free; positive values count mappings of a shared frame.
 
-## Address-space model
+The kernel identity-maps `[0, HARD_MEMORY_LIMIT)` as supervisor-writable pages. Only frames within the size reported by `frame_usable_count` enter the allocation pool. `mem_reserve` is the kernel's monotonic boot allocator. Its initial break is the greater of `_end` and the highest Multiboot module end. It skips frames already allocated after paging starts and fails before crossing the memory limit.
 
-Every process has a `vm_space_t` (in its PCB) describing its user memory as a handful of virtual memory areas. Each VMA is a half-open, page-aligned range `[start, end)` with a protection (`VM_PROT_*`) and a kind (`VM_CODE`, `VM_DATA`, `VM_HEAP`, `VM_STACK`, `VM_ANON`). This is the structure real kernels build on (Linux `vm_area_struct`, BSD `vm_map_entry`); here it is a 512-entry array. It was 16, then 64, then 128, and each turned out to be a real limit, not a comfortable one: four regions are spoken for before a program runs a line (code, data, heap, stack), and a C library's allocator takes one per allocation it cannot fit in what it holds. The compiler reading musl's 1.9 MB `libc.a` ran out of the 16 and reported "memory full" with physical memory barely touched and the address space almost entirely free, which is a confusing way for a table size to present itself; the same compiler linking the machine's own `login` ran out of the 64 the same way, since that link's SHA-512 crypt pulls more archive members than any one-source link. The third time was not the compiler but an ordinary program asking for 1 KB at a time: it got about 3.1 MB before `malloc` began to fail, while a single 64 MB request succeeded, because musl carves a mapping per small block and the ceiling a program meets is the table and not the memory. At 512 the same walk passes 8 MiB. An entry is 16 bytes, so the table costs 128 KB of kernel `.bss` across the 16-process table, against 32 KB at 128. `tests/musl/vmamusl.c` holds both boundaries: more mappings than 128 could grant, and a walk of small allocations that must reach 8 MiB.
+Before reserving module memory, `modlayout.c` rejects an empty or backwards range, a module past 32 MiB, a module overlapping the kernel, or two overlapping modules. The rejection includes the module number and physical range.
 
-Running out used to be silent. `vm.c` is deliberately independent of the kernel's globals, so it cannot name the process it refused, and the two callers that can (`mmap2` and the split in `munmap`) now say so on the serial log, once per process: `vm: mmap: pid 6 (vmamusl) has used all 512 of its mappings`. Silence here cost hours once, because a program whose library ran out of mappings looks exactly like a program whose library failed for its own reasons. `vm.c` is pure logic with no kernel globals, so the host test (`tests/host/vm_hosttest.c`) exercises find, insert, remove, overlap, and stack growth directly under ASan and UBSan.
+`alloc_user_page` scans upward from the end of the boot reservations. Page-cache frames are reserved from the top of the pool downward. User frames return to the pool when their reference count reaches zero; page directories and private page tables use separate free lists.
 
-`exec` builds the map (`elf_setup_vmas`): one VMA per loaded ELF segment with the segment's real permissions, an empty heap just past the image (`brk == image_end`), and a one-page stack at the top growable down to `stack_limit`. `fork` copies the parent's map verbatim.
+## Page tables and address spaces
 
-## Eager versus lazy
+`init_paging` creates the kernel page directory, enables paging and CR0.WP, and registers the vector 14 handler. CR0.WP makes supervisor writes honor read-only PTEs, which the page cache uses to detect its first write to a clean page.
 
-ELF code and data segments are loaded eagerly at `exec` (their pages are mapped up front), which keeps the loader simple and the boot path unchanged. Everything that grows at runtime is demand-paged: heap pages (`brk`), the stack below its first page, and anonymous `mmap` regions. The 32-bit x86 page tables have no NX bit, so "code" is present, user, read-only and "data", "heap", and "stack" are present, user, writable; only the write bit distinguishes them, which is what copy-on-write keys on.
+A process page directory initially copies the kernel directory's PDEs. The referenced kernel page tables remain shared, while a user mapping first copies or allocates the page table for that process. A context switch loads the process's directory into CR3. Kernel page tables needed by every process, including the page-cache window, must exist before the first directory is cloned.
 
-## Demand paging
+User addresses run from `USER_ADDR_MIN` (`0x02000000`) through, but not including, `USER_ADDR_MAX` (`0xC0000000`). The kernel may identity-map selected MMIO regions outside the low physical window. A new shared kernel PDE is refused after the first process directory has been cloned.
 
-The same resolver serves two callers, and the second one is why it does more than the fault handler needs. `vm_prefault_range` is what a syscall calls before it hands a raw user pointer to a layer that dereferences it directly (KRFFS, TCP, UDP, the drivers), and a prefault for writing must leave a page the kernel can actually write. A page shared by a fork is present, read-only and copy-on-write inside a writable region, so answering "present, therefore backed" would promise a page the next store faults on, with the operation already half done. `vm_resolve` makes it private there and then. A present page that is neither writable nor copy-on-write (out of frames) is reported unresolved, which segfaults the process; reporting it backed would retry the same instruction forever.
+## Virtual memory areas
 
-`_page_fault_handler` (vector 14) reads `CR2` and the error code, then tries each case in turn.
+Each PCB contains a `vm_space_t` with at most 512 VMAs. A VMA is a half-open, page-aligned range with `VM_PROT_READ`, `VM_PROT_WRITE`, and `VM_PROT_EXEC` bits and one of these types:
 
-* Copy-on-write: a write that faulted on a *present* user-space page may be a frame `fork` left shared read-only. `cow_fault` runs first, before `vm_resolve` is asked anything; it copies the frame, makes the page private and writable, and the instruction retries. A present-page write that is not COW falls through to the read-only segfault below.
-* Demand paging: a fault on a user-space address (`addr < USER_ADDR_MAX`) of a live process goes to `vm_resolve`. If a VMA covers it (or it is a legal one-page-or-more stack growth below the stack VMA and at or above `stack_limit`), a fresh frame is allocated, zero-filled, and mapped; a write to a read-only region or an address in no VMA fails. This keys on the faulting address being in user space, not on the CPU mode, so a kernel touch of a lazy user page resolves here too.
-* Page-cache window: a supervisor fault inside the demand-paged disk window (`addr >= PCWIN_BASE`, below `PCWIN_BASE + pc_window_size()`) goes to `pc_fault`, which polls the backing sectors into a cache frame and maps it. The window is a kernel-only mapping the file system touches in ring 0, so the branch is gated on `!user_mode`: a ring-3 touch of a window address is a wild access that falls through to the segfault. A window fault past the backed size, or one the fill cannot serve, is a real bug and panics.
-* An unrecoverable fault taken in user mode segfaults the process. `terminate_current_process` (in `kernel.c`, shared with the CTRL+C path) tears it down and schedules the parent to collect the zombie; if the dier was a real init it panics instead (a rescue/no-init debug shell regains control). The machine survives.
-* A fault in kernel mode with no valid user cause is a genuine kernel bug, and panics loudly.
+* `VM_CODE` and `VM_DATA` describe loaded ELF segments.
+* `VM_HEAP` describes the non-empty part of the `brk` heap.
+* `VM_STACK` starts with one page and may grow downward by at most 8 MiB.
+* `VM_ANON` describes an anonymous `mmap2` allocation.
 
-Newly demand-paged pages are always zeroed, so heap, stack, and `mmap` memory reads as zero and a recycled frame never leaks a previous process's data.
+`execve` loads ELF pages eagerly, then creates one VMA per loadable segment with the segment's permissions. It records an empty heap at the image end, places the initial stack at `0xBFFFF000`, and starts anonymous allocation below `VM_MMAP_BASE` (`0xB0000000`). The heap receives a VMA on its first non-empty growth. `fork` copies the complete `vm_space_t`.
 
-## Syscalls
+The syscall contracts are:
 
-* `brk` (45): the heap is a single demand-paged `VM_HEAP` VMA `[heap_start, page_up(brk))`. Growing extends the region (pages fault in lazily); shrinking frees the pages above the new break. Returns the resulting break, matching musl's `__brk` contract.
-* `mmap2` (192): anonymous private mappings only (what musl's allocator uses), placed by bumping `mmap_top` down from a fixed base between heap and stack. Pages are demand-paged and zero-filled; the file-backed path returns `-ENOSYS`.
-* `munmap` (91): drops the VMA bookkeeping (trimming or splitting partial overlaps) and frees the backing frames.
+* `brk` (45) grows or shrinks one heap range. Growth reserves virtual addresses only; pages are allocated on first access. Shrinking releases present frames. A collision or out-of-range request returns the old break.
+* `mmap2` (192) requires `MAP_ANONYMOUS`, rejects `MAP_FIXED`, ignores the address hint, file descriptor, and page offset, and allocates downward from `mmap_top`. File-backed mappings return `-ENOSYS`. The implementation does not validate `MAP_PRIVATE` against `MAP_SHARED`; every accepted mapping receives the private copy-on-write behavior used by fork.
+* `munmap` (91) removes full VMAs, trims either end, or splits a VMA, then releases every present frame in the range. A never-faulted page has no frame to release.
 
-## Fault-aware usercopy
+VMA allocation does not reserve physical frames. If a later user fault cannot allocate a frame, the unresolved fault terminates that process with `SIGSEGV`. A kernel prefault reports failure to its caller instead.
 
-Because user memory is now demand-paged, the kernel must not dereference a not-yet-present user page directly. `copy_from_user`, `copy_to_user`, and `strncpy_from_user` range-check the pointer and then pre-fault each page through the same `vm_resolve`: a valid-but-lazy page is backed (with write permission for copies into user space), and a page outside every VMA returns `-EFAULT` instead of faulting in kernel mode. `strncpy_from_user` faults one page at a time as it crosses boundaries, since the string may end before a later, legitimately unmapped page.
+## Page faults
 
-## Page cache and the disk window
+The vector 14 handler reads CR2 and the x86 error code, then handles these cases in order:
 
-`pagecache.*` lifts KRFFS off the in-memory RAM module onto a real disk. `init_pagecache` reserves a pool of up to `PC_SLOTS` (1024) frames, 4 MiB, adapted down to a quarter of the free frames on a small-memory machine with a 256-frame floor (the cache grew from 256 when the machine became its own build host and every compile faulted the toolchain through the old 1 MiB window), and pre-maps the page tables for a kernel-virtual window whose base is `PCWIN_BASE` (0xD0000000: above the region real firmware uses for device MMIO, which begins at 0xC0500000 on the machine this kernel boots; user space still ends at 0xC0000000 and the gap between them holds the identity-mapped BARs). The window span is the page-table coverage already laid down, sized against the lowest device MMIO BAR above the base and capped at `PC_WINDOW_CAP` (512 MiB). `pc_set_backing` points the cache at a backing store (sized to the partition) and starts it empty; the file system then reads and writes the backing simply by touching window addresses.
+1. A write protection fault on a present user COW page calls `cow_fault`.
+2. A user-range fault for a live process calls `vm_resolve` for an existing VMA or legal stack growth.
+3. A supervisor fault inside the backed page-cache window calls `pc_fault`.
+4. Any remaining user-mode fault terminates the process with `SIGSEGV`; a real init death halts the kernel.
+5. Any remaining supervisor fault panics the kernel.
 
-A window fault is serviced by `pc_fault`: it polls the backing sectors into a free or evicted cache frame and maps it, read-only on a read and read-write on a write. The fault path polls and never sleeps, so it runs with interrupts off. Dirty tracking leans on CR0.WP (set alongside PG at `init_paging`): a clean frame is mapped read-only even for the file system in ring 0, so the first supervisor write faults again and `pc_fault` marks the frame dirty and re-maps it writable. `pc_sync` (fsync and sync) writes back every dirty frame and re-protects it read-only; eviction writes a dirty frame back before reusing it.
+`vm_resolve` checks the VMA permissions. A new heap, stack, or anonymous page receives a zeroed frame. A read-only VMA remains read-only in its PTE. A write prefault of a present COW page makes the page private before kernel code writes through the pointer. A present page that cannot satisfy the requested access is rejected instead of retrying the same instruction.
 
-The backing store is one page at a time, behind the `pc_read_fn`/`pc_write_fn` pair the mount installs. For a disk-backed file system that pair drives the block layer in `sys/block`: `block.*` is a sector-addressed device behind a small read/write vtable (with a partition view that adds `start_lba`), and `ata.*` is the polled PIO ATA driver. Reads and writes there are synchronous and polled too, so the window fault can drive them with interrupts off and the scheduler stopped.
+Stack growth extends the stack VMA down to the faulting page when the page is at or above `stack_limit`. It refuses growth that would cross another VMA. Pages between the old and new start remain unallocated until touched.
 
-## Testing
+## Copy-on-write fork
 
-* `tests/vmprobe`: brk grow and shrink, heap read and write, anonymous `mmap` map/read/write/`munmap`, deep recursion to force stack growth, and the lazy-pages-read-zero check. Prints `VMPROBE OK`.
-* `tests/vmfault`: writes through a wild pointer into an unmapped gap; the process must die with the kernel surviving and the shell returning.
-* `tests/musl/mallocqsort`: a musl program that `malloc`s, `qsort`s, and makes a 256 KB (mmap-backed) allocation. Prints `MALLOC QSORT OK`.
-* `tests/host/vm_hosttest` and `tests/host/frame_hosttest`: native ASan and UBSan host tests for the pure VMA and frame-sizing logic (`make verify-host`).
+`fork` maps each present user frame into the child. Writable pages become read-only and receive `PTE_COW` in both processes; the frame reference count increases. Genuine read-only pages keep their existing flags and are not marked COW.
+
+On the first write, `cow_fault` allocates and copies a frame when another process still references the old one. If the writer is the sole owner, it removes `PTE_COW` and restores write permission without copying. Exit, `execve`, `munmap`, and failed-fork cleanup decrement the same reference counts.
+
+## Checked user access
+
+`copy_from_user`, `copy_to_user`, and `strncpy_from_user` reject addresses outside the user range. They call `vm_prefault_range` before dereferencing user memory, so a valid lazy page is created and an unmapped or read-only destination returns `-EFAULT` instead of faulting in supervisor mode. `strncpy_from_user` checks one page at a time because the terminating NUL may appear before the next unmapped page.
+
+The kernel also prefaults ranges before passing user buffers to code that accesses them directly. A write prefault resolves COW before any part of the operation has modified the buffer.
+
+## Page cache
+
+The page cache maps a backing store into a supervisor-only window at `PCWIN_BASE` (`0xD0000000`). The window ends at the lowest 32-bit PCI memory BAR within it, or at the 512 MiB cap when no BAR intervenes. Its page tables are allocated before the first process starts.
+
+At boot, the cache reserves `min(1024, free_frames / 4)` frames. The boot stops if that result is below 256. The reserved capacity is therefore 1 MiB through 4 MiB. Each resident page has a hash entry, a clock-replacement state, and dirty, accessed, and pinned flags.
+
+`pc_set_backing` installs page-sized read and write callbacks. `rach2.fswindow` uses a Multiboot module as the backing store. A disk root uses the selected ATA or AHCI block device through an MBR partition view.
+
+On a miss, `pc_fault` reads one page into a reserved frame. A read maps it read-only. The first supervisor write faults again, marks the page dirty, and remaps it writable. A write miss performs the read and marks the new resident page dirty immediately. A user-mode access to the window is never served.
+
+Clock eviction writes a dirty victim before reuse. A failed write leaves the page dirty and resident. `pc_sync` writes every dirty page and re-protects it read-only; failed pages remain dirty for a later retry. `fsync` and `fdatasync` call `pc_sync` for the whole cache, while `sync` calls it but returns zero even after a writeback failure.
+
+## Files
+
+* `frame.*` sizes the managed physical-frame pool.
+* `heap.*` implements the boot-time physical allocator.
+* `modlayout.*` validates Multiboot module placement.
+* `paging.*` owns page tables, frame references, faults, demand paging, COW, and kernel mappings.
+* `vm.*` implements VMA lookup, insertion, removal, overlap checks, and stack growth.
+* `usercopy.*` implements the user-pointer boundary.
+* `pagecache.*` implements the disk window, residency, eviction, and writeback.
+
+## Verification
+
+`make test` runs `vmprobe`, `forkro`, `cowregrant`, `usercopyfault`, and `musl/vmamusl` in its default guest suite. They cover lazy heap and anonymous pages, stack growth, read-only mappings across fork, COW re-grant, checked strings crossing into an unmapped page, 300 simultaneous mappings, and at least 8 MiB of live small allocations.
+
+The boot self-tests exercise page-table isolation and force page-cache faults, eviction, cross-page writes, and writeback through a RAM backing store. `make verify-host` runs the pure VMA, memory-map, module-layout, and page-cache bookkeeping tests under AddressSanitizer and UndefinedBehaviorSanitizer.
+
+The test image also contains `vmfault`, `vmro`, `winprobe`, `cowprobe`, `musl/mallocqsort`, and `musl/cowfork` for dedicated or manual runs. See the [guest test inventory](../../../tests/Readme.md) for their execution contract.
