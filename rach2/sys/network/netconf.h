@@ -96,6 +96,16 @@ uint32_t netconf_broadcast(void);
  * by the transmit path that puts the frame on the wire, so the two cannot
  * disagree about what a broadcast is.
  */
+/**
+ * Whether `ip` is one this stack must never take as its own or a peer's.
+ *
+ * The first octet decides it: 0 names no host, 127 is loopback, which this
+ * stack aliases to its own address, and 224 and above are multicast and the
+ * reserved space beyond. One judgement, so the boot line, the interface
+ * ioctls and the address cache cannot disagree about what an address is.
+ */
+int netconf_address_is_impossible(uint32_t ip);
+
 int netconf_is_broadcast(uint32_t ip);
 
 /**

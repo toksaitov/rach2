@@ -16,14 +16,88 @@
 #include "../netconf.h"
 #include "../../lib/kstring.h"
 
-/* One cached IP-to-MAC mapping. */
+/* One cached IP-to-MAC mapping. `used` orders the entries by how recently the
+   mapping was learned or looked up, which is what decides who leaves when the
+   cache is full. */
 typedef struct arp_entry {
     uint32_t ip;
     uint8_t  mac[6];
     uint8_t  valid;   /* 0 = free slot */
+    uint32_t used;
 } arp_entry_t;
 
 static arp_entry_t arp_cache[ARP_CACHE_SIZE];
+
+/* Rises on every learn and every hit; the entry holding the lowest value is
+   the one the machine has gone longest without needing. */
+static uint32_t arp_clock;
+
+/**
+ * The next ordering stamp, renumbering the cache if the counter would wrap.
+ *
+ * A wrap would make an old entry look like the newest one and the newest like
+ * the oldest, so at the top the entries are sorted by the stamp they hold and
+ * renumbered 1..N, which keeps their order and costs a walk of eight.
+ */
+static uint32_t arp_stamp(void)
+{
+    int order[ARP_CACHE_SIZE];
+    int count = 0;
+    int i, j;
+
+    if (arp_clock != 0xFFFFFFFFu) {
+        return ++arp_clock;
+    }
+
+    for (i = 0; i < ARP_CACHE_SIZE; i++) {
+        if (arp_cache[i].valid) {
+            order[count] = i;
+            count++;
+        }
+    }
+    for (i = 1; i < count; i++) {
+        int key = order[i];
+        uint32_t value = arp_cache[key].used;
+
+        j = i - 1;
+        while (j >= 0 && arp_cache[order[j]].used > value) {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = key;
+    }
+    for (i = 0; i < count; i++) {
+        arp_cache[order[i]].used = (uint32_t)(i + 1);
+    }
+    arp_clock = (uint32_t)count;
+    return ++arp_clock;
+}
+
+/**
+ * Whether an address is one a neighbour can actually have.
+ *
+ * A machine on a real network hears ARP from every neighbour, and some of what
+ * it hears names no host: a DHCP client announces itself while probing with a
+ * sender address of 0.0.0.0, and caching that spends a slot on a mapping
+ * nothing can be sent to. The judgement of an address is netconf's, so this
+ * cannot drift from what the boot line and the ioctls accept; a broadcast and
+ * the subnet's own network address are refused on top of it, since they name
+ * many machines or none rather than the one whose hardware address is in the
+ * packet.
+ */
+static int arp_address_is_a_neighbour(uint32_t ip)
+{
+    if (netconf_address_is_impossible(ip)) {
+        return 0;
+    }
+    if (netconf_is_broadcast(ip)) {
+        return 0;
+    }
+    if (net_ip_mask != 0 && ip == (net_ip_addr & net_ip_mask)) {
+        return 0;
+    }
+    return 1;
+}
 
 /* ARP packets are a fixed 28 bytes (Ethernet + IPv4). */
 static uint8_t arp_reply_buf[28];
@@ -41,6 +115,7 @@ void arp_flush(void)
 
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         arp_cache[i].valid = 0;
+        arp_cache[i].used = 0;
     }
 }
 
@@ -48,31 +123,48 @@ void arp_flush(void)
  * Store or refresh an IP-to-MAC mapping.
  *
  * We learn from every ARP packet, including unsolicited ones, which is a
- * cache-poisoning surface; that is acceptable on QEMU's SLIRP network.
- * Entries do not age out, which is fine for the handful of SLIRP peers
- * (gateway, DNS, one client).
+ * cache-poisoning surface; on a network where anyone can send, that is the
+ * cost of resolving addresses at all.
+ *
+ * Entries do not age out. What keeps a cache of eight usable on a real
+ * network, where this machine hears every neighbour, is the other half:
+ * addresses no neighbour can have are refused, and when the cache is full the
+ * entry gone longest without being learned or looked up is the one replaced.
+ * Dropping the new mapping instead, which is what this did, means a machine
+ * whose cache filled with strangers before it learned its gateway can reach
+ * nothing off its own subnet, and never recovers.
  */
 static void arp_cache_update(uint32_t ip, const uint8_t *mac)
 {
     int i;
     int free_slot = -1;
+    int oldest = 0;
+
+    if (!arp_address_is_a_neighbour(ip)) {
+        return;
+    }
 
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         if (arp_cache[i].valid && arp_cache[i].ip == ip) {
             k_memcpy(arp_cache[i].mac, mac, 6);
+            arp_cache[i].used = arp_stamp();
             return;
         }
         if (!arp_cache[i].valid && free_slot < 0) {
             free_slot = i;
         }
+        if (arp_cache[i].used < arp_cache[oldest].used) {
+            oldest = i;
+        }
     }
 
-    if (free_slot >= 0) {
-        arp_cache[free_slot].ip = ip;
-        k_memcpy(arp_cache[free_slot].mac, mac, 6);
-        arp_cache[free_slot].valid = 1;
+    if (free_slot < 0) {
+        free_slot = oldest;
     }
-    /* Cache full: drop the mapping (will not happen with so few peers). */
+    arp_cache[free_slot].ip = ip;
+    k_memcpy(arp_cache[free_slot].mac, mac, 6);
+    arp_cache[free_slot].valid = 1;
+    arp_cache[free_slot].used = arp_stamp();
 }
 
 /**
@@ -149,6 +241,7 @@ int arp_lookup(uint32_t ip, uint8_t *mac_out)
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         if (arp_cache[i].valid && arp_cache[i].ip == ip) {
             k_memcpy(mac_out, arp_cache[i].mac, 6);
+            arp_cache[i].used = arp_stamp();
             return 1;
         }
     }

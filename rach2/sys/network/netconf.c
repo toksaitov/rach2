@@ -92,10 +92,10 @@ static int parse_quad(const char **s, uint32_t *ip)
  * 127 is loopback, which this stack aliases to its own address, and everything
  * from 224 up is multicast, then the reserved space above it, then the
  * all-ones broadcast at the very end. This is the one judgement of an address,
- * used by the boot line and by the ioctls alike, so the two cannot drift into
- * disagreeing about what an address is.
+ * used by the boot line, by the ioctls and by the address cache alike, so they
+ * cannot drift into disagreeing about what an address is.
  */
-static int address_is_impossible(uint32_t ip)
+int netconf_address_is_impossible(uint32_t ip)
 {
     uint32_t top = ip >> 24;
 
@@ -109,7 +109,7 @@ int netconf_parse_addr(const char *s, uint32_t *ip)
     if (!parse_quad(&s, &v) || *s != '\0') {
         return 0;
     }
-    if (address_is_impossible(v)) {
+    if (netconf_address_is_impossible(v)) {
         return 0;
     }
     *ip = v;
@@ -136,7 +136,7 @@ int netconf_parse_cidr(const char *s, uint32_t *ip, uint32_t *mask)
         return 0;
     }
     m = (uint32_t)(0xFFFFFFFFu << (32u - prefix));
-    if (address_is_impossible(v)) {
+    if (netconf_address_is_impossible(v)) {
         return 0;
     }
     if ((v & ~m) == 0u || (v & ~m) == (~m & 0xFFFFFFFFu)) {
@@ -149,7 +149,7 @@ int netconf_parse_cidr(const char *s, uint32_t *ip, uint32_t *mask)
 
 int netconf_gateway_ok(uint32_t gw, uint32_t ip, uint32_t mask)
 {
-    if (address_is_impossible(gw)) {
+    if (netconf_address_is_impossible(gw)) {
         return 0;
     }
     if ((gw & mask) != (ip & mask)) {
@@ -384,7 +384,7 @@ int netconf_set_address(uint32_t ip, uint32_t mask)
         return 0;
     }
 
-    if (address_is_impossible(ip)) {
+    if (netconf_address_is_impossible(ip)) {
         net_unlock(flags);
         return -EINVAL;
     }

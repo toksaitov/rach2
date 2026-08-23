@@ -16,7 +16,9 @@
 #define ARP_OP_REQUEST  1
 #define ARP_OP_REPLY    2
 
-/* Number of cached IP-to-MAC mappings. */
+/* Number of cached IP-to-MAC mappings. Eight is small for a real network, so
+ * what fills them matters: addresses no neighbour can have are refused, and a
+ * full cache replaces the mapping gone longest without use. */
 #define ARP_CACHE_SIZE  8
 
 /** Handle a received ARP packet (the payload after the Ethernet header). */
@@ -31,7 +33,14 @@ void arp_rx(const uint8_t *data, uint16_t len);
  */
 void arp_flush(void);
 
-/** Look up the cached MAC for an IP; 1 on a hit, 0 on a miss. */
+/**
+ * Look up the cached MAC for an IP; 1 on a hit, 0 on a miss.
+ *
+ * A hit counts as use, so the entry moves to the back of the queue for
+ * replacement: a mapping the machine keeps reaching for, such as its gateway,
+ * is among the last to be replaced rather than the first. That is why a
+ * lookup writes.
+ */
 int arp_lookup(uint32_t ip, uint8_t *mac_out);
 
 /* Broadcast "who has target_ip?" to learn its MAC. */

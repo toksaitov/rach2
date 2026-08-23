@@ -145,6 +145,18 @@ Each raw socket queues eight datagrams of one MTU, the packet socket's budget ra
 
 busybox's `traceroute` runs on this, as root. Its `ping` is not built, and that is not about the kernel: the applet would answer from the shell's table before `/bin/ping`, the in-house program an ordinary account can run, which asks the kernel to ping rather than opening a socket that is root's. This machine keeps that one.
 
+## The address cache
+
+Eight entries, on a machine that hears every neighbour on its network. Three rules keep a cache that size usable.
+
+An address no neighbour can have is not learned. What counts as impossible is netconf's judgement, the same one the boot line and the interface ioctls use, so the three cannot disagree: a first octet of 0, of 127, or of 224 and above. A broadcast is refused on top of that, and so is the subnet's own network address. The case this rules out in practice is a DHCP client announcing itself while probing, which sends with a sender address of 0.0.0.0: cached, it spends a slot on a mapping nothing can be sent to.
+
+When the cache is full, the entry gone longest without being learned or looked up is replaced. Dropping the new mapping instead leaves a machine whose cache filled with strangers before it learned its gateway unable to reach anything off its own subnet, and unable to recover, because the mapping it needs is the one thrown away.
+
+A lookup counts as use, which is why `arp_lookup` writes. Every off-subnet packet looks up the gateway, so that mapping stays among the newest and is among the last a full cache replaces. It is not a guarantee: eight lookups of eight other addresses would put it at the front of the queue again. Entries do not age out; there is no clock here to age them against, and replacement by use covers what ageing would.
+
+`tests/host/arp_hosttest.c` drives all of it natively, because none of it can be provoked from inside a guest: a test there can neither invent nine neighbours nor make one of them send a DHCP probe.
+
 ## Datagram sockets with a peer
 
 `connect` on a datagram socket records where it will send and who it will hear from. There is no handshake and nothing to wait for: `write` then goes to that peer without being told again, `send` is `sendto` with no address, and `getpeername` answers. What it hears is as much the point as what it sends, and `socket_udp_deliver` drops a datagram from anyone else: a client connected to its server must not be answered by whoever else is on the wire. `connect` with `AF_UNSPEC` lets go of the peer, and two bytes are enough for that, since a family is all it is. The ephemeral source port and the peer are published under one hold, because a bind that landed first would put the socket in the port table with no peer recorded and admit a datagram from anyone in between.
