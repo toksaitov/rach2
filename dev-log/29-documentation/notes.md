@@ -50,6 +50,9 @@ This is the persistent record for information needed after a compaction or betwe
 * `pipe_read` removes each chunk from the ring before `copy_to_user` validates and copies the destination. If that copy fails, as many as 512 removed bytes are lost and are not included in the return count. This milestone does not edit code.
 * `tests/host/pipe_ring_hosttest.c` checks the physical ring boundary but never places the monotonic counters near 32-bit rollover, although `pipe_available` relies on unsigned subtraction across that rollover. This milestone does not edit tests.
 * `tests/musl/pipemusl.c` prints a failure when the child receives wrong data but still returns status 0. It is staged for manual use and is absent from the default runner. This milestone does not edit tests.
+* The fallback in `fd_poll` reports mouse descriptors readable without consulting the mouse packet ring or supplying a wait queue. A poller cannot wait for a mouse packet and can repeatedly receive readiness followed by a zero-byte read. This milestone does not edit code.
+* The header of `tests/musl/pollmusl.c` says a one-second `select` calls `pselect6_time64(413)` and falls back to `_newselect(142)`. The musl source and the built program show that a timeout whose seconds fit in 32 bits calls 142 directly; only an out-of-range timeout tries 413. This milestone does not edit test comments.
+* A comment in `sys_pselect6` says the sixth syscall argument is passed on the stack. The i386 syscall wrapper loads that argument into `%ebp`, which the interrupt frame saves as `params->ebp`; the implementation ignores it either way. This milestone does not edit source comments.
 
 ## Facts for subsystem passes
 
@@ -70,6 +73,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `rach2/sys/fs/Readme.md` now describes the extent format and validator, hierarchical lookup and inconsistent regular-file IDs, allocation and relocation, path and permission rules, directory cursor, descriptor lifetime, ownership and times, mount paths, dirty-bit protocol, limits, and the actual default, manual, host, and persistence tests. The default runner includes the named freestanding and musl permission probes; `catfile` and `ofdmusl` are staged but manual.
 * `rach2/sys/fs/synthfs.Readme.md` describes canonical routing, all current devfs entries, pty allocation, raw-window publication and I/O, every current global and per-process proc file, snapshot lifetime, and the default, manual, host, and specialized tests. `/proc/disk` exists before diagnostics with `state not-asked`; only `/dev/disk0` is conditional.
 * `rach2/sys/ipc/Readme.md` describes the two open-file descriptions, last-reference lifetime, 16-entry pool, byte-stream behavior, non-blocking and interrupted partial transfers, EOF and broken-pipe handling, the absence of atomic writes, readiness, ioctls, identities, and the exact automated, host, and manual coverage.
+* `rach2/sys/io/Readme.md` describes descriptor readiness, the scan and multi-queue wait, select projection, error handling, timeout and descriptor limits, the actual musl syscall selection, ignored signal masks, unsupported priority and epoll paths, and the automated, host, manual, and specialized coverage. A direct `make test-image` and `tools/harness.py` run of `/musl/pollmusl` passed.
 
 ## Decisions and deferred questions
 

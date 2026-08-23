@@ -1,53 +1,60 @@
-# `io/`: I/O multiplexing (`select` and `poll`)
+# `io/`: `poll` and `select`
 
-`poll` and `select` answer one question: of these many descriptors, which can I touch right now without blocking? They are what lets a single-threaded program (busybox's `ash` loop, an `httpd`, an `sshd`) wait on a keyboard, a socket, and a pipe at once and react to whichever is ready first, instead of blocking on one and going deaf to the others.
+Rach2 implements `poll`, `ppoll`, `select`, `_newselect`, and `pselect6` over one readiness scanner. These calls report which descriptors can make progress without waiting. They do not copy file, terminal, pipe, or socket payloads.
 
-## Readiness, not data
+## Readiness
 
-Each pollable backing answers a tiny query, "which of `{readable, writable, error/hangup}` is true now", and names the wait queue whose wakeup means "my answer may have changed". That is the whole interface (`file_ops.poll` for `ops`-backed objects: pipes, ttys, and ptys; `socket_poll` for sockets; regular files are always ready):
+Each descriptor reports a subset of the requested `POLLIN`, `POLLOUT`, and `POLLPRI` bits. `POLLERR`, `POLLHUP`, and `POLLNVAL` are returned without being requested.
 
-* a pipe read end is readable when bytes are buffered or the writers are gone (so `read` would return data or `0`, not block), and reports `POLLHUP` once the writers are gone;
-* a stream socket is readable with buffered data or a received FIN, writable once `ESTABLISHED`, and `POLLHUP` when the connection is fully closed;
-* a regular file is always readable and writable; it never blocks.
+An operations-backed descriptor calls its `file_ops.poll` method and supplies the wait queue whose wakeup can change its answer. Pipes, devfs files, procfs snapshots, and pseudoterminals use this path. The console calls the tty poller. Sockets call `socket_poll`. Regular KRFFS files and directories report requested read and write readiness without a wait queue.
 
-The poll core never copies payload; it only collects these readiness bits.
+The main backing rules are:
 
-## The core: scan, then park on all of them
+* A pipe uses its buffered byte count and peer lifetime. Its complete readiness contract is in the [pipe documentation](../ipc/Readme.md).
+* A tty is readable when its line discipline has input ready and is always writable. A pseudoterminal also reports peer hangup.
+* Datagram and protocol-bearing raw sockets are readable when a packet is queued and always writable. A listening stream socket is readable when an accepted connection is queued. A connected stream socket is readable with buffered data or a received FIN; it is writable in `ESTABLISHED` or `CLOSE_WAIT` while its send ring has space. Socket errors and a closed stream report `POLLERR` and `POLLHUP` as applicable. See the [network documentation](../network/Readme.md).
+* Procfs snapshots report read readiness, including at EOF. Devfs character devices report requested read and write readiness.
 
-`do_poll()` is the lost-wakeup-safe sleep generalized from one wait queue to many. With interrupts off (the single-CPU "lock"):
+The framebuffer, mouse, and any remaining descriptor type use the fallback that reports requested read and write readiness immediately. Mouse readiness is not tied to packet availability, so `poll` cannot wait for a mouse packet.
 
-1. scan every descriptor once (`poll_scan`), recording each one's wait queue;
-2. if any is ready (or a signal is pending, or the deadline passed), return;
-3. otherwise enqueue the caller on every polled object's wait queue at once (`wq_poll_add`), mark it `BLOCKED`, and yield.
+For `poll`, a negative descriptor is ignored. A closed or out-of-range nonnegative descriptor receives `POLLNVAL` and contributes to the return count. The return value is the number of `pollfd` entries with a nonzero result.
 
-A waker (an IRQ delivering pipe bytes or a TCP segment) calls `wq_wake_all` on one of those queues and marks the poller `READY`; on return the poller leaves all the queues (`wq_poll_remove`) and re-scans. The scan and the enqueue happen under the same `cli`, so a readiness change can never slip into the gap between "saw nothing ready" and "went to sleep"; the lost-wakeup window is closed exactly as in `proc/wait_queue.c`. An always-ready backing (a regular file) reports ready in the scan and so never reaches the park.
+## Scan and wait
 
-## `select` is `poll` underneath
+The core disables interrupts and scans every entry once. If one is ready, a deliverable signal is pending, or the deadline has passed, it returns. Otherwise it adds the process to every non-null wait queue, arms its timer deadline when needed, marks it blocked, and schedules another process.
 
-`select`'s three `fd_set` bitmaps are translated to a pollfd array and back (`fdsets_to_pollfds` and `pollfds_to_fdsets` in `poll_select.c`). That bit and word arithmetic is the fence-post-prone part, so it is kept pure and exercised natively under ASan in `tests/host/poll_select_hosttest.c`. The projection is direction-gated: a hangup or error is reported only on a set the caller actually selected the fd in (matching Linux's `POLLIN_SET`/`POLLOUT_SET`), so a `POLLHUP` on a write-only-selected fd is never invented into a read set, and the return value counts each ready direction (an fd ready for read and write counts 2). A selected bit naming an fd `>= MAX_FDS`, or a bit for a closed fd, is `-EBADF`, never a silent truncation.
+A pipe operation, socket path, terminal path, or signal can wake the process. The 100 Hz timer wakes a finite wait at its deadline. After any wake, the process removes itself from every queue and scans again. The scan and all queue insertions happen while interrupts are disabled, so a readiness change cannot occur between the test and the sleep.
 
-## ABI: let the real binary pick
+If no descriptor is ready, a pending signal returns `EINTR`; the kernel does not restart the call for `SA_RESTART`. A finite timeout is rounded up to a 10 ms tick. A zero timeout performs one scan without waiting. `poll` with no entries and a finite timeout acts as a sleep.
 
-i386 musl uses the whole family, so all of them route to one core and whichever number the binary emits just works (confirmed by disassembling the vendored `libc-1.2.5`):
+## `select` translation
 
-* `poll()` becomes `poll(168)`;
-* `select()` tries `pselect6_time64(413)` first (the kernel answers `-ENOSYS`), then falls back to `_newselect(142)`;
-* `select(82)` (the old single-pointer form), `pselect6(308)`, and `ppoll(309)` are implemented too. The `time64` variants `413` and `414` are intentionally not implemented; returning `-ENOSYS` is what triggers musl's time32 fallback.
+`select` translates its read, write, and exception bitmaps into a dense `pollfd` array. One selected descriptor becomes one entry whose event bits record every set that contained it. The result is projected back as follows:
 
-`struct pollfd` is `{int fd; short events; short revents;}`; `fd_set` is musl's `FD_SETSIZE = 1024` bits while `MAX_FDS = 16`.
+* `POLLIN`, `POLLHUP`, or `POLLERR` satisfies a requested read bit.
+* `POLLOUT` or `POLLERR` satisfies a requested write bit.
+* `POLLPRI` satisfies a requested exception bit.
 
-## Compared to Linux
+Projection is limited to sets in which the caller selected the descriptor. A hangup on a write-only selection does not create a read result. The return value counts ready set memberships, so one descriptor ready for both read and write contributes two.
 
-Linux `fs/select.c`: `do_select` walks the fd_sets calling each file's `->poll`, which returns a readiness mask and registers the task on the file's wait queue through a poll table; if nothing is ready the task sleeps and any wake re-runs the walk. `do_sys_poll` is the same for `pollfd`s. Rach2's `do_poll` is that loop with a fixed per-call array instead of a poll-table allocation.
+An `fd_set` has 1024 bits. `nfds` may be as large as 1024 even though a process can hold only 16 descriptors, but every selected bit must name an open descriptor below that limit. A selected closed or out-of-range descriptor returns `EBADF`; `nfds` outside 0 through 1024 returns `EINVAL`.
 
-## Deliberate simplifications
+## System-call ABI and limits
 
-* the `pselect6` and `ppoll` signal mask is accepted but not applied (there is no atomic pending-mask swap, and busybox and dropbear pass `NULL` or their normal mask here);
-* timeouts are quantized to the 10 ms PIT tick, and a parked poller is also re-woken each tick (it re-scans and re-sleeps): correct, if not the tightest;
-* `poll` is capped at `MAX_FDS` entries per call (the per-call stack array).
+The implemented i386 calls are old packed-argument `select(82)`, `_newselect(142)`, `poll(168)`, `pselect6(308)`, and `ppoll(309)`. The `pselect6_time64(413)` and `ppoll_time64(414)` calls are absent and return `ENOSYS`.
 
-## Verify
+The ported i386 musl calls `poll(168)` directly. It remaps ordinary `select` to `_newselect(142)`. `pselect` and `ppoll` use calls 308 and 309 while the timeout seconds fit in 32 bits. Only a larger timeout makes musl try call 413 or 414 before falling back to the 32-bit call with a clamped timeout.
 
-* `tests/pollprobe.c` (freestanding): timeout returns `0`, readiness `POLLIN`, `POLLHUP` on a closed writer, the same fd through `select` and `_newselect`, a cross-process block-then-wake, and the fd contract (wide `nfds` works, an out-of-range or closed bit is `-EBADF`, `nfds` past `FD_SETSIZE` is `-EINVAL`). Prints `POLLPROBE OK`.
-* `tests/host/poll_select_hosttest.c`: the `fd_set` and pollfd translation, including direction gating, under ASan and UBSan.
-* `tests/musl/pollmusl.c` (installed `mpoll`): real musl `poll()` and `select()` over a pipe, end to end, exercising the `413` to `142` fallback.
+`poll` accepts at most 16 entries. `select` reads and writes a complete 128-byte `fd_set` for each non-null set. `timeval` and `timespec` fields must be nonnegative and normalized; an invalid value returns `EINVAL`. This implementation does not write the remaining `select` time back to the caller's `timeval`.
+
+`ppoll`'s signal-mask arguments and `pselect6`'s sixth mask block are ignored. There is no atomic signal-mask replacement around the wait. No backing reports `POLLPRI`, so an exception-only `select` cannot become ready. The kernel does not implement `epoll`.
+
+## Verification
+
+`make test` runs `tests/pollprobe.c`. It checks a timeout on two empty pipes, `POLLIN`, `POLLHUP`, `_newselect`, a child write waking a blocked poller, invalid selected descriptors, the 1024-bit `nfds` bound, and invalid `timeval` normalization. The same default suite runs the musl-linked `addusermusl`, `passwdmusl`, and `loginmusl` programs, which use libc `poll` while collecting data from child-process pipes.
+
+`make verify-host` runs `tests/host/poll_select_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks bitmap word boundaries, dense translation, multi-set descriptors, array-capacity failure, error and hangup projection, direction gating, and ready-set counting.
+
+`tests/musl/pollmusl.c` is built and staged at `/musl/pollmusl` for manual use. Its short timeouts exercise musl's direct `poll(168)` and `_newselect(142)` paths over a pipe, including timeout, readiness, and a cross-process wake. It does not exercise the time64 fallback.
+
+The specialized guest targets extend socket coverage: `make packet-test` checks `poll` and `select` over a packet socket, `make raw-test` polls a raw socket, `make netif-test` checks immediate `POLLERR` on an ioctl-only socket, and `make dhcp-test` drives the in-house DHCP client's libc `poll` waits.
