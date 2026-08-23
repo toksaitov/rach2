@@ -53,6 +53,10 @@ This is the persistent record for information needed after a compaction or betwe
 * The fallback in `fd_poll` reports mouse descriptors readable without consulting the mouse packet ring or supplying a wait queue. A poller cannot wait for a mouse packet and can repeatedly receive readiness followed by a zero-byte read. This milestone does not edit code.
 * The header of `tests/musl/pollmusl.c` says a one-second `select` calls `pselect6_time64(413)` and falls back to `_newselect(142)`. The musl source and the built program show that a timeout whose seconds fit in 32 bits calls 142 directly; only an out-of-range timeout tries 413. This milestone does not edit test comments.
 * A comment in `sys_pselect6` says the sixth syscall argument is passed on the stack. The i386 syscall wrapper loads that argument into `%ebp`, which the interrupt frame saves as `params->ebp`; the implementation ignores it either way. This milestone does not edit source comments.
+* `raw_window_read` and `dev_disk0_read` return `-EIO` for a zero-length aligned read before EOF. They return zero only when the offset is at or past EOF. This milestone does not edit code.
+* The debug-shell `ahci` command withdraws all three raw disk devices before re-probing. It republishes `/dev/disk0` only when `rach2.diskdiag` is present and does not test `recovery_publishes_disk()`, so a recovery boot without that option loses `/dev/disk0` after the command. This milestone does not edit code.
+* Comments in `rach2/sys/block/recovery.h` and `rach2/kernel.c` say every image may write `/dev/bootpart` and `/dev/grubcore`. The metal build's `RACH2_DISK_READONLY` driver policy refuses their write commands. This milestone does not edit source comments.
+* Comments in `rach2/sys/block/diskinfo.h` and `rach2/sys/fs/devfs.h` call `/dev/disk0` read-only without qualifying the recovery build, whose handler permits effective uid 0 to write. This milestone does not edit source comments.
 
 ## Facts for subsystem passes
 
@@ -74,7 +78,8 @@ This is the persistent record for information needed after a compaction or betwe
 * `rach2/sys/fs/synthfs.Readme.md` describes canonical routing, all current devfs entries, pty allocation, raw-window publication and I/O, every current global and per-process proc file, snapshot lifetime, and the default, manual, host, and specialized tests. `/proc/disk` exists before diagnostics with `state not-asked`; only `/dev/disk0` is conditional.
 * `rach2/sys/ipc/Readme.md` describes the two open-file descriptions, last-reference lifetime, 16-entry pool, byte-stream behavior, non-blocking and interrupted partial transfers, EOF and broken-pipe handling, the absence of atomic writes, readiness, ioctls, identities, and the exact automated, host, and manual coverage.
 * `rach2/sys/io/Readme.md` describes descriptor readiness, the scan and multi-queue wait, select projection, error handling, timeout and descriptor limits, the actual musl syscall selection, ignored signal masks, unsupported priority and epoll paths, and the automated, host, manual, and specialized coverage. A direct `make test-image` and `tools/harness.py` run of `/musl/pollmusl` passed.
+* `rach2/sys/block/Readme.md` now describes the synchronous block interface, MBR and KRFFS discovery, ATA and AHCI limits, raw-device offsets and batching, write authority, disk diagnostics, and the actual host and specialized tests. It records the zero-length read error and the recovery re-probe publication defect as implemented behavior.
 
 ## Decisions and deferred questions
 
-* Recheck `rach2/sys/block/Readme.md` in its own pass. It says `rach2.diskdiag` publishes `/proc/disk` and `/dev/disk0` together, although the proc path always exists, and it lists a 0400 mode as a write barrier even though effective uid 0 passes the generic permission check and `make authority-test` opens `/dev/disk0` read-write on both kernels.
+* The block pass corrected the old claim that `rach2.diskdiag` publishes `/proc/disk` and `/dev/disk0` together. It also distinguishes mode 0400 from the ordinary kernel's write refusal because effective uid 0 bypasses the mode check.
