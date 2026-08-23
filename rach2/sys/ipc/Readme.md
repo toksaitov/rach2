@@ -1,38 +1,46 @@
 # `ipc/`: anonymous pipes
 
-The pipe is the original Unix inter-process channel and the thing that makes a shell pipeline `a | b` work: a bounded byte FIFO with a read end and a write end, each handed to user space as a file descriptor. Bytes written at one end come out, in order, at the other; the slower side sets the pace, because a reader blocks while the FIFO is empty and a writer blocks while it is full.
+Rach2 implements anonymous byte pipes through `pipe` and `pipe2`. A pipe has a read end, a write end, and a 4096-byte ring. It preserves byte order but has no message boundaries.
 
-## The end-of-stream contract
+## Creation and lifetime
 
-This is what lets a pipeline terminate cleanly, not hang:
+`pipe(int pipefd[2])` writes the read descriptor to `pipefd[0]` and the write descriptor to `pipefd[1]`. `pipe2` accepts only `O_CLOEXEC` and `O_NONBLOCK`; it applies either flag to both new descriptors and rejects any other bit with `EINVAL`.
 
-* `read()` returns `0` (EOF) once every write-end descriptor is closed and the buffer has drained, so the reader learns the producer is done.
-* `write()` raises `SIGPIPE` and returns `-EPIPE` once every read-end descriptor is closed, since there is no longer anyone to read the bytes, so the producer is told to stop (the default `SIGPIPE` action terminates it, which is why `yes | head` exits instead of spinning forever).
+The two ends start with separate open-file descriptions. `dup`, `dup2`, `dup3`, `F_DUPFD`, `F_DUPFD_CLOEXEC`, and `fork` share the open-file description for the end they copy. Its status flags are shared too, so `O_NONBLOCK` changes made through `fcntl` or `FIONBIO` are visible through duplicates of that end. `FD_CLOEXEC` remains a descriptor flag.
 
-`O_NONBLOCK` turns the two blocking cases into `-EAGAIN` instead.
+Closing a descriptor releases an end only when the last descriptor sharing its open-file description closes. Closing the last writer wakes readers to drain buffered data and observe EOF. Closing the last reader wakes writers for `SIGPIPE`. The pipe returns to its fixed pool after both ends close. The pool has 16 entries, and a process can hold at most 16 descriptors.
 
-## How it sits on the kernel
+Each live pipe has a nonzero inode distinct from every other live pipe. Both ends report that inode as a FIFO with permissions 0666 through `fstat`, and `/proc/<pid>/fd/<fd>` renders it as `pipe:[inode]`.
 
-Each pipe end is built on the file-backing layer:
+## Reads and writes
 
-* each end is a descriptor whose `ops` is `pipe_ops` (a `struct file_ops` vtable: `read`, `write`, `poll`, `ioctl`, `close`) and whose `priv` is the `struct pipe`. `read`, `write`, `ioctl`, and `close` dispatch through that vtable, so no pipe-specific code lives in the generic syscall layer;
-* read and write block on the wait queues (`read_wq`, `write_wq`), so other processes run while a pipeline stage waits, and a blocked stage is signal-interruptible (`-EINTR`);
-* the ends ride the refcounted open-file description: `dup`/`dup2`/`fork` share an end and bump the OFD refcount, and `pipe_close` (called from `fd_release_backing`) fires only when an end's last descriptor closes. The `struct pipe` returns to its pool once both ends are gone.
+A read of an empty pipe waits while a writer remains open. It returns `EAGAIN` instead when the read end is non-blocking, and returns `0` once the last writer has closed. Buffered data is returned before EOF. One call reads the bytes available at that point, up to the requested count; it does not wait to fill the caller's buffer.
 
-The byte FIFO itself is a power-of-two ring with monotonically increasing head and tail counters (occupancy is the unsigned `tail - head`, the physical slot is `pos & (SIZE-1)`); the wrap arithmetic lives in `pipe_ring.c` so it can be exercised natively under ASan in `tests/host/pipe_ring_hosttest.c`.
+A blocking write continues until it has copied the requested count while a reader remains. If the pipe fills, the writer waits for space. A non-blocking write uses the space currently available and returns a short count; it returns `EAGAIN` only when it cannot copy a byte. If the last reader has closed, the kernel posts `SIGPIPE` and returns `EPIPE` when no byte has been written by that call. A reader closure, signal, or user-copy fault after a partial transfer returns the partial count.
 
-## Compared to Linux
+Pipe waits are signal-interruptible. A wait interrupted before any transfer returns `EINTR`; the kernel does not implement `SA_RESTART`. See the [signal documentation](../proc/signal.Readme.md) for delivery details. Reads wake blocked writers after freeing space, writes wake blocked readers after adding data, and either final close wakes the other end. The wait queues admit every process in the fixed process table and wake all sleepers to recheck the condition.
 
-Linux `fs/pipe.c`: a pipe is an in-kernel object behind two `struct file`s with a `pipe_fops` operations table, readers and writers sleep on wait queues, and `pipe_release` tears an end down on the last close. Rach2's version is the same shape with a single fixed-size ring instead of Linux's chained page buffers.
+The 4096-byte `PIPE_BUF_SIZE` is the ring capacity, not an atomic-write limit. A blocking write uses whatever space is free before it waits. Concurrent writers can therefore interleave even when each request is no larger than 4096 bytes. There is no POSIX `PIPE_BUF` atomicity guarantee.
 
-## Deliberate simplifications
+## Descriptor operations
 
-* one fixed page (`PIPE_BUF_SIZE` = 4096) per pipe, from a small fixed pool;
-* no `F_SETPIPE_SZ` resizing, no packet mode (`O_DIRECT`), no splice, tee, or vmsplice;
-* writes are not guaranteed atomic below `PIPE_BUF` under concurrent writers (a single writer per end is the common shell case).
+Pipe descriptors use a `struct file_ops` table for `read`, `write`, `poll`, `ioctl`, and final `close`. The generic descriptor layer owns duplication, fork inheritance, close-on-exec, and last-reference release.
 
-## Verify
+The read end reports `POLLIN` when data is buffered or no writer remains, and always reports `POLLHUP` after the last writer closes. The write end reports `POLLOUT` when space exists or no reader remains, and always reports `POLLERR` after the last reader closes. These conditions match the ones that stop `read` and `write` from waiting.
 
-* `tests/pipeprobe.c` (freestanding): round-trip and EOF, `O_NONBLOCK` returning `-EAGAIN`, `SIGPIPE` and `-EPIPE`, blocking across a fork (5000 bytes through a 4 KB pipe), and a no-leak loop of create/close cycles past the pool size. Prints `PIPEPROBE OK`.
-* `tests/host/pipe_ring_hosttest.c`: the ring wrap arithmetic under ASan and UBSan.
-* `tests/musl/pipemusl.c` (staged at `/musl/pipemusl`): a real musl `pipe()` and `fork()` round-trip end to end.
+`FIONREAD` reports the buffered byte count. `FIONBIO` sets or clears `O_NONBLOCK` on that end's open-file description. Other pipe ioctls return `ENOTTY`. `lseek` and `_llseek` return `ESPIPE`.
+
+The ring uses monotonically increasing 32-bit head and tail counters. Occupancy is unsigned `tail - head`; a physical index is the counter masked by `PIPE_BUF_SIZE - 1`. The pure ring operations are in `pipe_ring.c` so the host suite can test the same code as the kernel.
+
+The implementation has no pipe resizing, packet mode, `splice`, `tee`, or `vmsplice`.
+
+## Verification
+
+`make test` runs two pipe-specific freestanding probes:
+
+* `tests/pipeprobe.c` checks byte order, EOF, the 4096-byte capacity, non-blocking empty and full cases, `SIGPIPE` and `EPIPE`, a 5000-byte transfer that blocks across `fork`, 100 create-close cycles, and agreement between the two ends' `fstat` and `/proc` identities.
+* `tests/pollprobe.c` checks `POLLIN` readiness, timeout, `POLLHUP`, `select` translation, and a poller woken by a child writing after a delay.
+
+`make verify-host` runs `tests/host/pipe_ring_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks empty and full rings, bounded partial operations, byte order, and a transfer across the physical end of the array. `tests/host/wait_queue_hosttest.c` checks fixed-array insertion, removal, capacity, and wake-all behavior; the guest probes above exercise the actual scheduling path.
+
+`tests/musl/pipemusl.c` is built and staged at `/musl/pipemusl` for a manual libc `pipe`, `fork`, read, write, close, and wait round trip. It is not an entry in the default `make test` runner.

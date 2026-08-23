@@ -7,6 +7,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `CLAUDE.md` and `Readme.md` described all build output as living under `build/`. The root Makefile and `mk/build.mk` make that true for in-house components; vendored projects also build extracted trees and musl's install under `vendor/`. `CLAUDE.md` is corrected. Recheck the root Readme in its own pass.
 * `CLAUDE.md` and `Readme.md` said the build does not run QEMU without distinguishing image builds from test targets. Image build targets do not boot QEMU. The run scripts and the test harnesses do. `CLAUDE.md` is corrected. Recheck the root Readme in its own pass.
 * Both root-document contradictions above are corrected in `Readme.md`.
+* The root `Readme.md` says the IPC subsystem provides atomic writes. The pipe implementation does not provide the POSIX `PIPE_BUF` guarantee: a write of 4096 bytes or less can use partial free space, block, and interleave with another writer. Revisit the root row during the file-system and I/O subsystem pass.
 
 ## Non-document defects
 
@@ -46,6 +47,9 @@ This is the persistent record for information needed after a compaction or betwe
 * The comment above `discover_boot_devices` says a partition in the GRUB gap withholds both boot devices. The implementation withholds `/dev/grubcore` but continues to judge and may publish `/dev/bootpart`. This milestone does not edit source comments.
 * `/dev/pts` is a resolvable synthetic directory but `getdents` on `/dev` does not list `pts`; it lists only the device registry. This milestone does not edit code.
 * `procfs_gen_stat` maps `PROC_STOPPED` through its default branch to `R`, so a job-control-stopped process is reported as running rather than `T`. This milestone does not edit code.
+* `pipe_read` removes each chunk from the ring before `copy_to_user` validates and copies the destination. If that copy fails, as many as 512 removed bytes are lost and are not included in the return count. This milestone does not edit code.
+* `tests/host/pipe_ring_hosttest.c` checks the physical ring boundary but never places the monotonic counters near 32-bit rollover, although `pipe_available` relies on unsigned subtraction across that rollover. This milestone does not edit tests.
+* `tests/musl/pipemusl.c` prints a failure when the child receives wrong data but still returns status 0. It is staged for manual use and is absent from the default runner. This milestone does not edit tests.
 
 ## Facts for subsystem passes
 
@@ -65,6 +69,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `rach2/sys/lib/krandom.Readme.md` now describes the one-time seed selection, whole-key `RDSEED` to `RDRAND` fallback, global stream, trust policy, `AT_RANDOM`, `getrandom`, random devices, netconsole consumer, and exact automated and manual coverage. The native `krandom_hosttest` passed directly under AddressSanitizer and UndefinedBehaviorSanitizer. No automated test runs `rngprobe`'s untrusted branch, reads `/dev/random`, or checks the `GRND_NONBLOCK` and `GRND_RANDOM` distinctions.
 * `rach2/sys/fs/Readme.md` now describes the extent format and validator, hierarchical lookup and inconsistent regular-file IDs, allocation and relocation, path and permission rules, directory cursor, descriptor lifetime, ownership and times, mount paths, dirty-bit protocol, limits, and the actual default, manual, host, and persistence tests. The default runner includes the named freestanding and musl permission probes; `catfile` and `ofdmusl` are staged but manual.
 * `rach2/sys/fs/synthfs.Readme.md` describes canonical routing, all current devfs entries, pty allocation, raw-window publication and I/O, every current global and per-process proc file, snapshot lifetime, and the default, manual, host, and specialized tests. `/proc/disk` exists before diagnostics with `state not-asked`; only `/dev/disk0` is conditional.
+* `rach2/sys/ipc/Readme.md` describes the two open-file descriptions, last-reference lifetime, 16-entry pool, byte-stream behavior, non-blocking and interrupted partial transfers, EOF and broken-pipe handling, the absence of atomic writes, readiness, ioctls, identities, and the exact automated, host, and manual coverage.
 
 ## Decisions and deferred questions
 
