@@ -25,7 +25,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `rach2/sys/mm/Readme.md`
 * [x] `rach2/sys/proc/signal.Readme.md`
 * [x] `rach2/sys/proc/tls.Readme.md`
-* [ ] `rach2/sys/lib/krandom.Readme.md`
+* [x] `rach2/sys/lib/krandom.Readme.md`
 * [ ] `rach2/sys/fs/Readme.md`
 * [ ] `rach2/sys/fs/synthfs.Readme.md`
 * [ ] `rach2/sys/ipc/Readme.md`

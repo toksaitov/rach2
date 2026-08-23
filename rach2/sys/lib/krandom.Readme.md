@@ -1,32 +1,55 @@
-# Rach2 Kernel CSPRNG (`krandom`)
+# Kernel random generator
 
-The kernel's source of randomness: a ChaCha20 stream cipher run as a cryptographically-secure PRNG, seeded from the CPU's hardware entropy (`RDSEED`/`RDRAND`) behind a CPUID feature check, with a timing-jitter fallback. It backs `AT_RANDOM` in every process's startup auxv (a best-effort seed for the stack canary and pointer guard) and the `getrandom(2)` syscall and the `/dev/random` and `/dev/urandom` devices, which serve the same CSPRNG but fail closed when the entropy is not trusted (see below).
+`krandom` is the kernel's single ChaCha20-based byte stream. `krandom_seed` replaces its initial deterministic key once during boot. The generator can continue from the fallback seed when the CPU supplies no hardware random value, but the kernel marks that state untrusted and restricts which interfaces may read it.
 
-## Pieces
+## Generator state
 
-| File        | Responsibility                                                                                                                                               |
-|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `krandom.c` | The ChaCha20 core, the seed collection (`RDSEED`, then `RDRAND`, then jitter), the keystream byte source, and `krandom_reseed`/`krandom_u32`/`krandom_bytes` |
-| `krandom.h` | The small public surface used by the auxv builder, `getrandom`, and `kmain`                                                                                  |
+The 16-word ChaCha input has four constant words, eight key words, a 64-bit block counter, and a 64-bit nonce. `chacha_block` applies 20 rounds and produces 64 bytes. `krandom_u32` and `krandom_bytes` consume one shared byte cursor, so calls of different sizes still form one continuous stream.
 
-## Why ChaCha20
+`krandom_reseed` accepts four words, derives four more by XOR with fixed constants, resets the counter and nonce to zero, and discards any unused output block. It does not change the recorded entropy source. `krandom_seed` sets that record after it installs either the fallback seed or a complete hardware key.
 
-A teaching kernel could ship a linear PRNG, but `AT_RANDOM` and `getrandom` are security primitives: a predictable stream defeats the very stack and pointer hardening musl wires them into. So `krandom` uses the same construction real kernels use for their fast CSPRNG: a stream cipher (ChaCha20, as in Linux's `get_random_bytes` and the BSD `arc4random`) keyed from hardware entropy. The state is `16 x uint32` (constants, key, counter, nonce); `chacha_block` mixes it with the standard quarter-round rounds, and `cc_next_byte` hands out the keystream a byte at a time, refilling a block as it drains.
+The running kernel calls `krandom_seed` once and has no later entropy accumulation or automatic rekey. The generator is global and has no lock. Callers must prevent a second random-generator call from interrupting a draw. Current callers run during boot, process setup, or a system call; no interrupt handler calls it.
 
-## Seeding
+## Boot seed and trust state
 
-`krandom_seed` collects a 256-bit key from the best source the CPU offers, checked at runtime so the kernel never executes an unsupported instruction:
+`krandom_seed` queries CPUID leaf 0 for the highest supported basic leaf, then tries these sources in order:
 
-1. `RDSEED`: a true-random seed, if CPUID reports it (leaf 7). Preferred.
-2. `RDRAND`: the on-chip CSPRNG, if CPUID reports it (leaf 1). Used when `RDSEED` is absent, and as a per-word fallthrough when a `RDSEED` retry budget is exhausted (it can transiently fail under load).
-3. Timing jitter: when neither exists (older CPUs or some emulators), the TSC read once, both halves kept, mixed with the CMOS seconds and the tick count. Weak, but never a constant.
+1. If leaf 7 is available and EBX bit 18 reports `RDSEED`, collect eight 32-bit words. Each word gets at most 32 instruction attempts. All eight must succeed.
+2. If `RDSEED` is unavailable or any of its eight words fails, discard that attempt. If leaf 1 is available and ECX bit 30 reports `RDRAND`, collect a new eight-word key under the same per-word retry limit. All eight must succeed.
+3. If neither instruction supplies a complete key, read the timestamp counter once, read the CMOS seconds field, and include the current PIT tick. Four values derived from those readings go through `krandom_reseed`.
 
-A CPUID max-leaf guard precedes the leaf-7 query so a CPU that does not implement that leaf is never asked for it (`#UD` avoidance). The state is pre-keyed with the ChaCha constants and a default key so even the first block before seeding is not all-zero.
+The recorded source is `KRANDOM_SRC_RDSEED`, `KRANDOM_SRC_RDRAND`, or `KRANDOM_SRC_JITTER`. The project treats the two hardware results as trusted. The fallback is best-effort boot variation and remains untrusted. The boot log prints the selected source; the diagnostic summary reports whether it is trusted.
 
-## Trusted entropy and fail-closed
+`rach2/run.sh`, `rach2/run_from_disk.sh`, and the default test runner use QEMU's `-cpu max`, which exposes a hardware random instruction and normally produces a trusted seed. `CPU` can select another QEMU model. Dropbear host-key generation needs the trusted interfaces described below.
 
-The CSPRNG is trusted only when it was seeded from a real hardware source (`RDSEED` or `RDRAND`); `krandom_is_trusted()` records that. `getrandom` (without `GRND_INSECURE`) and reads of `/dev/random` and `/dev/urandom` serve the stream only when it is trusted; otherwise they fail closed with `-EIO`, not hand out keys backed by timing jitter alone. The best-effort consumers stay served either way: `AT_RANDOM` (a stack canary only needs to be unpredictable) and `getrandom(..., GRND_INSECURE)`. This is why the run scripts default to `-cpu max`: it exposes `RDRAND`, so the CSPRNG is trusted and dropbear can generate a host key.
+## Consumer policy
 
-## Probe
+The following consumers draw from the stream regardless of the trust state:
 
-The pure core is host-tested under ASan and UBSan: `tests/host/krandom_hosttest.c` (`make verify-host`) checks the ChaCha block against known answers, that the byte stream is reproducible for a fixed seed, and that reseeding diverges the stream. In the guest, `tests/timeprobe.c` (`TIMEPROBE OK`) and `tests/musl/timemusl.c` (`TIMEMUSL OK`) confirm two `getrandom` draws differ, so the CSPRNG is live behind syscall 355.
+* Each newly built user image receives 16 bytes through `AT_RANDOM` on its initial stack. musl uses them for the stack canary and the mallocng allocator secret. `fork` copies an existing image and does not build a new auxiliary vector.
+* Netconsole draws one 32-bit boot identifier during initialization.
+* `getrandom` serves the fallback stream only when the caller passes `GRND_INSECURE`.
+
+System call 355, `getrandom`, normally requires a trusted source. Without one it returns `-EIO`. It never blocks: `GRND_NONBLOCK` is a no-op, and `GRND_RANDOM` selects no different pool. The three defined flags may be combined; any other flag bit returns `-EINVAL`. A request larger than `INT32_MAX` also returns `-EINVAL`. Successful and partial copies return the number of bytes written.
+
+`/dev/random` and `/dev/urandom` use the same read function and the same global stream. Neither blocks or has separate depletion accounting. Both return `-EIO` while the source is untrusted; neither has an insecure-read option. Writes to either node are accepted and discarded by the common device sink.
+
+## Source map
+
+* `rach2/sys/lib/krandom.c` implements ChaCha20, seed selection, source tracking, and the byte stream; `rach2/sys/lib/krandom.h` declares the interface.
+* `rach2/kernel.c` seeds the generator and prints its source.
+* `rach2/sys/proc/uimage.c` places caller-supplied random bytes in `AT_RANDOM`; `rach2/kernel.c` and `rach2/sys/syscall.c` draw those bytes for new images.
+* `rach2/sys/syscall.c` implements `getrandom`; `rach2/sys/fs/devfs.c` implements the two random device nodes.
+* `rach2/sys/network/netconsole.c` draws the netconsole boot identifier; `rach2/sys/diag.c` reports the trust state.
+
+## Verification
+
+`make verify-host` compiles `tests/host/krandom_hosttest.c` with `rach2/sys/lib/krandom.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks repeatability for one explicit seed, separation for a different seed, nonzero output from an all-zero seed, a 37-byte fill, and a fixed 512-byte monobit range. It has no ChaCha known-answer vector and does not exercise CPUID, the hardware instructions, or boot source selection.
+
+`make test` boots with `-cpu max`. When the hardware seed succeeds, `rngprobe` takes its trusted branch, reads two 32-byte buffers from `/dev/urandom`, checks that they differ, and applies a broad monobit range. `timeprobe` and `musl/timemusl` each require two 16-byte `getrandom` calls to differ, so the complete target requires a trusted source. `auxvprobe` checks that `AT_RANDOM` points to a 16-byte value in the initial stack page and that the value is not all zero. `devprobe` checks that successive `/dev/urandom` reads differ.
+
+`make test-noentropy` boots the test image with `-cpu qemu64`. `musl/saltnoent` requires ordinary `getrandom` to fail with `EIO`, then checks that salt creation changes no output or credential file. The same target runs the fail-closed branch of `musl/passwdmusl`.
+
+`tests/musl/rngmusl.c` is staged for a manual trusted-source run. It requests one 32-byte buffer through musl `getrandom` and another through `/dev/urandom`, then requires full, nonzero, different results. No Make target runs it.
+
+The untrusted branch in `tests/rngprobe.c` also checks `/dev/urandom` for `-EIO` and `getrandom(..., GRND_INSECURE)` for success, but no Make target currently runs that branch. The automated tests do not read `/dev/random` directly or distinguish the `GRND_NONBLOCK` and `GRND_RANDOM` flag behavior.
