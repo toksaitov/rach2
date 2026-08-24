@@ -2,11 +2,11 @@
 
 ![Rach2 running its self-tests](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-Rach2 is a small educational operating system for 32-bit x86. It boots into a Unix-like userland with accounts, a shell, a writable file system, networking, SSH, audio, a C compiler, and Doom. It can rebuild its own kernel, shell, and utilities from source while it is running. The code is meant to be read as well as run.
+Rach2 is a small educational operating system for 32-bit x86. It boots into a Unix-like system with accounts, a shell, a writable file system, networking, SSH, audio, a C compiler, and Doom. Rach2 can rebuild its own kernel, shell, and utilities from source.
 
 ## Build and run
 
-The build requires an `i686-elf` cross toolchain, QEMU, FUSE, and the verification tools checked by `make doctor`. On macOS, install Xcode Command Line Tools and Homebrew, then run `sh tools/bootstrap_mac.sh`. On Debian or Ubuntu, `make doctor` prints the required packages and the separate cross-compiler requirement. [The tools Readme](tools/Readme.md) describes machine setup and each check.
+Run `make doctor` before building. It checks the `i686-elf` cross toolchain, QEMU, FUSE, and the verification tools. On macOS, install Xcode Command Line Tools and Homebrew, then run `sh tools/bootstrap_mac.sh`. On Debian or Ubuntu, `make doctor` prints the required packages and explains that the cross compiler must be installed separately. See the [tools Readme](tools/Readme.md) for machine setup and the individual checks.
 
 ```sh
 git clone https://github.com/toksaitov/rach2.git
@@ -16,102 +16,95 @@ make
 (cd rach2 && ./run.sh os-simple)
 ```
 
-Both `os-simple` and `os-real` start at `/bin/login`. When the generated credential files are absent, the build creates `krffs/rach2_demo_password` for root and `krffs/rach2_test_password` for the unprivileged `test` account. These files are ignored by Git.
+Both `os-simple` and `os-real` start `/bin/login`. If the credential files do not exist, the build creates `krffs/rach2_demo_password` for root and `krffs/rach2_test_password` for the unprivileged `test` account. Git ignores both files.
 
-The common targets are:
+Other useful targets are:
 
-* `make` builds the kernel and os-simple image.
 * `make full` builds all three RAM images.
 * `make test` boots the test image and runs the default guest suite.
-* `make verify-style` checks the build, static analysis, source lists, ABI, and text rules.
-* `make verify-host` runs native sanitizer tests for selected kernel and tool logic.
-* `make selfbuild-test` proves the guest build described below.
-* `make help` summarizes the image, disk, hardware, and specialized test targets.
+* `make selfbuild-test` builds the kernel, shell, and utilities on Rach2.
+* `make verify-style` and `make verify-host` run the required project checks.
+* `make help` summarizes common build and test targets.
 
 Image targets only build artifacts. The run scripts and test targets start QEMU.
 
-## The three images
+## Images
 
-* `test` contains freestanding syscall probes, musl integration programs, and the fixtures used by `make test`.
-* `os-simple` is the small teaching system. Its login, ISH shell, file and network utilities, account tools, and init were written for Rach2.
-* `os-real` replaces most of the in-house user programs with BusyBox and Dropbear. It also contains TinyCC, pdpmake, the musl development files, and project sources under `/src`.
+* `test` contains the guest probes and their fixtures.
+* `os-simple` uses the project's own init, login, ISH shell, and utilities.
+* `os-real` uses BusyBox and Dropbear and includes TinyCC, pdpmake, the musl development files, and the project sources under `/src`.
 
-Disk, GRUB, metal, and recovery targets package variants of these systems. `make help` gives the current target names; the [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
+Additional targets build persistent disks, GRUB images, metal images, and recovery images. `make help` gives their current names. The [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
 
-## What is implemented
+## System
 
-* The [kernel](rach2/Readme.md) boots through Multiboot1, enters protected mode, manages paged user address spaces, schedules isolated processes preemptively, and provides a Linux i386-style system-call interface for static ELF32 programs.
-* [KRFFS](rach2/sys/fs/Readme.md) is a hierarchical native file system. A root can be mounted directly from a RAM module or persisted on ATA or AHCI storage through a write-back page cache. The [host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
-* The system provides Unix credentials, signals, process groups, job control, pipes, pseudo-terminals, file descriptors, and the `%gs` thread-local-storage ABI used by static musl programs. `/dev` and `/proc` expose device and process state.
-* The [network stack](rach2/sys/network/Readme.md) drives RTL8139 and RTL8168 devices and implements Ethernet, ARP, IPv4, ICMP, UDP, TCP, packet sockets, and raw ICMP sockets. Userland provides DHCP, DNS lookup, SSH, ping, netcat, and a small HTTP server.
-* VGA text and mode 13h graphics, PS/2 keyboard and mouse input, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker have kernel drivers.
-* [ISH](ish/Readme.md) is the freestanding command shell in os-simple. It runs one command at a time, supports file redirection, and links no C library. It is deliberately not a POSIX shell.
-* The [Doom port](ports/doom/Readme.md) uses the VGA, input, and audio interfaces. It requires an operator-supplied IWAD because game data is not committed.
+The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
 
-The kernel Readme indexes the subsystem documents and owns the detailed architecture, boot, command-line, debugging, hardware, and verification contracts.
+[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache. The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
 
-## The machine builds itself
+The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139 and RTL8168 devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
-`os-real` stages the kernel at `/src/rach2`, the utilities at `/src/utils`, and ISH at `/src/ish`. Each directory has a POSIX `guest.mk` read by pdpmake. TinyCC compiles the same sources used by the host build.
+Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
 
-Boot `os-real` with `(cd rach2 && ./run.sh os-real)`. Its compiler can build an ordinary program at the Rach2 prompt:
+## Building on Rach2
+
+`os-real` installs TinyCC, pdpmake, and the project sources. The kernel is under `/src/rach2`, the utilities under `/src/utils`, and ISH under `/src/ish`. Each directory has a POSIX `guest.mk` for pdpmake.
+
+Boot `os-real` with `(cd rach2 && ./run.sh os-real)`, then compile one of the installed utility sources:
 
 ```sh
-printf '#include <stdio.h>\nint main(void){puts("hello from Rach2");return 0;}\n' > /tmp/hello.c
-tcc -static -o /tmp/hello /tmp/hello.c
-/tmp/hello
+tcc -static -o /tmp/echo /src/utils/echo.c
+/tmp/echo hello from Rach2
 ```
 
-Rach2 has no dynamic linker, so guest executables are linked statically. [TinyCC](vendor/tcc/Readme.md) provides compilation, assembly, and linking; [pdpmake](vendor/pdpmake/Readme.md) drives the guest makefiles.
+Rach2 has no dynamic linker, so guest executables are static. [TinyCC](vendor/tcc/Readme.md) compiles, assembles, and links them; [pdpmake](vendor/pdpmake/Readme.md) reads the guest makefiles.
 
-`make selfbuild-test` builds the kernel twice in clean guest workspaces and requires identical hashes. It also builds the utilities and shell, extracts and checks the guest-built kernel on the host, and boots that kernel through the guest probe suite. The [self-build milestone](dev-log/22-selfbuild/Readme.md) records the design and evidence.
+`make selfbuild-test` builds the kernel twice in clean guest directories and requires identical hashes. It also builds the utilities and ISH, extracts and checks the guest-built kernel on the host, and boots that kernel through the guest probe suite.
 
 ## Limits
 
-Rach2 uses fixed limits to keep the implementation small enough to study. The kernel manages at most 32 MiB of physical RAM, with tables for 16 processes and 16 descriptors per process. Programs are static, the system has one native file system and an IPv4-only network stack, and there is no UEFI, USB, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
+The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 processes and 16 descriptors per process. Programs are static, KRFFS is the only native file system, and the network stack implements IPv4 only. Rach2 does not implement UEFI, USB, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
+
+## Hardware status
+
+QEMU is the primary boot and test environment. A Lenovo G50-70 has booted the recovery RAM root, configured its RTL8168GU network device, accepted keyed SSH, and read its internal AHCI disk without mounting or writing it. The sealed SSD has booted its ordinary root under QEMU from the physical device. Installing that SSD inside the laptop remains unfinished. [Milestone 25](dev-log/25-sealed/Readme.md) records the hardware session.
 
 ## Repository map
 
 System sources:
 
-* [`rach2/`](rach2/Readme.md) contains the kernel and the subsystem documentation.
-* [`krffs/`](krffs/Readme.md) contains the host-side KRFFS tools, image builders, and manifests.
-* [`ish/`](ish/Readme.md) contains the freestanding shell.
-* [`utils/`](utils/Readme.md) contains the hosted file, network, account, boot, and recovery programs.
+* [`rach2/`](rach2/Readme.md): kernel and subsystem documentation.
+* [`krffs/`](krffs/Readme.md): host tools, image builders, and manifests for KRFFS.
+* [`ish/`](ish/Readme.md): freestanding shell used by `os-simple` and the test image.
+* [`utils/`](utils/Readme.md): file, network, account, boot, and recovery programs.
 
 Integrated software:
 
-* [`vendor/musl/`](vendor/musl/Readme.md) contains the static i386 libc integration.
-* [`vendor/busybox/`](vendor/busybox/Readme.md) contains the main and set-id BusyBox integrations.
-* [`vendor/dropbear/`](vendor/dropbear/Readme.md) contains the Dropbear SSH integration.
-* [`vendor/tcc/`](vendor/tcc/Readme.md) contains the TinyCC integration and guest runtime.
-* [`vendor/pdpmake/`](vendor/pdpmake/Readme.md) contains the guest make integration.
-* [`ports/doom/`](ports/doom/Readme.md) contains the Doom engine and Rach2 platform layer.
+* [`vendor/musl/`](vendor/musl/Readme.md): static i386 C library.
+* [`vendor/busybox/`](vendor/busybox/Readme.md): main and set-id BusyBox builds.
+* [`vendor/dropbear/`](vendor/dropbear/Readme.md): Dropbear SSH server and client.
+* [`vendor/tcc/`](vendor/tcc/Readme.md): TinyCC and its guest runtime.
+* [`vendor/pdpmake/`](vendor/pdpmake/Readme.md): POSIX make used on Rach2.
+* [`ports/doom/`](ports/doom/Readme.md): Doom engine and Rach2 platform code.
 
-Build, history, and verification:
+Build, history, and tests:
 
-* [`mk/`](mk/Readme.md) contains shared GNU Make rules for in-house components.
-* [`tools/`](tools/Readme.md) contains toolchain checks, source checks, and boot harnesses.
-* [`dev-log/`](dev-log/Readme.md) records the plan and result of each completed milestone.
-* [`tests/`](tests/Readme.md) contains the guest probes and musl integration programs.
-* [`tests/host/`](tests/host/Readme.md) contains the native sanitizer tests.
+* [`mk/`](mk/Readme.md): shared GNU Make rules for in-house components.
+* [`tools/`](tools/Readme.md): toolchain checks, source checks, and boot harnesses.
+* [`dev-log/`](dev-log/Readme.md): plans and records for completed milestones.
+* [`tests/`](tests/Readme.md): guest probes and musl integration programs.
+* [`tests/host/`](tests/host/Readme.md): native sanitizer tests.
 
 ## Development
 
-[`CLAUDE.md`](CLAUDE.md) is the project policy for builds, writing, comments, verification, hardware, and Git. [`AGENTS.md`](AGENTS.md) gives coding agents the entry points into that policy. Read a component's Readme before changing it, and keep the current contract there rather than in the historical log.
+[`CLAUDE.md`](CLAUDE.md) defines the project rules for builds, writing, verification, hardware, and Git. [`AGENTS.md`](AGENTS.md) directs coding agents to those rules. Read a component's Readme before changing it. The component Readme defines the current contract; [`dev-log/`](dev-log/Readme.md) records how earlier milestones were planned and built.
 
-The [`dev-log` index](dev-log/Readme.md) links the design and build record for each milestone. Its last entry describes the work that produced the current tree. Historical records explain decisions at the time; component Readmes define current behavior.
+Every change must pass `make verify-style` and `make verify-host` before commit. The rest of the development procedure is in `CLAUDE.md`.
 
-## Third-party sources
+## Third-party sources and license
 
-The repository includes pinned source archives for musl, BusyBox, Dropbear, TinyCC, and pdpmake. Their build scripts verify SHA-256 digests before extraction, and project configurations and patches remain beside the archives. Extracted and installed trees are generated locally and ignored by Git. The integration Readmes describe each pin, patch, build, and update procedure.
+The repository includes pinned source archives for musl, BusyBox, Dropbear, TinyCC, and pdpmake. Their build scripts verify SHA-256 digests before extracting them. Project configuration and patches stay beside the archives; generated extraction and installation directories are ignored by Git. The integration Readmes describe each build and update procedure.
 
-`ports/doom/` is a maintained project fork rather than a pinned upstream archive. Its Readme identifies the upstream-derived engine and audio sources.
+`ports/doom/` is a maintained project fork. Its Readme identifies the upstream-derived engine and audio sources.
 
-## Hardware status
-
-QEMU is the main boot and device-test environment. Hardware support also targets a Lenovo G50-70. The recovery RAM root has booted on that laptop, configured its RTL8168GU network device, accepted keyed SSH, and read the internal AHCI disk without mounting or writing it. The sealed SSD's ordinary root has booted under QEMU from the physical device. Installing that SSD inside the laptop remains unfinished. [Milestone 25](dev-log/25-sealed/Readme.md) records the measurements and remaining work.
-
-## License
-
-This repository does not currently declare a project-wide license. Vendored and upstream-derived sources remain subject to their own notices and license terms.
+This repository does not declare a project-wide license. Vendored and upstream-derived sources remain subject to their own notices and license terms.
