@@ -10,11 +10,11 @@ This file is a bounded resume map for the one documentation file in progress. It
 * Active final-stage entry: the root routes, component directories, and cross-document ownership statements assign each contract to one owning Readme.
 * Current document: none.
 * Search pattern: none. The ownership pass uses the complete 28-path current-document list.
-* The ownership queue has not been recorded.
+* The ownership queue has been recorded from the complete current-document list.
 
 ## Final-stage cursor
 
-* Candidate queue: empty. The cross-component terminology entry is complete.
+* Candidate queue, in order: `tests/host/Readme.md`, `tests/Readme.md`, `rach2/Readme.md`, `rach2/sys/mm/Readme.md`, `rach2/sys/proc/signal.Readme.md`, `rach2/sys/proc/tls.Readme.md`, `rach2/sys/lib/krandom.Readme.md`, `rach2/sys/fs/Readme.md`, `rach2/sys/fs/synthfs.Readme.md`, `rach2/sys/ipc/Readme.md`, `rach2/sys/io/Readme.md`, `rach2/sys/block/Readme.md`, `rach2/sys/network/Readme.md`, `krffs/Readme.md`, `ish/Readme.md`, `utils/Readme.md`, `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/busybox/patches/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -33,8 +33,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Record the complete 28-path current-document list as the ownership queue, then inspect one file at a time.
+The first five ownership documents through `tools/Readme.md` are adjudicated. Commit this checkpoint, then inspect `tests/host/Readme.md`.
 
 ## Intended commit boundary
 
-* No document is in progress. Commit `finish.md` and this checkpoint when the terminology entry is complete.
+* No document is in progress. Commit this five-document ownership checkpoint.
