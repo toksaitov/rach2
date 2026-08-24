@@ -23,7 +23,7 @@ By default, the host Makefile compiles the kernel as freestanding C89 with `i686
 
 `C_SRC` and `ASM_SRC` in `Makefile` are explicit source lists. `make check-sources` checks the C list against the tree. `tools/check_guest.py` checks both host lists against `guest.mk`, the POSIX makefile that pdpmake and TinyCC use on Rach2. Host objects and dependency files are under `build/rach2/`; the guest build writes into its writable copy of the source tree.
 
-The metal and recovery kernels use separate component names and object trees. A flag stamp refuses to reuse one tree with different compiler options.
+The metal and recovery kernels use separate component names and object trees. A flag stamp prevents reuse of one tree with different compiler options.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ The kernel accepts one KRFFS root:
 * `rach2.fsdisk` and `rach2.root=disk` scan the attached disk's MBR and mount its KRFFS partition through the write-back page cache.
 * `rach2.fswindow` mounts the Multiboot module through the page-cache window. This is a development path for the cache rather than a persistent disk.
 
-A boot with no mounted root halts unless `rach2.rescue` was requested. `rach2.nodisk` combined with a disk root is also refused unless rescue mode was requested, because skipping the disk would otherwise expose an unauthenticated shell after the root failed to mount.
+A boot with no mounted root halts unless `rach2.rescue` was requested. The kernel also halts before mounting when `rach2.nodisk` is combined with a disk root, unless rescue mode was requested, because skipping the disk would otherwise expose an unauthenticated shell after the root failed to mount.
 
 The page cache writes dirty pages on eviction, `fsync`, `sync`, and an orderly stop. A disk root sets a dirty-mount flag while mounted and clears it only after a successful final flush. See [block storage](sys/block/Readme.md) and [KRFFS](sys/fs/Readme.md).
 
