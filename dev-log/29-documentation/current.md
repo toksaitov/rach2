@@ -8,16 +8,16 @@ This file is a bounded resume map for the one documentation file in progress. It
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
 * Active final-stage entry: contextual register review passes over the 28 current documents.
-* Current document: `rach2/Readme.md`.
-* Original and current forms read whole in this goal run: yes. The file has 174 lines.
-* Material claims: kernel build, architecture, root selection, QEMU runs, command line, debug shell, source map, hardware, limits, and verification.
-* Changed sections: Build and Root selection. The edits replace intention language without changing the build-tree or boot-line behavior.
+* Current document: `rach2/sys/mm/Readme.md`.
+* Original and current forms read whole in this goal run: yes. The file has 96 lines.
+* Material claims: physical memory, page tables, VMAs, faults, COW, user access, page cache, and verification.
+* Changed sections: Page tables and address spaces, and Page faults. The edits state two failure conditions without changing them.
 * Search pattern: `\b(honest|fiction|trap|bench|gate|era|surface|sight|holds?|names?|spells?|sits?|pins?|believes?|believed|believing|refuses?|refused|refusing|asks?|asked|asking)\b|(^|[.!?][[:space:]]+)Not[[:space:]]|\b[Nn]ot\b[^.!?]{0,100},?[[:space:]]+(it is|it's|they are|they're)\b`.
 * The contextual-register path-only search has run once. Do not rerun it.
 
 ## Final-stage cursor
 
-* Candidate queue, in order: `rach2/sys/mm/Readme.md`, `rach2/sys/proc/signal.Readme.md`, `rach2/sys/fs/Readme.md`, `rach2/sys/fs/synthfs.Readme.md`, `rach2/sys/ipc/Readme.md`, `rach2/sys/io/Readme.md`, `rach2/sys/block/Readme.md`, `rach2/sys/network/Readme.md`, `krffs/Readme.md`, `ish/Readme.md`, `utils/Readme.md`, `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
+* Candidate queue, in order: `rach2/sys/proc/signal.Readme.md`, `rach2/sys/fs/Readme.md`, `rach2/sys/fs/synthfs.Readme.md`, `rach2/sys/ipc/Readme.md`, `rach2/sys/io/Readme.md`, `rach2/sys/block/Readme.md`, `rach2/sys/network/Readme.md`, `krffs/Readme.md`, `ish/Readme.md`, `utils/Readme.md`, `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -36,8 +36,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-`rach2/Makefile` compares the stored flags before compiling, and `refuse_contradictory_boot_line` halts on the contradictory disk-root combination. The remaining matches are component-name nouns, an interrupt gate, and a literal parameter. Verify and commit this file, then inspect `rach2/sys/mm/Readme.md`.
+`rach2/sys/mm/paging.c` prevents late shared kernel PDE creation, and `vm_grow_stack` returns failure when the growth span overlaps another VMA. The contextual search now has no match in this file. Verify and commit it, then inspect `rach2/sys/proc/signal.Readme.md`.
 
 ## Intended commit boundary
 
-* `rach2/Readme.md` and this checkpoint only.
+* `rach2/sys/mm/Readme.md` and this checkpoint only.

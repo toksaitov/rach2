@@ -18,7 +18,7 @@ Before reserving module memory, `modlayout.c` rejects an empty or backwards rang
 
 A process page directory initially copies the kernel directory's PDEs. The referenced kernel page tables remain shared, while a user mapping first copies or allocates the page table for that process. A context switch loads the process's directory into CR3. Kernel page tables needed by every process, including the page-cache window, must exist before the first directory is cloned.
 
-User addresses run from `USER_ADDR_MIN` (`0x02000000`) through, but not including, `USER_ADDR_MAX` (`0xC0000000`). The kernel may identity-map selected MMIO regions outside the low physical window. A new shared kernel PDE is refused after the first process directory has been cloned.
+User addresses run from `USER_ADDR_MIN` (`0x02000000`) through, but not including, `USER_ADDR_MAX` (`0xC0000000`). The kernel may identity-map selected MMIO regions outside the low physical window. Creation of a shared kernel PDE fails after the first process directory has been cloned.
 
 ## Virtual memory areas
 
@@ -51,7 +51,7 @@ The vector 14 handler reads CR2 and the x86 error code, then handles these cases
 
 `vm_resolve` checks the VMA permissions. A new heap, stack, or anonymous page receives a zeroed frame. A read-only VMA remains read-only in its PTE. A write prefault of a present COW page makes the page private before kernel code writes through the pointer. A present page that cannot satisfy the requested access is rejected instead of retrying the same instruction.
 
-Stack growth extends the stack VMA down to the faulting page when the page is at or above `stack_limit`. It refuses growth that would cross another VMA. Pages between the old and new start remain unallocated until touched.
+Stack growth extends the stack VMA down to the faulting page when the page is at or above `stack_limit`. Growth fails if it would cross another VMA. Pages between the old and new start remain unallocated until touched.
 
 ## Copy-on-write fork
 
