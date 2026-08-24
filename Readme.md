@@ -11,7 +11,7 @@ The kernel implements protected mode, paging, system calls, preemptive multitask
 | Directory                                | Description                                                                                                            | Documentation                         |
 |------------------------------------------|------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
 | [rach2/](rach2/)                         | 32-bit x86 kernel with syscalls, paging, preemptive scheduling                                                         | [Readme](rach2/Readme.md)             |
-| [rach2/sys/network/](rach2/sys/network/) | TCP/IP stack: RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets                                                    | [Readme](rach2/sys/network/Readme.md) |
+| [rach2/sys/network/](rach2/sys/network/) | TCP/IP stack: RTL8139 and RTL8168, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets                                        | [Readme](rach2/sys/network/Readme.md) |
 | [tests/](tests/)                         | Guest probes and musl integration programs                                                                             | [Readme](tests/Readme.md)             |
 | [tests/host/](tests/host/)               | Native sanitizer tests for kernel and tool logic                                                                       | [Readme](tests/host/Readme.md)        |
 | [krffs/](krffs/)                         | K&R First-Fit File System host tools and image builders                                                                | [Readme](krffs/Readme.md)             |
@@ -44,7 +44,7 @@ The kernel subsystem documents describe the current implementation and its tests
 | Thread-local storage | `%gs` TLS via `set_thread_area`, per-process and switch-safe                       | [Readme](rach2/sys/proc/tls.Readme.md)    |
 | Signals              | Dispositions, masks, delivery on return-to-user, the `sigreturn` frame             | [Readme](rach2/sys/proc/signal.Readme.md) |
 | CSPRNG (`krandom`)   | ChaCha20 seeded from `RDSEED`/`RDRAND`, backing `AT_RANDOM` and `getrandom`        | [Readme](rach2/sys/lib/krandom.Readme.md) |
-| Network stack        | RTL8139, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets                              | [Readme](rach2/sys/network/Readme.md)     |
+| Network stack        | RTL8139 and RTL8168, Ethernet, ARP, IPv4, ICMP, UDP, TCP, sockets                  | [Readme](rach2/sys/network/Readme.md)     |
 
 ## Prerequisites
 

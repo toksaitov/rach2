@@ -8,6 +8,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `CLAUDE.md` and `Readme.md` said the build does not run QEMU without distinguishing image builds from test targets. Image build targets do not boot QEMU. The run scripts and the test harnesses do. `CLAUDE.md` is corrected. Recheck the root Readme in its own pass.
 * Both root-document contradictions above are corrected in `Readme.md`.
 * The root `Readme.md` says the IPC subsystem provides atomic writes. The pipe implementation does not provide the POSIX `PIPE_BUF` guarantee: a write of 4096 bytes or less can use partial free space, block, and interleave with another writer. Revisit the root row during the file-system and I/O subsystem pass.
+* The root `Readme.md` opening paragraph named RTL8139 and RTL8168 devices, but its component and subsystem tables named only RTL8139. Both summary rows now name both supported devices.
 
 ## Non-document defects
 

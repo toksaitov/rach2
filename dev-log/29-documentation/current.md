@@ -12,8 +12,9 @@ This file is a bounded resume map for the one documentation file in progress. It
 * First unchecked higher-level entry: network drivers, configuration, protocols, sockets, and network utilities.
 * Current documents in this group: the relevant root and kernel overview sections, `rach2/sys/network/Readme.md`, the network portions of `rach2/sys/fs/synthfs.Readme.md`, `rach2/sys/io/Readme.md`, and `utils/Readme.md`.
 * Implementation evidence: network device selection, RTL8139 and RTL8168GU drivers, configuration, Ethernet, ARP, IPv4, loopback, ICMP, UDP, TCP, socket and syscall code, procfs network generators, userland network programs, and named default, host, and specialized tests.
-* Compare device selection and polling, configuration precedence and validation, protocol limits, socket types and options, procfs formats and identity, userland ownership, and actual automated versus manual coverage. Use the network defects and settled facts in `notes.md` as the navigation list.
-* Intended checkpoint: mark only this subsystem entry when the comparison is complete. If a document needs correction, return to the one-file procedure and commit it before resuming the group.
+* Device selection, polling, boot configuration, protocol limits, socket types and options, procfs formats and identity, userland ownership, and automated versus manual coverage have been compared with their narrow implementation and test evidence.
+* The root opening paragraph already named both supported network devices, but both summary tables named only RTL8139. `Readme.md` now names RTL8139 and RTL8168 in both rows. No other cross-document disagreement was found.
+* Intended commit boundary: the two `Readme.md` summary-row corrections and the milestone control files. Resume the group after that clean checkpoint, then mark the subsystem complete.
 
 ## Boundary
 
@@ -22,4 +23,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run `make verify-style`, inspect and commit the two control files for the completed file-system pass, and require a clean tree. Then compare the network documents with the narrow implementation and test locations identified above.
+Run the file-level banned-prose and ASCII checks for `Readme.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file correction with the milestone control files and require a clean tree. Then mark the network subsystem complete.
