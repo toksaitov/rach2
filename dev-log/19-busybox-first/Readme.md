@@ -1,6 +1,6 @@
-# Milestone 19: busybox first, and our own machine beside it
+# Milestone 19: BusyBox first, and our own machine beside it
 
-The milestone follows one instruction: use as much busybox functionality as possible and minimize in-house code in the main image. The result assigns each implementation to an image rather than deleting it. Os-real, which presents a conventional Unix to students, now uses every busybox account tool, including the three that require set-id. Os-simple changes from a shell and root-level utility collection into a small Unix built from this project's code, with an authenticated login. The programs from the privilege milestones therefore remain runnable instead of becoming unbooted source.
+The milestone follows one instruction: use as much BusyBox functionality as possible and minimize in-house code in the main image. The result assigns each implementation to an image rather than deleting it. Os-real, which presents a conventional Unix to students, now uses every BusyBox account tool, including the three that require set-id. Os-simple changes from a shell and root-level utility collection into a small Unix built from this project's code, with an authenticated login. The programs from the privilege milestones therefore remain runnable instead of becoming unbooted source.
 
 The two images now expose the intended implementation contrast. Nothing was deleted.
 
@@ -8,7 +8,7 @@ The two images now expose the intended implementation contrast. Nothing was dele
 
 The plan was corrected in place as implementation disproved its assumptions.
 
-Busybox's account tools initially failed for a cause absent from the plan. `chpasswd` exited 2 without a message. Musl's buffered stdio uses `readv` instead of `read` when filling more than one byte, but the kernel implemented `writev` at 146 and left 145 unwired. Programs using `fgets`, `fread` or `scanf` had silently failed, while comments in three in-house programs treated byte-at-a-time reads without `readv` as a system constraint. Phase 2a was added after this discovery.
+BusyBox's account tools initially failed for a cause absent from the plan. `chpasswd` exited 2 without a message. Musl's buffered stdio uses `readv` instead of `read` when filling more than one byte, but the kernel implemented `writev` at 146 and left 145 unwired. Programs using `fgets`, `fread` or `scanf` had silently failed, while comments in three in-house programs treated byte-at-a-time reads without `readv` as a system constraint. Phase 2a was added after this discovery.
 
 The first `readv` implementation read every vector for every descriptor kind. This fails for pipes because a second read blocks if the first buffer filled exactly and no more input exists. It also fails for datagrams because the second read receives the next message after the first message's unused tail was discarded. The first correction read every non-regular descriptor only once, but that was also wrong. Its stated justification, that later buffers required a kernel allocation as large as the vector list, was false.
 
@@ -22,7 +22,7 @@ One property is established by code reasoning rather than a forced schedule. A p
 
 The terminal probe sizes its first buffer exactly to the line. A wider buffer would stop on a short read even without the terminal rule and would therefore fail to distinguish the implementations.
 
-Busybox's `Config.in` provides the set-id design: build the binary twice and apply the bit only to the required artifact. `FEATURE_INDIVIDUAL` is unsuitable because it requires a dynamic linker that this system lacks. The second build contains only `login`, `passwd` and `su`; its configuration disables the `/etc/busybox.conf` parser, whose use-after-free is recorded below, every shell symbol, and both applet-preference features.
+BusyBox's `Config.in` provides the set-id design: build the binary twice and apply the bit only to the required artifact. `FEATURE_INDIVIDUAL` is unsuitable because it requires a dynamic linker that this system lacks. The second build contains only `login`, `passwd` and `su`; its configuration disables the `/etc/busybox.conf` parser, whose use-after-free is recorded below, every shell symbol, and both applet-preference features.
 
 Removing a manifest's set-id bit does not reach the intended test because the allowlist declares the path set-id and staging fails first. The mutation must also move the entry to the unprivileged list. This first demonstrates the guard and then permits the suite's independent check to run.
 
@@ -31,10 +31,10 @@ Removing a manifest's set-id bit does not reach the intended test because the al
 The following commits changed code, configuration, or a manifest. The list comes from `git show --stat`, not the plan. Record-only commits are omitted, including the final commit that could not list itself.
 
 * `5c55730` changes the applet guard to read the table that `build_busybox.sh` stages beside the binary, rather than the table in the source tree that the build deletes and extracts again.
-* `df9a22c` builds busybox twice and adds `rach2-suid.config` for the set-id build.
+* `df9a22c` builds BusyBox twice and adds `rach2-suid.config` for the set-id build.
 * `12459f5` rejects a partial applet-table read by requiring a complete initializer and a token count matching `NUM_APPLETS`.
 * `9a4769c` implements `readv` at 145 and adds `tests/musl/readvmusl.c`.
-* `d0bd480` switches os-real's account tools to busybox: the main binary supplies `adduser`, `addgroup`, `deluser`, `delgroup` and `chpasswd`; the set-id binary supplies `login`, `passwd` and `su`; and `make account-test` verifies them.
+* `d0bd480` switches os-real's account tools to BusyBox: the main binary supplies `adduser`, `addgroup`, `deluser`, `delgroup` and `chpasswd`; the set-id binary supplies `login`, `passwd` and `su`; and `make account-test` verifies them.
 * `dbca70f` restores `cryptpw`, `mkpasswd` and the httpd MD5 feature, then clears the config guard's forbidden list while retaining the rule.
 * `d9e3112` limits `readv` to one read for non-regular files.
 * `8d55c5f` checks the complete set-id configuration instead of only the three applet names.
@@ -79,7 +79,7 @@ The final rounds expanded the guard beyond image file declarations. A set-id bit
 
 Two initial fixes were defective. Opening redirections before built-in dispatch broke `cd > file` and bare `cd` because redirection removal cleared argument slots before the operand was read from its old position. The ancestor rule also used the first `dir` directive while `stage_dir` reapplies the last, allowing a safe `/bin` followed by an unsafe declaration to pass. Both cases now have coverage.
 
-One finding was refuted with a trust-boundary analysis. It proposed binding each busybox binary to its staged applet table and configuration by digest or by extracting names from the executable. One script invocation writes all four artifacts, which are deleted together when the stamp is invalidated and rebuilt from a tarball checked against a repository sha256. `build/` is generated; an actor able to replace its binary can replace any generated artifact, including the compiler. An artifact-level binding would therefore claim a boundary the build system does not enforce. The guard instead protects reviewed sources: manifests, configurations, and allowlist entries.
+One finding was refuted with a trust-boundary analysis. It proposed binding each BusyBox binary to its staged applet table and configuration by digest or by extracting names from the executable. One script invocation writes all four artifacts, which are deleted together when the stamp is invalidated and rebuilt from a tarball checked against a repository sha256. `build/` is generated; an actor able to replace its binary can replace any generated artifact, including the compiler. An artifact-level binding would therefore claim a boundary the build system does not enforce. The guard instead protects reviewed sources: manifests, configurations, and allowlist entries.
 
 Another finding was partly refuted and later reconsidered. A pipe reader must already handle short reads, so filling one buffer per `readv` call is not itself defective. The same finding correctly identified datagram loss. After the milestone, the implementation was reconsidered without the assumed allocator constraint because the datagram already occupied a kernel buffer. Commit `72c9a00` provides the correction and closes that deferral.
 
@@ -87,7 +87,7 @@ One review round also found a defect in a fix requested by the preceding round.
 
 ## Documentation and manifest sweep
 
-Phase 6 reviewed every affected comment, document, and support file. It corrected byte-at-a-time explanations in three in-house programs after the addition of `readv`; the claim in `utils/su.c` that it was the image's only setuid binary; the account paragraph in the os-real manifest; the `check_setid.py` header, which described two parts instead of four; the busybox Readme applet count from 327 to 314; the top-level component table; the os-simple descriptions in `run.sh` and the Makefile; and Readmes that still described os-simple as a flat root containing a shell and no `/etc`.
+Phase 6 reviewed every affected comment, document, and support file. It corrected byte-at-a-time explanations in three in-house programs after the addition of `readv`; the claim in `utils/su.c` that it was the image's only setuid binary; the account paragraph in the os-real manifest; the `check_setid.py` header, which described two parts instead of four; the BusyBox Readme applet count from 327 to 314; the top-level component table; the os-simple descriptions in `run.sh` and the Makefile; and Readmes that still described os-simple as a flat root containing a shell and no `/etc`.
 
 The sweep found no unstaged in-house source because each is named or included by `exec-dir`; no unselected configuration symbol; no unused Makefile variable; and no forbidden-applet entry for an applet now expected in an image.
 
@@ -95,20 +95,20 @@ The final review rounds expanded the guard from executable programs to all trust
 
 ## Deferred work
 
-Busybox's `update_passwd` uses an advisory `fcntl` lock that this kernel grants unconditionally and does not participate in the in-house `/etc/.pwlock` protocol. Writers using the two protocols do not exclude each other, so two account changes in the same second can lose one update. Os-real can have simultaneous console and SSH sessions, so the number of terminals does not bound the race. The accepted trade is a possible repeated account change instead of retaining a second implementation of standard system tools. `vendor/busybox/Readme.md` records this loss of serialization.
+BusyBox's `update_passwd` uses an advisory `fcntl` lock that this kernel grants unconditionally and does not participate in the in-house `/etc/.pwlock` protocol. Writers using the two protocols do not exclude each other, so two account changes in the same second can lose one update. Os-real can have simultaneous console and SSH sessions, so the number of terminals does not bound the race. The accepted trade is a possible repeated account change instead of retaining a second implementation of standard system tools. `vendor/busybox/Readme.md` records this loss of serialization.
 
-Busybox's `adduser` publishes `/etc/passwd` before `/etc/shadow`. An interruption can therefore leave a visible account without a password, the state prevented by the in-house publication order. The same implementation trade applies, while os-simple retains the alternative order.
+BusyBox's `adduser` publishes `/etc/passwd` before `/etc/shadow`. An interruption can therefore leave a visible account without a password, the state prevented by the in-house publication order. The same implementation trade applies, while os-simple retains the alternative order.
 
 There is no in-house `deluser`; account removal in os-simple requires root to edit three files. Adding an implementation would conflict with the milestone's direction.
 
-Os-real retains the in-house `ping` because busybox requires raw sockets that the kernel does not provide. Raw sockets remain unimplemented, as explained in `vendor/busybox/Readme.md`.
+Os-real retains the in-house `ping` because BusyBox requires raw sockets that the kernel does not provide. Raw sockets remain unimplemented, as explained in `vendor/busybox/Readme.md`.
 
-The busybox `check_suid` use-after-free and the evidence needed for an upstream report are also recorded there. No report has been sent.
+The BusyBox `check_suid` use-after-free and the evidence needed for an upstream report are also recorded there. No report has been sent.
 
 ## Verification
 
-The final run started after `make distclean`, rebuilding vendored musl, busybox, and dropbear from their tarballs. One pass completed `make full`, `make verify-style`, `make verify-host` (18 host integration tests), `make test` (54 probes), `make account-test` (both images), `make shutdown-test`, `make login-test`, `make ping-test`, `make crash-test`, `make test-disk`, `make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`, `make cred-persist-test` and `make test-noentropy`. Every command passed.
+The final run started after `make distclean`, rebuilding vendored musl, BusyBox, and Dropbear from their tarballs. One pass completed `make full`, `make verify-style`, `make verify-host` (18 host integration tests), `make test` (54 probes), `make account-test` (both images), `make shutdown-test`, `make login-test`, `make ping-test`, `make crash-test`, `make test-disk`, `make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`, `make cred-persist-test` and `make test-noentropy`. Every command passed.
 
-The live SSH test used the same tree and both authentication routes. The demo key admitted root, and the generated password admitted the unprivileged account; each reached a busybox shell over a dropbear pty. Console authentication now uses busybox's `login` and reads the `/etc/shadow` written by the milestone's tools.
+The live SSH test used the same tree and both authentication routes. The demo key admitted root, and the generated password admitted the unprivileged account; each reached a BusyBox shell over a Dropbear pty. Console authentication now uses BusyBox's `login` and reads the `/etc/shadow` written by the milestone's tools.
 
 The account suite was repeated because the process-group defect had appeared in roughly one run in five. Both image paths passed repeatedly after the fix.

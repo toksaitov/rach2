@@ -19,8 +19,14 @@ This file is a bounded resume map for the one documentation file in progress. It
 * Check repeated model mannerisms, inconsistent names introduced by this milestone, ASCII, prohibited vocabulary, Markdown bullet form, and the complete historical diff in bounded ordered batches. Preserve quoted prompts, commands, output, ids, and historical substance.
 * The portable-plan correction is committed as `92ee567`. The contextual search then found `gate` used as shorthand for a verification list in milestones 19 through 21. Hardware gates and passages that discuss the old vocabulary remain unchanged.
 * The text-standard plan correction is committed as `02248d0`. The remaining `gate`, `trap`, `bench`, `surface`, `sight`, `era`, and `honest` matches are legitimate technical terms, literal prompts, or explicit historical discussion of the style rule.
-* `dev-log/17-completion/plan.md` was read whole in fifteen bounded sections. Its `/etc/skel` bullet is now two complete sentences: the file is not staged, and staging it would add convenience without teaching another mechanism. The deferred decision is unchanged.
-* Intended commit boundary: this one historical prose correction and the milestone checkpoint. Resume the collection search after a clean commit.
+* The completion-plan correction is committed as `ec09738`. Contextual searches for the register terms, rhetorical reversals, dramatic fragments, `honest`, and `fiction` are complete. Literal foundation prompts and legitimate technical terms remain unchanged.
+* Historical content changed in seven ordered batch commits: `480c449`, `8ddb34d`, `5fa487a`, `ebe174d`, `03dae47`, `243529b`, and `83d8a39`, followed by the focused correction commits through `ec09738`. Review each batch diff in repository path order, one historical file at a time; use bounded word diffs for reflowed files.
+* The complete historical content diff in `480c449` has been read in path order. The foundation plan used six bounded word-diff sections; the networking plan used five compact change-stream sections. No further correction was needed.
+* The complete historical content diff in `8ddb34d` has been read in path order. The review plan and disk plan each used two bounded compact change streams; the other eight files used one stream each. No further correction was needed.
+* The complete historical content diff in `5fa487a` has been read in path order. The milestone 12 plan used a bounded compact change stream, including three sections after compaction; the other nine files used one stream each. No further correction was needed.
+* All ten historical diffs in `ebe174d` have been read in path order. The final file, `dev-log/19-busybox-first/Readme.md`, was then read whole because the batch diff exposed inconsistent capitalization of the BusyBox name.
+* `dev-log/19-busybox-first/Readme.md` now uses the proper names BusyBox and Dropbear in prose while preserving lowercase path components, configuration names, and historical substance. Its banned-prose and ASCII checks and complete one-file diff review passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered review at `03dae47` after a clean commit.
 
 ## Boundary
 
@@ -29,4 +35,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run the file-level banned-prose and ASCII checks for `dev-log/17-completion/plan.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file correction with this checkpoint, then resume the collection search.
+Run `make verify-style`, `git diff --check`, and staged path and content review for the one-file correction. Commit it with this checkpoint, then resume at `03dae47`.
