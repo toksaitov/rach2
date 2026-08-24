@@ -111,9 +111,9 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `rach2/sys/fs/Readme.md`
 * [x] `rach2/sys/fs/synthfs.Readme.md`
 * [x] `rach2/sys/io/Readme.md`
-* [ ] `rach2/sys/ipc/Readme.md`
-* [ ] `rach2/sys/lib/krandom.Readme.md`
-* [ ] `rach2/sys/mm/Readme.md`
+* [x] `rach2/sys/ipc/Readme.md`
+* [x] `rach2/sys/lib/krandom.Readme.md`
+* [x] `rach2/sys/mm/Readme.md`
 * [ ] `rach2/sys/network/Readme.md`
 * [ ] `rach2/sys/proc/signal.Readme.md`
 * [ ] `rach2/sys/proc/tls.Readme.md`
