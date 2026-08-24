@@ -31,7 +31,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `rach2/sys/ipc/Readme.md`
 * [x] `rach2/sys/io/Readme.md`
 * [x] `rach2/sys/block/Readme.md`
-* [ ] `rach2/sys/network/Readme.md`
+* [x] `rach2/sys/network/Readme.md`
 
 ### File-system tools and userland
 

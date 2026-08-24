@@ -57,6 +57,20 @@ This is the persistent record for information needed after a compaction or betwe
 * The debug-shell `ahci` command withdraws all three raw disk devices before re-probing. It republishes `/dev/disk0` only when `rach2.diskdiag` is present and does not test `recovery_publishes_disk()`, so a recovery boot without that option loses `/dev/disk0` after the command. This milestone does not edit code.
 * Comments in `rach2/sys/block/recovery.h` and `rach2/kernel.c` say every image may write `/dev/bootpart` and `/dev/grubcore`. The metal build's `RACH2_DISK_READONLY` driver policy refuses their write commands. This milestone does not edit source comments.
 * Comments in `rach2/sys/block/diskinfo.h` and `rach2/sys/fs/devfs.h` call `/dev/disk0` read-only without qualifying the recovery build, whose handler permits effective uid 0 to write. This milestone does not edit source comments.
+* `rach2/sys/network/socket/socket.h` calls `SOCK_RAW` an ioctl-only descriptor and says the stack has no raw IP path. `IPPROTO_RAW` is ioctl-only, but `IPPROTO_ICMP` uses the implemented raw receive and send paths. This milestone does not edit source comments.
+* The same socket header says `SO_REUSEADDR` overrides nothing. UDP shared binds require both sockets to set it and require matching effective uids. This milestone does not edit source comments.
+* `rach2/sys/network/tcp/tcp.h` attributes its four-MSS initial congestion window to RFC 6928. RFC 6928 raises the permitted upper bound to ten segments; the older RFC 3390 range is two through four segments. This milestone does not edit source comments.
+* `rach2/sys/network/ip/icmp.h` says `icmp_ping` returns `-1` on failure. The implementation returns specific negative errnos including `ETIMEDOUT`, `EBUSY`, and `EINTR`. This milestone does not edit source comments.
+* The `r8168_tx_reclaim` comment says the transmit doorbell is rung again only after a descriptor was reclaimed. The code rings whenever descriptors remain outstanding, and its `reclaimed` count is unused. This milestone does not edit source comments or code.
+* The `do_getsockopt` header in `rach2/sys/syscall.c` says no asynchronous socket error is tracked. TCP records an error in `tcb.so_error`; `SO_ERROR` returns and clears it. This milestone does not edit source comments.
+* The trailing `do_recvmsg` comment says a packet socket reports a zero sender length. The implementation returns a 20-byte `sockaddr_ll` when `packet_last_addr` succeeds. This milestone does not edit source comments.
+* `socket_udp_deliver` replaces an unread UDP datagram in the socket's single receive slot. A burst can therefore discard an older unread datagram without reporting a queue overflow. This milestone does not edit code.
+* The `net_core.c` header says network initialization starts with the RTL8139 driver. `init_network` now calls the device table, which also supports RTL8168GU. This milestone does not edit source comments.
+* The RTL8139 interrupt-handler comment says transmit completion is polled in `rtl8139_tx`. That path relies on synchronous QEMU completion and performs no ownership poll. This milestone does not edit source comments.
+* `rach2/sys/network/socket/raw.h` explains raw receive layout in terms of BusyBox `ping`, but both project BusyBox configurations omit that applet. The normal configuration builds `traceroute`; the set-id configuration omits it. This milestone does not edit source comments.
+* The `tools/runtests.py` header says `sockettest` needs a host echo server or live DNS. The probe tests only local socket allocation, duplication, fork, close, and process-exit lifetime. This milestone does not edit script comments.
+* A raw ICMP send accepts payloads through 1500 bytes, then `ip_tx` adds a 20-byte header. `ethernet_tx` drops resulting IP datagrams larger than its 1500-byte payload limit without returning an error, so raw payloads from 1481 through 1500 report success but never leave. This milestone does not edit code.
+* `tests/rawprobe.c` checks a 1501-byte raw payload and misses the effective 1480-byte boundary imposed by the added IPv4 header. This milestone does not edit tests.
 
 ## Facts for subsystem passes
 
@@ -79,6 +93,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `rach2/sys/ipc/Readme.md` describes the two open-file descriptions, last-reference lifetime, 16-entry pool, byte-stream behavior, non-blocking and interrupted partial transfers, EOF and broken-pipe handling, the absence of atomic writes, readiness, ioctls, identities, and the exact automated, host, and manual coverage.
 * `rach2/sys/io/Readme.md` describes descriptor readiness, the scan and multi-queue wait, select projection, error handling, timeout and descriptor limits, the actual musl syscall selection, ignored signal masks, unsupported priority and epoll paths, and the automated, host, manual, and specialized coverage. A direct `make test-image` and `tools/harness.py` run of `/musl/pollmusl` passed.
 * `rach2/sys/block/Readme.md` now describes the synchronous block interface, MBR and KRFFS discovery, ATA and AHCI limits, raw-device offsets and batching, write authority, disk diagnostics, and the actual host and specialized tests. It records the zero-length read error and the recovery re-probe publication defect as implemented behavior.
+* `rach2/sys/network/Readme.md` now describes device selection, configuration, Ethernet, ARP, IPv4, loopback, ICMP, UDP, TCP, socket types and options, packet and raw sockets, netconsole, concurrency, and the actual default, host, and specialized coverage. It records the one-slot UDP replacement rule and the raw-send MTU defect as implemented behavior.
 
 ## Decisions and deferred questions
 

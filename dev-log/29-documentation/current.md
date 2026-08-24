@@ -4,10 +4,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Position
 
-* First unchecked file: `rach2/sys/network/Readme.md`.
+* File ready to commit: `rach2/sys/network/Readme.md`.
+* First unchecked file after this commit boundary: `krffs/Readme.md`. Do not start it before the network commit.
 * The original document, current rewrite, and current diff have been read whole during this file's work.
 * The only uncommitted product document is `rach2/sys/network/Readme.md`.
 * Intended commit: the network Readme with its worklist, notes, and checkpoint updates.
+* The file is complete and ready to commit. The worklist is marked only for this commit boundary.
 
 ## Current rewrite
 
@@ -32,16 +34,16 @@ The changed sentences must be checked against the named source before the next e
 
 ## Open checks
 
-* Correct the TCP retry sentence if `tcp_tick` sends seven retransmissions and closes on the following timeout.
-* Read only the assertions needed from `loopprobe.c`, `netifprobe.c`, `dgramprobe.c`, `packetprobe.c`, and `rawprobe.c` to confirm the verification bullets.
-* Check both BusyBox configs directly before recording any source-comment contradiction about `ping` or `traceroute`.
-* Recheck each proposed non-document defect at its narrow source location before adding it to `notes.md`.
-* Run the file checks, inspect the complete diff, update `notes.md` and `worklist.md`, then commit.
+None. The file is ready to commit.
 
 ## Checks run for this file
 
-None after the current rewrite. Run the complete per-file checks before commit.
+* `tcp_tick` and `TCP_MAX_RETX` confirm seven retransmissions followed by failure on the next timeout. The Readme sentence is corrected.
+* The named assertions in `loopprobe.c`, `netifprobe.c`, `dgramprobe.c`, `packetprobe.c`, and `rawprobe.c` confirm the verification summaries. `tools/rawwire_check.py` checks hop limits and the caller's checksum, and the `raw-test` recipe runs `traceroute` and checks its first hop.
+* Both BusyBox configs omit `ping`. The normal config builds `traceroute`; the set-id config omits it.
+* The proposed source and test comment defects and the raw-send MTU defect were reopened at their narrow locations. Confirmed defects are recorded in `notes.md`.
+* The banned-term check, direct ASCII check, phrase report, `tools/textcheck.sh`, `git diff --check`, `make verify-style`, and the 36-test `make verify-host` suite pass.
 
 ## Exact next action
 
-Read the retransmission branch of `tcp_tick` and fix the single TCP sentence if the retry count requires it. Then inspect the five specialized probe assertions in bounded chunks, check the two BusyBox configs, and finish the file without another broad source read.
+Inspect the complete diff, stage the network Readme and three milestone control files, inspect the staged diff and identity, then commit.
