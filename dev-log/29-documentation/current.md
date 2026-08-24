@@ -109,10 +109,11 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The normalization-plan naming correction is committed as `cccb98e`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The remaining match in `dev-log/05-images/Readme.md` is the literal `/bin/busybox` path.
 * The review-plan naming correction is committed as `f6dd1ea`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
-* Current file: `dev-log/08-disk/plan.md`, 204 lines and 34,622 bytes. It was read whole during the ordered historical batch review. Its two lowercase matches are ordinary `busybox ash` uses on lines 129 and 190; correct them without changing the recorded tests.
-* Both project names are corrected to BusyBox; the SSH commands and recorded results are unchanged.
-* The banned-prose check, ASCII check, complete one-file word diff, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: the two disk-plan naming corrections and the milestone checkpoint.
+* The disk-plan naming correction is committed as `1bf8359`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The remaining early-record matches were inspected and are literal vendored-directory names, configuration paths, Make targets, artifact paths, or `busybox` and `dropbear` commands.
+* The final historical collection check passes banned prose and ASCII over all 60 edited files. Its 135 lowercase project-name tokens are adjudicated literals. Its 69 dash candidates are Markdown thematic breaks or five preserved quotations and test inputs containing spaced `--`.
+* The prose-only collection pass is complete. The next higher-level entry is the whole-project root overview and component ownership check.
+* Intended commit boundary: the completed prose-only collection pass and its control files.
 
 ## Boundary
 
@@ -121,4 +122,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the disk plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
+Run `make verify-style`, review the control-file diff, and commit the completed prose-only collection pass.
