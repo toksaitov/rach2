@@ -106,6 +106,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `utils/Readme.md` now describes all 29 programs, the 19 ordinary and ten selected outputs, native and guest builds, image selection, network configuration, boot and recovery operations, account programs, credential transactions, and exact verification ownership. Both utility builds, `tools/check_guest.py`, `make verify-style`, and all 36 host tests passed.
 * `vendor/musl/Readme.md` now describes the 1.2.5 pin and digest, fixed compiler and static build, one spawn patch, link order, process ABI, installed and extracted consumers, guest staging, update procedure, and exact verification. `make deps`, all 35 musl program builds, a direct static link, `make verify-style`, all 36 host tests, and all 63 default guest probes passed.
 * `vendor/busybox/Readme.md` now describes the 1.36.1 pin and digest, two configured builds, 319 main applets, the three-app set-id binary, musl wrapper, two patches, current network and proc behavior, privilege boundary, image staging, update procedure, and exact verification. `make busybox`, `make check-busybox`, `make check-setid`, `make full`, `make verify-style`, and all 36 host tests passed.
+* `vendor/busybox/patches/Readme.md` now names the two current patches, their exact musl and bare-target adaptations, the configuration boundary, stamp invalidation, update procedure, and focused tests. `make busybox`, `make check-busybox`, `make verify-style`, and all 36 host tests passed.
 
 ## Decisions and deferred questions
 

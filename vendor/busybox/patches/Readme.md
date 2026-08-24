@@ -1,14 +1,27 @@
-# busybox patches
+# BusyBox patches
 
-Every `.patch` here is applied, in name order, by `build_busybox.sh` after it
-extracts the pinned tarball and before it configures. The vendored tree stays as
-upstream shipped it; a change to it lives here, where the diff and its reasons
-can be read.
+[`build_busybox.sh`](../build_busybox.sh) replaces the extracted BusyBox tree, then applies every `*.patch` in filename order before either configuration is built. The release archive remains unchanged. Project source adaptations belong here so that each change and its reason are reviewable.
 
-A patch is for something the ported musl cannot supply and upstream cannot be
-expected to know about. It is not the place to change what busybox does.
+## Current patches
 
-This file is tracked so the directory exists in a fresh checkout even when no
-patch does: `BUSYBOX_STAMP` names the directory as a prerequisite, so that
-removing the last patch invalidates the stamp, and a prerequisite that is not
-there is an error rather than a rebuild.
+* `0001-udhcpc-build-against-musl.patch` replaces two unavailable Linux packet headers in `networking/udhcp/dhcpc.c`. Musl's `netpacket/packet.h` supplies `sockaddr_ll` and `PACKET_AUXDATA`; the patch adds the auxiliary-data structure and status bit that the source also uses. The Linux filter header served only code disabled upstream with `#if 0`.
+* `0002-free-uptime-include-sysinfo.patch` makes `procps/free.c` and `procps/uptime.c` include `sys/sysinfo.h` without testing `__linux__`. The bare `i686-elf-gcc` target does not define that macro, while the ported musl supplies the header and Rach2 implements `sysinfo`.
+
+Configuration choices stay in [`rach2.config`](../rach2.config) and [`rach2-suid.config`](../rach2-suid.config). A source patch should be limited to an adaptation that those configurations cannot express.
+
+## Changing the set
+
+Add a new patch with the next numeric prefix. Rebase every patch when changing the pinned BusyBox release. `patch -p1` must apply to a fresh extraction without an interactive correction.
+
+The BusyBox stamp depends on this directory and on every current patch. Adding, editing, or deleting a patch invalidates the stamp, including deletion of the last patch. `make busybox` then recreates the tree and both configured binaries.
+
+Run:
+
+```
+make busybox
+make check-busybox
+make verify-style
+make verify-host
+```
+
+Run `make dhcp-test` after changing the udhcpc patch and `make procfiles-test` after changing the free or uptime patch.
