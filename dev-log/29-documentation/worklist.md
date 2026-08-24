@@ -167,7 +167,7 @@ An edit found during these passes returns to the one-file procedure. Finish one 
 
 * [x] Policy, onboarding, build, portability, and tooling
 * [x] Kernel boot, memory, processes, signals, TLS, and entropy
-* [ ] File systems, descriptors, synthetic files, pipes, polling, terminals, and block storage
+* [x] File systems, descriptors, synthetic files, pipes, polling, terminals, and block storage
 * [ ] Network drivers, configuration, protocols, sockets, and network utilities
 * [ ] Images, KRFFS host tools, accounts, init, shell, utilities, and self-build
 * [ ] musl, BusyBox, Dropbear, TinyCC, pdpmake, and Doom integration
