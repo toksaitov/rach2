@@ -7,10 +7,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual documentation files, all subsystem passes, the historical collection pass, and the first five whole-project checks are complete.
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
-* Current document: `mk/Readme.md`.
-* Original and current forms read whole: yes. The file has 48 lines.
-* Material claims: shared Make fragments, output directories, dependency tracking, compilation-database generation and its known defect, and kernel source-list checking.
-* Changed section: Header dependencies. `ISH` now names the component, while the `ish/` path remains lowercase elsewhere.
+* Current document: none. `mk/Readme.md` was committed in `f58f489`.
+* Next document: `tools/Readme.md`.
+* Original and current forms read whole for this pass: no.
+* Known question: ordinary prose uses lowercase `ish` for the component. Reopen `ish/Readme.md` as narrow evidence before editing it.
 
 ## Bounded batches
 
@@ -28,13 +28,13 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Boundary
 
-* Finish `mk/Readme.md` under the one-file procedure before editing another current document.
+* Begin `tools/Readme.md` under the one-file procedure. Do not edit another current document with it.
 * Do not fact-check or rename historical `dev-log/` terminology or begin the complete milestone diff review early.
 
 ## Exact next action
 
-The complete file diff, banned-prose check, direct ASCII check, `git diff --check`, and `make verify-style` pass. Stage only `mk/Readme.md` and this checkpoint, review the staged paths, content, and identity, and commit.
+After recovery, read `tools/Readme.md` whole, set out its material claims, and reopen the narrow `ISH` naming evidence before editing.
 
 ## Intended commit boundary
 
-* `mk/Readme.md` and the milestone checkpoint only.
+* No document is in progress. The next boundary is `tools/Readme.md` and its milestone control-file changes.
