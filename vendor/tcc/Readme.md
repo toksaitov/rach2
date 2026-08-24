@@ -1,68 +1,110 @@
-# Tiny C Compiler for Rach2
+# TinyCC 0.9.27 integration
 
-The compiler the machine runs on itself. `tcc` here is a static i386 executable that RUNS on Rach2 and COMPILES for Rach2, built from the pinned tarball by `build_tcc.sh` against the ported musl, and staged out of tree to `build/vendor/tcc/`.
+Rach2 stages a static i386 TinyCC that runs on the guest and produces Rach2 i386 objects and executables. TinyCC includes its own assembler and linker, so a guest build needs no GNU binutils.
 
-Version 0.9.27, the last release, pinned by sha256.
+The tracked integration has five files: `.gitignore`, this Readme, `build_tcc.sh`, `rach2-output-policy.patch`, and `tcc-0.9.27.tar.bz2`. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
 
-## Why tinycc and not gcc
+## Build
 
-Turning C into a running program takes three tools: a compiler, an assembler and a linker. gcc and clang are only the first and hand their output to GNU `as` and `ld`, so porting either means porting binutils too, and this image has neither of those. The small teaching compilers lose the same way: each emits assembly text for somebody else to assemble. (The fourth tool, a make to drive the three, milestone 21 ported: pdpmake, at `/bin/make`.)
+From the repository root:
 
-tcc is all three in one binary. That is the argument, and it is architectural rather than a matter of taste. Memory is a second point: gcc wants hundreds of megabytes to compile one large file, and this machine has 32 MB for everything, kernel included.
+```
+make tcc
+```
 
-## What the build has to arrange
+`make deps DEPS=full` and `make full` also build TinyCC through the same stamp. The stamp depends on the script, policy patch, BusyBox musl wrapper, exact archive, and musl stamp.
 
-tcc's configure decides what it is building for from the machine it is building on, and this machine is neither the host nor the target. Three things follow, each read out of the tarball rather than guessed.
+The build script:
 
-A cross prefix, always. With an empty one configure calls itself native, and native means it compiles `conftest.c` and RUNS it (`configure:309-316`). Our compiler emits i386 Rach2 binaries, which the build host cannot run. So `build_tcc.sh` writes a small toolchain directory holding `rach2-gcc` (the musl wrapper `vendor/busybox/muslgcc`), `rach2-ar` and `rach2-strip`, and points `--cross-prefix` at it. That also routes every tool through the wrapper, which is why no `--ar` is needed.
+1. Requires `tcc-0.9.27.tar.bz2` to have SHA-256 `de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c`.
+2. Replaces the extracted tree and applies `rach2-output-policy.patch` with `patch --batch --forward`.
+3. Creates a `rach2-` cross prefix whose `gcc`, `ar`, and `strip` names invoke the project musl wrapper and i686 ELF tools.
+4. Configures an i386 musl target with the guest search paths, then rewrites the generated target OS from the macOS build host to Linux and removes `CONFIG_OSX`.
+5. Builds the compiler without executing it on the host, and builds `libtcc1.a` with the cross GCC through TinyCC's `i386-libtcc1-usegcc=yes` rule.
+6. Adds three required 32-bit libgcc helper objects to `libtcc1.a`, stages the compiler, runtime, and five compiler headers, and checks their combined link closure.
 
-A CPU, always. The cross prefix stops the conftest from running; it does not say what to build for. Without `--cpu`, configure takes the target from `uname -m` (`configure:157`), which on an arm64 Mac is arm64.
+The staged outputs are:
 
-No Mach-O. On a Mac, configure adds `OSX` to its configuration (`configure:52-56`), which makes the Makefile define `TCC_TARGET_MACHO` (`Makefile:71`) and rename the target to `$(ARCH)-osx` (`Makefile:48`). The build rewrites `TARGETOS` and drops `CONFIG_OSX` in `config.mak`, so the file says what the build does, and then asserts `ARCH=i386` and the absence of the OSX flag rather than hoping.
+```
+build/vendor/tcc/tcc
+build/vendor/tcc/libtcc1.a
+build/vendor/tcc/include/float.h
+build/vendor/tcc/include/stdarg.h
+build/vendor/tcc/include/stdbool.h
+build/vendor/tcc/include/stddef.h
+build/vendor/tcc/include/varargs.h
+```
 
-`--config-musl` is passed, and not for the reason its name suggests. It does select a dynamic loader path, which is nothing to us since we never emit a dynamic executable. What it also does is drop `bcheck.o` from the runtime (`lib/Makefile:31-33`), and `bcheck.c` is written against glibc's malloc hooks, which musl does not have: without the flag the runtime does not build at all. The cost is that `tcc -b`, bounds checking, is not available on this machine.
+The current compiler is a stripped static ELF32 i386 `ET_EXEC`. `make check-tcc` requires every staged output, runs the ELF checker selftest and compiler check, and confirms that the four output-policy diagnostics are present in the shipped binary. `make clean` preserves the vendor build; `make distclean` removes it and the extracted tree.
 
-`libtcc1.a`, tcc's runtime and its answer to libgcc, is normally built by running the tcc that was just built, which here would mean running an i386 Rach2 binary on the build host. `lib/Makefile:23-27` offers `<target>-libtcc1-usegcc=yes`, which builds it with `CC` and `AR` instead. That is what is used, and nothing in this build ever executes the produced binary.
+## Cross-build choices
 
-## Where the compiler looks when it runs
+TinyCC's configure script otherwise infers important target properties from the build host. The integration fixes each one explicitly:
 
-The guest's own paths are baked in at configure time, because they are where the compiler searches when it runs on the machine, not where anything lives on the host:
+* `--cross-prefix` prevents configure from treating the build as native and trying to execute a Rach2 i386 test binary on the host.
+* `--cpu=i386` prevents an Apple Silicon host from selecting arm64 output.
+* `TARGETOS=Linux` with no `CONFIG_OSX` prevents Mach-O output on macOS.
+* `--config-musl` omits the bounds-checking runtime, whose glibc allocation hooks musl does not provide. TinyCC's `-b` mode is therefore unavailable.
 
-* `--tccdir=/lib/tcc`, which is what sets `CONFIG_TCCDIR`. `--libpaths` does not.
-* `--sysincludepaths=/lib/tcc/include:/include`. tcc's own headers come FIRST: musl expects the compiler to provide `stdarg.h` and friends, and tcc with musl's copies ahead of its own is a known way to get a crash instead of an error.
-* `--libpaths=/lib` and `--crtprefix=/lib`, where `libc.a` and the startup objects are staged.
+The generated `config.mak` and `config.h` are checked after configure. They must contain `ARCH=i386`, no `CONFIG_OSX`, and the guest paths described below.
 
-## What `make check-tcc` proves
+## Guest toolchain
 
-That the artifacts exist and are not empty, the way `check-busybox` does, because a stamp file outlives an artifact somebody deleted.
+The os-real, GRUB-test, and metal-disk profiles stage the same compiler bytes as `/bin/tcc` and `/bin/cc`. KRFFS has no symbolic links, so both paths are regular files. The compiler searches:
 
-Then the part `file(1)` cannot do: `tools/check_elf.py` reads the ELF header against what this kernel will actually load. It is two halves on purpose. The LOADER half is `elf_load_image`'s contract copied rule for rule (`rach2/sys/proc/elf.c`): `ELFCLASS32`, `ELFDATA2LSB`, `EV_CURRENT`, `ET_EXEC`, `EM_386`, the exact program-header entry size, at most 32 headers and 8 `PT_LOAD`s, the header table inside a `PT_LOAD` so `AT_PHDR` names something real, `p_filesz <= p_memsz`, ascending page-disjoint segments that do not wrap 32 bits, and both the segments and the entry point inside the window the LOADER uses. That window is `[0x02000000, 0xBFFFF000)`, one page below the one `mm/usercopy.h` defines, and the difference is not academic: the checker used the wider bound at first and approved an image exec refuses. `check_elf.py --selftest` holds ten crafted cases on both ends of that window, written with literal addresses rather than in terms of the constants, so that getting either constant wrong fails them: the first version pinned only the ceiling, and moving the floor still passed. The POLICY half is this project's and not the kernel's: no `PT_INTERP`, no `PT_DYNAMIC`. The loader does not refuse those, it ignores them, so a dynamic image would load, jump, and run with nothing relocated. That is why the check lives here.
+* `/lib/tcc/include` before `/include` for TinyCC's compiler-provided headers and then musl's headers;
+* `/lib/tcc` for `libtcc1.a`;
+* `/lib` for `libc.a`, `crt1.o`, `crti.o`, and `crtn.o`.
 
-## The output policy
+The profiles also stage pdpmake as `/bin/make` and the project sources under `/src`. A direct guest link must request a static executable:
 
-Four of tcc's output modes make something this system cannot run, and `rach2-output-policy.patch` refuses each with a diagnostic that says why:
+```
+tcc -static -o hello hello.c
+```
 
-* `-run` compiles into memory and jumps, which needs `mprotect(2)`, a syscall this kernel does not have.
-* `-shared` makes a shared object nothing can load.
-* A link without `-static` emits a dynamic executable. That one is the worst, because the kernel does NOT refuse it: `elf_load_image` maps the `PT_LOAD` segments and never looks at `PT_INTERP`, so the program loads, jumps, and runs with nothing relocated.
-* `-Wl,-oformat` asks for a raw image rather than an ELF. It reaches a different field from the other three (`output_format` rather than `output_type`), so the first version of this policy let `tcc -static -Wl,-oformat=binary` through and produced a file exec refuses for want of a program header table.
+Preprocessing with `-E` and object compilation with `-c` remain available for multi-step builds.
 
-Compiling to an object (`-c`) and preprocessing (`-E`) are untouched. Neither produces a program to run, and both are how a multi-step build works.
+## Output policy
 
-The refusal is in the compiler and not in a wrapper script, deliberately: a wrapper is something a student steps around by typing the real name, and then meets one of the three failures above with nothing to explain it. The patch is applied at build time rather than committed as an edited tree, so the vendored source stays as upstream shipped it and the diff a reader wants is one file here.
+`rach2-output-policy.patch` rejects four output kinds that the system cannot execute:
 
-It sits at the one place in `main()` where the chosen output type is acted on, and not inside `tcc_set_output_type`, which would look like the tidier single funnel: `-print-search-dirs` calls that function with `TCC_OUTPUT_MEMORY` as a scratch value purely to initialise the search paths (`tcc.c:280`), and refusing there would break a diagnostic that runs no code at all.
+* `-run`, because TinyCC's in-memory execution path requires `mprotect`;
+* `-shared`, because Rach2 has no dynamic loader;
+* an executable link without `-static`, because the kernel maps a dynamic ELF without relocating it;
+* `-Wl,-oformat` for a non-ELF image, because `exec` requires an ELF program-header table.
 
-A patch that does not apply stops the build, and `make check-tcc` reads all four diagnostics back out of the shipped binary, because a patch that quietly stopped applying and a compiler that accepts `-run` look identical from outside.
+The checks run in TinyCC's `main` after command-line processing. They do not change `tcc_set_output_type`, because `-print-search-dirs` calls that function with an in-memory output type while initializing search paths.
 
-## What the guest links against, and the three symbols that are not there
+[`tools/check_elf.py`](../../tools/check_elf.py) separately rejects an artifact outside the kernel's ELF32 i386 loader contract or one containing `PT_INTERP` or `PT_DYNAMIC`. The kernel ignores those two dynamic-linking headers, so accepting them would start an unrelocated image.
 
-The guest links `libc.a`, `libtcc1.a` and the startup objects, and nothing else. On the host the `muslgcc` wrapper appends libgcc, so the question of who provides gcc's helper routines never comes up; in the guest there is no libgcc, and musl was compiled by gcc.
+## Static link closure
 
-Three symbols fall in that gap: `vfprintf` wants `__udivmoddi4`, `__secs_to_tm` wants `__divmoddi4`, and `cpowl` wants `__mulxc3`. tcc's own runtime defines the first only as a file-local symbol and the other two not at all, because tcc's code generator never emits those calls. So `build_tcc.sh` takes those three objects from the libgcc of the compiler that built musl and adds them to `libtcc1.a`.
+Musl was built with GCC and refers to three compiler-runtime symbols that the unmodified TinyCC runtime does not export: `__udivmoddi4`, `__divmoddi4`, and `__mulxc3`. The build extracts their object files from the same 32-bit libgcc used by the musl toolchain and adds them to `libtcc1.a`.
 
-The list is written out rather than computed, and then checked: `tools/check_link.py` asks of the very files that will be staged whether anything is left undefined, so a fourth such symbol is a build failure here rather than a student's first link failing with a name they have no way to place.
+`tools/check_link.py` reads the staged musl archive, TinyCC runtime, and startup objects. It rejects an ordinary guest link with any unresolved strong symbol after accounting for symbols supplied by the program, the linker, and unreachable bounds-checking members.
 
-## What is deliberately not built
+## Updating the pin
 
-The kernel IS compiled in the guest since milestone 22: `make selfbuild-test` builds it there with this compiler and pdpmake, boots the result through the full probe suite, and builds the utilities and the ish shell the same way. musl and dropbear are not compiled in the guest; their reasons are recorded in `dev-log/20-compiler/`.
+To update TinyCC:
+
+1. Replace the archive with a release tarball from the [TinyCC release directory](https://download.savannah.gnu.org/releases/tinycc/).
+2. Change `VERSION` and `TARBALL_SHA256` in `build_tcc.sh`, and change `TCC_TARBALL` in the root Makefile.
+3. Rebase `rach2-output-policy.patch` and review configure, `config.mak`, the runtime build rule, guest paths, and compiler-runtime helper references.
+4. Rebuild and inspect every staged artifact before running the verification below.
+
+## Verification
+
+```
+make tcc
+make check-tcc
+make full
+make verify-style
+make verify-host
+make tcc-test
+make make-test
+make selfbuild-test
+```
+
+`make tcc-test` compiles and runs a static program, proves all four policy refusals and their diagnostics, checks object compilation, builds and compares the project `cat`, links the two-source `ping`, and fails if the compiler requests an unimplemented syscall.
+
+`make make-test` exercises the staged compiler through pdpmake across an incremental build and reboot. `make selfbuild-test` builds the kernel twice, utilities, and ISH in the guest; checks the userland results; extracts and checks the produced kernel; runs the full default probe suite with it; and rebuilds the staged ISH tree in place. Its GRUB boot is skipped with an explicit reason when Docker is unavailable.
