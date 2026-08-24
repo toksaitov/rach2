@@ -171,7 +171,7 @@ An edit found during these passes returns to the one-file procedure. Finish one 
 * [x] Network drivers, configuration, protocols, sockets, and network utilities
 * [x] Images, KRFFS host tools, accounts, init, shell, utilities, and self-build
 * [x] musl, BusyBox, Dropbear, TinyCC, pdpmake, and Doom integration
-* [ ] Tests, host tests, specialized harnesses, and verification claims
+* [x] Tests, host tests, specialized harnesses, and verification claims
 * [ ] Prose-only collection pass over `dev-log/`
 
 ## Whole-project pass
