@@ -6,7 +6,7 @@ This milestone combines two goals: make the project read as if one careful engin
 
 ## What the measurement showed, and what it does not show
 
-The repository vendors musl, busybox, dropbear, tinycc, pdpmake, and the Doom engine, all written by other people. The initial comparison measured phrases per thousand words in our C and header comments and in those upstream sources:
+The repository vendors musl, BusyBox, Dropbear, TinyCC, pdpmake, and the Doom engine, all written by other people. The initial comparison measured phrases per thousand words in our C and header comments and in those upstream sources:
 
     phrase          upstream/1k   ours/1k   ratio
     carries               0.01      0.59     59x
@@ -109,7 +109,7 @@ Restore the new-machine acceptance criteria from the first plan revision, which 
 
 Seven facts exist only in this machine's memory directory and would be absent from a clone. Write each fact in the file that owns its rule instead of collecting them on one page:
 
-* Prefer busybox to in-house code when a capability is missing. This owner decision belongs under Ports in `CLAUDE.md`.
+* Prefer BusyBox to in-house code when a capability is missing. This owner decision belongs under Ports in `CLAUDE.md`.
 * Explain the verification policy's required mutation proof: run the mutation from a script with a restoring trap because a mutation can hang the suite and outlive the command that applied it.
 * State that restoring with `cp` does not make `make` rebuild. Several runs therefore tested a stale binary and reported PASS for a mutation that had never been compiled.
 * Explain how to preserve an independent review's findings: use `tee` to write them to a file, ask the reviewer to state findings early, and limit the scope to work one reviewer can finish within ten minutes.

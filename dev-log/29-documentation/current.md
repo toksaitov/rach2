@@ -54,7 +54,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The complete `243529b` diff for `dev-log/25-sealed/checklist.md` has been read in four bounded compact sections, after a complete read of the 245-line file in two sections. It preserves the irreversible-hardware approval, device checks, commands, credentials, artifact identity, readback, laptop installation, and session record. No further correction was needed.
 * The complete 2,518-line compact `243529b` change stream for `dev-log/25-sealed/plan.md` has been read, after a complete read of the 279-line file in four sections. The changes preserve the initial design, measured facts, phase order, proof requirements, risks, omissions, and invariants.
 * The complete file was checked for lowercase project names. Eleven ordinary-prose uses of BusyBox and one of Dropbear were corrected; command names, paths, macros, historical facts, and all other content remain unchanged. The banned-prose check, ASCII check, complete one-file diff review, and `git diff --check` passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `243529b` review at `dev-log/26-portable/Readme.md` after a clean commit.
+* The sealed-plan naming correction is committed as `12f52c6`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The complete `243529b` diff for `dev-log/26-portable/Readme.md` has been read in three bounded compact sections after a complete read of the 93-line file. It preserves the prose measurements, checker defects, rename, verification integration, portability work, documentation findings, and deferrals. No further correction was needed.
+* The complete `243529b` diff for `dev-log/26-portable/arrival.md` has been read after a complete read of the 45-line file. It preserves the credential groups, generated defaults, machine identity, game data, build tree, and GitHub authentication boundaries. No further correction was needed.
+* The complete 851-line compact `243529b` change stream for `dev-log/26-portable/plan.md` has been read after a complete read of the 134-line file. The changes preserve the initial measurements, phase design, acceptance criteria, facts to preserve, risks, and completion rules.
+* Four ordinary-prose project-name uses were corrected to BusyBox, Dropbear, and TinyCC; musl and pdpmake remain lowercase. Command names, paths, historical facts, and all other content remain unchanged. The banned-prose check, ASCII check, complete one-file diff review, and `git diff --check` passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `243529b` review at the focused correction diffs after a clean commit.
 
 ## Boundary
 
@@ -63,4 +68,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Commit the staged one-file correction and checkpoint, then resume at `dev-log/26-portable/Readme.md`.
+Commit the staged one-file correction and checkpoint, then begin the focused correction-diff review.
