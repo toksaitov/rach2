@@ -20,7 +20,7 @@ That router hands out an infinite lease, 4294967295 seconds. The in-house client
 
 Six applets fail because a required file is missing: `ps` needs `/proc/uptime`, `top` needs `/proc/stat`, `route -n` needs `/proc/net/route`, `netstat` needs `/proc/net/tcp`, `arp` needs `/proc/net/arp`, and `df` needs `/proc/mounts`. `/proc/net/dev` exists and is correct.
 
-`TERM` is not broken. With a client that sends a terminal type, a dropbear session reports `TERM=xterm`. `stty` does fail on a pty, which is phase E.
+`TERM` is not broken. With a client that sends a terminal type, a Dropbear session reports `TERM=xterm`. `stty` does fail on a pty, which is phase E.
 
 ## What two rounds of review corrected in this plan
 

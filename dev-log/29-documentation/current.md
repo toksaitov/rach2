@@ -59,7 +59,15 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The complete `243529b` diff for `dev-log/26-portable/arrival.md` has been read after a complete read of the 45-line file. It preserves the credential groups, generated defaults, machine identity, game data, build tree, and GitHub authentication boundaries. No further correction was needed.
 * The complete 851-line compact `243529b` change stream for `dev-log/26-portable/plan.md` has been read after a complete read of the 134-line file. The changes preserve the initial measurements, phase design, acceptance criteria, facts to preserve, risks, and completion rules.
 * Four ordinary-prose project-name uses were corrected to BusyBox, Dropbear, and TinyCC; musl and pdpmake remain lowercase. Command names, paths, historical facts, and all other content remain unchanged. The banned-prose check, ASCII check, complete one-file diff review, and `git diff --check` passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `243529b` review at the focused correction diffs after a clean commit.
+* The portable-plan naming correction is committed as `d66744d`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit. The complete `243529b` historical content diff has now been reviewed in path order.
+* Current batch: `83d8a39`, six historical content files in path order. Control-file changes in the commit remain outside the historical content review.
+* The complete 1,456-line compact `83d8a39` change stream for `dev-log/27-prose/Readme.md` has been read after a complete read of the 139-line file in two sections. It preserves the file-by-file findings, source cross-checks, refuted concerns, upstream boundaries, and deferred code defects. No further correction was needed.
+* The complete `83d8a39` diff for `dev-log/27-prose/plan.md` has been read in two bounded compact sections after a complete read of the 45-line file. It preserves the serial procedure, tool restrictions, review criteria, scope boundaries, and completion rule. No further correction was needed.
+* The complete `83d8a39` diff for `dev-log/27-prose/worklist.md` has been read after a complete read of the 548-line file in seven bounded sections. It preserves the project-owned scope, file order, checked state, effort split, stop point, and completion instructions. No further correction was needed.
+* The complete 686-line compact `83d8a39` change stream for `dev-log/28-polish/Readme.md` has been read in five bounded sections after a complete read of the 89-line file. It preserves all phases, commits, review findings, deliberate omissions, verification results, and remaining hardware work. No further correction was needed.
+* The complete 1,517-line compact `83d8a39` change stream for `dev-log/28-polish/plan.md` has been read in eleven bounded sections after a complete read of the 256-line file in four sections. It preserves the original design, measurements, phase order, acceptance tests, hardware approval rule, risks, exclusions, and historical conclusions.
+* One ordinary-prose use of the Dropbear project name had inconsistent capitalization. It is corrected without changing historical substance. The banned-prose check, ASCII check, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `83d8a39` review at `dev-log/Readme.md` after a clean commit.
 
 ## Boundary
 
@@ -68,4 +76,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Commit the staged one-file correction and checkpoint, then begin the focused correction-diff review.
+Run the one-file checks and commit the Dropbear naming correction with the checkpoint.
