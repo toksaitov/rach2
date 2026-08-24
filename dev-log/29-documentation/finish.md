@@ -29,7 +29,7 @@ sed -n '/^## Current-contract documents/,/^## Historical documents/p' dev-log/29
 Copy its path output into `current.md`. Inspect matches with `rg -n "$review_pattern" PATH`, one queued file at a time. The product-name pattern covers case variants of Rach2, BusyBox, Dropbear, TinyCC, pdpmake, ISH, KRFFS, FUSE-T, QEMU, GRUB, and SHA-256. The cross-component pattern covers open-file descriptions, file systems, synthetic paths and nodes, block devices, network devices and interfaces, RAM images and roots, disk images, and staged artifacts, files, outputs, and trees. The contextual-register pattern covers every contextual term and construction named in `CLAUDE.md`. The ownership entry uses the complete 28-path current-document list from the same pipeline without a search.
 
 * [x] Correct `open file description` in `rach2/sys/fs/synthfs.Readme.md` under the one-file procedure.
-* [ ] Product, component, digest, image, build, and test names use one spelling; lowercase literals remain unchanged.
+* [x] Product, component, digest, image, build, and test names use one spelling; lowercase literals remain unchanged.
 * [ ] Process, descriptor, file-system, synthetic-path, block-device, interface, socket, image, and staged-artifact terms name distinct concepts consistently.
 * [ ] The root routes, component directories, and cross-document ownership statements assign each contract to one owning Readme.
 * [ ] Contextual register review passes over the 28 current documents.

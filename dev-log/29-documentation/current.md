@@ -7,15 +7,14 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual documentation files, all subsystem passes, the historical collection pass, and the first five whole-project checks are complete.
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
-* Active final-stage entry: correct the known `open-file description` inconsistency in `rach2/sys/fs/synthfs.Readme.md`.
-* Current document: `rach2/sys/fs/synthfs.Readme.md`.
-* Original and current forms read whole in this goal run: yes. The file has 107 lines.
-* Material claims: synthetic path routing, devfs registry and ptys, raw disk windows, procfs contents and identities, snapshot lifetime, and verification.
-* Changed section: Raw disk windows. Both inconsistent noun phrases now use the descriptor subsystem's established term `open-file description`.
+* Active final-stage entry: process, descriptor, file-system, synthetic-path, block-device, interface, socket, image, and staged-artifact terms name distinct concepts consistently.
+* Current document: none.
+* Search pattern: not run.
+* The next path-only search has not run.
 
 ## Final-stage cursor
 
-* Candidate queue: empty. The known correction is complete.
+* Candidate queue: empty. The product-name entry is complete.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -29,13 +28,13 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Boundary
 
-* Finish `rach2/sys/fs/synthfs.Readme.md` under the one-file procedure before resuming the collection check.
+* Inspect one queued file at a time. If an edit is needed, finish that file under the one-file procedure before resuming the queue.
 * Do not fact-check or rename historical `dev-log/` terminology or begin the complete milestone diff review early.
 
 ## Exact next action
 
-The isolated diff, banned-prose check, direct ASCII check, repository text check, `git diff --check`, `make verify-style`, and all 36 host tests pass. Stage only `rach2/sys/fs/synthfs.Readme.md`, `finish.md`, and this checkpoint, review them, and commit.
+Run the cross-component terminology path-only search once, then record its exact pattern and candidate queue here before inspecting any match.
 
 ## Intended commit boundary
 
-* `rach2/sys/fs/synthfs.Readme.md` and the milestone checkpoint only.
+* No document is in progress. Commit `finish.md` and this checkpoint before running the next search.
