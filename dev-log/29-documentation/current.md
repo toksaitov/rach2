@@ -104,10 +104,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The prose-record naming correction is committed as `24eadf0`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The collection-wide banned-prose check and ASCII check pass over all 60 edited historical files. The dash scan found only Markdown thematic breaks and five preserved historical quotations or test inputs containing spaced `--`.
 * The collection-wide lowercase-name check found ordinary-prose uses in early records in addition to literal paths and commands. The collection pass remains open.
-* Current file: `dev-log/02-networking-and-userland/plan.md`, 339 lines and 98,160 bytes after the prior ASCII correction. It was read whole in nine bounded sections before commit `e51b6bf`. Inspect its eighteen matching lines and correct ordinary BusyBox and Dropbear names only; preserve literal commands, paths, configuration names, and historical substance.
-* The eighteen matching lines were inspected. Ordinary project names are corrected on fourteen lines. The remaining lowercase tokens are literal `busybox` and `dropbear` commands, paths, filenames, artifact names, and applet invocations.
+* The networking-plan naming correction is committed as `e607899`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The remaining lowercase matches in `dev-log/03-text-standard/plan.md` are literal path globs.
+* Current file: `dev-log/04-normalization/plan.md`, 82 lines and 16,786 bytes. Its matches are literal paths or quoted comment text except for `dropbear staging contract` on line 72. Read the file whole in two bounded sections before correcting that project name.
+* The file has been read whole. The one ordinary-prose use is corrected; literal paths and quoted comment text remain unchanged.
 * The banned-prose check, ASCII check, complete one-file word diff, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: the networking-plan naming corrections and the milestone checkpoint.
+* Intended commit boundary: the one normalization-plan naming correction and the milestone checkpoint.
 
 ## Boundary
 
@@ -116,4 +118,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the networking plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
+Stage the normalization plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
