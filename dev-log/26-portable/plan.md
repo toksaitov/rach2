@@ -113,7 +113,7 @@ Seven facts exist only in this machine's memory directory and would be absent fr
 * Explain the verification policy's required mutation proof: run the mutation from a script with a restoring trap because a mutation can hang the suite and outlive the command that applied it.
 * State that restoring with `cp` does not make `make` rebuild. Several runs therefore tested a stale binary and reported PASS for a mutation that had never been compiled.
 * Explain how to preserve an independent review's findings: use `tee` to write them to a file, ask the reviewer to state findings early, and limit the scope to work one reviewer can finish within ten minutes.
-* Define how a milestone run stops. It continues until the goal is met or a phase has failed three honest attempts, not merely until a convenient checkpoint.
+* Define how a milestone run stops. It continues until the goal is met or three complete attempts to finish a phase have failed, not merely until a convenient checkpoint.
 * Limit a goal prompt to one line under thirty words that names the plan file because the destination truncates longer prompts.
 * Record the current commit-message form, which differs from the early history.
 

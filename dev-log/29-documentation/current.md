@@ -17,8 +17,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 * Current documents in this group: the 95 completed historical worklist entries under `dev-log/`, excluding the four live milestone 29 control files.
 * Evidence boundary: prose and the historical records themselves only. Do not compare any historical claim, number, path, command, chronology, or conclusion with current implementation.
 * Check repeated model mannerisms, inconsistent names introduced by this milestone, ASCII, prohibited vocabulary, Markdown bullet form, and the complete historical diff in bounded ordered batches. Preserve quoted prompts, commands, output, ids, and historical substance.
-* The collection-wide contextual search found `honest` and `dishonest` applied to RTC samples in `dev-log/21-time-and-make/Readme.md`. The file was read whole, and the sentence now distinguishes a correctly invalid sample from misleading valid-looking samples without changing the recorded defect.
-* Intended commit boundary: the one-sentence historical prose correction and the milestone checkpoint. Resume the collection pass after a clean commit; the next contextual finding is `three honest attempts` in `dev-log/26-portable/plan.md`.
+* The RTC sample correction is committed as `cfa59fc`. The second contextual finding was `three honest attempts` in `dev-log/26-portable/plan.md`. The file was read whole, and the sentence now says that three complete attempts to finish a phase have failed. The stopping rule is unchanged.
+* Intended commit boundary: the one-sentence portable-plan correction and the milestone checkpoint. Resume the collection-wide contextual search and ordered historical diff review after a clean commit.
 
 ## Boundary
 
@@ -27,4 +27,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run the file-level banned-prose and ASCII checks for `dev-log/21-time-and-make/Readme.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file historical correction with the checkpoint and require a clean tree. Then read `dev-log/26-portable/plan.md` whole and correct only the contextual register finding.
+Run the file-level banned-prose and ASCII checks for `dev-log/26-portable/plan.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file historical correction with the checkpoint and require a clean tree. Then resume the collection-wide contextual search and ordered historical diff review.
