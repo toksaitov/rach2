@@ -95,10 +95,11 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The repeated naming search found another ordinary-prose inconsistency. Current file: `dev-log/10-ahci/plan.md`, 198 lines and 29,437 bytes. Its only lowercase project-name match is `interactive busybox ash` on line 178; the surrounding backticked SSH command does not make the project name itself a command token. Read the file whole in four bounded sections before correcting it to BusyBox.
 * The complete file has been read in four bounded sections, and the one project-name use is corrected to BusyBox without changing the SSH command or result. The banned-prose check, ASCII check, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
 * The AHCI-plan naming correction is committed as `3784787`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
-* Current file: `dev-log/17-completion/plan.md`, 519 lines and 187,646 bytes. It has 30 lowercase BusyBox or Dropbear matches. Read the file whole in thirteen bounded sections, then inspect the matches in bounded groups and correct only ordinary project-name uses. Preserve commands, paths, configuration names, quoted output, and historical substance.
-* The file has been read whole after compaction. Ordinary-prose uses were corrected on 24 lines. The remaining lowercase matches are literal paths, Make targets, script names, and the `dropbearmulti dropbear` command.
+* The completion-plan naming correction is committed as `442a9ed`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* Current file: `dev-log/18-shutdown/Readme.md`, 91 lines and 12,050 bytes. It has six lowercase BusyBox or Dropbear matches. Read the file whole in two bounded sections, then correct only ordinary project-name uses. Preserve commands, paths, configuration names, quoted output, and historical substance.
+* The file has been read whole. All six matches are ordinary prose and are corrected without changing the record's claims or results.
 * The banned-prose check, ASCII check, complete one-file word diff, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: the completion-plan naming corrections and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
+* Intended commit boundary: any shutdown-record naming corrections and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
 
 ## Boundary
 
@@ -107,4 +108,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the completion plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
+Stage the shutdown record and checkpoint, review the staged paths and content, confirm the git identity, and commit.

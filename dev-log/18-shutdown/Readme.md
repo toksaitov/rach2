@@ -10,9 +10,9 @@ This milestone resolves the final item. This record covers the result, the revie
 
 Planning identified four related defects.
 
-Userland could not stop the machine. `halt`, `poweroff` and `reboot` were compiled into busybox and staged in os-real, but all three failed at the prompt with `halt: No such process`. The image therefore contained three unusable commands.
+Userland could not stop the machine. `halt`, `poweroff` and `reboot` were compiled into BusyBox and staged in os-real, but all three failed at the prompt with `halt: No such process`. The image therefore contained three unusable commands.
 
-The missing syscall was not the immediate cause because busybox never reached it. Without `-f`, busybox signals pid 1, but `/sbin/init` was not pid 1. Pid numbering started at 0, and the boot self-tests spawned processes before init existed. Init therefore received the next available number, while the kernel used `init_pid` to remember it. Pid 1 belonged to a dead self-test process. Unix interfaces define init as pid 1, and `/proc`, `ps` and `kill 1` reported that convention even though it was false here.
+The missing syscall was not the immediate cause because BusyBox never reached it. Without `-f`, BusyBox signals pid 1, but `/sbin/init` was not pid 1. Pid numbering started at 0, and the boot self-tests spawned processes before init existed. Init therefore received the next available number, while the kernel used `init_pid` to remember it. Pid 1 belonged to a dead self-test process. Unix interfaces define init as pid 1, and `/proc`, `ps` and `kill 1` reported that convention even though it was false here.
 
 The dirty-mount flag consequently appeared on every ordinary boot. A warning that is always present cannot distinguish an improper shutdown.
 
@@ -28,7 +28,7 @@ The milestone consists of thirteen commits. This ledger follows `git show --stat
 * `db57ade` therefore contains only the remaining work from that phase: the Readmes and the power-off boot in `crash_test.sh`.
 * `d3e2d5e` adds `reboot(2)` at syscall 88, root only, with `rebootprobe`.
 * `5c1bfd7` prevents shutdown from reporting a clean unmount after a failed flush and makes `crash_test.sh` check the statuses that expose such a failure.
-* `70bad4d` gives images without busybox their own `halt`.
+* `70bad4d` gives images without BusyBox their own `halt`.
 * `23dfd34` adds the `shutdown-test` fixture, its allowlist entry and its runner.
 * `945d8e3` makes init handle the three shutdown signals.
 * `77f952a` assigns pid 1 to `/sbin/init`, allowing bare `halt`, `poweroff` and `reboot` to work.
@@ -48,7 +48,7 @@ The review found an unsupported clean-unmount report. `kernel_shutdown` printed 
 
 The review found a utility missing from the build list. Without its `UTILITIES` entry, `utils/halt.c` produces no binary and `prune-stale` deletes any previous artifact. Reverting the entry demonstrated that removal.
 
-The review found two impossible proof claims in the plan. A `reboot -f` phase cannot isolate the kernel flush because busybox calls `sync()` before processing `-f`; every forced phase now passes `-n`. A `halt -n -f` phase also cannot require QEMU to exit, because halt deliberately parks the CPU and leaves QEMU running. That phase now waits for its token and terminates QEMU itself.
+The review found two impossible proof claims in the plan. A `reboot -f` phase cannot isolate the kernel flush because BusyBox calls `sync()` before processing `-f`; every forced phase now passes `-n`. A `halt -n -f` phase also cannot require QEMU to exit, because halt deliberately parks the CPU and leaves QEMU running. That phase now waits for its token and terminates QEMU itself.
 
 The review found a check that could accept a broken `reboot`. Under `-no-reboot`, reset and power-off both end QEMU with a clean image and no fallback line. The bare-`reboot` phase therefore passed when SIGTERM was incorrectly wired to power off the machine. Each stop phase now requires the expected stop type and excludes the other. Making SIGTERM power off demonstrated that this phase, and only this phase, fails.
 
@@ -80,7 +80,7 @@ The following mutation experiments were run and recorded outside the committed s
 
 ## Deferred work
 
-Init calls `reboot(2)` without first terminating other processes. This kernel refuses `kill(-1, sig)`, so an orderly teardown would require init to enumerate the process table and apply a new timeout policy. No committed data is lost because the flush runs with scheduling disabled. An open dropbear session is cut by `poweroff` without a FIN, and an active `passwd` can leave its lock for the next writer's stale-lock rule. An external kill has the same result.
+Init calls `reboot(2)` without first terminating other processes. This kernel refuses `kill(-1, sig)`, so an orderly teardown would require init to enumerate the process table and apply a new timeout policy. No committed data is lost because the flush runs with scheduling disabled. An open Dropbear session is cut by `poweroff` without a FIN, and an active `passwd` can leave its lock for the next writer's stale-lock rule. An external kill has the same result.
 
 The clean-unmount path can still panic instead of reporting an error when disk writes fail, the root page has been evicted, and every cache slot is dirty. Loading the root then requires an eviction, eviction requires a write, and the failed fill causes a panic. This outcome remains safe because the machine stops with the dirty flag set. Avoiding the panic would require pinning the root frame for the mount's lifetime, adding a page-cache feature solely to improve the diagnostic for an unusable disk.
 
