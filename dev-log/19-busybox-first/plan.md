@@ -169,13 +169,13 @@ Read and correct these sources in order:
 
 Then check for leftovers: configuration symbols that remain set without a selector, fixtures that stage programs absent from every image, in-house sources staged nowhere, a `FORBIDDEN_APPLETS` entry for an expected applet, and unused Makefile variables. Search the tree for every in-house program name. Confirm that each match is a staging rule, a live test, or accurate prose.
 
-Proof: run the complete gate and record the grep checklist in the milestone Readme. The written list is the evidence for this phase.
+Proof: run the complete verification list and record the grep checklist in the milestone Readme. The written list is the evidence for this phase.
 
-## Phase 7: write the record and run the gate
+## Phase 7: write the record and run the checks
 
 Record what shipped, what reviews found, what was refuted, and what remains deferred in `dev-log/19-busybox-first/Readme.md`. Correct this plan in place wherever the implementation disproved it. Add one bullet to `dev-log/Readme.md`, carrying forward the anchor sentence from the milestone-18 bullet.
 
-From a clean tree, run this gate in one pass: `verify-style`, `verify-host`, `test`, `account-test`, `shutdown-test`, `login-test`, `ping-test`, `crash-test`, `test-disk`, `test-disk-ahci`, `persist-test`, `persist-test-ahci`, `cred-persist-test`, `test-noentropy`, and the SSH capstone.
+From a clean tree, run these checks in one pass: `verify-style`, `verify-host`, `test`, `account-test`, `shutdown-test`, `login-test`, `ping-test`, `crash-test`, `test-disk`, `test-disk-ahci`, `persist-test`, `persist-test-ahci`, `cred-persist-test`, `test-noentropy`, and the SSH capstone.
 
 ## Preserve the in-house probes and review the privileged path
 
