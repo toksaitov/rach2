@@ -1,5 +1,5 @@
 # Milestone 2: networking and userland
 
-This milestone grew Rach2 from the foundation kernel into a networked system running a musl userland that accepts SSH logins: the TCP/IP stack, the ported musl C library, BusyBox, the Dropbear SSH server, and the modernized GNU Make build.
+This milestone added networking and a musl userland to the foundation kernel. The resulting system accepted SSH logins. The work included the TCP/IP stack, the ported musl C library, BusyBox, the Dropbear SSH server, and a modernized GNU Make build.
 
-It was built from `plan.md`, executed one phase at a time under the `/goal` runner, with a harsh independent Codex review at each phase. Unlike milestone 1, the prompts were not recorded, so `plan.md` is the record.
+The work followed `plan.md` one phase at a time under the `/goal` runner, with an independent Codex review that challenged the work after each phase. Milestone 1 recorded its prompts; milestone 2 did not, so `plan.md` is the record.

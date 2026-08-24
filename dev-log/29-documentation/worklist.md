@@ -83,18 +83,18 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `dev-log/01-foundation/28.md`
 * [x] `dev-log/01-foundation/29.md`
 * [x] `dev-log/01-foundation/30.md`
-* [ ] `dev-log/01-foundation/31.md`
-* [ ] `dev-log/01-foundation/32.md`
-* [ ] `dev-log/01-foundation/33.md`
-* [ ] `dev-log/01-foundation/34.md`
-* [ ] `dev-log/01-foundation/35.md`
-* [ ] `dev-log/01-foundation/Plan.md`
-* [ ] `dev-log/01-foundation/Readme.md`
+* [x] `dev-log/01-foundation/31.md`
+* [x] `dev-log/01-foundation/32.md`
+* [x] `dev-log/01-foundation/33.md`
+* [x] `dev-log/01-foundation/34.md`
+* [x] `dev-log/01-foundation/35.md`
+* [x] `dev-log/01-foundation/Plan.md`
+* [x] `dev-log/01-foundation/Readme.md`
 
 ### Milestones 2 through 8
 
-* [ ] `dev-log/02-networking-and-userland/Readme.md`
-* [ ] `dev-log/02-networking-and-userland/plan.md`
+* [x] `dev-log/02-networking-and-userland/Readme.md`
+* [x] `dev-log/02-networking-and-userland/plan.md`
 * [ ] `dev-log/03-text-standard/Readme.md`
 * [ ] `dev-log/03-text-standard/plan.md`
 * [ ] `dev-log/04-normalization/Readme.md`

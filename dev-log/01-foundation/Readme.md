@@ -1,5 +1,5 @@
 # Milestone 1: the foundation OS
 
-This milestone grew Rach2 from a bare-metal protected-mode kernel into a bootable 32-bit OS that runs Doom: physical and virtual memory with paging and a heap, kernel and user processes with syscalls and ELF loading, the KRFFS RAM disk file system, the device drivers (VGA Mode 13h, the PS/2 keyboard and mouse, the PIT timer, the PC speaker, and Sound Blaster 16 and Intel HDA audio with OPL3 music, including real-hardware HDA bring-up for Doom), the ish shell with Ctrl-C process control, and the Doom port through doomgeneric and Chocolate Doom.
+This milestone turned Rach2 from a bare-metal protected-mode kernel into a bootable 32-bit OS that runs Doom. It added physical and virtual memory with paging and a heap; kernel and user processes with system calls and ELF loading; the KRFFS RAM disk file system; VGA Mode 13h, PS/2 keyboard and mouse, PIT timer, PC speaker, Sound Blaster 16, and Intel HDA drivers; OPL3 music; real-hardware HDA support for Doom; the ish shell with Ctrl-C process control; and the Doom port based on doomgeneric and Chocolate Doom.
 
-It was driven by 35 development prompts, recorded here as `01.md` through `35.md`, with `Plan.md` as the plan and progress log. Milestone 2 grew it into a networked system running a musl userland.
+The 35 development prompts are recorded here as `01.md` through `35.md`. `Plan.md` records the plan and progress. Milestone 2 added networking and a musl userland.
