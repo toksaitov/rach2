@@ -2,11 +2,7 @@
 
 ![Rach2 running its self-tests](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-Rach2 is an educational Unix-like operating system for 32-bit x86. Its freestanding kernel, native file system, small userland, network stack, and build tools are written to be read together by students and developers.
-
-The kernel, project utilities, and ISH shell are cross-built on the host and rebuilt from the same sources on Rach2 itself. TinyCC and pdpmake run inside the `os-real` image. Kernel code stays within the C dialect accepted by both the freestanding C89 host build and the TinyCC guest build.
-
-The build produces three RAM images for different uses. `test` contains the automated guest probes. `os-simple` contains the project's own login, shell, and utilities. `os-real` combines the ported musl libc, BusyBox, Dropbear, TinyCC, pdpmake, and the optional Doom port.
+Rach2 is a small educational operating system for 32-bit x86. It boots into a Unix-like userland with accounts, a shell, a writable file system, networking, SSH, audio, a C compiler, and Doom. It can rebuild its own kernel, shell, and utilities from source while it is running. The code is meant to be read as well as run.
 
 ## Build and run
 
