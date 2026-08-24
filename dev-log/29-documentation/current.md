@@ -94,7 +94,11 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The ASCII correction is committed as `e51b6bf`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The repeated naming search found another ordinary-prose inconsistency. Current file: `dev-log/10-ahci/plan.md`, 198 lines and 29,437 bytes. Its only lowercase project-name match is `interactive busybox ash` on line 178; the surrounding backticked SSH command does not make the project name itself a command token. Read the file whole in four bounded sections before correcting it to BusyBox.
 * The complete file has been read in four bounded sections, and the one project-name use is corrected to BusyBox without changing the SSH command or result. The banned-prose check, ASCII check, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
+* The AHCI-plan naming correction is committed as `3784787`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* Current file: `dev-log/17-completion/plan.md`, 519 lines and 187,646 bytes. It has 30 lowercase BusyBox or Dropbear matches. Read the file whole in thirteen bounded sections, then inspect the matches in bounded groups and correct only ordinary project-name uses. Preserve commands, paths, configuration names, quoted output, and historical substance.
+* The file has been read whole after compaction. Ordinary-prose uses were corrected on 24 lines. The remaining lowercase matches are literal paths, Make targets, script names, and the `dropbearmulti dropbear` command.
+* The banned-prose check, ASCII check, complete one-file word diff, `git diff --check`, and `make verify-style` passed.
+* Intended commit boundary: the completion-plan naming corrections and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
 
 ## Boundary
 
@@ -103,4 +107,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Commit the AHCI plan naming correction with the checkpoint, then resume the remaining lowercase-name review.
+Stage the completion plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
