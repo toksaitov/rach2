@@ -1138,9 +1138,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
     * Added File Descriptors section with fd table, entry, and function docs
     * Updated fs/ directory structure to include fd.c/h
   * Verified: All 10 self-tests still pass
-* Current Phase: Phase 15 complete
-* Next Step: Phase 16 (File Syscalls: open, close, read, write)
-
 ### Session 12 - Phase 16 Complete
 * Completed Phase 16: File Syscalls
   * Implemented `sys_open()` in `sys/syscall.c`:
@@ -1168,8 +1165,8 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   * Added syscall numbers to `sys/syscall.h`: SYS_RENAME (38), SYS_DUP2 (63)
   * Registered syscalls in `init_syscall()`: SYS_READ, SYS_OPEN, SYS_CLOSE, SYS_DUP2
 * Fixed ISR return values:
-  * Problem: Syscall return values weren't reaching userspace (handlers received params by value)
-  * Solution: Changed ISR infrastructure to pass pointer to saved registers
+  * Syscall return values did not reach userspace because handlers received parameters by value
+  * Changed the ISR infrastructure to pass pointers to the saved registers
   * Modified `sys/isr_handler.s`:
     * Both `isr_common_handler` and `irq_common_handler` now push ESP before calling router
     * Routers receive pointer to actual saved registers on stack
@@ -1190,9 +1187,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   * Added detailed documentation for each syscall
   * Updated Files in syscall.c section
 * Verified: All 10 self-tests pass, `exec filetest` works correctly
-* Current Phase: Phase 16 complete
-* Next Step: Phase 17 (Process Lifecycle Syscalls: fork, exit, waitpid)
-
 ### Session 13 - Phase 17 Complete
 * Completed Phase 17: Process Lifecycle Syscalls (fork, exit, waitpid)
   * Created `utils/forktest.c` test program:
@@ -1250,9 +1244,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   Parent: waitpid returned PID=7, status=42
   All fork/waitpid syscalls passed!
   ```
-* Current Phase: Phase 17 complete
-* Next Step: Phase 18 (exec Syscall)
-
 ### Session 14 - Phase 18 Complete
 * Completed Phase 18: exec Syscall
   * Created `utils/shelltest.c` test program:
@@ -1281,12 +1272,10 @@ Documentation: Update Readme.md with the feature list, including the graphics an
     * Modifies `params->eip` and `params->user_esp` to "return" to new program via iret
   * Registered syscall: `_syscall_table[SYS_EXECVE] = sys_execve`
 * Bug fixes:
-  * Stack overflow: Initial implementation had 16KB+ of local buffers on 16KB kernel stack
-    * Symptom: `free_user_pages()` looped infinitely, corrupted loop counter
-    * Fix: Moved large buffers (elf_buffer, path_buf, argv storage) to static storage
-  * Garbage page table entries: Some PTEs had present+user bits but invalid physical addresses
-    * Symptom: Infinite loop freeing "virt=0xBFEB4000 phys=0x0" repeatedly
-    * Fix: Added sanity checks to skip entries where phys_addr == 0 or phys_addr == table
+  * The initial implementation put more than 16KB of local buffers on a 16KB kernel stack, corrupting the loop counter and making `free_user_pages()` loop indefinitely
+    * Moved the large buffers (elf_buffer, path_buf, argv storage) to static storage
+  * Some page-table entries had present and user bits but invalid physical addresses, causing a loop that repeatedly freed "virt=0xBFEB4000 phys=0x0"
+    * Added checks that skip entries where phys_addr == 0 or phys_addr == table
   * CR3 to page_dir_t conversion: `proc->cr3` stores `&page_dir->phys_page_tables`, not page_dir_t*
     * Conversion: `proc_dir = (page_dir_t *)(cr3 - 1024 * sizeof(page_table_t *))`
 * Updated `rach2/Readme.md`:
@@ -1309,9 +1298,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   Parent: Child PID=7 exited with status=0
   All exec syscalls passed!
   ```
-* Current Phase: Phase 18 complete
-* Next Step: Phase 19 (Directory and Path Syscalls: chdir, getcwd, stat)
-
 ### Session 15 - Phase 19 Complete
 * Completed Phase 19: Directory and Path Syscalls (chdir, getcwd, stat64)
   * Created `utils/dirtest.c` test program:
@@ -1374,9 +1360,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   Results: 4 passed, 0 failed
   All stat syscalls passed!
   ```
-* Current Phase: Phase 19 complete
-* Next Step: Phase 20 (Filesystem Modification Syscalls: creat, unlink, rename)
-
 ### Session 16 - Phase 20 Complete
 * Completed Phase 20: Filesystem Modification Syscalls (creat, unlink, rename, utimensat)
   * Created test programs in `utils/`:
@@ -1444,9 +1427,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   Results: 7 passed, 0 failed
   All rename syscalls passed!
   ```
-* Current Phase: Phase 20 complete
-* Next Step: Phase 21 (Directory Listing Syscall: getdents64)
-
 ### Session 17 - Phase 21 Complete
 * Completed Phase 21: Directory Listing Syscall (getdents64)
   * Created test program `utils/lstest.c`:
@@ -1474,9 +1454,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   * Added build command and example output
   * Added lstest to Syscalls Used table
 * Verified: `exec lstest` passes all 6 tests
-* Current Phase: Phase 21 complete
-* Next Step: Phase 22 (Console Input and Syscall Readiness)
-
 ### Session 18 - Phase 22 Complete
 * Completed Phase 22: Console Input and Syscall Readiness
   * Created test programs in `utils/`:
@@ -1501,12 +1478,10 @@ Documentation: Update Readme.md with the feature list, including the graphics an
     * Backspace support removes last character
     * Enter key marks buffer ready and wakes blocked process
     * Modified `sys_read()` to block process when reading from stdin
-  * Bug fix: Stack overflow in `exec_program()`:
-    * Symptom: Keyboard stopped working after running user programs
-    * Root cause: 16KB local array `elf_buffer[16384]` on 16KB kernel stack
-    * Investigation: EN_us keyboard scancode table was being zeroed after exec
-    * Solution: Made `_exec_elf_buffer` static to avoid stack overflow
-    * Stack overflow was corrupting kernel data section including EN_us array
+  * Fixed a stack overflow in `exec_program()`:
+    * The 16KB local array `elf_buffer[16384]` exhausted the 16KB kernel stack
+    * The overflow zeroed the EN_us keyboard scancode table, so the keyboard stopped working after a user program ran
+    * Made `_exec_elf_buffer` static
   * Keyboard handler CR3 switching:
     * Handler saves current CR3 and switches to kernel page directory
     * Required because user process page directories may not have kernel data mapped correctly
@@ -1566,9 +1541,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   * Created `tests/Readme.md` documenting all test programs
   * Updated `utils/Readme.md` to contain only Unix utilities (echo, cat, ls, etc.)
   * This separation prepares for Phase 23 (porting actual Unix utilities to Rach2)
-* Current Phase: Phase 22 complete
-* Next Step: Phase 23 (Port User Programs)
-
 ### Session 19 - Phase 23 Complete
 * Completed Phase 23: Port User Programs
   * Created `crt0.c` for `utils/` directory:
@@ -1600,9 +1572,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   * Rach2: `make` (builds with text address 0x08048000)
   * Linux: `make -f Makefile.linux` (builds with default text address)
   * Clean: `make clean`
-* Current Phase: Phase 23 complete
-* Next Step: Phase 24 (Build RAM Disk Image)
-
 ### Session 20 - Phase 24 Complete
 * Completed Phase 24: Build RAM Disk Image
   * Created `krffs_host/build_ramdisk.sh`:
@@ -1647,9 +1616,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
 * Boot commands:
   * QEMU direct: `./run_with_ram_disk.sh` (loads `../krffs_host/file_system.krffs`)
   * ISO with ramdisk: `cd krffs_host && ./build_ramdisk.sh && cd ../rach2 && make iso`
-* Current Phase: Phase 24 complete
-* Next Step: Phase 25 (External Command Execution - test utilities from kernel console)
-
 ### Session 21 - Phase 25 Complete
 * Completed Phase 25: External Command Execution
   * Tested all utilities via `exec` command from kernel console
@@ -1679,17 +1645,14 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   * `utils/rm.c` - Reduced buffer sizes to prevent stack overflow
   * `utils/mkdir.c` - Fixed exit code to return 1 on failure
 * Verified: All utilities run correctly from ISH shell, no crashes after 30+ commands
-* Current Phase: Phase 25 complete
-* Next Step: Phase 26 (I/O Redirection Testing)
-
 ### Session 22 - Phase 26 Complete
 * Completed Phase 26: I/O Redirection Testing
   * Tested `echo hello > test.txt` and `cat < test.txt` in ISH shell
   * Both input and output redirection work correctly
-* Keyboard Shift Key Fix:
-  * Problem: Typing Shift+`.` produced `.` instead of `>`, breaking redirection syntax
-  * Root cause: Keyboard handler only looked up unshifted scancode table
-    * Solution: Added the `EN_us_shift[128]` shifted scancode table to kbd.c with the correct symbol mappings
+* Fixed shifted keyboard input:
+  * Shift+`.` produced `.` instead of `>`, which broke redirection syntax
+  * The keyboard handler only used the unshifted scancode table
+  * Added the `EN_us_shift[128]` table to kbd.c with the correct shifted symbols
   * Added shift key tracking (`_kbd_shift`) in keyboard_handler to detect Shift press/release
   * Handler now uses shifted table when Shift is held
 * Files Modified:
@@ -1698,9 +1661,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   * `rach2/kernel.c` - Added _kbd_shift tracking and shifted table lookup in keyboard_handler
   * `ish/Readme.md` - Added I/O redirection usage example for Rach2
   * `rach2/Readme.md` - Updated keyboard driver feature to mention shift key support
-* Current Phase: Phase 26 complete
-* Next Step: Phase 27 (Shell as Init Process)
-
 ### Session 23 - Phase 27 Complete
 * Completed Phase 27: Shell as Init Process
   * Kernel now boots directly into ISH shell as init process (PID 1)
@@ -1726,9 +1686,6 @@ Documentation: Update Readme.md with the feature list, including the graphics an
   * `rach2/kernel.c` - Added init_pid, boot_init_process(), kill_foreground_process(), _kbd_ctrl, Ctrl key handling
   * `rach2/sys/syscall.c` - Modified sys_exit() for init exit handling (jump to kernel shell)
   * `rach2/Readme.md` - Added init process and CTRL+C documentation
-* Current Phase: Phase 27 complete
-* Next Step: Phase 28 (Final Testing and Polish)
-
 ### Session 24 - Phase 28 Complete (Doom Port)
 * Completed Phase 28: Final Testing, Polish, and Doom Port
   * Ported Doom (via doomgeneric) to run as a user-space application

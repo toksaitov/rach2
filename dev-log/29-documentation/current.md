@@ -12,7 +12,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Final-stage cursor
 
-* Diff page: `dev-log/01-foundation/Plan.md`, next output line 1. No page has been read.
+* Diff page: `dev-log/01-foundation/Plan.md`, next output line 1. No page has been read since the file changed.
 * The manifest comparison passed at `32fb6c1`: 88 content paths plus five control files equal all 93 changed Markdown paths.
 * The fixed-base path list contains no non-Markdown path.
 
@@ -29,8 +29,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-`Readme.md` has been read through output line 319, its end. Commit this large-file checkpoint, then read lines 1 through 80 of `git diff --no-ext-diff --unified=20 6e253221525273571b7ba12dcb5d1569bd746556..HEAD -- dev-log/01-foundation/Plan.md`.
+Commit the `dev-log/01-foundation/Plan.md` prose correction with this cursor reset. Then read lines 1 through 80 of its fixed-base diff.
 
 ## Intended commit boundary
 
-* `Readme.md`, its manifest check, and this cursor.
+* The foundation plan prose correction and this cursor reset.
