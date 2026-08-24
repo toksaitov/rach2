@@ -47,8 +47,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The complete `243529b` diff for `dev-log/24-metal/baseline.md` has been read in one bounded compact section. It preserves the measured disk, partition, registry, firmware, and expected-difference values. No further correction was needed.
 * The complete `243529b` diff for `dev-log/24-metal/checklist.md` has been read in three bounded compact sections. It preserves the hardware order, commands, credentials, capture requirements, and excluded-work boundary. No further correction was needed.
 * The complete `243529b` diff for `dev-log/24-metal/plan.md` has been read in eight bounded compact sections, followed by a complete read of the 122-line file in two sections. It preserves the hardware scope, pinned RTL8168GU design, phase order, safety requirements, risks, and acceptance criteria.
-* The file now uses GCC and TinyCC consistently in ordinary prose while preserving command names, paths, and historical substance. Its banned-prose and ASCII checks, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `243529b` review at `dev-log/25-sealed/Readme.md` after a clean commit.
+* The metal plan naming correction is committed as `532185f`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The complete 7,311-line compact `243529b` change stream for `dev-log/25-sealed/Readme.md` has been read. The range from 1251 through 1500 was split into two smaller sections after compaction. The changes preserve the implementation chronology, review findings, hardware measurements, commands, limits, and deferred work.
+* The complete file was checked for lowercase project names. Fourteen ordinary-prose uses of BusyBox were corrected; command names, paths, macros, historical facts, and all other content remain unchanged. The banned-prose check, ASCII check, complete one-file diff review, and `git diff --check` passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `243529b` review at `dev-log/25-sealed/checklist.md` after a clean commit.
 
 ## Boundary
 
@@ -57,4 +59,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the one-file correction and this checkpoint. Review the staged paths and complete staged diff, confirm the configured identity, commit, and resume at `dev-log/25-sealed/Readme.md`.
+Commit the staged one-file correction and checkpoint, then resume at `dev-log/25-sealed/checklist.md`.
