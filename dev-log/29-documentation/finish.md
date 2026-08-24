@@ -107,10 +107,10 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `mk/Readme.md`
 * [x] `ports/doom/Readme.md`
 * [x] `rach2/Readme.md`
-* [ ] `rach2/sys/block/Readme.md`
-* [ ] `rach2/sys/fs/Readme.md`
-* [ ] `rach2/sys/fs/synthfs.Readme.md`
-* [ ] `rach2/sys/io/Readme.md`
+* [x] `rach2/sys/block/Readme.md`
+* [x] `rach2/sys/fs/Readme.md`
+* [x] `rach2/sys/fs/synthfs.Readme.md`
+* [x] `rach2/sys/io/Readme.md`
 * [ ] `rach2/sys/ipc/Readme.md`
 * [ ] `rach2/sys/lib/krandom.Readme.md`
 * [ ] `rach2/sys/mm/Readme.md`
