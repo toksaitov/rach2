@@ -41,7 +41,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 
 ### External integrations maintained by this project
 
-* [ ] `vendor/musl/Readme.md`
+* [x] `vendor/musl/Readme.md`
 * [ ] `vendor/busybox/Readme.md`
 * [ ] `vendor/busybox/patches/Readme.md`
 * [ ] `vendor/dropbear/Readme.md`

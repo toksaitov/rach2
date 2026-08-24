@@ -1,118 +1,107 @@
-# musl: the C library for Rach2
+# musl 1.2.5 integration
 
-Rach2 links its userspace against [musl libc](https://musl.libc.org), a small, clean, MIT-licensed C library. musl is what lets Rach2 run real C programs built against a real libc, rather than a handful of hand-written freestanding ones, and porting it drives the process ABI, TLS, virtual memory, and syscall work.
+Rach2 links its hosted user programs against a static i386 build of [musl libc](https://musl.libc.org/). Musl supplies the C library, startup objects, headers, and Linux i386 syscall ABI used by the utilities, tests, and larger ports.
 
-This is how a static i386 Linux program is built and started: musl is a drop-in libc on Linux, and the startup contract below is the SysV/i386 process ABI that Linux implements.
+This directory contains the project-owned integration files and the pinned upstream archive. The tracked inputs are `.gitignore`, this Readme, `build_libc.sh`, `musl-1.2.5.tar.gz`, and `patches/0001-posix-spawn-forks.patch`. The extracted source, installed files, and build stamp are ignored and reproducible.
 
-## Building
+## Build
 
-```
-./build_libc.sh
-```
-
-You rarely run this by hand. The top-level `make` (and `make deps`) builds libc on demand behind a stamp file, in dependency order, before anything that links against it.
-
-No musl cross-toolchain is required. The build uses the same `i686-elf-gcc` the kernel uses (`CROSS_COMPILE=i686-elf- ./configure --target=i686 --disable-shared`), so it stays one compiler and one library build. The musl version is pinned to 1.2.5, and the vendored tarball's sha256 is verified before extraction. The extracted source and the `install/` output are rebuildable and git-ignored; the tracked files are the tarball, this Readme, the build script, and the one patch under `patches/` explained below.
-
-Outputs (under `install/`):
-
-* `lib/libc.a`, the static C library
-* `lib/crt1.o`, `lib/crti.o`, `lib/crtn.o`, the C runtime startup and teardown objects
-* `include/`, the musl headers
-
-## Updating from upstream
-
-musl is vendored as the pinned source tarball beside this Readme, and built from it with the patches under `patches/` applied at extraction; the Rach2-owned files here are this Readme, `build_libc.sh`, and those patches. To move to a new musl release:
-
-1. Download the new `musl-X.Y.Z.tar.gz` from https://musl.libc.org and replace the tarball here.
-2. Set `MUSL_VERSION` and `SHA256` in `build_libc.sh` to the new release and its published sha256, and `LIBC_TARBALL` in the root `Makefile`, which names the tarball the stamp depends on: leave it and the build stops looking for the file you just replaced.
-3. REBASE EVERY PATCH under `patches/` onto the new source and check that each still applies; `build_libc.sh` stops the build when one does not, which is the point. A patch that no longer applies is a decision to make again, not a line to delete.
-4. Rebuild with `make` (or `./build_libc.sh`), then run `make verify-host`, `make test` (which includes `musl/spawnmusl`, the probe that fails outright if the spawn patch is missing) and a boot.
-5. Otherwise musl is used as-is. If a new release expects a syscall the kernel does not implement, add it in `rach2/sys` rather than patching here: the adaptation belongs in the kernel unless, as with the spawn, the kernel cannot honestly provide what is asked for.
-
-There is ONE source patch, and it is explained here because a patch nobody can
-find the reason for becomes a fork.
-
-`patches/0001-posix-spawn-forks.patch` makes `posix_spawn` fork rather than
-clone. Upstream it issues `__clone(child, stack, CLONE_VM|CLONE_VFORK|SIGCHLD,
-&args)`: the child runs in the PARENT's address space, on a stack of its own,
-until it execs. Rach2 cannot share an address space between two processes, and a
-syscall that accepted those flags and quietly handed back a private
-copy-on-write image would be reporting semantics it does not provide, so syscall
-120 stays unimplemented and this call site changes instead. The child function
-never returns (it execs, or writes its errno to the pipe and exits) and it
-reports failure through that pipe rather than through shared memory, so a forked
-child serves it exactly as a cloned one did. Without this, `system(3)` and
-`popen(3)` fail on this system with a bare -1, which means no program can run a
-shell command and no make can run a recipe.
-
-Any further patch goes in `patches/NNNN-reason.patch` (applied right after
-extraction by `build_libc.sh`) and is explained here; keep them the rare
-exception, not a fork.
-
-## Linking a program against musl
+From the repository root:
 
 ```
-i686-elf-gcc -static -nostdlib -nostartfiles -isystem vendor/musl/install/include \
+make deps
+```
+
+The ordinary root build also builds musl before the utilities that require it. `make deps DEPS=full` adds the other four ports.
+
+The root stamp depends on `build_libc.sh`, the exact archive, and every file currently under `patches/`. An added or edited patch invalidates it; deleting a patch requires removing `.stamp` because the vanished prerequisite is no longer in Make's dependency list. The recipe removes the old installed archive, invokes the script, requires a nonempty `install/lib/libc.a`, and records success only afterward. `make clean` preserves the extracted and installed trees; `make distclean` removes them and the stamp.
+
+`build_libc.sh` performs these steps:
+
+1. Require `musl-1.2.5.tar.gz` to have SHA-256 `a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4`.
+2. Replace the extracted `musl-1.2.5/` tree and apply `patches/*.patch` in name order with no fuzz.
+3. Clear inherited compiler and make overrides. Configure with `CROSS_COMPILE=i686-elf-`, `--target=i686`, `--disable-shared`, and the absolute `install/` prefix.
+4. Build in parallel, replace the old install tree, and run musl's install target.
+
+The compiler is deliberately fixed at `i686-elf-gcc`; a caller's `CC`, `CROSS_CC`, or make flags cannot change this vendor build. The generated configuration selects the i386 architecture and static libraries.
+
+The integration consumes:
+
+* `install/include/`: musl headers.
+* `install/lib/libc.a`: the static C library.
+* `install/lib/crt1.o`, `crti.o`, and `crtn.o`: process startup and init/fini objects.
+* `musl-1.2.5/src/crypt/crypt_sha512.c`: the pinned SHA-512 crypt implementation compiled into the KRFFS host credential tools and their host tests.
+
+The root `check-libc` target checks both `libc.a` and the extracted crypt source. If either is missing while `.stamp` remains, remove the stamp and run `make deps`.
+
+## Project patch
+
+The build applies one source patch. `0001-posix-spawn-forks.patch` changes musl's `posix_spawn` child creation from `clone(CLONE_VM|CLONE_VFORK|SIGCHLD)` to the raw `fork` syscall.
+
+Rach2 has no shared address spaces and leaves syscall 120, `clone`, unimplemented. Pretending that a private copy satisfied `CLONE_VM` would give the caller the wrong contract. A forked spawn child can use the existing implementation because it either execs or writes its errno through the existing pipe and exits. The raw syscall also preserves musl's negative-errno path and does not run `pthread_atfork` handlers.
+
+The patch is required by `posix_spawn`, `system`, and `popen`; pdpmake uses the latter interfaces to run recipes. The default `spawnmusl` probe checks command status, pipe output, spawn errors, child cleanup, parent memory, repeated calls, and continued `clone` refusal with `ENOSYS`.
+
+Any additional project patch belongs under `patches/` with a numbered descriptive name. Rebase and explain a patch when the pinned release changes. Do not edit the extracted source as the maintained copy.
+
+## Static link contract
+
+A direct link from the repository root has this order:
+
+```
+i686-elf-gcc -m32 -static -nostdlib -nostartfiles \
+  -isystem vendor/musl/install/include \
   -o prog \
-  vendor/musl/install/lib/crt1.o vendor/musl/install/lib/crti.o \
+  vendor/musl/install/lib/crt1.o \
+  vendor/musl/install/lib/crti.o \
   prog.c \
-  vendor/musl/install/lib/libc.a $(i686-elf-gcc -print-libgcc-file-name) \
+  vendor/musl/install/lib/libc.a \
+  $(i686-elf-gcc -m32 -print-libgcc-file-name) \
   vendor/musl/install/lib/crtn.o \
   -Wl,-z,noexecstack
 ```
 
-Order matters: `crt1.o crti.o` first (they provide `_start` and the init/fini frames), then the program, then `libc.a`, then libgcc (for the compiler's runtime helpers musl calls, such as 64-bit division), then `crtn.o` last. The result is a static, non-PIE ELF32 EXEC for i386, based at 0x08048000, issuing `int 0x80` syscalls: the same shape as the freestanding utilities, but with a real libc behind it.
+`crt1.o` and `crti.o` precede program objects. `libc.a` and 32-bit libgcc follow them, and `crtn.o` closes the init/fini sections. The result is a static, non-PIE, little-endian ELF32 `ET_EXEC` for i386 with no `PT_INTERP`. The current linker places its first load at `0x08048000`; the exact entry address depends on the program.
+
+The utilities and `tests/musl/build.sh` use this order directly. BusyBox and Dropbear have project-owned `muslgcc` wrappers that add only headers during compilation, omit startup and libraries from partial links, and add the complete sequence at the final link. TinyCC and pdpmake use the BusyBox wrapper for their host builds.
+
+## Process ABI
+
+The kernel gives a new process one System V i386 entry stack: `argc`, the `argv` pointers and null, the `envp` pointers and null, an auxiliary vector ending with `AT_NULL`, then the referenced strings and 16 random bytes. Entry ESP is aligned to 16 bytes.
+
+Rach2 supplies `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_ENTRY`, `AT_PAGESZ`, `AT_CLKTCK`, `AT_SECURE`, and `AT_RANDOM`. `AT_SECURE` is one when an effective uid or gid differs from its real id. `AT_RANDOM` gives musl the bytes used for its stack protector and allocator state; the [randomness document](../../rach2/sys/lib/krandom.Readme.md) defines their trust policy.
+
+Musl's i386 `_start` preserves the entry stack, aligns its working stack, and calls `__libc_start_main`. Startup finds envp and the following auxiliary vector, initializes the thread pointer and stack protector, runs constructors, calls `main`, and passes its return value to `exit`.
+
+Static TLS scans the program headers for `PT_TLS`, creates the initial thread block, calls `set_thread_area`, loads `%gs`, and registers the clear-tid address. Rach2 provides one per-process TLS descriptor and restores its base on a context switch. It does not provide `clone` or threads. The [TLS document](../../rach2/sys/proc/tls.Readme.md) defines the supported descriptor and inheritance rules.
+
+Rach2 publishes no `AT_SYSINFO` or `AT_SYSINFO_EHDR`, so musl uses its i386 `int 0x80` syscall path. The kernel returns failures as negative Linux errno values. The kernel and subsystem Readmes own the individual syscall contracts.
+
+## Images and self-build
+
+The os-real, metal-disk, and GRUB-test manifests stage the installed headers as `/include` and the library and startup objects as `/lib/libc.a` and `/lib/crt*.o`. The staged TinyCC and pdpmake use them to build the project utilities. Musl itself is cross-built on the host and is not rebuilt in the guest.
+
+The [test documentation](../../tests/Readme.md) describes the 35 musl-linked programs and which 16 run in the default suite. `make selfbuild-test` exercises the staged compiler, library, headers, startup objects, and guest makefiles.
+
+## Updating the pin
+
+To update musl:
+
+1. Replace the archive with a release tarball from the [musl releases](https://musl.libc.org/releases/) directory.
+2. Change `MUSL_VERSION` and `SHA256` in `build_libc.sh`, and change `LIBC_TARBALL` in the root Makefile.
+3. Rebase every patch under `patches/` onto the new release. Keep the spawn patch unless the new source or kernel contract makes it unnecessary. If a patch is removed, remove `.stamp` too.
+4. Remove the old ignored extracted directory if its versioned name is no longer used.
+5. Run the build and verification commands below. Inspect the generated configuration and one linked ELF again.
+
+## Verification
 
 ```
-ELF 32-bit LSB executable, Intel 80386, statically linked
-Type: EXEC   LOAD @ 0x08048000   Entry: 0x0804xxxx   (no PT_INTERP)
+make deps
+make musl-programs
+make verify-style
+make verify-host
+make test
+make selfbuild-test
 ```
 
-## The startup contract (what the kernel must provide)
-
-When the kernel hands control to a fresh musl process at `_start`, this chain runs before `main`, and each step depends on facts the kernel must supply.
-
-```
-_start                 (crt1.o) reads argc/argv/envp off the initial stack,
-  |                    16-byte-aligns esp, calls __libc_start_main
-  v
-__libc_start_main
-  |-- __init_libc(envp) scans envp, then the auxv just past envp's NULL
-  |       |             terminator, recording page size, AT_SECURE, the
-  |       |             AT_RANDOM pointer, and the rest
-  |-- __init_tls(auxv)  finds PT_TLS via AT_PHDR/PHENT/PHNUM, allocates the
-  |       |             TLS block, installs it with the set_thread_area
-  |       |             syscall, then loads %gs  <-- the TLS crux
-  |-- __libc_start_init runs the init_array constructors
-  v
-main(argc, argv, envp)
-  v
-exit(status)           runs atexit/fini, then exit_group   <-- terminates
-```
-
-### The initial stack
-
-The kernel must build a correct SysV/i386 stack, low to high: `argc`, the `argv[]` pointers, `NULL`, the real `envp[]` pointers, `NULL`, the auxv pairs terminated by `AT_NULL`, then the string and aux-data area, with the entry `esp` 16-byte aligned. musl reads argc/argv/envp positionally and walks the auxv immediately after envp.
-
-### The auxiliary vector
-
-musl consults these `AT_` entries (each is a `{type, value}` pair); the kernel populates them from real facts:
-
-| Entry                         | Value           | Why musl needs it                                  |
-|-------------------------------|-----------------|----------------------------------------------------|
-| `AT_PAGESZ` (6)               | 4096            | page size for `sysconf`, `malloc`, `mmap` rounding |
-| `AT_CLKTCK` (17)              | 100             | `sysconf(_SC_CLK_TCK)` (the timer is 100 Hz)       |
-| `AT_PHDR/PHENT/PHNUM` (3/4/5) | program headers | `__init_tls` locates `PT_TLS` here                 |
-| `AT_ENTRY` (9)                | ELF entry       | informational                                      |
-| `AT_RANDOM` (25)              | ptr to 16 bytes | seeds the stack canary and malloc secret           |
-| `AT_SECURE` (23)              | 0 or 1          | 1 when the effective id differs from the real one  |
-| `AT_NULL` (0)                 | none            | terminates the vector                              |
-
-`AT_PHDR/PHENT/PHNUM/ENTRY` are recorded by the kernel's `elf_load`. `AT_RANDOM` points at 16 bytes from the kernel CSPRNG (`krandom`), seeding the stack canary and malloc secret; it is best-effort and always provided, since a canary only needs to be unpredictable. Crypto-grade randomness goes through `getrandom` and `/dev/urandom`, which draw from the same CSPRNG but fail closed (`-EIO`) until it is seeded from a trusted hardware source (`RDSEED`/`RDRAND`). See the krandom Readme.
-
-Deliberately absent: `AT_SYSINFO` and `AT_SYSINFO_EHDR` (the vDSO). With no vDSO advertised, musl falls back to issuing syscalls via `int 0x80`, exactly the mechanism Rach2 implements. The linked `hello` has six `int 0x80` sites and no vsyscall path.
-
-### TLS and the syscall set
-
-`__init_tls` requires the `set_thread_area` syscall and a per-process GDT TLS descriptor so `%gs`-relative thread-local access works: the riskiest part of the port. Reaching and returning from `main` then needs a core syscall set (`writev`, `exit_group`, `set_tid_address`, `ioctl(TCGETS/TIOCGWINSZ)`, `getpid`, `uname`, plus `brk` and `mmap` for `malloc`) under the `-errno` contract.
+`make test` includes `spawnmusl`. `make full` also builds all four larger ports against the installed musl.

@@ -77,6 +77,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `dhcpc -k` rejects `-b` but silently accepts and ignores `-l`, although its diagnostic says the stop form takes no other option. This milestone does not edit code.
 * `tests/host/bootverb_hosttest.c` says it covers every accepted and refused `bootctl` command line, but it never tests the `grub` verb and its final verb list still contains seven of the eight current verbs. This milestone does not edit tests.
 * `httpd [PORT]` binds the selected port, but the generated page always labels the server endpoint `10.0.2.15:80`. This milestone does not edit code.
+* `LIBC_PATCHES` is only `$(wildcard vendor/musl/patches/*.patch)`. Adding or editing a musl patch invalidates `.stamp`, but deleting a patch removes it from the current prerequisite list and can leave the installed libc built with that patch. The musl Readme tells an updater to remove the stamp when deleting a patch; this milestone does not edit the Makefile.
 
 ## Facts for subsystem passes
 
@@ -103,6 +104,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `krffs/Readme.md` now describes the nine host binaries, the six tools with effective region support, the flat FUSE mount, the v2 node format, staging grammar, image scripts, credential generators, and actual verification ownership. It assigns kernel and GRUB details to their owning Readmes and records the ineffective `defrag.krffs` region option.
 * `ish/Readme.md` now describes the whitespace-only grammar, builtins, exact statuses, order-sensitive redirection, environment callers, image paths, 12-call i386 ABI, three build routes, and actual default and self-build coverage. Both host-produced builds and `tools/check_guest.py` passed; a native test build confirmed the parser contract and the environment-prefix defect.
 * `utils/Readme.md` now describes all 29 programs, the 19 ordinary and ten selected outputs, native and guest builds, image selection, network configuration, boot and recovery operations, account programs, credential transactions, and exact verification ownership. Both utility builds, `tools/check_guest.py`, `make verify-style`, and all 36 host tests passed.
+* `vendor/musl/Readme.md` now describes the 1.2.5 pin and digest, fixed compiler and static build, one spawn patch, link order, process ABI, installed and extracted consumers, guest staging, update procedure, and exact verification. `make deps`, all 35 musl program builds, a direct static link, `make verify-style`, all 36 host tests, and all 63 default guest probes passed.
 
 ## Decisions and deferred questions
 
