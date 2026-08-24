@@ -70,8 +70,8 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `dev-log/15-privilege/plan.md`
 * [x] `dev-log/16-review/Readme.md`
 * [x] `dev-log/16-review/plan.md`
-* [ ] `dev-log/17-completion/Readme.md`
-* [ ] `dev-log/17-completion/plan.md`
+* [x] `dev-log/17-completion/Readme.md`
+* [x] `dev-log/17-completion/plan.md`
 * [ ] `dev-log/18-shutdown/Readme.md`
 * [ ] `dev-log/18-shutdown/plan.md`
 * [ ] `dev-log/19-busybox-first/Readme.md`
