@@ -10,7 +10,7 @@ Rach2 is an educational 32-bit x86 operating system. The kernel is freestanding 
 
 Use GNU Make on the host. `make doctor` checks the toolchain. `make` builds the kernel and os-simple image. `make full` also builds the test and os-real images, including BusyBox, Dropbear, TinyCC, pdpmake, and Doom. `make help` summarizes common targets.
 
-The guest build uses three POSIX `guest.mk` files for the kernel, utilities, and ish. pdpmake reads them on Rach2. `tools/check_guest.py` compares their source lists with the host Makefiles, and `make selfbuild-test` builds all three on the machine. Shared host Make rules are under `mk/`. Every in-house component puts its objects, `.d` files, and binaries in the repo-root `build/` directory. Vendored projects use their upstream build systems as described under Ports. `C_SRC` in `rach2/Makefile` is the explicit kernel source list; `make check-sources` compares it with the source tree. Do not run a `build_*.sh` script by hand or use `make clean` as a routine build step. Header dependencies rebuild the affected objects.
+The guest build uses three POSIX `guest.mk` files for the kernel, utilities, and ISH. pdpmake reads them on Rach2. `tools/check_guest.py` compares their source lists with the host Makefiles, and `make selfbuild-test` builds all three on the machine. Shared host Make rules are under `mk/`. Every in-house component puts its objects, `.d` files, and binaries in the repo-root `build/` directory. Vendored projects use their upstream build systems as described under Ports. `C_SRC` in `rach2/Makefile` is the explicit kernel source list; `make check-sources` compares it with the source tree. Do not run a `build_*.sh` script by hand or use `make clean` as a routine build step. Header dependencies rebuild the affected objects.
 
 Image build targets do not run QEMU. The run scripts under `rach2/` boot an image directly, while test targets invoke QEMU through their test scripts.
 
@@ -52,7 +52,7 @@ Output from tools and code uses one shape. Diagnostics go to stderr as `componen
 
 ## Ports
 
-musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, verified by sha256, extracted and built by their `build_*.sh` behind stamp files. BusyBox, Dropbear, TinyCC, and pdpmake link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees.
+musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, verified by SHA-256, extracted and built by their `build_*.sh` behind stamp files. BusyBox, Dropbear, TinyCC, and pdpmake link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees.
 
 When a capability is missing, look in BusyBox before writing it. That is the owner's standing decision, and it is why the account tools (`adduser`, `addgroup`, `chpasswd`, `deluser`, `delgroup`) are BusyBox's rather than this project's.
 

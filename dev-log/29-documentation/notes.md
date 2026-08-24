@@ -4,6 +4,7 @@ This is the persistent record for information needed after a compaction or betwe
 
 ## Cross-document contradictions
 
+* The shell's component name is `ISH`; lowercase `ish` names its path, binary, command, and source files. Several current documents used lowercase in ordinary prose. Correct them in worklist order during the whole-project terminology pass.
 * `AGENTS.md` and `CLAUDE.md` said that `make help` lists the targets, while the root and kernel Readmes correctly described a curated summary. Both policy files now use the accurate summary wording.
 * `krffs/Readme.md` also called `make help` the current image and disk target list. It now describes the output as a summary.
 * `CLAUDE.md` and `Readme.md` described all build output as living under `build/`. The root Makefile and `mk/build.mk` make that true for in-house components; vendored projects also build extracted trees and musl's install under `vendor/`. `CLAUDE.md` is corrected. Recheck the root Readme in its own pass.
