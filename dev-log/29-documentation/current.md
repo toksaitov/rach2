@@ -9,13 +9,13 @@ This file is a bounded resume map for the one documentation file in progress. It
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
 * Active final-stage entry: correct the known `open-file description` inconsistency in `rach2/sys/fs/synthfs.Readme.md`.
 * Current document: `rach2/sys/fs/synthfs.Readme.md`.
-* Original and current forms read whole in the planning session: yes. Read the file whole again when the goal starts.
+* Original and current forms read whole in this goal run: yes. The file has 107 lines.
 * Material claims: synthetic path routing, devfs registry and ptys, raw disk windows, procfs contents and identities, snapshot lifetime, and verification.
-* Planned sections: Raw disk windows and Snapshot lifetime. No document edit is in progress. Use the descriptor subsystem's established term `open-file description` consistently.
+* Changed section: Raw disk windows. Both inconsistent noun phrases now use the descriptor subsystem's established term `open-file description`.
 
 ## Final-stage cursor
 
-* Candidate queue: only `rach2/sys/fs/synthfs.Readme.md` for the known correction.
+* Candidate queue: empty. The known correction is complete.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -34,7 +34,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-When the goal starts, follow the final-stage recovery procedure. Read `rach2/sys/fs/synthfs.Readme.md` whole, reopen `rach2/sys/fs/fd.h` lines 70 through 125, correct the three `open file description` variants, and finish the one-file procedure.
+The isolated diff, banned-prose check, direct ASCII check, repository text check, `git diff --check`, `make verify-style`, and all 36 host tests pass. Stage only `rach2/sys/fs/synthfs.Readme.md`, `finish.md`, and this checkpoint, review them, and commit.
 
 ## Intended commit boundary
 

@@ -55,7 +55,7 @@ All three raw devices use a 64-bit offset shared by duplicated and inherited des
 
 Reads at or past the end return EOF, and a read crossing the end is shortened. A write at or across the end returns `ENOSPC` before writing any part of the request. Transfers pass through a 32 KiB kernel buffer in batches of at most 64 sectors, so a DMA driver never receives a user pointer. ATA and AHCI flush the device cache after every successful write command. A fully successful write is therefore durable when it returns. If a later batch fails, the short count covers only completed earlier batches; the block interface cannot report how much of the failed batch reached the device.
 
-Only one open file description may hold write access across the three raw windows. A second writer gets `EBUSY`; readers may coexist with it. `/dev/grubcore` additionally permits only one open file description at a time because replacement of the embedded loader is a multi-step transaction. A controller reprobe withdraws all three windows. Existing descriptors then receive `ENXIO` until the backing is published again.
+Only one open-file description may hold write access across the three raw windows. A second writer gets `EBUSY`; readers may coexist with it. `/dev/grubcore` additionally permits only one open-file description at a time because replacement of the embedded loader is a multi-step transaction. A controller reprobe withdraws all three windows. Existing descriptors then receive `ENXIO` until the backing is published again.
 
 ## procfs
 
