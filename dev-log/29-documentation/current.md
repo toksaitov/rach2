@@ -25,8 +25,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The complete historical content diff in `8ddb34d` has been read in path order. The review plan and disk plan each used two bounded compact change streams; the other eight files used one stream each. No further correction was needed.
 * The complete historical content diff in `5fa487a` has been read in path order. The milestone 12 plan used a bounded compact change stream, including three sections after compaction; the other nine files used one stream each. No further correction was needed.
 * All ten historical diffs in `ebe174d` have been read in path order. The final file, `dev-log/19-busybox-first/Readme.md`, was then read whole because the batch diff exposed inconsistent capitalization of the BusyBox name.
-* `dev-log/19-busybox-first/Readme.md` now uses the proper names BusyBox and Dropbear in prose while preserving lowercase path components, configuration names, and historical substance. Its banned-prose and ASCII checks and complete one-file diff review passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered review at `03dae47` after a clean commit.
+* The BusyBox naming correction is committed as `1afc84e`. Its banned-prose and ASCII checks, complete one-file diff review, `make verify-style`, and staged review passed; the tree was clean after the commit.
+* The complete `03dae47` diff for `dev-log/19-busybox-first/plan.md` has been read in four bounded compact sections. The file was then read whole in two sections because the diff exposed the same inconsistent BusyBox capitalization as the preceding record.
+* `dev-log/19-busybox-first/plan.md` now uses the BusyBox proper name in ordinary prose while preserving lowercase path components, target names, configuration names, the backticked `busybox` dispatcher name, and historical substance. Its banned-prose and ASCII checks and complete one-file diff review passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `03dae47` review at `dev-log/20-compiler/Readme.md` after a clean commit.
 
 ## Boundary
 
@@ -35,4 +37,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run `make verify-style`, `git diff --check`, and staged path and content review for the one-file correction. Commit it with this checkpoint, then resume at `03dae47`.
+Run `make verify-style`, `git diff --check`, and staged path and content review for the one-file correction. Commit it with this checkpoint, then resume at `dev-log/20-compiler/Readme.md`.

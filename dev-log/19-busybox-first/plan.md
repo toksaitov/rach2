@@ -1,12 +1,12 @@
-# Milestone 19: busybox first, and a home for our own tools
+# Milestone 19: BusyBox first, and a home for our own tools
 
 ## The goal
 
-This milestone completes the userland work begun in milestone 15. That milestone added the privilege model and left account tools partly in-house; milestone 17 added the missing programs; milestone 18 added userland shutdown. This milestone assigns each remaining program to busybox wherever its implementation can run on this kernel.
+This milestone completes the userland work begun in milestone 15. That milestone added the privilege model and left account tools partly in-house; milestone 17 added the missing programs; milestone 18 added userland shutdown. This milestone assigns each remaining program to BusyBox wherever its implementation can run on this kernel.
 
 The two images therefore serve different purposes rather than representing two sizes of the same system.
 
-`os-real` uses conventional distributed tools. Busybox supplies every supported function; an in-house implementation remains only when busybox cannot run on this kernel or when the teaching purpose requires it.
+`os-real` uses conventional distributed tools. BusyBox supplies every supported function; an in-house implementation remains only when BusyBox cannot run on this kernel or when the teaching purpose requires it.
 
 `os-simple` uses the programs written by this project. It already contains the in-house shell and core utilities but no accounts. It gains the account programs removed from os-real and the `/etc` files required by them.
 
@@ -14,17 +14,17 @@ Two constraints limit the design. Image size is not a consideration. Security wo
 
 ## Settled decisions
 
-Raw sockets remain unimplemented, so os-real retains the in-house `ping`. The send path would be small because `ip_tx` exists, but busybox expects the IP header at the start of each reply (`networking/ping.c:283-285`) while this stack removes it before delivery. Raw sockets are not justified without demand for `traceroute` and `arping` as well.
+Raw sockets remain unimplemented, so os-real retains the in-house `ping`. The send path would be small because `ip_tx` exists, but BusyBox expects the IP header at the start of each reply (`networking/ping.c:283-285`) while this stack removes it before delivery. Raw sockets are not justified without demand for `traceroute` and `arping` as well.
 
-`fcntl` record locking also remains unimplemented. It would not make busybox's `update_passwd` exclude in-house writers: the lock is non-blocking, failure produces only a warning (`libbb/update_passwd.c:173-174`), and release at `:314` precedes the `fsync` and `rename` at `:318-319`.
+`fcntl` record locking also remains unimplemented. It would not make BusyBox's `update_passwd` exclude in-house writers: the lock is non-blocking, failure produces only a warning (`libbb/update_passwd.c:173-174`), and release at `:314` precedes the `fsync` and `rename` at `:318-319`.
 
 The project retains its own `init` for teaching.
 
 ## Concurrent account writers
 
-An earlier draft incorrectly claimed that busybox's `O_CREAT|O_EXCL` temporary file (`libbb/update_passwd.c:142`) provides mutual exclusion. Busybox opens the database first (`:126-128`) and competes for the temporary name afterwards. A second writer can retain a descriptor on the old inode, wait for the first writer to rename its replacement, then acquire the temporary name and publish a stale view. This loses the first change. The window is small and requires two simultaneous account edits, but busybox provides no exclusion guarantee.
+An earlier draft incorrectly claimed that BusyBox's `O_CREAT|O_EXCL` temporary file (`libbb/update_passwd.c:142`) provides mutual exclusion. BusyBox opens the database first (`:126-128`) and competes for the temporary name afterwards. A second writer can retain a descriptor on the old inode, wait for the first writer to rename its replacement, then acquire the temporary name and publish a stale view. This loses the first change. The window is small and requires two simultaneous account edits, but BusyBox provides no exclusion guarantee.
 
-The implementation swap must therefore be atomic at the commit level. In-house writers coordinate through `/etc/.pwlock`, while busybox writers use `/etc/passwd+`; the protocols do not interact. No phase leaves `os-real` with `passwd` from one family and `adduser` from the other. One commit performs the complete swap, leaving each image with one protocol.
+The implementation swap must therefore be atomic at the commit level. In-house writers coordinate through `/etc/.pwlock`, while BusyBox writers use `/etc/passwd+`; the protocols do not interact. No phase leaves `os-real` with `passwd` from one family and `adduser` from the other. One commit performs the complete swap, leaving each image with one protocol.
 
 ## Phase 1: check the staged applet table
 
@@ -40,15 +40,15 @@ Mutations: delete the staged table, then truncate it in a separate run; both mus
 
 Readmes: update the applet-check input description in `tools/Readme.md`.
 
-## Phase 2: build and check the set-id busybox
+## Phase 2: build and check the set-id BusyBox
 
-Three applets require set-id execution. Applying the bit to the main busybox would run its two hundred applets as root, so a second build contains only the privileged applets. Busybox recommends this arrangement in `Config.in:216-219`: build separate binaries with different applet sets and mark only the required artifact. `FEATURE_INDIVIDUAL` cannot be used because it depends on `BUILD_LIBBUSYBOX` and a dynamic linker (`Config.in:424-440`), while every binary here is static.
+Three applets require set-id execution. Applying the bit to the main BusyBox would run its two hundred applets as root, so a second build contains only the privileged applets. BusyBox recommends this arrangement in `Config.in:216-219`: build separate binaries with different applet sets and mark only the required artifact. `FEATURE_INDIVIDUAL` cannot be used because it depends on `BUILD_LIBBUSYBOX` and a dynamic linker (`Config.in:424-440`), while every binary here is static.
 
 This phase builds and checks the binary without staging it, leaving both images unchanged and allowing independent verification.
 
 Change: add `vendor/busybox/rach2-suid.config` with `CONFIG_PASSWD`, `CONFIG_SU`, `CONFIG_LOGIN`, their required shadow and crypt features, `CONFIG_STATIC`, and `CONFIG_LFS`. The last option is required: without it, disagreement between `off_t` and `uoff_t` stops the build at `BUG_off_t_size_is_misdetected`.
 
-Disable `CONFIG_FEATURE_SUID_CONFIG` as a security requirement. The option enables the `/etc/busybox.conf` parser that caused the previous set-id busybox use-after-free: `check_suid` frees the parsed list without clearing its global (`libbb/appletlib.c:642`, global at `:305`, read at `:565`). Compiling out the parser removes the defective path instead of depending on reachability arguments or a negative test.
+Disable `CONFIG_FEATURE_SUID_CONFIG` as a security requirement. The option enables the `/etc/busybox.conf` parser that caused the previous set-id BusyBox use-after-free: `check_suid` frees the parsed list without clearing its global (`libbb/appletlib.c:642`, global at `:305`, read at `:565`). Compiling out the parser removes the defective path instead of depending on reachability arguments or a negative test.
 
 Make `build_busybox.sh` perform two independent builds. After staging the first binary and table, run `make -C "$SRC" mrproper`, copy the second configuration, and build `build/vendor/busybox/busybox-suid` with its own staged table.
 
@@ -62,13 +62,13 @@ Also correct the treatment of `getty` and `sulogin`. Both are `BB_SUID_DROP` (`l
 
 Proof: run `make check-busybox` and `make check-setid` after truncating the second binary, adding an applet to the second configuration, and editing that configuration without invalidating the stamp.
 
-Readmes: document the second build and busybox's recommendation in `vendor/busybox/Readme.md`; document the whitelist and artifact checks in `tools/Readme.md`.
+Readmes: document the second build and BusyBox's recommendation in `vendor/busybox/Readme.md`; document the whitelist and artifact checks in `tools/Readme.md`.
 
 ## Phase 2a: add the required readv syscall
 
 This phase was absent from the first draft. Phase 3 could not run without it.
 
-Busybox's `chpasswd` exited 2 without a message on os-real. Chpasswd reads through `xmalloc_fgetline`, while musl's buffered stdio uses `readv` instead of `read` when filling more than one byte. The kernel implemented `writev` at 146 but left 145 unwired. Programs using `fgets`, `fread` or `scanf` had silently failed, and comments in `utils/login.c`, `utils/passwd.c` and `utils/adduser.c` treated byte-at-a-time reads without `readv` as a system property rather than a missing syscall.
+BusyBox's `chpasswd` exited 2 without a message on os-real. Chpasswd reads through `xmalloc_fgetline`, while musl's buffered stdio uses `readv` instead of `read` when filling more than one byte. The kernel implemented `writev` at 146 but left 145 unwired. Programs using `fgets`, `fread` or `scanf` had silently failed, and comments in `utils/login.c`, `utils/passwd.c` and `utils/adduser.c` treated byte-at-a-time reads without `readv` as a system property rather than a missing syscall.
 
 Change: add `SYS_READV 145` to `rach2/sys/syscall.h` and place `sys_readv` beside `sys_writev` in `rach2/sys/syscall.c`, using the same structure and error rules. Extract the `sys_read` body into `read_fd(fd, buf, count)` and leave `sys_read` as a two-line wrapper, matching the existing `write_fd` and `sys_write` split. The original body did not access its parameter block after the first three lines, so this extraction is mechanical.
 
@@ -80,33 +80,33 @@ Mutation: make `sys_readv` return `-ENOSYS` while keeping it compiled; the probe
 
 Readmes: add `readv` (145) to the syscall table in `rach2/Readme.md`.
 
-## Phase 3: switch all os-real account tools to busybox
+## Phase 3: switch all os-real account tools to BusyBox
 
-Perform the complete swap in one commit. A partial state would combine busybox's `adduser` using `/etc/passwd+` with the in-house `passwd` using `/etc/.pwlock`, without mutual exclusion.
+Perform the complete swap in one commit. A partial state would combine BusyBox's `adduser` using `/etc/passwd+` with the in-house `passwd` using `/etc/.pwlock`, without mutual exclusion.
 
 Change `vendor/busybox/rach2.config`: enable `CONFIG_ADDUSER`, `CONFIG_ADDGROUP`, `CONFIG_DELUSER`, `CONFIG_DELGROUP` and `CONFIG_CHPASSWD`. Also set their dependent symbols explicitly because `oldconfig` preserves the values selected while these applets were disabled:
 
 * `CONFIG_LAST_ID=0`, `CONFIG_FIRST_SYSTEM_ID=0`, `CONFIG_LAST_SYSTEM_ID=0` define the uid allocation range. Zero leaves `adduser` with no usable range. Set real values and document the policy in the configuration rather than inheriting a default.
-* `CONFIG_FEATURE_DEFAULT_PASSWD_ALGO=""` selects the hash algorithm. Empty invokes a busybox fallback rather than sha512. Set `"sha512"` to match the existing `/etc/shadow` entries.
+* `CONFIG_FEATURE_DEFAULT_PASSWD_ALGO=""` selects the hash algorithm. Empty invokes a BusyBox fallback rather than SHA-512. Set `"sha512"` to match the existing `/etc/shadow` entries.
 * `CONFIG_FEATURE_ADDUSER_TO_GROUP` and `CONFIG_FEATURE_DEL_USER_FROM_GROUP` enable the add-member and remove-member forms. Without them, `deluser` can leave supplementary memberships, which the proof must detect.
 
-Update staging in the same change. Remove the five enabled names from `FORBIDDEN_APPLETS` in `tools/check_setid.py`. In `krffs/manifests/os-real.manifest`, remove the four in-house program lines and stage `build/vendor/busybox/busybox-suid` three times as `/bin/passwd`, `/bin/su` and `/bin/login`, each with `04755:0:0`. KRFFS has no symlinks, and busybox dispatches from `argv[0]`, so three copies provide the required names. Add all three set-id declarations to the allowlist.
+Update staging in the same change. Remove the five enabled names from `FORBIDDEN_APPLETS` in `tools/check_setid.py`. In `krffs/manifests/os-real.manifest`, remove the four in-house program lines and stage `build/vendor/busybox/busybox-suid` three times as `/bin/passwd`, `/bin/su` and `/bin/login`, each with `04755:0:0`. KRFFS has no symlinks, and BusyBox dispatches from `argv[0]`, so three copies provide the required names. Add all three set-id declarations to the allowlist.
 
 Proof: add `tools/account_test.sh` and `make account-test`, following `shutdown_test.sh` and booting os-real from disk so the runner can inspect databases offline. The sequence creates an account with `adduser`, sets its password with `chpasswd`, switches to it and verifies identity, changes its password with `passwd`, refuses a change to another account, reaches root with `su`, refuses an incorrect root password, and deletes the account with `deluser`.
 
 Use two-way assertions to detect partial deletion. After creation, require a uid within the configured range, a `$6$` hash, a group, and a home. After deletion, require the name to be absent from `/etc/passwd`, `/etc/shadow`, group names, and every group member list. Throughout the sequence, every passwd line must have a shadow line and a group with its gid, and no name may appear twice.
 
-Create a supplementary membership before testing its removal. Busybox's `adduser` creates a private group with an empty member list, so absence from all member lists after deletion proves nothing unless a list first contains the account. Use `addgroup` to add the account to a second group, verify the membership, delete the account, and verify removal. This makes the `FEATURE_DEL_USER_FROM_GROUP` mutation meaningful.
+Create a supplementary membership before testing its removal. BusyBox's `adduser` creates a private group with an empty member list, so absence from all member lists after deletion proves nothing unless a list first contains the account. Use `addgroup` to add the account to a second group, verify the membership, delete the account, and verify removal. This makes the `FEATURE_DEL_USER_FROM_GROUP` mutation meaningful.
 
 The runner follows three established rules: split tokens sent to the echoing console, space feeds so an input flush cannot discard them, and remove logs before the first boot as well as in the trap.
 
 Mutation: replace the `deluser` step with a no-op; deletion assertions must fail and name the shadow file. Disabling `CONFIG_FEATURE_DEL_USER_FROM_GROUP`, the mutation proposed by the first plan, does not leave membership behind. That symbol controls the two-argument `deluser USER GROUP` form (`loginutils/deluser.c:86`), while `update_passwd` removes a deleted name from every member list regardless of the symbol (`libbb/update_passwd.c:240-258`). The complete sequence correctly passes with the symbol disabled. Before relying on the membership assertion, a manual check confirmed that `addgroup testee shared` writes `shared:x:1002:testee` to the group file.
 
-The swap gives up the publication order added in milestone 17. The in-house `adduser` publishes shadow, group, home, and passwd in that order, so an account becomes visible only after completion and each interrupted prefix is interpretable. Busybox publishes passwd first (`loginutils/adduser.c:249`), then shadow, and only warns when home creation fails; `deluser` replaces the databases separately (`loginutils/deluser.c:137-161`). An interruption can therefore leave a visible account without a password. This trade is accepted because it requires a crash or full disk during a one-second window on a teaching system, while avoiding a second implementation of a standard tool. The account test proves the successful `adduser` and `passwd` sequence and configuration, not crash behavior.
+The swap gives up the publication order added in milestone 17. The in-house `adduser` publishes shadow, group, home, and passwd in that order, so an account becomes visible only after completion and each interrupted prefix is interpretable. BusyBox publishes passwd first (`loginutils/adduser.c:249`), then shadow, and only warns when home creation fails; `deluser` replaces the databases separately (`loginutils/deluser.c:137-161`). An interruption can therefore leave a visible account without a password. This trade is accepted because it requires a crash or full disk during a one-second window on a teaching system, while avoiding a second implementation of a standard tool. The account test proves the successful `adduser` and `passwd` sequence and configuration, not crash behavior.
 
 Require `make login-test` to pass as the console regression after changing its login program. Run the live SSH test in this phase.
 
-The initial boot prompt remains unchanged. Busybox login prints the host name followed by ` login: ` (`libbb/login.c:15,129`), and the kernel defaults the host name to `rach2` (`rach2/sys/syscall.c:8087`), producing the same bytes as the in-house program. The first draft incorrectly claimed that `login_test.sh` already verified this prompt; it used fixed delays and never matched it. Make `login_test.sh` wait for the exact prompt before sending the user name. Because `sethostname` and the busybox `hostname` applet can change the value later, document the guarantee only for the boot prompt.
+The initial boot prompt remains unchanged. BusyBox login prints the host name followed by ` login: ` (`libbb/login.c:15,129`), and the kernel defaults the host name to `rach2` (`rach2/sys/syscall.c:8087`), producing the same bytes as the in-house program. The first draft incorrectly claimed that `login_test.sh` already verified this prompt; it used fixed delays and never matched it. Make `login_test.sh` wait for the exact prompt before sending the user name. Because `sethostname` and the BusyBox `hostname` applet can change the value later, document the guarantee only for the boot prompt.
 
 Readmes: revise the disabled lists in `vendor/busybox/Readme.md`; update os-real staging and modes in `krffs/Readme.md`; add the runner to `tools/Readme.md`; and state in `utils/Readme.md` that the in-house programs now serve os-simple.
 
@@ -114,13 +114,13 @@ Readmes: revise the disabled lists in `vendor/busybox/Readme.md`; update os-real
 
 Keep this separate from phase 3. It is an independent capability and needs its own proof.
 
-`CONFIG_CRYPTPW` and `CONFIG_MKPASSWD` generate standalone password hashes; `CONFIG_FEATURE_HTTPD_AUTH_MD5` lets `httpd -m` generate one. All three were disabled because busybox salts them with a pid and a clock through a small generator (`libbb/pw_encrypt.c:34-40`). Busybox calls this weak but sufficient, which is acceptable for this teaching system.
+`CONFIG_CRYPTPW` and `CONFIG_MKPASSWD` generate standalone password hashes; `CONFIG_FEATURE_HTTPD_AUTH_MD5` lets `httpd -m` generate one. All three were disabled because BusyBox salts them with a pid and a clock through a small generator (`libbb/pw_encrypt.c:34-40`). BusyBox calls this weak but sufficient, which is acceptable for this teaching system.
 
 Move both guard rules with the features. `FORBIDDEN_APPLETS` still names `cryptpw` and `mkpasswd`; phase 3 removes only the five account writers. `FORBIDDEN_CONFIG` names `CONFIG_FEATURE_HTTPD_AUTH_MD5`. Enabling any of the three while its guard remains makes `make check-setid` fail. Commit the config change, both guard lists, and their self-tests together.
 
 Add a probe or runner case proving that `cryptpw` produces a `$6$` hash that `crypt` reproduces from the same password. Also prove that `httpd -m` produces a hash that the server accepts. Otherwise the capability would ship untested.
 
-The implementation differed from this draft. `FORBIDDEN_APPLETS` had already lost `cryptpw` and `mkpasswd` when phase 3 rewrote that list, so only `FORBIDDEN_CONFIG` changed here. It became empty rather than shorter. Keep the rule and its self-tests for the next feature whose capability has no applet name. The `mkpasswd` boot case compares its hash byte for byte with `build/krffs/mkhash.krffs`, the project's own SHA-512 crypt implementation. This proves that busybox agrees with the implementation used by the rest of the image. The `httpd` proof uses the loopback address without a network device. It generates the hash with `httpd -m`, writes it to `/etc/httpd.conf`, rejects a request without credentials, and serves a request with the correct credentials.
+The implementation differed from this draft. `FORBIDDEN_APPLETS` had already lost `cryptpw` and `mkpasswd` when phase 3 rewrote that list, so only `FORBIDDEN_CONFIG` changed here. It became empty rather than shorter. Keep the rule and its self-tests for the next feature whose capability has no applet name. The `mkpasswd` boot case compares its hash byte for byte with `build/krffs/mkhash.krffs`, the project's own SHA-512 crypt implementation. This proves that BusyBox agrees with the implementation used by the rest of the image. The `httpd` proof uses the loopback address without a network device. It generates the hash with `httpd -m`, writes it to `/etc/httpd.conf`, rejects a request without credentials, and serves a request with the correct credentials.
 
 Readmes: revise `vendor/busybox/Readme.md` to explain why these features are enabled again.
 
@@ -181,4 +181,4 @@ From a clean tree, run these checks in one pass: `verify-style`, `verify-host`, 
 
 The test image must continue to stage the in-house `passwd`, `adduser`, `login`, `su`, and `sudo`. The `passwdmusl`, `addusermusl`, `loginmusl`, `pwauthmusl`, and `suidmusl` probes must continue to exercise them. These programs still ship in os-simple, so their probes are not obsolete. Do not remove them merely because os-real no longer uses them.
 
-Directly review busybox's privileged `passwd` path and the `libbb` functions it calls, as was done for the in-house programs. It correctly authorizes against the real uid (`loginutils/passwd.c:136`). Read the remaining path instead of assuming it is correct.
+Directly review BusyBox's privileged `passwd` path and the `libbb` functions it calls, as was done for the in-house programs. It correctly authorizes against the real uid (`loginutils/passwd.c:136`). Read the remaining path instead of assuming it is correct.
