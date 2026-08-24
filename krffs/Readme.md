@@ -71,7 +71,7 @@ Staged nodes use the fixed time one second after the Unix epoch, and the root is
 
 `mkdisk.sh MANIFEST OUTPUT [DISK_MB] [PARTITION_MB]` creates a disk file with an MBR and one KRFFS partition of type `0x7f` at LBA 2048. The defaults are a 64 MiB disk and a 48 MiB partition. The partition may not exceed the kernel's 512 MiB mount window. This script also builds through a temporary file and publishes only a checked image.
 
-The root Makefile owns the named image profiles and their dependencies. `make full` builds `test.krffs`, `os-simple.krffs`, and `os-real.krffs`. The metal and recovery RAM images have separate targets. Run `make help` for the current image and disk target list.
+The root Makefile owns the named image profiles and their dependencies. `make full` builds `test.krffs`, `os-simple.krffs`, and `os-real.krffs`. The metal and recovery RAM images have separate targets. Run `make help` for a summary of the current image and disk targets.
 
 `gen_demo_key.sh` provisions separate Ed25519 keypairs for root and the test account. Optional `authorized_keys.extra` and `test_authorized_keys.extra` files add local public keys; the script rejects private-key material and malformed lines. `RACH2_REPLACE_KEYS=1` replaces existing generated pairs.
 
