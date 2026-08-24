@@ -162,7 +162,7 @@ Readmes: state in `utils/Readme.md` that these sources are staged and can be com
 
 ## Phase 7: turn the SSH capstone into a target
 
-The gate ends with an SSH capstone that is currently a manual Readme procedure. Convert it into an unattended test.
+The verification sequence ends with an SSH capstone that is currently a manual Readme procedure. Convert it into an unattended test.
 
 Change: add `tools/ssh_test.sh` and `make ssh-test`. The bounded script creates a fresh disk, boots with port forwarding, logs in on the console, starts dropbear, authenticates root by key and the unprivileged account by password, verifies one command through each session, stops QEMU, and uses a timeout that fails instead of hanging.
 
@@ -178,11 +178,11 @@ Review every comment, document, and support file that describes image contents, 
 
 Check for an unstaged vendor artifact, an unused Makefile variable, and a header staged twice.
 
-## Phase 9: write the record and run the gate
+## Phase 9: write the record and run the checks
 
 Record what shipped, what reviews found, what was refuted, and what remains deferred in `dev-log/20-compiler/Readme.md`. Correct this plan in place wherever the implementation disproves it. Add one bullet to `dev-log/Readme.md`, carrying forward the anchor sentence from milestone 19.
 
-From a clean tree, run the complete gate in one pass: `verify-style`, `verify-host`, `test`, `tcc-test`, `account-test`, `shutdown-test`, `login-test`, `ping-test`, `crash-test`, `test-disk`, `test-disk-ahci`, `persist-test`, `persist-test-ahci`, `cred-persist-test`, `test-noentropy`, `ssh-test`.
+From a clean tree, run these checks in one pass: `verify-style`, `verify-host`, `test`, `tcc-test`, `account-test`, `shutdown-test`, `login-test`, `ping-test`, `crash-test`, `test-disk`, `test-disk-ahci`, `persist-test`, `persist-test-ahci`, `cred-persist-test`, `test-noentropy`, `ssh-test`.
 
 ## Risks in likely order
 
