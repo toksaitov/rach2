@@ -97,11 +97,11 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `dev-log/26-portable/arrival.md`
 * [x] `dev-log/26-portable/plan.md`
 * [x] `dev-log/27-prose/Readme.md`
-* [ ] `dev-log/27-prose/plan.md`
-* [ ] `dev-log/27-prose/worklist.md`
-* [ ] `dev-log/28-polish/Readme.md`
-* [ ] `dev-log/28-polish/plan.md`
-* [ ] `dev-log/Readme.md`
+* [x] `dev-log/27-prose/plan.md`
+* [x] `dev-log/27-prose/worklist.md`
+* [x] `dev-log/28-polish/Readme.md`
+* [x] `dev-log/28-polish/plan.md`
+* [x] `dev-log/Readme.md`
 * [ ] `ish/Readme.md`
 * [ ] `krffs/Readme.md`
 * [ ] `mk/Readme.md`
