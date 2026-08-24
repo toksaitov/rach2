@@ -176,6 +176,8 @@ An edit found during these passes returns to the one-file procedure. Finish one 
 
 ## Whole-project pass
 
+`finish.md` expands the three remaining entries below. Its first unchecked entry is the only cursor inside them. A coarse entry is marked complete only after every corresponding entry in `finish.md` is complete.
+
 * [x] Root overview and component ownership checked again
 * [x] Build, verification, and git instructions agree across current documents
 * [x] Relative Markdown links and referenced tracked paths checked

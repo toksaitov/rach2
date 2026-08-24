@@ -10,7 +10,7 @@ The work is deliberately serial. One primary agent reads and edits one file at a
 
 ## The inventory
 
-`worklist.md` is the complete ordered inventory. It was made from the 123 tracked Markdown files present when this plan was written: 28 current-contract documents outside `dev-log/`, and 95 historical documents under `dev-log/`. The four live files in `dev-log/29-documentation/` are control files for the run and are not part of that count. `current.md` is the bounded checkpoint for the file in progress.
+`worklist.md` is the complete ordered inventory. It was made from the 123 tracked Markdown files present when this plan was written: 28 current-contract documents outside `dev-log/`, and 95 historical documents under `dev-log/`. The five live files in `dev-log/29-documentation/` are control files for the run and are not part of that count. `current.md` is the bounded checkpoint for the file in progress. `finish.md` expands the last whole-project stages into small, durable entries.
 
 At the start of the run, and after any later change to the set of tracked Markdown files, compare `git ls-files '*.md'` with `worklist.md`. Exclude `dev-log/29-documentation/` from that comparison. A newly added project document is added to the worklist before the run continues. An absent path is investigated rather than marked complete.
 
@@ -89,6 +89,19 @@ The first unchecked entry is the only source of the next position. A checked ent
 
 If two compactions occur on the same file without a commit, the next recovery must not repeat any broad read already named in `current.md`. Recheck only the unresolved claims, finish the document, verify it, and commit it. This rule prevents recovery itself from consuming the next context window.
 
+### Recovery during the final stages
+
+The final-stage procedure begins after every individual document, every subsystem pass, the historical collection pass, and the first five whole-project checks are complete. During this procedure, `finish.md` is the detailed progress ledger. Its first unchecked entry is the only next position.
+
+After a compaction in the final-stage procedure:
+
+1. Read `AGENTS.md`, `CLAUDE.md`, `finish.md`, and `current.md` in full. In this plan, read from `## The whole-project pass` through the end. Do not reread the completed inventory, arrival procedure, individual-file history, full `worklist.md`, or full `notes.md` as a ritual.
+2. Run `git status --short --branch` and read the recent milestone commits. Use `rg -n '^\* \[ \]' dev-log/29-documentation/worklist.md dev-log/29-documentation/finish.md` to confirm the two levels of progress without printing the completed entries.
+3. Inspect every uncommitted path. If a documentation file is active, read that complete file and its complete uncommitted diff. Reopen only the narrow evidence named in `current.md`.
+4. Resume the first unchecked `finish.md` entry at the exact candidate or diff-output line recorded in `current.md`. Do not rerun a completed search, recreate a completed candidate list, or restart a completed file.
+
+Limit a diff page to 80 output lines. Record the next output line in `current.md` before reading another page. A changed diff invalidates that file's cursor, so restart that file at output line 1 after editing it. It does not invalidate any earlier checked file.
+
 ## The current-file checkpoint
 
 `current.md` carries only the state needed to resume one file. Update it before a long evidence pass, after each bounded evidence batch, before a likely compaction, and before verification. Keep it short and replace obsolete details instead of appending a diary.
@@ -96,6 +109,7 @@ If two compactions occur on the same file without a commit, the next recovery mu
 It records:
 
 * the first unchecked file and whether its original and current forms were read whole;
+* the active `finish.md` entry, candidate path, or diff-output line during the final stages;
 * the changed sections and the claims they now make;
 * repository paths and function or target names that decide those claims;
 * facts already checked, open questions, and the exact next action;
@@ -136,6 +150,8 @@ Keep commits small enough to review as prose:
 
 `worklist.md` is committed with the boxes completed in the same commit as the documents they describe. `notes.md` is committed when a batch adds information to it. The working tree is clean at each checkpoint.
 
+During the final stages, update `finish.md` immediately after each completed entry. Commit manifest-only progress after one large diff file or at most five small diff files. If a documentation edit is required, return to the one-file procedure and commit that file before continuing the manifest. Run `make verify-style` and inspect the staged diff before every such commit.
+
 ## The current-document pass
 
 Process the 28 current-contract documents in the order in `worklist.md`. The order establishes the policy and repository model first, then the build and test machinery, kernel and subsystems, userland, and external integrations. A later document may expose an error in a completed one. Record it in `notes.md`; do not interrupt the current file. Return to the earlier file during the subsystem pass, one file at a time.
@@ -175,9 +191,9 @@ After the subsystem passes, inspect the documentation as one set.
 * Check all relative Markdown links and every referenced tracked path.
 * Compare all named Make targets with the Makefiles and `make help`.
 * Search repeated numeric and version claims, then trace each one to its authority.
-* Check that one term names one concept across the repository, and that each component has one owning Readme.
-* Read the complete documentation diff in repository order. Fix one file at a time.
-* Confirm that no upstream document, code file, config, script, manifest, generated file, or legal text changed.
+* Check that one term names one concept across the repository, and that each component has one owning Readme. Use the bounded terminology entries in `finish.md`. A search prints candidate paths only; copy that queue into `current.md`, then inspect one candidate file at a time. Do not rerun the search after the queue is recorded.
+* Read the complete documentation diff in repository order using the fixed milestone base and file manifest in `finish.md`. Read one file at a time in 80-line output pages. `current.md` records the next output line. Fix one file at a time under the one-file procedure, then restart that file's diff review from line 1.
+* Confirm the changed-path scope with the commands in `finish.md`. No upstream document, code file, config, script, manifest, generated file, or legal text may have changed.
 
 The whole-project pass includes the root Readme again. Its first review establishes context; this pass judges whether the completed component documents make its overview true.
 
@@ -191,7 +207,7 @@ Before recording the milestone:
 4. Run `make full`, `make verify-style`, `make verify-host`, and `make test` from the completed documentation tree.
 5. Run any specialized target used as direct evidence for a corrected claim. List it in the final record.
 6. Run `python3 tools/check_devlog.py --selftest` and `python3 tools/check_devlog.py`.
-7. Inspect `git diff --check`, the complete milestone diff, and the path list. Only in-scope Markdown files and this milestone's control files may differ.
+7. Inspect `git diff --check`, the complete milestone diff, and the path list from the fixed base recorded in `finish.md`. Only in-scope Markdown files and this milestone's control files may differ.
 8. Confirm that the worktree is clean after the final commit.
 
 Then write `dev-log/29-documentation/Readme.md`. Record the scope, the false current claims corrected, the recurring prose faults removed, any documentation deliberately left unchanged, non-document defects recorded for later work, and every verification command actually run. Do not turn the record into another copy of the component documentation.

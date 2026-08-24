@@ -7,17 +7,17 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual documentation files, all subsystem passes, the historical collection pass, and the first five whole-project checks are complete.
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
+* Active final-stage entry: correct the known `open-file description` inconsistency in `rach2/sys/fs/synthfs.Readme.md`.
 * Current document: `rach2/sys/fs/synthfs.Readme.md`.
-* Original and current forms read whole for this pass: yes. The file has 107 lines.
+* Original and current forms read whole in the planning session: yes. Read the file whole again when the goal starts.
 * Material claims: synthetic path routing, devfs registry and ptys, raw disk windows, procfs contents and identities, snapshot lifetime, and verification.
 * Planned sections: Raw disk windows and Snapshot lifetime. No document edit is in progress. Use the descriptor subsystem's established term `open-file description` consistently.
 
-## Bounded batches
+## Final-stage cursor
 
-1. Project, port, image, build, and test names, including capitalization and one-term-per-concept use.
-2. Kernel and userland terms that cross component boundaries: process, descriptor, file system, synthetic path, block device, interface, socket, image, and staged artifact.
-3. Owning Readme map against current documents, component directories, root routes, and cross-document ownership statements.
-4. Contextual register review over the 28 current documents after the terminology searches.
+* Candidate queue: only `rach2/sys/fs/synthfs.Readme.md` for the known correction.
+* Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
+* Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
 ## Evidence checked
 
@@ -25,7 +25,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 * `ish/Readme.md` confirms that `ISH` names the component; lowercase `ish` remains correct for paths, binaries, commands, and source names.
 * The integration Readmes consistently call the digest algorithm `SHA-256`; lowercase `sha256` is reserved for command names and identifiers.
 * `CLAUDE.md` now uses `ISH` and `SHA-256` in commit `4227fb6`; `Readme.md` uses the current product names in commit `db7e6a9`.
-* The naming search found the same ordinary-prose `ish` inconsistency in `tools/Readme.md` and `vendor/pdpmake/Readme.md`. Process those later in worklist order, one file at a time.
+* The ordinary-prose `ish` inconsistencies in `tools/Readme.md` and `vendor/pdpmake/Readme.md` were corrected in `315209a` and `89f9912`.
 
 ## Boundary
 
@@ -34,7 +34,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Read the narrow descriptor definition in `rach2/sys/fs/fd.h`, correct the three terminology variants, and run the file checks.
+When the goal starts, follow the final-stage recovery procedure. Read `rach2/sys/fs/synthfs.Readme.md` whole, reopen `rach2/sys/fs/fd.h` lines 70 through 125, correct the three `open file description` variants, and finish the one-file procedure.
 
 ## Intended commit boundary
 
