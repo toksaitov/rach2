@@ -67,7 +67,7 @@ The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 pro
 
 ## Hardware status
 
-QEMU is the primary boot and test environment. A Lenovo G50-70 has booted the recovery RAM root, configured its RTL8168GU network device, accepted keyed SSH, and read its internal AHCI disk without mounting or writing it. The sealed SSD has booted its ordinary root under QEMU from the physical device. Installing that SSD inside the laptop remains unfinished. [Milestone 25](dev-log/25-sealed/Readme.md) records the hardware session.
+QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. The laptop boots the complete `os-real` system from an AHCI-backed KRFFS root. RTL8168GU networking and keyed SSH work, file system changes persist across reboots, and both an in-system update and a recovery reflash have completed successfully. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) records the hardware result.
 
 ## Repository map
 

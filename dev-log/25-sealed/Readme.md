@@ -583,10 +583,14 @@ The recovery system read the laptop's internal disk over SSH, first through `/pr
 
 `dev-log/24-metal/baseline.md` recorded the final value from Windows before Rach2 ran on the machine. That file supplies the baseline; equality with the new read is this session's observation.
 
-### What is left, and for whom
+### What remained after the adapter session
 
-Half of phase F's two-location boot check is complete. At home, the machine obtained an address from a real router without a boot-line change, verifying the client. The office run remains undone.
+Half of phase F's two-location boot check was complete. At home, the machine obtained an address from a real router without a boot-line change, verifying the client. The office run had not been done.
 
-The sealing session in `dev-log/25-sealed/checklist.md` remains. It requires the physical drive. The SSD is outside the laptop on a USB adapter and contains the named artifact; the original Windows disk remains installed.
+The sealing session in `dev-log/25-sealed/checklist.md` remained. It required the physical drive. The SSD was outside the laptop on a USB adapter and contained the named artifact; the original Windows disk remained installed.
 
 The milestone omitted the items excluded by the plan: a second root partition, configuration partition, watchdog, network boot, and redundancy below GRUB. Two additional limits were decided during implementation and documented with their owning procedures. A root mount failure with a healthy boot partition still requires console recovery because the boot path cannot detect a kernel that loaded and stopped; automatic handling needs an environment-block boot counter. Recovery also changes its SSH identity on every RAM-root boot because a fixed key would require a host-side `dropbearkey`, which the project does not build.
+
+## Later laptop installation
+
+A later hardware session completed the installation left open above. The sealed SSD was installed in the Lenovo G50-70 SATA bay, where it booted the complete `os-real` system from its AHCI-backed KRFFS root. The RTL8168GU network interface and keyed SSH worked on the installed system, and files written to KRFFS remained after reboot. An update performed from the running system completed successfully. The recovery image also reflashed the system; the reflashed `os-real` system then booted with persistent storage and network access. The installation, ordinary boot, networking, SSH, persistence, update, and recovery paths therefore passed on the laptop. Earlier statements that the SSD remained outside the laptop describe the adapter session that preceded this installation.
