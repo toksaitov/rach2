@@ -1,182 +1,118 @@
 # Doom for Rach2
 
-![Doom's E1M1 Running on Rach2](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/doom.png)
+This port runs Doom as a freestanding static ELF32 i386 program. It uses the doomgeneric engine with a Rach2 platform layer for VGA graphics, keyboard and mouse input, elapsed time, PCM sound, PC speaker sound, and synthesized music.
 
-A port of Doom to the Rach2 kernel using [doomgeneric](https://github.com/ozkl/doomgeneric) as the platform abstraction layer. The port runs as a freestanding ELF32 executable with VGA Mode 13h graphics, PS/2 keyboard and mouse input, real audio playback via SB16/HDA, and OPL3 FM music synthesis.
-
-## Features
-
-* VGA Mode 13h graphics (320x200, 256 colors)
-* PS/2 keyboard input with full key mapping
-* PS/2 mouse support for aiming and movement
-* Real audio via Sound Blaster 16 or Intel HD Audio
-* PC speaker fallback for sound effects
-* OPL3 FM music via Nuked-OPL3 emulator
-* MIDI/MUS music parsing from Chocolate Doom
-
-## Source Structure
-
-```
-ports/doom/
-    Makefile              # Build configuration
-    crt0.c                # C runtime: asm _start, syscalls, 8MB heap
-    doomgeneric_rach2.c   # Platform layer for Rach2
-    i_pcsound.c           # PC speaker and audio driver interface
-    i_oplmusic.c/h        # OPL3 music driver (9-voice FM synthesis)
-    midifile.c/h          # MIDI file parser (from Chocolate Doom)
-    mus2mid.c/h           # MUS to MIDI converter (from Chocolate Doom)
-    opl3.c/h              # Nuked-OPL3 FM synthesizer emulator
-    include/              # Freestanding libc stubs
-        stdio.h           # printf, FILE, fopen/fread/fclose
-        stdlib.h          # malloc, free, atoi, rand
-        string.h          # memcpy, memset, strlen, strcmp
-        ...               # Other standard headers
-    src/                  # doomgeneric engine (from ozkl/doomgeneric)
-        d_main.c          # Doom main loop
-        r_*.c             # Rendering engine
-        p_*.c             # Game physics and logic
-        s_sound.c         # Sound subsystem
-        ...               # 80 source files, 97 headers
-    doom1.wad             # Shareware Doom WAD file
-```
-
-## Platform Layer
-
-The `doomgeneric_rach2.c` file implements the doomgeneric interface for Rach2:
-
-| Function           | Implementation                                                   |
-|--------------------|------------------------------------------------------------------|
-| `DG_Init`          | Opens framebuffer device, switches to Mode 13h, sets VGA palette |
-| `DG_DrawFrame`     | Writes 64000-byte framebuffer to VGA via write() syscall         |
-| `DG_GetTicksMs`    | Uses gettimeofday() syscall, converts kernel time to milliseconds|
-| `DG_SleepMs`       | Busy-waits using gettimeofday() for timing                       |
-| `DG_GetKey`        | Reads PS/2 scancodes via read(), maps to Doom keycodes           |
-| `DG_SetWindowTitle`| No-op (no window system)                                         |
-
-Mouse input is polled from the `mouse` device file, posting `ev_mouse` events for turning and movement.
-
-## Audio Architecture
-
-### Sound Effects
-
-The port uses a layered audio system with automatic hardware detection:
-
-1. Intel HD Audio (PCI): MMIO registers, CORB/RIRB codec communication
-2. Sound Blaster 16 (ISA): 8-bit DMA, IRQ-driven double-buffering
-3. PC Speaker (fallback): PIT channel 2 frequency control
-
-Doom itself mixes sound effects and music into 11025 Hz, 8-bit mono chunks and submits them through `AUDIO_WRITE`.
-
-On SB16 this format is consumed directly. On Intel HDA, the kernel may resample and upmix the stream to a codec-supported hardware format, typically 48 kHz, 16-bit stereo on real machines. DMX sound lumps from the WAD are parsed and mixed in software before being written to the selected audio device.
-
-### Music
-
-OPL3 FM synthesis provides the classic Doom music:
-
-* Nuked-OPL3: Cycle-accurate OPL3 emulator generating audio samples
-* GENMIDI: General MIDI instrument definitions from the WAD
-* MIDI/MUS: Music format parsing from Chocolate Doom
-* 9-voice polyphony: Full OPL3 voice management with pitch bend and modulation
-
-The OPL emulator runs at 49716 Hz and is downsampled into Doom's 11025 Hz mono mixer before the mixed stream is handed to the kernel audio layer. On HDA, the kernel may resample that stream again to match the hardware codec.
-
-## Required Syscalls
-
-| Syscall      | Number | Purpose                                                   |
-|--------------|--------|-----------------------------------------------------------|
-| read         | 3      | Keyboard scancodes, mouse packets, file I/O               |
-| write        | 4      | Framebuffer output, audio output                          |
-| open         | 5      | WAD file, framebuffer device, mouse device, audio device  |
-| close        | 6      | Close file descriptors                                    |
-| ioctl        | 54     | FB_SETPALETTE, KIOCSOUND, AUDIO_* commands                |
-| gettimeofday | 78     | Timing for game loop and music                            |
-| exit         | 1      | Clean shutdown                                            |
+The engine sources under `src/` come from doomgeneric and its Doom ancestry. `midifile.c` and `mus2mid.c` are adapted from Chocolate Doom. `opl3.c` and `opl3.h` contain Nuked OPL3. The files above `src/`, the stub headers under `include/`, and the component Makefile form the Rach2 integration.
 
 ## Build
 
-Requires the `i686-elf-gcc` cross-compiler:
+From the repository root, run:
 
-```sh
-make        # Build doom executable
-make clean  # Remove compiled files
+```
+make ports/doom
 ```
 
-This produces a ~390KB freestanding ELF32 executable.
+The component Makefile uses `i686-elf-gcc` with GNU99, freestanding static i386 flags, local replacement headers, and a fixed text address of `0x08048000`. Header dependencies rebuild the affected objects. The output is `build/ports/doom/doom`.
 
-## Running in Rach2
+The build contains `crt0.c`, six local platform and audio sources, and the 80 engine sources named by `DOOM_SRC`. `crt0.c` supplies `_start`, eight Linux i386-compatible syscall wrappers, the file interface used by the engine, a small libc subset, and a fixed 8 MiB bump heap. `free` does not reclaim memory.
 
-1. Build Doom:
-   ```sh
-   cd ports/doom
-   make
-   ```
+Run `make -C ports/doom clean` only when the component output must be removed. Ordinary rebuilds do not need it.
 
-2. Provide the game data. Doom needs an IWAD, which is operator-supplied and
-   never committed (game content, git-ignored via `ports/doom/.gitignore`). Put
-   one at `ports/doom/doom1.wad`: either the id Software Doom shareware
-   `doom1.wad` (freely redistributable, sha256
-   `1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`) or the
-   license-clean `freedoom1.wad` (https://freedoom.github.io) saved under that
-   name. Verify it is in place:
-   ```sh
-   ./ports/doom/fetch_wad.sh
-   ```
+## Platform interface
 
-3. Build the os-real image, which stages Doom at `/bin/doom` and the WAD at
-   `/doom1.wad` (from the repo root):
-   ```sh
-   make os-real-image
-   ```
-   Both are staged as `optional-file`: a missing WAD is skipped silently, and
-   `doom` then starts and exits with "IWAD not found".
+`doomgeneric_rach2.c` supplies the doomgeneric callbacks:
 
-4. Boot Rach2:
-   ```sh
-   cd rach2
-   ./run.sh os-real sb16   # Sound Blaster 16
-   ./run.sh os-real hda    # Intel HD Audio
-   ```
+* `DG_Init` opens `fb` and the optional `mouse` device relative to the current directory, clears local state, and records the start time.
+* `DG_DrawFrame` sends a changed 256-entry RGB palette through `FB_SETPALETTE`, writes the 320 by 200 indexed frame, and polls both input devices.
+* `DG_GetTicksMs` and `DG_SleepMs` use `gettimeofday`; sleep is a busy wait.
+* `DG_GetKey` returns queued key transitions read from standard input.
+* `DG_SetWindowTitle` does nothing because Rach2 has no window system.
+* `DG_Shutdown` closes the framebuffer and mouse descriptors.
 
-5. Log in at the console, then run it from the root directory:
-   ```
-   cd /
-   doom
-   ```
-   The directory matters. `doomgeneric_rach2.c` forces `-iwad doom1.wad`, a
-   relative name, and the WAD is staged at `/doom1.wad`, while a console login
-   starts in `/root`. Run it from anywhere else and it exits with "IWAD not
-   found", which looks exactly like a missing WAD.
+The local runtime wraps `exit`, `read`, `write`, `open`, `close`, `lseek`, `ioctl`, and `gettimeofday`. File access uses those wrappers. The port does not link musl.
 
-On supported real hardware, the same `doom` binary uses the kernel's HDA driver directly. Useful kernel-side audio debug commands during bring-up live under the `audio` command: `audio test scale`, `audio test write`, `audio test watch 440 2000 100`, `audio hda dump`, `audio hda codec`, `audio hda pins`, `audio hda stats`, and `audio hda out primary`.
+### Graphics and input
 
-## Controls
+The framebuffer path is `/fb` when Doom starts from `/`. Opening it selects VGA mode 13h. Each frame is 64,000 palette indices. Palette updates pass 768 RGB bytes to the kernel.
 
-| Key          | Action                             |
-|--------------|------------------------------------|
-| Arrow keys   | Move forward/back, turn left/right |
-| Ctrl         | Fire weapon                        |
-| Space        | Use/open doors                     |
-| Shift        | Run                                |
-| 1-7          | Select weapon                      |
-| Tab          | Automap                            |
-| Escape       | Menu                               |
-| Mouse X      | Turn left/right                    |
-| Mouse Y      | Move forward/back                  |
-| Left click   | Fire                               |
-| Right click  | Strafe                             |
+Keyboard input arrives as PS/2 set 1 scan codes on standard input. The platform layer maps letters, digits, arrows, modifiers, function keys, Enter, Escape, Tab, and the usual Doom action keys. Its queue can contain at most 31 unread transitions.
 
-## Memory Requirements
+Mouse input comes from `/mouse` when that device opens successfully. Each three-byte packet supplies button bits and signed X and Y movement. Doom continues with keyboard input if the mouse is unavailable.
 
-* WAD file: ~4MB (doom1.wad)
-* Heap: 8MB bump allocator in crt0.c (Doom needs about 6MB for its zone)
-* Framebuffer: 64KB at 0xA0000
-* Audio buffers: Doom mixes in small 11025 Hz chunks; the kernel provides the larger DMA/ring buffers (for HDA this is roughly 32 KB of DMA plus an 8 KB write ring)
+## Sound and music
 
-Total: Requires at least 14MB of available memory.
+The sound module asks the kernel for audio information through an ioctl on the console descriptor. If SB16 or HDA PCM output is available, it starts 11,025 Hz unsigned 8-bit mono playback, sets volume to 80, and mixes eight sound-effect channels with synthesized music. `AUDIO_WRITE` can accept a short chunk when the kernel ring is full; the port retries the unwritten portion until the call stops making progress, then drops the remainder.
 
-## Credits
+SB16 consumes the requested format directly. HDA converts it to the codec's selected sample rate, sample width, and channel count. The kernel audio subsystem selects the hardware and converts formats.
 
-* [doomgeneric](https://github.com/ozkl/doomgeneric) - Platform abstraction layer by Osman Celimli
-* [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3) - OPL3 emulator by Nuke.YKT
-* [Chocolate Doom](https://github.com/chocolate-doom/chocolate-doom) - MIDI/MUS parsing code
-* [id Software](https://github.com/id-Software/DOOM) - Original Doom source code
+Music uses the WAD's `GENMIDI` instruments and the local MUS and MIDI readers. The Nuked OPL3 emulator generates stereo 16-bit samples at 49,716 Hz. The mixer reduces those samples to its 11,025 Hz mono stream before sending the combined bytes to the kernel.
+
+If no PCM driver is available, sound effects use the WAD's `DP` lumps and `KIOCSOUND` to drive the PC speaker. This fallback does not play synthesized music.
+
+## Game data
+
+The program requires an IWAD. WAD files are operator-supplied, ignored by Git, and never built. Put the selected file at:
+
+```
+ports/doom/doom1.wad
+```
+
+`ports/doom/fetch_wad.sh` checks that path. It verifies the id Software Doom shareware v1.9 file when its SHA-256 digest is:
+
+```
+1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771
+```
+
+Another Doom IWAD, including Freedoom Phase 1, may use the same staged filename. The helper reports its digest but cannot verify its identity.
+
+The os-real, GRUB-test, and metal-disk manifests declare both `/bin/doom` and `/doom1.wad` as optional files. Image construction reports and skips an absent optional file. The normal image targets build the executable first, but a fresh clone still lacks the WAD.
+
+## Run
+
+Build the image after placing the WAD:
+
+```
+./ports/doom/fetch_wad.sh
+make os-real-image
+```
+
+Boot with one of the QEMU audio devices:
+
+```
+cd rach2
+./run.sh os-real sb16
+./run.sh os-real hda
+./run.sh os-real speaker
+```
+
+After login, start Doom from the root directory:
+
+```
+cd /
+doom
+```
+
+The port discards its incoming argument vector and always passes `-iwad doom1.wad` to the engine. That name is relative, while the manifest stages `/doom1.wad`. Starting in another directory fails to find the WAD and prints `IWAD file 'doom1.wad' not found!`.
+
+The same binary can use the kernel HDA driver on supported hardware. Hardware boot and disk-image procedures are described in the root and kernel Readmes.
+
+## Default controls
+
+* Arrow keys move and turn.
+* Left Ctrl fires.
+* Space uses doors and switches.
+* Shift runs.
+* Number keys select weapons.
+* Tab opens the automap.
+* Escape opens the menu.
+* Mouse movement turns and moves; the button bits use Doom's configured mouse bindings.
+
+## Verification
+
+`make ports/doom` proves the freestanding build and dependency graph. Check the output against the kernel loader with:
+
+```
+python3 tools/check_elf.py build/ports/doom/doom
+```
+
+`make full` rebuilds the port and the images that carry it. The repository has no automated test that launches Doom, validates an IWAD, or judges graphics and audio output. Test those paths by booting os-real and running the program as shown above.

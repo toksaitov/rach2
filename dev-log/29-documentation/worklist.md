@@ -47,7 +47,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `vendor/dropbear/Readme.md`
 * [x] `vendor/tcc/Readme.md`
 * [x] `vendor/pdpmake/Readme.md`
-* [ ] `ports/doom/Readme.md`
+* [x] `ports/doom/Readme.md`
 
 ## Historical documents: prose only
 

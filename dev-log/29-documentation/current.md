@@ -4,23 +4,23 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Position
 
-* File ready to commit: `vendor/pdpmake/Readme.md`.
-* First unchecked file after this commit boundary: `ports/doom/Readme.md`. Do not start it before the pdpmake commit.
-* The 96-line original, 90-line rewrite, and complete product diff have been read whole.
-* The only product document in this commit will be `vendor/pdpmake/Readme.md`.
-* Intended commit: the pdpmake integration Readme with its worklist, notes, and checkpoint updates.
+* File ready to commit: `ports/doom/Readme.md`.
+* First unchecked file after this commit boundary: `dev-log/01-foundation/01.md`. Do not start it before the Doom commit.
+* The 182-line original, 118-line rewrite, and complete product diff have been read whole.
+* The only product document in this commit will be `ports/doom/Readme.md`.
+* Intended commit: the Doom port Readme with its worklist, notes, and checkpoint updates.
 
 ## Material claims
 
-* Release pin, digest, tracked inputs, patch, stamp, build options, artifact, and guest staging.
-* Built-in modes and macros, recipe execution, command-line overrides, incremental behavior, and `-j` handling.
-* Guest makefiles, self-build role, system limits, update procedure, and exact verification.
+* Source ownership, tracked inputs, upstream-derived code, build rules, artifact, ELF contract, and image staging.
+* Graphics, keyboard, mouse, timing, files, audio, OPL music, controls, syscalls, memory, and kernel dependencies.
+* IWAD acquisition and digest, run procedure, working directory, hardware modes, and exact verification.
 
 ## Narrow evidence map
 
-* Build: `vendor/pdpmake/build_pdpmake.sh`, archive, platform-macros patch, root stamp rule, artifact, and extracted source.
-* Behavior: upstream macro tables, option parsing, job execution, `system(3)` path, and the three `guest.mk` files.
-* Staging and verification: manifests, `check-pdpmake`, `make-test`, `selfbuild-test`, and `tools/check_guest.py`.
+* Build and staging: `ports/doom/Makefile`, tracked paths, artifact, `.gitignore`, `fetch_wad.sh`, root targets, and manifests.
+* Platform contract: `doomgeneric_rach2.c`, `crt0.c`, `i_pcsound.c`, `i_oplmusic.c`, local headers, and imported source boundaries.
+* Kernel and verification: framebuffer, input, audio ioctls and implementations, run scripts, the absence of a runtime target, and the ELF checker.
 
 ## Open checks
 
@@ -28,27 +28,21 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Checks run for this file
 
-* Five files are tracked: `.gitignore`, this Readme, `build_pdpmake.sh`, the platform-macros patch, and `pdpmake-2.0.4.tgz`.
-* The direct archive SHA-256 is `7e19294d54edf360591d76d3b7a0a511864902ac3a75a0b5b11c7b3cae14c13f`, matching the build script.
-* The stamp depends on the script, exact patch, BusyBox musl wrapper, exact archive, and musl stamp. Its recipe removes the artifact and stamp before rebuilding.
-* The script replaces the extracted tree, applies the named patch with zero fuzz, asserts every compiler macro and `LDFLAGS=-static`, builds with the musl wrapper, stages the result, and runs the kernel ELF checker.
-* The current artifact is a 126,568-byte static ELF32 i386 executable with debug information. `tools/check_elf.py` accepts it.
-* os-real, GRUB-test, and metal-disk manifests stage it as `/bin/make`, with TinyCC, its static sysroot, and the three project source trees under `/src`.
-* Upstream enables extensions and POSIX 2024 by default, supports strict POSIX 2017 and 2024 modes, and selects a distinct built-in macro block for each mode. The patch sets `CC=tcc` in all three blocks and the common `LDFLAGS=-static`.
-* `-j` is accepted outside strict POSIX 2017, validated as digits, and copied into `MAKEFLAGS`, but upstream labels job execution unimplemented. Recipes still run serially.
-* Recipes call `system(3)`. The installed musl implementation invokes `/bin/sh -c` through `posix_spawn`, whose project patch replaces the unsupported clone path with fork.
-* Command-line macro definitions override makefile definitions and enter `MAKEFLAGS`; `make-test` uses a deliberately invalid makefile `CC` to prove `make CC=tcc` overrides it.
-* `rach2/guest.mk`, `utils/guest.mk`, and `ish/guest.mk` are the POSIX guest build descriptions. The adjacent host Makefiles remain GNU make input. `tools/check_guest.py` passes with 88 kernel sources, 29 utility programs, five ish objects, and three staged source trees.
-* `make-test` proves the compiler override, initial build and execution, no-op rebuilds, one-source and shared-header dependency rebuilds, `.PHONY`, a self-built `cat`, and timestamp behavior across a reboot.
-* `selfbuild-test` builds and hashes two clean kernels, builds all utilities and ish, runs 18 userland checks, extracts and checks the guest-built kernel, runs the default probe suite on it, optionally boots it with GRUB, and rebuilds staged ish in place as root.
-* The implementation confirms the documented 16-process system limit and 16-descriptor process limit. The update procedure names every version, digest, tarball, patch, build, and focused test input that must change or run.
-* The rewrite is 90 lines and 4,954 bytes. It replaces the selection history and false self-build denial with the current integration contract.
-* The relative link and every named repository path resolve. The named Make targets exist. The banned-term, watched-phrase, direct ASCII, and `git diff --check` checks pass.
-* `make pdpmake` reports the build current. `make check-pdpmake` accepts the non-empty static ELF32 artifact.
-* `make make-test` passes the initial build and execution, no-op and dependency rebuilds, compiler override, `.PHONY`, project `cat`, and both reboot checks.
-* `make selfbuild-test` passes two clean kernel builds with equal hashes, the utilities and ish builds, 18 userland checks, the kernel structural check, all 63 default probes, the host-clock comparison, and the in-place ish rebuild. Its no-Docker branch skipped the optional GRUB boot.
-* `make full` passes and rebuilds the three RAM-disk images. `make verify-style` passes all 13 sections. `make verify-host` passes all 36 host tests.
+* The port tracks its Makefile, integration Readme, local runtime and platform sources, 21 stub headers, audio and music sources, and the imported Doom engine tree. WAD files are ignored.
+* The component Makefile uses `i686-elf-gcc`, GNU99, freestanding static i386 flags, a fixed text address, automatic dependencies, 80 imported engine sources, six local sources, and `crt0.c`.
+* The artifact is `build/ports/doom/doom`, currently a 393,652-byte static ELF32 i386 executable. The root `ports/doom` target depends on the kernel and invokes the component Makefile.
+* os-real, GRUB-test, and metal-disk manifests stage the executable as optional `/bin/doom` and the operator-supplied WAD as optional `/doom1.wad`.
+* `fetch_wad.sh` does not download data. It requires `doom1.wad`, verifies the shareware v1.9 digest when matched, and accepts another IWAD with a warning because the engine recognizes more names internally.
+* The platform opens relative `fb` and optional `mouse`, writes indexed 320 by 200 frames and 768-byte palettes, reads set 1 scan codes from fd 0, and uses `gettimeofday` for ticks and busy waits.
+* The local runtime wraps eight syscalls and supplies a fixed 8 MiB non-reclaiming heap. The old syscall table omitted `lseek`; the rewrite names the complete wrapper set without duplicating syscall numbers.
+* PCM mode requests 11,025 Hz unsigned 8-bit mono, mixes eight effect channels with 49,716 Hz OPL3 output, and writes through console audio ioctls. SB16 consumes the format; HDA converts it. PC speaker fallback uses `DP` lumps and has no OPL music.
+* The fixed argument vector is `doom -iwad doom1.wad`, so the staged WAD resolves only when the program starts from `/`. QEMU accepts `sb16`, `hda`, and `speaker` audio selections.
+* The rewrite is 118 lines and 6,064 bytes. It removes the stale source inventory, incomplete syscall table, unsupported total-memory figure, UI table, and false silent-skip claim.
+* Every named repository path resolves. The banned-term, watched-phrase, direct ASCII, and `git diff --check` checks pass.
+* The WAD helper reports the expected absent operator file and its two supported acquisition choices; no WAD was added.
+* `make ports/doom` reports the build current. The direct ELF checker accepts the 393,652-byte static ELF32 i386 artifact.
+* `make full` passes and reports the optional WAD omission while rebuilding os-real. `make verify-style` passes all 13 sections. `make verify-host` passes all 36 host tests.
 
 ## Exact next action
 
-Stage the four scoped files, inspect the staged diff and identity, and commit.
+Stage the four scoped files, run `make verify-style`, inspect the staged diff and identity, and commit.
