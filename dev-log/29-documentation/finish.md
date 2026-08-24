@@ -87,11 +87,11 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `dev-log/23-install/plan.md`
 * [x] `dev-log/24-metal/Readme.md`
 * [x] `dev-log/24-metal/ahci-no-disk.md`
-* [ ] `dev-log/24-metal/baseline.md`
-* [ ] `dev-log/24-metal/checklist.md`
-* [ ] `dev-log/24-metal/plan.md`
-* [ ] `dev-log/25-sealed/Readme.md`
-* [ ] `dev-log/25-sealed/checklist.md`
+* [x] `dev-log/24-metal/baseline.md`
+* [x] `dev-log/24-metal/checklist.md`
+* [x] `dev-log/24-metal/plan.md`
+* [x] `dev-log/25-sealed/Readme.md`
+* [x] `dev-log/25-sealed/checklist.md`
 * [ ] `dev-log/25-sealed/plan.md`
 * [ ] `dev-log/26-portable/Readme.md`
 * [ ] `dev-log/26-portable/arrival.md`
