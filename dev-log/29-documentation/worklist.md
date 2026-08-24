@@ -118,19 +118,19 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `dev-log/12-review/plan.md`
 * [x] `dev-log/13-post-review/Readme.md`
 * [x] `dev-log/14-multiuser/Readme.md`
-* [ ] `dev-log/14-multiuser/plan.md`
-* [ ] `dev-log/15-privilege/Readme.md`
-* [ ] `dev-log/15-privilege/plan.md`
-* [ ] `dev-log/16-review/Readme.md`
-* [ ] `dev-log/16-review/plan.md`
+* [x] `dev-log/14-multiuser/plan.md`
+* [x] `dev-log/15-privilege/Readme.md`
+* [x] `dev-log/15-privilege/plan.md`
+* [x] `dev-log/16-review/Readme.md`
+* [x] `dev-log/16-review/plan.md`
 
 ### Milestones 17 through 23
 
-* [ ] `dev-log/17-completion/Readme.md`
-* [ ] `dev-log/17-completion/plan.md`
-* [ ] `dev-log/18-shutdown/Readme.md`
-* [ ] `dev-log/18-shutdown/plan.md`
-* [ ] `dev-log/19-busybox-first/Readme.md`
+* [x] `dev-log/17-completion/Readme.md`
+* [x] `dev-log/17-completion/plan.md`
+* [x] `dev-log/18-shutdown/Readme.md`
+* [x] `dev-log/18-shutdown/plan.md`
+* [x] `dev-log/19-busybox-first/Readme.md`
 * [ ] `dev-log/19-busybox-first/plan.md`
 * [ ] `dev-log/20-compiler/Readme.md`
 * [ ] `dev-log/20-compiler/plan.md`

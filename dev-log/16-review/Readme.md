@@ -1,93 +1,29 @@
 # Milestone 16: the privilege-milestone review
 
-The audit of milestone 15, the privilege milestone (1996 lines across 44 files:
-setuid-on-exec, IP loopback, SSH password auth, a setuid-root `su` and reference
-`sudo`, and the host tooling and probes for all of it). Run in the discipline of
-`dev-log/11-audit` and `dev-log/12-review`: every candidate finding adversarially
-verified with the default verdict refuted, Codex re-verifying the trust boundary
-and the network independently, and the chief adjudicating each finding against
-the code. The plan (`plan.md`) was drafted as chief and sharpened by a Codex
-review that returned seventeen findings, all confirmed and folded in before the
-audit ran. The surface is small and security-dense, so the audit is six focused
-phases plus the record.
+This milestone audited the 1996 lines across 44 files added by milestone 15: setuid-on-exec, IP loopback, SSH password authentication, a setuid-root `su`, the reference `sudo`, and their host tools and probes. It followed the procedure from `dev-log/11-audit` and `dev-log/12-review`. Every candidate finding began with a default verdict of refuted and was checked against the code. Codex independently checked the trust boundary and the network, and the chief adjudicated each finding. The chief drafted `plan.md`; a Codex review returned seventeen findings, all of which were confirmed and incorporated before the audit began. The small, security-sensitive scope required six focused phases and the record.
 
-The headline: no privilege escalation. Every candidate escalation was refuted
-with a trace, the setuid-exec credential path and the confinement invariant held
-under adversarial reading, and the four defects found and fixed are a hardening
-gap and two test-robustness gaps, not a hole a user could climb through.
+The audit found no privilege escalation. Every candidate escalation was refuted with a trace. Adversarial review confirmed the setuid-exec credential path and the confinement invariant. The four fixed defects were a hardening gap and two test-robustness gaps, not a path for a user to gain privilege.
 
 ## What the audit confirmed (refuted candidates)
 
-The trust boundary held. There is no exec path where the credentials change and
-control returns to the old image (every failure after the commit point is
-`exec_fail_destroyed`). A non-root user cannot mint a setuid-root-owned file: a
-created or chmod'd `04755` file is owned by the creator, and only root can chown
-to root, so exec grants the creator's own uid. The `KRFFS_MODE_SUID`/dirty-flag
-bit collision is inert: the root node cannot be exec'd and every stat path
-reports it with a fixed mode. `AT_SECURE` is correct, `suid`/`sgid` track the
-effective ids on every exec without breaking the saved-id model, fork copies
-credentials without contaminating the parent, and Dropbear's session drop leaves
-the session fully the target so a following `su` climbs cleanly. `su` refuses
-every bad-password case (empty, locked, non-`$`, missing shadow); `sudo` checks
-the real uid, clears the environment, and refuses cleanly; and with BusyBox
-unprivileged and its `su` compiled out, no applet runs as root for a non-root
-user and a bare `su` resolves to `/bin/su`.
+The trust boundary held. No exec path changes credentials and then returns control to the old image: every failure after the commit point uses `exec_fail_destroyed`. A non-root user cannot create a setuid file owned by root. A created or chmod'd `04755` file belongs to its creator, and only root can change its owner to root, so exec grants the creator's own uid. The collision between `KRFFS_MODE_SUID` and the dirty flag is inert because the root node cannot be exec'd and every stat path reports a fixed mode for it. `AT_SECURE` is correct. `suid` and `sgid` follow the effective ids on every exec without breaking the saved-id model. Fork copies credentials without changing the parent. Dropbear's session drop gives the session all of the target account's ids, after which `su` can regain root. `su` refuses every bad-password case: empty, locked, non-`$`, or missing shadow. `sudo` checks the real uid, clears the environment, and refuses invalid requests. BusyBox is unprivileged and its `su` is compiled out, so no applet runs as root for a non-root user and a bare `su` resolves to `/bin/su`.
 
-The network held. The loopback ring cannot tear or overwrite a datagram in
-flight under the interrupts-off enqueue-and-drain discipline; the
-`tcp_tick`-before-`ip_loop_drain` ordering costs at most an ordinary redundant
-retransmit; `tcp_send_rst_unmatched` builds an RFC 793 reset that is not an
-amplifier; and the ephemeral-port skip terminates without a self-collision. The
-host tooling held: `mkhash` mints exactly the hash the guest verifies, the
-generator is safe under `make -j`, the mode-width handling round-trips and
-protects the root node, and no generated secret is committed. `loopprobe`,
-`suidmusl`, `authmusl`, and `mkhash_hosttest` are real, not vacuous.
+The network checks also passed. With interrupts disabled during enqueue and drain, the loopback ring cannot tear or overwrite an in-flight datagram. Calling `tcp_tick` before `ip_loop_drain` costs at most an ordinary redundant retransmission. `tcp_send_rst_unmatched` constructs an RFC 793 reset that does not amplify traffic. The ephemeral-port search terminates without colliding with the same connection. The host tools also passed review: `mkhash` creates exactly the hash that the guest verifies, the generator is safe under `make -j`, mode widths survive a round trip while protecting the root node, and no generated secret is committed. `loopprobe`, `suidmusl`, `authmusl`, and `mkhash_hosttest` each exercise the path they claim to test.
 
 ## The four findings, fixed
 
-* `su` ran the target's shell with the caller's environment (`b9a2df3`). It set
-  a safe `PATH` and unset `ENV`/`IFS`, but BusyBox ash expands `PS1` through
-  command substitution, so an inherited `PS1='$(cmd)'` ran `cmd` as the target.
-  Not an unauthenticated escalation (authenticating `su` needs the target's
-  password), but it defeated the "minimal environment" the code claimed. `su`
-  now builds the target's environment from nothing (the five variables it
-  actually sets), the way `sudo` already did, closing `PS1` and every other
-  shell-expanded variable in one move.
+* `su` ran the target shell with the caller's environment (`b9a2df3`). It set a safe `PATH` and unset `ENV` and `IFS`, but BusyBox ash expands `PS1` through command substitution. An inherited `PS1='$(cmd)'` therefore ran `cmd` as the target. This was not an unauthenticated escalation because using `su` requires the target's password, but it violated the stated minimal-environment contract. `su` now constructs the target environment from only the five variables it sets, as `sudo` already did. This removes `PS1` and every other inherited shell variable.
 
-* No martian-source filter let a spoofed self-address reach the loopback path
-  (`ce98a27`). A wire frame with our own address as its source drew a reply that
-  `ip_tx` then routed onto the loopback ring; a `127/8` source leaked a reply out
-  the wire. A pre-existing gap the loopback ring widened, unreachable under the
-  shipped QEMU SLIRP NAT but exposed on real hardware. `ip_rx` now takes a
-  `from_loopback` flag and drops a wire packet whose source is our own address or
-  `127/8`; a genuine loopback datagram carries our own source by design, so the
-  check is gated on the delivery path, not the value.
+* The loopback path lacked a martian-source filter (`ce98a27`). A wire frame with the machine's own address as its source prompted a reply that `ip_tx` routed onto the loopback ring. A `127/8` source leaked a reply onto the wire. This existing defect was unreachable through the distributed QEMU SLIRP NAT but visible on real hardware. `ip_rx` now accepts a `from_loopback` flag and drops a wire packet whose source is the machine's address or `127/8`. A valid loopback datagram uses the machine's source address, so the check applies to the delivery path rather than the address alone.
 
-* `suidprobe` and `sudoprobe` could false-pass on a crash (`088ce6d`). They read
-  `WEXITSTATUS` without `WIFEXITED`, and a signal death carries the signal in the
-  status's low bits, so a `SIGSEGV`-killed helper (signal 11) decoded as exit 0,
-  a pass, exactly the outcome the probes exist to catch. Both now check
-  `WIFEXITED` and fail on an abnormal death. (The confinement was never at risk;
-  the probes verifying it were.)
+* `suidprobe` and `sudoprobe` could report success after a crash (`088ce6d`). They read `WEXITSTATUS` without first checking `WIFEXITED`. A signal death stores the signal in the status's low bits, so a helper killed by `SIGSEGV` (signal 11) decoded as exit 0. Both probes now require `WIFEXITED` and fail after an abnormal death. The confinement was not at risk; the defect was in the probes that verified it.
 
-* The generator's transients were not git-ignored (`088ce6d`). A kill after the
-  lock `mkdir` or before the `shadow.tmp` rename left an unignored path;
-  `krffs/.gitignore` now covers both.
+* The generator's transient paths were not ignored by Git (`088ce6d`). Termination after the lock `mkdir`, or before renaming `shadow.tmp`, left an unignored path. `krffs/.gitignore` now covers both paths.
 
 ## Documentation
 
-`plan.md` for milestone 15 still described the abandoned setuid-BusyBox design;
-it gained a status pointer to the record, kept as the as-drafted plan. `su.c`'s
-header now states the clean-environment contract precisely. No shipped doc
-presents the setuid-BusyBox design or `/etc/busybox.conf` as current; every
-reference reads as the abandoned approach or as what the guard prevents.
+The milestone 15 `plan.md` still described the abandoned setuid BusyBox design. It received a status pointer to the milestone record and remains the plan as drafted. The header in `su.c` now states the clean-environment contract precisely. No current document presents the setuid BusyBox design or `/etc/busybox.conf` as current. Each reference identifies the design as abandoned or describes what the guard prevents.
 
 ## Verification
 
-Every fix passed `make verify-style` and `make verify-host` and kept `make test`
-green at 44 probes; the network and probe fixes were checked against `loopprobe`,
-`pingtest` (the martian filter drops no legitimate reply), and both privilege
-probes. Each trust-boundary and network phase took an independent Codex
-adversarial re-verify; the chief adjudicated every finding against the code, and
-the confirmed-versus-refuted split is recorded above. The final gate ran the
-whole suite, both disk paths, and the SSH capstones from a clean tree.
+Every fix passed `make verify-style` and `make verify-host`, and `make test` continued to pass all 44 probes. The network and probe fixes were checked with `loopprobe`, `pingtest` (the martian filter drops no valid reply), and both privilege probes. Each trust-boundary and network phase received an independent adversarial Codex review. The chief checked every finding against the code, and the record distinguishes confirmed findings from refuted candidates. Final verification ran the complete suite, both disk paths, and the SSH end-to-end tests from a clean tree.

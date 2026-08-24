@@ -1,125 +1,114 @@
 # Milestone 19: busybox first, and our own machine beside it
 
-The direction came from one instruction: take as much from busybox as it can give, and keep as little in-house code as possible. That reads like a deletion milestone and is not one. What it settles is where each implementation belongs. os-real, the image that shows a student a real Unix, now takes every account tool from busybox, including the three that need the set-id bit. os-simple, which had been a shell and a heap of utilities at the file system root, becomes a small Unix built out of this project's own code, with a login in front of it, so the programs that came out of the privilege milestones are still the thing a reader runs rather than source nobody boots.
+The milestone follows one instruction: use as much busybox functionality as possible and minimize in-house code in the main image. The result assigns each implementation to an image rather than deleting it. Os-real, which presents a conventional Unix to students, now uses every busybox account tool, including the three that require set-id. Os-simple changes from a shell and root-level utility collection into a small Unix built from this project's code, with an authenticated login. The programs from the privilege milestones therefore remain runnable instead of becoming unbooted source.
 
-Reading one image against the other is the point of having two. Nothing was deleted.
+The two images now expose the intended implementation contrast. Nothing was deleted.
 
-## Where the plan was wrong
+## Corrections to the plan
 
-The plan is corrected in place; this is the summary of what the work disproved.
+The plan was corrected in place as implementation disproved its assumptions.
 
-busybox's account tools did not run at all, and not for any reason the plan had considered. `chpasswd` exited 2 with no message. The cause was in the kernel: musl's buffered stdio fills its buffer with `readv` rather than `read` whenever it wants more than a single byte, and this kernel had `writev` at 146 and nothing at 145. Every program reading through `fgets`, `fread` or `scanf` had been failing silently, and the tree had absorbed that as a property of the system: three in-house programs carried comments explaining that they read a byte at a time because there is no `readv`. That is phase 2a, which was not in the first draft.
+Busybox's account tools initially failed for a cause absent from the plan. `chpasswd` exited 2 without a message. Musl's buffered stdio uses `readv` instead of `read` when filling more than one byte, but the kernel implemented `writev` at 146 and left 145 unwired. Programs using `fgets`, `fread` or `scanf` had silently failed, while comments in three in-house programs treated byte-at-a-time reads without `readv` as a system constraint. Phase 2a was added after this discovery.
 
-The first `readv` walked every vector for every kind of descriptor, which is wrong twice: a second read of a pipe whose first buffer filled exactly blocks for input nobody has written, and a second read of a datagram socket takes the next datagram after the first one's tail has already been dropped. The answer to that was to read everything but a regular file exactly once, and it was the wrong answer, defended here for several rounds with a reason that was not true: that filling the later buffers would need a kernel buffer the size of the vector list, and no allocator to take one from.
+The first `readv` implementation read every vector for every descriptor kind. This fails for pipes because a second read blocks if the first buffer filled exactly and no more input exists. It also fails for datagrams because the second read receives the next message after the first message's unused tail was discarded. The first correction read every non-regular descriptor only once, but that was also wrong. Its stated justification, that later buffers required a kernel allocation as large as the vector list, was false.
 
-There is no such need. A datagram is already in a kernel buffer, `sock->recv_buf`, from the moment the receive interrupt puts it there until a read consumes it, and a stream's bytes are in the pipe or the socket ring. Nothing had to be allocated: what was missing was the ability to take a message out in pieces. `socket_recv` split into `socket_dgram_wait`, `socket_dgram_peek` and `socket_dgram_consume`, and it is now those three in a row over one buffer, so there is still one copy-out. A caller taking several pieces holds `net_lock` across all of them and the consume: a syscall body here runs with interrupts ENABLED, only preemption is off, and the first version of this got that wrong, which the review caught by reading the `sti` in the syscall handler. What ships reads by kind: a regular file again per buffer; one datagram copied across the buffers it reaches, consumed once, so the next read starts the next message; a pipe, a stream socket, a device or a `/proc` file again only while it says it holds more, which is safe to ask because a syscall is not preemptible here and the interrupts that do run only ever add to what is readable; and a terminal exactly once, since the line is its unit and a second buffer would take the line behind it.
+No allocation is required. A datagram remains in `sock->recv_buf` from receive interrupt until consumption, while stream bytes remain in the pipe or socket ring. The missing operation was segmented extraction of one message. `socket_recv` was split into `socket_dgram_wait`, `socket_dgram_peek` and `socket_dgram_consume`, used consecutively over one buffer with one copy-out. A caller holds `net_lock` across all pieces and the consume. Syscall bodies run with interrupts enabled and only preemption disabled; review found the first version's contrary assumption by tracing `sti` in the syscall handler. The final implementation dispatches by descriptor kind. Regular files read once per buffer. One datagram is copied across the buffers it reaches and consumed once, so the next call starts the next message. Pipes, stream sockets, devices, and `/proc` files continue only while they report more readable data; this is safe because the syscall is not preemptible and interrupts only add readable data. Terminals read once because a line is the unit, and a second buffer would consume the following line.
 
-Two rounds of review on that change were both right, and the second found something worse than the first. The datagram is now taken out of the socket whole, under one hold of `net_lock`, and spread across the caller's buffers afterwards with interrupts on, through `copy_to_user`. Holding it matters because a syscall body here runs with interrupts ENABLED (only preemption is off) and the receive interrupt overwrites the slot unconditionally, so a walk that took the lock per copy could return a prefix of one message followed by bytes of another; the single-buffer `socket_recv` had that same gap opened by the refactor, and it is closed the same way. Copying afterwards rather than in place matters because the buffers are read from user memory as the copy goes: a caller can point one buffer AT its own vector list and have the datagram rewrite the destinations behind it, addresses nothing validated, and the version that wrote through them with a raw `memcpy` under interrupts off wedged the machine. The probe now builds exactly that payload, and it does wedge the machine when the raw write is put back.
+Two review rounds found defects in this change. The final path removes the complete datagram under one hold of `net_lock`, then distributes it across user buffers with interrupts enabled through `copy_to_user`. Holding the lock for the complete removal is required because receive interrupts can overwrite the slot while the syscall runs. Locking each copy separately could combine a prefix of one message with bytes from another. The refactor had opened the same race in single-buffer `socket_recv`, which now uses the same protection. Deferred copy-out is also required because the vector entries remain in user memory while copying. A caller can point one destination at its vector list and make the datagram overwrite destinations not yet validated. The version that used raw `memcpy` under disabled interrupts wedged the machine. The probe constructs that payload and reproduces the wedge when the raw write is restored.
 
-The message buffer is one datagram wide on a 16 KB kernel stack. Reading the stack size, which is what the first deferral should have started from, would have ended the argument in a minute.
+The temporary message buffer holds one datagram on the 16 KB kernel stack. The stack bound resolves the allocation concern that motivated the first deferral.
 
-One thing here is argued rather than witnessed: that the hold is enough. A probe cannot force a datagram to arrive between two of the copies, since that needs the receive path driven from inside the call and the kernel has no injection point for it. What the probe covers is the shape of the result; the atomicity rests on the lock being held and on `net.h`'s own statement of what that lock is for.
+One property is established by code reasoning rather than a forced schedule. A probe cannot make a datagram arrive between two copies without driving the receive path from inside the syscall, and the kernel provides no injection point. The probe checks the result layout; atomicity depends on holding the lock and on the contract for that lock in `net.h`.
 
-The terminal rule needed the probe to be built carefully to mean anything: with a buffer wider than the line, the walk already stopped on the short read, and removing the rule changed nothing. The case that witnesses it sizes the first buffer to the line exactly.
+The terminal probe sizes its first buffer exactly to the line. A wider buffer would stop on a short read even without the terminal rule and would therefore fail to distinguish the implementations.
 
-The set-id question had an answer in busybox's own `Config.in`: build the binary twice and put the bit on the one that needs it. `FEATURE_INDIVIDUAL`, the obvious-looking alternative, needs a dynamic linker this system does not have. The second build holds `login`, `passwd` and `su` and nothing else, and its config turns off the `/etc/busybox.conf` parser (whose use-after-free is recorded below), every shell symbol, and the two applet-preference features.
+Busybox's `Config.in` provides the set-id design: build the binary twice and apply the bit only to the required artifact. `FEATURE_INDIVIDUAL` is unsuitable because it requires a dynamic linker that this system lacks. The second build contains only `login`, `passwd` and `su`; its configuration disables the `/etc/busybox.conf` parser, whose use-after-free is recorded below, every shell symbol, and both applet-preference features.
 
-Removing the set-id bit from a manifest to prove a test catches it does not reach the test: the allowlist declares that path set-id and the image refuses to stage. The mutation has to move the entry to the unprivileged list too, which is the guard doing its job on the way to proving the suite does its own.
+Removing a manifest's set-id bit does not reach the intended test because the allowlist declares the path set-id and staging fails first. The mutation must also move the entry to the unprivileged list. This first demonstrates the guard and then permits the suite's independent check to run.
 
-## What shipped
+## Implementation record
 
-The commits that changed code, configuration or a manifest, read from `git show --stat` rather than from the plan. The ones that only wrote this record are not listed, and neither is the last of them, which cannot list itself.
+The following commits changed code, configuration, or a manifest. The list comes from `git show --stat`, not the plan. Record-only commits are omitted, including the final commit that could not list itself.
 
-* `5c55730` points the applet guard at the table `build_busybox.sh` stages beside the binary, not the one in the tree the build deletes and re-extracts.
-* `df9a22c` builds busybox twice and adds `rach2-suid.config`, the set-id build's configuration.
-* `12459f5` refuses an applet table read part way, requiring the initializer to be complete and its token count to match `NUM_APPLETS`.
-* `9a4769c` adds `readv` at 145, with `tests/musl/readvmusl.c`.
-* `d0bd480` moves os-real's account tools to busybox: `adduser`, `addgroup`, `deluser`, `delgroup` and `chpasswd` from the main binary, `login`, `passwd` and `su` from the set-id one, with `make account-test`.
-* `dbca70f` brings back `cryptpw`, `mkpasswd` and the httpd MD5 feature, and empties the config guard's forbidden list without removing the rule.
-* `d9e3112` makes `readv` read once from anything that is not a regular file.
-* `8d55c5f` guards the set-id build's config, not just the three names in its table.
-* `0c6750c` makes the account suite authenticate from an unprivileged account, since root's `su` asks for no password.
-* `111ef4d` rewrites the prose that still called `utils/su` os-real's trust boundary.
-* `ea2070d` checks every `readv` destination is writable before a byte is taken.
-* `f8da0bb` lets a zombie hold its process group.
-* `d874739` points both config checks at the configs `oldconfig` resolved.
-* `ef308ea` makes os-simple the machine built from our code, behind its own login.
-* `a10f3ef` and `67bacf0` sweep the prose the move between images left behind.
-* `ab1f6c6` makes a write pre-fault resolve a copy-on-write page instead of promising it.
-* `f24e276` guards the mode, the owner and the source of the programs root runs unprivileged.
-* `b1acda2` makes the shell report what it could not run, since `su -c` reads that status.
-* `272f680` reads each HTTP request and each password attempt on its own rather than off the whole log.
-* `febace9` guards the directories above a program root runs, and init's own mode.
-* `751b4c0` lets a built-in fail: `cd` says so, and a redirection is opened before it runs.
-* `f3e1da0` reads each attempt after the password change on its own.
-* `b846740` models the stager's last-dir-wins rule and stops `exec-dir` standing in for a `dir`.
-* `0a20010` reads a built-in's operand after the redirection is pulled out of the line.
-* `1c96156` asserts a refused login ran nothing, not only that it complained.
-* `f35dae0` pins what root reads to decide who somebody is, not only what root runs.
-* `ffee845` pins the text of the credential files an image stages inline.
-* `418d0f1` declares which directive stages a trusted file, since the value cannot say.
-* `63e6fd2` sweeps the manifest at every image build, not only in the style gate.
-* `72c9a00` scatters one datagram across the buffers and reads a stream on while it holds more, which is one deferral closed after the fact.
+* `5c55730` changes the applet guard to read the table that `build_busybox.sh` stages beside the binary, rather than the table in the source tree that the build deletes and extracts again.
+* `df9a22c` builds busybox twice and adds `rach2-suid.config` for the set-id build.
+* `12459f5` rejects a partial applet-table read by requiring a complete initializer and a token count matching `NUM_APPLETS`.
+* `9a4769c` implements `readv` at 145 and adds `tests/musl/readvmusl.c`.
+* `d0bd480` switches os-real's account tools to busybox: the main binary supplies `adduser`, `addgroup`, `deluser`, `delgroup` and `chpasswd`; the set-id binary supplies `login`, `passwd` and `su`; and `make account-test` verifies them.
+* `dbca70f` restores `cryptpw`, `mkpasswd` and the httpd MD5 feature, then clears the config guard's forbidden list while retaining the rule.
+* `d9e3112` limits `readv` to one read for non-regular files.
+* `8d55c5f` checks the complete set-id configuration instead of only the three applet names.
+* `0c6750c` changes the account suite to authenticate from an unprivileged account because root's `su` does not request a password.
+* `111ef4d` corrects prose that still identified `utils/su` as os-real's trust boundary.
+* `ea2070d` verifies every `readv` destination is writable before consuming input.
+* `f8da0bb` retains process-group membership for zombies.
+* `d874739` makes both configuration checks read the configurations resolved by `oldconfig`.
+* `ef308ea` turns os-simple into the machine built from in-house code and adds its login.
+* `a10f3ef` and `67bacf0` correct prose left stale by the move between images.
+* `ab1f6c6` makes write pre-fault resolve a copy-on-write page rather than claiming the unresolved page is writable.
+* `f24e276` checks the mode, owner, and source of programs that root runs without privilege.
+* `b1acda2` makes the shell report an executable lookup failure so `su -c` receives the correct status.
+* `272f680` checks each HTTP request and password attempt separately instead of matching the complete log.
+* `febace9` checks the ancestor directories of programs run by root and the mode of init.
+* `751b4c0` propagates built-in failures: `cd` reports failure, and redirection opens before dispatch.
+* `f3e1da0` checks each post-change password attempt separately.
+* `b846740` models the stager's last-dir-wins rule and prevents `exec-dir` from satisfying a required `dir`.
+* `0a20010` obtains a built-in operand after removing redirection from the command line.
+* `1c96156` verifies that a refused login executed nothing, not only that it printed a refusal.
+* `f35dae0` protects files root reads to determine identity as well as programs root executes.
+* `ffee845` fixes the expected text of credential files staged inline.
+* `418d0f1` records the directive that stages each trusted file because the value alone cannot identify it.
+* `63e6fd2` runs the manifest sweep for every image build, not only during style verification.
+* `72c9a00` scatters one datagram across the supplied buffers and continues stream reads while data remains, resolving one deferred item after the milestone.
 
-## Two defects the work found in code that was already shipping
+## Existing defects found during the work
 
-Neither was the milestone's subject. Both were found by running the thing.
+Neither defect belonged to the original scope; runtime testing exposed both.
 
-A process left its process group when it exited rather than when it was reaped, so `TIOCSPGRP` refused a group holding one unreaped zombie. A shell putting a pipeline in the foreground sets the terminal's group to the first member's pid, and that member can be a short command that has already finished: the account suite hit it once in about five runs, as `-sh: can't set tty process group: Operation not permitted` followed by a command that never ran. `tests/jobprobe.c` now proves the rule deterministically by forking a child that exits at once and claiming the terminal for its group before reaping it.
+A process left its process group at exit instead of at reap, causing `TIOCSPGRP` to reject a group containing one unreaped zombie. When a shell foregrounds a pipeline, it assigns the terminal to the first member's pid. That member may be a short-lived command that has already exited. The account suite encountered this about once in five runs, printing `-sh: can't set tty process group: Operation not permitted` before omitting the next command. `tests/jobprobe.c` now tests the rule deterministically: a child exits immediately, and the parent assigns the terminal to its group before reaping it.
 
-A write pre-fault reported a copy-on-write page backed. `vm_prefault_range` is what a syscall calls before handing a raw user pointer to a layer that dereferences it (KRFFS, TCP, UDP, the drivers), and `vm_resolve` returned success for any present page. A page inherited through `fork` is present, read-only and copy-on-write inside a writable region, so the promise was wrong: the store that followed faulted with the operation already half done, and if `cow_fault` then failed for want of a frame, the handler returned without fixing anything and the instruction retried forever. It now makes the page private there, and reports a present page it cannot make writable as unresolved, which segfaults the process rather than hanging the machine.
+Write pre-fault incorrectly reported a copy-on-write page as backed. A syscall uses `vm_prefault_range` before passing a raw user pointer to KRFFS, TCP, UDP, or a driver, but `vm_resolve` returned success for any present page. A page inherited through `fork` is present, read-only, and copy-on-write within a writable region. The subsequent store could fault after the operation was partly complete; if `cow_fault` then lacked a frame, it returned without resolving the fault and the instruction retried indefinitely. The pre-fault now makes the page private. If a present page cannot be made writable, it reports the page as unresolved, causing a process segfault instead of a machine hang.
 
-## What the reviews caught
+## Review findings
 
-Ten rounds, each adjudicated against the code.
+Ten review rounds were adjudicated against the code.
 
-Confirmed and fixed: the account suite proved almost nothing, because `su testee -c id` run by root never asks for a password, so a wrong hash and an unusable set-id `passwd` would both have passed; the same suite's `AUTHIT` token was printed by the next command in a list rather than by the run that succeeded, and its `uid=` assertion was satisfied by an earlier `id` in the same boot; the config guard read the hand-written config rather than the one `oldconfig` resolved, so a duplicate or `=yes` assignment would be read one way by the guard and another by the build; the unprivileged allowlist recorded only paths, so `/bin/login`, which init execs as root, could have been staged world-writable and passed; `readv` validated address ranges without faulting the destinations in; `ish -c` reported 0 for a command it never found, which `su -c` would have read as work done; and the HTTP test's two requests were asserted against the whole log, which an inverted authentication branch would have satisfied.
+Confirmed findings corrected the following defects. The account suite used `su testee -c id` as root, which does not request a password, so both a wrong hash and an unusable set-id `passwd` could pass. Its `AUTHIT` token came from the following command rather than the successful run, and an earlier `id` in the same boot satisfied its `uid=` assertion. The config guard read the hand-written configuration instead of the version resolved by `oldconfig`, allowing duplicate or `=yes` assignments to differ between guard and build. The unprivileged allowlist recorded only paths, allowing init's root-executed `/bin/login` to be staged world-writable. `readv` checked address ranges without faulting in destination pages. `ish -c` returned 0 for a missing command, which `su -c` interpreted as success. The HTTP test matched two requests against the complete log, allowing an inverted authentication branch to satisfy it.
 
-The last rounds were about the guard rather than the images, and they were right. A set-id bit is not the whole of a trust boundary: `/bin/login` is what init execs as root, so its mode, its owner and the file it is staged from are all part of the boundary, and so is every directory above it, because this kernel decides `unlink` and `rename` on the parent's write bit. A `/bin` at 0777 replaces a correctly declared program without touching its line. `/sbin/init` is held to one mode by a rule rather than a per-image entry. And an assertion counted over a whole log is not an assertion about an attempt: the password test could be satisfied by a `passwd` that changed nothing, where the old password was the one that worked, so each attempt is now bracketed and read on its own, and a refusal must also have run nothing rather than merely have been printed.
+The final rounds expanded the guard beyond image file declarations. A set-id bit alone does not define the trust boundary. Init executes `/bin/login` as root, so the program's mode, owner, source file, and every ancestor directory are trusted because this kernel authorizes `unlink` and `rename` from the parent's write bit. A `/bin` directory at 0777 permits replacement of a correctly declared program without modifying its manifest line. A single rule fixes the required mode of `/sbin/init` across images. The reviews also required attempt-local assertions: a complete-log password check could pass when `passwd` changed nothing and only the old password worked. Each attempt is now bracketed and checked separately, and a refusal must prove that no command ran rather than merely match a message.
 
-Two of those fixes were themselves wrong at first, which is why the rounds kept going. Opening the redirections before the built-in dispatch made `cd > file` and a bare `cd` fail, because pulling a redirection out of the argument array clears the slots it occupied and the operand was still being read from where it had been; and the ancestor rule read the FIRST `dir` for a path where `stage_dir` re-applies the LAST, so a safe `/bin` followed by an unsafe one passed the sweep. Both are covered by cases now.
+Two initial fixes were defective. Opening redirections before built-in dispatch broke `cd > file` and bare `cd` because redirection removal cleared argument slots before the operand was read from its old position. The ancestor rule also used the first `dir` directive while `stage_dir` reapplies the last, allowing a safe `/bin` followed by an unsafe declaration to pass. Both cases now have coverage.
 
-Refuted with reasons, and recorded rather than dropped: that the guard should bind each busybox binary to the applet table and config staged beside it, by digest or by reading the names back out of the executable. The four artifacts are written by one run of one script, removed together when the stamp is invalidated, and rebuilt from a tarball checked against a sha256 in the tree. `build/` is a generated directory: somebody who can put a different binary there can put a different anything there, including the compiler, and a guard that pretended otherwise would be drawing the trust boundary in a place the build system does not defend. The boundary the guard does defend is the source: a manifest, a config or an allowlist entry that a person changes and another person reviews.
+One finding was refuted with a trust-boundary analysis. It proposed binding each busybox binary to its staged applet table and configuration by digest or by extracting names from the executable. One script invocation writes all four artifacts, which are deleted together when the stamp is invalidated and rebuilt from a tarball checked against a repository sha256. `build/` is generated; an actor able to replace its binary can replace any generated artifact, including the compiler. An artifact-level binding would therefore claim a boundary the build system does not enforce. The guard instead protects reviewed sources: manifests, configurations, and allowlist entries.
 
-Refuted with evidence: that `readv` filling one buffer per call from a pipe is a defect, on the grounds that a short read is what every reader must already handle. That is true and it was not the point: the finding also said the datagram half loses data, and it was right. The refusal was reconsidered after the milestone closed, when the question came back as "what actually stops us", and the answer was nothing. `72c9a00` is the correction, and the reasoning that had been offered for the deferral, an allocator this kernel does not have, was wrong on its face: the datagram was already in a kernel buffer.
+Another finding was partly refuted and later reconsidered. A pipe reader must already handle short reads, so filling one buffer per `readv` call is not itself defective. The same finding correctly identified datagram loss. After the milestone, the implementation was reconsidered without the assumed allocator constraint because the datagram already occupied a kernel buffer. Commit `72c9a00` provides the correction and closes that deferral.
 
-The reviewer was right far more often than not, and one of its findings landed on a defect in a fix it had asked for in the previous round.
+One review round also found a defect in a fix requested by the preceding round.
 
-## The sweep
+## Documentation and manifest sweep
 
-Phase 6 read every comment, document and support file the move touched. What it changed: three in-house programs whose comments explained that they read a byte at a time because the kernel has no `readv`; `utils/su.c`'s claim to be the image's one setuid binary; the os-real manifest's account paragraph; `check_setid.py`'s header, which described two halves when there are four; the applet count in the busybox Readme (327 to 314); the top-level Readme's component table; `run.sh`'s and the Makefile's descriptions of what os-simple is; and the several Readmes that described os-simple as a flat root with a shell and no `/etc`.
+Phase 6 reviewed every affected comment, document, and support file. It corrected byte-at-a-time explanations in three in-house programs after the addition of `readv`; the claim in `utils/su.c` that it was the image's only setuid binary; the account paragraph in the os-real manifest; the `check_setid.py` header, which described two parts instead of four; the busybox Readme applet count from 327 to 314; the top-level component table; the os-simple descriptions in `run.sh` and the Makefile; and Readmes that still described os-simple as a flat root containing a shell and no `/etc`.
 
-What it looked for and did not find: an in-house source staged nowhere (every one is staged by name or swept in by `exec-dir`), a config symbol nothing selects, a Makefile variable with no user, and a forbidden-applet entry for an applet that is now expected.
+The sweep found no unstaged in-house source because each is named or included by `exec-dir`; no unselected configuration symbol; no unused Makefile variable; and no forbidden-applet entry for an applet now expected in an image.
 
-The last round also widened the guard past programs. `/etc/shadow` writable by anyone is a root password anyone may choose, and no set-id bit is involved; nor is one involved in `/etc/passwd`, `/etc/group`, `/etc/shells`, `/etc/profile`, root's `authorized_keys`, `/bin/sh` (which login and dropbear exec for root) or `/bin/dropbearmulti`. The allowlist's second list is therefore named `trusted` rather than `unprivileged`, and it holds both kinds: what root runs, and what root reads to decide who somebody is. The test account's own `authorized_keys` is deliberately not in it, since that file is the account's own and replacing it is not a climb. The round after that went one level deeper and was right again: four of those files are staged INLINE, so their mode and owner say nothing about what they contain, and `test:x:0:0:` in a manifest hands root to an account whose password is written on the host. Their text is pinned too, in the manifest and in the staged image both. Adding an account to a shipped image is now a change to two files, deliberately. Two more rounds followed that one, both on the guard's own seams: a value cannot say which directive staged it, so `text 0600 /etc/shadow krffs/shadow` would have written those literal words into the file the system authenticates against while every check passed, and the verb is now declared beside the value; and the image builders ran only the half of the guard that reads the artifact, so the default `make`, which stages os-simple without going through `make verify-style`, never swept the manifest it was staging. Both halves now run at every image build, before the file is moved into place.
+The final review rounds expanded the guard from executable programs to all trusted inputs. A world-writable `/etc/shadow` lets any user choose the root password without using set-id; the same trust class includes `/etc/passwd`, `/etc/group`, `/etc/shells`, `/etc/profile`, root's `authorized_keys`, `/bin/sh`, which login and dropbear execute for root, and `/bin/dropbearmulti`. The second allowlist is therefore named `trusted` rather than `unprivileged`, and contains both programs root executes and files root reads to determine identity. The test account's `authorized_keys` remains excluded because the account owns it and replacement does not escalate privilege. Four trusted files are staged INLINE, so checking mode and owner cannot verify their contents. A manifest line containing `test:x:0:0:` would grant root to an account whose password was set on the host. The guard now fixes their text in both manifest and staged image, making a new account in a distributed image a deliberate two-file change. Later rounds added two guard checks. First, the value cannot identify the staging directive: `text 0600 /etc/shadow krffs/shadow` would write those literal words into the authentication file while satisfying value-only checks, so the expected directive is now recorded with the value. Second, image builders previously ran only the artifact half of the guard; default `make` staged os-simple without `make verify-style` and never checked its manifest. Both halves now run before every image is installed.
 
-## What stays deferred, and why
+## Deferred work
 
-busybox's `update_passwd` takes an advisory `fcntl` lock this kernel grants unconditionally and knows nothing of `/etc/.pwlock`, the lock the in-house credential library takes. Two writers on different protocols do not exclude each other, so a lost update is possible: two account changes issued in the same second, one silently overwritten. The review's correction is kept here because it is right: os-real can carry a console session and an SSH login at once, so this is not bounded by there being one terminal. What bounds it is the cost, an account change made twice, against keeping a second implementation of tools a real system ships. The property was traded deliberately and is written down in `vendor/busybox/Readme.md` rather than quietly lost.
+Busybox's `update_passwd` uses an advisory `fcntl` lock that this kernel grants unconditionally and does not participate in the in-house `/etc/.pwlock` protocol. Writers using the two protocols do not exclude each other, so two account changes in the same second can lose one update. Os-real can have simultaneous console and SSH sessions, so the number of terminals does not bound the race. The accepted trade is a possible repeated account change instead of retaining a second implementation of standard system tools. `vendor/busybox/Readme.md` records this loss of serialization.
 
-busybox's `adduser` publishes `/etc/passwd` before `/etc/shadow`, so an interrupted run can leave a visible account with no password, which is the state the in-house ordering was built to make impossible. Same trade, same reasoning; os-simple still shows the other ordering.
+Busybox's `adduser` publishes `/etc/passwd` before `/etc/shadow`. An interruption can therefore leave a visible account without a password, the state prevented by the in-house publication order. The same implementation trade applies, while os-simple retains the alternative order.
 
-There is no in-house `deluser`. Removing an account in os-simple is root editing three files. Writing one would contradict the milestone's direction.
+There is no in-house `deluser`; account removal in os-simple requires root to edit three files. Adding an implementation would conflict with the milestone's direction.
 
-`ping` in os-real is still ours, because busybox's wants a raw socket this kernel does not offer. Raw sockets stay unbuilt; the reasoning is in `vendor/busybox/Readme.md`.
+Os-real retains the in-house `ping` because busybox requires raw sockets that the kernel does not provide. Raw sockets remain unimplemented, as explained in `vendor/busybox/Readme.md`.
 
-The busybox use-after-free in `check_suid` is recorded there too, with what an upstream report would need. Nothing has been sent.
+The busybox `check_suid` use-after-free and the evidence needed for an upstream report are also recorded there. No report has been sent.
 
-## The gate
+## Verification
 
-Run in one pass from a tree `make distclean` had emptied, so the vendored musl,
-busybox and dropbear were built from their tarballs again: `make full`, then
-`make verify-style`, `make verify-host` (18 host seam tests), `make test` (54
-probes), `make account-test` (both images), `make shutdown-test`,
-`make login-test`, `make ping-test`, `make crash-test`, `make test-disk`,
-`make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`,
-`make cred-persist-test` and `make test-noentropy`. Every one passed.
+The final run started after `make distclean`, rebuilding vendored musl, busybox, and dropbear from their tarballs. One pass completed `make full`, `make verify-style`, `make verify-host` (18 host integration tests), `make test` (54 probes), `make account-test` (both images), `make shutdown-test`, `make login-test`, `make ping-test`, `make crash-test`, `make test-disk`, `make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`, `make cred-persist-test` and `make test-noentropy`. Every command passed.
 
-The SSH capstone was run by hand on that same tree, both ways in: the demo key
-for root, and the generated password for the unprivileged account, each reaching
-a busybox shell over a dropbear pty. The console login it starts from is
-busybox's `login` now, reading the `/etc/shadow` this milestone's tools write.
+The live SSH test used the same tree and both authentication routes. The demo key admitted root, and the generated password admitted the unprivileged account; each reached a busybox shell over a dropbear pty. Console authentication now uses busybox's `login` and reads the `/etc/shadow` written by the milestone's tools.
 
-The account suite is the one that has to be run more than once to be believed.
-The process-group defect above showed up in roughly one run in five, and both
-arcs have been run green repeatedly since it was fixed.
+The account suite was repeated because the process-group defect had appeared in roughly one run in five. Both image paths passed repeatedly after the fix.

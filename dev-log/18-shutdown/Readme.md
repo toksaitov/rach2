@@ -1,91 +1,91 @@
 # Milestone 18: the clean shutdown
 
-Milestone 15 shipped with a deferral list. Milestone 17 emptied it except for one line, which it wrote down rather than fixed:
+Milestone 15 ended with a deferral list. Milestone 17 resolved every item except the following one:
 
 > Every ordinary disk boot leaves the dirty-mount flag set, because there is no userland `reboot(2)` and the only caller that clears the flag is the debug shell's `halt`.
 
-This milestone closes it, so the list is finally empty. What follows is what shipped, what the reviews caught, and what stays open.
+This milestone resolves the final item. This record covers the result, the review findings, and the remaining limits.
 
-## What the item turned out to be
+## The actual problem
 
-Three things were wrong at once, and the planning found a fourth.
+Planning identified four related defects.
 
-The machine could not be stopped from userland at all. `halt`, `poweroff` and `reboot` were compiled into busybox and staged in os-real, and all three failed at the prompt with `halt: No such process`. The image shipped three commands that did not work.
+Userland could not stop the machine. `halt`, `poweroff` and `reboot` were compiled into busybox and staged in os-real, but all three failed at the prompt with `halt: No such process`. The image therefore contained three unusable commands.
 
-The reason was not the missing syscall. busybox never reached it: without `-f` it signals pid 1, and `/sbin/init` was not pid 1. Pid numbering started at 0 and the boot self-tests spawned processes before init existed, so init took whatever number the counter had reached and the kernel carried `init_pid` to remember it. Pid 1 was a dead self-test process. Every Unix text says init is pid 1, and `/proc`, `ps` and `kill 1` all said so here too; all three were wrong.
+The missing syscall was not the immediate cause because busybox never reached it. Without `-f`, busybox signals pid 1, but `/sbin/init` was not pid 1. Pid numbering started at 0, and the boot self-tests spawned processes before init existed. Init therefore received the next available number, while the kernel used `init_pid` to remember it. Pid 1 belonged to a dead self-test process. Unix interfaces define init as pid 1, and `/proc`, `ps` and `kill 1` reported that convention even though it was false here.
 
-The dirty-mount flag therefore fired on every ordinary boot, which is worse than not having it, because a warning that is always wrong teaches the reader to ignore the one time it is right.
+The dirty-mount flag consequently appeared on every ordinary boot. A warning that is always present cannot distinguish an improper shutdown.
 
-And the one path that did clear the flag could lie. `krffs_disk_mark_clean` cleared the bit and then flushed once; `pc_sync` walks the cache by slot and fails whole, having already written what succeeded. A run whose root page was written and whose later frame was not left the platter reading CLEAN with data missing, while the kernel printed that the image stayed dirty. That was a defect in shipped code, found while planning, and it is why the first change was not a new feature.
+The only path that cleared the flag could also record a false clean state. `krffs_disk_mark_clean` cleared the bit and then flushed once; `pc_sync` walks the cache by slot and reports failure after writing the slots that succeeded. If the root page was written but a later frame failed, the platter read CLEAN with data missing while the kernel reported that the image stayed dirty. Planning found this defect in the existing code, so the first change corrected it before adding shutdown support.
 
-## What shipped, and one scoping error in how it shipped
+## Implementation record and commit-scope error
 
-Thirteen commits, and the ledger is written from `git show --stat` rather than from the plan, because the two disagree and the history is what a reader can audit.
+The milestone consists of thirteen commits. This ledger follows `git show --stat` because it disagrees with the plan and is the auditable record.
 
-* `e09a87b` plans the milestone.
-* `c1b71ea` removes a test run's logs before the next one boots rather than only when it exits, in `crash_test.sh`, and corrects the same claim in `login_test.sh`.
-* `d618bb5` makes the clean unmount flush, then clear, then flush, and ALSO carries `sys/power.{c,h}`, the `C_SRC` line, `kernel_shutdown` and the debug shell's new commands, which belong to the next phase.
-* `db57ade` therefore carries only what was left of that phase: the Readmes and `crash_test.sh`'s power-off boot.
+* `e09a87b` records the milestone plan.
+* `c1b71ea` removes one test run's logs before the next run boots instead of waiting for the first run to exit, in `crash_test.sh`, and corrects the same claim in `login_test.sh`.
+* `d618bb5` changes clean unmount to flush, clear, and flush again. It also includes `sys/power.{c,h}`, the `C_SRC` line, `kernel_shutdown`, and the new debug-shell commands that belong to the next phase.
+* `db57ade` therefore contains only the remaining work from that phase: the Readmes and the power-off boot in `crash_test.sh`.
 * `d3e2d5e` adds `reboot(2)` at syscall 88, root only, with `rebootprobe`.
-* `5c1bfd7` stops the shutdown claiming a clean unmount it did not earn, and makes `crash_test.sh` read the statuses that would say otherwise.
-* `70bad4d` gives the images with no busybox a `halt` of their own.
+* `5c1bfd7` prevents shutdown from reporting a clean unmount after a failed flush and makes `crash_test.sh` check the statuses that expose such a failure.
+* `70bad4d` gives images without busybox their own `halt`.
 * `23dfd34` adds the `shutdown-test` fixture, its allowlist entry and its runner.
-* `945d8e3` lets init answer the three signals that ask for a shutdown.
-* `77f952a` makes `/sbin/init` pid 1, which is what makes a bare `halt`, `poweroff` and `reboot` work.
-* `300d3a9`, `5d0aa56` and `c26f0a0` are this record, the fix for a gate that could not tell a reset from a power-off, and the clean-tree run.
+* `945d8e3` makes init handle the three shutdown signals.
+* `77f952a` assigns pid 1 to `/sbin/init`, allowing bare `halt`, `poweroff` and `reboot` to work.
+* `300d3a9`, `5d0aa56` and `c26f0a0` add this record, fix a check that could not distinguish reset from power-off, and record the clean-tree run.
 
-The split between `d618bb5` and `db57ade` is a scoping error, and it is written here rather than tidied away. The ordering fix was committed, then reviewed, then amended with the correction the review asked for, and the amend staged the whole working tree, which by then already held the next phase's new files. The rule this tree keeps is one logical change per commit; this is two in one, and its neighbour is the remainder. The history was not rewritten to hide it because these commits were already the record other work referred to, and a reader who runs `git show` on either hash should find what this paragraph says they will.
+The split between `d618bb5` and `db57ade` is a commit-scope error. The ordering fix was committed and reviewed, then amended with the requested correction. The amend staged the whole working tree, which already contained the next phase's new files. Project policy requires one logical change per commit, but the first commit contains two changes and its neighbor contains the remainder. The history was left intact because other work already referred to these commits; `git show` on either hash confirms this account.
 
-Typing `halt`, `poweroff` or `reboot` as root now stops the machine, flushing the page cache and clearing the dirty-mount flag on the way; `-f` on any of the three calls `reboot(2)` directly; an unprivileged caller is refused and the machine stays up; and a boot that is killed rather than stopped still leaves the flag set, which is now a statement about that boot rather than about every boot.
+Root can now stop the machine with `halt`, `poweroff` or `reboot`; shutdown flushes the page cache and clears the dirty-mount flag. With `-f`, each command calls `reboot(2)` directly. An unprivileged caller is refused and the machine remains running. Killing a boot instead of stopping it leaves the flag set, so the flag now describes that boot rather than every boot.
 
-## What the reviews caught
+## Review findings
 
-The independent review ran on every phase and was wrong once and right the rest of the time, which is the ratio that makes it worth running.
+An independent review followed every phase. One finding was incorrect; the others identified defects or missing evidence.
 
-It overturned a disproof. Phase 0 was nearly dropped: an experiment planted a stale log, stubbed out QEMU, and watched the unmodified script fail anyway, and the conclusion drawn was that the redirect structurally precedes the wait. The review refused that, correctly, since the redirect belongs to the backgrounded child and nothing orders it before the parent's `grep`. Measured afterwards, the parent won that race in 0 of 600 trials, because its next act costs a fork and an exec while the child's costs an `open`. The review also named the false pass the first analysis had missed: the whole suite cannot pass on stale tokens, but the CLEAN phase alone can, since its image is a fresh copy that fsck agrees with. One line closes it.
+The review reversed an incorrect disproof. Phase 0 was almost removed after an experiment planted a stale log, replaced QEMU with a stub, and observed the unmodified script fail. The initial analysis concluded that the redirect necessarily precedes the wait. It does not: the redirect belongs to the background child, with no ordering before the parent's `grep`. Later measurement found the parent winning 0 of 600 trials because its next operation requires a fork and an exec while the child needs only an `open`. The review also identified a false pass omitted from the first analysis. Stale tokens cannot pass the whole suite, but they can pass the CLEAN phase alone because that phase uses a fresh image that fsck accepts. Removing the old log before the run closes the defect.
 
-It caught the shutdown claiming more than it had earned. `kernel_shutdown` printed `clean unmount: dirty-mount flag cleared` whether or not the flush had succeeded, because `krffs_disk_mark_clean` returned nothing; and `crash_test.sh` discarded QEMU's exit status and read `fsck`'s output through a pipe, so a corrupt image that printed something else entirely would have been read as clean. Both are fixed in `5c1bfd7`, and the fsck check is now a function whose two directions were unit-tested.
+The review found an unsupported clean-unmount report. `kernel_shutdown` printed `clean unmount: dirty-mount flag cleared` even after a failed flush because `krffs_disk_mark_clean` returned nothing. `crash_test.sh` also discarded QEMU's exit status and read `fsck` output through a pipe, allowing unrelated output from a corrupt image to be accepted as clean. Commit `5c1bfd7` fixes both defects. The fsck check is now a function with unit tests for both outcomes.
 
-It caught a utility that would never have been built: `utils/halt.c` without its `UTILITIES` entry produces no binary at all, and `prune-stale` deletes it. Demonstrated by reverting the entry and watching the sweep remove it.
+The review found a utility missing from the build list. Without its `UTILITIES` entry, `utils/halt.c` produces no binary and `prune-stale` deletes any previous artifact. Reverting the entry demonstrated that removal.
 
-It caught the plan promising two proofs that could not exist. A `reboot -f` phase would have proved nothing about the kernel's flush, because busybox calls `sync()` itself before it splits on `-f`; every forced phase now passes `-n`. And a `halt -n -f` phase could never have required a self-exit, because a halt parks the CPU and leaves QEMU running by design; that phase now waits for the token and does its own killing.
+The review found two impossible proof claims in the plan. A `reboot -f` phase cannot isolate the kernel flush because busybox calls `sync()` before processing `-f`; every forced phase now passes `-n`. A `halt -n -f` phase also cannot require QEMU to exit, because halt deliberately parks the CPU and leaves QEMU running. That phase now waits for its token and terminates QEMU itself.
 
-It caught a gate that could certify a broken `reboot`. Under `-no-reboot` a reset and a power-off both end QEMU with a clean image and no fallback line, so the bare-`reboot` phase would have passed with SIGTERM wired to power the machine off. Every phase that claims a stop now names which stop happened and which must not have; demonstrated by making SIGTERM power off and watching that phase, and only that phase, fail.
+The review found a check that could accept a broken `reboot`. Under `-no-reboot`, reset and power-off both end QEMU with a clean image and no fallback line. The bare-`reboot` phase therefore passed when SIGTERM was incorrectly wired to power off the machine. Each stop phase now requires the expected stop type and excludes the other. Making SIGTERM power off demonstrated that this phase, and only this phase, fails.
 
-It also caught a residual the fix could not remove, and it is recorded below rather than papered over.
+The review also identified a remaining limitation that the change could not remove; it is recorded below.
 
-## What was refuted
+## Refuted findings
 
-Two of the review's findings did not survive contact with the code, and are recorded because refusing a finding needs evidence as much as accepting one does.
+Two review findings were refuted with code and measurement.
 
-The claim that the redirect race is winnable in practice: measured at 0 of 600 trials across both background forms the script uses. The window is real, which is why the line was added, but the demonstration the review asked for does not exist.
+The first claim was that the redirect race could be won in practice. Across both background forms used by the script, measurement found 0 wins in 600 trials. The window still exists and justified the fix, but the requested demonstration was not reproducible.
 
-The claim that reading the root node before the flush makes the store safe: it makes the STORE safe, and nothing can make the read safe, since bringing a page in needs an eviction and an eviction needs a write. The comment was corrected to say exactly that rather than dropped.
+The second claim was that reading the root node before the flush makes the operation safe. It makes the STORE safe, but cannot make the read safe: loading the page may require eviction, and eviction requires a write. The comment now states that narrower guarantee.
 
-## The gate
+## Verification
 
-`make verify-style`, `make verify-host` and `make test` on every phase, plus `make crash-test`, `make shutdown-test`, `make login-test`, `make ping-test`, the disk probes on both buses, and the SSH capstone on the phase that touched init. `make test` grew from 51 probes to 52 with `rebootprobe`. `make shutdown-test` is new and runs eight boots.
+Every phase ran `make verify-style`, `make verify-host` and `make test`. The applicable phases also ran `make crash-test`, `make shutdown-test`, `make login-test`, `make ping-test`, the disk probes on both buses, and the live SSH case for the init change. `make test` grew from 51 probes to 52 with `rebootprobe`. The new `make shutdown-test` runs eight boots.
 
-The whole gate was re-run from a clean tree at the end, with `build/` and the vendored stamps removed and everything rebuilt: `verify-style`, `verify-host`, `test` (52 probes), `crash-test`, `shutdown-test`, `login-test`, `ping-test`, `test-disk`, `test-disk-ahci`, `persist-test`, `persist-test-ahci`, `cred-persist-test` and `test-noentropy`, all green.
+The final clean-tree run removed `build/` and the vendored stamps, rebuilt everything, and passed `verify-style`, `verify-host`, `test` (52 probes), `crash-test`, `shutdown-test`, `login-test`, `ping-test`, `test-disk`, `test-disk-ahci`, `persist-test`, `persist-test-ahci`, `cred-persist-test` and `test-noentropy`.
 
-Every capstone was run live: `poweroff` and `reboot` at the debug shell each stop QEMU within a second of being typed; `poweroff -f` stops os-real where it printed `Function not implemented` before; os-simple stops from its own `ish` prompt with the in-house `halt`; `/proc` lists `0 1 2 3 self` with `/proc/1/cmdline` reading `init`; and the SSH capstone logs in over a pty with init as pid 1, reads `/proc/1/cmdline` as `init`, and stops the machine with a bare `poweroff` from that session, which ends QEMU one second later.
+The live checks also passed. At the debug shell, `poweroff` and `reboot` each stopped QEMU within a second. `poweroff -f` stopped os-real, where it had previously printed `Function not implemented`. Os-simple stopped from its `ish` prompt with the in-house `halt`. `/proc` listed `0 1 2 3 self`, and `/proc/1/cmdline` read `init`. The SSH case logged in over a pty with init as pid 1, read `/proc/1/cmdline` as `init`, and issued bare `poweroff`; QEMU ended one second later.
 
-The experiments no committed test can carry, each run and recorded:
+The following mutation experiments were run and recorded outside the committed suite:
 
-* The selective write-back mutation, failing exactly one non-zero offset from the moment `halt` is typed. Against the old ordering the platter read CLEAN with a page missing while the kernel printed that it stayed dirty; against the new one the flush failed first, the flag was never touched, and the image read dirty.
-* Both flushes removed, which fails `shutdown-test`'s first phase on a dirty image.
-* The `outw` removed, which fails `crash-test`'s power-off phase on its timeout.
-* The privilege check removed from `reboot(2)`, which does not print a failure: it powers the machine off in the middle of `make test`, which is the detection and the reason `rebootprobe`'s child asserts its own precondition before it asks for anything.
-* Each signal arm removed in turn, and the renumbering reverted. The matrix is what the plan predicted: reverting the renumbering fails the four bare phases and leaves the `-f` and `$PPID` phases green, and removing SIGUSR1 fails bare `halt` alone.
+* A selective write-back mutation failed exactly one non-zero offset after `halt` was typed. With the old ordering, the platter read CLEAN with a page missing while the kernel reported that the image stayed dirty. With the new ordering, the first flush failed, the flag remained unchanged, and the image read dirty.
+* Removing both flushes failed the first `shutdown-test` phase on a dirty image.
+* Removing `outw` made the power-off phase of `crash-test` fail on its timeout.
+* Removing the privilege check from `reboot(2)` powered off the machine during `make test` instead of printing a failure. That interruption is the detection, and explains why the `rebootprobe` child asserts its precondition before requesting an operation.
+* Each signal arm was removed separately, and the pid renumbering was reverted. The results matched the plan: reverting renumbering failed the four bare phases while the `-f` and `$PPID` phases passed; removing SIGUSR1 failed only bare `halt`.
 
-## What stays deferred
+## Deferred work
 
-init tears nothing down before it calls `reboot(2)`. A `kill(-1, sig)` is refused by this kernel, so a real teardown means a hand-rolled walk over the process table with an invented timeout inside the one program that must never be clever. Nothing committed is lost, since the flush happens with scheduling off. The cost is named rather than hidden: a dropbear session open across a `poweroff` is cut without a FIN, and a `passwd` running at that moment leaves its lock for the next writer's stale-lock rule, which is the same outcome as the external kill this replaces.
+Init calls `reboot(2)` without first terminating other processes. This kernel refuses `kill(-1, sig)`, so an orderly teardown would require init to enumerate the process table and apply a new timeout policy. No committed data is lost because the flush runs with scheduling disabled. An open dropbear session is cut by `poweroff` without a FIN, and an active `passwd` can leave its lock for the next writer's stale-lock rule. An external kill has the same result.
 
-The clean-unmount path can still panic instead of reporting, on a disk whose writes have failed, whose root page has been evicted, and whose every cache slot is dirty: reading the root then needs an eviction, the eviction needs a write, and a fill that cannot be served is a panic. The machine's outcome is the safe one, since a panic stops the box with the flag still set. Closing it means pinning the root frame for the life of the mount, which is a page-cache feature bought to improve a diagnostic on a disk that is already unusable.
+The clean-unmount path can still panic instead of reporting an error when disk writes fail, the root page has been evicted, and every cache slot is dirty. Loading the root then requires an eviction, eviction requires a write, and the failed fill causes a panic. This outcome remains safe because the machine stops with the dirty flag set. Avoiding the panic would require pinning the root frame for the mount's lifetime, adding a page-cache feature solely to improve the diagnostic for an unusable disk.
 
-No committed test discriminates the old flush ordering from the new one. Both agree on a healthy disk, and telling them apart needs a write that fails for one offset and succeeds for another, which is a fault-injection seam on the production write path that this tree deliberately does not have. `crash_test.sh`'s clean-halt phase is the regression the change must not break, and the selective mutation above is the evidence.
+No committed test distinguishes the old flush ordering from the new one. Both behave identically on a healthy disk; distinguishing them requires a write that fails at one offset and succeeds at another. The production write path deliberately has no such fault-injection point. The clean-halt phase in `crash_test.sh` protects the supported behavior, while the selective mutation above provides evidence for the ordering change.
 
-The marker phase asserts that a write made immediately before a stop survives it, and not that the shutdown's flush is the only thing that could have carried the page: the cache also writes a frame back when it evicts one. Measured: the same write is lost when the machine is killed instead of stopped, so the assertion is real; a mutation that published the flag page alone still passed it.
+The marker phase proves that a write immediately before shutdown survives. It does not prove that the shutdown flush was the only operation to write the page, because cache eviction also writes frames. The same write was lost when the machine was killed instead of stopped, confirming that the assertion exercises persistence; however, a mutation that published only the flag page still passed.
 
-The power-off is QEMU's, not a general one, and the earlier draft of this record overstated it. The three gates find where the PM block is; they do not establish that sleep type 0 means soft-off, which on real hardware firmware publishes in ACPI tables this kernel does not parse. A machine that is not this chipset falls into the halt loop and says so, but a board whose S5 is some other type could be asked for a different sleep state instead, which is the one outcome the fallback cannot catch. Reading S5 properly needs an AML interpreter. The reset writes a fixed port for the same reason in reverse: a wrong derived address would put a sleep word into a live device, while `0xCF9` is inert where it is unclaimed.
+Power-off support is specific to QEMU, despite an overstatement in an earlier draft of this record. The three checks locate the PM block but do not prove that sleep type 0 means soft-off. On physical hardware, firmware publishes that value in ACPI tables that this kernel does not parse. A different chipset falls back to the halt loop and reports the fallback, but a board using another S5 value could receive the wrong sleep-state request without triggering it. Correctly reading S5 requires an AML interpreter. Reset uses a fixed port for the converse reason: a wrongly derived address could write a sleep word to a live device, whereas `0xCF9` is inert when unclaimed.

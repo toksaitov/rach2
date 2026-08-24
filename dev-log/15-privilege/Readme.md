@@ -1,113 +1,28 @@
 # Milestone 15: privilege regained: passwords, the setuid bit, and su
 
-Milestone 14 made privilege real but one-way: login drops root to a user, and
-nothing could ever climb back. This milestone adds the classic other half. A
-user proves who they are with a password, against real SHA-512 crypt hashes in
-an `/etc/shadow` the permission bits protect; a program marked with the setuid
-bit runs with its owner's authority; and `su` combines the two, so the
-unprivileged account can become root by proof instead of by a second login. It
-is the mechanism behind `su`, `sudo`, `passwd`, and `ping` alike, the one every
-operating-systems course pairs with the permission model, and the one whose
-absence left milestone 14's story unfinished: three uids per process, and until
-now no syscall that ever made them differ upward.
+Milestone 14 allowed login to drop root privilege but provided no way to regain it. This milestone adds password authentication against SHA-512 crypt hashes in a permission-protected `/etc/shadow`, setuid execution with the file owner's authority, and `su` to combine them. An unprivileged account can therefore authenticate and become root without a second login. The same mechanism supports `su`, `sudo`, `passwd`, and `ping`. It completes milestone 14's three-uid process model by adding a syscall path that can raise an effective uid.
 
-The tree was close. Dropbear was already compiled with password auth and its
-cross-build already found musl's `crypt` and `shadow.h`, so the server verifies
-against `/etc/shadow` the moment a hash exists; musl already carried the `$6$`
-implementation and the `crypt`/`getspnam` a `su` needs. What was missing was the
-shadow file, the setuid semantics on exec, a program to spend that privilege,
-and one enabling piece the self-test wanted: the stack had no loopback. The plan
-(`plan.md`) was drafted as chief and sharpened by an independent Codex review
-that returned eight findings, all confirmed against the tree before any code;
-each of the six phases was then built, gated by its own probe or capstone,
-independently reviewed again, and committed as one scoped change.
+Dropbear was already compiled with password authentication, and its cross-build found musl's `crypt` and `shadow.h`, so it could verify `/etc/shadow` once a hash existed. Musl already provided the `$6$` implementation and the `crypt` and `getspnam` functions needed by `su`. The missing pieces were the shadow file, setuid exec semantics, a program that uses the privilege, and loopback for the self-test. The chief agent drafted `plan.md`. An independent Codex review returned eight findings, all checked against the tree before implementation. Each of the six phases then received its own probe or end-to-end test, another independent review, and one scoped commit.
 
 ## The six phases
 
-* Shadow (`1fdfefd`). A host tool, `mkhash.krffs`, mints `$6$` hashes from the
-  vendored musl `crypt_sha512.c`, the same code the guest verifies with;
-  `gen_demo_password.sh` mints a random password per account into git-ignored
-  files and writes the git-ignored `/etc/shadow` (`0600` root). The test image
-  commits a fixed test credential so the probes have a known hash. Proven by
-  the host `mkhash_hosttest` against the SHA-crypt spec vectors and by
-  `authmusl`, which now resolves the shadow entry and checks `crypt` through
-  libc; a boot showed root reading `/etc/shadow` while the test account is
-  denied, the reason the file was ever split from `passwd`.
+* Shadow (`1fdfefd`). The host tool `mkhash.krffs` creates `$6$` hashes with the vendored musl `crypt_sha512.c`, which is also the implementation used for guest verification. `gen_demo_password.sh` creates a random password for each account in ignored files and writes the ignored `/etc/shadow` with mode `0600` and root ownership. The test image contains a fixed credential with a known hash. The host `mkhash_hosttest` checks the SHA-crypt specification vectors, while `authmusl` resolves the shadow entry and checks `crypt` through libc. A boot confirmed that root could read `/etc/shadow` and the test account could not, which is why the data was separated from `passwd`.
 
-* Loopback (`d31449c`). The socket layer canonicalizes a `127/8` destination to
-  the machine's one address before any connection state exists, so no lower
-  layer carries a second local address; `ip_tx` turns a self-addressed datagram
-  around through a new bounded ring the timer drains, never inline, since the
-  transmit buffers and TCP state are single-threaded by the interrupt
-  discipline. A closed loopback port answers with the RFC 793 reset instead of
-  a black hole, and the ephemeral allocator skips in-use local ports so a
-  self-connect cannot collide. Proven by `loopprobe`, a UDP echo and a TCP
-  round trip against `127.0.0.1` in one process. The Codex review caught the
-  two TCP gaps (the missing reset and the same-port collision); both were fixed
-  and re-verified.
+* Loopback (`d31449c`). Before creating connection state, the socket layer maps a `127/8` destination to the machine's single address, so lower layers need no second local address. `ip_tx` places a self-addressed datagram in a new bounded ring for the timer to drain rather than processing it inline, because the interrupt discipline serializes the transmit buffers and TCP state. A closed loopback port returns the RFC 793 reset. The ephemeral allocator skips local ports already in use, preventing a self-connect collision. `loopprobe` runs a UDP echo and TCP round trip against `127.0.0.1` in one process. The Codex review found the missing reset and same-port collision; both were fixed and checked again.
 
-* Password login (`7a95aea`). The capstone server command dropped `-s` and
-  gained `-g`: password auth is on for the test account, root stays pubkey-only
-  so the administrator takes no password over the network. Thanks to loopback
-  the proof is self-contained: at the guest shell the OS logs into itself,
-  `DROPBEAR_PASSWORD=... dropbearmulti dbclient -y test@127.0.0.1`, and a host
-  client logs in with the minted password while a wrong password, and root with
-  any password, are refused.
+* Password login (`7a95aea`). The end-to-end server command removes `-s` and adds `-g`. The test account may use password authentication, while root remains public-key-only so an administrator does not send a password over the network. Loopback makes the test self-contained: the guest runs `DROPBEAR_PASSWORD=... dropbearmulti dbclient -y test@127.0.0.1` to log into itself. A host client can use the generated password, while an incorrect password and every root password are rejected.
 
-* The setuid and setgid bits on exec (`9547881`). After the execute-permission
-  check, exec applies the bits: the effective and saved ids take the file
-  owner's, the real ids unchanged, and the mode paths widen from nine bits to
-  the full `07777` so the bits store and report (the root node's dirty-mount
-  flag, which shares the setuid position, stays confined by the fixed-identity
-  paths that never expose it). `AT_SECURE`, hardcoded 0 until now, reports
-  whether the effective id differs from the real one; since the stack carries
-  no `AT_UID`/`AT_EUID`, it is the only signal musl's startup has, and it drives
-  the setuid fd sanitization. Proven by `suidprobe` (setuid-root, a non-root
-  owner, setgid-only, a plain exec, and a setuid-without-execute refusal, plus
-  the stat width) and the libc sibling `suidmusl`. The security review's
-  load-bearing catch: `AT_SECURE` was under-reported for an already-privileged
-  plain exec; the rule became the man-page definition, effective id differing
-  from real, which is both correct and simpler.
+* The setuid and setgid bits on exec (`9547881`). After checking execute permission, exec sets the effective and saved ids from the file owner and leaves the real ids unchanged. Mode handling expands from nine bits to `07777` so the set-id bits can be stored and reported. The root node's dirty-mount flag shares the setuid position but remains restricted to fixed-identity paths that do not expose it. `AT_SECURE`, previously fixed at 0, reports whether an effective id differs from its real id. The stack has no `AT_UID` or `AT_EUID`, so this is musl startup's only signal for setuid fd sanitization. `suidprobe` checks setuid-root, a non-root owner, setgid-only, plain exec, setuid without execute permission, and stat width; `suidmusl` checks the libc path. The security review found that an already-privileged plain exec under-reported `AT_SECURE`. The rule was changed to the man-page definition: an effective id differs from its real id.
 
-* su and the reference sudo. Privilege climbs through `/bin/su` alone: a small
-  setuid-root program (`utils/su.c`) that authenticates the target against
-  `/etc/shadow` with `crypt`, drops to it, and execs its shell. busybox stays
-  unprivileged, and its own `su` applet is compiled out so a bare `su`
-  resolves to ours. The capstone grew its final scene: SSH in as test, fail to
-  write `/etc/motd`, `su` with root's password, succeed. The reference `sudo`
-  lands in `utils/`, staged only into the test image and gated by `sudoprobe`
-  (a permitted uid reaches root, an unlisted one is refused); it is the
-  coursework answer key, and the shipped image carries `su` and no sudo so the
-  exercise stays honest.
+* su and the reference sudo. `/bin/su` is the only path that raises privilege. This small setuid-root program (`utils/su.c`) authenticates the target against `/etc/shadow` with `crypt`, changes to that identity, and executes its shell. BusyBox remains unprivileged, and its `su` applet is disabled so a bare `su` resolves to the project program. The end-to-end test logs in as test, confirms that writing `/etc/motd` fails, runs `su` with the root password, and confirms that the write succeeds. The reference `sudo` is under `utils/`, staged only in the test image, and checked by `sudoprobe`: a listed uid reaches root and an unlisted uid is rejected. It is the coursework reference. The distributed image includes `su` but not sudo.
 
-  This phase was first built the textbook embedded-Linux way, `/bin/busybox`
-  setuid root confined to `su` by an `/etc/busybox.conf`, and that took the
-  milestone's hardest debugging. A setuid busybox runs an applet as root unless
-  the conf drops it, true for every enabled `BB_SUID_REQUIRE` applet (its
-  fallback keeps root) and every `BB_SUID_MAYBE` one (it has no drop path);
-  two review passes were needed just to confine the full twelve, guarded by a
-  build-time check. Then the capstone surfaced a deeper problem: a uid-1000
-  non-PTY SSH command (`ssh test@host id`) crashed with a page fault, while
-  root and interactive logins worked. The fault was a latent busybox
-  use-after-free: `check_suid` frees the parsed `suid_config` list but never
-  clears the global, and a noexec applet re-dispatch (`sh -c id`, where `id`
-  runs in-process) walks the dangling list. It hides on Linux, where the freed
-  page usually stays mapped; Rach2's `munmap` promptly unmaps, so the stale
-  read faults, exactly as it should. The kernel is right and the vendored
-  busybox is not ours to patch, so the design changed to the cleaner one above:
-  busybox never setuid, no config file, no use-after-free, the full applet set
-  intact, and the setuid surface a hundred auditable lines instead of a
-  megabyte. `tools/check_busybox_suid.py` now enforces the new invariant, that
-  busybox stays unprivileged and `/bin/su` is the one setuid path, so a future
-  edit that makes busybox setuid fails the build.
+The first design followed the common embedded-Linux arrangement: `/bin/busybox` was setuid root, with `/etc/busybox.conf` restricting that privilege to `su`. A setuid BusyBox runs an applet as root unless the configuration drops it. This applies to every enabled `BB_SUID_REQUIRE` applet, whose fallback retains root, and every `BB_SUID_MAYBE` applet, which has no drop path. Two review passes were needed to restrict all twelve applets, with a build-time check enforcing the result. The end-to-end test then found a second problem. A uid-1000 non-PTY command, `ssh test@host id`, faulted, although root and interactive logins worked. BusyBox had a latent use-after-free: `check_suid` frees the parsed `suid_config` list without clearing the global pointer. A noexec redispatch such as `sh -c id`, where `id` runs in-process, then reads the freed list. Linux usually leaves the freed page mapped, but Rach2's `munmap` unmaps it and exposes the stale read. The vendor source was outside this milestone's edit scope, so the design changed. BusyBox remains unprivileged, no configuration file is needed, the full applet set remains available, and the setuid implementation is about a hundred auditable lines rather than a megabyte. `tools/check_busybox_suid.py` enforces that BusyBox stays unprivileged and `/bin/su` is the only setuid path; making BusyBox setuid causes the build to fail.
 
-* The record and the gate (this commit). This Readme, the deferrals below, the
-  owning-Readme updates carried in each phase, and a final clean-tree gate.
+* The record and final check (this commit). This Readme, the deferrals below, the owning-Readme changes made in each phase, and a final clean-tree check complete the milestone.
 
-## The capstone
+## The end-to-end test
 
-Booting os-real with an SSH forward and `dropbearmulti dropbear -R -g -p 22` at
-the guest shell:
+Booting os-real with an SSH forward and `dropbearmulti dropbear -R -g -p 22` at the guest shell:
 
 ```
 $ ssh -p 2222 test@localhost                 (password: krffs/rach2_test_password)
@@ -123,45 +38,16 @@ $ ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost    (key only; -g bars
 
 ## What stays deferred
 
-Closed by milestone 17 (`dev-log/17-completion`), which took this list as its
-charter; what remains open there is stated in that record with its reason. The
-list below is left as it was written, because it is the record of what this
-milestone shipped and did not ship.
+Milestone 17 (`dev-log/17-completion`) used this list as its scope and completed it. Its record identifies anything still open and gives the reason. This list remains here because it records what this milestone implemented and deferred.
 
-The reasoning for each is at its point of use in the code and the owning
-Readmes; collected here:
+The code and owning Readmes give the reason at each point of use. The deferred items were:
 
-* A root password over SSH: `-g` keeps the administrator pubkey-only; the
-  password exists so `su` has something to verify.
-* The in-guest `passwd` and `adduser` workflows, and a real login getty:
-  `passwd` is the natural next exercise (a setuid program that rewrites a
-  root-owned file on the caller's behalf), and the console stays the root
-  rescue path.
-* Clearing the setuid bit when a file is written or chowned: POSIX does; in the
-  shipped images no setuid file is writable by anyone but root, so the hole it
-  closes cannot open.
-* Sticky-bit enforcement: the bit stores and reports (so `1777 /tmp` shows in
-  `ls -l`), but its restricted-deletion rule waits for a shared directory among
-  mutually hostile users.
-* A loopback interface proper, zero-length UDP datagrams, TCP simultaneous
-  open, per-component path-walk search checks, quotas, ACLs, capabilities, and
-  the POSIX kill-rule refinements: unchanged from the milestone-14 list, for
-  the reasons recorded there and in the plan.
+* A root password over SSH: `-g` keeps the administrator pubkey-only; the password exists so `su` has something to verify.
+* The in-guest `passwd` and `adduser` workflows and a login getty: `passwd` is the next exercise, a setuid program that rewrites a root-owned file for its caller, while the console remains the root rescue path.
+* Clearing the setuid bit when a file is written or chowned: POSIX requires this, but no setuid file in the distributed images is writable by a non-root user, so the protected condition cannot occur.
+* Sticky-bit enforcement: the bit is stored and reported, so `1777 /tmp` appears in `ls -l`, but restricted deletion waits for a shared directory used by users who do not trust one another.
+* A loopback interface proper, zero-length UDP datagrams, TCP simultaneous open, per-component path-walk search checks, quotas, ACLs, capabilities, and the POSIX kill-rule refinements: unchanged from the milestone-14 list, for the reasons recorded there and in the plan.
 
 ## Verification
 
-Every phase held the global gate: `make verify-style`, `make verify-host`, and
-`make test`, which grew from 40 probes to 44 with `loopprobe`, `suidprobe`,
-`sudoprobe`, and the musl `suidmusl`. The disk probes pass on both the ATA and
-AHCI paths, since the setuid work sits on the exec path they exercise. The
-password and `su` capstones are recorded manual runs. Each phase took an
-independent Codex review of its diff; the reviews were load-bearing, catching
-the two TCP loopback gaps and the under-reported `AT_SECURE`, and, on the
-abandoned setuid-busybox approach, both the missing `BB_SUID_REQUIRE` applets
-and the whole `MAYBE` class before that approach was dropped. The busybox
-use-after-free that forced the redesign was found by driving the capstone to a
-crash and reading the fault down to the instruction; a Codex root-cause pass
-independently placed it in busybox's `check_suid`, not the kernel. The chief
-adjudicated every finding against the code, confirming or refuting it with
-evidence; where a review's own follow-up stalled, the empirical tests stood as
-the proof. The verdict is recorded with the milestone.
+Every phase passed `make verify-style`, `make verify-host`, and `make test`. The last target grew from 40 probes to 44 with `loopprobe`, `suidprobe`, `sudoprobe`, and the musl `suidmusl`. The disk probes pass over ATA and AHCI because they exercise the exec path changed by setuid. The password and `su` end-to-end tests are recorded manual runs. Independent Codex reviews found the two TCP loopback defects, the under-reported `AT_SECURE`, and, in the abandoned setuid-BusyBox design, the missing `BB_SUID_REQUIRE` applets and the complete `MAYBE` class. Driving the end-to-end test to a crash exposed the BusyBox use-after-free; a separate Codex diagnosis placed it in BusyBox's `check_suid` rather than the kernel. The chief agent checked every finding against the code and confirmed or refuted it with evidence. When a review follow-up did not complete, direct tests supplied the evidence. The milestone records the conclusion.
