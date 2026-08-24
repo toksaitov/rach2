@@ -8,17 +8,17 @@ This file is a bounded resume map for the one documentation file in progress. It
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
 * Active final-stage entry: contextual register review passes over the 28 current documents.
-* Current document: `vendor/pdpmake/Readme.md`.
-* Original and current forms read whole in this goal run: yes. The current file has 90 lines.
-* Material claims: archive build, platform macros, recipe execution, guest makefiles, pin updates, and tests.
-* Changed section: Platform macros. The edit gives the exact `CC` value and states the TinyCC rejection directly.
+* Current document: `ports/doom/Readme.md`.
+* Original and current forms read whole in this goal run: yes. The current file has 118 lines.
+* Material claims: build, platform callbacks, graphics, input, audio, game data, runtime path, controls, and verification.
+* Changed sections: Sound and music, and Run. The edits identify the ioctl and relative path directly.
 * Commands passed: isolated diff review, banned-prose and ASCII checks, `git diff --check`, `make verify-style`, and all 36 `make verify-host` tests.
 * Search pattern: `\b(honest|fiction|trap|bench|gate|era|surface|sight|holds?|names?|spells?|sits?|pins?|believes?|believed|believing|refuses?|refused|refusing|asks?|asked|asking)\b|(^|[.!?][[:space:]]+)Not[[:space:]]|\b[Nn]ot\b[^.!?]{0,100},?[[:space:]]+(it is|it's|they are|they're)\b`.
 * The contextual-register path-only search has run once. Do not rerun it.
 
 ## Final-stage cursor
 
-* Candidate queue, in order: `ports/doom/Readme.md`.
+* Candidate queue, in order: empty.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -37,8 +37,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-The pdpmake patch sets all three built-in compiler definitions to `CC=tcc` and sets `LDFLAGS=-static`; the TinyCC policy patch rejects an executable link without `-static`. The file is ready to commit. Then inspect `ports/doom/Readme.md`.
+`i_pcsound.c` issues `AUDIO_GET_INFO` on descriptor 0 before starting PCM playback; `doomgeneric_rach2.c` passes the relative `doom1.wad`, while the manifests stage `/doom1.wad`. The file is ready to commit. Then complete the contextual-register entry.
 
 ## Intended commit boundary
 
-* `vendor/pdpmake/Readme.md` and this checkpoint only.
+* `ports/doom/Readme.md` and this checkpoint only.

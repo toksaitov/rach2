@@ -41,7 +41,7 @@ Mouse input comes from `/mouse` when that device opens successfully. Each three-
 
 ## Sound and music
 
-The sound module asks the kernel for audio information through an ioctl on the console descriptor. If SB16 or HDA PCM output is available, it starts 11,025 Hz unsigned 8-bit mono playback, sets volume to 80, and mixes eight sound-effect channels with synthesized music. `AUDIO_WRITE` can accept a short chunk when the kernel ring is full; the port retries the unwritten portion until the call stops making progress, then drops the remainder.
+The sound module issues `AUDIO_GET_INFO` on the console descriptor. If SB16 or HDA PCM output is available, it starts 11,025 Hz unsigned 8-bit mono playback, sets volume to 80, and mixes eight sound-effect channels with synthesized music. `AUDIO_WRITE` can accept a short chunk when the kernel ring is full; the port retries the unwritten portion until the call stops making progress, then drops the remainder.
 
 SB16 consumes the requested format directly. HDA converts it to the codec's selected sample rate, sample width, and channel count. The kernel audio subsystem selects the hardware and converts formats.
 
@@ -92,7 +92,7 @@ cd /
 doom
 ```
 
-The port discards its incoming argument vector and always passes `-iwad doom1.wad` to the engine. That name is relative, while the manifest stages `/doom1.wad`. Starting in another directory fails to find the WAD and prints `IWAD file 'doom1.wad' not found!`.
+The port discards its incoming argument vector and always passes `-iwad doom1.wad` to the engine. That path is relative, while the manifest stages `/doom1.wad`. Starting in another directory fails to find the WAD and prints `IWAD file 'doom1.wad' not found!`.
 
 The same binary can use the kernel HDA driver on supported hardware. Hardware boot and disk-image procedures are described in the root and kernel Readmes.
 
