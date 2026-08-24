@@ -19,7 +19,7 @@ Vendored projects are the exception to the output convention. Their build script
 
 An object compile with `$(DEPFLAGS)` writes a `.d` file beside its `.o`. Makefiles include those files so a header edit rebuilds the objects that use it. Tests and utilities compile and link most programs in one command, so their rules use `-MF` to put each `.d` file under the component's `BUILD` directory.
 
-The kernel, tests, ish, utilities, KRFFS tools, and Doom all use this dependency tracking. The details differ because their compile rules differ. A header edit does not require `make clean`.
+The kernel, tests, ISH, utilities, KRFFS tools, and Doom all use this dependency tracking. The details differ because their compile rules differ. A header edit does not require `make clean`.
 
 ## clangd compilation database
 
