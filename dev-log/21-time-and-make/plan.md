@@ -4,22 +4,22 @@
 
 Milestone 20 added native C compilation one command at a time. This milestone adds `make` to drive the existing compiler and turn those commands into a build.
 
-The port depends on timestamp support because make compares modification times. The kernel reports zero for every file and does not stamp writes. The draft expected a clean build to succeed because targets were absent, followed by incorrect no-op builds because edited sources and their objects appeared equally old. Pdpmake disproved that expectation: at `make.c:337`, it treats a zero modification time as a missing file. Even the clean build would fail with `don't know how to make main.c`. The milestone therefore implements the clock and filesystem timestamps before porting make.
+The port depends on timestamp support because make compares modification times. The kernel reports zero for every file and does not stamp writes. The draft expected a clean build to succeed because targets were absent, followed by incorrect no-op builds because edited sources and their objects appeared equally old. The pdpmake program disproved that expectation: at `make.c:337`, it treats a zero modification time as a missing file. Even the clean build would fail with `don't know how to make main.c`. The milestone therefore implements the clock and filesystem timestamps before porting make.
 
 ## Settled choices
 
-Use pdpmake 2.0.4 under the existing vendor pattern: verify the upstream tarball by sha256, extract and build it out of tree behind a stamped `build_pdpmake.sh`, link through `muslgcc` against the ported musl, and stage it through a manifest.
+Use pdpmake 2.0.4 under the existing vendor pattern: verify the upstream tarball by SHA-256, extract and build it out of tree behind a stamped `build_pdpmake.sh`, link through `muslgcc` against the ported musl, and stage it through a manifest.
 
 The choice over bmake, GNU make, and scc-make follows from these constraints:
 
-* Pdpmake is public domain under the Unlicense, with 4297 lines across nine `.c` files and one header. The draft counted 4332 before the tarball entered the tree. Its build is a 30-line POSIX makefile without configure, so unlike tcc it requires no fake cross prefix to avoid running a compiled test.
+* The pdpmake source is public domain under the Unlicense, with 4297 lines across nine `.c` files and one header. The draft counted 4332 before the tarball entered the tree. Its build is a 30-line POSIX makefile without configure, so unlike TinyCC it requires no fake cross prefix to avoid running a compiled test.
 * It implements POSIX.1-2024 make by default, can select POSIX.1-2017, and enables non-POSIX extensions by default. Students can use common makefile constructs or select strict POSIX and observe incompatible rules fail.
-* Busybox-w32 ships it as the `make` applet. Mainline busybox 1.36.1, which this project vendors, has no make applet: its tree lacks `miscutils/make.c`, and `rach2.config` has no `CONFIG_MAKE`. Updating busybox would not provide make.
+* BusyBox-w32 ships it as the `make` applet. Mainline BusyBox 1.36.1, which this project vendors, has no make applet: its tree lacks `miscutils/make.c`, and `rach2.config` has no `CONFIG_MAKE`. Updating BusyBox would not provide make.
 * The ISC-licensed scc-make runner-up has 2336 lines but rejects archive members, ignores `.PHONY`, and accepts no command-line macro override, so `make CC=tcc` fails. Bmake has 31000 lines, uses autoconf, and requires a starting `sys.mk`. GNU make is common but has 36000 lines, GPLv3, autoconf, and gnulib, and requires `--disable-posix-spawn` here.
 
 Exclude parallel builds. `MAX_FDS` is 16 per process and `MAX_PROCS` is 16 system-wide, so `-j` would exhaust processes at about four jobs. The documented contract is `make -j1`.
 
-The implementation showed a simpler reason and corrected the plan. Pdpmake does not run jobs concurrently: `main.c` parses `-j`, adds it to `MAKEFLAGS`, and reports "not implemented". The process limits therefore never apply.
+The implementation showed a simpler reason and corrected the plan. The pdpmake program does not run jobs concurrently: `main.c` parses `-j`, adds it to `MAKEFLAGS`, and reports "not implemented". The process limits therefore never apply.
 
 Do not build this repository's GNU makefiles in the guest.
 
@@ -37,7 +37,7 @@ Planning established each point from the tree or a booted guest:
 * On the first write fault to a present read-only page, the page cache marks its slot dirty (`rach2/sys/mm/pagecache.c:266-269`). Writing a node timestamp dirties the node page, and write-back persists it. Each stamp therefore costs a dirty page.
 * When a still-open file is unlinked, `sys_unlink` orphans it and returns before reaching `krffs_unlink`; see the tail of `rach2/sys/syscall.c` and `krffs_orphan_node` at `rach2/sys/fs/krffs.c:1152`.
 * Staged images are not reproducible. `krffs/krffs_node.c:175-183` initializes a node from the host clock, while `stageimage.krffs.c:230-237` zeroes only nodes that it allocates, excluding the root created by mkfs. Two builds can therefore differ in the root's three timestamps.
-* The image's busybox provides `date`, `stat` with `-c`, `touch`, and `sleep`.
+* The image's BusyBox provides `date`, `stat` with `-c`, `touch`, and `sleep`.
 * Drivers are flat under `rach2/sys`, including `pit.c`, `kbd.c`, `serial.c`, and `power.c`. The `power.c` pattern derives a base from hardware instead of trusting a constant. `C_SRC` is explicit in `rach2/Makefile`, and `make check-sources` rejects an unlisted new `.c` file.
 
 ## Phase 1: add a real-time clock
@@ -154,18 +154,18 @@ If review rejects the shim, phase 7 falls back to a pinned patch replacing pdpma
 
 ## Phase 7: vendor pdpmake
 
-Add `build_pdpmake.sh`, `Readme.md`, `.gitignore`, and the pinned 2.0.4 tarball under `vendor/pdpmake/`. Update `tools/textcheck.sh` to prune the extracted tree in the same commit. Add `make pdpmake`, `PDPMAKE_STAMP`, and `check-pdpmake` beside the tcc targets. Build with `make CC=<muslgcc> LDFLAGS=-static`, then check the result with `tools/check_elf.py`.
+Add `build_pdpmake.sh`, `Readme.md`, `.gitignore`, and the pinned 2.0.4 tarball under `vendor/pdpmake/`. Update `tools/textcheck.sh` to prune the extracted tree in the same commit. Add `make pdpmake`, `PDPMAKE_STAMP`, and `check-pdpmake` beside the TinyCC targets. Build with `make CC=<muslgcc> LDFLAGS=-static`, then check the result with `tools/check_elf.py`.
 
 The plan fixes three integration choices:
 
 * Stage it only as `/bin/make`.
-* Use one pinned patch to set the built-in macros required by this machine: `CC = tcc` and `LDFLAGS = -static`. POSIX leaves their values implementation-defined, so the patch defines the port's platform without changing make's behavior. Do not set them through `/etc/profile`. A login shell reads that file, but a non-login shell, SSH command, or direct exec does not. Make would otherwise invoke tcc for a dynamic link, and tcc would return an error.
-* Stage tcc again as `/bin/cc`, so the conventional `cc` command invokes the compiler. KRFFS has no symlinks, and the image already stages one binary under the three names `login`, `passwd`, and `su`. Include `/bin/cc` in the sysroot checked by the guard.
+* Use one pinned patch to set the built-in macros required by this machine: `CC = tcc` and `LDFLAGS = -static`. POSIX leaves their values implementation-defined, so the patch defines the port's platform without changing make's behavior. Do not set them through `/etc/profile`. A login shell reads that file, but a non-login shell, SSH command, or direct exec does not. Make would otherwise invoke `tcc` for a dynamic link, and `tcc` would return an error.
+* Stage TinyCC again as `/bin/cc`, so the conventional `cc` command invokes the compiler. KRFFS has no symlinks, and the image already stages one binary under the three names `login`, `passwd`, and `su`. Include `/bin/cc` in the sysroot checked by the guard.
 
 Like `/bin/tcc` in milestone 20, `/bin/make` and `/bin/cc` are ordinary programs and remain outside the guard's trusted list.
 
 * Proof: run `check_elf.py` on the binary; require `check-pdpmake` to reject a missing or empty artifact; require the staged image to contain both paths; and build under `env -i` to prove that the result does not depend on a login-shell environment.
-* Mutations: change one character in the tarball's sha256, drop `/bin/cc` from the manifest, and revert the patch. Without the patch, the link under `env -i` must fail.
+* Mutations: change one character in the tarball's SHA-256, drop `/bin/cc` from the manifest, and revert the patch. Without the patch, the link under `env -i` must fail.
 * Readmes: add `vendor/pdpmake/Readme.md`, then update `krffs/Readme.md` and the root `Readme.md`.
 
 ## Phase 8: test the guest build
@@ -209,13 +209,13 @@ From a clean tree, run the complete verification set in one pass: `verify-style`
 3. The root node's mode contains the dirty-mount flag, and `KRFFS_MODE_DIRTY` uses the same bit as `KRFFS_MODE_SUID`. Timestamp stamping must never alter the mode. This milestone must run `crash-test` to check that invariant.
 4. Each write now dirties the node page as well as the data page. Check `persist-test` for excessive writes and page-cache slot pressure.
 5. The proposed clone shim substitutes a copied address space for shared memory. Its exact flag match was meant to limit that substitution, and phase 6 defines the fallback patch.
-6. Make, a shell, and tcc must fit in 32 MB with `VMA_MAX` set to 64 and `MAX_PROCS` set to 16. Recursive make is unsupported, and the Readme must say so.
+6. Make, a shell, and TinyCC must fit in 32 MB with `VMA_MAX` set to 64 and `MAX_PROCS` set to 16. Recursive make is unsupported, and the Readme must say so.
 7. The larger exec limits remain finite. A sufficiently long link command must return `-E2BIG` without killing its caller.
 8. Two phases change the contents of staged images by changing the root times, and one phase changes staging order. Run every image-consuming suite, including the half of `check_setid` that reads nodes directly.
 
 ## What must not be broken
 
-Preserve the 55 probes, the SSH, busybox, and Doom final tests, and the guarantees from milestone 20: output remains static, `-run` remains refused, and an ordinary account can read the sysroot.
+Preserve the 55 probes, the SSH, BusyBox, and Doom final tests, and the guarantees from milestone 20: output remains static, `-run` remains refused, and an ordinary account can read the sysroot.
 
 Staging the same tree must produce the same image, byte for byte.
 
