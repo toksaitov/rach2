@@ -7,12 +7,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual files, every subsystem pass, the historical pass, the first five whole-project checks, and the terminology and boundary pass are complete.
 * First unchecked higher-level entry: complete documentation diff read in repository order, one edited file at a time.
 * Scope: the 88 content paths in `finish.md`, against fixed base `6e253221525273571b7ba12dcb5d1569bd746556`.
-* Active final-stage entry: complete documentation diff, `dev-log/10-ahci/Readme.md`.
-* Current document: `dev-log/10-ahci/Readme.md`.
+* Active final-stage entry: complete documentation diff, `dev-log/11-audit/Readme.md`.
+* Current document: `dev-log/11-audit/Readme.md`.
 
 ## Final-stage cursor
 
-* Diff page: `dev-log/10-ahci/Readme.md`, next output line 1. No page has been read.
+* Diff page: `dev-log/11-audit/Readme.md`, next output line 1. No page has been read.
 * The manifest comparison passed at `32fb6c1`: 88 content paths plus five control files equal all 93 changed Markdown paths.
 * The fixed-base path list contains no non-Markdown path.
 
@@ -29,8 +29,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Commit the completed audit entries. Then read lines 1 through 80 of the fixed-base diff for `dev-log/10-ahci/Readme.md`.
+Commit the completed AHCI entries. Then read lines 1 through 80 of the fixed-base diff for `dev-log/11-audit/Readme.md`.
 
 ## Intended commit boundary
 
-* The completed `dev-log/09-audit/Readme.md` and `dev-log/09-audit/plan.md` diff reviews, their manifest entries, and this cursor.
+* The completed `dev-log/10-ahci/Readme.md` and `dev-log/10-ahci/plan.md` diff reviews, their manifest entries, and this cursor.
