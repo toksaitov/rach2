@@ -54,7 +54,7 @@ The following commits changed code, configuration, or a manifest. The list comes
 * `d25a97d` adds `make tcc-test`, the ENOSYS trace controlled by `rach2.trace=enosys`, and `tools/check_link.py`.
 * `48b7a28` compiles the project's `cat` in the guest and compares it with busybox's implementation.
 * `17a454b` reports missing syscalls by compiler process name instead of subtracting syscall numbers from separate boots.
-* `2893d4e` adds the `make ssh-test` target so the gate can run the SSH capstone unattended.
+* `2893d4e` adds the `make ssh-test` target so the verification run can execute the SSH capstone unattended.
 * `26b6ba2` updates prose affected by the compiler.
 * `9caec47` compares staged headers with their source tree and requires them to be readable by an ordinary account.
 * `c465f67` strengthens both new tests and ensures that they stop their machines on every exit path.
@@ -97,8 +97,8 @@ The machine has no `make`, so multi-step builds require explicit command lines. 
 
 `MAX_FDS` remains 16. Each nested `#include` holds a descriptor until that include returns. The tested programs nest only a few includes rather than sixteen, but the descriptor limit remains small.
 
-## The gate
+## Verification
 
-The gate ran once after `make distclean` emptied the tree, rebuilding musl, busybox, dropbear, and tcc from their tarballs: `make full`, `make verify-style`, `make verify-host` with 18 host boundary tests, `make test` with 55 of 55 probes, `make tcc-test`, `make ssh-test`, `make account-test` for both images, `make shutdown-test`, `make login-test`, `make ping-test`, `make crash-test`, `make test-disk`, `make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`, `make cred-persist-test`, and `make test-noentropy`. Every target passed.
+The final verification ran once after `make distclean` emptied the tree, rebuilding musl, busybox, dropbear, and tcc from their tarballs: `make full`, `make verify-style`, `make verify-host` with 18 host boundary tests, `make test` with 55 of 55 probes, `make tcc-test`, `make ssh-test`, `make account-test` for both images, `make shutdown-test`, `make login-test`, `make ping-test`, `make crash-test`, `make test-disk`, `make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`, `make cred-persist-test`, and `make test-noentropy`. Every target passed.
 
-The capstone now runs as a target within the gate. `make ssh-test` logged root in by key and the test account by password over a dropbear pty, then rejected three attempts. As the unprivileged `test` account, `make tcc-test` compiled and ran a program, compiled the project's `cat` and `ping` from source in the image, and verified rejection of the four unsupported output forms.
+The capstone now runs as a target in that sequence. `make ssh-test` logged root in by key and the test account by password over a dropbear pty, then rejected three attempts. As the unprivileged `test` account, `make tcc-test` compiled and ran a program, compiled the project's `cat` and `ping` from source in the image, and verified rejection of the four unsupported output forms.

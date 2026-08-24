@@ -18,8 +18,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 * Evidence boundary: prose and the historical records themselves only. Do not compare any historical claim, number, path, command, chronology, or conclusion with current implementation.
 * Check repeated model mannerisms, inconsistent names introduced by this milestone, ASCII, prohibited vocabulary, Markdown bullet form, and the complete historical diff in bounded ordered batches. Preserve quoted prompts, commands, output, ids, and historical substance.
 * The portable-plan correction is committed as `92ee567`. The contextual search then found `gate` used as shorthand for a verification list in milestones 19 through 21. Hardware gates and passages that discuss the old vocabulary remain unchanged.
-* `dev-log/19-busybox-first/plan.md` was read whole. Its three affected lines now say verification list, checks, and these checks; every command and historical requirement is unchanged.
-* Intended commit boundary: this one-file historical prose correction and the milestone checkpoint. Resume with `dev-log/20-compiler/Readme.md` after a clean commit.
+* The BusyBox plan correction is committed as `9003c91`. `dev-log/20-compiler/Readme.md` was read whole. Four uses of `gate` now say verification run, verification, final verification, or sequence; every command, count, and result is unchanged.
+* Intended commit boundary: this one-file historical prose correction and the milestone checkpoint. Resume with `dev-log/20-compiler/plan.md` after a clean commit.
 
 ## Boundary
 
@@ -28,4 +28,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run the file-level banned-prose and ASCII checks for `dev-log/19-busybox-first/plan.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file historical correction with the checkpoint and require a clean tree. Then read `dev-log/20-compiler/Readme.md` whole.
+Run the file-level banned-prose and ASCII checks for `dev-log/20-compiler/Readme.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file historical correction with the checkpoint and require a clean tree. Then read `dev-log/20-compiler/plan.md` whole.
