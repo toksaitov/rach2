@@ -11,6 +11,7 @@ This is the persistent record for information needed after a compaction or betwe
 
 ## Non-document defects
 
+* Comments above the root Makefile's verification targets and several comments under `tools/` use the private register that `CLAUDE.md` rejects for sets of checks. One root Makefile comment also uses a mechanically prohibited term. The current style check does not report these locations. This milestone does not edit Makefile, script, or source comments.
 * The comment at the top of `rach2/guest.mk` says the response file avoids putting 87 objects on one command line. `OBJS` now has 88 entries, confirmed by `tools/check_guest.py`. This milestone does not edit source comments.
 * `mk/build.mk` says a Docker `grub-mkrescue` call in `rach2/Makefile` uses `$(abspath ...)`. No `abspath` call remains in the in-house Makefiles or tools. This milestone does not edit Makefile comments.
 * The `.clangd` comment says the host KRFFS tools receive host-compiler flags from the compilation database. `tools/gen_compile_commands.sh` excludes `krffs/`, so that database supplies no such flags. This milestone does not edit configuration comments.
