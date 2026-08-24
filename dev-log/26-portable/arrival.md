@@ -1,45 +1,45 @@
-# What a clone does not carry
+# What a clone omits
 
-`git clone` gives a tree that builds. It does not give a tree that is identical to the one it came from, and the difference is deliberate in every case: these files are either secrets, or game data nobody may redistribute, or credentials that would be worth less if they travelled. This page says what is missing, what happens if you do nothing, and what carrying it would buy.
+`git clone` produces a buildable tree, but deliberately omits secrets, game data that cannot be redistributed, and machine-specific credentials. This page lists each omission, the default behavior, and the reason to transfer it.
 
 ## The credentials
 
-Eleven files, git-ignored by `krffs/.gitignore`, in three groups.
+`krffs/.gitignore` excludes eleven credential files in three groups.
 
-On a clone where all of them are absent, `make` mints a working set on the first build, and that is the ordinary case. A PARTIAL set is the one to be careful with: each generator stops on a sentinel rather than filling gaps, so `gen_demo_key.sh` does nothing once the aggregate `authorized_keys` exists, `gen_demo_password.sh` does nothing once `shadow` exists, and neither ever creates the two optional `.extra` files. Carry all of a group or none of it; half a group survives a build unrepaired.
+When all eleven files are absent, the first `make` creates a working set. A PARTIAL set requires care because each generator stops when it finds a sentinel instead of filling gaps. `gen_demo_key.sh` does nothing once the aggregate `authorized_keys` exists, `gen_demo_password.sh` does nothing once `shadow` exists, and neither generator creates the two optional `.extra` files. Transfer every file in a group or none of them. A build does not repair an incomplete group.
 
-The root SSH key, minted by `krffs/gen_demo_key.sh`:
+`krffs/gen_demo_key.sh` creates the root SSH files:
 
-* `krffs/rach2_demo_ed25519` and `.pub`, the keypair `ssh -i` uses to log in as root.
+* `krffs/rach2_demo_ed25519` and `.pub`, the key pair used by `ssh -i` to log in as root.
 * `krffs/authorized_keys`, staged into the image as root's `~/.ssh/authorized_keys`.
-* `krffs/authorized_keys.extra`, optional and hand-made: any public key put here is staged alongside the generated one, which is how a person's own workstation key gets in.
+* `krffs/authorized_keys.extra`, an optional hand-written file whose public keys are staged beside the generated key, allowing a workstation key to be added.
 
-The test account's SSH key, the same shape:
+The test account has the corresponding SSH files:
 
 * `krffs/rach2_test_ed25519` and `.pub`, and `krffs/test_authorized_keys`.
-* `krffs/test_authorized_keys.extra`, the same optional hand-made addition as the root one.
+* `krffs/test_authorized_keys.extra`, the same optional hand-written addition as the root file.
 
-The passwords, minted by `krffs/gen_demo_password.sh`:
+`krffs/gen_demo_password.sh` creates the password files:
 
-* `krffs/rach2_demo_password` and `krffs/rach2_test_password`, the plaintext, kept so a person can read them.
-* `krffs/shadow`, staged as the image's `/etc/shadow`, holding their SHA-512 crypt hashes.
+* `krffs/rach2_demo_password` and `krffs/rach2_test_password`, retained in plaintext so a person can read them.
+* `krffs/shadow`, staged as the image's `/etc/shadow`, containing their SHA-512 crypt hashes.
 
-Do nothing and the next build mints a new set, which is usually what you want: the new machine gets its own credentials and the old ones open nothing on it. Carry them, out of band, only to keep an existing image or a running installation reachable with the keys you already have. A sealed machine is the case that matters: its credentials were minted once for that machine and exist nowhere else, so losing them means reflashing it.
+Without a transfer, the next build creates a new set. The new machine then has independent credentials, and the old credentials cannot access it. Transfer the files outside Git only when existing keys must continue to reach an image or running installation. Credentials for a sealed machine were created once for that machine and exist nowhere else; losing them requires reflashing it.
 
 ## The machine's own identity
 
-Not a file here at all. The SSH server mints a host key on its first boot and keeps it, and the fingerprint it prints on that boot is the only thing that authenticates the machine to its first client. It is read off the machine's own screen and written into the session record; the netconsole capture shows the same line but is unauthenticated broadcast, so it proves nothing. A clone cannot carry this because it does not exist until the machine boots.
+The machine's identity is not a repository file. The SSH server creates and retains a host key on its first boot. The fingerprint printed during that boot is the only authentication available to the first client. It must be read from the machine's screen and written in the session record. A netconsole capture contains the same line, but its unauthenticated broadcast provides no proof. A clone cannot include a key that does not exist until the machine boots.
 
-Recovery is different: its root is a RAM image, so it mints a new host key on every recovery boot and `ssh` will say the identity changed. That is expected, and `dev-log/25-sealed/checklist.md` says what to do about it.
+Recovery uses a RAM image as its root, so every recovery boot creates a new host key and causes `ssh` to report a changed identity. `dev-log/25-sealed/checklist.md` documents the expected response.
 
 ## The game data
 
-`ports/doom/doom1.wad`, about 4 MB, git-ignored because it is game content. Put either the id Software shareware `doom1.wad` (sha256 `1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`) or `freedoom1.wad` from https://freedoom.github.io saved under that name, and run `./ports/doom/fetch_wad.sh` to check it is in place. Without it the image still builds: the WAD is staged as an optional file, and `doom` starts and exits with "IWAD not found".
+Git ignores `ports/doom/doom1.wad`, about 4 MB, because it is game content. Save either the id Software shareware `doom1.wad` (sha256 `1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`) or `freedoom1.wad` from https://freedoom.github.io under that name, then run `./ports/doom/fetch_wad.sh` to check it. The image builds without the optional WAD; `doom` then starts and exits with "IWAD not found".
 
 ## The build tree
 
-`build/` is git-ignored and regenerable, and it is hundreds of megabytes. Clone rather than copy. If you must copy a working tree, exclude `build/` and either run `make distclean` or delete the vendored stamps (`vendor/*/.stamp`) first: a stamp left behind without the output it stands for makes `make full` skip rebuilding that capstone, and the missing binary shows up much later as a puzzle.
+Git ignores the regenerable `build/` directory, which occupies hundreds of megabytes. Prefer a clone to a copied working tree. When copying is necessary, exclude `build/` and first run `make distclean` or delete the vendor stamps (`vendor/*/.stamp`). A stamp without its corresponding output causes `make full` to skip that capstone, leaving a missing binary that is reported only later.
 
 ## GitHub
 
-The remote's authentication is the machine's, not the repository's. A new machine needs its own credential (an SSH key on the account, or `gh auth login`) before it can push. Nothing in the tree carries it and nothing should.
+Remote authentication belongs to the machine. Before it can push, a new machine needs its own credential, either an SSH key registered with the account or `gh auth login`. The tree neither includes nor should include that credential.

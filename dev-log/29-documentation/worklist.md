@@ -144,16 +144,16 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 ### Milestones 24 through 28 and the index
 
 * [x] `dev-log/24-metal/Readme.md`
-* [ ] `dev-log/24-metal/ahci-no-disk.md`
-* [ ] `dev-log/24-metal/baseline.md`
-* [ ] `dev-log/24-metal/checklist.md`
-* [ ] `dev-log/24-metal/plan.md`
-* [ ] `dev-log/25-sealed/Readme.md`
-* [ ] `dev-log/25-sealed/checklist.md`
-* [ ] `dev-log/25-sealed/plan.md`
-* [ ] `dev-log/26-portable/Readme.md`
-* [ ] `dev-log/26-portable/arrival.md`
-* [ ] `dev-log/26-portable/plan.md`
+* [x] `dev-log/24-metal/ahci-no-disk.md`
+* [x] `dev-log/24-metal/baseline.md`
+* [x] `dev-log/24-metal/checklist.md`
+* [x] `dev-log/24-metal/plan.md`
+* [x] `dev-log/25-sealed/Readme.md`
+* [x] `dev-log/25-sealed/checklist.md`
+* [x] `dev-log/25-sealed/plan.md`
+* [x] `dev-log/26-portable/Readme.md`
+* [x] `dev-log/26-portable/arrival.md`
+* [x] `dev-log/26-portable/plan.md`
 * [ ] `dev-log/27-prose/Readme.md`
 * [ ] `dev-log/27-prose/plan.md`
 * [ ] `dev-log/27-prose/worklist.md`

@@ -1,12 +1,12 @@
-# The laptop session
+# Laptop hardware session
 
-Everything below needs hands on the Lenovo. It is written to be worked through in order, because each step's failure has a different next move and the order puts the cheap answers first.
+Every step requires physical access to the Lenovo. Perform them in order because each failure has a different follow-up and the early steps provide the simplest results.
 
-Nothing here writes the SSD. The stick is the only boot device, Windows is untouched, and the metal kernel is built read-only at the disk so that this stays true even if something goes wrong.
+No step writes the SSD. The stick is the only boot device, Windows remains unchanged, and the metal kernel enforces read-only disk access even after an error.
 
 ## Before starting
 
-On the Mac:
+Run these commands on the Mac:
 
 ```sh
 make full                 # the base build and the capstones
@@ -15,122 +15,122 @@ make rach2-metal-iso      # the hybrid image for the stick
 make metal-test           # the same image, rehearsed unattended in QEMU
 ```
 
-Then write `build/iso/rach2-metal.iso` to the stick unchanged. It is a hybrid image: the same file boots in QEMU and from a USB port.
+Write `build/iso/rach2-metal.iso` to the stick without modification. The same hybrid image boots in QEMU and from USB.
 
-What to have on hand:
+Prepare the following:
 
-* An Ethernet cable from the laptop to the same switch or router as the Mac.
-* Nothing to type at the GRUB prompt: the metal menu's first three entries carry `rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole` already. For another network, rebuild with `RACH2_METAL_IP=... RACH2_METAL_GATEWAY=... make rach2-metal-iso`, or pick the entry with no network configuration and edit at the prompt.
-* The demo passwords, which are short and fixed for development: root is `1qA2wS3eD` and the test account is `4rF5tG6yH` (`krffs/gen_demo_password.sh`, overridable with `RACH2_ROOT_PASSWORD`).
-* An address for the laptop that the router will not hand to anything else. Reserve it, or pick one outside the DHCP pool. Write it down; it goes on the kernel command line, since there is no DHCP.
-* The Mac's own address on that network, and a terminal ready to run `tcpdump`.
-* A camera. On the boots before SSH works, a photograph of the screen is the log.
+* Connect the notebook by Ethernet cable to the same switch or router used by the Mac.
+* The first three metal-menu entries already include `rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole`, so they require no GRUB edits. For another network, rebuild with `RACH2_METAL_IP=... RACH2_METAL_GATEWAY=... make rach2-metal-iso`, or select the entry without network configuration and edit it at the prompt.
+* The short, fixed development passwords are `1qA2wS3eD` for root and `4rF5tG6yH` for the test account. `krffs/gen_demo_password.sh` generates them, and `RACH2_ROOT_PASSWORD` overrides the root value.
+* Reserve a notebook address that the router will not assign elsewhere, or choose one outside the DHCP pool. Record it for the kernel command line because Rach2 has no DHCP client.
+* Record the Mac's address on the same network and prepare a terminal for `tcpdump`.
+* Keep a camera ready. Before SSH works, a screen photograph provides the boot log.
 
-## What to connect and what to serve
+## Connections and host services
 
-The laptop gets: power, the Ethernet cable, and the stick. Nothing else.
+Connect only power, Ethernet, and the stick to the notebook.
 
-The Mac serves two things, and only while the session is running:
+The Mac provides two services only during the session:
 
-* A packet capture, which is the first proof the network card works at all:
+* Start a packet capture to obtain the first evidence that the network card transmits:
   `sudo tcpdump -i en0 -nn -e -s0 'ether proto 0x88b5'`
-  Those are the netconsole frames. Their source address should be the laptop's own `28:D2:44:7E:E0:AF`.
-* An SSH client, once the machine answers.
+  These are netconsole frames. Their source address should be the notebook's `28:D2:44:7E:E0:AF`.
+* Use an SSH client after the notebook responds.
 
-## The boots, in order
+## Ordered boots
 
-Each boot is written down with where it came from, because the network card's entry state depends on it and that is the risk this milestone is most exposed to.
+Record the preceding machine state for every boot. The network card's initial state depends on whether the boot follows cold power, Windows, or Rach2.
 
-### 1. Cold power-on, the diagnostic entry
+### 1. Cold power-on with the diagnostic entry
 
-From a full power-off, boot the stick and pick the `rach2.diag` menu entry.
+After a complete power-off, boot the stick and select `rach2.diag`.
 
-The boot log scrolls past in well under a second and cannot be photographed; the first session had to film it. So the diagnostic entry now prints its report a SECOND time at the end of the boot and waits there until a key is pressed. Photograph that screen, then press a key. The earlier copy of the report is still the one that scrolls, and is not worth chasing.
+The boot log scrolls past in well under a second and cannot be photographed; the first session required video. The diagnostic entry therefore prints the report a second time at the end of boot and waits for a key. Photograph that report before pressing a key. Do not try to capture the earlier scrolling copy.
 
-What it should show: the kernel's end address, the allocator's break, the direct-map end, the free frame count, every module's range, and the Ethernet controller's identity read from `TxConfig`.
+The report should include the kernel end address, allocator break, direct-map end, free-frame count, every module range, and the Ethernet controller identity read from `TxConfig`.
 
-* The masked revision should be `0x509`. Write down what it actually is. This is the number the driver gates on and the one thing no tool under Windows could safely read.
-* If the boot stops before this, the module layout is the first suspect. `--quirk-modules-after-kernel` is the recorded fallback.
+* Record the actual masked revision; the expected value is `0x509`. The driver checks this value, and no Windows tool could read it safely.
+* If the boot stops earlier, investigate module placement first. The recorded fallback is `--quirk-modules-after-kernel`.
 
-### 2. Cold power-on, the normal entry, no network expected yet
+### 2. Cold power-on with the normal entry
 
-Boot the normal entry. It should reach `rach2 login:` on VGA with the 8042 keyboard working.
+Boot the normal entry without expecting network access. It should reach `rach2 login:` on VGA with a working 8042 keyboard.
 
-If it stops during bring-up, the switches exist for exactly this. Edit the command line at the GRUB prompt and add them one at a time: `rach2.nomouse`, `rach2.noaudio`, `rach2.nonet`. A skipped device says so on its boot line, so a photograph still shows what was asked for. Whichever switch lets the machine reach the login prompt names the probe that stopped it.
+If initialization stops, edit the GRUB command line and try `rach2.nomouse`, `rach2.noaudio`, and `rach2.nonet` one at a time. The boot log identifies each skipped device, so a photograph records the requested configuration. The option that permits login identifies the device probe that stopped.
 
-### 3. Cold power-on, with the address and the log on the wire
+### 3. Cold power-on with addressing and netconsole
 
-Add to the command line:
+Add this command line:
 
 ```
 rach2.ip=<the reserved address>/24 rach2.gateway=<the router> rach2.netconsole
 ```
 
-With `tcpdump` already running on the Mac, this is the first real test of the ported driver. What to look for, in order of how much it proves:
+Start `tcpdump` on the Mac before booting. This is the first hardware test of the ported driver. Check these results in increasing order of evidence:
 
-* Frames arriving at all, with source `28:D2:44:7E:E0:AF`. The card transmits.
-* Their sequence numbers ascending with no gaps. The ring and the doorbell work.
-* The text in them being the boot log, starting from before the network came up. The buffered log was carried.
+* Frames arrive from `28:D2:44:7E:E0:AF`, proving that the card transmits.
+* Sequence numbers increase without gaps, proving that the ring and doorbell operate.
+* Frame contents contain the boot log beginning before network initialization, proving that buffering retained the earlier output.
 
-Capture the whole session to a file; it is the boot log this machine has never been able to produce.
+Save the complete capture. It provides the boot log previously unavailable from this notebook.
 
-If no frames arrive, the boot line still says a great deal: the driver's own line reports the revision, the station address and the negotiated speed, and a refusal names which handshake did not complete. Photograph it. That message is the diagnostic the whole driver was written to produce.
+If no frames arrive, photograph the driver's boot line. It reports the revision, station address, negotiated speed, and any failed handshake. The driver was written to provide this diagnostic without networking.
 
-### 4. The same, at 100 Mbps
+### 4. Repeat at 100 Mbps
 
-Repeat on a 100 Mbps port. The ring is 64 descriptors where the reference uses 256, and that deviation is decided by numbers rather than argument: a 64-frame burst should complete with no drops, and the counters on the boot line say so.
+Repeat the test on a 100 Mbps port. This ring has 64 descriptors while the reference uses 256. A 64-frame burst must complete without drops, as reported by the boot-line counters.
 
-### 5. SSH, and the disk read against the baseline
+### 5. SSH and a disk read against the baseline
 
-Two usage notes that cost the first session time. This project's `ping` takes a host and no flags, so `ping 192.168.0.1` and not `ping -c 1 192.168.0.1`, which tries to resolve `-c` as a name. And a name needs `/etc/resolv.conf`, which the metal image stages naming 1.1.1.1; numeric addresses never touch it.
+The first session established two usage requirements. This project's `ping` accepts a host without flags. Use `ping 192.168.0.1`; `ping -c 1 192.168.0.1` instead tries to resolve `-c` as a name. Host names require `/etc/resolv.conf`, which the metal image stages with 1.1.1.1. Numeric addresses do not use that file.
 
-If the frames arrive, the machine is probably reachable. From the Mac:
+If frames arrive, try SSH from the Mac:
 
 ```sh
 ssh -i krffs/rach2_demo_ed25519 root@<the laptop>
 ```
 
-The host key is minted per boot, so use a scratch known-hosts file rather than turning checking off.
+The host key changes on every boot. Use a temporary known-hosts file instead of disabling host-key checking.
 
-Everything after this point is a normal session, and the loop of this milestone is over: the screen and the camera stop being the interface.
+After SSH login, the remaining work uses a normal session. The screen and camera are no longer the interface.
 
-Add `rach2.disk=ahci rach2.diskdiag` to the command line and read the disk without touching it:
+Add `rach2.disk=ahci rach2.diskdiag` to the command line, then read the disk without writing it:
 
 ```sh
 cat /proc/disk
 dd if=/dev/disk0 bs=512 count=1 2>/dev/null | sha256sum
 ```
 
-Compare every line against `baseline.md`, which holds what Windows measured before Rach2 existed on this machine: the model, the serial, 1953525168 sectors, the disk signature `0x4905b015`, the two partition entries, and the MBR's SHA-256. A disagreement is the finding, whichever side is wrong. Nothing in this step writes; if the machine ever prints `refused command` during it, the diagnostic strayed off the read path and that is a defect to report rather than to work around.
+Compare every line with `baseline.md`, which records the Windows measurements taken before Rach2 ran on this notebook: model, serial, 1953525168 sectors, disk signature `0x4905b015`, two partition entries, and the MBR SHA-256. Any difference requires investigation, regardless of which side is wrong. This step performs no writes. If it prints `refused command`, the diagnostic left the read path; report that defect instead of bypassing it.
 
-### 6. After a Windows shutdown
+### 6. Boot after a Windows shutdown
 
-Shut Windows down normally, then boot the stick again. This is the other entry state the machine will really present, and the one the out-of-band handshake and the AHCI reset exist for. Both the network card and the SATA link may behave differently from a cold start; record which.
+Shut Windows down normally, then boot the stick again. This provides the other expected initial state and exercises the out-of-band handshake and AHCI reset. Record whether the network card or SATA link differs from a cold start.
 
-### 7. Windows, with the stick removed
+### 7. Boot Windows without the stick
 
-Boot Windows. It must come up exactly as before. This is checked at the end of every session, not once.
+Remove the stick and boot Windows. It must behave exactly as before. Repeat this check at the end of every session.
 
-### 8. The scripted acceptance
+### 8. Run scripted acceptance
 
-Once SSH answers, run the scripted half from the development host rather than reading numbers off a screen:
+After SSH responds, run the scripted checks from the development host:
 
 ```sh
 sh tools/metal_accept.sh <the laptop>
 ```
 
-It reports what the machine says it is, checks that the running kernel is the read-only build and that nothing is mounted, and compares the drive's identity and the hash of its first sector against `baseline.md`. Keep its output; it is the record of the session. Everything it cannot do is in this file, and stays here: it cannot pull a cable, power-cycle a machine, hear a sound, or watch Windows boot.
+The script reports the machine identity, requires the read-only kernel and no mounted disk, and compares the drive identity and first-sector hash with `baseline.md`. Retain its output as the session record. This checklist retains the manual tasks that the script cannot perform: disconnecting a cable, power-cycling the notebook, hearing a sound, and watching Windows boot.
 
-## What to capture when something does not work
+## Failure evidence
 
-* The screen, photographed, including the line the boot stopped on.
-* The `tcpdump` capture, whatever it holds, including nothing.
-* Which entry, which command line, and what the machine was doing before this boot (cold, after Windows, after a Rach2 reboot). The entry state is part of the fact.
+* Photograph the screen, including the line where boot stopped.
+* Save the `tcpdump` capture even when it contains no frames.
+* Record the menu entry, complete command line, and preceding state: cold, after Windows, or after a Rach2 reboot. That initial state is part of the result.
 
-A capture proves the displayed state and nothing more. What is wanted from this session is measured numbers: the revision, the station address, the negotiated speed and duplex, the frame and drop counters, and the memory-layout figures.
+A capture proves only the recorded state. Collect the measured revision, station address, negotiated speed and duplex, frame and drop counters, and memory-layout values.
 
-## What is deliberately not in this session
+## Excluded work
 
-* Nothing writes the SSD. Not the partition table, not a filesystem, not one sector. The metal kernel cannot: it refuses every command but the four that read.
-* No Linux is booted on this machine. Keeping it off keeps its driver's idea of the network card's state out of the experiment.
-* The carve, the persistent host key and the install loop are the next milestone phase, and they are gated on the owner's approval after a full backup.
+* Do not write the SSD: not the partition table, a file system, or one sector. The metal kernel permits only the four read commands.
+* Do not boot Linux on the notebook. Its driver would change the network card's initial state and invalidate the experiment.
+* Partitioning, a persistent host key, and the installation loop belong to the next milestone phase. They require the owner's approval after a complete backup.

@@ -1,32 +1,23 @@
 # The sealing session
 
-This is the session that writes the disk. Everything before it was rehearsal; after it the drive goes into the laptop and the case is closed, and every change after that arrives over SSH.
+This session writes the disk. All earlier work was rehearsal. Afterward, the drive goes into the laptop, the case is closed, and every subsequent change arrives over SSH.
 
-It is written to be worked through in order. Two things make it different from the milestone 24 session, and both are the reason it is a document rather than a habit: this one writes a whole drive, and the drive it writes is not the one that session measured.
+Follow the procedure in order. It differs from the milestone 24 session in two ways: it writes a complete drive, and it does not write the drive measured in that session.
 
 ## What this session does
 
 1. Build the image and rehearse it in QEMU.
-2. List the candidate drive and everything the host reports about it, get the owner's approval naming that node, and confirm the node by unplugging and replugging it.
-3. Write 660602880 bytes to it over a USB adapter, from the Mac.
-4. Read the same count back off the drive and compare hashes.
-5. Screw the drive into the laptop, boot it, and reach it over SSH.
-6. Write down what was on the disk that day.
+2. List the candidate drive and all properties reported by the host, obtain the owner's approval for that node, and confirm it by unplugging and reconnecting the drive.
+3. Write 660602880 bytes from the Mac through a USB adapter.
+4. Read the same byte count from the drive and compare hashes.
+5. Install the drive in the laptop, boot it, and connect over SSH.
+6. Record the disk contents from that day.
 
 ## The passwords come first
 
-The passwords this repository builds with are development ones, written down in
-every checklist and in the script that mints them: root is `1qA2wS3eD` and the
-test account is `4rF5tG6yH`. They are fine for a machine that lives in QEMU.
-They are not fine for this one, and the reason is a chain rather than any one of
-them: the SSH server refuses root a password, but the test account has one, and
-the image stages a set-id `su`. Anyone who has read this repository could log in
-as `test` and become root without ever touching the key.
+The repository's default passwords are for development and appear in every checklist and in their generating script: root uses `1qA2wS3eD`, and the test account uses `4rF5tG6yH`. They are suitable for QEMU but not for this machine. The SSH server rejects root password login, but the test account has a password and the image stages a set-id `su`. Anyone who has read the repository could log in as `test` and become root without the key.
 
-So the sealing build mints its own. The generator leaves credentials that are
-already there alone, because every image target calls it and a script that
-reminted on each call would change a machine's passwords under whoever was
-using them; replacing them is asked for by name:
+The sealing build therefore creates separate passwords. The generator preserves existing credentials because every image target invokes it; replacing them on every call would unexpectedly change the machine's passwords. Replacement requires an explicit option:
 
 ```sh
 RACH2_REPLACE_PASSWORDS=1 \
@@ -36,159 +27,88 @@ RACH2_TEST_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)"
 cat krffs/rach2_demo_password krffs/rach2_test_password
 ```
 
-Run that BEFORE the build below, and copy both lines into the session record;
-they are the only copy, and the machine they open will not be openable any other
-way. Everything built afterwards carries those hashes. Without
-`RACH2_REPLACE_PASSWORDS` the script exits without doing anything when
-`krffs/shadow` is already there, which is what every other build wants and is
-exactly the trap this step is written to avoid.
+Run that BEFORE the build below and copy both lines into the session record. They are the only copy, and no other passwords will open the machine. Every later build carries those hashes. Without `RACH2_REPLACE_PASSWORDS`, the script exits without changing an existing `krffs/shadow`, as required by ordinary builds. The explicit option prevents this sealing build from retaining the development credentials.
 
-The tree is left holding those passwords afterwards, which is right for the
-build that follows and wrong for the next ordinary day's work: to go back to the
-development credentials, run the same command with `RACH2_REPLACE_PASSWORDS=1`
-and neither password variable set.
+The tree retains the new passwords for the following build. Before returning to ordinary development, run the same command with `RACH2_REPLACE_PASSWORDS=1` and neither password variable set.
 
-The keys are the other half, and they are not per-machine by default:
-`gen_demo_key.sh` leaves a keypair alone once it exists, so a tree that has ever
-built an image is carrying the key every demo on that machine has used. The
-sealing build mints new ones the same way:
+The login keys also require replacement. `gen_demo_key.sh` preserves an existing keypair, so a tree that has built an image retains the key used by every demo on that machine. The sealing build creates a new pair explicitly:
 
 ```sh
 RACH2_REPLACE_KEYS=1 sh krffs/gen_demo_key.sh
 ```
 
-`krffs/rach2_demo_ed25519` is then the only thing that opens a root session on
-this machine, and the old one opens nothing. Keep it where the machine is not,
-and take a copy: it cannot be replaced afterwards without writing the disk
-again.
+`krffs/rach2_demo_ed25519` then becomes the only key that opens a root session on this machine; the previous key no longer works. Store it away from the machine and keep a copy. Replacing it later requires another disk write.
 
 ## The machine's own identity
 
-The server mints a host key on its first boot and keeps it, so the ordinary
-system has one identity from then on and `ssh` can pin it in the usual way. The
-first connection is the one with nothing to compare against, and the machine
-prints the fingerprint as it generates the key:
+The server creates and retains a host key on its first boot. The ordinary system then has a stable identity that `ssh` can pin. No previous identity is available for the first connection, so the machine prints the fingerprint when it generates the key:
 
 ```
 Generated hostkey /etc/dropbear/dropbear_ed25519_host_key, fingerprint is SHA256:...
 ```
 
-Read that off the laptop's own screen, at the machine, and write it into the
-session record. This is the one moment in the whole procedure when the screen is
-worth walking to: it is the only channel here that nobody else on the network
-can write to. The netconsole capture carries the same line, and it is useful for
-seeing what the machine did, but it is unauthenticated broadcast: anyone on the
-segment can send a frame carrying whatever fingerprint they like. Do not verify
-an identity from it.
+Read the fingerprint from the laptop's screen and write it in the session record. This is the only step that requires the screen because no other machine on the network can write to it. The netconsole capture contains the same line and records the boot, but it is unauthenticated broadcast. Any station on the segment can transmit an arbitrary fingerprint. Do not use it to verify the server's identity.
 
-Recovery is different and it is worth knowing before the day it is needed: its
-root is a RAM image, so it mints a new host key on every recovery boot and `ssh`
-will say the identity changed. The screen is the same answer, if the machine can
-be reached; if it cannot, then the honest position is that the connection is
-unauthenticated, and what goes down it should be judged on that basis. A whole
-root partition sent to a machine that turns out to be somebody else is a bad
-day, but so is a machine that stays broken. The mitigation this project has is
-that the image sent is not a secret and its arrival is verified by a hash read
-back off the drive, so a wrong destination is detected rather than trusted.
+Recovery differs because its root is a RAM image. It creates a new host key on every recovery boot, and `ssh` reports the identity change. Verify the new fingerprint on the screen when the machine is accessible. Without the screen, the connection is unauthenticated and must be treated accordingly. Sending a complete root partition to the wrong machine is destructive, but leaving the target unrepaired may also be unacceptable. The transmitted image is not secret, and a hash of the bytes read back from the drive verifies its arrival. This detects a wrong destination instead of assuming the connection was authentic.
 
 ## Before starting
 
-On the Mac, after the passwords above:
+After replacing the passwords, run these commands on the Mac:
 
 ```sh
 make rach2-sealed-disk    # the artifact: 64 MiB boot, 500 MiB root, 64 MiB recovery
 make sealed-test          # the same artifact, operated over SSH in QEMU
 ```
 
-`make sealed-test` prints the artifact's SHA-256 on its first line. Copy that
-line into the session record and keep it to hand: it names the artifact that was
-rehearsed, and every check below compares against that number rather than
-against whatever file happens to be in `build/images` later.
+`make sealed-test` prints the artifact's SHA-256 on its first line. Copy that line into the session record. It identifies the rehearsed artifact, and every later check uses that value rather than the file that happens to occupy `build/images`.
 
 ```sh
 SEALED_SHA=<the digest sealed-test printed>
 shasum -a 256 build/images/rach2-sealed.disk    # must equal $SEALED_SHA
 ```
 
-If it does not, something was rebuilt after the rehearsal, and what is on disk
-is not what was tested. Rehearse again rather than writing it.
+If the values differ, the artifact was rebuilt after rehearsal and is not the tested image. Rehearse the new artifact before writing it.
 
 What to have on hand:
 
 * The 250 GB SSD and a USB-to-SATA adapter.
-* The laptop's screws and whatever opens its back panel.
-* An Ethernet cable to the same switch as the Mac. The sealed image takes its address from DHCP; the static entries in its menu carry 192.168.0.105/24 through 192.168.0.1 for a network that hands out nothing.
-* The two passwords minted above, from the session record. They are not the development ones any more, and nothing else knows them. Root logs in over SSH by key alone; the test account's password is what `su` asks for at the console.
-* `krffs/rach2_demo_ed25519`, the key the image was built around.
+* The laptop's screws and a tool for opening its back panel.
+* An Ethernet cable connected to the same switch as the Mac. The sealed image obtains its address through DHCP; the static menu entries use 192.168.0.105/24 through 192.168.0.1 when no server responds.
+* The two passwords created above and copied into the session record. They are no longer the development passwords, and no other copy exists. Root uses SSH key authentication alone; the test account uses its password for `su` at the console.
+* `krffs/rach2_demo_ed25519`, the key included in the image.
 
 ## Identifying the drive
 
-This is the step that cannot be undone by rebuilding, so it is the one written
-in the most detail.
+This step cannot be undone by rebuilding, so it requires the most detailed checks.
 
-Nothing in Rach2 is bound to a particular drive. The kernel probes for whatever
-disk answers and finds its root by scanning partition entries for the KRFFS
-magic, so the image boots from any drive carrying the layout. Drive identity is
-a guard on this host's `dd` and on nothing else, which is why the guard is a
-person confirming the drive in front of them rather than a string comparison
-against a label.
+Rach2 is not bound to a particular drive. The kernel probes the available disk and scans its partition entries for the KRFFS magic, so any drive with the layout can boot the image. Drive identity protects only this host's `dd` command. The required check is therefore a person confirming the physical drive, not a label embedded in the image.
 
-So the check is an approval, and `CLAUDE.md` carries it as project policy for
-any irreversible hardware operation. Whoever is about to write, a person or an
-assistant, lists the candidate and everything the host reports about it,
-presents that, and writes only after an approval naming the node. An approval
-does not carry to the next run, and one given on another machine does not carry
-at all, because the node number belongs to the host and the moment rather than
-to the drive.
+The check requires approval under the irreversible-hardware policy in `CLAUDE.md`. Before writing, the operator or assistant lists the candidate and all properties reported by the host, presents them to the owner, and waits for approval that specifies the node. Approval applies only to that run on that host because a node number identifies the host's current attachment, not the drive permanently.
 
-With the target drive on the adapter and nothing else new plugged in:
+Connect the target drive through the adapter with no other new device attached:
 
 ```sh
 diskutil list physical       # every disk, so the candidate is seen among them
 diskutil info /dev/diskN     # size, bus, internal or external, whole disk
 ```
 
-What is presented, and what must hold before an approval is worth asking for:
+Present the following properties and confirm them before requesting approval:
 
-* The size is around 250 GB, not 1 TB. The laptop's original drive is a Samsung
-  SSD 870 EVO 1TB, serial S74ZNX0Y927920A, 1953525168 sectors
-  (`dev-log/24-metal/baseline.md`), and writing this image to it would destroy
-  the Windows installation this project has kept intact through two milestones.
-* `Device Location` is `External`. The Mac's own internal drive never is.
-* `Whole` is `Yes`: the node is the whole disk and not a partition.
-* The partition table the drive currently carries, stated as it is, so the owner
-  can say whether that is the drive they believe it to be.
-* The model and serial where the bridge passes them through. The adapter in use
-  reports the model as `Generic` and no serial at all, because it answers about
-  itself rather than about the drive. That is a limit of the adapter and not a
-  reason to stop; it is the reason the approval carries the weight the serial
-  comparison used to.
+* The size is around 250 GB, not 1 TB. The laptop's original drive is a Samsung SSD 870 EVO 1TB, serial S74ZNX0Y927920A, with 1953525168 sectors (`dev-log/24-metal/baseline.md`). Writing this image there would destroy the Windows installation preserved through two milestones.
+* `Device Location` is `External`. The Mac's internal drive does not have this value.
+* `Whole` is `Yes`, confirming that the node represents a complete disk rather than a partition.
+* The drive's current partition table, reported without interpretation, so the owner can compare it with the expected device.
+* The model and serial when the bridge reports them. The adapter used here reports model `Generic` and no serial because it describes itself rather than the drive. This adapter limitation does not prevent the operation, but it makes explicit approval more important because no serial comparison is available.
 
-Then unplug the adapter, run `diskutil list` again, and confirm the node has
-gone. Plug it back in and confirm it returns. That is what says which node is the
-drive in your hand rather than which node was there a minute ago, and it is the
-one check that does not depend on the bridge reporting anything at all.
+Disconnect the adapter, run `diskutil list` again, and confirm that the node disappears. Reconnect it and confirm that the node returns. This identifies the attached drive independently of any property reported by the bridge.
 
 ## The write and the readback
 
-One block, and the device is named once. What the shell re-checks here is the
-part that can have changed since the approval was given: the node's own
-properties, and the artifact in the build directory. It does not re-check the
-drive's identity, because with this adapter there is nothing to compare; that
-rests on the approval above. `set -e` stops the block at the first line that
-disagrees, before anything is written.
+The following block uses one device value. It rechecks the properties that could have changed after approval and verifies the artifact in the build directory. It cannot recheck drive identity because the adapter supplies no serial; the approval above establishes that identity. `set -e` stops the block at the first failed check, before the write.
 
-Fill in the two values, and paste the whole thing. `DISK` is the node the
-approval named, and `SEALED_SHA` is the digest `make sealed-test` printed. Both
-are deliberately empty here: a worked example carrying a real device number is
-the thing most likely to be pasted unread, and an empty one stops the block at
-its first test.
+Fill in the two values and paste the complete block. `DISK` is the approved node, and `SEALED_SHA` is the digest printed by `make sealed-test`. Both are empty here so an unedited copy stops at its first check instead of carrying a real device number into another session.
 
-The mechanical guards stay, because they cost nothing and they catch the case
-the approval cannot: a node that changed between being approved and being
-written. They no longer compare a serial, since the bridge may not report one;
-what they assert is that the node is an external whole disk of a plausible size
-and is not the host's boot disk.
+The mechanical checks detect a node that changed between approval and writing. They do not compare a serial because the bridge may omit it. They require an external whole disk of a plausible size and reject the host's boot disk.
 
 ```sh
 (
@@ -270,44 +190,27 @@ and is not the host's boot disk.
 )
 ```
 
-Every value starts empty and each is tested on its own line, so the block stops
-before it reads a device. What it cannot do is recognise the drive: with no
-serial to compare, the shell can only assert that the node is an external USB
-whole disk of exactly the approved size. That the drive is the right one is
-established by the approval and by the unplug and replug, not here.
+Every value begins empty and has a separate test, so the unedited block stops before reading a device. Without a reported serial, the shell can verify only that the node is an external USB whole disk of exactly the approved size. Approval and the disconnect-and-reconnect check establish the drive's identity.
 
-To see what it parsed before trusting it, comment out `diskutil unmountDisk`,
-both `sudo dd` lines and `sync`, and add a `printf` of the four `GOT_` values
-after they are read. Commenting out the `diskutil info` line instead leaves
-nothing to parse. A field name this awk does not match is an empty value and a
-stop, not a wrong write.
+To inspect the parsed values, comment out `diskutil unmountDisk`, both `sudo dd` lines, and `sync`, then add a `printf` for the four `GOT_` values after the reads. Do not comment out the `diskutil info` line because the parser needs its output. An unmatched field produces an empty value and stops the block before a write.
 
-630 MiB is 660602880 bytes, which is the whole artifact. `dd` is given the count,
-but a count is a maximum and `dd` succeeds at an early end of file, so the size
-is asserted before the write rather than inferred from it. The raw node is
-derived from `$DISK` rather than typed again, because a raw node typed by hand
-is a second chance to name the wrong disk, and it is the one that writes at a
-usable speed.
+630 MiB is 660602880 bytes, the complete artifact. Although `dd` receives this count, the count is a maximum and `dd` succeeds after an early end of file. The block therefore checks the file size before writing. It derives the raw node from `$DISK` instead of accepting a second device name, which avoids another opportunity to select the wrong disk while retaining raw-device speed.
 
-The last two lines are the only check that the bytes on the drive are the bytes
-that were tested. A `dd` that reported success has said nothing about what is on
-the platter, and comparing against the file rather than against the recorded
-digest would pass an artifact that was rebuilt after the rehearsal.
+The final two lines verify that the drive contains the tested bytes. Successful `dd` completion does not establish the stored contents. Comparing with the recorded digest, rather than the current file, also detects an artifact rebuilt after rehearsal.
 
-If the readback disagrees, nothing is lost: run the block again. The image is
-built from the repository, not from the drive.
+If the readback differs, run the block again with the image built from the repository.
 
 ## Into the laptop
 
-Windows lives on the original drive. Take that drive out and keep it, whole, as the way back to the machine as it was; put the sealed drive in its place.
+Windows remains on the original drive. Remove that drive intact and keep it as the way to restore the previous machine. Install the sealed drive in its place.
 
-Then, with the Ethernet cable in and nothing else attached, power it on. The default menu entry boots in three seconds with nothing typed.
+Connect only the Ethernet cable and power on the laptop. Without input, the default menu entry boots after three seconds.
 
 What should happen, in order:
 
-* The GRUB menu draws on the laptop's screen, with seven entries, the first highlighted.
-* The machine takes an address from the router's DHCP server.
-* Within about half a minute, it answers SSH.
+* The laptop screen displays the GRUB menu with seven entries and the first entry selected.
+* The machine obtains an address from the router's DHCP server.
+* The SSH server answers within about half a minute.
 
 From the Mac:
 
@@ -318,30 +221,25 @@ ssh -i krffs/rach2_demo_ed25519 root@<the address the router gave it>
 bootctl status
 ```
 
-`bootctl status` should say `booted: candidate`, report the four boot files' extents, and show no trial armed. That is the machine in the state the artifact was built in.
+`bootctl status` should report `booted: candidate`, the extents of the four boot files, and no armed trial. These values describe the artifact's initial state.
 
-If it does not answer, the screen is the log again: photograph it. The netconsole is on (`rach2.netconsole`), so a capture on the Mac (`sudo tcpdump -i en0 -nn -e -s0 'ether proto 0x88b5'`) carries the boot log even when the machine cannot be reached.
+If SSH does not answer, photograph the screen. Netconsole is enabled through `rach2.netconsole`, so a Mac capture with `sudo tcpdump -i en0 -nn -e -s0 'ether proto 0x88b5'` records the boot log even when the machine is unreachable.
 
-If the network has no DHCP server, pick `Rach2 (static address)` at the menu; it carries 192.168.0.105/24.
+If the network has no DHCP server, select `Rach2 (static address)` from the menu. It uses 192.168.0.105/24.
 
 ## What to record
 
-* The root and test passwords minted for this machine, kept where the machine
-  is not.
-* The artifact's SHA-256, from `make sealed-test`.
-* Everything presented for the approval: the node, the size in bytes, the bus,
-  external or internal, whole disk, the table the drive carried before the
-  write, and the model and serial where the bridge reported them.
-* The readback hash, and that it matched.
-* The address the router gave the machine, and the output of `bootctl status` from the first SSH session.
-* The SSH host key fingerprint the machine prints as it mints one, read off the
-  laptop's own screen. That is the only channel here nobody else on the segment
-  can write to, and without it the first connection authenticates nothing.
-* Anything the machine printed that this document did not predict.
+* The root and test passwords created for this machine, stored away from the machine.
+* The artifact's SHA-256 from `make sealed-test`.
+* Every property presented for approval: node, byte size, bus, external or internal location, whole-disk status, partition table before the write, and any model and serial reported by the bridge.
+* The readback hash and confirmation that it matched.
+* The address assigned by the router and the output of `bootctl status` from the first SSH session.
+* The SSH host-key fingerprint generated by the machine and read from the laptop screen. No other station on the segment can write to that channel; without this comparison, the first connection authenticates nothing.
+* Any output not predicted by this document.
 
 ## What this session does not do
 
-* It does not touch the original 1 TB drive. That drive comes out before the sealed one goes in, and it is the way back.
-* It does not partition or format anything on the Mac. The image is written whole and carries its own table.
-* It does not install a bootloader on the machine: the artifact already carries GRUB in the gap, its menu on partition 1, and recovery on partition 3.
-* It does not need the machine again afterwards. Everything after this arrives over SSH, and what to do when that stops working is `tools/Readme.md`'s recovery section, not this file.
+* It does not modify the original 1 TB drive. That drive is removed before installing the sealed drive and provides the way back.
+* It does not partition or format a device on the Mac. The complete image includes its partition table.
+* It does not install a bootloader on the laptop. The artifact already contains GRUB in the post-MBR region, its menu on partition 1, and recovery on partition 3.
+* It requires no later physical access during ordinary operation. Subsequent changes arrive over SSH. If that path fails, follow the recovery section in `tools/Readme.md`, not this file.
