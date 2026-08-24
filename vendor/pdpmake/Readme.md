@@ -1,96 +1,90 @@
 # pdpmake
 
-The make that runs ON the machine. Milestone 20 put a compiler there; this is
-what turns a pile of compiler commands into a build.
+pdpmake is the `make` implementation installed on Rach2. The guest uses it with TinyCC to build ordinary programs and the staged Rach2 source trees.
 
-Version 2.0.4, vendored as the pinned tarball beside this Readme and verified by
-sha256 before extraction. Public domain (the Unlicense): the LICENSE file in the
-tarball says so, and it is the only dependency in this tree that carries no
-conditions at all.
+This tree carries pdpmake 2.0.4 as `pdpmake-2.0.4.tgz`. Its SHA-256 digest is:
 
-## Why this make
+```
+7e19294d54edf360591d76d3b7a0a511864902ac3a75a0b5b11c7b3cae14c13f
+```
 
-Rach2 needed a make that is small enough to read, portable enough to cross-build
-without a fight, and standard enough that what a student learns here is what
-they will meet elsewhere. pdpmake is 4297 lines across nine `.c` files and one
-header, and its build system is a 30-line POSIX makefile with no configure
-script: the cross build here is the musl wrapper, `-static`, and nothing else.
-It implements POSIX.1-2024 make, with POSIX.1-2017 selectable and the common
-non-POSIX extensions on by default.
+The upstream `LICENSE` releases the program into the public domain.
 
-It is also the program BusyBox for Windows ships as its `make` applet. Mainline
-BusyBox 1.36.1, which this tree vendors, has no make applet at all, so bumping
-BusyBox would never have supplied one.
+## Build
 
-The runners-up, so the choice is not made twice: bmake is 31000 lines behind
-autoconf and needs a `sys.mk` set staged before it will start; GNU make is the
-make a student meets everywhere else, and it is 36000 lines, GPLv3, autoconf and
-gnulib, and needs `--disable-posix-spawn` on this system; scc-make is smaller
-than pdpmake and is not a POSIX make in practice (no archive members, no
-`.PHONY`, no macro override on the command line, so `make CC=tcc` does nothing).
+Run the port through the root Makefile:
 
-## Building
+```
+make pdpmake
+```
 
-`make pdpmake` (or `./build_pdpmake.sh`) verifies the tarball, extracts it,
-applies the one patch, `patches/0001-platform-macros.patch`, by name, and stops if it is missing, builds it against the ported musl through
-`vendor/busybox/muslgcc`, and judges the result with `tools/check_elf.py`, which
-knows what this kernel will actually load. The output is
-`build/vendor/pdpmake/make`, staged into os-real as `/bin/make`.
+The stamp rule depends on the build script, the exact archive, the platform patch, the BusyBox musl compiler wrapper, and the installed musl libc. It removes the old stamp and staged executable before invoking `vendor/pdpmake/build_pdpmake.sh`. A failed build therefore leaves neither a trusted stamp nor a stale output.
 
-## The one patch
+The script performs these steps:
 
-`patches/0001-platform-macros.patch` sets the built-in macros this platform
-needs: `CC=tcc` in all three modes and `LDFLAGS=-static`. POSIX leaves the values
-of the built-in macros implementation-defined, so this is the port stating its
-platform rather than a change of behaviour.
+1. Verify the archive digest.
+2. Replace the extracted `vendor/pdpmake/pdpmake-2.0.4/` tree.
+3. Apply `patches/0001-platform-macros.patch` with no fuzz.
+4. Check the patched built-in macros.
+5. Build with `vendor/busybox/muslgcc` and `LDFLAGS=-static`.
+6. Copy the executable to `build/vendor/pdpmake/make`.
+7. Pass the staged executable to `tools/check_elf.py`.
 
-Both matter on their first use. The built-in rules call `$(CC)`, which upstream
-is `cc` in the extensions mode, `c99` under POSIX 2017 and `c17` under POSIX
-2024; this image carries one compiler, and the other two names are on no path
-here, so a strict-POSIX build would fail with "not found". And `LDFLAGS` is
-empty upstream, so the built-in link rule would ask tcc for a dynamic
-executable, which tcc on this machine refuses by its own pinned patch: this
-kernel has no dynamic linker and would load and jump into an image with nothing
-relocated.
+The output is a static ELF32 i386 executable. The os-real, GRUB-test, and metal-disk manifests install it as `/bin/make`.
 
-`build_pdpmake.sh` checks the values after applying the patch, and refuses to
-build if any mode still names a compiler this image does not carry: a patch can
-apply cleanly to the wrong place.
+## Platform macros
 
-Neither could be done through `/etc/profile`. That file is read by a login shell
-and not by a non-login shell, an SSH command, or a direct exec, so a make
-started any other way would fail at the link.
+Upstream enables its extensions and POSIX.1-2024 support by default. Strict POSIX.1-2024 and POSIX.1-2017 modes select separate built-in macro sets.
 
-## What it can and cannot do here
+`patches/0001-platform-macros.patch` changes the platform-dependent values in all three modes:
 
-It runs recipes through `/bin/sh -c`, which is busybox's ash in os-real, using
-`system(3)`. That call reaches a child through musl's `posix_spawn`, which this
-tree patches to fork (see `vendor/musl/Readme.md`); before milestone 21 it did
-not work at all and no recipe could run.
+```
+CC=tcc
+LDFLAGS=-static
+```
 
-Parallel builds do not happen, and that is upstream's doing rather than the
-port's: `-j` is parsed and passed on in `MAKEFLAGS`, and `main.c` says of it "not
-implemented". Recipes run one after another whatever is asked for. Nothing here
-tries to change that, and there would be little room if it did: `MAX_PROCS` is 16
-system-wide and `MAX_FDS` 16 per process.
+The image has TinyCC as `/bin/tcc` and `/bin/cc`, but it has no `c99` or `c17` command. All three built-in `CC` definitions therefore name `tcc`. Rach2 has no dynamic linker, and the staged TinyCC refuses dynamic executable output, so the common `LDFLAGS` definition requests a static link.
 
-This repository's top-level makefiles are GNU makefiles and pdpmake cannot read them. Since milestone 22 it also carries three POSIX makefiles written for pdpmake, `rach2/guest.mk`, `utils/guest.mk` and `ish/guest.mk`, which are what the machine builds itself with.
-Building Rach2 on Rach2 is not what this is for; building a student's program on
-Rach2 is.
+The build script checks these values after patching and rejects any remaining `CC=cc`, `CC=c99`, or `CC=c17` definition. Command-line definitions still take precedence. For example, `make CC=tcc` overrides a `CC` definition in a makefile and propagates the override through `MAKEFLAGS`.
 
-## Updating from upstream
+## Recipe execution
 
-1. Download the new `pdpmake-X.Y.Z.tgz` from https://frippery.org/make and
-   replace the tarball here.
-2. Set `VERSION` and `TARBALL_SHA256` in `build_pdpmake.sh`, and `PDPMAKE_TARBALL`
-   in the root `Makefile`, which names the tarball the stamp depends on: leave it
-   and the build stops looking for the file you just replaced.
-3. Rebase the patch under `patches/` onto the new source. `build_pdpmake.sh`
-   stops the build when it does not apply, which is the point: a patch that no
-   longer applies is a decision to make again, not a line to delete.
-4. Rebuild (`make pdpmake`), then run `make make-test`, which is the gate that
-   drives this program: a recipe run, a rebuild of only what changed, and a
-   timestamp that survives a reboot. `make tcc-test` will not fail on a broken
-   make, since it compiles by hand. `build_pdpmake.sh` asserts the patched macro
-   values itself, so a patch that applied to the wrong place fails the build
-   rather than the student.
+pdpmake executes each non-empty recipe with `system(3)`. The installed musl implementation runs `/bin/sh -c` through `posix_spawn`. The [musl integration](../musl/Readme.md) patches `posix_spawn` to use the fork operation implemented by Rach2.
+
+The `-j` option is accepted in the extension and POSIX.1-2024 modes and copied into `MAKEFLAGS`, but pdpmake 2.0.4 does not implement parallel jobs. Recipes run serially even when `-j` is present. Rach2 also limits the system to 16 processes and each process to 16 file descriptors.
+
+## Project builds in the guest
+
+The repository's host Makefiles require GNU Make. pdpmake reads the three POSIX guest makefiles instead:
+
+* `rach2/guest.mk` builds the kernel.
+* `utils/guest.mk` builds 29 utility programs.
+* `ish/guest.mk` builds the shell from five objects.
+
+`tools/check_guest.py` compares their source and object lists with the host Makefiles. The self-build images stage the corresponding trees as `/src/rach2`, `/src/utils`, and `/src/ish`, together with pdpmake, TinyCC, its runtime archive, and the static musl development files. An ordinary user builds from a writable copy. Root may build the staged trees in place.
+
+Use the named guest makefile from its directory:
+
+```
+make -f guest.mk
+```
+
+## Updating
+
+1. Download `pdpmake-X.Y.Z.tgz` from `https://frippery.org/make` and replace the pinned archive.
+2. Update `VERSION` and `TARBALL_SHA256` in `build_pdpmake.sh`.
+3. Update `PDPMAKE_TARBALL` in the root `Makefile`.
+4. Rebase `patches/0001-platform-macros.patch`. Keep its three `CC` changes and common static-link definition.
+5. Run `make pdpmake`, `make make-test`, and `make selfbuild-test`.
+
+A change to any prerequisite named by the stamp rule invalidates the stamp. If the patch no longer applies exactly or no longer produces the required macro definitions, the build stops.
+
+## Verification
+
+`make check-pdpmake` requires a non-empty staged executable and checks its ELF layout and static link. The build script separately checks the patched built-in macros.
+
+`make make-test` boots the os-real image twice. It checks a command-line compiler override, a clean two-source build, no-op rebuilds, one-source and shared-header rebuilds, `.PHONY`, one project utility, executable behavior, and timestamps preserved across a reboot.
+
+`make selfbuild-test` builds the kernel twice from clean guest trees and requires identical hashes. It also builds the utilities and ish, runs 18 userland checks, extracts and checks the exact guest-built kernel, runs the default guest probes on that kernel, optionally boots it through GRUB, and rebuilds `/src/ish` in place as root.
+
+Run `python3 tools/check_guest.py` after changing a host or guest source list, a guest makefile, or the staged `/src` trees.
