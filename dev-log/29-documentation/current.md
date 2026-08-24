@@ -14,7 +14,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Final-stage cursor
 
-* Candidate queue, in order: `utils/Readme.md`, `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/busybox/patches/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
+* Candidate queue, in order: `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -33,7 +33,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-The first twenty ownership documents through `ish/Readme.md` are adjudicated. Commit this checkpoint, then inspect `utils/Readme.md`.
+The first twenty-five ownership documents through `vendor/dropbear/Readme.md` are adjudicated. Commit this checkpoint, then inspect `vendor/tcc/Readme.md`.
 
 ## Intended commit boundary
 
