@@ -78,6 +78,8 @@ This is the persistent record for information needed after a compaction or betwe
 * `tests/host/bootverb_hosttest.c` says it covers every accepted and refused `bootctl` command line, but it never tests the `grub` verb and its final verb list still contains seven of the eight current verbs. This milestone does not edit tests.
 * `httpd [PORT]` binds the selected port, but the generated page always labels the server endpoint `10.0.2.15:80`. This milestone does not edit code.
 * `LIBC_PATCHES` is only `$(wildcard vendor/musl/patches/*.patch)`. Adding or editing a musl patch invalidates `.stamp`, but deleting a patch removes it from the current prerequisite list and can leave the installed libc built with that patch. The musl Readme tells an updater to remove the stamp when deleting a patch; this milestone does not edit the Makefile.
+* `build_dropbear.sh` applies an optional `patches/*.patch` set, but `DROPBEAR_STAMP` depends on no patch directory or wildcard. Adding, editing, or deleting a Dropbear patch can therefore leave the staged binary current according to Make. The Dropbear Readme requires manual stamp removal; this milestone does not edit the Makefile.
+* `vendor/dropbear/localoptions.h` defines `DROPBEAR_HMAC_SHA256`, but Dropbear 2022.83 reads `DROPBEAR_SHA2_256_HMAC`. HMAC-SHA256 remains enabled through the upstream default, so the ineffective local definition currently changes no feature. This milestone does not edit configuration headers.
 
 ## Facts for subsystem passes
 
@@ -107,6 +109,7 @@ This is the persistent record for information needed after a compaction or betwe
 * `vendor/musl/Readme.md` now describes the 1.2.5 pin and digest, fixed compiler and static build, one spawn patch, link order, process ABI, installed and extracted consumers, guest staging, update procedure, and exact verification. `make deps`, all 35 musl program builds, a direct static link, `make verify-style`, all 36 host tests, and all 63 default guest probes passed.
 * `vendor/busybox/Readme.md` now describes the 1.36.1 pin and digest, two configured builds, 319 main applets, the three-app set-id binary, musl wrapper, two patches, current network and proc behavior, privilege boundary, image staging, update procedure, and exact verification. `make busybox`, `make check-busybox`, `make check-setid`, `make full`, `make verify-style`, and all 36 host tests passed.
 * `vendor/busybox/patches/Readme.md` now names the two current patches, their exact musl and bare-target adaptations, the configuration boundary, stamp invalidation, update procedure, and focused tests. `make busybox`, `make check-busybox`, `make verify-style`, and all 36 host tests passed.
+* `vendor/dropbear/Readme.md` now describes the 2022.83 pin and digest, six tracked inputs, static multi-call build, resolved feature boundary, account staging, manual and supervised startup, trusted entropy, host-key persistence, kernel dependencies, update procedure, and exact verification. `make dropbear`, `make check-dropbearmulti`, `make full`, `make ssh-test`, `make metal-test`, `make verify-style`, and all 36 host tests passed.
 
 ## Decisions and deferred questions
 
