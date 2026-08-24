@@ -50,7 +50,11 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The metal plan naming correction is committed as `532185f`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The complete 7,311-line compact `243529b` change stream for `dev-log/25-sealed/Readme.md` has been read. The range from 1251 through 1500 was split into two smaller sections after compaction. The changes preserve the implementation chronology, review findings, hardware measurements, commands, limits, and deferred work.
 * The complete file was checked for lowercase project names. Fourteen ordinary-prose uses of BusyBox were corrected; command names, paths, macros, historical facts, and all other content remain unchanged. The banned-prose check, ASCII check, complete one-file diff review, and `git diff --check` passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `243529b` review at `dev-log/25-sealed/checklist.md` after a clean commit.
+* The sealed-record naming correction is committed as `8d86b4a`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The complete `243529b` diff for `dev-log/25-sealed/checklist.md` has been read in four bounded compact sections, after a complete read of the 245-line file in two sections. It preserves the irreversible-hardware approval, device checks, commands, credentials, artifact identity, readback, laptop installation, and session record. No further correction was needed.
+* The complete 2,518-line compact `243529b` change stream for `dev-log/25-sealed/plan.md` has been read, after a complete read of the 279-line file in four sections. The changes preserve the initial design, measured facts, phase order, proof requirements, risks, omissions, and invariants.
+* The complete file was checked for lowercase project names. Eleven ordinary-prose uses of BusyBox and one of Dropbear were corrected; command names, paths, macros, historical facts, and all other content remain unchanged. The banned-prose check, ASCII check, complete one-file diff review, and `git diff --check` passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `243529b` review at `dev-log/26-portable/Readme.md` after a clean commit.
 
 ## Boundary
 
@@ -59,4 +63,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Commit the staged one-file correction and checkpoint, then resume at `dev-log/25-sealed/checklist.md`.
+Commit the staged one-file correction and checkpoint, then resume at `dev-log/26-portable/Readme.md`.
