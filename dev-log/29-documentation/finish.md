@@ -77,11 +77,11 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `dev-log/18-shutdown/plan.md`
 * [x] `dev-log/19-busybox-first/Readme.md`
 * [x] `dev-log/19-busybox-first/plan.md`
-* [ ] `dev-log/20-compiler/Readme.md`
-* [ ] `dev-log/20-compiler/plan.md`
-* [ ] `dev-log/21-time-and-make/Readme.md`
-* [ ] `dev-log/21-time-and-make/plan.md`
-* [ ] `dev-log/22-selfbuild/Readme.md`
+* [x] `dev-log/20-compiler/Readme.md`
+* [x] `dev-log/20-compiler/plan.md`
+* [x] `dev-log/21-time-and-make/Readme.md`
+* [x] `dev-log/21-time-and-make/plan.md`
+* [x] `dev-log/22-selfbuild/Readme.md`
 * [ ] `dev-log/22-selfbuild/plan.md`
 * [ ] `dev-log/23-install/Readme.md`
 * [ ] `dev-log/23-install/plan.md`
