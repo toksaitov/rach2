@@ -131,19 +131,19 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `dev-log/18-shutdown/Readme.md`
 * [x] `dev-log/18-shutdown/plan.md`
 * [x] `dev-log/19-busybox-first/Readme.md`
-* [ ] `dev-log/19-busybox-first/plan.md`
-* [ ] `dev-log/20-compiler/Readme.md`
-* [ ] `dev-log/20-compiler/plan.md`
-* [ ] `dev-log/21-time-and-make/Readme.md`
-* [ ] `dev-log/21-time-and-make/plan.md`
-* [ ] `dev-log/22-selfbuild/Readme.md`
-* [ ] `dev-log/22-selfbuild/plan.md`
-* [ ] `dev-log/23-install/Readme.md`
-* [ ] `dev-log/23-install/plan.md`
+* [x] `dev-log/19-busybox-first/plan.md`
+* [x] `dev-log/20-compiler/Readme.md`
+* [x] `dev-log/20-compiler/plan.md`
+* [x] `dev-log/21-time-and-make/Readme.md`
+* [x] `dev-log/21-time-and-make/plan.md`
+* [x] `dev-log/22-selfbuild/Readme.md`
+* [x] `dev-log/22-selfbuild/plan.md`
+* [x] `dev-log/23-install/Readme.md`
+* [x] `dev-log/23-install/plan.md`
 
 ### Milestones 24 through 28 and the index
 
-* [ ] `dev-log/24-metal/Readme.md`
+* [x] `dev-log/24-metal/Readme.md`
 * [ ] `dev-log/24-metal/ahci-no-disk.md`
 * [ ] `dev-log/24-metal/baseline.md`
 * [ ] `dev-log/24-metal/checklist.md`

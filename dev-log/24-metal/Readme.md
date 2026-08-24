@@ -1,156 +1,156 @@
-# Milestone 24: onto the notebook
+# Milestone 24: booting the notebook
 
-An old Rach2 booted a real Lenovo G50-70. The current one does not, and this milestone is the work of making it boot that machine again, from a USB stick, with networking, so that developing on it stops meaning photographing its screen and starts meaning an SSH session.
+An earlier Rach2 booted a Lenovo G50-70. The current system does not. This milestone restores a networked boot from a USB stick so development can use SSH instead of photographs of the screen.
 
-The plan is in `plan.md`, written before any code and reviewed to agreement. This file records what was built, what was proved and where, and what is still waiting for the hardware. It is written while the local half is complete and the machine has not yet been booted, so every claim below says which of the two it belongs to.
+The reviewed `plan.md` was written before implementation. This record distinguishes what was built and proved locally from what still requires the hardware. At the time of writing, the local work was complete and the notebook had not booted the new system.
 
-## What the machine is, and what that decides
+## Hardware constraints
 
-A Lenovo G50-70: Haswell, Insyde firmware in CSM mode, one SATA SSD holding a Windows installation, and a Realtek RTL8168GU on the PCI bus. Three facts about it shaped everything.
+The Lenovo G50-70 has a Haswell processor, Insyde firmware in CSM mode, one SATA SSD with Windows installed, and a Realtek RTL8168GU on the PCI bus. Three properties determined the design.
 
-It has no serial port. Every other machine this project has run on could be debugged by reading a serial line; this one cannot, so a boot that stops leaves nothing but the last line on its screen. That is why the module-placement check formats its refusal into the panic rather than the serial log, why there are switches to skip a device probe one at a time, and why the kernel log is repeated onto the wire as broadcast frames.
+The notebook has no serial port. Earlier machines provided a serial log, but a stopped boot on this notebook leaves only the last screen line. The module-placement check therefore includes its diagnostic in the panic. Boot switches can skip individual device probes, and netconsole repeats the kernel log in broadcast Ethernet frames.
 
-Its SSD is somebody's Windows. Nothing this milestone builds may write it, and a promise that size cannot rest on remembering not to call the write path, so it is a build switch and an allowlist in the drivers, checked on the artifact and on the bytes of a disk.
+The SSD contains another person's Windows installation. This milestone must not write it. A build switch and driver command allowlist enforce that rule, and tests check both the kernel artifact and the disk bytes.
 
-Its network card is not emulated by anything on this desk. The driver was ported from a pinned Linux reference and its first execution will be on the laptop, so the weight a boot usually carries is carried instead by a software model of the chip in a host test, and by review.
+No available emulator implements this network card. The driver comes from a pinned Linux reference, and its first execution will be on the notebook. A host test uses a software model of the chip, and review compares the port with its reference.
 
 ## Phase A: the image and the layout check
 
-A `rach2-metal` image profile: busybox, the set-id trio, dropbear, `/etc`, the authorized keys, and nothing else. No compiler, no `/src`, no installer; a machine with no writable disk cannot use them, and every byte costs RAM under the kernel's 32 MiB direct map. It builds to 2.4 MB of 4.
+The `rach2-metal` image contains BusyBox, the three set-id programs, Dropbear, `/etc`, and the authorized keys. It omits the compiler, `/src`, and the installer because a machine without a writable disk cannot use them. Image size consumes RAM below the kernel's 32 MiB direct-map limit. The image uses 2.4 MB of the available 4 MB.
 
-The boot now refuses a module placed over the kernel, past the direct map, or over another module, and the refusal names the rule and the range. The check is a pure function (`sys/mm/modlayout.c`) with a host test, because QEMU can craft only one of its four refusals: an oversized module is a file, but no bootloader will place two modules over each other on request. `modlayout_describe` formats the whole refusal into a caller's buffer so it can reach `k_panic`, which is the only output a machine with no serial port has.
+The boot rejects a module that overlaps the kernel, extends beyond the direct map, or overlaps another module. Its diagnostic identifies the rule and address range. A host test exercises the pure check in `sys/mm/modlayout.c`. QEMU can produce only one of the four failures: an oversized module can be supplied as a file, but a bootloader cannot be directed to overlap two modules. `modlayout_describe` writes the complete diagnostic to the caller's buffer for `k_panic`, the only available output without a serial port.
 
-`rach2.diag` prints one report before any driver runs: where the kernel ends, where the allocator's break sits, where the direct map ends, how many frames survived, every module's range, and the Ethernet controller's identity read from `TxConfig`. It reads and configures nothing. Rehearsed against the RTL8139 it found the device, stepped over the I/O BAR to the memory BAR, mapped the window, read `TxConfig` and refused the wrong revision, so only the 8168's answer to it is unrehearsed.
+Before any driver runs, `rach2.diag` prints one report with the kernel end, allocator break, direct-map end, surviving frame count, every module range, and the Ethernet controller identity from `TxConfig`. It reads and configures nothing. The RTL8139 rehearsal found the device, skipped its I/O BAR for the memory BAR, mapped the window, read `TxConfig`, and rejected the wrong revision. Only the 8168 response remains unrehearsed.
 
-## Phase B: a device interface, a ported driver, and the log on the wire
+## Phase B: the network interface, driver, and remote log
 
-The stack no longer names a card. A driver publishes a `netdev_ops` and `netdev_probe` binds the first that answers; the RTL8139 moved behind it unchanged, which is what keeps every existing test's machine exactly what it was. A driver's `init` reports three things and not two, because "the card is not here" and "the card is here and would not start" are different diagnostics and on a machine with no network to report over, the second is the only one there is.
+The network stack no longer selects a specific card. Each driver provides `netdev_ops`, and `netdev_probe` binds the first device that responds. The unchanged RTL8139 driver moved behind this interface, preserving the virtual machine used by every existing test. A driver's `init` distinguishes three results rather than two. The result "the card is not here" differs from "the card is here and would not start"; without working networking, the latter diagnostic is the only report of an initialization failure.
 
-`driver/rtl8168.c` is a port of Linux v6.16 (commit `038d61fd642278bab63ee8ef722c50d10ab01e8f`) for the version that file calls `RTL_GIGA_MAC_VER_42`, and every sequence names the reference function it came from. Two departures are deliberate and are in the file's header: link state is read from `PHYstatus`, which the reference declares and never reads because phylib reaches the PHY over MDIO, and the PHY is powered up here, because the reference suspends it at probe and lets phylib wake it and nothing here would.
+`driver/rtl8168.c` ports the `RTL_GIGA_MAC_VER_42` support from Linux v6.16, commit `038d61fd642278bab63ee8ef722c50d10ab01e8f`. Each sequence identifies its reference function. The file header documents two deliberate differences. This driver reads link state from `PHYstatus`; the reference declares that register but uses phylib and MDIO instead. This driver also powers up the PHY because the reference suspends it during probe and relies on phylib to wake it.
 
-`tests/host/rtl8168_hosttest.c` drives the whole bring-up against a software model of the chip's registers: completion flags that move only when a command completes, an out-of-band bit that must be cleared, a link list handshaked twice, descriptors whose ownership moves, and a recorded write log the test asserts the reference's order against. It cannot prove PCIe ordering, that DMA reaches the rings, the PHY's analog behaviour, or whether this board needs the firmware patch the port omits.
+`tests/host/rtl8168_hosttest.c` exercises complete initialization against a software model of the chip registers. Completion flags change only when commands finish. The model requires clearing an out-of-band bit, performs the link-list handshake twice, transfers descriptor ownership, and records writes for comparison with the reference order. It cannot prove PCIe ordering, DMA access to the rings, analog PHY behavior, or whether this board requires the omitted firmware patch.
 
-Beside it, netconsole: the serial stream repeated into broadcast frames of EtherType `0x88b5`, below IP on purpose, so it works on the first boot on an unknown network and keeps working when the address configuration is the thing that is wrong. `make netconsole-test` captures every frame QEMU's guest sends and checks one boot id, sequence numbers in order, lengths, checksums, and a line printed before the network device existed, which is what proves the buffer held what came before transmitting was possible.
+Netconsole copies the serial stream into broadcast frames with EtherType `0x88b5`. It operates below IP so the first boot can report on an unknown network and address-configuration failures do not disable logging. `make netconsole-test` captures every frame from the QEMU guest. It checks one boot id, ordered sequence numbers, lengths, checksums, and a line printed before the network device existed. The last check proves that the buffer retained output produced before transmission became possible.
 
-## Phase C: the tick, the address, the reset, and an unattended server
+## Phase C: polling, addressing, reset, and unattended SSH
 
-The 100 Hz timer drives a polled device (`netdev_poll`), and the RTL8168GU's transmit became asynchronous: hand the frame over, ring the doorbell, return. The tick reclaims and rings again for anything outstanding, so a lost poll request costs 10 ms rather than the connection. A full ring is the one case a transmit still waits on, briefly, because dropping the moment a burst outruns the chip loses frames the next tick would have made room for.
+The 100 Hz timer calls `netdev_poll` for a polled device. RTL8168GU transmission is asynchronous: give the frame to the device, ring its doorbell, and return. Each tick reclaims completed descriptors and rings the doorbell again when work remains. A lost poll request therefore delays progress by 10 ms instead of stopping the connection. Transmission waits briefly only when the ring is full; immediately dropping a burst would lose frames for which the next tick could free space.
 
-The address comes from the boot line: `rach2.ip=A.B.C.D/prefix` and `rach2.gateway=A.B.C.D`, parsed into the one configuration every layer reads. The rule about defaults is the part worth remembering: with neither option the machine keeps the SLIRP tuple it always had, and with an address but no gateway there is NO gateway at all rather than the SLIRP one, because `10.0.2.2` beside a real LAN address is a router that does not exist. The parser refuses more than it accepts, and `make test-addressed` runs the entire probe suite with the address named on the boot line instead of compiled in, which is what proves the configuration reaches ARP, IP, TCP, the sockets and the boot line.
+The boot line supplies `rach2.ip=A.B.C.D/prefix` and `rach2.gateway=A.B.C.D`, which the parser converts into the single configuration read by every network layer. Without either option, Rach2 keeps its existing SLIRP settings. With an address but no gateway, it configures no gateway; retaining `10.0.2.2` with a real LAN address would specify a nonexistent router. The parser accepts only its defined forms. `make test-addressed` runs the complete probe suite with a boot-line address instead of the compiled address, proving that the configuration reaches ARP, IP, TCP, sockets, and the boot command line.
 
-Restarting the machine now tries three mechanisms in order, most of the machine first: the firmware's own SMI handler, then the chipset reset register, then the keyboard controller pulse. Trying them in the other order works on QEMU, where the chipset register is the one that acts, and would leave the target parked at a halt, which over SSH is indistinguishable from a kernel that died.
+A restart tries three mechanisms in order: the firmware SMI handler, the chipset reset register, and the keyboard-controller pulse. This order begins with the mechanism that resets the most hardware. Reversing it works in QEMU because the chipset register responds there, but would leave the target halted. Over SSH, that halt cannot be distinguished from a kernel failure.
 
-`init-metal`, the third build of `utils/init.c`, supervises dropbear beside the console login, because nobody is going to type a command at a machine across the room. `make metal-test` is the rehearsal: the image is given power and a command line, NOTHING is typed at its console, and then SSH by key, a pty, a file each way compared by checksum, and the server killed by pid with a different pid required to answer.
+`init-metal`, the third build of `utils/init.c`, supervises Dropbear alongside the console login so the remote notebook requires no console input. `make metal-test` rehearses unattended operation. The harness supplies power and a command line but types nothing at the console. It then checks key-authenticated SSH, a pty, a file copied in each direction and compared by checksum, and server supervision by killing its pid and requiring a different pid to answer.
 
-## Phase D: the disk it must not write, and the controller it must reset
+## Phase D: read-only disks and AHCI reset
 
-A second kernel is built with `-DRACH2_DISK_READONLY` into its own object tree. Under it, both drivers consult an allowlist where a command leaves them for the device, and only the four reading commands are permitted; everything else is refused, including commands the file has never heard of. A build switch and not a boot flag, because a boot flag is editable at the GRUB prompt by whoever is sitting at the machine.
+A second kernel uses `-DRACH2_DISK_READONLY` and a separate object tree. In that build, both disk drivers check a command allowlist immediately before submitting work to the device. Only the four read commands are accepted; every other command, including an unknown one, is rejected. This policy is a build option rather than a boot flag because a person at the GRUB prompt can edit boot flags.
 
-Which policy an artifact carries is read off the artifact, since checking for the absence of a write path proves nothing when the commands are numbers and the functions are static. `make diskpolicy-test` then shows it on the bytes: the same freshly built disk booted with each kernel, the ordinary one required to mount and change it, and the metal one required to refuse a command by name and leave the image byte for byte as it was.
+The artifact identifies which policy it implements. Searching for an absent write path proves nothing because commands are numeric and the relevant functions are static. `make diskpolicy-test` then checks behavior against disk bytes. It boots the same newly built disk with each kernel. The ordinary kernel must mount and modify it; the metal kernel must reject a named command and leave the image byte-for-byte unchanged.
 
-The metal ISO carries that kernel and no other profile does, checked where the image is built rather than assumed: staging the ordinary kernel under the metal name would produce exactly the image this milestone promises not to make, and for a while it did.
+The metal ISO contains that kernel, and no other profile does. The image build checks this distinction. Staging the ordinary kernel under the metal name would create exactly the image prohibited by this milestone, and an earlier version did so.
 
-The AHCI driver now resets the controller and re-establishes each SATA link. Milestone 10 had to skip the HBA reset, because without a COMRESET the link never comes back and the port reports a device that is never ready; with the COMRESET that is a state the driver can get out of, and the reset is worth having on a machine that takes the controller over from firmware that has been using it. Two details had to be right and were not at first: the received-FIS area must be programmed and `PxCMD.FRE` enabled before the reset, because the device answers with a FIS and a FIS arrives only if the port is listening; and the signature must not be read until the task file says the device has finished its own reset, since before that it reads as all ones.
+The AHCI driver resets the controller and reestablishes each SATA link. Milestone 10 skipped the HBA reset because the link never recovered without COMRESET, leaving a device that never became ready. COMRESET provides a recovery path, so the driver can reset a controller inherited from active firmware. Two details were initially wrong. The received-FIS area must be programmed and `PxCMD.FRE` enabled before reset so the port can receive the device's response. The driver must also wait for the task file to report reset completion before reading the signature; earlier reads return all ones.
 
-## What was found on the way
+## Defects found during implementation
 
-Three defects were found by measurement or by a test rather than by reading, and each was in code that looked right.
+Measurements or tests found three defects that code inspection had missed.
 
-Every hardware wait in the kernel was between two and seven times too short. `init_pit` writes control byte 0x36, which selects mode 3, where the 8254's counter steps by two per input clock, so a delay converting counts to microseconds at the input frequency measures half of what it should; and the window multiplication overflowed 32 bits besides. A boot self-test that measures 200 ms of `k_udelay` against the 100 Hz tick read 30 ms before the fix and 200 ms after. Nothing in QEMU cared. On the chip this milestone exists for, every settle time in the bring-up would have been short.
+Every hardware wait in the kernel was two to seven times too short. `init_pit` writes control byte 0x36, selecting mode 3. In that mode, the 8254 counter advances by two for each input-clock count, so conversion at the input frequency produces half the intended delay. The window multiplication also overflowed 32 bits. A boot self-test measured 200 ms of `k_udelay` against the 100 Hz tick. It observed 30 ms before the correction and 200 ms afterward. The error did not affect QEMU tests, but every initialization delay for the target chip would have been short.
 
-The bounded-wait helper in the RTL8168 driver accepted any bit of its mask where the reference requires all of them, so a chip with one FIFO still holding data would have been treated as drained and reset underneath itself. That came from an independent review against the reference.
+The RTL8168 bounded-wait helper accepted any bit in its mask, while the reference requires every bit. A chip with one FIFO still containing data could therefore be treated as drained and reset prematurely. An independent comparison with the reference found this defect.
 
-The netconsole's drain followed a moving end, so a device that reported an error from inside every transmit would have kept the machine inside one `printf` forever, transmitting the report of its own failure to transmit. The host test written to provoke exactly that hung, which is also why every host test now runs under a watchdog.
+The netconsole drain loop followed a moving endpoint. If every transmission reported an error through `printf`, the error text extended the same buffer being drained and the loop never ended. The host test for this case hung, which led to running every host test under a watchdog.
 
-## The supported surface, and what is excluded
+## Supported and excluded features
 
-An excluded device is listed here rather than skipped quietly, because a reader who cannot tell "not built" from "built and broken" cannot use this record.
+The table lists excluded devices explicitly so a reader can distinguish "not built" from "built and broken".
 
-| Part | On the metal image | Proved by |
-|------|--------------------|-----------|
-| Boot from a USB stick (CSM, El Torito hybrid ISO) | yes | the laptop, unproved |
-| VGA text console and the 8042 keyboard | yes | the laptop, unproved |
-| RTL8168GU Ethernet | yes | the chip model in `verify-host`; the wire waits for the laptop |
-| Netconsole over that card | yes | `make netconsole-test` over the RTL8139; the 8168 waits |
-| Boot-line IPv4, ARP, ICMP, UDP, TCP, sockets | yes | `make test-addressed`, the whole suite |
-| Dropbear over SSH, supervised by init | yes | `make metal-test`, unattended |
-| The console login as the recovery path | yes | `make metal-test`, `make login-test` |
-| AHCI to identify and read | yes | `make test-disk-ahci`; the reset and COMRESET wait for the laptop |
-| Reading the disk without mounting it | yes | `make diskdiag-test`, on the bytes |
-| Writing any disk | NO, refused by the build | `make diskpolicy-test`, on the bytes |
-| Restart | yes | `make reset-test`, each mechanism alone |
-| Power off | yes, when a profile matches | `make shutdown-test`; the laptop's chipset row is unproved |
-| Trusted entropy for the host key | required | `make metal-test`; needs RDRAND on the laptop |
-| HD Audio | NO, excluded from the image | nothing stages an audio program; the driver is in the kernel |
-| The compiler, `/src`, pdpmake, the installer | NO, excluded from the image | a machine with no writable disk cannot use them |
-| Doom | NO, excluded from the image | RAM under the 32 MiB direct map |
-| Writing the SSD, carving a partition, a persistent host key | NO, phase E | gated on the owner's approval after a full backup |
-| DHCP, DNS, IPv6, a second interface | NO | out of scope; a numeric address is the contract |
+| Part | On the metal image | Evidence |
+|------|--------------------|----------|
+| Boot from a USB stick (CSM, El Torito hybrid ISO) | Yes | The laptop; not yet proved |
+| VGA text console and the 8042 keyboard | Yes | The laptop; not yet proved |
+| RTL8168GU Ethernet | Yes | The chip model in `verify-host`; not yet tested on the notebook |
+| Netconsole over that card | Yes | `make netconsole-test` with RTL8139; the 8168 path is not yet tested |
+| Boot-line IPv4, ARP, ICMP, UDP, TCP, sockets | Yes | The complete suite under `make test-addressed` |
+| Dropbear over SSH, supervised by init | Yes | Unattended `make metal-test` |
+| The console login as the recovery path | Yes | `make metal-test` and `make login-test` |
+| AHCI identification and reads | Yes | `make test-disk-ahci`; reset and COMRESET are not yet tested on the laptop |
+| Reading the disk without mounting it | Yes | Byte-level checks in `make diskdiag-test` |
+| Writing any disk | No; the build rejects it | Byte-level checks in `make diskpolicy-test` |
+| Restart | Yes | `make reset-test`, with each mechanism isolated |
+| Power off | Yes, when a profile matches | `make shutdown-test`; the laptop chipset row is unproved |
+| Trusted entropy for the host key | Required | `make metal-test`; requires RDRAND on the laptop |
+| HD Audio | No; excluded from the image | No audio program is staged, although the kernel contains the driver |
+| The compiler, `/src`, pdpmake, the installer | No; excluded from the image | A machine without writable storage cannot use them |
+| Doom | No; excluded from the image | RAM is limited by the 32 MiB direct map |
+| Writing the SSD, carving a partition, a persistent host key | No; deferred to phase E | Requires the owner's approval after a complete backup |
+| DHCP, DNS, IPv6, a second interface | No | Out of scope; a numeric address is the contract |
 
-## A kernel bug this milestone's own growth exposed
+## Directory iteration defect
 
-The self-build capstone failed near the end, and it was not a flake. `sys_getdents64`'s directory cursor was a count of the children seen so far. `rm -rf` reads a batch of names, unlinks them, and reads on from that cursor, so every unlink renumbered the survivors and the next read skipped one entry for each file already gone. The leftovers made `rmdir` refuse, and all a user saw was "Directory not empty".
+The final self-build test failed consistently. The `sys_getdents64` directory cursor counted children already returned. `rm -rf` reads a batch of names, unlinks them, and resumes from that count. Each unlink renumbered the remaining children, so the next read skipped one entry for every removed file. The remaining entries made `rmdir` fail with only "Directory not empty" reported to the user.
 
-It had presumably always been there, and it surfaced now because this milestone added enough files to `rach2/sys` that listing it stopped fitting in one call: below that threshold every name is read before any unlink, and the defect cannot show.
+The defect presumably already existed. This milestone added enough files to `rach2/sys` that its listing no longer fit in one call. Below that threshold, the caller reads every name before unlinking any entry, so the error remains hidden.
 
-The cursor is now the byte offset of the last node returned. That survives deletion, because removing a node only widens free extents and allocation splits a free node rather than shifting a reserved one. It does not survive a file growing out of its extent, which relocates that node; a child that grows while another descriptor is mid-listing can be missed or repeated. That is a concurrent modification of a directory being read, which POSIX leaves unspecified, and it is not reachable from the loop the cursor exists for. The boundary is written in the function rather than left to be rediscovered. `tests/unlinkdirprobe.c` reproduces the original defect with a deliberately small buffer and fails against the old cursor.
+The cursor now records the byte offset of the last returned node. Deletion preserves that position because removing a node only enlarges free extents, and allocation splits a free node instead of shifting a reserved node. Growth beyond a file's extent can still relocate the node. If a child grows while another descriptor lists the directory, that child can be missed or repeated. POSIX leaves concurrent modification during directory iteration unspecified, and the deletion loop does not reach this case. The function documents this limit. `tests/unlinkdirprobe.c` reproduces the original failure with a deliberately small buffer and fails with the old cursor.
 
-## What is proved, and where
+## Verification status
 
-In QEMU, from a clean tree: the whole existing probe suite, twice, once with the address compiled in and once with it on the boot line; the netconsole capture; every subset of the optional device switches; the read-only kernel against a real disk image; all three AHCI paths with the controller reset in place; the SSH capstone; and the unattended metal rehearsal. On the host: 27 seam tests, including the chip model, the address parser, the command allowlist and the netconsole.
+QEMU verification from a clean tree ran the complete probe suite twice: once with the compiled address and once with the boot-line address. It also covered netconsole capture, every subset of the optional device switches, the read-only kernel with a disk image, all three AHCI paths after controller reset, the SSH capstone, and the unattended metal test. The host ran 27 host tests, including the chip model, address parser, command allowlist, and netconsole.
 
-Nothing here has touched the laptop. Everything below is unproved until it does.
+None of this verification used the notebook. The remaining claims require that hardware.
 
-Who supplies each proof matters, because some of it cannot be scripted. The scripted half of the acceptance is `tools/metal_accept.sh`, run over SSH from the development host: it reads what the machine says it is, checks the running kernel is the read-only build, checks the disk is not mounted, and compares the drive's identity and the hash of its first sector against `baseline.md`. It is rehearsed inside `make metal-test`, so it is not being debugged on the machine it is meant to measure. The human half is `checklist.md` and stays human: a cable pulled and put back, cold power cycles, a screen photographed, a sound heard, and Windows booting with the stick out.
+Some acceptance steps require a person. The scripted part, `tools/metal_accept.sh`, runs over SSH from the development host. It reads the reported machine identity, requires the read-only kernel, verifies that the disk is not mounted, and compares the drive identity and first-sector hash with `baseline.md`. `make metal-test` rehearses this script before it runs on the target. The manual `checklist.md` covers disconnecting and reconnecting a cable, cold power cycles, a screen photograph, audible output, and booting Windows after removing the stick.
 
 ## What was refuted
 
-* That nothing calls `netdev_poll` was raised as a defect during phase B's review and refuted: the plan assigns the timer hook to phase C, where it landed.
-* That `install-test` had regressed: it failed once and passed on a serial re-run. Its matrix boot has a 75-second bounded wait and three QEMU tests were running at once; the script is byte-identical to the milestone-23 close.
-* That the AHCI host test needed a full register model like the RTL8168's. The bounds that matter are arithmetic, and one of them was a real defect (an all-ones capacity accepted, truncating every later LBA), fixed in the driver where it lives.
-* The plan's literal poweroff numbers. `0x1804` is derivable and is now derived from the chipset's own base register; only the sleep type is a constant, carried per profile with its provenance, because it lives in AML this kernel does not interpret.
+* A phase B review reported that nothing called `netdev_poll`. The plan assigned the timer hook to phase C, and that phase added the call.
+* One failure suggested that `install-test` had regressed, but a serial rerun passed. Its matrix boot has a 75-second time limit, and three QEMU tests had run concurrently. The script remains byte-identical to the milestone-23 version.
+* A review requested a complete AHCI register model like the RTL8168 model. The important AHCI bounds are arithmetic. Testing found one real error: accepting an all-ones capacity truncated every later LBA. The driver now rejects it.
+* The plan specified literal poweroff values. The driver now derives `0x1804` from the chipset base register. Only the sleep type remains a per-profile constant with recorded provenance because it resides in AML that this kernel cannot interpret.
 
-## The first LAN session, measured
+## First measured LAN session
 
-The machine was booted from the stick on a real network and reached over SSH from the development host. What that settled:
+The notebook booted from the stick on a real network and accepted an SSH connection from the development host. The session established these results:
 
-* The ported driver works. `xid 0x509` as predicted, `Network... OK (RTL8168GU)`, ARP resolved, ICMP both ways, and a TCP session carrying SSH. The bring-up sequence, the four indirect windows, the descriptor rings and the PHY all behave on the chip nothing here can emulate.
-* Init brings the machine up unattended: dropbear was listening before the login prompt appeared, and root authenticated by key with nothing typed at the console.
-* `lynxpoint-lp` matched once the mobile device-id range was added, and `poweroff` cuts power rather than halting.
-* Name resolution needed `/etc/resolv.conf`, which the metal image did not stage. It names 1.1.1.1, which is what this LAN's router hands out; the router forwards DNS too, but a fixed public resolver keeps working if the stick moves.
-* A 104 KB file crossed in each direction, byte for byte by checksum.
+* The ported driver works. It reported the predicted `xid 0x509` and `Network... OK (RTL8168GU)`. ARP resolved, ICMP passed in both directions, and SSH used a TCP connection. The initialization sequence, four indirect windows, descriptor rings, and PHY all worked on the physical chip absent from the emulators.
+* Init starts the machine unattended. Dropbear listened before the login prompt appeared, and root authenticated by key without console input.
+* After adding the mobile device-id range, `lynxpoint-lp` matched and `poweroff` cut power instead of halting.
+* Name resolution required `/etc/resolv.conf`, which the metal image had omitted. It specifies 1.1.1.1, the address supplied by this LAN's router. The router also forwards DNS, but a fixed public resolver remains usable when the stick moves.
+* A 104 KB file transferred in each direction and matched byte-for-byte by checksum.
 
-Two throughput numbers, which the plan asked for and which say different things:
+The plan requested two throughput measurements with different scopes:
 
-| Measurement | Laptop, RTL8168GU, polled | QEMU, RTL8139, interrupt-driven |
+| Measurement | Notebook, polled RTL8168GU | QEMU, interrupt-driven RTL8139 |
 |---|---|---|
-| A whole SSH session: connect, authenticate, run, close | 0.3 s | comparable |
-| Bulk transfer, 104 KB one direction | 0.9 KB/s | 1.1 KB/s |
+| Complete SSH session: connect, authenticate, run, close | 0.3 s | Comparable |
+| One-way bulk transfer, 104 KB | 0.9 KB/s | 1.1 KB/s |
 
-The interactive figure is what remote development needs and it is fine. The bulk figure is poor, and the comparison is the point: the polled driver on real hardware is within twenty percent of the interrupt-driven one in QEMU, so this is not the new driver and not the 100 Hz poll. It is a defect in the TCP stack that predates this milestone, and it is recorded here as the next thing worth chasing rather than attributed to the hardware. (Milestone 25 phase A found and fixed it: the receiver never told a peer that its window had reopened, so the peer's persist timer set the rate. The same 64 KiB transfer now takes 0.291 s instead of 60.179 s. See `dev-log/25-sealed/Readme.md`.)
+The interactive result is sufficient for remote development, but bulk throughput is poor. The polled real-hardware driver is within twenty percent of the interrupt-driven QEMU driver, so the similar rates point to an older TCP defect rather than the new driver or its 100 Hz poll. Milestone 25 phase A found and corrected that defect: the receiver did not notify its peer when the receive window reopened, so the peer's persist timer determined the rate. The same 64 KiB transfer then took 0.291 s instead of 60.179 s. See `dev-log/25-sealed/Readme.md`.
 
-## What waits for the hardware
+## Claims awaiting hardware
 
-* That the RTL8168GU driver works at all. The model proves the sequences and their order; it cannot prove PCIe ordering, that DMA reaches the rings, the PHY's behaviour, or whether this board needs the firmware patch the port omits. The first proof is a packet capture on the development host showing our frames with the machine's own source address.
-* That the AHCI reset and COMRESET behave on a Lynx Point controller, and that COMRESET is in fact the recovery for the link that comes up dead after a warm reboot.
-* That the three-mechanism restart restarts this machine, and that poweroff works: the ACPI path still derives its address from a PIIX4's configuration space and will refuse on this chipset, falling back to a halt. The PCH power-management path and the ACPI-enable handshake are written down in the plan and not yet built.
-* That the module layout fits under the direct map on this machine's memory map.
-* Everything about the SSD beyond reading it, which is phase E.
+* The RTL8168GU driver has not yet run on the device. The model verifies the sequences and their order, but cannot verify PCIe ordering, DMA access to the rings, PHY behavior, or a possible requirement for the omitted firmware patch. The first proof will be a packet capture on the development host showing frames with the notebook's source address.
+* AHCI reset and COMRESET have not yet run on a Lynx Point controller. The hardware must also show whether COMRESET recovers a link that fails after a warm reboot.
+* The three restart mechanisms and poweroff remain unproved on this notebook. The ACPI path derives its address from PIIX4 configuration space and will reject this chipset, then halt. The plan specifies a PCH power-management path and ACPI-enable handshake that have not been built.
+* The notebook memory map must show that the module layout fits below the direct-map limit.
+* Phase E covers all SSD behavior beyond reads.
 
 ## Phase E, designed and deliberately not built
 
-Phase E's local half was designed in full and then not built, which is a decision rather than an omission, so the reasons are here.
+The local part of phase E was fully designed but deliberately not implemented. This section records the reasons.
 
-It is gated twice by the plan's own terms: on the owner's explicit approval after a full backup of the SSD, and on the MBR inventory. Neither gate has opened, so the carved topology those pieces address does not exist. Building them now would mean shipping a `rach2.bootuuid=` selection that nothing can select, and adding a GRUB entry to the stick that addresses volumes that are not there. The second is worse than useless: the stick that works today is the one the first laptop session depends on, and an entry pointing at a missing volume is a way to break it before it has ever been used.
+The plan requires both the owner's explicit approval after a complete SSD backup and an MBR inventory. Neither prerequisite has been met, so the proposed partition layout does not exist. Implementation would add a `rach2.bootuuid=` selector with no selectable volume and a GRUB entry that refers to absent volumes. The working stick is required for the first notebook session, and such an entry could break it before that session.
 
-The design also had one part that should not be built as designed, and it is worth recording so it is not rediscovered later. To make the fixture bootable it published a WRITABLE `/dev/bootpart` window over a FAT volume, chosen by a boot-line token, under the ordinary read-write kernel. That is precisely the shape this milestone spent phase D removing: a boot flag is editable at the GRUB prompt, and the volume in question would sit on the disk holding somebody's Windows. Whatever phase E builds, the write side of it belongs behind the build switch, not behind a token.
+One part of the design must also change before implementation. To boot the fixture, it exposed a writable `/dev/bootpart` window over a FAT volume selected by a boot-line token under the ordinary read-write kernel. Phase D removed this authority because a person can edit a boot flag at the GRUB prompt, and this volume would reside on the Windows disk. Any phase E write path must use the build switch instead of a token.
 
-What is inherited when phase E begins: the MBR arithmetic is already decided by the inventory (entries 3 and 4 are free, so the carve uses primary slots and no extended-partition support is needed), `baseline.md` holds the numbers to check the disk against, and `/proc/disk` and `/dev/disk0` are the instrument for checking them.
+Phase E inherits several decisions. The inventory shows that MBR entries 3 and 4 are free, so partitioning can use primary entries without extended-partition support. `baseline.md` records the expected disk values. `/proc/disk` and `/dev/disk0` provide the measurements used to compare them.
 
-## The baseline, and its deadline
+## Baseline and retention
 
-`baseline.md` holds what Windows measured on this machine before Rach2 had touched it: the drive's model and serial, its 1953525168 sectors, its disk signature, its two partition entries and the SHA-256 of its first sector. It exists in the tree because `Lenovo_G50-70_report_temp.txt`, where those numbers came from, is untracked and is deleted when the hardware work concludes, and because the SSD half of this milestone has no other baseline to check itself against.
+`baseline.md` records Windows measurements taken before Rach2 accessed the notebook: the drive model and serial, 1953525168 sectors, the disk signature, two partition entries, and the SHA-256 of the first sector. The tracked file preserves these values because their source, `Lenovo_G50-70_report_temp.txt`, is untracked and will be deleted after the hardware work. No other baseline exists for the SSD work.
 
-## The record's own housekeeping
+## Temporary source record
 
-`Lenovo_G50-70_report_temp.txt` sits untracked in the repository root and is deleted at the very end of the milestone, once the hardware work has concluded. It has never been committed.
+`Lenovo_G50-70_report_temp.txt` remains untracked in the repository root. Delete it only after all hardware work in the milestone is complete. It has never been committed.
