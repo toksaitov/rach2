@@ -7,12 +7,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual files, every subsystem pass, the historical pass, the first five whole-project checks, and the terminology and boundary pass are complete.
 * First unchecked higher-level entry: complete documentation diff read in repository order, one edited file at a time.
 * Scope: the 88 content paths in `finish.md`, against fixed base `6e253221525273571b7ba12dcb5d1569bd746556`.
-* Active final-stage entry: complete documentation diff, `tests/host/Readme.md`.
-* Current document: `tests/host/Readme.md`.
+* Active final-stage entry: complete documentation diff, `tools/Readme.md`.
+* Current document: `tools/Readme.md`.
 
 ## Final-stage cursor
 
-* Diff page: `tests/host/Readme.md`, next output line 1.
+* Diff page: `tools/Readme.md`, next output line 1.
 * The manifest comparison passed at `32fb6c1`: 88 content paths plus five control files equal all 93 changed Markdown paths.
 * The fixed-base path list contains no non-Markdown path.
 
@@ -29,7 +29,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Read lines 1 through 80 of the fixed-base diff for `tests/host/Readme.md`.
+Read lines 1 through 80 of the fixed-base diff for `tools/Readme.md`.
 
 ## Intended commit boundary
 
