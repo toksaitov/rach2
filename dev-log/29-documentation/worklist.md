@@ -53,16 +53,16 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 
 ### Milestone 1
 
-* [ ] `dev-log/01-foundation/01.md`
-* [ ] `dev-log/01-foundation/02.md`
-* [ ] `dev-log/01-foundation/03.md`
-* [ ] `dev-log/01-foundation/04.md`
-* [ ] `dev-log/01-foundation/05.md`
-* [ ] `dev-log/01-foundation/06.md`
-* [ ] `dev-log/01-foundation/07.md`
-* [ ] `dev-log/01-foundation/08.md`
-* [ ] `dev-log/01-foundation/09.md`
-* [ ] `dev-log/01-foundation/10.md`
+* [x] `dev-log/01-foundation/01.md`
+* [x] `dev-log/01-foundation/02.md`
+* [x] `dev-log/01-foundation/03.md`
+* [x] `dev-log/01-foundation/04.md`
+* [x] `dev-log/01-foundation/05.md`
+* [x] `dev-log/01-foundation/06.md`
+* [x] `dev-log/01-foundation/07.md`
+* [x] `dev-log/01-foundation/08.md`
+* [x] `dev-log/01-foundation/09.md`
+* [x] `dev-log/01-foundation/10.md`
 * [ ] `dev-log/01-foundation/11.md`
 * [ ] `dev-log/01-foundation/12.md`
 * [ ] `dev-log/01-foundation/13.md`
