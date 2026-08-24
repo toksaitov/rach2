@@ -14,7 +14,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Final-stage cursor
 
-* Candidate queue, in order: `rach2/sys/proc/tls.Readme.md`, `rach2/sys/lib/krandom.Readme.md`, `rach2/sys/fs/Readme.md`, `rach2/sys/fs/synthfs.Readme.md`, `rach2/sys/ipc/Readme.md`, `rach2/sys/io/Readme.md`, `rach2/sys/block/Readme.md`, `rach2/sys/network/Readme.md`, `krffs/Readme.md`, `ish/Readme.md`, `utils/Readme.md`, `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/busybox/patches/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
+* Candidate queue, in order: `rach2/sys/io/Readme.md`, `rach2/sys/block/Readme.md`, `rach2/sys/network/Readme.md`, `krffs/Readme.md`, `ish/Readme.md`, `utils/Readme.md`, `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/busybox/patches/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -33,7 +33,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-The first ten ownership documents through `rach2/sys/proc/signal.Readme.md` are adjudicated. Commit this checkpoint, then inspect `rach2/sys/proc/tls.Readme.md`.
+The first fifteen ownership documents through `rach2/sys/ipc/Readme.md` are adjudicated. Commit this checkpoint, then inspect `rach2/sys/io/Readme.md`.
 
 ## Intended commit boundary
 
