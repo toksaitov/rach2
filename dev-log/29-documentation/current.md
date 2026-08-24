@@ -97,10 +97,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The AHCI-plan naming correction is committed as `3784787`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The completion-plan naming correction is committed as `442a9ed`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The shutdown-record naming correction is committed as `69cf465`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
-* Current file: `dev-log/18-shutdown/plan.md`, 208 lines and 29,560 bytes. It has thirteen lowercase BusyBox or Dropbear matches. Read the file whole in four bounded sections, then correct only ordinary project-name uses. Preserve commands, paths, configuration names, quoted output, and historical substance.
-* The file has been read whole. Ten ordinary-prose uses are corrected. The remaining three matches are components of `vendor/busybox/rach2.config` and `vendor/busybox/busybox-1.36.1` paths.
+* The shutdown-plan naming correction is committed as `79bcaca`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The remaining matches in `dev-log/19-busybox-first/plan.md` are literal paths, Make targets, script names, artifact names, and the quoted `busybox` applet token.
+* Current file: `dev-log/19-busybox-first/Readme.md`, 114 lines and 18,269 bytes. Its remaining matches are literal paths except for one ordinary-prose Dropbear use on line 94. Read the file whole in two bounded sections before correcting it.
+* The file has been read whole. The one ordinary-prose use is corrected; the path and artifact names remain unchanged.
 * The banned-prose check, ASCII check, complete one-file word diff, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: any shutdown-plan naming corrections and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
+* Intended commit boundary: the one BusyBox-record naming correction and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
 
 ## Boundary
 
@@ -109,4 +111,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the shutdown plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
+Stage the BusyBox record and checkpoint, review the staged paths and content, confirm the git identity, and commit.
