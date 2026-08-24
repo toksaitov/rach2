@@ -62,15 +62,15 @@ The devices have these publication and permission rules:
 
 The modes reject unprivileged opens. Effective uid 0 bypasses the mode check, so root can open ordinary `/dev/disk0` with `O_RDWR`. The ordinary kernel's write handler then returns `EPERM`. A recovery kernel compiles the write implementation and checks effective uid 0 again on every write. The bounded boot windows also repeat that effective-uid check when they write.
 
-The debug-shell `ahci` command is refused while KRFFS is mounted from disk. Otherwise it withdraws all three raw devices, initializes AHCI directly, dumps the controller, reads sector zero, and runs discovery again. It republishes `/dev/disk0` only when `rach2.diskdiag` is present; a recovery boot without that option loses the whole-disk node after this manual re-probe.
+The debug-shell `ahci` command reports an error and performs no re-probe while KRFFS is mounted from disk. Otherwise it withdraws all three raw devices, initializes AHCI directly, dumps the controller, reads sector zero, and runs discovery again. It republishes `/dev/disk0` only when `rach2.diskdiag` is present; a recovery boot without that option loses the whole-disk node after this manual re-probe.
 
 ## Disk policy and recovery authority
 
 Two independent build switches limit writes.
 
-`RACH2_DISK_READONLY` selects the metal kernel's driver policy. The ATA and AHCI issue paths permit only `READ SECTORS`, `READ SECTORS EXT`, `READ DMA EXT`, and `IDENTIFY`; every other command byte is refused. This also prevents writes through `/dev/bootpart` and `/dev/grubcore`. `tools/check_diskpolicy.py` requires exactly one policy banner in the built kernel.
+`RACH2_DISK_READONLY` selects the metal kernel's driver policy. The ATA and AHCI issue paths permit only `READ SECTORS`, `READ SECTORS EXT`, `READ DMA EXT`, and `IDENTIFY`; every other command byte returns failure. This also prevents writes through `/dev/bootpart` and `/dev/grubcore`. `tools/check_diskpolicy.py` requires exactly one policy banner in the built kernel.
 
-`RACH2_RECOVERY` controls the `/dev/disk0` write handler and automatic whole-disk publication. The ordinary kernel has the refusal body. The recovery kernel has the root-only write body. This switch does not bypass `RACH2_DISK_READONLY`; the Makefile builds the recovery kernel with recovery authority and the normal read-write driver policy. `tools/check_recovery.py` checks the authority banner.
+`RACH2_RECOVERY` controls the `/dev/disk0` write handler and automatic whole-disk publication. The ordinary kernel has the `EPERM` body. The recovery kernel has the root-only write body. This switch does not bypass `RACH2_DISK_READONLY`; the Makefile builds the recovery kernel with recovery authority and the normal read-write driver policy. `tools/check_recovery.py` checks the authority banner.
 
 The command and flush counters cover attempts issued since boot. `/proc/disk` reports them beside the raw-device batch size and call count.
 
@@ -91,6 +91,6 @@ The default `make test` boot has no data disk and does not exercise either disk 
 * `make stress-test` and `make stress-test-ahci` write and verify 33 MiB through the 4 MiB resident page cache.
 * `make bootpart-test` checks an absent boot partition, a writable FAT fixture, both bounded devices under a RAM root, and `_llseek` markers at 5 GiB and 258 GiB on a sparse AHCI disk.
 * `make authority-test` compares ordinary and recovery kernels, checks the write exclusion rule, and requires a 200-sector raw transfer to take four 64-sector calls.
-* `make diskpolicy-test` proves that the read-only artifact refuses a mount write and leaves the disk image unchanged. `make diskdiag-test` compares raw-sector hashes and requires the complete read-only session to leave the image unchanged.
+* `make diskpolicy-test` proves that a mount write fails under the read-only artifact and leaves the disk image unchanged. `make diskdiag-test` compares raw-sector hashes and requires the complete read-only session to leave the image unchanged.
 
 `make grub-test`, `make menu-test`, `make install-test`, `make drill-test`, and `make sealed-test` exercise the raw windows in their boot-loader and recovery workflows. The sealed test attaches the boot disk through AHCI and boots it through GRUB without QEMU's `-kernel` option.
