@@ -152,9 +152,9 @@ Each phase changes text only, never behavior. Each phase passes `make verify-sty
        Probe success tokens and the [PASS]/[FAIL] markers are contracts, untouched.
     4. Docs: rewrite the frequently read Readmes (root, mk/, libc/, the kernel subsystem
        Readmes).
-    5. Foundation-era C comments: remove restating body comments, write useful headers,
+    5. Foundation C comments: remove restating body comments, write useful headers,
        subsystem by subsystem.
-    6. Newer dense C (the musl and build era): move broad explanations to headers, keep
+    6. Newer dense C (from the musl and build work): move broad explanations to headers, keep
        the ABI and POSIX facts.
     7. Header audit: extend from public functions to subsystem-critical static functions.
     8. Make the text checks required rather than advisory.
