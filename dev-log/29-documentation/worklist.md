@@ -170,7 +170,7 @@ An edit found during these passes returns to the one-file procedure. Finish one 
 * [x] File systems, descriptors, synthetic files, pipes, polling, terminals, and block storage
 * [x] Network drivers, configuration, protocols, sockets, and network utilities
 * [x] Images, KRFFS host tools, accounts, init, shell, utilities, and self-build
-* [ ] musl, BusyBox, Dropbear, TinyCC, pdpmake, and Doom integration
+* [x] musl, BusyBox, Dropbear, TinyCC, pdpmake, and Doom integration
 * [ ] Tests, host tests, specialized harnesses, and verification claims
 * [ ] Prose-only collection pass over `dev-log/`
 
