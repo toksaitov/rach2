@@ -4,9 +4,9 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Position
 
-* First unchecked file after this commit boundary: `dev-log/01-foundation/11.md`. Do not start it before the batch commit.
+* First unchecked file after this commit boundary: `dev-log/01-foundation/21.md`. Do not start it before the batch commit.
 * Its original has not been read yet.
-* Historical batch ready to commit: foundation prompts `01.md` through `10.md`.
+* Historical batch ready to commit: foundation prompts `11.md` through `20.md`.
 * All ten files remain byte-for-byte unchanged.
 * Intended commit: the ten ordered worklist completions and this checkpoint update.
 
@@ -18,11 +18,14 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Checks run for this batch
 
-* `01.md` was read whole. It is a literal prompt with no surrounding editorial prose, so it remains byte-for-byte unchanged.
-* `02.md`, `03.md`, and `04.md` were also read whole and contain only literal prompt text. They remain byte-for-byte unchanged.
-* `05.md` through `10.md` were read whole and also contain only literal prompt text. They remain byte-for-byte unchanged.
-* The banned-term checks pass for `01.md` through `10.md`.
-* Existing Unicode em dashes in `01.md`, `03.md`, `05.md`, `06.md`, `07.md`, and `10.md` remain because replacing bytes inside literal prompts would change the historical record. The final explicit ASCII check applies to edited historical files.
+* `11.md` and `12.md` were read whole and contain only literal prompt text. They remain byte-for-byte unchanged.
+* `13.md` was read whole and also contains only literal prompt text. It remains byte-for-byte unchanged.
+* `14.md` was read whole and also contains only literal prompt text. It remains byte-for-byte unchanged.
+* `15.md` and `16.md` were read whole and also contain only literal prompt text. They remain byte-for-byte unchanged.
+* `17.md` was read whole and also contains only literal prompt text. It remains byte-for-byte unchanged.
+* `18.md` and `19.md` were read whole and also contain only literal prompt text. They remain byte-for-byte unchanged.
+* `20.md` was read whole in three bounded sections and also contains only literal prompt text. It remains byte-for-byte unchanged.
+* The banned-term checks pass for all ten files. The direct ASCII check passes for `11.md` through `15.md` and `17.md` through `20.md`; the existing em dashes in `16.md` remain as literal prompt bytes.
 
 ## Exact next action
 

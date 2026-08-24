@@ -63,16 +63,16 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `dev-log/01-foundation/08.md`
 * [x] `dev-log/01-foundation/09.md`
 * [x] `dev-log/01-foundation/10.md`
-* [ ] `dev-log/01-foundation/11.md`
-* [ ] `dev-log/01-foundation/12.md`
-* [ ] `dev-log/01-foundation/13.md`
-* [ ] `dev-log/01-foundation/14.md`
-* [ ] `dev-log/01-foundation/15.md`
-* [ ] `dev-log/01-foundation/16.md`
-* [ ] `dev-log/01-foundation/17.md`
-* [ ] `dev-log/01-foundation/18.md`
-* [ ] `dev-log/01-foundation/19.md`
-* [ ] `dev-log/01-foundation/20.md`
+* [x] `dev-log/01-foundation/11.md`
+* [x] `dev-log/01-foundation/12.md`
+* [x] `dev-log/01-foundation/13.md`
+* [x] `dev-log/01-foundation/14.md`
+* [x] `dev-log/01-foundation/15.md`
+* [x] `dev-log/01-foundation/16.md`
+* [x] `dev-log/01-foundation/17.md`
+* [x] `dev-log/01-foundation/18.md`
+* [x] `dev-log/01-foundation/19.md`
+* [x] `dev-log/01-foundation/20.md`
 * [ ] `dev-log/01-foundation/21.md`
 * [ ] `dev-log/01-foundation/22.md`
 * [ ] `dev-log/01-foundation/23.md`
