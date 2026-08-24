@@ -177,7 +177,7 @@ An edit found during these passes returns to the one-file procedure. Finish one 
 ## Whole-project pass
 
 * [x] Root overview and component ownership checked again
-* [ ] Build, verification, and git instructions agree across current documents
+* [x] Build, verification, and git instructions agree across current documents
 * [ ] Relative Markdown links and referenced tracked paths checked
 * [ ] Make targets and commands checked against Makefiles and `make help`
 * [ ] Repeated counts, limits, versions, and artifact names traced to their sources
