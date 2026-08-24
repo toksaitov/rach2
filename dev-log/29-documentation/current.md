@@ -7,14 +7,14 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual documentation files, all subsystem passes, the historical collection pass, and the first five whole-project checks are complete.
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
-* Active final-stage entry: the root routes, component directories, and cross-document ownership statements assign each contract to one owning Readme.
+* Active final-stage entry: contextual register review passes over the 28 current documents.
 * Current document: none.
-* Search pattern: none. The ownership pass uses the complete 28-path current-document list.
-* The ownership queue has been recorded from the complete current-document list.
+* Search pattern: not run.
+* The contextual-register path-only search has not run.
 
 ## Final-stage cursor
 
-* Candidate queue, in order: `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
+* Candidate queue: empty. The ownership entry is complete.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -33,8 +33,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-The first twenty-five ownership documents through `vendor/dropbear/Readme.md` are adjudicated. Commit this checkpoint, then inspect `vendor/tcc/Readme.md`.
+Run the contextual-register path-only search once, then record its exact pattern and candidate queue before inspecting any match.
 
 ## Intended commit boundary
 
-* No document is in progress. Commit this five-document ownership checkpoint.
+* No document is in progress. Commit `finish.md` and this checkpoint before running the next search.
