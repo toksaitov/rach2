@@ -184,8 +184,8 @@ An edit found during these passes returns to the one-file procedure. Finish one 
 * [x] Make targets and commands checked against Makefiles and `make help`
 * [x] Repeated counts, limits, versions, and artifact names traced to their sources
 * [x] Terminology and document boundaries checked across the repository
-* [ ] Complete documentation diff read in repository order, one edited file at a time
-* [ ] Changed-path list contains only in-scope Markdown and milestone control files
+* [x] Complete documentation diff read in repository order, one edited file at a time
+* [x] Changed-path list contains only in-scope Markdown and milestone control files
 
 ## Final verification and record
 

@@ -121,12 +121,12 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `tests/host/Readme.md`
 * [x] `tools/Readme.md`
 * [x] `utils/Readme.md`
-* [ ] `vendor/busybox/Readme.md`
-* [ ] `vendor/busybox/patches/Readme.md`
-* [ ] `vendor/dropbear/Readme.md`
-* [ ] `vendor/musl/Readme.md`
-* [ ] `vendor/pdpmake/Readme.md`
-* [ ] `vendor/tcc/Readme.md`
+* [x] `vendor/busybox/Readme.md`
+* [x] `vendor/busybox/patches/Readme.md`
+* [x] `vendor/dropbear/Readme.md`
+* [x] `vendor/musl/Readme.md`
+* [x] `vendor/pdpmake/Readme.md`
+* [x] `vendor/tcc/Readme.md`
 
 ## Changed-path scope
 
@@ -149,7 +149,7 @@ comm -3 \
 
 `git diff --name-only 6e253221525273571b7ba12dcb5d1569bd746556..HEAD | awk '!/\.md$/'` prints every forbidden non-Markdown path.
 
-* [ ] The current changed Markdown paths equal the 88 content paths above plus the five milestone control files.
-* [ ] `git diff --name-only 6e253221525273571b7ba12dcb5d1569bd746556..HEAD` contains no non-Markdown path.
-* [ ] Every changed vendor Markdown file is one of the project integration Readmes in the original inventory.
-* [ ] No upstream document, generated file, legal text, script, manifest, configuration, or code file changed.
+* [x] The current changed Markdown paths equal the 88 content paths above plus the five milestone control files.
+* [x] `git diff --name-only 6e253221525273571b7ba12dcb5d1569bd746556..HEAD` contains no non-Markdown path.
+* [x] Every changed vendor Markdown file is one of the project integration Readmes in the original inventory.
+* [x] No upstream document, generated file, legal text, script, manifest, configuration, or code file changed.
