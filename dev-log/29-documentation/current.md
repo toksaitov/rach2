@@ -8,13 +8,16 @@ This file is a bounded resume map for the one documentation file in progress. It
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
 * Active final-stage entry: contextual register review passes over the 28 current documents.
-* Current document: none.
-* Search pattern: not run.
-* The contextual-register path-only search has not run.
+* Current document: `tools/Readme.md`.
+* Original and current forms read whole in this goal run: yes. The file has 115 lines.
+* Material claims: machine setup, `make verify-style`, `make verify-host`, checkers, QEMU runners, target-specific test scripts, and GRUB and ISO builders.
+* Changed sections: Machine setup, Target-specific test scripts, and GRUB and ISO builders. The edits replace intention verbs without changing the named behavior.
+* Search pattern: `\b(honest|fiction|trap|bench|gate|era|surface|sight|holds?|names?|spells?|sits?|pins?|believes?|believed|believing|refuses?|refused|refusing|asks?|asked|asking)\b|(^|[.!?][[:space:]]+)Not[[:space:]]|\b[Nn]ot\b[^.!?]{0,100},?[[:space:]]+(it is|it's|they are|they're)\b`.
+* The contextual-register path-only search has run once. Do not rerun it.
 
 ## Final-stage cursor
 
-* Candidate queue: empty. The ownership entry is complete.
+* Candidate queue, in order: `tests/host/Readme.md`, `tests/Readme.md`, `rach2/Readme.md`, `rach2/sys/mm/Readme.md`, `rach2/sys/proc/signal.Readme.md`, `rach2/sys/fs/Readme.md`, `rach2/sys/fs/synthfs.Readme.md`, `rach2/sys/ipc/Readme.md`, `rach2/sys/io/Readme.md`, `rach2/sys/block/Readme.md`, `rach2/sys/network/Readme.md`, `krffs/Readme.md`, `ish/Readme.md`, `utils/Readme.md`, `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -33,8 +36,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run the contextual-register path-only search once, then record its exact pattern and candidate queue before inspecting any match.
+`tools/doctor.sh`, `tools/diskpolicy_test.sh`, and `tools/grub_embed.py` confirm the unchanged behavior. The remaining contextual matches in `tools/Readme.md` are ordinary names and the established dependency term `pins`. Verify and commit this file, then inspect `tests/host/Readme.md`.
 
 ## Intended commit boundary
 
-* No document is in progress. Commit `finish.md` and this checkpoint before running the next search.
+* `tools/Readme.md` and this checkpoint only.

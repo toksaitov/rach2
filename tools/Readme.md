@@ -10,7 +10,7 @@ Two scripts are also user entry points. `bootstrap_mac.sh` prepares a Mac, and `
 * `mac-formulae.txt` lists the Homebrew formulae and casks for a fresh Mac. It includes the i686 cross toolchain, QEMU, FUSE-T, the verification tools, `coreutils` for `gtimeout`, and Expect for the SSH test.
 * `doctor.sh` implements `make doctor`. It requires the cross compiler and binutils, QEMU, `make`, a host C compiler, Python, `pkg-config`, FUSE, and the four verification-only tools used by `make verify-style`. Docker, OpenSSH tools, Git, Expect, and `gtimeout` are reported as optional because only some targets need them.
 
-`make doctor` checks that command-line tools run, not merely that their names are present. For FUSE it asks `pkg-config` for either `fuse` or `fuse-t`.
+`make doctor` checks that command-line tools run, not merely that their names are present. For FUSE it runs `pkg-config --exists` for `fuse`, then for `fuse-t`.
 
 ## `make verify-style`
 
@@ -84,14 +84,14 @@ These scripts receive built artifacts and credentials from their Make targets. T
 * `tcc_test.sh` (`make tcc-test`) compiles and runs programs as the unprivileged account, compares a machine-built `cat` with the staged one, and checks the unsupported TinyCC output forms.
 * `make_test.sh` (`make make-test`) checks incremental pdpmake behavior, dependency rebuilding, `.PHONY`, compiler overrides, and timestamps across a reboot.
 * `selfbuild_test.sh` (`make selfbuild-test`) builds the kernel twice in clean guest workspaces, requires equal hashes, builds utilities and ISH, extracts and checks the exact kernel, and boots it through the probe suite. It also boots that kernel through GRUB when Docker is available.
-* `ssh_test.sh` (`make ssh-test`) checks root key login, unprivileged password login, pty and terminal-size propagation, and refused authentication cases. It requires Expect for the password exchange.
+* `ssh_test.sh` (`make ssh-test`) checks root key login, unprivileged password login, pty and terminal-size propagation, and rejected authentication attempts. It requires Expect for the password exchange.
 * `procfiles_test.sh` (`make procfiles-test`) checks `/proc/mounts` on RAM, page-cache, and disk roots, then checks the `/proc` data used by `ps`, `df`, `free`, `uptime`, `dmesg`, `route`, `arp`, and `netstat`.
 * `login_test.sh` (`make login-test`) compares strict and permissive init behavior when `/bin/login` is absent, checks recovery of a stopped console session, and verifies `rach2.rescue`.
 * `exitline_test.sh` (`make exitline-test`) requires plain process-exit diagnostics under the debug shell, suppresses them under init, and checks both `runtests.py` scoring markers and the no-token harness path.
 * `shutdown_test.sh` (`make shutdown-test`) checks forced and signal-driven halt, poweroff, and reboot paths, root permission, QEMU termination where required, and offline KRFFS state.
-* `bootline_test.sh` (`make bootline-test`) checks refused disk-root command lines, an unmountable disk root, and the rescue exemptions.
+* `bootline_test.sh` (`make bootline-test`) checks rejected disk-root command lines, an unmountable disk root, and the rescue exemptions.
 * `crash_test.sh` (`make crash-test`) checks the dirty-mount flag after a killed boot, clean halt, poweroff, and attempts to clear the root's overlapping set-id bit.
-* `diskpolicy_test.sh` (`make diskpolicy-test`) proves that the ordinary kernel changes a mounted fixture while the read-only kernel refuses the write and leaves every byte unchanged.
+* `diskpolicy_test.sh` (`make diskpolicy-test`) proves that the ordinary kernel changes a mounted fixture while the write fails under the read-only kernel and leaves every byte unchanged.
 * `diskdiag_test.sh` (`make diskdiag-test`) checks read-only disk inspection over unattended SSH, compares selected sectors with the host image, requires the diagnostic disk copy to remain unchanged, and checks the no-disk case.
 * `reset_test.sh` (`make reset-test`) runs each of the three restart mechanisms with the earlier mechanisms skipped.
 * `metal_test.sh` (`make metal-test`) boots the metal image without console input, checks SSH and file transfer, kills Dropbear, and requires init to start a different server process. It also runs `metal_accept.sh` against the QEMU guest.
@@ -106,7 +106,7 @@ These scripts receive built artifacts and credentials from their Make targets. T
 ## GRUB and ISO builders
 
 * `mkdisk_grub.sh [KERNEL [OUTPUT]]` builds a BIOS-bootable disk with a FAT32 boot partition, a KRFFS root, and an optional FAT32 recovery partition. It stages a fixed-size candidate kernel slot, a fallback kernel, a fixed-size menu slot, and a GRUB environment block, then validates the FAT chains and layout before publishing the image.
-* `grub_embed.py` writes GRUB's MBR boot code and core image while preserving the partition table. It patches the core-image pointers and refuses an image that does not fit the post-MBR gap or one tail slot.
+* `grub_embed.py` writes GRUB's MBR boot code and core image while preserving the partition table. It patches the core-image pointers and rejects an image that does not fit the post-MBR gap or one tail slot.
 * `mkgrubcore.sh MARKER OUTPUT` builds a replacement core image with a serial marker and the same embedded recovery configuration as the disk builder.
 * `grub-embed.cfg` is the common embedded configuration. It tries the normal menu on partition 1 and then the recovery menu on partition 3.
 * `mkiso.sh` builds `test`, `os-simple`, `os-real`, or `rach2-metal` as a GRUB ISO in Docker. It checks the selected kernel's disk policy before staging it. The top-level `make isos` target builds all four.
