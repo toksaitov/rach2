@@ -109,11 +109,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The normalization-plan naming correction is committed as `cccb98e`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The remaining match in `dev-log/05-images/Readme.md` is the literal `/bin/busybox` path.
 * The review-plan naming correction is committed as `f6dd1ea`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
-* The disk-plan naming correction is committed as `1bf8359`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
-* The remaining early-record matches were inspected and are literal vendored-directory names, configuration paths, Make targets, artifact paths, or `busybox` and `dropbear` commands.
-* The final historical collection check passes banned prose and ASCII over all 60 edited files. Its 135 lowercase project-name tokens are adjudicated literals. Its 69 dash candidates are Markdown thematic breaks or five preserved quotations and test inputs containing spaced `--`.
-* The prose-only collection pass is complete. The next higher-level entry is the whole-project root overview and component ownership check.
-* Intended commit boundary: the completed prose-only collection pass and its control files.
+* The prose-only historical collection pass is committed as `c1f3d92`. All individual files, seven current-document subsystem passes, and the historical collection pass are complete.
+* Completed higher-level entry: root overview and component ownership checked again.
+* Current documents: `Readme.md` and the owning current Readmes it routes to. Re-read the root file whole, compare its component and subsystem maps with the tracked current-document inventory and owning directories, and check that overview text does not duplicate contracts that belong in component Readmes.
+* The root file was read whole. Its component table covers every tracked top-level component and all five vendor integrations; its subsystem table covers all ten kernel subsystem Readmes. The BusyBox patch Readme is linked from its owning integration Readme. A link-graph check reaches 26 of the 28 current documents; the two policy files, `AGENTS.md` and `CLAUDE.md`, are named explicitly in the root's final route. The overview keeps implementation detail in the owning documents. No edit was needed.
+* Current higher-level entry: build, verification, and git instructions agree across current documents.
+* Intended commit boundary: the completed root-ownership entry and checkpoint.
 
 ## Boundary
 
@@ -122,4 +123,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run `make verify-style`, review the control-file diff, and commit the completed prose-only collection pass.
+Run `make verify-style`, review the control-file diff, and commit the completed root-ownership entry. Then compare build, verification, and git instructions across current documents.
