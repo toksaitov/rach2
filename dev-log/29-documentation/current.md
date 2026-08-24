@@ -8,17 +8,17 @@ This file is a bounded resume map for the one documentation file in progress. It
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
 * Active final-stage entry: contextual register review passes over the 28 current documents.
-* Current document: `vendor/dropbear/Readme.md`.
-* Original and current forms read whole in this goal run: yes. The current file has 124 lines.
-* Material claims: archive build, feature selection, accounts, server startup, entropy, kernel dependencies, pin updates, and tests.
-* Changed section: Entropy and host keys. The edit states the two `EIO` results directly.
+* Current document: `vendor/tcc/Readme.md`.
+* Original and current forms read whole in this goal run: yes. The current file has 110 lines.
+* Material claims: archive build, target configuration, guest paths, output policy, link closure, pin updates, and tests.
+* Changed section: Build. The edit identifies the three generated commands and the tools each invokes.
 * Commands passed: isolated diff review, banned-prose and ASCII checks, `git diff --check`, `make verify-style`, and all 36 `make verify-host` tests.
 * Search pattern: `\b(honest|fiction|trap|bench|gate|era|surface|sight|holds?|names?|spells?|sits?|pins?|believes?|believed|believing|refuses?|refused|refusing|asks?|asked|asking)\b|(^|[.!?][[:space:]]+)Not[[:space:]]|\b[Nn]ot\b[^.!?]{0,100},?[[:space:]]+(it is|it's|they are|they're)\b`.
 * The contextual-register path-only search has run once. Do not rerun it.
 
 ## Final-stage cursor
 
-* Candidate queue, in order: `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
+* Candidate queue, in order: `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -37,8 +37,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Dropbear's `process_getrandom` falls back to `DROPBEAR_URANDOM_DEV` after an error; `sys_getrandom` and `dev_rand_read` return `-EIO` without trusted hardware entropy. The file is ready to commit. Then inspect `vendor/tcc/Readme.md`.
+`build_tcc.sh` writes executable `rach2-gcc`, `rach2-ar`, and `rach2-strip` scripts and passes their `rach2-` prefix to configure. The file is ready to commit. Then inspect `vendor/pdpmake/Readme.md`.
 
 ## Intended commit boundary
 
-* `vendor/dropbear/Readme.md` and this checkpoint only.
+* `vendor/tcc/Readme.md` and this checkpoint only.

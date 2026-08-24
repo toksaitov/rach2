@@ -18,7 +18,7 @@ The build script:
 
 1. Requires `tcc-0.9.27.tar.bz2` to have SHA-256 `de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c`.
 2. Replaces the extracted tree and applies `rach2-output-policy.patch` with `patch --batch --forward`.
-3. Creates a `rach2-` cross prefix whose `gcc`, `ar`, and `strip` names invoke the project musl wrapper and i686 ELF tools.
+3. Creates a `rach2-` cross prefix: `rach2-gcc` invokes the project musl wrapper, while `rach2-ar` and `rach2-strip` invoke the i686 ELF tools.
 4. Configures an i386 musl target with the guest search paths, then rewrites the generated target OS from the macOS build host to Linux and removes `CONFIG_OSX`.
 5. Builds the compiler without executing it on the host, and builds `libtcc1.a` with the cross GCC through TinyCC's `i386-libtcc1-usegcc=yes` rule.
 6. Adds three required 32-bit libgcc helper objects to `libtcc1.a`, stages the compiler, runtime, and five compiler headers, and checks their combined link closure.
