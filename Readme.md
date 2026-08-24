@@ -85,11 +85,11 @@ make test      # boot the test image and check each probe's declared result
 make selfbuild-test   # the machine builds its own kernel, utilities and shell
 make images    # build all three images without the test run
 make isos      # a bootable ISO per image, for real hardware (Docker grub-mkrescue)
-make deps      # just the vendored third-party (libc; DEPS=full adds busybox,
-               #   dropbear, tcc and pdpmake)
+make deps      # just the vendored third-party (libc; DEPS=full adds BusyBox,
+               #   Dropbear, TinyCC and pdpmake)
 make help      # summarize common build and test targets
 make clean     # remove in-house build products and images
-make distclean # + every vendored build: musl, busybox, dropbear, tcc, pdpmake
+make distclean # + every vendored build: musl, BusyBox, Dropbear, TinyCC, pdpmake
 ```
 
 `make` follows the dependency graph; a header edit rebuilds only the objects that include it. Do not invoke a vendor `build_*.sh` script or run `make clean` as a routine build step. In-house objects and binaries go under the repo-root `build/` directory. Vendor scripts extract working trees under `vendor/`; musl also installs its sysroot there. The image consumes staged vendor artifacts from `build/vendor/`.
@@ -151,7 +151,7 @@ The kernel source is staged at `/src/rach2`, the shell at `/src/ish`, and the ut
 
 `/src` is root-owned, so an unprivileged account first copies a tree: `cp -r /src/rach2 ~ && cd ~/rach2 && make -f guest.mk`.
 
-`make selfbuild-test` builds the kernel twice in clean guest workspaces and requires equal hashes. It also builds the 29 utility programs and ish, then runs 18 smoke checks. After stopping the guest, the script extracts the kernel from the disk image, checks it with `tools/check_kernel.py --tcc`, and boots it through the complete probe suite. If Docker is available, the same kernel also boots through GRUB. A final guest boot rebuilds the staged `/src/ish` in place as root.
+`make selfbuild-test` builds the kernel twice in clean guest workspaces and requires equal hashes. It also builds the 29 utility programs and ISH, then runs 18 smoke checks. After stopping the guest, the script extracts the kernel from the disk image, checks it with `tools/check_kernel.py --tcc`, and boots it through the complete probe suite. If Docker is available, the same kernel also boots through GRUB. A final guest boot rebuilds the staged `/src/ish` in place as root.
 
 `make os-real-grub-disk` creates a BIOS-bootable disk image. `rach2/run_from_disk.sh` boots its GRUB installation without QEMU's `-kernel` option. On that image, `bootctl` installs a machine-built kernel:
 
@@ -171,7 +171,7 @@ The FAT boot partition has a fixed-size candidate slot and an untouched fallback
 `make ssh-test` boots a persistent os-real disk image, starts Dropbear from a console session, logs in as root by key, and logs in as `test` by password. Every wait has a timeout. The manual sequence is:
 
 ```sh
-make full                                   # build the os-real image (busybox + dropbear + Doom)
+make full                                   # build the os-real image (BusyBox + Dropbear + Doom)
 
 # Terminal 1: boot os-real with SSH port forwarding. The run script defaults
 # to -cpu max so the kernel can seed its random generator before Dropbear
