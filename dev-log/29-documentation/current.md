@@ -10,9 +10,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * First unchecked higher-level entry: file systems, descriptors, synthetic files, pipes, polling, terminals, and block storage.
 * Current documents in this group: the relevant root and kernel overview rows, `rach2/sys/fs/Readme.md`, `rach2/sys/fs/synthfs.Readme.md`, `rach2/sys/ipc/Readme.md`, `rach2/sys/io/Readme.md`, and `rach2/sys/block/Readme.md`.
 * Implementation evidence: KRFFS and generic file-system code, fd and open-file-description code, devfs and procfs routing and generators, pipes, poll and select, terminal and pty paths, block discovery and drivers, syscall dispatch, and the named default, host, manual, and specialized tests.
-* Root-file correction complete: the IPC row now says `partial transfers`, matching `rach2/sys/ipc/Readme.md` and `pipe_write`. Its prose, ASCII, link, path, whitespace, complete diff, and `make verify-style` checks pass.
-* After this commit, resume the group comparison for descriptor limits, synthetic paths and publication conditions, pipe readiness, poll and terminal interruption, ATA and AHCI discovery, raw-device authority, and test ownership.
-* Intended commit: `Readme.md` and the three milestone control files only.
+* Root-file correction is in commit `86f7a64`: the IPC row now says `partial transfers`, matching `rach2/sys/ipc/Readme.md` and `pipe_write`.
+* Kernel-overview correction complete: the `rach2.diskdiag` row now says it probes the disk and publishes `/dev/disk0`, while `/proc/disk` always exists and records the result. Its prose, ASCII, whitespace, complete diff, and `make verify-style` checks pass.
+* After this commit, resume the group comparison for the remaining descriptor, readiness, interruption, discovery, authority, and test-ownership claims.
+* Intended commit: `rach2/Readme.md` and `dev-log/29-documentation/current.md` only.
 
 ## Boundary
 
@@ -21,4 +22,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Inspect the staged path list and complete staged diff for the four intended files, confirm the Git identity, and commit without pushing. Then resume the file-system subsystem pass from the remaining comparisons above.
+Inspect the two staged paths and their complete diff, confirm the Git identity, and commit without pushing. Then resume this subsystem pass.

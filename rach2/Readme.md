@@ -95,7 +95,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.fsdisk` or `rach2.root=disk` | Mount KRFFS from the disk selected by the block layer. |
 | `rach2.fswindow` | Mount the Multiboot KRFFS module through the page-cache window. |
 | `rach2.disk=ahci` | Try AHCI before ATA; fall back to ATA if no AHCI disk answers. |
-| `rach2.diskdiag` | Publish `/proc/disk` and the `/dev/disk0` whole-disk window. |
+| `rach2.diskdiag` | Probe the disk and publish the `/dev/disk0` whole-disk window. `/proc/disk` always exists and records the result. |
 | `rach2.ip=A.B.C.D/prefix` | Set the single IPv4 address and mask. No gateway is implied. |
 | `rach2.ip=none` | Probe the NIC but leave IPv4 unconfigured for userland. |
 | `rach2.gateway=A.B.C.D` | Set a gateway on the configured subnet. It requires `rach2.ip`. |
