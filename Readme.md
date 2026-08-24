@@ -87,7 +87,7 @@ make images    # build all three images without the test run
 make isos      # a bootable ISO per image, for real hardware (Docker grub-mkrescue)
 make deps      # just the vendored third-party (libc; DEPS=full adds busybox,
                #   dropbear, tcc and pdpmake)
-make help      # list every target
+make help      # summarize common build and test targets
 make clean     # remove in-house build products and images
 make distclean # + every vendored build: musl, busybox, dropbear, tcc, pdpmake
 ```
@@ -205,7 +205,7 @@ If you fall back to the kernel debug shell, use `audio help` for the audio test 
 * `CLAUDE.md` is the normative project policy (build, writing, comments, verification, git); `AGENTS.md` points a coding agent to it.
 * `dev-log/` records how each milestone was planned and built; `dev-log/Readme.md` indexes them and its last entry is where the tree stands now.
 * Each component and kernel subsystem has its own Readme, linked in the tables above.
-* Every change must pass `make verify-style` and `make verify-host`; `make help` lists all targets.
+* Every change must pass `make verify-style` and `make verify-host`; `make help` summarizes common targets.
 
 ## Moving to another machine
 

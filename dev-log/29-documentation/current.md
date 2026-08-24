@@ -15,8 +15,9 @@ This file is a bounded resume map for the one documentation file in progress. It
 * First unchecked higher-level entry: tests, host tests, specialized harnesses, and verification claims.
 * Current documents in this group: `CLAUDE.md`, the root and kernel overview verification sections, `tools/Readme.md`, `tests/host/Readme.md`, `tests/Readme.md`, and verification sections in the component and subsystem Readmes.
 * Implementation evidence: root verification and specialized target recipes, `tools/check.sh`, `tools/hosttest.sh`, `tools/runtests.py`, harness and specialized test scripts, host-test discovery, guest source and manifest lists, and each named checker or selftest.
-* Compare what each target builds or boots, exact default and specialized coverage, prerequisites and timeouts, program and host-test counts, outcome scoring, manual exclusions, checker scope, and claims about destructive or external prerequisites. Use the test facts and non-document defects in `notes.md` as navigation.
-* Intended checkpoint: mark only this subsystem entry when the comparison is complete. If a document needs correction, return to the one-file procedure and commit it before resuming the group.
+* The authoritative inventories confirm 70 root guest programs, 35 musl guest programs, 63 default entries split 47 and 16, and 36 discovered host tests. The default runner's outcome scoring and clock check, the host runner's dependency and watchdog rules, and the thirteen `verify-style` phases agree with their owning documents.
+* `make help` is a curated summary and omits valid targets including `packet-test`, `netif-test`, `dgram-test`, and `dhcp-test`. `Readme.md` incorrectly said it lists every target in two places; both now say that it summarizes common targets.
+* Intended commit boundary: the two `Readme.md` help-summary corrections and the milestone control files. Resume the verification group after that clean checkpoint.
 
 ## Boundary
 
@@ -25,4 +26,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run `make verify-style`, inspect and commit the two control files for the completed integration pass, and require a clean tree. Then compare verification claims with the narrow target recipes, runners, program lists, and checker implementations identified above.
+Run the file-level banned-prose and ASCII checks for `Readme.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file correction with the milestone control files and require a clean tree. Then finish the specialized-target and component verification comparisons.
