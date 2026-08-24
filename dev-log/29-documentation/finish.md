@@ -45,11 +45,11 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `dev-log/01-foundation/Readme.md`
 * [x] `dev-log/02-networking-and-userland/Readme.md`
 * [x] `dev-log/02-networking-and-userland/plan.md`
-* [ ] `dev-log/03-text-standard/Readme.md`
-* [ ] `dev-log/03-text-standard/plan.md`
-* [ ] `dev-log/04-normalization/Readme.md`
-* [ ] `dev-log/04-normalization/plan.md`
-* [ ] `dev-log/05-images/Readme.md`
+* [x] `dev-log/03-text-standard/Readme.md`
+* [x] `dev-log/03-text-standard/plan.md`
+* [x] `dev-log/04-normalization/Readme.md`
+* [x] `dev-log/04-normalization/plan.md`
+* [x] `dev-log/05-images/Readme.md`
 * [ ] `dev-log/06-review/plan.md`
 * [ ] `dev-log/06-review/results.md`
 * [ ] `dev-log/07-init/Readme.md`
