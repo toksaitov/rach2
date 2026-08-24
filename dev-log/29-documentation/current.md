@@ -7,12 +7,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual files, every subsystem pass, the historical pass, the first five whole-project checks, and the terminology and boundary pass are complete.
 * First unchecked higher-level entry: complete documentation diff read in repository order, one edited file at a time.
 * Scope: the 88 content paths in `finish.md`, against fixed base `6e253221525273571b7ba12dcb5d1569bd746556`.
-* Active final-stage entry: complete documentation diff, `dev-log/25-sealed/plan.md`.
-* Current document: `dev-log/25-sealed/plan.md`.
+* Active final-stage entry: complete documentation diff, `dev-log/27-prose/plan.md`.
+* Current document: `dev-log/27-prose/plan.md`.
 
 ## Final-stage cursor
 
-* Diff page: `dev-log/25-sealed/plan.md`, next output line 1.
+* Diff page: `dev-log/27-prose/plan.md`, next output line 1.
 * The manifest comparison passed at `32fb6c1`: 88 content paths plus five control files equal all 93 changed Markdown paths.
 * The fixed-base path list contains no non-Markdown path.
 
@@ -29,7 +29,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Read lines 1 through 80 of the fixed-base diff for `dev-log/25-sealed/plan.md`.
+Read lines 1 through 80 of the fixed-base diff for `dev-log/27-prose/plan.md`.
 
 ## Intended commit boundary
 
