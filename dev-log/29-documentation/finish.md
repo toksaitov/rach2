@@ -42,9 +42,9 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `CLAUDE.md`
 * [x] `Readme.md`
 * [x] `dev-log/01-foundation/Plan.md`
-* [ ] `dev-log/01-foundation/Readme.md`
-* [ ] `dev-log/02-networking-and-userland/Readme.md`
-* [ ] `dev-log/02-networking-and-userland/plan.md`
+* [x] `dev-log/01-foundation/Readme.md`
+* [x] `dev-log/02-networking-and-userland/Readme.md`
+* [x] `dev-log/02-networking-and-userland/plan.md`
 * [ ] `dev-log/03-text-standard/Readme.md`
 * [ ] `dev-log/03-text-standard/plan.md`
 * [ ] `dev-log/04-normalization/Readme.md`
