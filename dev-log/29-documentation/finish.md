@@ -38,8 +38,8 @@ Copy its path output into `current.md`. Inspect matches with `rg -n "$review_pat
 
 These are the 88 project documentation files changed from the fixed base when this manifest was written. The five milestone control files are excluded. The final milestone record is reviewed separately before it is indexed.
 
-* [ ] `AGENTS.md`
-* [ ] `CLAUDE.md`
+* [x] `AGENTS.md`
+* [x] `CLAUDE.md`
 * [ ] `Readme.md`
 * [ ] `dev-log/01-foundation/Plan.md`
 * [ ] `dev-log/01-foundation/Readme.md`
