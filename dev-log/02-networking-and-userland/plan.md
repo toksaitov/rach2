@@ -83,7 +83,7 @@ The plan does not add kernel-wide sanitizers, blanket kernel UBSan handlers, a C
 
 ```
 toolchain (host):  the stock i686-elf-gcc builds musl itself (no cross-toolchain;
-                   spiked and confirmed — see Phase 0).
+                   spiked and confirmed; see Phase 0).
 libc/              pinned musl source (pinned tarball, no git submodule), build step, the
   Readme.md        link recipe, and how utils select musl vs. freestanding.
 rach2/sys/
