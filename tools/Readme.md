@@ -33,7 +33,7 @@ Two scripts are also user entry points. `bootstrap_mac.sh` prepares a Mac, and `
 The supporting files have narrower jobs:
 
 * `check_sources.sh` compares `C_SRC` in `rach2/Makefile` with `kernel.c` and the C files below `rach2/sys/`.
-* `check_guest.py` checks five contracts: the kernel object and link description, the utility program-to-source map, the ish object list, the guest file-descriptor and command-size limits, and the three source trees staged under `/src`.
+* `check_guest.py` checks five contracts: the kernel object and link description, the utility program-to-source map, the ISH object list, the guest file-descriptor and command-size limits, and the three source trees staged under `/src`.
 * `textcheck.sh` checks ASCII, prose uses of spaced `--`, Markdown bullet form, and development-phase tags. Its default Markdown scope includes root documents and documents below `rach2/`, `ish/`, `utils/`, `tests/`, `krffs/`, `tools/`, `mk/`, and `vendor/`. It excludes `dev-log/` and all of `ports/doom/`.
 * `check_comments.py` checks 80-column comment wrapping in the in-house C, shell, Make, and Python files. It includes the project glue under `ports/doom/` and excludes `ports/doom/src/`.
 * `prose_check.py --banned` checks the mechanically prohibited vocabulary in comments, messages, and Markdown. Its default scope includes the root documents and the in-house source roots, including the Doom glue but excluding `vendor/` and `dev-log/`. A path argument checks a file outside that default. `--report` compares watched phrase rates with the pinned upstream corpus without failing the build.
@@ -83,7 +83,7 @@ These scripts receive built artifacts and credentials from their Make targets. T
 * `account_test.sh` (`make account-test`) checks account creation, authentication, password changes, and database consistency in both os-real and os-simple. The os-real profile also checks deletion across reboots.
 * `tcc_test.sh` (`make tcc-test`) compiles and runs programs as the unprivileged account, compares a machine-built `cat` with the staged one, and checks the unsupported TinyCC output forms.
 * `make_test.sh` (`make make-test`) checks incremental pdpmake behavior, dependency rebuilding, `.PHONY`, compiler overrides, and timestamps across a reboot.
-* `selfbuild_test.sh` (`make selfbuild-test`) builds the kernel twice in clean guest workspaces, requires equal hashes, builds utilities and ish, extracts and checks the exact kernel, and boots it through the probe suite. It also boots that kernel through GRUB when Docker is available.
+* `selfbuild_test.sh` (`make selfbuild-test`) builds the kernel twice in clean guest workspaces, requires equal hashes, builds utilities and ISH, extracts and checks the exact kernel, and boots it through the probe suite. It also boots that kernel through GRUB when Docker is available.
 * `ssh_test.sh` (`make ssh-test`) checks root key login, unprivileged password login, pty and terminal-size propagation, and refused authentication cases. It requires Expect for the password exchange.
 * `procfiles_test.sh` (`make procfiles-test`) checks `/proc/mounts` on RAM, page-cache, and disk roots, then checks the `/proc` data used by `ps`, `df`, `free`, `uptime`, `dmesg`, `route`, `arp`, and `netstat`.
 * `login_test.sh` (`make login-test`) compares strict and permissive init behavior when `/bin/login` is absent, checks recovery of a stopped console session, and verifies `rach2.rescue`.
