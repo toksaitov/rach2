@@ -99,10 +99,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The shutdown-record naming correction is committed as `69cf465`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The shutdown-plan naming correction is committed as `79bcaca`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The remaining matches in `dev-log/19-busybox-first/plan.md` are literal paths, Make targets, script names, artifact names, and the quoted `busybox` applet token.
-* Current file: `dev-log/19-busybox-first/Readme.md`, 114 lines and 18,269 bytes. Its remaining matches are literal paths except for one ordinary-prose Dropbear use on line 94. Read the file whole in two bounded sections before correcting it.
-* The file has been read whole. The one ordinary-prose use is corrected; the path and artifact names remain unchanged.
+* The BusyBox-record naming correction is committed as `9057736`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The remaining matches through `dev-log/25-sealed/plan.md` are literal commands, paths, applet tokens, artifact names, or a captured Dropbear filename.
+* Current file: `dev-log/27-prose/Readme.md`, 139 lines and 29,198 bytes. Its remaining matches are literal paths or quotations except for `main-busybox` in ordinary prose on line 65. Read the file whole in two bounded sections before recasting that phrase as `main BusyBox`.
+* The file has been read whole. The one ordinary-prose phrase is recast as `main BusyBox`; literal paths and quotations remain unchanged.
 * The banned-prose check, ASCII check, complete one-file word diff, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: the one BusyBox-record naming correction and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
+* Intended commit boundary: the one prose-record naming correction and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
 
 ## Boundary
 
@@ -111,4 +113,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the BusyBox record and checkpoint, review the staged paths and content, confirm the git identity, and commit.
+Stage the prose record and checkpoint, review the staged paths and content, confirm the git identity, and commit.
