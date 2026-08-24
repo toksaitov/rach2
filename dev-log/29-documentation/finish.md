@@ -119,7 +119,7 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `rach2/sys/proc/tls.Readme.md`
 * [x] `tests/Readme.md`
 * [x] `tests/host/Readme.md`
-* [ ] `tools/Readme.md`
+* [x] `tools/Readme.md`
 * [ ] `utils/Readme.md`
 * [ ] `vendor/busybox/Readme.md`
 * [ ] `vendor/busybox/patches/Readme.md`
