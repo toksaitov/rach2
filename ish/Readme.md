@@ -1,113 +1,107 @@
-# ISH Shell
+# ish/: freestanding command shell
 
-![ISH Shell Running on Rach2](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/ish.png)
+ISH is the small command shell used by the os-simple image and the test image. It is a static i386 program with its own startup code, string routines, and Linux i386 system-call wrappers. It links no C library.
 
-A small Unix shell in freestanding C. It reads a line, parses it, and runs a builtin (`cd`, `exit`) or forks and execs a program found on `PATH`, with `<` and `>` redirection. It links no C library: the system calls are inline `int $0x80` wrappers for 32-bit x86, and the string routines (length, compare, tokenize, path join) are hand-rolled, so the shell needs nothing but the kernel's syscall ABI.
+ISH runs one command at a time. It is not a POSIX shell and has no script language.
 
-It also runs one line named on its own command line, `ish -c 'command'`, and exits with that line's status. That form is not a convenience: it is how another program asks a shell to run something as somebody, which is what `su -c` does; `login` instead execs the shell as a login shell with no command, and a shell that only ever read its input would sit waiting for a line nobody is going to type.
+## Command syntax
 
-The shell can be built for both Linux (native) and the Rach2 kernel (freestanding ELF32).
+Interactive mode reads from standard input until end of file. The shell prints no prompt. The input buffer capacity is 255 bytes, and the argument array can contain 255 tokens.
 
-## Features
+The one-line form runs `COMMAND` and exits with its status:
 
-* Built-in commands: `cd` (change directory), `exit` (terminate shell)
-* One line from the command line with `-c`, exiting with that line's status
-* External command execution by searching the PATH environment variable
-* Input redirection with `<` (stdin from file)
-* Output redirection with `>` (stdout to file)
-* Process management: forks child process, parent waits for completion
-* Stdlib-free operation using custom syscall wrappers
-
-## Structure
-
-* `ish.c`: Main shell loop, input handling, built-in commands, fork/exec logic
-* `ish_common.h`: Shared macros including ish_check for error assertions
-* `ish_shell_utilities.h`: Declarations for shell operations
-* `ish_shell_utilities.c`: Argument parsing, PATH/HOME extraction, redirection handling
-* `ish_cstring_utilities.h`: Declarations for string operations
-* `ish_cstring_utilities.c`: String functions (length, compare, tokenize, path combine) without stdlib
-* `ish_syscalls.h`: System call declarations and macros to replace stdlib functions
-* `ish_syscalls.c`: Includes the i386 implementation
-* `ish_syscalls.i386.c`: 32-bit x86 syscalls via inline assembly (int $0x80)
-* `crt0.c`: C runtime startup for Rach2 (provides `_start` entry point)
-* `Makefile`: Build configuration for Rach2 target
-* `Makefile.linux`: Build configuration for Linux target
-* `guest.mk`: the same build for pdpmake on Rach2 itself (`make -f guest.mk` in `/src/ish` as root, or in a copy of it as any account): the staged tcc compiles the five objects, ish's own `crt0.o` among them, and links them `-nostdlib -static`, dropping only the host build's explicit `-Ttext`, since tcc's default i386 text base is the same address. `tools/check_guest.py` holds its object list equal to the Makefile's.
-
-## Required Syscalls
-
-* `read`
-* `write`
-* `open`
-* `close`
-* `stat`
-* `chdir`
-* `creat`
-* `dup2`
-* `fork`
-* `execve`
-* `waitpid`
-* `exit`
-
-## Build for Rach2 (Default)
-
-Requires a cross-compiler (`i686-elf-gcc` or `x86_64-elf-gcc`):
-
-```
-make
+```sh
+ish -c 'COMMAND'
 ```
 
-This builds a freestanding ELF32 executable linked with `crt0.o` (provides `_start` entry point). The binary can be added to a KRFFS image and run on the Rach2 kernel.
+Only `argv[2]` is used. The parser splits on ASCII whitespace. It does not implement quotes, escapes, variables, globbing, pipelines, command lists, subshells, or background jobs. Shell metacharacters have no special meaning except when `<` or `>` appears as a separate token.
 
-## Build for Linux
+The two builtins are:
 
-Requires the same cross-compiler as the Rach2 build:
+* `cd [DIRECTORY]` changes the shell's working directory. With no operand it uses `HOME`. Success returns 0; failure returns 1.
+* `exit [STATUS]` exits the shell. The operand is read as a signed decimal prefix; a missing or nonnumeric operand means 0.
 
-```
-make -f Makefile.linux
-```
+An external command is tried as written. If `stat` cannot find it, ISH tries each nonempty element of `PATH`. A constructed path is limited to 1024 bytes. The child inherits the shell's complete environment.
 
-This builds the same freestanding binary but with the default text address (instead of `0x08048000`).
+The parent waits for each external command. `-c` reports these statuses:
 
-## Clean
+* the child's exit status after a normal exit;
+* 127 when no executable path resolves;
+* 126 when the command cannot be started, including a redirection that cannot be opened;
+* `128 + SIGNAL` when a signal kills the child.
 
-```
-make clean
-```
+Interactive mode discards each command's status and reads the next line.
 
-## Usage (Linux)
+## Redirection
 
-```
-./ish
-```
+`< FILE` opens `FILE` as standard input. `> FILE` creates or truncates `FILE` at mode 0644 and makes it standard output. The operator and filename must be separate tokens:
 
-Example commands:
-
-```
-ish -c 'echo one line and out'
-ls -la
-echo hello world
-cd /tmp
-pwd
-echo test output > out.txt
-cat < out.txt
-cd
-exit 0
+```sh
+cat < input.txt
+echo hello > output.txt
 ```
 
-## Usage (Rach2)
+ISH supports one redirection for each stream. The first redirection removes itself and every later token from the command's argument array. When both streams are redirected, output must therefore come first:
 
-Add the compiled `ish` binary to a KRFFS file system image, boot Rach2, and run from the kernel shell:
-
-```
-> exec ish
+```sh
+command > output.txt < input.txt
 ```
 
-The shell will start and accept commands. External commands must also be present in the KRFFS image.
+Arguments that must reach the command go before either redirection. Redirections are opened before a builtin or child runs. A builtin does not attach them to its own input or output, but a requested file is still opened and an open failure still returns 126.
 
-I/O redirection is fully supported on Rach2:
+## Environment and callers
 
+ISH reads `HOME` for a bare `cd` and `PATH` for command lookup. It does not change its behavior when `argv[0]` begins with a dash.
+
+The project `login` and `su` programs give a shell a fresh environment containing `PATH`, `HOME`, `SHELL`, `USER`, and `LOGNAME`. `su -c` passes `-c` and its command to the target shell. Login mode changes the working directory and places a dash at the start of `argv[0]`; ISH ignores the dash and enters its ordinary input loop.
+
+The os-simple image stages the binary as `/bin/ish` and `/bin/sh`, and both of its accounts name `/bin/ish`. The test image stages the same binary as `/ish` for `ishmusl` and as `/bin/sh` for musl's `system` and `popen` tests. The os-real image uses BusyBox `sh`; it stages the ISH source under `/src/ish` for self-build work.
+
+## System-call ABI
+
+`ish_syscalls.i386.c` issues Linux i386 `int $0x80` calls directly. The shell uses exactly these calls:
+
+```text
+exit fork read write open close waitpid creat execve chdir dup2 stat
 ```
-echo hello > test.txt
-cat < test.txt
+
+`crt0.c` reads `argc`, `argv`, and `envp` from the initial i386 process stack, calls `main`, and passes its return value to `exit`.
+
+## Builds
+
+The normal host build uses the shared freestanding cross compiler and writes `build/ish/ish`:
+
+```sh
+make -C ish
 ```
+
+It builds five objects under `build/ish/`, links a static ELF32 Intel 80386 executable, and places `.text` and `_start` at `0x08048000`. The shared toolchain rules select `i686-elf-gcc`, fall back to `x86_64-elf-gcc -m32`, or accept an explicit `CROSS_CC`.
+
+The Linux compatibility build writes `build/ish/linux/ish`:
+
+```sh
+make -C ish -f Makefile.linux
+```
+
+It uses the same source and raw Linux i386 ABI but leaves the text address to the linker. The result is a static Linux ELF32 executable; it does not run natively on macOS.
+
+The staged source tree has a POSIX makefile for pdpmake and TinyCC:
+
+```sh
+make -f guest.mk
+```
+
+Run it in a writable copy of `/src/ish`. Root may also build the staged tree in place. `guest.mk` builds the same five objects and links a local `ish` with `-m32 -nostdlib -static`; TinyCC's default i386 text address supplies the address named explicitly by the host build.
+
+## Source map
+
+* `ish.c` contains the input loop, builtins, path search, redirection, fork, exec, wait, and status conversion.
+* `ish_shell_utilities.[ch]` split arguments, read environment entries, and remove redirection tokens.
+* `ish_cstring_utilities.[ch]` provide the string, token, integer, and path operations.
+* `ish_syscalls.[ch]` select and declare the raw i386 wrappers.
+* `crt0.c` supplies the freestanding `_start` entry.
+* `Makefile`, `Makefile.linux`, and `guest.mk` own the three build routes.
+
+## Verification
+
+`make verify-style` builds the normal component and checks that `guest.mk` names the same five objects. `make test` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, and redirection failure. `make selfbuild-test` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.
