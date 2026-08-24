@@ -41,7 +41,7 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `AGENTS.md`
 * [x] `CLAUDE.md`
 * [x] `Readme.md`
-* [ ] `dev-log/01-foundation/Plan.md`
+* [x] `dev-log/01-foundation/Plan.md`
 * [ ] `dev-log/01-foundation/Readme.md`
 * [ ] `dev-log/02-networking-and-userland/Readme.md`
 * [ ] `dev-log/02-networking-and-userland/plan.md`
