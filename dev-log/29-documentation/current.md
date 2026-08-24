@@ -35,8 +35,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The complete `03dae47` diff for `dev-log/21-time-and-make/Readme.md` has been read. Lines 1 through 330 were complete before compaction; recovery read the file whole and resumed only the unread diff in six bounded sections.
 * The make record naming correction is committed as `79c3b70`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The complete `03dae47` diff for `dev-log/21-time-and-make/plan.md` has been read in seven bounded compact sections, followed by a complete read of the 224-line file in two sections. It preserves the withdrawn clone design, phase corrections, verification requirements, and other historical substance.
-* The file now uses TinyCC, BusyBox, pdpmake, and SHA-256 consistently in ordinary prose while preserving commands, targets, paths, quoted text, and historical substance. Its banned-prose and ASCII checks, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `03dae47` review at `dev-log/22-selfbuild/Readme.md` after a clean commit.
+* The make plan naming correction is committed as `7800019`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The complete `03dae47` diff for `dev-log/22-selfbuild/Readme.md` has been read in three bounded compact sections, followed by a complete read of the 73-line file. It preserves the four blockers, measured limits, review findings, corrected predictions, deferrals, and verification results.
+* The file now uses TinyCC, GCC, BusyBox, Dropbear, musl, and pdpmake consistently in ordinary prose while preserving commands, profiles, paths, and historical substance. Its banned-prose and ASCII checks, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `03dae47` review at `dev-log/22-selfbuild/plan.md` after a clean commit.
 
 ## Boundary
 
@@ -45,4 +47,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the one-file correction and this checkpoint. Review the staged paths and complete staged diff, confirm the configured identity, commit, and resume at `dev-log/22-selfbuild/Readme.md`.
+Stage the one-file correction and this checkpoint. Review the staged paths and complete staged diff, confirm the configured identity, commit, and resume at `dev-log/22-selfbuild/plan.md`.
