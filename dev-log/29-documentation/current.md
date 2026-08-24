@@ -17,7 +17,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 * Current documents in this group: the 95 completed historical worklist entries under `dev-log/`, excluding the four live milestone 29 control files.
 * Evidence boundary: prose and the historical records themselves only. Do not compare any historical claim, number, path, command, chronology, or conclusion with current implementation.
 * Check repeated model mannerisms, inconsistent names introduced by this milestone, ASCII, prohibited vocabulary, Markdown bullet form, and the complete historical diff in bounded ordered batches. Preserve quoted prompts, commands, output, ids, and historical substance.
-* Intended checkpoint: mark the prose-only collection entry only after the collection checks and bounded diff review complete. Any correction returns to the one-file historical procedure and is committed before the collection pass resumes.
+* The collection-wide contextual search found `honest` and `dishonest` applied to RTC samples in `dev-log/21-time-and-make/Readme.md`. The file was read whole, and the sentence now distinguishes a correctly invalid sample from misleading valid-looking samples without changing the recorded defect.
+* Intended commit boundary: the one-sentence historical prose correction and the milestone checkpoint. Resume the collection pass after a clean commit; the next contextual finding is `three honest attempts` in `dev-log/26-portable/plan.md`.
 
 ## Boundary
 
@@ -26,4 +27,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run `make verify-style`, inspect and commit the two control files for the completed verification pass, and require a clean tree. Then run the prose-only collection checks and read the historical documentation diff in bounded ordered batches.
+Run the file-level banned-prose and ASCII checks for `dev-log/21-time-and-make/Readme.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file historical correction with the checkpoint and require a clean tree. Then read `dev-log/26-portable/plan.md` whole and correct only the contextual register finding.
