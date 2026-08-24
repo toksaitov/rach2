@@ -8,16 +8,17 @@ This file is a bounded resume map for the one documentation file in progress. It
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
 * Active final-stage entry: contextual register review passes over the 28 current documents.
-* Current document: `rach2/sys/block/Readme.md`.
-* Original and current forms read whole in this goal run: yes. The file has 96 lines.
-* Material claims: block interface, partition discovery, ATA, AHCI, raw devices, write policy, diagnostics, and tests.
-* Changed sections: Raw disk devices, Disk policy and recovery authority, and Verification. The edits state error and no-action results directly.
+* Current document: `utils/Readme.md`.
+* Original and current forms read whole in this goal run: yes. The current file has 140 lines.
+* Material claims: utility builds, network clients, account programs, recovery tools, credential transactions, image selection, and tests.
+* Changed sections: Network programs and Image selection. The edits state DHCPNAK, short-lease handling, and manifest entries directly.
+* Commands passed: isolated diff review, banned-prose and ASCII checks, `git diff --check`, `make verify-style`, and all 36 `make verify-host` tests.
 * Search pattern: `\b(honest|fiction|trap|bench|gate|era|surface|sight|holds?|names?|spells?|sits?|pins?|believes?|believed|believing|refuses?|refused|refusing|asks?|asked|asking)\b|(^|[.!?][[:space:]]+)Not[[:space:]]|\b[Nn]ot\b[^.!?]{0,100},?[[:space:]]+(it is|it's|they are|they're)\b`.
 * The contextual-register path-only search has run once. Do not rerun it.
 
 ## Final-stage cursor
 
-* Candidate queue, in order: `rach2/sys/network/Readme.md`, `krffs/Readme.md`, `ish/Readme.md`, `utils/Readme.md`, `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
+* Candidate queue, in order: `vendor/musl/Readme.md`, `vendor/busybox/Readme.md`, `vendor/dropbear/Readme.md`, `vendor/tcc/Readme.md`, `vendor/pdpmake/Readme.md`, `ports/doom/Readme.md`.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -36,8 +37,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-`rach2/kernel.c` reports and skips the AHCI re-probe while a disk root is mounted; `diskcmd_policy` rejects every command outside the read-only allowlist; `diskpolicy_test.sh` requires the write to fail and the image to remain unchanged. The remaining matches are an interrupt gate, byte addressing, and literal `not-asked` state. Verify and commit this file, then inspect `rach2/sys/network/Readme.md`.
+`utils/dhcpc.c` removes the configured address when a lease expires or a server sends DHCPNAK; `dhcp_sane_lease` returns 0 below `DHCP_MIN_LEASE`; the os-simple manifest has the five explicit `file` entries. The file is ready to commit. Then inspect `vendor/musl/Readme.md`.
 
 ## Intended commit boundary
 
-* `rach2/sys/block/Readme.md` and this checkpoint only.
+* `utils/Readme.md` and this checkpoint only.
