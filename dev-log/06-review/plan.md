@@ -24,12 +24,12 @@ Scope: the whole tree from a clean checkout. `make distclean`, `make doctor`, `m
 Method, in order:
 * Host-tool preflight: `make doctor` checks the cross toolchain and the style tools but NOT the peers the later phases need. Before the manual-test phases, confirm `qemu-system-i386`, `docker` (Phase 19 ISOs), `ssh` and `ssh-keygen` (Phase 15), and `socat` and `curl` (Phase 17) are present, and skip-with-a-note any test whose tool is missing.
 * `make distclean && make doctor` -> every required tool PASS.
-* `make full` from a clean tree -> rebuilds musl, busybox, dropbear from the vendored tarballs (sha256 lines print verified), builds the kernel, stages build/images/{test,os-simple,os-real}.krffs, and prints the per-image "built ... (N of M bytes used, K free)". Record the byte counts and the kernel size.
+* `make full` from a clean tree -> rebuilds musl, BusyBox, Dropbear from the vendored tarballs (sha256 lines print verified), builds the kernel, stages build/images/{test,os-simple,os-real}.krffs, and prints the per-image "built ... (N of M bytes used, K free)". Record the byte counts and the kernel size.
 * `make verify-style` -> record the exact step labels 0/8..8/8 and the PASS/advisory-count at each.
 * `make verify-host` -> record the eleven `PASS: <name>` lines.
 * `make test` -> record `runtests: N probes, 0 failures` and the probe count N.
-* Boot each image: `cd rach2 && ./run.sh test` (debug shell + probes), `./run.sh os-simple` (ish init), `./run.sh os-real` (busybox /bin/sh init). Record what comes up.
-* End-to-end SSH test: `NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real`, then host `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` -> pubkey auth into busybox ash, rc 0.
+* Boot each image: `cd rach2 && ./run.sh test` (debug shell + probes), `./run.sh os-simple` (ish init), `./run.sh os-real` (BusyBox /bin/sh init). Record what comes up.
+* End-to-end SSH test: `NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real`, then host `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` -> pubkey auth into BusyBox ash, rc 0.
 
 What to look for: any build warning under -ansi -Werror (must be zero), any failed verification step, any image that does not boot to its expected init, or an end-to-end SSH failure. The build does not run QEMU; the scripts do (note run.sh defaults to -cpu max).
 
@@ -152,7 +152,7 @@ What to look for:
 * ICMP: icmp_rx copies <=1500 into icmp_reply_buf[1500] and recomputes over len (len already clamped, came validated from ip_rx); the single global in-flight ping state colliding between debug-shell netping and a syscall ping.
 * IP: ip_rx validation order rejects total_len<hdr_len and total_len>len before payload; ip_tx ARP-miss silent drop requires every caller to retry (icmp_ping, tcp SYN via tcp_tick, the test retry loops); ip_id_counter wrap benign (DF).
 * socketcall user-pointer validation: user_buffer_ok on recv/send/sendto/recvfrom buffers; sockaddr via copy_from_user; copy_sockaddr_to_user's caller_len read and the (caller_len<16) truncation and unconditional len=16 writeback; addrlen<SOCKADDR_MIN rejection; do_accept's bad-sa_ptr path releases the socket ref exactly once.
-* sin_family byte order: family host-order, sin_port/sin_addr big-endian (the dropbear-discovered fact) consistent across getsockname/getpeername/accept/recvfrom; SC_BE16/SC_BE32 read the caller correctly.
+* sin_family byte order: family host-order, sin_port/sin_addr big-endian (the Dropbear-discovered fact) consistent across getsockname/getpeername/accept/recvfrom; SC_BE16/SC_BE32 read the caller correctly.
 * socketcall arg-count table: nargs per SC_* matches each do_* arity; SC_PING=0x1000 cannot alias a BSD sub-call and the renumber matches tests/pingtest.c and utils/ping.c.
 * socket refcount: do_socket alloc-then-fd_alloc-fail unref; dup/dup2/fork ref; fd_release_backing drops one per descriptor (not OFD-gated); freed exactly at last close; socket_unref at 0 calls udp_unbind or tcp_close exactly once.
 * C89/-ansi: every block-scoped mid-function declaration opens a new block (tcp_rx ESTABLISHED, the RST struct-socket case, tcp_tick new_ss, do_accept rc); no //, no designated init, the (void) casts.
@@ -333,7 +333,7 @@ Method: the concrete runnable matrix from the survey:
 * fsck/fsviz/edfs walkthrough: mkfs + fsck (clean) + fsviz (-t ribbon matching the file count); the edfs corrupt-magic + fsck loop and the SUSPECTED BUG watch: confirm fsck does NOT print "completed successfully ... no errors found" after a fault (the unconditional success puts()).
 * ISO path (needs Docker): `make os-simple-iso` then `./run_from_iso.sh os-simple`; negatives: `sh tools/mkiso.sh bogus` -> usage, no rm -rf; Docker absent -> "docker is required".
 * Toolchain knobs: `make CROSS_CC=$(command -v i686-elf-gcc)`; `make clean` with no cross GCC must succeed (the toolchain.mk error check excludes clean).
-* Run-script matrix smoke: `./run.sh os-real {sb16,hda,speaker}` wire the right -device; `NET=off ./run.sh os-simple` no NIC; `CPU=qemu64 ./run.sh os-real` then dropbear keygen fails closed.
+* Run-script matrix smoke: `./run.sh os-real {sb16,hda,speaker}` wire the right -device; `NET=off ./run.sh os-simple` no NIC; `CPU=qemu64 ./run.sh os-real` then Dropbear keygen fails closed.
 
 What to look for: any stamp or check that does not catch a missing or zero-length artifact; any unnecessary rebuild; any non-atomic image write; the contradictory fsck success message; or any run-script device-wiring or environment mismatch with qemu_devices.sh.
 
@@ -351,7 +351,7 @@ Scope: the three images; the 10 in-kernel self-tests; `make verify-host`.
 
 Method (all commands from the repo root):
 * `make full && rach2/run.sh` -> the 10 self-tests print [PASS] (memory, strings, timer, paging, syscall, context switch, round-robin A>0/B>0, memory isolation, KRFFS write, ELF parse) and the `>` prompt appears (no image argument boots the kernel into the debug shell).
-* `rach2/run.sh os-simple` -> ish; `rach2/run.sh os-real` -> busybox /bin/sh; `make test` then `rach2/run.sh test` -> the probe pass. Confirms boot_init_process order (/sbin/init, /bin/sh, ish).
+* `rach2/run.sh os-simple` -> ish; `rach2/run.sh os-real` -> BusyBox /bin/sh; `make test` then `rach2/run.sh test` -> the probe pass. Confirms boot_init_process order (/sbin/init, /bin/sh, ish).
 * `make verify-host` -> all eleven host tests pass under ASan/UBSan (vm/frame/uimage/tls/wait_queue cover kernel-core without booting).
 * The PCB-layout assertion regression guard (transient code edit, so run it in a worktree): temporarily insert a PCB field before tls_base, confirm the boot panic "process_t layout drifted from switch.s offsets" fires, then discard the worktree.
 * Kernel-survives-fault: from the debug shell `fault` -> the BSOD panic screen; `halt` stops cleanly.
@@ -369,16 +369,16 @@ Output: a boot, self-test, and host-test matrix.
 
 Goal: confirm fork/exec/wait under load, signals end to end, TLS/auxv, and timed sleeps.
 
-Scope: tests/{vmprobe,cowprobe,forkro,vmro,vmfault,sigprobe,jobprobe,tlsprobe,auxvprobe,errnoprobe,timeprobe}; busybox by-hand sequences on os-real.
+Scope: tests/{vmprobe,cowprobe,forkro,vmro,vmfault,sigprobe,jobprobe,tlsprobe,auxvprobe,errnoprobe,timeprobe}; BusyBox by-hand sequences on os-real.
 
 Method (from the survey):
 * Fork+exec+wait under load: on os-real run `yes | head -5`, then `sleep 5 &` + `wait`; run several times to stress the page-dir/page-table free lists; no leaked slots.
 * Demand-paging/COW: vmprobe -> VMPROBE OK; cowprobe, forkro, vmro -> COW holds; vmfault -> the process is killed by a wild write and the KERNEL SURVIVES (shell returns).
 * Hostile ELF: from the debug shell `exec` a non-ELF and a truncated/garbage file -> ENOEXEC and the CALLER stays intact; if a crafted out-of-window/overlapping-PT_LOAD binary is available, elf_load_image rejects it.
-* Signals: in busybox install a trap, `kill -INT`, `kill -TSTP` then `kill -CONT` a stopped job, Ctrl+C / Ctrl+Z on the console -> the foreground group gets SIGINT/SIGTSTP, the job stops (PROC_STOPPED) and resumes, jobs/wait report it; sigprobe and jobprobe OK; a SIGSEGV on a child returns the parent prompt, on init returns the debug shell.
+* Signals: in BusyBox install a trap, `kill -INT`, `kill -TSTP` then `kill -CONT` a stopped job, Ctrl+C / Ctrl+Z on the console -> the foreground group gets SIGINT/SIGTSTP, the job stops (PROC_STOPPED) and resumes, jobs/wait report it; sigprobe and jobprobe OK; a SIGSEGV on a child returns the parent prompt, on init returns the debug shell.
 * TLS/auxv: tlsprobe, auxvprobe, errnoprobe OK.
-* Nanosleep/timer: timeprobe OK; `sleep`/`usleep` in busybox; gettimeofday/clock_gettime/times advance at 100 Hz; nanosleep wakes on time and is -EINTR-interruptible with remaining time; proc_wake_sleepers fires from the timer while the sleeper is parked.
-* Out-of-slots / OOM: a fork bomb in busybox -> fork returns -EAGAIN, system stays up and recovers; large mmap/brk until -ENOMEM refuses cleanly.
+* Nanosleep/timer: timeprobe OK; `sleep`/`usleep` in BusyBox; gettimeofday/clock_gettime/times advance at 100 Hz; nanosleep wakes on time and is -EINTR-interruptible with remaining time; proc_wake_sleepers fires from the timer while the sleeper is parked.
+* Out-of-slots / OOM: a fork bomb in BusyBox -> fork returns -EAGAIN, system stays up and recovers; large mmap/brk until -ENOMEM refuses cleanly.
 
 What to look for: a missing OK token; a kernel panic on the vmfault/segfault/fork-bomb/OOM paths (must survive); a leaked process slot after repeated cycles.
 
@@ -422,10 +422,10 @@ Output: an I/O+fs test matrix.
 
 Goal: confirm the highest-integration path (fork/exec/signals/tty/pty/TLS/entropy/TCP/socket) end to end.
 
-Scope: os-real image, dropbear server, host ssh client. The guest's outbound client (`dropbearmulti dbclient`) is built and present but not exercised here. Outbound use over SLIRP is optional because SLIRP forwards inbound host ports but constrains arbitrary outbound connections. This phase tests the server path, with host ssh connecting to the guest.
+Scope: os-real image, Dropbear server, host ssh client. The guest's outbound client (`dropbearmulti dbclient`) is built and present but not exercised here. Outbound use over SLIRP is optional because SLIRP forwards inbound host ports but constrains arbitrary outbound connections. This phase tests the server path, with host ssh connecting to the guest.
 
 Method:
-* `make full`, boot `NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real`, at the guest `exec dropbearmulti dropbear -F -R -p 22` (no -E), host `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` -> pubkey auth into interactive busybox ash, rc 0. Requires -cpu max.
+* `make full`, boot `NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real`, at the guest `exec dropbearmulti dropbear -F -R -p 22` (no -E), host `ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` -> pubkey auth into interactive BusyBox ash, rc 0. Requires -cpu max.
 * Inside: a job-control sequence (start a job, ^C, ^Z, fg/bg) -> signals route through the pty slave fg_pgid; `tty` -> /dev/pts/0; `ls -l /dev/pts` -> the allocated slave.
 * Confirm `make full` ran gen_demo_key.sh when krffs/authorized_keys was absent, and the os-real manifest modes (/root/.ssh 0700, authorized_keys 0600).
 
@@ -539,7 +539,7 @@ Goal: confirm the fail-closed entropy, OOM, missing-WAD, missing-key, and defaul
 Scope: the entropy fail-closed contract; OOM with an oversized image; Doom with a missing WAD; SSH with a missing key; the default-CPU run.
 
 Method:
-* Entropy fail-closed: boot the test image with `CPU=qemu64 rach2/run.sh test` (no RDRAND) -> rngprobe FAILs closed; read /dev/urandom or call getrandom -> -EIO, while a process still starts (AT_RANDOM/canary best-effort); dropbear keygen fails without -cpu max. Positive control: `make test` (default -cpu max) -> rngprobe/RNGPROBE OK and two getrandom draws differ.
+* Entropy fail-closed: boot the test image with `CPU=qemu64 rach2/run.sh test` (no RDRAND) -> rngprobe FAILs closed; read /dev/urandom or call getrandom -> -EIO, while a process still starts (AT_RANDOM/canary best-effort); Dropbear keygen fails without -cpu max. Positive control: `make test` (default -cpu max) -> rngprobe/RNGPROBE OK and two getrandom draws differ.
 * OOM: an oversized image / large mmap+brk until -ENOMEM -> the allocator refuses cleanly without corrupting the kernel; a tiny image so a manifest file does not fit -> mkimage "not enough space" non-zero exit (cross-ref Phase 11).
 * Missing Doom WAD: launch doom with doom1.wad absent -> a clean failure, not a kernel fault.
 * Missing SSH key: attempt the end-to-end SSH test with krffs/rach2_demo_ed25519 absent or wrong -> auth fails cleanly; confirm `make full` regenerates the key via gen_demo_key.sh when krffs/authorized_keys was absent.

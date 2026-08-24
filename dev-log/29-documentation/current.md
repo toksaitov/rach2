@@ -106,10 +106,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The collection-wide lowercase-name check found ordinary-prose uses in early records in addition to literal paths and commands. The collection pass remains open.
 * The networking-plan naming correction is committed as `e607899`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The remaining lowercase matches in `dev-log/03-text-standard/plan.md` are literal path globs.
-* Current file: `dev-log/04-normalization/plan.md`, 82 lines and 16,786 bytes. Its matches are literal paths or quoted comment text except for `dropbear staging contract` on line 72. Read the file whole in two bounded sections before correcting that project name.
-* The file has been read whole. The one ordinary-prose use is corrected; literal paths and quoted comment text remain unchanged.
+* The normalization-plan naming correction is committed as `cccb98e`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The remaining match in `dev-log/05-images/Readme.md` is the literal `/bin/busybox` path.
+* Current file: `dev-log/06-review/plan.md`, 572 lines and 83,603 bytes. It was read whole during the ordered historical batch review. Its fifteen matching lines have been inspected: two contain only literal paths, targets, artifacts, or commands; thirteen contain ordinary BusyBox or Dropbear names to correct without changing the review plan's claims.
+* The ordinary project names are corrected on those thirteen lines. The remaining lowercase tokens are literal Make targets, paths, artifact names, and the `dropbearmulti dropbear` command.
 * The banned-prose check, ASCII check, complete one-file word diff, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: the one normalization-plan naming correction and the milestone checkpoint.
+* Intended commit boundary: the review-plan naming corrections and the milestone checkpoint.
 
 ## Boundary
 
@@ -118,4 +120,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the normalization plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
+Stage the review plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
