@@ -108,10 +108,11 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The remaining lowercase matches in `dev-log/03-text-standard/plan.md` are literal path globs.
 * The normalization-plan naming correction is committed as `cccb98e`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The remaining match in `dev-log/05-images/Readme.md` is the literal `/bin/busybox` path.
-* Current file: `dev-log/06-review/plan.md`, 572 lines and 83,603 bytes. It was read whole during the ordered historical batch review. Its fifteen matching lines have been inspected: two contain only literal paths, targets, artifacts, or commands; thirteen contain ordinary BusyBox or Dropbear names to correct without changing the review plan's claims.
-* The ordinary project names are corrected on those thirteen lines. The remaining lowercase tokens are literal Make targets, paths, artifact names, and the `dropbearmulti dropbear` command.
+* The review-plan naming correction is committed as `f6dd1ea`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* Current file: `dev-log/08-disk/plan.md`, 204 lines and 34,622 bytes. It was read whole during the ordered historical batch review. Its two lowercase matches are ordinary `busybox ash` uses on lines 129 and 190; correct them without changing the recorded tests.
+* Both project names are corrected to BusyBox; the SSH commands and recorded results are unchanged.
 * The banned-prose check, ASCII check, complete one-file word diff, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: the review-plan naming corrections and the milestone checkpoint.
+* Intended commit boundary: the two disk-plan naming corrections and the milestone checkpoint.
 
 ## Boundary
 
@@ -120,4 +121,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the review plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.
+Stage the disk plan and checkpoint, review the staged paths and content, confirm the git identity, and commit.

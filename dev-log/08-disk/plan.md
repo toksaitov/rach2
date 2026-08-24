@@ -126,7 +126,7 @@ Hard parts and mitigations:
 
 Dependencies: Phases 1 and 2.
 
-Verification: the existing ten self-tests, a module-style boot, and the SSH end-to-end test (`ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` to busybox ash) all pass with KRFFS on the stub-backed window because the filesystem code is unchanged. This regression check verifies that relocation is transparent. Run the self-test write and the /sbin/init ELF load, which faults the binary in through `exec_krffs_read`, to exercise the fault path under proc0.
+Verification: the existing ten self-tests, a module-style boot, and the SSH end-to-end test (`ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` to BusyBox ash) all pass with KRFFS on the stub-backed window because the filesystem code is unchanged. This regression check verifies that relocation is transparent. Run the self-test write and the /sbin/init ELF load, which faults the binary in through `exec_krffs_read`, to exercise the fault path under proc0.
 
 ### Phase 4: block-device backing and in-guest cache probes
 
@@ -187,7 +187,7 @@ Dependencies: all prior phases (the disk boot only changes where the bytes come 
 Verification, staged:
 * Host: `make os-real-disk` then `qemu-system-i386 -drive ...,if=ide` shows the GRUB menu and `multiboot /boot/kernel` reaches the debug shell off partition 1, verifying MBR, embedding, and boot-filesystem reads before any disk-KRFFS path runs. `fdisk -l` and a `dd | xxd` of partition 2's first sector confirm the 0x4B52 magic landed.
 * In-guest: the `disk` debug command dumps LBA 0 and the MBR parser prints the found `start_lba`/`nr_sectors` matching `fdisk`.
-* End to end: `run_from_disk.sh os-real` with `rach2.root=disk` boots to `File system... OK (KRFFS, N files)` with the same file count as the module boot, `/sbin/init` runs, and the SSH end-to-end test logs into busybox ash. This checks that KRFFS is fully readable from the disk.
+* End to end: `run_from_disk.sh os-real` with `rach2.root=disk` boots to `File system... OK (KRFFS, N files)` with the same file count as the module boot, `/sbin/init` runs, and the SSH end-to-end test logs into BusyBox ash. This checks that KRFFS is fully readable from the disk.
 * `stressprobe` on the 64 MB disk exits 0 with every checksum intact, verifying that the 32 MB physical cap is removed.
 * Regression: the module-path `make test`, `make verify-style` (8/8), and `make verify-host` pass. A module-path boot and the SSH end-to-end test also pass.
 
