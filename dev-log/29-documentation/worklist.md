@@ -154,12 +154,12 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 * [x] `dev-log/26-portable/Readme.md`
 * [x] `dev-log/26-portable/arrival.md`
 * [x] `dev-log/26-portable/plan.md`
-* [ ] `dev-log/27-prose/Readme.md`
-* [ ] `dev-log/27-prose/plan.md`
-* [ ] `dev-log/27-prose/worklist.md`
-* [ ] `dev-log/28-polish/Readme.md`
-* [ ] `dev-log/28-polish/plan.md`
-* [ ] `dev-log/Readme.md`
+* [x] `dev-log/27-prose/Readme.md`
+* [x] `dev-log/27-prose/plan.md`
+* [x] `dev-log/27-prose/worklist.md`
+* [x] `dev-log/28-polish/Readme.md`
+* [x] `dev-log/28-polish/plan.md`
+* [x] `dev-log/Readme.md`
 
 ## Subsystem passes
 

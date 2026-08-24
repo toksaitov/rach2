@@ -1,228 +1,89 @@
 # Milestone 28: the diagnostics
 
-What a person on this machine can ask it about itself. The plan and the
-reasoning behind each phase are in `plan.md`; this file records what was built,
-what the reviews overturned, and what is still waiting on hardware.
+This milestone added information that a user can request from the machine about its own state. `plan.md` gives each phase's design and rationale. This record describes the implementation, review corrections, and hardware work that remains.
 
-Every phase held the same shape: one scoped change, the repository's own gate,
-a test proved by making it fail, an independent review of the diff with every
-finding adjudicated against the code, the documentation that owns the changed
-contract rewritten in the same commit, and one commit in the house style.
+Each phase contained one scoped change, repository verification, a test proved by an intentional failure, an independent diff review whose findings were checked against the code, an update to the owning documentation in the same commit, and one house-style commit.
 
 ## What was built
 
 ### A: the quiet exit line (a38dedc)
 
-`sys_exit` printed `Process exited with status N` for every process that
-exited, including a forked child's, onto the console of a machine running a
-real init. It is gated on `debug_shell_is_home` now, so an image with
-`/sbin/init` is quiet and the kernel debug shell still prints it. The two
-dedicated markers the probe runner scores from (`sys_exit: init process N
-exited with status M` and `terminate: ... killed by signal S`) are untouched,
-because they are the scoring contract. `make exitline-test` proves it in four
-boots and asserts the whole marker line, not a fragment: two plain lines could
-otherwise be two copies of one exit, so the child exits 42 and the probe 0.
+`sys_exit` wrote `Process exited with status N` to the console for every exit, including a forked child, even when the machine ran a real init. The line now depends on `debug_shell_is_home`: an image with `/sbin/init` remains quiet, while the kernel debug shell still reports exits. The probe runner's scoring markers, `sys_exit: init process N exited with status M` and `terminate: ... killed by signal S`, remain unchanged. `make exitline-test` verifies the behavior in four boots and matches the complete marker. Matching fragments could mistake two copies of one exit for two distinct lines, so the child exits with 42 and the probe with 0.
 
 ### B: bounded /proc text (5518611)
 
-A `/proc` file is generated into a buffer when it is opened and read back from
-there, so one descriptor shows one moment. The appenders used to stop when they
-ran out of room, which turned a sixteen-row table into a nine-row one with
-nothing saying so. Each file now declares its own maximum, the shared buffer is
-the largest of them, a `typedef` of a negative array size stops the build if a
-declared bound will not fit, and a text that exceeds its bound is refused with
-`-EOVERFLOW` and one line on the serial log naming the file.
+Opening a `/proc` file generates its contents in a buffer, and later reads use that buffer, giving each descriptor one snapshot. Previously, an appender silently stopped at the buffer limit and could reduce a sixteen-row table to nine rows. Each file now declares a maximum, and the shared buffer uses the largest maximum. A negative-array-size `typedef` rejects a declared bound that does not fit. Text exceeding its bound returns `-EOVERFLOW` and produces a serial diagnostic identifying the file.
 
 ### C: the machine's own /proc files (c6f449b)
 
-`/proc/uptime`, `/proc/stat`, `/proc/meminfo` and `/proc/mounts`, which is what
-`ps`, `df`, `free` and `uptime` read. Two of them needed something real behind
-them rather than a plausible number. There is no idle task here, so idle time
-is measured by marking the kernel's own `sti; hlt` waits and sampling the mark
-from the timer, and `tools/check.sh` now rejects an unmarked `sti; hlt` outside
-`sched.c` so a new wait cannot be added silently. `df` needed `statfs64` and
-`fstatfs64`, which this kernel had never had. The mount line names its source
-and options, recorded where the branch that chose them is still in scope.
-`make procfiles-test` boots the three mount sources and then runs the programs
-against numbers the guest does not hold.
+The phase added `/proc/uptime`, `/proc/stat`, `/proc/meminfo`, and `/proc/mounts`, used by `ps`, `df`, `free`, and `uptime`. Two files required measured values. The kernel has no idle task, so the timer samples marks placed around the kernel's `sti; hlt` waits. `tools/check.sh` rejects an unmarked `sti; hlt` outside `sched.c`, preventing an unaccounted wait from being added. Supporting `df` required the previously absent `statfs64` and `fstatfs64` calls. The mount line records its source and options while the selecting branch remains in scope. `make procfiles-test` boots all three mount sources and runs the programs against expected values unavailable inside the guest.
 
 ### D: the network files under /proc (10244c7)
 
-`/proc/net/route`, `arp` and `tcp`, each in the shape the program that reads it
-parses, taken from the parser rather than from a description. The part worth
-recording is identity: `netstat` reads a uid and an inode, and a socket had
-neither, so every row would have said the same socket owned by root. Each
-socket now carries an inode of its own and a uid taken in syscall context; a
-connection allocated in receive context inherits the listener's uid, which is
-whose socket it is, and both are copied into the control block so a row in a
-closing state still reports them after its socket is detached. The same inode
-appears in `/proc/net/tcp`, in `/proc/<pid>/fd/N` and in `fstat`.
+The phase added `/proc/net/route`, `arp`, and `tcp` in the formats parsed by their consumers. `netstat` reads a uid and inode, but sockets previously had neither, so every row would have described one root-owned socket. Each socket now receives a unique inode and a uid captured in syscall context. A connection allocated during receive processing inherits its listener's uid. Both values are copied into the control block so a closing row retains them after detaching from its socket. The inode agrees across `/proc/net/tcp`, `/proc/<pid>/fd/N`, and `fstat`.
 
-The review of this phase found the two defects that mattered most in it: the
-Send-Q column reported only unsent bytes rather than the whole write queue, and
-a descriptor opened on one of the three new files reported `/proc/0/stat`
-through its link because neither origin dispatcher had been taught about them.
+Review found two significant defects. Send-Q counted only unsent bytes instead of the complete write queue. A descriptor for any of the three new files resolved through its link as `/proc/0/stat` because neither origin dispatcher recognized those files.
 
 ### E: the terminal ioctls over a pty (5bc86e6)
 
-The plan reported `stty` failing on a dropbear session and asked for a
-diagnosis before a fix. The diagnosis found no fault in the kernel: `TCGETS`,
-`TCSETS` and `TIOCGWINSZ` on a pty slave all work, and over SSH with a client
-terminal of a known size, `stty size` prints it and `stty -a` prints the
-termios. What was reported was a client with no terminal of its own asking for
-a window of zero by zero, which is what `ssh -tt` from a script does; busybox
-`stty` treats a zero row count as an error and prints the device name with
-nothing after it, because there is no errno behind that decision.
+The plan reported a `stty` failure in a Dropbear session and required diagnosis before correction. The kernel was working: `TCGETS`, `TCSETS`, and `TIOCGWINSZ` succeed on a pty slave, while `stty size` and `stty -a` report the dimensions and termios over SSH when the client has a known terminal size. The failing client had no terminal and requested a zero-by-zero window, as `ssh -tt` does from a script. BusyBox `stty` treats zero rows as an error and prints only the device name because that decision has no errno.
 
-So the phase added the coverage that was missing rather than a fix: `ptyprobe`
-now sets the window on the master before the fork, as a login server does, and
-the child requires the slave to report it and the termios to read and write;
-`make ssh-test` gives its client a terminal 40 by 100 and requires the session
-to report that size back. `resize` answers zero for the same reason `stty` did:
-it asks the terminal, and a terminal that is a script does not answer.
+The phase added missing coverage instead of changing the kernel. `ptyprobe` sets the master window before forking, as a login server does; the child then requires the slave to report that window and support termios reads and writes. `make ssh-test` gives its client a 40-by-100 terminal and requires the session to report those dimensions. `resize` returns zero for the same reason as `stty`: a scripted terminal does not answer its query.
 
-One real defect came out of the `/proc/self/fd` half of the question: every
-pipe on the machine resolved to the constant `pipe:[1]`, which said they were
-all one pipe, and `fstat` reported no inode for a pipe at all. Pipes now carry
-their own, like sockets.
+The `/proc/self/fd` investigation found one kernel defect. Every pipe resolved as `pipe:[1]`, making all pipes appear identical, and `fstat` returned no pipe inode. Pipes now receive unique inodes, as sockets do.
 
 ### F: the packet socket, finished (545a754)
 
-The packet socket was built for one caller, a DHCP client, and stopped where
-that caller stopped: IPv4 only, no protocol filter, ARP frames never offered,
-a hardcoded EtherType on send, and no `sockaddr_ll` from `getsockname`. All
-five are done, and `arping` answers on the test network as a result. The
-address a receive reports is real too, which the plan did not ask for and
-`arping` cannot work without: it discards every frame whose `sll_pkttype` and
-`sll_hatype` it does not recognise, so a receive that reported no address left
-it waiting forever.
+The packet socket originally served only a DHCP client: it accepted only IPv4, had no protocol filter, never received ARP, used a fixed EtherType when sending, and returned no `sockaddr_ll` from `getsockname`. All five limitations were removed, allowing `arping` to respond on the test network. Receive also reports a real address, an unplanned requirement for `arping`. It discards frames whose `sll_pkttype` or `sll_hatype` it does not recognize, so a missing address caused it to wait indefinitely.
 
-The review caught a bind that changed the socket's filter before the interface
-was validated, so a refused bind left the socket receiving something else, and
-a rebind that could hand a reader a queued IPv4 datagram labelled as ARP.
+Review found that bind changed the socket filter before validating the interface, so a rejected bind altered later receives. Rebinding could also present a queued IPv4 datagram as ARP.
 
 ### G: raw ICMP sockets and IP_TTL (36be791)
 
-The largest phase. `AF_INET/SOCK_RAW/IPPROTO_ICMP` is a real socket now, root's,
-receiving whole datagrams with the header included because that is what the
-programs parse, and `ip_rx` offers each accepted datagram to every matching raw
-socket before its own handler runs, which still runs. `ip_tx` gained a hop
-limit and a return value, and the four outcomes are named in `ip.h`: the ARP
-miss is the one that is not an error, because a datagram send promises no
-delivery and the next one leaves resolved. `IP_TTL` is a real per-socket value
-for a raw send and a datagram send alike, and `IP_HDRINCL` is refused rather
-than accepted and ignored.
+This was the largest phase. Root can create an `AF_INET/SOCK_RAW/IPPROTO_ICMP` socket that receives complete datagrams, including headers required by its consumers. `ip_rx` submits each accepted datagram to every matching raw socket before invoking its normal handler. `ip_tx` gained a hop limit and return value. `ip.h` defines four outcomes; an ARP miss is not an error because datagram sends do not promise delivery and a later send can use the resolved address. `IP_TTL` is a per-socket value for raw and datagram sends. `IP_HDRINCL` is rejected instead of accepted and ignored.
 
-busybox `traceroute` runs on this and names the gateway as its first hop. Its
-`ping` is deliberately not built: the applet would answer from the shell's
-table before `/bin/ping`, the in-house program an ordinary account can run, and
-several tests read that program's output. `make raw-test` is four boots and a
-capture; the capture is what proves the two things no program inside the
-machine can see, the hop limit each datagram left with and the caller's own
-checksum crossing the wire unrepaired.
+BusyBox `traceroute` uses this support and reports the gateway as its first hop. Its `ping` applet remains disabled because it would take precedence over `/bin/ping`, the unprivileged in-house program whose output several tests inspect. `make raw-test` runs four boots and captures traffic. The capture verifies two properties invisible inside the guest: each datagram's transmitted hop limit and preservation of the caller's checksum on the wire.
 
 ### H: a boot line that contradicts itself (f537358)
 
-`rach2.nodisk` skips the disk probe, and on an image whose root is that disk it
-left nothing to mount, so the kernel fell through to the debug shell, which
-authenticates nobody. That combination halts now with a line naming both
-tokens, and `rach2.rescue` is the exemption, because asking for that shell
-deliberately is what the token is for.
+`rach2.nodisk` skips disk probing. When an image used that disk as its root, no root remained to mount and the kernel entered the unauthenticated debug shell. That combination now halts after a diagnostic identifies both tokens. `rach2.rescue` is exempt because it explicitly requests the shell.
 
-The review widened it, correctly: the same fall-through opens for any root that
-does not mount, not only for the skipped one. A boot that mounted nothing now
-halts whatever asked for it, and the one case where the debug shell is a home
-and not a way in, an image whose root mounted and has no init, is untouched.
-That is the test image, and the harness still drives it.
+Review broadened the refusal because any root-mount failure could enter the same shell. A boot with no mounted root now halts regardless of its request. An image with a mounted root but no init still uses the debug shell as its intended environment. The test image depends on that case, and the harness still runs it.
 
 ### I: the mapping ceiling (db0c5fb, fa09074)
 
-`VMA_MAX` was 128, chosen in milestone 22 for a link that ran out, and a
-process asking `malloc` for 1 KB at a time got about 3.1 MB before it began to
-fail while a single 64 MB request succeeded: musl carves a mapping per small
-block, so the ceiling a program meets is the table. It is 512, from that
-measurement, and the same walk passes 8 MiB. The other half was silence: the
-kernel refused the mapping and said nothing, so the failure looked like the
-library's own. It now names the process, once, on the serial log. The review
-moved that mark from a remembered pid onto the process itself, since a pid is
-reused and the next process to hold the number would have been silenced.
+Milestone 22 set `VMA_MAX` to 128 after a link exhausted the table. Repeated 1 KB `malloc` calls failed after about 3.1 MB, while one 64 MB request succeeded, because musl creates a mapping for each small block and the table imposed the effective limit. The measurement justified raising the value to 512, after which the same walk passed 8 MiB. Mapping refusal had also been silent and resembled a library failure. The kernel now reports the process once on the serial log. Review moved the once-only marker from a remembered pid into the process because pid reuse could suppress the diagnostic for a later process.
 
 ### J: the boot log, under the name a person expects (f270b85, 9220448)
 
-`dmesg` failed on `klogctl`, a system call this kernel does not have.
-Implementing Linux's logging call for one command would be the wrong shape, and
-the log is already a device, so `/bin/dmesg` is a short script that prints
-`/dev/bootlog` and the applet is turned off, which is also what keeps it from
-answering before the file. It refuses options rather than printing the log for
-a caller that asked to clear or follow it.
+`dmesg` attempted the unsupported `klogctl` system call. Adding Linux's logging call for one command was rejected because the boot log already existed as a device. `/bin/dmesg` became a short script that prints `/dev/bootlog`, and the BusyBox applet was disabled to prevent it from taking precedence. The script rejects options instead of printing the log when the caller requested clearing or following behavior.
 
 ### The three notes milestone 27 left (dce720d)
 
-`rach2/.gdbinit` still said `file kernel`, stale since the build directory was
-unified; `vga_putc_raw` guarded control bytes with `c < 31`, so 0x1F was drawn
-as a glyph; and `blockprobe` built file names one byte at a time, which ran past
-`'9'` into punctuation for the files past the tenth. All three are fixed.
+The three notes identified these defects. `rach2/.gdbinit` still used `file kernel` after build-directory unification. `vga_putc_raw` checked control bytes with `c < 31`, allowing 0x1F to render as a glyph. `blockprobe` constructed file names one byte at a time and produced punctuation after `'9'` for files beyond the tenth. All three were corrected.
 
 ## What the reviews overturned
 
-Every phase took an independent review, and each one found something the work
-had missed. The findings that changed the code rather than the prose:
+Every phase received independent review, and each review found an omission. These findings changed code rather than prose:
 
-* Phase D: Send-Q reported unsent bytes only; the three new `/proc/net` files
-  had no entry in either origin dispatcher, so a descriptor on one of them
-  reported another file's identity.
-* Phase E: every wait in `ptyprobe` could hang rather than fail, and the pipe
-  link parser accepted text that was not a pipe link. The socket and pipe inode
-  counters could hand out a live number after a wrap.
-* Phase F: a refused bind changed the socket's filter; a rebind could relabel a
-  queued datagram.
-* Phase G: the raw send built its datagram through the shared transmit buffers
-  without the network lock, which an interrupt-context sender can re-enter.
-  The claim that `raw_ready` needed that lock was refuted: `wq_wait_event`
-  evaluates a predicate with interrupts already off, which is what serializes
-  it, and the packet socket has read it the same way since milestone 25.
-* Phase H: the refusal was too narrow, and the test killed its machine at the
-  moment the diagnostic appeared, so it could not tell a kernel that halted
-  from one that printed and carried on.
-* Phase I: "once per process" was keyed to a pid, which is reused.
-* Phase J: the script took options and ignored them; the test read the boot
-  banner off the console rather than out of the command's own output.
+* Phase D: Send-Q counted only unsent bytes. Neither origin dispatcher recognized the three new `/proc/net` files, so their descriptors reported another file's identity.
+* Phase E: every wait in `ptyprobe` could hang instead of fail, and the pipe-link parser accepted non-pipe text. Socket and pipe inode counters could allocate a number still in use after wrapping.
+* Phase F: a rejected bind changed the socket filter, and rebinding could relabel a queued datagram.
+* Phase G: raw send used shared transmit buffers without the network lock, allowing reentry by an interrupt-context sender. The claim that `raw_ready` required the lock was refuted. `wq_wait_event` evaluates its predicate with interrupts disabled, providing serialization; the packet socket had used the same method since milestone 25.
+* Phase H: the refusal covered too few mount failures. The test also terminated its machine as soon as the diagnostic appeared and therefore could not distinguish a halt from continued execution.
+* Phase I: "once per process" used a reusable pid as its key.
+* Phase J: the script accepted and ignored options, while the test read the boot banner from the console instead of the command's output.
 
 ## What was not done, and why
 
-* busybox `ping` is not built. The plan asked for it, and the machine can run
-  it now, but the applet would shadow `/bin/ping`, the unprivileged in-house
-  program that the plan's own list of things not to break protects and that
-  several tests read the output of. `traceroute` has no such collision and is
-  built, and `rawprobe` covers the socket directly.
-* The fan-out test covers an echo reply and a time-exceeded message. An
-  unreachable was asked for as well; the network QEMU provides does not produce
-  one for its own closed ports, and the delivery path does not branch on the
-  message type, so the two kinds exercise the same code.
-* `recvfrom` on a packet socket reports the link address of the datagram most
-  recently taken, kept per socket. That is what `arping` reads, and it is not
-  the same as Linux's per-datagram address on a queue read out of order; no
-  program here does that.
+* BusyBox `ping` is not built. The plan requested it and the machine now supports it, but the applet would take precedence over `/bin/ping`, the protected unprivileged in-house program whose output several tests inspect. `traceroute` has no collision and remains enabled; `rawprobe` exercises the socket directly.
+* The fan-out test covers an echo reply and a time-exceeded message. The plan also requested an unreachable message, but QEMU's network does not generate one for its closed ports. The delivery path has no message-type branch, so the two available types exercise the same code.
+* Packet-socket `recvfrom` reports the link address for the most recently received datagram and stores it per socket. `arping` uses that behavior. It differs from Linux's per-datagram address when queued packets are read out of order, but no program in this tree does so.
 
-## The gate, from a clean tree
+## Clean-tree verification
 
-`make distclean` and then the whole thing, in this order, every one green:
-`make full`, `verify-style`, `verify-host`, `test` (63 of 63 probes),
-`packet-test`, `raw-test`, `bootline-test`, `procfiles-test`, `exitline-test`,
-`dhcp-test`, `ssh-test`, `selfbuild-test` (the machine built its kernel twice
-from clean workspaces, hashed equal, and booted the result through GRUB and the
-whole probe suite). `make sealed-test` then rebuilt the sealed artifact at its
-contracted 660602880 bytes and operated it over SSH through all eight phases.
-The artifact's hash differs from build to build by design: the demo password is
-generated per build, so what is contracted is the geometry and the size, and
-the hash belongs to the copy that is about to be written.
+After `make distclean`, the following commands passed in order: `make full`, `verify-style`, `verify-host`, `test` with 63 of 63 probes, `packet-test`, `raw-test`, `bootline-test`, `procfiles-test`, `exitline-test`, `dhcp-test`, `ssh-test`, and `selfbuild-test`. The final test built the kernel twice in clean workspaces, compared equal hashes, and booted the result through GRUB and the complete probe suite. `make sealed-test` then rebuilt the sealed artifact at its required 660602880 bytes and exercised all eight phases over SSH. Its hash intentionally changes between builds because each build generates a demo password. The contract covers geometry and size; the hash identifies the particular copy awaiting a write.
 
 ## Waiting on hardware
 
-The laptop is not powered on for this session, so every claim that needs it
-waits: a DHCP lease on real hardware for the packet-socket change, `traceroute`
-across a real route rather than one hop of QEMU's, and the sealed drive.
-Phase K's disk rewrite requires the owner present to approve a named node,
-every time, and that approval cannot be given from here. What did run is the
-whole local gate, including `make sealed-test`, which operates the finished
-artifact over SSH in eight phases and passed.
+The laptop was not powered on during this session. Hardware verification therefore remains for a DHCP lease after the packet-socket change, `traceroute` across a real route instead of one QEMU hop, and the sealed drive. Phase K's disk rewrite requires the owner to approve a specific node in person for every write, and no such approval was available. The complete local verification passed, including `make sealed-test`, which exercised the finished artifact over SSH in eight phases.

@@ -1,32 +1,20 @@
 # Milestone 27 worklist
 
-Every file this milestone reads, in the order it is done. Mark an entry `[x]`
-the moment it is finished, before starting the next one: after a compaction
-this file, and not memory, is what says where the work got to. Re-read this
-file when a session begins or a compaction has happened, not every turn.
+This worklist contains every file in its processing order. Mark an entry `[x]` immediately after completing it and before starting the next one. After a compaction, this file determines the position. Read it at the beginning of a session and after a compaction, not before every turn.
 
-An entry naming several files is a batch of small ones; finish all of them
-before marking it.
+An entry that names several small files forms one batch. Complete every named file before checking the entry.
 
-Built from `git ls-files`, so it is what this project owns. Out of it: the
-`dev-log/` records, the upstream Doom sources under `ports/doom/src/`, the
-vendored tarballs and patch files, and BusyBox's two generated `.config`
-files. The Readmes and build scripts under `vendor/` ARE ours and are here.
+The list was built from `git ls-files` and defines the project-owned scope. It excludes `dev-log/` records, upstream Doom sources under `ports/doom/src/`, vendored tarballs and patch files, and BusyBox's two generated `.config` files. Project-owned Readmes and build scripts under `vendor/` remain in scope.
 
 ---
 
 # Set one: what a reader consults
 
-Run this set at HIGH effort. It is the documents, the ports' own half, the
-build, every kernel header (which is where a contract is stated), the syscall
-layer and the kernel sources. A wrong sentence here is read by everyone who
-comes after, and in a teaching kernel the explanation beside the code IS the
-material: `CLAUDE.md` names Lions' Commentary as the model, and that is a
-commentary on sources.
+Run set one at HIGH effort. It contains documents, project-owned port files, the build, every kernel header, the syscall layer, and kernel sources. Headers state contracts, and later readers depend on these files. In a teaching kernel, explanations beside the code are part of the material. `CLAUDE.md` identifies Lions' Commentary, a commentary on source, as the model.
 
 ## Documents (22 entries, 76303 words)
 
-A document is where a claim is most often wrong and most often read.
+Documents receive the most readers and contain the most frequently false claims.
 
 * [x] `Readme.md` (2629 words)
 * [x] `CLAUDE.md` (2051 words)
@@ -53,7 +41,7 @@ A document is where a claim is most often wrong and most often read.
 
 ## The vendored ports, our half (13 entries, 10964 words)
 
-How each upstream project is pinned, patched, configured and built.
+These files describe how each upstream project is pinned, patched, configured, and built.
 
 * [x] `vendor/busybox/Readme.md` (3074 words)
 * [x] `vendor/dropbear/Readme.md` (1681 words)
@@ -71,7 +59,7 @@ How each upstream project is pinned, patched, configured and built.
 
 ## The build (14 entries, 10844 words)
 
-The root `Makefile` is a third comments.
+Comments occupy one third of the root `Makefile`.
 
 * [x] `Makefile` (7173 words)
 * [x] `utils/Makefile` (946 words)
@@ -164,8 +152,7 @@ The root `Makefile` is a third comments.
 
 ## The syscall layer (12 ranges of one file, 24141 words)
 
-`rach2/sys/syscall.c` is ten times the next file. It is read in ranges so an
-entry is a real unit of work; read each range whole, including its code.
+`rach2/sys/syscall.c` is ten times larger than the next file. Its ranges provide manageable worklist entries. Read each range completely, including its code.
 
 * [x] `rach2/sys/syscall.c` lines 1-900
 * [x] `rach2/sys/syscall.c` lines 901-1800
@@ -269,17 +256,13 @@ entry is a real unit of work; read each range whole, including its code.
 
 # STOP HERE
 
-Set one is done. Do not start set two. Report what set one found and wait:
-the owner changes the effort setting to MEDIUM before set two begins.
+Set one is complete. Do not start set two. Report its findings and wait for the owner to change the effort setting to MEDIUM.
 
 ---
 
 # Set two: the rest of what we wrote
 
-Run this set at MEDIUM effort. Same standard, same method; these are read by
-fewer people, and the tests last because their comments are read by fewest.
-The userland is here rather than in set one because the kernel is what this
-project teaches; move it up if that judgement turns out wrong.
+Run set two at MEDIUM effort, using the same method and standard. These files receive fewer readers, and tests come last because their comments receive the fewest. Userland is in set two because the project teaches the kernel. Move it to set one if that judgement proves wrong.
 
 ## Utilities, shell and file system (80 entries, 64324 words)
 
@@ -563,4 +546,3 @@ project teaches; move it up if that judgement turns out wrong.
 * [x] `tests/tcptest.c` (110 words)
 * [x] `tests/musl/hello.c`, `tests/host/compat/sys/random.h`, `tests/musl/statushelper.c`, `tests/forktest.c`, `tests/musl/pipemusl.c`, `tests/hello.c`, `tests/shelltest.c`, `tests/stdintest.c` (659 words over 8 files)
 * [x] `tests/host/compat/shadow.h`, `tests/filetest.c` (97 words over 2 files)
-

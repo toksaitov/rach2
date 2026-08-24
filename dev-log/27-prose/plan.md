@@ -2,44 +2,44 @@
 
 ## The goal
 
-One person reads every document and every comment this project owns, judges it against the code it describes, and fixes what is wrong or badly written. Milestone 26 built the checks a script can make and found that they reach only part of the way: a machine can see a banned word and an over-wide line, and it cannot see a sentence that is well formed and false. Eight such sentences were found by hand in six documents at the end of that milestone, including a fresh-machine setup sequence that did not work. There are 485 entries over 589 files.
+One person reads every project-owned document and comment, compares it with the code it describes, and corrects false or poorly written prose. Milestone 26 implemented mechanical checks, but those checks detect banned words and over-wide lines, not a grammatical but false sentence. Manual review found eight such sentences in six documents at the end of that milestone, including an unusable fresh-machine setup procedure. The inventory has 485 entries covering 589 files.
 
-## How this milestone is run, which matters more than usual
+## Run procedure
 
-`worklist.md` lists every entry, in order, with a box beside it. It is built from `git ls-files`, so it is what this project owns: the Readmes and build scripts under `vendor/` are ours and are on it, and so are the seven Makefiles, the root one being a third comments. The order is by reading value, so an interrupted run leaves the useful part done.
+`worklist.md` lists every entry in order with a checkbox. It was derived from `git ls-files` and therefore defines the project-owned scope. The list includes project Readmes and build scripts under `vendor/` and all seven Makefiles; comments occupy one third of the root Makefile. Entries are ordered by their value to a reader, so an interruption leaves the most useful work complete.
 
-Work one entry at a time. Read the file whole, including the code the comments sit on. Fix what is wrong. Then mark the entry `[x]`, and only then start the next one.
+Process one entry at a time. Read the complete file, including the code associated with its comments. Correct the prose, mark the entry `[x]`, and only then begin the next entry.
 
-That marking is the whole mechanism. This milestone is long enough that the conversation will be compacted many times, and after each one the worklist, not memory, is what says where the work got to. On resuming: open `worklist.md`, find the first unmarked entry, continue from there. Do not re-derive the position from anything else.
+The checkboxes record the position across conversation compactions. After resuming, open `worklist.md` and continue with its first unchecked entry. Do not infer the position from memory or another source.
 
-Commit every ten finished entries, in the house style, one line. `git log --oneline` is then a second record of the position, independent of the file.
+Commit after every ten completed entries, using the one-line house style. `git log --oneline` then provides an independent position record.
 
 ## What may be used
 
-Read files and edit them. That is the work.
+Read and edit the files directly.
 
-Do not use `grep`, `rg`, `find`, `python`, or any other tool to survey, search, or summarise a file instead of reading it. The point of this milestone is that a person reads every line, because the errors being looked for are exactly the ones a search cannot describe.
+Do not substitute `grep`, `rg`, `find`, `python`, or another survey or summary tool for reading a file. The target defects require a person to read every line and cannot be expressed as a search.
 
-Two commands are allowed, neither of which is analysis: `git commit` at each batch, and `make verify-style` after each commit. The second exists because a writing pass cannot check its own work and this one is 511 files long: without it a broken comment delimiter or an over-wide line rides along for hundreds of commits and becomes expensive to find. With it, any breakage is bisectable to ten files. If it fails, fix what it names before continuing.
+Only two commands are allowed, and neither performs analysis: `git commit` after each batch and `make verify-style` after each commit. The verification command is required because this writing pass spans 511 files and cannot validate itself. Without frequent verification, a broken comment delimiter or over-wide line could remain for hundreds of commits. Running it after each batch limits a defect to ten files. Fix every reported failure before continuing.
 
 ## What is being judged
 
-Style, against the rules in `CLAUDE.md`. The register rule, the comment rule, the message shape, ASCII, no em-dash, Markdown that is not wrapped to a column. The half of the register rule that a checker decides is already clean; the half a person decides is the reason for this milestone.
+Judge style by `CLAUDE.md`: the register and comment rules, message form, ASCII requirement, em-dash prohibition, and unwrapped Markdown prose. Mechanical register checks already pass. This milestone applies the part that requires human judgement.
 
-Correctness, which is the harder half and the point. A document states contracts: does the code still do that? A comment explains a function: is it still true of the function beneath it? Check the claim, not the grammar. Counts, file lists, paths, command lines, target names, and behaviour described in prose are all things that drift, and every one of them was found wrong somewhere in milestone 26.
+Correctness is the primary criterion. Compare every documented contract with the code and every function comment with its function. Check the claim as well as its grammar. Milestone 26 found stale counts, file lists, paths, command lines, target names, and descriptions of behavior.
 
-Two failures to watch for specifically, because both were found in this tree: a document that describes a check as covering everything when it covers a subset, and a comment that describes the reasoning that produced the code rather than what the code does.
+Watch for two defects already found in this tree: a document claiming complete coverage for a subset check, and a comment describing development reasoning instead of the resulting code.
 
-When a comment is right but reads badly, rewrite it. When a comment is wrong, fix the statement. When a comment explains something the code now says better by itself, delete it: `CLAUDE.md` says the body is made clear by naming and structure, not narrated.
+Rewrite an accurate but unclear comment. Correct a false comment. Delete a comment when names and structure now express its content more clearly, as required by `CLAUDE.md`.
 
 ## What is out of scope
 
-The vendored trees, and `ports/doom/src`. Nothing in `worklist.md` is third-party; if a path looks like it might be, it is not on the list.
+Vendored trees and `ports/doom/src` are excluded. `worklist.md` contains no third-party file; any apparently vendored path outside project ownership is absent from it.
 
-`dev-log/` records, including this plan. They are evidence of what was decided and when, and rewriting them would falsify the record. `dev-log/Readme.md` says so.
+`dev-log/` records, including this plan, are excluded because they preserve earlier decisions. `dev-log/Readme.md` states that rewriting them would falsify the record.
 
-Code. This milestone changes comments and documents. A file where the code itself is wrong gets the comment fixed and the code left alone, with a line in the record naming what was found; milestone 28 is where behaviour changes.
+Code is excluded. This milestone changes documents and comments. When code is wrong, correct its comment, leave the code unchanged, and record the defect. Milestone 28 changes behavior.
 
 ## Done when
 
-Every entry in `worklist.md` is marked, `make verify-style` passes, and `dev-log/27-prose/Readme.md` records what was found: the claims that turned out to be false, the comments that described reasoning rather than behaviour, and anything noticed about the code that this milestone deliberately did not change.
+The milestone is complete when every `worklist.md` entry is checked, `make verify-style` passes, and `dev-log/27-prose/Readme.md` records the false claims, comments that described reasoning instead of behavior, and code defects deliberately left unchanged.

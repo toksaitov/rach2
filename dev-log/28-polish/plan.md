@@ -2,255 +2,255 @@
 
 ## The goal
 
-Milestone 25 sealed the disk. Before it goes into the laptop, the machine gets the tools a person reaches for when something is wrong.
+Milestone 25 sealed the disk. Before installing it in the laptop, this milestone adds the diagnostic tools needed when the machine fails.
 
-A boot of the sealed image on the Lenovo showed that `ps`, `top`, `route`, `netstat`, `arp` and `df` are all compiled in and all fail, most of them on a single missing file under `/proc`. This is the milestone that writes those files, and it does so without inventing any number the kernel does not hold.
+A sealed-image boot on the Lenovo showed that `ps`, `top`, `route`, `netstat`, `arp` and `df` were present but failed. Most needed one missing file under `/proc`. This milestone adds those files without reporting values that the kernel does not have.
 
-Milestone 26 swept the documentation immediately before this one, so the Readmes describe the tree as it stands when this work begins. Each phase here rewrites the Readme owning any contract it changes, in its own commit, as the project requires; what it does not do is a second sweep.
+Milestone 26 reviewed the documentation immediately before this work, so the Readmes describe the starting tree. Each phase updates the Readme that owns a changed contract in the same commit. This milestone does not repeat the complete documentation review.
 
-Nothing here changes the disk layout, the boot menu, or the two levels of disk authority. The sealed image is rebuilt, rehearsed and physically rewritten at the end, so the drive that goes into the machine carries this milestone.
+The disk layout, boot menu, and two levels of disk authority remain unchanged. The final phase rebuilds and rehearses the sealed image, then writes it to the physical drive for the laptop.
 
 ## What was measured before this plan
 
 The sealed disk was written to the 250 GB SSD, booted in QEMU off the physical drive, and booted on the Lenovo G50-70 over a USB adapter on a real network.
 
-DHCP works end to end on real hardware. The netconsole capture holds the whole exchange: discover, select for 192.168.0.107 from server 192.168.0.1, lease obtained. The router's reservation matched the MAC the driver reports, `28:D2:44:7E:E0:AF`, which is what `dev-log/24-metal/baseline.md` recorded. The lease was applied, not merely received: address, mask, default route, and `/etc/resolv.conf` written from the lease. `nslookup` reaches 1.1.1.1 and answers correctly.
+DHCP works end to end on real hardware. The netconsole capture records discovery, selection of 192.168.0.107 from server 192.168.0.1, and lease acquisition. The router's reservation matched the MAC reported by the driver, `28:D2:44:7E:E0:AF`, and by `dev-log/24-metal/baseline.md`. The client applied the address, mask, default route, and `/etc/resolv.conf` from the lease. `nslookup` reaches 1.1.1.1 and returns the correct answer.
 
 That router hands out an infinite lease, 4294967295 seconds. The in-house client is not exposed to it: `HARD_MAX_LEASE` (`utils/dhcpc.c:89`) is seven days and `dhcp_sane_lease` clamps before `dhcp_boundaries` multiplies by seven, on both lease paths.
 
-Six applets fail, and each names its missing file: `ps` on `/proc/uptime`, `top` on `/proc/stat`, `route -n` on `/proc/net/route`, `netstat` on `/proc/net/tcp`, `arp` on `/proc/net/arp`, `df` on `/proc/mounts`. `/proc/net/dev` exists and is correct.
+Six applets fail because a required file is missing: `ps` needs `/proc/uptime`, `top` needs `/proc/stat`, `route -n` needs `/proc/net/route`, `netstat` needs `/proc/net/tcp`, `arp` needs `/proc/net/arp`, and `df` needs `/proc/mounts`. `/proc/net/dev` exists and is correct.
 
 `TERM` is not broken. With a client that sends a terminal type, a dropbear session reports `TERM=xterm`. `stty` does fail on a pty, which is phase E.
 
 ## What two rounds of review corrected in this plan
 
-An adversarial review against the code overturned six of this plan's claims. Each correction is carried into the phase it belongs to; they are listed here because a reader of the finished milestone should know which of these were mistakes rather than discoveries.
+Two reviews against the code found six incorrect claims in the draft plan. The relevant phase includes each correction. This section distinguishes those draft errors from facts discovered during implementation.
 
-`rach2.nodisk` already exists. It was built in milestone 24 as one of four device-skip tokens, implemented at `rach2/sys/block/block.c:100`, documented at `rach2/Readme.md:61`, and exercised by `make subset-test` (`Makefile:1018`). An earlier draft proposed building it. What is actually wrong with it is different, and phase H addresses that.
+`rach2.nodisk` already exists. Milestone 24 added it as one of four device-skip tokens. It is implemented at `rach2/sys/block/block.c:100`, documented at `rach2/Readme.md:61`, and exercised by `make subset-test` (`Makefile:1018`). The draft proposed adding it. Phase H instead addresses a defect in its existing behavior.
 
-That target boots six lines and not sixteen: none, each token alone, and all four together. `rach2/Readme.md:61` calls it every combination, which milestone 26 corrects rather than this one widening the target to match the prose.
+That target boots six command lines: none of the tokens, each token alone, and all four together. It does not boot all sixteen combinations. Milestone 26 corrects the claim at `rach2/Readme.md:61`; this milestone does not widen the target to match it.
 
-The test runners do not score what an earlier draft said they score. `tools/runtests.py` scores from the dedicated init-return and signal-return markers and explicitly not from a bare `Process exited with status N` (`tests/Readme.md:123`). `tools/harness.py` reads the generic line, but only in its no-token mode. The discriminator phase A needs already exists as `debug_shell_is_home` (`rach2/kernel.c:96`).
+The draft also misstated probe scoring. `tools/runtests.py` uses the dedicated init-return and signal-return markers, not a bare `Process exited with status N` (`tests/Readme.md:123`). `tools/harness.py` reads the generic line only in its no-token mode. Phase A can distinguish the two cases with the existing `debug_shell_is_home` flag (`rach2/kernel.c:96`).
 
-Retiring `utils/ping.c` costs more than it saves. It is the two-translation-unit specimen the compiler proof compiles (`tools/tcc_test.sh:161`, with `:249` naming it as the one in-house program with a companion source), the unprivileged smoke test in the self-build gate (`tools/selfbuild_test.sh:208`), and the basis of three probes. busybox `ping` needs a raw socket and a raw socket is root's, so removing the in-house one also removes unprivileged ping. It stays.
+The draft proposed removing `utils/ping.c`, but three contracts require it. The compiler proof uses it as the two-translation-unit specimen (`tools/tcc_test.sh:161`, with `:249` identifying it as the one in-house program with a companion source). The self-build verification runs it as the unprivileged smoke test (`tools/selfbuild_test.sh:208`), and three probes depend on it. BusyBox `ping` requires a raw socket available only to root. The in-house implementation therefore remains as the unprivileged ping.
 
-Widening the packet socket's protocol is not enough for `arping`. busybox creates the socket with protocol zero, binds with the ARP protocol, and calls `getsockname` expecting a `sockaddr_ll` carrying a hardware address. The kernel accepts only the IPv4 protocol at creation (`rach2/sys/syscall.c:8170`), ignores the bound protocol, and returns a `sockaddr_in`. Phase F carries the whole list.
+Widening the packet socket's protocol alone does not support `arping`. BusyBox creates a socket with protocol zero, binds it to the ARP protocol, and calls `getsockname` for a `sockaddr_ll` containing a hardware address. The kernel accepts only the IPv4 protocol at creation (`rach2/sys/syscall.c:8170`), ignores the bound protocol, and returns a `sockaddr_in`. Phase F addresses all three requirements.
 
-The timer does not know whether it interrupted an idle processor. There is no idle task: `schedule()` returns with the blocked process still current when nothing is ready (`rach2/sys/proc/sched.c:73`), and the wait is `sti; hlt; cli` inside the blocking syscall (`rach2/sys/syscall.c:5570`). Phase C therefore builds the idle marker rather than assuming one.
+The timer cannot determine directly whether it interrupted an idle processor. There is no idle task. When no process is ready, `schedule()` returns with the blocked process still current (`rach2/sys/proc/sched.c:73`), and the blocking syscall waits with `sti; hlt; cli` (`rach2/sys/syscall.c:5570`). Phase C therefore adds an explicit idle marker.
 
-A TCP control block outlives the socket that made it. `tcb->sock` is cleared on detach (`rach2/sys/network/tcp/tcp.c:909`) while the row stays in the pool through the closing states, and a passive connection's socket is allocated in receive context (`tcp.c:1159`), where there is no calling process to take a UID from. Phase D stores identity so it survives both.
+A TCP control block can outlive its socket. Detach clears `tcb->sock` (`rach2/sys/network/tcp/tcp.c:909`), but the row remains in the pool through the closing states. A passive connection's socket is allocated in receive context (`tcp.c:1159`), where no calling process supplies a UID. Phase D stores the identity where both cases retain it.
 
 ## What the sockets are today, exactly
 
-`do_socket` (`rach2/sys/syscall.c:8142`) accepts two families. `AF_PACKET` with `SOCK_DGRAM` and the IPv4 protocol is a working packet socket, root only, added in milestone 25 because DHCP replies arrive before the machine owns an address. `AF_INET` with `SOCK_RAW` and `IPPROTO_RAW` is a stub that carries interface ioctls and refuses to send or receive. ICMP echo is a private socketcall, `SC_PING` at `0x1000`, one request in flight, used by `utils/ping.c`.
+`do_socket` (`rach2/sys/syscall.c:8142`) accepts two families. `AF_PACKET` with `SOCK_DGRAM` and the IPv4 protocol provides a root-only packet socket. Milestone 25 added it because DHCP replies arrive before the machine has an address. `AF_INET` with `SOCK_RAW` and `IPPROTO_RAW` provides only interface ioctls and refuses to send or receive. ICMP echo uses the private `SC_PING` socketcall at `0x1000`, permits one request in flight, and serves `utils/ping.c`.
 
-So: packet sockets yes, raw IP sockets no. `vendor/busybox/Readme.md:82` said both were absent; milestone 26 corrects it to that state, and phases F and G move it again as they change what is true.
+The starting tree therefore supports packet sockets but not raw IP sockets. `vendor/busybox/Readme.md:82` said both were absent. Milestone 26 corrects that description of the starting tree, and phases F and G update it again after changing the implementation.
 
-`do_setsockopt` (`rach2/sys/syscall.c:8938`) keeps two flags and returns 0 for every other option, by a decision its comment records. `IP_TTL` is therefore accepted and ignored today, and `ip_tx` sets TTL 64 unconditionally. That matters to traceroute and is named in phase G.
+`do_setsockopt` (`rach2/sys/syscall.c:8938`) records two flags and returns 0 for every other option, as its comment specifies. It therefore accepts and ignores `IP_TTL`, while `ip_tx` always sets TTL 64. Phase G must change this behavior for traceroute.
 
 ## Before phase A: the arrival check
 
-This milestone runs on a different machine from the one that wrote it, so its first act is proving that machine can do the work. From a fresh clone on the Mac mini: `make doctor`, `make full`, `make verify-style`, `make verify-host`, the full test list, `make selfbuild-test`, and `make sealed-test`. Milestone 26 could not run this, because a clone on the machine that already has everything proves very little.
+This milestone runs on a different machine from the one where it was planned. A fresh clone on the Mac mini must pass `make doctor`, `make full`, `make verify-style`, `make verify-host`, the full test list, `make selfbuild-test`, and `make sealed-test`. Milestone 26 could not perform this check because a clone on the existing development machine would not test a new-machine setup.
 
-One precondition comes with it: the router reservation that gives the laptop its address must still exist, since phase F's DHCP test asserts the address it hands out.
+The router reservation for the laptop must still exist because phase F's DHCP test checks the assigned address.
 
-The credential dependency an earlier draft carried is gone, and the reason is worth recording because it changed the shape of both milestones. The artifact now on the SSD was built with the owner's own public key alongside the project's demo key, so the Mac mini reaches the laptop with the key already in its `~/.ssh` and needs none of the project's private material to run phases F and G. Copying the five generated files is now a convenience, not a precondition, and the alternative of moving phase K's rewrite ahead of the hardware tests is no longer needed.
+An earlier draft incorrectly required the project's generated credentials. The artifact on the SSD contains the owner's public key alongside the project's demo key. The Mac mini already has the corresponding key in `~/.ssh`, so phases F and G need none of the project's private material. Copying the five generated files is optional, and phase K no longer needs to precede the hardware tests. This correction changed both milestone plans.
 
-Three things arrive by hand rather than by clone, and each is checked here rather than assumed, because every target above can pass while all three are missing. The laptop's presented SSH host key is compared against the fingerprint milestone 26 recorded, so the first connection authenticates the machine instead of trusting whatever answers. `ports/doom/fetch_wad.sh` is run, because the WAD is staged as an optional file (`krffs/manifests/rach2-metal-disk.manifest:163`) and its absence is accepted silently, leaving a disk whose Doom cannot start. And write access to the remote is proved with `git push --dry-run`, since a machine that can clone cannot necessarily publish, and phase K's record has to reach the remote.
+Three prerequisites arrive outside the clone and require explicit checks. The laptop's SSH host key must match the fingerprint recorded by milestone 26 before the first connection trusts it. Run `ports/doom/fetch_wad.sh` because the WAD is optional in `krffs/manifests/rach2-metal-disk.manifest:163`; a build can otherwise succeed with no playable Doom data. Run `git push --dry-run` to prove write access to the remote because clone access does not prove that phase K can publish its record.
 
-Done when every one of those targets passes on the Mac mini from a clean clone, the laptop answers SSH with the owner's own key, already present in `~/.ssh` on that machine, and its host key matches the recorded fingerprint, the WAD is present, and the remote accepts a dry-run push.
+This check is complete when every target passes from a clean clone on the Mac mini, the laptop accepts the owner's key already present in that machine's `~/.ssh`, the laptop's host key matches the recorded fingerprint, the WAD is present, and the remote accepts a dry-run push.
 
 ## Phase A: a quiet exit on a normal boot, first
 
-This goes first because it changes the serial channel through which every later phase is judged.
+This phase comes first because every later phase uses the affected serial output.
 
-`sys_exit` prints "Process exited with status N" to the screen and the serial port on every process exit (`rach2/sys/syscall.c:454-455`). On a machine running init and a login shell it is noise, and ash answers the question through `$?`.
+`sys_exit` prints "Process exited with status N" to the screen and serial port for every process exit (`rach2/sys/syscall.c:454-455`). A machine running init and a login shell does not need this line because ash reports the status through `$?`.
 
-The gate is `debug_shell_is_home` (`rach2/kernel.c:96`), false on a boot that runs init and assigned true at `kernel.c:3143`, which both debug-shell paths reach: an init-less image, and the rescue selection made just above it. The change wraps the two generic prints and nothing else, so it neither writes nor moves the flag and cannot disturb its other readers (`kernel.c:271`, `kernel.c:1250`, `syscall.c:515`, `:4648`, `:4678`, `:7533`). The two dedicated markers stay unconditional: the init-return line (`syscall.c:521`) and the signal-death line (`kernel.c:267`), because those are what `runtests.py` scores.
+Use `debug_shell_is_home` (`rach2/kernel.c:96`) to select the output. It is false when a boot runs init and becomes true at `kernel.c:3143`, which both debug-shell paths reach: an image without init and the rescue selection immediately above it. Wrap only the two generic prints. Do not write or move the flag or change its other readers (`kernel.c:271`, `kernel.c:1250`, `syscall.c:515`, `:4648`, `:4678`, `:7533`). Keep the init-return marker (`syscall.c:521`) and signal-death marker (`kernel.c:267`) unconditional because `runtests.py` scores them.
 
-Proving it needs real boots, not the parser self-test, which feeds canned strings and never boots a kernel. Four: a normal init boot with a child that exits, asserting no generic line appears; a debug-shell probe with a forked child, asserting the generic lines remain; a signal-killed probe, asserting the dedicated marker; and one `harness.py` run in its no-token mode, asserting the generic line it depends on is still there.
+The parser self-test uses canned strings and cannot prove the boot behavior. Use four real boots: a normal init boot whose child exits and produces no generic line; a debug-shell probe whose forked child still produces the generic lines; a signal-killed probe that produces the dedicated marker; and a no-token `harness.py` run that still receives the generic line it requires.
 
 While here, correct `tools/runtests.py`'s own top-level prose, which still describes the older scheme.
 
-Done when those four boots pass, `make test` passes unchanged, and `tests/Readme.md`'s scoring description is still true.
+This phase is complete when all four boots pass, `make test` remains unchanged, and the scoring description in `tests/Readme.md` remains correct.
 
 ## Phase B: the /proc snapshot mechanism
 
-Every synthetic `/proc` file is built into a fixed `char data[512]` at open (`rach2/sys/fs/procfs.c:38`) through appenders that stop silently when full (`procfs.c:49`). Sixteen TCP rows or eight ARP rows do not fit, and a truncated table reads as a short one with no error anywhere.
+At open time, every synthetic `/proc` file is built in a fixed `char data[512]` buffer (`rach2/sys/fs/procfs.c:38`). Its appenders silently stop when full (`procfs.c:49`). Sixteen TCP rows or eight ARP rows exceed the buffer, and the resulting table appears valid but incomplete.
 
-The design is a snapshot with a proved worst-case bound, not streaming generation. Streaming would be feasible against the existing `file_ops` and the shared offset (`rach2/sys/fs/file.h:23`, `procfs.c:457`), but regenerating a live table on each read splices different states of it into one open file, and every pool here is a fixed size, so a bound can be proved instead. Each file declares its maximum, the appenders fail loudly rather than stopping, and the snapshot is taken once at open as it is today.
+Keep the existing open-time snapshot and give it a proved worst-case bound. The existing `file_ops` and shared offset could support streaming (`rach2/sys/fs/file.h:23`, `procfs.c:457`), but regenerating a live table on each read could combine different states in one open file. Every relevant pool has a fixed size, so each file can declare a maximum. An appender that exceeds it must fail instead of truncating the snapshot.
 
-Done when a table larger than 512 bytes reads back whole, an appender that would overflow its declared bound fails the build or the test rather than truncating, and a test that opens a file, changes the underlying table, and then reads on takes the state captured at open. Reading twice without changing anything proves nothing here: a regenerating implementation passes that too.
+This phase is complete when a table larger than 512 bytes reads back in full, an appender that exceeds its declared bound fails the build or test, and a test proves snapshot timing by opening a file before changing the underlying table. Two reads of unchanged state are insufficient because regeneration would produce the same result.
 
 ## Phase C: the process and system files under /proc
 
-Add `/proc/uptime`, `/proc/stat`, `/proc/meminfo` and `/proc/mounts`, plus the `statfs64` syscall that `df` needs.
+Add `/proc/uptime`, `/proc/stat`, `/proc/meminfo`, and `/proc/mounts`, together with the `statfs64` syscall required by `df`.
 
-What exists: `kernel_uptime_seconds` and the within-second counter (`rach2/kernel.c:80`, `:81`, advanced by the timer handler at `:148`), and `frame_total_count` and `frame_free_count` (`rach2/sys/mm/paging.h:165`, `:168`), which is `/proc/meminfo` outright.
+The existing counters provide most of the data. `kernel_uptime_seconds` and the within-second counter are at `rach2/kernel.c:80` and `:81`; the timer handler advances them at `:148`. `frame_total_count` and `frame_free_count` at `rach2/sys/mm/paging.h:165` and `:168` directly provide `/proc/meminfo`.
 
-Idle time has to be built, and the shape of it is the phase's real work. There is no idle task, and a blocked process stays current while the processor halts, so testing `current_proc` or its state would classify idle ticks as busy. An explicit marker is set around the wait and sampled at timer entry before any wakeup changes state, and the counters record delivered ticks rather than claiming wall-clock time, since interrupts are off in several paths and a tick can be lost. Multiword counters are read atomically.
+Idle time requires new accounting. A blocked process remains current while the processor halts because there is no idle task. Testing `current_proc` or its state would therefore count idle ticks as busy. Set an explicit marker around each wait and sample it at timer entry before a wakeup can change state. Count delivered ticks rather than wall-clock time because paths that disable interrupts can lose a tick. Read multiword counters atomically.
 
-Every halt site has to carry the marker, and there are more than one: `rach2/sys/syscall.c:5570`, `:6774`, `:7183`, `:7551`, `rach2/sys/proc/wait_queue.c:134` and `rach2/sys/io/poll.c:203`. One marked-wait helper that all of them call is the answer, with a style check that rejects a bare `sti; hlt` outside it, because a site added later and left unmarked would silently report its idle time as busy.
+Every halt site needs the marker: `rach2/sys/syscall.c:5570`, `:6774`, `:7183`, `:7551`, `rach2/sys/proc/wait_queue.c:134`, and `rach2/sys/io/poll.c:203`. Route all of them through one marked-wait helper. Add a style check that rejects a bare `sti; hlt` elsewhere so a later unmarked wait cannot count idle time as busy.
 
-The test cannot be that busy plus idle equals the delivered ticks, because a marker that is never set satisfies that with idle at zero. It asserts three things over two intervals: during a controlled halt, idle increases and busy does not; during a tight user loop, busy increases and idle does not; and across both, the two deltas sum to the ticks the timer delivered.
+A check that busy plus idle equals delivered ticks is insufficient because a marker that is never set passes with idle fixed at zero. Test three properties over two intervals. During a controlled halt, idle increases and busy does not. During a tight user loop, busy increases and idle does not. Across both intervals, the two deltas sum to the delivered timer ticks.
 
-A boot epoch is stored, because `rtc_boot_time` (`rach2/sys/rtc.c:469`) is the moment the clock was read rather than a kept origin, and `/proc/stat` needs a stable `btime`.
+Store a boot epoch for the stable `btime` required by `/proc/stat`. `rtc_boot_time` (`rach2/sys/rtc.c:469`) gives the time of each clock read, not a retained origin.
 
-`/proc/mounts` needs a real source, and there is not one today. The three mount branches are transient local state (`rach2/kernel.c:3002-3018`) whose `via` string is discarded, and what survives is one bit, disk or not disk, in `_krffs_on_disk` (`kernel.c:1514`). So the mount records what it mounted and with which options at the moment it succeeds, and the file reports that. A fixed line would call a RAM root a disk one on two boots out of three.
+`/proc/mounts` has no persistent source of mount details. The three mount branches keep only transient local state at `rach2/kernel.c:3002-3018` and discard their `via` strings. The surviving `_krffs_on_disk` bit at `kernel.c:1514` distinguishes only disk from non-disk roots. Record the source and options when a mount succeeds, then report those values. A fixed line would misreport a RAM root as a disk root on two of the three boot paths.
 
-`df` needs `statfs64`, which returns `-ENOSYS` today. KRFFS knows its own size and free space, so the numbers are real.
+`df` needs `statfs64`, which currently returns `-ENOSYS`. KRFFS can supply its actual size and free space.
 
-A stored boot epoch is needed for `/proc/stat`'s `btime`, because `rtc_boot_time` (`rach2/sys/rtc.c:469`) is the moment the clock was read rather than a kept origin, and `btime` that moved between reads would be worse than absent.
+The stored boot epoch also keeps `/proc/stat`'s `btime` fixed. Since `rtc_boot_time` (`rach2/sys/rtc.c:469`) reports the moment of a clock read instead of a retained origin, using it directly would change `btime` between reads.
 
-`top` is deferred and said to be. It reads several CPU categories from `/proc/stat` and `/proc/loadavg`, and load averages need run-queue sampling this milestone is not adding. A `top` printing static numbers would be worse than one that does not run.
+Defer `top` and document the omission. It reads several CPU categories from `/proc/stat` and `/proc/loadavg`; load averages require run-queue sampling outside this milestone. Do not make `top` run by supplying static values.
 
-Done when `ps`, `df`, and (with their config options enabled) `free` and `uptime` run and print values that match what the kernel independently reports; the three-interval idle test passes; `/proc/mounts` names the right source and options on a RAM-root boot, a window boot and a disk boot, which are three separate boots; `btime` is unchanged across repeated reads within one boot; and a probe reads each file and checks its shape.
+This phase is complete when `ps`, `df`, and, with their configuration options enabled, `free` and `uptime` report values that match independent kernel data. The three-interval idle test must pass. Three separate boots must show the correct `/proc/mounts` source and options for a RAM root, a window, and a disk. Repeated reads during one boot must leave `btime` unchanged, and a probe must validate the format of every file.
 
 ## Phase D: the network files under /proc
 
-Add `/proc/net/route`, `/proc/net/arp` and `/proc/net/tcp`, following `/proc/net/dev`.
+Add `/proc/net/route`, `/proc/net/arp`, and `/proc/net/tcp` alongside `/proc/net/dev`.
 
-The route table derives from `netconf` (`rach2/sys/network/netconf.h:7`): one on-link subnet and at most one default gateway. The ARP table is eight entries and the TCP table is the tcb pool, and both are private with no iterator today, so each gets a lock-protected snapshot function rather than a reader reaching into its internals.
+Derive the route table from `netconf` (`rach2/sys/network/netconf.h:7`), which has one on-link subnet and at most one default gateway. The private ARP table has eight entries, and the private TCP table is the tcb pool. Give each a lock-protected snapshot function instead of exposing its internals to the proc reader.
 
-Identity is the subtle part. busybox netstat parses a UID and an inode from `/proc/net/tcp`, and a socket carries neither; printing zero would claim every socket belongs to root. The inode is allocated on the socket, the owner UID is taken in syscall context, a passive connection inherits the listening socket's UID because its socket is allocated in receive context where there is no caller, and both values are copied into the control block so a row in a closing state still reports them after `tcb->sock` is cleared. The same inode appears in `/proc/net/tcp`, in `/proc/<pid>/fd/N`, and in `fstat` of the socket, replacing the constant `socket:[1]` rendered today (`rach2/sys/fs/procfs.c:248`).
+Socket identity requires additional state. BusyBox netstat parses a UID and inode from `/proc/net/tcp`, but the current socket has neither. Printing zero would incorrectly assign every socket to root. Allocate an inode on the socket and capture the owner UID in syscall context. A passive connection inherits the listening socket's UID because receive context has no calling process when it allocates the socket. Copy both values into the control block so a closing row retains them after `tcb->sock` is cleared. Use the same inode in `/proc/net/tcp`, `/proc/<pid>/fd/N`, and socket `fstat`, replacing the current constant `socket:[1]` (`rach2/sys/fs/procfs.c:248`).
 
-`/proc/net/arp` is a textual table, not the hexadecimal one `/proc/net/route` uses. Each file follows its own real format, verified against busybox's parser rather than against a guess.
+`/proc/net/arp` uses a textual table, while `/proc/net/route` uses hexadecimal fields. Verify each format against the BusyBox parser that consumes it.
 
-`netstat` also opens `/proc/net/tcp6`. There is no IPv6 here. The file stays absent, netstat says so for that family alone after printing the IPv4 table, and the Readme records that as the intended answer.
+`netstat` also opens `/proc/net/tcp6`, but the system has no IPv6. Leave the file absent. Netstat can report that family as unavailable after printing the IPv4 table, and the Readme must describe this behavior.
 
-Done when `route -n`, `arp` and `netstat -tn` print the machine's real state; the address netstat shows for a live SSH session matches what the peer sees; the inode for one socket is the same value in `/proc/net/tcp`, in `/proc/<pid>/fd/N` and in `fstat`, which the constant rendered today would fail; the owner of an accepted connection is the listener's UID, proved with a listener whose owner differs from whatever process is current when the SYN arrives, since otherwise taking the current process's UID would pass by accident; a row in a closing state still reports its identity after its socket is detached; and a test fills each table to capacity with no truncation.
+This phase is complete when `route -n`, `arp`, and `netstat -tn` report the machine's current state. For a live SSH session, netstat's peer address must match the peer's observation. One socket must have the same inode in `/proc/net/tcp`, `/proc/<pid>/fd/N`, and `fstat`, which the current constant cannot satisfy. Test accepted-connection ownership with a listener whose UID differs from the process current when the SYN arrives; otherwise an incorrect current-process UID would pass. A closing row must retain its identity after socket detachment, and a capacity test must fill each table without truncation.
 
 ## Phase E: stty on a pty
 
-`stty size` on standard input and `stty -F /dev/pts/0 size` both fail on a dropbear session, printing the device name with no reason after it, and `stty -a` reports "Not a tty" where `tty` correctly answers `/dev/pts/0`.
+In a Dropbear session, both `stty size` on standard input and `stty -F /dev/pts/0 size` fail after printing only the device name. `stty -a` reports "Not a tty", although `tty` correctly reports `/dev/pts/0`.
 
-The dispatch looks right: `sys_ioctl` calls `fd_tty(entry)` and `tty_common_ioctl` before the generic ops dispatch, precisely so a pty slave's `TCGETS` reaches the shared handler (`rach2/sys/syscall.c:7796-7810`, the handler itself at `:7671`). The `TIOCGWINSZ` at `rach2/sys/tty/pty.c:254` is the master's, inside `ptm_ioctl`, and is not the path a slave takes; which handler a slave actually reaches is part of what the diagnosis establishes. A message with an empty reason suggests an errno musl has no string for, which would mean a return value outside the errno range rather than an unhandled request. That is a hypothesis, and the phase diagnoses before it fixes.
+The initial dispatch inspection shows the expected order. `sys_ioctl` calls `fd_tty(entry)` and `tty_common_ioctl` before the generic operations dispatch so a pty slave's `TCGETS` can reach the shared handler (`rach2/sys/syscall.c:7796-7810`; the handler is at `:7671`). The `TIOCGWINSZ` handler at `rach2/sys/tty/pty.c:254` belongs to the master through `ptm_ioctl`, not to the slave path. The diagnosis must determine which handler the slave reaches. An empty diagnostic could mean that musl received an errno without a known string, perhaps because the kernel returned a value outside the errno range. Treat this only as a hypothesis until the probe decides it.
 
-A probe opens a pty pair, issues `TCGETS`, `TIOCGWINSZ` and `TCSETS` on the slave, and prints the raw return values, which decides between that hypothesis, `fd_tty` failing for the descriptor dropbear hands the child, and `tty_common_ioctl` not claiming a request it appears to handle.
+A probe opens a pty pair, issues `TCGETS`, `TIOCGWINSZ`, and `TCSETS` on the slave, and prints the raw return values. Those results distinguish the errno hypothesis from a failure of `fd_tty` on Dropbear's child descriptor or a request that `tty_common_ioctl` appears to support but does not claim.
 
-Resolve in the same phase why `/proc/self/fd` showed descriptor 0 as `/dev/pts/0` and descriptors 1 and 2 as `pipe:[1]` in that session. It may be dropbear behaving normally or it may be the same fault.
+The same phase must explain why `/proc/self/fd` showed descriptor 0 as `/dev/pts/0` but descriptors 1 and 2 as `pipe:[1]`. This may be normal Dropbear behavior or another symptom of the same defect.
 
-Done when `stty size` and `stty -a` work over an SSH session, `resize` reports the window, `/proc/self/fd` in that session names the expected object for descriptors 0, 1 and 2 with the answer written down whichever way it turns out, and a regression probe fails if the ioctl path returns to what it does today.
+This phase is complete when `stty size` and `stty -a` work through SSH, `resize` reports the window, and `/proc/self/fd` reports the expected objects for descriptors 0, 1, and 2. Record the result even if Dropbear's descriptor arrangement is correct. A regression probe must fail if the ioctl path returns to its starting behavior.
 
 ## Phase F: the packet socket ABI, completed
 
-The packet socket was built for one caller and stops where that caller stopped. Finishing it is what `arping` needs, and it is independent of raw ICMP, so it comes first.
+The packet socket implements only the operations needed by its original caller. Complete its ABI for `arping` before adding the independent raw ICMP support.
 
-Five pieces: accept creation with protocol zero; store the bound protocol and filter deliveries by it; deliver ARP frames to a matching packet socket alongside the kernel's own `arp_rx` rather than instead of it (`rach2/sys/network/ethernet/ethernet.c:60`); send with the bound protocol's EtherType instead of the hardcoded IPv4 one (`rach2/sys/network/socket/packet.c:197`); and return a real `sockaddr_ll` from `getsockname` with interface index, hardware type, address length and MAC.
+The implementation has five parts. Accept socket creation with protocol zero. Store the bound protocol and use it to filter deliveries. Deliver ARP frames to a matching packet socket as well as the kernel's own `arp_rx` (`rach2/sys/network/ethernet/ethernet.c:60`). Send with the bound protocol's EtherType instead of the fixed IPv4 value (`rach2/sys/network/socket/packet.c:197`). Return a complete `sockaddr_ll` from `getsockname`, including the interface index, hardware type, address length, and MAC.
 
-The existing DHCP path must be unaffected, which is the regression this phase is most likely to cause. `make dhcp-test` and a real lease on the laptop are both required.
+This work must preserve the existing DHCP path. Require both `make dhcp-test` and a real lease on the laptop.
 
-Done when `arping` answers on the test network; a probe proves a socket bound to ARP sees ARP frames and one bound to IP does not; one injected ARP frame both reaches the socket and leaves an address-to-MAC entry visible in `/proc/net/arp`, which phase D provides; a reply on the wire may be asserted as well but cannot stand in for the cache entry, since insertion can fail on a full table while `arp_rx` still replies (`rach2/sys/network/arp/arp.c:64`, `:126`), and a delivery that diverted ARP away from `arp_rx` would pass a socket-only test while quietly breaking address resolution; `getsockname` returns a `sockaddr_ll` with the real MAC; and DHCP still takes a lease on hardware.
+This phase is complete when `arping` answers on the test network and a probe shows that an ARP-bound socket receives ARP frames while an IP-bound socket does not. One injected ARP frame must reach the socket and create an address-to-MAC entry visible through `/proc/net/arp` from phase D. A wire reply is useful but cannot replace the cache assertion: insertion can fail when the table is full while `arp_rx` still replies (`rach2/sys/network/arp/arp.c:64`, `:126`), and a socket-only test would accept an implementation that diverts ARP away from `arp_rx`. `getsockname` must return a `sockaddr_ll` with the actual MAC, and DHCP must still acquire a lease on hardware.
 
 ## Phase G: raw ICMP sockets, and IP_TTL
 
-Add `AF_INET` with `SOCK_RAW` and `IPPROTO_ICMP` that genuinely sends and receives, root only, so busybox `ping` and `traceroute` work. This is the largest phase and it is placed after everything cheap.
+Add root-only send and receive support for `AF_INET` with `SOCK_RAW` and `IPPROTO_ICMP`, allowing BusyBox `ping` and `traceroute` to work. This is the largest phase, so it follows the smaller changes.
 
-The receive side delivers a full IPv4 datagram, header included, because that is what busybox parses, to every raw socket whose protocol matches, without consuming the kernel's own ICMP handling. Time-exceeded and unreachable messages reach raw sockets too, or traceroute learns nothing. Proving fan-out needs more than two working pings: an implementation that demultiplexed by echo identifier would pass that while delivering each datagram to exactly one socket. So the test injects one known datagram and asserts that two raw sockets receive byte-identical copies of it while the kernel's own ICMP path also processes it, and repeats for a time-exceeded message.
+The receive path delivers the complete IPv4 datagram, including its header, to every matching raw socket because BusyBox parses that format. Delivery must not consume the kernel's own ICMP handling. Raw sockets also receive time-exceeded and unreachable messages required by traceroute. Two successful pings do not prove fan-out because an implementation could demultiplex by echo identifier and send each datagram to only one socket. Instead, inject one known datagram and require byte-identical copies on two raw sockets while the kernel's ICMP path also processes it. Repeat the test with a time-exceeded message.
 
-The send side takes an ICMP message whose checksum the caller computed and does not rewrite it, and supplies the IPv4 header itself. `ip_tx` returns void today and silently drops an oversized datagram (`rach2/sys/network/ip/ip.c:195`), returns without transmitting when there is no route (`ip.c:260`), and on an ARP miss sends a request and returns (`ip.c:264`). It gains a return value, and the four outcomes are named here rather than left to the implementation:
+The send path accepts an ICMP message with a caller-computed checksum, preserves that checksum, and supplies the IPv4 header. The current `ip_tx` returns void. It silently drops an oversized datagram (`rach2/sys/network/ip/ip.c:195`), returns without transmission when no route exists (`ip.c:260`), and sends a request before returning on an ARP miss (`ip.c:264`). Give it a return value with these four specified outcomes:
 
     IP_HDRINCL set          -ENOPROTOOPT, because it is not implemented
     datagram over the MTU   -EMSGSIZE
     no route to the address -ENETUNREACH
     ARP not yet resolved    success, and the datagram is dropped
 
-The last one is deliberate and is the only one that is not an error. A datagram send does not promise delivery, the ARP request has gone, and the next packet goes out resolved; `ping` retries by design. It is distinguished from no route, which is a permanent condition the caller must hear about.
+An unresolved neighbor is the only non-error outcome. Datagram send does not guarantee delivery, the ARP request has been sent, and a later packet can use the resolved entry; `ping` retries. No route is a persistent condition and must be returned to the caller.
 
-`IP_HDRINCL` is rejected rather than silently accepted, which is what `do_setsockopt` would do with it today.
+Reject `IP_HDRINCL` instead of silently accepting it as the current `do_setsockopt` does.
 
-`IP_TTL` becomes a real per-socket value for UDP and raw sends. Without it traceroute sets a hop limit that is silently ignored, every probe leaves with TTL 64, and a one-hop target answers, which would let this phase pass with traceroute's entire mechanism absent. The test captures transmitted frames and asserts the TTL field changes per probe; multi-hop behaviour is confirmed once on the laptop against a real route.
+Store `IP_TTL` per socket and apply it to UDP and raw sends. Without this change, traceroute's hop limit is ignored, every probe leaves with TTL 64, and a one-hop target can answer even though traceroute's mechanism is absent. Capture transmitted frames and require the TTL field to change with each probe. Confirm multi-hop behavior once against a real route from the laptop.
 
-Budget the sockets, in the numbers the packet socket already uses rather than a second convention: eight datagrams of one MTU per raw socket, the arriving datagram dropped when the queue is full so a client that is behind keeps what it already has, a dropped counter, and one diagnostic the first time it happens (`rach2/sys/network/socket/packet.c:18-21`, `:116-122`).
+Use the packet socket's existing limits for raw sockets instead of defining another scheme: eight one-MTU datagrams per socket, drop-new behavior when the queue is full, a drop counter, and one diagnostic on the first drop (`rach2/sys/network/socket/packet.c:18-21`, `:116-122`). Dropping the arriving datagram preserves the queued data for a slow reader.
 
-The pool those sockets come from holds sixteen and is shared with TCP, accepted connections included (`rach2/sys/network/socket/socket.h:26`). Exhaustion is already `-ENOMEM` (`rach2/sys/syscall.c:8185`) and stays that. A raw socket must not be able to starve the machine of the sockets SSH needs, which is what the test below is for.
+Raw and TCP sockets, including accepted connections, share a pool of sixteen (`rach2/sys/network/socket/socket.h:26`). Pool exhaustion already returns `-ENOMEM` (`rach2/sys/syscall.c:8185`) and must continue to do so. The test below verifies that raw-socket exhaustion does not break an existing SSH connection.
 
-`utils/ping.c` and `SC_PING` stay. Raw sockets are root's; the in-house ping is what an ordinary user runs, what the self-build gate smokes as the `test` account, and the two-file specimen the compiler proof builds. Both share `ip_rx`, `icmp_rx` and `ip_tx`, so this is not a second stack; the hazard is receive ordering, which the fan-out test above closes.
+Keep `utils/ping.c` and `SC_PING`. Raw sockets are restricted to root, while the in-house ping serves ordinary users, runs under the `test` account during self-build verification, and provides the compiler proof's two-file specimen. Both implementations use `ip_rx`, `icmp_rx`, and `ip_tx`; the new work does not create another network stack. The fan-out test verifies the receive ordering that could otherwise distinguish them.
 
-Done when all of these hold, each as its own test:
+This phase is complete when a separate test proves each requirement:
 
-* busybox `ping` and `traceroute` work as root on the test network and on the laptop, and the in-house `ping` still works as an ordinary user.
+* BusyBox `ping` and `traceroute` work as root on the test network and the laptop, while the in-house `ping` still works for an ordinary user.
 * An ordinary user opening a raw socket is refused.
-* The fan-out test passes for an echo reply and again for a time-exceeded message, and once more for an unreachable.
+* The fan-out test passes separately for an echo reply, a time-exceeded message, and an unreachable message.
 * A capture shows the TTL changing per traceroute probe, on a raw send and on a UDP send.
-* `IP_HDRINCL`, an oversized datagram and an address with no route each return the errno named above, and an unresolved neighbour returns success with the ARP request on the wire.
+* `IP_HDRINCL`, an oversized datagram, and an address with no route each return the errno specified above. An unresolved neighbor returns success and puts the ARP request on the wire.
 * A capture shows the caller's ICMP checksum unchanged.
-* Nine datagrams are delivered to a raw socket nobody is reading: the first eight are readable in order, the ninth is gone, and the dropped counter says one.
-* Every remaining slot in the pool is taken, not merely most of them, and the next socket creation returns `-ENOMEM`; an SSH session opened beforehand still carries data through it and afterwards.
+* When nine datagrams reach an unread raw socket, the first eight remain readable in order, the ninth is dropped, and the drop counter reports one.
+* After every remaining pool slot is occupied, the next socket creation returns `-ENOMEM`. An SSH session opened beforehand still transfers data during and after exhaustion.
 * `make selfbuild-test` and `tools/tcc_test.sh` pass untouched.
 
 ## Phase H: a boot line that contradicts itself
 
-`rach2.nodisk` exists and is a diagnostic, not a boundary. The plan says so plainly, because an editable token cannot be an authority boundary: milestone 25 settled that (`dev-log/25-sealed/plan.md:17`, `rach2/sys/block/recovery.h:14`), and the argument does not reverse because this token removes access. Deleting it from a boot line that expects it grants access.
+`rach2.nodisk` is a diagnostic option rather than an authority boundary. Milestone 25 established that an editable token cannot control authority (`dev-log/25-sealed/plan.md:17`, `rach2/sys/block/recovery.h:14`). The rule also applies to a token that removes access because deleting it from an expected boot line would grant access.
 
-The defect is what it does on an image whose root is on the disk. Discovery runs before the root is mounted (`rach2/kernel.c:2996`), so with the probe skipped nothing mounts, and `boot_init_process` prints "falling back to kernel debug shell" (`kernel.c:1331`) and hands the machine to an unauthenticated shell, which the kernel elsewhere refuses to do on purpose (`kernel.c:1296`).
+The defect occurs when the image's root is on the skipped disk. Discovery precedes the root mount (`rach2/kernel.c:2996`). Skipping the probe leaves no mounted root, after which `boot_init_process` prints "falling back to kernel debug shell" (`kernel.c:1331`) and starts an unauthenticated shell. Another path deliberately refuses that outcome (`kernel.c:1296`).
 
-The prohibited combination is the skip token, and a disk root by either spelling (`rach2.fsdisk` or `rach2.root=disk`, `kernel.c:3008`), and no explicit rescue request. Rescue is the exemption because it is the documented way to reach the debug shell deliberately (`kernel.c:1298`), by either spelling (`rach2.rescue` or `init=rescue`, `kernel.c:3137`), and a person skipping a suspected disk probe on the way there is doing exactly what the tokens exist for. Everything else halts with a diagnostic naming both tokens.
+Refuse a boot that combines the skip token with either disk-root spelling (`rach2.fsdisk` or `rach2.root=disk`, `kernel.c:3008`) and has no explicit rescue request. Exempt rescue because it deliberately requests the debug shell (`kernel.c:1298`) through either `rach2.rescue` or `init=rescue` (`kernel.c:3137`); skipping a suspect disk probe during rescue is a valid diagnostic use. Every prohibited case halts after a diagnostic reports both tokens.
 
-The three sibling tokens are audited for the same shape of fault.
+Audit the other three skip tokens for equivalent failures.
 
-Done when both disk-root spellings without rescue halt and say why, both rescue spellings with the skip token and a disk root still reach the shell, a boot test asserts each of those four and never accepts the debug shell as success for the prohibited case, `make subset-test` still passes, and `rach2/Readme.md` says the tokens are diagnostics and not boundaries.
+This phase is complete when both disk-root spellings halt with an explanation in the absence of rescue, while both rescue spellings still reach the shell when combined with the skip token and a disk root. A boot test must assert all four cases and must never accept the debug shell as success for a prohibited case. `make subset-test` must still pass, and `rach2/Readme.md` must identify the tokens as diagnostics rather than boundaries.
 
 ## Phase I: the mapping ceiling, and saying so when it is hit
 
-Found while debugging an SSH login and measured on the machine: a process can make about 3.1 MB of small allocations before `malloc` starts failing, while a single 64 MB allocation succeeds. The cause is `VMA_MAX` at 128 (`rach2/sys/mm/vm.h:37`) against musl's allocator, which carves many mappings for small blocks. Raising it to 512 lifted the ceiling past 8 MB with no other change.
+Measurements taken while debugging an SSH login showed that small `malloc` allocations fail after about 3.1 MB, although one 64 MB allocation succeeds. Musl creates many mappings for small blocks and reaches `VMA_MAX`, which is 128 at `rach2/sys/mm/vm.h:37`. Raising the limit to 512 allowed the same workload to pass 8 MB with no other change.
 
-Both halves are worth fixing. The limit itself is low for a machine that compiles its own kernel, and 128 was chosen in milestone 22 for a link that needed more than 64, not from any measurement of the small-allocation case. And the failure is silent: `vm.c:82` and `vm.c:134` return without a word, so a process that ran out of mappings looks like a process whose library failed for its own reasons. That silence cost hours of misdiagnosis in the session that found it.
+Increase the limit and report its exhaustion. The value 128 came from a milestone 22 link that needed more than 64, not from the measured small-allocation workload of a machine that compiles its own kernel. The failure is also silent: `vm.c:82` and `vm.c:134` return without a diagnostic, making mapping exhaustion appear to be a library failure. This ambiguity cost hours during the session that found it.
 
-Raising the number costs kernel memory that is already accounted for in the comment there: 16 bytes an entry across the 16-process table, so 512 entries is 128 KB of `.bss` against 32 KB today.
+The existing comment accounts for the kernel-memory cost: 16 bytes per entry across the 16-process table. A 512-entry limit uses 128 KB of `.bss`, compared with the current 32 KB.
 
-The diagnostic belongs where the kernel knows which process is asking, which is the `sys_mmap2` path and the split-failure caller in `syscall.c`, not `vm.c`, which is deliberately independent of kernel globals (`rach2/sys/mm/vm.h:16`).
+Report exhaustion in the `sys_mmap2` path and the split-failure caller in `syscall.c`, where the kernel knows the requesting process. Keep the diagnostic out of `vm.c`, which deliberately avoids kernel globals (`rach2/sys/mm/vm.h:16`).
 
-Done when the same workload that measured 3.1 MB (1 KB blocks until `malloc` returns null) reaches at least 8 MiB after the change, exhaustion says so on the serial log naming the process, `tests/musl/vmamusl.c` asks for more mappings than the old 128 could grant while keeping its deliberate margin below the new maximum, and the comment in `vm.h` records the measurement rather than only which link ran out.
+This phase is complete when the workload that reached 3.1 MB, using 1 KB blocks until `malloc` returns null, reaches at least 8 MiB. Exhaustion must identify the process on the serial log. `tests/musl/vmamusl.c` must request more mappings than the former limit of 128 while retaining its deliberate margin below the new maximum. The comment in `vm.h` must record the measurement in addition to the link that exhausted the earlier limit.
 
 ## Phase J: dmesg from the boot log
 
-`dmesg` fails on `klogctl`, which is not implemented, and implementing the Linux logging call is the wrong shape for this kernel. `/dev/bootlog` already exists and carries the log the SSH session reads.
+`dmesg` fails because `klogctl` is not implemented. Do not add the Linux logging call for this one command; `/dev/bootlog` already provides the log read by an SSH session.
 
-Give a person on the machine an ordinary command that prints it. If that means a small program or a script rather than busybox's `dmesg`, the Readme says so plainly instead of shipping a `dmesg` that is not one.
+Provide an ordinary command that prints the boot log. If it uses a small program or script instead of BusyBox `dmesg`, document that implementation and its limits rather than presenting it as a complete `dmesg` implementation.
 
-Done when the boot log is readable from a shell on the machine and the Readme names the command and the reason.
+This phase is complete when a shell command reads the boot log and the Readme identifies both the command and the reason for its implementation.
 
 ## Phase K: the checks, the record, and the disk
 
-Run every check from a clean tree: `make verify-style`, `make verify-host`, the full suite, `make selfbuild-test`, `make sealed-test`. Rebuild the sealed disk and write the record in `dev-log/28-polish/Readme.md`.
+From a clean tree, run `make verify-style`, `make verify-host`, the full suite, `make selfbuild-test`, and `make sealed-test`. Rebuild the sealed disk and write `dev-log/28-polish/Readme.md`.
 
-Then rewrite the physical drive, because a milestone that improves the machine and leaves the old artifact on the disk has not finished.
+Then update the physical drive so it contains the completed artifact.
 
-This runs on a different machine from the one that wrote this plan, with a different set of drives attached and quite possibly a different node for the same SSD. So the write begins by asking, as `CLAUDE.md` requires of any destructive hardware operation: list every physical disk the host can see, list what it reports about the candidate (node, size in bytes, bus, internal or external, whole disk, and the table it currently carries), and wait for an approval naming that node. The approval given on the old machine does not carry over, and neither does the node number. Nothing here may assume the drive is `/dev/disk6` or that the last approval still stands.
+The work runs on a different host, with different attached drives and possibly a different node for the same SSD. Before writing, follow `CLAUDE.md`: list every visible physical disk and report the candidate's node, size in bytes, bus, internal or external status, whole-disk status, and current partition table. Wait for approval that identifies that node. Neither the old host's approval nor its node number applies. Do not assume the drive is `/dev/disk6`.
 
-After the approval the write follows `dev-log/25-sealed/checklist.md` as corrected in milestone 26: compare the artifact's hash and size against the rehearsed one, write under the guarded block, read the whole device back, and compare hashes again.
+After approval, follow `dev-log/25-sealed/checklist.md` as corrected in milestone 26. Compare the artifact's hash and size with the rehearsed copy, write it under the guarded block, read back the complete device, and compare hashes again.
 
-Done when every gate passes from a clean tree, the record is written, the drive's readback hash equals the rehearsed artifact's with the target's identification recorded beside it, and the rewritten drive then boots and answers: a login prompt, an SSH session by key, and `bootctl status` reporting a committed candidate with no trial armed. A drive that hashes correctly and does not boot has not finished the milestone, which is why the checklist requires the boot as well.
+This phase is complete when every check passes from a clean tree, the record exists, and the drive's readback hash matches the rehearsed artifact with the target identification recorded beside it. The rewritten drive must then boot to a login prompt, accept a keyed SSH session, and have `bootctl status` report a committed candidate with no trial armed. A matching hash alone does not prove that the drive boots, so the checklist requires both results.
 
 ## Risks, in expected order
 
-Phase G can go long. A raw socket touches the receive path every protocol shares, and a mistake is not a failed applet but a stack that drops packets under load. It is the last of the network phases, and the three phases after it are small, so a milestone that stops early still delivers the diagnostics.
+Phase G has the greatest schedule risk. Raw sockets change the shared receive path, where a defect can drop packets under load rather than merely break one applet. It follows the other network phases, and the final three phases are small. If the milestone stops at this phase, the preceding diagnostic work still provides its intended results.
 
-Phase A can break the suite in a way that looks like a passing run: a probe that stops being scored rather than one that fails. That is why its proof is four real boots.
+Phase A can make an unscored probe appear to pass. Its proof therefore requires four real boots.
 
-Phases C and D invite invention. Linux `/proc` carries fields this kernel has no equivalent for. A field that is not real is either computed for the first time here or the applet needing it is deferred and said to be; it is not filled with a plausible number.
+Phases C and D must not invent Linux `/proc` fields without an equivalent in this kernel. Either compute a missing value from actual state or defer and document the applet that needs it. Do not supply a plausible constant.
 
-Phase F can break DHCP, which is the one capability the sealed machine cannot boot without.
+Phase F can break DHCP, without which the sealed machine cannot boot.
 
-Phase E may find nothing in an hour and then take a day, because it starts as a diagnosis.
+Phase E begins with diagnosis. It may produce no finding in an hour and then require a day.
 
 ## What this milestone deliberately leaves out
 
 * IPv6. `/proc/net/tcp6` stays absent and netstat says so.
-* `top`, and with it `/proc/loadavg` and per-category CPU accounting.
-* `IP_HDRINCL`, unless phase G finds traceroute needs it.
-* `klogctl`. The boot log is reached the way this system already reaches it.
-* The `ip` suite. `ifup` uses the ifconfig backend.
+* `top`, together with `/proc/loadavg` and per-category CPU accounting.
+* `IP_HDRINCL`, unless phase G finds that traceroute requires it.
+* `klogctl`. The command reads the boot log through the existing system interface.
+* The `ip` suite. `ifup` continues to use the ifconfig backend.
 * Any change to the disk layout, the boot menu, or the two authority levels.
 
 ## What must not be broken
 
-* The probe scoring contract. Phase A changes when the generic line is printed, never what it says, and never the two dedicated markers.
-* DHCP on real hardware. Phase F is the risk; a lease on the laptop is part of its done-when.
-* The two levels of disk authority and their compile-time switches. Phase H adds no authority and states that its token is not a boundary.
-* Unprivileged `ping`, the self-build smoke test that uses it, and the two-translation-unit compiler proof that compiles it.
-* The guest build's equality with the host lists, held by `tools/check_guest.py` and proved by `make selfbuild-test`.
-* The sealed artifact's geometry and its 660602880 bytes. Phase K rebuilds it; it does not redesign it.
-* C89 in the kernel, inside the dialect `i686-elf-gcc` and the staged TinyCC share.
-* ASCII only, and the voice rule, in every line of prose this milestone touches.
+* The probe scoring contract. Phase A changes only when the generic line is printed. Its text and the two dedicated markers remain unchanged.
+* DHCP on real hardware. Phase F must obtain a lease on the laptop.
+* The two levels of disk authority and their compile-time switches. Phase H adds no authority and documents that its token is not a boundary.
+* Unprivileged `ping`, the self-build smoke test that runs it, and the two-translation-unit compiler proof that compiles it.
+* Agreement between the guest and host build lists, checked by `tools/check_guest.py` and `make selfbuild-test`.
+* The sealed artifact's geometry and 660602880-byte size. Phase K rebuilds the existing design.
+* Kernel C89 within the dialect shared by `i686-elf-gcc` and the staged TinyCC.
+* ASCII and the project voice in every prose line changed by this milestone.
