@@ -18,9 +18,9 @@ This file is a bounded resume map for the one documentation file in progress. It
 * Evidence boundary: prose and the historical records themselves only. Do not compare any historical claim, number, path, command, chronology, or conclusion with current implementation.
 * Check repeated model mannerisms, inconsistent names introduced by this milestone, ASCII, prohibited vocabulary, Markdown bullet form, and the complete historical diff in bounded ordered batches. Preserve quoted prompts, commands, output, ids, and historical substance.
 * The portable-plan correction is committed as `92ee567`. The contextual search then found `gate` used as shorthand for a verification list in milestones 19 through 21. Hardware gates and passages that discuss the old vocabulary remain unchanged.
-* The make record correction is committed as `f811798`. The contextual search found two uses of `era` for development stages in `dev-log/03-text-standard/plan.md`; all other `bench`, `surface`, `sight`, `era`, and `honest` matches were legitimate technical terms or explicit historical discussion of the style rule.
-* `dev-log/03-text-standard/plan.md` was read whole in four bounded sections. The two phase labels now say Foundation C comments and C from the musl and build work. Their scope and order are unchanged.
-* Intended commit boundary: this one-file historical prose correction and the milestone checkpoint. Resume the contextual collection search after a clean commit.
+* The text-standard plan correction is committed as `02248d0`. The remaining `gate`, `trap`, `bench`, `surface`, `sight`, `era`, and `honest` matches are legitimate technical terms, literal prompts, or explicit historical discussion of the style rule.
+* `dev-log/17-completion/plan.md` was read whole in fifteen bounded sections. Its `/etc/skel` bullet is now two complete sentences: the file is not staged, and staging it would add convenience without teaching another mechanism. The deferred decision is unchanged.
+* Intended commit boundary: this one historical prose correction and the milestone checkpoint. Resume the collection search after a clean commit.
 
 ## Boundary
 
@@ -29,4 +29,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run the file-level banned-prose and ASCII checks for `dev-log/03-text-standard/plan.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file historical correction with the checkpoint and require a clean tree. Then continue the contextual collection search for invented shorthand and model mannerisms.
+Run the file-level banned-prose and ASCII checks for `dev-log/17-completion/plan.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file correction with this checkpoint, then resume the collection search.
