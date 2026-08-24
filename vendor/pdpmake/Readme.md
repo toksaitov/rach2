@@ -85,6 +85,6 @@ A change to any prerequisite named by the stamp rule invalidates the stamp. If t
 
 `make make-test` boots the os-real image twice. It checks a command-line compiler override, a clean two-source build, no-op rebuilds, one-source and shared-header rebuilds, `.PHONY`, one project utility, executable behavior, and timestamps preserved across a reboot.
 
-`make selfbuild-test` builds the kernel twice from clean guest trees and requires identical hashes. It also builds the utilities and ish, runs 18 userland checks, extracts and checks the exact guest-built kernel, runs the default guest probes on that kernel, optionally boots it through GRUB, and rebuilds `/src/ish` in place as root.
+`make selfbuild-test` builds the kernel twice from clean guest trees and requires identical hashes. It also builds the utilities and ISH, runs 18 userland checks, extracts and checks the exact guest-built kernel, runs the default guest probes on that kernel, optionally boots it through GRUB, and rebuilds `/src/ish` in place as root.
 
 Run `python3 tools/check_guest.py` after changing a host or guest source list, a guest makefile, or the staged `/src` trees.

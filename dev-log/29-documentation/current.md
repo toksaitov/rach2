@@ -7,10 +7,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual documentation files, all subsystem passes, the historical collection pass, and the first five whole-project checks are complete.
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
-* Current document: `tools/Readme.md`.
-* Original and current forms read whole for this pass: yes. The file has 115 lines.
-* Material claims: machine setup, the style and host verification suites, artifact and configuration checkers, compilation-database generation, QEMU runners, target-specific tests, GRUB and ISO builders, and real-machine acceptance.
-* Known question: ordinary prose uses lowercase `ish` for the component in the guest-check and self-build descriptions. Reopen `ish/Readme.md` as narrow evidence before editing it.
+* Current document: `vendor/pdpmake/Readme.md`.
+* Original and current forms read whole for this pass: yes. The file has 90 lines.
+* Material claims: the pdpmake version and digest, stamp and build lifecycle, platform macros, recipe execution, serial `-j` behavior, guest makefiles, staged paths, update procedure, and verification.
+* Known question: the verification section uses lowercase `ish` for the component. Reopen `ish/Readme.md` as narrow evidence before editing it.
 
 ## Bounded batches
 
@@ -28,13 +28,13 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Boundary
 
-* Finish `tools/Readme.md` under the one-file procedure. Do not edit another current document with it.
+* Finish `vendor/pdpmake/Readme.md` under the one-file procedure. Do not edit another current document with it.
 * Do not fact-check or rename historical `dev-log/` terminology or begin the complete milestone diff review early.
 
 ## Exact next action
 
-The isolated diff, banned-prose check, direct ASCII check, repository text check, `git diff --check`, and `make verify-style` pass. Stage only `tools/Readme.md` and this checkpoint, review the staged paths, content, and identity, and commit.
+The isolated diff, banned-prose check, direct ASCII check, repository text check, `git diff --check`, and `make verify-style` pass. Stage only `vendor/pdpmake/Readme.md` and this checkpoint, review the staged paths, content, and identity, and commit.
 
 ## Intended commit boundary
 
-* `tools/Readme.md` and the milestone checkpoint only.
+* `vendor/pdpmake/Readme.md` and the milestone checkpoint only.
