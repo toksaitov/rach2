@@ -9,6 +9,7 @@ This is the persistent record for information needed after a compaction or betwe
 * Both root-document contradictions above are corrected in `Readme.md`.
 * The root `Readme.md` says the IPC subsystem provides atomic writes. The pipe implementation does not provide the POSIX `PIPE_BUF` guarantee: a write of 4096 bytes or less can use partial free space, block, and interleave with another writer. Revisit the root row during the file-system and I/O subsystem pass.
 * The root `Readme.md` opening paragraph named RTL8139 and RTL8168 devices, but its component and subsystem tables named only RTL8139. Both summary rows now name both supported devices.
+* The root and kernel Readmes said that `make help` lists every target or the specialized test set. Its output is a curated summary and omits valid targets. Both documents now describe it as a summary.
 
 ## Non-document defects
 

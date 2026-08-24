@@ -17,7 +17,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 * Implementation evidence: root verification and specialized target recipes, `tools/check.sh`, `tools/hosttest.sh`, `tools/runtests.py`, harness and specialized test scripts, host-test discovery, guest source and manifest lists, and each named checker or selftest.
 * The authoritative inventories confirm 70 root guest programs, 35 musl guest programs, 63 default entries split 47 and 16, and 36 discovered host tests. The default runner's outcome scoring and clock check, the host runner's dependency and watchdog rules, and the thirteen `verify-style` phases agree with their owning documents.
 * `make help` is a curated summary and omits valid targets including `packet-test`, `netif-test`, `dgram-test`, and `dhcp-test`. `Readme.md` incorrectly said it lists every target in two places; both now say that it summarizes common targets.
-* Intended commit boundary: the two `Readme.md` help-summary corrections and the milestone control files. Resume the verification group after that clean checkpoint.
+* `rach2/Readme.md` made the same overstatement about the specialized test set. Its verification section now says that `make help` summarizes common specialized tests.
+* Intended commit boundary: the one-sentence `rach2/Readme.md` correction and the milestone control files. Resume the verification group after that clean checkpoint.
 
 ## Boundary
 
@@ -26,4 +27,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run the file-level banned-prose and ASCII checks for `Readme.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file correction with the milestone control files and require a clean tree. Then finish the specialized-target and component verification comparisons.
+Run the file-level banned-prose and ASCII checks for `rach2/Readme.md`, `make verify-style`, `git diff --check`, and staged path and content review. Commit the one-file correction with the milestone control files and require a clean tree. Then finish the specialized-target and component verification comparisons.
