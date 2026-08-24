@@ -102,11 +102,11 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `dev-log/28-polish/Readme.md`
 * [x] `dev-log/28-polish/plan.md`
 * [x] `dev-log/Readme.md`
-* [ ] `ish/Readme.md`
-* [ ] `krffs/Readme.md`
-* [ ] `mk/Readme.md`
-* [ ] `ports/doom/Readme.md`
-* [ ] `rach2/Readme.md`
+* [x] `ish/Readme.md`
+* [x] `krffs/Readme.md`
+* [x] `mk/Readme.md`
+* [x] `ports/doom/Readme.md`
+* [x] `rach2/Readme.md`
 * [ ] `rach2/sys/block/Readme.md`
 * [ ] `rach2/sys/fs/Readme.md`
 * [ ] `rach2/sys/fs/synthfs.Readme.md`
