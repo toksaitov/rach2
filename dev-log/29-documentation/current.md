@@ -27,8 +27,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All ten historical diffs in `ebe174d` have been read in path order. The final file, `dev-log/19-busybox-first/Readme.md`, was then read whole because the batch diff exposed inconsistent capitalization of the BusyBox name.
 * The BusyBox naming correction is committed as `1afc84e`. Its banned-prose and ASCII checks, complete one-file diff review, `make verify-style`, and staged review passed; the tree was clean after the commit.
 * The complete `03dae47` diff for `dev-log/19-busybox-first/plan.md` has been read in four bounded compact sections. The file was then read whole in two sections because the diff exposed the same inconsistent BusyBox capitalization as the preceding record.
-* `dev-log/19-busybox-first/plan.md` now uses the BusyBox proper name in ordinary prose while preserving lowercase path components, target names, configuration names, the backticked `busybox` dispatcher name, and historical substance. Its banned-prose and ASCII checks and complete one-file diff review passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `03dae47` review at `dev-log/20-compiler/Readme.md` after a clean commit.
+* The plan naming correction is committed as `e61fc79`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The complete `03dae47` diff for `dev-log/20-compiler/Readme.md` has been read in three bounded compact sections, followed by a complete read of the 104-line file. It uses inconsistent TinyCC, BusyBox, and Dropbear capitalization in ordinary prose.
+* `dev-log/20-compiler/Readme.md` now uses the TinyCC, BusyBox, Dropbear, and GCC proper names in ordinary prose while preserving lowercase command invocations, paths, target names, the backticked `busybox cat` command, and historical substance. Its banned-prose and ASCII checks and complete one-file diff review passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `03dae47` review at `dev-log/20-compiler/plan.md` after a clean commit.
 
 ## Boundary
 
@@ -37,4 +39,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run `make verify-style`, `git diff --check`, and staged path and content review for the one-file correction. Commit it with this checkpoint, then resume at `dev-log/20-compiler/Readme.md`.
+Run `make verify-style`, `git diff --check`, and staged path and content review for the one-file correction. Commit it with this checkpoint, then resume at `dev-log/20-compiler/plan.md`.
