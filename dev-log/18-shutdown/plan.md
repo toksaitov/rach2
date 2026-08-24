@@ -10,7 +10,7 @@ This milestone resolves the final item from milestone 15. It remains a milestone
 
 The item comprises three defects, not merely a missing convenience.
 
-* Userland cannot stop the machine. `halt`, `poweroff` and `reboot` are compiled into busybox (`vendor/busybox/rach2.config:501-503`) and staged in os-real, but all three fail. At the os-real prompt, `halt` prints `halt: No such process` and exits 1. The image contains three unusable commands.
+* Userland cannot stop the machine. `halt`, `poweroff` and `reboot` are compiled into BusyBox (`vendor/busybox/rach2.config:501-503`) and staged in os-real, but all three fail. At the os-real prompt, `halt` prints `halt: No such process` and exits 1. The image contains three unusable commands.
 * The dirty-mount flag consequently appears on every ordinary boot. Such a warning cannot distinguish the improper shutdown it is meant to report. Milestone 8 introduced the flag, and `make crash-test` proves that it survives an attack on the root node.
 * The only path that clears the flag can record a false clean state. `krffs_disk_mark_clean` (`rach2/kernel.c:1464-1476`) clears the bit in the window and calls `pc_sync()` once. `pc_sync` (`rach2/sys/mm/pagecache.c:296-318`) walks the 256 slots by index and returns -1 after any failed frame write-back, even if earlier writes succeeded. If the root page is written and a later frame fails, the platter is marked CLEAN with data missing while the kernel prints `KRFFS: clean-unmount flush failed; image stays dirty`. That report is accurate only when the root write itself fails.
 
@@ -28,7 +28,7 @@ The milestone adds one syscall between these layers and two userland routes to i
 
 ## Why bare `halt` fails
 
-The missing syscall is not the immediate cause because busybox never reaches it. Without `-f`, `halt` calls `sync()` and then `kill(1, SIGUSR1)` (`vendor/busybox/busybox-1.36.1/init/halt.c:204-227`). It retries once through `init_was_not_there()`, which polls `access("/proc/meminfo")` against a synthetic `/proc` that does not provide that file, then exits with `strerror(ESRCH)`.
+The missing syscall is not the immediate cause because BusyBox never reaches it. Without `-f`, `halt` calls `sync()` and then `kill(1, SIGUSR1)` (`vendor/busybox/busybox-1.36.1/init/halt.c:204-227`). It retries once through `init_was_not_there()`, which polls `access("/proc/meminfo")` against a synthetic `/proc` that does not provide that file, then exits with `strerror(ESRCH)`.
 
 The signal fails because `/sbin/init` is not pid 1. `next_pid` starts at 0 (`rach2/sys/proc/process.c:45`), and boot self-tests spawn processes before init starts. Init receives the next available number, while the kernel tracks it separately in `init_pid` (`rach2/kernel.c:60`) because it is not pid 1. Pid 1 may be a dead boot probe or a live process that receives the signal.
 
@@ -112,11 +112,11 @@ Readmes: add `reboot` (88), its command set, and its root-only restriction to th
 
 ### Phase 4: an in-house way to stop the machine
 
-Os-simple stages `/ish` and the `utils` sweep without busybox (`krffs/manifests/os-simple.manifest`). After phase 3, it would therefore contain the stop syscall but no program that calls it, making phase 7's shutdown instructions incomplete.
+Os-simple stages `/ish` and the `utils` sweep without BusyBox (`krffs/manifests/os-simple.manifest`). After phase 3, it would therefore contain the stop syscall but no program that calls it, making phase 7's shutdown instructions incomplete.
 
 Change: add the root-only `utils/halt.c` program, which accepts `halt [-r|-p]`, defaults to power-off, and calls `reboot(2)`. Also add its name to `UTILITIES` in `utils/Makefile`. The explicit list controls the build, and `prune-stale` deletes any binary in `build/utils` that it does not name. A source file alone would produce no staged program. With the list entry, the os-simple `exec-dir` sweep stages it automatically.
 
-Do not stage the program in os-real. Its manifest explains that busybox's standalone ash dispatches `halt`, `poweroff` and `reboot` as applets before searching the filesystem. A `/bin/halt` binary there would be unreachable and would duplicate the command implementation visible in the image.
+Do not stage the program in os-real. Its manifest explains that BusyBox's standalone ash dispatches `halt`, `poweroff` and `reboot` as applets before searching the filesystem. A `/bin/halt` binary there would be unreachable and would duplicate the command implementation visible in the image.
 
 Proof: the phase 5 runner adds an os-simple boot that types `halt` at the `ish` prompt and requires QEMU to exit without intervention. It first requires the staged file to exist, so omitting the `UTILITIES` entry reports a missing file instead of timing out. Reverting the list entry demonstrates this failure.
 
@@ -126,13 +126,13 @@ Readmes: add the program to `utils/Readme.md`. Update the os-simple paragraph in
 
 ### Phase 5: the fixture and the runner
 
-Change: add `krffs/manifests/shutdown-test.manifest` based on `login-test-shell.manifest`. It stages busybox, `/sbin/init` from `init-shell`, a small `/etc`, an unprivileged account, and setuid `/bin/su`. The manifest explains why it uses `init-shell` instead of `init-login`: the direct root shell avoids `login`'s `TCSAFLUSH`, which would discard queued scripted input. In the same commit, add the manifest and its `/bin/su` set-id declaration to the `tools/check_setid.py` allowlist because any unlisted manifest is an error. Add `tools/shutdown_test.sh` and `make shutdown-test`.
+Change: add `krffs/manifests/shutdown-test.manifest` based on `login-test-shell.manifest`. It stages BusyBox, `/sbin/init` from `init-shell`, a small `/etc`, an unprivileged account, and setuid `/bin/su`. The manifest explains why it uses `init-shell` instead of `init-login`: the direct root shell avoids `login`'s `TCSAFLUSH`, which would discard queued scripted input. In the same commit, add the manifest and its `/bin/su` set-id declaration to the `tools/check_setid.py` allowlist because any unlisted manifest is an error. Add `tools/shutdown_test.sh` and `make shutdown-test`.
 
 The runner header states three input-safety rules. Remove logs before each run as well as in the trap. Space the scripted feed so an input flush cannot discard it. Split every expected token sent to the console so console echo cannot satisfy the output match.
 
 Proof: run `poweroff -n -f` on the fixture, require QEMU to exit without intervention, and require offline fsck to find a clean image. The existing first crash-test phase on the same geometry provides the crash control. This phase uses `poweroff`, not `halt`, because `halt` selects `RB_HALT_SYSTEM`, which parks the CPU and deliberately leaves QEMU running. A second phase covers `halt -n -f`: wait for `shutdown: clean unmount: dirty-mount flag cleared` and `halt: system halted`, terminate QEMU from the runner, and require fsck to report CLEAN. Both forced routes in the design are thereby exercised.
 
-The `-n` option is required because busybox calls `sync()` before processing `-f` (`init/halt.c:204-209`). Without `-n`, `SYS_SYNC` could write the marker file before shutdown and let the phase pass after removal of the kernel flush. With `-n`, only the kernel flush remains in this path. A marker written immediately before the command must be readable on the second boot.
+The `-n` option is required because BusyBox calls `sync()` before processing `-f` (`init/halt.c:204-209`). Without `-n`, `SYS_SYNC` could write the marker file before shutdown and let the phase pass after removal of the kernel flush. With `-n`, only the kernel flush remains in this path. A marker written immediately before the command must be readable on the second boot.
 
 Mutation: removing both flushes makes the preceding phase fail on a dirty image. The same write was lost when the machine was killed instead of stopped, confirming that the marker checks persistence. However, a mutation that published only the flag page still passed because cache eviction can also write a frame on a busier boot. The phase proves that a write immediately before shutdown survives; it does not prove that only the shutdown flush wrote the page.
 
@@ -142,7 +142,7 @@ Readmes: add the runner, its phases, and the reason for a shell wrapper rather t
 
 ### Phase 6: init answers the three shutdown signals
 
-Change only `utils/init.c`. Install one handler for all three signals and call `reboot(2)` directly: map SIGUSR1 to `RB_HALT_SYSTEM`, SIGUSR2 to `RB_POWER_OFF`, and SIGTERM to `RB_AUTOBOOT`, matching busybox.
+Change only `utils/init.c`. Install one handler for all three signals and call `reboot(2)` directly: map SIGUSR1 to `RB_HALT_SYSTEM`, SIGUSR2 to `RB_POWER_OFF`, and SIGTERM to `RB_AUTOBOOT`, matching BusyBox.
 
 The handler performs the syscall instead of setting a flag for the main loop. A conventional handler avoids operations that may conflict with interrupted code, but this handler makes one syscall that never returns. It is therefore async-signal-safe and cannot be re-entered. A `sig_atomic_t` flag would introduce a race because init blocks in `waitpid` (`utils/init.c:148`). If the signal arrived after the flag check but before the blocking call, no code would read the flag until another child event, which may never occur on an idle console. Closing that window requires an atomically unmasked wait, but this kernel's `ppoll` accepts a signal mask without applying it. Busybox usually retries after polling for a missing `/proc/meminfo`, but the design must not depend on a retry caused by an absent file. The header summarizes this reasoning in three sentences.
 
@@ -150,7 +150,7 @@ Process teardown remains deferred. Init stops the machine without first stopping
 
 Commit the handlers one change before assigning pid 1. Handlers without pid 1 are inert. Assigning pid 1 first would turn the current `halt: No such process` failure into `panic: init died` with the image still dirty because all three signals terminate by default.
 
-Proof: add a `shutdown-test` phase that types `kill -USR2 $PPID`. The command avoids a fixed pid and therefore tests the signal contract independently of renumbering. It sends the signal exactly once, so any dependency on the busybox retry fails. QEMU must exit without intervention, and fsck must find a clean image. Removing the SIGUSR2 arm demonstrates the failure.
+Proof: add a `shutdown-test` phase that types `kill -USR2 $PPID`. The command avoids a fixed pid and therefore tests the signal contract independently of renumbering. It sends the signal exactly once, so any dependency on the BusyBox retry fails. QEMU must exit without intervention, and fsck must find a clean image. Removing the SIGUSR2 arm demonstrates the failure.
 
 Done when: `make shutdown-test` and `make login-test` pass. The latter protects the init-loop behavior changed by this phase.
 
@@ -162,7 +162,7 @@ Change: add `proc_reclaim_boot_pids()` to `rach2/sys/proc/process.c`. It sets `n
 
 Proof: add four phases to `make shutdown-test`, covering each signal arm and the unprivileged refusal. Bare `halt`, the command that motivated the milestone, receives its own direct test.
 
-* Bare root `poweroff` must stop the machine and leave a clean fsck result. The timeout includes the four seconds busybox spends polling for `/proc/meminfo`, which synthfs does not provide.
+* Bare root `poweroff` must stop the machine and leave a clean fsck result. The timeout includes the four seconds BusyBox spends polling for `/proc/meminfo`, which synthfs does not provide.
 * Bare root `reboot` uniquely exercises SIGTERM and `RB_AUTOBOOT`. Its two-boot sequence reads back a marker and requires `not cleanly unmounted last time` to be absent on the second boot.
 * Bare root `halt` uniquely exercises SIGUSR1 and `RB_HALT_SYSTEM`. Because halt parks the CPU instead of stopping QEMU, the phase waits for `shutdown: clean unmount: dirty-mount flag cleared` and the halt token, terminates QEMU from the runner, and requires a CLEAN fsck result. This phase detects a missing or transposed SIGUSR1 arm.
 * Bare `halt` through `su` as the unprivileged account must print `halt: Operation not permitted`, after which a split token must still receive a response. This distinguishes refusal from a stopped machine, and the image must fsck DIRTY. It is the only committed test of `cred_may_signal` for `kill(1, ...)`, which controls the bare command.
@@ -199,7 +199,7 @@ Run and record four manual mutation categories that the committed suite cannot e
 
 ## Deferred work
 
-Init calls `reboot(2)` without first terminating other processes. After this milestone, the one-line handler makes that omission explicit. This kernel refuses `kill(-1, sig)`, so an orderly teardown would require init to enumerate the process table and define a timeout policy. No committed data is lost because the flush runs with scheduling disabled. An open dropbear session is cut by `poweroff` without a FIN, and an active `passwd` can leave its lock for the next writer's stale-lock rule. The current external kill has the same result.
+Init calls `reboot(2)` without first terminating other processes. After this milestone, the one-line handler makes that omission explicit. This kernel refuses `kill(-1, sig)`, so an orderly teardown would require init to enumerate the process table and define a timeout policy. No committed data is lost because the flush runs with scheduling disabled. An open Dropbear session is cut by `poweroff` without a FIN, and an active `passwd` can leave its lock for the next writer's stale-lock rule. The current external kill has the same result.
 
 The clean-unmount path can still panic instead of reporting an error when disk writes fail, the root page has been evicted, and every cache slot is dirty. Loading the root then requires an eviction, eviction requires a write, and the failed fill causes a panic. Review identified this case, whose outcome remains safe because the machine stops with the dirty flag set. Avoiding the panic would require pinning the root frame for the mount's lifetime, adding a page-cache feature solely to improve the diagnostic for an unusable disk.
 
