@@ -4,46 +4,43 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Position
 
-* File ready to commit: `rach2/sys/network/Readme.md`.
-* First unchecked file after this commit boundary: `krffs/Readme.md`. Do not start it before the network commit.
-* The original document, current rewrite, and current diff have been read whole during this file's work.
-* The only uncommitted product document is `rach2/sys/network/Readme.md`.
-* Intended commit: the network Readme with its worklist, notes, and checkpoint updates.
-* The file is complete and ready to commit. The worklist is marked only for this commit boundary.
+* File ready to commit: `krffs/Readme.md`.
+* First unchecked file after this commit boundary: `ish/Readme.md`. Do not start it before the KRFFS commit.
+* The original document and the current rewrite have been read whole. The complete uncommitted diff has been inspected after compaction.
+* The only product document in this commit will be `krffs/Readme.md`.
+* Intended commit: the KRFFS host-tools Readme with its worklist, notes, and checkpoint updates.
 
-## Current rewrite
+## Material claims
 
-The rewrite is complete in structure. It covers device selection, runtime configuration, Ethernet, ARP, IPv4, ICMP, UDP, TCP, socket ABI, packet sockets, raw sockets, netconsole, concurrency, and verification.
-
-The changed sentences must be checked against the named source before the next edit. Do not reread the full root Makefile or the whole network tree.
+* The host tools, their command lines, repair behavior, and offset-and-size region support.
+* The flat FUSE mount, hierarchical staged format, allocator, node fields, timestamps, limits, and host-platform support.
+* The component build, output paths, dependencies, mounting workflow, and unmount commands.
+* The image scripts, manifest grammar, reproducibility and set-id checks, account provisioning, and module-image contents.
+* The plain and GRUB disk layouts, boot slots, persistent-root behavior, run commands, and specialized disk tests.
 
 ## Narrow evidence map
 
-* Probe order and pool initialization: `init_network` in `rach2/sys/network/core/net_core.c` and `netdev_probe` in `rach2/sys/network/driver/netdev.c`.
-* Driver limits: constants and transmit or receive paths in `driver/rtl8139.[ch]` and `driver/rtl8168.[ch]`; host-model coverage in `tests/host/rtl8168_hosttest.c`.
-* Boot and runtime configuration: `netconf_apply`, `netconf_set_address`, `netconf_set_netmask`, and `netconf_set_gateway` in `netconf.c`; `ifreq_ioctl` and `route_ioctl` in `netif.c`.
-* Ethernet and ARP: `ethernet_rx`, `ethernet_tx`, `arp_cache_update`, `arp_rx`, and `arp_lookup`.
-* IPv4 and loopback: `ip_rx`, `ip_tx`, and `ip_loop_drain`.
-* Ping and UDP: `icmp_ping`, `udp_bind`, `udp_rx`, `udp_tx`, and `socket_udp_deliver`.
-* TCP limits and retry count: constants in `tcp/tcp.h`, `tcp_tick`, listener queue operations, and close paths in `tcp/tcp.c` and `socket/socket.c`.
-* Socket ABI and options: socketcall cases in `rach2/sys/syscall.c` plus the relevant operations in `socket/socket.c`, `socket/packet.c`, and `socket/raw.c`.
-* Netconsole: `netconsole_putc`, `netconsole_enable`, and the frame builder in `netconsole.c`.
-* Timer order: the timer handler in `rach2/kernel.c`.
-* Default and specialized coverage: `tools/runtests.py`, the network targets in the root `Makefile`, and only the named assertions in `tests/{loopprobe,netifprobe,dgramprobe,packetprobe,rawprobe}.c`.
-* BusyBox applet claims: direct `CONFIG_PING`, `CONFIG_TRACEROUTE`, and related entries in both project BusyBox configs.
+* Component inventory and build: tracked files under `krffs/`, `krffs/Makefile`, and only the relevant KRFFS rules in the root `Makefile`.
+* Tool interfaces: each tool's `main` option parser plus `krffs_region.[ch]` and its callers.
+* Format and FUSE behavior: `krffs_node.[ch]`, `krffs_allocator.[ch]`, `krffs_file_system.[ch]`, `krffs_fuse_operations.[ch]`, `stageimage.krffs.c`, and matching host tests.
+* Image construction: `mkimage.sh`, `mkdisk.sh`, `create_file_system.krffs.sh`, `manifests/`, and only the relevant root Makefile target recipes.
+* Credentials and manifest checks: `gen_demo_key.sh`, `gen_demo_password.sh`, `tools/check_setid.py`, and their direct callers.
+* Disk and boot claims: `tools/mkdisk_grub.sh`, `tools/grub_embed.py`, `rach2/run.sh`, `rach2/run_from_disk.sh`, and the named target recipes.
 
 ## Open checks
 
-None. The file is ready to commit.
+* Inspect the complete diff, stage the KRFFS Readme and three milestone control files, inspect the staged diff and identity, and commit.
 
 ## Checks run for this file
 
-* `tcp_tick` and `TCP_MAX_RETX` confirm seven retransmissions followed by failure on the next timeout. The Readme sentence is corrected.
-* The named assertions in `loopprobe.c`, `netifprobe.c`, `dgramprobe.c`, `packetprobe.c`, and `rawprobe.c` confirm the verification summaries. `tools/rawwire_check.py` checks hop limits and the caller's checksum, and the `raw-test` recipe runs `traceroute` and checks its first hop.
-* Both BusyBox configs omit `ping`. The normal config builds `traceroute`; the set-id config omits it.
-* The proposed source and test comment defects and the raw-send MTU defect were reopened at their narrow locations. Confirmed defects are recorded in `notes.md`.
-* The banned-term check, direct ASCII check, phrase report, `tools/textcheck.sh`, `git diff --check`, `make verify-style`, and the 36-test `make verify-host` suite pass.
+* The tracked component has 60 files. `krffs/Makefile` builds nine binaries under `build/krffs/`; only the mount binary and its objects use the FUSE flags. `mkhash.krffs` also requires the extracted musl SHA-512 crypt source.
+* The nine entry points and shared region parser were checked. Six image tools support aligned regions. The FUSE mount maps a whole file. `defrag.krffs` parses region arguments but calls `fsck.krffs` without forwarding them.
+* The v2 node layout, first-fit split rule, adjacent-free coalescing, flat FUSE operation table, parent-aware staging, fixed timestamps, manifest grammar, sorted walks, and set-id handling were checked at their narrow source locations.
+* `mkimage.sh`, `mkdisk.sh`, `create_file_system.krffs.sh`, the credential generators, the set-id checker, and the relevant root Makefile recipes were checked. `make full` builds the three ordinary images; metal and recovery images are separate.
+* Every named tracked path exists. `make help` confirms the image, disk, persistence, credential, crash, shutdown, and stress targets. The host has `/usr/bin/truncate`, and `pkg-config fuse-t` reports version 1.2.7.
+* The banned-term check, direct ASCII check, watched-phrase review, and `tools/textcheck.sh` pass. The only watched phrase in the file is the literal distinction that the FUSE mount accepts a whole-file image, not a region.
+* `git diff --check` and `make verify-style` pass.
 
 ## Exact next action
 
-Inspect the complete diff, stage the network Readme and three milestone control files, inspect the staged diff and identity, then commit.
+Inspect the complete diff, stage the four scoped paths, inspect the staged diff and identity, and commit.

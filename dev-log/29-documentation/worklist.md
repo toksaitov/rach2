@@ -35,7 +35,7 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 
 ### File-system tools and userland
 
-* [ ] `krffs/Readme.md`
+* [x] `krffs/Readme.md`
 * [ ] `ish/Readme.md`
 * [ ] `utils/Readme.md`
 
