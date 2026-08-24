@@ -7,12 +7,12 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual files, every subsystem pass, the historical pass, the first five whole-project checks, and the terminology and boundary pass are complete.
 * First unchecked higher-level entry: complete documentation diff read in repository order, one edited file at a time.
 * Scope: the 88 content paths in `finish.md`, against fixed base `6e253221525273571b7ba12dcb5d1569bd746556`.
-* Active final-stage entry: complete documentation diff, `Readme.md`.
-* Current document: `Readme.md`.
+* Active final-stage entry: complete documentation diff, `dev-log/01-foundation/Plan.md`.
+* Current document: `dev-log/01-foundation/Plan.md`.
 
 ## Final-stage cursor
 
-* Diff page: `Readme.md`, next output line 1. No page has been read.
+* Diff page: `dev-log/01-foundation/Plan.md`, next output line 1. No page has been read.
 * The manifest comparison passed at `32fb6c1`: 88 content paths plus five control files equal all 93 changed Markdown paths.
 * The fixed-base path list contains no non-Markdown path.
 
@@ -29,8 +29,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-`CLAUDE.md` has been read through output line 103, its end. Commit this large-file checkpoint, then read lines 1 through 80 of `git diff --no-ext-diff --unified=20 6e253221525273571b7ba12dcb5d1569bd746556..HEAD -- Readme.md`.
+`Readme.md` has been read through output line 319, its end. Commit this large-file checkpoint, then read lines 1 through 80 of `git diff --no-ext-diff --unified=20 6e253221525273571b7ba12dcb5d1569bd746556..HEAD -- dev-log/01-foundation/Plan.md`.
 
 ## Intended commit boundary
 
-* `AGENTS.md`, `CLAUDE.md`, their manifest checks, and this cursor.
+* `Readme.md`, its manifest check, and this cursor.
