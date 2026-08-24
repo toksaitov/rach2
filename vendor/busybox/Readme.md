@@ -1,94 +1,99 @@
-# BusyBox for Rach2
+# BusyBox 1.36.1 integration
 
-A static BusyBox 1.36.1 linked against the ported musl (`vendor/musl/install`), run as the interactive job-control shell (`ash`) on the console tty.
+Rach2 uses a static BusyBox as the os-real shell and general command set. A second BusyBox contains only the three applets installed set-id root. Both are linked against the project [musl integration](../musl/Readme.md).
+
+The tracked integration has ten files: `.gitignore`, this Readme, `build_busybox.sh`, `busybox-1.36.1.tar.bz2`, `muslgcc`, two configs, two patches, and the [patch documentation](patches/Readme.md). The extracted source, six staged build artifacts, and stamp are ignored and reproducible.
 
 ## Build
 
-    ./build_busybox.sh
+From the repository root:
 
-Or build it through the top level (`make full`, or `make deps DEPS=full`); either builds BusyBox on demand behind a stamp file (it relinks only when the tarball, `rach2.config`, the `muslgcc` wrapper, libc, or a file under `patches/` changes; the directory itself is a prerequisite too, so removing the last patch invalidates the stamp rather than leaving a binary built from it).
+```
+make busybox
+```
 
-It verifies the pinned tarball (`busybox-1.36.1.tar.bz2`, sha256 gated), extracts it, applies every patch under `patches/` in name order, applies `rach2.config`, and builds with `muslgcc` (the wrapper that bridges the bare `i686-elf-gcc` cross compiler to the ported musl: musl headers on compile, musl crt1/crti/crtn + `libc.a` + libgcc on the final link, and `-nostdlib` without crt on busybox's `ld -r` partial links). GNU binutils come from `CROSS_COMPILE=i686-elf-`; `HOSTCC=cc` builds the host-side kconfig tools. The stripped binary is staged out of tree to `build/vendor/busybox/busybox` (staged into the os-real image as `/bin/busybox` and `/bin/sh`).
+`make deps DEPS=full` and `make full` also build BusyBox through the same stamp. The stamp depends on the script, archive, wrapper, both configs, the musl stamp, the patch directory, and every current patch. The directory prerequisite makes adding or deleting the last patch invalidate the build.
 
-## Updating from upstream
+The build script:
 
-The Rach2-owned files here are this Readme, `build_busybox.sh`, the `muslgcc` wrapper, `rach2.config`, and the patches under `patches/`. BusyBox itself is the pinned tarball, and it is not quite unmodified: one patch is applied at build time, described below. To move to a new release:
+1. Requires `busybox-1.36.1.tar.bz2` to have SHA-256 `b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314`.
+2. Replaces the extracted tree and applies `patches/*.patch` in name order.
+3. Copies `rach2.config`, resolves it with `oldconfig`, and builds with `CROSS_COMPILE=i686-elf-`, `CC=muslgcc`, and `HOSTCC=cc`.
+4. Strips and stages the main binary, generated applet table, and resolved config.
+5. Runs `mrproper`, repeats the build with `rach2-suid.config`, and stages the corresponding three artifacts.
 
-1. Download the new `busybox-X.Y.Z.tar.bz2` from https://busybox.net and replace the tarball here.
-2. Set `VERSION` and `TARBALL_SHA256` in `build_busybox.sh` to the new release and its sha256, and `BUSYBOX_TARBALL` in the root `Makefile`, which names the tarball the stamp depends on: leave it and the build stops looking for the file you just replaced.
-3. Rebase every patch under `patches/` onto the new tree. `build_busybox.sh` applies them before configuring and stops the build on a patch that does not apply, so a stale one is loud rather than silent; a patch upstream has since fixed is deleted, and the stamp notices that too.
-4. Rebuild with `make full` (or `./build_busybox.sh`), then re-run a boot, the SSH capstone, and `make dhcp-test`, which is what proves `udhcpc` still builds and still takes a lease.
-5. If the new release renamed or dropped a config symbol, adjust `rach2.config` (it is `defconfig` with the applets Rach2 cannot run turned off, so a `make oldconfig` against the new tree shows what changed).
+The staged outputs are:
 
-The SHA hardware-acceleration options (`CONFIG_SHA1_HWACCEL`, `CONFIG_SHA256_HWACCEL`) are off. The accelerated paths dispatch on CPUID, which reports what the CPU has, and this kernel never enables what those paths need: `CR4.OSFXSR` stays clear and no context switch saves the XMM registers, so the first SSE instruction of the accelerated routine raises an invalid-opcode fault and the process is killed. `sha256sum` died exactly that way on the machine this image boots. The plain C paths use no vector state and run everywhere; the suid build always had these options off. The kernel-side gap (advertised CPU features the kernel does not enable state for) is recorded in the milestone 22 record as deferred.
+```
+build/vendor/busybox/busybox
+build/vendor/busybox/busybox-suid
+build/vendor/busybox/applet_tables-main.h
+build/vendor/busybox/applet_tables-suid.h
+build/vendor/busybox/config-main
+build/vendor/busybox/config-suid
+```
 
-There are two source patches under `patches/`, applied after extraction by `build_busybox.sh` in name order; everything else is `rach2.config`. `networking/udhcp/dhcpc.c` includes `<linux/filter.h>` and `<linux/if_packet.h>`, and the ported musl has neither. The filter header is needed only by a BPF block upstream has kept inside `#if 0` for years, so the patch drops it; the packet header becomes musl's `<netpacket/packet.h>`, which carries `sockaddr_ll` and `PACKET_AUXDATA` but neither the auxiliary-data structure the file reads nor the status bit it tests, so the patch supplies those two behind guards. Copying the Linux headers in instead was tried and does not work: they pull in `linux/compiler.h`, `linux/types.h`, `linux/bpf_common.h` and `asm/byteorder.h`, none of which the ported musl has. A tarball bump must carry this patch forward or `udhcpc` stops building, and with it the machine stops taking an address.
+`make check-busybox` requires all six to be nonempty. The current binaries are stripped, static ELF32 i386 executables. `make clean` preserves them; `make distclean` removes them, the extracted tree, and the stamp.
 
-`patches/0002-free-uptime-include-sysinfo.patch` drops an `#ifdef __linux__` from `procps/free.c` and `procps/uptime.c`. Both call `sysinfo(2)` and take its struct, and both include the header that declares them only under that macro. This tree is cross-compiled with `i686-elf-gcc`, a bare-metal triple that defines no `__linux__` whatever libc is put in front of it, so the include was skipped and both files failed to compile the moment their config options were turned on, on a system whose kernel has the call and whose libc has the header. The condition is dropped rather than widened: musl supplies `<sys/sysinfo.h>` on every target it builds for, and this tree builds against musl and nothing else.
+## Musl wrapper and patches
 
-## Config rationale (`rach2.config`, from `defconfig` minus what Rach2 cannot run)
+`muslgcc` has three modes. Compilation adds `-m32` and the installed musl headers. A relocatable `-r` link also adds `-nostdlib` but no startup objects or libraries. A final link adds `crt1.o` and `crti.o` before caller objects, then `libc.a`, 32-bit libgcc, and `crtn.o`.
 
-Earlier builds carried a hand-curated `allnoconfig` with a short coreutils list. This config is BusyBox's stock `defconfig`, the full standard toolset (the `vi` and `sed` editors, `awk`, `find` and `xargs`, the `tar`/`gzip`/`bzip2`/`unzip` archivers, the complete coreutils, `less`, `diff`, `grep`, and the job-control `ash`), 319 applets, with only the applets Rach2 cannot support turned off and the three that need the set-id bit moved to a second binary. Layered on top:
+Two source patches are applied before either configuration:
 
-* `STATIC=y` (no shared libs), `LFS=y` (musl's off_t is always 64-bit; without this busybox's `BUG_off_t_size_is_misdetected` assert fires).
-* `SH_IS_ASH`, `ASH_JOB_CONTROL`, `FEATURE_SH_MATH[_64]` for `$((...))` arithmetic.
-* `FEATURE_SH_STANDALONE=y` + `FEATURE_PREFER_APPLETS=y` so ash runs applets from the single binary. A NOFORK or NOEXEC applet (`awk`, `find`, `cut`, ...) runs in-process; a regular applet (`grep`, `sed`, `wc`, `vi`, ...) is run by re-exec'ing busybox, so `BUSYBOX_EXEC_PATH="/bin/busybox"` (NOT the default `/proc/self/exe`, which Rach2 does not provide) and the os-real image stages busybox there. Under the default exec path every regular applet fails as "not found".
+* `0001-udhcpc-build-against-musl.patch` replaces unavailable Linux packet headers with musl's packet header and supplies the auxiliary-data definitions that musl omits.
+* `0002-free-uptime-include-sysinfo.patch` includes musl's `sys/sysinfo.h` for `free` and `uptime`. The bare `i686-elf-gcc` target does not define `__linux__`, which guarded the upstream includes.
 
-## Disabled (needs a Linux kernel Rach2 is not)
+The [patch Readme](patches/Readme.md) owns the exact hunks and update checks.
 
-`defconfig` also enables applets that include `<linux/...>`, `<asm/...>`, or `<mtd/...>`, or that drive Linux-only syscalls and ioctls. None can run on the Rach2 kernel, and most do not compile against the freestanding musl, which ships no `linux/` header tree; they are off:
+## Main binary
 
-* Console and VT: `kbd_mode openvt showkey deallocvt chvt loadkmap dumpkmap loadfont setfont conspy` (linux/kd.h, linux/vt.h).
-* Netlink and Linux networking: the `ip` family, `brctl ifenslave nameif tunctl zcip ether-wake slattach`, `udhcpd`, `tc`.
+The resolved main build contains 319 applets. It is static, uses 64-bit file offsets, and selects job-control ash as `/bin/sh`. Standalone ash runs suitable applets in process and re-execs the rest through the configured `BUSYBOX_EXEC_PATH=/bin/busybox`. Both paths are staged because KRFFS has no symbolic links.
 
-`arping` and `traceroute` moved off that list in milestone 28: the packet socket learned the ARP protocol, and the raw ICMP socket with `IP_TTL` is what traceroute is made of. `dmesg` is off for a related reason: it reads a ring buffer through `klogctl`, which this kernel does not have, so the applet can only fail; `/bin/dmesg` is a script that prints `/dev/bootlog`, which is where this machine keeps what it printed while starting, and the applet would answer before it. `ping` stays off, and not because it would fail: the applet would answer from the shell's table before `/bin/ping`, the in-house program an ordinary account can run, since it asks the kernel to ping rather than opening a socket that is root's. It wants no set-id bit (`BB_SUID_DROP`), and opening its socket at all is root's, here as on Linux. Its `-w` timeout does not work, because this kernel has no `setitimer`; `arping -f`, which stops at the first reply, is the form to use.
+The generated applet table and `config-main` are the authority for what ships; the hand-written config is an input to Kconfig. The main selection includes the usual file, text, archive, process, account-management, and IPv4 network tools. Important choices are:
 
-`ifconfig` and `udhcpc` moved off that list in milestone 25. The machine this project seals into a laptop is carried between buildings and takes its address from whatever network it is plugged into, so `udhcpc` is the client and `ifconfig` and `route` are what its lease script uses. `CONFIG_FEATURE_IFUPDOWN_IP` is off with them: it selects the `ip` backend for `ifup`, every `ip` applet is off, and `ifup` would call a command that is not there.
-* Block, flash, RAID, i2c: `losetup`, the MTD `ubi*`/`nandwrite`, `raidautorun`, `i2c*`, `hdparm`, `blockdev fstrim fsfreeze blkdiscard`, `mkfs.ext2`/`mkfs.vfat`, `eject`.
-* Other Linux-only: `mdev acpid ionice setpriv switch_root watchdog fbsplash beep seedrng`.
-`free` and `uptime` moved off that list in milestone 28, which published the `/proc` files they read (`meminfo`, `stat`, `uptime`). Both are on now.
+* `ifconfig`, `route`, `ifup`, `ifdown`, and `udhcpc` are enabled. `FEATURE_IFUPDOWN_IP` is disabled, so ifupdown uses the ifconfig and route backend.
+* IPv4 `arping` and `traceroute` are enabled. Both require root for their packet or raw socket. `ping` is disabled so `/bin/ping`, the unprivileged project program, remains the command ash finds. IPv6 ping and traceroute are disabled because Rach2 has no IPv6 stack.
+* The `dmesg` applet is disabled. The image supplies `/bin/dmesg`, which reads `/dev/bootlog`; Rach2 has no Linux `klogctl` ring.
+* `free`, `uptime`, and `df` are enabled and work with the current `sysinfo`, proc, and `statfs64` implementations. `mount` and `umount` are selected but fail because their syscalls are not implemented.
+* SHA-1 and SHA-256 hardware acceleration are disabled. The kernel neither enables nor preserves XMM state, so the accelerated x86 routines cannot run safely.
+* `cryptpw`, `mkpasswd`, and `httpd -m` are enabled, with SHA-512 as the default password algorithm. An implicit BusyBox salt is derived from pid and monotonic time and bypasses the kernel's trusted random source. Supply an explicit salt when a reproducible or externally generated credential is required.
 
-## Disabled (privilege climbs elsewhere)
+The main binary contains `adduser`, `deluser`, `addgroup`, `delgroup`, and `chpasswd`. BusyBox serializes each file through `F_SETLK`, but Rach2 grants advisory locks without recording conflicts, and these programs do not use `/etc/.pwlock`. Concurrent BusyBox and project credential writers can therefore lose one update. Avoid concurrent account changes.
 
-Three applets are off in THIS config for a different reason: they work, and that is the problem. `su`, `passwd` and `login` want the set-id bit, and this binary is staged without one, so an applet of any of those names would answer from the shell's PATH before the set-id build does and then refuse for want of a bit it does not have. Making this busybox setuid instead would run every one of its BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless an `/etc/busybox.conf` confined them, and that config path trips a busybox use-after-free the kernel's strict `munmap` faults. They are not gone from the image: they are in the second binary described below, which is where they can have the bit without giving it to anything else.
+## Set-id binary
 
-* `CONFIG_SU` off here, on there: `su` is the program that climbs.
-* `CONFIG_PASSWD` off here, on there: `passwd` is the one that writes a credential file.
-* `CONFIG_LOGIN` off here, on there: `login` reads `/etc/shadow` before it knows who it is talking to.
+The second generated table contains exactly `login`, `passwd`, and `su`. It contains no shell or other applet. The set-id config keeps static linking and 64-bit file offsets, disables individual applet binaries, and compiles out `FEATURE_SUID_CONFIG`.
 
-`ADDUSER`, `DELUSER`, `ADDGROUP`, `DELGROUP` and `CHPASSWD` are on, and the objection they were once off for is worth stating because it was weighed rather than forgotten. All five rewrite `/etc/passwd`, `/etc/shadow` or `/etc/group` through busybox's own `update_passwd`, which takes an advisory `fcntl` lock that this kernel grants unconditionally and which knows nothing of `/etc/.pwlock`, the lock the in-house credential library takes. A lock only works if every writer takes it: two writers on different protocols do not exclude each other at all, so each reads a pre-image and the later rename erases the other's change, which is the lost update the credential transaction exists to prevent. What settled it is what the race costs and what it takes to reach it: two account changes issued in the same second, one of which is then silently lost. os-real can carry more than one session, a console and an SSH login at once, so it is not a machine where that is impossible; it is a machine where it is not worth a second implementation of the tools a real system ships. The image gets the account tools a real system ships, and the property that was traded for them is written down here rather than quietly lost. busybox's `adduser` also execs `passwd` with an end-of-options `--` and the new name, and only after creating the passwd, shadow, group and home entries, so it needs a `passwd` that accepts that argument form; the set-id build's does, being busybox's own. The in-house `utils/adduser.c` stays in the tree for the image that has no busybox, where it does the same four things in an order chosen so that every prefix of it is a system a reader can make sense of.
+The pinned `check_suid` implementation frees its parsed `/etc/busybox.conf` list without clearing the global pointer. A later in-process applet dispatch could walk the freed list. Compiling that feature out of the set-id binary avoids the path. The main binary is not set-id, and project manifests stage no `/etc/busybox.conf`.
 
-The last group is about the console login. `LOGIN` is off here and on in the set-id build, which is what `/sbin/init` execs; `SULOGIN` and `GETTY` stay off, since there is one console, no single-user mode to rescue into, and no terminal database to consult, so init starts `login` directly. `VLOCK` locks a terminal by re-authenticating, which is `BB_SUID_REQUIRE` and would need the bit, and nothing here locks a terminal. `WALL` and `CRONTAB` are here for the same reason: both are `BB_SUID_REQUIRE`, so with them enabled the statement that THIS binary contains no applet that would want a set-id bit would be false, and it is that statement, not any particular applet, that the guard checks. What is lost with them is a message to every terminal (there is one) and a scheduled job (nothing here runs one).
+`tools/check_setid.py --applets` decodes the complete generated tables. It rejects a main binary containing a set-id applet, `ping`, IPv6 raw-socket applets, or `dmesg`; it requires the set-id table to equal the three-name whitelist. It also reads the resolved configs for feature checks.
 
-`CRYPTPW` and `MKPASSWD` are BACK, and the reason they were off is worth keeping because it is the argument that was weighed and set aside. They write nothing. They read a password, call `pw_encrypt`, and print the result. What they are is a second way to mint a hash, and its salt comes from `getpid()` plus a monotonic clock fed to a linear congruential generator, with no read of any entropy source at all. This image mints salts one way, through `pwauth_mint_salt`, which draws from the kernel's CSPRNG and refuses when that generator is not trusted; shipping a tool that produces a salt from a pid and a clock would put a weaker hash into the same `/etc/shadow` by a route the fail-closed rule cannot see. `CONFIG_FEATURE_HTTPD_AUTH_MD5` was off for exactly that reason and not for anything to do with serving pages: `httpd -m` mints a `$1$` hash from the same pid-and-clock salt and prints it, and standalone ash reaches the applet with no file to remove, so the feature is a third minter hiding inside an applet whose name says nothing about passwords. It was the reason the guard reads `rach2.config` as well as the applet table, and the guard keeps that ability with an empty list, because a feature that returns a capability no applet name mentions is exactly the thing an applet-name check cannot see. What settled all three was the judgment that this is a teaching machine: busybox's salt is a pid and a clock through a small generator, its own comment calls that lame but good enough, and for a system whose threat model is a student it is. `make account-test` pins the result rather than the intent: `mkpasswd -m sha512 -S abcdefgh hunter2` must produce, byte for byte, the hash `krffs/mkhash.krffs` produces for the same password and salt, so busybox agrees with the implementation the rest of the image authenticates with.
+## Image staging
 
-`CONFIG_FEATURE_DEFAULT_PASSWD_ALGO` is `sha512` rather than the stock `des`, so that anything left in the tree that consults it agrees with the `$6$` hashes the image actually carries. `tools/check_setid.py --applets` is what holds the whole arrangement in place, and it is two rules pointing opposite ways: the main binary's table is a blacklist (no applet that would want a set-id bit, none that needs a raw socket), and the set-id binary's is a whitelist of exactly `login`, `passwd` and `su`, since every applet in that one runs as root. The hash generators are on neither list, deliberately. It reads the applet table and the resolved config `build_busybox.sh` STAGES beside each binary, `build/vendor/busybox/applet_tables-main.h`, `applet_tables-suid.h`, `config-main` and `config-suid`, rather than the copies inside the extracted source tree: that tree is deleted and re-extracted at the top of every build, so the in-tree file is absent for most of a rebuild and describes the previous configuration in the window before the re-extract, and with two configurations sharing one directory it would describe whichever was built last. All six are removed with the binaries when the stamp is invalidated, and `make check-busybox` requires every one of them to be present and non-empty, so a stamp cannot outlive the artifacts it stands for. Reading the resolved config rather than the hand-written one is what makes the set-id build's guard mean something: `oldconfig` decides what a person wrote, and a guard reading the earlier file would be checking an intention rather than a binary. The parser matches whole NUL-delimited names rather than substrings (`passwd` appears inside `passwd_main` and inside help text), requires the `applet_names` initializer to be complete and its token count to match the declared `NUM_APPLETS`, and requires `cat` in the main table, so a file that was truncated part way fails loudly instead of reading as a shorter and apparently innocent applet set.
+The os-real, metal, recovery, and GRUB-test profiles stage the main binary at mode 0755 as `/bin/busybox` and `/bin/sh`. They stage `busybox-suid` three times at mode 04755 as `/bin/login`, `/bin/passwd`, and `/bin/su`. The same bytes dispatch by `argv[0]`.
 
-## The second binary, for the applets that need root
+Rach2 stages its own strict or metal init; the BusyBox init applet is unused. The image stages the udhcpc lease script and `/etc/network/interfaces` for BusyBox ifupdown. The [utilities Readme](../../utils/Readme.md) describes the project programs that coexist with BusyBox.
 
-busybox is built twice here. The main binary holds everything else and is staged unprivileged; a second one, from the same source with `rach2-suid.config`, holds exactly `login`, `passwd` and `su`, the three applets that refuse to work without the set-id bit, and is staged carrying it. That is busybox's own advice rather than an invention: its `Config.in` says that if you do not want even initial busybox code running as root for every applet, you build two binaries with different applets and set the bit only on the one that needs it.
+## Updating the pin
 
-The obvious-looking alternative is not available. `FEATURE_INDIVIDUAL` produces one small executable per applet, but against a shared `libbusybox.so` and, in its own words, "You need to have a working dynamic linker." Every binary in this system is static and the loader cannot run a dynamic one.
+To update BusyBox:
 
-Three settings in that config are essential. There is no shell of any kind, set explicitly: `allnoconfig` leaves `CONFIG_SH_IS_ASH` on, so a config written by leaving things out ships an `sh` applet inside a binary that runs as root. `CONFIG_FEATURE_SUID_CONFIG` is off, which compiles out the `/etc/busybox.conf` parser and with it the use-after-free described below. `CONFIG_LFS` is on, without which the build stops on `BUG_off_t_size_is_misdetected`, a message that names neither the option nor the file.
+1. Replace the archive with a release tarball from [busybox.net](https://busybox.net/downloads/).
+2. Change `VERSION` and `TARBALL_SHA256` in `build_busybox.sh`, and change `BUSYBOX_TARBALL` in the root Makefile.
+3. Rebase both patches and update the patch Readme. Delete a patch that upstream has made unnecessary.
+4. Resolve both configs against the new source and inspect `config-main`, `config-suid`, and both generated applet tables for renamed symbols or changed defaults.
+5. Run the build and verification commands below.
 
-The guard rules point in opposite directions for the two binaries, and that asymmetry is the point. For the main table it is a blacklist: no applet that wants the set-id bit, none that needs a raw socket. For the set-id table it is a whitelist of exactly those three names, because everything in that binary gets root, so a rule that only listed what is forbidden would pass a binary that had quietly grown a shell.
+## Verification
 
-## An upstream bug we should report
+```
+make busybox
+make check-busybox
+make check-setid
+make verify-style
+make verify-host
+make full
+```
 
-`check_suid` frees the parsed `/etc/busybox.conf` list and never clears the global that points at it (`libbb/appletlib.c:642`, with the global declared at `:305` and read at `:565`). A second in-process dispatch then walks freed memory to decide which applets keep root. Checked against upstream master in August 2026: the free is still there and the pointer is still not cleared, so this is not a quirk of the pinned tarball.
-
-It needs three things at once to bite: busybox set-id, `FEATURE_SUID_CONFIG` on, and a `NOEXEC` applet re-dispatching in process. All three are supported configurations. Milestone 15 met it here, as a page fault on `ssh test@host id`, and dropped the set-id-busybox design because of it; the write-up is in `dev-log/15-privilege/Readme.md`. On Linux the freed page usually stays mapped and the read quietly returns plausible data, which is why it survived; this kernel unmaps promptly, so it faults every time.
-
-Reporting it is an open action, not yet done. The list `busybox@busybox.net` is the route the project's own README prefers over the tracker at `bugs.busybox.net`, and it wants a transcript anyone can replay. The fix is one line, clearing the pointer after the free. If a local patch is wanted before upstream moves, `build_busybox.sh` already applies `patches/*.patch` after extraction, and a context diff there will stop the build loudly if upstream ever changes that function.
-
-## Known limits (present but constrained)
-
-* An applet that needs an unimplemented syscall is compiled in but returns its error at runtime: `df` (no `statfs64`, `-ENOSYS`), `mount`/`umount`, and date is not tz-aware (set `TZ=UTC`). The networking applets (`wget nc telnet httpd tftp`) run against the from-scratch TCP/IP stack, within its limits. `PING`, `PING6`, `TRACEROUTE`, `TRACEROUTE6` and `ARPING` are off, and no longer all for the same reason. The first four open a raw IP socket, which this kernel does not offer: `AF_INET/SOCK_RAW` exists only as a descriptor carrying the interface ioctls and refuses to send or receive, so busybox's ping dies with `can't create raw socket: Invalid argument` before it sends anything. `ARPING` opens a packet socket, which milestone 25 built for the DHCP client, but binds it to the ARP protocol where only IPv4 is accepted, so it is a protocol away rather than a socket family away. `/bin/ping` is ours (`utils/ping.c`) and reaches a bare `ping` from the shell's PATH only because the applet is gone.
-* The static config triggers no file-backed `mmap` (Rach2's `mmap2` is anon-only, `-ENOSYS` otherwise); musl's allocator uses anonymous mmap, which works.
-* `getcwd` is capped at the PCB `CWD_MAX=64`.
-* Fixed kernel limits: `MAX_FDS=16`, `MAX_PROCS=16`, socket pool 16.
-
-## The console hand-off (job control)
-
-A job-control shell SIGTTIN-stops itself unless it is the controlling terminal's foreground group at startup, so the kernel makes a launched program the console's session + foreground group (`exec_program`), and releases it when the kernel debug shell regains control (`shell_reset_input`). COM1 has no receive IRQ, so the timer drains the serial port into the discipline while a foreground job runs (nobody is reading the console then). That is how a serial `^C`/`^Z` reaches the job.
+The focused guest checks are `make dhcp-test` for ifupdown, udhcpc, and arping; `make raw-test` for traceroute; `make procfiles-test` for `ps`, `df`, `free`, and `uptime`; and `make account-test` for the account applets, hash generators, and console login. `make login-test` checks strict init behavior when `/bin/login` is absent; it does not exercise the applet. `make ssh-test` and `make selfbuild-test` cover ash over a pty and the staged compiler environment. The default `make test` image uses ISH and does not exercise BusyBox.
