@@ -118,5 +118,5 @@ Review every changed document for stale claims. Write `dev-log/24-metal/Readme.m
 
 * Windows must boot from the SSD whenever the stick is absent. Before both phase E prerequisites are satisfied, nothing may write the SSD. In phase D, the metal build option applies the command allowlist, and the artifact check verifies that policy.
 * Keep every QEMU suite and existing verification passing: RTL8139 through the new driver interface, SLIRP defaults without `rach2.ip=`, unchanged strict os-real init, and the milestone 23 harnesses as regressions.
-* Keep one kernel source tree for gcc and tcc. Add every new kernel file to the guest build lists and `check_guest`.
+* Keep one kernel source tree for GCC and TinyCC. Add every new kernel file to the guest build lists and `check_guest`.
 * Preserve the register rule in every committed line and keep all internal phases in one milestone record.

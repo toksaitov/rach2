@@ -39,8 +39,16 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The complete `03dae47` diff for `dev-log/22-selfbuild/Readme.md` has been read in three bounded compact sections, followed by a complete read of the 73-line file. It preserves the four blockers, measured limits, review findings, corrected predictions, deferrals, and verification results.
 * The self-build record naming correction is committed as `53e5073`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
 * The complete `03dae47` diff for `dev-log/22-selfbuild/plan.md` has been read in five bounded compact sections, followed by a complete read of the 138-line file in two sections. It preserves the initial investigation, phase order, mutations, risks, and verification requirements.
-* The file now uses TinyCC, GCC, BusyBox, pdpmake, and SHA-256 consistently in ordinary prose while preserving commands, target names, profiles, paths, and historical substance. Its banned-prose and ASCII checks, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `03dae47` review at `dev-log/23-install/Readme.md` after a clean commit.
+* The self-build plan naming correction is committed as `6bd2090`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The complete `03dae47` diff for `dev-log/23-install/Readme.md` has been read in three bounded compact sections. It preserves the boot-slot design, review findings, corrected predictions, deferrals, and verification results. No further correction was needed.
+* The complete `03dae47` diff for `dev-log/23-install/plan.md` has been read in five bounded compact sections. It preserves the settled requirements, interruption matrix, Phase 0 observations, implementation phases, mutations, risks, and verification contract. No further correction was needed.
+* The complete `03dae47` diff for `dev-log/24-metal/Readme.md` has been read in five bounded compact sections. It preserves the hardware constraints, implemented features, measurements, verification status, first LAN session, unproved claims, and deferred phase E boundary. No further correction was needed. The complete `03dae47` batch has now been reviewed in path order.
+* The complete `243529b` diff for `dev-log/24-metal/ahci-no-disk.md` has been read in three bounded compact sections. It preserves the initial diagnosis, alternative hypotheses, proposed and applied changes, prior SSD behavior, and final hardware result. No further correction was needed.
+* The complete `243529b` diff for `dev-log/24-metal/baseline.md` has been read in one bounded compact section. It preserves the measured disk, partition, registry, firmware, and expected-difference values. No further correction was needed.
+* The complete `243529b` diff for `dev-log/24-metal/checklist.md` has been read in three bounded compact sections. It preserves the hardware order, commands, credentials, capture requirements, and excluded-work boundary. No further correction was needed.
+* The complete `243529b` diff for `dev-log/24-metal/plan.md` has been read in eight bounded compact sections, followed by a complete read of the 122-line file in two sections. It preserves the hardware scope, pinned RTL8168GU design, phase order, safety requirements, risks, and acceptance criteria.
+* The file now uses GCC and TinyCC consistently in ordinary prose while preserving command names, paths, and historical substance. Its banned-prose and ASCII checks, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the ordered `243529b` review at `dev-log/25-sealed/Readme.md` after a clean commit.
 
 ## Boundary
 
@@ -49,4 +57,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Stage the one-file correction and this checkpoint. Review the staged paths and complete staged diff, confirm the configured identity, commit, and resume at `dev-log/23-install/Readme.md`.
+Stage the one-file correction and this checkpoint. Review the staged paths and complete staged diff, confirm the configured identity, commit, and resume at `dev-log/25-sealed/Readme.md`.
