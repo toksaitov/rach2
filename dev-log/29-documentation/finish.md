@@ -54,7 +54,7 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `dev-log/06-review/results.md`
 * [x] `dev-log/07-init/Readme.md`
 * [x] `dev-log/08-disk/Readme.md`
-* [ ] `dev-log/08-disk/plan.md`
+* [x] `dev-log/08-disk/plan.md`
 * [ ] `dev-log/09-audit/Readme.md`
 * [ ] `dev-log/09-audit/plan.md`
 * [ ] `dev-log/10-ahci/Readme.md`
