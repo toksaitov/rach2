@@ -11,6 +11,7 @@ This file expands the last three whole-project entries in `worklist.md`. The fix
 * Read a file's milestone diff with `git diff --no-ext-diff --unified=20 6e253221525273571b7ba12dcb5d1569bd746556..HEAD -- PATH`. Page the output through `sed -n 'START,ENDp'`, at most 80 lines at a time. Record `END + 1` in `current.md` before reading the next page.
 * A file is checked only after every diff page has been read. If the file changes during review, restart its diff at output line 1. Do not restart an earlier checked file.
 * Commit manifest-only progress after one large file or at most five small files. A committed checkpoint has a clean working tree.
+* After each checkpoint commit, report `documentation: diff N/88; final checks N/15; next PATH; tree clean|dirty`. Do not report a percentage or time estimate.
 * Before the diff review and after every later documentation edit, compare the manifest with the changed Markdown paths. Add a missing in-scope content document in repository order. The five milestone control files are excluded from the per-file diff list.
 
 ## Terminology and document boundaries

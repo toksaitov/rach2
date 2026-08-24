@@ -100,6 +100,8 @@ After a compaction in the final-stage procedure:
 3. Inspect every uncommitted path. If a documentation file is active, read that complete file and its complete uncommitted diff. Reopen only the narrow evidence named in `current.md`.
 4. Resume the first unchecked `finish.md` entry at the exact candidate or diff-output line recorded in `current.md`. Do not rerun a completed search, recreate a completed candidate list, or restart a completed file.
 
+After recovery, send one progress line in this form: `documentation: diff N/88; final checks N/15; next PATH; tree clean|dirty`. Send the same line after each checkpoint commit. Count checked entries; do not estimate a percentage or remaining time. Do not answer an earlier steering message again during automatic continuation. Continue from the repository checkpoint unless a new user message changes or stops the goal.
+
 Limit a diff page to 80 output lines. Record the next output line in `current.md` before reading another page. A changed diff invalidates that file's cursor, so restart that file at output line 1 after editing it. It does not invalidate any earlier checked file.
 
 ## The current-file checkpoint
@@ -215,3 +217,5 @@ Then write `dev-log/29-documentation/Readme.md`. Record the scope, the false cur
 Add `29-documentation` to `dev-log/Readme.md` only when that final record exists. The record and the index entry are one commit, so the index never states that unfinished work is complete. Run `tools/check_devlog.py` on that commit.
 
 The milestone is done when the final record and index are committed, all worklist entries are checked, every required verification passes, and the working tree is clean. Do not push.
+
+When these conditions are met, report completion once, mark the goal complete, and stop. Do not begin another review or verification pass.

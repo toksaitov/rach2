@@ -29,8 +29,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Commit the two completed BusyBox-first entries. Then read lines 1 through 80 of the fixed-base diff for `dev-log/20-compiler/Readme.md`.
+Read lines 1 through 80 of the fixed-base diff for `dev-log/20-compiler/Readme.md`.
 
 ## Intended commit boundary
 
-* The completed `dev-log/19-busybox-first/Readme.md` and `dev-log/19-busybox-first/plan.md` diff reviews, their manifest entries, and this cursor.
+* The next completed manifest batch: one large file or at most five small files, plus this cursor.
