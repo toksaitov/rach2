@@ -10,7 +10,7 @@ The region is a circular, doubly linked sequence of extents. Every extent starts
 
 There are three node types: root, free, and reserved. A reserved node represents either a regular file or a directory. Directory modes include `S_IFDIR`; regular-file modes store only the permission and special bits. The root is a separate node with logical ID 0 and a stored mode of 0755 without `S_IFDIR`. Stat and permission code therefore handle the root by identity.
 
-Mount validation requires a root node with the KRFFS magic and root type. It then walks the complete extent sequence and checks each node's magic, type, size, preceding-size link, bounds, exact tiling of the region, and closure back to the root. It refuses a malformed sequence before publishing the mount.
+Mount validation requires a root node with the KRFFS magic and root type. It then walks the complete extent sequence and checks each node's magic, type, size, preceding-size link, bounds, exact tiling of the region, and closure back to the root. A malformed sequence fails validation before the mount is published.
 
 A child records its containing directory's ID in `parent_id`. Lookup scans the node sequence for a matching `(parent_id, name)` pair. A directory's ID is a 64-bit mix of its parent ID and name. The implementation does not detect ID collisions. Regular-file IDs are not consistent between creation routes: the host stager uses the parent-aware mix for every staged node, while guest creation and rename use the older DJB hash of the basename. The kernel path resolver does not use a regular file's ID, but `stat` and `getdents64` report it as the inode number.
 
