@@ -5,9 +5,9 @@ This file is a bounded resume map for the one documentation file in progress. It
 ## Position
 
 * All 123 individual files, every subsystem pass, the historical pass, the first five whole-project checks, and the terminology and boundary pass are complete.
-* First unchecked higher-level entry: final verification and completion.
+* First unchecked higher-level entry: none.
 * Scope: the 88 content paths in `finish.md`, against fixed base `6e253221525273571b7ba12dcb5d1569bd746556`.
-* Active final-stage entry: tracked Markdown inventory.
+* Active final-stage entry: complete.
 * Current document: none.
 
 ## Final-stage cursor
@@ -29,7 +29,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Re-run the tracked Markdown inventory comparison from `plan.md` and check the matching `worklist.md` entry.
+No further action. The final commit must leave the working tree clean.
 
 ## Intended commit boundary
 

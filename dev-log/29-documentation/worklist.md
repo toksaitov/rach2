@@ -189,16 +189,16 @@ An edit found during these passes returns to the one-file procedure. Finish one 
 
 ## Final verification and record
 
-* [ ] Tracked Markdown inventory still matches this worklist
-* [ ] Explicit banned-prose and ASCII checks pass for edited historical files
-* [ ] `make full` passes
-* [ ] `make verify-style` passes
-* [ ] `make verify-host` passes
-* [ ] `make test` passes
-* [ ] Specialized evidence targets named in `notes.md` pass
-* [ ] `python3 tools/check_devlog.py --selftest` passes
-* [ ] `dev-log/29-documentation/Readme.md` written and proofread
-* [ ] `dev-log/Readme.md` updated only after the final record exists
-* [ ] `python3 tools/check_devlog.py` passes with milestone 29 indexed
-* [ ] Complete milestone diff and `git diff --check` pass final review
-* [ ] Final commit made and working tree clean
+* [x] Tracked Markdown inventory still matches this worklist
+* [x] Explicit banned-prose and ASCII checks pass for edited historical files
+* [x] `make full` passes
+* [x] `make verify-style` passes
+* [x] `make verify-host` passes
+* [x] `make test` passes
+* [x] Specialized evidence targets named in `notes.md` pass
+* [x] `python3 tools/check_devlog.py --selftest` passes
+* [x] `dev-log/29-documentation/Readme.md` written and proofread
+* [x] `dev-log/Readme.md` updated only after the final record exists
+* [x] `python3 tools/check_devlog.py` passes with milestone 29 indexed
+* [x] Complete milestone diff and `git diff --check` pass final review
+* [x] Final commit made and working tree clean
