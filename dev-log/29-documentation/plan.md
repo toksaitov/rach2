@@ -10,7 +10,7 @@ The work is deliberately serial. One primary agent reads and edits one file at a
 
 ## The inventory
 
-`worklist.md` is the complete ordered inventory. It was made from the 123 tracked Markdown files present when this plan was written: 28 current-contract documents outside `dev-log/`, and 95 historical documents under `dev-log/`. The three live files in `dev-log/29-documentation/` are control files for the run and are not part of that count.
+`worklist.md` is the complete ordered inventory. It was made from the 123 tracked Markdown files present when this plan was written: 28 current-contract documents outside `dev-log/`, and 95 historical documents under `dev-log/`. The four live files in `dev-log/29-documentation/` are control files for the run and are not part of that count. `current.md` is the bounded checkpoint for the file in progress.
 
 At the start of the run, and after any later change to the set of tracked Markdown files, compare `git ls-files '*.md'` with `worklist.md`. Exclude `dev-log/29-documentation/` from that comparison. A newly added project document is added to the worklist before the run continues. An absent path is investigated rather than marked complete.
 
@@ -72,32 +72,57 @@ The plan was prepared after `make doctor` passed on the new machine. The goal ru
 
 ## Recovery after every compaction
 
-Treat every conversation compaction as loss of working context, even when a generated summary appears sufficient. Before another edit, do all of the following:
+Compaction loses conversational detail, but it does not invalidate repository evidence already recorded as a navigation aid. Recovery must restore enough context to finish the current file. It must not restart a repository-wide audit.
 
-1. Read `AGENTS.md`, `CLAUDE.md`, this plan, `worklist.md`, and `notes.md` again.
-2. Run `git status --short --branch` and inspect every uncommitted documentation diff.
-3. Read the milestone's commits with `git log --oneline` and identify the first unchecked worklist entry.
-4. Rebuild the repository model from the root `Makefile`, the current root `Readme.md`, the owning component's files, and the tests relevant to the next document. Do not rely on the compacted conversation for a factual claim.
-5. Read the next document from its first line to its last line. If it was partly edited when compaction occurred, read both the complete file and its complete diff before continuing.
+Before another edit after compaction:
 
-The first unchecked entry is the only source of the next position. A checked entry is complete. An unchecked entry is read again from the beginning, even if earlier work on it appears in the diff.
+1. Read `AGENTS.md`, `CLAUDE.md`, this plan, `worklist.md`, `notes.md`, and `current.md`.
+2. Run `git status --short --branch`, read the milestone's commits with `git log --oneline`, and identify the first unchecked worklist entry.
+3. Read the complete current document and its complete uncommitted diff. Inspect every other uncommitted path before continuing.
+4. Use `current.md` to locate the evidence already examined and the unresolved checks. The checkpoint is not factual authority. Reopen the implementation or test for each claim that will be edited, but read only the function, rule, configuration block, or test case that decides it.
+5. Read the root `Makefile` or root `Readme.md` only when the current document makes a project-wide build, target, image, or ownership claim. Locate the relevant rule first and read its complete recipe and prerequisites. Do not reread either root file from beginning to end merely because compaction occurred.
+6. Do not reread an entire subsystem as a recovery ritual. Start with the edited sentences and open questions in `current.md`. Expand to callers or adjacent code only when the narrow evidence does not decide the claim.
+
+Keep recovery output bounded. A single command should print no more than 200 lines or about 20,000 bytes. Split a larger file around named functions or sections. Generated summaries and `current.md` choose where to look; only the repository decides the fact.
+
+The first unchecked entry is the only source of the next position. A checked entry is complete. The current document is always read whole after compaction, but its completed evidence audit is not repeated without a concrete unresolved claim.
+
+If two compactions occur on the same file without a commit, the next recovery must not repeat any broad read already named in `current.md`. Recheck only the unresolved claims, finish the document, verify it, and commit it. This rule prevents recovery itself from consuming the next context window.
+
+## The current-file checkpoint
+
+`current.md` carries only the state needed to resume one file. Update it before a long evidence pass, after each bounded evidence batch, before a likely compaction, and before verification. Keep it short and replace obsolete details instead of appending a diary.
+
+It records:
+
+* the first unchecked file and whether its original and current forms were read whole;
+* the changed sections and the claims they now make;
+* repository paths and function or target names that decide those claims;
+* facts already checked, open questions, and the exact next action;
+* commands already run for the current file and their result;
+* the intended commit boundary.
+
+`current.md` is a map, not evidence. After a compaction, re-open the narrow source location before relying on a checked fact in an edit. Once the file is committed, replace the checkpoint with the next file's starting state. Do not copy its temporary detail into the final milestone record.
 
 ## The one-file procedure
 
 For each entry in `worklist.md`:
 
 1. Read the entire document without using a search result or summary as a substitute.
-2. For a current-contract document, identify every material claim and inspect the implementation and tests that decide it. Read enough surrounding code to understand the contract rather than matching one token.
-3. Record cross-document contradictions, non-document defects, facts needed by later passes, and decisions that may be lost after compaction in `notes.md`.
-4. Rewrite the document in place. Do not edit a second documentation file while the first is in progress.
-5. Check every local link, path, command, target, count, version, mode, and named artifact in the edited file.
-6. Review the file's diff by itself. Confirm that it changes documentation only and preserves any historical assertion that is out of factual scope.
-7. Run `python3 tools/prose_check.py --banned <file>` and a direct ASCII check on the file. Run the repository text checks for current documentation. Fix every result before proceeding.
-8. Add any lasting result to `notes.md`, then mark the worklist entry `[x]`.
+2. Set `current.md` to this file and list its material claims before opening a large body of evidence.
+3. For a current-contract document, inspect the implementation and tests that decide each material claim. Read enough surrounding code to understand the contract rather than matching one token. Work in bounded batches and update `current.md` after each batch.
+4. Record cross-document contradictions, non-document defects, facts needed by later passes, and decisions that may be lost after compaction in `notes.md`.
+5. Rewrite the document in place. Do not edit a second documentation file while the first is in progress.
+6. Check every local link, path, command, target, count, version, mode, and named artifact in the edited file.
+7. Review the file's diff by itself. Confirm that it changes documentation only and preserves any historical assertion that is out of factual scope.
+8. Run `python3 tools/prose_check.py --banned <file>` and a direct ASCII check on the file. Run the repository text checks for current documentation. Fix every result before proceeding.
+9. Add any lasting result to `notes.md`, mark the worklist entry `[x]`, update `current.md` to say that the file is ready to commit, and commit the file with its control-file changes.
 
 Do not mark a file complete because it needed no edit until it has been read under this procedure. Do not start the next file while the present entry is unchecked.
 
 Search tools may locate the implementation of a claim after the document has been read. They may not replace reading the document or the relevant code. Generated summaries, word-frequency reports, and automated rewrites may identify questions; they do not decide prose or facts.
+
+Do not maximize source coverage in one context window. The useful unit is a finished documentation file, not the number of implementation lines read. Once every changed sentence has direct evidence and the required checks pass, commit the file instead of reopening settled parts of the subsystem.
 
 ## Checkpoints and commits
 
