@@ -64,19 +64,19 @@ A zero-byte write could extend a file and expose stale data, while a write beyon
 
 A root descriptor returned boot time rather than the root node's stored time because `fstat` on `/` used a branch that never inspected the node.
 
-The reproducibility gate could use stale binaries and pass without exercising directory ordering. It now builds the binaries under test and tries four candidate name sets until the host returns one out of order, then compares the staged names with the sorted order. If the host returns all four sets already sorted, the check reports that it cannot prove ordering instead of claiming partial coverage as success.
+The reproducibility check could use stale binaries and pass without exercising directory ordering. It now builds the binaries under test and tries four candidate name sets until the host returns one out of order, then compares the staged names with the sorted order. If the host returns all four sets already sorted, the check reports that it cannot prove ordering instead of claiming partial coverage as success.
 
 A vector that exactly filled the copy-in buffer and then supplied another string returned `EFAULT`, incorrectly blaming the caller's pointer for a kernel limit. It now returns `E2BIG`.
 
 Editing a musl patch did not trigger a rebuild. The stamp now depends on `patches/*.patch`, which is required now that a patch affects runtime behavior.
 
-The make gate could accept a stale executable, skipped the command-line macro override, could attribute one `make` success message to another invocation, and sent console input at a fixed rate that a slow host could overrun. It now sends one guest command at a time and waits for its marker, performs guest-side counts on each command's output file, and requires the exact modification time across reboot instead of using a tolerance.
+The make verification could accept a stale executable or attribute one `make` success message to another invocation. It also skipped the command-line macro override and sent console input at a fixed rate that a slow host could overrun. It now sends one guest command at a time and waits for its marker, performs guest-side counts on each command's output file, and requires the exact modification time across reboot instead of using a tolerance.
 
 The paired RTC reads compared date fields and status B and D but omitted status A. A divider could therefore be valid in the first sample and invalid in the second while the pair was accepted. The pure `rtc_snapshots_agree` function now compares status A as well, masking the update-in-progress bit on both sides because hardware changes that bit independently.
 
 The next review found the milestone's central RTC defect. On some hardware, reading register D sets a validity bit that was clear after battery failure. A dead cell therefore yields one correctly invalid sample followed by misleading valid-looking samples. The first pair disagrees; retrying only because of that disagreement discards the true invalid result, then accepts a matching in-range pair containing stale battery data. A clear validity bit is now terminal. The pure `rtc_pair_disposition` function decides each pair: use a healthy pair, retry a pair that straddles an update, and stop without further reads or decoding if either sample clears the validity bit. Keeping this policy in the pure function lets the host test prove that a pair which both disagrees and reports lost contents stops rather than retries; sample comparison alone cannot decide that.
 
-The closing sweep found nineteen stale contracts, followed by seven more in a second round. They included a dependency tier that omitted both new capstones, a maintenance procedure naming the wrong gate, a probe-registration contract that did not hold for musl probes, a cppcheck suppression that hid all shadowed variables in `kernel.c` for a removed global, and an empty file committed through an accidental shell redirection.
+The closing sweep found nineteen stale contracts, followed by seven more in a second round. They included a dependency tier that omitted both new capstones, a maintenance procedure naming the wrong verification sequence, a probe-registration contract that did not hold for musl probes, a cppcheck suppression that hid all shadowed variables in `kernel.c` for a removed global, and an empty file committed through an accidental shell redirection.
 
 ## What was refuted
 
@@ -100,10 +100,10 @@ The guest still does not build the kernel. Milestone 20 listed three obstacles; 
 
 The exec limits are larger but remain finite. A sufficiently long link command returns `-E2BIG` without killing the caller.
 
-## The gate
+## Verification
 
-`make test` grew from 55 probes to 61 by adding `musl/clockmusl` for the date rather than `timemusl` sleep behavior, `musl/statmusl`, `musl/stampmusl`, `musl/execargmusl`, `musl/spawnmusl`, and the existing `musl/timemusl`. That last probe had been present in the tree and documentation but absent from the runner, allowing this milestone to overwrite it without a failure. The gate also gained `make make-test`, while `make deps DEPS=full` now builds the compiler and make that it previously omitted.
+`make test` grew from 55 probes to 61 by adding `musl/clockmusl` for the date rather than `timemusl` sleep behavior, `musl/statmusl`, `musl/stampmusl`, `musl/execargmusl`, `musl/spawnmusl`, and the existing `musl/timemusl`. That last probe had been present in the tree and documentation but absent from the runner, allowing this milestone to overwrite it without a failure. The verification list also gained `make make-test`, while `make deps DEPS=full` now builds the compiler and make that it previously omitted.
 
-The gate ran once after `make distclean` emptied the tree, rebuilding musl, busybox, dropbear, tcc, and pdpmake from their tarballs: `make full`, `make verify-style`, `make verify-host` with 19 host boundary tests, `make test` with 61 of 61 probes, `make tcc-test`, `make make-test`, `make ssh-test`, `make account-test`, `make shutdown-test`, `make login-test`, `make ping-test`, `make crash-test`, `make test-disk`, `make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`, `make cred-persist-test`, and `make test-noentropy`. Every target passed.
+The final verification ran once after `make distclean` emptied the tree, rebuilding musl, busybox, dropbear, tcc, and pdpmake from their tarballs: `make full`, `make verify-style`, `make verify-host` with 19 host boundary tests, `make test` with 61 of 61 probes, `make tcc-test`, `make make-test`, `make ssh-test`, `make account-test`, `make shutdown-test`, `make login-test`, `make ping-test`, `make crash-test`, `make test-disk`, `make test-disk-ahci`, `make persist-test`, `make persist-test-ahci`, `make cred-persist-test`, and `make test-noentropy`. Every target passed.
 
-Both capstones ran within that gate. `make tcc-test` compiled a program and an in-house tool in the guest, then verified rejection of four unsupported output forms. `make make-test` built a program from a makefile written at the prompt, rebuilt only changed inputs, did nothing when inputs were unchanged, rebooted, and found the persisted times unchanged.
+Both capstones ran in that sequence. `make tcc-test` compiled a program and an in-house tool in the guest, then verified rejection of four unsupported output forms. `make make-test` built a program from a makefile written at the prompt, rebuilt only changed inputs, did nothing when inputs were unchanged, rebooted, and found the persisted times unchanged.
