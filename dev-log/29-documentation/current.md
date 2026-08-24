@@ -7,10 +7,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual documentation files, all subsystem passes, the historical collection pass, and the first five whole-project checks are complete.
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
-* Current document: `vendor/pdpmake/Readme.md`.
-* Original and current forms read whole for this pass: yes. The file has 90 lines.
-* Material claims: the pdpmake version and digest, stamp and build lifecycle, platform macros, recipe execution, serial `-j` behavior, guest makefiles, staged paths, update procedure, and verification.
-* Known question: the verification section uses lowercase `ish` for the component. Reopen `ish/Readme.md` as narrow evidence before editing it.
+* Current document: `rach2/sys/fs/synthfs.Readme.md`.
+* Original and current forms read whole for this pass: yes. The file has 107 lines.
+* Material claims: synthetic path routing, devfs registry and ptys, raw disk windows, procfs contents and identities, snapshot lifetime, and verification.
+* Planned sections: Raw disk windows and Snapshot lifetime. No document edit is in progress. Use the descriptor subsystem's established term `open-file description` consistently.
 
 ## Bounded batches
 
@@ -21,6 +21,7 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Evidence checked
 
+* `rach2/sys/fs/fd.h` defines the shared object as an `Open-file description (OFD)` and uses `open-file description` throughout its contract and field comments.
 * `ish/Readme.md` confirms that `ISH` names the component; lowercase `ish` remains correct for paths, binaries, commands, and source names.
 * The integration Readmes consistently call the digest algorithm `SHA-256`; lowercase `sha256` is reserved for command names and identifiers.
 * `CLAUDE.md` now uses `ISH` and `SHA-256` in commit `4227fb6`; `Readme.md` uses the current product names in commit `db7e6a9`.
@@ -28,13 +29,13 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Boundary
 
-* Finish `vendor/pdpmake/Readme.md` under the one-file procedure. Do not edit another current document with it.
+* Finish `rach2/sys/fs/synthfs.Readme.md` under the one-file procedure before resuming the collection check.
 * Do not fact-check or rename historical `dev-log/` terminology or begin the complete milestone diff review early.
 
 ## Exact next action
 
-The isolated diff, banned-prose check, direct ASCII check, repository text check, `git diff --check`, and `make verify-style` pass. Stage only `vendor/pdpmake/Readme.md` and this checkpoint, review the staged paths, content, and identity, and commit.
+Read the narrow descriptor definition in `rach2/sys/fs/fd.h`, correct the three terminology variants, and run the file checks.
 
 ## Intended commit boundary
 
-* `vendor/pdpmake/Readme.md` and the milestone checkpoint only.
+* `rach2/sys/fs/synthfs.Readme.md` and the milestone checkpoint only.
