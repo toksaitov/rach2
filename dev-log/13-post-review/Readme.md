@@ -1,67 +1,19 @@
 # 13-post-review: work after the milestone-12 review
 
-Milestone 12 retired the whole-system production-readiness review. The changes
-since are small, self-contained follow-ups made directly on `master`, not a new
-milestone: a build change, a console feature, a run-script fix, and the fixes
-from an independent review of the disk layer. This record is the in-repo anchor
-for where the tree stands now, so a fresh reader or agent picking up the
-directory (with no access to the previous machine's notes) can tell what
-changed after milestone 12 and why.
+Milestone 12 completed the whole-system production-readiness review. The changes since then are small, self-contained follow-ups made directly on `master` rather than a new milestone: a build change, a console feature, a run-script fix, and fixes from an independent disk-layer review. A reader without the previous machine's notes can use this record to learn what changed after milestone 12 and why.
 
 ## The changes
 
-* Full BusyBox applet set. `vendor/busybox/rach2.config` moved from a
-  hand-curated minimal list (29 applets) to BusyBox's stock `defconfig` (327
-  applets: the `vi` and `sed` editors, `awk`, `find`, `tar`/`gzip`, `grep`, and
-  the full coreutils), with only the applets that need Linux-only kernel headers
-  or syscalls Rach2 does not provide turned off (the VT console tools, the
-  netlink `ip`/`ifconfig` family, loop/MTD/RAID/i2c, `mkfs.*`, and `free`/`uptime`
-  which want `sysinfo`). The rationale and the disabled set live in
-  `vendor/busybox/Readme.md`. `BUSYBOX_EXEC_PATH` stays `/bin/busybox` because
-  Rach2 has no `/proc/self/exe`, so a regular (non-NOEXEC) applet re-execs the
-  real binary instead of failing as "not found."
+* Full BusyBox applet set. `vendor/busybox/rach2.config` changed from a hand-selected set of 29 applets to BusyBox's stock `defconfig` with 327 applets. The new set includes the `vi` and `sed` editors, `awk`, `find`, `tar`/`gzip`, `grep`, and the complete coreutils. Applets that require Linux-only kernel headers or unsupported syscalls remain disabled: the VT console tools, the netlink `ip`/`ifconfig` family, loop/MTD/RAID/i2c, `mkfs.*`, and `free`/`uptime`, which require `sysinfo`. `vendor/busybox/Readme.md` records the rationale and disabled set. `BUSYBOX_EXEC_PATH` remains `/bin/busybox` because Rach2 lacks `/proc/self/exe`; a regular non-NOEXEC applet therefore re-executes the binary instead of failing as "not found."
 
-* A VT100/ANSI interpreter on the VGA text console. `k_putc`
-  (`rach2/sys/kio.c`) understood only BS, HT, LF, and CR and printed every other
-  control byte as `?`, so a line editor or `vi` on the QEMU window rendered the
-  `ESC [` cursor and erase sequences as literal garbage; the serial console
-  worked only because the host terminal interpreted them. `k_putc` now runs a
-  small escape-sequence state machine (cursor motion, erase, SGR color,
-  save/restore, and it swallows the alternate-screen and query sequences), so
-  backspace, BusyBox line editing, and full-screen `vi` render in the window.
-  The kernel Readme (`rach2/Readme.md`) notes the capability.
+* VT100/ANSI interpretation on the VGA text console. `k_putc` in `rach2/sys/kio.c` previously recognized only BS, HT, LF, and CR, and printed every other control byte as `?`. A line editor or `vi` in the QEMU window therefore displayed the `ESC [` cursor and erase sequences as text. The serial console worked because the host terminal interpreted those sequences. `k_putc` now uses a small escape-sequence state machine for cursor motion, erase, SGR color, and save and restore operations. It also consumes alternate-screen and query sequences. Backspace, BusyBox line editing, and full-screen `vi` now render in the QEMU window. `rach2/Readme.md` documents the capability.
 
-* `run_from_disk.sh` SSH forward. The script set its `NET_HOSTFWD` default to
-  `hostfwd=tcp::2222-:22` after sourcing `qemu_devices.sh`, whose own
-  `8080 -> 80` default had already set the variable, so the 2222 default never
-  took effect and SSH to port 2222 was refused. The default now runs before the
-  source. `run_from_disk.sh` forwards host 2222 to guest 22; override with
-  `NET_HOSTFWD`.
+* `run_from_disk.sh` SSH forwarding. The script set its `NET_HOSTFWD` default to `hostfwd=tcp::2222-:22` after sourcing `qemu_devices.sh`. That script had already assigned its own `8080 -> 80` default, so the port 2222 default never took effect and SSH connections to port 2222 were refused. The assignment now precedes the source operation. `run_from_disk.sh` forwards host port 2222 to guest port 22; `NET_HOSTFWD` overrides the default.
 
-* Disk-layer hardening from an independent review, ahead of a real-hardware
-  deployment. The AHCI command path now checks the byte count the HBA reports
-  (`prdbc`) against the request, so a transfer that completes short without an
-  error status fails instead of passing; unchecked, a short write that
-  `pc_sync` then marked clean was silent data loss. The page-cache window
-  probe scans every PCI bus the driver discovery scans, not bus 0 alone, so a
-  memory BAR behind a bridge cannot share addresses with the window. The ATA
-  probe fast-fails a floating bus reading 0xFF (an absent drive on most real
-  hardware) instead of spinning out the watchdog. All three are invisible on
-  QEMU, the same class the milestone 11 audit hunted.
+* Disk-layer corrections from an independent review before deployment on physical hardware. The AHCI command path now compares the HBA's reported byte count (`prdbc`) with the request. A short transfer without an error status now fails; otherwise, `pc_sync` could mark a short write clean and lose data without an error. The page-cache window probe now scans every PCI bus examined during driver discovery rather than only bus 0, so a memory BAR behind a bridge cannot overlap the window. The ATA probe immediately rejects a floating bus that reads 0xFF, which usually indicates an absent drive on physical hardware, rather than waiting for the watchdog. QEMU does not expose any of these cases. Milestone 11 examined the same kind of hardware-only defect.
 
-* Machine-speed calibration in the test tooling, found when the tree moved to
-  a slower host. `crash_test.sh` gates each phase on a serial token instead of
-  a fixed sleep (the kernel's `halt` now prints `halt: system halted` on
-  serial after the clean-unmount flush, so the script waits for evidence, not
-  time), and `runtests.py` gives boot-to-shell its own `--boottmo` window
-  (60 s) separate from the per-probe step timeout. Both scripts previously
-  raced the host: red on a loaded or slow machine, green on the machine the
-  timings were written on.
+* Test-tool calibration for machine speed, added after the tree moved to a slower host. `crash_test.sh` now waits for a serial token at each phase instead of using a fixed delay. The kernel's `halt` command prints `halt: system halted` on serial after the clean-unmount flush, so the script waits for that result. `runtests.py` now gives the boot-to-shell step a separate 60 s `--boottmo` limit instead of using the per-probe step timeout. Both scripts previously depended on host timing and could fail on a loaded or slow machine while passing on the machine for which the delays were chosen.
 
 ## Current state
 
-HEAD is `master`. The base OS, the BusyBox/Dropbear/Doom capstones, and the
-verify gates (`make verify-style`, `make verify-host`) are green. To continue,
-read `CLAUDE.md` (the normative project policy) first, then this dev-log for the
-history and the owning component Readme for the code you touch; commit in scoped
-one-line units in the repo's house style, with no attribution of any kind.
+HEAD is `master`. The base OS and the BusyBox, Dropbear, and Doom end-to-end tests pass, as do `make verify-style` and `make verify-host`. Before continuing, read `CLAUDE.md`, this development log, and the owning component Readme. Commit each change as a scoped one-line unit in the repository's style, without attribution.

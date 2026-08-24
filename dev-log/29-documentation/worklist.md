@@ -108,16 +108,16 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 
 ### Milestones 9 through 16
 
-* [ ] `dev-log/09-audit/Readme.md`
-* [ ] `dev-log/09-audit/plan.md`
-* [ ] `dev-log/10-ahci/Readme.md`
-* [ ] `dev-log/10-ahci/plan.md`
-* [ ] `dev-log/11-audit/Readme.md`
-* [ ] `dev-log/11-audit/plan.md`
-* [ ] `dev-log/12-review/Readme.md`
-* [ ] `dev-log/12-review/plan.md`
-* [ ] `dev-log/13-post-review/Readme.md`
-* [ ] `dev-log/14-multiuser/Readme.md`
+* [x] `dev-log/09-audit/Readme.md`
+* [x] `dev-log/09-audit/plan.md`
+* [x] `dev-log/10-ahci/Readme.md`
+* [x] `dev-log/10-ahci/plan.md`
+* [x] `dev-log/11-audit/Readme.md`
+* [x] `dev-log/11-audit/plan.md`
+* [x] `dev-log/12-review/Readme.md`
+* [x] `dev-log/12-review/plan.md`
+* [x] `dev-log/13-post-review/Readme.md`
+* [x] `dev-log/14-multiuser/Readme.md`
 * [ ] `dev-log/14-multiuser/plan.md`
 * [ ] `dev-log/15-privilege/Readme.md`
 * [ ] `dev-log/15-privilege/plan.md`

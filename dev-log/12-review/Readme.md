@@ -1,146 +1,33 @@
 # Milestone 12: the whole-system production-readiness review
 
-Eleven milestones built the OS; this one tries to break it. Where `06-review`,
-`09-audit`, and `11-audit` each audited the slice their predecessor had just
-added, this review takes the whole system as its subject: the boot path and the
-traps, physical memory and paging, the page cache, the block layer and KRFFS, the
-system-call ABI, process and signal and job-control lifecycle, the fd and OFD
-layer, the TTY and pty line discipline, wait queues and poll and pipes, the entire
-network stack from the socket layer down through TCP to the RTL8139, the audio
-drivers, the display and the peripherals, the freestanding library and the
-CSPRNG, the in-house userland, the KRFFS host tooling, and the trust boundary
-itself, consolidated. It is the production-readiness pass: the question is no
-longer "does the new code work" but "where does the finished system fail when it
-is pushed past the paths the green probes walk."
+After eleven implementation milestones, this review examined the whole system rather than only the preceding milestone. Its scope included the boot path and exceptions, physical memory and paging, the page cache, block layer and KRFFS, the system-call ABI, process, signal, and job-control lifecycles, the fd and OFD layer, the TTY and pty line discipline, wait queues, polling, pipes, the network stack from sockets through TCP to RTL8139, audio, display and peripherals, the freestanding library and CSPRNG, in-house userland, KRFFS host tools, and the trust boundary. Unlike `06-review`, `09-audit`, and `11-audit`, it tested the completed system beyond the paths exercised by the passing probes.
 
 ## The method
 
-Thirty risk-ordered phases (`P0` through `P29`), each run in the discipline the
-prior audits settled on and the plan (`plan.md`, built with Codex from a survey of
-the whole surface) lays out. A phase fans out parallel auditors, one per concern
-cluster; a separate adversarial verifier tries to refute every candidate, defaulting
-to refuted when uncertain; and then Codex re-reads the phase independently. Only a
-confirmed finding is fixed, each in a scoped one-line commit, and the global gate
-(`verify-style` 8/8, `verify-host`, `make test`, the disk and persistence probes,
-`check-sources`) holds green at every step. Where a phase licensed it, the fix
-extended a test or rewrote the owning Readme in the same commit.
+The plan in `plan.md`, built with Codex from a whole-system survey, divided the review into thirty phases ordered by risk (`P0` through `P29`). Each phase assigned one group of concerns to each parallel auditor. A separate adversarial verifier tried to refute every candidate finding and treated uncertainty as a refutation, after which Codex read the phase independently. Only confirmed findings received fixes, each in a scoped commit with a one-line message. The complete checks passed after every change: `verify-style` 8/8, `verify-host`, `make test`, the disk and persistence probes, and `check-sources`. When a phase allowed it, the same commit extended a test or rewrote the owning Readme.
 
-The independent Codex re-verify earned its place in every phase, and twice it was
-load-bearing in a way the prior audits had only hinted at. It repeatedly rejected a
-phase the fan-out had passed and named a real gap the parallel readers had missed:
-the socket and signal error-return paths, an integer overflow, a closing-state
-transition. More striking, in the peripherals phase it overturned a refutation. The
-fan-out's adversarial verifier had looked at the 8259 bring-up and declared the
-early-unmask concern unreachable; Codex, re-auditing the same code, constructed the
-reachable case and proved it real. An audit that trusted its own refutations would
-have shipped that bug. And the lesson the last audit closed on, keep a reader who
-did not write the fix, held twice over here: Codex caught two regressions in the
-review's own retransmit fix during the TCP phase, and the closing retirement review
-held the milestone three rounds on the same code, each round naming a real residual
-the per-phase passes had missed. A close detaches the socket before the FIN is even
-sent, so the receive states could acknowledge nothing and stall, and a simultaneous
-close could land in the wrong state; only with those closed did it retire.
+The independent Codex review changed the result in several phases. It rejected phases accepted by the parallel readers after finding missed socket and signal error returns, an integer overflow, and a closing-state transition. In the peripherals phase, it overturned the adversarial verifier's conclusion that the early-unmask case in 8259 initialization was unreachable. Codex constructed a reachable case and confirmed the defect. During the TCP phase, Codex also found two regressions in the review's retransmit fix. The final review repeated three times on the same code because each round found another residual defect missed by the phase reviews. A close detached the socket before sending the FIN, preventing receive states from acknowledging data and causing a stall. A simultaneous close could also enter the wrong state. The milestone completed after both defects were fixed.
 
 ## What it found
 
-About fifty confirmed defects across the substantive phases, plus a clean bill on
-the two phases that matter most for the negatives: the hostile-packet parsing and
-the ring-3 trust boundary. The pattern the earlier audits noticed holds and
-sharpens here. The severity lives where QEMU and the passing probes never go: on the
-hangup path, in the connection-closing states, on the error returns, at the real
-hardware edges, and behind the spellings of a path or an option no normal run
-types. The network stack, the largest and least-exercised subsystem, held the most.
+The substantive phases confirmed about fifty defects. The hostile-packet parsing and ring-3 trust-boundary phases found none. The most severe defects were outside QEMU and the passing probes: hangup handling, connection-closing states, error returns, hardware-specific cases, and unusual path or option spellings. The network stack was the largest and least exercised subsystem, and contained the most defects.
 
-The highest-value finds, by where they hid:
+The most important findings were:
 
-* TCP, the connection-closing states and the send side. `tcp_rx` consumed a FIN in
-  `FIN_WAIT_1`/`FIN_WAIT_2` with no in-order sequence check, so a duplicate or
-  out-of-order FIN corrupted `rcv_nxt`; those states delivered no data at all, so a
-  peer that kept sending after our close lost its bytes and was mis-acknowledged;
-  a segment carrying both data and a FIN advanced `rcv_nxt` over a truncated
-  payload, signalling EOF before the data was delivered; a retransmit timer fired
-  for a close with unacknowledged data resent only the FIN, never the lost data, so
-  the teardown stalled until giveup; and the send path returned `0` on a full ring
-  with no backpressure, so a blocking writer livelocked and `POLLOUT` lied. The fixes
-  rebuild the closing-state receive path (deliver in order, gate the FIN on its data,
-  validate the ACK, re-ACK a retransmission), give the send a real blocking and
-  `-EAGAIN` discipline woken when an ACK frees ring space, and surface a connection
-  error through `SO_ERROR` and `POLLERR`. Codex's re-verify caught the retransmit
-  fix counting queued-but-unsent bytes as in flight and the closing states failing
-  to advance the send-ring acknowledgement, both fixed before close. The whole
-  rework is verified live: `tcptest` and `sockettest` pass against a host echo
-  server over SLIRP, and the SSH capstone runs the real stack end to end.
+* TCP closing states and sending. `tcp_rx` accepted a FIN in `FIN_WAIT_1`/`FIN_WAIT_2` without checking that its sequence was in order, so a duplicate or out-of-order FIN corrupted `rcv_nxt`. Those states discarded all data, causing a peer that sent after the local close to lose bytes and receive an incorrect acknowledgement. A segment containing data and a FIN advanced `rcv_nxt` past a truncated payload and reported EOF before delivering the data. When a close had unacknowledged data, its retransmit timer resent only the FIN, not the lost data, and teardown stalled until giveup. A full send ring returned `0` without backpressure, causing a blocking writer to livelock while `POLLOUT` reported writable. The fixes deliver closing-state data in order, process the FIN after its data, validate ACKs, acknowledge retransmissions again, block sends or return `-EAGAIN` until an ACK releases ring space, and report connection errors through `SO_ERROR` and `POLLERR`. Codex found two defects in the retransmit fix: it counted queued but unsent bytes as in flight, and the closing states did not advance the send-ring acknowledgement. Both were fixed before completion. Live tests confirmed the result: `tcptest` and `sockettest` passed against a host echo server over SLIRP, and the SSH end-to-end test exercised the stack.
 
-* The PS/2 keyboard, before its handler exists. `init_pic` unmasked every IRQ line
-  and `init_isr` enabled interrupts before the keyboard handler was installed, so an
-  early IRQ 1, a keystroke or a byte the BIOS left in the controller, was
-  acknowledged without reading port `0x60` and stranded the controller's output
-  buffer, leaving the keyboard dead. This is the finding the fan-out refuted and
-  Codex rescued. IRQ 1 now stays masked until its handler is in place; the 8259
-  latches the held request, so a buffered byte is delivered the moment it unmasks.
+* PS/2 keyboard initialization. `init_pic` unmasked every IRQ line and `init_isr` enabled interrupts before installing the keyboard handler. An early IRQ 1, from either a keystroke or a byte left by the BIOS, was acknowledged without reading port `0x60`. The byte remained in the controller's output buffer and the keyboard stopped responding. The parallel review had refuted this finding, but Codex confirmed a reachable case. IRQ 1 now remains masked until the handler is installed. The 8259 retains the pending request and delivers the buffered byte after the line is unmasked.
 
-* The line discipline, on hangup. A raw-mode read consulted only `VMIN` and never
-  the end-of-file a hangup sets, so a raw pty slave whose master had closed blocked
-  forever instead of returning `0`, the exact path a dropbear SSH session takes. A
-  pty slave read ignored `O_NONBLOCK`, and a canonical slave whose master had closed
-  read EOF once and then blocked rather than reporting persistent end-of-file. A
-  control character set to zero (the disable convention) still matched an incoming
-  NUL, so disabling an interrupt key turned every NUL into a spurious signal. All now
-  read the way a real terminal does.
+* Terminal hangup behavior. A raw-mode read checked only `VMIN` and ignored the end-of-file state set by a hangup. A raw pty slave therefore blocked forever instead of returning `0` after its master closed, which is the path used by a Dropbear SSH session. A pty slave read also ignored `O_NONBLOCK`, while a canonical slave reported EOF once after its master closed and then blocked instead of continuing to report EOF. A zero control character, the disabled value, still matched an incoming NUL and caused a signal. These reads now follow terminal hangup and disabled-control-character behavior.
 
-* The path classifier, behind a spelling. The synthetic `/dev` and `/proc` mounts
-  are decided lexically, while KRFFS collapses `..` on resolution, so a name like
-  `/x/../proc` classified as a real file and could create a KRFFS node that shadowed
-  the synthetic mount; `execve` reached KRFFS without classifying at all. The kernel
-  now canonicalizes an absolute path once, before classification, and `execve`
-  classifies like every other path syscall.
+* Path classification. The synthetic `/dev` and `/proc` mounts were selected lexically, while KRFFS collapsed `..` during resolution. A path such as `/x/../proc` was therefore classified as a KRFFS file and could create a node that shadowed the synthetic mount. `execve` reached KRFFS without classification. The kernel now canonicalizes each absolute path once before classification, and `execve` uses the same classification as the other path syscalls.
 
-* The host tooling, against a hostile path or image. `defrag.krffs` ran `fsck`
-  through `system()` with the image path concatenated into the shell string, so a
-  path with a shell metacharacter ran arbitrary commands; it now forks and execs
-  with the path as a distinct argument. The shared node-bounds check accepted a node
-  whose header straddled the end of the mapping, and `fsviz` and `fsck` walked a
-  corrupt or non-KRFFS image without a magic check or an iteration cap; all now fail
-  closed.
+* Host tools processing malicious paths or images. `defrag.krffs` invoked `fsck` through `system()` after concatenating the image path into a shell command, so a shell metacharacter in the path executed arbitrary commands. It now forks and executes the program with the path as a separate argument. The shared node-bounds check accepted a node whose header crossed the end of the mapping. `fsviz` and `fsck` also traversed a corrupt or non-KRFFS image without checking its magic value or limiting iterations. All three cases now report failure.
 
-The rest spread across the phases: a default handler for the CPU exceptions that had
-none; a per-fork kernel-stack leak fixed with a real stack arena; a stale-node
-use-after-free across the fd operations; a relocate-on-grow that dropped a KRFFS
-node's parent and a mount that never validated the on-disk chain; a `select` that
-busy-spun on a hangup-only write descriptor and a timed `poll` that lost its timeout
-when another process was runnable; a UDP datagram read out from under the receive
-IRQ; a listener that leaked its accept queue and a second `listen` or `connect` that
-leaked the old control block; an SB16 stereo desync and an unbounded HDA wall-clock
-spin; a `k_itoa` that negated `INT_MIN` in a signed `int` and a `k_strreverse` that
-walked off an empty string, each now caught by a host test; an init that respawned a
-crash-looping shell at full CPU; and three gate scripts that could report a false
-green. Every fix is its own commit, and the larger structural debt the review
-surfaced but did not act on (the two oversize source files, a reproducible-build
-pin for the Docker-built ISO, a handful of host tests that the 32-bit-pointer host
-build cannot run) is recorded for a focused follow-up rather than rushed in at the
-tail of a thirty-phase audit.
+The other phases added a default handler for previously unhandled CPU exceptions; replaced a per-fork kernel-stack leak with a stack arena; fixed a stale-node use-after-free in fd operations; preserved a KRFFS node's parent during relocation and validated the on-disk chain during mounting; stopped `select` from busy-spinning on a hangup-only write descriptor and preserved a timed `poll` timeout while another process was runnable; protected a UDP datagram from the receive IRQ; released a listener's accept queue and the old control block on repeated `listen` or `connect`; corrected SB16 stereo desynchronization and bounded an HDA wall-clock wait; added host tests for `k_itoa` negating `INT_MIN` in a signed `int` and `k_strreverse` reading beyond an empty string; limited respawning of a crash-looping shell; and fixed three verification scripts that could report success without performing their checks. Each fix has its own commit. Follow-up work records two oversized source files, a reproducible-build pin for the Docker-built ISO, and host tests that cannot run in the 32-bit-pointer host build.
 
-The two negative phases came back clean and are worth stating as such. Every layer
-of the inbound packet path, Ethernet through IP, UDP, ARP, and ICMP, and the RTL8139
-receive ring, bounds its reads against the captured length before trusting a field;
-no runt, oversized-length, header-underflow, or ring-wrap frame reaches an
-out-of-bounds access. And an independent attempt to construct a ring-3 to ring-0
-escape found none: the user-copy helpers reject an address-plus-length wrap and a
-crossing of the page-cache window, the raw framebuffer and audio hand-offs are
-bounded, the page-cache fault is gated on supervisor mode, and the CSPRNG fails
-closed. The one change the security phase made was defensive: `vm_prefault_range`
-now self-defends against the wrap its callers already reject.
+The two negative phases found no defects. Every inbound packet layer, from Ethernet through IP, UDP, ARP, and ICMP to the RTL8139 receive ring, checks reads against the captured length before using a field. Runt frames, oversized lengths, header underflows, and ring-wrapped frames do not reach an out-of-bounds access. An independent attempt to construct a ring-3 to ring-0 escape also found none. The user-copy helpers reject address-plus-length wrapping and crossings into the page-cache window; the raw-framebuffer and audio transfers are bounded; page-cache faults require supervisor mode; and the CSPRNG reports failure when necessary. The security phase added one defensive check: `vm_prefault_range` now rejects the wrap already rejected by its callers.
 
 ## Verification
 
-The global gate held at every phase and once more at close: `make verify-style`
-8/8, `make verify-host` over fifteen host seam tests, `make test` at thirty-five
-boot probes, `make check-sources`, and the IDE and AHCI disk, persistence, crash,
-and stress probes. The trust-boundary and parsing fixes are revert-verified, the
-test reintroducing the bug confirmed to fail before the fix. The network rework is
-verified live against a host echo server, not just by reasoning. And the capstone
-matrix runs the finished system end to end: the SSH server authenticates a public
-key and runs busybox `ash` over a pty to a clean disconnect, busybox is the live
-login shell, and Doom loads its WAD and reaches its refresh daemon and play loop.
-The vendored musl, BusyBox, Dropbear, and Doom trees stayed out of the diff
-throughout.
+The complete checks passed after every phase and at completion: `make verify-style` at 8/8, `make verify-host` over fifteen host interface tests, `make test` with thirty-five boot probes, `make check-sources`, and the IDE and AHCI disk, persistence, crash, and stress probes. Reverting the trust-boundary and parsing fixes caused their tests to fail, confirming that the tests exercised the defects. A host echo server provided live verification of the network changes. The end-to-end tests authenticated an SSH public key, ran BusyBox `ash` over a pty through a clean disconnect, used BusyBox as the login shell, and ran Doom through WAD loading, the refresh daemon, and the play loop. The vendored musl, BusyBox, Dropbear, and Doom trees remained outside the diff.
