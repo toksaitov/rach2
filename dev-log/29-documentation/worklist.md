@@ -180,7 +180,7 @@ An edit found during these passes returns to the one-file procedure. Finish one 
 * [x] Build, verification, and git instructions agree across current documents
 * [x] Relative Markdown links and referenced tracked paths checked
 * [x] Make targets and commands checked against Makefiles and `make help`
-* [ ] Repeated counts, limits, versions, and artifact names traced to their sources
+* [x] Repeated counts, limits, versions, and artifact names traced to their sources
 * [ ] Terminology and document boundaries checked across the repository
 * [ ] Complete documentation diff read in repository order, one edited file at a time
 * [ ] Changed-path list contains only in-scope Markdown and milestone control files
