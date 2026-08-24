@@ -175,7 +175,7 @@ Run these checks after each applicable phase and at milestone completion:
 
 * `make verify-style` passes 8/8, and `make verify-host` passes.
 * The module-path `make test` 28/28 unchanged.
-* A boot, an SSH session (`ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` to an interactive busybox ash, `rc=0`), and Doom.
+* A boot, an SSH session (`ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost` to an interactive BusyBox ash, `rc=0`), and Doom.
 * The AHCI disk boots and passes its probes. `make test-disk-ahci`, persistence, and stress tests over AHCI pass the same `BLOCKPROBE OK`-style tokens through the AHCI HBA.
 * The vendored musl/BusyBox/Dropbear trees stay untouched and out of the diff.
 * The default RAM-module boot remains byte-identical. AHCI adds only a second producer of `block0` selected by a command-line flag; the RAM-disk and `if=ide` ATA paths remain unchanged. The ATA `test-disk`, `persist-test`, and `stress-test` targets pass.

@@ -91,7 +91,10 @@ This file is a bounded resume map for the one documentation file in progress. It
 * The complete focused `2758e1e` diff for `dev-log/28-polish/plan.md` has been read. It capitalizes Dropbear in one ordinary-prose sentence and changes no historical fact. No further correction was needed. All focused historical correction diffs are now reviewed.
 * The collection-wide ASCII check found one remaining non-ASCII sequence in `dev-log/02-networking-and-userland/plan.md`: line 86 uses an em dash in ordinary explanatory prose. The file has 339 long lines and 98,161 bytes. Read it whole in nine bounded sections before replacing that punctuation without changing the historical statement.
 * The complete 339-line `dev-log/02-networking-and-userland/plan.md` has been read in nine bounded sections. The line 86 em dash is replaced with a semicolon without changing the toolchain statement. The banned-prose check, ASCII check, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
-* Intended commit boundary: this one historical ASCII correction and the milestone checkpoint. Resume the collection-wide checks after a clean commit.
+* The ASCII correction is committed as `e51b6bf`. Its file checks, `make verify-style`, staged path and content review, and identity check passed; the tree was clean after the commit.
+* The repeated naming search found another ordinary-prose inconsistency. Current file: `dev-log/10-ahci/plan.md`, 198 lines and 29,437 bytes. Its only lowercase project-name match is `interactive busybox ash` on line 178; the surrounding backticked SSH command does not make the project name itself a command token. Read the file whole in four bounded sections before correcting it to BusyBox.
+* The complete file has been read in four bounded sections, and the one project-name use is corrected to BusyBox without changing the SSH command or result. The banned-prose check, ASCII check, complete one-file diff review, `git diff --check`, and `make verify-style` passed.
+* Intended commit boundary: this one historical naming correction and the milestone checkpoint. Resume the remaining lowercase-name review after a clean commit.
 
 ## Boundary
 
@@ -100,4 +103,4 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Commit the one historical ASCII correction and checkpoint, then resume the collection-wide checks.
+Commit the AHCI plan naming correction with the checkpoint, then resume the remaining lowercase-name review.
