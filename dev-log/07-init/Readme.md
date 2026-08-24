@@ -1,73 +1,24 @@
-# Milestone 7: a persistent reaping init and a gated rescue shell
+# Milestone 7: persistent init and rescue mode
 
-Two coupled changes turn the kernel's built-in debug shell from the home you land
-in into a deliberate rescue mode, and give the system a real PID 1.
+Two related changes restrict the kernel's built-in debug shell to rescue use and give the system a persistent PID 1 that reaps processes.
 
 ## The problem
 
-The kernel had no init. The debug shell was the home: it `exec`ed a shell as a
-transient init, and on that shell's exit it jumped back to itself. Two things
-followed. A normal boot dropped to an unauthenticated kernel shell the moment you
-exited your login shell. And nothing reaped orphans: when a process exited
-without waiting on its children, the kernel notified only the one parent slot and
-never reparented the children, so an orphan's parent pid named a freed slot, no
-live process ever matched it in `do_wait`, and its frames, page directory, and
-zombie slot leaked against `MAX_PROCS = 16`. Dropbear forking a shell per SSH
-session was a real trigger; the review milestone deferred the fix as needing a
-persistent reaping init, which this milestone builds.
+The kernel had no init. Its debug shell `exec`ed another shell as a temporary init and resumed when that shell exited. A normal boot therefore exposed an unauthenticated kernel shell after the login shell exited. The kernel also did not reap orphans. When a process exited without waiting for its children, the kernel notified only its parent slot and did not reparent the children. An orphan's parent pid then referred to a freed slot, no live process matched it in `do_wait`, and the orphan's frames, page directory, and zombie slot consumed the `MAX_PROCS = 16` limit. Dropbear triggered this defect by forking one shell per SSH session. The review milestone deferred the fix until the system had a persistent reaping init; this milestone added one.
 
 ## The design
 
-The design was explored with an independent Codex pass and a four-stance panel
-(userland init, kernel-resident init, busybox init, first-principles), each
-critiqued adversarially. They converged, and the panel's critiques caught the two
-traps the naive versions hit (below).
+An independent Codex review compared four approaches: a userland init, a kernel-resident init, BusyBox init, and a first-principles design. The comparison selected one design and found two defects in its initial versions, described below.
 
-* **PID 1 is a small userland program, `utils/init.c`, staged at `/sbin/init`.**
-  It is the real Unix model and the clearest to teach: a `wait()` loop that reaps
-  whatever lands on it and respawns the login shell when that shell dies, in 30
-  lines. One binary serves both real images; it tries `/bin/sh` then `/ish`. A
-  kernel-resident init was rejected (PID 1 in ring 0 needs from-scratch trapframe
-  synthesis, the riskiest ABI code, to bury the one lesson worth teaching); a
-  busybox-init/inittab port was rejected (a second, larger project that churns the
-  vendored tree and teaches nothing about how init works).
-* **The kernel gains one mechanism: orphan reparenting.** `reparent_children` (in
-  `process.c`) walks the table on every death path and retargets the dier's
-  children onto `init_pid`, waking init to reap a child that is already a zombie.
-  This is the leak fix; it is the kernel's job, and init's `wait()` does the rest.
-* **A `rach2.rescue` kernel command line decides what init-exit MEANS, not whether
-  the debug shell exists.** Gating the shell's existence would break the test
-  harness, which drives the debug shell on the no-init test image. Instead: a
-  normal boot runs `/sbin/init` and a real init's death is a panic (the user chose
-  halt over respawn, which also keeps `init_pid` stable and reparenting trivially
-  correct); `rach2.rescue`, or an image with no init, makes the debug shell the
-  supervisor exactly as before. The harness passes no `-append` and needs no
-  change. The kernel reads the previously-ignored multiboot command line through a
-  small `sys/cmdline.c`, captured before the bump allocator can clobber it.
+* PID 1 is the small userland program `utils/init.c`, staged at `/sbin/init`. Its 30-line `wait()` loop reaps any process reparented to it and respawns the login shell when that shell exits. One binary serves both operating-system images; it tries `/bin/sh` and then `/ish`. A kernel-resident init was rejected because PID 1 in ring 0 would require new trapframe synthesis, adding risky ABI code to an otherwise simple lesson. A BusyBox init and inittab port was rejected as a larger second project that would change the vendored tree without explaining the init mechanism.
+* The kernel adds orphan reparenting. On every process death path, `reparent_children` in `process.c` walks the process table and assigns the exiting process's children to `init_pid`. It wakes init when a reparented child is already a zombie. The kernel performs reparenting, and init's `wait()` loop performs reaping.
+* The `rach2.rescue` kernel command-line option decides how the kernel handles init exit; it does not remove the debug shell. Removing the shell would break the test harness, which drives it on the test image that has no init. A normal boot runs `/sbin/init`, and init's death causes a panic. The user chose halt rather than respawn, which also keeps `init_pid` stable and reparenting simple. With `rach2.rescue`, or an image without init, the debug shell remains the supervisor. The harness passes no `-append` and requires no change. The kernel reads the previously ignored multiboot command line through `sys/cmdline.c`, capturing it before the bump allocator can overwrite it.
 
-## The two traps the panel caught
+## Problems found during design review
 
-* **The controlling-terminal handoff.** `exec_program` published the first user
-  process as the console's session owner. If init were that owner, the console
-  would be pinned to init forever and a spawned busybox ash, which checks
-  `tcgetpgrp` at startup, would `SIGTTIN`-stop itself. Fix: the console publish is
-  skipped for a real init, so the console stays leaderless; init's forked shell
-  does the getty dance (`setsid` then `ioctl(TIOCSCTTY)`) and claims it. ish, which
-  does no job control, would auto-claim on its first read, but busybox ash needs
-  the controlling terminal established before it runs, so the explicit `TIOCSCTTY`
-  is what makes both work.
-* **`exec_fail_destroyed` abandoned init.** It jumped to the debug shell for any
-  dier. On a normal boot a login shell whose `execve` failed after teardown would
-  have dropped to the debug shell. It now branches on whether the dier was init,
-  panicking a real init and never exposing the shell on a normal boot.
+* Controlling-terminal handoff: `exec_program` published the first user process as the console's session owner. If init owned the session, the console would remain assigned to init. A spawned BusyBox ash checks `tcgetpgrp` at startup and would stop itself with `SIGTTIN`. The kernel therefore skips console publication for init and leaves the console without a leader. The shell forked by init calls `setsid` and then `ioctl(TIOCSCTTY)` to claim it. ish has no job control and would claim the console on its first read, but BusyBox ash requires the controlling terminal before it starts. The explicit `TIOCSCTTY` makes both shells work.
+* Failure after destructive exec: `exec_fail_destroyed` previously jumped to the debug shell for any process. On a normal boot, a login shell whose `execve` failed after teardown would therefore expose the debug shell. The path now tests whether the failed process was init. It panics if init failed and never exposes the shell during a normal boot.
 
 ## Verification
 
-`make test` is 28 of 28 (a new `orphanprobe` is the leak proof: it forks orphans
-past `MAX_PROCS`, and reaps both the child and the reparented grandchild each
-round; pre-fix the grandchild leaks and the table wedges). os-simple boots
-`/sbin/init`, runs ish, and respawns it on exit without dropping to the debug
-shell; os-real boots busybox ash with a working controlling terminal; the SSH
-capstone still logs in over pubkey auth, with dropbear's per-session shells now
-reaped; `rach2.rescue` boots the debug shell; and the gate (`make verify-style`,
-`make verify-host`) stays green.
+`make test` passes 28 of 28 tests. The new `orphanprobe` forks enough orphans to pass `MAX_PROCS`, then reaps both the child and reparented grandchild on each round. Before the fix, each grandchild leaked and eventually exhausted the process table. `os-simple` boots `/sbin/init`, runs ish, and respawns it on exit without exposing the debug shell. `os-real` boots BusyBox ash with a working controlling terminal. The end-to-end SSH test still authenticates with a public key, and init now reaps Dropbear's per-session shells. `rach2.rescue` boots the debug shell. `make verify-style` and `make verify-host` pass.

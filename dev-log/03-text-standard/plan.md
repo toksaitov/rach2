@@ -2,11 +2,11 @@
 
 ## Status
 
-Complete. Phases 0 through 8 were executed one at a time, each proved with `make verify-style` and `make verify-host` (plus a real boot and the SSH capstone where touched) and reviewed by an independent Codex pass with every finding fixed. The text-style check is now a hard gate (`8/8 text style`) in `tools/check.sh`. This file is the record of that refactor.
+Complete. Phases 0 through 8 ran one at a time. Each phase passed `make verify-style` and `make verify-host`, plus a boot and the end-to-end SSH test where applicable. An independent Codex review followed each phase, and every finding was fixed. The text-style check is now required (`8/8 text style`) by `tools/check.sh`. This file records the refactor.
 
 ## Purpose
 
-Every piece of written language in the repository should read as if one careful author wrote it. A student opening any file should learn from it, not wade through slop. This document defines the standard for prose in documentation, comments in source, and messages printed by tools and code, then lays out a phased, verifiable refactor that brings the existing tree to that standard and enforces it so it cannot regress.
+Written language in the repository should read as if one careful author wrote it. A student should be able to learn from any file without first sorting useful information from filler. This document defines the standard for documentation, source comments, and messages printed by tools and code. It also defines a phased, verifiable refactor of the existing tree and a check for later violations.
 
 ## Scope
 
@@ -14,7 +14,7 @@ In-house files only: the kernel (`rach2/`), the host tools (`krffs/`, `tools/`),
 
 ## Voice
 
-The target is the prose of the people who taught systems by writing it down well: Kernighan and Ritchie in The C Programming Language; Kernighan and Pike in The Practice of Programming and The Unix Programming Environment; W. Richard Stevens in Advanced Programming in the UNIX Environment and TCP/IP Illustrated; Knuth for precision. The Unix manual pages are the model for reference docs. Lions' Commentary on UNIX is the model for explaining kernel code to a student. The shared qualities: terse, exact, concrete; explain the part that is not obvious and stop; never reach for a slogan.
+The prose models are Kernighan and Ritchie in The C Programming Language; Kernighan and Pike in The Practice of Programming and The Unix Programming Environment; W. Richard Stevens in Advanced Programming in the UNIX Environment and TCP/IP Illustrated; and Knuth for precision. The Unix manual pages are the model for reference documentation. Lions' Commentary on UNIX is the model for explaining kernel code to a student. Their shared qualities are terse, exact, and concrete prose that explains the non-obvious part and stops.
 
 ## Prose in documentation
 
@@ -35,9 +35,9 @@ No em-dash, whether written as U+2014 or as a spaced `--`. Recast the sentence: 
 
 ## Vocabulary and voice
 
-Filler, slogans, and changelog phrasing are not allowed in stable text: phrases like "the crux", "for free", "by design", "belt-and-suspenders", marketing adjectives used as filler, and diary phrasing like "the reason is" or "next phase".
+Stable text excludes filler, slogans, and changelog phrasing. Examples include "the crux", "for free", "by design", "belt-and-suspenders", marketing adjectives used as filler, and diary phrases such as "the reason is" or "next phase".
 
-This is not enforced by a banned-word list. Greping for phrases is fragile: it raises false positives on ordinary words, and it never covers the real space of bad writing. Voice is judged, not greped. The author applies judgment when writing, and a review pass (the model and Codex) flags text that reads like a machine wrote it. The mechanical gate is reserved for objective checks that cannot misfire, described under Enforcement.
+This rule is not enforced by a banned-word list. Grepping for phrases raises false positives on ordinary words and cannot cover every form of bad writing. The author applies judgment while writing, and the model and Codex review text that reads as if a machine wrote it. Automated enforcement is reserved for the objective checks described below.
 
 ## Messages from tools and code
 
@@ -57,7 +57,7 @@ Probe success tokens such as `VMPROBE OK` are contracts read by the test harness
 
 Default: the explanation lives in a block comment immediately before the function, never inside the body. The body is made clear by naming and structure, not narrated.
 
-In-body comments are allowed only when something genuinely needs explaining at its exact line and cannot be named away: a deliberate hack or workaround, or a hardware or ABI fact. Even then the comment is written as documentation, one line, stating the fact. It never reads like a note to oneself or a reasoning trace. For example, `/* COM1 raises no receive interrupt; the timer polls it. */`, not a sentence about why the author chose to poll.
+In-body comments are allowed only when a fact must be explained at its exact line and cannot be expressed by a name: a deliberate hack or workaround, or a hardware or ABI fact. Even then, write one line of documentation that states the fact. It must not read like a note to oneself or a reasoning trace. For example, use `/* COM1 raises no receive interrupt; the timer polls it. */` rather than a sentence about why the author chose to poll.
 
 ### Header format
 
@@ -97,7 +97,7 @@ Example, rewritten from the current `schedule()` in `rach2/sys/proc/sched.c`, wh
      */
     void schedule(void)
 
-OPEN, doc generation: a generator is not built now. The structure above is enough for an index or an audit. Revisit a generator only if a real consumer appears.
+Deferred: no documentation generator is built now. The structure above is enough for an index or audit. Revisit generation only when a consumer needs it.
 
 ## CLAUDE.md and AGENTS.md
 
@@ -108,14 +108,14 @@ OPEN, doc generation: a generator is not built now. The structure above is enoug
     3. Text style: the voice, with the named exemplars, and a pointer to this standard.
     4. Comments: header-first, the narrow in-body exception.
     5. Messages: the component-prefixed format.
-    6. Ports: musl, BusyBox, Dropbear; pinned tarballs, sha gate, stamp files, muslgcc.
+    6. Ports: musl, BusyBox, Dropbear; pinned tarballs, SHA check, stamp files, muslgcc.
     7. Verification: make doctor, make verify-style, make verify-host; per-change review.
     8. Git: scoped commits, one logical unit, no attribution, no behavior change in a
        text-only cleanup, no vendored churn.
     9. Documentation discipline: docs describe current contracts; history lives in
        commits; one Readme per component, updated in the same change.
 
-`AGENTS.md` is one short file pointing Codex at `CLAUDE.md`. The gate fails if it stops doing so.
+`AGENTS.md` is one short file pointing Codex at `CLAUDE.md`. The check fails if that reference is removed.
 
 ## Enforcement
 
@@ -133,11 +133,11 @@ Two checks need a small parser rather than a grep:
 * In-body comments: a C-aware scan for comments between a function's braces. During migration a reviewed exception may carry a `STYLE: local-invariant` marker, audited by hand.
 * Header presence: enforced first on public (non-static) functions, later on subsystem-critical static ones.
 
-Voice, vocabulary, and whether a comment earns its place are judged in review, not gated. The checker runs advisory (warning, non-failing) until the tree is clean, then becomes a hard gate.
+Review decides prose, vocabulary, and whether a comment is necessary. The checker begins in advisory mode, where it warns but does not fail. Once the tree passes, the checker becomes required.
 
 ## Phased refactor
 
-Each phase changes text only, never behavior. Each ends with `make verify-style` and `make verify-host` green, a real boot and the SSH capstone where touched, a harsh independent Codex review of the phase with every finding fixed, and one scoped house-style commit with no attribution. Message-string changes are made in lockstep with any test or harness that reads them; probe success tokens are left alone. Voice is the one thing the gate cannot judge, so Codex review is its enforcement: every phase that touches prose or comments is read by Codex for slop and tone, not just correctness.
+Each phase changes text only, never behavior. Each phase passes `make verify-style` and `make verify-host`, plus a boot and the end-to-end SSH test where applicable. An independent Codex review follows, every finding is fixed, and the phase ends in one scoped house-style commit without attribution. Message strings change with any test or harness that reads them; probe success tokens stay unchanged. Automated checks cannot judge prose, so Codex reviews every phase that changes prose or comments for style as well as correctness.
 
     0. Land CLAUDE.md, AGENTS.md, and tools/textcheck.sh in advisory mode. Do the
        housekeeping below.
@@ -145,19 +145,19 @@ Each phase changes text only, never behavior. Each ends with `make verify-style`
        bullets to *, strip bold abuse, align tables.
     2. Vocabulary and voice: rewrite slogan and diary phrasing across comments,
        Markdown, shell, and Makefiles, by judgment.
-    3. Messages: remove slop from tool diagnostics and standardize the build-script
-       progress to the prefixed `component: action` form. The numbered verify gate and
-       the doctor status rows are deliberate aligned displays and keep their shape; the
-       kernel boot log already reads as `subsystem: event` and carries no slop, so it
-       stays. Probe success tokens and the [PASS]/[FAIL] markers are contracts, untouched.
-    4. Docs: rewrite the high-traffic Readmes (root, mk/, libc/, the kernel subsystem
+    3. Messages: remove filler from tool diagnostics and standardize the build-script
+       progress to the prefixed `component: action` form. The numbered verification
+       display and the doctor status rows are deliberately aligned and keep their shape.
+       The kernel boot log already reads as `subsystem: event` and needs no change.
+       Probe success tokens and the [PASS]/[FAIL] markers are contracts, untouched.
+    4. Docs: rewrite the frequently read Readmes (root, mk/, libc/, the kernel subsystem
        Readmes).
-    5. Foundation-era C comments: remove restating body comments, write real headers,
+    5. Foundation-era C comments: remove restating body comments, write useful headers,
        subsystem by subsystem.
     6. Newer dense C (the musl and build era): move broad explanations to headers, keep
        the ABI and POSIX facts.
     7. Header audit: extend from public functions to subsystem-critical static functions.
-    8. Flip the text checks from advisory to a hard gate.
+    8. Make the text checks required rather than advisory.
 
 ## Housekeeping: the dev-log directory and the retired plan
 
@@ -173,6 +173,6 @@ Rename `prompts/` to `dev-log/`, one subdirectory per milestone:
 
 Milestone 2 grew the kernel into a networked system running a musl userland that accepts SSH logins: the TCP/IP stack, the musl C library, BusyBox, Dropbear, and the build modernization. It is named `networking-and-userland`. Phase 0 retires the current root `PLAN.md` into `dev-log/02-networking-and-userland/plan.md`. This file keeps the name `text-standard-plan.md` at the repo root while the refactor runs, and retires into `dev-log/03-text-standard/plan.md` when the milestone is done.
 
-## Open to your veto
+## Owner choices
 
-Everything above is decided, including the names and the header form. Override any of it if you disagree: a name other than `dev-log` or `networking-and-userland`, `kernel-doc` headers instead of Doxygen, or a different message shape.
+Everything above is decided, including the names and header form. The owner may override any choice, including the names `dev-log` and `networking-and-userland`, Doxygen rather than `kernel-doc` headers, and the message format.

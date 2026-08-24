@@ -95,16 +95,16 @@ After a compaction, read `AGENTS.md`, `CLAUDE.md`, `plan.md`, this file, and `no
 
 * [x] `dev-log/02-networking-and-userland/Readme.md`
 * [x] `dev-log/02-networking-and-userland/plan.md`
-* [ ] `dev-log/03-text-standard/Readme.md`
-* [ ] `dev-log/03-text-standard/plan.md`
-* [ ] `dev-log/04-normalization/Readme.md`
-* [ ] `dev-log/04-normalization/plan.md`
-* [ ] `dev-log/05-images/Readme.md`
-* [ ] `dev-log/06-review/plan.md`
-* [ ] `dev-log/06-review/results.md`
-* [ ] `dev-log/07-init/Readme.md`
-* [ ] `dev-log/08-disk/Readme.md`
-* [ ] `dev-log/08-disk/plan.md`
+* [x] `dev-log/03-text-standard/Readme.md`
+* [x] `dev-log/03-text-standard/plan.md`
+* [x] `dev-log/04-normalization/Readme.md`
+* [x] `dev-log/04-normalization/plan.md`
+* [x] `dev-log/05-images/Readme.md`
+* [x] `dev-log/06-review/plan.md`
+* [x] `dev-log/06-review/results.md`
+* [x] `dev-log/07-init/Readme.md`
+* [x] `dev-log/08-disk/Readme.md`
+* [x] `dev-log/08-disk/plan.md`
 
 ### Milestones 9 through 16
 
