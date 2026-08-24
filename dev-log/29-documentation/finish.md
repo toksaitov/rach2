@@ -120,7 +120,7 @@ These are the 88 project documentation files changed from the fixed base when th
 * [x] `tests/Readme.md`
 * [x] `tests/host/Readme.md`
 * [x] `tools/Readme.md`
-* [ ] `utils/Readme.md`
+* [x] `utils/Readme.md`
 * [ ] `vendor/busybox/Readme.md`
 * [ ] `vendor/busybox/patches/Readme.md`
 * [ ] `vendor/dropbear/Readme.md`
