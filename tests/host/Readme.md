@@ -84,9 +84,9 @@ The suite contains 36 native test programs.
 ### Boot and host utilities
 
 * `bootctl_hosttest.c` checks FAT32 discovery, kernel and fallback validation, candidate installation, environment and menu updates, cluster geometry, readback, and interrupted, dropped, or torn writes.
-* `bootverb_hosttest.c` checks every `bootctl` verb, operand count, returned operand, refused old spelling, and exact name matching.
+* `bootverb_hosttest.c` checks every `bootctl` verb, operand count, returned operand, rejection of the old spelling, and exact name matching.
 * `grubslot_hosttest.c` checks the two GRUB core-image tails, blocklist validation and patching, alternating installation, slot clearing, and readback failure.
 * `mkhash_hosttest.c` checks the vendored musl SHA-512 crypt against published vectors and rejects a malformed setting.
 * `pwauth_hosttest.c` checks password comparison, salt-byte mapping, credential-file replacement, locking, flush failures, fork and exit cleanup, signal state, and terminal teardown.
-* `pwauthatexit_hosttest.c` checks that a transaction is refused and leaves no lock when the library cannot register both exit handlers.
+* `pwauthatexit_hosttest.c` checks that a transaction fails and leaves no lock when the library cannot register both exit handlers.
 * `sectorcopy_hosttest.c` checks decimal size parsing, 64-bit disk bounds, whole-sector streaming, short and long input, partial I/O, errors, and 64-sector write batches.
