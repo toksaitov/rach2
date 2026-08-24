@@ -7,14 +7,14 @@ This file is a bounded resume map for the one documentation file in progress. It
 * All 123 individual documentation files, all subsystem passes, the historical collection pass, and the first five whole-project checks are complete.
 * First unchecked higher-level entry: terminology and document boundaries checked across the repository.
 * Scope: terminology and ownership among the 28 current-contract documents. The historical collection has already received its separate naming pass.
-* Active final-stage entry: process, descriptor, file-system, synthetic-path, block-device, interface, socket, image, and staged-artifact terms name distinct concepts consistently.
+* Active final-stage entry: the root routes, component directories, and cross-document ownership statements assign each contract to one owning Readme.
 * Current document: none.
-* Search pattern: not run.
-* The next path-only search has not run.
+* Search pattern: none. The ownership pass uses the complete 28-path current-document list.
+* The ownership queue has not been recorded.
 
 ## Final-stage cursor
 
-* Candidate queue: empty. The product-name entry is complete.
+* Candidate queue: empty. The cross-component terminology entry is complete.
 * Diff page: not started. The complete-diff manifest begins only after every terminology entry is checked.
 * Broad searches already completed: initial product capitalization and SHA-256 naming. Do not repeat them; `finish.md` defines the remaining bounded searches.
 
@@ -33,8 +33,8 @@ This file is a bounded resume map for the one documentation file in progress. It
 
 ## Exact next action
 
-Run the cross-component terminology path-only search once, then record its exact pattern and candidate queue here before inspecting any match.
+Record the complete 28-path current-document list as the ownership queue, then inspect one file at a time.
 
 ## Intended commit boundary
 
-* No document is in progress. Commit `finish.md` and this checkpoint before running the next search.
+* No document is in progress. Commit `finish.md` and this checkpoint when the terminology entry is complete.

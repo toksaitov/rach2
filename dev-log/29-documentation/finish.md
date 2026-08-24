@@ -30,7 +30,7 @@ Copy its path output into `current.md`. Inspect matches with `rg -n "$review_pat
 
 * [x] Correct `open file description` in `rach2/sys/fs/synthfs.Readme.md` under the one-file procedure.
 * [x] Product, component, digest, image, build, and test names use one spelling; lowercase literals remain unchanged.
-* [ ] Process, descriptor, file-system, synthetic-path, block-device, interface, socket, image, and staged-artifact terms name distinct concepts consistently.
+* [x] Process, descriptor, file-system, synthetic-path, block-device, interface, socket, image, and staged-artifact terms name distinct concepts consistently.
 * [ ] The root routes, component directories, and cross-document ownership statements assign each contract to one owning Readme.
 * [ ] Contextual register review passes over the 28 current documents.
 
