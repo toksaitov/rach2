@@ -80,6 +80,7 @@ MKIMAGE         = krffs/mkimage.sh
 # The suites' wall-clock limit tool (see its rule below).
 DEADLINE        = build/tests/system/deadline
 BINFIND         = build/tools/inspect/binfind
+SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test test-disk bootpart-test install-test \
@@ -106,7 +107,7 @@ MKDISK          = krffs/mkdisk.sh
 # takes minutes; a later `make` rebuilds only what changed. Each image is its
 # own file under build/images/, so they coexist instead of overwriting one
 # shared image.
-all: images $(DEADLINE)
+all: images $(DEADLINE) $(BINFIND) $(SHA256TOOL)
 
 # The cached tool check (tools/setup/preflight.sh): a missing or changed build tool
 # fails here, named, before any compilation. It is an order-only prerequisite
@@ -281,6 +282,12 @@ $(DEADLINE): tests/system/runner/deadline.c
 # The binary byte searcher (tools/inspect/binfind.c), replacing strings(1)
 # piped to grep in the TinyCC policy check.
 $(BINFIND): tools/inspect/binfind.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+# The digest tool (tools/verify/sha256.c), replacing sha256sum and shasum.
+# The scripts that need it before make has run compile it themselves.
+$(SHA256TOOL): tools/verify/sha256.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 

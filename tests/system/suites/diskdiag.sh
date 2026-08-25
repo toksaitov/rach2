@@ -176,7 +176,8 @@ check_sector() {
     lba="$1"
     guest="$(ssh_run "dd if=/dev/disk0 bs=512 skip=$lba count=1 2>/dev/null | sha256sum" \
              | tr -d '\r' | awk '{print $1}')"
-    host="$(dd if="$BASE" bs=512 skip="$lba" count=1 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+    host="$(dd if="$BASE" bs=512 skip="$lba" count=1 2>/dev/null \
+           | "$REPO/build/tools/verify/sha256" - | awk '{print $1}')"
     if [ -z "$guest" ] || [ "$guest" != "$host" ]; then
         fail "sector $lba read back as $guest and the image has $host"
     fi
