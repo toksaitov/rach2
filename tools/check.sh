@@ -342,7 +342,7 @@ hr "12/13 checker selftests"
 if python3 "$REPO/tools/check_kernel.py" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    python3 "$REPO/tools/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    python3 "$REPO/tools/check_sealednet.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
-   sh "$REPO/tools/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
+   sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_kernelck.log"; fail=1

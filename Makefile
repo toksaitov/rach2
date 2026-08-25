@@ -1570,8 +1570,10 @@ verify-host:
 # clangd compilation database, generated from the build's own commands (GCC has no
 # clang-style -MJ). Output: compile_commands.json at the repo root (git-ignored). The
 # checked-in .clangd points clangd at the i686-elf cross GCC; see mk/Readme.md.
+# Retired name, kept as an alias for this milestone only.
 compile-commands:
-	@./tools/gen_compile_commands.sh
+	@echo "compile-commands: retired: run sh tools/dev/gen_compile_commands.sh" >&2
+	@./tools/dev/gen_compile_commands.sh
 
 # Kernel source-list guard: fail if a rach2 .c on disk is missing from C_SRC (so a new
 # kernel source cannot be silently dropped from the build). Also run inside the gate.

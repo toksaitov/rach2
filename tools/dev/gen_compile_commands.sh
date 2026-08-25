@@ -27,7 +27,7 @@
 #
 set -u
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$REPO/compile_commands.json"
 
 # Escape one string for a JSON double-quoted value. The four escapes cover
