@@ -99,7 +99,7 @@ req clang-format clang-format
 
 echo
 echo "Optional (only some tasks need these):"
-opt docker       "make isos / os-real-grub-disk" docker
+opt docker       "vendor/grub regeneration (maintainer only)" docker
 opt ssh-keygen   "the SSH capstone demo key" openssh
 opt git          "cloning and committing" git
 

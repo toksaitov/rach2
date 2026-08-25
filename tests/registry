@@ -42,9 +42,9 @@ tcc|run-tcc|-|qemu-system-i386,python3|yes
 make|run-make|-|qemu-system-i386,python3|yes
 selfbuild|run-selfbuild|-|qemu-system-i386,python3|yes
 ssh|run-ssh|-|qemu-system-i386,python3,ssh|yes
-grub|run-grub|-|qemu-system-i386,python3,docker|yes
-menu|run-menu|-|qemu-system-i386,python3,docker|yes
-install|run-install|-|qemu-system-i386,python3,docker|yes
+grub|run-grub|-|qemu-system-i386,python3|yes
+menu|run-menu|-|qemu-system-i386,python3|yes
+install|run-install|-|qemu-system-i386,python3|yes
 sealed|run-sealed|-|qemu-system-i386,python3,ssh|yes
 drill|run-drill|-|qemu-system-i386,python3,ssh,expect|yes
 metal|run-metal|-|qemu-system-i386,python3,ssh|yes

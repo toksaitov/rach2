@@ -7,7 +7,7 @@ The scripts under `tools/` are grouped by role: `setup/` prepares and reports on
 * `setup/bootstrap_mac.sh` reads `mac-formulae.txt`, skips installed Homebrew packages, and installs the rest. `--dry-run` prints the commands without installing anything. It accepts only macOS and leaves the final decision to `doctor.sh`.
 * `setup/mac-formulae.txt` lists the Homebrew formulae and casks for a fresh Mac. It includes the i686 cross toolchain, QEMU, FUSE-T, and the verification tools.
 * `setup/preflight.sh` is the build's own cached tool check. `make` and `tests/run` run it at each entry; it stats the recorded tool paths on a cache hit and repeats its compile probes only when the environment changed. A missing tool fails the build, named, before compilation. `--report` prints one line per tool without caching.
-* `setup/doctor.sh` is the wider machine-setup report, run directly (the `make doctor` alias is retired). It covers the cross compiler and binutils, QEMU, `make`, a host C compiler, Python, and the verification tools, and reports Docker, OpenSSH tools, Git, and FUSE as optional because only some suites need them.
+* `setup/doctor.sh` is the wider machine-setup report, run directly (the `make doctor` alias is retired). It covers the cross compiler and binutils, QEMU, `make`, a host C compiler, Python, and the verification tools, and reports Docker (maintainer procedures only), OpenSSH tools, Git, and FUSE as optional.
 
 `doctor.sh` checks that command-line tools run, not merely that their names are present. For FUSE it runs `pkg-config --exists` for `fuse`, then for `fuse-t`.
 
@@ -59,11 +59,11 @@ The inspectors under `inspect/` validate built artifacts; the validation stamps 
 
 ## GRUB and ISO builders
 
-* `image/mkdisk_grub.sh [KERNEL [OUTPUT]]` builds a BIOS-bootable disk with a FAT32 boot partition, a KRFFS root, and an optional FAT32 recovery partition. It stages a fixed-size candidate kernel slot, a fallback kernel, a fixed-size menu slot, and a GRUB environment block, then validates the FAT chains and layout before publishing the image.
+* `image/mkdisk_grub.sh [KERNEL [OUTPUT]]` builds a BIOS-bootable disk natively: mtools stage the FAT32 boot partition, `mkmbr.c` writes the partition table, and the pinned GRUB boot code embeds from [`vendor/grub/`](../vendor/grub/Readme.md). The disk has a KRFFS root and an optional FAT32 recovery partition. It stages a fixed-size candidate kernel slot, a fallback kernel, a fixed-size menu slot, and a GRUB environment block, then validates the FAT chains and layout before publishing the image.
 * `image/grub_embed.py` writes GRUB's MBR boot code and core image while preserving the partition table. It patches the core-image pointers and rejects an image that does not fit the post-MBR gap or one tail slot.
-* `image/mkgrubcore.sh MARKER OUTPUT` builds a replacement core image with a serial marker and the same embedded recovery configuration as the disk builder.
+* `image/mkgrubcore.sh {A|B} OUTPUT` verifies and hands out one of the two pinned marked core images the replacement suites install.
 * `image/grub-embed.cfg` is the common embedded configuration. It tries the normal menu on partition 1 and then the recovery menu on partition 3.
-* `image/mkiso.sh` builds `test`, `os-simple`, `os-real`, or `rach2-metal` as a GRUB ISO in Docker. It checks the selected kernel's disk policy before staging it. The top-level `make isos` target builds all four.
-* `image/ubuntu-image.txt` pins the Ubuntu container base by digest for all three GRUB builders. The scripts still install GRUB, mtools, and related packages from Ubuntu's current archive during each build, so the package set is not pinned by this file.
+* `image/mkiso.sh` builds `test`, `os-simple`, `os-real`, or `rach2-metal` as a GRUB ISO with native `xorriso` and the pinned El Torito and hybrid images under [`vendor/grub/`](../vendor/grub/Readme.md). It checks the selected kernel's disk policy before staging it. The top-level `make isos` target builds all four.
+* `image/ubuntu-image.txt` pins the Ubuntu container base by digest for the maintainer regeneration of the pinned GRUB artifacts (`vendor/grub/regen_grub.sh`); no build or suite uses a container.
 
 `mkdisk_grub.sh` accepts ten `RACH2_DISK_*` settings. `RACH2_DISK_MANIFEST`, `RACH2_DISK_KRFFS_MB`, and `RACH2_DISK_APPEND` select the root contents, root size, and common kernel arguments. `RACH2_DISK_BOOT_MB` and `RACH2_DISK_CLUSTER` set the FAT boot geometry. `RACH2_DISK_RECOVERY_MB`, `RACH2_DISK_RECOVERY_KERNEL`, and `RACH2_DISK_RECOVERY_IMAGE` add recovery. `RACH2_DISK_DHCP_APPEND` and `RACH2_DISK_STATIC_APPEND` provide the two network command lines. The script fixes the FAT serial and uses `SOURCE_DATE_EPOCH` for repeatable FAT metadata.

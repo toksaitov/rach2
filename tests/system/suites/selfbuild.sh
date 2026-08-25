@@ -346,17 +346,10 @@ bounded() {
     wait "$bpid"
 }
 
-docker_ready=1
-docker_skip="the Docker command is not installed"
-if command -v docker >/dev/null 2>&1; then
-    if bounded 30 docker info >/dev/null 2>&1; then
-        docker_ready=0
-    else
-        docker_skip="the Docker daemon did not answer"
-    fi
-fi
-if [ "$docker_ready" -eq 0 ]; then
-    GRUB_DISK="$DISK.grub"
+# The GRUB boot of the guest-built kernel is unconditional: the disk is
+# assembled natively from the pinned GRUB artifacts, so there is nothing to
+# skip when Docker is absent.
+GRUB_DISK="$DISK.grub"
     if ! bounded 900 sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
         rm -f "$GRUB_DISK"
         fail "the GRUB disk around the built kernel did not assemble inside its bound"
@@ -385,10 +378,6 @@ if [ "$docker_ready" -eq 0 ]; then
     fi
     rm -f "$GRUB_DISK" "$GLOG"
     GRUB_NOTE="and booted through GRUB"
-else
-    echo "selfbuild-test: the GRUB boot needs Docker to assemble the disk; skipped: $docker_skip"
-    GRUB_NOTE="(GRUB skipped: $docker_skip)"
-fi
 
 # The in-place regression: root, in a second short boot of the same disk,
 # runs make directly in the staged /src/ish, no copy and no touch. This is
