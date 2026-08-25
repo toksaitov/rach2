@@ -23,10 +23,10 @@
 # because the installer walks the same structures and a broken chain would
 # stop every install.
 #
-# The disk and GRUB are assembled in a throwaway Docker container (mtools and
-# grub-pc-bin), so no host GRUB toolchain is needed. The KRFFS partition image
-# is built first on the host with mkimage.sh. Build the kernel and the
-# capstones first (make).
+# The disk is assembled on the host with mtools, the project MBR writer, and
+# the pinned GRUB artifacts under vendor/grub/, so no GRUB toolchain and no
+# Docker is needed. The KRFFS partition image is built first with mkimage.sh.
+# Build the kernel and the capstones first (make).
 #
 # Usage: ./mkdisk_grub.sh
 #
@@ -35,13 +35,6 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
-
-# The Ubuntu image, pinned by digest in ubuntu-image.txt beside this
-# script: a tag moves,
-# and a GRUB built from a different grub-pc is a change nobody chose.
-UBUNTU_IMAGE="$(sed -n 's/^\(ubuntu@sha256:[0-9a-f]*\)$/\1/p' \
-                "$REPO/tools/image/ubuntu-image.txt" | head -1)"
-[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/image/ubuntu-image.txt has no digest" >&2; exit 1; }
 
 # The kernel and output default to the host build's, and both can be named:
 # the self-build proof hands the guest-built kernel here and boots the result.
@@ -89,10 +82,10 @@ RECOVERY_IMAGE="${RACH2_DISK_RECOVERY_IMAGE:-}"
 # name and mtools honours it; a caller that has one already keeps it, so this
 # disk agrees with whatever else that caller is building.
 #
-# What is still not fixed, and is not pretended to be: the container is the
-# floating "$UBUNTU_IMAGE" tag and installs whatever GRUB and mtools the archive
-# has that day, and the machine's SSH host key and password salt are
-# generated per tree. Those are inputs to the artifact, not noise in it.
+# What is still not fixed, and is not pretended to be: the machine's SSH
+# host key and password salt are generated per tree. Those are inputs to
+# the artifact, not noise in it. The GRUB bytes themselves are pinned under
+# vendor/grub/ and verified before use.
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
 export SOURCE_DATE_EPOCH
 FAT_SERIAL=1acef00d
@@ -112,10 +105,24 @@ if [ ! -f "$KERNEL" ]; then
     echo "mkdisk_grub: kernel not built ($KERNEL); run 'make' first" >&2
     exit 1
 fi
-if ! command -v docker >/dev/null 2>&1; then
-    echo "mkdisk_grub: docker required to assemble the disk (make doctor)" >&2
-    exit 1
+for t in mformat mmd mcopy mshowfat; do
+    command -v "$t" >/dev/null 2>&1 || {
+        echo "mkdisk_grub: mtools is required (brew install mtools, or apt install mtools)" >&2
+        exit 1
+    }
+done
+
+# The MBR writer beside this script, compiled on first use; it writes the
+# same bytes parted wrote in the retired container, CHS fields included.
+MKMBR="$REPO/build/tools/image/mkmbr"
+if [ ! -x "$MKMBR" ]; then
+    mkdir -p "${MKMBR%/*}"
+    cc -O2 -o "$MKMBR" "$REPO/tools/image/mkmbr.c" || exit 1
 fi
+
+# The pinned GRUB artifacts, verified against their manifest before a byte
+# of boot code reaches the disk.
+sh "$REPO/vendor/grub/verify_grub.sh" bios-boot.img disk-core.img
 
 # The KRFFS partition image, sized to partition 2, built with the host tools.
 sh "$REPO/krffs/mkimage.sh" "$MANIFEST" \
@@ -384,162 +391,166 @@ if ! awk '/^[[:space:]]*multiboot /{ n = gsub(/rach2\.ip=/, "&"); if (n > 1) exi
     exit 1
 fi
 
-# Assemble with mtools (FAT) and a hand embed of GRUB's boot code, never a loop
-# mount: loop devices destabilize Docker Desktop. The FAT boot partition is
-# formatted in a standalone file and written into the disk; a self-contained
-# core.img (its modules built in) goes in the post-MBR gap, so GRUB needs
-# nothing else on the partition but the kernel and grub.cfg.
-#
-# grub-bios-setup cannot run here (it fails to canonicalize the disk file's host
-# device on Docker's overlay filesystem), so grub_embed.py writes boot.img and
-# core.img and patches their pointers directly, which is all grub-bios-setup
-# would have done for a contiguous core.img in the gap.
-docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
-    "$UBUNTU_IMAGE" sh -e -c "
-    apt-get update -qq && \
-    apt-get install -y -qq grub-pc-bin grub-common parted mtools python3 \
-        >/dev/null 2>&1
-    export MTOOLS_SKIP_CHECK=1
-    export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH
-    export PATH=\"\$PATH:/usr/sbin:/sbin\"
-    command -v grub-editenv >/dev/null || {
-        echo 'mkdisk_grub: grub-editenv is not in the container' >&2; exit 1; }
-    command -v mshowfat >/dev/null || {
-        echo 'mkdisk_grub: mshowfat is not in the container' >&2; exit 1; }
-    dd if=/dev/zero of='$OUT.new' bs=1M count=$DISK_MB status=none
-    parted -s '$OUT.new' mklabel msdos
-    parted -s '$OUT.new' mkpart primary fat32 ${GAP_MB}MiB \
-        $((GAP_MB + BOOT_MB))MiB
-    parted -s '$OUT.new' mkpart primary $((GAP_MB + BOOT_MB))MiB \
-        $((GAP_MB + BOOT_MB + KRFFS_MB))MiB
-    if [ $RECOVERY_MB -gt 0 ]; then
-        parted -s '$OUT.new' mkpart primary fat32 \
-            $((GAP_MB + BOOT_MB + KRFFS_MB))MiB \
-            $((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB))MiB
-    fi
-    parted -s '$OUT.new' set 1 boot on
+# Everything below runs on the host: mtools for the FAT volumes, the MBR
+# writer for the partition table, the pinned GRUB core for the boot path.
+# No container, no loop mount, no GRUB toolchain.
+export MTOOLS_SKIP_CHECK=1
+# UTC, so the SOURCE_DATE_EPOCH timestamps land in FAT fields the way the
+# retired container (which ran UTC) wrote them.
+export TZ=UTC
 
-    KBYTES=\$(stat -c %s '$KERNEL')
-    if [ \"\$KBYTES\" -gt $SLOT_BYTES ]; then
-        echo \"mkdisk_grub: the kernel is \$KBYTES bytes and the slot has $SLOT_BYTES\" >&2
+dd if=/dev/zero of="$OUT.new" bs=1048576 count="$DISK_MB" 2>/dev/null
+if [ "$RECOVERY_MB" -gt 0 ]; then
+    "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+        "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
+        "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c"
+else
+    "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+        "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83"
+fi
+
+KBYTES=$(wc -c < "$KERNEL" | tr -d ' ')
+if [ "$KBYTES" -gt "$SLOT_BYTES" ]; then
+    echo "mkdisk_grub: the kernel is $KBYTES bytes and the slot has $SLOT_BYTES" >&2
+    exit 1
+fi
+
+TMPD="$REPO/build/images/mkdisk.tmp"
+rm -rf "$TMPD"
+mkdir -p "$TMPD"
+trap 'rm -f "$GRUB_CFG" "$OUT.new"; rm -rf "$TMPD"' EXIT
+
+dd if=/dev/zero of="$TMPD/candidate.pad" bs="$SLOT_BYTES" count=1 2>/dev/null
+dd if="$KERNEL" of="$TMPD/candidate.pad" conv=notrunc 2>/dev/null
+dd if=/dev/zero of="$TMPD/p1.img" bs=1048576 count="$BOOT_MB" 2>/dev/null
+if [ -n "$CLUSTER" ]; then
+    mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL -c "$CLUSTER" ::
+else
+    mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL ::
+fi
+mmd -i "$TMPD/p1.img" ::/boot
+mmd -i "$TMPD/p1.img" ::/boot/grub
+mcopy -i "$TMPD/p1.img" "$TMPD/candidate.pad" ::/boot/kernel
+mcopy -i "$TMPD/p1.img" "$KERNEL" ::/boot/fallback
+mcopy -i "$TMPD/p1.img" "$GRUB_CFG" ::/boot/grub/grub.cfg
+# The rewritable menu, empty but full size. A '#' fill, not zeros, because
+# GRUB reads the whole file and a comment is what an empty menu looks like
+# to it; the first line says so to anyone who reads the disk.
+dd if=/dev/zero bs=1 count="$MENU_BYTES" 2>/dev/null | tr '\0' '#' > "$TMPD/boot.cfg"
+printf '# no menu staged; bootctl config replaces this file\n' \
+    | dd of="$TMPD/boot.cfg" conv=notrunc 2>/dev/null
+mcopy -i "$TMPD/p1.img" "$TMPD/boot.cfg" ::/boot/boot.cfg
+# The 1024-byte GRUB environment block, written here byte-for-byte the way
+# grub-editenv wrote it in the retired container (a header, one variable,
+# and a '#' fill), proved identical by digest when the container path was
+# converted.
+{
+    printf '# GRUB Environment Block\n'
+    printf '# WARNING: Do not edit this file by tools other than grub-editenv!!!\n'
+    printf 'saved_entry=candidate\n'
+} > "$TMPD/genv.head"
+GENVN=$(wc -c < "$TMPD/genv.head" | tr -d ' ')
+{
+    cat "$TMPD/genv.head"
+    dd if=/dev/zero bs=1 count=$((1024 - GENVN)) 2>/dev/null | tr '\0' '#'
+} > "$TMPD/genv"
+mcopy -i "$TMPD/p1.img" "$TMPD/genv" ::/boot/grub/grubenv
+
+# Every staged chain, verified before the partition is committed: each of
+# the four files must be whole (its cluster count matching its size) and
+# the extents disjoint. mshowfat prints cluster ranges, the BPB names the
+# cluster size, and the awk below fails closed: a missing record, a wrong
+# count, or a shared cluster stops the build.
+CFGBYTES=$(wc -c < "$GRUB_CFG" | tr -d ' ')
+: > "$TMPD/chains.txt"
+for f in ::/boot/kernel ::/boot/fallback ::/boot/grub/grub.cfg \
+         ::/boot/grub/grubenv ::/boot/boot.cfg; do
+    mshowfat -i "$TMPD/p1.img" "$f" >> "$TMPD/chains.txt"
+done
+# shellcheck disable=SC2046 # od output is exactly three numeric fields
+set -- $(od -An -j 11 -N 3 -t u1 "$TMPD/p1.img")
+CLBYTES=$(( ($1 + $2 * 256) * $3 ))
+[ "$CLBYTES" -gt 0 ] || {
+    echo "mkdisk_grub: the formatted volume reports a zero cluster size" >&2
+    exit 1
+}
+awk -v cbytes="$CLBYTES" -v kernel="$SLOT_BYTES" -v fallback="$KBYTES" \
+    -v grubcfg="$CFGBYTES" -v grubenv=1024 -v bootcfg="$MENU_BYTES" '
+function need(bytes) { return int((bytes + cbytes - 1) / cbytes) }
+{
+    file = $1
+    sub(/.*\//, "", file)
+    want = file == "kernel" ? kernel : file == "fallback" ? fallback : \
+           file == "grub.cfg" ? grubcfg : file == "grubenv" ? grubenv : \
+           file == "boot.cfg" ? bootcfg : -1
+    if (want < 0) { print "mkdisk_grub: unexpected record for " file; exit 1 }
+    if (file in seen) { print "mkdisk_grub: repeated record for " file; exit 1 }
+    seen[file] = 1
+    count = 0
+    rest = $0
+    while (match(rest, /<[0-9]+(-[0-9]+)?>/)) {
+        run = substr(rest, RSTART + 1, RLENGTH - 2)
+        rest = substr(rest, RSTART + RLENGTH)
+        dash = index(run, "-")
+        a = dash ? substr(run, 1, dash - 1) + 0 : run + 0
+        b = dash ? substr(run, dash + 1) + 0 : run + 0
+        count += b - a + 1
+        for (c = a; c <= b; c++) {
+            if (c in used) {
+                print "mkdisk_grub: " file " and " used[c] " share clusters"
+                exit 1
+            }
+            used[c] = file
+        }
+    }
+    if (count == 0) { print "mkdisk_grub: " file " has no clusters"; exit 1 }
+    if (count != need(want)) {
+        print "mkdisk_grub: " file " spans " count " clusters and its " \
+              want " bytes need " need(want)
         exit 1
-    fi
-    dd if=/dev/zero of=/tmp/candidate.pad bs=$SLOT_BYTES count=1 status=none
-    dd if='$KERNEL' of=/tmp/candidate.pad conv=notrunc status=none
-    dd if=/dev/zero of=/tmp/p1.img bs=1M count=$BOOT_MB status=none
-    if [ -n '$CLUSTER' ]; then
-        mformat -i /tmp/p1.img -F -N $FAT_SERIAL -c $CLUSTER ::
+    }
+}
+END {
+    if (!("kernel" in seen && "fallback" in seen && "grub.cfg" in seen && \
+          "grubenv" in seen && "boot.cfg" in seen)) {
+        print "mkdisk_grub: a chain record is missing"
+        exit 1
+    }
+    printf "mkdisk_grub: boot files verified at %d bytes per cluster\n", cbytes
+}' "$TMPD/chains.txt"
+
+dd if="$TMPD/p1.img" of="$OUT.new" bs=1048576 seek="$GAP_MB" conv=notrunc 2>/dev/null
+
+python3 "$REPO/tools/image/grub_embed.py" "$OUT.new" \
+    "$REPO/vendor/grub/bios-boot.img" "$REPO/vendor/grub/disk-core.img"
+
+dd if="$KRFFS_BIN" of="$OUT.new" bs=1048576 seek=$((GAP_MB + BOOT_MB)) \
+    conv=notrunc 2>/dev/null
+
+# Partition 3, when asked for: a FAT32 volume holding the recovery kernel
+# and its RAM image, or the empty directories they will live in when this
+# build was not given them.
+if [ "$RECOVERY_MB" -gt 0 ]; then
+    dd if=/dev/zero of="$TMPD/p3.img" bs=1048576 count="$RECOVERY_MB" 2>/dev/null
+    if [ -n "$CLUSTER" ]; then
+        mformat -i "$TMPD/p3.img" -F -N $FAT_SERIAL -c "$CLUSTER" ::
     else
-        mformat -i /tmp/p1.img -F -N $FAT_SERIAL ::
+        mformat -i "$TMPD/p3.img" -F -N $FAT_SERIAL ::
     fi
-    mmd -i /tmp/p1.img ::/boot
-    mmd -i /tmp/p1.img ::/boot/grub
-    mcopy -i /tmp/p1.img /tmp/candidate.pad ::/boot/kernel
-    mcopy -i /tmp/p1.img '$KERNEL' ::/boot/fallback
-    mcopy -i /tmp/p1.img '$GRUB_CFG' ::/boot/grub/grub.cfg
-    # The rewritable menu, empty but full size. A '#' fill, not zeros
-    # because GRUB reads the whole file and a comment is what an empty menu
-    # looks like to it; the first line says so to anyone who reads the disk.
-    dd if=/dev/zero bs=1 count=$MENU_BYTES status=none | tr '\\0' '#' > /tmp/boot.cfg
-    printf '# no menu staged; bootctl config replaces this file\n' \
-        | dd of=/tmp/boot.cfg conv=notrunc status=none
-    mcopy -i /tmp/p1.img /tmp/boot.cfg ::/boot/boot.cfg
-    grub-editenv /tmp/genv create
-    grub-editenv /tmp/genv set saved_entry=candidate
-    mcopy -i /tmp/p1.img /tmp/genv ::/boot/grub/grubenv
-    # Every staged chain, verified before the partition is committed: each of
-    # the four files must be whole (its cluster count matching its size) and
-    # the four extents disjoint. mshowfat prints cluster ranges; each command
-    # runs under sh -e so a failed one fails the build, and the verifier then
-    # requires all four records with exact counts, so it fails closed rather
-    # than ship a boot partition the installer would refuse at first contact.
-    CFGBYTES=\$(stat -c %s '$GRUB_CFG')
-    : > /tmp/chains.txt
-    for f in ::/boot/kernel ::/boot/fallback ::/boot/grub/grub.cfg \
-             ::/boot/grub/grubenv ::/boot/boot.cfg; do
-        mshowfat -i /tmp/p1.img \$f >> /tmp/chains.txt
-    done
-    python3 -c '
-import sys, re
-seen = []
-sizes = {\"kernel\": $SLOT_BYTES, \"fallback\": int(sys.argv[1]),
-         \"grub.cfg\": int(sys.argv[2]), \"grubenv\": 1024,
-         \"boot.cfg\": $MENU_BYTES}
-# The cluster size comes from the volume that was just formatted, not from an
-# assumption: this compared cluster counts against sector counts, which was
-# only ever right because mformat happened to pick one sector per cluster.
-bpb = open(\"/tmp/p1.img\", \"rb\").read(64)
-cbytes = (bpb[11] | (bpb[12] << 8)) * bpb[13]
-if cbytes <= 0:
-    sys.exit(\"mkdisk_grub: the formatted volume reports a zero cluster size\")
-for line in open(\"/tmp/chains.txt\"):
-    name = line.split()[0].rsplit(\"/\", 1)[-1]
-    # mshowfat prints a run as <a-b> and a lone cluster as <a>; a file small
-    # enough to fit one cluster only appears in the second form, which a
-    # larger cluster size makes the common case, not the rare one.
-    ranges = [(int(a), int(b if b else a)) for a, b in
-              re.findall(r\"<(\\d+)(?:-(\\d+))?>\", line)]
-    if not ranges:
-        sys.exit(\"mkdisk_grub: %s has no clusters\" % name)
-    n = sum(b - a + 1 for a, b in ranges)
-    want = sizes.pop(name, None)
-    if want is None:
-        sys.exit(\"mkdisk_grub: unexpected or repeated record for %s\" % name)
-    if n != (want + cbytes - 1) // cbytes:
-        sys.exit(\"mkdisk_grub: %s spans %d clusters and its %d bytes need %d\" %
-                 (name, n, want, (want + cbytes - 1) // cbytes))
-    seen.append((name, ranges))
-if sizes:
-    sys.exit(\"mkdisk_grub: no chain record for %s\" %
-             \", \".join(sorted(sizes)))
-for i in range(len(seen)):
-    for j in range(i + 1, len(seen)):
-        for a1, b1 in seen[i][1]:
-            for a2, b2 in seen[j][1]:
-                if a1 <= b2 and a2 <= b1:
-                    sys.exit(\"mkdisk_grub: %s and %s share clusters\" %
-                             (seen[i][0], seen[j][0]))
-print(\"mkdisk_grub: boot files verified at %d bytes per cluster:\" % cbytes,
-      \" \".join(n for n, _ in seen))
-' \"\$KBYTES\" \"\$CFGBYTES\"
-    dd if=/tmp/p1.img of='$OUT.new' bs=1M seek=$GAP_MB conv=notrunc status=none
-
-    grub-mkimage -O i386-pc -p '(hd0,msdos1)/boot/grub' -o /tmp/core.img \
-        -c '$EMBED_CFG' \
-        biosdisk part_msdos fat normal multiboot configfile loadenv echo \
-        test serial terminal
-    python3 '$REPO/tools/image/grub_embed.py' '$OUT.new' \
-        /usr/lib/grub/i386-pc/boot.img /tmp/core.img
-
-    dd if='$KRFFS_BIN' of='$OUT.new' bs=1M seek=$((GAP_MB + BOOT_MB)) \
-        conv=notrunc status=none
-
-    # Partition 3, when asked for: a FAT32 volume holding the recovery kernel
-    # and its RAM image, or the empty directories they will live in when this
-    # build was not given them. parted's filesystem argument only sets the MBR
-    # type byte, so without this the entry would name a filesystem that is not
-    # there, and GRUB could not read the partition the recovery entry needs.
-    if [ $RECOVERY_MB -gt 0 ]; then
-        dd if=/dev/zero of=/tmp/p3.img bs=1M count=$RECOVERY_MB status=none
-        if [ -n '$CLUSTER' ]; then
-            mformat -i /tmp/p3.img -F -N $FAT_SERIAL -c $CLUSTER ::
-        else
-            mformat -i /tmp/p3.img -F -N $FAT_SERIAL ::
-        fi
-        mmd -i /tmp/p3.img ::/boot
-        mmd -i /tmp/p3.img ::/boot/grub
-        if [ -n '$RECOVERY_KERNEL' ]; then
-            mcopy -i /tmp/p3.img '$RECOVERY_KERNEL' ::/boot/recovery
-        fi
-        if [ -n '$RECOVERY_IMAGE' ]; then
-            mcopy -i /tmp/p3.img '$RECOVERY_IMAGE' ::/boot/recovery.krffs
-        fi
-        mcopy -i /tmp/p3.img '$RECOVERY_CFG' ::/boot/grub/recovery.cfg
-        dd if=/tmp/p3.img of='$OUT.new' bs=1M \
-            seek=$((GAP_MB + BOOT_MB + KRFFS_MB)) conv=notrunc status=none
+    mmd -i "$TMPD/p3.img" ::/boot
+    mmd -i "$TMPD/p3.img" ::/boot/grub
+    if [ -n "$RECOVERY_KERNEL" ]; then
+        mcopy -i "$TMPD/p3.img" "$RECOVERY_KERNEL" ::/boot/recovery
     fi
-    mv '$OUT.new' '$OUT'
-"
+    if [ -n "$RECOVERY_IMAGE" ]; then
+        mcopy -i "$TMPD/p3.img" "$RECOVERY_IMAGE" ::/boot/recovery.krffs
+    fi
+    mcopy -i "$TMPD/p3.img" "$RECOVERY_CFG" ::/boot/grub/recovery.cfg
+    dd if="$TMPD/p3.img" of="$OUT.new" bs=1048576 \
+        seek=$((GAP_MB + BOOT_MB + KRFFS_MB)) conv=notrunc 2>/dev/null
+fi
+rm -rf "$TMPD"
+mv "$OUT.new" "$OUT"
 
 echo "mkdisk_grub: wrote $OUT"
 echo "mkdisk_grub: boot it with rach2/run_from_disk.sh"
