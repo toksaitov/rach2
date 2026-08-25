@@ -25,6 +25,11 @@
 # hard error: passed on to the compiler it would surface as a bare "no such
 # file", which reads as a broken toolchain, not a typo.
 #
+# The build is incremental: a program recompiles only when its source, a
+# link-deps source, a project header its previous compile recorded (-MMD),
+# the installed libc, or this script is newer than the binary. An untouched
+# tree therefore compiles nothing.
+#
 # Run vendor/musl/build_libc.sh first if install/ is absent.
 #
 
@@ -45,6 +50,28 @@ if [ ! -f "$PREFIX/lib/libc.a" ]; then
     echo "error: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
     exit 1
 fi
+
+# stale OUT DEP...: succeed when OUT is missing or any dependency (given, or
+# recorded in OUT.d by the previous compile) is missing or newer than OUT.
+stale() {
+    stale_out=$1
+    shift
+    [ -f "$stale_out" ] || return 0
+    for f in "$@"; do
+        [ -e "$f" ] || return 0
+        [ "$f" -nt "$stale_out" ] && return 0
+    done
+    if [ -f "$stale_out.d" ]; then
+        # Strip the target token and continuation backslashes; every other
+        # token is a recorded header path.
+        for f in $(sed 's/\\//g' "$stale_out.d" | tr ' ' '\n' |
+                       sed -e '/:$/d' -e '/^$/d'); do
+            [ -e "$f" ] || return 0
+            [ "$f" -nt "$stale_out" ] && return 0
+        done
+    fi
+    return 1
+}
 
 mkdir -p "$OUT"
 for src in *.c; do
@@ -71,9 +98,13 @@ for src in *.c; do
         fi
         deps="$deps $REPO/$dep"
     done
+    # shellcheck disable=SC2086
+    stale "$OUT/$prog" "$src" $deps "$PREFIX/lib/libc.a" \
+        "$SCRIPT_DIR/build.sh" || continue
     echo "  CC $prog"
     # shellcheck disable=SC2086
     $CC -static -nostdlib -nostartfiles -isystem "$PREFIX/include" -I ../../utils -O2 \
+        -MMD -MF "$OUT/$prog.d" \
         -o "$OUT/$prog" \
         "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$src" $deps \
         "$PREFIX/lib/libc.a" "$LIBGCC" "$PREFIX/lib/crtn.o" \
