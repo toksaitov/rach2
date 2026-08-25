@@ -36,6 +36,14 @@
 set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# The byte scanner beside this script, compiled on first use: the shell text
+# tools disagree across platforms about NUL and high bytes, and C does not.
+ASCIISCAN="$REPO/build/tools/verify/asciiscan"
+if [ ! -x "$ASCIISCAN" ]; then
+    mkdir -p "${ASCIISCAN%/*}"
+    cc -O2 -o "$ASCIISCAN" "$REPO/tools/verify/asciiscan.c" || exit 1
+fi
 cd "$REPO" || exit 1
 VDIR=/tmp/rach2_verify
 mkdir -p "$VDIR"
@@ -104,7 +112,7 @@ newcode_ch()
 # 0. required tools
 hr "preflight: tools present"
 miss=0
-for t in i686-elf-gcc i686-elf-readelf cppcheck shellcheck clang-format perl; do
+for t in i686-elf-gcc i686-elf-readelf cppcheck shellcheck clang-format; do
     command -v "$t" >/dev/null 2>&1 || { echo "  MISSING: $t"; miss=1; }
 done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
@@ -167,7 +175,7 @@ cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
 fi
-na=$(inhouse_ch | while read -r f; do perl -ne 'print "$ARGV\n" if /[^\x09\x0a\x0d\x20-\x7e]/' "$f"; done | sort -u)
+na=$(inhouse_ch | while read -r f; do "$ASCIISCAN" "$f" >/dev/null || echo "$f"; done | sort -u)
 [ -n "$na" ] && { echo "  non-ASCII bytes in:"; echo "$na" | sed 's/^/    /'; cv=1; }
 # shellcheck disable=SC2046
 for h in $(inhouse_ch | grep '\.h$'); do

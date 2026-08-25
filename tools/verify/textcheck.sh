@@ -18,6 +18,14 @@
 set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# The byte scanner beside this script, compiled on first use: the shell text
+# tools disagree across platforms about NUL and high bytes, and C does not.
+ASCIISCAN="$REPO/build/tools/verify/asciiscan"
+if [ ! -x "$ASCIISCAN" ]; then
+    mkdir -p "${ASCIISCAN%/*}"
+    cc -O2 -o "$ASCIISCAN" "$REPO/tools/verify/asciiscan.c" || exit 1
+fi
 cd "$REPO" || exit 1
 
 findings=$(mktemp)
@@ -69,7 +77,7 @@ py_files() {
     # quote).
     { md_files; script_files; ch_files; py_files; } | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
-        perl -ne 'print "$ARGV:$.: non-ASCII byte\n" if /[^\x09\x0a\x0d\x20-\x7e]/' "$f"
+        "$ASCIISCAN" "$f" || true
     done
 
     # A spaced "--" used as an em-dash in C and H comments. Double-quoted

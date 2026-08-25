@@ -36,7 +36,6 @@ hint() {
                              || echo "apt install openssh-client" ;;
     python3)  [ "$MAC" = 1 ] && echo "xcode-select --install (or brew install python3)" \
                              || echo "apt install python3" ;;
-    perl)     [ "$MAC" = 1 ] && echo "preinstalled with macOS" || echo "apt install perl" ;;
     docker)   [ "$MAC" = 1 ] && echo "brew install --cask docker (Docker Desktop)" \
                              || echo "apt install docker.io" ;;
     *)        [ "$MAC" = 1 ] && echo "brew install $1" || echo "apt install $1" ;;
@@ -65,7 +64,7 @@ req() {
 #
 # Four tools that used to sit here are required, not optional: the
 # style check
-# refuses to start without cppcheck, shellcheck, clang-format and perl, and
+# refuses to start without cppcheck, shellcheck and clang-format, and
 # `CLAUDE.md` requires `tests/run style` on every change. Calling them
 # optional told a reader on a fresh machine that they could skip the one check
 # the project insists on.
@@ -97,7 +96,6 @@ echo "Required to verify (tests/run style refuses to run without these):"
 req cppcheck     cppcheck
 req shellcheck   shellcheck
 req clang-format clang-format
-req perl         perl
 
 echo
 echo "Optional (only some tasks need these):"
