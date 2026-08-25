@@ -90,7 +90,14 @@ add_local_keys() {
         [ -f "$extra" ] && cat "$extra"
     } > "$pub.tmp"
     [ -s "$pub.tmp" ] || { echo "gen_demo_key: composed an empty krffs/$pub" >&2; exit 1; }
-    mv "$pub.tmp" "$pub"
+    # Publish only a changed composition: an identical file keeps its
+    # timestamp, so a rebuild that regenerates credentials does not restage
+    # the images that carry them.
+    if [ -f "$pub" ] && cmp -s "$pub.tmp" "$pub"; then
+        rm -f "$pub.tmp"
+    else
+        mv "$pub.tmp" "$pub"
+    fi
     if [ -f "$extra" ]; then
         echo "gen_demo_key: krffs/$pub has the demo key and krffs/$extra"
     fi
