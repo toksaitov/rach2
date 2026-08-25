@@ -90,7 +90,7 @@ budgetmusl catfile cowfork ctrlcmusl devtest hello mallocqsort ofdmusl
 pipemusl pollmusl ptymusl rngmusl sigmusl sockfillmusl tcpsendrecv ttymusl
 ```
 
-Use `make help` and the root `Makefile` for the complete specialized target list. Several targets use the test image without running a program from these two lists.
+Use `tests/registry` and the root `Makefile` for the complete specialized suite list. Several suites use the test image without running a program from these two lists.
 
 ## Manual runs
 

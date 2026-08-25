@@ -1,6 +1,6 @@
 # Build, verification, and test tools
 
-The scripts under `tools/` support the top-level Make targets. Use `make help` to choose a target. The Makefile supplies prerequisites and arguments that are easy to omit when calling a script directly.
+The scripts under `tools/` support the top-level Make targets and the suite runner. The root Readme documents the public interface. The Makefile supplies prerequisites and arguments that are easy to omit when calling a script directly.
 
 Two scripts are also user entry points. `bootstrap_mac.sh` prepares a Mac, and `metal_accept.sh` reads acceptance data from a running machine over SSH. The other scripts are normally called by Make or by another tracked script.
 

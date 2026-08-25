@@ -7,7 +7,7 @@
 # system ships: busybox, dropbear, Doom, and the tcc compiler with pdpmake to
 # drive it).
 #
-# Quick start (run `make doctor` first to check your toolchain):
+# Quick start (the build checks its own tools; sh tools/doctor.sh is the wider report):
 #   make            build everything: kernel, host tools, guest programs, the
 #                   vendored userland, Doom, and the three RAM images. The
 #                   first build compiles the five vendor projects and takes
@@ -15,11 +15,10 @@
 #   make test       boot the test image and check every probe passes.
 #   tests/run NAME  run one named suite (style, host, ssh, all, ...).
 #   make isos       a bootable ISO per image, for real hardware (needs Docker).
-#   make doctor     check the toolchain (PASS/MISSING with install hints)
 #   make clean      remove the in-house build products and the images
 #   make distclean  + the vendored musl, busybox, dropbear, tcc and pdpmake
 #                   builds (full from-scratch)
-#   make help       list every target
+
 # Run a built image with rach2/run.sh <test|os-simple|os-real>; the build system
 # does not run QEMU (that script models the disk/audio/network/-cpu matrix).
 
@@ -1485,61 +1484,10 @@ distclean: clean
 	rm -rf build
 
 help:
-	@echo "Rach2 build targets:"
-	@echo "  make            kernel + the os-simple image (our login, shell and tools)"
-	@echo "  make            everything, including all the RAM-disk images"
-	@echo "  make images     the RAM-disk images (test, os-simple, os-real)"
-	@echo "  make test-image / os-simple-image / os-real-image   one image"
-	@echo "  make os-real-disk   the os-real tree on a partitioned ATA disk image"
-	@echo "  make os-real-grub-disk   a BIOS-bootable GRUB disk (needs Docker)"
-	@echo "  make rach2-sealed-disk   the sealed laptop disk: 64 MiB boot, 500 MiB root, 64 MiB recovery"
-	@echo "  make rach2-recovery      the recovery kernel, the only build that can write the whole disk"
-	@echo "  make rach2-recovery-image  the RAM root that kernel loads, with reflash and bootctl"
-	@echo "  make drill-test      the recovery drill: a destroyed root repaired over SSH"
-	@echo "  make sealed-test     the sealed disk, operated over SSH the way it will be"
-	@echo "  make authority-test  only a recovery kernel writes the whole disk"
-	@echo "  make menu-test    a staged boot menu, and the stub that catches a torn one"
-	@echo "  make grub-test    the machine replacing its own boot loader"
-	@echo "  make test       boot the test image and check every probe passes"
-	@echo "  make test-noentropy   the same image on a CPU with no RDSEED/RDRAND: the salt refusal"
-	@echo "  make test-disk / persist-test / crash-test / stress-test   disk integrity checks"
-	@echo "  make bootpart-test  the /dev/bootpart and /dev/grubcore windows and /proc/cmdline"
-	@echo "  make install-test   the machine installs its own kernel (Docker)"
-	@echo "  make cred-persist-test   a credential replacement read back after a reboot"
-	@echo "  make ping-test  the ICMP path: replies, the timeout, and who else runs while it waits"
-	@echo "  make raw-test   raw ICMP sockets, IP_TTL, and traceroute on the machine"
-	@echo "  make bootline-test  a boot line that contradicts itself is refused"
-	@echo "  make netconsole-test  the boot log leaves over Ethernet, captured and checked"
-	@echo "  make test-addressed   the same suite with the network named on the boot line"
-	@echo "  make metal-test  the metal image reached over SSH with nobody at its console"
-	@echo "  make diskpolicy-test  the read-only kernel leaves a disk byte for byte"
-	@echo "  make subset-test  the kernel boots with any subset of its optional devices"
-	@echo "  make diskdiag-test  a disk read over SSH without mounting it or writing a byte"
-	@echo "  make reset-test  each of the three restart mechanisms on its own"
-	@echo "  make test-disk-q35  the disk proof on the laptop's exact PCI topology"
-	@echo "  make tcc-test    the machine compiles a program on itself"
-	@echo "  make make-test   the machine builds one, and rebuilds only what changed"
-	@echo "  make selfbuild-test   the machine builds its own kernel (twice, hash-equal), utilities and shell"
-	@echo "  make ssh-test    the SSH capstone, both logins, unattended"
-	@echo "  make account-test   accounts created, authenticated and deleted, on both images"
-	@echo "  make shutdown-test  userland stops the machine, and only root can"
-	@echo "  make login-test the console cannot fall back to an unauthenticated shell"
-	@echo "  make exitline-test  the plain exit line prints under the debug shell only"
-	@echo "  make procfiles-test the /proc files, on the three mounts and through ps/df/free"
-	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
-	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
-	@echo "  make rach2-metal-image / rach2-metal-iso   the RAM-only image the Lenovo boots"
-	@echo "  make deps       vendored third-party (retired alias; make builds it)"
-	@echo "  make busybox / dropbear / tcc / pdpmake   one capstone's third-party build"
-	@echo "  make check-tcc / check-pdpmake   the compiler and make an image will carry"
-	@echo "  make doctor     check the toolchain (PASS/MISSING with install hints)"
-	@echo "  make verify-style / verify-host   quality gates"
-	@echo "  make compile-commands   regenerate compile_commands.json for clangd (IDE)"
-	@echo "  make check-sources      verify the kernel C_SRC list matches the sources on disk"
-	@echo "  make clean      remove the in-house build products and the images"
-	@echo "  make distclean  + the vendored musl, busybox, dropbear, tcc and pdpmake builds"
-	@echo ""
-	@echo "Run an image (the build system does not run QEMU):"
-	@echo "  cd rach2 && ./run.sh os-simple              # boot the os-simple image"
-	@echo "  cd rach2 && ./run.sh test                   # boot the test image"
-	@echo "  cd rach2 && ./run_from_disk.sh              # boot the GRUB disk (no -kernel; SSH on host 2222)"
+	@echo "help: retired: the Readme documents the interface" >&2
+	@echo "  make            build everything (kernel, userland, the three RAM images)"
+	@echo "  make test       build what the default suite needs and run it"
+	@echo "  tests/run NAME  run one suite (style, host, ssh, all, ...)"
+	@echo "  make clean      remove build output; keep the vendor builds and credentials"
+	@echo "  make distclean  remove the vendor builds and stamps too"
+	@echo "  rach2/run.sh IMAGE   boot a built image (test, os-simple, os-real)"

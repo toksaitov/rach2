@@ -22,7 +22,7 @@ Other useful targets are:
 * `make test` boots the test image and runs the default guest suite.
 * `tests/run NAME` runs one named suite; `tests/run selfbuild` builds the kernel, shell, and utilities on Rach2.
 * `tests/run style` and `tests/run host` run the required project checks.
-* `make help` summarizes common build and test targets.
+* `make clean` removes build output; `make distclean` also removes the vendor builds.
 
 Image targets only build artifacts. The run scripts and test targets start QEMU.
 
@@ -32,7 +32,7 @@ Image targets only build artifacts. The run scripts and test targets start QEMU.
 * `os-simple` uses the project's own init, login, ISH shell, and utilities.
 * `os-real` uses BusyBox and Dropbear and includes TinyCC, pdpmake, the musl development files, and the project sources under `/src`.
 
-Additional targets build persistent disks, GRUB images, metal images, and recovery images. `make help` gives their current names. The [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
+Additional targets build persistent disks, GRUB images, metal images, and recovery images. The root Makefile names them. The [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
 
 ## System
 
