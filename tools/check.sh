@@ -333,13 +333,16 @@ fi
 #     guards, so what is verified here is the checker itself: the kernel one
 #     must accept a well-formed kernel and refuse each malformed variant a
 #     loader would misload, the GRUB one must accept the configuration a core
-#     image has and refuse every way of losing the recovery path, and the
+#     image has and refuse every way of losing the recovery path, the
 #     sealed-network one must refuse every way the menu and the recovery script
-#     can come to describe two different machines.
+#     can come to describe two different machines, and the compilation-database
+#     generator must join wrapped recipes, select only compile commands, and
+#     refuse to publish an invalid database.
 hr "12/13 checker selftests"
 if python3 "$REPO/tools/check_kernel.py" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    python3 "$REPO/tools/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
-   python3 "$REPO/tools/check_sealednet.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
+   python3 "$REPO/tools/check_sealednet.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   sh "$REPO/tools/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_kernelck.log"; fail=1

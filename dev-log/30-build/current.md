@@ -4,13 +4,11 @@ This file holds only the resume state for the item in progress. Replace its cont
 
 ## Position
 
-* Active phase: 2, the compilation database.
-* Item in progress: reading `tools/gen_compile_commands.sh` to locate the wrapped-recipe selection and tab-escaping defects.
-* Exact next action: fix the generator, add its self-test with the wrapped Homebrew command, prove the self-test by restoring the defect, wire the self-test into the style checks, and rewrite `mk/Readme.md` and `tools/Readme.md` in the same commit.
+* Active phase: 3, the interface.
+* Item in progress: not started.
+* Exact next action: land the FUSE split in `krffs/Makefile` (core objects without FUSE flags, mount tool off the default graph), then build `tests/run` with the complete suite registry from the plan's end state.
 
-## Phase 1 baselines, recorded 2026-08-26 at commit f234cf9
+## Phase record
 
-* `make doctor`: pass, all required tools present.
-* Green run, every command exit zero: `make full` (warm, 3 s), `make verify-style` (23 s, 13 of 13), `make verify-host` (37 s, 36 tests), `make test` (96 s, 63 of 63 probes and the clock).
-* Cold baseline `make distclean && make full`: 60 s, with every vendor verified, extracted, patched, and rebuilt.
-* No-op baseline `make full`: 3 s (the phony image targets restage on every run; phase 5 item 1 addresses this).
+* Phase 1 complete at e4d3187. Baselines: cold `make distclean && make full` 60 s; no-op `make full` 3 s; `verify-style` 23 s; `verify-host` 37 s; `make test` 96 s, 63 of 63.
+* Phase 2 complete: the generator joins wrapped recipes, selects commands by first word, escapes control characters, validates before publication, and its 5-case `--selftest` runs in check 12. Both restored defects (no join, no tab escape) made the selftest fail; the published database parses as JSON with 203 entries.

@@ -27,7 +27,7 @@ Two scripts are also user entry points. `bootstrap_mac.sh` prepares a Mac, and `
 * Run the probe scorer's self-test.
 * Run the set-id checker's self-test and manifest sweep.
 * Build the KRFFS host tools and test deterministic image staging.
-* Run the kernel, embedded-GRUB, and sealed-network checker self-tests.
+* Run the kernel, embedded-GRUB, sealed-network, and compilation-database checker self-tests.
 * Check the dev-log index against the finished milestone directories.
 
 The supporting files have narrower jobs:
@@ -62,9 +62,7 @@ See [the host-test Readme](../tests/host/Readme.md) for the individual tests and
 
 ## clangd database
 
-`gen_compile_commands.sh` implements `make compile-commands`. It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/` and filters their command lines into `compile_commands.json`.
-
-The generator is currently defective on the Homebrew i686 toolchain. It can select a wrapped recipe continuation through the `i686-elf-gcc` text in a libgcc path and write an unescaped tab into the JSON string. The target then reports success with an invalid JSON file. See [the shared Make documentation](../mk/Readme.md) for the exact limitation and clangd settings.
+`gen_compile_commands.sh` implements `make compile-commands`. It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines, selects the cross-compile commands by their first word, and publishes `compile_commands.json` only after the finished file passes a line-by-line JSON validation and the kernel coverage check. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `make verify-style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
 
 ## QEMU runners and capture checkers
 
