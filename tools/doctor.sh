@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 #
-# tools/doctor.sh: Rach2 build/run toolchain preflight (run via `make doctor`).
+# tools/doctor.sh: the wider Rach2 machine-setup report, run directly.
 #
 # Reports each tool as PASS / MISSING / OPTIONAL with an install hint, and exits
 # non-zero if a tool in either required group is absent (or present but
@@ -65,7 +65,7 @@ req() {
 #
 # Four tools that used to sit here are required, not optional: `tools/check.sh`
 # refuses to start without cppcheck, shellcheck, clang-format and perl, and
-# `CLAUDE.md` requires `make verify-style` on every change. Calling them
+# `CLAUDE.md` requires `tests/run style` on every change. Calling them
 # optional told a reader on a fresh machine that they could skip the one check
 # the project insists on.
 opt() {
@@ -76,7 +76,7 @@ opt() {
     fi
 }
 
-echo "Rach2 toolchain check (make doctor)"
+echo "Rach2 toolchain check (tools/doctor.sh)"
 echo
 echo "Required (build + run the OS):"
 req i686-elf-gcc     cross
@@ -87,28 +87,12 @@ req i686-elf-ar      binutils
 req i686-elf-ranlib  binutils
 req i686-elf-nm      binutils
 req qemu-system-i386 qemu
-req pkg-config       pkgconf
 req make             make
 req cc               cc
 req python3          python3
 
-# FUSE for the krffs host tools (fuse-t on macOS, fuse on Linux), checked via
-# pkg-config. If pkg-config is missing OR broken (same probe req() uses for it),
-# FUSE is uncheckable; report that without counting it a second time (pkg-config
-# is already the failure above).
-if ! pkg-config --version >/dev/null 2>&1; then
-    row "[SKIP]" "FUSE" "cannot check until pkg-config works"
-elif pkg-config --exists fuse 2>/dev/null; then
-    row "[PASS]" "FUSE" "fuse ($(pkg-config --modversion fuse 2>/dev/null))"
-elif pkg-config --exists fuse-t 2>/dev/null; then
-    row "[PASS]" "FUSE" "fuse-t ($(pkg-config --modversion fuse-t 2>/dev/null))"
-else
-    row "[MISSING]" "FUSE" "$(hint fuse)"
-    missing=$((missing + 1))
-fi
-
 echo
-echo "Required to verify (make verify-style refuses to run without these):"
+echo "Required to verify (tests/run style refuses to run without these):"
 req cppcheck     cppcheck
 req shellcheck   shellcheck
 req clang-format clang-format
@@ -119,13 +103,26 @@ echo "Optional (only some tasks need these):"
 opt docker       "make isos / os-real-grub-disk" docker
 opt ssh-keygen   "the SSH capstone demo key" openssh
 opt git          "cloning and committing" git
-opt expect       "make ssh-test" expect
-opt gtimeout     "make sealed-test (coreutils on macOS)" coreutils
+opt expect       "tests/run ssh" expect
+opt gtimeout     "tests/run sealed (coreutils on macOS)" coreutils
+
+# FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the
+# default build or the suites needs it. Checked via pkg-config, which is now
+# also optional for the same reason.
+if ! pkg-config --version >/dev/null 2>&1; then
+    row "[----]" "FUSE" "optional; cannot check without pkg-config (pkgconf)"
+elif pkg-config --exists fuse 2>/dev/null; then
+    row "[PASS]" "FUSE" "fuse ($(pkg-config --modversion fuse 2>/dev/null))"
+elif pkg-config --exists fuse-t 2>/dev/null; then
+    row "[PASS]" "FUSE" "fuse-t ($(pkg-config --modversion fuse-t 2>/dev/null))"
+else
+    row "[----]" "FUSE" "optional, for make -C krffs mount; $(hint fuse)"
+fi
 
 echo
 if [ "$missing" -eq 0 ]; then
     echo "doctor: all required tools present"
     exit 0
 fi
-echo "doctor: $missing required tool(s) missing; install them (hints above), then re-run 'make doctor'" >&2
+echo "doctor: $missing required tool(s) missing; install them (hints above), then re-run 'sh tools/doctor.sh'" >&2
 exit 1

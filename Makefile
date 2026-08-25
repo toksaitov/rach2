@@ -95,7 +95,7 @@ MKDISK          = krffs/mkdisk.sh
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
         compile-commands check-sources \
-        verify-style verify-host run-style run-host run-default doctor help \
+        verify-style verify-host run-style run-host run-default preflight doctor help \
         musl busybox dropbear tcc pdpmake $(BASE_DIRS) $(FULL_DIRS)
 
 # Default: everything reusable. The three RAM images pull in the kernel, the
@@ -105,6 +105,15 @@ MKDISK          = krffs/mkdisk.sh
 # own file under build/images/, so they coexist instead of overwriting one
 # shared image.
 all: images
+
+# The cached tool check (tools/preflight.sh): a missing or changed build tool
+# fails here, named, before any compilation. It is an order-only prerequisite
+# of the build entry points; clean and distclean never run it.
+preflight:
+	@./tools/preflight.sh
+
+all images $(BASE_DIRS) $(FULL_DIRS): | preflight
+$(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP): | preflight
 
 # Retired names, kept as aliases for this milestone only. `full` was the old
 # everything build; `deps` built vendor stamps that are now ordinary
@@ -1412,6 +1421,7 @@ check-libc: $(LIBC_STAMP)
 
 # --- toolchain preflight + quality gates ---
 doctor:
+	@echo "doctor: retired: make checks its own tools; this remains the setup report" >&2
 	@./tools/doctor.sh
 
 # The style suite (see tools/check.sh): -Werror build, scoped cppcheck,

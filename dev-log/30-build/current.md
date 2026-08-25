@@ -5,8 +5,8 @@ This file holds only the resume state for the item in progress. Replace its cont
 ## Position
 
 * Active phase: 3, the interface.
-* Item in progress: default scope done (clean `make` builds everything in 59 s, no-op 3 s, aliases print notices, style and host pass). Next: the cached preflight replacing `doctor`, then the `help` retirement.
-* Exact next action: write `tools/preflight.sh` with the fingerprint cache, wire it into `make` and `tests/run`, alias `doctor`, and prove the missing-tool, warmed-cache, invalidation, cheap-hit, and clean-bypass cases.
+* Item in progress: preflight done and proved (missing tool named before compilation; warmed cache detects a hidden tool; script change invalidates; 53 ms cached hit; clean and distclean bypass it). `doctor` is a notice alias for the direct setup report, FUSE and pkg-config moved to doctor's optional group. Next: the `help` and `compile-commands` retirement notices, closing phase 3.
+* Exact next action: alias `help` (the Readme is the interface) and add the `compile-commands` notice, then run style, host, and `make test` and commit.
 
 ## Phase record
 
