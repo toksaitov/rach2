@@ -79,6 +79,7 @@ OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
 # The suites' wall-clock limit tool (see its rule below).
 DEADLINE        = build/tests/system/deadline
+BINFIND         = build/tools/inspect/binfind
 MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test test-disk bootpart-test install-test \
@@ -274,6 +275,12 @@ build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs: | ch
 # replacing coreutils' gtimeout. Built with the host compiler like the KRFFS
 # tools.
 $(DEADLINE): tests/system/runner/deadline.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+# The binary byte searcher (tools/inspect/binfind.c), replacing strings(1)
+# piped to grep in the TinyCC policy check.
+$(BINFIND): tools/inspect/binfind.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
@@ -1490,7 +1497,7 @@ check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN)
 	    exit 1; }
 	@python3 tools/inspect/check_elf.py $(PDPMAKE_BIN)
 
-check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS)
+check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS) $(BINFIND)
 	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	          build/vendor/tcc/include/stdarg.h \
 	          build/vendor/tcc/include/stddef.h \
@@ -1503,7 +1510,7 @@ check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS)
 	@python3 tools/inspect/check_elf.py $(TCC_BIN)
 	@for m in "must be linked with -static" "run is not available" \
 	          "shared is not available" "must be an ELF"; do \
-	    strings $(TCC_BIN) | grep -q -- "$$m" || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm vendor/tcc/.stamp and rebuild" >&2; exit 1; }; \
+	    $(BINFIND) "$$m" $(TCC_BIN) || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm vendor/tcc/.stamp and rebuild" >&2; exit 1; }; \
 	done
 
 check-busybox: $(BUSYBOX_STAMP) $(BUSYBOX_OUTPUTS)
