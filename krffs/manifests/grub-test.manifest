@@ -26,6 +26,9 @@ file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 # Ours, and reachable as a bare `ping` only because busybox's applet is gone:
 # that one wants SOCK_RAW, which this kernel's socket layer does not offer.
 file 0755 /bin/ping build/utils/ping
+# The boot log reader, matching os-real: `dmesg` here is a script over
+# /dev/bootlog, because this kernel has no klogctl ring.
+file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 optional-file 0755 /bin/doom build/ports/doom/doom
 
