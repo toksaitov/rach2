@@ -61,7 +61,7 @@ The repository's host Makefiles require GNU Make. pdpmake reads the three POSIX 
 * `utils/guest.mk` builds 29 utility programs.
 * `ish/guest.mk` builds the shell from five objects.
 
-`tools/check_guest.py` compares their source and object lists with the host Makefiles. The self-build images stage the corresponding trees as `/src/rach2`, `/src/utils`, and `/src/ish`, together with pdpmake, TinyCC, its runtime archive, and the static musl development files. An ordinary user builds from a writable copy. Root may build the staged trees in place.
+Each guest makefile includes its component's shared source manifest, the same file the host build reads; `tools/check_guest.py` checks the derivations. The self-build images stage the corresponding trees as `/src/rach2`, `/src/utils`, and `/src/ish`, together with pdpmake, TinyCC, its runtime archive, and the static musl development files. An ordinary user builds from a writable copy. Root may build the staged trees in place.
 
 Use the named guest makefile from its directory:
 

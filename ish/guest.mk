@@ -5,15 +5,16 @@
 # has its own crt0 and raw syscall stubs, so it links -nostdlib the way
 # the host build does; the one host flag that is dropped is -Ttext, because
 # tcc's default i386 text base is the same 0x08048000 the host build names
-# explicitly. The object list below must equal the host Makefile's;
-# tools/check_guest.py has the two equal on the host.
+# explicitly. Both makefiles include sources.mk, so one file lists the
+# sources for the two builds; tools/check_guest.py checks the derivation.
 #
 # Run from a writable copy of this tree: make -f guest.mk
 
 ICC = cc
 
-OBJS = crt0.o ish.o ish_shell_utilities.o ish_cstring_utilities.o \
-       ish_syscalls.o
+include sources.mk
+
+OBJS = $(ISH_SRC:.c=.o)
 
 ish: $(OBJS)
 	$(ICC) -m32 -nostdlib -static -o ish $(OBJS)

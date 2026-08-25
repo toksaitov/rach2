@@ -13,10 +13,12 @@ CFLAGS = -m32 -ffreestanding $(DEPFLAGS)
 LDFLAGS = -m32 -nostdlib -static -Wl,-Ttext=0x08048000
 
 # Everything builds out of tree under $(BUILD) (build/ish/, from mk/build.mk): the
-# objects and the ish binary the RAM-disk staging picks up.
+# objects and the ish binary the RAM-disk staging picks up. The source list
+# lives in sources.mk, which guest.mk includes too, so one file describes
+# both builds.
+include sources.mk
 TARGET = $(BUILD)/ish
-OBJECTS = $(addprefix $(BUILD)/, crt0.o ish.o ish_shell_utilities.o \
-                                 ish_cstring_utilities.o ish_syscalls.o)
+OBJECTS = $(addprefix $(BUILD)/, $(ISH_SRC:.c=.o))
 
 .PHONY: all clean
 

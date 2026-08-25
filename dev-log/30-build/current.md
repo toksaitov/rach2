@@ -5,8 +5,8 @@ This file holds only the resume state for the item in progress. Replace its cont
 ## Position
 
 * Active phase: 4, shared source manifests.
-* Item in progress: kernel manifest done: `rach2/sources.mk` included by both builds, `guest.mk` derives `OBJS` and writes the response file from it in one builtin printf (1587 bytes expanded, budget 2572), `check_guest.py` learned includes and substitution references. Proofs: host kernel hash unchanged (148594d07c3b105210a0), planted nonexistent source fails both descriptions by name, header edit rebuilds 23 of 83 objects, self-build hash equals the milestone 29 record (fba1c906...). Next: the utils manifest, then ISH.
-* Exact next action: read `utils/Makefile` and `utils/guest.mk`, move the program map and companion sources into a shared file, and prove the same way.
+* Item in progress: phase 4 complete. All three components build from shared manifests (`rach2/sources.mk` at 391c901, `utils/programs.mk`, `ish/sources.mk`), `check_guest.py` checks derivations, includes, and substitution references, and the docs name the new contract. Proofs per component: unchanged output hashes (kernel 148594d0..., utils set f0da6d2d..., ish eaf64ab0...), planted nonexistent sources failing both descriptions by name, and two full self-builds (259 to 261 s) with the guest kernel hash still equal to the milestone 29 record.
+* Exact next action: commit the utils and ISH conversions, then start phase 5, incremental correctness, item 1: real image file targets with the staging closure.
 * Phase 3 completed at fa0436e: interface is make, make test, tests/run NAME, clean, distclean, run.sh; retired names print notices; preflight cached; FUSE optional; compile-commands alias retires in phase 6 with the script move.
 
 ## Phase record
