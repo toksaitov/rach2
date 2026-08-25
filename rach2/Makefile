@@ -54,7 +54,7 @@ CFLAGS += $(KEXTRA)
 all : $(KERNEL_BIN)
 
 # Bootable ISO images are built per RAM-disk image at the top level (make isos; see
-# tools/mkiso.sh), so this Makefile only builds the kernel.
+# tools/image/mkiso.sh), so this Makefile only builds the kernel.
 
 # Kernel
 

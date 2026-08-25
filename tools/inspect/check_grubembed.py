@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check the configuration built into a GRUB core image.
 
-Two builders write core images for this project: `tools/mkdisk_grub.sh` writes
-the one a disk ships with, and `tools/mkgrubcore.sh` writes the ones `bootctl
-grub` installs over it. Both embed `tools/grub-embed.cfg`, and what that file
+Two builders write core images for this project: `tools/image/mkdisk_grub.sh` writes
+the one a disk ships with, and `tools/image/mkgrubcore.sh` writes the ones `bootctl
+grub` installs over it. Both embed `tools/image/grub-embed.cfg`, and what that file
 must say is the difference between a machine that can be repaired when its boot
 partition is damaged and one that cannot: two `configfile` calls, partition 1
 first and partition 3 second.

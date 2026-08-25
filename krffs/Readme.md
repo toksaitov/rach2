@@ -1,6 +1,6 @@
 # krffs/: host file-system tools
 
-This directory contains the host implementation of KRFFS and the tools that create, inspect, and stage the file-system images used by Rach2. The kernel implementation is documented in `rach2/sys/fs/Readme.md`. GRUB disk construction belongs to `tools/mkdisk_grub.sh` and is documented in `tools/Readme.md`.
+This directory contains the host implementation of KRFFS and the tools that create, inspect, and stage the file-system images used by Rach2. The kernel implementation is documented in `rach2/sys/fs/Readme.md`. GRUB disk construction belongs to `tools/image/mkdisk_grub.sh` and is documented in `tools/Readme.md`.
 
 ## Build
 

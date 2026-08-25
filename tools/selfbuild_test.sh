@@ -356,7 +356,7 @@ if command -v docker >/dev/null 2>&1; then
 fi
 if [ "$docker_ready" -eq 0 ]; then
     GRUB_DISK="$DISK.grub"
-    if ! bounded 900 sh tools/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
+    if ! bounded 900 sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
         rm -f "$GRUB_DISK"
         fail "the GRUB disk around the built kernel did not assemble inside its bound"
     fi

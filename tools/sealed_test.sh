@@ -445,7 +445,7 @@ phase "the boot loader, replaced and put back"
 # A core image with a marker in it, installed into the tail that is not in use.
 # The marker prints before anything on a partition, so what it proves is which
 # image the machine is running, not which bytes are at rest.
-sh "$REPO/tools/mkgrubcore.sh" SEALEDCORE1 "$CORE" > /dev/null 2>&1 || \
+sh "$REPO/tools/image/mkgrubcore.sh" SEALEDCORE1 "$CORE" > /dev/null 2>&1 || \
     fail "the marked core image could not be built"
 cold_boot core
 machine 'cat > /tmp/core.img' < "$CORE" > /dev/null 2>&1 || fail "the core image did not arrive"
@@ -470,7 +470,7 @@ esac
 # not running, so a second install has to land in the other one: a defect in
 # that direction alone would leave a machine whose next loader update makes GRUB
 # unreachable, and recovery with it.
-sh "$REPO/tools/mkgrubcore.sh" SEALEDCORE2 "$CORE" > /dev/null 2>&1 || \
+sh "$REPO/tools/image/mkgrubcore.sh" SEALEDCORE2 "$CORE" > /dev/null 2>&1 || \
     fail "the second core image could not be built"
 machine 'cat > /tmp/core.img' < "$CORE" > /dev/null 2>&1 || fail "the second core did not arrive"
 OUT="$(machine 'bootctl grub /tmp/core.img' || true)"

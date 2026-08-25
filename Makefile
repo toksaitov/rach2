@@ -436,7 +436,7 @@ os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-seti
 os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
-	sh tools/mkdisk_grub.sh
+	sh tools/image/mkdisk_grub.sh
 
 # `make rach2-metal-grub-disk`: the disk that goes INTO the laptop, imaged over
 # a USB adapter and swapped in place of the Windows disk. The full os-real
@@ -453,7 +453,7 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
 	RACH2_DISK_KRFFS_MB=500 \
 	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole" \
-	    sh tools/mkdisk_grub.sh build/rach2/kernel $(METAL_GRUB_DISK)
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(METAL_GRUB_DISK)
 
 # `make rach2-sealed-disk`: the disk milestone 25 seals into the laptop, written
 # once over a USB adapter and not removed again. Its geometry is the milestone's
@@ -502,7 +502,7 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 	RACH2_DISK_STATIC_APPEND="rach2.ip=$(SEALED_IP) rach2.gateway=$(SEALED_GATEWAY)" \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
 # (-cpu max) and runs every probe, failing if any does not exit 0. The few probes
@@ -622,8 +622,8 @@ bootpart-test: rach2 tests krffs
 GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
 grub-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
-	sh tools/mkgrubcore.sh A $(IMAGES_DIR)/core-a.img
-	sh tools/mkgrubcore.sh B $(IMAGES_DIR)/core-b.img
+	sh tools/image/mkgrubcore.sh A $(IMAGES_DIR)/core-a.img
+	sh tools/image/mkgrubcore.sh B $(IMAGES_DIR)/core-b.img
 	sed -e '/^#/d' -e '/^$$/d' -e '\|^file 0644 /core-[ab]\.img|d' \
 	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
 	sed -e '/^#/d' -e '/^$$/d' krffs/manifests/os-real.manifest \
@@ -631,7 +631,7 @@ grub-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
 	RACH2_DISK_MANIFEST=krffs/manifests/grub-test.manifest \
-	    sh tools/mkdisk_grub.sh build/rach2/kernel $(GRUB_TEST_DISK)
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(GRUB_TEST_DISK)
 	sh tools/grub_test.sh $(GRUB_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 
@@ -649,7 +649,7 @@ menu-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
-	sh tools/mkdisk_grub.sh build/rach2/kernel $(MENU_TEST_DISK)
+	sh tools/image/mkdisk_grub.sh build/rach2/kernel $(MENU_TEST_DISK)
 	sh tools/menu_test.sh $(MENU_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 
@@ -695,7 +695,7 @@ install-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-seti
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
-	sh tools/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
+	sh tools/image/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
 	sh tools/install_test.sh $(INSTALL_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 
@@ -740,7 +740,7 @@ drill-test: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid
 	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
 	sh tools/drill_test.sh $(DRILL_DISK) \
 	    "`cat krffs/rach2_demo_password`" 2298
 
@@ -1450,16 +1450,16 @@ stress-test-ahci: rach2 tests krffs
 
 # Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
 # image as GRUB multiboot modules, built by grub-mkrescue in a throwaway Docker
-# container (see tools/mkiso.sh). Output: build/images/<image>.iso.
+# container (see tools/image/mkiso.sh). Output: build/images/<image>.iso.
 isos: test-iso os-simple-iso os-real-iso rach2-metal-iso
 test-iso: test-image
-	sh tools/mkiso.sh test
+	sh tools/image/mkiso.sh test
 os-simple-iso: os-simple-image
-	sh tools/mkiso.sh os-simple
+	sh tools/image/mkiso.sh os-simple
 os-real-iso: os-real-image
-	sh tools/mkiso.sh os-real
+	sh tools/image/mkiso.sh os-real
 rach2-metal-iso: rach2-metal rach2-metal-image
-	sh tools/mkiso.sh rach2-metal
+	sh tools/image/mkiso.sh rach2-metal
 
 # The staged capstone binaries are the REAL prerequisites of the os-real image. A
 # stamp only proves its build RAN; the artifact can be deleted OR truncated afterwards

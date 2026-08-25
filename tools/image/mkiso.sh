@@ -28,13 +28,14 @@ case "$IMAGE" in
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# The Ubuntu image, pinned by digest in tools/ubuntu-image.txt: a tag moves,
+# The Ubuntu image, pinned by digest in ubuntu-image.txt beside this
+# script: a tag moves,
 # and a GRUB built from a different grub-pc is a change nobody chose.
 UBUNTU_IMAGE="$(sed -n 's/^\(ubuntu@sha256:[0-9a-f]*\)$/\1/p' \
-                "$REPO/tools/ubuntu-image.txt" | head -1)"
-[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/ubuntu-image.txt has no digest" >&2; exit 1; }
+                "$REPO/tools/image/ubuntu-image.txt" | head -1)"
+[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/image/ubuntu-image.txt has no digest" >&2; exit 1; }
 # The metal profile has the kernel that cannot write a disk, and no other
 # profile does. This is the stick that goes into a laptop whose SSD has
 # somebody's Windows, so the artifact is checked here, not assumed:

@@ -35,7 +35,7 @@
 
 /* Where the blocklist lives in the entry sector: an 8-byte LBA at 0x1f4, a
  * 16-bit sector count at 0x1fc, and the real-mode segment the tail is read
- * into at 0x1fe. The first two are the offsets `tools/grub_embed.py` patches
+ * into at 0x1fe. The first two are the offsets `grub_embed.py` patches
  * when the disk is built. The segment is not patched by anything here; it is
  * checked, because GRUB's own image builder always writes 0x0820 (the kernel
  * segment 0x0800 plus the entry sector) and a file that does not carry it is

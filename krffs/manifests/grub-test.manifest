@@ -162,6 +162,6 @@ optional-file 0644 /doom1.wad ports/doom/doom1.wad
 
 # The two core images `make grub-test` builds, each with a marker inside it that
 # names which one it is, so a boot can be told apart by what its own boot loader
-# prints. See tools/mkgrubcore.sh.
+# prints. See tools/image/mkgrubcore.sh.
 file 0644 /core-a.img build/images/core-a.img
 file 0644 /core-b.img build/images/core-b.img

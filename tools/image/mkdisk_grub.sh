@@ -34,13 +34,14 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# The Ubuntu image, pinned by digest in tools/ubuntu-image.txt: a tag moves,
+# The Ubuntu image, pinned by digest in ubuntu-image.txt beside this
+# script: a tag moves,
 # and a GRUB built from a different grub-pc is a change nobody chose.
 UBUNTU_IMAGE="$(sed -n 's/^\(ubuntu@sha256:[0-9a-f]*\)$/\1/p' \
-                "$REPO/tools/ubuntu-image.txt" | head -1)"
-[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/ubuntu-image.txt has no digest" >&2; exit 1; }
+                "$REPO/tools/image/ubuntu-image.txt" | head -1)"
+[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/image/ubuntu-image.txt has no digest" >&2; exit 1; }
 
 # The kernel and output default to the host build's, and both can be named:
 # the self-build proof hands the guest-built kernel here and boots the result.
@@ -340,7 +341,7 @@ mv "$GRUB_CFG.new" "$GRUB_CFG"
 # The menu on partition 3. Everything above lives on partition 1, and a machine
 # whose boot partition is damaged cannot read any of it: no menu, no entry, no
 # recovery. What reaches this file is the configuration built into the core
-# image, `tools/grub-embed.cfg`, which says there why it is shaped as it is;
+# image, `grub-embed.cfg` beside this script, which says why it is shaped so;
 # `configfile` does not retarget the root, which is why this file sets its own.
 cat > "$RECOVERY_CFG" <<'RCFG'
 set root=(hd0,msdos3)
@@ -365,7 +366,7 @@ sed -e "s|RACH2_STATIC_TOKENS|$STATIC_APPEND|" \
     -e "s|RACH2_APPEND_TOKENS|$EXTRA_APPEND|" "$RECOVERY_CFG" > "$RECOVERY_CFG.new"
 mv "$RECOVERY_CFG.new" "$RECOVERY_CFG"
 
-cp "$REPO/tools/grub-embed.cfg" "$EMBED_CFG"
+cp "$REPO/tools/image/grub-embed.cfg" "$EMBED_CFG"
 
 # The lines whose absence is silent: a core that cannot reach partition 3 boots
 # every ordinary machine and no damaged one, and one that reaches it first sends
@@ -507,7 +508,7 @@ print(\"mkdisk_grub: boot files verified at %d bytes per cluster:\" % cbytes,
         -c '$EMBED_CFG' \
         biosdisk part_msdos fat normal multiboot configfile loadenv echo \
         test serial terminal
-    python3 '$REPO/tools/grub_embed.py' '$OUT.new' \
+    python3 '$REPO/tools/image/grub_embed.py' '$OUT.new' \
         /usr/lib/grub/i386-pc/boot.img /tmp/core.img
 
     dd if='$KRFFS_BIN' of='$OUT.new' bs=1M seek=$((GAP_MB + BOOT_MB)) \
