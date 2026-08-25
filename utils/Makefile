@@ -49,9 +49,15 @@ include programs.mk
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
 SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
 
+# The configuration fingerprint (mk/fingerprint.mk): a changed flag, link
+# input, or reinstalled compiler rebuilds every program automatically.
+CONFIG_TEXT = $(CC) $(CFLAGS) $(LINK_PRE) $(LINK_POST)
+include ../mk/fingerprint.mk
+
 .PHONY: all clean libc-check prune-stale
 
 all: prune-stale $(TARGETS) $(SBIN_TARGETS)
+
 
 $(TARGETS) $(SBIN_TARGETS): | libc-check
 

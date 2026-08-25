@@ -6,6 +6,7 @@ The files under `mk/` define the common GNU Make settings for in-house host buil
 * `deps.mk` defines `DEPFLAGS := -MMD -MP`. These options write header dependencies and tolerate a header removed since the preceding build.
 * `build.mk` defaults `TOP` to `..`, `COMPONENT` to the current directory name, and `BUILD` to `$(TOP)/build/$(COMPONENT)`. A Makefile can override each value before including it.
 * `rules.mk` supplies a `$(BUILD)/%.o` C compile rule and includes the resulting `.d` files. `ish/` uses it directly. Other components have compile rules for their own source and link layouts.
+* `fingerprint.mk` writes the component's resolved configuration (compiler path and identity, flags) to `$(BUILD)/.config` at parse time, touching it only on a change. Objects and programs depend on it, so a flag edit or a reinstalled compiler rebuilds the affected tree automatically.
 
 ## Output directories
 

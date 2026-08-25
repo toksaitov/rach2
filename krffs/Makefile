@@ -45,8 +45,16 @@ TARGETS = $(addprefix $(BUILD)/, mkfs.krffs defrag.krffs fsck.krffs \
 # never modified.
 MUSL_CRYPT = $(TOP)/vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
 
+# The configuration fingerprint (mk/fingerprint.mk): a changed flag or host
+# compiler rebuilds every object automatically. The optional mount tool's
+# pkg-config flags stay out of the text so a default build never runs
+# pkg-config.
+CONFIG_TEXT = $(CC) $(CFLAGS)
+include ../mk/fingerprint.mk
+
 .PHONY : all mount libc-check fuse-check
 all : $(TARGETS)
+
 
 # The FUSE mount tool is not part of the default build: staging and checking
 # images never mounts one, and FUSE is the one host library the other tools do

@@ -40,9 +40,15 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
 # the source tree stays clean and the RAM-disk staging picks the binaries up there.
 TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 
+# The configuration fingerprint (mk/fingerprint.mk): a changed flag or a
+# reinstalled compiler rebuilds every probe automatically.
+CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS)
+include ../mk/fingerprint.mk
+
 .PHONY: all clean
 
 all: $(TARGETS)
+
 
 # Each probe is a single freestanding source compiled+linked in one step; -MMD (from
 # $(DEPFLAGS)) writes the deps, -MF puts that .d under $(BUILD), so editing a shared

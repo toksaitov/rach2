@@ -72,31 +72,18 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
 	python3 ../tools/check_kernel.py "$$tmp" && \
 	mv "$$tmp" $@
 
-# A build tree remembers the flags it was built with, and refuses to be built
-# again with different ones. The reason is -DRACH2_DISK_READONLY: make decides
-# what to rebuild from timestamps, which say nothing about compiler flags, so
-# building one tree twice with different switches links some objects from each
-# and produces a kernel that reports one policy and enforces the other. That is
-# the single artifact this milestone cannot ship, and a partial rebuild is a
-# worse answer than a refusal, because a refusal is visible. The two kernels
-# therefore live in two trees (COMPONENT=rach2-metal for the read-only one) and
-# this stops the trees being crossed.
-KFLAGS_STAMP = $(BUILD)/.kflags
+# The configuration fingerprint (mk/fingerprint.mk): make decides what to
+# rebuild from timestamps, which say nothing about compiler flags, so
+# building one tree twice with different switches would link some objects
+# from each and produce a kernel that reports one policy and enforces the
+# other, the single artifact this build must not ship. A changed
+# configuration (such as -DRACH2_DISK_READONLY reaching the wrong tree)
+# purges the whole object tree at parse time, so the component rebuilds
+# from nothing and never mixes two option sets. The two policy kernels
+# still live in two trees (COMPONENT=rach2-metal for the read-only one).
+CONFIG_TEXT = $(CC) $(CFLAGS) $(LD) $(LDFLAGS)
+include ../mk/fingerprint.mk
 
-.PHONY : kflags
-kflags :
-	@mkdir -p $(BUILD)
-	@if [ -f $(KFLAGS_STAMP) ] && ! printf '%s\n' '$(CFLAGS)' | cmp -s - $(KFLAGS_STAMP); then \
-	    echo "rach2: $(BUILD) was built with different flags:" >&2; \
-	    echo "rach2:   built with: $$(cat $(KFLAGS_STAMP))" >&2; \
-	    echo "rach2:   asked for:  $(CFLAGS)" >&2; \
-	    echo "rach2: remove $(BUILD) and build again; mixing the two would link" >&2; \
-	    echo "rach2: objects from both and the kernel would enforce neither policy" >&2; \
-	    exit 1; \
-	fi
-	@printf '%s\n' '$(CFLAGS)' > $(KFLAGS_STAMP)
-
-$(ASM_OBJECTS) $(C_OBJECTS) : | kflags
 
 $(ASM_OBJECTS) : $(BUILD)/%.o : %.s
 	@mkdir -p $(dir $@)

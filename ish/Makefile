@@ -20,9 +20,15 @@ include sources.mk
 TARGET = $(BUILD)/ish
 OBJECTS = $(addprefix $(BUILD)/, $(ISH_SRC:.c=.o))
 
+# The configuration fingerprint (mk/fingerprint.mk): a changed flag or a
+# reinstalled compiler rebuilds every object automatically.
+CONFIG_TEXT = $(CC) $(CFLAGS) $(LDFLAGS)
+include ../mk/fingerprint.mk
+
 .PHONY: all clean
 
 all: $(TARGET)
+
 
 $(TARGET): $(OBJECTS)
 	@mkdir -p $(dir $@)

@@ -22,7 +22,7 @@ By default, the host Makefile compiles the kernel as freestanding C89 with `i686
 
 `C_SRC` and `ASM_SRC` in `sources.mk` are explicit source lists, included by both the host `Makefile` and `guest.mk`, the POSIX makefile that pdpmake and TinyCC use on Rach2, so one file describes both builds. `make check-sources` checks the C list against the tree, and `tools/check_guest.py` checks the guest derivation and limits. Host objects and dependency files are under `build/rach2/`; the guest build writes into its writable copy of the source tree.
 
-The metal and recovery kernels use separate component names and object trees. A flag stamp prevents reuse of one tree with different compiler options.
+The metal and recovery kernels use separate component names and object trees. A configuration fingerprint under each tree rebuilds it automatically when the resolved compiler options change, so one tree never mixes objects from two option sets.
 
 ## Architecture
 
