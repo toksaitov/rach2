@@ -100,10 +100,6 @@ wait_token() {
     return 1
 }
 
-if ! command -v expect >/dev/null 2>&1; then
-    echo "ssh-test: expect(1) is needed for the password half; install it" >&2
-    exit 2
-fi
 
 rm -f "$WORK"
 cp "$DISK" "$WORK"
@@ -174,54 +170,37 @@ case "$OUT" in
     *) fail "the key login did not arrive as root: $OUT" ;;
 esac
 
-# One password login, run through expect because ssh reads a password from a
-# terminal and not from a pipe. What comes back is the session's output plus two
-# lines this script reads: whether a password was ever ASKED for, since a server
-# that let somebody in without asking would otherwise be read as a password
-# login, and expect's own exit status, so a script that died before it ever
-# spoke to the server cannot be read as an answer from the server.
+# One password login, run through the pty driver because ssh reads a
+# password from a terminal and not from a pipe. What comes back is the
+# session's output plus two lines this script reads: whether a password was
+# ever ASKED for, since a server that let somebody in without asking would
+# otherwise be read as a password login, and the driver's own exit status,
+# so a run that died before it ever spoke to the server cannot be read as an
+# answer from the server.
 #
 # The number of prompts is an argument: a login that is expected to work gets
 # the ordinary three, and one that is expected to be refused gets one, so a
 # wrong password is answered once and the attempt ends instead of sitting
 # through two more.
 #
-# Everything variable reaches Tcl through the environment, and the script is
-# held in single quotes so the shell expands none of it. Pasting a password into
-# Tcl source is how a `[`, a `$` or a quote in a generated password becomes a
-# Tcl error instead of a login, and an attempt that failed to run at all would
-# have satisfied every check below that asks for the ABSENCE of a token.
+# The driver sizes the pty at 40 rows by 100 columns; the session's window
+# size is part of what the checks below prove. The password travels in the
+# environment, never in an argument a process listing could show.
 ssh_password() {
-    # The `$env(...)` below are Tcl's, read at run time by expect, and must not
-    # be expanded by the shell; that is the whole point of this function.
-    # shellcheck disable=SC2016
-    RACH2_USER="$1" RACH2_PASSWORD="$2" RACH2_PROMPTS="$3" RACH2_COMMAND="$4" \
-    RACH2_PORT="$PORT" RACH2_KNOWN="$KNOWN" expect -c '
-set timeout 60
-log_user 0
-set asked 0
-# The size the client will ask the server for. expect gives the spawned ssh a
-# terminal of its own, and a terminal with no size asks for none: the session
-# then has a zero window, which is not a fault in the machine but is
-# indistinguishable from one in a test.
-set stty_init "rows 40 columns 100"
-spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=$env(RACH2_KNOWN) \
-    -o ConnectTimeout=20 -o PubkeyAuthentication=no \
-    -o PreferredAuthentications=password \
-    -o NumberOfPasswordPrompts=$env(RACH2_PROMPTS) -tt \
-    -p $env(RACH2_PORT) $env(RACH2_USER)@localhost $env(RACH2_COMMAND)
-expect {
-  -re {[Pp]assword:} { set asked 1; send -- "$env(RACH2_PASSWORD)\r"; exp_continue }
-  eof { puts $expect_out(buffer) }
-  timeout { puts TIMEDOUT }
-}
-puts "PROMPTED=$asked"' 2>&1
-    echo "EXPECTRC=$?"
+    RACH2_PASSWORD="$2" python3 "$REPO/tests/system/runner/ptydrive.py" \
+        --rows 40 --cols 100 --timeout 60 -- \
+        ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+        -o ConnectTimeout=20 -o PubkeyAuthentication=no \
+        -o PreferredAuthentications=password \
+        -o "NumberOfPasswordPrompts=$3" -tt \
+        -p "$PORT" "$1@localhost" "$4" 2>&1
+    echo "DRIVERRC=$?"
 }
 
 # Require an attempt to have been REFUSED, not merely to have run
-# nothing. An ssh that could not connect, a server that had died, and a Tcl
-# error all produce no session and no token; only the server saying no produces
+# nothing. An ssh that could not connect, a server that had died, and a
+# driver error all produce no session and no token; only the server saying
+# no produces
 # this line. $1 is the output, $2 names the attempt.
 require_denied() {
     case "$1" in
@@ -233,11 +212,11 @@ require_denied() {
     esac
 }
 
-# And require the attempt to have been made at all: expect returns non-zero for
-# a Tcl error, which is a run that never reached the server.
+# And require the attempt to have been made at all: the driver returns
+# non-zero for a run that never reached the server.
 require_ran() {
     case "$1" in
-        *"EXPECTRC=0"*) ;;
+        *"DRIVERRC=0"*) ;;
         *) fail "$2 did not run to the end: $1" ;;
     esac
 }

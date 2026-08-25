@@ -104,7 +104,6 @@ echo "Optional (only some tasks need these):"
 opt docker       "make isos / os-real-grub-disk" docker
 opt ssh-keygen   "the SSH capstone demo key" openssh
 opt git          "cloning and committing" git
-opt expect       "tests/run ssh" expect
 
 # FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the
 # default build or the suites needs it. Checked via pkg-config, which is now
