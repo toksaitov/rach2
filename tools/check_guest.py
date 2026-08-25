@@ -8,10 +8,10 @@ a program missing its companion source, and the failure would surface inside
 a booted guest, late and hard to read. This guard runs on the host, inside
 the verify gate, and has the five contracts:
 
-  1. rach2/guest.mk's OBJS equals the host ASM_SRC plus C_SRC, object for
-     object, and the kernel.objs recipe writes exactly that list, loader.o
-     first, no duplicates, with the link reading @kernel.objs plus the tcc
-     runtime at the pinned text address.
+  1. rach2/guest.mk derives OBJS from the shared rach2/sources.mk lists the
+     host build includes, object for object, loader.o first, no duplicates;
+     the kernel.objs recipe writes $(OBJS) whole, and the link reads
+     @kernel.objs plus the tcc runtime at the pinned text address.
   2. utils/guest.mk's per-program source map equals the host utils/Makefile
      map, including the companion sources (pwauth.c, resolv.c) and the two
      -D builds (init-login, adduser-crash).
@@ -78,6 +78,46 @@ def read_macro(text, name):
     return value
 
 
+def guest_text(repo, name):
+    """The makefile text with one level of `include` lines inlined."""
+    path = os.path.join(repo, name)
+    base = os.path.dirname(path)
+    lines = []
+    for line in open(path):
+        match = re.match(r"include\s+(\S+)\s*$", line)
+        if match:
+            lines.append(open(os.path.join(base, match.group(1))).read())
+            lines.append("\n")
+        else:
+            lines.append(line)
+    return "".join(lines)
+
+
+def expand_tokens(text, tokens):
+    """Expand `$(VAR:.a=.b)` substitution references against text's macros."""
+    out = []
+    for token in tokens:
+        match = re.match(r"^\$\((\w+):(\.\w+)=(\.\w+)\)$", token)
+        if not match:
+            out.append(token)
+            continue
+        name, old, new = match.groups()
+        for value in read_macro(text, name):
+            out.append(value[:-len(old)] + new if value.endswith(old)
+                       else value)
+    return out
+
+
+def subst_refs(expanded, macros):
+    """Expand substitution references inside one recipe line."""
+    def repl(match):
+        name, old, new = match.groups()
+        value = macros.get(name, "")
+        return " ".join(w[:-len(old)] + new if w.endswith(old) else w
+                        for w in value.split())
+    return re.sub(r"\$\((\w+):(\.\w+)=(\.\w+)\)", repl, expanded)
+
+
 def rules_of(text):
     """Return `{target: (prerequisites, recipe_lines)}` for explicit rules."""
     rules = {}
@@ -110,8 +150,12 @@ def check_kernel_lists(repo):
                                                            "print-c-src")
     expected = [re.sub(r"\.[cs]$", ".o", s) for s in sources]
 
-    text = open(os.path.join(repo, "rach2", "guest.mk")).read()
-    objs = read_macro(text, "OBJS")
+    host = open(os.path.join(repo, "rach2", "Makefile")).read()
+    if not re.search(r"^include sources\.mk$", host, re.M):
+        fail("rach2/Makefile does not include sources.mk, so the host build "
+             "no longer reads the shared kernel source list")
+    text = guest_text(repo, os.path.join("rach2", "guest.mk"))
+    objs = expand_tokens(text, read_macro(text, "OBJS"))
     if objs != expected:
         missing = sorted(set(expected) - set(objs))
         extra = sorted(set(objs) - set(expected))
@@ -122,28 +166,19 @@ def check_kernel_lists(repo):
     rules = rules_of(text)
     if "kernel.objs" not in rules:
         fail("rach2/guest.mk has no kernel.objs rule")
-    if "guest.mk" not in rules["kernel.objs"][0]:
-        fail("kernel.objs does not depend on guest.mk, so an edited object "
-             "list would link through the stale response file")
+    for needed in ("guest.mk", "sources.mk"):
+        if needed not in rules["kernel.objs"][0]:
+            fail("kernel.objs does not depend on %s, so an edited object "
+                 "list would link through the stale response file" % needed)
     recipe = rules["kernel.objs"][1]
-    if recipe[-1] != "mv kernel.objs.new kernel.objs":
-        fail("kernel.objs is not published by renaming the temporary file")
-    written = []
-    for number, line in enumerate(recipe[:-1]):
-        wanted = ("> kernel.objs.new" if number == 0
-                  else ">> kernel.objs.new")
-        match = re.match(r"printf '%s\\n' (.*?) (>>?) kernel\.objs\.new$",
-                         line)
-        if not match or (match.group(2) + " kernel.objs.new") != wanted:
-            fail("kernel.objs recipe line %d must end with '%s': %s"
-                 % (number + 1, wanted, line))
-        written.extend(match.group(1).split())
-    if written != objs:
-        fail("kernel.objs writes a different list than OBJS")
-    if written[0] != "loader.o":
-        fail("kernel.objs does not start with loader.o")
-    if len(written) != len(set(written)):
-        fail("kernel.objs writes a duplicate object")
+    if recipe != [r"printf '%s\n' $(OBJS) > kernel.objs.new",
+                  "mv kernel.objs.new kernel.objs"]:
+        fail("kernel.objs must write $(OBJS) whole through the temporary "
+             "file and publish it by rename")
+    if objs[0] != "loader.o":
+        fail("OBJS does not start with loader.o")
+    if len(objs) != len(set(objs)):
+        fail("OBJS contains a duplicate object")
 
     link = " ".join(rules.get("kernel", ([], []))[1])
     for needed in ("@kernel.objs", "-Wl,-Ttext=0x100074",
@@ -259,7 +294,7 @@ def check_limits(repo):
              "descriptors a compile has besides its includes that exceeds "
              "the %d-descriptor table" % (depth, FD_RESERVED, FD_LIMIT))
     for name in ("rach2/guest.mk", "utils/guest.mk", "ish/guest.mk"):
-        text = open(os.path.join(repo, name)).read()
+        text = guest_text(repo, name)
         macros = {}
         for line in text.split("\n"):
             match = re.match(r"(\w+)\s*=", line)
@@ -270,6 +305,7 @@ def check_limits(repo):
             for line in recipe:
                 expanded = line
                 for _pass in range(3):
+                    expanded = subst_refs(expanded, macros)
                     for key, value in macros.items():
                         expanded = expanded.replace("$(%s)" % key, value)
                 expanded = expanded.replace("$@", target)

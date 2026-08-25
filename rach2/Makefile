@@ -6,95 +6,9 @@ KERNEL_BIN = $(BUILD)/$(KERNEL)
 
 LINKER_SCRIPT = link
 
-ASM_SRC = $(LOADER).s          \
-	  sys/isr_handler.s        \
-	  sys/tables/gdt_handler.s \
-	  sys/tables/idt_handler.s \
-	  sys/proc/switch.s
-
-C_SRC   = $(KERNEL).c \
-	  sys/kio.c       \
-	  sys/serial.c    \
-	  sys/syscall.c   \
-	  sys/module.c    \
-	  sys/cmdline.c   \
-	  sys/isr.c       \
-	  sys/pic.c       \
-	  sys/board.c     \
-	  sys/bootlog.c   \
-	  sys/pit.c       \
-	  sys/rtc.c       \
-	  sys/kbd.c       \
-	  sys/mouse.c     \
-	  sys/panic.c     \
-	  sys/speaker.c   \
-	  sys/pci.c       \
-	  sys/power.c     \
-	  sys/block/block.c     \
-	  sys/block/mbr.c       \
-	  sys/block/ata.c       \
-	  sys/block/diskcmd.c   \
-	  sys/block/recovery.c  \
-	  sys/block/diskinfo.c  \
-	  sys/block/ahci.c      \
-	  sys/display/vga_text.c \
-	  sys/display/vga_gfx.c  \
-	  sys/audio/audio.c     \
-	  sys/audio/audio_debug.c \
-	  sys/audio/dma.c       \
-	  sys/audio/sb16.c      \
-	  sys/audio/hda.c       \
-	  sys/tables/gdt.c      \
-	  sys/tables/tss.c      \
-	  sys/tables/idt.c      \
-	  sys/mm/heap.c         \
-	  sys/mm/paging.c       \
-	  sys/mm/usercopy.c     \
-	  sys/mm/vm.c           \
-	  sys/mm/frame.c        \
-	  sys/mm/pagecache.c    \
-	  sys/mm/modlayout.c    \
-	  sys/diag.c            \
-	  sys/udelay.c          \
-	  sys/proc/process.c    \
-	  sys/proc/sched.c      \
-	  sys/proc/wait_queue.c \
-	  sys/ipc/pipe.c        \
-	  sys/ipc/pipe_ring.c   \
-	  sys/io/poll.c         \
-	  sys/io/poll_select.c  \
-	  sys/tty/n_tty.c       \
-	  sys/tty/tty.c         \
-	  sys/tty/pty.c         \
-	  sys/proc/elf.c        \
-	  sys/proc/uimage.c     \
-	  sys/proc/tls.c        \
-	  sys/fs/krffs.c        \
-	  sys/fs/fd.c           \
-	  sys/fs/devfs.c        \
-	  sys/fs/synthfs.c      \
-	  sys/fs/procfs.c       \
-	  sys/network/netconf.c \
-	  sys/network/netif.c   \
-	  sys/network/netconsole.c \
-	  sys/network/core/net_core.c \
-	  sys/network/driver/netdev.c \
-	  sys/network/driver/rtl8139.c \
-	  sys/network/driver/rtl8168.c \
-	  sys/network/ethernet/ethernet.c \
-	  sys/network/arp/arp.c \
-	  sys/network/ip/ip.c \
-	  sys/network/ip/icmp.c \
-	  sys/network/udp/udp.c \
-	  sys/network/tcp/tcp.c \
-	  sys/network/tcp/rcvwnd.c \
-	  sys/network/socket/socket.c \
-	  sys/network/socket/packet.c \
-	  sys/network/socket/raw.c \
-	  sys/lib/kctypes.c     \
-	  sys/lib/kstd.c        \
-	  sys/lib/kstring.c     \
-	  sys/lib/krandom.c
+# The kernel source lists (ASM_SRC and C_SRC) live in sources.mk, which
+# guest.mk includes too, so one file describes both builds.
+include sources.mk
 
 # Everything builds out of tree under $(BUILD) (build/rach2/, from mk/build.mk): the
 # objects, the GCC-written .d files, the kernel binary, and the ISO staging, so the

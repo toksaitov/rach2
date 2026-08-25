@@ -33,7 +33,7 @@ Two scripts are also user entry points. `bootstrap_mac.sh` prepares a Mac, and `
 
 The supporting files have narrower jobs:
 
-* `check_sources.sh` compares `C_SRC` in `rach2/Makefile` with `kernel.c` and the C files below `rach2/sys/`.
+* `check_sources.sh` compares `C_SRC` in `rach2/sources.mk` with `kernel.c` and the C files below `rach2/sys/`.
 * `check_guest.py` checks five contracts: the kernel object and link description, the utility program-to-source map, the ISH object list, the guest file-descriptor and command-size limits, and the three source trees staged under `/src`.
 * `textcheck.sh` checks ASCII, prose uses of spaced `--`, Markdown bullet form, and development-phase tags. Its default Markdown scope includes root documents and documents below `rach2/`, `ish/`, `utils/`, `tests/`, `krffs/`, `tools/`, `mk/`, and `vendor/`. It excludes `dev-log/` and all of `ports/doom/`.
 * `check_comments.py` checks 80-column comment wrapping in the in-house C, shell, Make, and Python files. It includes the project glue under `ports/doom/` and excludes `ports/doom/src/`.

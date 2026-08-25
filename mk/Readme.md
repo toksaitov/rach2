@@ -41,4 +41,4 @@ For VS Code, set `"clangd.arguments": ["--query-driver=**/i686-elf-*gcc"]`. Othe
 
 ## Kernel source list
 
-`C_SRC` in `rach2/Makefile` is explicit. A new kernel C file can therefore exist without being compiled. `make check-sources` compares the list with `kernel.c` and the C files below `rach2/sys/`, and fails on an unlisted or missing file. `tests/run style` runs this check. It does not check Doom or vendor source lists.
+`C_SRC` in `rach2/sources.mk` is explicit. A new kernel C file can therefore exist without being compiled. `make check-sources` compares the list with `kernel.c` and the C files below `rach2/sys/`, and fails on an unlisted or missing file. `tests/run style` runs this check. It does not check Doom or vendor source lists.

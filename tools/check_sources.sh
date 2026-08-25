@@ -4,7 +4,7 @@
 # wired into the quality gate, tools/check.sh).
 #
 # Every C source on disk in the kernel tree (rach2/kernel.c + rach2/sys/**/*.c)
-# must appear in the explicit C_SRC list in rach2/Makefile, and every C_SRC
+# must appear in the explicit C_SRC list in rach2/sources.mk, and every C_SRC
 # entry must exist on disk. A new kernel .c that is not added to C_SRC would be
 # silently left out of the build (and out of the ABI/boot tests), so this fails
 # loudly instead. Doom and the vendored musl/busybox/dropbear trees keep their
