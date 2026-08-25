@@ -153,7 +153,7 @@ fi
 hr "3/13 shellcheck"
 sc=0
 # shellcheck disable=SC2046
-shellcheck -x -e SC1091 $(ls tests/run tools/*.sh tools/*/*.sh vendor/musl/*.sh vendor/*/build_*.sh 2>/dev/null) \
+shellcheck -x -e SC1091 $(ls tests/run tests/system/suites/*.sh tests/system/accept/*.sh tools/*/*.sh vendor/musl/*.sh vendor/*/build_*.sh 2>/dev/null) \
     >"$VDIR/verify_shellcheck.log" 2>&1 || sc=1
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 -e SC2034 -e SC2086 \

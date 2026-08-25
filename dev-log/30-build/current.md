@@ -4,13 +4,11 @@ This file holds only the resume state for the item in progress. Replace its cont
 
 ## Position
 
-* Active phase: 6, the layout.
+* Active phase: 7, small dependency removals.
 * Item in progress: not started.
-* Exact next action: move the scripts into `tests/system/` (runner, suites, checkers, fixtures, accept) and the `tools/` role directories (setup, verify, inspect, image, dev), one role per commit, updating every caller and the owning Readme in the same commit, with the renamed-path search from the standing rules. The compilation database generator lands in `tools/dev/` and its make alias joins the retirement list. For each moved suite, mutate its expected token and confirm the runner reaches the moved script.
+* Exact next action: replace `gtimeout` with a C process-group deadline tool and prove it with a hanging child and a hanging descendant; then move the SSH password and pty exchange into the retained Python runner and remove Expect; then fold the Perl, host SHA-256, and `strings` uses into the project checkers with differential fixtures. The FUSE split already landed in phase 3 (131bd4a).
 
 ## Phase record
 
-* Phases 1 to 4 complete: baselines e4d3187; generator 6ef65d2; interface fa0436e (FUSE split 131bd4a, runner e9c5d80, default scope a49cdb9, preflight 88257a0); manifests 391c901, b7bb4bf, f241cdc.
-* Phase 5 complete, all nine items: images from recorded inventories (03a03f2), patch series manifests (91c7287), parse-time output healing (ca5cd6a), validation stamps with builtin-rule delegation guards (c5dc1f5), configuration purge fingerprints (f026a72), real component edges only (5fb125b), incremental musl tests (f946e0a), credential timestamps (cec40ce), shared job budget with parallel-race fixes and progress messages (9f0c5f9).
-* Closing measurements against the phase 1 baseline (cold 60 s, no-op 3 s): no-op `make` is 1 s; cold serial `make` is 118 s because the vendors now share the caller's job budget instead of choosing a private ten-way `-j` (decided in the design rounds); cold `make -j4` is 42 s with at most 3 concurrent compiles and 149 component interleavings.
-* Notable fixes proved along the way: GNU make 3.81 compares whole seconds, so fingerprints purge at parse time instead of using mtime prerequisites; absent optional image inputs are represented by their nearest existing ancestor directory; relative inventory paths must be absolutized so they cannot name phony targets; musl installs legitimately empty headers, so healing tests existence, not size.
+* Phases 1 to 5 complete; see the log from e4d3187 through 710b9fe.
+* Phase 6 complete: setup c2d2eac, dev df90c21, verify 23724b2, inspect e9af87b, image 3fba431, tests/system 2fd741f, suite-name retirement c2bca4f. Every mover's repository-root computation gained one level; extensionless callers such as `tests/run` need sweeps without include filters; path rewrites widen comment lines, so `check_comments` runs after every role. Proofs: all four setup tools, the generator, and every checker re-proved from their new homes; 17 dynamic dispatch proofs (temporary exit 97 per moved suite reached through `tests/run`); the four Docker-disk suites statically wired; the SSH capstone passed through the moved suite in 29 s; strict shellcheck covers the moved suites again.
