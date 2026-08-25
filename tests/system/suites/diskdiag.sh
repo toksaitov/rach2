@@ -98,9 +98,9 @@ fi
 
 # The artifacts first: a kernel that is not the policy it claims would make
 # every comparison below meaningless.
-python3 "$REPO/tools/inspect/check_diskpolicy.py" "$RW_KERNEL" read-write \
+sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RW_KERNEL" read-write \
     || fail "the read-write kernel is not read-write"
-python3 "$REPO/tools/inspect/check_diskpolicy.py" "$RO_KERNEL" read-only \
+sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RO_KERNEL" read-only \
     || fail "the read-only kernel is not read-only"
 
 rm -f "$BASE"

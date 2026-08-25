@@ -52,21 +52,21 @@ fail() {
 
 # The artifacts first: a kernel that is not the policy it claims makes every
 # comparison below meaningless.
-python3 "$REPO/tools/inspect/check_diskpolicy.py" "$RW_KERNEL" read-write || fail "the read-write kernel is not read-write"
-python3 "$REPO/tools/inspect/check_diskpolicy.py" "$RO_KERNEL" read-only || fail "the read-only kernel is not read-only"
+sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RW_KERNEL" read-write || fail "the read-write kernel is not read-write"
+sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RO_KERNEL" read-only || fail "the read-only kernel is not read-only"
 
 # And the check's negative half, which is the case that matters: the Readme
 # records that the metal image was once built around the ordinary kernel, and
 # the only thing standing between that mistake and a stick that can write
 # somebody's SSD is this check refusing. A check that is only ever run on the
 # artifact it approves has never been shown to reject anything.
-if python3 "$REPO/tools/inspect/check_diskpolicy.py" "$RW_KERNEL" read-only >/dev/null 2>&1; then
+if sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RW_KERNEL" read-only >/dev/null 2>&1; then
     fail "the policy check accepted the read-write kernel as read-only"
 fi
-if python3 "$REPO/tools/inspect/check_diskpolicy.py" "$RO_KERNEL" read-write >/dev/null 2>&1; then
+if sh "$REPO/tools/inspect/check_diskpolicy.sh" "$RO_KERNEL" read-write >/dev/null 2>&1; then
     fail "the policy check accepted the read-only kernel as read-write"
 fi
-if python3 "$REPO/tools/inspect/check_diskpolicy.py" /dev/null read-only >/dev/null 2>&1; then
+if sh "$REPO/tools/inspect/check_diskpolicy.sh" /dev/null read-only >/dev/null 2>&1; then
     fail "the policy check accepted an empty file"
 fi
 echo "diskpolicy-test: the policy check rejects each kernel offered as the other: OK"

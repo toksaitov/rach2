@@ -405,14 +405,14 @@ $(OS_REAL_IMAGE): krffs/manifests/os-real.manifest $(IMAGE_TOOLS) | preflight kr
 # The metal kernel: the same sources built read-only at the disk, into its own
 # object tree so the two kernels never share one. The switch is a build switch
 # and not a boot flag because a boot flag is editable at the GRUB prompt, and
-# what it protects is somebody else's Windows installation. check_diskpolicy.py
+# what it protects is somebody else's Windows installation. check_diskpolicy.sh
 # then reads the policy back off the artifact, since there is nothing to check
 # for by absence: the commands are numbers and the functions that issue them
 # are static.
 METAL_KERNEL = build/rach2-metal/kernel
 rach2-metal: krffs
 	$(MAKE) -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
-	python3 tools/inspect/check_diskpolicy.py $(METAL_KERNEL) read-only
+	sh tools/inspect/check_diskpolicy.sh $(METAL_KERNEL) read-only
 
 # The recovery kernel: the same sources, built with the authority to write any
 # sector of the disk, into its own object tree so the two kernels never share
@@ -420,14 +420,14 @@ rach2-metal: krffs
 # editable at the GRUB prompt, and what this one guards is the whole disk rather
 # than one file. It is NOT the read-only switch and must not be confused with
 # it; that one is enforced below devfs and would stop this kernel writing the
-# boot partition too, which recovery needs to do. check_recovery.py reads the
+# boot partition too, which recovery needs to do. check_recovery.sh reads the
 # authority back off the artifact in both directions.
 RECOVERY_KERNEL = build/rach2-recovery/kernel
 rach2-recovery: krffs rach2
 	$(MAKE) -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
-	python3 tools/inspect/check_recovery.py $(RECOVERY_KERNEL) recovery
-	python3 tools/inspect/check_recovery.py build/rach2/kernel ordinary
-	python3 tools/inspect/check_diskpolicy.py $(RECOVERY_KERNEL) read-write
+	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
+	sh tools/inspect/check_recovery.sh build/rach2/kernel ordinary
+	sh tools/inspect/check_diskpolicy.sh $(RECOVERY_KERNEL) read-write
 
 rach2-metal-image: krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	sh krffs/gen_demo_key.sh
@@ -686,13 +686,13 @@ run-menu: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # call turned a 500 MiB write into a million cache flushes.
 #
 # The two kernels are the same sources built with different switches into
-# different object trees, and check_recovery.py reads the authority back off
+# different object trees, and check_recovery.sh reads the authority back off
 # each artifact so a mislabelled one cannot reach this test.
 AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
 run-authority: rach2 rach2-recovery tests krffs test-image
 	python3 tests/system/fixtures/mkwidefixture.py $(AUTH_TEST_IMAGE)
-	python3 tools/inspect/check_recovery.py build/rach2/kernel ordinary
-	python3 tools/inspect/check_recovery.py $(RECOVERY_KERNEL) recovery
+	sh tools/inspect/check_recovery.sh build/rach2/kernel ordinary
+	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-ordinary" \
 	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \

@@ -54,7 +54,7 @@ if [ ! -f "$KERNEL" ]; then
     fi
     exit 1
 fi
-if ! python3 "$REPO/tools/inspect/check_diskpolicy.py" "$KERNEL" "$POLICY"; then
+if ! sh "$REPO/tools/inspect/check_diskpolicy.sh" "$KERNEL" "$POLICY"; then
     echo "mkiso: refusing to build $IMAGE.iso around a kernel with the wrong disk policy" >&2
     exit 1
 fi

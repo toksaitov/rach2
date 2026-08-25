@@ -26,7 +26,7 @@
  * only whether devfs exposes a writable whole-disk node.
  *
  * The banner below is how a built kernel says which of the two it is, the same
- * way the disk policy's does, and `check_recovery.py` reads it in both
+ * way the disk policy's does, and `check_recovery.sh` reads it in both
  * directions: a recovery artifact must carry the recovery banner, and an
  * everyday one must not. That catches a kernel built without the switch and
  * offered as recovery, which is the mistake worth catching early; it is not
@@ -36,7 +36,7 @@
  */
 
 /**
- * The policy string built into the artifact, for `check_recovery.py`.
+ * The policy string built into the artifact, for `check_recovery.sh`.
  *
  * This file makes no decision of its own. Whether the whole-disk write exists
  * is settled by `#ifdef RACH2_RECOVERY` where that handler is written, in

@@ -218,7 +218,7 @@ ROOT_SHA="$(sha256_of "$ROOTIMG")"
 # An everyday artifact offered as recovery must be rejected by the check that
 # reads the authority off a built kernel, or a mis-built one would reach the day
 # it is needed unnoticed.
-if python3 "$REPO/tools/inspect/check_recovery.py" "$REPO/build/rach2/kernel" recovery \
+if sh "$REPO/tools/inspect/check_recovery.sh" "$REPO/build/rach2/kernel" recovery \
         > /dev/null 2>&1; then
     fail "the everyday kernel passed the recovery artifact check"
 fi

@@ -14,7 +14,7 @@
  * compiler's default is, so the table is exercised through
  * `diskcmd_allowed_under`, which takes the policy as an argument; that the
  * BUILD switch actually selects the read-only policy is checked on the built
- * artifact instead, by tools/inspect/check_diskpolicy.py.
+ * artifact instead, by tools/inspect/check_diskpolicy.sh.
  */
 
 extern int printf(const char *fmt, ...);
