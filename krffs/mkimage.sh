@@ -41,10 +41,11 @@ mkdir -p "$(dirname "$OUT")"
 # any previous image intact, not a half-written one that run.sh would
 # boot.
 TMP="$OUT.new"
-trap 'rm -f "$TMP"' EXIT INT TERM
+DEPS_TMP="$OUT.d.new"
+trap 'rm -f "$TMP" "$DEPS_TMP"' EXIT INT TERM
 dd if=/dev/zero of="$TMP" bs=1048576 count="$SIZE" 2>/dev/null
 "$TOOLS/mkfs.krffs" "$TMP" >/dev/null
-"$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP"
+STAGEIMAGE_DEPS="$DEPS_TMP" "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP"
 
 # Both halves of the set-id guard, before the rename, so a failing image is
 # never moved into place. The sweep reads the manifest, which is where a
@@ -59,3 +60,39 @@ python3 "$REPO/tools/check_setid.py" "$MANIFEST"
 python3 "$REPO/tools/check_setid.py" --image "$TMP" --manifest "$MANIFEST"
 
 mv "$TMP" "$OUT"
+
+# Publish the staged inputs as a make dependency file beside the image, after
+# the image itself, so a failed build keeps the previous list. A recorded
+# path that exists becomes a prerequisite with an empty rule of its own, so
+# a later deletion marks the image out of date instead of stopping make. A
+# recorded path that is absent (a skipped optional-file) must not be a
+# prerequisite, or its empty rule would restage the image on every run;
+# its nearest existing ancestor directory stands in for it, because that
+# directory's timestamp moves when the file appears.
+if [ -s "$DEPS_TMP" ]; then
+    DEPS_LIST="$OUT.d.list"
+    # Absolute paths, for a reason beyond neatness: a relative recorded path
+    # such as `rach2` names the root Makefile's phony component target, and a
+    # phony prerequisite is considered remade on every run, which would
+    # restage the image forever.
+    sort -u "$DEPS_TMP" | while IFS= read -r p; do
+        case "$p" in
+            /*) ;;
+            *) p="$REPO/$p" ;;
+        esac
+        if [ -e "$p" ]; then
+            printf '%s\n' "$p"
+        else
+            d=$(dirname "$p")
+            while [ ! -d "$d" ]; do d=$(dirname "$d"); done
+            printf '%s\n' "$d"
+        fi
+    done | sort -u > "$DEPS_LIST"
+    {
+        printf '%s:' "$OUT"
+        while IFS= read -r p; do printf ' %s' "$p"; done < "$DEPS_LIST"
+        printf '\n'
+        sed 's/$/:/' "$DEPS_LIST"
+    } > "$OUT.d"
+    rm -f "$DEPS_LIST"
+fi

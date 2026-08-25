@@ -69,6 +69,32 @@ static bool is_valid_guest_path(const char *path)
 }
 
 /**
+ * Record one host input path for the build's dependency tracking.
+ *
+ * When `STAGEIMAGE_DEPS` names a file, every host path the stager reads or
+ * walks is appended there, one per line, absent `optional-file` paths
+ * included. The build turns the list into make dependencies, so a changed,
+ * added, or removed input restages exactly the images that carry it.
+ */
+static void record_input(const char *path)
+{
+    static FILE *deps_file;
+    static int deps_tried;
+
+    if (!deps_tried) {
+        const char *name = getenv("STAGEIMAGE_DEPS");
+
+        deps_tried = 1;
+        if (name != NULL && *name != '\0') {
+            deps_file = fopen(name, "w");
+        }
+    }
+    if (deps_file != NULL) {
+        fprintf(deps_file, "%s\n", path);
+    }
+}
+
+/**
  * Read a whole file into a `malloc`'d buffer.
  *
  * `*len` is the byte count (no NUL is appended; the data is staged verbatim).
@@ -77,7 +103,10 @@ static bool is_valid_guest_path(const char *path)
  */
 static char *read_whole_file(const char *path, size_t *len)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f;
+
+    record_input(path);
+    f = fopen(path, "rb");
     long n;
     char *buf;
 
@@ -610,8 +639,7 @@ static bool stage_exec_dir(
                 uint32_t gid
             )
 {
-    DIR *d =
-        opendir(hostdir);
+    DIR *d;
     struct dirent *e;
     char **names =
         NULL;
@@ -621,6 +649,8 @@ static bool stage_exec_dir(
     bool ok =
         true;
 
+    record_input(hostdir);
+    d = opendir(hostdir);
     if (d == NULL) {
         fprintf(stderr, "stageimage: cannot open host dir '%s'.\n", hostdir);
 
@@ -811,8 +841,10 @@ static bool stage_tree(struct krffs_file_system *file_system,
     size_t count = 0;
     size_t i;
     bool ok = true;
-    DIR *d = opendir(hostdir);
+    DIR *d;
 
+    record_input(hostdir);
+    d = opendir(hostdir);
     if (d == NULL) {
         fprintf(stderr, "stageimage: cannot open host dir '%s'.\n", hostdir);
 
@@ -1002,7 +1034,10 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         }
         /* optional-file skips ONLY a genuinely absent host file. A file that
            exists but cannot be read (a permission error, a short read) is a
-           real error for both directives, never a silent skip. */
+           real error for both directives, never a silent skip. The absence
+           is recorded before the skip: the input inventory must name the
+           path so its later appearance restages the image. */
+        record_input(hostpath);
         if (access(hostpath, F_OK) != 0) {
             if (strcmp(verb, "optional-file") == 0) {
                 printf("stageimage: optional '%s' absent (%s); skipping.\n", path, hostpath);

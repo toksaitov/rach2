@@ -5,8 +5,8 @@ This file holds only the resume state for the item in progress. Replace its cont
 ## Position
 
 * Active phase: 4, shared source manifests.
-* Item in progress: phase 4 complete. All three components build from shared manifests (`rach2/sources.mk` at 391c901, `utils/programs.mk`, `ish/sources.mk`), `check_guest.py` checks derivations, includes, and substitution references, and the docs name the new contract. Proofs per component: unchanged output hashes (kernel 148594d0..., utils set f0da6d2d..., ish eaf64ab0...), planted nonexistent sources failing both descriptions by name, and two full self-builds (259 to 261 s) with the guest kernel hash still equal to the milestone 29 record.
-* Exact next action: commit the utils and ISH conversions, then start phase 5, incremental correctness, item 1: real image file targets with the staging closure.
+* Active phase: 5, incremental correctness. Items 7 (incremental musl test builds, f946e0a) and 8 (credential timestamps, cec40ce) are committed. Item 1 is proved and ready to commit: the three RAM images are real file targets, the stager records every input (absent optional files included) into an image-side `.d`, absent inputs are represented by their nearest existing ancestor directory, and recorded paths are absolutized because a relative `rach2` names a phony target. Proof record: two no-ops restage nothing, an os-simple manifest touch restages only os-simple, a probe source touch restages only test, the Doom WAD's appearance and removal each restage only os-real, and the final no-op restages nothing.
+* Exact next action: commit item 1, then item 2 (vendor patch manifests) and the remaining phase 5 items in the plan's order.
 * Phase 3 completed at fa0436e: interface is make, make test, tests/run NAME, clean, distclean, run.sh; retired names print notices; preflight cached; FUSE optional; compile-commands alias retires in phase 6 with the script move.
 
 ## Phase record

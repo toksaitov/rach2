@@ -216,12 +216,24 @@ ish: rach2
 utils: rach2 $(LIBC_STAMP)
 ports/doom: rach2
 
-# --- the RAM-disk images. Each target builds its inputs (via the component
-#     sub-makes), then stages the image from its manifest with mkimage.sh
-#     (dd + mkfs.krffs + stageimage.krffs), out of tree into build/images/. The
-#     image targets are .PHONY: a re-stage is sub-second, so they always refresh. ---
+# --- the RAM-disk images. Each is a real file target staged from its manifest
+#     with mkimage.sh (dd + mkfs.krffs + stageimage.krffs), out of tree into
+#     build/images/. The stager records every host input it read into an
+#     image-side .d file, included below, so an untouched tree restages
+#     nothing and a changed, added, or removed input restages exactly the
+#     images that carry it. The component sub-makes are order-only: they
+#     refresh their outputs first, and the recorded inputs decide staleness. ---
 
 images: test-image os-simple-image os-real-image
+
+test-image: $(TEST_IMAGE)
+os-simple-image: $(OS_SIMPLE_IMAGE)
+os-real-image: $(OS_REAL_IMAGE)
+
+IMAGE_TOOLS = krffs/mkimage.sh tools/check_setid.py build/krffs/mkfs.krffs \
+              build/krffs/stageimage.krffs
+
+-include $(TEST_IMAGE).d $(OS_SIMPLE_IMAGE).d $(OS_REAL_IMAGE).d
 
 # The musl integration programs (tests/musl/*.c -> build/tests/musl/), built by
 # their own script. They are end-to-end libc tests staged into the test image.
@@ -230,16 +242,16 @@ musl-programs: $(LIBC_STAMP)
 
 # The test image: the freestanding syscall probes plus the musl integration
 # programs. `make test` boots it and asserts every probe's success token.
-test-image: krffs rach2 tests musl-programs utils ish
-	$(MKIMAGE) krffs/manifests/test.manifest $(TEST_IMAGE) 10
+$(TEST_IMAGE): krffs/manifests/test.manifest $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
+	$(MKIMAGE) krffs/manifests/test.manifest $@ 10
 
 # The os-simple image: a small Unix built out of this project's own code. init
 # execs /bin/login, so this image needs the account databases; gen_demo_password.sh
 # mints them when krffs/shadow is absent and does nothing when it is there, and it
 # is the same file os-real stages, so one password opens either image.
-os-simple-image: krffs rach2 ish utils
+$(OS_SIMPLE_IMAGE): krffs/manifests/os-simple.manifest $(IMAGE_TOOLS) | preflight krffs rach2 ish utils
 	sh krffs/gen_demo_password.sh
-	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
+	$(MKIMAGE) krffs/manifests/os-simple.manifest $@ 10
 
 # The os-real image: a real Unix-like environment (busybox shell + coreutils,
 # dropbear SSH server and client, Doom, and an /etc + /root tree). 16 MB: enough for
@@ -248,10 +260,10 @@ os-simple-image: krffs rach2 ish utils
 # is loaded just above 1 MB). gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when absent;
 # the check targets ensure the busybox/dropbear binaries are real.
-os-real-image: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_IMAGE): krffs/manifests/os-real.manifest $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
-	$(MKIMAGE) krffs/manifests/os-real.manifest $(OS_REAL_IMAGE) 16
+	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 16
 
 # The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
 # machine (the kernel has no USB driver, so the module GRUB loads is the whole
