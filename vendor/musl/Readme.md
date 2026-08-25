@@ -14,7 +14,7 @@ make musl
 
 The ordinary root `make` builds musl before everything that links it. `make busybox`, `make dropbear`, `make tcc`, and `make pdpmake` build the other four ports individually.
 
-The root stamp depends on `build_libc.sh`, the exact archive, and every file currently under `patches/`. An added or edited patch invalidates it; deleting a patch requires removing `.stamp` because the vanished prerequisite is no longer in Make's dependency list. The recipe removes the old installed archive, invokes the script, requires a nonempty `install/lib/libc.a`, and records success only afterward. `make clean` preserves the extracted and installed trees; `make distclean` removes them and the stamp.
+The root stamp depends on `build_libc.sh`, the exact archive, the patch manifest `patches/series`, and every patch currently under `patches/`. The script applies exactly the patches the series names, in its order, and fails on a named patch that is absent or a patch file the series does not name, so adding, editing, or removing a patch always invalidates the stamp through a tracked input. The recipe removes the old installed archive, invokes the script, requires a nonempty `install/lib/libc.a`, and records success only afterward. `make clean` preserves the extracted and installed trees; `make distclean` removes them and the stamp.
 
 `build_libc.sh` performs these steps:
 

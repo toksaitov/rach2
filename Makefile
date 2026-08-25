@@ -142,11 +142,13 @@ pdpmake: $(PDPMAKE_STAMP)
 #     belt-and-suspenders backstop on the final touch. ---
 .DELETE_ON_ERROR:
 
-# The pinned patches are prerequisites, not decoration: build_libc.sh applies
-# them after the extract, so a tree whose stamp predates a patch would keep
-# linking every program against the unpatched libc, and an edit to one would
-# never be built at all.
-LIBC_PATCHES = $(wildcard vendor/musl/patches/*.patch)
+# The patch manifest and the pinned patches are prerequisites, not
+# decoration: build_libc.sh applies the patches patches/series names after
+# the extract, so a tree whose stamp predates a series edit would keep
+# linking every program against the wrong libc, and an edit to one patch
+# would never be built at all. The series file notices an added or removed
+# patch; the wildcard notices an edit to one that exists.
+LIBC_PATCHES = vendor/musl/patches/series $(wildcard vendor/musl/patches/*.patch)
 
 $(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
 	@rm -f $@ vendor/musl/install/lib/libc.a
@@ -194,8 +196,13 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
+# The patch manifest is a prerequisite for the reason musl's is: the script
+# applies what patches/series names, so a series edit or a patch edit must
+# invalidate the stamp.
+DROPBEAR_PATCHES = vendor/dropbear/patches/series $(wildcard vendor/dropbear/patches/*.patch)
+
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h vendor/dropbear/muslgcc \
-                   $(DROPBEAR_TARBALL) $(LIBC_STAMP)
+                   $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(DROPBEAR_BIN)
 	./vendor/dropbear/build_dropbear.sh
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }

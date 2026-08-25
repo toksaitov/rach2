@@ -57,21 +57,35 @@ echo "libc: extracting"
 rm -rf "$SRC"
 tar xzf "$TARBALL"
 
-# Apply any curated patches, in order, before configuring. The vendored tree is
-# otherwise pristine; this is the escape hatch for the rare fix that cannot be
-# made any other way. With no patches/ directory the loop does nothing.
-if [ -d patches ]; then
-    for p in patches/*.patch; do
-        [ -e "$p" ] || break
-        echo "libc: applying $p"
-        # --forward and no fuzz: a patch that no longer applies cleanly to a new
-        # musl is a decision to make again, not a hunk to place approximately.
-        if ! patch -p1 -F 0 --forward -d "$SRC" < "$p"; then
-            echo "libc: $p does not apply to musl $MUSL_VERSION; rebase it" >&2
+# Apply the curated patches named in patches/series, in its order, before
+# configuring. The vendored tree is otherwise pristine; this is the escape
+# hatch for the rare fix that cannot be made any other way. The series file
+# is the patch manifest the build stamp depends on: a named patch that is
+# absent fails, and so does a patches/*.patch file the series does not name,
+# so an added or removed patch always changes a tracked build input.
+if [ -f patches/series ]; then
+    while IFS= read -r p; do
+        case "$p" in ''|'#'*) continue ;; esac
+        if [ ! -f "patches/$p" ]; then
+            echo "libc: patches/series names a missing patch: $p" >&2
             exit 1
         fi
-    done
+        echo "libc: applying patches/$p"
+        # --forward and no fuzz: a patch that no longer applies cleanly to a new
+        # musl is a decision to make again, not a hunk to place approximately.
+        if ! patch -p1 -F 0 --forward -d "$SRC" < "patches/$p"; then
+            echo "libc: patches/$p does not apply to musl $MUSL_VERSION; rebase it" >&2
+            exit 1
+        fi
+    done < patches/series
 fi
+for p in patches/*.patch; do
+    [ -e "$p" ] || break
+    if ! grep -qx "$(basename "$p")" patches/series 2>/dev/null; then
+        echo "libc: $p is not named in patches/series; add it there or remove it" >&2
+        exit 1
+    fi
+done
 
 echo "libc: configuring (CROSS_COMPILE=i686-elf-, static, target i686)"
 cd "$SRC"

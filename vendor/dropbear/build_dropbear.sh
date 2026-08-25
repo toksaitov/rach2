@@ -64,17 +64,33 @@ echo "dropbear: extracting"
 rm -rf "$SRC"
 tar xjf "$TARBALL"
 
-# Apply any curated patches, in order, before building. The vendored tree is
-# otherwise pristine; this is the escape hatch for the rare fix localoptions.h
-# cannot express. With no patches/ directory the loop does nothing.
-if [ -d patches ]; then
-    for p in patches/*.patch; do
-        [ -e "$p" ] || break
-        echo "dropbear: applying $p"
-        patch -p1 -d "$SRC" < "$p"
-    done
+# Apply the curated patches named in patches/series, in its order, before
+# building. The vendored tree is otherwise pristine; this is the escape
+# hatch for the rare fix localoptions.h cannot express. The series file is
+# the patch manifest the build stamp depends on: a named patch that is
+# absent fails, and so does a patches/*.patch file the series does not
+# name, so an added or removed patch always changes a tracked build input.
+if [ -f patches/series ]; then
+    while IFS= read -r p; do
+        case "$p" in ''|'#'*) continue ;; esac
+        if [ ! -f "patches/$p" ]; then
+            echo "dropbear: patches/series names a missing patch: $p" >&2
+            exit 1
+        fi
+        echo "dropbear: applying patches/$p"
+        if ! patch -p1 -F 0 --forward -d "$SRC" < "patches/$p"; then
+            echo "dropbear: patches/$p does not apply; rebase it" >&2
+            exit 1
+        fi
+    done < patches/series
 fi
-
+for p in patches/*.patch; do
+    [ -e "$p" ] || break
+    if ! grep -qx "$(basename "$p")" patches/series 2>/dev/null; then
+        echo "dropbear: $p is not named in patches/series; add it there or remove it" >&2
+        exit 1
+    fi
+done
 echo "dropbear: installing the curated localoptions.h"
 cp localoptions.h "$SRC/localoptions.h"
 

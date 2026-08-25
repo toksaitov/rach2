@@ -2,7 +2,7 @@
 
 Rach2 uses a static Dropbear multi-call binary for the SSH server, client, and key generator. It is linked against the project [musl integration](../musl/Readme.md) and staged as `/bin/dropbearmulti`.
 
-The tracked integration has six files: `.gitignore`, this Readme, `build_dropbear.sh`, `dropbear-2022.83.tar.bz2`, `localoptions.h`, and a Dropbear-specific `muslgcc` wrapper. The extracted source, staged binary, and stamp are ignored and reproducible. There are no project source patches.
+The tracked integration has seven files: `.gitignore`, this Readme, `build_dropbear.sh`, `dropbear-2022.83.tar.bz2`, `localoptions.h`, a Dropbear-specific `muslgcc` wrapper, and the patch manifest `patches/series`, which is empty because there are no project source patches. The extracted source, staged binary, and stamp are ignored and reproducible.
 
 ## Build
 
@@ -12,7 +12,7 @@ From the repository root:
 make dropbear
 ```
 
-The root `make` also builds Dropbear through the same stamp. The stamp depends on the build script, archive, local options, wrapper, and musl stamp. `make check-dropbearmulti` requires the staged binary to be nonempty.
+The root `make` also builds Dropbear through the same stamp. The stamp depends on the build script, archive, local options, wrapper, patch manifest and patches, and musl stamp. `make check-dropbearmulti` requires the staged binary to be nonempty.
 
 The build script:
 
@@ -105,7 +105,7 @@ To update Dropbear:
 3. Review `localoptions.h`, every configure option, the generated `config.h`, and the resolved defaults for changed or renamed features.
 4. Rebuild and inspect the staged ELF before running the verification below.
 
-The build script can apply `patches/*.patch` in filename order, but the root stamp rule does not depend on that directory. If a source patch is added, changed, or deleted, remove `vendor/dropbear/.stamp` before `make dropbear` until the stamp rule is extended to cover patches.
+A source patch is added by placing it under `patches/` and naming it in `patches/series`; the script applies exactly what the series names, in its order, and fails on a named patch that is absent or a patch file the series does not name. The root stamp depends on the series and on every patch, so adding, editing, or removing one invalidates the build through a tracked input.
 
 ## Verification
 

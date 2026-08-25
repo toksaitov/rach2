@@ -1,0 +1,3 @@
+# The patch manifest: build_dropbear.sh applies exactly the patches
+# named here, in this order. A named patch that is absent, or a
+# patches/*.patch file not named here, fails the build. Empty today.
