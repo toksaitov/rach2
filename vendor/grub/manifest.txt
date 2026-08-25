@@ -1,0 +1,16 @@
+# vendor/grub/manifest.txt: provenance of the pinned GRUB artifacts.
+# Regenerated only by regen_grub.sh; see vendor/grub/Readme.md.
+container ubuntu@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb
+snapshot https://snapshot.ubuntu.com/ubuntu/ at archive state: Tue, 25 Aug 2026  1:36:35 UTC
+package grub-pc-bin 2.12-1ubuntu7.3 deb-sha256 698d80bc51c0c593fbc829758365a0e4bce96819e2c8c754ae77dfe39b0388df
+package grub-common 2.12-1ubuntu7.3 deb-sha256 464e7c3a9f261b2120a6755fbf753384669c666a5cc7cd571cf836d6da88373f
+tool grub-mkimage (GRUB) 2.12-1ubuntu7.3
+disk-modules biosdisk part_msdos fat normal multiboot configfile loadenv echo test serial terminal
+iso-modules biosdisk iso9660 part_msdos fat normal multiboot configfile loadenv echo test serial terminal
+embed-cfg e8cd27fce8199ac2a3449d3301691051e55511e15449cb35a25464cec0c8635e
+artifact bios-boot.img 512 7720690bdaf25fd7e3ade7e01b8d0de91e0991653e2a6900011ab23daf6e6032
+artifact boot-hybrid.img 512 2d3027be0a695db635d0bdccaf0a5184636956a0769bb634f26429908c9cfd1d
+artifact disk-core.img 158112 1bd98a14ad37ef1f689e1fa561f443bcc51decb16a8c781dcfae1c900594db0c
+artifact disk-core-a.img 158239 8e62518f7eee6e8334cfe525cc4aa4881009cdb95b2afdaf2f673c6a009e5ea1
+artifact disk-core-b.img 158239 191a226bd5f364005ba30c490bfbf6c237ca6ff02c0728524d26f1bcf10cceef
+artifact eltorito.img 163333 9b59c17b4f49bbbd2ffaf606628c5dc422168517e78603d377f799e85d60d924

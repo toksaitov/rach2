@@ -52,7 +52,7 @@ Output from tools and code uses one shape. Diagnostics go to stderr as `componen
 
 ## Ports
 
-musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, verified by SHA-256, extracted and built by their `build_*.sh` behind stamp files. BusyBox, Dropbear, TinyCC, and pdpmake link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees.
+musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, verified by SHA-256, extracted and built by their `build_*.sh` behind stamp files. BusyBox, Dropbear, TinyCC, and pdpmake link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees. The one exception is `vendor/grub/`: six reviewed, pinned GRUB boot artifacts with their provenance manifest, committed because the generating toolchain does not build on every supported host. They change only through `vendor/grub/regen_grub.sh` and its review procedure.
 
 When a capability is missing, look in BusyBox before writing it. That is the owner's standing decision, and it is why the account tools (`adduser`, `addgroup`, `chpasswd`, `deluser`, `delgroup`) are BusyBox's rather than this project's.
 

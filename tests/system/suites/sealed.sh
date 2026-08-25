@@ -440,7 +440,7 @@ phase "the boot loader, replaced and put back"
 # A core image with a marker in it, installed into the tail that is not in use.
 # The marker prints before anything on a partition, so what it proves is which
 # image the machine is running, not which bytes are at rest.
-sh "$REPO/tools/image/mkgrubcore.sh" SEALEDCORE1 "$CORE" > /dev/null 2>&1 || \
+sh "$REPO/tools/image/mkgrubcore.sh" A "$CORE" > /dev/null 2>&1 || \
     fail "the marked core image could not be built"
 cold_boot core
 machine 'cat > /tmp/core.img' < "$CORE" > /dev/null 2>&1 || fail "the core image did not arrive"
@@ -454,7 +454,7 @@ if [ -z "$FIRST_TAIL" ]; then
     fail "the install did not say which tail it wrote: $OUT"
 fi
 reboot_machine 2
-grep -aq "GRUBCORE=SEALEDCORE1" "$LOG" || fail "the machine did not boot the core it installed"
+grep -aq "GRUBCORE=A" "$LOG" || fail "the machine did not boot the core it installed"
 OUT="$(machine 'bootctl status' || true)"
 case "$OUT" in
     *"booted: candidate"*) ;;
@@ -465,7 +465,7 @@ esac
 # not running, so a second install has to land in the other one: a defect in
 # that direction alone would leave a machine whose next loader update makes GRUB
 # unreachable, and recovery with it.
-sh "$REPO/tools/image/mkgrubcore.sh" SEALEDCORE2 "$CORE" > /dev/null 2>&1 || \
+sh "$REPO/tools/image/mkgrubcore.sh" B "$CORE" > /dev/null 2>&1 || \
     fail "the second core image could not be built"
 machine 'cat > /tmp/core.img' < "$CORE" > /dev/null 2>&1 || fail "the second core did not arrive"
 OUT="$(machine 'bootctl grub /tmp/core.img' || true)"
@@ -478,7 +478,7 @@ if [ -z "$SECOND_TAIL" ] || [ "$SECOND_TAIL" = "$FIRST_TAIL" ]; then
     fail "the second install wrote the same tail as the first ($FIRST_TAIL and $SECOND_TAIL)"
 fi
 reboot_machine 3
-grep -aq "GRUBCORE=SEALEDCORE2" "$LOG" || fail "the machine did not boot the second core"
+grep -aq "GRUBCORE=B" "$LOG" || fail "the machine did not boot the second core"
 OUT="$(machine 'bootctl status' || true)"
 case "$OUT" in
     *"booted: candidate"*) ;;
