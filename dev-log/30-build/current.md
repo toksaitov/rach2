@@ -4,9 +4,10 @@ This file holds only the resume state for the item in progress. Replace its cont
 
 ## Position
 
-* Active phase: 3, the interface.
-* Item in progress: preflight done and proved (missing tool named before compilation; warmed cache detects a hidden tool; script change invalidates; 53 ms cached hit; clean and distclean bypass it). `doctor` is a notice alias for the direct setup report, FUSE and pkg-config moved to doctor's optional group. Next: the `help` and `compile-commands` retirement notices, closing phase 3.
-* Exact next action: alias `help` (the Readme is the interface) and add the `compile-commands` notice, then run style, host, and `make test` and commit.
+* Active phase: 4, shared source manifests.
+* Item in progress: the kernel's shared source list read by `rach2/Makefile` and `rach2/guest.mk`.
+* Exact next action: read both build descriptions, move `C_SRC` into `rach2/sources.mk` in the POSIX include dialect both makes accept, and prove with a nonexistent source added to the shared file failing both builds.
+* Phase 3 completed at fa0436e: interface is make, make test, tests/run NAME, clean, distclean, run.sh; retired names print notices; preflight cached; FUSE optional; compile-commands alias retires in phase 6 with the script move.
 
 ## Phase record
 
