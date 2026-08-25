@@ -3,16 +3,16 @@
 #
 # mkiso.sh: build a bootable ISO for one RAM-disk image, for real hardware.
 #
-# Stages the kernel and the image as GRUB multiboot modules and runs
-# grub-mkrescue (in a throwaway Docker container, so no host GRUB toolchain is
-# needed) to produce build/images/<image>.iso. Each image gets its own ISO and
-# its own staging dir, so `make isos` can build all three in parallel without a
-# race.
+# Stages the kernel and the image as GRUB multiboot modules and assembles
+# build/images/<image>.iso with xorriso and the pinned GRUB El Torito and
+# hybrid images under vendor/grub/, so no GRUB toolchain and no Docker is
+# needed. The hybrid MBR keeps the ISO bootable when written to a USB
+# device. Each image gets its own ISO and its own staging dir, so
+# `make isos` can build all three in parallel without a race.
 #
 # Usage: ./mkiso.sh <test|os-simple|os-real|rach2-metal>
 #
-# Requires Docker (the only step that does). Build the kernel and the image
-# first (make / make <image>-image).
+# Requires xorriso. Build the kernel and the image first (make).
 #
 
 set -e
@@ -30,12 +30,6 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# The Ubuntu image, pinned by digest in ubuntu-image.txt beside this
-# script: a tag moves,
-# and a GRUB built from a different grub-pc is a change nobody chose.
-UBUNTU_IMAGE="$(sed -n 's/^\(ubuntu@sha256:[0-9a-f]*\)$/\1/p' \
-                "$REPO/tools/image/ubuntu-image.txt" | head -1)"
-[ -n "$UBUNTU_IMAGE" ] || { echo "$(basename "$0"): tools/image/ubuntu-image.txt has no digest" >&2; exit 1; }
 # The metal profile has the kernel that cannot write a disk, and no other
 # profile does. This is the stick that goes into a laptop whose SSD has
 # somebody's Windows, so the artifact is checked here, not assumed:
@@ -155,16 +149,26 @@ menuentry "Rach2 ($IMAGE) - rescue (kernel debug shell)" {
 }
 CFG
 
-# Mount the repo at its own absolute path so the absolute build/ paths resolve
-# in the container; grub-mkrescue gets absolute, quoted paths. grub-mkrescue's
-# stderr is kept (its diagnostics name a missing module or a broken layout), and
-# a build failure is fatal, not a silent "wrote" line over a missing or
-# stale ISO.
-if ! docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" "$UBUNTU_IMAGE" sh -c \
-    "apt-get update -qq && \
-     apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && \
-     grub-mkrescue -o '$ISO_OUT' '$ISODIR'"; then
-    echo "mkiso: the ISO build failed in the container (see the diagnostics above)" >&2
+command -v xorriso >/dev/null 2>&1 || {
+    echo "mkiso: xorriso is required (brew install xorriso, or apt install xorriso)" >&2
+    exit 1
+}
+
+# The pinned El Torito and hybrid images, verified before they board the ISO.
+sh "$REPO/vendor/grub/verify_grub.sh" eltorito.img boot-hybrid.img
+cp "$REPO/vendor/grub/eltorito.img" "$ISODIR/boot/grub/eltorito.img"
+
+# xorriso assembles what grub-mkrescue assembled in the retired container:
+# an ISO9660 tree with the El Torito boot image, its boot-info table patched
+# in, and GRUB's hybrid MBR so the same ISO boots from a USB device.
+# xorriso's diagnostics are kept; a failure is fatal, never a silent "wrote"
+# line over a stale ISO.
+if ! xorriso -as mkisofs -graft-points -R -J \
+        -b boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 \
+        -boot-info-table --grub2-boot-info \
+        --grub2-mbr "$REPO/vendor/grub/boot-hybrid.img" \
+        -o "$ISO_OUT" "$ISODIR" 2>&1 | grep -v '^xorriso : UPDATE'; then
+    echo "mkiso: the ISO build failed (see the diagnostics above)" >&2
     rm -rf "$ISODIR"
     exit 1
 fi
