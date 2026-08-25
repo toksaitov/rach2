@@ -178,11 +178,12 @@ machine() {
 }
 
 sha256_of() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        shasum -a 256 "$1" | awk '{print $1}'
+    if [ ! -x "$REPO/build/tools/verify/sha256" ]; then
+        mkdir -p "$REPO/build/tools/verify"
+        cc -O2 -o "$REPO/build/tools/verify/sha256" \
+            "$REPO/tools/verify/sha256.c" || return 1
     fi
+    "$REPO/build/tools/verify/sha256" "$1" | awk '{print $1}'
 }
 
 rm -f "$WORK" "$KNOWN"

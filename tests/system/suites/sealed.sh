@@ -205,20 +205,21 @@ reboot_machine() {
 # session that stalls after connecting never returns, and the run's own
 # deadline is only looked at between boots. A rehearsal that can hang for
 # ever is not a proof of anything.
-DEADLINE="$REPO/build/tests/system/deadline"
-if [ ! -x "$DEADLINE" ]; then
-    echo "sealed-test: $DEADLINE is not built; run make first" >&2
+DEADLINE_TOOL="$REPO/build/tests/system/deadline"
+if [ ! -x "$DEADLINE_TOOL" ]; then
+    echo "sealed-test: $DEADLINE_TOOL is not built; run make first" >&2
     exit 2
 fi
-SSHTMO="$DEADLINE 180"
-QUICKTMO="$DEADLINE 20"
+SSHTMO="$DEADLINE_TOOL 180"
+QUICKTMO="$DEADLINE_TOOL 20"
 
 sha256_of() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        shasum -a 256 "$1" | awk '{print $1}'
+    if [ ! -x "$REPO/build/tools/verify/sha256" ]; then
+        mkdir -p "$REPO/build/tools/verify"
+        cc -O2 -o "$REPO/build/tools/verify/sha256" \
+            "$REPO/tools/verify/sha256.c" || return 1
     fi
+    "$REPO/build/tools/verify/sha256" "$1" | awk '{print $1}'
 }
 
 # ---------------------------------------------------------------- the artifact

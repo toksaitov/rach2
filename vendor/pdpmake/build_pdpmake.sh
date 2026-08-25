@@ -42,11 +42,12 @@ TARBALL_SHA256="7e19294d54edf360591d76d3b7a0a511864902ac3a75a0b5b11c7b3cae14c13f
 
 sha256_of()
 {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        shasum -a 256 "$1" | awk '{print $1}'
+    if [ ! -x "$SCRIPT_DIR/../../build/tools/verify/sha256" ]; then
+        mkdir -p "$SCRIPT_DIR/../../build/tools/verify"
+        cc -O2 -o "$SCRIPT_DIR/../../build/tools/verify/sha256" \
+            "$SCRIPT_DIR/../../tools/verify/sha256.c" || return 1
     fi
+    "$SCRIPT_DIR/../../build/tools/verify/sha256" "$1" | awk '{print $1}'
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
