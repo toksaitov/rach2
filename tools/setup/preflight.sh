@@ -18,9 +18,9 @@
 #
 set -u
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 STAMP="$REPO/build/.preflight"
-SELF="$REPO/tools/preflight.sh"
+SELF="$REPO/tools/setup/preflight.sh"
 
 # The tools the default build needs. Suites declare their own runtime tools
 # in tests/registry; QEMU is a suite tool, not a build tool. python3 leaves

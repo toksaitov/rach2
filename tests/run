@@ -57,7 +57,7 @@ run_one() {
     target=$(printf '%s' "$line" | cut -d'|' -f2)
     tools=$(printf '%s' "$line" | cut -d'|' -f4)
     check_tools "$1" "$tools" || return 1
-    "$REPO/tools/preflight.sh" || return 1
+    "$REPO/tools/setup/preflight.sh" || return 1
     start=$(date +%s)
     if make -C "$REPO" --no-print-directory "$target"; then
         echo "run: $1: PASS in $(($(date +%s) - start))s"

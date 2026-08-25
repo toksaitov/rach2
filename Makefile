@@ -7,7 +7,7 @@
 # system ships: busybox, dropbear, Doom, and the tcc compiler with pdpmake to
 # drive it).
 #
-# Quick start (the build checks its own tools; sh tools/doctor.sh is the wider report):
+# Quick start (the build checks its own tools; sh tools/setup/doctor.sh is the wider report):
 #   make            build everything: kernel, host tools, guest programs, the
 #                   vendored userland, Doom, and the three RAM images. The
 #                   first build compiles the five vendor projects and takes
@@ -105,11 +105,11 @@ MKDISK          = krffs/mkdisk.sh
 # shared image.
 all: images
 
-# The cached tool check (tools/preflight.sh): a missing or changed build tool
+# The cached tool check (tools/setup/preflight.sh): a missing or changed build tool
 # fails here, named, before any compilation. It is an order-only prerequisite
 # of the build entry points; clean and distclean never run it.
 preflight:
-	@./tools/preflight.sh
+	@./tools/setup/preflight.sh
 
 all images $(BASE_DIRS) $(FULL_DIRS): | preflight
 $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP): | preflight
@@ -1541,7 +1541,7 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 # --- toolchain preflight + quality gates ---
 doctor:
 	@echo "doctor: retired: make checks its own tools; this remains the setup report" >&2
-	@./tools/doctor.sh
+	@./tools/setup/doctor.sh
 
 # The style suite (see tools/check.sh): -Werror build, scoped cppcheck,
 # shellcheck, the convention grep, clang-format, and a readelf ABI check.

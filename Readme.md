@@ -6,7 +6,7 @@ Rach2 is a small educational operating system for 32-bit x86. It boots into a Un
 
 ## Build and run
 
-The build checks its own tools before compiling and names anything missing. For a wider machine report covering QEMU, FUSE, and the verification tools, run `sh tools/doctor.sh`. On macOS, install Xcode Command Line Tools and Homebrew, then run `sh tools/bootstrap_mac.sh`. On Debian or Ubuntu, `make doctor` prints the required packages and explains that the cross compiler must be installed separately. See the [tools Readme](tools/Readme.md) for machine setup and the individual checks.
+The build checks its own tools before compiling and names anything missing. For a wider machine report covering QEMU, FUSE, and the verification tools, run `sh tools/setup/doctor.sh`. On macOS, install Xcode Command Line Tools and Homebrew, then run `sh tools/setup/bootstrap_mac.sh`. On Debian or Ubuntu, `sh tools/setup/doctor.sh` prints the required packages and explains that the cross compiler must be installed separately. See the [tools Readme](tools/Readme.md) for machine setup and the individual checks.
 
 ```sh
 git clone https://github.com/toksaitov/rach2.git

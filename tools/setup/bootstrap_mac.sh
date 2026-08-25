@@ -2,7 +2,7 @@
 #
 # tools/bootstrap_mac.sh: install what a fresh Mac needs, from the manifest.
 #
-# Reads tools/mac-formulae.txt so the list lives in one place a person can read
+# Reads tools/setup/mac-formulae.txt: the list lives in one readable place
 # and a script can act on. Installs nothing that is already there, prints what
 # it would do under --dry-run, and leaves the judgement of whether the machine
 # is ready to `make doctor`, which is the thing that actually knows.
@@ -11,8 +11,8 @@
 # install; `xcode-select --install` is, and this says so rather than pretending.
 set -eu
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
-MANIFEST="$REPO/tools/mac-formulae.txt"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+MANIFEST="$REPO/tools/setup/mac-formulae.txt"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
