@@ -217,7 +217,7 @@ def main(argv):
         return selftest()
 
     devlog = argv[1] if len(argv) > 1 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), os.pardir, "dev-log")
+        os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "dev-log")
     index = os.path.join(devlog, "Readme.md")
 
     if not os.path.isdir(devlog):

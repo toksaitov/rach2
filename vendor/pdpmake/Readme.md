@@ -61,7 +61,7 @@ The repository's host Makefiles require GNU Make. pdpmake reads the three POSIX 
 * `utils/guest.mk` builds 29 utility programs.
 * `ish/guest.mk` builds the shell from five objects.
 
-Each guest makefile includes its component's shared source manifest, the same file the host build reads; `tools/check_guest.py` checks the derivations. The self-build images stage the corresponding trees as `/src/rach2`, `/src/utils`, and `/src/ish`, together with pdpmake, TinyCC, its runtime archive, and the static musl development files. An ordinary user builds from a writable copy. Root may build the staged trees in place.
+Each guest makefile includes its component's shared source manifest, the same file the host build reads; `tools/verify/check_guest.py` checks the derivations. The self-build images stage the corresponding trees as `/src/rach2`, `/src/utils`, and `/src/ish`, together with pdpmake, TinyCC, its runtime archive, and the static musl development files. An ordinary user builds from a writable copy. Root may build the staged trees in place.
 
 Use the named guest makefile from its directory:
 
@@ -87,4 +87,4 @@ A change to any prerequisite named by the stamp rule invalidates the stamp. If t
 
 `make selfbuild-test` builds the kernel twice from clean guest trees and requires identical hashes. It also builds the utilities and ISH, runs 18 userland checks, extracts and checks the exact guest-built kernel, runs the default guest probes on that kernel, optionally boots it through GRUB, and rebuilds `/src/ish` in place as root.
 
-Run `python3 tools/check_guest.py` after changing a host or guest source list, a guest makefile, or the staged `/src` trees.
+Run `python3 tools/verify/check_guest.py` after changing a host or guest source list, a guest makefile, or the staged `/src` trees.

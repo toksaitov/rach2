@@ -20,7 +20,7 @@ make selfbuild-test    # build the kernel twice on Rach2 and compare the results
 
 By default, the host Makefile compiles the kernel as freestanding C89 with `i686-elf-gcc` and links it at 1 MiB with `i686-elf-ld`. It links no C library or libgcc. The kernel-only build can also use the corresponding `x86_64-elf` cross tools. Every host link runs `tools/check_kernel.py` before replacing the previous kernel.
 
-`C_SRC` and `ASM_SRC` in `sources.mk` are explicit source lists, included by both the host `Makefile` and `guest.mk`, the POSIX makefile that pdpmake and TinyCC use on Rach2, so one file describes both builds. `make check-sources` checks the C list against the tree, and `tools/check_guest.py` checks the guest derivation and limits. Host objects and dependency files are under `build/rach2/`; the guest build writes into its writable copy of the source tree.
+`C_SRC` and `ASM_SRC` in `sources.mk` are explicit source lists, included by both the host `Makefile` and `guest.mk`, the POSIX makefile that pdpmake and TinyCC use on Rach2, so one file describes both builds. `make check-sources` checks the C list against the tree, and `tools/verify/check_guest.py` checks the guest derivation and limits. Host objects and dependency files are under `build/rach2/`; the guest build writes into its writable copy of the source tree.
 
 The metal and recovery kernels use separate component names and object trees. A configuration fingerprint under each tree rebuilds it automatically when the resolved compiler options change, so one tree never mixes objects from two option sets.
 

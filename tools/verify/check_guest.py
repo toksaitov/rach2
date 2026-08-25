@@ -385,7 +385,7 @@ def check_staging(repo):
 
 def main():
     repo = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__)))
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     sources = check_kernel_lists(repo)
     programs = check_utils(repo)
     ish_objects = check_ish(repo)

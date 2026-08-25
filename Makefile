@@ -1543,11 +1543,11 @@ doctor:
 	@echo "doctor: retired: make checks its own tools; this remains the setup report" >&2
 	@./tools/setup/doctor.sh
 
-# The style suite (see tools/check.sh): -Werror build, scoped cppcheck,
+# The style suite (see tools/verify/check.sh): -Werror build, scoped cppcheck,
 # shellcheck, the convention grep, clang-format, and a readelf ABI check.
 # `tests/run style` names this target.
 run-style:
-	@./tools/check.sh
+	@./tools/verify/check.sh
 
 # The host suite (see tools/hosttest.sh): pure kernel logic compiled and run
 # natively under AddressSanitizer + UndefinedBehaviorSanitizer. It waits on
@@ -1578,7 +1578,7 @@ compile-commands:
 # Kernel source-list guard: fail if a rach2 .c on disk is missing from C_SRC (so a new
 # kernel source cannot be silently dropped from the build). Also run inside the gate.
 check-sources:
-	@./tools/check_sources.sh
+	@./tools/verify/check_sources.sh
 
 # clean: the everyday reset. Each sub-make removes its own build/<component> tree
 # (objects, .d, binaries), and the RAM-disk images under build/images go too. The

@@ -15,7 +15,7 @@
 #
 set -u
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 K="$REPO/rach2"
 
 # The explicit list the build compiles, expanded by Make (one source per line).

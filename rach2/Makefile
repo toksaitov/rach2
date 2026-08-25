@@ -98,14 +98,14 @@ $(C_OBJECTS) : $(BUILD)/%.o : %.c
 # yet): the leading '-' makes that silent. They live beside the objects in $(BUILD).
 -include $(C_OBJECTS:.o=.d)
 
-# Emit the explicit kernel source list (expanded), for tools/check_sources.sh (the
+# Emit the explicit kernel source list (expanded), for tools/verify/check_sources.sh (the
 # source-list guard that fails if a rach2 .c on disk is missing from C_SRC). .PHONY so
 # it always runs; prints nothing but the list.
 .PHONY : print-c-src
 print-c-src :
 	@echo $(C_SRC)
 
-# The assembly list too, for tools/check_guest.py (the guest build's list
+# The assembly list too, for tools/verify/check_guest.py (the guest build's list
 # guard): the guest makefile must name exactly these sources.
 .PHONY : print-asm-src
 print-asm-src :

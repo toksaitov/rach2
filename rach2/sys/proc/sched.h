@@ -31,9 +31,9 @@ void sched_yield(void);
  * says so is a marker set around the halt and sampled by the timer before any
  * wakeup can change state.
  *
- * Every halt in the kernel goes through one of these two, and `tools/check.sh`
- * refuses a bare `sti; hlt` written anywhere else: a site added later and left
- * unmarked would report its idle time as busy, and nothing else would say so.
+ * Every halt in the kernel goes through one of these two, and the style
+ * check refuses a bare `sti; hlt` written anywhere else: a site added later
+ * left unmarked would report its idle time as busy, and nothing would say so.
  * They differ only in the interrupt flag they leave behind, which the callers
  * do not agree on: a wait that must re-check a condition with interrupts off
  * needs the `cli`, and one that returns to ordinary work does not.

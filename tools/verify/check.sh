@@ -9,21 +9,21 @@
 #
 #   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent
 #   skip) 1. the kernel build with -Werror (the zero-warning policy as a hard
-#   gate) 2. cppcheck (c89, warning+style) with tools/cppcheck.suppress
+#   gate) 2. cppcheck (c89, warning+style) with tools/verify/cppcheck.suppress
 #   (--error-exitcode) 3. shellcheck on the in-house shell scripts
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
 #   5. clang-format: HARD on new-code dirs (tools/ libc/ tests/host, *probe.c)
 #      and on any files named as arguments; advisory across the legacy tree
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC)
-#   8. text style, in three parts: tools/textcheck.sh for non-ASCII and dashes,
-#      tools/check_comments.py for the 80-column comment rule, and
-#      tools/prose_check.py --banned for the vocabulary a script can decide.
+#   8. text style, in three parts: textcheck.sh for non-ASCII and dashes,
+#      check_comments.py for the 80-column comment rule, and prose_check.py
+#      --banned for the vocabulary a script can decide (all beside this file).
 #   9. the probe runner's scoring rule (tools/runtests.py --selftest)
 #  10. the set-id manifest sweep (tools/check_setid.py)
-#  11. image reproducibility (tools/check_repro.py): one tree, one image
+#  11. image reproducibility (tools/verify/check_repro.py): one tree, one image
 #  12. the checker selftests (tools/check_kernel.py, tools/check_grubembed.py)
-#  13. the dev-log index (tools/check_devlog.py): it names every finished
+#  13. the dev-log index (tools/verify/check_devlog.py): it names every finished
 #      milestone, and names the newest last
 #
 # Usage:
@@ -34,7 +34,7 @@
 
 set -u
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO" || exit 1
 VDIR=/tmp/rach2_verify
 mkdir -p "$VDIR"
@@ -137,7 +137,7 @@ ls "$REPO"/krffs/krffs_reader.c "$REPO"/krffs/krffs_reader.h \
    "$REPO"/krffs/readfile.krffs.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \
-      --suppressions-list="$REPO/tools/cppcheck.suppress" \
+      --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
       --file-list="$VDIR/_srcs.txt" >"$VDIR/verify_cppcheck.log" 2>&1; then
     echo "  PASS (0 findings)"
 else
@@ -242,18 +242,18 @@ fi
 # 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC,
 #    so a newly added kernel source cannot be silently dropped from the build.
 hr "7/13 kernel source list (C_SRC vs disk) and the guest build lists"
-if "$REPO/tools/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
-   python3 "$REPO/tools/check_guest.py" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
+if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
+   python3 "$REPO/tools/verify/check_guest.py" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_sources.log"; fail=1
 fi
 
-# Text style: the mechanical natural-text checks (tools/textcheck.sh). It
+# Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
 # catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
 # tree.
 hr "8/13 text style"
-if "$REPO/tools/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
+if "$REPO/tools/verify/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS (textcheck)"
 else
     tc=$(sed -n 's/^textcheck: \([0-9]*\) finding.*/\1/p' "$VDIR/verify_text.log")
@@ -264,7 +264,7 @@ fi
 # Comment width. Written for milestone 26 and left unwired until the tree
 # reached zero, because a check that fails on the day it lands teaches everyone
 # to ignore it.
-if python3 "$REPO/tools/check_comments.py" >"$VDIR/verify_cols.log" 2>&1; then
+if python3 "$REPO/tools/verify/check_comments.py" >"$VDIR/verify_cols.log" 2>&1; then
     echo "  PASS (comments at 80 columns)"
 else
     cc=$(sed -n 's/^check_comments: \([0-9]*\) comment.*/\1/p' "$VDIR/verify_cols.log")
@@ -275,8 +275,8 @@ fi
 # Vocabulary. Only the half of the register rule a script can decide: terms with
 # no legitimate use in this tree, in comments AND in the strings a person reads.
 # The other half, and the repetition report, are for review; see CLAUDE.md.
-if python3 "$REPO/tools/prose_check.py" --selftest >"$VDIR/verify_prose.log" 2>&1 &&
-   python3 "$REPO/tools/prose_check.py" --banned >>"$VDIR/verify_prose.log" 2>&1; then
+if python3 "$REPO/tools/verify/prose_check.py" --selftest >"$VDIR/verify_prose.log" 2>&1 &&
+   python3 "$REPO/tools/verify/prose_check.py" --banned >>"$VDIR/verify_prose.log" 2>&1; then
     echo "  PASS (banned vocabulary)"
 else
     pc=$(sed -n 's/^prose_check: \([0-9]*\) banned.*/\1/p' "$VDIR/verify_prose.log")
@@ -321,7 +321,7 @@ hr "11/13 image reproducibility (one tree, one image)"
 if ! make -C "$REPO/krffs" >"$VDIR/verify_repro_build.log" 2>&1; then
     echo "  FAIL: the krffs host tools did not build; see $VDIR/verify_repro_build.log"
     fail=1
-elif python3 "$REPO/tools/check_repro.py" >"$VDIR/verify_repro.log" 2>&1; then
+elif python3 "$REPO/tools/verify/check_repro.py" >"$VDIR/verify_repro.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_repro.log"; fail=1
@@ -353,8 +353,8 @@ fi
 #     directories' numeric order, and a directory holding only a plan must have
 #     none. The selftest proves the rules reject; the run proves this index.
 hr "13/13 dev-log index"
-if python3 "$REPO/tools/check_devlog.py" --selftest >"$VDIR/verify_devlog.log" 2>&1 &&
-   python3 "$REPO/tools/check_devlog.py" >>"$VDIR/verify_devlog.log" 2>&1; then
+if python3 "$REPO/tools/verify/check_devlog.py" --selftest >"$VDIR/verify_devlog.log" 2>&1 &&
+   python3 "$REPO/tools/verify/check_devlog.py" >>"$VDIR/verify_devlog.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_devlog.log"; fail=1

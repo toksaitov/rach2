@@ -56,7 +56,7 @@ import sys
 import tarfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOP = os.path.normpath(os.path.join(HERE, os.pardir))
+TOP = os.path.normpath(os.path.join(HERE, os.pardir, os.pardir))
 sys.path.insert(0, HERE)
 
 from check_comments import c_spans, hash_comment_lines   # one lexer, not two
@@ -107,7 +107,7 @@ WATCH = (
 # This file states the rule, so it must be able to name what it bans.
 # `CLAUDE.md` states it too, in one section; the rest of that file is checked
 # normally.
-EXEMPT_FILES = (os.path.join("tools", "prose_check.py"),)
+EXEMPT_FILES = (os.path.join("tools", "verify", "prose_check.py"),)
 EXEMPT_SECTION = {"CLAUDE.md": "### Register rule"}
 
 
@@ -374,7 +374,7 @@ def cmd_report(argv):
     return 0
 
 
-FIXTURE = os.path.join(TOP, "tools", "prose_upstream.txt")
+FIXTURE = os.path.join(TOP, "tools", "verify", "prose_upstream.txt")
 
 
 def fixture_lines():
@@ -419,7 +419,7 @@ def cmd_fixture(argv):
     return 0
 
 
-BASELINE = os.path.join(TOP, "tools", "prose_baseline.txt")
+BASELINE = os.path.join(TOP, "tools", "verify", "prose_baseline.txt")
 
 
 def cmd_baseline(argv):

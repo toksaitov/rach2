@@ -287,7 +287,7 @@ def main(argv):
     if len(argv) > 1 and argv[1] == "--selftest":
         return selftest()
 
-    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir)
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir)
     if len(argv) > 1:
         roots = argv[1:]
     else:

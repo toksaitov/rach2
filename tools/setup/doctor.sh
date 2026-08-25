@@ -7,7 +7,7 @@
 # broken), so a student or a fresh CI box sees a clear checklist instead of a
 # cryptic failure mid-build.
 #
-# ASCII-only output: the convention gate (tools/check.sh) forbids non-ASCII
+# ASCII-only output: the style check (tools/verify/check.sh) forbids
 # bytes in in-house files, so no checkmarks/Unicode here.
 #
 set -u
@@ -63,7 +63,8 @@ req() {
 # opt NAME WHAT HINTKEY: a tool only some tasks need; absence is a note, not a
 # failure (these are dev/quality tools, so a plain presence check is enough).
 #
-# Four tools that used to sit here are required, not optional: `tools/check.sh`
+# Four tools that used to sit here are required, not optional: the
+# style check
 # refuses to start without cppcheck, shellcheck, clang-format and perl, and
 # `CLAUDE.md` requires `tests/run style` on every change. Calling them
 # optional told a reader on a fresh machine that they could skip the one check

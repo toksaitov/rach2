@@ -6,7 +6,7 @@
 # the host build does; the one host flag that is dropped is -Ttext, because
 # tcc's default i386 text base is the same 0x08048000 the host build names
 # explicitly. Both makefiles include sources.mk, so one file lists the
-# sources for the two builds; tools/check_guest.py checks the derivation.
+# sources for the two builds; tools/verify/check_guest.py checks the derivation.
 #
 # Run from a writable copy of this tree: make -f guest.mk
 
