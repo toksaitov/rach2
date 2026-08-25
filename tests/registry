@@ -45,7 +45,7 @@ ssh|run-ssh|-|qemu-system-i386,python3,ssh,expect|yes
 grub|run-grub|-|qemu-system-i386,python3,docker|yes
 menu|run-menu|-|qemu-system-i386,python3,docker|yes
 install|run-install|-|qemu-system-i386,python3,docker|yes
-sealed|run-sealed|-|qemu-system-i386,python3,ssh,gtimeout|yes
+sealed|run-sealed|-|qemu-system-i386,python3,ssh|yes
 drill|run-drill|-|qemu-system-i386,python3,ssh,expect|yes
 metal|run-metal|-|qemu-system-i386,python3,ssh|yes
 style|run-style|-|cppcheck,shellcheck,clang-format,perl,python3|yes

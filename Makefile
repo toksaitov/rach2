@@ -77,6 +77,8 @@ OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
 METAL_IMAGE     = $(IMAGES_DIR)/rach2-metal.krffs
 OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
+# The suites' wall-clock limit tool (see its rule below).
+DEADLINE        = build/tests/system/deadline
 MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all full deps clean distclean images musl-programs test test-disk bootpart-test install-test \
@@ -103,7 +105,7 @@ MKDISK          = krffs/mkdisk.sh
 # takes minutes; a later `make` rebuilds only what changed. Each image is its
 # own file under build/images/, so they coexist instead of overwriting one
 # shared image.
-all: images
+all: images $(DEADLINE)
 
 # The cached tool check (tools/setup/preflight.sh): a missing or changed build tool
 # fails here, named, before any compilation. It is an order-only prerequisite
@@ -267,6 +269,13 @@ build/ish/ish:
 	@$(MAKE) --no-print-directory -C ish
 build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs: | check-libc
 	@$(MAKE) --no-print-directory -C krffs
+
+# The deadline tool: the suites' wall-clock limit with process-group kill,
+# replacing coreutils' gtimeout. Built with the host compiler like the KRFFS
+# tools.
+$(DEADLINE): tests/system/runner/deadline.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
 
 # --- validation stamps. A validator is a prerequisite of a stamp that sits
 #     between a published artifact and its consumers, so editing the checker
@@ -708,7 +717,7 @@ run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid
 # recovery), and a control run that injects nothing and asserts that no fallback
 # and no recovery appears anywhere. Docker builds the artifact; the runs are
 # QEMU and ssh.
-run-sealed: rach2-sealed-disk
+run-sealed: rach2-sealed-disk $(DEADLINE)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" 2297
 
@@ -1554,7 +1563,7 @@ run-style:
 # the vendored musl for the same reason krffs does: mkhash_hosttest names the
 # musl crypt in its host-deps, and that source exists only once the tarball is
 # extracted. `tests/run host` names this target.
-run-host: check-libc
+run-host: check-libc $(DEADLINE)
 	@./tests/system/suites/host.sh
 
 # Retired names, kept as aliases for this milestone only.

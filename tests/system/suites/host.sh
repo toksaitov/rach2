@@ -35,20 +35,18 @@ any=0
 # A test that hangs must fail the gate, not hang it. One of these tests
 # drives a device that reports an error on every transmit, and the first defect
 # it caught was an unbounded loop, so this is a demonstrated case and not a
-# precaution. The test runs in the FOREGROUND under timeout(1): a background
-# job in a non-interactive shell inherits SIGINT and SIGQUIT ignored, and
-# pwauth_hosttest checks precisely those dispositions in a child it forks, so
-# backgrounding the test makes that test fail for a reason of our own making.
+# precaution. The test runs in the FOREGROUND under the project deadline
+# tool: a background job in a non-interactive shell inherits SIGINT and
+# SIGQUIT ignored, and pwauth_hosttest checks precisely those dispositions
+# in a child it forks, so backgrounding the test makes that test fail for a
+# reason of our own making. The tool is built by this suite's make target
+# (and by any make) before the tests compile.
 WATCHDOG_SECS=60
 WATCHDOG=""
-for t0 in timeout gtimeout; do
-    if command -v "$t0" >/dev/null 2>&1; then
-        WATCHDOG="$t0 $WATCHDOG_SECS"
-        break
-    fi
-done
-if [ -z "$WATCHDOG" ]; then
-    echo "hosttest: no timeout(1) or gtimeout(1); a hung test will not be cut short" >&2
+if [ -x "$REPO/build/tests/system/deadline" ]; then
+    WATCHDOG="$REPO/build/tests/system/deadline $WATCHDOG_SECS"
+else
+    echo "hosttest: build/tests/system/deadline is not built; a hung test will not be cut short" >&2
 fi
 
 wrapped_deps()

@@ -201,23 +201,17 @@ reboot_machine() {
     fail "the machine came back but never answered SSH (boot $want)"
 }
 
-# A bound on every ssh, where the host has a timeout(1) to give.
-SSHTMO=""
-QUICKTMO=""
-for t0 in timeout gtimeout; do
-    if command -v "$t0" >/dev/null 2>&1; then
-        SSHTMO="$t0 180"
-        QUICKTMO="$t0 20"
-        break
-    fi
-done
-if [ -z "$SSHTMO" ]; then
-    # Not a warning: without it a session that stalls after connecting never
-    # returns, and the run's own deadline is only looked at between boots. A
-    # rehearsal that can hang for ever is not a proof of anything.
-    echo "sealed-test: timeout(1) or gtimeout(1) is required (brew install coreutils)" >&2
+# A bound on every ssh, through the project deadline tool: without it a
+# session that stalls after connecting never returns, and the run's own
+# deadline is only looked at between boots. A rehearsal that can hang for
+# ever is not a proof of anything.
+DEADLINE="$REPO/build/tests/system/deadline"
+if [ ! -x "$DEADLINE" ]; then
+    echo "sealed-test: $DEADLINE is not built; run make first" >&2
     exit 2
 fi
+SSHTMO="$DEADLINE 180"
+QUICKTMO="$DEADLINE 20"
 
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then

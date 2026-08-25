@@ -8,7 +8,7 @@
 
 Each test declares separately compiled project sources in one or more `host-deps:` comment lines. The runner rejects a dependency line that was wrapped without repeating the prefix, checks that every named file exists, and passes those files to the compiler. A test that includes a project `.c` file directly to reach its `static` functions leaves `host-deps:` empty.
 
-The runner stores binaries and logs under `/tmp/rach2_verify`. If `timeout` or `gtimeout` is installed, each binary runs in the foreground with a 60-second limit. Otherwise the runner warns that a hung test cannot be stopped. Exit status 0 passes; a nonzero exit, sanitizer report, compile failure, or timeout fails. Tests may print diagnostics.
+The runner stores binaries and logs under `/tmp/rach2_verify`. The project `deadline` tool (built by `make`) runs each binary in the foreground with a 60-second limit and kills the whole process group of one that hangs. Exit status 0 passes; a nonzero exit, sanitizer report, compile failure, or timeout fails. Tests may print diagnostics.
 
 The host suite first runs `check-libc`. This ensures that musl's installed library and extracted SHA-512 crypt source exist before the password tests compile.
 

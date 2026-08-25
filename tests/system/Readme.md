@@ -17,7 +17,7 @@ This directory holds everything that runs Rach2 to test it: the QEMU runners und
 
 ## Suites
 
-The two verification suites come first. `suites/host.sh` (`tests/run host`) discovers every `tests/host/*_hosttest.c`, compiles it with the host C compiler and AddressSanitizer plus UndefinedBehaviorSanitizer, and runs it; a test lists separately compiled sources in repeatable `host-deps:` comments, and each test is limited to 60 seconds when `timeout` or `gtimeout` is installed. The style suite lives under [`tools/verify/`](../../tools/Readme.md) because it checks the tree, not the running system.
+The two verification suites come first. `suites/host.sh` (`tests/run host`) discovers every `tests/host/*_hosttest.c`, compiles it with the host C compiler and AddressSanitizer plus UndefinedBehaviorSanitizer, and runs it; a test lists separately compiled sources in repeatable `host-deps:` comments, and the project `deadline` tool limits each test to 60 seconds. The style suite lives under [`tools/verify/`](../../tools/Readme.md) because it checks the tree, not the running system.
 
 The behavioral suites receive built artifacts and credentials from their Make targets. They use disposable copies or dedicated fixtures, and each script that starts QEMU installs cleanup for it.
 

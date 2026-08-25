@@ -5,9 +5,9 @@ The scripts under `tools/` are grouped by role: `setup/` prepares and reports on
 ## Machine setup
 
 * `setup/bootstrap_mac.sh` reads `mac-formulae.txt`, skips installed Homebrew packages, and installs the rest. `--dry-run` prints the commands without installing anything. It accepts only macOS and leaves the final decision to `doctor.sh`.
-* `setup/mac-formulae.txt` lists the Homebrew formulae and casks for a fresh Mac. It includes the i686 cross toolchain, QEMU, FUSE-T, the verification tools, `coreutils` for `gtimeout`, and Expect for the SSH test.
+* `setup/mac-formulae.txt` lists the Homebrew formulae and casks for a fresh Mac. It includes the i686 cross toolchain, QEMU, FUSE-T, the verification tools, and Expect for the SSH test.
 * `setup/preflight.sh` is the build's own cached tool check. `make` and `tests/run` run it at each entry; it stats the recorded tool paths on a cache hit and repeats its compile probes only when the environment changed. A missing tool fails the build, named, before compilation. `--report` prints one line per tool without caching.
-* `setup/doctor.sh` is the wider machine-setup report, run directly (the `make doctor` alias is retired). It covers the cross compiler and binutils, QEMU, `make`, a host C compiler, Python, and the verification tools, and reports Docker, OpenSSH tools, Git, Expect, FUSE, and `gtimeout` as optional because only some suites need them.
+* `setup/doctor.sh` is the wider machine-setup report, run directly (the `make doctor` alias is retired). It covers the cross compiler and binutils, QEMU, `make`, a host C compiler, Python, and the verification tools, and reports Docker, OpenSSH tools, Git, Expect, and FUSE as optional because only some suites need them.
 
 `doctor.sh` checks that command-line tools run, not merely that their names are present. For FUSE it runs `pkg-config --exists` for `fuse`, then for `fuse-t`.
 

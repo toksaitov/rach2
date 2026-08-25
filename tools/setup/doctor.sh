@@ -105,7 +105,6 @@ opt docker       "make isos / os-real-grub-disk" docker
 opt ssh-keygen   "the SSH capstone demo key" openssh
 opt git          "cloning and committing" git
 opt expect       "tests/run ssh" expect
-opt gtimeout     "tests/run sealed (coreutils on macOS)" coreutils
 
 # FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the
 # default build or the suites needs it. Checked via pkg-config, which is now
