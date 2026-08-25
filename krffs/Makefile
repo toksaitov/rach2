@@ -1,5 +1,6 @@
-# KRFFS host tools: the FUSE mount plus the mkfs/defrag/fsck/fsviz/edfs/stageimage
-# utilities and the mkhash password hasher. These run on the HOST, so they use
+# KRFFS host tools: the mkfs/defrag/fsck/fsviz/edfs/stageimage utilities, the
+# mkhash password hasher, and the optional FUSE mount (`make mount`). These run
+# on the HOST, so they use
 # the host compiler (cc), not the cross toolchain; only the shared
 # header-dependency tracking (../mk/deps.mk) applies, so editing a krffs header
 # rebuilds exactly the objects that include it.
@@ -8,29 +9,33 @@ include ../mk/build.mk
 
 CFLAGS += -g -std=gnu99 $(DEPFLAGS) -D_FILE_OFFSET_BITS=64
 
-FUSE_PKG := $(shell pkg-config --exists fuse 2>/dev/null && echo fuse || echo fuse-t)
+# FUSE is needed only by the optional mount tool (`make mount`), so the
+# pkg-config probe is lazy (=): a default build neither runs pkg-config nor
+# needs the FUSE headers installed.
+FUSE_PKG = $(shell pkg-config --exists fuse 2>/dev/null && echo fuse || echo fuse-t)
 FUSE_CFLAGS += `pkg-config $(FUSE_PKG) --cflags` -DFUSE_USE_VERSION=26
 FUSE_LDLIBS += `pkg-config $(FUSE_PKG) --libs`
 
 # Everything builds out of tree under $(BUILD) (build/krffs/, from mk/build.mk): the
 # shared objects and the host-tool binaries the RAM-disk scripts run from there.
 
-# The four objects every tool shares.
+# The four objects every tool shares. Only krffs.c and krffs_fuse_operations.c
+# include the FUSE interface, so the core, the allocator, and the tool mains
+# compile without the FUSE cflags.
 CORE = $(addprefix $(BUILD)/, krffs_file_system.o krffs_node.o krffs_platform.o \
                               krffs_utilities.o)
 
-# Objects compiled WITH the FUSE cflags: the mount tool and everything linked into
-# it, including the shared core. The standalone tool mains are compiled WITHOUT the
-# FUSE cflags, exactly the split the previous per-target rules produced.
-FUSE_OBJS = $(CORE) $(addprefix $(BUILD)/, krffs_allocator.o krffs_fuse_operations.o \
-                                           krffs.o)
-TOOL_OBJS = $(addprefix $(BUILD)/, mkfs.krffs.o defrag.krffs.o fsck.krffs.o \
+# The two objects of the optional mount tool, the only ones compiled WITH the
+# FUSE cflags.
+MOUNT_OBJS = $(addprefix $(BUILD)/, krffs_fuse_operations.o krffs.o)
+TOOL_OBJS = $(CORE) $(addprefix $(BUILD)/, krffs_allocator.o \
+                                   mkfs.krffs.o defrag.krffs.o fsck.krffs.o \
                                    fsviz.krffs.o edfs.krffs.o stageimage.krffs.o \
                                    mkhash.krffs.o readfile.krffs.o \
                                    krffs_reader.o)
 
-OBJECTS = $(FUSE_OBJS) $(TOOL_OBJS) $(BUILD)/crypt_sha512.o
-TARGETS = $(addprefix $(BUILD)/, krffs mkfs.krffs defrag.krffs fsck.krffs \
+OBJECTS = $(MOUNT_OBJS) $(TOOL_OBJS) $(BUILD)/crypt_sha512.o
+TARGETS = $(addprefix $(BUILD)/, mkfs.krffs defrag.krffs fsck.krffs \
                                  fsviz.krffs edfs.krffs stageimage.krffs \
                                  mkhash.krffs readfile.krffs)
 
@@ -40,8 +45,18 @@ TARGETS = $(addprefix $(BUILD)/, krffs mkfs.krffs defrag.krffs fsck.krffs \
 # never modified.
 MUSL_CRYPT = $(TOP)/vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
 
-.PHONY : all libc-check
+.PHONY : all mount libc-check fuse-check
 all : $(TARGETS)
+
+# The FUSE mount tool is not part of the default build: staging and checking
+# images never mounts one, and FUSE is the one host library the other tools do
+# not need. `make -C krffs mount` builds it where FUSE is installed.
+mount : $(BUILD)/krffs
+
+fuse-check :
+	@pkg-config --exists fuse 2>/dev/null || pkg-config --exists fuse-t 2>/dev/null || { \
+	    echo "krffs: the mount tool needs FUSE: install fuse-t (macOS) or libfuse-dev and pkg-config" >&2; \
+	    exit 1; }
 
 $(TARGETS) : | libc-check
 
@@ -54,10 +69,13 @@ libc-check :
 	    echo "krffs: vendored musl source not extracted; run make deps first" >&2; \
 	    exit 1; }
 
-# The FUSE mount tool: the FUSE objects + the FUSE libraries.
-$(BUILD)/krffs : $(FUSE_OBJS)
+# The FUSE mount tool: the shared core and allocator + the two FUSE objects +
+# the FUSE libraries.
+$(BUILD)/krffs : $(CORE) $(BUILD)/krffs_allocator.o $(MOUNT_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(FUSE_LDLIBS)
+
+$(BUILD)/krffs $(MOUNT_OBJS) : | fuse-check
 
 # stageimage and fsck also need the allocator: one writes KRFFS nodes directly,
 # the other frees the orphans a crash left behind.
@@ -89,9 +107,9 @@ $(BUILD)/crypt_sha512.o : $(MUSL_CRYPT)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Compile rules: FUSE objects get the FUSE cflags, tool mains do not. Each makes its
-# $(BUILD) output dir first.
-$(FUSE_OBJS) : $(BUILD)/%.o : %.c
+# Compile rules: the two mount objects get the FUSE cflags, everything else
+# does not. Each makes its $(BUILD) output dir first.
+$(MOUNT_OBJS) : $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(FUSE_CFLAGS) -c $< -o $@
 $(TOOL_OBJS) : $(BUILD)/%.o : %.c

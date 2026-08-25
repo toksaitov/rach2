@@ -4,19 +4,19 @@ This directory contains the host implementation of KRFFS and the tools that crea
 
 ## Build
 
-The component uses the host C compiler and builds nine binaries under `build/krffs/`:
+The component uses the host C compiler and builds eight binaries under `build/krffs/`:
 
 ```sh
 make -C krffs
 ```
 
-The FUSE mount and its objects use the flags reported by `pkg-config fuse` or `pkg-config fuse-t`. The standalone tools do not include FUSE headers or link with FUSE. Header dependencies are written beside the objects under `build/krffs/`.
+The default build needs neither FUSE nor `pkg-config`. The FUSE mount is a separate optional target, `make -C krffs mount`, whose two objects use the flags reported by `pkg-config fuse` or `pkg-config fuse-t`; without an installed FUSE it fails with an installation hint. The other tools do not include FUSE headers or link with FUSE. Header dependencies are written beside the objects under `build/krffs/`.
 
 `mkhash.krffs` compiles the SHA-512 crypt implementation from the extracted musl 1.2.5 source. The root build orders KRFFS after `check-libc`. In a fresh tree, run `make deps` before a standalone `make -C krffs`.
 
 ## Tools
 
-* `krffs` mounts a whole-file image through the FUSE 2.6 interface. It forces single-threaded FUSE operation.
+* `krffs` (optional, `make -C krffs mount`) mounts a whole-file image through the FUSE 2.6 interface. It forces single-threaded FUSE operation.
 * `mkfs.krffs` initializes an existing regular file or region. `-f` permits replacement of an existing KRFFS signature.
 * `fsck.krffs` validates the root and the complete node ring. It clears the dirty flag after validating the root. After a successful structural walk, it frees reserved nodes whose names are empty.
 * `defrag.krffs` runs `fsck.krffs`, then moves allocated nodes toward the start and coalesces free space. It currently works only on a whole-file image; its pre-check does not forward region arguments.
@@ -79,7 +79,7 @@ The root Makefile owns the named image profiles and their dependencies. `make fu
 
 ## Mounting a scratch image
 
-Create the image and mount point under the ignored build directory:
+Build the optional mount tool with `make -C krffs mount`, then create the image and mount point under the ignored build directory:
 
 ```sh
 mkdir -p build/krffs/mount
