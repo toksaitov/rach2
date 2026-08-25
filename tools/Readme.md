@@ -8,11 +8,11 @@ Two scripts are also user entry points. `bootstrap_mac.sh` prepares a Mac, and `
 
 * `bootstrap_mac.sh` reads `mac-formulae.txt`, skips installed Homebrew packages, and installs the rest. `--dry-run` prints the commands without installing anything. It accepts only macOS and leaves the final decision to `make doctor`.
 * `mac-formulae.txt` lists the Homebrew formulae and casks for a fresh Mac. It includes the i686 cross toolchain, QEMU, FUSE-T, the verification tools, `coreutils` for `gtimeout`, and Expect for the SSH test.
-* `doctor.sh` implements `make doctor`. It requires the cross compiler and binutils, QEMU, `make`, a host C compiler, Python, `pkg-config`, FUSE, and the four verification-only tools used by `make verify-style`. Docker, OpenSSH tools, Git, Expect, and `gtimeout` are reported as optional because only some targets need them.
+* `doctor.sh` implements `make doctor`. It requires the cross compiler and binutils, QEMU, `make`, a host C compiler, Python, `pkg-config`, FUSE, and the four verification-only tools used by `tests/run style`. Docker, OpenSSH tools, Git, Expect, and `gtimeout` are reported as optional because only some targets need them.
 
 `make doctor` checks that command-line tools run, not merely that their names are present. For FUSE it runs `pkg-config --exists` for `fuse`, then for `fuse-t`.
 
-## `make verify-style`
+## `tests/run style`
 
 `check.sh` runs a preflight followed by thirteen numbered checks:
 
@@ -42,7 +42,7 @@ The supporting files have narrower jobs:
 * `check_devlog.py` requires the dev-log index to name every finished milestone once, in directory order, and to omit plan-only milestones. It accepts `Readme.md` and milestone 6's `results.md` as completion records.
 * `cppcheck.suppress` contains the project-wide and path-scoped cppcheck exceptions read by `check.sh`.
 
-## `make verify-host`
+## `tests/run host`
 
 `hosttest.sh` discovers every `tests/host/*_hosttest.c`, compiles it with the host C compiler and AddressSanitizer plus UndefinedBehaviorSanitizer, and runs it. A test lists separately compiled sources in repeatable `host-deps:` comments. The script rejects a wrapped dependency declaration, missing dependencies, a compile failure, a nonzero test status, and an empty test set.
 
@@ -55,14 +55,14 @@ See [the host-test Readme](../tests/host/Readme.md) for the individual tests and
 * `check_kernel.py` validates a kernel ELF, its Multiboot header, its two load segments, its entry point, and its image end. The default profile requires GNU ld symbols; `--tcc` accepts the symbol-free TinyCC layout. `rach2/Makefile` runs it on every kernel link.
 * `check_elf.py` validates user executables against both the kernel loader and the project's static-executable policy. `make check-tcc` and `make check-pdpmake` use it.
 * `check_link.py` uses `i686-elf-nm` to require that the libraries and startup objects staged for TinyCC leave no required symbol undefined. `vendor/tcc/build_tcc.sh` runs it.
-* `check_setid.py` has four related checks: manifest declarations, the resulting image nodes, the two BusyBox applet tables and resolved configs, and the strict and permissive init binaries. `make verify-style` runs its self-test and manifest sweep; `krffs/mkimage.sh` and `krffs/mkdisk.sh` run the image check; `make check-setid` runs the manifest, BusyBox, and init checks.
+* `check_setid.py` has four related checks: manifest declarations, the resulting image nodes, the two BusyBox applet tables and resolved configs, and the strict and permissive init binaries. `tests/run style` runs its self-test and manifest sweep; `krffs/mkimage.sh` and `krffs/mkdisk.sh` run the image check; `make check-setid` runs the manifest, BusyBox, and init checks.
 * `check_diskpolicy.py` requires a kernel to contain exactly one of the read-only and read-write policy banners. `check_recovery.py` does the same for ordinary and recovery disk authority. These checks detect a mis-built artifact; the behavioral targets test actual disk writes.
 * `check_grubembed.py` requires `grub-embed.cfg` to contain exactly the ordered configuration calls for partitions 1 and 3. Both GRUB core builders run it.
 * `check_sealednet.py` checks that the sealed disk's address, prefix, mask, gateway, and recovery fallback script describe one valid network configuration.
 
 ## clangd database
 
-`gen_compile_commands.sh` implements `make compile-commands`. It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines, selects the cross-compile commands by their first word, and publishes `compile_commands.json` only after the finished file passes a line-by-line JSON validation and the kernel coverage check. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `make verify-style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
+`gen_compile_commands.sh` implements `make compile-commands`. It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines, selects the cross-compile commands by their first word, and publishes `compile_commands.json` only after the finished file passes a line-by-line JSON validation and the kernel coverage check. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `tests/run style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
 
 ## QEMU runners and capture checkers
 

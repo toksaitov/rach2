@@ -29,7 +29,7 @@ Run this target from the repository root:
 make compile-commands
 ```
 
-`tools/gen_compile_commands.sh` runs `make -Bn` in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines back into whole commands, and keeps each command whose first word is the i686 cross GCC, one entry per C source operand. Strings are escaped for JSON, the finished database is validated line by line, and an entry is required for every kernel source in `C_SRC`; the file replaces `compile_commands.json` only after both checks pass. The generated file is ignored by Git. `make verify-style` runs the generator's `--selftest`, which covers the wrapped-recipe and validation cases on fixtures.
+`tools/gen_compile_commands.sh` runs `make -Bn` in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines back into whole commands, and keeps each command whose first word is the i686 cross GCC, one entry per C source operand. Strings are escaped for JSON, the finished database is validated line by line, and an entry is required for every kernel source in `C_SRC`; the file replaces `compile_commands.json` only after both checks pass. The generated file is ignored by Git. `tests/run style` runs the generator's `--selftest`, which covers the wrapped-recipe and validation cases on fixtures.
 
 The database excludes the host KRFFS tools, vendored projects, and Doom. The checked-in `.clangd` selects `i686-elf-gcc` for the four covered trees. Allow clangd to query that cross compiler:
 
@@ -41,4 +41,4 @@ For VS Code, set `"clangd.arguments": ["--query-driver=**/i686-elf-*gcc"]`. Othe
 
 ## Kernel source list
 
-`C_SRC` in `rach2/Makefile` is explicit. A new kernel C file can therefore exist without being compiled. `make check-sources` compares the list with `kernel.c` and the C files below `rach2/sys/`, and fails on an unlisted or missing file. `make verify-style` runs this check. It does not check Doom or vendor source lists.
+`C_SRC` in `rach2/Makefile` is explicit. A new kernel C file can therefore exist without being compiled. `make check-sources` compares the list with `kernel.c` and the C files below `rach2/sys/`, and fails on an unlisted or missing file. `tests/run style` runs this check. It does not check Doom or vendor source lists.

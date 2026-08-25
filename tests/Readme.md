@@ -4,6 +4,10 @@
 
 This directory has two guest test sets. The root contains 70 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
 
+## The suite runner
+
+`tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with the suite's make target, artifact prerequisites, runtime tools, and `all` membership. The runner checks the suite's runtime tools first, then builds and runs it through Make; an unknown name fails and prints the valid names. `tests/run all` runs every suite the registry marks as a member and reports a summary. `make test` is a shortcut for `tests/run default`, and `tests/run style` and `tests/run host` are the two verification suites every change must pass.
+
 ## Build and image layout
 
 From the repository root:
@@ -106,4 +110,4 @@ A root program needs its source name in `tests/Makefile`'s `PROGS`. A musl progr
 
 Add a program to `tools/runtests.py`'s `PROBES` only when it can run in the shared debug-shell boot and must exit 0. A program that needs input, host traffic, a disk, a deliberate signal, a different CPU, or more than one boot needs a separate target and an explicit result contract instead. Add manifest entries for fixtures, special ownership, or special modes, not for an ordinary executable already covered by `exec-dir`.
 
-If a musl program links project sources, add one or more unwrapped `link-deps:` declarations. Inspect `tools/check.sh` when adding a source: `tests/*probe.c` is discovered by its strict lists, but other names and files under `tests/musl/` may need explicit entries. Update this Readme, run the new test's target, and run `make verify-style` and `make verify-host` before committing.
+If a musl program links project sources, add one or more unwrapped `link-deps:` declarations. Inspect `tools/check.sh` when adding a source: `tests/*probe.c` is discovered by its strict lists, but other names and files under `tests/musl/` may need explicit entries. Update this Readme, run the new test's target, and run `tests/run style` and `tests/run host` before committing.

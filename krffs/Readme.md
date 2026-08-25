@@ -94,4 +94,4 @@ The mounted directory supports ordinary root-level file operations. Use the host
 
 ## Verification
 
-`make verify-host` covers the bounded reader and the musl-compatible password hash. `make verify-style` builds the component as part of the in-house tree and checks dependency, text, and source conventions. Image builds exercise staging and both set-id checks. The disk, persistence, credential, crash, shutdown, and stress targets exercise images made by `mkdisk.sh` through the kernel implementation.
+`tests/run host` covers the bounded reader and the musl-compatible password hash. `tests/run style` builds the component as part of the in-house tree and checks dependency, text, and source conventions. Image builds exercise staging and both set-id checks. The disk, persistence, credential, crash, shutdown, and stress targets exercise images made by `mkdisk.sh` through the kernel implementation.

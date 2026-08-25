@@ -5,10 +5,15 @@ This file holds only the resume state for the item in progress. Replace its cont
 ## Position
 
 * Active phase: 3, the interface.
-* Item in progress: not started.
-* Exact next action: land the FUSE split in `krffs/Makefile` (core objects without FUSE flags, mount tool off the default graph), then build `tests/run` with the complete suite registry from the plan's end state.
+* Item in progress: runner and registry committed; next is the default-scope change (`make` builds everything) with the `full` and `deps` aliases.
+* Exact next action: change `all` to build the three images and vendors, alias `full` and `deps` with retirement notices, update `CLAUDE.md` and the root Readme, and prove the new default from a clean tree.
 
 ## Phase record
 
-* Phase 1 complete at e4d3187. Baselines: cold `make distclean && make full` 60 s; no-op `make full` 3 s; `verify-style` 23 s; `verify-host` 37 s; `make test` 96 s, 63 of 63.
-* Phase 2 complete: the generator joins wrapped recipes, selects commands by first word, escapes control characters, validates before publication, and its 5-case `--selftest` runs in check 12. Both restored defects (no join, no tab escape) made the selftest fail; the published database parses as JSON with 203 entries.
+* Phase 1 complete at e4d3187. Baselines: cold `make distclean && make full` 60 s; no-op `make full` 3 s; style 23 s; host 37 s; `make test` 96 s.
+* Phase 2 complete at 6ef65d2: compilation database generator fixed, selftest in check 12, both restored defects failed the selftest.
+* Phase 3 in progress: FUSE split at 131bd4a (default KRFFS build needs neither FUSE nor pkg-config; `make -C krffs mount` is the optional tool). Runner landed: `tests/run` reads `tests/registry` (43 suites, five fields), `make test` delegates to `tests/run default`, `verify-style` and `verify-host` are retirement aliases for `tests/run style` and `tests/run host`, and 26 current documents name the new commands. Proofs: unknown suite exits 2 with the valid list; style and host pass through the runner; a planted banned term made `tests/run style` fail and the restore passed again; `make test` boots 63 of 63 through the runner.
+
+## Sequencing note
+
+The `*-test` targets keep their recipes and print no retirement notice while the runner dispatches through them; their bodies move to `tests/system/suites/` in phase 6, and only then do the old names become notice-printing aliases. The registry's prerequisites field stays `-` until then.

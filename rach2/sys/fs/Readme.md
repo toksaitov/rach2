@@ -80,4 +80,4 @@ The default `make test` run includes the basic file, directory, metadata, rename
 
 `tests/musl/catfile.c` and `tests/musl/ofdmusl.c` are built as `/musl/catfile` and `/musl/ofdmusl` in the test image but are not in the default runner. They provide manual end-to-end checks of musl stdio and directory calls, and of a duplicated stdio descriptor's shared offset.
 
-`make persist-test` and `make persist-test-ahci` boot the same disk image twice and require a file written through `fsync` and `sync` on the first boot to be read back on the second. `make verify-host` includes `readfile_hosttest`, which checks the host extractor's bounded path walk and malformed-image refusals; it does not exercise the kernel allocator or namespace implementation.
+`make persist-test` and `make persist-test-ahci` boot the same disk image twice and require a file written through `fsync` and `sync` on the first boot to be read back on the second. `tests/run host` includes `readfile_hosttest`, which checks the host extractor's bounded path walk and malformed-image refusals; it does not exercise the kernel allocator or namespace implementation.

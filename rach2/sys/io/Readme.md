@@ -53,7 +53,7 @@ The ported i386 musl calls `poll(168)` directly. It remaps ordinary `select` to 
 
 `make test` runs `tests/pollprobe.c`. It checks a timeout on two empty pipes, `POLLIN`, `POLLHUP`, `_newselect`, a child write waking a blocked poller, invalid selected descriptors, the 1024-bit `nfds` bound, and invalid `timeval` normalization. The same default suite runs the musl-linked `addusermusl`, `passwdmusl`, and `loginmusl` programs, which use libc `poll` while collecting data from child-process pipes.
 
-`make verify-host` runs `tests/host/poll_select_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks bitmap word boundaries, dense translation, multi-set descriptors, array-capacity failure, error and hangup projection, direction gating, and ready-set counting.
+`tests/run host` runs `tests/host/poll_select_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks bitmap word boundaries, dense translation, multi-set descriptors, array-capacity failure, error and hangup projection, direction gating, and ready-set counting.
 
 `tests/musl/pollmusl.c` is built and staged at `/musl/pollmusl` for manual use. Its short timeouts exercise musl's direct `poll(168)` and `_newselect(142)` paths over a pipe, including timeout, readiness, and a cross-process wake. It does not exercise the time64 fallback.
 

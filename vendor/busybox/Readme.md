@@ -91,8 +91,8 @@ To update BusyBox:
 make busybox
 make check-busybox
 make check-setid
-make verify-style
-make verify-host
+tests/run style
+tests/run host
 make full
 ```
 

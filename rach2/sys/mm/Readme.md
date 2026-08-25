@@ -91,6 +91,6 @@ Clock eviction writes a dirty victim before reuse. A failed write leaves the pag
 
 `make test` runs `vmprobe`, `forkro`, `cowregrant`, `usercopyfault`, and `musl/vmamusl` in its default guest suite. They cover lazy heap and anonymous pages, stack growth, read-only mappings across fork, COW re-grant, checked strings crossing into an unmapped page, 300 simultaneous mappings, and at least 8 MiB of live small allocations.
 
-The boot self-tests exercise page-table isolation and force page-cache faults, eviction, cross-page writes, and writeback through a RAM backing store. `make verify-host` runs the pure VMA, memory-map, module-layout, and page-cache bookkeeping tests under AddressSanitizer and UndefinedBehaviorSanitizer.
+The boot self-tests exercise page-table isolation and force page-cache faults, eviction, cross-page writes, and writeback through a RAM backing store. `tests/run host` runs the pure VMA, memory-map, module-layout, and page-cache bookkeeping tests under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 The test image also contains `vmfault`, `vmro`, `winprobe`, `cowprobe`, `musl/mallocqsort`, and `musl/cowfork` for dedicated or manual runs. See the [guest test inventory](../../../tests/Readme.md) for their execution contract.

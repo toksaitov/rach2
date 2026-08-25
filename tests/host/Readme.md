@@ -1,6 +1,6 @@
 # Host tests
 
-`make verify-host` compiles project code as native C programs and runs it under AddressSanitizer and UndefinedBehaviorSanitizer. The suite tests pure kernel logic, utility libraries, parsers, and hardware models without booting Rach2. Guest probes and QEMU tests remain responsible for system calls, privilege changes, devices, and complete subsystem behavior.
+`tests/run host` compiles project code as native C programs and runs it under AddressSanitizer and UndefinedBehaviorSanitizer. The suite tests pure kernel logic, utility libraries, parsers, and hardware models without booting Rach2. Guest probes and QEMU tests remain responsible for system calls, privilege changes, devices, and complete subsystem behavior.
 
 ## Runner
 
@@ -10,7 +10,7 @@ Each test declares separately compiled project sources in one or more `host-deps
 
 The runner stores binaries and logs under `/tmp/rach2_verify`. If `timeout` or `gtimeout` is installed, each binary runs in the foreground with a 60-second limit. Otherwise the runner warns that a hung test cannot be stopped. Exit status 0 passes; a nonzero exit, sanitizer report, compile failure, or timeout fails. Tests may print diagnostics.
 
-The `verify-host` target first runs `check-libc`. This ensures that musl's installed library and extracted SHA-512 crypt source exist before the password tests compile.
+The host suite first runs `check-libc`. This ensures that musl's installed library and extracted SHA-512 crypt source exist before the password tests compile.
 
 ## Adding a test
 

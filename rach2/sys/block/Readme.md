@@ -82,7 +82,7 @@ For a present disk, `diskinfo_probe` adopts `block0`, reads sector zero, and pub
 
 ## Verification
 
-`make verify-host` runs the pure block tests under AddressSanitizer and UndefinedBehaviorSanitizer. `block_hosttest` checks partition forwarding and bounds. `mbr_hosttest` checks parsing, overlap, disk-end, gap, and FAT-entry cases. `diskcmd_hosttest` tests all 256 command bytes under both policies. `diskinfo_hosttest` checks IDENTIFY strings, 64-bit decimal conversion, the 2 TiB window, and the exact procfs record. `pagecache_hosttest` checks fill, eviction, writeback, and failed-write retention above the block interface.
+`tests/run host` runs the pure block tests under AddressSanitizer and UndefinedBehaviorSanitizer. `block_hosttest` checks partition forwarding and bounds. `mbr_hosttest` checks parsing, overlap, disk-end, gap, and FAT-entry cases. `diskcmd_hosttest` tests all 256 command bytes under both policies. `diskinfo_hosttest` checks IDENTIFY strings, 64-bit decimal conversion, the 2 TiB window, and the exact procfs record. `pagecache_hosttest` checks fill, eviction, writeback, and failed-write retention above the block interface.
 
 The default `make test` boot has no data disk and does not exercise either disk driver. The disk targets provide that coverage:
 

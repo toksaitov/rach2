@@ -113,8 +113,8 @@ The build script can apply `patches/*.patch` in filename order, but the root sta
 make dropbear
 make check-dropbearmulti
 make full
-make verify-style
-make verify-host
+tests/run style
+tests/run host
 make ssh-test
 make metal-test
 ```

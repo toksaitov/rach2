@@ -20,8 +20,8 @@ Run:
 ```
 make busybox
 make check-busybox
-make verify-style
-make verify-host
+tests/run style
+tests/run host
 ```
 
 Run `make dhcp-test` after changing the udhcpc patch and `make procfiles-test` after changing the free or uptime patch.

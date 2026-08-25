@@ -1,0 +1,94 @@
+#!/usr/bin/env sh
+#
+# tests/run: the one entry point for the test suites. `tests/run NAME` checks
+# the suite's runtime tools, builds what it needs through Make, and runs it;
+# `tests/run all` runs every suite the registry marks as a member and reports
+# a summary. An unknown name fails and prints the valid ones. The registry
+# format is documented at the top of tests/registry.
+#
+set -u
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+REGISTRY="$REPO/tests/registry"
+
+[ -f "$REGISTRY" ] || {
+    echo "run: missing $REGISTRY" >&2
+    exit 1
+}
+
+# Print the suite names, one per line, in registry order.
+names() {
+    sed -e '/^#/d' -e '/^$/d' -e 's/|.*//' "$REGISTRY"
+}
+
+# Look one suite up; print its registry line or nothing.
+lookup() {
+    awk -F'|' -v want="$1" '/^#/ { next } $1 == want { print; exit }' "$REGISTRY"
+}
+
+# Require every runtime tool of one suite before spending a build on it.
+check_tools() {
+    suite=$1
+    tools=$2
+    [ "$tools" = "-" ] && return 0
+    oldifs=$IFS
+    IFS=,
+    for tool in $tools; do
+        IFS=$oldifs
+        command -v "$tool" >/dev/null 2>&1 || {
+            echo "run: $suite needs $tool and it is not installed" >&2
+            return 1
+        }
+    done
+    IFS=$oldifs
+    return 0
+}
+
+# Build and run one suite through its make target. The target carries the
+# suite's artifact prerequisites.
+run_one() {
+    line=$(lookup "$1")
+    if [ -z "$line" ]; then
+        echo "run: unknown suite '$1'; valid suites are:" >&2
+        names | tr '\n' ' ' | sed 's/^/  /;s/ $//' >&2
+        echo >&2
+        return 2
+    fi
+    target=$(printf '%s' "$line" | cut -d'|' -f2)
+    tools=$(printf '%s' "$line" | cut -d'|' -f4)
+    check_tools "$1" "$tools" || return 1
+    start=$(date +%s)
+    if make -C "$REPO" --no-print-directory "$target"; then
+        echo "run: $1: PASS in $(($(date +%s) - start))s"
+        return 0
+    fi
+    echo "run: $1: FAIL in $(($(date +%s) - start))s" >&2
+    return 1
+}
+
+case "${1-}" in
+    '')
+        echo "usage: tests/run NAME" >&2
+        echo "run: valid suites are:" >&2
+        names | tr '\n' ' ' | sed 's/^/  /;s/ $//' >&2
+        echo >&2
+        exit 2
+        ;;
+    all)
+        failed=''
+        count=0
+        # shellcheck disable=SC2013 # suite names are single tokens by format
+        for suite in $(awk -F'|' '/^#/ { next } $5 == "yes" { print $1 }' "$REGISTRY"); do
+            count=$((count + 1))
+            run_one "$suite" || failed="$failed $suite"
+        done
+        if [ -n "$failed" ]; then
+            echo "run: result: $count suites, failed:$failed" >&2
+            exit 1
+        fi
+        echo "run: result: all $count suites passed"
+        ;;
+    *)
+        run_one "$1"
+        ;;
+esac

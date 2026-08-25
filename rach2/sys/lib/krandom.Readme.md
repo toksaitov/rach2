@@ -44,7 +44,7 @@ System call 355, `getrandom`, normally requires a trusted source. Without one it
 
 ## Verification
 
-`make verify-host` compiles `tests/host/krandom_hosttest.c` with `rach2/sys/lib/krandom.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks repeatability for one explicit seed, separation for a different seed, nonzero output from an all-zero seed, a 37-byte fill, and a fixed 512-byte monobit range. It has no ChaCha known-answer vector and does not exercise CPUID, the hardware instructions, or boot source selection.
+`tests/run host` compiles `tests/host/krandom_hosttest.c` with `rach2/sys/lib/krandom.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks repeatability for one explicit seed, separation for a different seed, nonzero output from an all-zero seed, a 37-byte fill, and a fixed 512-byte monobit range. It has no ChaCha known-answer vector and does not exercise CPUID, the hardware instructions, or boot source selection.
 
 `make test` boots with `-cpu max`. When the hardware seed succeeds, `rngprobe` takes its trusted branch, reads two 32-byte buffers from `/dev/urandom`, checks that they differ, and applies a broad monobit range. `timeprobe` and `musl/timemusl` each require two 16-byte `getrandom` calls to differ, so the complete target requires a trusted source. `auxvprobe` checks that `AT_RANDOM` points to a 16-byte value in the initial stack page and that the value is not all zero. `devprobe` checks that successive `/dev/urandom` reads differ.
 

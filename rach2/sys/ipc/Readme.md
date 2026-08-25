@@ -41,6 +41,6 @@ The implementation has no pipe resizing, packet mode, `splice`, `tee`, or `vmspl
 * `tests/pipeprobe.c` checks byte order, EOF, the 4096-byte capacity, non-blocking empty and full cases, `SIGPIPE` and `EPIPE`, a 5000-byte transfer that blocks across `fork`, 100 create-close cycles, and agreement between the two ends' `fstat` and `/proc` identities.
 * `tests/pollprobe.c` checks `POLLIN` readiness, timeout, `POLLHUP`, `select` translation, and a poller woken by a child writing after a delay.
 
-`make verify-host` runs `tests/host/pipe_ring_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks empty and full rings, bounded partial operations, byte order, and a transfer across the physical end of the array. `tests/host/wait_queue_hosttest.c` checks fixed-array insertion, removal, capacity, and wake-all behavior; the guest probes above exercise the actual scheduling path.
+`tests/run host` runs `tests/host/pipe_ring_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks empty and full rings, bounded partial operations, byte order, and a transfer across the physical end of the array. `tests/host/wait_queue_hosttest.c` checks fixed-array insertion, removal, capacity, and wake-all behavior; the guest probes above exercise the actual scheduling path.
 
 `tests/musl/pipemusl.c` is built and staged at `/musl/pipemusl` for a manual libc `pipe`, `fork`, read, write, close, and wait round trip. It is not an entry in the default `make test` runner.

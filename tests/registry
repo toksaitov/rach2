@@ -1,0 +1,52 @@
+# tests/registry: the suite registry tests/run reads. One suite per line:
+#
+#   name|make target|artifact prerequisites|runtime tools|member of all
+#
+# The make target both builds the suite's artifacts and runs it; until the
+# suite bodies move out of the root Makefile, the prerequisites field is `-`
+# because the target carries its own. The runtime tools are the external
+# commands the suite needs beyond the build toolchain; `-` means none. The
+# last field marks membership in `tests/run all`.
+default|run-default|-|qemu-system-i386,python3|yes
+addressed|test-addressed|-|qemu-system-i386,python3|yes
+noentropy|test-noentropy|-|qemu-system-i386,python3|yes
+disk|test-disk|-|qemu-system-i386,python3|yes
+disk-ahci|test-disk-ahci|-|qemu-system-i386,python3|yes
+disk-q35|test-disk-q35|-|qemu-system-i386,python3|yes
+bootpart|bootpart-test|-|qemu-system-i386,python3|yes
+subset|subset-test|-|qemu-system-i386,python3|yes
+stress|stress-test|-|qemu-system-i386,python3|yes
+stress-ahci|stress-test-ahci|-|qemu-system-i386,python3|yes
+persist|persist-test|-|qemu-system-i386,python3|yes
+persist-ahci|persist-test-ahci|-|qemu-system-i386,python3|yes
+cred-persist|cred-persist-test|-|qemu-system-i386,python3|yes
+crash|crash-test|-|qemu-system-i386,python3|yes
+authority|authority-test|-|qemu-system-i386,python3|yes
+bootline|bootline-test|-|qemu-system-i386,python3|yes
+exitline|exitline-test|-|qemu-system-i386,python3|yes
+login|login-test|-|qemu-system-i386,python3|yes
+procfiles|procfiles-test|-|qemu-system-i386,python3|yes
+account|account-test|-|qemu-system-i386,python3|yes
+shutdown|shutdown-test|-|qemu-system-i386,python3|yes
+reset|reset-test|-|qemu-system-i386,python3,expect|yes
+diskpolicy|diskpolicy-test|-|qemu-system-i386,python3,expect|yes
+diskdiag|diskdiag-test|-|qemu-system-i386,python3,expect,ssh|yes
+ping|ping-test|-|qemu-system-i386,python3|yes
+packet|packet-test|-|qemu-system-i386,python3|yes
+raw|raw-test|-|qemu-system-i386,python3|yes
+netif|netif-test|-|qemu-system-i386,python3|yes
+dgram|dgram-test|-|qemu-system-i386,python3|yes
+dhcp|dhcp-test|-|qemu-system-i386,python3|yes
+netconsole|netconsole-test|-|qemu-system-i386,python3|yes
+tcc|tcc-test|-|qemu-system-i386,python3|yes
+make|make-test|-|qemu-system-i386,python3|yes
+selfbuild|selfbuild-test|-|qemu-system-i386,python3|yes
+ssh|ssh-test|-|qemu-system-i386,python3,ssh,expect|yes
+grub|grub-test|-|qemu-system-i386,python3,docker|yes
+menu|menu-test|-|qemu-system-i386,python3,docker|yes
+install|install-test|-|qemu-system-i386,python3,docker|yes
+sealed|sealed-test|-|qemu-system-i386,python3,ssh,gtimeout|yes
+drill|drill-test|-|qemu-system-i386,python3,ssh,expect|yes
+metal|metal-test|-|qemu-system-i386,python3,ssh|yes
+style|run-style|-|cppcheck,shellcheck,clang-format,perl,python3|yes
+host|run-host|-|-|yes

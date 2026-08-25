@@ -98,7 +98,7 @@ MKDISK          = krffs/mkdisk.sh
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake \
         compile-commands check-sources \
-        verify-style verify-host doctor help \
+        verify-style verify-host run-style run-host run-default doctor help \
         busybox dropbear tcc pdpmake $(BASE_DIRS) $(FULL_DIRS)
 
 # Default: the kernel and the os-simple image (our login, shell and Unix tools).
@@ -384,9 +384,16 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 # musl/pwauthmusl waits out the credential lock's real ten-second retry budget
 # twice, so tens of seconds is its GREEN path. Only a failing probe ever waits a
 # step window out, so widening it costs a passing run nothing.
-test: test-image
+# The default suite's build-and-run target. `make test` and `tests/run
+# default` both land here; the registry in tests/registry names it.
+run-default: test-image
 	python3 tools/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60
+
+# The public test entry: the runner owns the suite registry, so this is a
+# shortcut for `tests/run default` and holds no suite knowledge of its own.
+test:
+	@./tests/run default
 
 # `make test-addressed`: the same suite, with the network named on the boot line
 # instead of compiled in. The address given is the one SLIRP already provides,
@@ -1404,18 +1411,28 @@ check-libc: $(LIBC_STAMP)
 doctor:
 	@./tools/doctor.sh
 
-# Lightweight quality gate (see tools/check.sh): -Werror build, scoped cppcheck,
+# The style suite (see tools/check.sh): -Werror build, scoped cppcheck,
 # shellcheck, the convention grep, clang-format, and a readelf ABI check.
-verify-style:
+# `tests/run style` names this target.
+run-style:
 	@./tools/check.sh
 
-# Dual-target seam tests (see tools/hosttest.sh): pure kernel logic compiled and
-# run natively under AddressSanitizer + UndefinedBehaviorSanitizer. It waits on
+# The host suite (see tools/hosttest.sh): pure kernel logic compiled and run
+# natively under AddressSanitizer + UndefinedBehaviorSanitizer. It waits on
 # the vendored musl for the same reason krffs does: mkhash_hosttest names the
 # musl crypt in its host-deps, and that source exists only once the tarball is
-# extracted.
-verify-host: check-libc
+# extracted. `tests/run host` names this target.
+run-host: check-libc
 	@./tools/hosttest.sh
+
+# Retired names, kept as aliases for this milestone only.
+verify-style:
+	@echo "verify-style: retired: use tests/run style" >&2
+	@./tests/run style
+
+verify-host:
+	@echo "verify-host: retired: use tests/run host" >&2
+	@./tests/run host
 
 # --- IDE support + source-list guard ---
 # clangd compilation database, generated from the build's own commands (GCC has no

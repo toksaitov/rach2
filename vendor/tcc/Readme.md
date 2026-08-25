@@ -98,8 +98,8 @@ To update TinyCC:
 make tcc
 make check-tcc
 make full
-make verify-style
-make verify-host
+tests/run style
+tests/run host
 make tcc-test
 make make-test
 make selfbuild-test

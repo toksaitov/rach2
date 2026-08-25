@@ -26,7 +26,7 @@ All written language reads as if one careful author wrote it. The model for voic
 
 These models tend to use figurative phrases as private shorthand. Do not use that register in chat replies, code comments, documentation, Readmes, commit messages, or reviewer prompts. `tools/prose_check.py` enforces terms that have no valid use here. Review handles choices that depend on context.
 
-Decided by `tools/prose_check.py`. These terms are wrong at any frequency: "load-bearing", "worth stating plainly", "worth noting", "full stop", "blast radius", "tripwire", "timebox", and "seam". Write the ordinary word: a test, a stage, a time limit. There are no sanctioned exceptions: the tests under `tests/host` are the host tests, and the check suites are named by their targets, `make verify-style` and `make verify-host`. This rule's own text, the checker's word lists, and its test fixtures are the only places these terms may appear.
+Decided by `tools/prose_check.py`. These terms are wrong at any frequency: "load-bearing", "worth stating plainly", "worth noting", "full stop", "blast radius", "tripwire", "timebox", and "seam". Write the ordinary word: a test, a stage, a time limit. There are no sanctioned exceptions: the tests under `tests/host` are the host tests, and the check suites are named by their targets, `tests/run style` and `tests/run host`. This rule's own text, the checker's word lists, and its test fixtures are the only places these terms may appear.
 
 Do not add "trap", "bench", "gate", "era", "surface", or "sight" to the mechanical list. Each has a valid use in this tree: a shell trap, a test bench, hardware gates, an attack surface, controller generations, and ordinary phrases such as "anywhere in sight". Review must still reject any of them when used as invented shorthand. A mechanical ban is reserved for a term with no valid use in this domain.
 
@@ -76,7 +76,7 @@ Never report that a delegated job is running without reading its state in the sa
 
 A test is proved by making it fail. Drive a mutation from a script that restores the source in a trap, because a mutation can hang the suite and outlive the command that applied it, leaving the tree mutated. Restoring the source is not enough on its own: a `cp` back does not make `make` rebuild, so several runs here re-tested a stale binary and reported PASS for a mutation that had never been compiled. Touch the file, or rebuild explicitly, before believing the result.
 
-Every change passes `make verify-style` and `make verify-host`, and a real boot plus the SSH capstone when it touches anything they exercise. Substantial work gets a harsh independent Codex review with every finding fixed before commit. The half of the register rule that a person decides is part of that review; `tools/prose_check.py` decides the other half before the review starts.
+Every change passes `tests/run style` and `tests/run host`, and a real boot plus the SSH capstone when it touches anything they exercise. Substantial work gets a harsh independent Codex review with every finding fixed before commit. The half of the register rule that a person decides is part of that review; `tools/prose_check.py` decides the other half before the review starts.
 
 ## Git
 

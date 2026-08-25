@@ -23,7 +23,7 @@ Other useful targets are:
 * `make full` builds all three RAM images.
 * `make test` boots the test image and runs the default guest suite.
 * `make selfbuild-test` builds the kernel, shell, and utilities on Rach2.
-* `make verify-style` and `make verify-host` run the required project checks.
+* `tests/run style` and `tests/run host` run the required project checks.
 * `make help` summarizes common build and test targets.
 
 Image targets only build artifacts. The run scripts and test targets start QEMU.
@@ -99,7 +99,7 @@ Build, history, and tests:
 
 [`CLAUDE.md`](CLAUDE.md) defines the project rules for builds, writing, verification, hardware, and Git. [`AGENTS.md`](AGENTS.md) directs coding agents to those rules. Read a component's Readme before changing it. The component Readme defines the current contract; [`dev-log/`](dev-log/Readme.md) records how earlier milestones were planned and built.
 
-Every change must pass `make verify-style` and `make verify-host` before commit. The rest of the development procedure is in `CLAUDE.md`.
+Every change must pass `tests/run style` and `tests/run host` before commit. The rest of the development procedure is in `CLAUDE.md`.
 
 ## Third-party sources and license
 

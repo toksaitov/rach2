@@ -53,4 +53,4 @@ System call and interrupt entry save `%gs`, `%fs`, `%es`, and `%ds` separately b
 
 The same test run starts its musl-linked programs through the real i386 startup code. Each program calls musl's `__init_tls` and `__set_thread_area` before `main`.
 
-`make verify-host` runs `tests/host/tls_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks that `tls_resolve_base` accepts musl's `-1`/`0x51` request and explicit entry 6, then rejects a wrong entry, missing 32-bit flag, non-data segment, read-only segment, non-present segment, and null arguments.
+`tests/run host` runs `tests/host/tls_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks that `tls_resolve_base` accepts musl's `-1`/`0x51` request and explicit entry 6, then rejects a wrong entry, missing 32-bit flag, non-data segment, read-only segment, non-present segment, and null arguments.

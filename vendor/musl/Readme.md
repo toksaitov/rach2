@@ -98,8 +98,8 @@ To update musl:
 ```
 make deps
 make musl-programs
-make verify-style
-make verify-host
+tests/run style
+tests/run host
 make test
 make selfbuild-test
 ```

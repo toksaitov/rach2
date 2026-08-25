@@ -108,4 +108,4 @@ The specialized network targets are:
 * `make dhcp-test` checks the BusyBox and in-house DHCP clients, renewal, fixed configuration, routing, and unattended startup.
 * `make netconsole-test` validates captured frame headers, sequence numbers, checksums, and early buffered output.
 
-`make verify-host` drives ARP replacement, address parsing and transitions, netconsole buffering and recursion, receive-window updates, and the RTL8168GU software model. `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged but excluded from the default runner. All except `sockettest` require a live peer or DNS service.
+`tests/run host` drives ARP replacement, address parsing and transitions, netconsole buffering and recursion, receive-window updates, and the RTL8168GU software model. `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged but excluded from the default runner. All except `sockettest` require a live peer or DNS service.

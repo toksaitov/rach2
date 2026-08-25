@@ -171,4 +171,4 @@ It does not implement UEFI, Multiboot2, USB, SMP, threads, swap, dynamic linking
 
 ## Verification
 
-`make test` boots the test image and checks the default guest suite. `make verify-host` compiles selected kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer. `make verify-style` builds the kernel with warnings as errors, runs the static and text checks, compares source lists, and validates the linked ELF. `make help` summarizes common specialized boot, disk, network, shutdown, and self-build tests.
+`make test` boots the test image and checks the default guest suite. `tests/run host` compiles selected kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer. `tests/run style` builds the kernel with warnings as errors, runs the static and text checks, compares source lists, and validates the linked ELF. `make help` summarizes common specialized boot, disk, network, shutdown, and self-build tests.
