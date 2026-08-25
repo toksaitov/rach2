@@ -4,11 +4,12 @@ This file holds only the resume state for the item in progress. Replace its cont
 
 ## Position
 
-* Active phase: 7, small dependency removals.
+* Active phase: 8, Docker removal.
 * Item in progress: not started.
-* Exact next action: replace `gtimeout` with a C process-group deadline tool and prove it with a hanging child and a hanging descendant; then move the SSH password and pty exchange into the retained Python runner and remove Expect; then fold the Perl, host SHA-256, and `strings` uses into the project checkers with differential fixtures. The FUSE split already landed in phase 3 (131bd4a).
+* Exact next action: add `vendor/grub/` with the six pinned artifacts (`bios-boot.img`, `disk-core.img`, `disk-core-a.img`, `disk-core-b.img`, `eltorito.img`, `boot-hybrid.img`), their provenance manifest, the digest verifier, its `Readme.md`, the `CLAUDE.md` exception, and one converted consumer in one reviewed commit. The artifacts are generated once through the existing Docker procedure with every input recorded, then the disk builder, ISO builder, and core selector convert to native mtools, `xorriso`, and new C tools for the MBR layout, environment block, and embedding.
 
 ## Phase record
 
-* Phases 1 to 5 complete; see the log from e4d3187 through 710b9fe.
-* Phase 6 complete: setup c2d2eac, dev df90c21, verify 23724b2, inspect e9af87b, image 3fba431, tests/system 2fd741f, suite-name retirement c2bca4f. Every mover's repository-root computation gained one level; extensionless callers such as `tests/run` need sweeps without include filters; path rewrites widen comment lines, so `check_comments` runs after every role. Proofs: all four setup tools, the generator, and every checker re-proved from their new homes; 17 dynamic dispatch proofs (temporary exit 97 per moved suite reached through `tests/run`); the four Docker-disk suites statically wired; the SSH capstone passed through the moved suite in 29 s; strict shellcheck covers the moved suites again.
+* Phases 1 to 6 complete; see e4d3187 through d622e0d.
+* Phase 7 complete: deadline tool 3fa1ed8 (124-contract, group kill proved on a hanging descendant); pty driver 127b28d (capstone 29 s, wrong-password and window-size mutations both failed the suite); asciiscan cdf3770 (byte-parity with Perl on NUL and high-byte fixtures); sha256 7961db5 (FIPS vectors and tarball parity, vendor digest path and corrupt-tarball refusal proved); binfind 2ce62e7; make rules for both f4a1f78. Removed so far: gtimeout, Expect, Perl, host SHA-256 tools, strings; FUSE and pkg-config optional since phase 3.
+* A collision to remember: sealed.sh already used `DEADLINE` for its second budget; the tool variable is `DEADLINE_TOOL` there.
