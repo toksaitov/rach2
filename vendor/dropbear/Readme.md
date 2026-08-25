@@ -12,7 +12,7 @@ From the repository root:
 make dropbear
 ```
 
-`make deps DEPS=full` and `make full` also build Dropbear through the same stamp. The stamp depends on the build script, archive, local options, wrapper, and musl stamp. `make check-dropbearmulti` requires the staged binary to be nonempty.
+The root `make` also builds Dropbear through the same stamp. The stamp depends on the build script, archive, local options, wrapper, and musl stamp. `make check-dropbearmulti` requires the staged binary to be nonempty.
 
 The build script:
 
@@ -112,7 +112,7 @@ The build script can apply `patches/*.patch` in filename order, but the root sta
 ```
 make dropbear
 make check-dropbearmulti
-make full
+make
 tests/run style
 tests/run host
 make ssh-test

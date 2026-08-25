@@ -12,7 +12,7 @@ From the repository root:
 make tcc
 ```
 
-`make deps DEPS=full` and `make full` also build TinyCC through the same stamp. The stamp depends on the script, policy patch, BusyBox musl wrapper, exact archive, and musl stamp.
+The root `make` also builds TinyCC through the same stamp. The stamp depends on the script, policy patch, BusyBox musl wrapper, exact archive, and musl stamp.
 
 The build script:
 
@@ -97,7 +97,7 @@ To update TinyCC:
 ```
 make tcc
 make check-tcc
-make full
+make
 tests/run style
 tests/run host
 make tcc-test

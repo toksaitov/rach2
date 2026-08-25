@@ -86,7 +86,7 @@ for t in tests/host/*_hosttest.c; do
     # Name a missing dep here: passed on to the compiler it would surface as a
     # bare "no such file", which reads as a broken test. A dep under the
     # extracted musl tree has one specific cause and one specific repair, and
-    # the repair names the stamp, not `make deps`, because a copied
+    # the repair names the stamp, not a make target, because a copied
     # worktree has a stamp whose tree is gone and make reads that stamp as
     # current. An in-house dep is a typo or a rename, so say only that it is
     # missing.
@@ -102,7 +102,7 @@ for t in tests/host/*_hosttest.c; do
     if [ -n "$missing" ]; then
         echo "  FAIL: $base: missing host-deps:$missing"
         if [ -n "$missing_musl" ]; then
-            echo "        the vendored musl source is not extracted; rm vendor/musl/.stamp and rebuild (make deps)"
+            echo "        the vendored musl source is not extracted; rm vendor/musl/.stamp and rebuild (make)"
         fi
         fail=1
         continue

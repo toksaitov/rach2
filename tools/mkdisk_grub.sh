@@ -26,7 +26,7 @@
 # The disk and GRUB are assembled in a throwaway Docker container (mtools and
 # grub-pc-bin), so no host GRUB toolchain is needed. The KRFFS partition image
 # is built first on the host with mkimage.sh. Build the kernel and the
-# capstones first (make full).
+# capstones first (make).
 #
 # Usage: ./mkdisk_grub.sh
 #

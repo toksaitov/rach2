@@ -12,7 +12,7 @@ From the repository root:
 make busybox
 ```
 
-`make deps DEPS=full` and `make full` also build BusyBox through the same stamp. The stamp depends on the script, archive, wrapper, both configs, the musl stamp, the patch directory, and every current patch. The directory prerequisite makes adding or deleting the last patch invalidate the build.
+The root `make` also builds BusyBox through the same stamp. The stamp depends on the script, archive, wrapper, both configs, the musl stamp, the patch directory, and every current patch. The directory prerequisite makes adding or deleting the last patch invalidate the build.
 
 The build script:
 
@@ -93,7 +93,7 @@ make check-busybox
 make check-setid
 tests/run style
 tests/run host
-make full
+make
 ```
 
 The focused guest checks are `make dhcp-test` for ifupdown, udhcpc, and arping; `make raw-test` for traceroute; `make procfiles-test` for `ps`, `df`, `free`, and `uptime`; and `make account-test` for the account applets, hash generators, and console login. `make login-test` checks strict init behavior when `/bin/login` is absent; it does not exercise the applet. `make ssh-test` and `make selfbuild-test` cover ash over a pty and the staged compiler environment. The default `make test` image uses ISH and does not exercise BusyBox.

@@ -66,7 +66,7 @@ $(TARGETS) : | libc-check
 # behind check-libc; this is for a standalone `make -C krffs` in a clean tree.
 libc-check :
 	@test -f "$(MUSL_CRYPT)" || { \
-	    echo "krffs: vendored musl source not extracted; run make deps first" >&2; \
+	    echo "krffs: vendored musl source not extracted; run the root make first" >&2; \
 	    exit 1; }
 
 # The FUSE mount tool: the shared core and allocator + the two FUSE objects +

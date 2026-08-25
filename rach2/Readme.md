@@ -12,8 +12,7 @@ Run ordinary builds from the repository root:
 
 ```sh
 make -C rach2          # build build/rach2/kernel only
-make                   # build the kernel and os-simple image
-make full              # build all three RAM images
+make                   # build everything, including the three RAM images
 make rach2-metal       # build/rach2-metal/kernel, with disk writes disabled
 make rach2-recovery    # build/rach2-recovery/kernel, with whole-disk authority
 make selfbuild-test    # build the kernel twice on Rach2 and compare the results

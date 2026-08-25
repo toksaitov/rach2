@@ -5,8 +5,8 @@ This file holds only the resume state for the item in progress. Replace its cont
 ## Position
 
 * Active phase: 3, the interface.
-* Item in progress: runner and registry committed; next is the default-scope change (`make` builds everything) with the `full` and `deps` aliases.
-* Exact next action: change `all` to build the three images and vendors, alias `full` and `deps` with retirement notices, update `CLAUDE.md` and the root Readme, and prove the new default from a clean tree.
+* Item in progress: default scope done (clean `make` builds everything in 59 s, no-op 3 s, aliases print notices, style and host pass). Next: the cached preflight replacing `doctor`, then the `help` retirement.
+* Exact next action: write `tools/preflight.sh` with the fingerprint cache, wire it into `make` and `tests/run`, alias `doctor`, and prove the missing-tool, warmed-cache, invalidation, cheap-hit, and clean-bypass cases.
 
 ## Phase record
 

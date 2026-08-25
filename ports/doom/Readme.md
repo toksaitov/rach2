@@ -115,4 +115,4 @@ The same binary can use the kernel HDA driver on supported hardware. Hardware bo
 python3 tools/check_elf.py build/ports/doom/doom
 ```
 
-`make full` rebuilds the port and the images that carry it. The repository has no automated test that launches Doom, validates an IWAD, or judges graphics and audio output. Test those paths by booting os-real and running the program as shown above.
+The root `make` rebuilds the port and the images that carry it. The repository has no automated test that launches Doom, validates an IWAD, or judges graphics and audio output. Test those paths by booting os-real and running the program as shown above.

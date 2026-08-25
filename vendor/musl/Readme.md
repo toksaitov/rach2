@@ -9,10 +9,10 @@ This directory contains the project-owned integration files and the pinned upstr
 From the repository root:
 
 ```
-make deps
+make musl
 ```
 
-The ordinary root build also builds musl before the utilities that require it. `make deps DEPS=full` adds the other four ports.
+The ordinary root `make` builds musl before everything that links it. `make busybox`, `make dropbear`, `make tcc`, and `make pdpmake` build the other four ports individually.
 
 The root stamp depends on `build_libc.sh`, the exact archive, and every file currently under `patches/`. An added or edited patch invalidates it; deleting a patch requires removing `.stamp` because the vanished prerequisite is no longer in Make's dependency list. The recipe removes the old installed archive, invokes the script, requires a nonempty `install/lib/libc.a`, and records success only afterward. `make clean` preserves the extracted and installed trees; `make distclean` removes them and the stamp.
 
@@ -32,7 +32,7 @@ The integration consumes:
 * `install/lib/crt1.o`, `crti.o`, and `crtn.o`: process startup and init/fini objects.
 * `musl-1.2.5/src/crypt/crypt_sha512.c`: the pinned SHA-512 crypt implementation compiled into the KRFFS host credential tools and their host tests.
 
-The root `check-libc` target checks both `libc.a` and the extracted crypt source. If either is missing while `.stamp` remains, remove the stamp and run `make deps`.
+The root `check-libc` target checks both `libc.a` and the extracted crypt source. If either is missing while `.stamp` remains, remove the stamp and run `make musl`.
 
 ## Project patch
 
@@ -96,12 +96,12 @@ To update musl:
 ## Verification
 
 ```
-make deps
+make musl
 make musl-programs
 tests/run style
 tests/run host
 make test
-make selfbuild-test
+tests/run selfbuild
 ```
 
-`make test` includes `spawnmusl`. `make full` also builds all four larger ports against the installed musl.
+`make test` includes `spawnmusl`. The root `make` also builds all four larger ports against the installed musl.

@@ -20,9 +20,8 @@ Both `os-simple` and `os-real` start `/bin/login`. If the credential files do no
 
 Other useful targets are:
 
-* `make full` builds all three RAM images.
 * `make test` boots the test image and runs the default guest suite.
-* `make selfbuild-test` builds the kernel, shell, and utilities on Rach2.
+* `tests/run NAME` runs one named suite; `tests/run selfbuild` builds the kernel, shell, and utilities on Rach2.
 * `tests/run style` and `tests/run host` run the required project checks.
 * `make help` summarizes common build and test targets.
 

@@ -8,17 +8,14 @@
 # drive it).
 #
 # Quick start (run `make doctor` first to check your toolchain):
-#   make            build the kernel + the os-simple image: the everyday teaching
-#                   build, kept fast.
-#   make full       all the RAM-disk images (test, os-simple, os-real).
-#   make images     the RAM-disk images.
+#   make            build everything: kernel, host tools, guest programs, the
+#                   vendored userland, Doom, and the three RAM images. The
+#                   first build compiles the five vendor projects and takes
+#                   minutes; later runs rebuild only what changed.
 #   make test       boot the test image and check every probe passes.
-#   make selfbuild-test   the machine builds its own kernel, utilities and shell.
+#   tests/run NAME  run one named suite (style, host, ssh, all, ...).
 #   make isos       a bootable ISO per image, for real hardware (needs Docker).
-#   make deps       build the vendored third-party (libc; DEPS=full adds the
-#                   busybox, dropbear, tcc and pdpmake capstones)
 #   make doctor     check the toolchain (PASS/MISSING with install hints)
-#   make verify-style / verify-host   the quality gates
 #   make clean      remove the in-house build products and the images
 #   make distclean  + the vendored musl, busybox, dropbear, tcc and pdpmake
 #                   builds (full from-scratch)
@@ -99,24 +96,30 @@ MKDISK          = krffs/mkdisk.sh
         check-pdpmake \
         compile-commands check-sources \
         verify-style verify-host run-style run-host run-default doctor help \
-        busybox dropbear tcc pdpmake $(BASE_DIRS) $(FULL_DIRS)
+        musl busybox dropbear tcc pdpmake $(BASE_DIRS) $(FULL_DIRS)
 
-# Default: the kernel and the os-simple image (our login, shell and Unix tools).
-all: os-simple-image
+# Default: everything reusable. The three RAM images pull in the kernel, the
+# host tools, the guest programs, the vendored userland, and Doom through
+# their own prerequisites. The first build compiles five vendor projects and
+# takes minutes; a later `make` rebuilds only what changed. Each image is its
+# own file under build/images/, so they coexist instead of overwriting one
+# shared image.
+all: images
 
-# Everything: all the RAM-disk images. Each is its own file under build/images/, so
-# they coexist instead of overwriting one shared image.
-full: images
+# Retired names, kept as aliases for this milestone only. `full` was the old
+# everything build; `deps` built vendor stamps that are now ordinary
+# prerequisites of the images.
+full:
+	@echo "full: retired: plain make builds everything now" >&2
+	@$(MAKE) --no-print-directory all
 
-# Build the vendored third-party. libc is built by default (utils link it); the
-# four capstones os-real carries are added with DEPS=full (they are slow, and
-# nothing but that image needs them).
-deps: $(LIBC_STAMP)
-ifeq ($(DEPS),full)
-deps: $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP)
-endif
+deps:
+	@echo "deps: retired: vendor builds are ordinary prerequisites of make" >&2
+	@$(MAKE) --no-print-directory $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) \
+	    $(TCC_STAMP) $(PDPMAKE_STAMP)
 
 # Friendly aliases for the third-party stamps.
+musl: $(LIBC_STAMP)
 busybox: $(BUSYBOX_STAMP)
 dropbear: $(DROPBEAR_STAMP)
 tcc: $(TCC_STAMP)
@@ -1404,8 +1407,8 @@ check-dropbearmulti: $(DROPBEAR_STAMP)
 # without either, so check both here rather than let a consumer fail later on a
 # missing file with no cause named.
 check-libc: $(LIBC_STAMP)
-	@test -s $(LIBC_A) || { echo "libc: $(LIBC_A) missing or empty; rm vendor/musl/.stamp and rebuild (make deps)" >&2; exit 1; }
-	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm vendor/musl/.stamp and rebuild (make deps)" >&2; exit 1; }
+	@test -s $(LIBC_A) || { echo "libc: $(LIBC_A) missing or empty; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
+	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
 
 # --- toolchain preflight + quality gates ---
 doctor:
@@ -1474,7 +1477,7 @@ distclean: clean
 help:
 	@echo "Rach2 build targets:"
 	@echo "  make            kernel + the os-simple image (our login, shell and tools)"
-	@echo "  make full       all the RAM-disk images"
+	@echo "  make            everything, including all the RAM-disk images"
 	@echo "  make images     the RAM-disk images (test, os-simple, os-real)"
 	@echo "  make test-image / os-simple-image / os-real-image   one image"
 	@echo "  make os-real-disk   the os-real tree on a partitioned ATA disk image"
@@ -1516,7 +1519,7 @@ help:
 	@echo "  make test-disk-ahci / persist-test-ahci / stress-test-ahci   the same over AHCI/SATA"
 	@echo "  make isos       a bootable ISO per image, for real hardware (needs Docker)"
 	@echo "  make rach2-metal-image / rach2-metal-iso   the RAM-only image the Lenovo boots"
-	@echo "  make deps       vendored third-party (libc; DEPS=full adds the four capstones)"
+	@echo "  make deps       vendored third-party (retired alias; make builds it)"
 	@echo "  make busybox / dropbear / tcc / pdpmake   one capstone's third-party build"
 	@echo "  make check-tcc / check-pdpmake   the compiler and make an image will carry"
 	@echo "  make doctor     check the toolchain (PASS/MISSING with install hints)"
