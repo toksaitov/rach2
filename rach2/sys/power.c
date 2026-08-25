@@ -144,7 +144,7 @@ static void power_acpi_off(void)
     if (port != 0) {
         const board_profile_t *p = board_current();
 
-        /* The token stays exactly what it was: tools/shutdown_test.sh watches
+        /* The token stays exactly what it was: the shutdown suite watches
          * for it, so the board's name goes on its own line, not into
          * the middle of a string another program reads. */
         serial_printf("poweroff: board %s\n", board_name());

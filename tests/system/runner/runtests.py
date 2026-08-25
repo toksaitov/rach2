@@ -25,7 +25,7 @@ that never comes.
 without RDSEED/RDRAND. Exit code: 0 if every probe exited 0, else 1.
 
 This is the automated end-to-end pass over the test image. A handful of probes are
-exercised by hand under tools/harness.py instead, because each needs a contract a
+exercised by hand under tests/system/runner/harness.py instead, because each needs a contract a
 single shared boot does not set up: forktest and cowprobe exit with the child's
 own status (not 0); stdintest and ttyprobe block on real terminal input; vmfault,
 vmro, and winprobe fault on purpose (harness.py runs each in its own boot, where

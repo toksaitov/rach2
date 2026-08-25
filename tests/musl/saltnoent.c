@@ -8,7 +8,7 @@
  * the CPU has RDSEED and RDRAND and the kernel's random pool is trusted; a
  * minter that quietly fell back to the untrusted stream would pass every other
  * proof in the tree. So this program is staged at `/musl/saltnoent` and is
- * deliberately not in `tools/runtests.py`'s `PROBES`, since it must fail where
+ * deliberately not in the probe runner's `PROBES`, since it must fail where
  * entropy is trusted. `make test-noentropy` boots the same image on a CPU that
  * exposes neither instruction and runs it there.
  *

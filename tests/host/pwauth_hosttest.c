@@ -23,7 +23,7 @@
  * real `/etc/shadow`; and `getrandom`, which no host call can stand in for,
  * since the property that matters is the kernel's refusal to hand out untrusted
  * entropy. Their declarations come from `tests/host/compat`, on the include
- * path of `tools/hosttest.sh` alone.
+ * path of `tests/system/suites/host.sh` alone.
  *
  * A fourth, `fsync`, is supplied for a different reason: it is the one step of
  * the replacement whose failure cannot be provoked by arranging the file
@@ -2468,7 +2468,7 @@ static void check_exit_mask(void)
      * exists to catch is a writer that wedges inside the registered release,
      * and such a writer still holds the pipe's write end, so a blocking read
      * would never return and the wait below would never be reached. Nothing in
-     * tools/hosttest.sh imposes an outer timeout, so an unbounded read here
+     * the host suite imposes an outer timeout, so an unbounded read here
      * turns a detected fault into a hung gate. */
     {
         struct pollfd waiting;

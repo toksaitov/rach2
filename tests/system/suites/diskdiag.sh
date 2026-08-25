@@ -40,7 +40,7 @@ if [ -z "$RW_KERNEL" ] || [ -z "$RO_KERNEL" ] || [ -z "$METAL_IMAGE" ]; then
     exit 2
 fi
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="$REPO/krffs/rach2_demo_ed25519"
 W="$REPO/build/images/diskdiag"
 BASE="$W.base.disk"
@@ -110,7 +110,7 @@ cp "$METAL_IMAGE" "$IMG"
 
 # ---- 1. the control: mounting writes ----
 cp "$BASE" "$RW"
-python3 "$REPO/tools/harness.py" --kernel "$RW_KERNEL" \
+python3 "$REPO/tests/system/runner/harness.py" --kernel "$RW_KERNEL" \
     --drive "file=$RW,format=raw,if=ide,index=0,media=disk" \
     --append "rach2.fsdisk rach2.rescue" \
     --timeout 90 --log "$RWLOG" --ok "Type 'help'" \
@@ -198,7 +198,7 @@ fi
 echo "diskdiag-test: the whole session left the disk byte for byte: OK"
 
 # ---- 3. absence ----
-python3 "$REPO/tools/harness.py" --kernel "$RO_KERNEL" \
+python3 "$REPO/tests/system/runner/harness.py" --kernel "$RO_KERNEL" \
     --initrd "$IMG" --qemu-arg=-cpu --qemu-arg=max \
     --append "rach2.diskdiag rach2.rescue" \
     --timeout 90 --log "$NOLOG" --ok "Disk diagnostic" \

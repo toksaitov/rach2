@@ -11,10 +11,10 @@
 # something still reads it.
 #
 # Four boots, because the two ways to get this wrong are opposite. Silencing the
-# line everywhere breaks `tools/harness.py`, which decodes a probe's status from
+# line everywhere breaks the harness, which decodes a probe's status from
 # it in its no-token mode; silencing nothing leaves the noise. And a probe that
 # stopped being SCORED would look like a passing run, so the two dedicated
-# markers `tools/runtests.py` reads are asserted here too.
+# markers `tests/system/runner/runtests.py` reads are asserted here too.
 #
 #   1. os-real, logged in, running a program that forks, execs and exits: the
 #      program's own output must appear and the plain line must not. Asserting
@@ -185,7 +185,7 @@ echo "exitline-test: a killed probe still prints its dedicated marker: OK"
 # stops the machine through the debug-exit port and then takes the real,
 # untruncated status off the serial line. A gate that silenced that line
 # everywhere would fail here rather than in a later milestone.
-if ! python3 tools/harness.py --kernel "$HARNESS_KERNEL" --initrd "$TEST_IMAGE" \
+if ! python3 tests/system/runner/harness.py --kernel "$HARNESS_KERNEL" --initrd "$TEST_IMAGE" \
         --timeout 90 "execq=/hello" >/dev/null 2>&1; then
     echo "exitline-test: FAIL: harness.py could not decode a status in its" >&2
     echo "exitline-test: no-token mode" >&2

@@ -33,7 +33,7 @@ if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$PASSWORD" ] || [ -z "$TESTPASSWO
     exit 2
 fi
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 WORK="$DISK.work"
 LOG="$DISK.work.log"
 FEED="$DISK.work.feed"

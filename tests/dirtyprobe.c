@@ -17,7 +17,7 @@
  * stat, which reports the root with a fixed `S_IFDIR | 0755` and would show a
  * clean mode on a corrupted image. So the probe runs under the rescue shell on
  * a disk-backed mount, hammers every path that reaches the root node with a
- * mode-adjacent operation, and `tools/crash_test.sh` kills QEMU afterwards and
+ * mode-adjacent operation, and the crash suite kills QEMU afterwards and
  * requires offline `fsck.krffs` still to report "not cleanly unmounted".
  *
  * The `sync(2)` after each attempt is the whole proof. The page cache is

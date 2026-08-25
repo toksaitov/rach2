@@ -3,7 +3,7 @@
  *
  * `statushelper N` exits with N; `statushelper signal` kills itself with
  * SIGTERM, whose default action terminates. It is a fixture and not a probe:
- * `tools/runtests.py` never runs it, since a program whose whole purpose is to
+ * The probe runner never runs it, since a program whose whole purpose is to
  * fail on request would fail the suite it was listed in.
  *
  * `ishmusl` runs it through `ish -c` to read back what the shell reports.

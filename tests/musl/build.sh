@@ -11,7 +11,7 @@
 # ...). `make musl-programs` runs this.
 #
 # A program that must link a source from elsewhere in the tree names it in a
-# "link-deps:" comment, the convention tools/hosttest.sh parses for the host
+# "link-deps:" comment, the convention the host suite parses for the host
 # tests, with the paths written from the repo root:
 #
 #     /**

@@ -446,11 +446,11 @@ void release_fd_table(fd_table_t *table)
  * fatal (panic_init_died); an init exiting under the debug shell returns to it.
  *
  * The plain status line goes out only where the debug shell is the supervisor.
- * There it is how a person, and `tools/harness.py` in its no-token mode, read a
+ * There it is how a person, and the harness in its no-token mode, read a
  * transient init's outcome. On an image running `/sbin/init` and a login shell
  * every process exit would print it, a forked child's included, and the shell
  * already answers the question through `$?`. The line that hands the shell back
- * below is not gated: `tools/runtests.py` scores probes from that one.
+ * below is not gated: the probe runner scores probes from that one.
  */
 static int32_t sys_exit(isr_params_t *params)
 {

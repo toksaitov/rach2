@@ -29,7 +29,7 @@ if [ -z "$RW_KERNEL" ] || [ -z "$RO_KERNEL" ]; then
     exit 2
 fi
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 WORK="$REPO/build/images/diskpolicy"
 BASE="$WORK.base.disk"
 RW="$WORK.rw.disk"
@@ -78,7 +78,7 @@ sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$BASE" 64
 
 boot() {
     cp "$BASE" "$2"
-    python3 "$REPO/tools/harness.py" --kernel "$1" \
+    python3 "$REPO/tests/system/runner/harness.py" --kernel "$1" \
         --drive "file=$2,format=raw,if=ide,index=0,media=disk" \
         --append "rach2.fsdisk rach2.rescue" \
         --timeout 90 --log "$3" --ok "Type 'help'" \

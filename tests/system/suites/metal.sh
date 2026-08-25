@@ -36,7 +36,7 @@ if [ -z "$KERNEL" ] || [ -z "$IMAGE" ]; then
     exit 2
 fi
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="$REPO/krffs/rach2_demo_ed25519"
 WORK="$IMAGE.metal.work"
 LOG="$IMAGE.metal.log"
@@ -241,7 +241,7 @@ echo "metal-test: the machine handed over its own boot log, from the first line:
 # The acceptance script itself, rehearsed here so it is not being debugged on
 # the laptop. Its baseline comparisons are against a drive this machine does
 # not have, which it reports, not fails on.
-if ! sh "$REPO/tools/metal_accept.sh" 127.0.0.1 "$PORT" >/dev/null 2>&1; then
+if ! sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" >/dev/null 2>&1; then
     fail "the acceptance script did not pass against the rehearsal machine"
 fi
 echo "metal-test: the acceptance script runs clean against the rehearsal machine: OK"

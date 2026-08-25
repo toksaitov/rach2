@@ -19,7 +19,7 @@
 #   8. text style, in three parts: textcheck.sh for non-ASCII and dashes,
 #      check_comments.py for the 80-column comment rule, and prose_check.py
 #      --banned for the vocabulary a script can decide (all beside this file).
-#   9. the probe runner's scoring rule (tools/runtests.py --selftest)
+#   9. the probe runner's scoring rule (runtests.py --selftest)
 #  10. the set-id manifest sweep (tools/inspect/check_setid.py)
 #  11. image reproducibility (tools/verify/check_repro.py): one tree, one image
 #  12. the checker selftests (check_kernel.py, check_grubembed.py, and
@@ -289,7 +289,7 @@ fi
 # than a boot: it decides every probe's PASS or FAIL, so a regression in it is
 # invisible in the one place that would otherwise catch it.
 hr "9/13 probe scoring rule (runtests selftest)"
-if python3 "$REPO/tools/runtests.py" --selftest >"$VDIR/verify_score.log" 2>&1; then
+if python3 "$REPO/tests/system/runner/runtests.py" --selftest >"$VDIR/verify_score.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_score.log"; fail=1

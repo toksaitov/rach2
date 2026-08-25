@@ -8,7 +8,7 @@
  * The declaration is repeated here and the definition is the host test's, over
  * the vendored SHA-512 crypt the guest verifies with.
  *
- * This directory is on the include path of `tools/hosttest.sh` alone. Nothing
+ * This directory is on the include path of the host suite alone. Nothing
  * the guest builds ever sees it, and nothing here may differ from what musl
  * declares.
  */

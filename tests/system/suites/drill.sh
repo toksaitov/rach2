@@ -37,7 +37,7 @@ if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
     exit 2
 fi
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 DEADLINE=2400
 START="$(date +%s)"
 
@@ -227,7 +227,7 @@ fi
 # kernel from a menu entry nobody will edit on the day it is needed, so a build
 # that waited to be asked would be a build that could not repair anything. This
 # boot mounts nothing from the disk and writes nothing to it.
-if ! python3 "$REPO/tools/harness.py" --kernel "$REPO/build/rach2-recovery/kernel" \
+if ! python3 "$REPO/tests/system/runner/harness.py" --kernel "$REPO/build/rach2-recovery/kernel" \
         --initrd "$REPO/build/images/rach2-recovery.krffs" --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         --append "rach2.root=ram" --timeout 180 --steptmo 60 --ok "NODETHERE" \
@@ -470,7 +470,7 @@ mv "$WORK.save" "$WORK"
 # pair it is on, and the image records that where `bootctl` reads it. The client
 # that did not get a lease has to be gone as well: one that answered later would
 # replace the address while the record went on naming it.
-if ! python3 "$REPO/tools/harness.py" --kernel "$REPO/build/rach2-recovery/kernel" \
+if ! python3 "$REPO/tests/system/runner/harness.py" --kernel "$REPO/build/rach2-recovery/kernel" \
         --initrd "$REPO/build/images/rach2-recovery.krffs" --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         --net "hubport,id=net0,hubid=1" \

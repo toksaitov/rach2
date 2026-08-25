@@ -317,7 +317,7 @@ fi
 if ! python3 tools/inspect/check_kernel.py --tcc "$KEXTRACT"; then
     fail "the built kernel failed the structural checker"
 fi
-if ! python3 tools/runtests.py --kernel "$KEXTRACT" \
+if ! python3 tests/system/runner/runtests.py --kernel "$KEXTRACT" \
         --initrd build/images/test.krffs --timeout 300 --steptmo 60; then
     fail "the probe suite did not pass on the machine-built kernel"
 fi

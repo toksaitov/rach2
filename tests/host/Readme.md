@@ -4,7 +4,7 @@
 
 ## Runner
 
-[`tools/hosttest.sh`](../../tools/hosttest.sh) discovers every `tests/host/*_hosttest.c` file. It uses `${CC:-cc}` with C99, `-g -O1`, `-fsanitize=address,undefined`, and `-fno-sanitize-recover=all`. The include path contains the kernel, utility, KRFFS, and compatibility-header directories.
+[`tests/system/suites/host.sh`](../../tests/system/suites/host.sh) discovers every `tests/host/*_hosttest.c` file. It uses `${CC:-cc}` with C99, `-g -O1`, `-fsanitize=address,undefined`, and `-fno-sanitize-recover=all`. The include path contains the kernel, utility, KRFFS, and compatibility-header directories.
 
 Each test declares separately compiled project sources in one or more `host-deps:` comment lines. The runner rejects a dependency line that was wrapped without repeating the prefix, checks that every named file exists, and passes those files to the compiler. A test that includes a project `.c` file directly to reach its `static` functions leaves `host-deps:` empty.
 

@@ -8,7 +8,7 @@
 # half, a strict image that failed to boot at all for some unrelated reason
 # would pass the test by printing nothing.
 #
-# tools/login_test.sh boots this and its strict twin. Host paths are relative to
+# tests/system/suites/login.sh boots this and its strict twin. Host paths are relative to
 # the repo root (mkimage.sh cd's there).
 
 dir 0755 /bin

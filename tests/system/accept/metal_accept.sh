@@ -34,7 +34,7 @@ if [ -z "$HOST" ]; then
     exit 2
 fi
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="$REPO/krffs/rach2_demo_ed25519"
 KNOWN="$REPO/build/images/metal-accept.known"
 

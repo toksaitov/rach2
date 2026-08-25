@@ -41,7 +41,7 @@ if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
     exit 2
 fi
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 DEADLINE=3600
 START="$(date +%s)"
 PHASE_AT="$START"

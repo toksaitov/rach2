@@ -89,7 +89,7 @@ EXTRAGROUP="shared"
 # stages, whose password gen_demo_password.sh minted beside root's.
 SIMPLEUSER="newbie"
 SIMPLEPASS="newbiepw1"
-TESTPASSWORD="$(cat "$(dirname "$0")/../krffs/rach2_test_password" 2>/dev/null || echo none)"
+TESTPASSWORD="$(cat "$(dirname "$0")/../../../krffs/rach2_test_password" 2>/dev/null || echo none)"
 
 # The id ranges rach2.config asks adduser for: system accounts inside
 # FIRST_SYSTEM_ID..LAST_SYSTEM_ID, regular ones above that up to LAST_ID.

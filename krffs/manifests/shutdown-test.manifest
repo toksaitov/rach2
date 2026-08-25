@@ -13,7 +13,7 @@
 # away by the kernel's signal permission check, and an image with only root in
 # it cannot ask that question.
 #
-# tools/shutdown_test.sh boots it. Host paths are relative to the repo root
+# tests/system/suites/shutdown.sh boots it. Host paths are relative to the repo root
 # (mkimage.sh cd's there).
 
 dir 0755 /bin

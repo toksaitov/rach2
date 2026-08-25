@@ -23,7 +23,7 @@
  * `status` is the only window onto this disk. It prints the four files' sector
  * extents, what the environment block has, whether a trial is armed or
  * consumed, and which slot this boot came from. Its extent lines are a test
- * contract: `tools/install_test.sh` reads the candidate's first sector from
+ * contract: the install suite reads the candidate's first sector from
  * them to corrupt it, so their field order is fixed.
  *
  * `config` writes the boot menu GRUB reads after its own stub entries. That

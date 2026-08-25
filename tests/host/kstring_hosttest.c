@@ -9,7 +9,7 @@
  * targets), so a bounds bug surfaces here, in milliseconds, instead of as a
  * mystery fault in QEMU. The test prints nothing; it returns the number of
  * failed checks as its exit status (0 == all passed), which is what
- * tools/hosttest.sh asserts.
+ * tests/system/suites/host.sh asserts.
  */
 
 #include "kstring.h"
