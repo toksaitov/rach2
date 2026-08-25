@@ -4,20 +4,18 @@
 # through /bin/cc; the GNU Makefile beside it stays the host build. Each
 # program is one hosted static link against the compiler's own sysroot
 # (musl's headers and libc.a, the crt objects), which is exactly what the
-# host build produces through the muslgcc wrapper. The per-program source
-# map below must equal the host Makefile's; tools/check_guest.py has the
-# two maps equal on the host.
+# host build produces through the muslgcc wrapper. Both makefiles include
+# programs.mk, so one file lists the programs, their companion sources,
+# and their extra defines, and the two builds cannot drift apart.
 #
 # Run from a writable copy of this tree: make -f guest.mk
 
 UCC = cc
 UFLAGS = -static
 
-PROGS = true false echo yes cat pwd touch mkdir rm mv cp ls ping nc \
-        httpd dhcpc netup reflash halt init-shell init-login init-metal login su sudo passwd adduser \
-        adduser-crash bootctl
+include programs.mk
 
-all: $(PROGS)
+all: $(UTILITIES) $(SBIN_PROGS)
 
 true: true.c
 	$(UCC) $(UFLAGS) -o true true.c
@@ -43,40 +41,40 @@ cp: cp.c
 	$(UCC) $(UFLAGS) -o cp cp.c
 ls: ls.c
 	$(UCC) $(UFLAGS) -o ls ls.c
-ping: ping.c resolv.c netdb.h
-	$(UCC) $(UFLAGS) -o ping ping.c resolv.c
-nc: nc.c resolv.c netdb.h
-	$(UCC) $(UFLAGS) -o nc nc.c resolv.c
 httpd: httpd.c
 	$(UCC) $(UFLAGS) -o httpd httpd.c
-dhcpc: dhcpc.c dhcpmsg.c dhcpmsg.h ipcheck.c ipcheck.h
-	$(UCC) $(UFLAGS) -o dhcpc dhcpc.c dhcpmsg.c ipcheck.c
-netup: netup.c netcfg.c netcfg.h ipcheck.c ipcheck.h
-	$(UCC) $(UFLAGS) -o netup netup.c netcfg.c ipcheck.c
-reflash: reflash.c sectorcopy.c sectorcopy.h
-	$(UCC) $(UFLAGS) -o reflash reflash.c sectorcopy.c
 halt: halt.c
 	$(UCC) $(UFLAGS) -o halt halt.c
-init-shell: init.c
-	$(UCC) $(UFLAGS) -o init-shell init.c
-init-login: init.c
-	$(UCC) $(UFLAGS) -DINIT_CONSOLE_LOGIN -o init-login init.c
-init-metal: init.c
-	$(UCC) $(UFLAGS) -DINIT_CONSOLE_LOGIN -DINIT_METAL -o init-metal init.c
-login: login.c pwauth.c pwauth.h
-	$(UCC) $(UFLAGS) -o login login.c pwauth.c
-su: su.c pwauth.c pwauth.h
-	$(UCC) $(UFLAGS) -o su su.c pwauth.c
 sudo: sudo.c
 	$(UCC) $(UFLAGS) -o sudo sudo.c
-passwd: passwd.c pwauth.c pwauth.h
-	$(UCC) $(UFLAGS) -o passwd passwd.c pwauth.c
-adduser: adduser.c pwauth.c pwauth.h
-	$(UCC) $(UFLAGS) -o adduser adduser.c pwauth.c
-adduser-crash: adduser.c pwauth.c pwauth.h
-	$(UCC) $(UFLAGS) -DADDUSER_CRASH_POINT -o adduser-crash adduser.c pwauth.c
-bootctl: bootctl.c bootslot.c bootslot.h bootverb.c bootverb.h grubslot.c grubslot.h
-	$(UCC) $(UFLAGS) -o bootctl bootctl.c bootslot.c bootverb.c grubslot.c
+ping: $(SRC_ping) $(HDR_ping)
+	$(UCC) $(UFLAGS) -o ping $(SRC_ping)
+nc: $(SRC_nc) $(HDR_nc)
+	$(UCC) $(UFLAGS) -o nc $(SRC_nc)
+dhcpc: $(SRC_dhcpc) $(HDR_dhcpc)
+	$(UCC) $(UFLAGS) -o dhcpc $(SRC_dhcpc)
+netup: $(SRC_netup) $(HDR_netup)
+	$(UCC) $(UFLAGS) -o netup $(SRC_netup)
+reflash: $(SRC_reflash) $(HDR_reflash)
+	$(UCC) $(UFLAGS) -o reflash $(SRC_reflash)
+init-shell: $(SRC_init_shell)
+	$(UCC) $(UFLAGS) -o init-shell $(SRC_init_shell)
+init-login: $(SRC_init_login)
+	$(UCC) $(UFLAGS) $(DEF_init_login) -o init-login $(SRC_init_login)
+init-metal: $(SRC_init_metal)
+	$(UCC) $(UFLAGS) $(DEF_init_metal) -o init-metal $(SRC_init_metal)
+login: $(SRC_login) $(HDR_login)
+	$(UCC) $(UFLAGS) -o login $(SRC_login)
+su: $(SRC_su) $(HDR_su)
+	$(UCC) $(UFLAGS) -o su $(SRC_su)
+passwd: $(SRC_passwd) $(HDR_passwd)
+	$(UCC) $(UFLAGS) -o passwd $(SRC_passwd)
+adduser: $(SRC_adduser) $(HDR_adduser)
+	$(UCC) $(UFLAGS) -o adduser $(SRC_adduser)
+adduser-crash: $(SRC_adduser_crash) $(HDR_adduser_crash)
+	$(UCC) $(UFLAGS) $(DEF_adduser_crash) -o adduser-crash $(SRC_adduser_crash)
+bootctl: $(SRC_bootctl) $(HDR_bootctl)
+	$(UCC) $(UFLAGS) -o bootctl $(SRC_bootctl)
 
 clean:
-	rm -f $(PROGS)
+	rm -f $(UTILITIES) $(SBIN_PROGS)

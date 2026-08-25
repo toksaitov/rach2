@@ -118,6 +118,26 @@ def subst_refs(expanded, macros):
     return re.sub(r"\$\((\w+):(\.\w+)=(\.\w+)\)", repl, expanded)
 
 
+def macros_of(text):
+    """Every simple macro of the text, name to joined value."""
+    macros = {}
+    for line in text.split("\n"):
+        match = re.match(r"(\w+)\s*=", line)
+        if match:
+            macros[match.group(1)] = " ".join(
+                read_macro(text, match.group(1)))
+    return macros
+
+
+def expand_line(line, macros):
+    """Expand macros and substitution references in one makefile line."""
+    for _pass in range(3):
+        line = subst_refs(line, macros)
+        for key, value in macros.items():
+            line = line.replace("$(%s)" % key, value)
+    return line
+
+
 def rules_of(text):
     """Return `{target: (prerequisites, recipe_lines)}` for explicit rules."""
     rules = {}
@@ -190,18 +210,20 @@ def check_kernel_lists(repo):
 
 
 def host_utils_map(repo):
-    text = open(os.path.join(repo, "utils", "Makefile")).read()
+    if not re.search(r"^include programs\.mk$",
+                     open(os.path.join(repo, "utils", "Makefile")).read(),
+                     re.M):
+        fail("utils/Makefile does not include programs.mk, so the host "
+             "build no longer reads the shared program map")
+    text = guest_text(repo, os.path.join("utils", "Makefile"))
+    macros = macros_of(text)
     programs = read_macro(text, "UTILITIES") + read_macro(text, "SBIN_PROGS")
     mapping = {}
     for target, (prereqs, _recipe) in rules_of(text).items():
         match = re.match(r"\$\(BUILD\)/(?:sbin/)?([\w-]+)$", target)
         if match:
-            for token in prereqs:
-                if "$" in token:
-                    fail("utils/Makefile %s has a prerequisite this guard "
-                         "cannot resolve (%s); teach the guard before "
-                         "using make syntax there" % (target, token))
-            mapping[match.group(1)] = [p for p in prereqs
+            expanded = expand_line(" ".join(prereqs), macros).split()
+            mapping[match.group(1)] = [p for p in expanded
                                        if p.endswith(".c")]
     result = {}
     for program in programs:
@@ -211,43 +233,48 @@ def host_utils_map(repo):
 
 def check_utils(repo):
     expected = host_utils_map(repo)
-    text = open(os.path.join(repo, "utils", "guest.mk")).read()
+    text = guest_text(repo, os.path.join("utils", "guest.mk"))
+    macros = macros_of(text)
     rules = rules_of(text)
-    progs = read_macro(text, "PROGS")
+    progs = read_macro(text, "UTILITIES") + read_macro(text, "SBIN_PROGS")
     if sorted(progs) != sorted(expected):
-        fail("utils/guest.mk PROGS differs from the host program list "
+        fail("utils/guest.mk program list differs from the host list "
              "(host has %d, guest has %d)" % (len(expected), len(progs)))
     for program, sources in sorted(expected.items()):
         if program not in rules:
             fail("utils/guest.mk has no rule for %s" % program)
-        got = [p for p in rules[program][0] if p.endswith(".c")]
+        got = [p for p in expand_line(" ".join(rules[program][0]),
+                                      macros).split() if p.endswith(".c")]
         if sorted(got) != sorted(sources):
             fail("utils/guest.mk %s builds from %s; the host builds from %s"
                  % (program, ", ".join(got), ", ".join(sources)))
-        compiled = [t for t in " ".join(rules[program][1]).split()
-                    if t.endswith(".c")]
+        recipe = expand_line(" ".join(rules[program][1]), macros)
+        compiled = [t for t in recipe.split() if t.endswith(".c")]
         if sorted(compiled) != sorted(sources):
             fail("utils/guest.mk %s compiles %s in its recipe; the host "
                  "compiles %s" % (program, ", ".join(compiled) or "nothing",
                                   ", ".join(sources)))
     for program, define in (("init-login", "-DINIT_CONSOLE_LOGIN"),
                             ("adduser-crash", "-DADDUSER_CRASH_POINT")):
-        if define not in " ".join(rules[program][1]):
+        recipe = expand_line(" ".join(rules[program][1]), macros_of(text))
+        if define not in recipe:
             fail("utils/guest.mk %s lacks %s" % (program, define))
     return len(expected)
 
 
 def check_ish(repo):
-    text = open(os.path.join(repo, "ish", "Makefile")).read()
-    match = re.search(r"OBJECTS = \$\(addprefix \$\(BUILD\)/, (.*?)\)",
-                      text, re.S)
-    if not match:
-        fail("could not read ish/Makefile OBJECTS")
-    expected = match.group(1).replace("\\", " ").split()
-    guest = read_macro(open(os.path.join(repo, "ish", "guest.mk")).read(),
-                       "OBJS")
-    if sorted(guest) != sorted(expected):
-        fail("ish/guest.mk OBJS differs from the host list")
+    host = open(os.path.join(repo, "ish", "Makefile")).read()
+    if not re.search(r"^include sources\.mk$", host, re.M):
+        fail("ish/Makefile does not include sources.mk, so the host build "
+             "no longer reads the shared source list")
+    if r"OBJECTS = $(addprefix $(BUILD)/, $(ISH_SRC:.c=.o))" not in host:
+        fail("ish/Makefile does not derive OBJECTS from ISH_SRC")
+    text = guest_text(repo, os.path.join("ish", "guest.mk"))
+    expected = [re.sub(r"\.c$", ".o", s)
+                for s in read_macro(text, "ISH_SRC")]
+    guest = expand_tokens(text, read_macro(text, "OBJS"))
+    if guest != expected:
+        fail("ish/guest.mk OBJS does not derive from the shared ISH_SRC")
     return len(expected)
 
 

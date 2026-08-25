@@ -26,7 +26,7 @@ The native Linux build produces only the 12 portable file utilities under `build
 make -C utils -f Makefile.linux
 ```
 
-Self-building images stage this source tree at `/src/utils`. `guest.mk` uses `cc -static` to build all 29 programs with the same companion sources and compile-time variants as the host Makefile. `tools/check_guest.py` compares the two maps.
+Self-building images stage this source tree at `/src/utils`. `guest.mk` uses `cc -static` to build all 29 programs from `programs.mk`, the shared map of programs, companion sources, and compile-time variants the host Makefile includes too. `tools/check_guest.py` checks that both builds read it.
 
 ## Portable file utilities
 

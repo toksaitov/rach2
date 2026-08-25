@@ -34,34 +34,17 @@ CFLAGS  = -m32 -static -nostdlib -nostartfiles -isystem $(PREFIX)/include \
 LINK_PRE  = $(CRT1) $(CRTI)
 LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack
 
-UTILITIES = true  \
-            false \
-            echo  \
-            yes   \
-            cat   \
-            pwd   \
-            touch \
-            mkdir \
-            rm    \
-            mv    \
-            cp    \
-            ls    \
-            ping  \
-            nc    \
-            httpd \
-            dhcpc \
-            netup \
-            reflash \
-            halt
-
+# The program lists and the per-program source map live in programs.mk, which
+# guest.mk includes too, so one file describes both builds.
+#
 # init is PID 1, and su and sudo climb privilege; none of the three is a user tool
-# to be swept into an image root. They build into a sbin/ subdir so the os-simple
-# `exec-dir / build/utils` sweep (which stages only the regular files directly in
-# build/utils, skipping subdirs) cannot stage them at all. Every image that wants
-# one names it explicitly, which is also what makes the set-id allowlist in
-# tools/check_setid.py a complete list rather than a sample: a privileged program
-# reaches an image only through a `file` line naming it.
-SBIN_PROGS = init-shell init-login init-metal login su sudo passwd adduser adduser-crash bootctl
+# to be swept into an image root. The SBIN_PROGS build into a sbin/ subdir so the
+# os-simple `exec-dir / build/utils` sweep (which stages only the regular files
+# directly in build/utils, skipping subdirs) cannot stage them at all. Every image
+# that wants one names it explicitly, which is also what makes the set-id allowlist
+# in tools/check_setid.py a complete list rather than a sample: a privileged
+# program reaches an image only through a `file` line naming it.
+include programs.mk
 
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
 SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
@@ -123,13 +106,13 @@ $(BUILD)/%: %.c
 # compile+link two sources in one step (-MF records only the last source's headers),
 # so the inputs (the program source, resolv.c, netdb.h) are explicit prerequisites; the
 # $(BUILD) .d adds the resolver's transitive headers.
-$(BUILD)/ping: ping.c resolv.c netdb.h
+$(BUILD)/ping: $(SRC_ping) $(HDR_ping)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/ping.d -o $@ $(LINK_PRE) ping.c resolv.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/ping.d -o $@ $(LINK_PRE) $(SRC_ping) $(LINK_POST)
 
-$(BUILD)/nc: nc.c resolv.c netdb.h
+$(BUILD)/nc: $(SRC_nc) $(HDR_nc)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/nc.d -o $@ $(LINK_PRE) nc.c resolv.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/nc.d -o $@ $(LINK_PRE) $(SRC_nc) $(LINK_POST)
 
 # The sbin family: the same musl link, into build/utils/sbin/ (see above).
 $(BUILD)/sbin/%: %.c
@@ -139,15 +122,15 @@ $(BUILD)/sbin/%: %.c
 # su links the credential library (pwauth.c, declared in pwauth.h), the way ping
 # and nc link the resolver above and for the same reason: the -MF .d records only
 # the last source's headers, so the inputs are explicit prerequisites here.
-$(BUILD)/sbin/su: su.c pwauth.c pwauth.h
+$(BUILD)/sbin/su: $(SRC_su) $(HDR_su)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/su.d -o $@ $(LINK_PRE) su.c pwauth.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/su.d -o $@ $(LINK_PRE) $(SRC_su) $(LINK_POST)
 
 # passwd links the credential library for the same reason su does, and is the
 # first program that writes through it.
-$(BUILD)/sbin/passwd: passwd.c pwauth.c pwauth.h
+$(BUILD)/sbin/passwd: $(SRC_passwd) $(HDR_passwd)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/passwd.d -o $@ $(LINK_PRE) passwd.c pwauth.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/passwd.d -o $@ $(LINK_PRE) $(SRC_passwd) $(LINK_POST)
 
 # init builds three times from the one source, and no artifact is named plain
 # `init`: a manifest left on the old path fails to stage rather than silently
@@ -156,24 +139,24 @@ $(BUILD)/sbin/passwd: passwd.c pwauth.c pwauth.h
 # shell table and its exec loop compiled out, so the strict artifact holds no
 # code path and no string that names a shell; init-metal is init-login plus a
 # supervised SSH server, for the machine nobody is standing in front of.
-$(BUILD)/sbin/init-shell: init.c
+$(BUILD)/sbin/init-shell: $(SRC_init_shell)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/init-shell.d -o $@ $(LINK_PRE) init.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/init-shell.d -o $@ $(LINK_PRE) $(SRC_init_shell) $(LINK_POST)
 
-$(BUILD)/sbin/init-login: init.c
+$(BUILD)/sbin/init-login: $(SRC_init_login)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -DINIT_CONSOLE_LOGIN -MF $(BUILD)/sbin/init-login.d -o $@ \
-	    $(LINK_PRE) init.c $(LINK_POST)
+	$(CC) $(CFLAGS) $(DEF_init_login) -MF $(BUILD)/sbin/init-login.d -o $@ \
+	    $(LINK_PRE) $(SRC_init_login) $(LINK_POST)
 
-$(BUILD)/sbin/init-metal: init.c
+$(BUILD)/sbin/init-metal: $(SRC_init_metal)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -DINIT_CONSOLE_LOGIN -DINIT_METAL -MF $(BUILD)/sbin/init-metal.d -o $@ \
-	    $(LINK_PRE) init.c $(LINK_POST)
+	$(CC) $(CFLAGS) $(DEF_init_metal) -MF $(BUILD)/sbin/init-metal.d -o $@ \
+	    $(LINK_PRE) $(SRC_init_metal) $(LINK_POST)
 
 # login links the credential library: it is the console's authentication.
-$(BUILD)/sbin/login: login.c pwauth.c pwauth.h
+$(BUILD)/sbin/login: $(SRC_login) $(HDR_login)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/login.d -o $@ $(LINK_PRE) login.c pwauth.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/login.d -o $@ $(LINK_PRE) $(SRC_login) $(LINK_POST)
 
 # adduser links the credential library the same way, and builds twice from the
 # one source: as shipped, and as a crash build that dies the instant a named
@@ -181,9 +164,9 @@ $(BUILD)/sbin/login: login.c pwauth.c pwauth.h
 # proved by injection rather than by a reading of the source. Everything the
 # second build adds lives under -DADDUSER_CRASH_POINT, so the shipped binary has
 # neither the extra argument nor the code, and only the test image stages it.
-$(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
+$(BUILD)/sbin/adduser: $(SRC_adduser) $(HDR_adduser)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/adduser.d -o $@ $(LINK_PRE) adduser.c pwauth.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/adduser.d -o $@ $(LINK_PRE) $(SRC_adduser) $(LINK_POST)
 
 # dhcpc links the message library (dhcpmsg.c), the half of the client that
 # needs no system call: the framing, the checksums and the option parsing that
@@ -192,33 +175,33 @@ $(BUILD)/sbin/adduser: adduser.c pwauth.c pwauth.h
 # Both link ipcheck.c, the one judgement of whether an IPv4 configuration is one
 # a machine can hold, which a lease off the wire and a stanza in a file are
 # equally subject to.
-$(BUILD)/dhcpc: dhcpc.c dhcpmsg.c dhcpmsg.h ipcheck.c ipcheck.h
+$(BUILD)/dhcpc: $(SRC_dhcpc) $(HDR_dhcpc)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/dhcpc.d -o $@ $(LINK_PRE) dhcpc.c dhcpmsg.c ipcheck.c \
+	$(CC) $(CFLAGS) -MF $(BUILD)/dhcpc.d -o $@ $(LINK_PRE) $(SRC_dhcpc) \
 	    $(LINK_POST)
 
 # reflash links the copy library (sectorcopy.c): the numbers that decide where
 # a write lands, and the loop that turns a stream into whole sectors.
-$(BUILD)/reflash: reflash.c sectorcopy.c sectorcopy.h
+$(BUILD)/reflash: $(SRC_reflash) $(HDR_reflash)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/reflash.d -o $@ $(LINK_PRE) reflash.c sectorcopy.c \
+	$(CC) $(CFLAGS) -MF $(BUILD)/reflash.d -o $@ $(LINK_PRE) $(SRC_reflash) \
 	    $(LINK_POST)
 
-$(BUILD)/netup: netup.c netcfg.c netcfg.h ipcheck.c ipcheck.h
+$(BUILD)/netup: $(SRC_netup) $(HDR_netup)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/netup.d -o $@ $(LINK_PRE) netup.c netcfg.c ipcheck.c \
+	$(CC) $(CFLAGS) -MF $(BUILD)/netup.d -o $@ $(LINK_PRE) $(SRC_netup) \
 	    $(LINK_POST)
 
 # bootctl links the boot-slot library (bootslot.c), the pure core its
 # host test drives over fixture images with fault injection.
-$(BUILD)/sbin/bootctl: bootctl.c bootslot.c bootslot.h bootverb.c bootverb.h grubslot.c grubslot.h
+$(BUILD)/sbin/bootctl: $(SRC_bootctl) $(HDR_bootctl)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) bootctl.c bootslot.c bootverb.c grubslot.c $(LINK_POST)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) $(SRC_bootctl) $(LINK_POST)
 
-$(BUILD)/sbin/adduser-crash: adduser.c pwauth.c pwauth.h
+$(BUILD)/sbin/adduser-crash: $(SRC_adduser_crash) $(HDR_adduser_crash)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -DADDUSER_CRASH_POINT -MF $(BUILD)/sbin/adduser-crash.d -o $@ \
-	    $(LINK_PRE) adduser.c pwauth.c $(LINK_POST)
+	$(CC) $(CFLAGS) $(DEF_adduser_crash) -MF $(BUILD)/sbin/adduser-crash.d -o $@ \
+	    $(LINK_PRE) $(SRC_adduser_crash) $(LINK_POST)
 
 -include $(addprefix $(BUILD)/, $(UTILITIES:=.d)) \
         $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS:=.d))
