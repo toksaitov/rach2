@@ -33,6 +33,8 @@
 
 set -e
 
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+
 KERNEL="$1"
 DISK="$2"
 TESTPASSWORD="$3"
@@ -166,7 +168,7 @@ cp "$DISK" "$WORK"
 # The space preflight, on the host, over the copy the guest will write.
 FREE_BYTES="$(python3 -c "
 import sys
-sys.path.insert(0, 'tools')
+sys.path.insert(0, 'tools/inspect')
 import check_setid
 region = check_setid.read_region('$WORK', $PART_OFFSET, $PART_SIZE)
 nodes = check_setid.walk_nodes(region)
