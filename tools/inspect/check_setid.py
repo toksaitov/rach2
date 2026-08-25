@@ -73,7 +73,7 @@ import struct
 import sys
 import tempfile
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MANIFEST_DIR = os.path.join(REPO, "krffs", "manifests")
 
 S_ISUID = 0o4000

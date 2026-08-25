@@ -492,7 +492,7 @@ static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
  * so which kernel it is compiled into is decided when the kernel is built and
  * not when it boots. An everyday build compiles the refusal below and has no
  * path around it; a `-DRACH2_RECOVERY` build compiles the body. Both carry a
- * banner naming which they are, and `tools/check_recovery.py` reads it off the
+ * banner naming which they are, and `check_recovery.py` reads it off the
  * artifact in both directions.
  */
 #ifdef RACH2_RECOVERY

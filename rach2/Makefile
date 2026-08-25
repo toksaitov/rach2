@@ -69,7 +69,7 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@ ...'; \
 	$(LD) $(LDFLAGS) -o "$$tmp" $^ && \
-	python3 ../tools/check_kernel.py "$$tmp" && \
+	python3 ../tools/inspect/check_kernel.py "$$tmp" && \
 	mv "$$tmp" $@
 
 # The configuration fingerprint (mk/fingerprint.mk): make decides what to

@@ -68,9 +68,9 @@ The debug-shell `ahci` command reports an error and performs no re-probe while K
 
 Two independent build switches limit writes.
 
-`RACH2_DISK_READONLY` selects the metal kernel's driver policy. The ATA and AHCI issue paths permit only `READ SECTORS`, `READ SECTORS EXT`, `READ DMA EXT`, and `IDENTIFY`; every other command byte returns failure. This also prevents writes through `/dev/bootpart` and `/dev/grubcore`. `tools/check_diskpolicy.py` requires exactly one policy banner in the built kernel.
+`RACH2_DISK_READONLY` selects the metal kernel's driver policy. The ATA and AHCI issue paths permit only `READ SECTORS`, `READ SECTORS EXT`, `READ DMA EXT`, and `IDENTIFY`; every other command byte returns failure. This also prevents writes through `/dev/bootpart` and `/dev/grubcore`. `tools/inspect/check_diskpolicy.py` requires exactly one policy banner in the built kernel.
 
-`RACH2_RECOVERY` controls the `/dev/disk0` write handler and automatic whole-disk publication. The ordinary kernel has the `EPERM` body. The recovery kernel has the root-only write body. This switch does not bypass `RACH2_DISK_READONLY`; the Makefile builds the recovery kernel with recovery authority and the normal read-write driver policy. `tools/check_recovery.py` checks the authority banner.
+`RACH2_RECOVERY` controls the `/dev/disk0` write handler and automatic whole-disk publication. The ordinary kernel has the `EPERM` body. The recovery kernel has the root-only write body. This switch does not bypass `RACH2_DISK_READONLY`; the Makefile builds the recovery kernel with recovery authority and the normal read-write driver policy. `tools/inspect/check_recovery.py` checks the authority banner.
 
 The command and flush counters cover attempts issued since boot. `/proc/disk` reports them beside the raw-device batch size and call count.
 

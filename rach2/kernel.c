@@ -3061,7 +3061,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     /* Modules were parsed early, before paging; just report them. */
     /* Which disk policy this kernel was built with, on the screen and in the
      * log. A machine whose disk must not be written says so before it has
-     * touched one, and the same string is what tools/check_diskpolicy.py reads
+     * touched one, and the same string is what check_diskpolicy.py reads
      * out of the artifact. */
     if (diskcmd_policy() != DISKCMD_READ_WRITE) {
         set_fore_color(light_brown);

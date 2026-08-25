@@ -122,7 +122,7 @@ The lock serializes writers but cannot make `adduser`'s four publications atomic
 
 os-simple stages all 19 ordinary programs into `/bin` with one `exec-dir` manifest entry. Five `file` entries stage `init-login`, `login`, `su`, `passwd`, and `adduser`. os-real uses BusyBox for most of these jobs and stages selected project programs such as `ping` and `bootctl`. The metal and recovery manifests select `init-metal`; recovery also selects `reflash` and `bootctl`.
 
-The `sbin` output directory prevents a privileged or policy-sensitive program from entering an image through the ordinary sweep. `tools/check_setid.py` checks the explicit set-id paths.
+The `sbin` output directory prevents a privileged or policy-sensitive program from entering an image through the ordinary sweep. `tools/inspect/check_setid.py` checks the explicit set-id paths.
 
 ## Verification
 

@@ -42,7 +42,7 @@ LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack
 # os-simple `exec-dir / build/utils` sweep (which stages only the regular files
 # directly in build/utils, skipping subdirs) cannot stage them at all. Every image
 # that wants one names it explicitly, which is also what makes the set-id allowlist
-# in tools/check_setid.py a complete list rather than a sample: a privileged
+# in tools/inspect/check_setid.py a complete list rather than a sample: a privileged
 # program reaches an image only through a `file` line naming it.
 include programs.mk
 

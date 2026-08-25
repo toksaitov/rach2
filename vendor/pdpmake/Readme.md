@@ -28,7 +28,7 @@ The script performs these steps:
 4. Check the patched built-in macros.
 5. Build with `vendor/busybox/muslgcc` and `LDFLAGS=-static`.
 6. Copy the executable to `build/vendor/pdpmake/make`.
-7. Pass the staged executable to `tools/check_elf.py`.
+7. Pass the staged executable to `tools/inspect/check_elf.py`.
 
 The output is a static ELF32 i386 executable. The os-real, GRUB-test, and metal-disk manifests install it as `/bin/make`.
 

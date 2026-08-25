@@ -54,7 +54,7 @@ fi
 # The lines whose absence is silent: a replacement core that cannot reach
 # partition 3 boots every ordinary machine and no damaged one. The same checker
 # the disk builder runs, on the same file.
-python3 "$REPO/tools/check_grubembed.py" "$REPO/tools/grub-embed.cfg"
+python3 "$REPO/tools/inspect/check_grubembed.py" "$REPO/tools/grub-embed.cfg"
 
 docker run --rm --platform linux/amd64 -v "$REPO":"$REPO" -w "$REPO" \
     "$UBUNTU_IMAGE" sh -e -c "

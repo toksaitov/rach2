@@ -20,9 +20,10 @@
 #      check_comments.py for the 80-column comment rule, and prose_check.py
 #      --banned for the vocabulary a script can decide (all beside this file).
 #   9. the probe runner's scoring rule (tools/runtests.py --selftest)
-#  10. the set-id manifest sweep (tools/check_setid.py)
+#  10. the set-id manifest sweep (tools/inspect/check_setid.py)
 #  11. image reproducibility (tools/verify/check_repro.py): one tree, one image
-#  12. the checker selftests (tools/check_kernel.py, tools/check_grubembed.py)
+#  12. the checker selftests (check_kernel.py, check_grubembed.py, and
+#      the compile-commands generator)
 #  13. the dev-log index (tools/verify/check_devlog.py): it names every finished
 #      milestone, and names the newest last
 #
@@ -303,8 +304,8 @@ setid=0
 # The self-test first: it covers the failure cases no current manifest
 # exercises, so without it a regression in, say, the image walk or the path
 # decoding would leave every real manifest passing and the gate green.
-python3 "$REPO/tools/check_setid.py" --selftest >"$VDIR/verify_setid.log" 2>&1 || setid=1
-python3 "$REPO/tools/check_setid.py" >>"$VDIR/verify_setid.log" 2>&1 || setid=1
+python3 "$REPO/tools/inspect/check_setid.py" --selftest >"$VDIR/verify_setid.log" 2>&1 || setid=1
+python3 "$REPO/tools/inspect/check_setid.py" >>"$VDIR/verify_setid.log" 2>&1 || setid=1
 if [ "$setid" -eq 0 ]; then
     echo "  PASS"
 else
@@ -339,9 +340,9 @@ fi
 #     generator must join wrapped recipes, select only compile commands, and
 #     refuse to publish an invalid database.
 hr "12/13 checker selftests"
-if python3 "$REPO/tools/check_kernel.py" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
-   python3 "$REPO/tools/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
-   python3 "$REPO/tools/check_sealednet.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
+if python3 "$REPO/tools/inspect/check_kernel.py" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
+   python3 "$REPO/tools/inspect/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   python3 "$REPO/tools/inspect/check_sealednet.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else

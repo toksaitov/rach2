@@ -4,7 +4,7 @@
 # machine this disk goes into is across the room and must be reachable the
 # moment it has booted. Everything else, /src and the compilers included, is
 # os-real's by construction: this file is its manifest with that single line
-# changed, and tools/check_setid.py derives its profile from os-real's the
+# changed, and tools/inspect/check_setid.py derives its profile from os-real's the
 # same way.
 dir 0755 /bin
 # This busybox stays unprivileged. A setuid one would run every one of its

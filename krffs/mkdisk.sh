@@ -110,7 +110,7 @@ PY
 # Both halves, as mkimage.sh runs them, the inventory over the partition rather
 # than the whole file: the region is the partition, so the walk needs both
 # bounds or it runs off the wrong end.
-python3 "$REPO/tools/check_setid.py" "$MANIFEST"
-python3 "$REPO/tools/check_setid.py" --image "$TMP" --manifest "$MANIFEST" \
+python3 "$REPO/tools/inspect/check_setid.py" "$MANIFEST"
+python3 "$REPO/tools/inspect/check_setid.py" --image "$TMP" --manifest "$MANIFEST" \
     --offset "$PART_OFFSET" --size "$PART_SIZE"
 mv "$TMP" "$OUT"

@@ -277,22 +277,22 @@ build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs: | ch
 #     next run rebuilds it through the ordinary rules. fsck would clear the
 #     image's dirty flag in place, so the image stamp runs only the
 #     non-mutating set-id inventory. ---
-build/rach2/.kernel-checked: build/rach2/kernel tools/check_kernel.py
-	@python3 tools/check_kernel.py build/rach2/kernel || { rm -f build/rach2/kernel $@; exit 1; }
+build/rach2/.kernel-checked: build/rach2/kernel tools/inspect/check_kernel.py
+	@python3 tools/inspect/check_kernel.py build/rach2/kernel || { rm -f build/rach2/kernel $@; exit 1; }
 	@touch $@
 
-vendor/tcc/.validated: $(TCC_STAMP) tools/check_link.py
-	@python3 tools/check_link.py vendor/musl/install/lib/libc.a build/vendor/tcc/libtcc1.a \
+vendor/tcc/.validated: $(TCC_STAMP) tools/inspect/check_link.py
+	@python3 tools/inspect/check_link.py vendor/musl/install/lib/libc.a build/vendor/tcc/libtcc1.a \
 	    vendor/musl/install/lib/crt1.o vendor/musl/install/lib/crti.o \
 	    vendor/musl/install/lib/crtn.o || { rm -rf build/vendor/tcc $@; exit 1; }
 	@touch $@
 
-vendor/pdpmake/.validated: $(PDPMAKE_STAMP) tools/check_elf.py
-	@python3 tools/check_elf.py $(PDPMAKE_BIN) || { rm -f $(PDPMAKE_BIN) $@; exit 1; }
+vendor/pdpmake/.validated: $(PDPMAKE_STAMP) tools/inspect/check_elf.py
+	@python3 tools/inspect/check_elf.py $(PDPMAKE_BIN) || { rm -f $(PDPMAKE_BIN) $@; exit 1; }
 	@touch $@
 
-build/images/%.checked: build/images/%.krffs tools/check_setid.py
-	@python3 tools/check_setid.py --image $< --manifest krffs/manifests/$*.manifest \
+build/images/%.checked: build/images/%.krffs tools/inspect/check_setid.py
+	@python3 tools/inspect/check_setid.py --image $< --manifest krffs/manifests/$*.manifest \
 	    || { rm -f $< $@; exit 1; }
 	@touch $@
 
@@ -338,7 +338,7 @@ test-image: $(TEST_IMAGE)
 os-simple-image: $(OS_SIMPLE_IMAGE)
 os-real-image: $(OS_REAL_IMAGE)
 
-IMAGE_TOOLS = krffs/mkimage.sh tools/check_setid.py build/krffs/mkfs.krffs \
+IMAGE_TOOLS = krffs/mkimage.sh tools/inspect/check_setid.py build/krffs/mkfs.krffs \
               build/krffs/stageimage.krffs
 
 -include $(TEST_IMAGE).d $(OS_SIMPLE_IMAGE).d $(OS_REAL_IMAGE).d
@@ -389,7 +389,7 @@ $(OS_REAL_IMAGE): krffs/manifests/os-real.manifest $(IMAGE_TOOLS) | preflight kr
 METAL_KERNEL = build/rach2-metal/kernel
 rach2-metal: krffs
 	$(MAKE) -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
-	python3 tools/check_diskpolicy.py $(METAL_KERNEL) read-only
+	python3 tools/inspect/check_diskpolicy.py $(METAL_KERNEL) read-only
 
 # The recovery kernel: the same sources, built with the authority to write any
 # sector of the disk, into its own object tree so the two kernels never share
@@ -402,9 +402,9 @@ rach2-metal: krffs
 RECOVERY_KERNEL = build/rach2-recovery/kernel
 rach2-recovery: krffs rach2
 	$(MAKE) -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
-	python3 tools/check_recovery.py $(RECOVERY_KERNEL) recovery
-	python3 tools/check_recovery.py build/rach2/kernel ordinary
-	python3 tools/check_diskpolicy.py $(RECOVERY_KERNEL) read-write
+	python3 tools/inspect/check_recovery.py $(RECOVERY_KERNEL) recovery
+	python3 tools/inspect/check_recovery.py build/rach2/kernel ordinary
+	python3 tools/inspect/check_diskpolicy.py $(RECOVERY_KERNEL) read-write
 
 rach2-metal-image: krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	sh krffs/gen_demo_key.sh
@@ -478,7 +478,7 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 # machine is plugged into has no server: the same defaults the metal stick uses,
 # overridable at build time for anywhere else. The menu takes a prefix and the
 # recovery script takes a dotted mask, and the two must be the same subnet with
-# the gateway inside it; tools/check_sealednet.py holds them to that before a
+# the gateway inside it; tools/inspect/check_sealednet.py holds them to that before a
 # disk is written, since a machine whose menu and fallback disagree is one
 # nobody can reach by either.
 SEALED_ADDRESS ?= 192.168.0.105
@@ -490,7 +490,7 @@ SEALED_DISK = build/images/rach2-sealed.disk
 rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
-	@python3 tools/check_sealednet.py $(SEALED_ADDRESS) $(SEALED_PREFIX) \
+	@python3 tools/inspect/check_sealednet.py $(SEALED_ADDRESS) $(SEALED_PREFIX) \
 	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
 	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
 	RACH2_DISK_BOOT_MB=64 \
@@ -668,8 +668,8 @@ menu-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
 authority-test: rach2 rach2-recovery tests krffs test-image
 	python3 tools/mkwidefixture.py $(AUTH_TEST_IMAGE)
-	python3 tools/check_recovery.py build/rach2/kernel ordinary
-	python3 tools/check_recovery.py $(RECOVERY_KERNEL) recovery
+	python3 tools/inspect/check_recovery.py build/rach2/kernel ordinary
+	python3 tools/inspect/check_recovery.py $(RECOVERY_KERNEL) recovery
 	python3 tools/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-ordinary" \
 	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \
@@ -1479,7 +1479,7 @@ check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN)
 	@test -s $(PDPMAKE_BIN) || { \
 	    echo "pdpmake: $(PDPMAKE_BIN) missing or empty; rm vendor/pdpmake/.stamp and rebuild (make pdpmake)" >&2; \
 	    exit 1; }
-	@python3 tools/check_elf.py $(PDPMAKE_BIN)
+	@python3 tools/inspect/check_elf.py $(PDPMAKE_BIN)
 
 check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS)
 	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
@@ -1490,8 +1490,8 @@ check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS)
 	          build/vendor/tcc/include/varargs.h; do \
 	    test -s "$$f" || { echo "tcc: $$f missing or empty; rm vendor/tcc/.stamp and rebuild (make tcc)" >&2; exit 1; }; \
 	done
-	@python3 tools/check_elf.py --selftest
-	@python3 tools/check_elf.py $(TCC_BIN)
+	@python3 tools/inspect/check_elf.py --selftest
+	@python3 tools/inspect/check_elf.py $(TCC_BIN)
 	@for m in "must be linked with -static" "run is not available" \
 	          "shared is not available" "must be an ELF"; do \
 	    strings $(TCC_BIN) | grep -q -- "$$m" || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm vendor/tcc/.stamp and rebuild" >&2; exit 1; }; \
@@ -1524,8 +1524,8 @@ check-busybox: $(BUSYBOX_STAMP) $(BUSYBOX_OUTPUTS)
 # requires: unordered, a parallel build scans a build/utils/sbin/ that holds
 # yesterday's artifacts and passes while today's are staged.
 check-setid: $(BUSYBOX_STAMP) utils
-	@python3 tools/check_setid.py
-	@python3 tools/check_setid.py --applets
+	@python3 tools/inspect/check_setid.py
+	@python3 tools/inspect/check_setid.py --applets
 check-dropbearmulti: $(DROPBEAR_STAMP) $(DROPBEAR_BIN)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 

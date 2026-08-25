@@ -24,7 +24,7 @@
  * absence of a write path would prove nothing: the commands are numbers and the
  * functions that issue them are static, so there is nothing to look for. A
  * string that says which of the two builds this is can be looked for, in both
- * directions, and `tools/check_diskpolicy.py` does.
+ * directions, and `tools/inspect/check_diskpolicy.py` does.
  */
 
 /* The two builds. `DISKCMD_READ_ONLY` is what -DRACH2_DISK_READONLY selects. */

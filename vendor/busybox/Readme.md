@@ -67,7 +67,7 @@ The second generated table contains exactly `login`, `passwd`, and `su`. It cont
 
 The pinned `check_suid` implementation frees its parsed `/etc/busybox.conf` list without clearing the global pointer. A later in-process applet dispatch could walk the freed list. Compiling that feature out of the set-id binary avoids the path. The main binary is not set-id, and project manifests stage no `/etc/busybox.conf`.
 
-`tools/check_setid.py --applets` decodes the complete generated tables. It rejects a main binary containing a set-id applet, `ping`, IPv6 raw-socket applets, or `dmesg`; it requires the set-id table to equal the three-entry whitelist. It also reads the resolved configs for feature checks.
+`tools/inspect/check_setid.py --applets` decodes the complete generated tables. It rejects a main binary containing a set-id applet, `ping`, IPv6 raw-socket applets, or `dmesg`; it requires the set-id table to equal the three-entry whitelist. It also reads the resolved configs for feature checks.
 
 ## Image staging
 

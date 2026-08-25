@@ -229,7 +229,7 @@ done
 # Nothing the guest's libc asks for may be left for the guest to discover. The
 # question is asked of the artifacts that will actually be staged.
 echo "tcc: checking the guest can link against what it will carry"
-python3 "$SCRIPT_DIR/../../tools/check_link.py" \
+python3 "$SCRIPT_DIR/../../tools/inspect/check_link.py" \
     "$PREFIX/lib/libc.a" "$STAGE/libtcc1.a" \
     "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$PREFIX/lib/crtn.o"
 

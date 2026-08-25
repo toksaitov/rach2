@@ -371,7 +371,7 @@ cp "$REPO/tools/grub-embed.cfg" "$EMBED_CFG"
 # every ordinary machine and no damaged one, and one that reaches it first sends
 # every healthy machine to recovery. Both builders check the same file with the
 # same checker.
-python3 "$REPO/tools/check_grubembed.py" "$EMBED_CFG"
+python3 "$REPO/tools/inspect/check_grubembed.py" "$EMBED_CFG"
 
 # No entry may name the address twice. The kernel refuses a command line that
 # does, and refuses it by coming up with no address at all, so a build that
