@@ -154,6 +154,7 @@ $(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
 	@rm -f $@ vendor/musl/install/lib/libc.a
 	./vendor/musl/build_libc.sh
 	@test -s vendor/musl/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }
+	@{ find vendor/musl/install -type f | sort; echo $(MUSL_CRYPT_SRC); } > vendor/musl/.outputs
 	@touch $@
 
 # The patches are a prerequisite for the same reason musl's are: `build_busybox.sh`
@@ -183,6 +184,7 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
 	    build/vendor/tcc/include/stdarg.h
 	./vendor/tcc/build_tcc.sh
 	@test -s $(TCC_BIN) || { echo "tcc: build produced no $(TCC_BIN)" >&2; exit 1; }
+	@find build/vendor/tcc -type f | sort > vendor/tcc/.outputs
 	@touch $@
 
 # pdpmake, the make that runs ON the machine. Its patches are prerequisites for
@@ -208,6 +210,44 @@ $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoption
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
 	@touch $@
 
+# --- vendor output healing. The stamps prove the scripts ran; the files the
+#     scripts staged are what the graph consumes. A deleted output retires its
+#     vendor's stamp HERE, at parse time, so the ordinary stamp rule rebuilds
+#     the vendor and every transitive dependent in the same run; a recipe-time
+#     sub-make could not, because make's cached timestamps would miss the
+#     stamp's change. The dependency-only rules below make each output a known
+#     target ordered behind its stamp. A truncated output is the validators'
+#     business, not this rule's. musl and TinyCC declare their whole staged
+#     trees in .outputs lists their stamp recipes write. ---
+MUSL_OUTPUTS = $(shell cat vendor/musl/.outputs 2>/dev/null)
+TCC_OUTPUTS = $(shell cat vendor/tcc/.outputs 2>/dev/null)
+BUSYBOX_OUTPUTS = $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
+                  build/vendor/busybox/applet_tables-main.h \
+                  build/vendor/busybox/applet_tables-suid.h \
+                  build/vendor/busybox/config-main \
+                  build/vendor/busybox/config-suid
+
+_ := $(shell [ ! -f $(LIBC_STAMP) ] || [ ! -f vendor/musl/.outputs ] || \
+        while IFS= read -r f; do [ -e "$$f" ] || { rm -f $(LIBC_STAMP); break; }; done \
+            < vendor/musl/.outputs)
+_ := $(shell [ ! -f $(TCC_STAMP) ] || [ ! -f vendor/tcc/.outputs ] || \
+        while IFS= read -r f; do [ -e "$$f" ] || { rm -f $(TCC_STAMP); break; }; done \
+            < vendor/tcc/.outputs)
+_ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || \
+        for f in $(BUSYBOX_OUTPUTS); do [ -e "$$f" ] || { rm -f $(BUSYBOX_STAMP); break; }; done)
+_ := $(shell [ ! -f $(DROPBEAR_STAMP) ] || [ -s $(DROPBEAR_BIN) ] || rm -f $(DROPBEAR_STAMP))
+_ := $(shell [ ! -f $(PDPMAKE_STAMP) ] || [ -s $(PDPMAKE_BIN) ] || rm -f $(PDPMAKE_STAMP))
+
+ifneq ($(MUSL_OUTPUTS),)
+$(MUSL_OUTPUTS): $(LIBC_STAMP)
+endif
+ifneq ($(TCC_OUTPUTS),)
+$(TCC_OUTPUTS): $(TCC_STAMP)
+endif
+$(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
+$(DROPBEAR_BIN): $(DROPBEAR_STAMP)
+$(PDPMAKE_BIN): $(PDPMAKE_STAMP)
+
 # --- component sub-makes + the build-order DAG ---
 $(BASE_DIRS) $(FULL_DIRS):
 	$(MAKE) -C $@
@@ -218,6 +258,13 @@ $(BASE_DIRS) $(FULL_DIRS):
 # builds krffs first and cannot find the file.
 krffs: check-libc
 rach2: krffs
+
+# The components that compile or stage musl's installed files list them as
+# prerequisites, so a deleted header, library, or the extracted crypt source
+# heals through the rules above before a sub-make would fail on it.
+ifneq ($(MUSL_OUTPUTS),)
+krffs tests utils: $(MUSL_OUTPUTS)
+endif
 tests: rach2 $(LIBC_STAMP)
 ish: rach2
 utils: rach2 $(LIBC_STAMP)
@@ -1374,13 +1421,13 @@ rach2-metal-iso: rach2-metal rach2-metal-image
 # unrelocated, which is worse. The last check reads the output policy's own
 # diagnostics out of the shipped binary, since a patch that did not apply and a
 # compiler that accepts `-run` look identical from outside.
-check-pdpmake: $(PDPMAKE_STAMP)
+check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN)
 	@test -s $(PDPMAKE_BIN) || { \
 	    echo "pdpmake: $(PDPMAKE_BIN) missing or empty; rm vendor/pdpmake/.stamp and rebuild (make pdpmake)" >&2; \
 	    exit 1; }
 	@python3 tools/check_elf.py $(PDPMAKE_BIN)
 
-check-tcc: $(TCC_STAMP)
+check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS)
 	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	          build/vendor/tcc/include/stdarg.h \
 	          build/vendor/tcc/include/stddef.h \
@@ -1396,7 +1443,7 @@ check-tcc: $(TCC_STAMP)
 	    strings $(TCC_BIN) | grep -q -- "$$m" || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm vendor/tcc/.stamp and rebuild" >&2; exit 1; }; \
 	done
 
-check-busybox: $(BUSYBOX_STAMP)
+check-busybox: $(BUSYBOX_STAMP) $(BUSYBOX_OUTPUTS)
 	@for f in $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
 	          build/vendor/busybox/applet_tables-main.h \
 	          build/vendor/busybox/applet_tables-suid.h \
@@ -1425,7 +1472,7 @@ check-busybox: $(BUSYBOX_STAMP)
 check-setid: $(BUSYBOX_STAMP) utils
 	@python3 tools/check_setid.py
 	@python3 tools/check_setid.py --applets
-check-dropbearmulti: $(DROPBEAR_STAMP)
+check-dropbearmulti: $(DROPBEAR_STAMP) $(DROPBEAR_BIN)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 
 # musl's stamp guards two artifacts, not one: the installed libc the cross links
@@ -1433,7 +1480,7 @@ check-dropbearmulti: $(DROPBEAR_STAMP)
 # mkhash host test compile from directly. A copied worktree carries the stamp
 # without either, so check both here rather than let a consumer fail later on a
 # missing file with no cause named.
-check-libc: $(LIBC_STAMP)
+check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 	@test -s $(LIBC_A) || { echo "libc: $(LIBC_A) missing or empty; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
 	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
 
@@ -1495,7 +1542,7 @@ clean:
 # fail at the check instead.
 distclean: clean
 	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) \
-	      $(PDPMAKE_STAMP)
+	      $(PDPMAKE_STAMP) vendor/musl/.outputs vendor/tcc/.outputs
 	rm -rf vendor/musl/install \
 	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) \
 	       $(DROPBEAR_TARBALL:.tar.bz2=) $(TCC_TARBALL:.tar.bz2=) \

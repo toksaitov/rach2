@@ -4,3 +4,4 @@ tcc-0.9.27/
 
 # Build stamp (mk top-level orchestration)
 .stamp
+.outputs

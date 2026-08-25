@@ -8,3 +8,4 @@ install/
 
 # Build stamp (mk top-level orchestration)
 .stamp
+.outputs
