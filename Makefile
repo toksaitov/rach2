@@ -309,8 +309,10 @@ $(BASE_DIRS) $(FULL_DIRS):
 # that source, which exists only once build_libc.sh has extracted the pinned
 # tarball; without this a from-scratch tree (a fresh clone, or make distclean)
 # builds krffs first and cannot find the file.
+# Only real edges: krffs compiles the extracted musl crypt source, and tests
+# and utils link the installed musl. The kernel, ISH, Doom, and the KRFFS
+# tools share no build inputs with one another, so `make -j` overlaps them.
 krffs: check-libc
-rach2: krffs
 
 # The components that compile or stage musl's installed files list them as
 # prerequisites, so a deleted header, library, or the extracted crypt source
@@ -318,10 +320,8 @@ rach2: krffs
 ifneq ($(MUSL_OUTPUTS),)
 krffs tests utils: $(MUSL_OUTPUTS)
 endif
-tests: rach2 $(LIBC_STAMP)
-ish: rach2
-utils: rach2 $(LIBC_STAMP)
-ports/doom: rach2
+tests: $(LIBC_STAMP)
+utils: $(LIBC_STAMP)
 
 # --- the RAM-disk images. Each is a real file target staged from its manifest
 #     with mkimage.sh (dd + mkfs.krffs + stageimage.krffs), out of tree into
