@@ -77,7 +77,7 @@ cp rach2.config "$SRC/.config"
 yes "" | make -C "$SRC" oldconfig HOSTCC=cc >/dev/null
 
 echo "busybox: building (CC=muslgcc, CROSS_COMPILE=i686-elf-, HOSTCC=cc)"
-make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
+make -C "$SRC" \
     CROSS_COMPILE=i686-elf- CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
 
 echo "busybox: staging the stripped binary to build/vendor/busybox/busybox"
@@ -112,7 +112,7 @@ cp rach2-suid.config "$SRC/.config"
 yes "" | make -C "$SRC" oldconfig HOSTCC=cc >/dev/null
 
 echo "busybox: building the set-id binary"
-make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
+make -C "$SRC" \
     CROSS_COMPILE=i686-elf- CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
 
 echo "busybox: staging the set-id binary to build/vendor/busybox/busybox-suid"

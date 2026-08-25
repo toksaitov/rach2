@@ -152,7 +152,7 @@ LIBC_PATCHES = vendor/musl/patches/series $(wildcard vendor/musl/patches/*.patch
 
 $(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
 	@rm -f $@ vendor/musl/install/lib/libc.a
-	./vendor/musl/build_libc.sh
+	+@t0=$$(date +%s); ./vendor/musl/build_libc.sh && echo "libc: result: built in $$(($$(date +%s)-t0))s"
 	@test -s vendor/musl/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }
 	@{ find vendor/musl/install -type f | sort; echo $(MUSL_CRYPT_SRC); } > vendor/musl/.outputs
 	@touch $@
@@ -174,7 +174,7 @@ $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
 	    build/vendor/busybox/applet_tables-suid.h \
 	    build/vendor/busybox/config-main \
 	    build/vendor/busybox/config-suid
-	./vendor/busybox/build_busybox.sh
+	+@t0=$$(date +%s); ./vendor/busybox/build_busybox.sh && echo "busybox: result: built in $$(($$(date +%s)-t0))s"
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
 	@touch $@
 
@@ -182,7 +182,7 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
               vendor/busybox/muslgcc $(TCC_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	    build/vendor/tcc/include/stdarg.h
-	./vendor/tcc/build_tcc.sh
+	+@t0=$$(date +%s); ./vendor/tcc/build_tcc.sh && echo "tcc: result: built in $$(($$(date +%s)-t0))s"
 	@test -s $(TCC_BIN) || { echo "tcc: build produced no $(TCC_BIN)" >&2; exit 1; }
 	@find build/vendor/tcc -type f | sort > vendor/tcc/.outputs
 	@touch $@
@@ -194,7 +194,7 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
 $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
                   vendor/busybox/muslgcc $(PDPMAKE_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(PDPMAKE_BIN)
-	./vendor/pdpmake/build_pdpmake.sh
+	+@t0=$$(date +%s); ./vendor/pdpmake/build_pdpmake.sh && echo "pdpmake: result: built in $$(($$(date +%s)-t0))s"
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
@@ -206,7 +206,7 @@ DROPBEAR_PATCHES = vendor/dropbear/patches/series $(wildcard vendor/dropbear/pat
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h vendor/dropbear/muslgcc \
                    $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(DROPBEAR_BIN)
-	./vendor/dropbear/build_dropbear.sh
+	+@t0=$$(date +%s); ./vendor/dropbear/build_dropbear.sh && echo "dropbear: result: built in $$(($$(date +%s)-t0))s"
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
 	@touch $@
 
@@ -265,7 +265,7 @@ build/rach2/kernel:
 	@$(MAKE) --no-print-directory -C rach2
 build/ish/ish:
 	@$(MAKE) --no-print-directory -C ish
-build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs:
+build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs: | check-libc
 	@$(MAKE) --no-print-directory -C krffs
 
 # --- validation stamps. A validator is a prerequisite of a stamp that sits
@@ -303,7 +303,8 @@ os-real-image: build/images/os-real.checked
 
 # --- component sub-makes + the build-order DAG ---
 $(BASE_DIRS) $(FULL_DIRS):
-	$(MAKE) -C $@
+	@echo "$(notdir $@): building"
+	@$(MAKE) --no-print-directory -C $@
 
 # krffs waits on the vendored musl because mkhash compiles its SHA-512 crypt from
 # that source, which exists only once build_libc.sh has extracted the pinned

@@ -13,11 +13,22 @@
 # object landing in the fingerprint's second would survive as stale.
 CONFIG = $(BUILD)/.config
 
+# What a configuration change removes. The default is the whole $(BUILD)
+# tree; a component whose directory is shared with another build (the musl
+# test programs live under build/tests/musl) narrows this to its own
+# products so a parallel sibling is not deleted mid-compile.
+CONFIG_PURGE ?= $(BUILD)
+
+# A first parse (no fingerprint yet) records the configuration without
+# purging: a fresh tree has nothing stale, and under `make -j` a purge here
+# would race a sibling already building into a shared directory.
 _ := $(shell mkdir -p $(BUILD); \
     new=$$( { command -v $(firstword $(CC)); \
               ls -ln "$$(command -v $(firstword $(CC)))" 2>/dev/null; \
               printf '%s\n' "$(CONFIG_TEXT)"; } 2>/dev/null ); \
-    if [ "$$new" != "$$(cat $(CONFIG) 2>/dev/null)" ]; then \
-        rm -rf $(BUILD); mkdir -p $(BUILD); \
+    if [ ! -f $(CONFIG) ]; then \
+        printf '%s\n' "$$new" > $(CONFIG); \
+    elif [ "$$new" != "$$(cat $(CONFIG))" ]; then \
+        rm -rf $(CONFIG_PURGE); mkdir -p $(BUILD); \
         printf '%s\n' "$$new" > $(CONFIG); \
     fi)

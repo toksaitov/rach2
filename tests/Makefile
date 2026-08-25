@@ -41,8 +41,11 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
 TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 
 # The configuration fingerprint (mk/fingerprint.mk): a changed flag or a
-# reinstalled compiler rebuilds every probe automatically.
+# reinstalled compiler rebuilds every probe automatically. The purge names
+# this Makefile's own products because build/tests/musl belongs to
+# tests/musl/build.sh, which can be compiling there in a parallel build.
 CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS)
+CONFIG_PURGE = $(TARGETS) $(BUILD)/*.d
 include ../mk/fingerprint.mk
 
 .PHONY: all clean

@@ -183,7 +183,7 @@ if ! grep -q 'CONFIG_TCCDIR "/lib/tcc"' "$SRC/config.h" ||
 fi
 
 echo "tcc: building the compiler"
-make -C "$SRC" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" \
+make -C "$SRC" \
     TARGETOS=Linux CONFIG_OSX= tcc >/dev/null
 
 # The runtime, built with the cross gcc rather than by running the compiler that

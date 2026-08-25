@@ -92,15 +92,19 @@ cd "$SRC"
 # This is always the i686 cross build, so no caller's compiler choice may reach
 # it. Two channels carry one in. musl's configure keeps an inherited CC and
 # never tries the CROSS_COMPILE candidates (its trycc is a no-op once CC is
-# set), and a `make CC=... ` above us records the override in MAKEFLAGS, which
-# the musl make below would re-import even after CC itself is cleared. Clear
-# both; the CROSS_COMPILE prefix alone selects the compiler.
+# set), and a `make CC=... ` above us records the override in MAKEFLAGS after
+# a ` -- ` separator, which the musl make below would re-import even after CC
+# itself is cleared. Clear CC and strip that override tail, but keep the rest
+# of MAKEFLAGS: it carries the caller's jobserver, so this build shares the
+# root `make -j` budget instead of choosing a job count of its own.
 unset CC
-unset MAKEFLAGS MFLAGS
+unset MFLAGS
+MAKEFLAGS="${MAKEFLAGS-}"; MAKEFLAGS="${MAKEFLAGS%% -- *}"
+export MAKEFLAGS
 CROSS_COMPILE=i686-elf- ./configure --target=i686 --disable-shared --prefix="$PREFIX"
 
 echo "libc: building"
-make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+make
 
 echo "libc: installing to $PREFIX (cleaned first for a reproducible tree)"
 rm -rf "$PREFIX"
