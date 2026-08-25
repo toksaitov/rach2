@@ -5,8 +5,8 @@ This file holds only the resume state for the item in progress. Replace its cont
 ## Position
 
 * Active phase: 4, shared source manifests.
-* Active phase: 5, incremental correctness. Items 7 (incremental musl test builds, f946e0a) and 8 (credential timestamps, cec40ce) are committed. Item 1 is proved and ready to commit: the three RAM images are real file targets, the stager records every input (absent optional files included) into an image-side `.d`, absent inputs are represented by their nearest existing ancestor directory, and recorded paths are absolutized because a relative `rach2` names a phony target. Proof record: two no-ops restage nothing, an os-simple manifest touch restages only os-simple, a probe source touch restages only test, the Doom WAD's appearance and removal each restage only os-real, and the final no-op restages nothing.
-* Exact next action: commit item 1, then item 2 (vendor patch manifests) and the remaining phase 5 items in the plan's order.
+* Active phase: 5, incremental correctness. Committed: item 7 (f946e0a), item 8 (cec40ce), item 1 (03a03f2, image input inventories), item 2 (91c7287, patch series manifests), item 3 (ca5cd6a, parse-time healing; musl's legitimately empty headers demand existence tests, not size tests). Item 4 proved, committing now: validation stamps for the kernel, TinyCC, pdpmake, and each image; a checker edit revalidates without recompiling (kernel mtime unchanged, zero compiles); a truncated artifact fails its revalidation, is removed, and rebuilds on the next run; every vendor binary and the kernel proved by truncation; explicit delegation rules stop make's builtin link rule from rebuilding a missing kernel with the host cc.
+* Exact next action: commit item 4, then item 5: per-component flag fingerprints replacing the kernel's refuse-on-change kflags stamp.
 * Phase 3 completed at fa0436e: interface is make, make test, tests/run NAME, clean, distclean, run.sh; retired names print notices; preflight cached; FUSE optional; compile-commands alias retires in phase 6 with the script move.
 
 ## Phase record

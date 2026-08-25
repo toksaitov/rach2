@@ -3,3 +3,4 @@ pdpmake-*/
 
 # The build stamp: state, not source.
 .stamp
+.validated

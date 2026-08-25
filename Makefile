@@ -238,6 +238,14 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || \
 _ := $(shell [ ! -f $(DROPBEAR_STAMP) ] || [ -s $(DROPBEAR_BIN) ] || rm -f $(DROPBEAR_STAMP))
 _ := $(shell [ ! -f $(PDPMAKE_STAMP) ] || [ -s $(PDPMAKE_BIN) ] || rm -f $(PDPMAKE_STAMP))
 
+# The tree lists above test existence only, because musl installs several
+# legitimately empty headers. The binaries that can never be empty also get a
+# size test, so a truncated one rebuilds its vendor instead of failing a
+# check with advice.
+_ := $(shell [ ! -f $(LIBC_STAMP) ] || [ -s vendor/musl/install/lib/libc.a ] || rm -f $(LIBC_STAMP))
+_ := $(shell [ ! -f $(TCC_STAMP) ] || [ -s $(TCC_BIN) ] || rm -f $(TCC_STAMP))
+_ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSYBOX_SUID_BIN) ]; } || rm -f $(BUSYBOX_STAMP))
+
 ifneq ($(MUSL_OUTPUTS),)
 $(MUSL_OUTPUTS): $(LIBC_STAMP)
 endif
@@ -247,6 +255,51 @@ endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
+
+# --- component files the root graph names. Each gets an explicit delegation
+#     rule to its sub-make: without one, a deleted kernel beside its surviving
+#     kernel.o would match make's builtin link rule and be relinked by the
+#     host cc. The rules run only when the file is missing; the ordinary
+#     refresh still happens through the order-only component recursion. ---
+build/rach2/kernel:
+	@$(MAKE) --no-print-directory -C rach2
+build/ish/ish:
+	@$(MAKE) --no-print-directory -C ish
+build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs:
+	@$(MAKE) --no-print-directory -C krffs
+
+# --- validation stamps. A validator is a prerequisite of a stamp that sits
+#     between a published artifact and its consumers, so editing the checker
+#     revalidates the artifact without recompiling it. Validation of a fresh
+#     candidate happens inside the producing recipe (the kernel link, mkimage)
+#     and preserves the previous artifact on failure; a failed REvalidation
+#     here removes the published artifact and its stamp and fails, so the
+#     next run rebuilds it through the ordinary rules. fsck would clear the
+#     image's dirty flag in place, so the image stamp runs only the
+#     non-mutating set-id inventory. ---
+build/rach2/.kernel-checked: build/rach2/kernel tools/check_kernel.py
+	@python3 tools/check_kernel.py build/rach2/kernel || { rm -f build/rach2/kernel $@; exit 1; }
+	@touch $@
+
+vendor/tcc/.validated: $(TCC_STAMP) tools/check_link.py
+	@python3 tools/check_link.py vendor/musl/install/lib/libc.a build/vendor/tcc/libtcc1.a \
+	    vendor/musl/install/lib/crt1.o vendor/musl/install/lib/crti.o \
+	    vendor/musl/install/lib/crtn.o || { rm -rf build/vendor/tcc $@; exit 1; }
+	@touch $@
+
+vendor/pdpmake/.validated: $(PDPMAKE_STAMP) tools/check_elf.py
+	@python3 tools/check_elf.py $(PDPMAKE_BIN) || { rm -f $(PDPMAKE_BIN) $@; exit 1; }
+	@touch $@
+
+build/images/%.checked: build/images/%.krffs tools/check_setid.py
+	@python3 tools/check_setid.py --image $< --manifest krffs/manifests/$*.manifest \
+	    || { rm -f $< $@; exit 1; }
+	@touch $@
+
+all images: build/rach2/.kernel-checked vendor/tcc/.validated vendor/pdpmake/.validated
+test-image: build/images/test.checked
+os-simple-image: build/images/os-simple.checked
+os-real-image: build/images/os-real.checked
 
 # --- component sub-makes + the build-order DAG ---
 $(BASE_DIRS) $(FULL_DIRS):
@@ -1542,7 +1595,8 @@ clean:
 # fail at the check instead.
 distclean: clean
 	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) \
-	      $(PDPMAKE_STAMP) vendor/musl/.outputs vendor/tcc/.outputs
+	      $(PDPMAKE_STAMP) vendor/musl/.outputs vendor/tcc/.outputs \
+	      vendor/tcc/.validated vendor/pdpmake/.validated
 	rm -rf vendor/musl/install \
 	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) \
 	       $(DROPBEAR_TARBALL:.tar.bz2=) $(TCC_TARBALL:.tar.bz2=) \
