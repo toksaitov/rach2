@@ -115,10 +115,10 @@ make check-dropbearmulti
 make
 tests/run style
 tests/run host
-make ssh-test
-make metal-test
+tests/run ssh
+tests/run metal
 ```
 
-`make ssh-test` boots a writable os-real disk copy and starts the server from the console. It proves root key authentication, test password authentication, pty allocation, terminal size and termios, and the rejection of missing credentials, a wrong test password, and root password authentication under `-g`.
+`tests/run ssh` boots a writable os-real disk copy and starts the server from the console. It proves root key authentication, test password authentication, pty allocation, terminal size and termios, and the rejection of missing credentials, a wrong test password, and root password authentication under `-g`.
 
-`make metal-test` supplies no console input. It proves automatic network configuration and server startup, root key authentication, pty allocation, a checked file transfer in both directions, and server restart under `init-metal`. The default `make test` image contains neither Dropbear nor BusyBox and does not exercise this integration.
+`tests/run metal` supplies no console input. It proves automatic network configuration and server startup, root key authentication, pty allocation, a checked file transfer in both directions, and server restart under `init-metal`. The default `make test` image contains neither Dropbear nor BusyBox and does not exercise this integration.

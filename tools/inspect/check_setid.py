@@ -363,7 +363,7 @@ ALLOWLIST["rach2-recovery"] = dict(
 # edited and is built the same way.
 ALLOWLIST["rach2-metal-disk"] = dict(ALLOWLIST["os-real"], init="init-metal")
 
-# `make grub-test` boots os-real with two marked GRUB core images staged beside
+# `tests/run grub` boots os-real with two marked GRUB core images staged beside
 # it, so the machine has something to install over its own boot loader. Its
 # set-id set is os-real's, and must stay so: adding a file to a manifest is not
 # a way to get a new privileged program into an image past this checker.

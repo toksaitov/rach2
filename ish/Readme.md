@@ -104,4 +104,4 @@ Run it in a writable copy of `/src/ish`. Root may also build the staged tree in 
 
 ## Verification
 
-`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `make test` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, and redirection failure. `make selfbuild-test` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.
+`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `make test` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, and redirection failure. `tests/run selfbuild` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.

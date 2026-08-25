@@ -96,4 +96,4 @@ tests/run host
 make
 ```
 
-The focused guest checks are `make dhcp-test` for ifupdown, udhcpc, and arping; `make raw-test` for traceroute; `make procfiles-test` for `ps`, `df`, `free`, and `uptime`; and `make account-test` for the account applets, hash generators, and console login. `make login-test` checks strict init behavior when `/bin/login` is absent; it does not exercise the applet. `make ssh-test` and `make selfbuild-test` cover ash over a pty and the staged compiler environment. The default `make test` image uses ISH and does not exercise BusyBox.
+The focused guest checks are `tests/run dhcp` for ifupdown, udhcpc, and arping; `tests/run raw` for traceroute; `tests/run procfiles` for `ps`, `df`, `free`, and `uptime`; and `tests/run account` for the account applets, hash generators, and console login. `tests/run login` checks strict init behavior when `/bin/login` is absent; it does not exercise the applet. `tests/run ssh` and `tests/run selfbuild` cover ash over a pty and the staged compiler environment. The default `make test` image uses ISH and does not exercise BusyBox.

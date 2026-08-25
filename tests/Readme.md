@@ -54,7 +54,7 @@ readvmusl timemusl clockmusl statmusl stampmusl execargmusl spawnmusl
 vmamusl ishmusl
 ```
 
-`make test-addressed` runs the same list with `rach2.ip=10.0.2.15/24` and `rach2.gateway=10.0.2.2` on the kernel command line.
+`tests/run addressed` runs the same list with `rach2.ip=10.0.2.15/24` and `rach2.gateway=10.0.2.2` on the kernel command line.
 
 ## Other guest programs and targets
 
@@ -66,15 +66,15 @@ vmamusl ishmusl
 
 Programs that need another boot, disk, network exchange, or result contract have dedicated root targets. Some targets reuse a default-suite program under different conditions:
 
-* `make test-noentropy` runs `musl/saltnoent` and the fail-closed case of `musl/passwdmusl` on `-cpu qemu64`.
-* `make ping-test`, `make packet-test`, `make raw-test`, `make netif-test`, and `make dgram-test` run `pingtest`, `packetprobe`, `rawprobe`, `netifprobe`, and `dgramprobe` with their required network setup.
-* `make test-disk`, `make test-disk-ahci`, and `make test-disk-q35` run `blockprobe` against a disk-backed root.
-* `make persist-test` and `make persist-test-ahci` run `persistprobe` twice against one disk image.
-* `make stress-test` and `make stress-test-ahci` run `stressprobe` against a file system larger than physical memory.
-* `make bootpart-test` and `make authority-test` run the applicable `bootprobe` modes.
-* `make cred-persist-test` runs `musl/creddisk` across three boots of one disk image.
-* `make crash-test` runs `dirtyprobe`, stops QEMU without a clean unmount, and checks the image with `fsck.krffs`.
-* `make exitline-test` uses `vmfault` while checking which process-exit diagnostics are visible.
+* `tests/run noentropy` runs `musl/saltnoent` and the fail-closed case of `musl/passwdmusl` on `-cpu qemu64`.
+* `tests/run ping`, `tests/run packet`, `tests/run raw`, `tests/run netif`, and `tests/run dgram` run `pingtest`, `packetprobe`, `rawprobe`, `netifprobe`, and `dgramprobe` with their required network setup.
+* `tests/run disk`, `tests/run disk-ahci`, and `tests/run disk-q35` run `blockprobe` against a disk-backed root.
+* `tests/run persist` and `tests/run persist-ahci` run `persistprobe` twice against one disk image.
+* `tests/run stress` and `tests/run stress-ahci` run `stressprobe` against a file system larger than physical memory.
+* `tests/run bootpart` and `tests/run authority` run the applicable `bootprobe` modes.
+* `tests/run cred-persist` runs `musl/creddisk` across three boots of one disk image.
+* `tests/run crash` runs `dirtyprobe`, stops QEMU without a clean unmount, and checks the image with `fsck.krffs`.
+* `tests/run exitline` uses `vmfault` while checking which process-exit diagnostics are visible.
 
 These root programs are staged for manual or supplementary runs and are not direct entries in the targets above:
 

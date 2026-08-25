@@ -15,7 +15,7 @@ make -C rach2          # build build/rach2/kernel only
 make                   # build everything, including the three RAM images
 make rach2-metal       # build/rach2-metal/kernel, with disk writes disabled
 make rach2-recovery    # build/rach2-recovery/kernel, with whole-disk authority
-make selfbuild-test    # build the kernel twice on Rach2 and compare the results
+tests/run selfbuild    # build the kernel twice on Rach2 and compare the results
 ```
 
 By default, the host Makefile compiles the kernel as freestanding C89 with `i686-elf-gcc` and links it at 1 MiB with `i686-elf-ld`. It links no C library or libgcc. The kernel-only build can also use the corresponding `x86_64-elf` cross tools. Every host link runs `tools/inspect/check_kernel.py` before replacing the previous kernel.

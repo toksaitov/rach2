@@ -134,7 +134,7 @@ make -C utils -f Makefile.linux
 python3 tools/verify/check_guest.py .
 tests/run host
 make test
-make selfbuild-test
+tests/run selfbuild
 ```
 
 The default guest suite covers the set-id, sudo, credential, passwd, adduser, login, and reboot paths. Host tests exercise DHCP messages, interface parsing, boot slots, boot verbs, GRUB slots, raw stream copying, and the credential transaction. The root Makefile also provides `dhcp-test`, `bootpart-test`, `grub-test`, `menu-test`, `install-test`, `authority-test`, `drill-test`, `account-test`, `shutdown-test`, `login-test`, `metal-test`, `cred-persist-test`, and `sealed-test` for workflows that need a particular image, network, disk, reboot sequence, or SSH session.

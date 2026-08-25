@@ -48,7 +48,7 @@ System call 355, `getrandom`, normally requires a trusted source. Without one it
 
 `make test` boots with `-cpu max`. When the hardware seed succeeds, `rngprobe` takes its trusted branch, reads two 32-byte buffers from `/dev/urandom`, checks that they differ, and applies a broad monobit range. `timeprobe` and `musl/timemusl` each require two 16-byte `getrandom` calls to differ, so the complete target requires a trusted source. `auxvprobe` checks that `AT_RANDOM` points to a 16-byte value in the initial stack page and that the value is not all zero. `devprobe` checks that successive `/dev/urandom` reads differ.
 
-`make test-noentropy` boots the test image with `-cpu qemu64`. `musl/saltnoent` requires ordinary `getrandom` to fail with `EIO`, then checks that salt creation changes no output or credential file. The same target runs the fail-closed branch of `musl/passwdmusl`.
+`tests/run noentropy` boots the test image with `-cpu qemu64`. `musl/saltnoent` requires ordinary `getrandom` to fail with `EIO`, then checks that salt creation changes no output or credential file. The same target runs the fail-closed branch of `musl/passwdmusl`.
 
 `tests/musl/rngmusl.c` is staged for a manual trusted-source run. It requests one 32-byte buffer through musl `getrandom` and another through `/dev/urandom`, then requires full, nonzero, different results. No Make target runs it.
 

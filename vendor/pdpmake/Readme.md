@@ -75,7 +75,7 @@ make -f guest.mk
 2. Update `VERSION` and `TARBALL_SHA256` in `build_pdpmake.sh`.
 3. Update `PDPMAKE_TARBALL` in the root `Makefile`.
 4. Rebase `patches/0001-platform-macros.patch`. Keep its three `CC` changes and common static-link definition.
-5. Run `make pdpmake`, `make make-test`, and `make selfbuild-test`.
+5. Run `make pdpmake`, `tests/run make`, and `tests/run selfbuild`.
 
 A change to any prerequisite named by the stamp rule invalidates the stamp. If the patch no longer applies exactly or no longer produces the required macro definitions, the build stops.
 
@@ -83,8 +83,8 @@ A change to any prerequisite named by the stamp rule invalidates the stamp. If t
 
 `make check-pdpmake` requires a non-empty staged executable and checks its ELF layout and static link. The build script separately checks the patched built-in macros.
 
-`make make-test` boots the os-real image twice. It checks a command-line compiler override, a clean two-source build, no-op rebuilds, one-source and shared-header rebuilds, `.PHONY`, one project utility, executable behavior, and timestamps preserved across a reboot.
+`tests/run make` boots the os-real image twice. It checks a command-line compiler override, a clean two-source build, no-op rebuilds, one-source and shared-header rebuilds, `.PHONY`, one project utility, executable behavior, and timestamps preserved across a reboot.
 
-`make selfbuild-test` builds the kernel twice from clean guest trees and requires identical hashes. It also builds the utilities and ISH, runs 18 userland checks, extracts and checks the exact guest-built kernel, runs the default guest probes on that kernel, optionally boots it through GRUB, and rebuilds `/src/ish` in place as root.
+`tests/run selfbuild` builds the kernel twice from clean guest trees and requires identical hashes. It also builds the utilities and ISH, runs 18 userland checks, extracts and checks the exact guest-built kernel, runs the default guest probes on that kernel, optionally boots it through GRUB, and rebuilds `/src/ish` in place as root.
 
 Run `python3 tools/verify/check_guest.py` after changing a host or guest source list, a guest makefile, or the staged `/src` trees.

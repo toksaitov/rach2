@@ -99,13 +99,13 @@ Protocol transmit buffers, driver descriptors, ARP state, and the socket and TCP
 
 The specialized network targets are:
 
-* `make test-addressed` runs the default suite with the SLIRP address supplied on the boot line.
-* `make ping-test` checks replies, timeout, serialization, process progress, and slot release.
-* `make netif-test` checks interface queries, runtime reconfiguration, interface-down behavior, connection reset, and listener survival.
-* `make dgram-test` checks connected UDP, broadcast permission, shared binds, service-port permission, and socket options.
-* `make packet-test` checks packet-socket validation and live IPv4 and ARP exchange.
-* `make raw-test` checks raw ICMP fan-out, queue limits, routing errors, hop limits, caller checksums, and `traceroute`.
-* `make dhcp-test` checks the BusyBox and in-house DHCP clients, renewal, fixed configuration, routing, and unattended startup.
-* `make netconsole-test` validates captured frame headers, sequence numbers, checksums, and early buffered output.
+* `tests/run addressed` runs the default suite with the SLIRP address supplied on the boot line.
+* `tests/run ping` checks replies, timeout, serialization, process progress, and slot release.
+* `tests/run netif` checks interface queries, runtime reconfiguration, interface-down behavior, connection reset, and listener survival.
+* `tests/run dgram` checks connected UDP, broadcast permission, shared binds, service-port permission, and socket options.
+* `tests/run packet` checks packet-socket validation and live IPv4 and ARP exchange.
+* `tests/run raw` checks raw ICMP fan-out, queue limits, routing errors, hop limits, caller checksums, and `traceroute`.
+* `tests/run dhcp` checks the BusyBox and in-house DHCP clients, renewal, fixed configuration, routing, and unattended startup.
+* `tests/run netconsole` validates captured frame headers, sequence numbers, checksums, and early buffered output.
 
 `tests/run host` drives ARP replacement, address parsing and transitions, netconsole buffering and recursion, receive-window updates, and the RTL8168GU software model. `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged but excluded from the default runner. All except `sockettest` require a live peer or DNS service.

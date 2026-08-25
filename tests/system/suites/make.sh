@@ -4,7 +4,7 @@
 # make_test.sh: prove that a build on this machine is a build, and not a
 # from-scratch rebuild wearing a build's clothes.
 #
-# The compiler arrived in milestone 20 and `make tcc-test` proves it compiles.
+# The compiler arrived in milestone 20 and `tests/run tcc` proves it compiles.
 # What this proves is what a make is for: that a second run does nothing, that
 # touching one thing rebuilds exactly what depends on it, that the program which
 # comes out is the new one, and that all of it survives a reboot. Every one of

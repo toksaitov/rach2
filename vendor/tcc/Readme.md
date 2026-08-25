@@ -100,11 +100,11 @@ make check-tcc
 make
 tests/run style
 tests/run host
-make tcc-test
-make make-test
-make selfbuild-test
+tests/run tcc
+tests/run make
+tests/run selfbuild
 ```
 
-`make tcc-test` compiles and runs a static program, proves all four policy refusals and their diagnostics, checks object compilation, builds and compares the project `cat`, links the two-source `ping`, and fails if the compiler requests an unimplemented syscall.
+`tests/run tcc` compiles and runs a static program, proves all four policy refusals and their diagnostics, checks object compilation, builds and compares the project `cat`, links the two-source `ping`, and fails if the compiler requests an unimplemented syscall.
 
-`make make-test` exercises the staged compiler through pdpmake across an incremental build and reboot. `make selfbuild-test` builds the kernel twice, utilities, and ISH in the guest; checks the userland results; extracts and checks the produced kernel; runs the full default probe suite with it; and rebuilds the staged ISH tree in place. Its GRUB boot is skipped with an explicit reason when Docker is unavailable.
+`tests/run make` exercises the staged compiler through pdpmake across an incremental build and reboot. `tests/run selfbuild` builds the kernel twice, utilities, and ISH in the guest; checks the userland results; extracts and checks the produced kernel; runs the full default probe suite with it; and rebuilds the staged ISH tree in place. Its GRUB boot is skipped with an explicit reason when Docker is unavailable.

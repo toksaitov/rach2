@@ -12,5 +12,5 @@ formula cppcheck             required by make verify-style
 formula shellcheck           required by make verify-style
 formula clang-format         required by make verify-style
 cask    fuse-t               FUSE for macOS, for mounting a krffs image on the host
-formula coreutils            gtimeout, which make sealed-test needs on macOS
-formula expect               drives the pty in make ssh-test
+formula coreutils            gtimeout, which tests/run sealed needs on macOS
+formula expect               drives the pty in tests/run ssh

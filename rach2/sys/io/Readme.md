@@ -57,4 +57,4 @@ The ported i386 musl calls `poll(168)` directly. It remaps ordinary `select` to 
 
 `tests/musl/pollmusl.c` is built and staged at `/musl/pollmusl` for manual use. Its short timeouts exercise musl's direct `poll(168)` and `_newselect(142)` paths over a pipe, including timeout, readiness, and a cross-process wake. It does not exercise the time64 fallback.
 
-The specialized guest targets extend socket coverage: `make packet-test` checks `poll` and `select` over a packet socket, `make raw-test` polls a raw socket, `make netif-test` checks immediate `POLLERR` on an ioctl-only socket, and `make dhcp-test` drives the in-house DHCP client's libc `poll` waits.
+The specialized guest targets extend socket coverage: `tests/run packet` checks `poll` and `select` over a packet socket, `tests/run raw` polls a raw socket, `tests/run netif` checks immediate `POLLERR` on an ioctl-only socket, and `tests/run dhcp` drives the in-house DHCP client's libc `poll` waits.

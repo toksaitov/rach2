@@ -86,11 +86,11 @@ For a present disk, `diskinfo_probe` adopts `block0`, reads sector zero, and pub
 
 The default `make test` boot has no data disk and does not exercise either disk driver. The disk targets provide that coverage:
 
-* `make test-disk`, `make test-disk-ahci`, and `make test-disk-q35` run `blockprobe` through ATA, a separate AHCI controller, and the q35 controller at PCI function 2.
-* `make persist-test` and `make persist-test-ahci` write and fsync on one boot, then read the file from the same disk on the next boot.
-* `make stress-test` and `make stress-test-ahci` write and verify 33 MiB through the 4 MiB resident page cache.
-* `make bootpart-test` checks an absent boot partition, a writable FAT fixture, both bounded devices under a RAM root, and `_llseek` markers at 5 GiB and 258 GiB on a sparse AHCI disk.
-* `make authority-test` compares ordinary and recovery kernels, checks the write exclusion rule, and requires a 200-sector raw transfer to take four 64-sector calls.
-* `make diskpolicy-test` proves that a mount write fails under the read-only artifact and leaves the disk image unchanged. `make diskdiag-test` compares raw-sector hashes and requires the complete read-only session to leave the image unchanged.
+* `tests/run disk`, `tests/run disk-ahci`, and `tests/run disk-q35` run `blockprobe` through ATA, a separate AHCI controller, and the q35 controller at PCI function 2.
+* `tests/run persist` and `tests/run persist-ahci` write and fsync on one boot, then read the file from the same disk on the next boot.
+* `tests/run stress` and `tests/run stress-ahci` write and verify 33 MiB through the 4 MiB resident page cache.
+* `tests/run bootpart` checks an absent boot partition, a writable FAT fixture, both bounded devices under a RAM root, and `_llseek` markers at 5 GiB and 258 GiB on a sparse AHCI disk.
+* `tests/run authority` compares ordinary and recovery kernels, checks the write exclusion rule, and requires a 200-sector raw transfer to take four 64-sector calls.
+* `tests/run diskpolicy` proves that a mount write fails under the read-only artifact and leaves the disk image unchanged. `tests/run diskdiag` compares raw-sector hashes and requires the complete read-only session to leave the image unchanged.
 
-`make grub-test`, `make menu-test`, `make install-test`, `make drill-test`, and `make sealed-test` exercise the raw windows in their boot-loader and recovery workflows. The sealed test attaches the boot disk through AHCI and boots it through GRUB without QEMU's `-kernel` option.
+`tests/run grub`, `tests/run menu`, `tests/run install`, `tests/run drill`, and `tests/run sealed` exercise the raw windows in their boot-loader and recovery workflows. The sealed test attaches the boot disk through AHCI and boots it through GRUB without QEMU's `-kernel` option.

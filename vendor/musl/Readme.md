@@ -81,7 +81,7 @@ Rach2 publishes no `AT_SYSINFO` or `AT_SYSINFO_EHDR`, so musl uses its i386 `int
 
 The os-real, metal-disk, and GRUB-test manifests stage the installed headers as `/include` and the library and startup objects as `/lib/libc.a` and `/lib/crt*.o`. The staged TinyCC and pdpmake use them to build the project utilities. Musl itself is cross-built on the host and is not rebuilt in the guest.
 
-The [test documentation](../../tests/Readme.md) describes the 35 musl-linked programs and which 16 run in the default suite. `make selfbuild-test` exercises the staged compiler, library, headers, startup objects, and guest makefiles.
+The [test documentation](../../tests/Readme.md) describes the 35 musl-linked programs and which 16 run in the default suite. `tests/run selfbuild` exercises the staged compiler, library, headers, startup objects, and guest makefiles.
 
 ## Updating the pin
 

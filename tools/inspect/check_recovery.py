@@ -25,7 +25,7 @@ the switch and offered as recovery, or one compiled with it and shipped as the
 everyday kernel. It is not proof against a tampered one. The banner is a string
 in .rodata and the write handler is a separate conditional, so editing eight
 bytes of a built kernel changes what this reads without changing what the kernel
-does. The behavioural proof is `make authority-test`, which boots both kernels
+does. The behavioural proof is `tests/run authority`, which boots both kernels
 and requires the ordinary one to refuse a write and leave the sector unchanged;
 this check exists so a build mistake is caught before that test runs, not
 instead of it.

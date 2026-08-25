@@ -531,7 +531,7 @@ test:
 # so every probe must pass exactly as it does without it; what is under test is
 # that `rach2.ip=` and `rach2.gateway=` reach ARP, IP, TCP, the sockets and the
 # boot line, and that naming the current network changes nothing.
-test-addressed: test-image
+run-addressed: test-image
 	python3 tests/system/runner/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60 \
 	    --append "rach2.ip=10.0.2.15/24 rach2.gateway=10.0.2.2"
@@ -546,7 +546,7 @@ test-addressed: test-image
 # leaves /etc/shadow, its temporary file and the lock exactly as they were.
 # harness.py passes no -cpu of its own, so the passthrough is the only one on the
 # command line.
-test-noentropy: test-image
+run-noentropy: test-image
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 90 --ok "SALTNOENT OK" \
@@ -563,7 +563,7 @@ test-noentropy: test-image
 # resident cache, so it exercises real eviction and writeback and fails on any
 # dropped or corrupted page.
 DISK_TEST_IMAGE = $(IMAGES_DIR)/disk-test.disk
-test-disk: rach2 tests krffs
+run-disk: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
@@ -588,7 +588,7 @@ test-disk: rach2 tests krffs
 # AHCI because the ATA driver's 28-bit LBA stops at 128 GiB.
 BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
 WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
-bootpart-test: rach2 tests krffs
+run-bootpart: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
@@ -620,7 +620,7 @@ bootpart-test: rach2 tests krffs
 # before it installed. The marker comes from inside the running core, because
 # reading the pointer back would prove only bytes at rest.
 GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
-grub-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-grub: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
 	sh tools/image/mkgrubcore.sh A $(IMAGES_DIR)/core-a.img
 	sh tools/image/mkgrubcore.sh B $(IMAGES_DIR)/core-b.img
@@ -645,7 +645,7 @@ grub-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 # read back to prove bootctl overwrote bytes in place rather than rewriting a
 # file. Docker absent fails the run: this is the phase's proof.
 MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
-menu-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-menu: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
@@ -666,7 +666,7 @@ menu-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 # different object trees, and check_recovery.py reads the authority back off
 # each artifact so a mislabelled one cannot reach this test.
 AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
-authority-test: rach2 rach2-recovery tests krffs test-image
+run-authority: rach2 rach2-recovery tests krffs test-image
 	python3 tests/system/fixtures/mkwidefixture.py $(AUTH_TEST_IMAGE)
 	python3 tools/inspect/check_recovery.py build/rach2/kernel ordinary
 	python3 tools/inspect/check_recovery.py $(RECOVERY_KERNEL) recovery
@@ -691,7 +691,7 @@ authority-test: rach2 rach2-recovery tests krffs test-image
 # from host-crafted environment blocks. Docker required; its absence fails
 # the target, because this harness is the milestone's proof.
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
-install-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
@@ -708,7 +708,7 @@ install-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-seti
 # recovery), and a control run that injects nothing and asserts that no fallback
 # and no recovery appears anywhere. Docker builds the artifact; the runs are
 # QEMU and ssh.
-sealed-test: rach2-sealed-disk
+run-sealed: rach2-sealed-disk
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" 2297
 
@@ -729,7 +729,7 @@ sealed-test: rach2-sealed-disk
 # such flag, so there the everyday entries have no whole-disk node at all, and
 # the recovery build publishes its own whatever the command line says.
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-drill-test: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid
+run-drill: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
@@ -750,7 +750,7 @@ drill-test: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid
 # fsync pushed the write through the cache to the disk, since the file would
 # otherwise be gone.
 PERSIST_DISK = $(IMAGES_DIR)/persist-test.disk
-persist-test: rach2 tests krffs
+run-persist: rach2 tests krffs
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_DISK) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
@@ -771,7 +771,7 @@ persist-test: rach2 tests krffs
 # left rather than breaking it. The third reads back the release itself: a lock
 # whose removal stayed in the page cache would still be there.
 CRED_PERSIST_DISK = $(IMAGES_DIR)/cred-persist-test.disk
-cred-persist-test: rach2 musl-programs krffs
+run-cred-persist: rach2 musl-programs krffs
 	$(MKDISK) krffs/manifests/cred-persist-test.manifest $(CRED_PERSIST_DISK) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
@@ -805,7 +805,7 @@ BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # kills QEMU, while the timeout case alone costs four seconds and the child the
 # probe forks lives three to eight, so without it the token would arrive after
 # QEMU was dead.
-ping-test: rach2 tests krffs test-image
+run-ping: rach2 tests krffs test-image
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PINGTEST OK" \
@@ -815,7 +815,7 @@ ping-test: rach2 tests krffs test-image
 # that arrives before this machine owns an address. Its own target and not a
 # probe in the suite, for the reason `ping-test` is: it needs the network to
 # answer, and the suite's probes must not.
-packet-test: rach2 tests krffs test-image
+run-packet: rach2 tests krffs test-image
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PACKETPROBE OK" \
@@ -827,7 +827,7 @@ packet-test: rach2 tests krffs test-image
 # `rach2.rescue` it is allowed, since asking for that shell is what the token is
 # for. Four boots, and each refusal is asserted twice: the diagnostic, and that
 # no shell was reached after it.
-bootline-test: rach2 tests krffs
+run-bootline: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTLINE_TEST_IMAGE) 64 48
 	sh tests/system/suites/bootline.sh build/rach2/kernel $(BOOTLINE_TEST_IMAGE)
 
@@ -838,7 +838,7 @@ bootline-test: rach2 tests krffs
 # `traceroute` itself on the image that has it. The capture is read by
 # tests/system/checkers/rawwire_check.py for the two things a program inside the machine cannot
 # see: the hop limit each datagram left with, and the caller's own checksum.
-raw-test: rach2 tests krffs test-image os-real-image
+run-raw: rach2 tests krffs test-image os-real-image
 	@rm -f $(RAW_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -879,7 +879,7 @@ raw-test: rach2 tests krffs test-image os-real-image
 # machine's address. Its own target, like `ping-test`: it changes the address
 # out from under the machine and puts it back, and the last thing it does is
 # ping the gateway, which needs the network to answer.
-netif-test: rach2 tests krffs test-image
+run-netif: rach2 tests krffs test-image
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0,hostfwd=udp::15999-:9999" \
@@ -898,7 +898,7 @@ netif-test: rach2 tests krffs test-image
 # Its own target because it broadcasts, and a probe in the suite must not put a
 # frame on the wire that the other probes did not ask for.
 DGRAM_PCAP = $(IMAGES_DIR)/dgram.pcap
-dgram-test: rach2 tests krffs test-image
+run-dgram: rach2 tests krffs test-image
 	@rm -f $(DGRAM_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -924,7 +924,7 @@ SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple.log
 STATIC_PCAP = $(IMAGES_DIR)/static-simple.pcap
 RSTATIC_PCAP = $(IMAGES_DIR)/static-real.pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
-dhcp-test: rach2 utils busybox krffs os-real-image os-simple-image
+run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image
 	@rm -f $(DHCP_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1180,7 +1180,7 @@ dhcp-test: rach2 utils busybox krffs os-real-image os-simple-image
 # the network device came up, which is what proves the pre-transmit buffer was
 # carried rather than dropped.
 NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole.pcap
-netconsole-test: rach2 tests krffs test-image
+run-netconsole: rach2 tests krffs test-image
 	@rm -f $(NETCONSOLE_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1199,7 +1199,7 @@ netconsole-test: rach2 tests krffs test-image
 # one is ever exercised, and nobody finds out the later ones do not work until
 # the machine they were written for refuses to restart. So each is booted with
 # the ones before it left out, and each must still restart the machine.
-reset-test: rach2 tests krffs test-image
+run-reset: rach2 tests krffs test-image
 	sh tests/system/suites/reset.sh build/rach2/kernel $(TEST_IMAGE)
 
 # `make diskdiag-test`: a disk read without being mounted and without being
@@ -1208,7 +1208,7 @@ reset-test: rach2 tests krffs test-image
 # read-only kernel reading it over SSH with nothing typed at the console, where
 # every sector hashed on the machine must equal the same offset hashed here;
 # and the same kernel with no drive at all.
-diskdiag-test: rach2 rach2-metal rach2-metal-image
+run-diskdiag: rach2 rach2-metal rach2-metal-image
 	sh tests/system/suites/diskdiag.sh build/rach2/kernel $(METAL_KERNEL) $(METAL_IMAGE) 2224
 
 # `make subset-test`: the kernel reaches a shell with any subset of its optional
@@ -1216,7 +1216,7 @@ diskdiag-test: rach2 rach2-metal rach2-metal-image
 # no diagnostic but the screen, and the only way to find which probe stopped it
 # is to switch them off one at a time from the GRUB command line. That is only
 # useful if each switch actually works, so each is booted here.
-subset-test: rach2 tests krffs test-image
+run-subset: rach2 tests krffs test-image
 	@for opt in "" "rach2.noaudio" "rach2.nomouse" "rach2.nonet" "rach2.nodisk" \
 	            "rach2.noaudio rach2.nomouse rach2.nonet rach2.nodisk"; do \
 	    echo "  subset-test: booting with [$$opt]"; \
@@ -1233,7 +1233,7 @@ subset-test: rach2 tests krffs test-image
 # kernel; the ordinary one must change it, which is what makes the other half
 # mean anything, and the metal one must refuse a command by name and leave the
 # image untouched.
-diskpolicy-test: rach2 rach2-metal
+run-diskpolicy: rach2 rach2-metal
 	sh tests/system/suites/diskpolicy.sh build/rach2/kernel $(METAL_KERNEL)
 
 # `make metal-test`: the metal image reached over SSH with nobody at its
@@ -1244,7 +1244,7 @@ diskpolicy-test: rach2 rach2-metal
 # key authentication, a pty, and a file crossing intact each way are all one
 # test. It kills the server once as well, because a supervisor that starts a
 # daemon and does not restart it has not been tested.
-metal-test: rach2-metal rach2-metal-image
+run-metal: rach2-metal rach2-metal-image
 	sh tests/system/suites/metal.sh $(METAL_KERNEL) $(METAL_IMAGE) 2223
 
 # `make account-test`: accounts created, authenticated, changed and deleted on
@@ -1257,7 +1257,7 @@ metal-test: rach2-metal rach2-metal-image
 # alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 
-account-test: rach2 utils krffs busybox ish check-tcc check-pdpmake
+run-account: rach2 utils krffs busybox ish check-tcc check-pdpmake
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
@@ -1276,7 +1276,7 @@ account-test: rach2 utils krffs busybox ish check-tcc check-pdpmake
 # turning into a mysterious failure.
 TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
 
-tcc-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-tcc: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
@@ -1289,7 +1289,7 @@ tcc-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # boots of one disk, since the reboot is half the point.
 MAKE_TEST_DISK = $(IMAGES_DIR)/make-test.disk
 
-make-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-make: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(MAKE_TEST_DISK) 64 48
@@ -1303,7 +1303,7 @@ make-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid c
 # whole run carries one deadline over the per-step ones.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
 
-selfbuild-test: rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
@@ -1318,7 +1318,7 @@ selfbuild-test: rach2 utils krffs test-image check-busybox check-tcc check-pdpma
 SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test.disk
 SSH_TEST_PORT ?= 2222
 
-ssh-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-ssh: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
@@ -1331,7 +1331,7 @@ ssh-test: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # token, and every image checked by offline fsck afterwards.
 SHUTDOWN_TEST_DISK = $(IMAGES_DIR)/shutdown-test.disk
 
-shutdown-test: rach2 utils krffs busybox
+run-shutdown: rach2 utils krffs busybox
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/shutdown-test.manifest $(SHUTDOWN_TEST_DISK) 64 48
 	sh tests/system/suites/shutdown.sh build/rach2/kernel $(SHUTDOWN_TEST_DISK) \
@@ -1344,7 +1344,7 @@ shutdown-test: rach2 utils krffs busybox
 LOGIN_TEST_STRICT = $(IMAGES_DIR)/login-test-strict.krffs
 LOGIN_TEST_SHELL  = $(IMAGES_DIR)/login-test-shell.krffs
 
-login-test: rach2 utils krffs busybox os-real-image
+run-login: rach2 utils krffs busybox os-real-image
 	$(MKIMAGE) krffs/manifests/login-test-strict.manifest $(LOGIN_TEST_STRICT) 10
 	$(MKIMAGE) krffs/manifests/login-test-shell.manifest $(LOGIN_TEST_SHELL) 10
 	sh tests/system/suites/login.sh build/rach2/kernel $(LOGIN_TEST_STRICT) \
@@ -1355,7 +1355,7 @@ login-test: rach2 utils krffs busybox os-real-image
 # per mount source, each of which must name its own; then `ps`, `df`, `free` and
 # `uptime` on the real image, each of which failed on a missing /proc file.
 PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
-procfiles-test: rach2 tests utils krffs busybox os-real-image test-image
+run-procfiles: rach2 tests utils krffs busybox os-real-image test-image
 	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
 	sh tests/system/suites/procfiles.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 16
@@ -1367,13 +1367,13 @@ procfiles-test: rach2 tests utils krffs busybox os-real-image test-image
 # harness.py run with no token, which has only the plain line to read.
 HARNESS_KERNEL = build/rach2-harness/kernel
 
-exitline-test: rach2 tests utils krffs busybox os-real-image test-image
+run-exitline: rach2 tests utils krffs busybox os-real-image test-image
 	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
 	sh tests/system/suites/exitline.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
 	    $(HARNESS_KERNEL)
 
-crash-test: rach2 tests krffs
+run-crash: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(CRASH_TEST_IMAGE) 64 48
 	sh tests/system/suites/crash.sh build/rach2/kernel $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
 
@@ -1381,7 +1381,7 @@ crash-test: rach2 tests krffs
 # a 64 MB disk with a 48 MB partition and runs stressprobe, which writes and
 # re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache.
 STRESS_DISK = $(IMAGES_DIR)/stress-test.disk
-stress-test: rach2 tests krffs
+run-stress: rach2 tests krffs
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
@@ -1403,7 +1403,7 @@ DISK_TEST_AHCI_IMAGE = $(IMAGES_DIR)/disk-test-ahci.disk
 PERSIST_AHCI_DISK    = $(IMAGES_DIR)/persist-test-ahci.disk
 STRESS_AHCI_DISK     = $(IMAGES_DIR)/stress-test-ahci.disk
 
-test-disk-ahci: rach2 tests krffs
+run-disk-ahci: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
@@ -1417,7 +1417,7 @@ test-disk-ahci: rach2 tests krffs
 # other AHCI test attaches a separate controller that lands at function 0, so a
 # scan that never walked past function 0 would pass all of them and fail on
 # the real machine.
-test-disk-q35: rach2 tests krffs
+run-disk-q35: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
@@ -1426,7 +1426,7 @@ test-disk-q35: rach2 tests krffs
 	    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ide.0 \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
 
-persist-test-ahci: rach2 tests krffs
+run-persist-ahci: rach2 tests krffs
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
@@ -1439,7 +1439,7 @@ persist-test-ahci: rach2 tests krffs
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
 
-stress-test-ahci: rach2 tests krffs
+run-stress-ahci: rach2 tests krffs
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_AHCI_DISK) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
@@ -1614,3 +1614,127 @@ help:
 	@echo "  make clean      remove build output; keep the vendor builds and credentials"
 	@echo "  make distclean  remove the vendor builds and stamps too"
 	@echo "  rach2/run.sh IMAGE   boot a built image (test, os-simple, os-real)"
+
+# Retired suite names, kept as aliases for this milestone only.
+test-addressed:
+	@echo "test-addressed: retired: use tests/run addressed" >&2
+	@./tests/run addressed
+test-noentropy:
+	@echo "test-noentropy: retired: use tests/run noentropy" >&2
+	@./tests/run noentropy
+test-disk:
+	@echo "test-disk: retired: use tests/run disk" >&2
+	@./tests/run disk
+test-disk-ahci:
+	@echo "test-disk-ahci: retired: use tests/run disk-ahci" >&2
+	@./tests/run disk-ahci
+test-disk-q35:
+	@echo "test-disk-q35: retired: use tests/run disk-q35" >&2
+	@./tests/run disk-q35
+bootpart-test:
+	@echo "bootpart-test: retired: use tests/run bootpart" >&2
+	@./tests/run bootpart
+subset-test:
+	@echo "subset-test: retired: use tests/run subset" >&2
+	@./tests/run subset
+stress-test:
+	@echo "stress-test: retired: use tests/run stress" >&2
+	@./tests/run stress
+stress-test-ahci:
+	@echo "stress-test-ahci: retired: use tests/run stress-ahci" >&2
+	@./tests/run stress-ahci
+persist-test:
+	@echo "persist-test: retired: use tests/run persist" >&2
+	@./tests/run persist
+persist-test-ahci:
+	@echo "persist-test-ahci: retired: use tests/run persist-ahci" >&2
+	@./tests/run persist-ahci
+cred-persist-test:
+	@echo "cred-persist-test: retired: use tests/run cred-persist" >&2
+	@./tests/run cred-persist
+crash-test:
+	@echo "crash-test: retired: use tests/run crash" >&2
+	@./tests/run crash
+authority-test:
+	@echo "authority-test: retired: use tests/run authority" >&2
+	@./tests/run authority
+bootline-test:
+	@echo "bootline-test: retired: use tests/run bootline" >&2
+	@./tests/run bootline
+exitline-test:
+	@echo "exitline-test: retired: use tests/run exitline" >&2
+	@./tests/run exitline
+login-test:
+	@echo "login-test: retired: use tests/run login" >&2
+	@./tests/run login
+procfiles-test:
+	@echo "procfiles-test: retired: use tests/run procfiles" >&2
+	@./tests/run procfiles
+account-test:
+	@echo "account-test: retired: use tests/run account" >&2
+	@./tests/run account
+shutdown-test:
+	@echo "shutdown-test: retired: use tests/run shutdown" >&2
+	@./tests/run shutdown
+reset-test:
+	@echo "reset-test: retired: use tests/run reset" >&2
+	@./tests/run reset
+diskpolicy-test:
+	@echo "diskpolicy-test: retired: use tests/run diskpolicy" >&2
+	@./tests/run diskpolicy
+diskdiag-test:
+	@echo "diskdiag-test: retired: use tests/run diskdiag" >&2
+	@./tests/run diskdiag
+ping-test:
+	@echo "ping-test: retired: use tests/run ping" >&2
+	@./tests/run ping
+packet-test:
+	@echo "packet-test: retired: use tests/run packet" >&2
+	@./tests/run packet
+raw-test:
+	@echo "raw-test: retired: use tests/run raw" >&2
+	@./tests/run raw
+netif-test:
+	@echo "netif-test: retired: use tests/run netif" >&2
+	@./tests/run netif
+dgram-test:
+	@echo "dgram-test: retired: use tests/run dgram" >&2
+	@./tests/run dgram
+dhcp-test:
+	@echo "dhcp-test: retired: use tests/run dhcp" >&2
+	@./tests/run dhcp
+netconsole-test:
+	@echo "netconsole-test: retired: use tests/run netconsole" >&2
+	@./tests/run netconsole
+tcc-test:
+	@echo "tcc-test: retired: use tests/run tcc" >&2
+	@./tests/run tcc
+make-test:
+	@echo "make-test: retired: use tests/run make" >&2
+	@./tests/run make
+selfbuild-test:
+	@echo "selfbuild-test: retired: use tests/run selfbuild" >&2
+	@./tests/run selfbuild
+ssh-test:
+	@echo "ssh-test: retired: use tests/run ssh" >&2
+	@./tests/run ssh
+grub-test:
+	@echo "grub-test: retired: use tests/run grub" >&2
+	@./tests/run grub
+menu-test:
+	@echo "menu-test: retired: use tests/run menu" >&2
+	@./tests/run menu
+install-test:
+	@echo "install-test: retired: use tests/run install" >&2
+	@./tests/run install
+sealed-test:
+	@echo "sealed-test: retired: use tests/run sealed" >&2
+	@./tests/run sealed
+drill-test:
+	@echo "drill-test: retired: use tests/run drill" >&2
+	@./tests/run drill
+metal-test:
+	@echo "metal-test: retired: use tests/run metal" >&2
+	@./tests/run metal
+
+.PHONY: run-addressed run-noentropy run-disk run-disk-ahci run-disk-q35 run-bootpart run-subset run-stress run-stress-ahci run-persist run-persist-ahci run-cred-persist run-crash run-authority run-bootline run-exitline run-login run-procfiles run-account run-shutdown run-reset run-diskpolicy run-diskdiag run-ping run-packet run-raw run-netif run-dgram run-dhcp run-netconsole run-tcc run-make run-selfbuild run-ssh run-grub run-menu run-install run-sealed run-drill run-metal
