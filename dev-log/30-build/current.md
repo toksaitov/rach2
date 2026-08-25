@@ -4,17 +4,13 @@ This file holds only the resume state for the item in progress. Replace its cont
 
 ## Position
 
-* Active phase: 4, shared source manifests.
-* Active phase: 5, incremental correctness. Committed: item 7 (f946e0a), item 8 (cec40ce), item 1 (03a03f2, image input inventories), item 2 (91c7287, patch series manifests), item 3 (ca5cd6a, parse-time healing; musl's legitimately empty headers demand existence tests, not size tests). Item 4 proved, committing now: validation stamps for the kernel, TinyCC, pdpmake, and each image; a checker edit revalidates without recompiling (kernel mtime unchanged, zero compiles); a truncated artifact fails its revalidation, is removed, and rebuilds on the next run; every vendor binary and the kernel proved by truncation; explicit delegation rules stop make's builtin link rule from rebuilding a missing kernel with the host cc.
-* Exact next action: commit item 4, then item 5: per-component flag fingerprints replacing the kernel's refuse-on-change kflags stamp.
-* Phase 3 completed at fa0436e: interface is make, make test, tests/run NAME, clean, distclean, run.sh; retired names print notices; preflight cached; FUSE optional; compile-commands alias retires in phase 6 with the script move.
+* Active phase: 6, the layout.
+* Item in progress: not started.
+* Exact next action: move the scripts into `tests/system/` (runner, suites, checkers, fixtures, accept) and the `tools/` role directories (setup, verify, inspect, image, dev), one role per commit, updating every caller and the owning Readme in the same commit, with the renamed-path search from the standing rules. The compilation database generator lands in `tools/dev/` and its make alias joins the retirement list. For each moved suite, mutate its expected token and confirm the runner reaches the moved script.
 
 ## Phase record
 
-* Phase 1 complete at e4d3187. Baselines: cold `make distclean && make full` 60 s; no-op `make full` 3 s; style 23 s; host 37 s; `make test` 96 s.
-* Phase 2 complete at 6ef65d2: compilation database generator fixed, selftest in check 12, both restored defects failed the selftest.
-* Phase 3 in progress: FUSE split at 131bd4a (default KRFFS build needs neither FUSE nor pkg-config; `make -C krffs mount` is the optional tool). Runner landed: `tests/run` reads `tests/registry` (43 suites, five fields), `make test` delegates to `tests/run default`, `verify-style` and `verify-host` are retirement aliases for `tests/run style` and `tests/run host`, and 26 current documents name the new commands. Proofs: unknown suite exits 2 with the valid list; style and host pass through the runner; a planted banned term made `tests/run style` fail and the restore passed again; `make test` boots 63 of 63 through the runner.
-
-## Sequencing note
-
-The `*-test` targets keep their recipes and print no retirement notice while the runner dispatches through them; their bodies move to `tests/system/suites/` in phase 6, and only then do the old names become notice-printing aliases. The registry's prerequisites field stays `-` until then.
+* Phases 1 to 4 complete: baselines e4d3187; generator 6ef65d2; interface fa0436e (FUSE split 131bd4a, runner e9c5d80, default scope a49cdb9, preflight 88257a0); manifests 391c901, b7bb4bf, f241cdc.
+* Phase 5 complete, all nine items: images from recorded inventories (03a03f2), patch series manifests (91c7287), parse-time output healing (ca5cd6a), validation stamps with builtin-rule delegation guards (c5dc1f5), configuration purge fingerprints (f026a72), real component edges only (5fb125b), incremental musl tests (f946e0a), credential timestamps (cec40ce), shared job budget with parallel-race fixes and progress messages (9f0c5f9).
+* Closing measurements against the phase 1 baseline (cold 60 s, no-op 3 s): no-op `make` is 1 s; cold serial `make` is 118 s because the vendors now share the caller's job budget instead of choosing a private ten-way `-j` (decided in the design rounds); cold `make -j4` is 42 s with at most 3 concurrent compiles and 149 component interleavings.
+* Notable fixes proved along the way: GNU make 3.81 compares whole seconds, so fingerprints purge at parse time instead of using mtime prerequisites; absent optional image inputs are represented by their nearest existing ancestor directory; relative inventory paths must be absolutized so they cannot name phony targets; musl installs legitimately empty headers, so healing tests existence, not size.
