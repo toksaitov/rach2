@@ -284,24 +284,32 @@ static int selftest(void)
             bad++;
         }
     }
-    /* The window's end is found by the same rule that scores it. A marker
-       that does not begin a line is a probe's text, and ending the window
-       on it would cut the kernel's own verdict out of the window. */
+    /* The window's end and the window's score read the same text by two
+       rules, and the difference is deliberate. The end must be found
+       wherever the kernel printed it, because the kernel writes the marker
+       with no leading newline and a probe that dies after a partial line
+       leaves it mid-line; an unbounded window there reads as a hang. The
+       score requires a line start, so a probe cannot print itself a pass.
+       An absurd digit run is not a marker under either rule. */
     {
         static const struct {
             const char *name;
             const char *text;
+            int at_line_start;
             int want_found;
         } scans[] = {
             { "the kernel's marker on its own line",
               "boot\nsys_exit: init process 4 exited with status 0, "
-              "returning to kernel shell\n", 1 },
-            { "a probe's marker in the middle of a line",
-              "boot: probe says sys_exit: init process 4 exited with "
-              "status 0, returning to kernel shell\n", 0 },
+              "returning to kernel shell\n", 1, 1 },
+            { "a marker after a probe's partial line, bounding the window",
+              "probe wrote thisterminate: init process 4 killed by signal "
+              "11, returning to kernel shell\n", 0, 1 },
+            { "that same marker under the scoring rule",
+              "probe wrote thisterminate: init process 4 killed by signal "
+              "11, returning to kernel shell\n", 1, 0 },
             { "a pid of more digits than a long holds",
               "\nsys_exit: init process 4 exited with status "
-              "999999999999999999999999, returning to kernel shell\n", 0 }
+              "999999999999999999999999, returning to kernel shell\n", 1, 0 }
         };
         int k, scan_n = (int) (sizeof(scans) / sizeof(scans[0]));
 
@@ -309,8 +317,8 @@ static int selftest(void)
             char which;
             long value;
             long end = find_marker((const unsigned char *) scans[k].text,
-                                   strlen(scans[k].text), 0, 1, &which,
-                                   &value);
+                                   strlen(scans[k].text), 0,
+                                   scans[k].at_line_start, &which, &value);
 
             if ((end >= 0) != scans[k].want_found) {
                 printf("  FAIL: %s: expected %s, got %s\n", scans[k].name,
@@ -440,7 +448,15 @@ static long expect_marker(double window)
     for (;;) {
         char which;
         long value;
-        long end = find_marker(buf, buf_len, consumed, 1, &which, &value);
+        /* Not at a line start, unlike the scoring rule. The kernel writes
+           this marker straight to serial with no leading newline, so a
+           probe that dies by signal after printing a partial line leaves
+           the marker in the middle of one. Requiring a line start here
+           would leave that window unbounded, and the probe would read as
+           a hang and stop the rest of the suite. A probe that prints the
+           text itself ends its own window early and then scores as no
+           exit reported, which is a failure either way. */
+        long end = find_marker(buf, buf_len, consumed, 0, &which, &value);
 
         if (end >= 0) {
             consumed = (size_t) end;

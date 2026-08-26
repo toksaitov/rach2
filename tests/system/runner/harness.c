@@ -644,8 +644,20 @@ int main(int argc, char **argv)
     for (i = 0; i < n_steps; i++) {
         const char *step = steps[i];
 
-        if (child_poll() >= 0)
+        /* The machine is gone, so every step left is a check that will not
+           run. They are counted and named: a run that stopped early and
+           reported a pass over the steps it never reached is the report
+           this harness exists to prevent. */
+        if (child_poll() >= 0) {
+            int left;
+
+            for (left = i; left < n_steps; left++) {
+                fprintf(stderr, "HARNESS: step '%s' never ran: qemu had "
+                        "already exited\n", steps[left]);
+                step_failures++;
+            }
             break;
+        }
         if (strncmp(step, "expect=", 7) == 0) {
             int got = expect_pattern(step + 7);
 
@@ -820,7 +832,7 @@ int main(int argc, char **argv)
             if (memcmp(buf + at, marker, mlen) == 0) {
                 size_t p = at + mlen;
                 long sign = 1, n = 0;
-                int digits = 0;
+                int digits = 0, over = 0;
 
                 if (p < buf_len && buf[p] == '-') {
                     sign = -1;
@@ -828,12 +840,20 @@ int main(int argc, char **argv)
                 }
                 while (p < buf_len && buf[p] >= '0' && buf[p] <= '9') {
                     if (n > (LONG_MAX - 9) / 10)
-                        break;
-                    n = n * 10 + (buf[p] - '0');
+                        over = 1;
+                    else
+                        n = n * 10 + (buf[p] - '0');
                     p++;
                     digits++;
                 }
-                if (digits > 0) {
+                /* A number too large for a long is reported rather than
+                   read as the prefix that fit. Python compared the whole
+                   value; a prefix would be a different status. */
+                if (over) {
+                    fprintf(stderr, "HARNESS: a guest status of %d digits "
+                            "is past what this host reads\n", digits);
+                    have_status = 0;
+                } else if (digits > 0) {
                     status = sign * n;
                     have_status = 1;
                 }
