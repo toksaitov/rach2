@@ -24,6 +24,9 @@
  * 0xFF sentinel in both CHS fields, meaning "use the LBA": the form the
  * plain KRFFS disk (krffs/mkdisk.sh) has always carried, where nothing
  * ever reads a geometry.
+ *
+ * `mkmbr --list DISK` reads instead of writing: one line per non-empty
+ * entry, `INDEX TYPE START SIZE`, the type in hex and the extent in bytes.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -74,6 +77,41 @@ static int colon(const char **p)
     return 1;
 }
 
+/* Print the table: one line per non-empty entry, `INDEX TYPE START SIZE`
+   with the type in hex and the two byte counts in decimal. The suites read
+   a partition's extent this way instead of unpacking the table
+   themselves. */
+static int list_table(const char *path)
+{
+    unsigned char sector[512];
+    FILE *f = fopen(path, "rb");
+    int i;
+
+    if (f == NULL || fread(sector, 1, sizeof(sector), f) != sizeof(sector)) {
+        fprintf(stderr, "mkmbr: cannot read the first sector of %s\n", path);
+        return 1;
+    }
+    fclose(f);
+    if (sector[510] != 0x55 || sector[511] != 0xAA) {
+        fprintf(stderr, "mkmbr: no MBR signature in %s\n", path);
+        return 1;
+    }
+    for (i = 0; i < 4; i++) {
+        const unsigned char *e = sector + 0x1be + 16 * i;
+        unsigned long start = (unsigned long) e[8] |
+            (unsigned long) e[9] << 8 | (unsigned long) e[10] << 16 |
+            (unsigned long) e[11] << 24;
+        unsigned long count = (unsigned long) e[12] |
+            (unsigned long) e[13] << 8 | (unsigned long) e[14] << 16 |
+            (unsigned long) e[15] << 24;
+
+        if (start == 0 || count == 0)
+            continue;
+        printf("%d %02x %lu %lu\n", i + 1, e[4], start * 512, count * 512);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     unsigned char sector[512];
@@ -83,6 +121,8 @@ int main(int argc, char **argv)
     FILE *f;
     int i, active = 0, lba_units = 0;
 
+    if (argc == 3 && strcmp(argv[1], "--list") == 0)
+        return list_table(argv[2]);
     if (argc >= 2 && strcmp(argv[1], "--lba") == 0) {
         lba_units = 1;
         argv++;

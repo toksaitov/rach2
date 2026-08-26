@@ -244,28 +244,23 @@ echo "sealed-test: artifact $DISK_SHA ($(wc -c < "$DISK") bytes)"
 # sector and taking the first that has a KRFFS root node, not by trusting an
 # entry number or a type byte. What is destroyed below has to be the partition
 # the machine actually mounts.
-EXTENTS="$(python3 -c "
-import struct, sys
-f = open('$WORK', 'rb')
-table = f.read(512)
-boot = 0
-root = None
-for i in range(4):
-    e = table[446 + 16 * i:446 + 16 * i + 16]
-    start, count = struct.unpack_from('<II', e, 8)
-    if start == 0 or count == 0:
-        continue
-    if boot == 0:
-        boot = start
-    f.seek(start * 512)
-    head = f.read(512)
-    magic, kind = struct.unpack_from('<HB', head, 0)
-    if magic == 0x4B52 and kind == 0 and root is None:
-        root = (start, count)
-if root is None:
-    sys.exit('sealed-test: no partition on the artifact has a KRFFS root')
-print('%d %d %d' % (boot, root[0], root[1]))
-")"
+# The first partition is the boot partition; the root is whichever
+# partition begins with a KRFFS root node, which is its first three bytes:
+# the magic 0x4b52 little-endian and the root type 0. Probed rather than
+# assumed, because what follows destroys and rewrites this partition.
+EXTENTS="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
+    while read -r idx type start size; do
+        [ -n "$idx" ] || continue
+        head3="$(dd if="$WORK" bs=512 skip=$((start / 512)) count=1 \
+            status=none | od -An -tx1 -N3 | tr -d ' ')"
+        printf '%s %s %s %s\n' "$type" "$start" "$size" "$head3"
+    done | awk '
+        NR == 1 { boot = $2 }
+        $4 == "524b00" && root == "" { root = $2; rootsz = $3 }
+        END {
+            if (root == "") exit 1
+            print boot / 512, root / 512, rootsz / 512
+        }')" || fail "no partition on the artifact has a KRFFS root"
 BOOT_LBA="$(echo "$EXTENTS" | cut -d' ' -f1)"
 ROOT_LBA="$(echo "$EXTENTS" | cut -d' ' -f2)"
 ROOT_SECTORS="$(echo "$EXTENTS" | cut -d' ' -f3)"
@@ -283,14 +278,10 @@ ROOT_SHA="$(sha256_of "$ROOTIMG")"
 # its banner rewritten in place, which is the smallest edit that makes a boot
 # say which kernel booted it; the structural checker still accepts it, and a
 # machine that installs it prints the marker in its own boot and nowhere else.
-python3 -c "
-d = open('$REPO/build/rach2/kernel', 'rb').read()
-old = b'======= Rach2 Booting... ======='
-new = b'======= Rach2 SEALEDMARK ======='
-if d.count(old) == 0:
-    raise SystemExit('sealed-test: the kernel has no banner to mark')
-open('$MARKED', 'wb').write(d.replace(old, new))
-"
+cp "$REPO/build/rach2/kernel" "$MARKED"
+"$REPO/build/tools/inspect/binfind" --replace \
+    '======= Rach2 Booting... =======' '======= Rach2 SEALEDMARK =======' \
+    "$MARKED" || fail "the kernel has no banner to mark"
 "$REPO/build/tools/inspect/elfcheck" --kernel "$MARKED" > /dev/null || \
     fail "the marked kernel does not pass the structural checker"
 
@@ -367,12 +358,8 @@ phase "a destroyed candidate, the fallback, and the repair"
 # The candidate slot's first sector, destroyed with the machine stopped. GRUB
 # loads a kernel and this one no longer is one, so the fallback number takes the
 # other slot: that is the whole reason two slots exist.
-python3 -c "
-f = open('$WORK', 'r+b')
-f.seek(($BOOT_LBA + $CAND_SECTOR) * 512)
-f.write(b'\x00' * 512)
-f.close()
-"
+dd if=/dev/zero of="$WORK" bs=512 seek=$((BOOT_LBA + CAND_SECTOR)) \
+    count=1 conv=notrunc status=none
 
 cold_boot fallback
 grep -aq "Falling back to" "$LOG" || fail "a destroyed candidate did not take the fallback"
@@ -416,17 +403,15 @@ stop_machine
 
 # Truncated from the host, mid-entry: the file keeps its size, so nothing about
 # the volume changes, and the stub must survive a menu it cannot parse.
-python3 -c "
-d = open('$WORK', 'rb').read()
-i = d.find(b'menuentry sealedone --id sealedone')
-if i < 0:
-    raise SystemExit('sealed-test: the staged menu is not on the disk')
-head = b'menuentry sealedone --id sealedone {\n'
-f = open('$WORK', 'r+b')
-f.seek(i)
-f.write(head + b'#' * (4096 - len(head)))
-f.close()
-"
+MENU_AT="$("$REPO/build/tools/inspect/binfind" --offset \
+    'menuentry sealedone --id sealedone' "$WORK")" || \
+    fail "the staged menu is not on the disk"
+printf 'menuentry sealedone --id sealedone {\n' > "$WORK.menu"
+n="$(wc -c < "$WORK.menu" | tr -d ' ')"
+dd if=/dev/zero bs=1 count=$((4096 - n)) 2>/dev/null | tr '\0' '#' \
+    >> "$WORK.menu"
+dd if="$WORK.menu" of="$WORK" bs=1 seek="$MENU_AT" conv=notrunc status=none
+rm -f "$WORK.menu"
 cold_boot torn
 grep -aqi "error" "$LOG" || fail "a truncated menu produced no loader error"
 OUT="$(machine 'bootctl status' || true)"
@@ -490,12 +475,8 @@ phase "the root destroyed, and rewritten from recovery"
 # The root's first sector, destroyed with the machine stopped, and the recovery
 # entry armed the way an operator arms it from the console: this is the one
 # damage that leaves the machine with no way in of its own.
-python3 -c "
-f = open('$WORK', 'r+b')
-f.seek($ROOT_OFF)
-f.write(b'\x00' * 512)
-f.close()
-"
+dd if=/dev/zero of="$WORK" bs=512 seek=$((ROOT_OFF / 512)) count=1 \
+    conv=notrunc status=none
 # The damage is proved before it is repaired: the ordinary entry must fail to
 # mount and offer nothing, which is the state an operator would find the machine
 # in. Booting straight into recovery would prove the repair without ever showing
@@ -510,26 +491,25 @@ cleanup_boot
 # Writing the block from nothing would drop the saved default with it, and the
 # machine would come back on the fallback for a reason that had nothing to do
 # with the repair.
-python3 -c "
-d = open('$WORK', 'rb').read()
-i = d.find(b'# GRUB Environment Block')
-if i < 0:
-    raise SystemExit('sealed-test: the disk has no environment block')
-old = d[i:i + 1024]
-keep = []
-for line in old.split(b'\n'):
-    line = line.rstrip(b'#')
-    if not line or line.startswith(b'#') or line.startswith(b'next_entry='):
-        continue
-    keep.append(line)
-head = (b'# GRUB Environment Block\n'
-        b'# WARNING: Do not edit this file by tools other than grub-editenv!!!\n')
-block = head + b'\n'.join(keep + [b'next_entry=recovery', b''])
-f = open('$WORK', 'r+b')
-f.seek(i)
-f.write(block.ljust(1024, b'#'))
-f.close()
-"
+ENV_AT="$("$REPO/build/tools/inspect/binfind" --offset \
+    '# GRUB Environment Block' "$WORK")" || \
+    fail "the disk has no environment block"
+{
+    printf '# GRUB Environment Block\n'
+    printf '# WARNING: Do not edit this file by tools other than grub-editenv!!!\n'
+    # Every variable the block already holds except next_entry, which this
+    # is about to set: the '#' fill is stripped from each line, the two
+    # header comments and any empty line dropped.
+    dd if="$WORK" bs=1 skip="$ENV_AT" count=1024 status=none |
+        sed 's/#*$//' |
+        grep -a -v -e '^#' -e '^$' -e '^next_entry='
+    printf 'next_entry=recovery\n'
+} > "$WORK.env"
+n="$(wc -c < "$WORK.env" | tr -d ' ')"
+dd if=/dev/zero bs=1 count=$((1024 - n)) 2>/dev/null | tr '\0' '#' \
+    >> "$WORK.env"
+dd if="$WORK.env" of="$WORK" bs=1 seek="$ENV_AT" conv=notrunc status=none
+rm -f "$WORK.env"
 
 cold_boot recovery
 grep -aq "Modules... OK" "$LOG" || fail "the armed entry did not load the recovery image"

@@ -84,6 +84,7 @@ BINFIND         = build/tools/inspect/binfind
 ELFCHECK        = build/tools/inspect/elfcheck
 SETIDCHECK      = build/tools/inspect/setidcheck
 MKFIXTURE       = build/tests/system/mkfixture
+HOLDPORT        = build/tests/system/holdport
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
@@ -292,6 +293,12 @@ $(PCAPCHECK): tests/system/checkers/pcapcheck.c
 # The disk fixtures (tests/system/fixtures/mkfixture.c): the bootprobe
 # partition pattern and the 260 GB sparse disk.
 $(MKFIXTURE): tests/system/fixtures/mkfixture.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+# The TCP peer (tests/system/runner/holdport.c) the procfiles suite needs
+# so the connection it looks for in /proc/net/tcp is a live one.
+$(HOLDPORT): tests/system/runner/holdport.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
@@ -696,7 +703,7 @@ run-grub: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # read back to prove bootctl overwrote bytes in place rather than rewriting a
 # file. Docker absent fails the run: this is the phase's proof.
 MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
-run-menu: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-menu: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
@@ -742,7 +749,7 @@ run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE)
 # from host-crafted environment blocks. Docker required; its absence fails
 # the target, because this harness is the milestone's proof.
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
-run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
@@ -759,7 +766,7 @@ run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid
 # recovery), and a control run that injects nothing and asserts that no fallback
 # and no recovery appears anywhere. Docker builds the artifact; the runs are
 # QEMU and ssh.
-run-sealed: rach2-sealed-disk $(DEADLINE) $(ELFCHECK)
+run-sealed: rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" 2297
 
@@ -780,7 +787,7 @@ run-sealed: rach2-sealed-disk $(DEADLINE) $(ELFCHECK)
 # such flag, so there the everyday entries have no whole-disk node at all, and
 # the recovery build publishes its own whatever the command line says.
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-run-drill: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid
+run-drill: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND)
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
@@ -1406,7 +1413,7 @@ run-login: rach2 utils krffs busybox os-real-image
 # per mount source, each of which must name its own; then `ps`, `df`, `free` and
 # `uptime` on the real image, each of which failed on a missing /proc file.
 PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
-run-procfiles: rach2 tests utils krffs busybox os-real-image test-image
+run-procfiles: rach2 tests utils krffs busybox os-real-image test-image $(HOLDPORT)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
 	sh tests/system/suites/procfiles.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 16

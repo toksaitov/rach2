@@ -33,6 +33,8 @@
 
 set -e
 
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+
 DISK="$1"
 ROOTPASSWORD="$2"
 
@@ -213,23 +215,23 @@ grep -aq "Falling back to .Rach2 (fallback kernel)" "$LOG" || \
 # them is checked by the fallback above. The menu is drawn on the serial console
 # with one title per line, so the order they appear in is the order GRUB has
 # them in.
-python3 -c "
-import re, sys
-want = ['Rach2', 'Rach2 (fallback kernel)', 'Rach2 (static address)',
-        'Rach2 (fallback kernel, static address)', 'Rach2 (kernel debug shell)',
-        'Rach2 (recovery, not yet built)',
-        'Rach2 (recovery, static address, not yet built)', 'stagedone', 'stagedtwo']
-text = open('$LOG', 'rb').read().decode('latin-1')
-# GRUB draws one title per screen row, positioned with a cursor escape, and
-# marks the highlighted one with a leading asterisk.
-seen = []
-for row, body in re.findall(r'\\[(\\d+);3H([^\\x1b]{0,60})', text):
-    t = body.strip().lstrip('*').strip()
-    if t and t not in seen:
-        seen.append(t)
-if seen != want:
-    sys.exit('menu-test: the entry order is %r, not %r' % (seen, want))
-" || fail "the seven stub entries are not in the order their numbers assume, or the staged two are not after them"
+# GRUB draws one title per screen row, positioned with a cursor escape,
+# and marks the highlighted one with a leading asterisk. The titles are cut
+# out of the log in the order they were drawn, each kept once.
+SEEN="$(tr '\033' '\n' < "$LOG" | sed -n 's/^\[[0-9][0-9]*;3H//p' |
+    sed 's/^[ *]*//; s/[ ]*$//' | grep -a -v '^$' |
+    awk '!seen[$0]++')"
+WANT="Rach2
+Rach2 (fallback kernel)
+Rach2 (static address)
+Rach2 (fallback kernel, static address)
+Rach2 (kernel debug shell)
+Rach2 (recovery, not yet built)
+Rach2 (recovery, static address, not yet built)
+stagedone
+stagedtwo"
+[ "$SEEN" = "$WANT" ] || \
+    fail "the seven stub entries are not in the order their numbers assume, or the staged two are not after them"
 if grep -a "Falling back to" "$LOG" | grep -aq "staged"; then
     fail "the fallback number selected a staged entry, so the stub's entries no longer hold the low indices"
 fi
@@ -238,21 +240,17 @@ fi
 # so nothing about the FAT changes, but its last menuentry has no closing brace.
 # GRUB must report the parse error and the machine must still boot, because the
 # stub defined its own entries before it read this one.
-python3 -c "
-import sys
-work = '$WORK'
-d = open(work, 'rb').read()
-i = d.find(b'menuentry stagedone --id stagedone')
-if i < 0:
-    sys.exit('menu-test: the staged menu is not on the disk')
-head = b'menuentry stagedone --id stagedone {\n'
-if i + 8192 > len(d):
-    sys.exit('menu-test: the menu slot runs past the image')
-f = open(work, 'r+b')
-f.seek(i)
-f.write(head + b'#' * (8192 - len(head)))
-f.close()
-"
+MENU_AT="$("$REPO/build/tools/inspect/binfind" --offset \
+    'menuentry stagedone --id stagedone' "$WORK")" || \
+    fail "the staged menu is not on the disk"
+[ $((MENU_AT + 8192)) -le "$(wc -c < "$WORK" | tr -d ' ')" ] || \
+    fail "the menu slot runs past the image"
+printf 'menuentry stagedone --id stagedone {\n' > "$WORK.menu"
+n="$(wc -c < "$WORK.menu" | tr -d ' ')"
+dd if=/dev/zero bs=1 count=$((8192 - n)) 2>/dev/null | tr '\0' '#' \
+    >> "$WORK.menu"
+dd if="$WORK.menu" of="$WORK" bs=1 seek="$MENU_AT" conv=notrunc status=none
+rm -f "$WORK.menu"
 
 LOG="$DISK.log.torn"
 boot_watch "rach2 login:"

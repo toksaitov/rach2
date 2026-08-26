@@ -39,6 +39,8 @@
 
 set -e
 
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+
 DISK="$1"
 ROOTPASSWORD="$2"
 
@@ -173,17 +175,29 @@ rm -f "$WORK"
 cp "$DISK" "$WORK"
 
 # The environment block's offset in the image, for the matrix states.
-ENVOFF="$(python3 -c "
-d = open('$WORK', 'rb').read()
-i = d.find(b'# GRUB Environment Block')
-print(i)
-")"
+ENVOFF="$("$REPO/build/tools/inspect/binfind" --offset \
+    '# GRUB Environment Block' "$WORK" || echo -1)"
 if [ "$ENVOFF" -lt 0 ]; then
     fail "the disk has no environment block"
 fi
 
 # One pass of the install loop. $1 is the pass number, $2 the sed pattern the
 # marker edit replaces, $3 the marker this pass plants.
+# The byte offset of a token's first occurrence in the log, or empty when
+# it is absent. `grep -ab` numbers each matching line by its byte offset,
+# which is what puts the console tokens in order without a parser: the
+# console writes them as they happen, so an ordering assertion is an
+# assertion about these numbers.
+token_at() {
+    grep -abo -m1 -e "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1
+}
+
+# Whether `$3` appears in the log between the byte offsets $1 and $2.
+token_between() {
+    dd if="$4" bs=1 skip="$1" count=$(($2 - $1)) status=none 2>/dev/null |
+        grep -aq -e "$3"
+}
+
 run_pass() {
     P="$1"
     OLDMARK="$2"
@@ -221,23 +235,19 @@ run_pass() {
     # reboot and the second slot token (the trial boot's own interval) and
     # not before the reboot (the running kernel was unmarked or previously
     # marked; the token echoes carry the marker text and do not count).
-    python3 -c "
-import sys
-log = open('$LOG', 'rb').read()
-armed = log.find(b'ARMED${P}RC=1')
-rb = log.find(b'PRERB${P}A')
-slot2 = log.find(b'rach2.slotB${P}=candidate')
-if armed < 0:
-    sys.exit('pass $P: the armed-trial commit was not refused, so the trial '
-             'was never armed or the gate is gone')
-if rb < 0 or slot2 < 0 or slot2 < rb or armed > rb:
-    sys.exit('pass $P: the session tokens are missing or out of order')
-interval = log[rb:slot2]
-if b'Booting... ${TOKEN}' not in interval:
-    sys.exit('pass $P: the installed kernel did not print its marker')
-if b'bootctl: committed' not in log[slot2:]:
-    sys.exit('pass $P: the trial commit did not report success')
-" || fail "pass $P: the trial boot's identity did not hold"
+    ARMED_AT="$(token_at "$LOG" "ARMED${P}RC=1")"
+    RB_AT="$(token_at "$LOG" "PRERB${P}A")"
+    SLOT2_AT="$(token_at "$LOG" "rach2.slotB${P}=candidate")"
+    LOGEND="$(wc -c < "$LOG" | tr -d ' ')"
+    [ -n "$ARMED_AT" ] || fail "pass $P: the armed-trial commit was not refused, so the trial was never armed or the gate is gone"
+    if [ -z "$RB_AT" ] || [ -z "$SLOT2_AT" ] ||
+       [ "$SLOT2_AT" -lt "$RB_AT" ] || [ "$ARMED_AT" -gt "$RB_AT" ]; then
+        fail "pass $P: the session tokens are missing or out of order"
+    fi
+    token_between "$RB_AT" "$SLOT2_AT" "Booting... ${TOKEN}" "$LOG" || \
+        fail "pass $P: the installed kernel did not print its marker"
+    token_between "$SLOT2_AT" "$LOGEND" "bootctl: committed" "$LOG" || \
+        fail "pass $P: the trial commit did not report success"
 
     # Session B: cold boot; the saved default must be the marked candidate.
     # Then the recovery half: corrupt the candidate at the extent the
@@ -270,26 +280,27 @@ if b'bootctl: committed' not in log[slot2:]:
     done
     cleanup_boot
 
-    python3 -c "
-import sys
-log = open('$LOG', 'rb').read()
-mark = b'Booting... ${TOKEN}'
-cold = log.find(mark)
-rb_b = log.find(b'PRERB${P}B')
-slot_d = log.find(b'rach2.slotD${P}=fallback')
-rb_c = log.find(b'PRERB${P}C')
-slot_e = log.find(b'rach2.slotE${P}=candidate')
-if -1 in (cold, rb_b, slot_d, rb_c, slot_e):
-    sys.exit('pass $P: the recovery tokens are missing')
-if not (cold < rb_b < slot_d < rb_c < slot_e):
-    sys.exit('pass $P: the recovery tokens are out of order')
-if mark in log[rb_b:slot_d]:
-    sys.exit('pass $P: the fallback boot has the marker')
-if mark not in log[rb_c:slot_e]:
-    sys.exit('pass $P: the repaired candidate did not print its marker')
-if b'bootctl: committed' not in log[slot_e:]:
-    sys.exit('pass $P: the repair commit did not report success')
-" || fail "pass $P: the recovery half's identity did not hold"
+    COLD_AT="$(token_at "$LOG" "Booting... ${TOKEN}")"
+    RB_B="$(token_at "$LOG" "PRERB${P}B")"
+    SLOT_D="$(token_at "$LOG" "rach2.slotD${P}=fallback")"
+    RB_C="$(token_at "$LOG" "PRERB${P}C")"
+    SLOT_E="$(token_at "$LOG" "rach2.slotE${P}=candidate")"
+    LOGEND="$(wc -c < "$LOG" | tr -d ' ')"
+    if [ -z "$COLD_AT" ] || [ -z "$RB_B" ] || [ -z "$SLOT_D" ] ||
+       [ -z "$RB_C" ] || [ -z "$SLOT_E" ]; then
+        fail "pass $P: the recovery tokens are missing"
+    fi
+    if [ "$COLD_AT" -ge "$RB_B" ] || [ "$RB_B" -ge "$SLOT_D" ] ||
+       [ "$SLOT_D" -ge "$RB_C" ] || [ "$RB_C" -ge "$SLOT_E" ]; then
+        fail "pass $P: the recovery tokens are out of order"
+    fi
+    if token_between "$RB_B" "$SLOT_D" "Booting... ${TOKEN}" "$LOG"; then
+        fail "pass $P: the fallback boot has the marker"
+    fi
+    token_between "$RB_C" "$SLOT_E" "Booting... ${TOKEN}" "$LOG" || \
+        fail "pass $P: the repaired candidate did not print its marker"
+    token_between "$SLOT_E" "$LOGEND" "bootctl: committed" "$LOG" || \
+        fail "pass $P: the repair commit did not report success"
 }
 
 run_pass 1 "Rach2 Booting\\.\\.\\." "Rach2 Booting... IKMARKA" "IKMARKA"
@@ -299,31 +310,53 @@ run_pass 2 "IKMARKA" "IKMARKB" "IKMARKB"
 # login: the marked candidate prints IKMARKB before any prompt, so presence
 # tells the entries apart. A destroyed header and a complete old value select
 # the fallback; a complete new value selects the candidate once.
+# The block is built whole and written in place at the recorded offset:
+# 1024 bytes, the lines given here and a '#' fill, the way grub-editenv
+# writes one; `craft_env` takes the lines.
 craft_env() {
-    python3 -c "
-f = open('$WORK', 'r+b')
-f.seek($ENVOFF)
-f.write($1)
-f.close()
-"
+    printf '%s' "$1" > "$WORK.env"
+    n="$(wc -c < "$WORK.env" | tr -d ' ')"
+    dd if=/dev/zero bs=1 count=$((1024 - n)) 2>/dev/null | tr '\0' '#' \
+        >> "$WORK.env"
+    dd if="$WORK.env" of="$WORK" bs=1 seek="$ENVOFF" conv=notrunc \
+        status=none
+    rm -f "$WORK.env"
+}
+
+# The destroyed header: 1024 bytes of one repeated pattern, so nothing in
+# the block reads as a variable at all.
+smash_env() {
+    dd if=/dev/zero bs=1 count=512 2>/dev/null | tr '\0' '\336' > "$WORK.env"
+    dd if=/dev/zero bs=1 count=512 2>/dev/null | tr '\0' '\255' \
+        >> "$WORK.env"
+    dd if="$WORK.env" of="$WORK" bs=1 seek="$ENVOFF" conv=notrunc \
+        status=none
+    rm -f "$WORK.env"
 }
 
 LOG="$DISK.log.m1"
-craft_env "b'\\xde\\xad' * 512"
+smash_env
 boot_watch "rach2 login:"
 if grep -aq "Booting... IKMARKB" "$LOG"; then
     fail "a destroyed environment header still booted the candidate"
 fi
 
 LOG="$DISK.log.m2"
-craft_env "(b'# GRUB Environment Block\\n# WARNING: Do not edit this file by tools other than grub-editenv!!!\\nsaved_entry=fallback\\n').ljust(1024, b'#')"
+craft_env "# GRUB Environment Block
+# WARNING: Do not edit this file by tools other than grub-editenv!!!
+saved_entry=fallback
+"
 boot_watch "rach2 login:"
 if grep -aq "Booting... IKMARKB" "$LOG"; then
     fail "a complete old value still booted the candidate"
 fi
 
 LOG="$DISK.log.m3"
-craft_env "(b'# GRUB Environment Block\\n# WARNING: Do not edit this file by tools other than grub-editenv!!!\\nsaved_entry=fallback\\nnext_entry=candidate\\n').ljust(1024, b'#')"
+craft_env "# GRUB Environment Block
+# WARNING: Do not edit this file by tools other than grub-editenv!!!
+saved_entry=fallback
+next_entry=candidate
+"
 boot_watch "Booting... IKMARKB"
 
 echo "install-test: two passes installed, trialed, committed, recovered and re-committed a machine-built kernel on the booted disk, and the matrix states each booted the kernel the plan predicts: OK"
