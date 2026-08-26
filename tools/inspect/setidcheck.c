@@ -100,6 +100,35 @@ static char *xstrdup(const char *s)
     return p;
 }
 
+/**
+ * Appends a formatted string to a fixed buffer, advancing `*used`.
+ *
+ * `snprintf` returns the length it would have written, so a loop that adds
+ * that return value to an index walks past the end of the buffer on the
+ * first truncation, and the next call writes outside it with a length that
+ * has underflowed. This clamps `*used` at the end of the buffer instead
+ * and returns 0 when the text did not fit, so a caller that cannot afford
+ * a shortened result can say so.
+ */
+static int appendf(char *out, size_t out_len, size_t *used, const char *fmt,
+                   ...)
+{
+    va_list ap;
+    int want;
+
+    if (*used + 1 >= out_len)
+        return 0;
+    va_start(ap, fmt);
+    want = vsnprintf(out + *used, out_len - *used, fmt, ap);
+    va_end(ap);
+    if (want < 0 || (size_t) want >= out_len - *used) {
+        *used = out_len - 1;
+        return 0;
+    }
+    *used += (size_t) want;
+    return 1;
+}
+
 static void list_push(struct list *l, char *item)
 {
     if (l->n == l->cap) {
@@ -1329,6 +1358,14 @@ static int walk_nodes(struct image *im)
                             "have", (unsigned long) position,
                             (unsigned long long) n.size,
                             (unsigned long) im->size);
+        if (n.data_size > n.size - NODE_SIZE ||
+            n.data_size > im->size - position - NODE_SIZE)
+            return img_fail(im, "node at offset %lu claims %llu bytes of "
+                            "data, which do not fit in its own %llu bytes "
+                            "or in the region",
+                            (unsigned long) position,
+                            (unsigned long long) n.data_size,
+                            (unsigned long long) n.size);
         im->nodes = realloc(im->nodes,
                             (size_t) (im->n_nodes + 1) * sizeof(n));
         if (im->nodes == NULL)
@@ -1429,6 +1466,22 @@ static int node_paths(struct image *im)
 
 /* Read the `size` bytes at `offset` of `path`, checking the bounds. A
    size of 0 means the rest of the file. */
+/* A number given on the command line, parsed strictly: a mistyped offset
+   that reads as 0 would inventory a different region and report on that
+   one. */
+static int parse_num(const char *s, long *out)
+{
+    char *end;
+    long v;
+
+    errno = 0;
+    v = strtol(s, &end, 0);
+    if (end == s || *end != '\0' || errno != 0)
+        return -1;
+    *out = v;
+    return 0;
+}
+
 static int read_region(struct image *im, const char *path, long offset,
                        long size)
 {
@@ -1768,9 +1821,12 @@ static void hset_free(struct hset *h)
 }
 
 /* The host's header tree, keyed by the guest path each header will answer
-   to. Returns nonzero when the tree is absent. */
+   to. Returns nonzero when the tree is absent. Anything the walk cannot
+   read is reported rather than passed over: a header left out of this set
+   is a header the staged tree is never compared against, which is the
+   comparison quietly proving less than it says. */
 static int host_headers(const char *root, const char *guest_root,
-                        struct hset *out)
+                        struct hset *out, struct list *problems)
 {
     DIR *dir = opendir(root);
     struct dirent *ent;
@@ -1785,15 +1841,27 @@ static int host_headers(const char *root, const char *guest_root,
             continue;
         snprintf(host, sizeof(host), "%s/%s", root, ent->d_name);
         snprintf(guest, sizeof(guest), "%s/%s", guest_root, ent->d_name);
-        if (lstat(host, &st) != 0 || S_ISLNK(st.st_mode))
+        if (lstat(host, &st) != 0) {
+            addf(problems, "%s: %s; the staged tree cannot be compared "
+                 "against it", host, strerror(errno));
             continue;
+        }
+        if (S_ISLNK(st.st_mode)) {
+            addf(problems, "%s is a symbolic link; the staging walk copies "
+                 "regular files, so what this compares against is not what "
+                 "the guest would read", host);
+            continue;
+        }
         if (S_ISDIR(st.st_mode)) {
-            host_headers(host, guest, out);
+            host_headers(host, guest, out, problems);
         } else if (S_ISREG(st.st_mode)) {
             size_t len;
             unsigned char *data = read_file(host, &len);
 
-            if (data != NULL)
+            if (data == NULL)
+                addf(problems, "%s: cannot be read; the staged tree cannot "
+                     "be compared against it", host);
+            else
                 hset_add(out, guest, 0, data, data, len);
         }
     }
@@ -1833,10 +1901,10 @@ static void some(struct list *paths, char *out, size_t out_len)
     qsort(paths->items, (size_t) paths->n, sizeof(char *), cmp_str);
     out[0] = '\0';
     for (i = 0; i < shown; i++)
-        used += (size_t) snprintf(out + used, out_len - used, "%s%s",
-                                  i ? ", " : "", paths->items[i]);
+        appendf(out, out_len, &used, "%s%s", i ? ", " : "",
+                paths->items[i]);
     if (paths->n > 3)
-        snprintf(out + used, out_len - used, " and %d more", paths->n - 3);
+        appendf(out, out_len, &used, " and %d more", paths->n - 3);
 }
 
 /* Compare a staged header tree with the tree it was staged from: by path,
@@ -2011,7 +2079,7 @@ static void sysroot_checks(const struct allow *allow, const struct image *im,
                     name, problems);
 
     if (host_headers(SYSROOT_HEADER_SOURCE, SYSROOT_HEADER_ROOT,
-                     &wanted) != 0) {
+                     &wanted, problems) != 0) {
         addf(problems, "%s: %s is not there, so the staged headers could "
              "not be compared with it", name, SYSROOT_HEADER_SOURCE);
     } else {
@@ -2028,6 +2096,7 @@ static void sysroot_checks(const struct allow *allow, const struct image *im,
 #define APPLET_TABLE "build/vendor/busybox/applet_tables-main.h"
 #define SUID_APPLET_TABLE "build/vendor/busybox/applet_tables-suid.h"
 #define SUID_BUSYBOX_CONFIG "build/vendor/busybox/config-suid"
+#define BUSYBOX_CONFIG "build/vendor/busybox/config-main"
 #define INIT_BINARIES "build/utils/sbin"
 
 /* Read a generated applet table into whole-token names. The names live in
@@ -2112,8 +2181,12 @@ static int applet_names(const char *path, struct list *names,
         decl += strlen("#define NUM_APPLETS");
         while (*decl == ' ' || *decl == '\t')
             decl++;
-        if (*decl >= '0' && *decl <= '9')
+        if (*decl >= '0' && *decl <= '9') {
+            errno = 0;
             declared = strtol(decl, NULL, 10);
+            if (errno != 0)
+                declared = -1;
+        }
     }
     free(text);
     if (declared < 0) {
@@ -2180,18 +2253,15 @@ static void check_suid_applets(const struct allow *allow, const char *path,
     used = 0;
     declared[0] = '\0';
     for (i = 0; i < allow->suid_applets.n; i++)
-        used += (size_t) snprintf(declared + used,
-                                  sizeof(declared) - used, "%s`%s`",
-                                  i ? ", " : "",
-                                  allow->suid_applets.items[i]);
+        appendf(declared, sizeof(declared), &used, "%s`%s`", i ? ", " : "",
+                allow->suid_applets.items[i]);
     if (extra.n > 0) {
         qsort(extra.items, (size_t) extra.n, sizeof(char *), cmp_str);
         used = 0;
         joined[0] = '\0';
         for (i = 0; i < extra.n; i++)
-            used += (size_t) snprintf(joined + used,
-                                      sizeof(joined) - used, "%s`%s`",
-                                      i ? ", " : "", extra.items[i]);
+            appendf(joined, sizeof(joined), &used, "%s`%s`", i ? ", " : "",
+                    extra.items[i]);
         addf(problems, "%s: the set-id busybox has %s beside the declared "
              "%s; every applet in that binary runs as root", path, joined,
              declared);
@@ -2201,9 +2271,8 @@ static void check_suid_applets(const struct allow *allow, const char *path,
         used = 0;
         joined[0] = '\0';
         for (i = 0; i < missing.n; i++)
-            used += (size_t) snprintf(joined + used,
-                                      sizeof(joined) - used, "%s`%s`",
-                                      i ? ", " : "", missing.items[i]);
+            appendf(joined, sizeof(joined), &used, "%s`%s`", i ? ", " : "",
+                    missing.items[i]);
         addf(problems, "%s: the set-id busybox is missing %s, so this "
              "check proved nothing about the binary that ships", path,
              joined);
@@ -2283,6 +2352,11 @@ static void check_suid_config(const struct allow *allow, const char *path,
                     seen[i]++;
                 }
             }
+        } else {
+            addf(problems, "%s: the line at byte %lu is %lu bytes long, "
+                 "past what this guard reads; a symbol decided there "
+                 "would not be seen", path, (unsigned long) pos,
+                 (unsigned long) (end - pos));
         }
         pos = end + 1;
     }
@@ -2449,10 +2523,20 @@ int main(int argc, char **argv)
             image = argv[++i];
         else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc)
             manifest = argv[++i];
-        else if (strcmp(argv[i], "--offset") == 0 && i + 1 < argc)
-            offset = strtol(argv[++i], NULL, 0);
-        else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc)
-            size = strtol(argv[++i], NULL, 0);
+        else if (strcmp(argv[i], "--offset") == 0 && i + 1 < argc) {
+            if (parse_num(argv[++i], &offset) != 0 || offset < 0) {
+                fprintf(stderr, "check-setid: --offset %s is not a byte "
+                        "offset\n", argv[i]);
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
+            if (parse_num(argv[++i], &size) != 0 || size <= 0) {
+                fprintf(stderr, "check-setid: --size %s is not a positive "
+                        "byte count; leave it out for the rest of the "
+                        "file\n", argv[i]);
+                return 2;
+            }
+        }
         else if (argv[i][0] != '-')
             list_push(&manifests, argv[i]);
         else {
@@ -2526,6 +2610,10 @@ int main(int argc, char **argv)
         check_applets(allow, applets ? applets : APPLET_TABLE, &problems);
         check_suid_applets(allow, SUID_APPLET_TABLE, &problems);
         check_suid_config(allow, SUID_BUSYBOX_CONFIG, &problems);
+        if (access(BUSYBOX_CONFIG, R_OK) != 0)
+            addf(&problems, "%s: the main build staged no resolved config, "
+                 "so what its applet table was built from cannot be read",
+                 BUSYBOX_CONFIG);
         check_inits(allow, INIT_BINARIES, &problems);
         if (problems.n > 0)
             return report(&problems);
@@ -2693,15 +2781,18 @@ static void trusted_lines(const struct entry *e, char *out, size_t out_len)
     out[0] = '\0';
     for (i = 0; i < paths.n; i++)
         for (j = 0; j < e->n_trusted; j++)
-            if (strcmp(e->trusted[j].path, paths.items[i]) == 0)
-                used += (size_t) snprintf(out + used, out_len - used,
-                                          "%s %s %s %s\n",
-                                          e->trusted[j].verb,
-                                          fmt_entry(e->trusted[j].mode,
-                                                    e->trusted[j].uid,
-                                                    e->trusted[j].gid),
-                                          e->trusted[j].path,
-                                          e->trusted[j].value);
+            if (strcmp(e->trusted[j].path, paths.items[i]) == 0 &&
+                !appendf(out, out_len, &used, "%s %s %s %s\n",
+                         e->trusted[j].verb,
+                         fmt_entry(e->trusted[j].mode, e->trusted[j].uid,
+                                   e->trusted[j].gid),
+                         e->trusted[j].path, e->trusted[j].value)) {
+                fprintf(stderr, "setidcheck: selftest: the trusted lines "
+                        "of %s do not fit in %lu bytes; the fixtures this "
+                        "builds would test less than the allow file "
+                        "declares\n", e->stem, (unsigned long) out_len);
+                exit(2);
+            }
     free(paths.items);
 }
 
@@ -3595,6 +3686,10 @@ static int selftest(struct allow *allow)
         wr64(region + 2 * NODE_SIZE + NODE_SIZEF_OFF, IMG_TOTAL * 2);
         st_image(&img_allow, "a node larger than the region",
                  "img-fixture", region, IMG_TOTAL, 0, 0, "which no node");
+        fixture(-1, NULL, NULL, 0, region);
+        wr64(region + 2 * NODE_SIZE + NODE_DATA_OFF, IMG_TOTAL);
+        st_image(&img_allow, "a node claiming more data than it holds",
+                 "img-fixture", region, IMG_TOTAL, 0, 0, "bytes of data");
         n = IMG_NODES[3];
         n.name = "su";
         n.mode = 0755;
