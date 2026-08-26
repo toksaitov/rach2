@@ -113,11 +113,16 @@ done
 
 # The MBR writer beside this script, compiled when missing or older than
 # its source; it writes the same bytes parted wrote in the retired
-# container, CHS fields included.
+# container, CHS fields included. The GRUB embedder is built the same way.
 MKMBR="$REPO/build/tools/image/mkmbr"
 if [ ! -x "$MKMBR" ] || [ "$REPO/tools/image/mkmbr.c" -nt "$MKMBR" ]; then
     mkdir -p "${MKMBR%/*}"
     cc -O2 -o "$MKMBR" "$REPO/tools/image/mkmbr.c" || exit 1
+fi
+GRUBEMBED="$REPO/build/tools/image/grubembed"
+if [ ! -x "$GRUBEMBED" ] || [ "$REPO/tools/image/grubembed.c" -nt "$GRUBEMBED" ]; then
+    mkdir -p "${GRUBEMBED%/*}"
+    cc -O2 -o "$GRUBEMBED" "$REPO/tools/image/grubembed.c" || exit 1
 fi
 
 # Every intermediate lives in this run's own directory, so two profiles
@@ -549,8 +554,7 @@ END {
 
 dd if="$TMPD/p1.img" of="$OUT.new" bs=1048576 seek="$GAP_MB" conv=notrunc 2>/dev/null
 
-python3 "$REPO/tools/image/grub_embed.py" "$OUT.new" \
-    "$TMPD/bios-boot.img" "$TMPD/disk-core.img"
+"$GRUBEMBED" "$OUT.new" "$TMPD/bios-boot.img" "$TMPD/disk-core.img"
 
 dd if="$KRFFS_BIN" of="$OUT.new" bs=1048576 seek=$((GAP_MB + BOOT_MB)) \
     conv=notrunc 2>/dev/null

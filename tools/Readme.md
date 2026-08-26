@@ -59,7 +59,7 @@ The inspectors under `inspect/` validate built artifacts; the validation stamps 
 ## GRUB and ISO builders
 
 * `image/mkdisk_grub.sh [KERNEL [OUTPUT]]` builds a BIOS-bootable disk natively: mtools stage the FAT32 boot partition, `mkmbr.c` writes the partition table, and the pinned GRUB boot code embeds from [`vendor/grub/`](../vendor/grub/Readme.md). The disk has a KRFFS root and an optional FAT32 recovery partition. It stages a fixed-size candidate kernel slot, a fallback kernel, a fixed-size menu slot, and a GRUB environment block, then validates the FAT chains and layout before publishing the image.
-* `image/grub_embed.py` writes GRUB's MBR boot code and core image while preserving the partition table. It patches the core-image pointers and rejects an image that does not fit the post-MBR gap or one tail slot.
+* `image/grubembed.c` writes GRUB's MBR boot code and core image while preserving the partition table. It patches the core-image pointers and rejects an image that does not fit the post-MBR gap or one tail slot.
 * `image/mkgrubcore.sh {A|B} OUTPUT` verifies and hands out one of the two pinned marked core images the replacement suites install.
 * `image/grub-embed.cfg` is the common embedded configuration. It tries the normal menu on partition 1 and then the recovery menu on partition 3.
 * `image/mkiso.sh` builds `test`, `os-simple`, `os-real`, or `rach2-metal` as a GRUB ISO with native `xorriso` and the pinned El Torito and hybrid images under [`vendor/grub/`](../vendor/grub/Readme.md). It checks the selected kernel's disk policy before staging it. The top-level `make isos` target builds all four.
