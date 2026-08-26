@@ -38,7 +38,7 @@ esac
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 BINFIND="$REPO/build/tools/inspect/binfind"
-if [ ! -x "$BINFIND" ]; then
+if [ ! -x "$BINFIND" ] || [ "$REPO/tools/inspect/binfind.c" -nt "$BINFIND" ]; then
     mkdir -p "${BINFIND%/*}"
     cc -O2 -o "$BINFIND" "$REPO/tools/inspect/binfind.c" || exit 2
 fi
