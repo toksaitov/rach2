@@ -461,8 +461,12 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too,
     struct spans names = { NULL, 0, 0 };
     int i;
 
-    if (stat(root, &st) != 0)
+    if (stat(root, &st) != 0) {
+        fprintf(stderr, "prosecheck: %s: %s; nothing under it was "
+                "checked\n", root, strerror(errno));
+        unread++;
         return;
+    }
     if (S_ISREG(st.st_mode)) {
         visit(ctx, root);
         return;
@@ -473,8 +477,12 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too,
             if (strstr(root, SKIP_PATHS[i]) != NULL)
                 return;
     dir = opendir(root);
-    if (dir == NULL)
+    if (dir == NULL) {
+        fprintf(stderr, "prosecheck: %s: %s; nothing under it was "
+                "checked\n", root, strerror(errno));
+        unread++;
         return;
+    }
     while ((ent = readdir(dir)) != NULL) {
         char full[2048];
         int skip = 0;
@@ -1669,6 +1677,11 @@ int main(int argc, char **argv)
         for (i = 0; i < N_WATCH; i++)
             printf("phrase %ld\n", count_spans(&c.prose, WATCH[i]));
         spans_free(&c.prose);
+        if (unread > 0) {
+            fprintf(stderr, "prosecheck: %ld file(s) could not be read, so "
+                    "these counts are over less than the tree\n", unread);
+            return 1;
+        }
         return 0;
     }
 

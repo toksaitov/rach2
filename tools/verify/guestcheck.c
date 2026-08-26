@@ -532,7 +532,8 @@ static void expand_line(char *line, size_t line_len, const struct macros *m)
                 p = at + strlen(want);
             }
             if (used > 0) {
-                snprintf(out + used, sizeof(out) - used, "%s", p);
+                appendf(out, sizeof(out), &used, "a substitution reference",
+                        "%s", p);
                 snprintf(line, line_len, "%s", out);
             }
         }
@@ -1079,8 +1080,12 @@ static void scan_includes(struct graph *g, const char *dir)
     DIR *d = opendir(dir);
     struct dirent *ent;
 
+    /* A directory or file the walk cannot read is a fault, not a gap to
+       pass over: a source left out of the graph can only shorten the
+       deepest include chain, so an omission reads as a build that fits. */
     if (d == NULL)
-        return;
+        fail("cannot read the directory %s; the include graph would be "
+             "missing whatever is under it", dir);
     while ((ent = readdir(d)) != NULL) {
         char full[1024];
         struct stat st;
@@ -1090,7 +1095,8 @@ static void scan_includes(struct graph *g, const char *dir)
             continue;
         snprintf(full, sizeof(full), "%s/%s", dir, ent->d_name);
         if (stat(full, &st) != 0)
-            continue;
+            fail("cannot read %s; the include graph would be missing it",
+                 full);
         if (S_ISDIR(st.st_mode)) {
             scan_includes(g, full);
             continue;
@@ -1105,7 +1111,8 @@ static void scan_includes(struct graph *g, const char *dir)
             const char *p;
 
             if (text == NULL)
-                continue;
+                fail("cannot read %s; the include graph would be missing "
+                     "it", full);
             memset(&node, 0, sizeof(node));
             snprintf(node.path, sizeof(node.path), "%s", full);
             normalize_path(node.path);
@@ -1252,7 +1259,8 @@ static int check_limits(void)
                             rules.item[i].target);
                     p = at + 2;
                 }
-                snprintf(out + used, sizeof(out) - used, "%s", p);
+                appendf(out, sizeof(out), &used, "an expanded recipe",
+                        "%s", p);
                 snprintf(line, sizeof(line), "%s", out);
                 out[0] = '\0';
                 used = 0;
@@ -1264,7 +1272,8 @@ static int check_limits(void)
                                 ? rules.item[i].prereqs.item[0] : "");
                     p = at + 2;
                 }
-                snprintf(out + used, sizeof(out) - used, "%s", p);
+                appendf(out, sizeof(out), &used, "an expanded recipe",
+                        "%s", p);
                 len = strlen(out);
                 if (len + ENV_ALLOWANCE > EXEC_BUDGET)
                     fail("%s: the %s recipe expands to %lu bytes, which with "

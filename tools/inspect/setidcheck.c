@@ -1853,7 +1853,9 @@ static int host_headers(const char *root, const char *guest_root,
             continue;
         }
         if (S_ISDIR(st.st_mode)) {
-            host_headers(host, guest, out, problems);
+            if (host_headers(host, guest, out, problems) != 0)
+                addf(problems, "%s: cannot be opened; the headers under it "
+                     "are not compared with anything", host);
         } else if (S_ISREG(st.st_mode)) {
             size_t len;
             unsigned char *data = read_file(host, &len);
@@ -2810,6 +2812,28 @@ static void init_line_of(const struct allow *allow, const char *stem,
 
 static char st_tmp[256];
 
+/* The selftest's fixtures are flat files in one directory, so removing
+   them and the directory is the whole of the cleanup. */
+static void st_clean(void)
+{
+    DIR *dir = opendir(st_tmp);
+    struct dirent *ent;
+
+    if (dir != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            char path[512];
+
+            if (strcmp(ent->d_name, ".") == 0 ||
+                strcmp(ent->d_name, "..") == 0)
+                continue;
+            snprintf(path, sizeof(path), "%s/%s", st_tmp, ent->d_name);
+            unlink(path);
+        }
+        closedir(dir);
+    }
+    rmdir(st_tmp);
+}
+
 /* Write a fixture manifest and sweep it. */
 static void st_manifest(const struct allow *allow, const char *name,
                         const char *stem, const char *text, int want_ok,
@@ -3717,6 +3741,7 @@ static int selftest(struct allow *allow)
                  "img-blind", region, IMG_TOTAL, 0, 0, "nothing to find");
     }
 
+    st_clean();
     if (st_bad) {
         printf("check-setid: selftest: %d of %d cases failed\n", st_bad,
                st_ran);
