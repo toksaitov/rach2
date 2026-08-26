@@ -435,7 +435,8 @@ static enum lang lang_of(const char *path)
        files answer to the same 80-column rule as the code they build. Named
        explicitly because they carry no extension. */
     if (ends_with(path, ".sh") || ends_with(path, ".mk") ||
-        ends_with(path, "/Makefile") || strcmp(path, "Makefile") == 0)
+        ends_with(path, ".py") || ends_with(path, "/Makefile") ||
+        strcmp(path, "Makefile") == 0)
         return LANG_HASH;
     if (ends_with(path, ".md"))
         return LANG_MD;

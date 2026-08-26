@@ -13,7 +13,7 @@
 # "Part N" diary tag in a C or H comment. Vocabulary is checked by
 # tools/verify/prosecheck.c, not here, and the half of the register rule
 # that needs a judgement is checked by a person in review. It uses grep,
-# find, awk, sed, perl.
+# find, awk and sed.
 #
 set -u
 

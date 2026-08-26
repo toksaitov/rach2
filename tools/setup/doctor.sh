@@ -59,6 +59,22 @@ req() {
     fi
 }
 
+# reqx NAME HINTKEY ARG...: the same, for a tool with no --version. NAME is
+# run with the given arguments and empty input, and must succeed.
+reqx() {
+    name=$1
+    key=$2
+    shift 2
+    if command -v "$name" >/dev/null 2>&1 &&
+       "$name" "$@" </dev/null >/dev/null 2>&1
+    then
+        row "[PASS]" "$name" "$(command -v "$name")"
+    else
+        row "[MISSING]" "$name" "$(hint "$key")"
+        missing=$((missing + 1))
+    fi
+}
+
 # opt NAME WHAT HINTKEY: a tool only some tasks need; absence is a note, not
 # a failure, and a plain presence check is enough for one. The three style
 # tools are not among them. `tests/run style` refuses to start without all
@@ -86,31 +102,54 @@ req i686-elf-nm      binutils
 req qemu-system-i386 qemu
 req make             make
 req cc               cc
-# mtools stages the FAT boot partition of every GRUB disk, and ssh-keygen
-# provisions the demo login keys the os-real image is built with. Both are
-# reached by a default `make`, so neither is optional.
-req mformat          mtools
-req mcopy            mtools
+req i686-elf-objcopy binutils
+# The rest of what tools/setup/preflight.sh requires. This report and that
+# check answer the same question, so they name the same tools: a machine this
+# passes and the build then rejects would make the report worthless.
+#
+# awk and sed are probed by doing a substitution rather than with --version,
+# which the BSD versions macOS ships do not accept. A tool that performs the
+# operation is present and working whatever it prints for a version.
+reqx awk  awk 'BEGIN { exit 0 }'
+reqx sed  sed 's/x/y/'
+req tar              tar
+req gzip             gzip
+req bzip2            bzip2
+req patch            patch
 
-# ssh-keygen has no --version, so it is probed by doing the work the build
-# does with it: generate a key pair into a temporary path and remove it. A
-# tool that cannot write a key is as broken here as one that is absent.
-keygen_probe=$(mktemp -u "${TMPDIR:-/tmp}/rach2-doctor-key.XXXXXX")
-if command -v ssh-keygen >/dev/null 2>&1 &&
-   ssh-keygen -t ed25519 -N '' -C rach2-doctor -f "$keygen_probe" \
+# ssh-keygen provisions the demo login keys the os-real image is built with,
+# so a default `make` reaches it. It has no --version, so it is probed by
+# doing the work the build does with it: generate a key pair in a temporary
+# directory. A tool that cannot write a key is as broken here as one that is
+# absent. The directory is removed on every path, interruption included.
+keygen_dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-doctor.XXXXXX") || keygen_dir=
+trap 'test -n "$keygen_dir" && rm -rf "$keygen_dir"' EXIT INT TERM HUP
+if command -v ssh-keygen >/dev/null 2>&1 && [ -n "$keygen_dir" ] &&
+   ssh-keygen -t ed25519 -N '' -C rach2-doctor -f "$keygen_dir/probe" \
        >/dev/null 2>&1; then
     row "[PASS]" "ssh-keygen" "$(command -v ssh-keygen)"
 else
     row "[MISSING]" "ssh-keygen" "$(hint openssh)"
     missing=$((missing + 1))
 fi
-rm -f "$keygen_probe" "$keygen_probe.pub"
+rm -rf "$keygen_dir"
+keygen_dir=
 
 echo
 echo "Required to verify (tests/run style refuses to run without these):"
 req cppcheck     cppcheck
 req shellcheck   shellcheck
 req clang-format clang-format
+
+echo
+# A default `make` builds the three RAM images and reaches none of these. The
+# GRUB disks do, and tools/image/mkdisk_grub.sh needs all four mtools
+# commands, so all four are named rather than one standing for the set.
+echo "Needed by the GRUB disk suites (grub, menu, install, sealed, drill, selfbuild):"
+opt mformat      "the FAT boot partition" mtools
+opt mmd          "the FAT boot partition" mtools
+opt mcopy        "the FAT boot partition" mtools
+opt mshowfat     "the FAT chain validation" mtools
 
 echo
 echo "Optional (only some tasks need these):"

@@ -5,19 +5,27 @@ The scripts under `tools/` are grouped by role: `setup/` prepares and reports on
 ## Machine setup
 
 To build and boot Rach2 a machine needs GNU Make, a host C compiler, the
-`i686-elf` freestanding cross toolchain, QEMU, mtools, and `ssh-keygen`. To
-pass `tests/run style` it also needs cppcheck, ShellCheck, and clang-format.
-Nothing is fetched during a build: the five vendored projects are pinned
-tarballs already in the tree.
+`i686-elf` freestanding cross toolchain, QEMU, `ssh-keygen`, and the POSIX
+text utilities. To pass `tests/run style` it also needs cppcheck, ShellCheck,
+and clang-format. The six suites that build a GRUB disk need mtools; a plain
+`make` builds the three RAM images and reaches none of it. Nothing is fetched
+during a build: the five vendored projects are pinned tarballs already in the
+tree.
 
 Install those, then run `sh tools/setup/doctor.sh`. It reports every tool in
-three tiers and prints the install command for whatever is missing.
+four tiers and prints the install command for whatever is missing.
 
 ### macOS
 
 Xcode's command line tools supply `make` and `cc`; Homebrew supplies the rest.
+Install Homebrew first if the machine has none, and run the `shellenv` line its
+installer prints, because it does not put `brew` on the path itself.
 
     xcode-select --install
+    /bin/bash -c "$(curl -fsSL \
+        https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+
     brew install i686-elf-gcc i686-elf-binutils qemu mtools \
                  cppcheck shellcheck clang-format
 
@@ -29,8 +37,8 @@ mount` mount an image on the host; neither is needed to build or test.
 
 The archive has everything except the cross toolchain.
 
-    sudo apt install build-essential qemu-system-x86 mtools openssh-client \
-                     cppcheck shellcheck clang-format
+    sudo apt install build-essential curl qemu-system-x86 mtools \
+                     openssh-client cppcheck shellcheck clang-format
 
 `xorriso` builds the optional ISOs, and `pkg-config` with `libfuse-dev` lets
 `make -C krffs mount` mount an image; neither is needed to build or test.
@@ -38,7 +46,7 @@ The archive has everything except the cross toolchain.
 No Debian package provides an `i686-elf` toolchain, so build one. It installs
 under your home directory and touches nothing the distribution owns.
 
-    sudo apt install bison flex texinfo libgmp-dev libmpfr-dev libmpc-dev
+    sudo apt install curl bison flex texinfo libgmp-dev libmpfr-dev libmpc-dev
 
     export PREFIX="$HOME/opt/cross" TARGET=i686-elf
     export PATH="$PREFIX/bin:$PATH"
@@ -76,12 +84,15 @@ prefix works; one built for another target does not.
   cache hit and repeats its compile probes only when the environment changed.
   A missing tool fails the build, named, before compilation. `--report`
   prints one line per tool without caching.
-* `setup/doctor.sh` is the wider machine report. It covers the cross compiler
-  and binutils, QEMU, `make`, a host C compiler, mtools, `ssh-keygen`, and the
-  three style tools, and reports `xorriso`, Docker (the `vendor/grub`
-  regeneration procedure only), Git, and FUSE as optional. It checks that
-  tools run rather than that their names are present; for FUSE it runs
-  `pkg-config --exists` for `fuse`, then for `fuse-t`.
+* `setup/doctor.sh` is the wider machine report, in four tiers: what a build
+  and run need, which is everything `preflight.sh` requires plus QEMU; the
+  three tools `tests/run style` refuses to start without; the four mtools
+  commands the GRUB disk suites need; and the optional `xorriso`, Docker (the
+  `vendor/grub` regeneration procedure only), Git, and FUSE. It checks that
+  tools run rather than that their names are present, probing `awk`, `sed`,
+  and `ssh-keygen` by doing the work the build does with them, since none of
+  the three accepts `--version` everywhere. For FUSE it runs `pkg-config
+  --exists` for `fuse`, then for `fuse-t`.
 
 ## `tests/run style`
 
@@ -124,7 +135,7 @@ The inspectors under `inspect/` validate built artifacts; the validation stamps 
 
 ## clangd database
 
-`dev/gen_compile_commands.sh` builds the clangd database, run directly (the `sh tools/dev/gen_compile_commands.sh` alias is retired). It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines, selects the cross-compile commands by their first word, and publishes `compile_commands.json` only after the finished file passes a line-by-line JSON validation and the kernel coverage check. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `tests/run style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
+`dev/gen_compile_commands.sh` builds the clangd database. Run it directly. It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines, selects the cross-compile commands by their first word, and publishes `compile_commands.json` only after the finished file passes a line-by-line JSON validation and the kernel coverage check. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `tests/run style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
 
 ## GRUB and ISO builders
 

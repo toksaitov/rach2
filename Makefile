@@ -871,7 +871,7 @@ run-cred-persist: rach2 musl-programs krffs $(HARNESS)
 # `tests/run crash`: prove the dirty-mount flag detects an unclean shutdown. A
 # crashed boot (killed after mounting) leaves the on-disk dirty bit set for
 # fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
-# test-disk on a shared file under `make -j`.
+# `tests/run disk` on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 # The capture `tests/run raw` reads the hop limits and the checksum out of.
 RAW_PCAP = $(IMAGES_DIR)/raw.pcap
@@ -892,8 +892,8 @@ run-ping: rach2 tests krffs test-image $(HARNESS)
 
 # `tests/run packet`: the packet socket, which is how a DHCP client sees a reply
 # that arrives before this machine owns an address. Its own target and not a
-# probe in the suite, for the reason `ping-test` is: it needs the network to
-# answer, and the suite's probes must not.
+# probe in the suite, for the reason `tests/run ping` is: it needs the
+# network to answer, and the suite's probes must not.
 run-packet: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -955,9 +955,9 @@ run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 	    "send=/bin/ping 10.0.2.2 && echo USERPING\"\"OK" wait=15
 
 # `tests/run netif`: the interface ioctls, which is how a program sets this
-# machine's address. Its own target, like `ping-test`: it changes the address
-# out from under the machine and puts it back, and the last thing it does is
-# ping the gateway, which needs the network to answer.
+# machine's address. Its own target, like `tests/run ping`: it changes the
+# address out from under the machine and puts it back, and the last thing it
+# does is ping the gateway, which needs the network to answer.
 run-netif: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1466,7 +1466,7 @@ run-stress: rach2 tests krffs $(HARNESS)
 # rides an ich9-ahci HBA (if=none + ide-hd) and rach2.disk=ahci selects the AHCI
 # backend, exercising the same page-cache/KRFFS path through
 # ahci_read/ahci_write. The --qemu-arg passthrough adds the two -device lines
-# without disturbing the fixed NIC. The ATA test-disk/persist-test/stress-test
+# without disturbing the fixed NIC. The ATA disk, persist and stress suites
 # stay on if=ide.
 AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
               --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0
