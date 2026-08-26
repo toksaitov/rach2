@@ -471,7 +471,7 @@ GENVN=$(wc -c < "$TMPD/genv.head" | tr -d ' ')
 mcopy -i "$TMPD/p1.img" "$TMPD/genv" ::/boot/grub/grubenv
 
 # Every staged chain, verified before the partition is committed: each of
-# the four files must be whole (its cluster count matching its size) and
+# the five files must be whole (its cluster count matching its size) and
 # the extents disjoint. mshowfat prints cluster ranges, the BPB names the
 # cluster size, and the awk below fails closed: a missing record, a wrong
 # count, or a shared cluster stops the build.
@@ -497,8 +497,14 @@ function need(bytes) { return int((bytes + cbytes - 1) / cbytes) }
     want = file == "kernel" ? kernel : file == "fallback" ? fallback : \
            file == "grub.cfg" ? grubcfg : file == "grubenv" ? grubenv : \
            file == "boot.cfg" ? bootcfg : -1
-    if (want < 0) { print "mkdisk_grub: unexpected record for " file; exit 1 }
-    if (file in seen) { print "mkdisk_grub: repeated record for " file; exit 1 }
+    if (want < 0) {
+        print "mkdisk_grub: unexpected record for " file > "/dev/stderr"
+        bad = 1; exit 1
+    }
+    if (file in seen) {
+        print "mkdisk_grub: repeated record for " file > "/dev/stderr"
+        bad = 1; exit 1
+    }
     seen[file] = 1
     count = 0
     rest = $0
@@ -511,23 +517,30 @@ function need(bytes) { return int((bytes + cbytes - 1) / cbytes) }
         count += b - a + 1
         for (c = a; c <= b; c++) {
             if (c in used) {
-                print "mkdisk_grub: " file " and " used[c] " share clusters"
-                exit 1
+                print "mkdisk_grub: " file " and " used[c] " share clusters" \
+                    > "/dev/stderr"
+                bad = 1; exit 1
             }
             used[c] = file
         }
     }
-    if (count == 0) { print "mkdisk_grub: " file " has no clusters"; exit 1 }
+    if (count == 0) {
+        print "mkdisk_grub: " file " has no clusters" > "/dev/stderr"
+        bad = 1; exit 1
+    }
     if (count != need(want)) {
         print "mkdisk_grub: " file " spans " count " clusters and its " \
-              want " bytes need " need(want)
-        exit 1
+              want " bytes need " need(want) > "/dev/stderr"
+        bad = 1; exit 1
     }
 }
 END {
+    # exit in a rule still runs END, so the success line is printed only
+    # when no rule flagged a failure first.
+    if (bad) exit 1
     if (!("kernel" in seen && "fallback" in seen && "grub.cfg" in seen && \
           "grubenv" in seen && "boot.cfg" in seen)) {
-        print "mkdisk_grub: a chain record is missing"
+        print "mkdisk_grub: a chain record is missing" > "/dev/stderr"
         exit 1
     }
     printf "mkdisk_grub: boot files verified at %d bytes per cluster\n", cbytes
