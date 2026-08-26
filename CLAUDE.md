@@ -24,9 +24,9 @@ All written language reads as if one careful author wrote it. The model for voic
 
 ### Register rule for Claude Opus 5 and Fable 5
 
-These models tend to use figurative phrases as private shorthand. Do not use that register in chat replies, code comments, documentation, Readmes, commit messages, or reviewer prompts. `tools/verify/prose_check.py` enforces terms that have no valid use here. Review handles choices that depend on context.
+These models tend to use figurative phrases as private shorthand. Do not use that register in chat replies, code comments, documentation, Readmes, commit messages, or reviewer prompts. `tools/verify/prosecheck.c` enforces terms that have no valid use here. Review handles choices that depend on context.
 
-Decided by `tools/verify/prose_check.py`. These terms are wrong at any frequency: "load-bearing", "worth stating plainly", "worth noting", "full stop", "blast radius", "tripwire", "timebox", and "seam". Write the ordinary word: a test, a stage, a time limit. There are no sanctioned exceptions: the tests under `tests/host` are the host tests, and the check suites are named by their targets, `tests/run style` and `tests/run host`. This rule's own text, the checker's word lists, and its test fixtures are the only places these terms may appear.
+Decided by `tools/verify/prosecheck.c`. These terms are wrong at any frequency: "load-bearing", "worth stating plainly", "worth noting", "full stop", "blast radius", "tripwire", "timebox", and "seam". Write the ordinary word: a test, a stage, a time limit. There are no sanctioned exceptions: the tests under `tests/host` are the host tests, and the check suites are named by their targets, `tests/run style` and `tests/run host`. This rule's own text, the checker's word lists, and its test fixtures are the only places these terms may appear.
 
 Do not add "trap", "bench", "gate", "era", "surface", or "sight" to the mechanical list. Each has a valid use in this tree: a shell trap, a test bench, hardware gates, an attack surface, controller generations, and ordinary phrases such as "anywhere in sight". Review must still reject any of them when used as invented shorthand. A mechanical ban is reserved for a term with no valid use in this domain.
 
@@ -34,7 +34,7 @@ Review decides the contextual cases. Reject "honest" or "fiction" when applied t
 
 Prefer a concrete subject and verb. Write "the header has a magic number", not "the header carries one". Review "holds", "names", "spells", "sits", and "pins" for the same fault. Keep established technical metaphors, such as a listening socket, a held lock, or a warm cache. Define a term of art at first use. Put a qualification beside the claim it limits. Do not use "trap" for a difficulty, "bench" for a work session, "gate" for a set of checks, "era" for a stage, "surface" for an area of code, or "sight" for a view.
 
-Repeating an ordinary phrase can produce the same private register. `prose_check.py --report` compares each watched phrase with human comments from the pinned upstream tarballs and Doom sources, then prints the rate and ratio. A person reads that report. A phrase fails the build only after the reason is recorded. Do not change the baseline in the same commit as the prose that changes it.
+Repeating an ordinary phrase can produce the same private register. `tools/verify/prose_report.sh` compares each watched phrase with human comments from the pinned upstream tarballs and Doom sources, then prints the rate and ratio. A person reads that report. A phrase fails the build only after the reason is recorded. Do not change the baseline in the same commit as the prose that changes it.
 
 Do not build a sentence toward a turn of phrase; state the claim first in plain words: the component, what it does, why. In scratch files and internal reasoning any register is fine; none of it may be committed or shown to the user. Chat replies are held to the same standard as committed prose: short sentences, ordinary words, and no em-dashes there either.
 
@@ -76,7 +76,7 @@ Never report that a delegated job is running without reading its state in the sa
 
 A test is proved by making it fail. Drive a mutation from a script that restores the source in a trap, because a mutation can hang the suite and outlive the command that applied it, leaving the tree mutated. Restoring the source is not enough on its own: a `cp` back does not make `make` rebuild, so several runs here re-tested a stale binary and reported PASS for a mutation that had never been compiled. Touch the file, or rebuild explicitly, before believing the result.
 
-Every change passes `tests/run style` and `tests/run host`, and a real boot plus the SSH capstone when it touches anything they exercise. Substantial work gets a harsh independent Codex review with every finding fixed before commit. The half of the register rule that a person decides is part of that review; `tools/verify/prose_check.py` decides the other half before the review starts.
+Every change passes `tests/run style` and `tests/run host`, and a real boot plus the SSH capstone when it touches anything they exercise. Substantial work gets a harsh independent Codex review with every finding fixed before commit. The half of the register rule that a person decides is part of that review; `tools/verify/prosecheck.c` decides the other half before the review starts.
 
 ## Git
 

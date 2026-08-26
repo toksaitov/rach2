@@ -1,6 +1,6 @@
 # Upstream comment prose, counted from the pinned tarballs and the
 # tracked Doom sources. Regenerate deliberately, and only when a
-# tarball is repinned: prose_check.py --fixture --write
+# tarball is repinned: prose_report.sh --fixture --write
 #
 # project words carries holds rather_than which_is not_a honest the_point in_practice worth note_that ,_not instead_of
 busybox 397531 4 27 26 121 122 0 4 6 10 96 214 218
