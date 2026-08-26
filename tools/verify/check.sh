@@ -45,6 +45,11 @@ if [ ! -x "$ASCIISCAN" ] || [ "$REPO/tools/verify/asciiscan.c" -nt "$ASCIISCAN" 
     mkdir -p "${ASCIISCAN%/*}"
     cc -O2 -o "$ASCIISCAN" "$REPO/tools/verify/asciiscan.c" || exit 1
 fi
+GUESTCHECK="$REPO/build/tools/verify/guestcheck"
+if [ ! -x "$GUESTCHECK" ] || [ "$REPO/tools/verify/guestcheck.c" -nt "$GUESTCHECK" ]; then
+    mkdir -p "${GUESTCHECK%/*}"
+    cc -O2 -o "$GUESTCHECK" "$REPO/tools/verify/guestcheck.c" || exit 1
+fi
 PROSECHECK="$REPO/build/tools/verify/prosecheck"
 if [ ! -x "$PROSECHECK" ] || [ "$REPO/tools/verify/prosecheck.c" -nt "$PROSECHECK" ]; then
     mkdir -p "${PROSECHECK%/*}"
@@ -258,7 +263,7 @@ fi
 #    so a newly added kernel source cannot be silently dropped from the build.
 hr "7/13 kernel source list (C_SRC vs disk) and the guest build lists"
 if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
-   python3 "$REPO/tools/verify/check_guest.py" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
+   "$GUESTCHECK" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_sources.log"; fail=1

@@ -85,6 +85,7 @@ ELFCHECK        = build/tools/inspect/elfcheck
 SETIDCHECK      = build/tools/inspect/setidcheck
 CFGCHECK        = build/tools/inspect/cfgcheck
 PROSECHECK      = build/tools/verify/prosecheck
+GUESTCHECK      = build/tools/verify/guestcheck
 MKFIXTURE       = build/tests/system/mkfixture
 HOLDPORT        = build/tests/system/holdport
 SHA256TOOL      = build/tools/verify/sha256
@@ -331,6 +332,12 @@ $(CFGCHECK): tools/inspect/cfgcheck.c
 # The prose checks (tools/verify/prosecheck.c): comment width, the banned
 # vocabulary, the phrase counts the report tabulates, and the dev-log index.
 $(PROSECHECK): tools/verify/prosecheck.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+# The guest-build guard (tools/verify/guestcheck.c): the three guest
+# makefiles against the host build they mirror.
+$(GUESTCHECK): tools/verify/guestcheck.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
