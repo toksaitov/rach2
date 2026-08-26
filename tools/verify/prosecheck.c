@@ -47,6 +47,7 @@
  */
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -367,21 +368,43 @@ static void hash_comment_lines(const char *text, size_t n, char *mark,
 
 /* ---- file reading and the walk ---- */
 
+/* Counts the files the walk reached but could not read. A file skipped in
+   silence is a file that passes every rule, so the count is reported and
+   fails the run. */
+static long unread;
+
 static char *read_text(const char *path, size_t *len)
 {
     FILE *f = fopen(path, "rb");
     char *buf;
     long n;
 
-    if (f == NULL)
+    if (f == NULL) {
+        fprintf(stderr, "prosecheck: %s: %s; it was not checked\n", path,
+                strerror(errno));
+        unread++;
         return NULL;
+    }
     if (fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) < 0 ||
-        fseek(f, 0, SEEK_SET) != 0 || n > MAX_FILE) {
+        fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "prosecheck: %s: cannot be measured; it was not "
+                "checked\n", path);
+        unread++;
+        fclose(f);
+        return NULL;
+    }
+    if (n > MAX_FILE) {
+        fprintf(stderr, "prosecheck: %s: %ld bytes, past the %d this tool "
+                "reads; it was not checked\n", path, n, MAX_FILE);
+        unread++;
         fclose(f);
         return NULL;
     }
     buf = xalloc((size_t) n + 1);
     if (fread(buf, 1, (size_t) n, f) != (size_t) n) {
+        fprintf(stderr, "prosecheck: %s: short read; it was not checked\n",
+                path);
+        unread++;
         free(buf);
         fclose(f);
         return NULL;
@@ -463,7 +486,14 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too,
                 skip = 1;
         if (skip)
             continue;
-        snprintf(full, sizeof(full), "%s/%s", root, ent->d_name);
+        if ((size_t) snprintf(full, sizeof(full), "%s/%s", root,
+                              ent->d_name) >= sizeof(full)) {
+            fprintf(stderr, "prosecheck: the path under %s named %s is "
+                    "longer than %lu bytes; it was not checked\n", root,
+                    ent->d_name, (unsigned long) sizeof(full));
+            unread++;
+            continue;
+        }
         spans_push(&names, strdup(full));
     }
     closedir(dir);
@@ -479,9 +509,20 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too,
         names.item[j + 1] = key;
     }
     for (i = 0; i < names.n; i++) {
-        if (stat(names.item[i], &st) != 0)
+        /* lstat, not stat: a symbolic link to a directory above this one
+           would walk the tree again and again. There are none in this
+           tree, so one that appears is reported rather than followed. */
+        if (lstat(names.item[i], &st) != 0) {
+            fprintf(stderr, "prosecheck: %s: %s; it was not checked\n",
+                    names.item[i], strerror(errno));
+            unread++;
             continue;
-        if (S_ISDIR(st.st_mode))
+        }
+        if (S_ISLNK(st.st_mode)) {
+            fprintf(stderr, "prosecheck: %s is a symbolic link; it was not "
+                    "checked\n", names.item[i]);
+            unread++;
+        } else if (S_ISDIR(st.st_mode))
             walk_at(names.item[i], visit, ctx, md_too, 0);
         else if (S_ISREG(st.st_mode)) {
             enum lang l = lang_of(names.item[i]);
@@ -1207,6 +1248,28 @@ static int any_span_has(const struct spans *s, const char *needle)
 
 static char st_dir[256];
 
+/* The selftest's fixtures are flat files in one directory, so removing
+   them and the directory is the whole of the cleanup. */
+static void st_clean(void)
+{
+    DIR *dir = opendir(st_dir);
+    struct dirent *ent;
+
+    if (dir != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            char path[512];
+
+            if (strcmp(ent->d_name, ".") == 0 ||
+                strcmp(ent->d_name, "..") == 0)
+                continue;
+            snprintf(path, sizeof(path), "%s/%s", st_dir, ent->d_name);
+            unlink(path);
+        }
+        closedir(dir);
+    }
+    rmdir(st_dir);
+}
+
 static char *st_write(const char *name, const char *body)
 {
     static char path[512];
@@ -1457,22 +1520,30 @@ static int selftest(void)
     spans_free(&md);
     if (st_bad) {
         fprintf(stderr, "prosecheck: selftest: %d case(s) failed\n", st_bad);
+        st_clean();
         return 1;
     }
+    st_clean();
     printf("prosecheck: selftest OK (24 cases)\n");
     return 0;
 }
 
 /* ---- entry ---- */
 
+/* The tool is run from the repository root by every caller; the root is
+   where CLAUDE.md is. Not finding one is fatal, because a checker that
+   walks a tree it did not find reports the same OK as a clean tree. */
 static void set_repo(void)
 {
-    /* The tool is run from the repository root by every caller; the root
-       is where CLAUDE.md is. */
     struct stat st;
+    char started_at[1100];
 
-    if (getcwd(repo, sizeof(repo)) == NULL)
-        snprintf(repo, sizeof(repo), ".");
+    if (getcwd(repo, sizeof(repo)) == NULL) {
+        fprintf(stderr, "prosecheck: cannot read the working directory: "
+                "%s\n", strerror(errno));
+        exit(2);
+    }
+    snprintf(started_at, sizeof(started_at), "%s", repo);
     for (;;) {
         char probe[1100];
         char *slash;
@@ -1482,9 +1553,12 @@ static void set_repo(void)
             return;
         slash = strrchr(repo, '/');
         if (slash == NULL || slash == repo)
-            return;
+            break;
         *slash = '\0';
     }
+    fprintf(stderr, "prosecheck: no CLAUDE.md at or above %s, so there is "
+            "no tree to check; run this from the repository\n", started_at);
+    exit(2);
 }
 
 int main(int argc, char **argv)
@@ -1513,6 +1587,11 @@ int main(int argc, char **argv)
         if (w.over > 0) {
             fprintf(stderr, "prosecheck: %ld comment line(s) over %d columns "
                     "in %ld file(s)\n", w.over, LIMIT, w.files);
+            return 1;
+        }
+        if (unread > 0) {
+            fprintf(stderr, "prosecheck: %ld file(s) could not be read, so "
+                    "this proved nothing about them\n", unread);
             return 1;
         }
         printf("prosecheck: OK (no comment line over %d columns)\n", LIMIT);
@@ -1549,6 +1628,11 @@ int main(int argc, char **argv)
         if (b.findings > 0) {
             fprintf(stderr, "prosecheck: %ld banned term use(s)\n",
                     b.findings);
+            return 1;
+        }
+        if (unread > 0) {
+            fprintf(stderr, "prosecheck: %ld file(s) could not be read, so "
+                    "this proved nothing about them\n", unread);
             return 1;
         }
         printf("prosecheck: OK (no banned term in the in-house prose)\n");
