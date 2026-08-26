@@ -62,13 +62,10 @@ if [ ! -f "$KRFFS" ]; then
     echo "mkiso: image not built ($KRFFS); run 'make $IMAGE-image' first" >&2
     exit 1
 fi
-if ! command -v docker >/dev/null 2>&1; then
-    echo "mkiso: docker is required for grub-mkrescue; install it (make doctor)" >&2
-    exit 1
-fi
 
 rm -rf "$ISODIR"
 mkdir -p "$ISODIR/boot/grub"
+trap 'rm -rf "$ISODIR" "$ISODIR.hybrid.img" "$ISODIR.log" "$ISO_OUT.new"' EXIT
 # cat (not cp) so the modules are dense: some GRUB builds crash on sparse files.
 cat "$KERNEL" > "$ISODIR/boot/kernel"
 cat "$KRFFS" > "$ISODIR/boot/$IMAGE.krffs"
@@ -154,25 +151,34 @@ command -v xorriso >/dev/null 2>&1 || {
     exit 1
 }
 
-# The pinned El Torito and hybrid images, verified before they board the ISO.
-sh "$REPO/vendor/grub/verify_grub.sh" eltorito.img boot-hybrid.img
+# The pinned El Torito and hybrid images: copied into this build's private
+# staging first, then the copies verified, so the bytes checked are the
+# bytes consumed and a regeneration racing this build cannot slip a file
+# between the check and the read.
 cp "$REPO/vendor/grub/eltorito.img" "$ISODIR/boot/grub/eltorito.img"
+cp "$REPO/vendor/grub/boot-hybrid.img" "$ISODIR.hybrid.img"
+sh "$REPO/vendor/grub/verify_grub.sh" \
+    "eltorito.img=$ISODIR/boot/grub/eltorito.img" \
+    "boot-hybrid.img=$ISODIR.hybrid.img"
 
 # xorriso assembles what grub-mkrescue assembled in the retired container:
 # an ISO9660 tree with the El Torito boot image, its boot-info table patched
-# in, and GRUB's hybrid MBR so the same ISO boots from a USB device.
-# xorriso's diagnostics are kept; a failure is fatal, never a silent "wrote"
-# line over a stale ISO.
-if ! xorriso -as mkisofs -graft-points -R -J \
+# in, and GRUB's hybrid MBR so the same ISO boots from a USB device. The
+# output goes to a .new sibling renamed only on success, and the exit status
+# is xorriso's own, not a log filter's, so a failure can neither pass nor
+# leave a half-written ISO where the old one was.
+if xorriso -as mkisofs -graft-points -R -J \
         -b boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 \
         -boot-info-table --grub2-boot-info \
-        --grub2-mbr "$REPO/vendor/grub/boot-hybrid.img" \
-        -o "$ISO_OUT" "$ISODIR" 2>&1 | grep -v '^xorriso : UPDATE'; then
+        --grub2-mbr "$ISODIR.hybrid.img" \
+        -o "$ISO_OUT.new" "$ISODIR" > "$ISODIR.log" 2>&1; then
+    grep -v '^xorriso : UPDATE' "$ISODIR.log" >&2 || true
+else
+    cat "$ISODIR.log" >&2
     echo "mkiso: the ISO build failed (see the diagnostics above)" >&2
-    rm -rf "$ISODIR"
     exit 1
 fi
+mv "$ISO_OUT.new" "$ISO_OUT"
 
-rm -rf "$ISODIR"
 echo "mkiso: wrote $ISO_OUT"
 echo "mkiso: boot it with rach2/run_from_iso.sh $IMAGE, or burn it to a USB stick"
