@@ -1,7 +1,7 @@
 # ISH Shell Makefile (Rach2)
 #
-# Builds the shell for the Rach2 kernel (freestanding ELF32).
-# For Linux builds, use: make -f Makefile.linux
+# Builds the shell for the Rach2 kernel (freestanding ELF32). For Linux builds,
+# use: make -f Makefile.linux
 
 # Shared cross toolchain + automatic header-dependency tracking (see ../mk/).
 include ../mk/toolchain.mk
@@ -12,10 +12,10 @@ CC := $(CROSS_CC)
 CFLAGS = -m32 -ffreestanding $(DEPFLAGS)
 LDFLAGS = -m32 -nostdlib -static -Wl,-Ttext=0x08048000
 
-# Everything builds out of tree under $(BUILD) (build/ish/, from mk/build.mk): the
-# objects and the ish binary the RAM-disk staging picks up. The source list
-# lives in sources.mk, which guest.mk includes too, so one file describes
-# both builds.
+# Everything builds out of tree under $(BUILD) (build/ish/, from mk/build.mk):
+# the objects and the ish binary the RAM-disk staging picks up. The source list
+# lives in sources.mk, which guest.mk includes too, so one file describes both
+# builds.
 include sources.mk
 TARGET = $(BUILD)/ish
 OBJECTS = $(addprefix $(BUILD)/, $(ISH_SRC:.c=.o))

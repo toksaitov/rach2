@@ -36,13 +36,14 @@ PROGS = hello filetest forktest shelltest dirtest stattest \
         idreport
 
 # These compile+link in one step, so there are no .o intermediates; only the
-# GCC-written .d, which -MF puts under $(BUILD) (build/tests/, from mk/build.mk), so
-# the source tree stays clean and the RAM-disk staging picks the binaries up there.
+# GCC-written .d, which -MF puts under $(BUILD) (build/tests/, from
+# mk/build.mk), so the source tree stays clean and the RAM-disk staging picks
+# the binaries up there.
 TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 
 # The configuration fingerprint (mk/fingerprint.mk): a changed flag or a
-# reinstalled compiler rebuilds every probe automatically. The purge names
-# this Makefile's own products because build/tests/musl belongs to
+# reinstalled compiler rebuilds every probe automatically. The purge names this
+# Makefile's own products because build/tests/musl belongs to
 # tests/musl/build.sh, which can be compiling there in a parallel build.
 CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS)
 CONFIG_PURGE = $(TARGETS) $(BUILD)/*.d
@@ -53,19 +54,19 @@ include ../mk/fingerprint.mk
 all: $(TARGETS)
 
 
-# Each probe is a single freestanding source compiled+linked in one step; -MMD (from
-# $(DEPFLAGS)) writes the deps, -MF puts that .d under $(BUILD), so editing a shared
-# header rebuilds it.
+# Each probe is a single freestanding source compiled+linked in one step; -MMD
+# (from $(DEPFLAGS)) writes the deps, -MF puts that .d under $(BUILD), so
+# editing a shared header rebuilds it.
 $(BUILD)/%: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $<
 
-# dnstest links the shared stub resolver from utils/ so it can exercise both the pure
-# parser (crafted vectors) and resolve_host() (live), and it links the ported musl so
-# both it and resolv.c use the real libc. It compiles+links two sources in one step,
-# where -MF records only the last source's headers, so the build inputs (dnstest.c,
-# resolv.c, netdb.h) are declared as explicit prerequisites; the $(BUILD) .d adds the
-# resolver's transitive headers on top.
+# dnstest links the shared stub resolver from utils/ so it can exercise both the
+# pure parser (crafted vectors) and resolve_host() (live), and it links the
+# ported musl so both it and resolv.c use the real libc. It compiles+links two
+# sources in one step, where -MF records only the last source's headers, so the
+# build inputs (dnstest.c, resolv.c, netdb.h) are declared as explicit
+# prerequisites; the $(BUILD) .d adds the resolver's transitive headers on top.
 $(BUILD)/dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h
 	@mkdir -p $(dir $@)
 	$(MUSL_CC) $(MUSL_CFLAGS) -MF $(BUILD)/dnstest.d -o $@ \

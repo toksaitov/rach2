@@ -1,21 +1,22 @@
 # Unix Utilities Makefile (Rach2)
 #
 # Builds the utilities as ordinary hosted C programs linked statically against
-# the ported musl (see vendor/musl/build_libc.sh), the same way tests/musl/build.sh
-# links its programs: musl's crt1/crti + libc.a + crtn via the cross compiler,
-# with the freestanding crt0.c and hand-rolled int-0x80 stubs dropped. Each
-# program now uses the real libc headers (<stdio.h>, <unistd.h>, <dirent.h>, ...).
+# the ported musl (see vendor/musl/build_libc.sh), the same way
+# tests/musl/build.sh links its programs: musl's crt1/crti + libc.a + crtn via
+# the cross compiler, with the freestanding crt0.c and hand-rolled int-0x80
+# stubs dropped. Each program now uses the real libc headers (<stdio.h>,
+# <unistd.h>, <dirent.h>, ...).
 #
-# Requires vendor/musl/install (run vendor/musl/build_libc.sh once first). For Linux host
-# builds, use: make -f Makefile.linux
+# Requires vendor/musl/install (run vendor/musl/build_libc.sh once first). For
+# Linux host builds, use: make -f Makefile.linux
 
 # Shared header-dependency tracking + the toolchain guard (see ../mk/). The musl
 # utilities are special: they link the i686 libc AND a 32-bit libgcc that
 # build_libc.sh's i686-elf-gcc produced, so they need i686-elf-gcc specifically:
 # a non-multilib x86_64-elf-gcc cannot supply a 32-bit libgcc (the freestanding
 # components link no libgcc, so they use the generic CROSS_CC, which may be
-# x86_64-elf-gcc). So prefer i686-elf-gcc, falling back to CROSS_CC; -m32 is then a
-# no-op but keeps the i686 ABI explicit.
+# x86_64-elf-gcc). So prefer i686-elf-gcc, falling back to CROSS_CC; -m32 is
+# then a no-op but keeps the i686 ABI explicit.
 include ../mk/toolchain.mk
 include ../mk/deps.mk
 include ../mk/build.mk
@@ -37,20 +38,21 @@ LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack
 # The program lists and the per-program source map live in programs.mk, which
 # guest.mk includes too, so one file describes both builds.
 #
-# init is PID 1, and su and sudo climb privilege; none of the three is a user tool
-# to be swept into an image root. The SBIN_PROGS build into a sbin/ subdir so the
-# os-simple `exec-dir / build/utils` sweep (which stages only the regular files
-# directly in build/utils, skipping subdirs) cannot stage them at all. Every image
-# that wants one names it explicitly, which is also what makes the set-id allowlist
-# in tools/inspect/setid.allow a complete list rather than a sample: a privileged
-# program reaches an image only through a `file` line naming it.
+# init is PID 1, and su and sudo climb privilege; none of the three is a user
+# tool to be swept into an image root. The SBIN_PROGS build into a sbin/ subdir
+# so the os-simple `exec-dir / build/utils` sweep (which stages only the regular
+# files directly in build/utils, skipping subdirs) cannot stage them at all.
+# Every image that wants one names it explicitly, which is also what makes the
+# set-id allowlist in tools/inspect/setid.allow a complete list rather than a
+# sample: a privileged program reaches an image only through a `file` line
+# naming it.
 include programs.mk
 
 TARGETS      = $(addprefix $(BUILD)/, $(UTILITIES))
 SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
 
-# The configuration fingerprint (mk/fingerprint.mk): a changed flag, link
-# input, or reinstalled compiler rebuilds every program automatically.
+# The configuration fingerprint (mk/fingerprint.mk): a changed flag, link input,
+# or reinstalled compiler rebuilds every program automatically.
 CONFIG_TEXT = $(CC) $(CFLAGS) $(LINK_PRE) $(LINK_POST)
 include ../mk/fingerprint.mk
 
@@ -68,11 +70,12 @@ $(TARGETS) $(SBIN_TARGETS): | libc-check
 #
 # Both levels are swept, and sbin/ is swept for a reason worth stating: its
 # contents are staged by name, so a stale binary there is only reachable through
-# a manifest line naming it, and the set-id guard (tools/inspect/setidcheck.c) compares a manifest's declared
-# source against its own table without ever stat-ing the host file. A rename
-# that missed one manifest line would therefore go on staging the old binary
-# with nothing reporting it. Milestone 25's rename of install-kernel to bootctl
-# left exactly that artifact behind, which is what closed this gap.
+# a manifest line naming it, and the set-id guard (tools/inspect/setidcheck.c)
+# compares a manifest's declared source against its own table without ever
+# stat-ing the host file. A rename that missed one manifest line would therefore
+# go on staging the old binary with nothing reporting it. Milestone 25's rename
+# of install-kernel to bootctl left exactly that artifact behind, which is what
+# closed this gap.
 prune-stale:
 	@keep=" $(UTILITIES) "; \
 	for f in $(BUILD)/*; do \
@@ -102,16 +105,16 @@ libc-check:
 	    exit 1; }
 
 # Each <name>.c compiles+links in one step into a static musl guest binary under
-# $(BUILD) (build/utils/, from mk/build.mk); -MF puts the GCC-written .d there too.
-# There are no .o intermediates and nothing lands in the source tree.
+# $(BUILD) (build/utils/, from mk/build.mk); -MF puts the GCC-written .d there
+# too. There are no .o intermediates and nothing lands in the source tree.
 $(BUILD)/%: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/$*.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
-# ping and nc link the shared stub resolver (resolv.c, declared in netdb.h). These
-# compile+link two sources in one step (-MF records only the last source's headers),
-# so the inputs (the program source, resolv.c, netdb.h) are explicit prerequisites; the
-# $(BUILD) .d adds the resolver's transitive headers.
+# ping and nc link the shared stub resolver (resolv.c, declared in netdb.h).
+# These compile+link two sources in one step (-MF records only the last source's
+# headers), so the inputs (the program source, resolv.c, netdb.h) are explicit
+# prerequisites; the $(BUILD) .d adds the resolver's transitive headers.
 $(BUILD)/ping: $(SRC_ping) $(HDR_ping)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/ping.d -o $@ $(LINK_PRE) $(SRC_ping) $(LINK_POST)
@@ -126,8 +129,8 @@ $(BUILD)/sbin/%: %.c
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/$*.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
 # su links the credential library (pwauth.c, declared in pwauth.h), the way ping
-# and nc link the resolver above and for the same reason: the -MF .d records only
-# the last source's headers, so the inputs are explicit prerequisites here.
+# and nc link the resolver above and for the same reason: the -MF .d records
+# only the last source's headers, so the inputs are explicit prerequisites here.
 $(BUILD)/sbin/su: $(SRC_su) $(HDR_su)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/su.d -o $@ $(LINK_PRE) $(SRC_su) $(LINK_POST)
@@ -174,20 +177,20 @@ $(BUILD)/sbin/adduser: $(SRC_adduser) $(HDR_adduser)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/adduser.d -o $@ $(LINK_PRE) $(SRC_adduser) $(LINK_POST)
 
-# dhcpc links the message library (dhcpmsg.c), the half of the client that
-# needs no system call: the framing, the checksums and the option parsing that
-# its host test drives with the messages a server will not produce on
-# request. netup links the configuration reader (netcfg.c) for the same reason.
-# Both link ipcheck.c, the one judgement of whether an IPv4 configuration is one
-# a machine can hold, which a lease off the wire and a stanza in a file are
-# equally subject to.
+# dhcpc links the message library (dhcpmsg.c), the half of the client that needs
+# no system call: the framing, the checksums and the option parsing that its
+# host test drives with the messages a server will not produce on request. netup
+# links the configuration reader (netcfg.c) for the same reason. Both link
+# ipcheck.c, the one judgement of whether an IPv4 configuration is one a machine
+# can hold, which a lease off the wire and a stanza in a file are equally
+# subject to.
 $(BUILD)/dhcpc: $(SRC_dhcpc) $(HDR_dhcpc)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/dhcpc.d -o $@ $(LINK_PRE) $(SRC_dhcpc) \
 	    $(LINK_POST)
 
-# reflash links the copy library (sectorcopy.c): the numbers that decide where
-# a write lands, and the loop that turns a stream into whole sectors.
+# reflash links the copy library (sectorcopy.c): the numbers that decide where a
+# write lands, and the loop that turns a stream into whole sectors.
 $(BUILD)/reflash: $(SRC_reflash) $(HDR_reflash)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/reflash.d -o $@ $(LINK_PRE) $(SRC_reflash) \
@@ -198,8 +201,8 @@ $(BUILD)/netup: $(SRC_netup) $(HDR_netup)
 	$(CC) $(CFLAGS) -MF $(BUILD)/netup.d -o $@ $(LINK_PRE) $(SRC_netup) \
 	    $(LINK_POST)
 
-# bootctl links the boot-slot library (bootslot.c), the pure core its
-# host test drives over fixture images with fault injection.
+# bootctl links the boot-slot library (bootslot.c), the pure core its host test
+# drives over fixture images with fault injection.
 $(BUILD)/sbin/bootctl: $(SRC_bootctl) $(HDR_bootctl)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) $(SRC_bootctl) $(LINK_POST)

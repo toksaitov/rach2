@@ -1,9 +1,8 @@
 # KRFFS host tools: the mkfs/defrag/fsck/fsviz/edfs/stageimage utilities, the
 # mkhash password hasher, and the optional FUSE mount (`make mount`). These run
-# on the HOST, so they use
-# the host compiler (cc), not the cross toolchain; only the shared
-# header-dependency tracking (../mk/deps.mk) applies, so editing a krffs header
-# rebuilds exactly the objects that include it.
+# on the HOST, so they use the host compiler (cc), not the cross toolchain; only
+# the shared header-dependency tracking (../mk/deps.mk) applies, so editing a
+# krffs header rebuilds exactly the objects that include it.
 include ../mk/deps.mk
 include ../mk/build.mk
 
@@ -16,8 +15,9 @@ FUSE_PKG = $(shell pkg-config --exists fuse 2>/dev/null && echo fuse || echo fus
 FUSE_CFLAGS += `pkg-config $(FUSE_PKG) --cflags` -DFUSE_USE_VERSION=26
 FUSE_LDLIBS += `pkg-config $(FUSE_PKG) --libs`
 
-# Everything builds out of tree under $(BUILD) (build/krffs/, from mk/build.mk): the
-# shared objects and the host-tool binaries the RAM-disk scripts run from there.
+# Everything builds out of tree under $(BUILD) (build/krffs/, from mk/build.mk):
+# the shared objects and the host-tool binaries the RAM-disk scripts run from
+# there.
 
 # The four objects every tool shares. Only krffs.c and krffs_fuse_operations.c
 # include the FUSE interface, so the core, the allocator, and the tool mains
@@ -69,9 +69,10 @@ fuse-check :
 $(TARGETS) : | libc-check
 
 # mkhash compiles the vendored musl crypt, which exists only once the pinned
-# tarball has been extracted. Say so, rather than letting make report "No rule to
-# make target" for a source nobody wrote by hand. The top-level build orders this
-# behind check-libc; this is for a standalone `make -C krffs` in a clean tree.
+# tarball has been extracted. Say so, rather than letting make report "No rule
+# to make target" for a source nobody wrote by hand. The top-level build orders
+# this behind check-libc; this is for a standalone `make -C krffs` in a clean
+# tree.
 libc-check :
 	@test -f "$(MUSL_CRYPT)" || { \
 	    echo "krffs: vendored musl source not extracted; run the root make first" >&2; \
@@ -95,8 +96,8 @@ $(BUILD)/stageimage.krffs : $(CORE) $(BUILD)/krffs_allocator.o $(BUILD)/stageima
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-# readfile also links the reader, the path walk the host test runs on
-# crafted regions (tests/host/readfile_hosttest.c).
+# readfile also links the reader, the path walk the host test runs on crafted
+# regions (tests/host/readfile_hosttest.c).
 $(BUILD)/readfile.krffs : $(CORE) $(BUILD)/krffs_reader.o $(BUILD)/readfile.krffs.o
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -115,8 +116,8 @@ $(BUILD)/crypt_sha512.o : $(MUSL_CRYPT)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Compile rules: the two mount objects get the FUSE cflags, everything else
-# does not. Each makes its $(BUILD) output dir first.
+# Compile rules: the two mount objects get the FUSE cflags, everything else does
+# not. Each makes its $(BUILD) output dir first.
 $(MOUNT_OBJS) : $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(FUSE_CFLAGS) -c $< -o $@
@@ -124,7 +125,8 @@ $(TOOL_OBJS) : $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Pull in the per-object header dependencies GCC wrote (-MMD), now beside the objects.
+# Pull in the per-object header dependencies GCC wrote (-MMD), now beside the
+# objects.
 -include $(OBJECTS:.o=.d)
 
 .PHONY : clean

@@ -81,7 +81,8 @@ $(BUILD)/%.o: $(DOOMGENERIC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Header-dependency files GCC wrote (-MMD); a header edit rebuilds its includers.
+# Header-dependency files GCC wrote (-MMD); a header edit rebuilds its
+# includers.
 -include $(OBJS:.o=.d)
 
 clean:
