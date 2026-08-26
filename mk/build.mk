@@ -13,9 +13,7 @@
 # or through the top-level make, so `../build` resolves to the same repo-root
 # build/ either way, the echoed compiler commands stay short, and a repo path
 # that contains a space does not get embedded in every object path (which GNU
-# Make, splitting on spaces, cannot handle). The one step that needs an absolute
-# path, the Docker grub-mkrescue call in rach2/Makefile, wraps the path in
-# $(abspath ...) at the call site.
+# Make, splitting on spaces, cannot handle).
 TOP       ?= ..
 COMPONENT ?= $(notdir $(CURDIR))
 BUILDROOT ?= $(TOP)/build
