@@ -467,14 +467,14 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     }
     /* The flags decide HOW the loader reads the image; both Rach2 layouts
        carry exactly ALIGN|MEMINFO (3), and anything else (the a.out kludge
-       above all) would change the load. The same rule tools/inspect/check_kernel.py
-       has on the host. */
+       above all) would change the load. The same rule the host ELF
+       validator (tools/inspect/elfcheck.c) has. */
     if (le32(image + off + 4) != 3) {
         return fail(err, errlen, "the multiboot flags are not ALIGN|MEMINFO");
     }
 
-    /* The loader contract, the way check_kernel.py judges it on the
-       host: a sane program-header table, at least one load that stays inside
+    /* The loader contract, the way the host ELF validator judges it: a
+       sane program-header table, at least one load that stays inside
        the file and the megabyte-up address space, and an entry point inside
        a load's file-backed bytes. `present` is how much of the image is in
        memory (a fallback check reads only the head); every range is judged

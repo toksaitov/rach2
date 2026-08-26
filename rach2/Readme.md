@@ -18,7 +18,7 @@ make rach2-recovery    # build/rach2-recovery/kernel, with whole-disk authority
 tests/run selfbuild    # build the kernel twice on Rach2 and compare the results
 ```
 
-By default, the host Makefile compiles the kernel as freestanding C89 with `i686-elf-gcc` and links it at 1 MiB with `i686-elf-ld`. It links no C library or libgcc. The kernel-only build can also use the corresponding `x86_64-elf` cross tools. Every host link runs `tools/inspect/check_kernel.py` before replacing the previous kernel.
+By default, the host Makefile compiles the kernel as freestanding C89 with `i686-elf-gcc` and links it at 1 MiB with `i686-elf-ld`. It links no C library or libgcc. The kernel-only build can also use the corresponding `x86_64-elf` cross tools. Every host link runs the project ELF validator (`tools/inspect/elfcheck.c`, `--kernel`) before replacing the previous kernel.
 
 `C_SRC` and `ASM_SRC` in `sources.mk` are explicit source lists, included by both the host `Makefile` and `guest.mk`, the POSIX makefile that pdpmake and TinyCC use on Rach2, so one file describes both builds. `make check-sources` checks the C list against the tree, and `tools/verify/check_guest.py` checks the guest derivation and limits. Host objects and dependency files are under `build/rach2/`; the guest build writes into its writable copy of the source tree.
 

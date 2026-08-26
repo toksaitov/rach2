@@ -63,13 +63,20 @@ all : $(KERNEL_BIN)
 # than at a boot later. The
 # link lands in a temporary file that is renamed only after the check passes,
 # so a failed check cannot leave a newer kernel behind for the next make to
-# treat as current.
+# treat as current. The checker is the project ELF validator, built with the
+# host compiler; a checker newer than the binary rebuilds it first.
+ELFCHECK = ../build/tools/inspect/elfcheck
+
 $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
 	@mkdir -p $(dir $@)
+	@if [ ! -x $(ELFCHECK) ] || [ ../tools/inspect/elfcheck.c -nt $(ELFCHECK) ]; then \
+	    mkdir -p $(dir $(ELFCHECK)); \
+	    cc -O2 -Wall -Wextra -o $(ELFCHECK) ../tools/inspect/elfcheck.c; \
+	fi
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@ ...'; \
 	$(LD) $(LDFLAGS) -o "$$tmp" $^ && \
-	python3 ../tools/inspect/check_kernel.py "$$tmp" && \
+	$(ELFCHECK) --kernel "$$tmp" && \
 	mv "$$tmp" $@
 
 # The configuration fingerprint (mk/fingerprint.mk): make decides what to

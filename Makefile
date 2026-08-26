@@ -80,6 +80,7 @@ MKIMAGE         = krffs/mkimage.sh
 # The suites' wall-clock limit tool (see its rule below).
 DEADLINE        = build/tests/system/deadline
 BINFIND         = build/tools/inspect/binfind
+ELFCHECK        = build/tools/inspect/elfcheck
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
@@ -107,7 +108,7 @@ MKDISK          = krffs/mkdisk.sh
 # takes minutes; a later `make` rebuilds only what changed. Each image is its
 # own file under build/images/, so they coexist instead of overwriting one
 # shared image.
-all: images $(DEADLINE) $(BINFIND) $(SHA256TOOL)
+all: images $(DEADLINE) $(BINFIND) $(ELFCHECK) $(SHA256TOOL)
 
 # The cached tool check (tools/setup/preflight.sh): a missing or changed build tool
 # fails here, named, before any compilation. It is an order-only prerequisite
@@ -285,6 +286,12 @@ $(BINFIND): tools/inspect/binfind.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
+# The ELF validator (tools/inspect/elfcheck.c): user executables against the
+# loader and the static-only policy, kernels against the multiboot loaders.
+$(ELFCHECK): tools/inspect/elfcheck.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
 # The digest tool (tools/verify/sha256.c), replacing sha256sum and shasum.
 # The scripts that need it before make has run compile it themselves.
 $(SHA256TOOL): tools/verify/sha256.c
@@ -300,18 +307,18 @@ $(SHA256TOOL): tools/verify/sha256.c
 #     next run rebuilds it through the ordinary rules. fsck would clear the
 #     image's dirty flag in place, so the image stamp runs only the
 #     non-mutating set-id inventory. ---
-build/rach2/.kernel-checked: build/rach2/kernel tools/inspect/check_kernel.py
-	@python3 tools/inspect/check_kernel.py build/rach2/kernel || { rm -f build/rach2/kernel $@; exit 1; }
+build/rach2/.kernel-checked: build/rach2/kernel $(ELFCHECK)
+	@$(ELFCHECK) --kernel build/rach2/kernel || { rm -f build/rach2/kernel $@; exit 1; }
 	@touch $@
 
-vendor/tcc/.validated: $(TCC_STAMP) tools/inspect/check_link.py
-	@python3 tools/inspect/check_link.py vendor/musl/install/lib/libc.a build/vendor/tcc/libtcc1.a \
+vendor/tcc/.validated: $(TCC_STAMP) tools/inspect/check_link.sh
+	@sh tools/inspect/check_link.sh vendor/musl/install/lib/libc.a build/vendor/tcc/libtcc1.a \
 	    vendor/musl/install/lib/crt1.o vendor/musl/install/lib/crti.o \
 	    vendor/musl/install/lib/crtn.o || { rm -rf build/vendor/tcc $@; exit 1; }
 	@touch $@
 
-vendor/pdpmake/.validated: $(PDPMAKE_STAMP) tools/inspect/check_elf.py
-	@python3 tools/inspect/check_elf.py $(PDPMAKE_BIN) || { rm -f $(PDPMAKE_BIN) $@; exit 1; }
+vendor/pdpmake/.validated: $(PDPMAKE_STAMP) $(ELFCHECK)
+	@$(ELFCHECK) $(PDPMAKE_BIN) || { rm -f $(PDPMAKE_BIN) $@; exit 1; }
 	@touch $@
 
 build/images/%.checked: build/images/%.krffs tools/inspect/check_setid.py
@@ -731,7 +738,7 @@ run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid
 # recovery), and a control run that injects nothing and asserts that no fallback
 # and no recovery appears anywhere. Docker builds the artifact; the runs are
 # QEMU and ssh.
-run-sealed: rach2-sealed-disk $(DEADLINE)
+run-sealed: rach2-sealed-disk $(DEADLINE) $(ELFCHECK)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" 2297
 
@@ -1326,7 +1333,7 @@ run-make: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # whole run carries one deadline over the per-step ones.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
 
-run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK)
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
@@ -1498,13 +1505,13 @@ rach2-metal-iso: rach2-metal rach2-metal-image
 # unrelocated, which is worse. The last check reads the output policy's own
 # diagnostics out of the shipped binary, since a patch that did not apply and a
 # compiler that accepts `-run` look identical from outside.
-check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN)
+check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN) $(ELFCHECK)
 	@test -s $(PDPMAKE_BIN) || { \
 	    echo "pdpmake: $(PDPMAKE_BIN) missing or empty; rm vendor/pdpmake/.stamp and rebuild (make pdpmake)" >&2; \
 	    exit 1; }
-	@python3 tools/inspect/check_elf.py $(PDPMAKE_BIN)
+	@$(ELFCHECK) $(PDPMAKE_BIN)
 
-check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS) $(BINFIND)
+check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS) $(BINFIND) $(ELFCHECK)
 	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	          build/vendor/tcc/include/stdarg.h \
 	          build/vendor/tcc/include/stddef.h \
@@ -1513,8 +1520,8 @@ check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS) $(BINFIND)
 	          build/vendor/tcc/include/varargs.h; do \
 	    test -s "$$f" || { echo "tcc: $$f missing or empty; rm vendor/tcc/.stamp and rebuild (make tcc)" >&2; exit 1; }; \
 	done
-	@python3 tools/inspect/check_elf.py --selftest
-	@python3 tools/inspect/check_elf.py $(TCC_BIN)
+	@$(ELFCHECK) --selftest
+	@$(ELFCHECK) $(TCC_BIN)
 	@for m in "must be linked with -static" "run is not available" \
 	          "shared is not available" "must be an ELF"; do \
 	    $(BINFIND) "$$m" $(TCC_BIN) || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm vendor/tcc/.stamp and rebuild" >&2; exit 1; }; \

@@ -75,13 +75,13 @@ Preprocessing with `-E` and object compilation with `-c` remain available for mu
 
 The checks run in TinyCC's `main` after command-line processing. They do not change `tcc_set_output_type`, because `-print-search-dirs` calls that function with an in-memory output type while initializing search paths.
 
-[`tools/inspect/check_elf.py`](../../tools/inspect/check_elf.py) separately rejects an artifact outside the kernel's ELF32 i386 loader contract or one containing `PT_INTERP` or `PT_DYNAMIC`. The kernel ignores those two dynamic-linking headers, so accepting them would start an unrelocated image.
+[`tools/inspect/elfcheck.c`](../../tools/inspect/elfcheck.c) separately rejects an artifact outside the kernel's ELF32 i386 loader contract or one containing `PT_INTERP` or `PT_DYNAMIC`. The kernel ignores those two dynamic-linking headers, so accepting them would start an unrelocated image.
 
 ## Static link closure
 
 Musl was built with GCC and refers to three compiler-runtime symbols that the unmodified TinyCC runtime does not export: `__udivmoddi4`, `__divmoddi4`, and `__mulxc3`. The build extracts their object files from the same 32-bit libgcc used by the musl toolchain and adds them to `libtcc1.a`.
 
-`tools/inspect/check_link.py` reads the staged musl archive, TinyCC runtime, and startup objects. It rejects an ordinary guest link with any unresolved strong symbol after accounting for symbols supplied by the program, the linker, and unreachable bounds-checking members.
+`tools/inspect/check_link.sh` reads the staged musl archive, TinyCC runtime, and startup objects. It rejects an ordinary guest link with any unresolved strong symbol after accounting for symbols supplied by the program, the linker, and unreachable bounds-checking members.
 
 ## Updating the pin
 

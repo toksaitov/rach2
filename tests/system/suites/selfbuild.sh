@@ -317,7 +317,7 @@ HOST_SHA="$(sha256_of "$KEXTRACT")"
 if [ "$HOST_SHA" != "$GUEST_SHA" ]; then
     fail "the extracted kernel hashes $HOST_SHA and the guest recorded $GUEST_SHA"
 fi
-if ! python3 tools/inspect/check_kernel.py --tcc "$KEXTRACT"; then
+if ! build/tools/inspect/elfcheck --kernel --tcc "$KEXTRACT"; then
     fail "the built kernel failed the structural checker"
 fi
 if ! python3 tests/system/runner/runtests.py --kernel "$KEXTRACT" \

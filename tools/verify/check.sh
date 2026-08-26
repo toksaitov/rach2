@@ -22,7 +22,7 @@
 #   9. the probe runner's scoring rule (runtests.py --selftest)
 #  10. the set-id manifest sweep (tools/inspect/check_setid.py)
 #  11. image reproducibility (tools/verify/check_repro.py): one tree, one image
-#  12. the checker selftests (check_kernel.py, check_grubembed.py, and
+#  12. the checker selftests (elfcheck, check_grubembed.py, and
 #      the compile-commands generator)
 #  13. the dev-log index (tools/verify/check_devlog.py): it names every finished
 #      milestone, and names the newest last
@@ -349,7 +349,12 @@ fi
 #     generator must join wrapped recipes, select only compile commands, and
 #     refuse to publish an invalid database.
 hr "12/13 checker selftests"
-if python3 "$REPO/tools/inspect/check_kernel.py" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
+ELFCHECK="$REPO/build/tools/inspect/elfcheck"
+if [ ! -x "$ELFCHECK" ] || [ "$REPO/tools/inspect/elfcheck.c" -nt "$ELFCHECK" ]; then
+    mkdir -p "${ELFCHECK%/*}"
+    cc -O2 -o "$ELFCHECK" "$REPO/tools/inspect/elfcheck.c" || exit 1
+fi
+if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    python3 "$REPO/tools/inspect/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    python3 "$REPO/tools/inspect/check_sealednet.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then

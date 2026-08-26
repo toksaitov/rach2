@@ -116,7 +116,12 @@ cp "$SRC/make" "$STAGE/make"
 # judges its output: `file(1)` calls a dynamic i386 binary and a static one the
 # same thing, and this loader does not.
 echo "pdpmake: checking the result is loadable by this kernel"
-python3 "$SCRIPT_DIR/../../tools/inspect/check_elf.py" "$STAGE/make"
+ELFCHECK="$SCRIPT_DIR/../../build/tools/inspect/elfcheck"
+if [ ! -x "$ELFCHECK" ] || [ "$SCRIPT_DIR/../../tools/inspect/elfcheck.c" -nt "$ELFCHECK" ]; then
+    mkdir -p "${ELFCHECK%/*}"
+    cc -O2 -o "$ELFCHECK" "$SCRIPT_DIR/../../tools/inspect/elfcheck.c"
+fi
+"$ELFCHECK" "$STAGE/make"
 
 echo "pdpmake: built $VERSION ($(wc -c < "$STAGE/make") bytes, static, musl, i386)"
 echo "pdpmake: rebuild the os-real image (make os-real-image) to install it"

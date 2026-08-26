@@ -45,9 +45,8 @@ The supporting files under `verify/` have narrower jobs:
 
 The inspectors under `inspect/` validate built artifacts; the validation stamps in the root Makefile re-run them when a checker or its artifact changes.
 
-* `check_kernel.py` validates a kernel ELF, its Multiboot header, its two load segments, its entry point, and its image end. The default profile requires GNU ld symbols; `--tcc` accepts the symbol-free TinyCC layout. `rach2/Makefile` runs it on every kernel link.
-* `check_elf.py` validates user executables against both the kernel loader and the project's static-executable policy. `make check-tcc` and `make check-pdpmake` use it.
-* `check_link.py` uses `i686-elf-nm` to require that the libraries and startup objects staged for TinyCC leave no required symbol undefined. `vendor/tcc/build_tcc.sh` runs it.
+* `elfcheck.c` is the ELF validator. Without options it judges user executables against both the kernel loader and the project's static-executable policy; `make check-tcc` and `make check-pdpmake` use that form. `--kernel` validates a kernel ELF, its Multiboot header, its two load segments, its entry point, and its image end, requiring GNU ld symbols unless `--tcc` accepts the symbol-free TinyCC layout; `rach2/Makefile` runs it on every kernel link. `--selftest` runs both profiles' refusal batteries.
+* `check_link.sh` uses `i686-elf-nm` to require that the libraries and startup objects staged for TinyCC leave no required symbol undefined. `vendor/tcc/build_tcc.sh` runs it.
 * `check_setid.py` has four related checks: manifest declarations, the resulting image nodes, the two BusyBox applet tables and resolved configs, and the strict and permissive init binaries. `tests/run style` runs its self-test and manifest sweep; `krffs/mkimage.sh` and `krffs/mkdisk.sh` run the image check; `make check-setid` runs the manifest, BusyBox, and init checks.
 * `check_diskpolicy.sh` requires a kernel to contain exactly one of the read-only and read-write policy banners. `check_recovery.sh` does the same for ordinary and recovery disk authority. These checks detect a mis-built artifact; the behavioral suites test actual disk writes.
 * `check_grubembed.py` requires `image/grub-embed.cfg` to contain exactly the ordered configuration calls for partitions 1 and 3. Both GRUB core builders run it.

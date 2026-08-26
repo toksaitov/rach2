@@ -291,7 +291,7 @@ if d.count(old) == 0:
     raise SystemExit('sealed-test: the kernel has no banner to mark')
 open('$MARKED', 'wb').write(d.replace(old, new))
 "
-python3 "$REPO/tools/inspect/check_kernel.py" "$MARKED" > /dev/null || \
+"$REPO/build/tools/inspect/elfcheck" --kernel "$MARKED" > /dev/null || \
     fail "the marked kernel does not pass the structural checker"
 
 # ------------------------------------------------------------ the fault run
