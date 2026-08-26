@@ -1386,7 +1386,7 @@ int main(void)
     /* Two gates read this, and neither can be satisfied by the side the other
      * expects. The suite scores on the kernel's exit line, so the status is 0
      * only on the trusted side and a fail-closed boot under `-cpu max` fails
-     * it. `make test-noentropy` matches a token and never reads the status, so
+     * it. `tests/run noentropy` matches a token and never reads the status, so
      * the fail-closed side is named and exits non-zero. */
     if (!trusted) {
         printf("PASSWDMUSL OK (fail-closed)\n");

@@ -179,7 +179,7 @@ struct spwd *getspnam(const char *name)
  *
  * The draw is deliberately not exercised from here. A positive result would be
  * this stub agreeing with itself, and the fail-closed half needs a kernel that
- * really has no trusted entropy, which is what `make test-noentropy` boots.
+ * really has no trusted entropy, which is what `tests/run noentropy` boots.
  */
 ssize_t getrandom(void *buffer, size_t length, unsigned int flags)
 {

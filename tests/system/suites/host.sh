@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 
 #
-# hosttest.sh: run the dual-target host tests (`make verify-host`).
+# hosttest.sh: run the dual-target host tests (`tests/run host`).
 #
 # Each tests/host/*_hosttest.c is pure kernel/util logic compiled NATIVELY on
 # the host and run under AddressSanitizer + UndefinedBehaviorSanitizer. The same

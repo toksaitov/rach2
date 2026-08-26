@@ -8,7 +8,7 @@
  * skips one entry per file already removed. The skipped files stay, `rmdir`
  * then refuses, and the only thing the user sees is "Directory not empty".
  *
- * It was found by `make selfbuild-test`, whose second pass could not remove
+ * It was found by `tests/run selfbuild`, whose second pass could not remove
  * the kernel source tree it had just copied, and only once that tree had grown
  * enough files that listing it took more than one call.
  *

@@ -6,7 +6,7 @@
 # `login`, which flushes pending input when it puts the line back into canonical
 # mode and would eat a script written ahead of its prompts. What is being proved
 # here is the shutdown path, not the console's authentication, which
-# `make login-test` owns.
+# `tests/run login` owns.
 #
 # It stages an unprivileged account and the setuid `/bin/su` because one phase
 # is a refusal: a bare `halt` run as somebody who is not root must be turned

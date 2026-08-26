@@ -319,11 +319,9 @@ if ! build/tests/system/runtests --kernel "$KEXTRACT" \
     fail "the probe suite did not pass on the machine-built kernel"
 fi
 
-# The GRUB half: the same bytes through a real loader. It needs Docker to
-# assemble the disk, and where Docker is absent the skip is named rather than
-# silent; the QEMU proof above ran either way. Every Docker operation runs
-# under a bound, because a stalled daemon or package mirror would otherwise
-# hang a run whose every other wait has one.
+# The GRUB half: the same bytes through a real loader. The disk assembly runs
+# under a bound, because a wait without one would hang a run whose every other
+# wait has a limit.
 bounded() {
     limit="$1"
     shift
@@ -344,36 +342,36 @@ bounded() {
 
 # The GRUB boot of the guest-built kernel is unconditional: the disk is
 # assembled natively from the pinned GRUB artifacts, so there is nothing to
-# skip when Docker is absent.
+# skip.
 GRUB_DISK="$DISK.grub"
-    if ! bounded 900 sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
-        rm -f "$GRUB_DISK"
-        fail "the GRUB disk around the built kernel did not assemble inside its bound"
+if ! bounded 900 sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
+    rm -f "$GRUB_DISK"
+    fail "the GRUB disk around the built kernel did not assemble inside its bound"
+fi
+GLOG="$DISK.grub.log"
+rm -f "$GLOG"
+qemu-system-i386 -cpu max -display none -rtc base=utc \
+    -drive "file=$GRUB_DISK,format=raw,if=ide,index=0,media=disk" \
+    -serial stdio < /dev/null > "$GLOG" 2>&1 &
+QPID=$!
+grub_ok=1
+waited=0
+while [ "$waited" -lt 120 ]; do
+    if grep -aq "login:" "$GLOG" 2>/dev/null; then
+        grub_ok=0
+        break
     fi
-    GLOG="$DISK.grub.log"
-    rm -f "$GLOG"
-    qemu-system-i386 -cpu max -display none -rtc base=utc \
-        -drive "file=$GRUB_DISK,format=raw,if=ide,index=0,media=disk" \
-        -serial stdio < /dev/null > "$GLOG" 2>&1 &
-    QPID=$!
-    grub_ok=1
-    waited=0
-    while [ "$waited" -lt 120 ]; do
-        if grep -aq "login:" "$GLOG" 2>/dev/null; then
-            grub_ok=0
-            break
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    cleanup_boot
-    if [ "$grub_ok" -ne 0 ]; then
-        cp "$GLOG" "$DISK.fail.log" 2>/dev/null || true
-        rm -f "$GRUB_DISK" "$GLOG"
-        fail "the machine-built kernel did not reach a login prompt through GRUB"
-    fi
+    sleep 1
+    waited=$((waited + 1))
+done
+cleanup_boot
+if [ "$grub_ok" -ne 0 ]; then
+    cp "$GLOG" "$DISK.fail.log" 2>/dev/null || true
     rm -f "$GRUB_DISK" "$GLOG"
-    GRUB_NOTE="and booted through GRUB"
+    fail "the machine-built kernel did not reach a login prompt through GRUB"
+fi
+rm -f "$GRUB_DISK" "$GLOG"
+GRUB_NOTE="and booted through GRUB"
 
 # The in-place regression: root, in a second short boot of the same disk,
 # runs make directly in the staged /src/ish, no copy and no touch. This is

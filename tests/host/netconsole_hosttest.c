@@ -5,7 +5,7 @@
  *
  * netconsole.c is compiled natively and driven through the same entry points
  * the kernel uses, with the Ethernet layer replaced by a recorder. What that
- * buys over the QEMU capture (`make netconsole-test`) is the cases a booting
+ * buys over the QEMU capture (`tests/run netconsole`) is the cases a booting
  * machine will not produce on demand: a ring that fills and drops, a payload
  * that fills exactly, and above all a driver that prints an error from inside
  * the transmit it was asked to perform, which is the recursion the code
@@ -117,7 +117,7 @@ unsigned int krandom_u32(void)
  * independently, and what they prove is the frame LAYOUT: that the fields land
  * at the offsets the header documents, in network order, and that a receiver
  * summing the frame gets zero. That the kernel's own `ip_checksum` agrees with
- * an outside implementation is proved elsewhere, by `make netconsole-test`,
+ * an outside implementation is proved elsewhere, by `tests/run netconsole`,
  * whose checker recomputes the sum in Python over a real capture.
  */
 void write16be(uint8_t *p, uint16_t value)

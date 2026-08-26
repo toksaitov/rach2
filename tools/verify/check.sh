@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 
 #
-# check.sh: Rach2 lightweight quality gate (`make verify-style`).
+# check.sh: Rach2 lightweight quality gate (`tests/run style`).
 #
 # Over IN-HOUSE code only (the kernel, the krffs host tools, the utils, the ish
 # shell, the tests, and the build scripts; never the vendored musl/ports trees),

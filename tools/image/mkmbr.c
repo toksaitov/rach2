@@ -12,9 +12,9 @@
  * is what lets the GRUB embed step write its boot code around this table
  * later.
  *
- * This replaces parted inside the Docker container, and it writes the same
- * bytes parted wrote, CHS fields included, so a disk built natively is
- * byte-identical to the reference the container produced. The CHS values
+ * This replaced parted, and it writes the same bytes parted wrote, CHS
+ * fields included, so the disks this builds are byte-identical to the ones
+ * built before the change. The CHS values
  * use parted's 4-head, 32-sector translation and saturate at cylinder
  * 1023; nothing boots by them (the kernel's MBR parser and GRUB read the
  * LBA fields alone), but identical bytes make the conversion provable by

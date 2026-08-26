@@ -30,9 +30,9 @@
 # The feeder paces on log patterns with occurrence counts, because a reboot
 # brings a second "login:" a plain grep would match the first of; assertions
 # over the log are made post-hoc on token byte offsets, each boot's claims
-# checked only inside its own interval. Docker is required (the disk is
-# assembled in a container): its absence fails the run, because this harness is
-# the milestone's proof, not an optional half.
+# checked only inside its own interval. The disk is assembled natively with
+# mtools and the pinned GRUB artifacts, so the whole harness runs anywhere the
+# rest of the suites do.
 #
 # Usage: install_test.sh <grub-disk> <root password>
 #

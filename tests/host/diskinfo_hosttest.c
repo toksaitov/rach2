@@ -3,7 +3,7 @@
  *
  * host-deps: rach2/sys/block/diskinfo.c rach2/sys/block/mbr.c
  *
- * The kernel side of this is exercised by `make diskdiag-test`, which boots a
+ * The kernel side of this is exercised by `tests/run diskdiag`, which boots a
  * real disk and hashes its sectors. What that cannot reach is the arithmetic
  * and the fence posts, because a real device will not answer with a serial
  * number full of control bytes or a capacity above 2^32 on request. So those

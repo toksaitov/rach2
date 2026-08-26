@@ -28,7 +28,7 @@
  * non-negative round-trip time, which proves the slot came back and is the
  * loopback echo's one end-to-end assertion.
  *
- * Prints "PINGTEST OK" on a clean run, which is what `make ping-test` matches.
+ * Prints "PINGTEST OK" on a clean run, which is what `tests/run ping` matches.
  *
  * Freestanding; direct int 0x80.
  */

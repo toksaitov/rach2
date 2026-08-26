@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 #
 # gen_compile_commands.sh: generate compile_commands.json, the LSP compilation
-# database clangd reads for per-file flags (run via `make compile-commands`).
+# database clangd reads for per-file flags. Run it directly.
 #
 # GCC has no clang-style -MJ, so the database is generated FROM the build's own
 # commands: each in-house component is dry-run (`make -Bn`), wrapped recipe
@@ -244,7 +244,7 @@ for comp in rach2 tests ish utils; do
     # empty DB.
     if ! ( cd "$dir" && make -Bn ) >"$dump_raw" 2>/dev/null; then
         echo "compile_commands: 'make -Bn' failed in $comp/: cannot generate the database" >&2
-        echo "       (is the i686-elf cross toolchain installed? try 'make doctor')" >&2
+        echo "       (is the i686-elf cross toolchain installed? try 'sh tools/setup/doctor.sh')" >&2
         exit 1
     fi
     join_continuations <"$dump_raw" >"$dump"

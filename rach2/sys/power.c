@@ -230,7 +230,7 @@ static void power_reset(void)
     /* `rach2.resetskip=N` leaves out the first N mechanisms. It exists so the
      * later ones can be shown to work on their own, which is the only way to
      * know the sequence is a real fallback chain, not a first method
-     * that happens to work everywhere it has been tried; `make reset-test`
+     * that happens to work everywhere it has been tried; `tests/run reset`
      * boots each value. It is also the switch to reach for on a machine where
      * an earlier method makes things worse. */
     if (skip < 1) {

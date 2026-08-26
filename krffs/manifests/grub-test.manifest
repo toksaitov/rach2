@@ -1,5 +1,5 @@
 # grub-test.manifest: the os-real machine, plus the two marked GRUB core images
-# `make grub-test` installs. One difference from os-real and one only: the two
+# `tests/run grub` installs. One difference from os-real and one only: the two
 # `/core-?.img` lines at the end. They are not in os-real because a production
 # image must not depend on whether a test ran, and the marked cores are build
 # products of the harness. The rest of this file is os-real's by construction,
@@ -64,7 +64,7 @@ tree 0644 /src/utils utils
 
 # The kernel's and the shell's sources too, each tree carrying the guest.mk
 # that pdpmake reads, so the machine can rebuild its own kernel and shell
-# (make selfbuild-test proves both from a copy of these trees). /src is
+# (tests/run selfbuild proves both from a copy of these trees). /src is
 # root-owned, read-only source media: root builds in place, every other
 # account copies its tree home first. The dir
 # lines write down the modes of the directories the trusted files sit under,
@@ -163,7 +163,7 @@ dir 0700:1000:1000 /home/test/.ssh
 file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
 optional-file 0644 /doom1.wad ports/doom/doom1.wad
 
-# The two core images `make grub-test` builds, each with a marker inside it that
+# The two core images `tests/run grub` builds, each with a marker inside it that
 # names which one it is, so a boot can be told apart by what its own boot loader
 # prints. See tools/image/mkgrubcore.sh.
 file 0644 /core-a.img build/images/core-a.img

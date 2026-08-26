@@ -31,7 +31,7 @@
  * everyday one must not. That catches a kernel built without the switch and
  * offered as recovery, which is the mistake worth catching early; it is not
  * proof against a tampered artifact, since the banner and the handler are
- * separate conditionals on the same macro. `make authority-test` boots both
+ * separate conditionals on the same macro. `tests/run authority` boots both
  * kernels and is the proof of what they actually do.
  */
 

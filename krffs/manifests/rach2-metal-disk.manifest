@@ -65,7 +65,7 @@ tree 0644 /src/utils utils
 
 # The kernel's and the shell's sources too, each tree carrying the guest.mk
 # that pdpmake reads, so the machine can rebuild its own kernel and shell
-# (make selfbuild-test proves both from a copy of these trees). /src is
+# (tests/run selfbuild proves both from a copy of these trees). /src is
 # root-owned, read-only source media: root builds in place, every other
 # account copies its tree home first. The dir
 # lines write down the modes of the directories the trusted files sit under,

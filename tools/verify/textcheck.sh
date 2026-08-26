@@ -2,7 +2,7 @@
 #
 # textcheck.sh: mechanical text-style checks for the in-house files (see
 # CLAUDE.md for the rules). It is called by tools/check.sh as a hard gate; a
-# finding fails `make verify-style`.
+# finding fails `tests/run style`.
 #
 # It checks only objective things that cannot misfire: non-ASCII bytes (which
 # kills Unicode dashes, smart quotes, and the ellipsis character) across the

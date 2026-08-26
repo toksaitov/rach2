@@ -1,5 +1,5 @@
-# clangd compilation database, generated from the build by `make compile-commands`
-# (see tools/dev/gen_compile_commands.sh); regenerable, never committed.
+# clangd compilation database, generated from the build by
+# tools/dev/gen_compile_commands.sh; regenerable, never committed.
 compile_commands.json
 
 # clangd's per-project index cache.
