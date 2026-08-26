@@ -213,6 +213,26 @@ struct load {
     uint32_t off, vaddr, paddr, filesz, memsz, align;
 };
 
+/**
+ * Reports whether the string table entry at `off` is exactly `want`.
+ *
+ * A string table is a byte range inside the file and its last entry need
+ * not be terminated, so the comparison stops at the end of the file as
+ * well as at a NUL. A truncated or malformed table then reads as a name
+ * that does not match rather than as a read past the buffer.
+ */
+static int name_is(const unsigned char *d, size_t n, uint64_t off,
+                   const char *want)
+{
+    size_t k;
+
+    for (k = 0; want[k] != '\0'; k++) {
+        if (off + k >= n || d[off + k] != (unsigned char) want[k])
+            return 0;
+    }
+    return off + k < n && d[off + k] == '\0';
+}
+
 /* Returns 0 and fills `detail` on success; nonzero with `kfail` set on
    the first violation. */
 static int kernel_check(const unsigned char *d, size_t n, int tcc,
@@ -280,6 +300,9 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
         if (l->filesz > l->memsz)
             return kf("load at 0x%x has p_filesz 0x%x > p_memsz 0x%x",
                       l->vaddr, l->filesz, l->memsz);
+        if ((uint64_t) l->vaddr + l->memsz > 0xFFFFFFFFu)
+            return kf("load at 0x%x: 0x%x bytes run past the end of the "
+                      "32-bit address space", l->vaddr, l->memsz);
         if ((uint64_t) l->off + l->filesz > n)
             return kf("load at 0x%x: file range 0x%x+0x%x runs past the end "
                       "of the file", l->vaddr, l->off, l->filesz);
@@ -316,10 +339,13 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
                   "flags 0x%x, not 0x%x", mb_off, mb_flags, MULTIBOOT_FLAGS);
 
     if (shoff != 0 && e_shentsize != 0) {
+        if (e_shentsize < 40)
+            return kf("section header entry size is %u, under the 40 bytes "
+                      "of an ELF32 section header", e_shentsize);
         if ((uint64_t) shoff + (uint64_t) e_shentsize * e_shnum > n)
             return kf("truncated or malformed symbol table");
         for (i = 0; i < e_shnum; i++) {
-            const unsigned char *sh = d + shoff + e_shentsize * i;
+            const unsigned char *sh = d + shoff + (uint64_t) e_shentsize * i;
             uint32_t sh_type = r32(sh + 4), sh_offset = r32(sh + 16);
             uint32_t sh_size = r32(sh + 20), sh_link = r32(sh + 24);
             uint32_t sh_entsize = r32(sh + 36);
@@ -328,23 +354,25 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
             if (sh_type != 2)
                 continue;
             have_symtab = 1;
-            if (sh_link >= e_shnum || sh_entsize == 0)
+            if (sh_link >= e_shnum || sh_entsize < 16)
                 return kf("truncated or malformed symbol table");
-            str_offset = r32(d + shoff + e_shentsize * sh_link + 16);
+            if ((uint64_t) sh_offset + sh_size > n)
+                return kf("truncated or malformed symbol table");
+            str_offset = r32(d + shoff + (uint64_t) e_shentsize * sh_link + 16);
+            if (str_offset >= n)
+                return kf("truncated or malformed symbol table");
             count = sh_size / sh_entsize;
             for (j = 0; j < count; j++) {
-                uint32_t name_off = r32(d + sh_offset + sh_entsize * j);
-                uint32_t value = r32(d + sh_offset + sh_entsize * j + 4);
-                const char *nm;
+                const unsigned char *sym = d + sh_offset +
+                                           (uint64_t) sh_entsize * j;
+                uint32_t name_off = r32(sym), value = r32(sym + 4);
 
-                if ((uint64_t) sh_offset + sh_entsize * j + 8 > n ||
-                    (uint64_t) str_offset + name_off >= n)
-                    return kf("truncated or malformed symbol table");
-                nm = (const char *) d + str_offset + name_off;
-                if (strncmp(nm, "_start", 7) == 0) {
+                if (name_is(d, n, (uint64_t) str_offset + name_off,
+                            "_start")) {
                     have_start = 1;
                     start_val = value;
-                } else if (strncmp(nm, "_end", 5) == 0) {
+                } else if (name_is(d, n, (uint64_t) str_offset + name_off,
+                                   "_end")) {
                     have_end = 1;
                     end_val = value;
                 }
@@ -679,12 +707,34 @@ static int selftest(void)
                      "a kernel without a symbol table under the common "
                      "profile", "no symbol table");
 
+    memcpy(mut, good, goodn);
+    w32(mut + 52 + 20, 0xFFF00000u);
+    st_expect_kernel(mut, goodn, 0, "a load that wraps the address space",
+                     "32-bit address space");
+    memcpy(mut, good, goodn);
+    w16(mut + 46, 20);
+    st_expect_kernel(mut, goodn, 0, "a short section header entry size",
+                     "section header entry size");
+    {
+        uint32_t shoff_of = r32(good + 32);
+        uint32_t symtab = shoff_of + 40, strtab = shoff_of + 80;
+
+        memcpy(mut, good, goodn);
+        w32(mut + strtab + 16, (uint32_t) goodn);
+        w32(mut + r32(good + symtab + 16) + 16, 0);
+        memcpy(mut + goodn, "_start", 6);
+        mut[goodn + 6] = 0;
+        st_expect_kernel(mut, goodn + 6, 0,
+                         "a symbol name unterminated at the end of the file",
+                         "no _start symbol");
+    }
+
     if (st_bad) {
         fprintf(stderr, "elfcheck: selftest: %d case(s) failed\n", st_bad);
         return 1;
     }
     printf("elfcheck: selftest: ok: 10 window cases, 5 accepted kernels, "
-           "10 refused, each for its own rule\n");
+           "13 refused, each for its own rule\n");
     return 0;
 }
 
@@ -735,9 +785,15 @@ int main(int argc, char **argv)
     }
     if (kernel_mode) {
         size_t n;
-        unsigned char *d = read_file(argv[first], &n);
+        unsigned char *d;
         char detail[160];
 
+        if (first != argc - 1) {
+            fprintf(stderr, "check-kernel: --kernel takes one kernel, not "
+                    "%d\n", argc - first);
+            return 2;
+        }
+        d = read_file(argv[first], &n);
         if (d == NULL) {
             fprintf(stderr, "check-kernel: cannot read %s\n", argv[first]);
             return 2;
