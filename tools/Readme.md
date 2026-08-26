@@ -26,7 +26,7 @@ The scripts under `tools/` are grouped by role: `setup/` prepares and reports on
 * Run the probe scorer's self-test.
 * Run the set-id checker's self-test and manifest sweep.
 * Build the KRFFS host tools and test deterministic image staging.
-* Run the kernel, embedded-GRUB, sealed-network, and compilation-database checker self-tests.
+* Run the ELF, configuration, and compilation-database checker self-tests.
 * Check the dev-log index against the finished milestone directories.
 
 The supporting files under `verify/` have narrower jobs:
@@ -34,11 +34,10 @@ The supporting files under `verify/` have narrower jobs:
 * `check_sources.sh` compares `C_SRC` in `rach2/sources.mk` with `kernel.c` and the C files below `rach2/sys/`.
 * `check_guest.py` checks five contracts: each component's host and guest builds derive from its shared source manifest (`rach2/sources.mk`, `utils/programs.mk`, `ish/sources.mk`), the kernel response file and link line, the utility program-to-source map, the guest file-descriptor and command-size limits, and the three source trees staged under `/src`.
 * `textcheck.sh` checks ASCII, prose uses of spaced `--`, Markdown bullet form, and development-phase tags. Its default Markdown scope includes root documents and documents below `rach2/`, `ish/`, `utils/`, `tests/`, `krffs/`, `tools/`, `mk/`, and `vendor/`. It excludes `dev-log/` and all of `ports/doom/`.
-* `check_comments.py` checks 80-column comment wrapping in the in-house C, shell, Make, and Python files. It includes the project glue under `ports/doom/` and excludes `ports/doom/src/`.
-* `prose_check.py --banned` checks the mechanically prohibited vocabulary in comments, messages, and Markdown. Its default scope includes the root documents and the in-house source roots, including the Doom glue but excluding `vendor/` and `dev-log/`. A path argument checks a file outside that default. `--report` compares watched phrase rates with the pinned upstream corpus without failing the build.
-* `prose_baseline.txt` records project phrase counts for `prose_check.py --report`; `prose_upstream.txt` records counts from the pinned upstream tarballs and Doom sources. They are measurements, not pass limits.
+* `prosecheck.c` holds the prose rules. `columns` checks 80-column comment wrapping in the in-house C, shell, Make, and Python files, including the project glue under `ports/doom/` and excluding `ports/doom/src/`. `banned` checks the mechanically prohibited vocabulary in comments, messages, and Markdown; its default scope is the root documents and the in-house source roots, including the Doom glue but excluding `vendor/` and `dev-log/`, and a path argument checks a file outside that default. `count` reports the word and phrase totals `prose_report.sh` tabulates, and `devlog` requires the dev-log index to name every finished milestone once, in directory order, and to omit plan-only milestones (it accepts `Readme.md` and milestone 6's `results.md` as completion records).
+* `prose_report.sh` compares watched phrase rates with the pinned upstream corpus without failing the build; `--baseline` and `--fixture` compare with the committed records or rewrite them.
+* `prose_baseline.txt` records project phrase counts for `prose_report.sh`; `prose_upstream.txt` records counts from the pinned upstream tarballs and Doom sources. They are measurements, not pass limits.
 * `check_repro.sh` stages the same scratch manifest twice with the real KRFFS tools, requires identical image bytes, and checks that `exec-dir` and `tree` entries were stored in name order with the fixed staged instant, reading the node inventory through `setidcheck --nodes`.
-* `check_devlog.py` requires the dev-log index to name every finished milestone once, in directory order, and to omit plan-only milestones. It accepts `Readme.md` and milestone 6's `results.md` as completion records.
 * `cppcheck.suppress` contains the project-wide and path-scoped cppcheck exceptions read by `check.sh`.
 
 ## Artifact and configuration checkers
@@ -49,8 +48,7 @@ The inspectors under `inspect/` validate built artifacts; the validation stamps 
 * `check_link.sh` uses `i686-elf-nm` to require that the libraries and startup objects staged for TinyCC leave no required symbol undefined. `vendor/tcc/build_tcc.sh` runs it.
 * `setidcheck.c` has four related checks: manifest declarations, the resulting image nodes, the two BusyBox applet tables and resolved configs, and the strict and permissive init binaries. Its declarations live in `setid.allow` beside it. `tests/run style` runs its self-test and manifest sweep; `krffs/mkimage.sh` and `krffs/mkdisk.sh` run the image check; `make check-setid` runs the manifest, BusyBox, and init checks. `--free` and `--nodes` read a region's free bytes and node inventory for the suites.
 * `check_diskpolicy.sh` requires a kernel to contain exactly one of the read-only and read-write policy banners. `check_recovery.sh` does the same for ordinary and recovery disk authority. These checks detect a mis-built artifact; the behavioral suites test actual disk writes.
-* `check_grubembed.py` requires `image/grub-embed.cfg` to contain exactly the ordered configuration calls for partitions 1 and 3. Both GRUB core builders run it.
-* `check_sealednet.py` checks that the sealed disk's address, prefix, mask, gateway, and recovery fallback script describe one valid network configuration.
+* `cfgcheck.c` checks the two configuration files a sealed disk depends on. `grubembed` requires `image/grub-embed.cfg` to contain exactly the ordered configuration calls for partitions 1 and 3, which both GRUB core builders run; `sealednet` checks that the sealed disk's address, prefix, mask, gateway, and recovery fallback script describe one valid network configuration.
 
 ## clangd database
 

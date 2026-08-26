@@ -83,6 +83,8 @@ PCAPCHECK       = build/tests/system/pcapcheck
 BINFIND         = build/tools/inspect/binfind
 ELFCHECK        = build/tools/inspect/elfcheck
 SETIDCHECK      = build/tools/inspect/setidcheck
+CFGCHECK        = build/tools/inspect/cfgcheck
+PROSECHECK      = build/tools/verify/prosecheck
 MKFIXTURE       = build/tests/system/mkfixture
 HOLDPORT        = build/tests/system/holdport
 SHA256TOOL      = build/tools/verify/sha256
@@ -320,6 +322,18 @@ $(SETIDCHECK): tools/inspect/setidcheck.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
+# The configuration checkers (tools/inspect/cfgcheck.c): the GRUB core's
+# embedded configuration and the sealed disk's fixed address.
+$(CFGCHECK): tools/inspect/cfgcheck.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+# The prose checks (tools/verify/prosecheck.c): comment width, the banned
+# vocabulary, the phrase counts the report tabulates, and the dev-log index.
+$(PROSECHECK): tools/verify/prosecheck.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
 # The digest tool (tools/verify/sha256.c), replacing sha256sum and shasum.
 # The scripts that need it before make has run compile it themselves.
 $(SHA256TOOL): tools/verify/sha256.c
@@ -536,7 +550,7 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 # machine is plugged into has no server: the same defaults the metal stick uses,
 # overridable at build time for anywhere else. The menu takes a prefix and the
 # recovery script takes a dotted mask, and the two must be the same subnet with
-# the gateway inside it; tools/inspect/check_sealednet.py holds them to that before a
+# the gateway inside it; the configuration checker holds them to that before a
 # disk is written, since a machine whose menu and fallback disagree is one
 # nobody can reach by either.
 SEALED_ADDRESS ?= 192.168.0.105
@@ -545,10 +559,10 @@ SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
 SEALED_IP = $(SEALED_ADDRESS)/$(SEALED_PREFIX)
 SEALED_DISK = build/images/rach2-sealed.disk
-rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(CFGCHECK)
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
-	@python3 tools/inspect/check_sealednet.py $(SEALED_ADDRESS) $(SEALED_PREFIX) \
+	@$(CFGCHECK) sealednet $(SEALED_ADDRESS) $(SEALED_PREFIX) \
 	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
 	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
 	RACH2_DISK_BOOT_MB=64 \

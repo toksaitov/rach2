@@ -17,14 +17,14 @@
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC)
 #   8. text style, in three parts: textcheck.sh for non-ASCII and dashes,
-#      check_comments.py for the 80-column comment rule, and prose_check.py
-#      --banned for the vocabulary a script can decide (all beside this file).
+#      prosecheck for the 80-column comment rule and for the vocabulary a
+#      script can decide (both beside this file).
 #   9. the probe runner's scoring rule (runtests.py --selftest)
 #  10. the set-id manifest sweep (tools/inspect/setidcheck.c)
 #  11. image reproducibility (tools/verify/check_repro.sh): one tree, one image
-#  12. the checker selftests (elfcheck, check_grubembed.py, and
+#  12. the checker selftests (elfcheck, cfgcheck, and
 #      the compile-commands generator)
-#  13. the dev-log index (tools/verify/check_devlog.py): it names every finished
+#  13. the dev-log index (prosecheck devlog): it names every finished
 #      milestone, and names the newest last
 #
 # Usage:
@@ -44,6 +44,11 @@ ASCIISCAN="$REPO/build/tools/verify/asciiscan"
 if [ ! -x "$ASCIISCAN" ] || [ "$REPO/tools/verify/asciiscan.c" -nt "$ASCIISCAN" ]; then
     mkdir -p "${ASCIISCAN%/*}"
     cc -O2 -o "$ASCIISCAN" "$REPO/tools/verify/asciiscan.c" || exit 1
+fi
+PROSECHECK="$REPO/build/tools/verify/prosecheck"
+if [ ! -x "$PROSECHECK" ] || [ "$REPO/tools/verify/prosecheck.c" -nt "$PROSECHECK" ]; then
+    mkdir -p "${PROSECHECK%/*}"
+    cc -O2 -o "$PROSECHECK" "$REPO/tools/verify/prosecheck.c" || exit 1
 fi
 cd "$REPO" || exit 1
 VDIR=/tmp/rach2_verify
@@ -274,10 +279,10 @@ fi
 # Comment width. Written for milestone 26 and left unwired until the tree
 # reached zero, because a check that fails on the day it lands teaches everyone
 # to ignore it.
-if python3 "$REPO/tools/verify/check_comments.py" >"$VDIR/verify_cols.log" 2>&1; then
+if "$PROSECHECK" columns >"$VDIR/verify_cols.log" 2>&1; then
     echo "  PASS (comments at 80 columns)"
 else
-    cc=$(sed -n 's/^check_comments: \([0-9]*\) comment.*/\1/p' "$VDIR/verify_cols.log")
+    cc=$(sed -n 's/^prosecheck: \([0-9]*\) comment.*/\1/p' "$VDIR/verify_cols.log")
     [ -n "$cc" ] || cc='?'
     echo "  FAIL: $cc over-width comment line(s); see $VDIR/verify_cols.log"; fail=1
 fi
@@ -285,11 +290,11 @@ fi
 # Vocabulary. Only the half of the register rule a script can decide: terms with
 # no legitimate use in this tree, in comments AND in the strings a person reads.
 # The other half, and the repetition report, are for review; see CLAUDE.md.
-if python3 "$REPO/tools/verify/prose_check.py" --selftest >"$VDIR/verify_prose.log" 2>&1 &&
-   python3 "$REPO/tools/verify/prose_check.py" --banned >>"$VDIR/verify_prose.log" 2>&1; then
+if "$PROSECHECK" --selftest >"$VDIR/verify_prose.log" 2>&1 &&
+   "$PROSECHECK" banned >>"$VDIR/verify_prose.log" 2>&1; then
     echo "  PASS (banned vocabulary)"
 else
-    pc=$(sed -n 's/^prose_check: \([0-9]*\) banned.*/\1/p' "$VDIR/verify_prose.log")
+    pc=$(sed -n 's/^prosecheck: \([0-9]*\) banned.*/\1/p' "$VDIR/verify_prose.log")
     [ -n "$pc" ] || pc='?'
     echo "  FAIL: $pc banned term use(s); see $VDIR/verify_prose.log"; fail=1
 fi
@@ -359,9 +364,13 @@ if [ ! -x "$ELFCHECK" ] || [ "$REPO/tools/inspect/elfcheck.c" -nt "$ELFCHECK" ];
     mkdir -p "${ELFCHECK%/*}"
     cc -O2 -o "$ELFCHECK" "$REPO/tools/inspect/elfcheck.c" || exit 1
 fi
+CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
+if [ ! -x "$CFGCHECK" ] || [ "$REPO/tools/inspect/cfgcheck.c" -nt "$CFGCHECK" ]; then
+    mkdir -p "${CFGCHECK%/*}"
+    cc -O2 -o "$CFGCHECK" "$REPO/tools/inspect/cfgcheck.c" || exit 1
+fi
 if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
-   python3 "$REPO/tools/inspect/check_grubembed.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
-   python3 "$REPO/tools/inspect/check_sealednet.py" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   "$CFGCHECK" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else
@@ -373,8 +382,7 @@ fi
 #     directories' numeric order, and a directory holding only a plan must have
 #     none. The selftest proves the rules reject; the run proves this index.
 hr "13/13 dev-log index"
-if python3 "$REPO/tools/verify/check_devlog.py" --selftest >"$VDIR/verify_devlog.log" 2>&1 &&
-   python3 "$REPO/tools/verify/check_devlog.py" >>"$VDIR/verify_devlog.log" 2>&1; then
+if "$PROSECHECK" devlog >"$VDIR/verify_devlog.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_devlog.log"; fail=1
