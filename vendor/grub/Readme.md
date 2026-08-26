@@ -10,7 +10,7 @@ The artifacts, all for BIOS `i386-pc` boot:
 * `eltorito.img`: the El Torito boot image for ISOs, with the `iso9660` module, built in GRUB's `i386-pc-eltorito` output format.
 * `boot-hybrid.img`: GRUB's hybrid MBR template, placed by `xorriso` so an ISO also boots when written to a USB device.
 
-`verify_grub.sh [ARTIFACT ...]` compares size and SHA-256 against the manifest; every consumer runs it before using an artifact, so a modified file fails the build instead of reaching a disk.
+`verify_grub.sh [ARTIFACT[=PATH] ...]` compares size and SHA-256 against the manifest; with no argument it checks every artifact beside the manifest, and `NAME=PATH` checks a copy at PATH against NAME's entry. Every consumer copies the artifacts it needs into its own working directory and verifies the copies, so the bytes checked are the bytes used and a modified file fails the build instead of reaching a disk. Every run also compares `tools/image/grub-embed.cfg` against the manifest's `embed-cfg` digest: the disk cores embed that file as it was at generation time, so editing it without regenerating fails the next build rather than shipping cores whose configuration nobody checked.
 
 ## Regeneration
 

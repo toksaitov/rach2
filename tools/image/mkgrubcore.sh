@@ -7,8 +7,8 @@
 # serial line (`GRUBCORE=A` or `GRUBCORE=B`) so a swap can be proved by the
 # core that actually ran. The two marked cores are pinned artifacts under
 # vendor/grub/, generated with the rest by regen_grub.sh; this script only
-# verifies the requested one against the manifest digest and copies it, so
-# no GRUB toolchain and no Docker is needed to run the suites.
+# copies the requested one and verifies the copy against the manifest
+# digest, so no GRUB toolchain and no Docker is needed to run the suites.
 #
 # Usage: ./mkgrubcore.sh {A|B} OUTPUT
 #
@@ -31,7 +31,11 @@ case "$MARKER" in
 esac
 [ -n "$OUT" ] || { echo "usage: mkgrubcore.sh {A|B} OUTPUT" >&2; exit 2; }
 
-sh "$REPO/vendor/grub/verify_grub.sh" "$NAME"
-
-cp "$SRC" "$OUT"
-echo "mkgrubcore: wrote $OUT ($(wc -c < "$OUT") bytes, marker $MARKER)"
+# Copy first, verify the copy: the bytes checked are the bytes handed out.
+cp "$SRC" "$OUT.new"
+if ! sh "$REPO/vendor/grub/verify_grub.sh" "$NAME=$OUT.new"; then
+    rm -f "$OUT.new"
+    exit 1
+fi
+mv "$OUT.new" "$OUT"
+echo "mkgrubcore: wrote $OUT ($(wc -c < "$OUT" | tr -d ' ') bytes, marker $MARKER)"
