@@ -974,7 +974,7 @@ static int read_milestones(const char *devlog, struct milestone *out, int max)
 
     if (dir == NULL)
         return -1;
-    while ((ent = readdir(dir)) != NULL && n < max) {
+    while ((ent = readdir(dir)) != NULL) {
         char full[1024];
         struct stat st;
         const char *p = ent->d_name;
@@ -993,6 +993,11 @@ static int read_milestones(const char *devlog, struct milestone *out, int max)
         snprintf(full, sizeof(full), "%s/%s", devlog, ent->d_name);
         if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode))
             continue;
+        if (n == max) {
+            fprintf(stderr, "prosecheck: more than %d milestone "
+                    "directories; the rest would go unchecked\n", max);
+            exit(2);
+        }
         snprintf(out[n].name, sizeof(out[n].name), "%s", ent->d_name);
         out[n].number = (p[0] - '0') * 10 + (p[1] - '0');
         out[n].finished = 0;
@@ -1028,8 +1033,8 @@ static int read_entries(const char *text, size_t n, char names[][128],
     size_t i = 0;
     int count = 0, fenced = 0;
 
-    while (i < n && count < max) {
-        size_t end = i, j;
+    while (i < n) {
+        size_t end = i;
         const char *p = text + i;
         const char *t;
 
@@ -1069,6 +1074,12 @@ static int read_entries(const char *text, size_t n, char names[][128],
                     if (after < text + end && *after == ':' && len > 3 &&
                         len < 128 && isdigit((unsigned char) name[0]) &&
                         isdigit((unsigned char) name[1]) && name[2] == '-') {
+                        if (count == max) {
+                            fprintf(stderr, "prosecheck: more than %d index "
+                                    "entries; the rest would go unread\n",
+                                    max);
+                            exit(2);
+                        }
                         memcpy(names[count], name, len);
                         names[count][len] = '\0';
                         count++;
@@ -1076,8 +1087,6 @@ static int read_entries(const char *text, size_t n, char names[][128],
                 }
             }
         }
-        for (j = 0; j < 0; j++)
-            ;
         i = end + 1;
     }
     return count;
