@@ -40,7 +40,6 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # the self-build proof hands the guest-built kernel here and boots the result.
 KERNEL="${1:-$REPO/build/rach2/kernel}"
 OUT="${2:-$REPO/build/images/os-real-grub.disk}"
-KRFFS_BIN="$REPO/build/images/grub-krffs.bin"
 
 # Three knobs for a disk aimed at a particular machine, each defaulting to
 # exactly what this script always built so no existing caller changes:
@@ -120,22 +119,30 @@ if [ ! -x "$MKMBR" ]; then
     cc -O2 -o "$MKMBR" "$REPO/tools/image/mkmbr.c" || exit 1
 fi
 
-# The pinned GRUB artifacts, verified against their manifest before a byte
-# of boot code reaches the disk.
-sh "$REPO/vendor/grub/verify_grub.sh" bios-boot.img disk-core.img
+# Every intermediate lives in this run's own directory, so two profiles
+# building in parallel (the suites do) cannot overwrite each other's
+# configuration or partition images. The trap clears it and the unrenamed
+# output on any exit; the finished disk appears only through the final mv.
+TMPD="$(mktemp -d "$REPO/build/images/mkdisk.XXXXXX")"
+trap 'rm -rf "$TMPD" "$OUT.new"' EXIT
+KRFFS_BIN="$TMPD/grub-krffs.bin"
+GRUB_CFG="$TMPD/grub-disk.cfg"
+RECOVERY_CFG="$TMPD/grub-recovery.cfg"
+EMBED_CFG="$TMPD/grub-embed.cfg"
+
+# The pinned GRUB artifacts: copied into this run's directory first, then
+# the copies verified against the manifest, so the bytes checked are the
+# bytes written to the disk and a regeneration racing this build cannot
+# slip a file between the check and the read.
+cp "$REPO/vendor/grub/bios-boot.img" "$TMPD/bios-boot.img"
+cp "$REPO/vendor/grub/disk-core.img" "$TMPD/disk-core.img"
+sh "$REPO/vendor/grub/verify_grub.sh" \
+    "bios-boot.img=$TMPD/bios-boot.img" \
+    "disk-core.img=$TMPD/disk-core.img"
 
 # The KRFFS partition image, sized to partition 2, built with the host tools.
 sh "$REPO/krffs/mkimage.sh" "$MANIFEST" \
     "$KRFFS_BIN" "$KRFFS_MB"
-
-# The GRUB config lives on the host so the container does not have to escape it.
-# Build into a .new sibling and rename only on success, so a failed run never
-# leaves a half-written disk that passes a later file-existence check. The trap
-# clears both temporaries on any exit.
-GRUB_CFG="$REPO/build/images/grub-disk.cfg"
-RECOVERY_CFG="$REPO/build/images/grub-recovery.cfg"
-EMBED_CFG="$REPO/build/images/grub-embed.cfg"
-trap 'rm -f "$GRUB_CFG" "$OUT.new"' EXIT
 
 # The install contract (dev-log/23-install/plan.md): /boot/kernel is the
 # candidate slot bootctl rewrites, /boot/fallback the untouched copy,
@@ -415,11 +422,6 @@ if [ "$KBYTES" -gt "$SLOT_BYTES" ]; then
     exit 1
 fi
 
-TMPD="$REPO/build/images/mkdisk.tmp"
-rm -rf "$TMPD"
-mkdir -p "$TMPD"
-trap 'rm -f "$GRUB_CFG" "$OUT.new"; rm -rf "$TMPD"' EXIT
-
 dd if=/dev/zero of="$TMPD/candidate.pad" bs="$SLOT_BYTES" count=1 2>/dev/null
 dd if="$KERNEL" of="$TMPD/candidate.pad" conv=notrunc 2>/dev/null
 dd if=/dev/zero of="$TMPD/p1.img" bs=1048576 count="$BOOT_MB" 2>/dev/null
@@ -522,7 +524,7 @@ END {
 dd if="$TMPD/p1.img" of="$OUT.new" bs=1048576 seek="$GAP_MB" conv=notrunc 2>/dev/null
 
 python3 "$REPO/tools/image/grub_embed.py" "$OUT.new" \
-    "$REPO/vendor/grub/bios-boot.img" "$REPO/vendor/grub/disk-core.img"
+    "$TMPD/bios-boot.img" "$TMPD/disk-core.img"
 
 dd if="$KRFFS_BIN" of="$OUT.new" bs=1048576 seek=$((GAP_MB + BOOT_MB)) \
     conv=notrunc 2>/dev/null
