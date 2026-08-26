@@ -57,8 +57,11 @@
 #define LIMIT 80
 #define MAX_FILE (4 * 1024 * 1024)
 
+/* The root Makefile is named here because it is the build's entry point and
+   sits in no walked directory. */
 static const char *const ROOTS[] = { "rach2", "utils", "ish", "krffs",
-                                     "tests", "tools", "mk", "ports/doom" };
+                                     "tests", "tools", "mk", "ports/doom",
+                                     "Makefile" };
 static const char *const TOP_MD[] = { "CLAUDE.md", "AGENTS.md", "Readme.md" };
 static const char *const SKIP_DIRS[] = { "vendor", "build", ".git" };
 static const char *const SKIP_PATHS[] = { "ports/doom/src" };
@@ -428,8 +431,11 @@ static enum lang lang_of(const char *path)
 {
     if (ends_with(path, ".c") || ends_with(path, ".h"))
         return LANG_C;
-    if (ends_with(path, ".py") || ends_with(path, ".sh") ||
-        ends_with(path, ".mk"))
+    /* A makefile is hash-commented like a shell script, and the build's own
+       files answer to the same 80-column rule as the code they build. Named
+       explicitly because they carry no extension. */
+    if (ends_with(path, ".sh") || ends_with(path, ".mk") ||
+        ends_with(path, "/Makefile") || strcmp(path, "Makefile") == 0)
         return LANG_HASH;
     if (ends_with(path, ".md"))
         return LANG_MD;
