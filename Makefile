@@ -88,6 +88,9 @@ PROSECHECK      = build/tools/verify/prosecheck
 GUESTCHECK      = build/tools/verify/guestcheck
 MKFIXTURE       = build/tests/system/mkfixture
 HOLDPORT        = build/tests/system/holdport
+HARNESS         = build/tests/system/harness
+RUNTESTS        = build/tests/system/runtests
+PTYDRIVE        = build/tests/system/ptydrive
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
@@ -302,6 +305,21 @@ $(MKFIXTURE): tests/system/fixtures/mkfixture.c
 # The TCP peer (tests/system/runner/holdport.c) the procfiles suite needs
 # so the connection it looks for in /proc/net/tcp is a live one.
 $(HOLDPORT): tests/system/runner/holdport.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+# The three runners (tests/system/runner/): the serial harness every suite
+# drives, the probe runner one boot scores, and the pty driver the SSH
+# suites answer their password prompts through.
+$(HARNESS): tests/system/runner/harness.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+$(RUNTESTS): tests/system/runner/runtests.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+$(PTYDRIVE): tests/system/runner/ptydrive.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
@@ -586,7 +604,7 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 # `make test`: the automated end-to-end pass over the test image. Boots it headless
 # (-cpu max) and runs every probe, failing if any does not exit 0. The few probes
 # with a special contract (fork-exit-code, stdin, faults, network) are run by hand
-# under tests/system/runner/harness.py; see tests/system/runner/runtests.py.
+# under tests/system/runner/harness.c; see tests/system/runner/runtests.c.
 # --timeout is one deadline for the whole run, not per probe, so it is stated here
 # rather than left at the default: the suite grows every milestone, and a default
 # sized for an older, shorter suite fails the tail as a hang on a slow host.
@@ -596,8 +614,8 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 # step window out, so widening it costs a passing run nothing.
 # The default suite's build-and-run target. `make test` and `tests/run
 # default` both land here; the registry in tests/registry names it.
-run-default: test-image
-	python3 tests/system/runner/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+run-default: test-image $(RUNTESTS)
+	$(RUNTESTS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60
 
 # The public test entry: the runner owns the suite registry, so this is a
@@ -610,8 +628,8 @@ test:
 # so every probe must pass exactly as it does without it; what is under test is
 # that `rach2.ip=` and `rach2.gateway=` reach ARP, IP, TCP, the sockets and the
 # boot line, and that naming the current network changes nothing.
-run-addressed: test-image
-	python3 tests/system/runner/runtests.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+run-addressed: test-image $(RUNTESTS)
+	$(RUNTESTS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60 \
 	    --append "rach2.ip=10.0.2.15/24 rach2.gateway=10.0.2.2"
 
@@ -620,17 +638,17 @@ run-addressed: test-image
 # and the kernel's pool is trusted; a minter that quietly fell back to the
 # untrusted stream would pass every proof in the suite. This boots the same test
 # image on a CPU that exposes neither instruction, and /musl/saltnoent (staged by
-# the image sweep, deliberately absent from runtests.py's PROBES because it must
+# the image sweep, deliberately absent from the probe runner's list because it must
 # fail where entropy is trusted) asserts that the mint refuses, says so once, and
 # leaves /etc/shadow, its temporary file and the lock exactly as they were.
-# harness.py passes no -cpu of its own, so the passthrough is the only one on the
-# command line.
-run-noentropy: test-image
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+# The harness passes no -cpu of its own, so the passthrough is the only one
+# on the command line.
+run-noentropy: test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 90 --ok "SALTNOENT OK" \
 	    "expect=Type 'help'" "send=exec /musl/saltnoent" wait=20
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 180 --ok "PASSWDMUSL OK (fail-closed)" \
 	    "expect=Type 'help'" "send=exec /musl/passwdmusl" wait=60
@@ -642,9 +660,9 @@ run-noentropy: test-image
 # resident cache, so it exercises real eviction and writeback and fails on any
 # dropped or corrupted page.
 DISK_TEST_IMAGE = $(IMAGES_DIR)/disk-test.disk
-run-disk: rach2 tests krffs
+run-disk: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
@@ -667,23 +685,23 @@ run-disk: rach2 tests krffs
 # AHCI because the ATA driver's 28-bit LBA stops at 128 GiB.
 BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
 WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
-run-bootpart: rach2 tests krffs $(MKFIXTURE)
+run-bootpart: rach2 tests krffs $(MKFIXTURE) $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE ABSENT OK" probe=bootprobe
 	$(MKFIXTURE) boot $(BOOTPART_TEST_IMAGE)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue rach2.bootprobe=fixture" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE OK" probe=bootprobe
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --append "rach2.rescue rach2.bootprobe=ramroot" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE RAMROOT OK" probe=bootprobe
 	$(MKFIXTURE) wide $(WIDE_TEST_IMAGE)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=wide" \
 	    --drive "file=$(WIDE_TEST_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
@@ -745,16 +763,16 @@ run-menu: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # different object trees, and check_recovery.sh reads the authority back off
 # each artifact so a mislabelled one cannot reach this test.
 AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
-run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE)
+run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE) $(HARNESS)
 	$(MKFIXTURE) wide $(AUTH_TEST_IMAGE)
 	sh tools/inspect/check_recovery.sh build/rach2/kernel ordinary
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-ordinary" \
 	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 180 --ok "BOOTPROBE AUTH ORDINARY OK" probe=bootprobe
-	python3 tests/system/runner/harness.py --kernel $(RECOVERY_KERNEL) --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(RECOVERY_KERNEL) --initrd $(TEST_IMAGE) \
 	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-recovery" \
 	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
@@ -808,7 +826,7 @@ run-sealed: rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND)
 # such flag, so there the everyday entries have no whole-disk node at all, and
 # the recovery build publishes its own whatever the command line says.
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-run-drill: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND)
+run-drill: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(HARNESS)
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	sh krffs/gen_demo_key.sh
@@ -829,13 +847,13 @@ run-drill: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(B
 # fsync pushed the write through the cache to the disk, since the file would
 # otherwise be gone.
 PERSIST_DISK = $(IMAGES_DIR)/persist-test.disk
-run-persist: rach2 tests krffs
+run-persist: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_DISK) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
@@ -850,19 +868,19 @@ run-persist: rach2 tests krffs
 # left rather than breaking it. The third reads back the release itself: a lock
 # whose removal stayed in the page cache would still be there.
 CRED_PERSIST_DISK = $(IMAGES_DIR)/cred-persist-test.disk
-run-cred-persist: rach2 musl-programs krffs
+run-cred-persist: rach2 musl-programs krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/cred-persist-test.manifest $(CRED_PERSIST_DISK) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (wrote)" \
 	    "expect=Type 'help'" "send=exec /creddisk" wait=15
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (released)" \
 	    "expect=Type 'help'" "send=exec /creddisk" wait=15
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (read back)" \
@@ -880,12 +898,12 @@ RAW_PCAP = $(IMAGES_DIR)/raw.pcap
 BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # `make ping-test`: the ICMP path against the SLIRP gateway, which is why it is
 # its own target rather than a probe in the suite. The explicit wait= is
-# required: after its last step harness.py drains only --grace and then
+# required: after its last step the harness drains only --grace and then
 # kills QEMU, while the timeout case alone costs four seconds and the child the
 # probe forks lives three to eight, so without it the token would arrive after
 # QEMU was dead.
-run-ping: rach2 tests krffs test-image
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+run-ping: rach2 tests krffs test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" wait=60
@@ -894,8 +912,8 @@ run-ping: rach2 tests krffs test-image
 # that arrives before this machine owns an address. Its own target and not a
 # probe in the suite, for the reason `ping-test` is: it needs the network to
 # answer, and the suite's probes must not.
-run-packet: rach2 tests krffs test-image
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+run-packet: rach2 tests krffs test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PACKETPROBE OK" \
 	    "expect=Type 'help'" "send=exec /packetprobe" wait=60
@@ -917,16 +935,16 @@ run-bootline: rach2 tests krffs
 # `traceroute` itself on the image that has it. The capture is read by
 # the capture checker for the two things a program inside the machine cannot
 # see: the hop limit each datagram left with, and the caller's own checksum.
-run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK)
+run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(RAW_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
 	    --timeout 200 --ok "RAWPROBE OK" \
 	    "expect=Type 'help'" "send=exec /rawprobe" wait=60
 	$(PCAPCHECK) rawwire $(RAW_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=10.0.2.15/24" \
 	    --timeout 200 --ok "RAWPROBE OK" \
@@ -937,7 +955,7 @@ run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK)
 	# probe per hop and does not retry, so a cold cache costs it its first
 	# answer. What is asserted is the first hop, which is the gateway
 	# answering a hop limit of one, and that is the whole mechanism.
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 300 --steptmo 90 --ok "TRACEDONE" \
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
@@ -947,7 +965,7 @@ run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK)
 	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" wait=10
 	# The in-house ping is still the one an ordinary account runs: busybox's
 	# needs a raw socket, which is root's, and is not built for that reason.
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
 	    "expect=rach2 login:" "send=test" "expect=Password:" \
@@ -958,15 +976,15 @@ run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK)
 # machine's address. Its own target, like `ping-test`: it changes the address
 # out from under the machine and puts it back, and the last thing it does is
 # ping the gateway, which needs the network to answer.
-run-netif: rach2 tests krffs test-image
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+run-netif: rach2 tests krffs test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0,hostfwd=udp::15999-:9999" \
 	    --timeout 180 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /netifprobe" \
 	    "expect=NETIFPROBE DOWN" "udp=15999:down" \
 	    "expect=NETIFPROBE UP" "udp=15999:up" wait=60
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=none" \
 	    --timeout 120 --ok "NETIFPROBE OK" \
@@ -977,9 +995,9 @@ run-netif: rach2 tests krffs test-image
 # Its own target because it broadcasts, and a probe in the suite must not put a
 # frame on the wire that the other probes did not ask for.
 DGRAM_PCAP = $(IMAGES_DIR)/dgram.pcap
-run-dgram: rach2 tests krffs test-image $(PCAPCHECK)
+run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DGRAM_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0,hostfwd=udp::15998-:7502" \
 	    --qemu-arg=-object \
@@ -1003,9 +1021,9 @@ SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple.log
 STATIC_PCAP = $(IMAGES_DIR)/static-simple.pcap
 RSTATIC_PCAP = $(IMAGES_DIR)/static-real.pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
-run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
+run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DHCP_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET)" \
 	    --qemu-arg=-object \
@@ -1038,7 +1056,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	# already configured. Init empties that directory, and this is what says
 	# so: two boots of one disk, each of which must reach a lease.
 	$(MKDISK) krffs/manifests/os-real.manifest $(DHCP_DISK) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.ip=none" \
 	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
@@ -1049,7 +1067,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	    "expect=lease of 192.168.90.20 obtained" wait=3 \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo FIRST\"\"LEASE" \
 	    "expect=FIRSTLEASE" "send=poweroff -f" wait=5
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.ip=none" \
 	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
@@ -1066,7 +1084,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	# console session in it.
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $(METAL_IMAGE) 4
 	@rm -f $(METAL_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET),hostfwd=tcp::2224-:22" \
 	    --qemu-arg=-object \
@@ -1103,7 +1121,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	# check below requires that packet to have gone to the gateway instead,
 	# which only a machine holding the leased /16 does.
 	@rm -f $(SIMPLE_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" \
 	    --qemu-arg=-object \
@@ -1148,7 +1166,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	# copies the stanza it stages, since it has no editor; os-real writes one
 	# with its shell.
 	@rm -f $(STATIC_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" \
 	    --qemu-arg=-object \
@@ -1178,7 +1196,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	# kernel would derive anyway, so skipping the netmask directive entirely
 	# would look identical. Here it does not.
 	@rm -f $(RSTATIC_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" \
 	    --qemu-arg=-object \
@@ -1201,7 +1219,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	# renewal falls due ten seconds in, and the run must see the lease applied
 	# more than once. Without that cap nothing here could reach the renewal
 	# path at all, and a client that renewed wrongly would ship green.
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" --append "rach2.ip=none" \
 	    --timeout 180 --steptmo 90 --log $(SIMPLE_LOG) \
@@ -1231,7 +1249,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	# and a client would begin by taking that address off and might never put
 	# one back. This one is asked at the console rather than read off the
 	# wire, because what is being tested is that nothing happened.
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET)" \
 	    --append "rach2.ip=192.168.90.50/24 rach2.gateway=192.168.90.2" \
@@ -1241,7 +1259,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	    "expect=# " wait=20 \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.50' && echo STATIC\"\"KEPT" \
 	    wait=10
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "hubport,id=net0,hubid=1" --append "rach2.ip=none" \
 	    --timeout 180 --steptmo 90 --ok "no lease, forking to background" \
@@ -1259,9 +1277,9 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 # the network device came up, which is what proves the pre-transmit buffer was
 # carried rather than dropped.
 NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole.pcap
-run-netconsole: rach2 tests krffs test-image $(PCAPCHECK)
+run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(NETCONSOLE_PCAP)
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=nc0,netdev=net0,file=$(NETCONSOLE_PCAP) \
@@ -1278,7 +1296,7 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK)
 # one is ever exercised, and nobody finds out the later ones do not work until
 # the machine they were written for refuses to restart. So each is booted with
 # the ones before it left out, and each must still restart the machine.
-run-reset: rach2 tests krffs test-image
+run-reset: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/reset.sh build/rach2/kernel $(TEST_IMAGE)
 
 # `make diskdiag-test`: a disk read without being mounted and without being
@@ -1287,7 +1305,7 @@ run-reset: rach2 tests krffs test-image
 # read-only kernel reading it over SSH with nothing typed at the console, where
 # every sector hashed on the machine must equal the same offset hashed here;
 # and the same kernel with no drive at all.
-run-diskdiag: rach2 rach2-metal rach2-metal-image
+run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
 	sh tests/system/suites/diskdiag.sh build/rach2/kernel $(METAL_KERNEL) $(METAL_IMAGE) 2224
 
 # `make subset-test`: the kernel reaches a shell with any subset of its optional
@@ -1295,11 +1313,11 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image
 # no diagnostic but the screen, and the only way to find which probe stopped it
 # is to switch them off one at a time from the GRUB command line. That is only
 # useful if each switch actually works, so each is booted here.
-run-subset: rach2 tests krffs test-image
+run-subset: rach2 tests krffs test-image $(HARNESS)
 	@for opt in "" "rach2.noaudio" "rach2.nomouse" "rach2.nonet" "rach2.nodisk" \
 	            "rach2.noaudio rach2.nomouse rach2.nonet rach2.nodisk"; do \
 	    echo "  subset-test: booting with [$$opt]"; \
-	    python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	    $(HARNESS) --kernel build/rach2/kernel \
 	        --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	        --append "$$opt" --timeout 90 --ok "Type 'help'" \
 	        "expect=Type 'help'" wait=2 >/dev/null 2>&1 \
@@ -1312,7 +1330,7 @@ run-subset: rach2 tests krffs test-image
 # kernel; the ordinary one must change it, which is what makes the other half
 # mean anything, and the metal one must refuse a command by name and leave the
 # image untouched.
-run-diskpolicy: rach2 rach2-metal
+run-diskpolicy: rach2 rach2-metal $(HARNESS)
 	sh tests/system/suites/diskpolicy.sh build/rach2/kernel $(METAL_KERNEL)
 
 # `make metal-test`: the metal image reached over SSH with nobody at its
@@ -1382,7 +1400,7 @@ run-make: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # whole run carries one deadline over the per-step ones.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
 
-run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK)
+run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS)
 	@mkdir -p $(IMAGES_DIR)
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
@@ -1397,7 +1415,7 @@ run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmak
 SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test.disk
 SSH_TEST_PORT ?= 2222
 
-run-ssh: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-ssh: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(PTYDRIVE)
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
@@ -1443,10 +1461,10 @@ run-procfiles: rach2 tests utils krffs busybox os-real-image test-image $(HOLDPO
 # shell and nowhere else. Four boots: an init image that must stay quiet while
 # a forked program runs, the test image that must still print it for a child
 # and a probe, a killed probe whose dedicated marker must survive, and a
-# harness.py run with no token, which has only the plain line to read.
+# the harness run with no token, which has only the plain line to read.
 HARNESS_KERNEL = build/rach2-harness/kernel
 
-run-exitline: rach2 tests utils krffs busybox os-real-image test-image
+run-exitline: rach2 tests utils krffs busybox os-real-image test-image $(HARNESS)
 	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
 	sh tests/system/suites/exitline.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
@@ -1460,9 +1478,9 @@ run-crash: rach2 tests krffs
 # a 64 MB disk with a 48 MB partition and runs stressprobe, which writes and
 # re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache.
 STRESS_DISK = $(IMAGES_DIR)/stress-test.disk
-run-stress: rach2 tests krffs
+run-stress: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(STRESS_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 150 --ok "STRESSPROBE OK" \
@@ -1482,9 +1500,9 @@ DISK_TEST_AHCI_IMAGE = $(IMAGES_DIR)/disk-test-ahci.disk
 PERSIST_AHCI_DISK    = $(IMAGES_DIR)/persist-test-ahci.disk
 STRESS_AHCI_DISK     = $(IMAGES_DIR)/stress-test-ahci.disk
 
-run-disk-ahci: rach2 tests krffs
+run-disk-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
@@ -1498,29 +1516,29 @@ run-disk-ahci: rach2 tests krffs
 # the real machine.
 run-disk-q35: rach2 tests krffs
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
 	    --qemu-arg=-machine --qemu-arg=q35 --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ide.0 \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
 
-run-persist-ahci: rach2 tests krffs
+run-persist-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
 
-run-stress-ahci: rach2 tests krffs
+run-stress-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_AHCI_DISK) 64 48
-	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
+	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(STRESS_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \

@@ -78,7 +78,7 @@ sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$BASE" 64
 
 boot() {
     cp "$BASE" "$2"
-    python3 "$REPO/tests/system/runner/harness.py" --kernel "$1" \
+    "$REPO/build/tests/system/harness" --kernel "$1" \
         --drive "file=$2,format=raw,if=ide,index=0,media=disk" \
         --append "rach2.fsdisk rach2.rescue" \
         --timeout 90 --log "$3" --ok "Type 'help'" \

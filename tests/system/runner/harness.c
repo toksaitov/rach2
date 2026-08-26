@@ -1,0 +1,783 @@
+/**
+ * harness: the tracked QEMU serial harness for probe and test runs.
+ *
+ * Boots qemu-system-i386 headless with the kernel and a KRFFS initrd,
+ * attaches QEMU's isa-debug-exit device (iobase 0xF4), and drives the
+ * guest with an expect and send script. With a HARNESS=1 kernel build the
+ * kernel writes each process exit status to that port (rach2/sys/kio.c,
+ * harness_exit), so QEMU stops with ((status << 1) | 1) and this reads a
+ * REAL exit code: a hang or a triple fault then shows up as a timeout, not
+ * as a missing serial marker.
+ *
+ * Usage:
+ *   harness --kernel K --initrd I [--net NETVAL] [--timeout S] [STEP ...]
+ *
+ *   STEP forms:
+ *     expect=REGEX   wait until REGEX appears (per-step cap = --steptmo)
+ *     send=TEXT      write TEXT and a newline to the guest serial
+ *     wait=SECS      sleep SECS, draining serial
+ *     tcp=PORT       open a TCP connection to 127.0.0.1:PORT and close it,
+ *                    which a `hostfwd=tcp::PORT-:GUESTPORT` in --net
+ *                    forwards to a server inside the guest. This provokes
+ *                    traffic; it does not prove the guest answered,
+ *                    because QEMU's user network accepts the host side of
+ *                    the connection before it knows whether anything is
+ *                    there. What the guest did is read from a capture.
+ *     udp=PORT:TEXT  send TEXT as one UDP datagram to 127.0.0.1:PORT,
+ *                    which a `hostfwd=udp::PORT-:GUESTPORT` forwards into
+ *                    the guest. This is the only way a test can put a
+ *                    frame on the guest's wire that the guest did not ask
+ *                    for.
+ *     exec=NAME|MARK run "exec NAME", re-sending if the shell drops it,
+ *                    until MARK
+ *     probe=NAME     boot, run "exec NAME", and let the kernel's
+ *                    harness_exit stop QEMU; the process exit code is then
+ *                    decoded from QEMU's.
+ *
+ * Exit code: 0 if the guest process exited 0 (QEMU returned an odd code
+ * via isa-debug-exit); 1 if it exited non-zero; 2 if QEMU failed to
+ * launch; 3 on a timeout or hang (QEMU never self-exited), an unambiguous
+ * failure.
+ *
+ * With no --ok token the status is read off the kernel's "Process exited
+ * with status N" line, which `sys_exit` prints only where the debug shell
+ * is the supervisor. That is every image this harness boots; an image
+ * running /sbin/init prints no such line, so drive one of those with --ok.
+ *
+ * `RACH2_TRACE=FILE` records each step's outcome and the final decision,
+ * which is how this was proved equal to the Python harness it replaces.
+ */
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define MAX_ARGS 128
+#define MAX_STEPS 128
+#define BUF_GROW (1 << 16)
+
+/* ---- the serial buffer ---- */
+
+static unsigned char *buf;
+static size_t buf_len, buf_cap;
+static size_t consumed;
+
+static void buf_add(const unsigned char *data, size_t n)
+{
+    if (buf_len + n + 1 > buf_cap) {
+        buf_cap = (buf_len + n + 1) * 2;
+        buf = realloc(buf, buf_cap);
+        if (buf == NULL) {
+            fprintf(stderr, "harness: out of memory\n");
+            exit(2);
+        }
+    }
+    memcpy(buf + buf_len, data, n);
+    buf_len += n;
+    buf[buf_len] = '\0';
+}
+
+/* ---- the clock ---- */
+
+static double now(void)
+{
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (double) tv.tv_sec + (double) tv.tv_usec / 1e6;
+}
+
+/* ---- the trace ---- */
+
+static FILE *tracef;
+
+static void trace(const char *fmt, ...)
+{
+    va_list ap;
+
+    if (tracef == NULL)
+        return;
+    va_start(ap, fmt);
+    vfprintf(tracef, fmt, ap);
+    va_end(ap);
+    fputc('\n', tracef);
+    fflush(tracef);
+}
+
+/* ---- a small regular expression matcher ----
+ *
+ * The patterns these suites use are literal text, with `.` appearing only
+ * inside addresses, but a pattern is a pattern: this supports the subset
+ * the Python harness's patterns could use and no more. A literal
+ * character matches itself, `.` matches any character but a newline, a
+ * `[...]` class matches one of its members (with ranges and a leading `^`
+ * to negate), `\` escapes the next character, and `*`, `+` and `?` repeat
+ * the item before them. `^` and `$` anchor. Anything else is literal.
+ *
+ * Backtracking, because a serial log is small and the patterns are short.
+ *
+ * A pattern using a construct outside this subset (a group, an
+ * alternation, a counted repeat) is REFUSED, not silently taken as
+ * literal text: a matcher that quietly never matches would turn a
+ * passing suite into a timeout nobody could read. No pattern in this tree
+ * uses one.
+ */
+
+struct item {
+    enum { LITERAL, ANY, CLASS } kind;
+    char literal;
+    unsigned char set[32]; /* a bitmap for CLASS */
+    int negate;
+    char repeat;           /* 0, '*', '+' or '?' */
+};
+
+struct regex {
+    struct item item[256];
+    int n;
+    int anchor_start, anchor_end;
+};
+
+static void class_add(struct item *it, unsigned char c)
+{
+    it->set[c >> 3] |= (unsigned char) (1 << (c & 7));
+}
+
+static int class_has(const struct item *it, unsigned char c)
+{
+    int in = (it->set[c >> 3] >> (c & 7)) & 1;
+
+    return it->negate ? !in : in;
+}
+
+static int regex_compile(struct regex *re, const char *pattern)
+{
+    const char *p = pattern;
+
+    memset(re, 0, sizeof(*re));
+    for (; *p != '\0'; p++) {
+        if (*p == '\\' && p[1] != '\0') {
+            p++;
+            continue;
+        }
+        if (strchr("(){}|", *p) != NULL) {
+            fprintf(stderr, "harness: the pattern '%s' uses '%c', which "
+                    "this matcher does not support; write it as literal "
+                    "text or extend the matcher\n", pattern, *p);
+            exit(2);
+        }
+    }
+    p = pattern;
+    if (*p == '^') {
+        re->anchor_start = 1;
+        p++;
+    }
+    while (*p != '\0' && re->n < 256) {
+        struct item *it = &re->item[re->n];
+
+        if (*p == '$' && p[1] == '\0') {
+            re->anchor_end = 1;
+            p++;
+            break;
+        }
+        memset(it, 0, sizeof(*it));
+        if (*p == '\\' && p[1] != '\0') {
+            it->kind = LITERAL;
+            it->literal = p[1];
+            p += 2;
+        } else if (*p == '.') {
+            it->kind = ANY;
+            p++;
+        } else if (*p == '[') {
+            unsigned char prev = 0;
+
+            it->kind = CLASS;
+            p++;
+            if (*p == '^') {
+                it->negate = 1;
+                p++;
+            }
+            if (*p == ']') {
+                class_add(it, (unsigned char) *p);
+                prev = (unsigned char) *p;
+                p++;
+            }
+            while (*p != '\0' && *p != ']') {
+                if (*p == '-' && p[1] != '\0' && p[1] != ']' && prev != 0) {
+                    unsigned char hi = (unsigned char) p[1];
+                    unsigned c;
+
+                    for (c = prev; c <= hi; c++)
+                        class_add(it, (unsigned char) c);
+                    p += 2;
+                    prev = 0;
+                    continue;
+                }
+                if (*p == '\\' && p[1] != '\0')
+                    p++;
+                class_add(it, (unsigned char) *p);
+                prev = (unsigned char) *p;
+                p++;
+            }
+            if (*p == ']')
+                p++;
+        } else {
+            it->kind = LITERAL;
+            it->literal = *p;
+            p++;
+        }
+        if (*p == '*' || *p == '+' || *p == '?') {
+            it->repeat = *p;
+            p++;
+        }
+        re->n++;
+    }
+    return 1;
+}
+
+static int item_matches(const struct item *it, unsigned char c)
+{
+    switch (it->kind) {
+    case LITERAL:
+        return (unsigned char) it->literal == c;
+    case ANY:
+        return c != '\n';
+    case CLASS:
+        return class_has(it, c);
+    }
+    return 0;
+}
+
+/* Match `re->item[k..]` at `text[at]`; returns the end offset or -1. */
+static long match_here(const struct regex *re, int k, const unsigned char *text,
+                       size_t len, size_t at)
+{
+    if (k == re->n)
+        return (re->anchor_end && at != len) ? -1 : (long) at;
+    {
+        const struct item *it = &re->item[k];
+
+        if (it->repeat == '*' || it->repeat == '+') {
+            size_t count = 0, i = at;
+
+            while (i < len && item_matches(it, text[i])) {
+                i++;
+                count++;
+            }
+            /* The longest run first, backing off one at a time, which is
+               what a greedy repeat means. */
+            for (;;) {
+                long got;
+
+                if (it->repeat == '+' && count == 0)
+                    return -1;
+                got = match_here(re, k + 1, text, len, at + count);
+                if (got >= 0)
+                    return got;
+                if (count == 0)
+                    return -1;
+                count--;
+            }
+        }
+        if (it->repeat == '?') {
+            if (at < len && item_matches(it, text[at])) {
+                long got = match_here(re, k + 1, text, len, at + 1);
+
+                if (got >= 0)
+                    return got;
+            }
+            return match_here(re, k + 1, text, len, at);
+        }
+        if (at < len && item_matches(it, text[at]))
+            return match_here(re, k + 1, text, len, at + 1);
+        return -1;
+    }
+}
+
+/* The end offset of the first match at or after `from`, or -1. */
+static long regex_search(const struct regex *re, const unsigned char *text,
+                         size_t len, size_t from)
+{
+    size_t at;
+
+    for (at = from; at <= len; at++) {
+        long got = match_here(re, 0, text, len, at);
+
+        if (got >= 0)
+            return got;
+        if (re->anchor_start)
+            break;
+    }
+    return -1;
+}
+
+/* ---- the guest process ---- */
+
+static pid_t child_pid = -1;
+static int child_out = -1;
+static int child_in = -1;
+static int child_status;
+static int child_reaped;
+static FILE *logf;
+static double deadline;
+
+/* The child's exit code, or -1 while it runs. */
+static int child_poll(void)
+{
+    pid_t got;
+
+    if (child_reaped)
+        return child_status;
+    got = waitpid(child_pid, &child_status, WNOHANG);
+    if (got == child_pid) {
+        child_reaped = 1;
+        child_status = WIFEXITED(child_status) ? WEXITSTATUS(child_status)
+                                               : 128 + WTERMSIG(child_status);
+        return child_status;
+    }
+    return -1;
+}
+
+/* Read what the guest has said, until `until` or the deadline. */
+static void pump(double until)
+{
+    while (now() < until && now() < deadline) {
+        fd_set r;
+        struct timeval tv;
+        unsigned char chunk[BUF_GROW];
+        ssize_t n;
+
+        FD_ZERO(&r);
+        FD_SET(child_out, &r);
+        tv.tv_sec = 0;
+        tv.tv_usec = 200000;
+        if (select(child_out + 1, &r, NULL, NULL, &tv) > 0) {
+            n = read(child_out, chunk, sizeof(chunk));
+            if (n > 0) {
+                buf_add(chunk, (size_t) n);
+                if (logf != NULL) {
+                    fwrite(chunk, 1, (size_t) n, logf);
+                    fflush(logf);
+                }
+            } else if (n == 0) {
+                break;
+            }
+        }
+        if (child_poll() >= 0) {
+            /* Drain what is left in the pipe before giving up. */
+            for (;;) {
+                n = read(child_out, chunk, sizeof(chunk));
+                if (n <= 0)
+                    break;
+                buf_add(chunk, (size_t) n);
+                if (logf != NULL) {
+                    fwrite(chunk, 1, (size_t) n, logf);
+                    fflush(logf);
+                }
+            }
+            break;
+        }
+    }
+}
+
+static double steptmo = 15.0;
+
+static int expect_pattern(const char *pattern)
+{
+    struct regex re;
+    double stop;
+
+    regex_compile(&re, pattern);
+    stop = now() + steptmo;
+    if (stop > deadline)
+        stop = deadline;
+    while (now() < stop && child_poll() < 0) {
+        long end = regex_search(&re, buf, buf_len, consumed);
+
+        if (end >= 0) {
+            consumed = (size_t) end;
+            return 1;
+        }
+        pump(now() + 0.3);
+    }
+    /* One last look at what arrived while the child was stopping. */
+    {
+        long end = regex_search(&re, buf, buf_len, consumed);
+
+        if (end >= 0) {
+            consumed = (size_t) end;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void send_line(const char *text)
+{
+    size_t n = strlen(text);
+
+    if (child_in < 0)
+        return;
+    if (write(child_in, text, n) < 0 || write(child_in, "\n", 1) < 0) {
+        /* A closed pipe means the guest is gone; the caller notices. */
+    }
+}
+
+/* ---- main ---- */
+
+static int contains(const unsigned char *hay, size_t len, const char *needle)
+{
+    size_t n = strlen(needle), i;
+
+    if (n == 0 || n > len)
+        return 0;
+    for (i = 0; i + n <= len; i++)
+        if (memcmp(hay + i, needle, n) == 0)
+            return 1;
+    return 0;
+}
+
+/* `--match PATTERN` prints the end offset of the first match in the text
+   on standard input, or -1. The matcher is proved against Python's `re`
+   through this. */
+static int match_mode(const char *pattern)
+{
+    struct regex re;
+    unsigned char text[1 << 16];
+    size_t n = fread(text, 1, sizeof(text), stdin);
+
+    regex_compile(&re, pattern);
+    printf("%ld\n", regex_search(&re, text, n, 0));
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    const char *kernel = NULL, *initrd = NULL, *append = NULL;
+    const char *net = "user,id=net0", *device = "rtl8139,netdev=net0";
+    const char *log = NULL, *ok = NULL;
+    const char *drives[MAX_ARGS];
+    const char *qemu_args[MAX_ARGS];
+    const char *steps[MAX_STEPS];
+    int n_drives = 0, n_qemu = 0, n_steps = 0;
+    double timeout = 60.0, grace = 3.0;
+    int no_debug_exit = 0;
+    char *qemu[MAX_ARGS * 2];
+    int nq = 0, i;
+    int out_pipe[2], in_pipe[2];
+    int step_failures = 0;
+    int qemu_rc;
+    const char *trace_path;
+
+    if (argc == 3 && strcmp(argv[1], "--match") == 0)
+        return match_mode(argv[2]);
+
+    for (i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+
+#define OPT(name, target) \
+    if (strcmp(arg, name) == 0 && i + 1 < argc) { target = argv[++i]; continue; }
+        OPT("--kernel", kernel)
+        OPT("--initrd", initrd)
+        OPT("--append", append)
+        OPT("--net", net)
+        OPT("--device", device)
+        OPT("--log", log)
+        OPT("--ok", ok)
+#undef OPT
+        if (strcmp(arg, "--drive") == 0 && i + 1 < argc) {
+            drives[n_drives++] = argv[++i];
+        } else if (strncmp(arg, "--qemu-arg=", 11) == 0) {
+            qemu_args[n_qemu++] = arg + 11;
+        } else if (strcmp(arg, "--qemu-arg") == 0 && i + 1 < argc) {
+            qemu_args[n_qemu++] = argv[++i];
+        } else if (strcmp(arg, "--timeout") == 0 && i + 1 < argc) {
+            timeout = atof(argv[++i]);
+        } else if (strcmp(arg, "--steptmo") == 0 && i + 1 < argc) {
+            steptmo = atof(argv[++i]);
+        } else if (strcmp(arg, "--grace") == 0 && i + 1 < argc) {
+            grace = atof(argv[++i]);
+        } else if (strcmp(arg, "--bootwait") == 0 && i + 1 < argc) {
+            i++; /* accepted and unused, as in the Python harness */
+        } else if (strcmp(arg, "--no-debug-exit") == 0) {
+            no_debug_exit = 1;
+        } else if (strncmp(arg, "--", 2) == 0) {
+            fprintf(stderr, "harness: unknown option %s\n", arg);
+            return 2;
+        } else if (n_steps < MAX_STEPS) {
+            /* A probe=NAME step expands to a wait for the shell prompt and
+               a repeated exec, the way the Python harness expanded it. */
+            if (strncmp(arg, "probe=", 6) == 0) {
+                static char execq[MAX_STEPS][256];
+                static int n_execq;
+
+                steps[n_steps++] = "expect=Type 'help'";
+                snprintf(execq[n_execq], sizeof(execq[0]), "execq=%s",
+                         arg + 6);
+                steps[n_steps++] = execq[n_execq++];
+            } else {
+                steps[n_steps++] = arg;
+            }
+        }
+    }
+    if (kernel == NULL) {
+        fprintf(stderr, "harness: --kernel is required\n");
+        return 2;
+    }
+
+    /* -no-reboot so a triple fault exits QEMU (read here as a failure)
+       instead of looping; NOT -no-shutdown, which would stop the
+       isa-debug-exit device from stopping the machine. */
+    qemu[nq++] = (char *) "qemu-system-i386";
+    qemu[nq++] = (char *) "-kernel";
+    qemu[nq++] = (char *) kernel;
+    qemu[nq++] = (char *) "-serial";
+    qemu[nq++] = (char *) "stdio";
+    qemu[nq++] = (char *) "-display";
+    qemu[nq++] = (char *) "none";
+    qemu[nq++] = (char *) "-no-reboot";
+    qemu[nq++] = (char *) "-netdev";
+    qemu[nq++] = (char *) net;
+    qemu[nq++] = (char *) "-device";
+    qemu[nq++] = (char *) device;
+    if (initrd != NULL) {
+        qemu[nq++] = (char *) "-initrd";
+        qemu[nq++] = (char *) initrd;
+    }
+    if (append != NULL) {
+        qemu[nq++] = (char *) "-append";
+        qemu[nq++] = (char *) append;
+    }
+    for (i = 0; i < n_drives; i++) {
+        qemu[nq++] = (char *) "-drive";
+        qemu[nq++] = (char *) drives[i];
+    }
+    for (i = 0; i < n_qemu; i++)
+        qemu[nq++] = (char *) qemu_args[i];
+    if (!no_debug_exit) {
+        qemu[nq++] = (char *) "-device";
+        qemu[nq++] = (char *) "isa-debug-exit,iobase=0xf4,iosize=0x04";
+    }
+    qemu[nq] = NULL;
+
+    if (pipe(out_pipe) != 0 || pipe(in_pipe) != 0) {
+        fprintf(stderr, "harness: cannot make a pipe\n");
+        return 2;
+    }
+    child_pid = fork();
+    if (child_pid < 0) {
+        fprintf(stderr, "qemu launch failed: %s\n", strerror(errno));
+        return 2;
+    }
+    if (child_pid == 0) {
+        dup2(in_pipe[0], 0);
+        dup2(out_pipe[1], 1);
+        dup2(out_pipe[1], 2);
+        close(in_pipe[1]);
+        close(out_pipe[0]);
+        execvp(qemu[0], qemu);
+        _exit(127);
+    }
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    child_out = out_pipe[0];
+    child_in = in_pipe[1];
+    fcntl(child_out, F_SETFL, O_NONBLOCK);
+    signal(SIGPIPE, SIG_IGN);
+
+    trace_path = getenv("RACH2_TRACE");
+    if (trace_path != NULL)
+        tracef = fopen(trace_path, "w");
+    if (log != NULL)
+        logf = fopen(log, "wb");
+    deadline = now() + timeout;
+    buf_add((const unsigned char *) "", 0);
+
+    for (i = 0; i < n_steps; i++) {
+        const char *step = steps[i];
+
+        if (child_poll() >= 0)
+            break;
+        if (strncmp(step, "expect=", 7) == 0) {
+            int got = expect_pattern(step + 7);
+
+            if (!got)
+                step_failures++;
+            trace("step %s %s consumed=%lu", step, got ? "ok" : "fail",
+                  (unsigned long) consumed);
+        } else if (strncmp(step, "send=", 5) == 0) {
+            send_line(step + 5);
+        } else if (strncmp(step, "wait=", 5) == 0) {
+            pump(now() + atof(step + 5));
+        } else if (strncmp(step, "tcp=", 4) == 0) {
+            int port = atoi(step + 4);
+            int sk = socket(AF_INET, SOCK_STREAM, 0);
+            struct sockaddr_in addr;
+            struct timeval tv;
+
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons((unsigned short) port);
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            tv.tv_sec = 15;
+            tv.tv_usec = 0;
+            setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            if (sk >= 0 &&
+                connect(sk, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
+                printf("HARNESS: knocked on port %d\n", port);
+            } else {
+                printf("HARNESS: nothing answered on port %d (%s)\n", port,
+                       strerror(errno));
+                step_failures++;
+            }
+            if (sk >= 0)
+                close(sk);
+        } else if (strncmp(step, "udp=", 4) == 0) {
+            const char *colon = strchr(step + 4, ':');
+            int port = atoi(step + 4);
+            const char *text = colon != NULL ? colon + 1 : "";
+            int sk = socket(AF_INET, SOCK_DGRAM, 0);
+            struct sockaddr_in addr;
+
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons((unsigned short) port);
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            if (sk >= 0) {
+                sendto(sk, text, strlen(text), 0,
+                       (struct sockaddr *) &addr, sizeof(addr));
+                close(sk);
+            }
+        } else if (strncmp(step, "exec=", 5) == 0) {
+            const char *bar = strchr(step + 5, '|');
+            char name[256], marker[256];
+            int tries = 0, seen = 0;
+
+            if (bar != NULL) {
+                snprintf(name, sizeof(name), "%.*s", (int) (bar - step - 5),
+                         step + 5);
+                snprintf(marker, sizeof(marker), "%s", bar + 1);
+            } else {
+                snprintf(name, sizeof(name), "%s", step + 5);
+                marker[0] = '\0';
+            }
+            while (tries < 4 && child_poll() < 0) {
+                char line[512];
+
+                snprintf(line, sizeof(line), "exec %s", name);
+                send_line(line);
+                if (expect_pattern(marker)) {
+                    seen = 1;
+                    break;
+                }
+                tries++;
+            }
+            if (!seen)
+                step_failures++;
+            trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail",
+                  (unsigned long) consumed);
+        } else if (strncmp(step, "execq=", 6) == 0) {
+            /* Run a probe, re-sending if the kernel shell drops the
+               command, and stop as soon as harness_exit stops QEMU. */
+            int tries = 0;
+
+            while (tries < 6 && child_poll() < 0) {
+                char line[512];
+
+                snprintf(line, sizeof(line), "exec %s", step + 6);
+                send_line(line);
+                pump(now() + 3.0);
+                tries++;
+            }
+        } else {
+            fprintf(stderr, "unknown step: %s\n", step);
+            step_failures++;
+        }
+    }
+
+    pump(now() + grace);
+    qemu_rc = child_poll();
+    if (qemu_rc < 0) {
+        kill(child_pid, SIGTERM);
+        usleep(400000);
+        if (child_poll() < 0) {
+            kill(child_pid, SIGKILL);
+            usleep(400000);
+            child_poll();
+        }
+    }
+    pump(now() + 0.5);
+    if (logf != NULL)
+        fclose(logf);
+
+    /* A serial-token check passes on the printed token alone, for a probe
+       run in the debug shell that never stops QEMU itself. */
+    if (ok != NULL) {
+        int seen = contains(buf, buf_len, ok);
+
+        trace("decide ok_seen=%d step_failures=%d", seen, step_failures);
+        if (seen && step_failures == 0) {
+            fprintf(stderr, "HARNESS: saw '%s'\n", ok);
+            return 0;
+        }
+        if (step_failures)
+            fprintf(stderr, "HARNESS: %d step(s) failed\n", step_failures);
+        else
+            fprintf(stderr, "HARNESS: pattern '%s' not seen\n", ok);
+        return 1;
+    }
+
+    if (qemu_rc < 0) {
+        trace("decide timeout step_failures=%d", step_failures);
+        fprintf(stderr, "HARNESS: timeout/hang: QEMU never self-exited\n");
+        return 3;
+    }
+    /* The result comes from the kernel's SERIAL status print, not from
+       QEMU's exit code: the host truncates exit codes to 8 bits, so
+       ((status << 1) | 1) aliases (status 128 gives host 1) and a QEMU
+       launch error also gives 1; either would pass a broken run. The
+       serial line is the true, untruncated status and also proves the
+       guest ran. The exit code is used only to confirm that QEMU stopped
+       through isa-debug-exit (an odd code) instead of hanging. */
+    {
+        const char *marker = "Process exited with status ";
+        size_t mlen = strlen(marker);
+        long status = -1;
+        int have_status = 0;
+        size_t at;
+        int via_debug_exit = (qemu_rc & 1) == 1;
+
+        for (at = 0; at + mlen < buf_len; at++) {
+            if (memcmp(buf + at, marker, mlen) == 0) {
+                const char *p = (const char *) buf + at + mlen;
+
+                status = strtol(p, NULL, 10);
+                have_status = 1;
+            }
+        }
+        trace("decide qemu_rc=%d via_debug_exit=%d status=%s "
+              "step_failures=%d", qemu_rc, via_debug_exit,
+              have_status ? "set" : "none", step_failures);
+        fprintf(stderr, "HARNESS: qemu_exit=%d via_debug_exit=%s "
+                "guest_status=", qemu_rc, via_debug_exit ? "True" : "False");
+        if (have_status)
+            fprintf(stderr, "%ld\n", status);
+        else
+            fprintf(stderr, "?\n");
+        if (!have_status || !via_debug_exit) {
+            fprintf(stderr, "HARNESS: no clean guest exit reported, "
+                    "failing\n");
+            return 1;
+        }
+        return status == 0 ? 0 : 1;
+    }
+}

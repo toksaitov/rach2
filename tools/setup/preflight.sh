@@ -23,17 +23,15 @@ STAMP="$REPO/build/.preflight"
 SELF="$REPO/tools/setup/preflight.sh"
 
 # The tools the default build needs. Suites declare their own runtime tools
-# in tests/registry; QEMU is a suite tool, not a build tool. python3 leaves
-# this list when the checkers stop being Python.
+# in tests/registry; QEMU is a suite tool, not a build tool.
 TOOLS="make cc i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip \
-       i686-elf-objcopy awk sed tar gzip bzip2 patch ssh-keygen python3"
+       i686-elf-objcopy awk sed tar gzip bzip2 patch ssh-keygen"
 
 hint() {
     case "$1" in
         i686-elf-*) echo "brew install i686-elf-gcc i686-elf-binutils, or see tools/Readme.md" ;;
         cc)         echo "install Xcode Command Line Tools or a C compiler package" ;;
         ssh-keygen) echo "install the OpenSSH client package" ;;
-        python3)    echo "install Python 3" ;;
         *)          echo "install it with your package manager" ;;
     esac
 }

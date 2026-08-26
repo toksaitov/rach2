@@ -54,7 +54,7 @@ for skip in 0 1 2; do
         *) what="" ;;
     esac
     rm -f "$LOG"
-    python3 "$REPO/tests/system/runner/harness.py" --kernel "$KERNEL" --initrd "$IMAGE" \
+    "$REPO/build/tests/system/harness" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
         --append "rach2.rescue rach2.resetskip=$skip" \
         --timeout 90 --log "$LOG" --ok "reboot: restarting" \

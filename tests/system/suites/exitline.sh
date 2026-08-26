@@ -14,7 +14,7 @@
 # line everywhere breaks the harness, which decodes a probe's status from
 # it in its no-token mode; silencing nothing leaves the noise. And a probe that
 # stopped being SCORED would look like a passing run, so the two dedicated
-# markers `tests/system/runner/runtests.py` reads are asserted here too.
+# markers `tests/system/runner/runtests.c` reads are asserted here too.
 #
 #   1. os-real, logged in, running a program that forks, execs and exits: the
 #      program's own output must appear and the plain line must not. Asserting
@@ -25,7 +25,7 @@
 #      probe both exit.
 #   3. The same image running a probe that faults on purpose: the dedicated
 #      signal marker must appear, which is what scores a killed probe.
-#   4. `harness.py` with no token, which has nothing to read but the plain
+#   4. `the harness` with no token, which has nothing to read but the plain
 #      line: it must still decode a status and exit 0.
 #
 # Usage: exitline_test.sh <kernel> <test.krffs> <os-real.krffs> <user>
@@ -40,7 +40,7 @@ REAL="$3"
 USER_NAME="$4"
 PASSWORD="$5"
 # The harness build reports each exit status to QEMU's isa-debug-exit device, so
-# `harness.py` can stop the machine at all; the plain serial line is what it
+# `the harness` can stop the machine at all; the plain serial line is what it
 # then reads the untruncated status from. Both halves have to hold, which is why
 # the fourth boot runs against this kernel and not the ordinary one.
 HARNESS_KERNEL="$6"
@@ -129,7 +129,7 @@ echo "exitline-test: an image running init prints no plain exit line: OK"
 # print appears for each. The two are named by their statuses rather than
 # counted, because the command is sent more than once: the shell discards
 # anything typed before it is listening, and a run that fed a probe nothing
-# would report the silence as a missing print, so `harness.py` re-sends for the
+# would report the silence as a missing print, so `the harness` re-sends for the
 # same reason. Counting would then accept two copies of the probe's own exit
 # from a kernel that had stopped printing its children's.
 ( sleep 8; i=0; while [ "$i" -lt 3 ]; do printf 'exec /forktest\n'; sleep 7; i=$((i + 1)); done ) \
@@ -139,7 +139,7 @@ QPID=$!
 if ! wait_serial "$TEST_IMAGE.fork.log" "$PLAIN 42" 90; then
     stop
     echo "exitline-test: FAIL: the debug shell did not print the forked" >&2
-    echo "exitline-test: child's exit, which harness.py reads a status from" >&2
+    echo "exitline-test: child's exit, which the harness reads a status from" >&2
     exit 1
 fi
 if ! wait_serial "$TEST_IMAGE.fork.log" "$PLAIN 0" 30; then
@@ -152,12 +152,12 @@ stop
 if ! grep -qE "^sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell" \
         "$TEST_IMAGE.fork.log"; then
     echo "exitline-test: FAIL: the line that hands the shell back is not the" >&2
-    echo "exitline-test: one runtests.py scores a probe from" >&2
+    echo "exitline-test: one the probe runner scores a probe from" >&2
     exit 1
 fi
 echo "exitline-test: the debug shell prints it for a child and a probe: OK"
 
-# 3. The two markers runtests.py scores from, neither of which is gated and
+# 3. The two markers the probe runner scores from, neither of which is gated and
 # neither of which may become so. vmfault writes through a wild pointer on
 # purpose. Each is matched whole, prefix and tail included: a substring would
 # accept a line renamed at either end, and the runner matches the whole thing.
@@ -168,28 +168,28 @@ QPID=$!
 if ! wait_serial "$TEST_IMAGE.signal.log" "killed by signal" 90; then
     stop
     echo "exitline-test: FAIL: a probe killed by a signal printed no marker," >&2
-    echo "exitline-test: so runtests.py would score it as never having run" >&2
+    echo "exitline-test: so the probe runner would score it as never having run" >&2
     exit 1
 fi
 stop
 if ! grep -qE "^terminate: init process [0-9]+ killed by signal 11, returning to kernel shell" \
         "$TEST_IMAGE.signal.log"; then
     echo "exitline-test: FAIL: the signal marker is not the whole line" >&2
-    echo "exitline-test: runtests.py matches, so a probe killed on purpose" >&2
+    echo "exitline-test: the probe runner matches, so a probe killed on purpose" >&2
     echo "exitline-test: would stop being scored" >&2
     exit 1
 fi
 echo "exitline-test: a killed probe still prints its dedicated marker: OK"
 
-# 4. harness.py with no --ok, which reads the plain line and nothing else: it
+# 4. the harness with no --ok, which reads the plain line and nothing else: it
 # stops the machine through the debug-exit port and then takes the real,
 # untruncated status off the serial line. A gate that silenced that line
 # everywhere would fail here rather than in a later milestone.
-if ! python3 tests/system/runner/harness.py --kernel "$HARNESS_KERNEL" --initrd "$TEST_IMAGE" \
+if ! build/tests/system/harness --kernel "$HARNESS_KERNEL" --initrd "$TEST_IMAGE" \
         --timeout 90 "execq=/hello" >/dev/null 2>&1; then
-    echo "exitline-test: FAIL: harness.py could not decode a status in its" >&2
+    echo "exitline-test: FAIL: the harness could not decode a status in its" >&2
     echo "exitline-test: no-token mode" >&2
     exit 1
 fi
-echo "exitline-test: harness.py still decodes a status with no token: OK"
+echo "exitline-test: the harness still decodes a status with no token: OK"
 echo "exitline-test: PASS"

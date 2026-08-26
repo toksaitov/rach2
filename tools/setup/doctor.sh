@@ -34,8 +34,6 @@ hint() {
                              || echo "apt install libfuse-dev" ;;
     openssh)  [ "$MAC" = 1 ] && echo "preinstalled with macOS (or brew install openssh)" \
                              || echo "apt install openssh-client" ;;
-    python3)  [ "$MAC" = 1 ] && echo "xcode-select --install (or brew install python3)" \
-                             || echo "apt install python3" ;;
     docker)   [ "$MAC" = 1 ] && echo "brew install --cask docker (Docker Desktop)" \
                              || echo "apt install docker.io" ;;
     *)        [ "$MAC" = 1 ] && echo "brew install $1" || echo "apt install $1" ;;
@@ -89,7 +87,6 @@ req i686-elf-nm      binutils
 req qemu-system-i386 qemu
 req make             make
 req cc               cc
-req python3          python3
 
 echo
 echo "Required to verify (tests/run style refuses to run without these):"

@@ -7,7 +7,7 @@
 # it would do under --dry-run, and leaves the judgement of whether the machine
 # is ready to `make doctor`, which is the thing that actually knows.
 #
-# Xcode's command line tools (make, cc, python3, perl) are not Homebrew's to
+# Xcode's command line tools (make and cc) are not Homebrew's to
 # install; `xcode-select --install` is, and this says so rather than pretending.
 set -eu
 

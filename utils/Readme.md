@@ -131,7 +131,7 @@ The component-level checks are:
 ```
 make -C utils
 make -C utils -f Makefile.linux
-python3 tools/verify/check_guest.py .
+build/tools/verify/guestcheck .
 tests/run host
 make test
 tests/run selfbuild

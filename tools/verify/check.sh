@@ -19,7 +19,7 @@
 #   8. text style, in three parts: textcheck.sh for non-ASCII and dashes,
 #      prosecheck for the 80-column comment rule and for the vocabulary a
 #      script can decide (both beside this file).
-#   9. the probe runner's scoring rule (runtests.py --selftest)
+#   9. the probe runner's scoring rule (runtests --selftest)
 #  10. the set-id manifest sweep (tools/inspect/setidcheck.c)
 #  11. image reproducibility (tools/verify/check_repro.sh): one tree, one image
 #  12. the checker selftests (elfcheck, cfgcheck, and
@@ -44,6 +44,11 @@ ASCIISCAN="$REPO/build/tools/verify/asciiscan"
 if [ ! -x "$ASCIISCAN" ] || [ "$REPO/tools/verify/asciiscan.c" -nt "$ASCIISCAN" ]; then
     mkdir -p "${ASCIISCAN%/*}"
     cc -O2 -o "$ASCIISCAN" "$REPO/tools/verify/asciiscan.c" || exit 1
+fi
+RUNTESTS="$REPO/build/tests/system/runtests"
+if [ ! -x "$RUNTESTS" ] || [ "$REPO/tests/system/runner/runtests.c" -nt "$RUNTESTS" ]; then
+    mkdir -p "${RUNTESTS%/*}"
+    cc -O2 -o "$RUNTESTS" "$REPO/tests/system/runner/runtests.c" || exit 1
 fi
 GUESTCHECK="$REPO/build/tools/verify/guestcheck"
 if [ ! -x "$GUESTCHECK" ] || [ "$REPO/tools/verify/guestcheck.c" -nt "$GUESTCHECK" ]; then
@@ -308,7 +313,7 @@ fi
 # than a boot: it decides every probe's PASS or FAIL, so a regression in it is
 # invisible in the one place that would otherwise catch it.
 hr "9/13 probe scoring rule (runtests selftest)"
-if python3 "$REPO/tests/system/runner/runtests.py" --selftest >"$VDIR/verify_score.log" 2>&1; then
+if "$RUNTESTS" --selftest >"$VDIR/verify_score.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_score.log"; fail=1

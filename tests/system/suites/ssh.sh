@@ -187,7 +187,7 @@ esac
 # size is part of what the checks below prove. The password travels in the
 # environment, never in an argument a process listing could show.
 ssh_password() {
-    RACH2_PASSWORD="$2" python3 "$REPO/tests/system/runner/ptydrive.py" \
+    RACH2_PASSWORD="$2" "$REPO/build/tests/system/ptydrive" \
         --rows 40 --cols 100 --timeout 60 -- \
         ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o ConnectTimeout=20 -o PubkeyAuthentication=no \

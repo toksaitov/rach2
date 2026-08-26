@@ -4,8 +4,8 @@ This directory holds everything that runs Rach2 to test it: the QEMU runners und
 
 ## QEMU runners
 
-* `runner/harness.py` starts `qemu-system-i386` headless, accepts optional initrd, disk, network, device, and extra QEMU arguments, and executes ordered serial steps. Step forms include `expect=`, `send=`, `wait=`, `tcp=`, `udp=`, `exec=`, and `probe=`. It enforces a run deadline and per-step deadlines. With a harness kernel it can decode the guest process status through QEMU's `isa-debug-exit` device; `--ok` instead requires a serial token.
-* `runner/runtests.py` implements the shared boot used by `make test`. It runs the ordered `PROBES` list and scores each probe from the kernel line that returns its transient init process to the debug shell. Probes that need input, networking, a deliberate fault, or a nonzero contract are run by separate Make recipes through `harness.py`. `--selftest` checks the scorer without QEMU.
+* `runner/harness.c` starts `qemu-system-i386` headless, accepts optional initrd, disk, network, device, and extra QEMU arguments, and executes ordered serial steps. Step forms include `expect=`, `send=`, `wait=`, `tcp=`, `udp=`, `exec=`, and `probe=`. It enforces a run deadline and per-step deadlines. With a harness kernel it can decode the guest process status through QEMU's `isa-debug-exit` device; `--ok` instead requires a serial token.
+* `runner/runtests.c` implements the shared boot used by `make test`. It runs the ordered probe list and scores each probe from the kernel line that returns its transient init process to the debug shell. Probes that need input, networking, a deliberate fault, or a nonzero contract are run by separate Make recipes through `the harness`. `--selftest` checks the scorer without QEMU.
 
 ## Capture checkers and fixtures
 
@@ -22,7 +22,7 @@ The behavioral suites receive built artifacts and credentials from their Make ta
 * `suites/tcc.sh` (`tests/run tcc`) compiles and runs programs as the unprivileged account, compares a machine-built `cat` with the staged one, and checks the unsupported TinyCC output forms.
 * `suites/make.sh` (`tests/run make`) checks incremental pdpmake behavior, dependency rebuilding, `.PHONY`, compiler overrides, and timestamps across a reboot.
 * `suites/selfbuild.sh` (`tests/run selfbuild`) builds the kernel twice in clean guest workspaces, requires equal hashes, builds utilities and ISH, extracts and checks the exact kernel, and boots it through the probe suite. It also boots that kernel through GRUB when Docker is available.
-* `suites/ssh.sh` (`tests/run ssh`) checks root key login, unprivileged password login, pty and terminal-size propagation, and rejected authentication attempts. The pty driver `runner/ptydrive.py` answers the password prompts on a sized terminal.
+* `suites/ssh.sh` (`tests/run ssh`) checks root key login, unprivileged password login, pty and terminal-size propagation, and rejected authentication attempts. The pty driver `runner/ptydrive.c` answers the password prompts on a sized terminal.
 * `suites/procfiles.sh` (`tests/run procfiles`) checks `/proc/mounts` on RAM, page-cache, and disk roots, then checks the `/proc` data used by `ps`, `df`, `free`, `uptime`, `dmesg`, `route`, `arp`, and `netstat`.
 * `suites/login.sh` (`tests/run login`) compares strict and permissive init behavior when `/bin/login` is absent, checks recovery of a stopped console session, and verifies `rach2.rescue`.
 * `suites/exitline.sh` (`tests/run exitline`) requires plain process-exit diagnostics under the debug shell, suppresses them under init, and checks both the scoring markers and the no-token harness path.
@@ -39,7 +39,7 @@ The behavioral suites receive built artifacts and credentials from their Make ta
 * `suites/install.sh` (`tests/run install`) checks kernel trial, commit, fallback, repair, and determinate interrupted environment states on a GRUB disk.
 * `suites/sealed.sh` (`tests/run sealed`) runs the finished sealed disk through an injected-fault sequence over SSH and a separate control run that must use neither fallback nor recovery.
 
-The remaining suites (`default`, the disk, network, persistence, and stress families) run through `runner/harness.py` and `runner/runtests.py` directly from their Make recipes without a suite script.
+The remaining suites (`default`, the disk, network, persistence, and stress families) run through `runner/harness.c` and `runner/runtests.c` directly from their Make recipes without a suite script.
 
 ## Real-machine acceptance
 
