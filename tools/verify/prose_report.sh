@@ -117,7 +117,7 @@ fixture_lines() {
 
 baseline_lines() {
     printf '%s\n' \
-        "# Watched phrases, per population, at the end of milestone 26." \
+        "# Watched phrases, per population, at the end of milestone 30." \
         "# A record, not a budget: only the banned terms fail a build." \
         "# Regenerate: prose_report.sh --baseline --write" \
         "#" \
