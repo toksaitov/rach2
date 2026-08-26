@@ -111,10 +111,11 @@ for t in mformat mmd mcopy mshowfat; do
     }
 done
 
-# The MBR writer beside this script, compiled on first use; it writes the
-# same bytes parted wrote in the retired container, CHS fields included.
+# The MBR writer beside this script, compiled when missing or older than
+# its source; it writes the same bytes parted wrote in the retired
+# container, CHS fields included.
 MKMBR="$REPO/build/tools/image/mkmbr"
-if [ ! -x "$MKMBR" ]; then
+if [ ! -x "$MKMBR" ] || [ "$REPO/tools/image/mkmbr.c" -nt "$MKMBR" ]; then
     mkdir -p "${MKMBR%/*}"
     cc -O2 -o "$MKMBR" "$REPO/tools/image/mkmbr.c" || exit 1
 fi
