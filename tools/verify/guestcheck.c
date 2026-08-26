@@ -63,6 +63,33 @@ static void fail(const char *fmt, ...)
     exit(1);
 }
 
+/**
+ * Appends a formatted string to a fixed buffer, advancing `*used`.
+ *
+ * `snprintf` returns the length it would have written, so adding that
+ * return value to an index walks past the end of the buffer on the first
+ * truncation and the next call writes outside it. Every buffer here holds
+ * makefile text that is parsed afterwards, so a buffer that fills is a
+ * fault to report and not a length to trim: a checker reading a shortened
+ * makefile is reading one that is not on disk. `what` names the buffer in
+ * the diagnostic.
+ */
+static void appendf(char *out, size_t out_len, size_t *used, const char *what,
+                    const char *fmt, ...)
+{
+    va_list ap;
+    int want;
+
+    if (*used >= out_len)
+        fail("%s does not fit in %lu bytes", what, (unsigned long) out_len);
+    va_start(ap, fmt);
+    want = vsnprintf(out + *used, out_len - *used, fmt, ap);
+    va_end(ap);
+    if (want < 0 || (size_t) want >= out_len - *used)
+        fail("%s does not fit in %lu bytes", what, (unsigned long) out_len);
+    *used += (size_t) want;
+}
+
 /* ---- a list of strings ---- */
 
 struct list {
@@ -152,8 +179,8 @@ static void join_into(char *out, size_t out_len, const struct list *l)
 
     out[0] = '\0';
     for (i = 0; i < l->n; i++)
-        used += (size_t) snprintf(out + used, out_len - used, "%s%s",
-                                  i ? " " : "", l->item[i]);
+        appendf(out, out_len, &used, "a joined list", "%s%s",
+                i ? " " : "", l->item[i]);
 }
 
 /* ---- reading makefiles ---- */
@@ -210,7 +237,9 @@ static char *guest_text(const char *name)
         char line[MAX_LINE];
 
         if (len >= sizeof(line))
-            len = sizeof(line) - 1;
+            fail("a line of %lu bytes, past the %lu this reads; the rest of "
+                 "it would be parsed as a shorter line",
+                 (unsigned long) len, (unsigned long) sizeof(line) - 1);
         memcpy(line, p, len);
         line[len] = '\0';
         if (strncmp(line, "include ", 8) == 0) {
@@ -224,12 +253,11 @@ static char *guest_text(const char *name)
             subtext = read_file(sub);
             if (subtext == NULL)
                 fail("cannot read %s, included by %s", what, name);
-            used += (size_t) snprintf(out + used, MAX_TEXT - used, "%s\n",
-                                      subtext);
+            appendf(out, MAX_TEXT, &used, "the included makefile text",
+                    "%s\n", subtext);
             free(subtext);
         } else {
-            used += (size_t) snprintf(out + used, MAX_TEXT - used, "%s\n",
-                                      line);
+            appendf(out, MAX_TEXT, &used, "the makefile text", "%s\n", line);
         }
         if (end == NULL)
             break;
@@ -471,8 +499,8 @@ static void subst_refs(char *line, size_t line_len, const struct macros *m)
                 char word[512];
 
                 swap_suffix(word, sizeof(word), words.item[j], old, new_);
-                used += (size_t) snprintf(out + used, sizeof(out) - used,
-                                          "%s%s", j ? " " : "", word);
+                appendf(out, sizeof(out), &used, "an expanded word list",
+                        "%s%s", j ? " " : "", word);
             }
             list_free(&words);
         }
@@ -499,9 +527,8 @@ static void expand_line(char *line, size_t line_len, const struct macros *m)
             snprintf(want, sizeof(want), "$(%s)", m->name.item[i]);
             out[0] = '\0';
             while ((at = strstr(p, want)) != NULL) {
-                used += (size_t) snprintf(out + used, sizeof(out) - used,
-                                          "%.*s%s", (int) (at - p), p,
-                                          m->value.item[i]);
+                appendf(out, sizeof(out), &used, "a substitution reference",
+                        "%.*s%s", (int) (at - p), p, m->value.item[i]);
                 p = at + strlen(want);
             }
             if (used > 0) {
@@ -550,7 +577,9 @@ static void rules_of(const char *text, struct rules *out)
         const char *colon;
 
         if (len >= sizeof(line))
-            len = sizeof(line) - 1;
+            fail("a line of %lu bytes, past the %lu this reads; the rest of "
+                 "it would be parsed as a shorter line",
+                 (unsigned long) len, (unsigned long) sizeof(line) - 1);
         memcpy(line, p, len);
         line[len] = '\0';
         colon = strchr(line, ':');
@@ -1040,8 +1069,8 @@ static void normalize_path(char *path)
     }
     out[0] = '\0';
     for (i = 0; i < n; i++)
-        used += (size_t) snprintf(out + used, sizeof(out) - used, "%s%s",
-                                  (i || absolute) ? "/" : "", parts[i]);
+        appendf(out, sizeof(out), &used, "a normalised path", "%s%s",
+                (i || absolute) ? "/" : "", parts[i]);
     snprintf(path, 1024, "%s", out);
 }
 
@@ -1218,9 +1247,9 @@ static int check_limits(void)
                 out[0] = '\0';
                 p = line;
                 while ((at = strstr(p, "$@")) != NULL) {
-                    used += (size_t) snprintf(out + used, sizeof(out) - used,
-                                              "%.*s%s", (int) (at - p), p,
-                                              rules.item[i].target);
+                    appendf(out, sizeof(out), &used, "an expanded recipe",
+                            "%.*s%s", (int) (at - p), p,
+                            rules.item[i].target);
                     p = at + 2;
                 }
                 snprintf(out + used, sizeof(out) - used, "%s", p);
@@ -1229,11 +1258,10 @@ static int check_limits(void)
                 used = 0;
                 p = line;
                 while ((at = strstr(p, "$<")) != NULL) {
-                    used += (size_t) snprintf(out + used, sizeof(out) - used,
-                                              "%.*s%s", (int) (at - p), p,
-                                              rules.item[i].prereqs.n > 0
-                                                  ? rules.item[i].prereqs.item[0]
-                                                  : "");
+                    appendf(out, sizeof(out), &used, "an expanded recipe",
+                            "%.*s%s", (int) (at - p), p,
+                            rules.item[i].prereqs.n > 0
+                                ? rules.item[i].prereqs.item[0] : "");
                     p = at + 2;
                 }
                 snprintf(out + used, sizeof(out) - used, "%s", p);
@@ -1283,7 +1311,9 @@ static void check_staging(void)
         struct list fields = { NULL, 0, 0 };
 
         if (len >= sizeof(line))
-            len = sizeof(line) - 1;
+            fail("a line of %lu bytes, past the %lu this reads; the rest of "
+                 "it would be parsed as a shorter line",
+                 (unsigned long) len, (unsigned long) sizeof(line) - 1);
         memcpy(line, p, len);
         line[len] = '\0';
         hash = strchr(line, '#');
