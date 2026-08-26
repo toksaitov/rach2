@@ -79,6 +79,7 @@ OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
 # The suites' wall-clock limit tool (see its rule below).
 DEADLINE        = build/tests/system/deadline
+PCAPCHECK       = build/tests/system/pcapcheck
 BINFIND         = build/tools/inspect/binfind
 ELFCHECK        = build/tools/inspect/elfcheck
 SHA256TOOL      = build/tools/verify/sha256
@@ -277,6 +278,12 @@ build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs: | ch
 # replacing coreutils' gtimeout. Built with the host compiler like the KRFFS
 # tools.
 $(DEADLINE): tests/system/runner/deadline.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+# The capture checker (tests/system/checkers/pcapcheck.c): what the guest
+# put on the wire, judged from QEMU's filter-dump file.
+$(PCAPCHECK): tests/system/checkers/pcapcheck.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
@@ -866,9 +873,9 @@ run-bootline: rach2 tests krffs
 # one: the probe with the network answering, the same probe with an address and
 # no gateway (where the only truthful answer is that there is no route), and
 # `traceroute` itself on the image that has it. The capture is read by
-# tests/system/checkers/rawwire_check.py for the two things a program inside the machine cannot
+# the capture checker for the two things a program inside the machine cannot
 # see: the hop limit each datagram left with, and the caller's own checksum.
-run-raw: rach2 tests krffs test-image os-real-image
+run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK)
 	@rm -f $(RAW_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -876,7 +883,7 @@ run-raw: rach2 tests krffs test-image os-real-image
 	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
 	    --timeout 200 --ok "RAWPROBE OK" \
 	    "expect=Type 'help'" "send=exec /rawprobe" wait=60
-	python3 tests/system/checkers/rawwire_check.py $(RAW_PCAP)
+	$(PCAPCHECK) rawwire $(RAW_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=10.0.2.15/24" \
@@ -928,7 +935,7 @@ run-netif: rach2 tests krffs test-image
 # Its own target because it broadcasts, and a probe in the suite must not put a
 # frame on the wire that the other probes did not ask for.
 DGRAM_PCAP = $(IMAGES_DIR)/dgram.pcap
-run-dgram: rach2 tests krffs test-image
+run-dgram: rach2 tests krffs test-image $(PCAPCHECK)
 	@rm -f $(DGRAM_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -938,7 +945,7 @@ run-dgram: rach2 tests krffs test-image
 	    --timeout 180 --ok "DGRAMPROBE OK" \
 	    "expect=Type 'help'" "send=exec /dgramprobe" \
 	    "expect=DGRAMPROBE OUTSIDE" "udp=15998:outsider" wait=30
-	python3 tests/system/checkers/bcast_check.py $(DGRAM_PCAP) --port 7500 --dst-ip 255.255.255.255
+	$(PCAPCHECK) bcast $(DGRAM_PCAP) --port 7500 --dst-ip 255.255.255.255
 
 # `make dhcp-test`: the machine taking an address it was not told, with the
 # client os-real carries. It boots with `rach2.ip=none`, so IPv4 is unset and
@@ -954,7 +961,7 @@ SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple.log
 STATIC_PCAP = $(IMAGES_DIR)/static-simple.pcap
 RSTATIC_PCAP = $(IMAGES_DIR)/static-real.pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
-run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image
+run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK)
 	@rm -f $(DHCP_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -981,7 +988,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image
 	# route below: a packet for an address on no subnet of this machine's must
 	# leave addressed to the gateway's hardware address, which is what a
 	# default route means. Nothing answers 10.9.9.9, and nothing needs to.
-	python3 tests/system/checkers/bcast_check.py $(DHCP_PCAP) \
+	$(PCAPCHECK) bcast $(DHCP_PCAP) \
 	    --routed-via 192.168.90.2 --routed-dst 10.9.9.9
 	# And twice on a disk, where /var/run survives a reboot. `ifup` records
 	# there which interfaces it has configured, and the second boot must take
@@ -1034,7 +1041,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image
 	# because QEMU's user network accepts the host side of a connection before
 	# it knows whether the guest is there. Nothing was typed at the console in
 	# any of it.
-	python3 tests/system/checkers/bcast_check.py $(METAL_PCAP) --source 192.168.90.20
+	$(PCAPCHECK) bcast $(METAL_PCAP) --source 192.168.90.20
 	# And on a network with no server at all, which is a cable plugged in
 	# later or a switch that has not started forwarding. The client must go
 	# to the background and keep asking rather than give up, because a
@@ -1087,7 +1094,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image
 	# The success marker is a line only the client prints, because this image
 	# runs the ISH shell, which does not take the quotes out of an echoed
 	# token the way ash does: a token typed at it would match its own echo.
-	python3 tests/system/checkers/bcast_check.py $(SIMPLE_PCAP) --source 10.90.0.20 \
+	$(PCAPCHECK) bcast $(SIMPLE_PCAP) --source 10.90.0.20 \
 	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
 
 	# And the other half of the file: a fixed address, on both machines. The
@@ -1120,7 +1127,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image
 	# says: packets sent FROM 10.90.0.50, and the off-subnet packet addressed
 	# to the gateway's hardware address, which is the route the stanza asked
 	# for. Neither is possible from a machine still holding the lease.
-	python3 tests/system/checkers/bcast_check.py $(STATIC_PCAP) --source 10.90.0.50 \
+	$(PCAPCHECK) bcast $(STATIC_PCAP) --source 10.90.0.50 \
 	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
 	# The same stanza on os-real, through busybox's `ifup`, which is the whole
 	# reason the file has this format: one description of a network, two
@@ -1144,7 +1151,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image
 	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:10.90.0.50' /tmp/if && grep -q 'Mask:255.255.0.0' /tmp/if && ping 10.90.0.2 > /dev/null && echo REALSTATIC\"\"OK" \
 	    "expect=REALSTATICOK" "send=ping 10.200.0.1 > /dev/null 2>&1; echo DONE" \
 	    "expect=DONE" wait=5
-	python3 tests/system/checkers/bcast_check.py $(RSTATIC_PCAP) --source 10.90.0.50 \
+	$(PCAPCHECK) bcast $(RSTATIC_PCAP) --source 10.90.0.50 \
 	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
 
 	# And the half of the client that only time reaches: holding the lease.
@@ -1210,7 +1217,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image
 # the network device came up, which is what proves the pre-transmit buffer was
 # carried rather than dropped.
 NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole.pcap
-run-netconsole: rach2 tests krffs test-image
+run-netconsole: rach2 tests krffs test-image $(PCAPCHECK)
 	@rm -f $(NETCONSOLE_PCAP)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1218,7 +1225,7 @@ run-netconsole: rach2 tests krffs test-image
 	    --qemu-arg=filter-dump,id=nc0,netdev=net0,file=$(NETCONSOLE_PCAP) \
 	    --append "rach2.netconsole" \
 	    --timeout 90 --ok "Type 'help'" "expect=Type 'help'" wait=3
-	python3 tests/system/checkers/netconsole_check.py $(NETCONSOLE_PCAP) --min-frames 4 \
+	$(PCAPCHECK) netconsole $(NETCONSOLE_PCAP) --min-frames 4 \
 	    --expect "Initializing system components" \
 	    --expect "Network... OK" \
 	    --expect "netconsole: broadcast"
