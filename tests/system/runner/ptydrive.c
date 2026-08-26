@@ -87,9 +87,15 @@ static void compile_prompt(const char *pattern)
         }
     }
     p = pattern;
-    while (*p != '\0' && n_items < 64) {
+    while (*p != '\0') {
         struct item *it = &items[n_items];
 
+        if (n_items >= 64) {
+            fprintf(stderr, "ptydrive: the pattern '%s' has more than 64 "
+                    "items; a matcher holding a prefix of it would answer "
+                    "a prompt the pattern does not name\n", pattern);
+            exit(2);
+        }
         memset(it, 0, sizeof(*it));
         if (*p == '\\' && p[1] != '\0') {
             it->kind = LITERAL;
@@ -320,10 +326,32 @@ int main(int argc, char **argv)
 
     if (timed_out) {
         printf("TIMEDOUT\n");
-        kill(pid, SIGTERM);
+        /* forkpty puts the command in its own session, so the negative pid
+           reaches whatever it started as well. A command that ignores the
+           signal, or a descendant holding the pty, would otherwise keep
+           this process waiting after its own deadline has passed. */
+        if (kill(-pid, SIGTERM) != 0)
+            kill(pid, SIGTERM);
     }
     close(master);
-    waitpid(pid, NULL, 0);
+    {
+        double until = now() + 5.0;
+        int killed = 0;
+
+        while (waitpid(pid, NULL, WNOHANG) == 0) {
+            if (now() >= until && !killed) {
+                if (kill(-pid, SIGKILL) != 0)
+                    kill(pid, SIGKILL);
+                killed = 1;
+                until = now() + 5.0;
+            } else if (now() >= until) {
+                fprintf(stderr, "ptydrive: the command survived SIGKILL; "
+                        "leaving it and reporting\n");
+                break;
+            }
+            usleep(50000);
+        }
+    }
     printf("PROMPTED=%d\n", asked ? 1 : 0);
     return 0;
 }

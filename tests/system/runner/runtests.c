@@ -39,6 +39,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -148,6 +149,8 @@ static long marker_at(const unsigned char *text, size_t len, size_t at,
     }
     digits = 0;
     while (i < len && text[i] >= '0' && text[i] <= '9') {
+        if (n > (LONG_MAX - 9) / 10)
+            return -1;
         n = n * 10 + (text[i] - '0');
         i++;
         digits++;
@@ -281,6 +284,43 @@ static int selftest(void)
             bad++;
         }
     }
+    /* The window's end is found by the same rule that scores it. A marker
+       that does not begin a line is a probe's text, and ending the window
+       on it would cut the kernel's own verdict out of the window. */
+    {
+        static const struct {
+            const char *name;
+            const char *text;
+            int want_found;
+        } scans[] = {
+            { "the kernel's marker on its own line",
+              "boot\nsys_exit: init process 4 exited with status 0, "
+              "returning to kernel shell\n", 1 },
+            { "a probe's marker in the middle of a line",
+              "boot: probe says sys_exit: init process 4 exited with "
+              "status 0, returning to kernel shell\n", 0 },
+            { "a pid of more digits than a long holds",
+              "\nsys_exit: init process 4 exited with status "
+              "999999999999999999999999, returning to kernel shell\n", 0 }
+        };
+        int k, scan_n = (int) (sizeof(scans) / sizeof(scans[0]));
+
+        for (k = 0; k < scan_n; k++) {
+            char which;
+            long value;
+            long end = find_marker((const unsigned char *) scans[k].text,
+                                   strlen(scans[k].text), 0, 1, &which,
+                                   &value);
+
+            if ((end >= 0) != scans[k].want_found) {
+                printf("  FAIL: %s: expected %s, got %s\n", scans[k].name,
+                       scans[k].want_found ? "a marker" : "none",
+                       end >= 0 ? "a marker" : "none");
+                bad++;
+            }
+        }
+        n += scan_n;
+    }
     if (bad) {
         printf("runtests: selftest: %d of %d cases failed\n", bad, n);
         return 1;
@@ -400,7 +440,7 @@ static long expect_marker(double window)
     for (;;) {
         char which;
         long value;
-        long end = find_marker(buf, buf_len, consumed, 0, &which, &value);
+        long end = find_marker(buf, buf_len, consumed, 1, &which, &value);
 
         if (end >= 0) {
             consumed = (size_t) end;
@@ -522,8 +562,13 @@ int main(int argc, char **argv)
     child_in = in_pipe[1];
     fcntl(child_out, F_SETFL, O_NONBLOCK);
     signal(SIGPIPE, SIG_IGN);
-    if (log != NULL)
+    if (log != NULL) {
         logf = fopen(log, "wb");
+        if (logf == NULL)
+            fprintf(stderr, "runtests: cannot write %s: %s; the run "
+                    "continues without a transcript\n", log,
+                    strerror(errno));
+    }
     deadline = now() + timeout;
     buf_add((const unsigned char *) "", 0);
 
@@ -538,12 +583,21 @@ int main(int argc, char **argv)
         long end;
 
         snprintf(line, sizeof(line), "exec %s", PROBES[i]);
+        /* The window starts where this probe's output will start. Anything
+           already buffered came from the shell, not from the probe, and a
+           marker left in it would end the window before it began. */
+        consumed = start;
         send_line(line);
         /* The probe runs AS the init process, and only its own exit
            returns the kernel shell, so that marker bounds the window. The
            marker is on serial, so it survives a probe that left the
            console tty in raw mode (ttyprobe). */
         end = expect_marker(steptmo);
+        if (end >= 0 && (size_t) end < start) {
+            fprintf(stderr, "runtests: the marker for %s ends before its "
+                    "window begins; the scan is out of step\n", PROBES[i]);
+            return 2;
+        }
         if (end < 0) {
             results[n_results].name = PROBES[i];
             snprintf(results[n_results].detail,
@@ -633,9 +687,15 @@ int main(int argc, char **argv)
                 if (strcmp(results[j].name, PROBES[i]) == 0)
                     ran = 1;
             if (!ran) {
+                int want;
+
                 missing++;
-                used += (size_t) snprintf(names + used, sizeof(names) - used,
-                                          "%s%s", used ? " " : "", PROBES[i]);
+                want = snprintf(names + used, sizeof(names) - used, "%s%s",
+                                used ? " " : "", PROBES[i]);
+                if (want > 0 && (size_t) want < sizeof(names) - used)
+                    used += (size_t) want;
+                else
+                    used = sizeof(names) - 1;
             }
         }
         if (missing > 0) {

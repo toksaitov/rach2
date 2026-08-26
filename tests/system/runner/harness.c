@@ -50,6 +50,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -181,8 +182,17 @@ static int regex_compile(struct regex *re, const char *pattern)
         re->anchor_start = 1;
         p++;
     }
-    while (*p != '\0' && re->n < 256) {
+    while (*p != '\0') {
         struct item *it = &re->item[re->n];
+
+        if (re->n >= (int) (sizeof(re->item) / sizeof(re->item[0]))) {
+            fprintf(stderr, "harness: the pattern '%s' has more than %lu "
+                    "items; a matcher holding a prefix of it would match "
+                    "text the pattern does not\n", pattern,
+                    (unsigned long) (sizeof(re->item) /
+                                     sizeof(re->item[0])));
+            exit(2);
+        }
 
         if (*p == '$' && p[1] == '\0') {
             re->anchor_end = 1;
@@ -460,6 +470,16 @@ static int match_mode(const char *pattern)
     return 0;
 }
 
+/* A run that asks for more than the harness holds is stopped, not
+   trimmed: a dropped step is a check that never ran under a report that
+   says the run passed. */
+static int too_many(const char *what, int limit)
+{
+    fprintf(stderr, "harness: more than %d %s arguments; this harness "
+            "would run only the first %d\n", limit, what, limit);
+    return 2;
+}
+
 int main(int argc, char **argv)
 {
     const char *kernel = NULL, *initrd = NULL, *append = NULL;
@@ -471,7 +491,9 @@ int main(int argc, char **argv)
     int n_drives = 0, n_qemu = 0, n_steps = 0;
     double timeout = 60.0, grace = 3.0;
     int no_debug_exit = 0;
-    char *qemu[MAX_ARGS * 2];
+    /* Every --drive costs two words, so the command line is wider than
+       the option arrays it is built from. */
+    char *qemu[MAX_ARGS * 4];
     int nq = 0, i;
     int out_pipe[2], in_pipe[2];
     int step_failures = 0;
@@ -495,10 +517,16 @@ int main(int argc, char **argv)
         OPT("--ok", ok)
 #undef OPT
         if (strcmp(arg, "--drive") == 0 && i + 1 < argc) {
+            if (n_drives >= MAX_ARGS)
+                return too_many("--drive", MAX_ARGS);
             drives[n_drives++] = argv[++i];
         } else if (strncmp(arg, "--qemu-arg=", 11) == 0) {
+            if (n_qemu >= MAX_ARGS)
+                return too_many("--qemu-arg", MAX_ARGS);
             qemu_args[n_qemu++] = arg + 11;
         } else if (strcmp(arg, "--qemu-arg") == 0 && i + 1 < argc) {
+            if (n_qemu >= MAX_ARGS)
+                return too_many("--qemu-arg", MAX_ARGS);
             qemu_args[n_qemu++] = argv[++i];
         } else if (strcmp(arg, "--timeout") == 0 && i + 1 < argc) {
             timeout = atof(argv[++i]);
@@ -513,18 +541,29 @@ int main(int argc, char **argv)
         } else if (strncmp(arg, "--", 2) == 0) {
             fprintf(stderr, "harness: unknown option %s\n", arg);
             return 2;
-        } else if (n_steps < MAX_STEPS) {
+        } else {
             /* A probe=NAME step expands to a wait for the shell prompt and
                a repeated exec, the way the Python harness expanded it. */
             if (strncmp(arg, "probe=", 6) == 0) {
                 static char execq[MAX_STEPS][256];
                 static int n_execq;
 
+                if (n_steps + 2 > MAX_STEPS)
+                    return too_many("step", MAX_STEPS);
+                if ((size_t) snprintf(execq[n_execq], sizeof(execq[0]),
+                                      "execq=%s", arg + 6) >=
+                    sizeof(execq[0])) {
+                    fprintf(stderr, "harness: the probe name in %s is "
+                            "longer than %lu bytes; a shortened name runs "
+                            "a different program\n", arg,
+                            (unsigned long) sizeof(execq[0]) - 7);
+                    return 2;
+                }
                 steps[n_steps++] = "expect=Type 'help'";
-                snprintf(execq[n_execq], sizeof(execq[0]), "execq=%s",
-                         arg + 6);
                 steps[n_steps++] = execq[n_execq++];
             } else {
+                if (n_steps >= MAX_STEPS)
+                    return too_many("step", MAX_STEPS);
                 steps[n_steps++] = arg;
             }
         }
@@ -652,23 +691,41 @@ int main(int argc, char **argv)
             addr.sin_family = AF_INET;
             addr.sin_port = htons((unsigned short) port);
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            if (sk >= 0) {
-                sendto(sk, text, strlen(text), 0,
-                       (struct sockaddr *) &addr, sizeof(addr));
+            if (sk < 0) {
+                printf("HARNESS: no socket for port %d (%s)\n", port,
+                       strerror(errno));
+                step_failures++;
+            } else {
+                if (sendto(sk, text, strlen(text), 0,
+                           (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+                    printf("HARNESS: nothing sent to port %d (%s)\n", port,
+                           strerror(errno));
+                    step_failures++;
+                }
                 close(sk);
             }
         } else if (strncmp(step, "exec=", 5) == 0) {
             const char *bar = strchr(step + 5, '|');
             char name[256], marker[256];
-            int tries = 0, seen = 0;
+            int tries = 0, seen = 0, cut;
 
             if (bar != NULL) {
-                snprintf(name, sizeof(name), "%.*s", (int) (bar - step - 5),
-                         step + 5);
-                snprintf(marker, sizeof(marker), "%s", bar + 1);
+                cut = snprintf(name, sizeof(name), "%.*s",
+                               (int) (bar - step - 5), step + 5) >=
+                      (int) sizeof(name);
+                cut |= snprintf(marker, sizeof(marker), "%s", bar + 1) >=
+                       (int) sizeof(marker);
             } else {
-                snprintf(name, sizeof(name), "%s", step + 5);
+                cut = snprintf(name, sizeof(name), "%s", step + 5) >=
+                      (int) sizeof(name);
                 marker[0] = '\0';
+            }
+            if (cut) {
+                fprintf(stderr, "harness: the step '%s' is longer than "
+                        "this harness holds; a shortened name runs a "
+                        "different program\n", step);
+                step_failures++;
+                continue;
             }
             while (tries < 4 && child_poll() < 0) {
                 char line[512];
@@ -756,12 +813,30 @@ int main(int argc, char **argv)
         size_t at;
         int via_debug_exit = (qemu_rc & 1) == 1;
 
+        /* The status must be digits, as the Python harness's `(-?\d+)`
+           required: text that is not a number would otherwise read as
+           status 0 and pass a run that never reported one. */
         for (at = 0; at + mlen < buf_len; at++) {
             if (memcmp(buf + at, marker, mlen) == 0) {
-                const char *p = (const char *) buf + at + mlen;
+                size_t p = at + mlen;
+                long sign = 1, n = 0;
+                int digits = 0;
 
-                status = strtol(p, NULL, 10);
-                have_status = 1;
+                if (p < buf_len && buf[p] == '-') {
+                    sign = -1;
+                    p++;
+                }
+                while (p < buf_len && buf[p] >= '0' && buf[p] <= '9') {
+                    if (n > (LONG_MAX - 9) / 10)
+                        break;
+                    n = n * 10 + (buf[p] - '0');
+                    p++;
+                    digits++;
+                }
+                if (digits > 0) {
+                    status = sign * n;
+                    have_status = 1;
+                }
             }
         }
         trace("decide qemu_rc=%d via_debug_exit=%d status=%s "
@@ -776,6 +851,14 @@ int main(int argc, char **argv)
         if (!have_status || !via_debug_exit) {
             fprintf(stderr, "HARNESS: no clean guest exit reported, "
                     "failing\n");
+            return 1;
+        }
+        /* A step that failed fails the run even when the guest went on to
+           exit cleanly. The Python harness counted step failures only on
+           the --ok path, so a run driven by steps alone could report a
+           pass over a step that never matched. */
+        if (step_failures) {
+            fprintf(stderr, "HARNESS: %d step(s) failed\n", step_failures);
             return 1;
         }
         return status == 0 ? 0 : 1;
