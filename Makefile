@@ -83,6 +83,7 @@ PCAPCHECK       = build/tests/system/pcapcheck
 BINFIND         = build/tools/inspect/binfind
 ELFCHECK        = build/tools/inspect/elfcheck
 SETIDCHECK      = build/tools/inspect/setidcheck
+MKFIXTURE       = build/tests/system/mkfixture
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
@@ -285,6 +286,12 @@ $(DEADLINE): tests/system/runner/deadline.c
 # The capture checker (tests/system/checkers/pcapcheck.c): what the guest
 # put on the wire, judged from QEMU's filter-dump file.
 $(PCAPCHECK): tests/system/checkers/pcapcheck.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
+# The disk fixtures (tests/system/fixtures/mkfixture.c): the bootprobe
+# partition pattern and the 260 GB sparse disk.
+$(MKFIXTURE): tests/system/fixtures/mkfixture.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
@@ -616,7 +623,7 @@ run-disk: rach2 tests krffs
 
 # `make bootpart-test`: /proc/cmdline and the level-one disk devices. Three
 # boots of one disk: as mkdisk built it there is a single KRFFS partition, so
-# /dev/bootpart must be absent from stat and open; after tests/system/fixtures/mkbootfixture.py
+# /dev/bootpart must be absent from stat and open; after the boot fixture
 # adds a FAT-typed partition of known bytes, the probe drives the device end to
 # end (the 0600 mode from both stat paths, seeks against the partition size,
 # known bytes at a seek, a written sector read back, exactly 0 at the end,
@@ -632,13 +639,13 @@ run-disk: rach2 tests krffs
 # AHCI because the ATA driver's 28-bit LBA stops at 128 GiB.
 BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
 WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
-run-bootpart: rach2 tests krffs
+run-bootpart: rach2 tests krffs $(MKFIXTURE)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE ABSENT OK" probe=bootprobe
-	python3 tests/system/fixtures/mkbootfixture.py $(BOOTPART_TEST_IMAGE)
+	$(MKFIXTURE) boot $(BOOTPART_TEST_IMAGE)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue rach2.bootprobe=fixture" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
@@ -647,7 +654,7 @@ run-bootpart: rach2 tests krffs
 	    --append "rach2.rescue rach2.bootprobe=ramroot" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE RAMROOT OK" probe=bootprobe
-	python3 tests/system/fixtures/mkwidefixture.py $(WIDE_TEST_IMAGE)
+	$(MKFIXTURE) wide $(WIDE_TEST_IMAGE)
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=wide" \
 	    --drive "file=$(WIDE_TEST_IMAGE),format=raw,if=none,id=drv0" \
@@ -710,8 +717,8 @@ run-menu: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # different object trees, and check_recovery.sh reads the authority back off
 # each artifact so a mislabelled one cannot reach this test.
 AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
-run-authority: rach2 rach2-recovery tests krffs test-image
-	python3 tests/system/fixtures/mkwidefixture.py $(AUTH_TEST_IMAGE)
+run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE)
+	$(MKFIXTURE) wide $(AUTH_TEST_IMAGE)
 	sh tools/inspect/check_recovery.sh build/rach2/kernel ordinary
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
 	python3 tests/system/runner/harness.py --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \

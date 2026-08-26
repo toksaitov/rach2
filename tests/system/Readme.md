@@ -10,8 +10,7 @@ This directory holds everything that runs Rach2 to test it: the QEMU runners und
 ## Capture checkers and fixtures
 
 * `checkers/pcapcheck.c` reads Ethernet pcap files produced by QEMU, one subcommand per question. `bcast` checks a broadcast UDP datagram, a packet source address, an ARP ownership reply, or use of a gateway for an off-subnet destination. `netconsole` validates and reassembles Rach2 netconsole frames, including their broadcast address, boot id, sequence, payload length, checksum, and required log text. `rawwire` checks the hop limits and caller-supplied ICMP checksum emitted by the raw-socket probe.
-* `fixtures/mkbootfixture.py` rewrites a small MBR disk into the `/dev/bootpart` fixture and fills its FAT-typed partition with the probe's byte pattern.
-* `fixtures/mkwidefixture.py` creates a sparse 260 GiB disk with known sectors at 5 GiB and 258 GiB for 64-bit disk-offset tests.
+* `fixtures/mkfixture.c` builds both disk fixtures. `boot` rewrites a small MBR disk into the `/dev/bootpart` fixture and fills its FAT-typed partition with the probe's byte pattern; `wide` creates a sparse 260 GB disk with known sectors at 5 GiB and 258 GiB for 64-bit disk-offset tests.
 
 ## Suites
 

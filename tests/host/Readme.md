@@ -37,7 +37,7 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 `compat/crypt.h`, `compat/shadow.h`, and `compat/sys/random.h` reproduce the musl declarations needed by `utils/pwauth.c`. The runner places this directory before the system include directories, so the tests receive the same declarations on hosts that lack those headers or declare the interfaces elsewhere. The test programs provide the corresponding symbols; guest builds never use these headers.
 
-[`mkfatfixture.py`](mkfatfixture.py) independently writes the FAT32 volumes used by `bootctl_hosttest.c`. It builds valid and malformed layouts, including one-sector and eight-sector clusters, so `utils/bootslot.c` is checked against a separate implementation of the format. The runner does not discover the fixture builder as a test.
+[`mkfatfixture.c`](mkfatfixture.c) independently writes the FAT32 volumes used by `bootctl_hosttest.c`, which compiles it on first use. It builds valid and malformed layouts, including one-sector and eight-sector clusters, so `utils/bootslot.c` is checked against a separate implementation of the format. The runner does not discover the fixture builder as a test.
 
 ## Tests
 

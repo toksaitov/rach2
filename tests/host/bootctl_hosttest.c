@@ -3,7 +3,7 @@
  *
  * host-deps: utils/bootslot.c
  *
- * The fixtures come from tests/host/mkfatfixture.py, an independent FAT32
+ * The fixtures come from tests/host/mkfatfixture.c, an independent FAT32
  * writer, so two implementations of the format meet over every image. The
  * well-formed image (a volume label, a long-name entry, dot entries, an empty
  * file, the four named files) must open and install; each malformed image
@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "bootslot.h"
 
@@ -79,14 +80,22 @@ static int io_write(void *ctx, uint32_t lba, const void *buf)
 static const struct bootslot_io IO = {io_read, io_write, NULL};
 
 /** Build the named fixture and load it; aborts the test run on builder
- *  failure, which would make every case meaningless. */
+ *  failure, which would make every case meaningless. The builder is
+ *  compiled here on first use, since this test is compiled and run
+ *  directly and has no build system to ask. */
 static void load(const char *opt)
 {
     char cmd[256];
     FILE *f;
 
-    snprintf(cmd, sizeof(cmd), "python3 tests/host/mkfatfixture.py %s/fat_case.img %s", FIXDIR,
-             opt);
+    if (access(FIXDIR "/mkfatfixture", X_OK) != 0) {
+        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c", FIXDIR);
+        if (system(cmd) != 0) {
+            fprintf(stderr, "bootctl_hosttest: cannot build the fixture builder\n");
+            exit(1);
+        }
+    }
+    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat_case.img %s", FIXDIR, FIXDIR, opt);
     if (system(cmd) != 0) {
         fprintf(stderr, "bootctl_hosttest: fixture builder failed\n");
         exit(1);
