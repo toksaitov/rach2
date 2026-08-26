@@ -4,12 +4,84 @@ The scripts under `tools/` are grouped by role: `setup/` prepares and reports on
 
 ## Machine setup
 
-* `setup/bootstrap_mac.sh` reads `mac-formulae.txt`, skips installed Homebrew packages, and installs the rest. `--dry-run` prints the commands without installing anything. It accepts only macOS and leaves the final decision to `doctor.sh`.
-* `setup/mac-formulae.txt` lists the Homebrew formulae and casks for a fresh Mac. It includes the i686 cross toolchain, QEMU, FUSE-T, and the verification tools.
-* `setup/preflight.sh` is the build's own cached tool check. `make` and `tests/run` run it at each entry; it stats the recorded tool paths on a cache hit and repeats its compile probes only when the environment changed. A missing tool fails the build, named, before compilation. `--report` prints one line per tool without caching.
-* `setup/doctor.sh` is the wider machine-setup report, run directly (the `make doctor` alias is retired). It covers the cross compiler and binutils, QEMU, `make`, a host C compiler, Python, and the verification tools, and reports Docker (maintainer procedures only), OpenSSH tools, Git, and FUSE as optional.
+To build and boot Rach2 a machine needs GNU Make, a host C compiler, the
+`i686-elf` freestanding cross toolchain, QEMU, mtools, and `ssh-keygen`. To
+pass `tests/run style` it also needs cppcheck, ShellCheck, and clang-format.
+Nothing is fetched during a build: the five vendored projects are pinned
+tarballs already in the tree.
 
-`doctor.sh` checks that command-line tools run, not merely that their names are present. For FUSE it runs `pkg-config --exists` for `fuse`, then for `fuse-t`.
+Install those, then run `sh tools/setup/doctor.sh`. It reports every tool in
+three tiers and prints the install command for whatever is missing.
+
+### macOS
+
+Xcode's command line tools supply `make` and `cc`; Homebrew supplies the rest.
+
+    xcode-select --install
+    brew install i686-elf-gcc i686-elf-binutils qemu mtools \
+                 cppcheck shellcheck clang-format
+
+`ssh-keygen` ships with macOS. `xorriso` builds the optional ISOs
+(`make isos`), and `pkg-config` with the `fuse-t` cask lets `make -C krffs
+mount` mount an image on the host; neither is needed to build or test.
+
+### Debian and Ubuntu
+
+The archive has everything except the cross toolchain.
+
+    sudo apt install build-essential qemu-system-x86 mtools openssh-client \
+                     cppcheck shellcheck clang-format
+
+`xorriso` builds the optional ISOs, and `pkg-config` with `libfuse-dev` lets
+`make -C krffs mount` mount an image; neither is needed to build or test.
+
+No Debian package provides an `i686-elf` toolchain, so build one. It installs
+under your home directory and touches nothing the distribution owns.
+
+    sudo apt install bison flex texinfo libgmp-dev libmpfr-dev libmpc-dev
+
+    export PREFIX="$HOME/opt/cross" TARGET=i686-elf
+    export PATH="$PREFIX/bin:$PATH"
+
+    curl -LO https://ftp.gnu.org/gnu/binutils/binutils-2.43.tar.xz
+    tar xf binutils-2.43.tar.xz
+    mkdir build-binutils && cd build-binutils
+    ../binutils-2.43/configure --target=$TARGET --prefix="$PREFIX" \
+        --with-sysroot --disable-nls --disable-werror
+    make && make install && cd ..
+
+    curl -LO https://ftp.gnu.org/gnu/gcc/gcc-14.2.0/gcc-14.2.0.tar.xz
+    tar xf gcc-14.2.0.tar.xz
+    mkdir build-gcc && cd build-gcc
+    ../gcc-14.2.0/configure --target=$TARGET --prefix="$PREFIX" \
+        --disable-nls --enable-languages=c --without-headers
+    make all-gcc all-target-libgcc
+    make install-gcc install-target-libgcc && cd ..
+
+Build `all-target-libgcc` and not the compiler alone. The kernel is linked
+`-nostdlib` and uses no libgcc, but the ported musl, BusyBox, and Dropbear
+link it through the `muslgcc` wrappers, so a toolchain without it builds the
+kernel and then fails in the userland. Put `$PREFIX/bin` on the path of every
+shell that builds Rach2.
+
+The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures
+with `CROSS_COMPILE=i686-elf-` and both `muslgcc` wrappers call
+`i686-elf-gcc` by name. A toolchain installed elsewhere under that same
+prefix works; one built for another target does not.
+
+### The two checkers
+
+* `setup/preflight.sh` is the build's own cached tool check. `make` and
+  `tests/run` run it at each entry; it stats the recorded tool paths on a
+  cache hit and repeats its compile probes only when the environment changed.
+  A missing tool fails the build, named, before compilation. `--report`
+  prints one line per tool without caching.
+* `setup/doctor.sh` is the wider machine report. It covers the cross compiler
+  and binutils, QEMU, `make`, a host C compiler, mtools, `ssh-keygen`, and the
+  three style tools, and reports `xorriso`, Docker (the `vendor/grub`
+  regeneration procedure only), Git, and FUSE as optional. It checks that
+  tools run rather than that their names are present; for FUSE it runs
+  `pkg-config --exists` for `fuse`, then for `fuse-t`.
 
 ## `tests/run style`
 
@@ -52,7 +124,7 @@ The inspectors under `inspect/` validate built artifacts; the validation stamps 
 
 ## clangd database
 
-`dev/gen_compile_commands.sh` builds the clangd database, run directly (the `make compile-commands` alias is retired). It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines, selects the cross-compile commands by their first word, and publishes `compile_commands.json` only after the finished file passes a line-by-line JSON validation and the kernel coverage check. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `tests/run style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
+`dev/gen_compile_commands.sh` builds the clangd database, run directly (the `sh tools/dev/gen_compile_commands.sh` alias is retired). It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines, selects the cross-compile commands by their first word, and publishes `compile_commands.json` only after the finished file passes a line-by-line JSON validation and the kernel coverage check. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `tests/run style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
 
 ## GRUB and ISO builders
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 #
-# tools/doctor.sh: the wider Rach2 machine-setup report, run directly.
+# tools/setup/doctor.sh: the wider Rach2 machine-setup report, run directly.
 #
 # Reports each tool as PASS / MISSING / OPTIONAL with an install hint, and exits
 # non-zero if a tool in either required group is absent (or present but
@@ -23,9 +23,9 @@ esac
 hint() {
     case "$1" in
     cross)    [ "$MAC" = 1 ] && echo "brew install i686-elf-gcc" \
-                             || echo "build the OSDev i686-elf cross GCC, or 'brew install i686-elf-gcc' via Homebrew on Linux" ;;
+                             || echo "build it from source; tools/Readme.md has the commands" ;;
     binutils) [ "$MAC" = 1 ] && echo "brew install i686-elf-binutils" \
-                             || echo "part of the i686-elf cross toolchain (OSDev / Homebrew on Linux)" ;;
+                             || echo "part of the i686-elf toolchain; tools/Readme.md has the commands" ;;
     qemu)     [ "$MAC" = 1 ] && echo "brew install qemu" || echo "apt install qemu-system-x86" ;;
     pkgconf)  [ "$MAC" = 1 ] && echo "brew install pkg-config" || echo "apt install pkg-config" ;;
     make)     [ "$MAC" = 1 ] && echo "xcode-select --install" || echo "apt install make" ;;
@@ -34,6 +34,8 @@ hint() {
                              || echo "apt install libfuse-dev" ;;
     openssh)  [ "$MAC" = 1 ] && echo "preinstalled with macOS (or brew install openssh)" \
                              || echo "apt install openssh-client" ;;
+    mtools)   [ "$MAC" = 1 ] && echo "brew install mtools" || echo "apt install mtools" ;;
+    xorriso)  [ "$MAC" = 1 ] && echo "brew install xorriso" || echo "apt install xorriso" ;;
     docker)   [ "$MAC" = 1 ] && echo "brew install --cask docker (Docker Desktop)" \
                              || echo "apt install docker.io" ;;
     *)        [ "$MAC" = 1 ] && echo "brew install $1" || echo "apt install $1" ;;
@@ -57,15 +59,12 @@ req() {
     fi
 }
 
-# opt NAME WHAT HINTKEY: a tool only some tasks need; absence is a note, not a
-# failure (these are dev/quality tools, so a plain presence check is enough).
-#
-# Four tools that used to sit here are required, not optional: the
-# style check
-# refuses to start without cppcheck, shellcheck and clang-format, and
-# `CLAUDE.md` requires `tests/run style` on every change. Calling them
-# optional told a reader on a fresh machine that they could skip the one check
-# the project insists on.
+# opt NAME WHAT HINTKEY: a tool only some tasks need; absence is a note, not
+# a failure, and a plain presence check is enough for one. The three style
+# tools are not among them. `tests/run style` refuses to start without all
+# three, and CLAUDE.md requires that suite on every change, so calling them
+# optional would tell a reader on a fresh machine that the one check the
+# project insists on can be skipped.
 opt() {
     if command -v "$1" >/dev/null 2>&1; then
         row "[PASS]" "$1" "$(command -v "$1")"
@@ -74,7 +73,7 @@ opt() {
     fi
 }
 
-echo "Rach2 toolchain check (tools/doctor.sh)"
+echo "Rach2 toolchain check (tools/setup/doctor.sh)"
 echo
 echo "Required (build + run the OS):"
 req i686-elf-gcc     cross
@@ -87,6 +86,25 @@ req i686-elf-nm      binutils
 req qemu-system-i386 qemu
 req make             make
 req cc               cc
+# mtools stages the FAT boot partition of every GRUB disk, and ssh-keygen
+# provisions the demo login keys the os-real image is built with. Both are
+# reached by a default `make`, so neither is optional.
+req mformat          mtools
+req mcopy            mtools
+
+# ssh-keygen has no --version, so it is probed by doing the work the build
+# does with it: generate a key pair into a temporary path and remove it. A
+# tool that cannot write a key is as broken here as one that is absent.
+keygen_probe=$(mktemp -u "${TMPDIR:-/tmp}/rach2-doctor-key.XXXXXX")
+if command -v ssh-keygen >/dev/null 2>&1 &&
+   ssh-keygen -t ed25519 -N '' -C rach2-doctor -f "$keygen_probe" \
+       >/dev/null 2>&1; then
+    row "[PASS]" "ssh-keygen" "$(command -v ssh-keygen)"
+else
+    row "[MISSING]" "ssh-keygen" "$(hint openssh)"
+    missing=$((missing + 1))
+fi
+rm -f "$keygen_probe" "$keygen_probe.pub"
 
 echo
 echo "Required to verify (tests/run style refuses to run without these):"
@@ -96,8 +114,8 @@ req clang-format clang-format
 
 echo
 echo "Optional (only some tasks need these):"
+opt xorriso      "make isos, the bootable ISO per image" xorriso
 opt docker       "vendor/grub regeneration (maintainer only)" docker
-opt ssh-keygen   "the SSH capstone demo key" openssh
 opt git          "cloning and committing" git
 
 # FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the
@@ -118,5 +136,5 @@ if [ "$missing" -eq 0 ]; then
     echo "doctor: all required tools present"
     exit 0
 fi
-echo "doctor: $missing required tool(s) missing; install them (hints above), then re-run 'sh tools/doctor.sh'" >&2
+echo "doctor: $missing required tool(s) missing; install them (hints above), then re-run 'sh tools/setup/doctor.sh'" >&2
 exit 1
