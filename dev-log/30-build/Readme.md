@@ -36,11 +36,13 @@ Build and run: GNU Make, a POSIX shell with the base utilities, a host C compile
 
 ## The measurements
 
-The cold build (`make distclean && make`) takes 119 s serial and 34 s at `-j8`, against a 60 s phase 1 baseline that was serial in appearance only: each vendor wrapper chose its own parallelism then, and oversubscribed the machine when the caller asked for `-j`. The no-op build fell from 3 s to 1 s.
+The cold build (`make distclean && make`) takes 119 s serial and 35 s at `-j8`, against a 60 s phase 1 baseline that was serial in appearance only: each vendor wrapper chose its own parallelism then, and oversubscribed the machine when the caller asked for `-j`. The no-op build fell from 3 s to 1 s.
 
 ## Verification
 
-`tests/run style` and `tests/run host` pass at every commit. The complete suite set (`tests/run all`, 43 suites) passes, and `tests/run selfbuild` and `tests/run ssh` were run again as direct evidence. Each converted tool was proved by a differential against the tool it replaced and, where the check is a rule rather than a translation, by a mutation that makes it fail.
+`tests/run style` and `tests/run host` pass at every commit. `make distclean` followed by `make -j8` rebuilds the tree in 35 s, and the complete suite set (`tests/run all`, 43 suites) passes against what that cold build produced. `tests/run selfbuild` and `tests/run ssh` were run again on their own as direct evidence. Each converted tool was proved by a differential against the tool it replaced and, where the check is a rule rather than a translation, by a mutation that makes it fail.
+
+The dependency list above was checked rather than asserted. A directory of stubs that report their own name and exit 127 was placed ahead of the path, shadowing `python`, `python2`, `python3`, `perl`, `expect`, `parted`, `grub-editenv`, `grub-mkimage`, `gtimeout`, `docker`, `strings`, `sha256sum`, `shasum` and `openssl`. A full build, `tests/run style`, `tests/run host`, `tests/run selfbuild` and `tests/run ssh` all pass with none of them reachable, and no stub was invoked.
 
 Two faults in the conversions were found by running rather than by reading, and are recorded with the rest in `notes.md`: seven suite targets invoke a runner from their suite script rather than their recipe, so the prerequisite scan missed them and one suite failed on a binary that was never built; and a menu-truncation fixture padded from a literal length that was two bytes short, which ran past the slot and destroyed the GRUB environment block behind it.
 
