@@ -333,23 +333,34 @@ fi
 set timeout=3
 CFG
 
-# The per-machine tokens ride into the entries through three placeholders, so
-# the heredoc above stays quoted and GRUB's own ${...} variables never reach the
-# shell. The two network sets are what keeps the static entries honest: the
-# ordinary entries take the DHCP set and the static ones take the fixed address,
-# and neither line ever has both, since the kernel refuses an address given
-# twice and would come up with no address at all.
+# The per-machine tokens ride into the entries through three placeholders,
+# so the heredoc above stays quoted and GRUB's own ${...} variables never
+# reach the shell. Two separate network sets: the ordinary entries take the
+# DHCP set and the static ones take the fixed address, and neither line
+# ever has both, since the kernel refuses an address given twice and would
+# come up with no address at all. The values are escaped before sed sees
+# them, because `&`, `\`, and the delimiter are replacement syntax and a
+# token containing one would silently change; a newline would end the sed
+# expression, so it is refused outright.
+for v in "$EXTRA_APPEND" "$DHCP_APPEND" "$STATIC_APPEND"; do
+    if [ "$(printf '%s' "$v" | wc -l)" -gt 0 ]; then
+        echo "mkdisk_grub: an append token set contains a newline" >&2
+        exit 1
+    fi
+done
+sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 RECOVERY_TITLE="Rach2 (recovery, not yet built)"
 RECOVERY_STATIC_TITLE="Rach2 (recovery, static address, not yet built)"
 if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
     RECOVERY_TITLE="Rach2 (recovery, rewrites this disk)"
     RECOVERY_STATIC_TITLE="Rach2 (recovery, static address)"
 fi
-sed -e "s|RACH2_STATIC_TOKENS|$STATIC_APPEND|" \
-    -e "s|RACH2_DHCP_TOKENS|$DHCP_APPEND|" \
-    -e "s|RACH2_RECOVERY_STATIC_TITLE|$RECOVERY_STATIC_TITLE|" \
-    -e "s|RACH2_RECOVERY_TITLE|$RECOVERY_TITLE|" \
-    -e "s|RACH2_APPEND_TOKENS|$EXTRA_APPEND|" "$GRUB_CFG" > "$GRUB_CFG.new"
+sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
+    -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
+    -e "s|RACH2_RECOVERY_STATIC_TITLE|$(sedq "$RECOVERY_STATIC_TITLE")|" \
+    -e "s|RACH2_RECOVERY_TITLE|$(sedq "$RECOVERY_TITLE")|" \
+    -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \
+    "$GRUB_CFG" > "$GRUB_CFG.new"
 mv "$GRUB_CFG.new" "$GRUB_CFG"
 
 # The menu on partition 3. Everything above lives on partition 1, and a machine
@@ -375,9 +386,10 @@ menuentry "Rach2 (recovery, partition 1 unreadable, static address)" --id recove
 }
 RCFG
 
-sed -e "s|RACH2_STATIC_TOKENS|$STATIC_APPEND|" \
-    -e "s|RACH2_DHCP_TOKENS|$DHCP_APPEND|" \
-    -e "s|RACH2_APPEND_TOKENS|$EXTRA_APPEND|" "$RECOVERY_CFG" > "$RECOVERY_CFG.new"
+sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
+    -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
+    -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \
+    "$RECOVERY_CFG" > "$RECOVERY_CFG.new"
 mv "$RECOVERY_CFG.new" "$RECOVERY_CFG"
 
 cp "$REPO/tools/image/grub-embed.cfg" "$EMBED_CFG"
