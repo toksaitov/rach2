@@ -1,7 +1,7 @@
 /**
  * mkmbr: write an MBR partition table into a disk image file.
  *
- * Usage: `mkmbr DISK START:SIZE:TYPE[:boot] ...`, one argument per
+ * Usage: `mkmbr [--lba] DISK START:SIZE:TYPE[:boot] ...`, one argument per
  * partition in table order, at most four. START and SIZE are whole MiB,
  * TYPE is the hexadecimal partition type byte, and a trailing `:boot`
  * sets the active flag. A specification is refused unless it parses in
@@ -19,6 +19,11 @@
  * 1023; nothing boots by them (the kernel's MBR parser and GRUB read the
  * LBA fields alone), but identical bytes make the conversion provable by
  * comparison instead of by argument.
+ *
+ * `--lba` switches the units to whole sectors and writes the 0xFE 0xFF
+ * 0xFF sentinel in both CHS fields, meaning "use the LBA": the form the
+ * plain KRFFS disk (krffs/mkdisk.sh) has always carried, where nothing
+ * ever reads a geometry.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -76,10 +81,16 @@ int main(int argc, char **argv)
     unsigned long disk_sectors;
     long disk_bytes;
     FILE *f;
-    int i, active = 0;
+    int i, active = 0, lba_units = 0;
 
+    if (argc >= 2 && strcmp(argv[1], "--lba") == 0) {
+        lba_units = 1;
+        argv++;
+        argc--;
+    }
     if (argc < 3 || argc > 6) {
-        fprintf(stderr, "usage: mkmbr DISK START:SIZE:TYPE[:boot] ...\n");
+        fprintf(stderr,
+                "usage: mkmbr [--lba] DISK START:SIZE:TYPE[:boot] ...\n");
         return 2;
     }
     f = fopen(argv[1], "r+b");
@@ -119,16 +130,25 @@ int main(int argc, char **argv)
         boot = *p != '\0';
         /* The LBA fields are 32 bits, so the whole partition, end
            included, must sit below 2 TiB and inside the image. */
-        if (start_mib > 0x1FFFFFul || size_mib > 0x200000ul ||
-            (start_mib + size_mib) * 2048 > 0xFFFFFFFFul ||
-            (start_mib + size_mib) * 2048 > disk_sectors) {
+        if (lba_units) {
+            lba = start_mib;
+            count = size_mib;
+        } else {
+            if (start_mib > 0x1FFFFFul || size_mib > 0x200000ul) {
+                fprintf(stderr, "mkmbr: partition '%s' runs past the image "
+                        "(%lu sectors)\n", argv[i], disk_sectors);
+                fclose(f);
+                return 2;
+            }
+            lba = start_mib * 2048;
+            count = size_mib * 2048;
+        }
+        if (lba > 0xFFFFFFFFul - count || lba + count > disk_sectors) {
             fprintf(stderr, "mkmbr: partition '%s' runs past the image "
                     "(%lu sectors)\n", argv[i], disk_sectors);
             fclose(f);
             return 2;
         }
-        lba = start_mib * 2048;
-        count = size_mib * 2048;
         starts[i - 2] = lba;
         ends[i - 2] = lba + count;
         for (j = 0; j < i - 2; j++) {
@@ -145,9 +165,15 @@ int main(int argc, char **argv)
             return 2;
         }
         e[0] = boot ? 0x80 : 0x00;
-        chs(lba, e + 1);
+        if (lba_units) {
+            /* The "use the LBA" sentinel in both CHS fields. */
+            e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF;
+            e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;
+        } else {
+            chs(lba, e + 1);
+            chs(lba + count - 1, e + 5);
+        }
         e[4] = (unsigned char) type;
-        chs(lba + count - 1, e + 5);
         e[8] = (unsigned char) lba;
         e[9] = (unsigned char) (lba >> 8);
         e[10] = (unsigned char) (lba >> 16);

@@ -54,10 +54,6 @@ fi
 case "$DISK_MB$PART_MB" in
     *[!0-9]*|'') echo "mkdisk: disk_mb and partition_mb must be positive integers" >&2; exit 2 ;;
 esac
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "mkdisk: python3 is required to write the MBR" >&2
-    exit 1
-fi
 if [ ! -f "$TOOLS/mkfs.krffs" ] || [ ! -f "$TOOLS/stageimage.krffs" ]; then
     echo "mkdisk: the KRFFS host tools are missing; run 'make -C krffs' first" >&2
     exit 1
@@ -84,25 +80,14 @@ dd if=/dev/zero of="$TMP" bs=1048576 count="$DISK_MB" 2>/dev/null
 # primary partition entry points at the KRFFS region, and the 0x55AA signature
 # marks the sector valid. Type 0x7F is the reserved "individual/experimental"
 # code, fitting for a custom file system and ignored by host auto-mounters.
-python3 - "$TMP" "$PART_LBA" "$((PART_SIZE / SECTOR))" <<'PY'
-import struct, sys
-path, lba, count = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-mbr = bytearray(512)
-entry = struct.pack(
-    "<BBBBBBBBII",
-    0x00,                    # not bootable yet (GRUB phase sets this)
-    0xFE, 0xFF, 0xFF,        # CHS start: sentinel meaning "use LBA"
-    0x7F,                    # partition type: experimental/custom (KRFFS)
-    0xFE, 0xFF, 0xFF,        # CHS end: same sentinel
-    lba,                     # LBA of the first sector
-    count,                   # sector count
-)
-mbr[446:446 + 16] = entry
-mbr[510] = 0x55
-mbr[511] = 0xAA
-with open(path, "r+b") as f:
-    f.write(mbr)
-PY
+# The project MBR writer's --lba form puts the "use the LBA" sentinel in the
+# CHS fields, which is what this disk has always carried.
+MKMBR="$REPO/build/tools/image/mkmbr"
+if [ ! -x "$MKMBR" ] || [ "$REPO/tools/image/mkmbr.c" -nt "$MKMBR" ]; then
+    mkdir -p "${MKMBR%/*}"
+    cc -O2 -o "$MKMBR" "$REPO/tools/image/mkmbr.c" || exit 1
+fi
+"$MKMBR" --lba "$TMP" "$PART_LBA:$((PART_SIZE / SECTOR)):7f"
 
 "$TOOLS/mkfs.krffs" "$TMP" --offset "$PART_OFFSET" --size "$PART_SIZE" >/dev/null
 "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP" --offset "$PART_OFFSET" --size "$PART_SIZE"
