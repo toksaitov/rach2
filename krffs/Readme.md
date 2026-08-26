@@ -65,7 +65,7 @@ tree          MODE GUEST_DIR HOST_DIR
 
 `MODE` is octal and may include an owner as `MODE:UID:GID`; omitted ownership is `0:0`. Guest paths are absolute. `exec-dir` stages the regular executable files from one directory. `tree` recursively stages regular files and creates directories. Both walks are sorted. `stageimage.krffs` rejects a set-id `tree`. The image scripts' set-id checker also rejects a set-id `exec-dir`; a privileged file must have its own `file` directive. The stager rejects paths below the synthetic `/dev` and `/proc` trees.
 
-Staged nodes use the fixed time one second after the Unix epoch, and the root is forced to uid 0 and gid 0. These rules and sorted bulk walks make repeated staging reproducible. The image scripts run `tools/inspect/check_setid.py` on both the manifest and the completed image before publishing it.
+Staged nodes use the fixed time one second after the Unix epoch, and the root is forced to uid 0 and gid 0. These rules and sorted bulk walks make repeated staging reproducible. The image scripts run the set-id guard (`tools/inspect/setidcheck.c`) on both the manifest and the completed image before publishing it.
 
 `mkimage.sh MANIFEST OUTPUT [SIZE_MB]` creates a whole-file RAM image. The default size is 10 MiB. It builds a temporary file, runs `mkfs.krffs` and `stageimage.krffs`, checks it, and renames it over the output only after every step succeeds.
 

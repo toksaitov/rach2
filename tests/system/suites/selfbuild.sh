@@ -166,14 +166,8 @@ rm -f "$WORK"
 cp "$DISK" "$WORK"
 
 # The space preflight, on the host, over the copy the guest will write.
-FREE_BYTES="$(python3 -c "
-import sys
-sys.path.insert(0, 'tools/inspect')
-import check_setid
-region = check_setid.read_region('$WORK', $PART_OFFSET, $PART_SIZE)
-nodes = check_setid.walk_nodes(region)
-print(sum(n['size'] for n in nodes if n['type'] == 1))
-")"
+FREE_BYTES="$(build/tools/inspect/setidcheck --free --image "$WORK" \
+    --offset "$PART_OFFSET" --size "$PART_SIZE")"
 if [ -z "$FREE_BYTES" ] || [ "$FREE_BYTES" -lt "$NEED_BYTES" ]; then
     fail "the disk has $FREE_BYTES free bytes and two kernel builds need $NEED_BYTES"
 fi

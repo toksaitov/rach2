@@ -56,8 +56,13 @@ STAGEIMAGE_DEPS="$DEPS_TMP" "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP"
 # stager reads a manifest the stager does not. Each catches what the other
 # cannot, so a build that ran only one of them would ship what the other
 # refuses.
-python3 "$REPO/tools/inspect/check_setid.py" "$MANIFEST"
-python3 "$REPO/tools/inspect/check_setid.py" --image "$TMP" --manifest "$MANIFEST"
+SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
+if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
+    mkdir -p "${SETIDCHECK%/*}"
+    cc -O2 -o "$SETIDCHECK" "$REPO/tools/inspect/setidcheck.c" || exit 1
+fi
+"$SETIDCHECK" "$MANIFEST"
+"$SETIDCHECK" --image "$TMP" --manifest "$MANIFEST"
 
 mv "$TMP" "$OUT"
 

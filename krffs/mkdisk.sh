@@ -95,7 +95,12 @@ fi
 # Both halves, as mkimage.sh runs them, the inventory over the partition rather
 # than the whole file: the region is the partition, so the walk needs both
 # bounds or it runs off the wrong end.
-python3 "$REPO/tools/inspect/check_setid.py" "$MANIFEST"
-python3 "$REPO/tools/inspect/check_setid.py" --image "$TMP" --manifest "$MANIFEST" \
+SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
+if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
+    mkdir -p "${SETIDCHECK%/*}"
+    cc -O2 -o "$SETIDCHECK" "$REPO/tools/inspect/setidcheck.c" || exit 1
+fi
+"$SETIDCHECK" "$MANIFEST"
+"$SETIDCHECK" --image "$TMP" --manifest "$MANIFEST" \
     --offset "$PART_OFFSET" --size "$PART_SIZE"
 mv "$TMP" "$OUT"

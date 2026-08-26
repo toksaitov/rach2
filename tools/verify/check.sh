@@ -20,8 +20,8 @@
 #      check_comments.py for the 80-column comment rule, and prose_check.py
 #      --banned for the vocabulary a script can decide (all beside this file).
 #   9. the probe runner's scoring rule (runtests.py --selftest)
-#  10. the set-id manifest sweep (tools/inspect/check_setid.py)
-#  11. image reproducibility (tools/verify/check_repro.py): one tree, one image
+#  10. the set-id manifest sweep (tools/inspect/setidcheck.c)
+#  11. image reproducibility (tools/verify/check_repro.sh): one tree, one image
 #  12. the checker selftests (elfcheck, check_grubembed.py, and
 #      the compile-commands generator)
 #  13. the dev-log index (tools/verify/check_devlog.py): it names every finished
@@ -313,8 +313,13 @@ setid=0
 # The self-test first: it covers the failure cases no current manifest
 # exercises, so without it a regression in, say, the image walk or the path
 # decoding would leave every real manifest passing and the gate green.
-python3 "$REPO/tools/inspect/check_setid.py" --selftest >"$VDIR/verify_setid.log" 2>&1 || setid=1
-python3 "$REPO/tools/inspect/check_setid.py" >>"$VDIR/verify_setid.log" 2>&1 || setid=1
+SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
+if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
+    mkdir -p "${SETIDCHECK%/*}"
+    cc -O2 -o "$SETIDCHECK" "$REPO/tools/inspect/setidcheck.c" || setid=1
+fi
+"$SETIDCHECK" --selftest >"$VDIR/verify_setid.log" 2>&1 || setid=1
+"$SETIDCHECK" >>"$VDIR/verify_setid.log" 2>&1 || setid=1
 if [ "$setid" -eq 0 ]; then
     echo "  PASS"
 else
@@ -331,7 +336,7 @@ hr "11/13 image reproducibility (one tree, one image)"
 if ! make -C "$REPO/krffs" >"$VDIR/verify_repro_build.log" 2>&1; then
     echo "  FAIL: the krffs host tools did not build; see $VDIR/verify_repro_build.log"
     fail=1
-elif python3 "$REPO/tools/verify/check_repro.py" >"$VDIR/verify_repro.log" 2>&1; then
+elif sh "$REPO/tools/verify/check_repro.sh" >"$VDIR/verify_repro.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_repro.log"; fail=1

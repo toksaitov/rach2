@@ -82,6 +82,7 @@ DEADLINE        = build/tests/system/deadline
 PCAPCHECK       = build/tests/system/pcapcheck
 BINFIND         = build/tools/inspect/binfind
 ELFCHECK        = build/tools/inspect/elfcheck
+SETIDCHECK      = build/tools/inspect/setidcheck
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
@@ -299,6 +300,12 @@ $(ELFCHECK): tools/inspect/elfcheck.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 
+# The set-id guard (tools/inspect/setidcheck.c), reading its declarations
+# from tools/inspect/setid.allow.
+$(SETIDCHECK): tools/inspect/setidcheck.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+
 # The digest tool (tools/verify/sha256.c), replacing sha256sum and shasum.
 # The scripts that need it before make has run compile it themselves.
 $(SHA256TOOL): tools/verify/sha256.c
@@ -328,8 +335,8 @@ vendor/pdpmake/.validated: $(PDPMAKE_STAMP) $(ELFCHECK)
 	@$(ELFCHECK) $(PDPMAKE_BIN) || { rm -f $(PDPMAKE_BIN) $@; exit 1; }
 	@touch $@
 
-build/images/%.checked: build/images/%.krffs tools/inspect/check_setid.py
-	@python3 tools/inspect/check_setid.py --image $< --manifest krffs/manifests/$*.manifest \
+build/images/%.checked: build/images/%.krffs $(SETIDCHECK) tools/inspect/setid.allow
+	@$(SETIDCHECK) --image $< --manifest krffs/manifests/$*.manifest \
 	    || { rm -f $< $@; exit 1; }
 	@touch $@
 
@@ -375,8 +382,8 @@ test-image: $(TEST_IMAGE)
 os-simple-image: $(OS_SIMPLE_IMAGE)
 os-real-image: $(OS_REAL_IMAGE)
 
-IMAGE_TOOLS = krffs/mkimage.sh tools/inspect/check_setid.py build/krffs/mkfs.krffs \
-              build/krffs/stageimage.krffs
+IMAGE_TOOLS = krffs/mkimage.sh $(SETIDCHECK) tools/inspect/setid.allow \
+              build/krffs/mkfs.krffs build/krffs/stageimage.krffs
 
 -include $(TEST_IMAGE).d $(OS_SIMPLE_IMAGE).d $(OS_REAL_IMAGE).d
 
@@ -1560,9 +1567,9 @@ check-busybox: $(BUSYBOX_STAMP) $(BUSYBOX_OUTPUTS)
 # binaries, so both are ordered after what produces them, the way phase 3's rule
 # requires: unordered, a parallel build scans a build/utils/sbin/ that holds
 # yesterday's artifacts and passes while today's are staged.
-check-setid: $(BUSYBOX_STAMP) utils
-	@python3 tools/inspect/check_setid.py
-	@python3 tools/inspect/check_setid.py --applets
+check-setid: $(BUSYBOX_STAMP) utils $(SETIDCHECK)
+	@$(SETIDCHECK)
+	@$(SETIDCHECK) --applets
 check-dropbearmulti: $(DROPBEAR_STAMP) $(DROPBEAR_BIN)
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
 
