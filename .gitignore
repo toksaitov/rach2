@@ -16,8 +16,5 @@ build/
 # macOS
 .DS_Store
 
-# Python bytecode cache
-__pycache__/
-
 # Scratch files at the repository root are never part of the build.
 /*.txt
