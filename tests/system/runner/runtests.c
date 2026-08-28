@@ -482,6 +482,10 @@ int main(int argc, char **argv)
 {
     const char *kernel = NULL, *initrd = NULL, *cpu = "max";
     const char *log = NULL, *append = NULL;
+    /* The card to attach. The RTL8139 is what this suite has always booted
+       against; naming another is how the same probes are run on another
+       driver. */
+    const char *device = "rtl8139,netdev=net0";
     double timeout = 180.0, steptmo = 20.0, boottmo = 60.0;
     char *qemu[32];
     int nq = 0, i;
@@ -509,6 +513,8 @@ int main(int argc, char **argv)
             log = argv[++i];
         else if (strcmp(argv[i], "--append") == 0 && i + 1 < argc)
             append = argv[++i];
+        else if (strcmp(argv[i], "--device") == 0 && i + 1 < argc)
+            device = argv[++i];
         else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc)
             timeout = atof(argv[++i]);
         else if (strcmp(argv[i], "--steptmo") == 0 && i + 1 < argc)
@@ -547,7 +553,7 @@ int main(int argc, char **argv)
     qemu[nq++] = (char *) "-netdev";
     qemu[nq++] = (char *) "user,id=net0";
     qemu[nq++] = (char *) "-device";
-    qemu[nq++] = (char *) "rtl8139,netdev=net0";
+    qemu[nq++] = (char *) device;
     if (append != NULL) {
         qemu[nq++] = (char *) "-append";
         qemu[nq++] = (char *) append;

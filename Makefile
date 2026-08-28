@@ -72,6 +72,14 @@ MUSL_CRYPT_SRC = $(LIBC_TARBALL:.tar.gz=)/src/crypt/crypt_sha512.c
 #     by the manifest-driven stageimage.krffs (see krffs/mkimage.sh and
 #     krffs/manifests/), which writes the whole tree directly as KRFFS v2
 #     nodes (no FUSE mount). Each image is its own file, so they coexist. ---
+# The card the network suites attach. The RTL8139 is the default, so every
+# invocation that names nothing runs what it always ran; `tests/run e1000`
+# re-enters these same targets with the other emulated card. The runner and
+# the harness both take --device, and ssh.sh takes the card as an argument,
+# because it builds its own QEMU command line.
+NIC             ?= rtl8139
+NIC_DEV          = --device $(NIC),netdev=net0
+
 IMAGES_DIR      = build/images
 TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
 OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
@@ -598,7 +606,7 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 # run nothing. The default suite's build-and-run target. `make test` and
 # `tests/run default` both land here; the registry in tests/registry names it.
 run-default: test-image $(RUNTESTS)
-	$(RUNTESTS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(RUNTESTS) $(NIC_DEV) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60
 
 # The public test entry: the runner owns the suite registry, so this is a
@@ -885,7 +893,7 @@ BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # forks lives three to eight, so without it the token would arrive after QEMU
 # was dead.
 run-ping: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" wait=60
@@ -895,7 +903,7 @@ run-ping: rach2 tests krffs test-image $(HARNESS)
 # probe in the suite, for the reason `tests/run ping` is: it needs the
 # network to answer, and the suite's probes must not.
 run-packet: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PACKETPROBE OK" \
 	    "expect=Type 'help'" "send=exec /packetprobe" wait=60
@@ -919,14 +927,14 @@ run-bootline: rach2 tests krffs
 # the hop limit each datagram left with, and the caller's own checksum.
 run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(RAW_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
 	    --timeout 200 --ok "RAWPROBE OK" \
 	    "expect=Type 'help'" "send=exec /rawprobe" wait=60
 	$(PCAPCHECK) rawwire $(RAW_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=10.0.2.15/24" \
 	    --timeout 200 --ok "RAWPROBE OK" \
@@ -937,7 +945,7 @@ run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 	# not retry, so a cold cache costs it its first answer. What is asserted is the
 	# first hop, which is the gateway answering a hop limit of one, and that is the
 	# whole mechanism.
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 300 --steptmo 90 --ok "TRACEDONE" \
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
@@ -947,7 +955,7 @@ run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" wait=10
 	# The in-house ping is still the one an ordinary account runs: busybox's needs
 	# a raw socket, which is root's, and is not built for that reason.
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
 	    "expect=rach2 login:" "send=test" "expect=Password:" \
@@ -959,14 +967,14 @@ run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 # address out from under the machine and puts it back, and the last thing it
 # does is ping the gateway, which needs the network to answer.
 run-netif: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0,hostfwd=udp::15999-:9999" \
 	    --timeout 180 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /netifprobe" \
 	    "expect=NETIFPROBE DOWN" "udp=15999:down" \
 	    "expect=NETIFPROBE UP" "udp=15999:up" wait=60
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=none" \
 	    --timeout 120 --ok "NETIFPROBE OK" \
@@ -979,7 +987,7 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 DGRAM_PCAP = $(IMAGES_DIR)/dgram.pcap
 run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DGRAM_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0,hostfwd=udp::15998-:7502" \
 	    --qemu-arg=-object \
@@ -1005,7 +1013,7 @@ RSTATIC_PCAP = $(IMAGES_DIR)/static-real.pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
 run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DHCP_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET)" \
 	    --qemu-arg=-object \
@@ -1038,7 +1046,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $
 	# Init empties that directory, and this is what says so: two boots of one disk,
 	# each of which must reach a lease.
 	$(MKDISK) krffs/manifests/os-real.manifest $(DHCP_DISK) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.ip=none" \
 	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
@@ -1049,7 +1057,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $
 	    "expect=lease of 192.168.90.20 obtained" wait=3 \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo FIRST\"\"LEASE" \
 	    "expect=FIRSTLEASE" "send=poweroff -f" wait=5
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.ip=none" \
 	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
@@ -1065,7 +1073,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $
 	# the SSH server, so the lease must arrive with no console session in it.
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $(METAL_IMAGE) 4
 	@rm -f $(METAL_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET),hostfwd=tcp::2224-:22" \
 	    --qemu-arg=-object \
@@ -1099,7 +1107,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $
 	# below requires that packet to have gone to the gateway instead, which only a
 	# machine holding the leased /16 does.
 	@rm -f $(SIMPLE_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" \
 	    --qemu-arg=-object \
@@ -1255,7 +1263,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $
 NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole.pcap
 run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(NETCONSOLE_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=nc0,netdev=net0,file=$(NETCONSOLE_PCAP) \
@@ -1265,6 +1273,47 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --expect "Initializing system components" \
 	    --expect "Network... OK" \
 	    --expect "netconsole: broadcast"
+
+# `tests/run e1000`: the network path on the other emulated card, and the probe
+# order that decides which card a machine with more than one of them gets.
+#
+# This card is the one QEMU attaches when nobody asks for one, so it is what a
+# person running qemu-system-i386 from a generic command line has. The suites
+# re-run here are the ones whose subject is the wire: the probe boot, ICMP, the
+# packet socket, the interface ioctls, broadcast, netconsole, the raw socket,
+# DHCP, and the SSH capstone, which is the deepest use the TCP path gets. The
+# other suites are about disks, accounts, and building, and running them again
+# on a second card would cost minutes and show nothing.
+run-e1000: rach2 tests krffs test-image $(HARNESS)
+	$(MAKE) --no-print-directory NIC=e1000 run-default run-ping run-packet \
+	    run-netif run-dgram run-netconsole run-raw run-dhcp run-ssh
+# The probe order, which only a machine holding more than one card can show.
+# The table tries the RTL8139 first, so a machine with both must bind that one;
+# a machine with only the e1000 must bind the e1000; and a machine whose card no
+# driver claims must say so and still reach its shell, which is what proves each
+# driver reports ABSENT for a device that is not its own rather than starting on
+# it. The 82574L is that card: Intel, gigabit, and a different register
+# interface, so the e1000 driver must refuse it by device id.
+#
+# Each boot is asserted on the bound driver's own detail line rather than on the
+# summary, because the summary names the card in parentheses and the harness
+# matcher takes no parenthesis. Only the bound driver prints a detail line, so
+# the line is the binding.
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
+	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
+	    --timeout 90 --ok "Type 'help'" \
+	    "expect=RTL8139: IRQ" "expect=Type 'help'" wait=2
+	$(HARNESS) --device e1000,netdev=net0 --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 90 --ok "Type 'help'" \
+	    "expect=e1000: 82540EM" "expect=Type 'help'" wait=2
+	$(HARNESS) --device e1000e,netdev=net0 --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 90 --ok "Type 'help'" \
+	    "expect=no supported network card" \
+	    "expect=Type 'help'" wait=2
 
 # `tests/run reset`: each reset mechanism on its own. The kernel tries three,
 # most of the machine first, and the order was chosen for a laptop whose chipset
@@ -1397,7 +1446,7 @@ run-ssh: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid che
 	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
 	sh tests/system/suites/ssh.sh build/rach2/kernel $(SSH_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`" \
-	    $(SSH_TEST_PORT)
+	    $(SSH_TEST_PORT) $(NIC)
 
 # `tests/run shutdown`: userland stopping the machine, on a disk fixture, with
 # every claim of a stop asserted on the QEMU process ending rather than on a
@@ -1662,4 +1711,4 @@ distclean: clean
 	rm -rf build
 
 
-.PHONY: run-addressed run-noentropy run-disk run-disk-ahci run-disk-q35 run-bootpart run-subset run-stress run-stress-ahci run-persist run-persist-ahci run-cred-persist run-crash run-authority run-bootline run-exitline run-login run-procfiles run-account run-shutdown run-reset run-diskpolicy run-diskdiag run-ping run-packet run-raw run-netif run-dgram run-dhcp run-netconsole run-tcc run-make run-selfbuild run-ssh run-grub run-menu run-install run-sealed run-drill run-metal
+.PHONY: run-addressed run-noentropy run-disk run-disk-ahci run-disk-q35 run-bootpart run-subset run-stress run-stress-ahci run-persist run-persist-ahci run-cred-persist run-crash run-authority run-bootline run-exitline run-login run-procfiles run-account run-shutdown run-reset run-diskpolicy run-diskdiag run-ping run-packet run-raw run-netif run-dgram run-dhcp run-netconsole run-e1000 run-tcc run-make run-selfbuild run-ssh run-grub run-menu run-install run-sealed run-drill run-metal

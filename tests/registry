@@ -38,6 +38,7 @@ netif|run-netif|-|qemu-system-i386|yes
 dgram|run-dgram|-|qemu-system-i386|yes
 dhcp|run-dhcp|-|qemu-system-i386|yes
 netconsole|run-netconsole|-|qemu-system-i386|yes
+e1000|run-e1000|-|qemu-system-i386,ssh|yes
 tcc|run-tcc|-|qemu-system-i386|yes
 make|run-make|-|qemu-system-i386|yes
 selfbuild|run-selfbuild|-|qemu-system-i386,mformat,mmd,mcopy,mshowfat|yes

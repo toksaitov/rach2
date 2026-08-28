@@ -17,7 +17,14 @@
 # The disk is a copy, so a run leaves nothing behind, and every wait is bounded:
 # a hang has to fail, not sit there.
 #
-# Usage: ssh_test.sh <kernel> <disk> <root password> <test password> <port>
+# The card is a parameter because this machine has more than one driver and
+# the capstone is worth running on each: the TCP path is the deepest thing the
+# network stack does, and a driver that loses one frame in a handshake shows
+# here and nowhere else. It defaults to the RTL8139, so an invocation that
+# names no card runs exactly what it always ran.
+#
+# Usage: ssh_test.sh <kernel> <disk> <root password> <test password>
+#                    [port] [card]
 #
 
 set -e
@@ -27,9 +34,10 @@ DISK="$2"
 PASSWORD="$3"
 TESTPASSWORD="$4"
 PORT="${5:-2222}"
+CARD="${6:-rtl8139}"
 
 if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$PASSWORD" ] || [ -z "$TESTPASSWORD" ]; then
-    echo "usage: ssh_test.sh <kernel> <disk> <root password> <test password> [port]" >&2
+    echo "usage: ssh_test.sh <kernel> <disk> <root password> <test password> [port] [card]" >&2
     exit 2
 fi
 
@@ -113,7 +121,7 @@ mkfifo "$FEED"
 qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -append "rach2.fsdisk" \
     -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
-    -netdev "user,id=n0,hostfwd=tcp::$PORT-:22" -device rtl8139,netdev=n0 \
+    -netdev "user,id=n0,hostfwd=tcp::$PORT-:22" -device "$CARD,netdev=n0" \
     -serial stdio < "$FEED" > "$LOG" 2>&1 &
 QPID=$!
 # The machine is started first and the feed second, which is the order that lets
