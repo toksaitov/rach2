@@ -1204,10 +1204,32 @@ static const char *rtl8168_error(void)
     return r8168_err;
 }
 
+/**
+ * Report the link, from the MAC's own summary of it.
+ *
+ * The speed comes from `r8168_link_speed`, which reads PHYstatus; a speed of
+ * zero from that function is what this chip says for no link.
+ *
+ * @return 1 with `*out` filled; 0 only when no window is mapped.
+ */
+static int rtl8168_link(struct netdev_link *out)
+{
+    uint32_t speed;
+
+    if (r8168_mmio == 0) {
+        return 0;
+    }
+    speed = r8168_link_speed();
+    out->up = speed != 0;
+    out->mbps = (uint16_t)speed;
+    out->full_duplex = (io->r8(R8168_PHYSTATUS) & R8168_PHY_FULLDUP) ? 1 : 0;
+    return 1;
+}
+
 /** The card's detail line under the boot summary. */
 static void rtl8168_print_info(void)
 {
-    uint32_t speed = r8168_link_speed();
+    struct netdev_link link;
 
     serial_printf(
         "    RTL8168GU: xid 0x%X, MMIO 0x%X, "
@@ -1217,11 +1239,11 @@ static void rtl8168_print_info(void)
         (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF), (unsigned)(net_mac[3] >> 4),
         (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
         (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
-    if (speed == 0) {
-        serial_printf("    RTL8168GU: no link yet\n");
+    if (rtl8168_link(&link) && link.up) {
+        serial_printf("    RTL8168GU: link %d Mb/s, %s duplex\n", (int)link.mbps,
+                      link.full_duplex ? "full" : "half");
     } else {
-        serial_printf("    RTL8168GU: link %d Mb/s, %s duplex\n", speed,
-                      (io->r8(R8168_PHYSTATUS) & R8168_PHY_FULLDUP) ? "full" : "half");
+        serial_printf("    RTL8168GU: no link yet\n");
     }
     serial_printf("    RTL8168GU: rx %d (%d error, %d dropped), tx %d (%d stalled)\n",
                   r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_tx_packets,
@@ -1260,5 +1282,6 @@ static void rtl8168_stop(void)
     r8168_up = 0;
 }
 
-const struct netdev_ops rtl8168_netdev = {"RTL8168GU",  rtl8168_init,  rtl8168_tx, rtl8168_poll,
-                                          rtl8168_stop, rtl8168_error, rtl8168_print_info};
+const struct netdev_ops rtl8168_netdev = {"RTL8168GU",   rtl8168_init,  rtl8168_tx,
+                                          rtl8168_poll,  rtl8168_stop,  rtl8168_link,
+                                          rtl8168_error, rtl8168_print_info};

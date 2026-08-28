@@ -157,6 +157,7 @@ echo "procfiles-test: the three mounts each name their own source: OK"
   printf 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt\n'; sleep 10;
   printf 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6\n'; sleep 4;
   printf 'arp -n > /tmp.arp; echo AR""P-STATUS:$?; cat /tmp.arp\n'; sleep 3;
+  printf 'ifconfig eth0 > /tmp.if; echo IF""-STATUS:$?; cat /tmp.if\n'; sleep 3;
   printf 'cat /proc/net/dev > /tmp.nd; echo ND""-STATUS:$?; cat /tmp.nd\n'; sleep 6 ) \
     | qemu-system-i386 -cpu max -display none \
     -kernel "$KERNEL" -initrd "$REAL" \
@@ -199,8 +200,8 @@ tr -d '\r' <"$REAL.applets.log" >"$PLAIN_LOG"
 # Each applet's own exit status, captured before anything reads its output. An
 # applet that printed a plausible row and then failed passed the earlier version
 # of this test, which looked only at the text.
-for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "ND:cat" "DMESG:dmesg" \
-            "RT:route" "ARP:arp" "NS:netstat"; do
+for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "ND:cat" "IF:ifconfig" \
+            "DMESG:dmesg" "RT:route" "ARP:arp" "NS:netstat"; do
     token="${pair%%:*}"
     word="${pair#*:}"
     status=$(sed -n "s/^$token-STATUS:\([0-9][0-9]*\).*/\1/p" "$PLAIN_LOG" | head -1)
@@ -223,7 +224,18 @@ for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "ND:cat" "DMESG:dmesg" \
         exit 1
     fi
 done
-echo "procfiles-test: ps, df, free, uptime, cat, dmesg, route, arp and netstat each exited 0: OK"
+echo "procfiles-test: ps, df, free, uptime, cat, ifconfig, dmesg, route, arp and netstat each exited 0: OK"
+
+# RUNNING means the link is up, not that a card is bound. The distinction is
+# only visible from outside the machine when it is wrong: a driver that read
+# its link bit the wrong way round would drop this flag on a machine whose
+# network plainly works, which is what the rest of this suite has just used.
+if ! grep -q "RUNNING" "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: ifconfig does not report the interface RUNNING" >&2
+    sed -n '/^eth0/,/^$/p' "$PLAIN_LOG" | head -6 >&2
+    exit 1
+fi
+echo "procfiles-test: ifconfig reports the interface RUNNING, so the link is read: OK"
 
 # /proc/net/dev: the sixteen counters, by position. Field count is checked as
 # well as content, because a column added or lost still prints a plausible

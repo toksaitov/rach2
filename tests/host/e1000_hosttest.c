@@ -802,12 +802,54 @@ int main(void)
         CHECK(model_accesses == mark, "stopping an absent card costs no register access");
     }
 
+    /* ---- the link ---- */
+    model_reset();
+    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the link checks");
+    {
+        struct netdev_link link;
+
+        model_reg[E1000_STATUS / 4] = E1000_STATUS_LU | E1000_STATUS_FD | (2u << 6);
+        CHECK(e1000_link(&link) == 1, "a card whose registers can be read answers");
+        CHECK(link.up && link.mbps == 1000 && link.full_duplex,
+              "a gigabit full-duplex link is reported as one");
+
+        model_reg[E1000_STATUS / 4] = E1000_STATUS_LU | (1u << 6);
+        CHECK(e1000_link(&link) && link.mbps == 100 && !link.full_duplex,
+              "a hundred-megabit half-duplex link is reported as one");
+
+        model_reg[E1000_STATUS / 4] = E1000_STATUS_LU;
+        CHECK(e1000_link(&link) && link.mbps == 10, "ten megabit is reported as ten");
+
+        /* Both 2 and 3 encode a gigabit, and a driver that read the field as
+           a table would get the second of them wrong. */
+        model_reg[E1000_STATUS / 4] = E1000_STATUS_LU | (3u << 6);
+        CHECK(e1000_link(&link) && link.mbps == 1000,
+              "the second encoding of a gigabit is a gigabit too");
+
+        model_reg[E1000_STATUS / 4] = 0;
+        CHECK(e1000_link(&link) == 1 && !link.up,
+              "a card with no link says so, which is not the same as not saying");
+    }
+
+    /* A card that was never found cannot be asked. */
+    model_reset();
+    pci_present = 0;
+    CHECK(e1000_init() == NETDEV_ABSENT, "the card is absent");
+    {
+        struct netdev_link link;
+
+        link.up = 42;
+        CHECK(e1000_link(&link) == 0, "a card with no window reports that it cannot say");
+        CHECK(link.up == 42, "and leaves the caller's answer untouched");
+    }
+
     /* ---- the driver's table ---- */
     CHECK(e1000_netdev.tx == e1000_tx_frame, "the table names the transmit path");
     CHECK(e1000_netdev.poll == 0, "the table leaves poll empty, because this card interrupts");
     CHECK(e1000_netdev.init == e1000_init, "the table names the bring-up");
     CHECK(e1000_netdev.error != 0, "the table names a diagnostic");
     CHECK(e1000_netdev.stop == e1000_stop, "the table names the way to silence the card");
+    CHECK(e1000_netdev.link == e1000_link, "the table names the way to ask about the link");
 
     CHECK(lock_depth == 0 && !lock_ever_negative,
           "every interrupt bracket the driver took, it released");

@@ -46,6 +46,10 @@ struct model {
     int stops;
     int txs;
     int polls;
+    /* What this model's `link` answers: whether it can say at all, and what
+       it says when it can. */
+    int can_say;
+    struct netdev_link state;
     const char *reason;
 };
 
@@ -127,6 +131,23 @@ static void second_poll(void)
     m_second.polls++;
 }
 
+static int first_link(struct netdev_link *out)
+{
+    if (!m_first.can_say) {
+        return 0;
+    }
+    *out = m_first.state;
+    return 1;
+}
+static int second_link(struct netdev_link *out)
+{
+    if (!m_second.can_say) {
+        return 0;
+    }
+    *out = m_second.state;
+    return 1;
+}
+
 static const char *first_error(void)
 {
     return m_first.reason;
@@ -146,12 +167,14 @@ static void nothing(void)
 /* The names netdev.c links against. The real ones live in the three driver
    files; here they are these models, which is what puts the walk under test
    rather than any card. */
-const struct netdev_ops rtl8139_netdev = {"first",    first_init,  first_tx, 0,
-                                          first_stop, first_error, nothing};
-const struct netdev_ops e1000_netdev = {"second",    second_init,  second_tx, second_poll,
-                                        second_stop, second_error, nothing};
-const struct netdev_ops rtl8168_netdev = {"third",    third_init,  third_tx, 0,
-                                          third_stop, third_error, nothing};
+const struct netdev_ops rtl8139_netdev = {"first",    first_init, first_tx,    0,
+                                          first_stop, first_link, first_error, nothing};
+const struct netdev_ops e1000_netdev = {"second",    second_init, second_tx,    second_poll,
+                                        second_stop, second_link, second_error, nothing};
+/* The third has no `link`, which is a driver that cannot report one and is
+   the case the interface has to answer for as well. */
+const struct netdev_ops rtl8168_netdev = {"third",    third_init, third_tx,    0,
+                                          third_stop, 0,          third_error, nothing};
 
 #include "network/driver/netdev.c"
 
@@ -165,6 +188,15 @@ static void reset(int a, int b, int c)
     m_first.stops = m_second.stops = m_third.stops = 0;
     m_first.txs = m_second.txs = m_third.txs = 0;
     m_first.polls = m_second.polls = m_third.polls = 0;
+    m_first.can_say = 1;
+    m_second.can_say = 1;
+    m_third.can_say = 1;
+    m_first.state.up = 1;
+    m_first.state.mbps = 100;
+    m_first.state.full_duplex = 1;
+    m_second.state.up = 0;
+    m_second.state.mbps = 0;
+    m_second.state.full_duplex = 0;
     m_first.reason = "the first card would not start";
     m_second.reason = "the second card would not start";
     m_third.reason = "the third card would not start";
@@ -251,6 +283,39 @@ int main(void)
     CHECK(m_first.polls == 0, "a driver with no poll is not polled");
     netdev_stop();
     CHECK(m_first.stops == 1, "the bound driver is the one silenced");
+
+    /* ---- the link, through the interface ---- */
+    reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
+    CHECK(netdev_probe() == 1, "a card is bound before the link checks");
+    {
+        struct netdev_link link;
+
+        CHECK(netdev_link(&link) == 1 && link.up && link.mbps == 100,
+              "the bound driver's answer is the one that comes back");
+    }
+
+    /* A driver that cannot report a link is not the same as one reporting no
+       link, and the interface has to keep them apart. */
+    reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_UP);
+    CHECK(netdev_probe() == 1, "the driver with no link report is bound");
+    {
+        struct netdev_link link;
+
+        link.up = 42;
+        CHECK(netdev_link(&link) == 0, "a driver with no link report says it cannot say");
+        CHECK(link.up == 42, "and leaves the caller's answer untouched");
+    }
+
+    /* And a machine with nothing bound at all. */
+    reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_ABSENT);
+    CHECK(netdev_probe() == 0, "nothing is bound");
+    {
+        struct netdev_link link;
+
+        link.up = 42;
+        CHECK(netdev_link(&link) == 0, "a machine with no card cannot say either");
+        CHECK(link.up == 42, "and leaves the caller's answer untouched");
+    }
 
     /* A driver whose transmit refuses: the refusal reaches the caller
        unchanged, which is what lets the interface count it. */

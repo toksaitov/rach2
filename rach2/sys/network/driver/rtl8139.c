@@ -51,6 +51,7 @@ static const char *rtl_err = "no card";
 static void rtl8139_irq(isr_params_t *params);
 static void rtl8139_rx(void);
 static void rtl8139_rx_reset(void);
+static int rtl8139_link(struct netdev_link *out);
 
 /**
  * Probe, reset, and bring up the RTL8139.
@@ -164,6 +165,8 @@ const char *rtl8139_error(void) { return rtl_err; }
  */
 static void rtl8139_print_info(void)
 {
+    struct netdev_link link;
+
     serial_printf("    RTL8139: IRQ %d, I/O 0x%X, "
                   "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
                   (int)rtl_pci.irq, (unsigned)iobase,
@@ -173,6 +176,12 @@ static void rtl8139_print_info(void)
                   (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
                   (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
                   (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+    if (rtl8139_link(&link) && link.up) {
+        serial_printf("    RTL8139: link %d Mb/s, %s duplex\n", (int)link.mbps,
+                      link.full_duplex ? "full" : "half");
+    } else {
+        serial_printf("    RTL8139: no link yet\n");
+    }
 }
 
 /**
@@ -199,9 +208,35 @@ static void rtl8139_stop(void)
     }
 }
 
+/**
+ * Report the link, from the card's own media status register.
+ *
+ * `LINKB` is inverted, so the test reads the opposite way round from every
+ * other bit here. Speed is one bit because this card has two speeds, and the
+ * duplex comes from the basic mode control register, which is where the PHY
+ * records what it negotiated.
+ *
+ * @return 1 with `*out` filled; 0 only when no card was found, since a card
+ *         that is present can always answer this.
+ */
+static int rtl8139_link(struct netdev_link *out)
+{
+    uint8_t msr;
+
+    if (iobase == 0) {
+        return 0;
+    }
+    msr = inb(iobase + RTL_MSR);
+    out->up = (msr & RTL_MSR_LINKB) ? 0 : 1;
+    out->mbps = (uint16_t)((msr & RTL_MSR_SPEED_10) ? 10 : 100);
+    out->full_duplex = (inw(iobase + RTL_BMCR) & RTL_BMCR_DUPLEX) ? 1 : 0;
+    return 1;
+}
+
 /* The card's entry in the driver table. `poll` is NULL: this one interrupts. */
-const struct netdev_ops rtl8139_netdev = {"RTL8139",     rtl8139_init,  rtl8139_tx, 0,
-                                          rtl8139_stop,  rtl8139_error, rtl8139_print_info};
+const struct netdev_ops rtl8139_netdev = {"RTL8139",    rtl8139_init,  rtl8139_tx,
+                                          0,            rtl8139_stop,  rtl8139_link,
+                                          rtl8139_error, rtl8139_print_info};
 
 /**
  * Copy a frame into the next TX descriptor and start its DMA.

@@ -1,23 +1,22 @@
 # Milestone 32: resume state
 
-Phase: 3, the host model and the suite. Complete.
+Phase: 4, the interface. Items 1 and 2 committed; item 3 ready to commit.
 
-Done: `tests/host/e1000_hosttest.c` drives the driver against a software model
-of the chip, and 26 mutations each made one named check fail and only that one.
-The `dhcp` target, `runtests`, and `ssh.sh` take the card as a parameter,
-defaulting to the RTL8139. `tests/run e1000` runs the probe boot, ping, packet,
-netif, dgram, netconsole, raw, dhcp, and ssh on the other card, plus three
-probe-order boots.
+Done: `tx` returns a verdict and the interface counts what each layer refused,
+so `/proc/net/dev` prints six real counters instead of two. `stop` silences a
+card at shutdown and after a bring-up that failed with DMA already enabled.
+`link` reports the link, and `IFF_RUNNING` now means the link is up rather
+than a device being bound.
 
-Evidence: `tests/run e1000` PASS in 911s, including 63/63 probes, the SSH
-capstone on the e1000, and all three probe-order boots (both cards attached
-binds the RTL8139; only the e1000 binds the e1000; an 82574L, which no driver
-claims, reports no supported card and still reaches the shell). The default
-card path is unchanged: `tests/run default` PASS in 94s, `dhcp` PASS in 315s,
-`ssh` PASS in 29s, each confirmed to use rtl8139. `tests/run style` and
-`tests/run host` pass. The driver's rings are volatile, and the host test
-passes at -O0, -O1, and -O2.
+Evidence: 43 mutations proved across five scripts; new `tests/host/netdev_hosttest.c`
+covers the probe walk; `procfiles` asserts the sixteen `/proc/net/dev` fields
+and `ifconfig` reporting RUNNING; `netconsole` asserts the shutdown wire
+contract with a new `pcapcheck --reject`. Suites passing: style, host, netif,
+procfiles, default, shutdown, reset, netconsole.
 
-Next: phase 4, the interface. Three changes in order, each with its own
-Readme and its own failing-first proof: `tx` returns a verdict, `stop`
-quiesces the card, `link` reports the link.
+Two defects found and fixed along the way: `k_puts` never reached serial, so a
+netconsole reader was never told the machine was stopping; and the card really
+was transmitting through `power_stop`, which a capture now shows it no longer
+does.
+
+Next: commit item 3, then phase 5, the scripts and documents.

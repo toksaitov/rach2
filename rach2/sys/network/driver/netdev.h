@@ -41,6 +41,19 @@
 #define NETDEV_TX_DROPPED (-1)
 
 /**
+ * What a card reports about its link.
+ *
+ * `up` is whether the other end is there at all, which is the part a program
+ * asks about; `mbps` and `full_duplex` are what was negotiated, and are
+ * meaningless when `up` is zero.
+ */
+struct netdev_link {
+    int up;
+    uint16_t mbps;
+    int full_duplex;
+};
+
+/**
  * A network device's operations.
  *
  * `init` probes and brings the device up. It returns `NETDEV_UP` when the card
@@ -61,6 +74,11 @@
  * never finished starting, because the probe calls it on a driver whose
  * `init` returned `NETDEV_FAILED`, and a driver can fail after enabling bus
  * mastering. It must also be safe to call twice.
+ *
+ * `link` fills `*out` and returns 1, or returns 0 when the card cannot report
+ * its link at all, leaving `*out` untouched. Both answers are useful and they
+ * are not the same: a card that says the link is down is different from a
+ * card that cannot say.
  */
 struct netdev_ops {
     const char *name;
@@ -68,6 +86,7 @@ struct netdev_ops {
     int (*tx)(const uint8_t *data, uint16_t len);
     void (*poll)(void);
     void (*stop)(void);
+    int (*link)(struct netdev_link *out);
     const char *(*error)(void);
     void (*print_info)(void);
 };
@@ -112,5 +131,13 @@ void netdev_print_info(void);
  * resets around it. Does nothing when no device is bound.
  */
 void netdev_stop(void);
+
+/**
+ * Ask the bound device about its link.
+ *
+ * @return 1 with `*out` filled, or 0 when no device is bound or the bound
+ *         device cannot report its link.
+ */
+int netdev_link(struct netdev_link *out);
 
 #endif /* _NETDEV_H_ */

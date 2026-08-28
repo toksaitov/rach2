@@ -30,6 +30,16 @@
 #define RTL_RCR         0x44    /* RX configuration (32-bit)               */
 #define RTL_9346CR      0x50    /* 93C46 command: 0xC0 config, 0x00 normal */
 #define RTL_CONFIG1     0x52    /* Configuration register 1                */
+#define RTL_MSR         0x58    /* Media status (8-bit)                    */
+#define RTL_BMCR        0x62    /* Basic mode control (16-bit)             */
+
+/* Media status bits. LINKB is inverted: the bit is SET when the link is
+   DOWN, which is the one thing about this register worth stating twice. */
+#define RTL_MSR_LINKB    0x04   /* 1 = no link */
+#define RTL_MSR_SPEED_10 0x08   /* 1 = 10 Mb/s, 0 = 100 Mb/s */
+
+/* Basic mode control: the duplex the PHY settled on. */
+#define RTL_BMCR_DUPLEX  0x0100
 
 /* Interrupt status / mask bits (RTL_ISR / RTL_IMR). */
 #define RTL_ISR_ROK     0x0001  /* RX OK             */

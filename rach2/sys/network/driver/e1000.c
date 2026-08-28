@@ -639,6 +639,32 @@ static const char *e1000_error(void)
 }
 
 /**
+ * Report the link, from the card's own status register.
+ *
+ * The speed field is two bits and both 2 and 3 mean a gigabit, which is why
+ * this reads as two tests rather than a table: the card has three speeds and
+ * four encodings for them.
+ *
+ * @return 1 with `*out` filled; 0 only when no window is mapped, since a card
+ *         whose registers can be read can always answer this.
+ */
+static int e1000_link(struct netdev_link *out)
+{
+    uint32_t status;
+    uint32_t speed;
+
+    if (e1000_mmio == 0) {
+        return 0;
+    }
+    status = io->r32(E1000_STATUS);
+    speed = (status & E1000_STATUS_SPEED_MASK) >> E1000_STATUS_SPEED_SHIFT;
+    out->up = (status & E1000_STATUS_LU) ? 1 : 0;
+    out->mbps = (uint16_t)(speed == 0 ? 10 : (speed == 1 ? 100 : 1000));
+    out->full_duplex = (status & E1000_STATUS_FD) ? 1 : 0;
+    return 1;
+}
+
+/**
  * Silence the card: receiver and transmitter off, interrupts masked, DMA
  * revoked.
  *
@@ -678,8 +704,7 @@ static void e1000_stop(void)
  */
 static void e1000_print_info(void)
 {
-    uint32_t status = io->r32(E1000_STATUS);
-    uint32_t speed = (status & E1000_STATUS_SPEED_MASK) >> E1000_STATUS_SPEED_SHIFT;
+    struct netdev_link link;
 
     serial_printf("    e1000: 82540EM, MMIO 0x%X, IRQ %d, "
                   "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
@@ -690,12 +715,11 @@ static void e1000_print_info(void)
                   (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
                   (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
                   (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
-    if (!(status & E1000_STATUS_LU)) {
-        serial_printf("    e1000: no link yet\n");
+    if (e1000_link(&link) && link.up) {
+        serial_printf("    e1000: link %d Mb/s, %s duplex\n", (int)link.mbps,
+                      link.full_duplex ? "full" : "half");
     } else {
-        serial_printf("    e1000: link %d Mb/s, %s duplex\n",
-                      speed == 0 ? 10 : (speed == 1 ? 100 : 1000),
-                      (status & E1000_STATUS_FD) ? "full" : "half");
+        serial_printf("    e1000: no link yet\n");
     }
     serial_printf("    e1000: rx %d (%d error, %d dropped), tx %d (%d stalled)\n",
                   e1000_rx_packets, e1000_rx_errors, e1000_rx_dropped, e1000_tx_packets,
@@ -704,5 +728,6 @@ static void e1000_print_info(void)
 
 /* The card's entry in the driver table. `poll` is NULL: this one
  * interrupts. */
-const struct netdev_ops e1000_netdev = {"e1000",     e1000_init,  e1000_tx_frame, 0,
-                                        e1000_stop,  e1000_error, e1000_print_info};
+const struct netdev_ops e1000_netdev = {"e1000",     e1000_init,  e1000_tx_frame,
+                                        0,           e1000_stop,  e1000_link,
+                                        e1000_error, e1000_print_info};

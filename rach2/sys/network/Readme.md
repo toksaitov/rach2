@@ -10,9 +10,11 @@ The order has a reason at each position. The RTL8139 is first because it is what
 
 A driver that finds its device but cannot start it stops the probe and supplies the boot diagnostic. It is also silenced on the way past: a bring-up can fail after it has enabled bus mastering, and an unbound driver is one nothing else will ever reach.
 
-Every driver publishes a `stop`, which turns its receiver and transmitter off, masks its interrupts, and clears PCI bus mastering, in that order. The last of those is what ends DMA whatever the device believes it is doing. `kernel_shutdown` calls it after the page cache is flushed and after the goodbye line, so a machine read over netconsole sees that line and nothing `power_stop` prints after it. `stop` must be safe on a device that never finished starting and safe to call twice.
+Every driver publishes a `link`, which reports whether the link is up and at what speed and duplex, and a `stop`, which turns the receiver and transmitter off, masks the interrupts, and clears PCI bus mastering, in that order. The last of those is what ends DMA whatever the device believes it is doing. `kernel_shutdown` calls it after the page cache is flushed and after the goodbye line, so a machine read over netconsole sees that line and nothing `power_stop` prints after it. `stop` must be safe on a device that never finished starting and safe to call twice.
 
 The storage drivers have the same exposure and no equivalent; that is not this milestone's work.
+
+`link` returns 1 with its answer filled or 0 when the card cannot report a link at all, and the two are not the same: a card saying the link is down is different from a card that cannot say. Each driver's boot detail line reports what it read.
 
 The RTL8139 driver is for QEMU's PCI device `10ec:8139`. It uses BAR0 I/O ports, an 8 KiB receive ring with a contiguous overhang, four round-robin transmit buffers, and IRQ-driven receive. It accepts frames promiscuously, pads short transmit frames to 60 bytes, drops received frames larger than 1518 bytes, and drops transmit frames larger than 1536 bytes. Its transmit path assumes QEMU completes a descriptor before the four-slot rotation reuses it. It does not wait for ownership as a real RTL8139 driver would.
 
@@ -32,6 +34,8 @@ rach2.ip=none
 ```
 
 An explicit address without `rach2.gateway` has no default route. `rach2.ip=none` leaves IPv4 unconfigured for userland. A gateway beside `none` is invalid. The parser rejects duplicate options, leading zeroes, malformed or out-of-range octets, trailing text, prefixes outside 1 through 30, non-host addresses, and a gateway outside the configured subnet. A refusal preserves the complete SLIRP default tuple.
+
+`SIOCGIFFLAGS` reports `IFF_RUNNING` when the bound card says its link is up. A card that cannot report a link is treated as running while a device is bound, because for such a card that is the most that can honestly be said.
 
 Programs configure the interface through `SIOCGIF*`, `SIOCSIF*`, `SIOCADDRT`, and `SIOCDELRT` on a socket descriptor. Getters are available to every user; setters and route changes require effective uid 0. The supported state consists of one address, one mask, the derived broadcast address, interface flags, and at most one default gateway. While an address is waiting for a separate netmask ioctl, the kernel assigns its classful mask. Adding the already implied subnet route succeeds without changing state. Removing it and adding any other non-default route are unsupported.
 

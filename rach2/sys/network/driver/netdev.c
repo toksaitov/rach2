@@ -106,3 +106,11 @@ void netdev_stop(void)
         netdev->stop();
     }
 }
+
+int netdev_link(struct netdev_link *out)
+{
+    if (netdev && netdev->link) {
+        return netdev->link(out);
+    }
+    return 0;
+}

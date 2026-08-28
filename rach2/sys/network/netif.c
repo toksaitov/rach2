@@ -177,8 +177,21 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         if (netif_up) {
             flags |= (uint16_t)IFF_UP;
         }
+        /* RUNNING is the link, not the card. `ifconfig` prints it, and a
+         * bound card with nothing plugged into it reported the same as a
+         * working one until the driver interface could be asked. A card that
+         * cannot report its link keeps the older meaning, because for such a
+         * card "a device is bound" is the most that can honestly be said. */
         if (netdev) {
-            flags |= (uint16_t)IFF_RUNNING;
+            struct netdev_link link;
+
+            if (netdev_link(&link)) {
+                if (link.up) {
+                    flags |= (uint16_t)IFF_RUNNING;
+                }
+            } else {
+                flags |= (uint16_t)IFF_RUNNING;
+            }
         }
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
         ifr[IFREQ_UNION] = (uint8_t)(flags & 0xff);
