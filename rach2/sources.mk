@@ -77,6 +77,7 @@ C_SRC = kernel.c \
         sys/network/netconsole.c \
         sys/network/core/net_core.c \
         sys/network/driver/netdev.c \
+        sys/network/driver/e1000.c \
         sys/network/driver/rtl8139.c \
         sys/network/driver/rtl8168.c \
         sys/network/ethernet/ethernet.c \

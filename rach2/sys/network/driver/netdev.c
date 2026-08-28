@@ -1,15 +1,20 @@
 /*
  * netdev.c: the driver table and the binding.
  *
- * The order of the table is the probe order. The RTL8139 comes first because
- * it is what QEMU exposes and what every existing test boots against, so a
- * machine that has one behaves exactly as it did before this interface
- * existed; the RTL8168GU follows, for the real hardware. A driver's `init`
- * must have no effect on a machine where its device is absent, since the next
- * driver's probe runs after it.
+ * The order of the table is the probe order, and each position has a reason.
+ * The RTL8139 is first because it is what every existing suite boots against
+ * and must keep binding. The e1000 is second because it is what QEMU attaches
+ * when nobody asks for a card, so it is what an emulated machine has by
+ * default. The RTL8168GU is last because it is the one physical target, and a
+ * `NETDEV_FAILED` verdict from it stops the probe, which on a machine with no
+ * serial port and no network is the only diagnostic there is.
+ *
+ * A driver's `init` must have no effect on a machine where its device is
+ * absent, since the next driver's probe runs after it.
  */
 
 #include "netdev.h"
+#include "e1000.h"
 #include "rtl8139.h"
 #include "rtl8168.h"
 
@@ -22,7 +27,8 @@ const struct netdev_ops *netdev = 0;
  * on a machine with no network to report it over. */
 static const char *probe_error = "no supported network card";
 
-static const struct netdev_ops *const drivers[] = {&rtl8139_netdev, &rtl8168_netdev};
+static const struct netdev_ops *const drivers[] = {&rtl8139_netdev, &e1000_netdev,
+                                                   &rtl8168_netdev};
 
 #define NETDEV_COUNT ((int)(sizeof(drivers) / sizeof(drivers[0])))
 
