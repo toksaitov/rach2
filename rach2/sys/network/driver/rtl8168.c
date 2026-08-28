@@ -1087,7 +1087,7 @@ static void r8168_tx_reclaim(void)
  * drivers behind that interface follow the same rule. The bracket nests, so a
  * caller that already has it pays nothing.
  */
-static void rtl8168_tx(const uint8_t *data, uint16_t len)
+static int rtl8168_tx(const uint8_t *data, uint16_t len)
 {
     uint32_t idx;
     uint32_t eor;
@@ -1096,7 +1096,7 @@ static void rtl8168_tx(const uint8_t *data, uint16_t len)
     uint32_t flags;
 
     if (!r8168_up || len == 0 || len > R8168_FRAME_MAX) {
-        return;
+        return NETDEV_TX_DROPPED;
     }
     flags = net_lock();
     r8168_tx_reclaim();
@@ -1114,7 +1114,7 @@ static void rtl8168_tx(const uint8_t *data, uint16_t len)
         if (r8168_tx_ring[idx].opts1 & R8168_DESC_OWN) {
             r8168_tx_stalls++;
             net_unlock(flags);
-            return;
+            return NETDEV_TX_DROPPED;
         }
     }
 
@@ -1144,6 +1144,7 @@ static void rtl8168_tx(const uint8_t *data, uint16_t len)
     io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
     r8168_tx_packets++;
     net_unlock(flags);
+    return NETDEV_TX_OK;
 }
 
 /**
@@ -1179,10 +1180,13 @@ static void rtl8168_poll(void)
         len = opts1 & R8168_DESC_LEN_MASK;
         if (opts1 & R8168_DESC_RX_RES) {
             r8168_rx_errors++;
+            ethernet_note_rx_error();
         } else if ((opts1 & (R8168_DESC_FS | R8168_DESC_LS)) != (R8168_DESC_FS | R8168_DESC_LS)) {
             r8168_rx_dropped++;
+            ethernet_note_rx_drop();
         } else if (len <= 4 || len > R8168_RX_BUF_SIZE) {
             r8168_rx_dropped++;
+            ethernet_note_rx_drop();
         } else {
             r8168_rx_packets++;
             ethernet_rx(r8168_rx_buf[idx], (uint16_t)(len - 4));

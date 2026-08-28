@@ -62,6 +62,21 @@ void serial_printf(const char *fmt, ...)
     (void)fmt;
 }
 
+/* The refusal counters the drivers report to. The interface owns them; here
+   they are counted so a check can say which one the driver reached. */
+static unsigned note_rx_errors;
+static unsigned note_rx_drops;
+
+void ethernet_note_rx_error(void)
+{
+    note_rx_errors++;
+}
+
+void ethernet_note_rx_drop(void)
+{
+    note_rx_drops++;
+}
+
 /* The kernel's interrupt bracket. There are no interrupts here, so the flag is
    a token; what the test holds the driver to is that every lock it takes it
    releases, which the balance below checks. */
@@ -553,6 +568,8 @@ static void model_reset(void)
     pci_present = 1;
     pci_master_enabled = 0;
     pci_memory_enabled = 0;
+    note_rx_errors = 0;
+    note_rx_drops = 0;
     rx_calls = 0;
     rx_last_len = 0;
     r8168_up = 0;
@@ -1029,7 +1046,8 @@ int main(void)
     {
         unsigned char frame[64];
 
-        rtl8168_tx(frame, (unsigned short)sizeof(frame));
+        CHECK(rtl8168_tx(frame, (unsigned short)sizeof(frame)) == NETDEV_TX_DROPPED,
+              "a driver that never came up refuses the frame rather than swallowing it");
         rtl8168_poll();
         CHECK(r8168_tx_packets == 0 && rx_calls == 0,
               "a driver that never came up neither sends nor receives");

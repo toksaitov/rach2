@@ -80,7 +80,7 @@ int rtl8139_init(void);
 
 /** Transmit a raw Ethernet frame (destination MAC through payload, no FCS; the
  *  chip appends the CRC). len must be <= RTL_TX_BUF_SIZE. */
-void rtl8139_tx(const uint8_t *data, uint16_t len);
+int rtl8139_tx(const uint8_t *data, uint16_t len);
 
 /** Configured I/O base. */
 uint16_t rtl8139_iobase(void);

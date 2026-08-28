@@ -92,6 +92,7 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
     if (plen > 1500) {
         serial_printf("ETH: TX payload too large (%d bytes), dropped\n",
                       (int)plen);
+        counts.tx_dropped++;
         return;
     }
     /* An interface an administrator took down has no IP and answers no
@@ -99,6 +100,7 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
        with no console is read, and a machine whose network was just
        misconfigured is exactly when its log is worth having. */
     if (!netif_is_up() && (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP)) {
+        counts.tx_dropped++;
         return;
     }
 
@@ -109,7 +111,23 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
     k_memcpy(eth_tx_frame + ETH_HDR_SIZE, payload, plen);
 
     total = (uint16_t)(ETH_HDR_SIZE + plen);
+    /* Counted after the driver answers, not before it is asked: a frame the
+     * card would not take did not leave, and counting it as carried is the
+     * error this verdict exists to correct. */
+    if (netdev_tx(eth_tx_frame, total) != NETDEV_TX_OK) {
+        counts.tx_dropped++;
+        return;
+    }
     counts.tx_packets++;
     counts.tx_bytes += total;
-    netdev_tx(eth_tx_frame, total);
+}
+
+void ethernet_note_rx_error(void)
+{
+    counts.rx_errors++;
+}
+
+void ethernet_note_rx_drop(void)
+{
+    counts.rx_dropped++;
 }

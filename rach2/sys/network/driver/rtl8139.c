@@ -2,9 +2,10 @@
  * rtl8139.c - Realtek RTL8139 PCI NIC driver.
  *
  * TX: four round-robin descriptors, each with its own buffer. Writing the
- * length to a TSD register starts the DMA. Before reusing a slot we wait for
- * its previous transmission to report TOK, so a burst of frames cannot
- * overwrite a buffer that is still in flight.
+ * length to a TSD register starts the DMA. This driver does not wait for a
+ * slot's previous transmission to complete before reusing it, because QEMU
+ * finishes each one as the TSD is written; see the note on rtl8139_tx, which
+ * is where that assumption is stated and where real hardware would differ.
  *
  * RX: one linear ring buffer. The chip prefixes each frame with a 4-byte header
  * (little-endian status word and length word). We validate that header before
@@ -196,7 +197,7 @@ const struct netdev_ops rtl8139_netdev = {
  * it; no OWN-bit poll is needed. Real hardware would poll the TSD OWN bit, but
  * this driver targets QEMU only.
  */
-void rtl8139_tx(const uint8_t *data, uint16_t len)
+int rtl8139_tx(const uint8_t *data, uint16_t len)
 {
     uint16_t txlen;
     uint32_t eflags;
@@ -204,7 +205,7 @@ void rtl8139_tx(const uint8_t *data, uint16_t len)
     if (len > RTL_TX_BUF_SIZE) {
         serial_printf("RTL8139: TX frame too large (%d bytes), dropped\n",
                       (int)len);
-        return;
+        return NETDEV_TX_DROPPED;
     }
 
     __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(eflags) : : "memory");
@@ -223,6 +224,7 @@ void rtl8139_tx(const uint8_t *data, uint16_t len)
     tx_idx = (tx_idx + 1) & 3;
 
     __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory", "cc");
+    return NETDEV_TX_OK;
 }
 
 /**
@@ -274,6 +276,7 @@ static void rtl8139_rx(void)
             pkt_len < RTL_RX_PKT_MIN || pkt_len > RTL_RX_PKT_MAX) {
             serial_printf("RTL8139: bad RX header status=0x%X len=%d, resync\n",
                           (unsigned)status, (int)pkt_len);
+            ethernet_note_rx_error();
             rtl8139_rx_reset();
             return;
         }
@@ -324,9 +327,13 @@ static void rtl8139_irq(isr_params_t *params)
         }
         if (isr_val & RTL_ISR_RER) {
             serial_printf("RTL8139: RX error interrupt\n");
+            ethernet_note_rx_error();
         }
         if (isr_val & (RTL_ISR_RXOVW | RTL_ISR_FOVW)) {
             serial_printf("RTL8139: RX overflow, resync\n");
+            /* The ring filled while the machine was elsewhere; what it held
+             * is gone, and the resync is the recovery. */
+            ethernet_note_rx_drop();
             rtl8139_rx_reset();
         }
         if (isr_val & RTL_ISR_TER) {

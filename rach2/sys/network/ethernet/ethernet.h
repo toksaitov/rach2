@@ -18,17 +18,35 @@ void ethernet_rx(const uint8_t *data, uint16_t len);
 void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
                  const uint8_t *payload, uint16_t plen);
 
-/* What the interface has carried since boot: every frame passes ethernet_rx or
- * ethernet_tx, so this is where it is counted, and /proc/net/dev is where it is
- * read. The counts are 32-bit and wrap, as Linux's do on a 32-bit machine. */
+/* What the interface has carried since boot, and what it refused. Every frame
+ * that arrives or leaves passes ethernet_rx or ethernet_tx, so this is where
+ * it is counted, and /proc/net/dev is where it is read. The counts are 32-bit
+ * and wrap, as Linux's do on a 32-bit machine.
+ *
+ * The three refusal counters are reported here rather than kept by each
+ * driver, because a frame a driver would not send is one the interface did not
+ * send, and the file that reports it has one column for each. A driver reports
+ * what it refused through the three functions below; it does not keep the
+ * interface's books. */
 struct eth_counts {
     uint32_t rx_packets;
     uint32_t rx_bytes;
+    uint32_t rx_errors;
+    uint32_t rx_dropped;
     uint32_t tx_packets;
     uint32_t tx_bytes;
+    uint32_t tx_dropped;
 };
 
 /** The interface's counters, live. */
 const struct eth_counts *ethernet_counts(void);
+
+/* A frame the hardware reported an error on: it reached the card and the card
+ * says it is not sound. */
+void ethernet_note_rx_error(void);
+
+/* A frame this machine could not take: one the driver cannot present whole,
+ * or one that arrived with nowhere to put it. */
+void ethernet_note_rx_drop(void);
 
 #endif /* _ETHERNET_H_ */

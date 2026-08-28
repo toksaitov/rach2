@@ -112,7 +112,7 @@ static uint32_t e1000_tx_head; /* next transmit descriptor to fill */
 
 static void e1000_irq(isr_params_t *params);
 static void e1000_rx(void);
-static void e1000_tx_frame(const uint8_t *data, uint16_t len);
+static int e1000_tx_frame(const uint8_t *data, uint16_t len);
 
 /* ------------------------------------------------------------------ */
 /* Bring-up.                                                           */
@@ -457,7 +457,7 @@ static int e1000_init(void)
  * stack, and `net.h` asks every syscall-context sender to hold the lock
  * anyway. The bracket nests, so a caller that already holds it pays nothing.
  */
-static void e1000_tx_frame(const uint8_t *data, uint16_t len)
+static int e1000_tx_frame(const uint8_t *data, uint16_t len)
 {
     uint32_t idx;
     uint32_t i;
@@ -468,7 +468,7 @@ static void e1000_tx_frame(const uint8_t *data, uint16_t len)
         if (len > E1000_FRAME_MAX) {
             serial_printf("e1000: tx: frame of %d bytes is too large, dropped\n", (int)len);
         }
-        return;
+        return NETDEV_TX_DROPPED;
     }
 
     flags = net_lock();
@@ -484,7 +484,7 @@ static void e1000_tx_frame(const uint8_t *data, uint16_t len)
         if (!(E1000_TXD_STATUS(&e1000_tx_ring[idx]) & E1000_TXD_STAT_DD)) {
             e1000_tx_stalls++;
             net_unlock(flags);
-            return;
+            return NETDEV_TX_DROPPED;
         }
     }
 
@@ -516,6 +516,7 @@ static void e1000_tx_frame(const uint8_t *data, uint16_t len)
 
     e1000_tx_packets++;
     net_unlock(flags);
+    return NETDEV_TX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -563,10 +564,13 @@ static void e1000_rx(void)
 
         if (errors & E1000_RXD_ERR_ANY) {
             e1000_rx_errors++;
+            ethernet_note_rx_error();
         } else if (!(status & E1000_RXD_STAT_EOP)) {
             e1000_rx_dropped++;
+            ethernet_note_rx_drop();
         } else if (len < E1000_FRAME_MIN || len > E1000_RX_BUF_SIZE) {
             e1000_rx_dropped++;
+            ethernet_note_rx_drop();
         } else {
             e1000_rx_packets++;
             ethernet_rx(e1000_rx_buf[e1000_rx_cur], (uint16_t)len);
@@ -617,6 +621,7 @@ static void e1000_irq(isr_params_t *params)
              * the whole recovery: the descriptors the card could not use are
              * returned by the tail write e1000_rx ends with. */
             e1000_rx_dropped++;
+            ethernet_note_rx_drop();
             e1000_rx();
         }
         /* A link change needs nothing done. The card renegotiates on its own

@@ -31,7 +31,9 @@ Changing the address flushes ARP, aborts connections opened from another local a
 
 ## Ethernet, ARP, and IPv4
 
-Ethernet accepts IPv4 and ARP. Packet sockets see a matching frame before the kernel protocol handler. The same frame still reaches that handler. `/proc/net/dev` reads the 32-bit frame and byte counters kept at this layer; the counters wrap.
+Ethernet accepts IPv4 and ARP. Packet sockets see a matching frame before the kernel protocol handler. The same frame still reaches that handler.
+
+This layer keeps six 32-bit counters, which wrap, and `/proc/net/dev` reads them: frames and bytes each way, receive errors, receive drops, and transmit drops. A frame is counted as transmitted only after the driver reports that it took it. A driver reports what it refused through `ethernet_note_rx_error` and `ethernet_note_rx_drop` and through its transmit verdict; it does not keep the interface's counters itself. The other ten columns of that file are zero because nothing here reports them.
 
 The ARP cache has eight entries. It learns a usable sender from requests and replies, including unsolicited packets. It rejects zero, loopback, multicast, reserved, broadcast, and subnet-network addresses. A lookup refreshes an entry's use order. When full, the cache replaces the entry unused for the longest time. Entries do not expire by age. On a transmit miss, the stack sends an ARP request, drops the current datagram, and reports success to the datagram sender. A later send can use the learned mapping.
 

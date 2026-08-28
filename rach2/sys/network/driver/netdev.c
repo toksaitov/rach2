@@ -59,11 +59,12 @@ int netdev_probe(void)
     return 0;
 }
 
-void netdev_tx(const uint8_t *data, uint16_t len)
+int netdev_tx(const uint8_t *data, uint16_t len)
 {
     if (netdev && netdev->tx) {
-        netdev->tx(data, len);
+        return netdev->tx(data, len);
     }
+    return NETDEV_TX_DROPPED;
 }
 
 void netdev_poll(void)

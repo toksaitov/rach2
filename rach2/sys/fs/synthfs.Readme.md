@@ -70,7 +70,7 @@ Only one open-file description may hold write access across the three raw window
 * `/proc/net` contains `dev`, `route`, `arp`, and `tcp`. There is no `tcp6` because the kernel has no IPv6 stack.
 * `/proc/self` is a magic symlink to the caller's numeric pid.
 
-The network files are snapshots of fixed kernel tables. `/proc/net/dev` prints receive and transmit byte and packet counts for the interface when one is present. `/proc/net/route` prints the on-link route and an optional default gateway. `/proc/net/arp` prints the eight-entry address cache. `/proc/net/tcp` prints the 16-entry TCP pool with Linux state numbers, queue lengths, uid, and the same socket inode used by `fstat` and `/proc/<pid>/fd/N`.
+The network files are snapshots of fixed kernel tables. `/proc/net/dev` prints the sixteen columns Linux prints, because programs find their number by counting fields. Six carry a value: bytes and frames each way, receive errors, receive drops, and transmit drops. The rest are zero. `/proc/net/route` prints the on-link route and an optional default gateway. `/proc/net/arp` prints the eight-entry address cache. `/proc/net/tcp` prints the 16-entry TCP pool with Linux state numbers, queue lengths, uid, and the same socket inode used by `fstat` and `/proc/<pid>/fd/N`.
 
 Each live `/proc/<pid>` directory contains `stat`, `cmdline`, and `fd`:
 

@@ -32,6 +32,14 @@
 #define NETDEV_UP 1
 #define NETDEV_FAILED (-1)
 
+/* What a driver's `tx` reports. Every driver here drops a frame under some
+   condition it cannot avoid: a length its buffers will not hold, or a ring the
+   card has not finished with. Until this verdict existed no layer above learned
+   of it, and `/proc/net/dev` printed its drop columns as zero whatever had
+   happened. */
+#define NETDEV_TX_OK 0
+#define NETDEV_TX_DROPPED (-1)
+
 /**
  * A network device's operations.
  *
@@ -42,14 +50,15 @@
  * network to report it over, and it stops the probe, not let the next
  * driver configure a machine whose card already failed. On anything but
  * `NETDEV_UP`, `error` names the reason. `tx` sends one Ethernet frame
- * (destination MAC through payload, no FCS; the chip appends it). `poll` is
- * NULL for an interrupt-driven device. `print_info` writes the indented
- * detail under the boot line.
+ * (destination MAC through payload, no FCS; the chip appends it) and reports
+ * `NETDEV_TX_OK` or `NETDEV_TX_DROPPED`. `poll` is NULL for an
+ * interrupt-driven device. `print_info` writes the indented detail under the
+ * boot line.
  */
 struct netdev_ops {
     const char *name;
     int (*init)(void);
-    void (*tx)(const uint8_t *data, uint16_t len);
+    int (*tx)(const uint8_t *data, uint16_t len);
     void (*poll)(void);
     const char *(*error)(void);
     void (*print_info)(void);
@@ -65,8 +74,13 @@ extern const struct netdev_ops *netdev;
  */
 int netdev_probe(void);
 
-/** Send one frame through the bound device; nothing happens with none bound. */
-void netdev_tx(const uint8_t *data, uint16_t len);
+/**
+ * Send one frame through the bound device.
+ *
+ * @return `NETDEV_TX_OK`, or `NETDEV_TX_DROPPED` when the driver refused the
+ *         frame or no device is bound. A caller that counts drops counts this.
+ */
+int netdev_tx(const uint8_t *data, uint16_t len);
 
 /** Give the bound device its turn on the timer tick, if it needs one. */
 void netdev_poll(void);

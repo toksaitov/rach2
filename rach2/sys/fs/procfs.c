@@ -649,8 +649,15 @@ uint32_t procfs_ino_pid(int pid)
  * sixteen counters Linux prints, because `ifconfig` and everything like it
  * parses this file by counting fields. This machine has one interface and
  * lists it only when a device was found: an interface that is not there is not
- * one a program should be told about. The counters it does not keep are zero,
- * which is what a device with no errors and no collisions reports anyway.
+ * one a program should be told about.
+ *
+ * Six of the sixteen are kept: bytes and packets each way, receive errors and
+ * receive drops, and transmit drops. The other ten are zero because this
+ * machine has nothing to put in them. The drop and error columns were zero
+ * too until the driver interface gained a transmit verdict, which was wrong
+ * whenever a driver refused a frame, and every driver here refuses one under
+ * some condition. Collisions and carrier remain zero: no driver reports
+ * either.
  */
 static int procfs_gen_netdev(struct procfs_text *t)
 {
@@ -670,11 +677,20 @@ static int procfs_gen_netdev(struct procfs_text *t)
     ap_u32(t, c->rx_bytes);
     ap_ch(t, ' ');
     ap_u32(t, c->rx_packets);
-    ap_str(t, " 0 0 0 0 0 0 ");
+    ap_ch(t, ' ');
+    ap_u32(t, c->rx_errors);
+    ap_ch(t, ' ');
+    ap_u32(t, c->rx_dropped);
+    /* fifo, frame, compressed, multicast */
+    ap_str(t, " 0 0 0 0 ");
     ap_u32(t, c->tx_bytes);
     ap_ch(t, ' ');
     ap_u32(t, c->tx_packets);
-    ap_str(t, " 0 0 0 0 0 0\n");
+    /* errs */
+    ap_str(t, " 0 ");
+    ap_u32(t, c->tx_dropped);
+    /* fifo, colls, carrier, compressed */
+    ap_str(t, " 0 0 0 0\n");
     return t->len;
 }
 

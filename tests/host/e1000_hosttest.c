@@ -63,6 +63,21 @@ void serial_printf(const char *fmt, ...)
     (void)fmt;
 }
 
+/* The refusal counters the drivers report to. The interface owns them; here
+   they are counted so a check can say which one the driver reached. */
+static unsigned note_rx_errors;
+static unsigned note_rx_drops;
+
+void ethernet_note_rx_error(void)
+{
+    note_rx_errors++;
+}
+
+void ethernet_note_rx_drop(void)
+{
+    note_rx_drops++;
+}
+
 void k_puts(const char *s)
 {
     (void)s;
@@ -419,6 +434,8 @@ static void model_reset(void)
     pci_present = 1;
     pci_master_enabled = 0;
     pci_memory_enabled = 0;
+    note_rx_errors = 0;
+    note_rx_drops = 0;
     rx_calls = 0;
     rx_last_len = 0;
     e1000_up = 0;
@@ -628,12 +645,16 @@ int main(void)
     e1000_irq(0);
     CHECK(rx_calls == 0 && e1000_rx_errors == 1,
           "a descriptor reporting an error is refused even though it is done and complete");
+    CHECK(note_rx_errors == 1 && note_rx_drops == 0,
+          "a hardware error is reported to the interface as an error, not a drop");
 
     model_reset();
     CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
     model_deliver(frame, 100, E1000_RXD_STAT_DD, 0);
     e1000_irq(0);
     CHECK(rx_calls == 0 && e1000_rx_dropped == 1, "a frame split across descriptors is refused");
+    CHECK(note_rx_drops == 1 && note_rx_errors == 0,
+          "a split frame is reported to the interface as a drop, not an error");
 
     model_reset();
     CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
@@ -664,7 +685,7 @@ int main(void)
     /* ---- transmit: the descriptor contract ---- */
     model_reset();
     CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the transmit checks");
-    e1000_tx_frame(frame, 200);
+    CHECK(e1000_tx_frame(frame, 200) == NETDEV_TX_OK, "a frame that is sent reports that it was");
     CHECK(model_tx_sent == 1 && model_tx_last_len == 200, "a frame is sent with its own length");
     CHECK(e1000_tx_packets == 1, "the frame is counted");
     {
@@ -690,7 +711,8 @@ int main(void)
     /* ---- transmit: an over-length frame is refused ---- */
     model_reset();
     CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
-    e1000_tx_frame(frame, E1000_FRAME_MAX + 1);
+    CHECK(e1000_tx_frame(frame, E1000_FRAME_MAX + 1) == NETDEV_TX_DROPPED,
+          "an over-length frame reports that it was dropped");
     CHECK(model_tx_sent == 0 && e1000_tx_packets == 0,
           "a frame larger than the card's own maximum is refused");
     CHECK(e1000_tx_head == 0, "a refused frame consumes no descriptor");
@@ -699,8 +721,15 @@ int main(void)
     model_reset();
     CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
     model_swallow_tx = 1;
-    for (i = 0; i < E1000_RING_SIZE + 2; i++) {
-        e1000_tx_frame(frame, 64);
+    {
+        int refusals = 0;
+
+        for (i = 0; i < E1000_RING_SIZE + 2; i++) {
+            if (e1000_tx_frame(frame, 64) == NETDEV_TX_DROPPED) {
+                refusals++;
+            }
+        }
+        CHECK(refusals > 0, "a frame the stalled ring could not take reports that it was dropped");
     }
     CHECK(e1000_tx_stalls > 0, "a ring the card never drains is counted as a stall, not a hang");
     CHECK(e1000_tx_packets <= E1000_RING_SIZE,
@@ -708,7 +737,8 @@ int main(void)
 
     /* ---- a driver that is not up does nothing ---- */
     model_reset();
-    e1000_tx_frame(frame, 64);
+    CHECK(e1000_tx_frame(frame, 64) == NETDEV_TX_DROPPED,
+          "a driver that never came up refuses the frame rather than swallowing it");
     e1000_irq(0);
     CHECK(e1000_tx_packets == 0 && rx_calls == 0,
           "a driver that never came up neither sends nor receives");
