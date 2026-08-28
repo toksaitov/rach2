@@ -91,9 +91,19 @@ static uint32_t e1000_tx_stalls;
  * 32 MiB identity-mapped limit: the virtual address is the physical one, so
  * what goes into a descriptor is the address of the array. The manual asks
  * for 16-byte alignment on each ring.
+ *
+ * The rings are volatile and the buffers are not, which is the distinction
+ * between memory the card writes while this driver is reading it and memory
+ * only one of them touches at a time. A done bit the compiler kept in a
+ * register would be a wait that never ends. The kernel builds this file
+ * without optimization, where that cannot happen, but the host model builds
+ * the same file at -O1 and -O2, so the type says what is true rather than
+ * resting on a flag. A buffer is read only after its descriptor reported
+ * done, so making 112 KiB of buffer volatile would slow every copy to no
+ * purpose.
  */
-static struct e1000_rx_desc e1000_rx_ring[E1000_RING_SIZE] __attribute__((aligned(16)));
-static struct e1000_tx_desc e1000_tx_ring[E1000_RING_SIZE] __attribute__((aligned(16)));
+static volatile struct e1000_rx_desc e1000_rx_ring[E1000_RING_SIZE] __attribute__((aligned(16)));
+static volatile struct e1000_tx_desc e1000_tx_ring[E1000_RING_SIZE] __attribute__((aligned(16)));
 static uint8_t e1000_rx_buf[E1000_RING_SIZE][E1000_RX_BUF_SIZE] __attribute__((aligned(8)));
 static uint8_t e1000_tx_buf[E1000_RING_SIZE][E1000_TX_BUF_SIZE] __attribute__((aligned(8)));
 
@@ -537,7 +547,7 @@ static void e1000_rx(void)
     uint32_t budget;
 
     for (budget = 0; budget < E1000_RING_SIZE; budget++) {
-        struct e1000_rx_desc *d = &e1000_rx_ring[e1000_rx_cur];
+        volatile struct e1000_rx_desc *d = &e1000_rx_ring[e1000_rx_cur];
         uint8_t status = E1000_RXD_STATUS(d);
         uint8_t errors;
         uint32_t len;

@@ -349,7 +349,7 @@ static void model_tx_drain(void)
         return;
     }
     while (model_tdh != tdt && guard < E1000_RING_SIZE * 2) {
-        struct e1000_tx_desc *d = &e1000_tx_ring[model_tdh];
+        volatile struct e1000_tx_desc *d = &e1000_tx_ring[model_tdh];
         unsigned len = d->lower & 0xffffu;
         unsigned i;
 
@@ -378,7 +378,7 @@ static unsigned model_rdh;
 static void model_deliver(const unsigned char *data, unsigned len, unsigned char status,
                           unsigned char errors)
 {
-    struct e1000_rx_desc *d = &e1000_rx_ring[model_rdh];
+    volatile struct e1000_rx_desc *d = &e1000_rx_ring[model_rdh];
     unsigned i;
 
     for (i = 0; i < len && i < E1000_RX_BUF_SIZE; i++) {

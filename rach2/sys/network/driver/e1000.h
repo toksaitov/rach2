@@ -199,6 +199,8 @@ struct e1000_tx_desc {
     uint32_t upper; /* status in 0..7, offload start in 8..15, VLAN in 16..31 */
 };
 
+/* The accessors take a volatile pointer because the rings are shared with
+   the card; see the declaration in e1000.c. */
 #define E1000_RXD_LEN(d)    ((d)->len_csum & 0xffffu)
 #define E1000_RXD_STATUS(d) ((uint8_t)((d)->sta_err & 0xffu))
 #define E1000_RXD_ERRORS(d) ((uint8_t)(((d)->sta_err >> 8) & 0xffu))
