@@ -28,7 +28,6 @@
 #include "../../pci.h"
 #include "../../serial.h"
 #include "../../udelay.h"
-#include "../../lib/kstring.h"
 #include "../../mm/paging.h"
 
 /* ------------------------------------------------------------------ */
@@ -479,9 +478,17 @@ static void e1000_tx_frame(const uint8_t *data, uint16_t len)
         }
     }
 
-    k_memcpy(e1000_tx_buf[idx], data, len);
+    for (i = 0; i < len; i++) {
+        e1000_tx_buf[idx][i] = data[i];
+    }
+    /* Pad to the Ethernet minimum with zeroes, so no stale buffer bytes reach
+     * the wire. Written as a loop, as rtl8168.c writes its own: this file is
+     * compiled natively by its host model as well as freestanding by the
+     * kernel, and it reaches for nothing outside itself. */
     if (total < 60) {
-        k_memset(e1000_tx_buf[idx] + total, 0, (size_t)(60 - total));
+        for (i = total; i < 60; i++) {
+            e1000_tx_buf[idx][i] = 0;
+        }
         total = 60;
     }
 
