@@ -316,6 +316,21 @@ void pci_enable_bus_master(pci_device_t *dev)
 }
 
 /**
+ * Clear the Bus Master bit, so the device can no longer drive DMA.
+ *
+ * The write that actually stops a device writing into memory. A driver that
+ * turns its receiver and transmitter off has told the device to stop; this
+ * takes away its ability to do it anyway, which is what matters when the
+ * memory it holds addresses for is about to belong to something else.
+ */
+void pci_disable_bus_master(pci_device_t *dev)
+{
+    uint16_t cmd = pci_read_config16(dev->bus, dev->device, dev->function, PCI_COMMAND);
+    cmd &= (uint16_t) ~PCI_CMD_BUS_MASTER;
+    pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, cmd);
+}
+
+/**
  * Set the Memory Space bit in the device's command register.
  *
  * Until this bit is set the device ignores accesses to its memory BARs.

@@ -190,6 +190,12 @@ void pci_enable_memory_space(pci_device_t *dev)
     pci_memory_enabled = 1;
 }
 
+void pci_disable_bus_master(pci_device_t *dev)
+{
+    (void)dev;
+    pci_master_enabled = 0;
+}
+
 void pci_enable_interrupts(pci_device_t *dev)
 {
     (void)dev;
@@ -439,6 +445,13 @@ static void model_reset(void)
     rx_calls = 0;
     rx_last_len = 0;
     e1000_up = 0;
+    /* The window pointer and the PCI record are part of a cold-power state
+       and are what `e1000_stop` reads to decide whether a register may be
+       written at all. A reset that left them set would be a driver that
+       remembers a card the machine no longer has. */
+    e1000_mmio = 0;
+    e1000_pci.vendor_id = 0;
+    e1000_pci.device_id = 0;
     e1000_rx_cur = 0;
     e1000_tx_head = 0;
     e1000_rx_packets = 0;
@@ -743,11 +756,58 @@ int main(void)
     CHECK(e1000_tx_packets == 0 && rx_calls == 0,
           "a driver that never came up neither sends nor receives");
 
+    /* ---- stop: the order, and what it leaves ---- */
+    model_reset();
+    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the stop checks");
+    {
+        unsigned mark = model_log_len;
+        int rctl, tctl, imc;
+
+        e1000_stop();
+        rctl = find_write(mark, E1000_RCTL);
+        tctl = find_write(mark, E1000_TCTL);
+        imc = find_write_bits(mark, E1000_IMC, 0xffffffffu);
+        CHECK(rctl >= 0 && model_log[rctl].value == 0, "the receiver is turned off");
+        CHECK(tctl >= 0 && model_log[tctl].value == 0, "the transmitter is turned off");
+        CHECK(imc >= 0, "every interrupt is masked");
+        CHECK(rctl < imc && tctl < imc,
+              "the card is told to stop while its interrupts are still its own");
+        CHECK(!pci_master_enabled,
+              "bus mastering is revoked, which is the write that ends DMA whatever "
+              "the card believes");
+        CHECK(!e1000_up, "a stopped driver no longer reports itself up");
+    }
+
+    /* Twice, because a shutdown path may reach it more than once. */
+    e1000_stop();
+    CHECK(!e1000_up, "stopping a stopped card changes nothing");
+
+    /* On a card that never finished starting, which is how the probe calls it
+       after a failed bring-up. */
+    model_reset();
+    model_stuck_reset = 1;
+    CHECK(e1000_init() == NETDEV_FAILED, "the bring-up fails after the window is mapped");
+    e1000_stop();
+    CHECK(!pci_master_enabled, "a card that failed to start is left unable to master the bus");
+
+    /* And on a machine that has no such card at all, where init wrote
+       nothing: stop must write nothing either. */
+    model_reset();
+    pci_present = 0;
+    CHECK(e1000_init() == NETDEV_ABSENT, "the card is absent");
+    {
+        unsigned mark = model_accesses;
+
+        e1000_stop();
+        CHECK(model_accesses == mark, "stopping an absent card costs no register access");
+    }
+
     /* ---- the driver's table ---- */
     CHECK(e1000_netdev.tx == e1000_tx_frame, "the table names the transmit path");
     CHECK(e1000_netdev.poll == 0, "the table leaves poll empty, because this card interrupts");
     CHECK(e1000_netdev.init == e1000_init, "the table names the bring-up");
     CHECK(e1000_netdev.error != 0, "the table names a diagnostic");
+    CHECK(e1000_netdev.stop == e1000_stop, "the table names the way to silence the card");
 
     CHECK(lock_depth == 0 && !lock_ever_negative,
           "every interrupt bracket the driver took, it released");

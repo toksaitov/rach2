@@ -1261,6 +1261,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $
 # the network device came up, which is what proves the pre-transmit buffer was
 # carried rather than dropped.
 NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole.pcap
+NETCONSOLE_STOP_PCAP = $(IMAGES_DIR)/netconsole-stop.pcap
 run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(NETCONSOLE_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
@@ -1273,6 +1274,22 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --expect "Initializing system components" \
 	    --expect "Network... OK" \
 	    --expect "netconsole: broadcast"
+# And the other end of a netconsole session: the machine stopping. The card is
+# silenced on the way out, so where that happens decides what a remote reader
+# is told. The contract is that the goodbye line reaches the wire and nothing
+# `power_stop` prints after it does, which only a capture can show: a line that
+# was never sent and a line that was sent and missed look the same from inside.
+	@rm -f $(NETCONSOLE_STOP_PCAP)
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=nc1,netdev=net0,file=$(NETCONSOLE_STOP_PCAP) \
+	    --append "rach2.netconsole" \
+	    --timeout 90 --ok "Stopping the system" \
+	    "expect=Type 'help'" "send=poweroff" wait=5
+	$(PCAPCHECK) netconsole $(NETCONSOLE_STOP_PCAP) --min-frames 4 \
+	    --expect "Stopping the system. Goodbye!" \
+	    --reject "powering off"
 
 # `tests/run e1000`: the network path on the other emulated card, and the probe
 # order that decides which card a machine with more than one of them gets.

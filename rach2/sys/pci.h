@@ -127,6 +127,9 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out);
 /** Set the Bus Master bit so the device can drive DMA. */
 void pci_enable_bus_master(pci_device_t *dev);
 
+/** Clear the Bus Master bit so the device can no longer drive DMA. */
+void pci_disable_bus_master(pci_device_t *dev);
+
 /** Set the Memory Space bit so the device responds to its memory BARs
  * (MMIO). */
 void pci_enable_memory_space(pci_device_t *dev);

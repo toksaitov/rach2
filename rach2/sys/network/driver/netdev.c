@@ -49,7 +49,16 @@ int netdev_probe(void)
         if (verdict == NETDEV_FAILED) {
             /* The card is in the machine and would not start. That reason is
              * the whole diagnostic, and probing stops here rather than let
-             * the next driver configure a machine whose card already failed. */
+             * the next driver configure a machine whose card already failed.
+             *
+             * Silence it on the way past. A bring-up can fail after it has
+             * enabled bus mastering, and nothing else will ever reach this
+             * driver again: it is not bound, so the shutdown path cannot stop
+             * it, and a card left able to write into its rings is the one
+             * case this operation exists for. */
+            if (drivers[i]->stop) {
+                drivers[i]->stop();
+            }
             if (drivers[i]->error) {
                 probe_error = drivers[i]->error();
             }
@@ -88,5 +97,12 @@ void netdev_print_info(void)
 {
     if (netdev && netdev->print_info) {
         netdev->print_info();
+    }
+}
+
+void netdev_stop(void)
+{
+    if (netdev && netdev->stop) {
+        netdev->stop();
     }
 }

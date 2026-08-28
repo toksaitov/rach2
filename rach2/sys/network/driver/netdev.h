@@ -54,12 +54,20 @@
  * `NETDEV_TX_OK` or `NETDEV_TX_DROPPED`. `poll` is NULL for an
  * interrupt-driven device. `print_info` writes the indented detail under the
  * boot line.
+ *
+ * `stop` silences the device: receiver and transmitter off, interrupts
+ * masked, and PCI bus mastering cleared, which is the write that ends DMA
+ * whatever the device thinks it is doing. It must be safe on a device that
+ * never finished starting, because the probe calls it on a driver whose
+ * `init` returned `NETDEV_FAILED`, and a driver can fail after enabling bus
+ * mastering. It must also be safe to call twice.
  */
 struct netdev_ops {
     const char *name;
     int (*init)(void);
     int (*tx)(const uint8_t *data, uint16_t len);
     void (*poll)(void);
+    void (*stop)(void);
     const char *(*error)(void);
     void (*print_info)(void);
 };
@@ -93,5 +101,16 @@ const char *netdev_error(void);
 
 /** The bound device's detail line, or nothing with none bound. */
 void netdev_print_info(void);
+
+/**
+ * Silence the bound device so it can no longer read or write memory.
+ *
+ * Called on the way out of a running machine, from `kernel_shutdown`, after
+ * the page cache is flushed and after the last line the log is asked to
+ * carry. Nothing about the device is usable afterwards, which is the point: a
+ * card left mastering the bus keeps writing into its rings while the machine
+ * resets around it. Does nothing when no device is bound.
+ */
+void netdev_stop(void);
 
 #endif /* _NETDEV_H_ */

@@ -14,8 +14,9 @@
  * a default route means), and `--port N [--dst-ip A.B.C.D]` requires a
  * broadcast UDP datagram for that port.
  *
- * `pcapcheck netconsole CAPTURE [--expect TEXT]... [--min-frames N]
- * [--print]` holds the kernel's netconsole frames (EtherType 0x88b5, see
+ * `pcapcheck netconsole CAPTURE [--expect TEXT]... [--reject TEXT]...
+ * [--min-frames N] [--print]`
+ * holds the kernel's netconsole frames (EtherType 0x88b5, see
  * rach2/sys/network/netconsole.c) to the contract their header states: one
  * nonzero boot id, one source address, sequence numbers from zero with no
  * gaps, a length matching the frame, a checksum summing to zero, and a
@@ -436,7 +437,8 @@ static int cmd_netconsole(int argc, char **argv)
 {
     const char *capture = NULL;
     const char *expect[32];
-    int n_expect = 0, show = 0;
+    const char *reject[32];
+    int n_expect = 0, n_reject = 0, show = 0;
     long min_frames = 1;
     struct pcap pc;
     const unsigned char *f;
@@ -458,6 +460,9 @@ static int cmd_netconsole(int argc, char **argv)
         if (strcmp(argv[i], "--expect") == 0 && i + 1 < argc) {
             if (n_expect < 32)
                 expect[n_expect++] = argv[++i];
+        } else if (strcmp(argv[i], "--reject") == 0 && i + 1 < argc) {
+            if (n_reject < 32)
+                reject[n_reject++] = argv[++i];
         } else if (strcmp(argv[i], "--min-frames") == 0 && i + 1 < argc)
             min_frames = atol(argv[++i]);
         else if (strcmp(argv[i], "--print") == 0)
@@ -472,7 +477,8 @@ static int cmd_netconsole(int argc, char **argv)
     }
     if (capture == NULL) {
         fprintf(stderr, "usage: pcapcheck netconsole CAPTURE "
-                "[--expect TEXT ...] [--min-frames N] [--print]\n");
+                "[--expect TEXT ...] [--reject TEXT ...] [--min-frames N] "
+                "[--print]\n");
         return 2;
     }
     pcap_open(&pc, capture, "netconsole_check");
@@ -565,6 +571,22 @@ static int cmd_netconsole(int argc, char **argv)
         }
         if (!found)
             nc_fail("the log does not contain '%s'", expect[i]);
+    }
+    /* Text that must NOT have reached the wire. A machine whose card is
+       stopped part way through shutting down sends the lines before that
+       point and none after it, and only a capture can tell the difference
+       between "not sent" and "sent and missed". */
+    for (i = 0; i < n_reject; i++) {
+        size_t want_len = strlen(reject[i]);
+        size_t j;
+
+        for (j = 0; want_len > 0 && j + want_len <= log_len; j++) {
+            if (memcmp(log + j, reject[i], want_len) == 0) {
+                nc_fail("the log contains '%s', which must not reach the wire",
+                        reject[i]);
+                break;
+            }
+        }
     }
     if (show)
         fwrite(log, 1, log_len, stdout);

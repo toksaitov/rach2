@@ -265,6 +265,12 @@ void pci_enable_memory_space(pci_device_t *dev)
     pci_memory_enabled = 1;
 }
 
+void pci_disable_bus_master(pci_device_t *dev)
+{
+    (void)dev;
+    pci_master_enabled = 0;
+}
+
 unsigned int map_mmio(unsigned int phys, unsigned int size)
 {
     (void)size;

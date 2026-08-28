@@ -4,7 +4,15 @@ This directory implements the kernel network stack. It supports one Ethernet int
 
 ## Device selection
 
-`init_network` allocates the TCP and socket pools before a device can receive a frame. `netdev_probe` then tries the RTL8139 driver followed by the RTL8168GU driver. It binds the first device that starts. A driver that finds its device but cannot start it stops the probe and supplies the boot diagnostic.
+`init_network` allocates the TCP and socket pools before a device can receive a frame. `netdev_probe` then tries the RTL8139, the e1000, and the RTL8168GU, in that order, and binds the first device that starts.
+
+The order has a reason at each position. The RTL8139 is first because it is what every existing suite boots against. The e1000 is second because it is what QEMU attaches when nobody asks for a card. The RTL8168GU is last because it is the one physical target, and a failure from it is the only diagnostic a machine with no serial port and no network has.
+
+A driver that finds its device but cannot start it stops the probe and supplies the boot diagnostic. It is also silenced on the way past: a bring-up can fail after it has enabled bus mastering, and an unbound driver is one nothing else will ever reach.
+
+Every driver publishes a `stop`, which turns its receiver and transmitter off, masks its interrupts, and clears PCI bus mastering, in that order. The last of those is what ends DMA whatever the device believes it is doing. `kernel_shutdown` calls it after the page cache is flushed and after the goodbye line, so a machine read over netconsole sees that line and nothing `power_stop` prints after it. `stop` must be safe on a device that never finished starting and safe to call twice.
+
+The storage drivers have the same exposure and no equivalent; that is not this milestone's work.
 
 The RTL8139 driver is for QEMU's PCI device `10ec:8139`. It uses BAR0 I/O ports, an 8 KiB receive ring with a contiguous overhang, four round-robin transmit buffers, and IRQ-driven receive. It accepts frames promiscuously, pads short transmit frames to 60 bytes, drops received frames larger than 1518 bytes, and drops transmit frames larger than 1536 bytes. Its transmit path assumes QEMU completes a descriptor before the four-slot rotation reuses it. It does not wait for ownership as a real RTL8139 driver would.
 

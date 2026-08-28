@@ -1228,5 +1228,37 @@ static void rtl8168_print_info(void)
                   r8168_tx_stalls);
 }
 
-const struct netdev_ops rtl8168_netdev = {"RTL8168GU",  rtl8168_init,  rtl8168_tx,
-                                          rtl8168_poll, rtl8168_error, rtl8168_print_info};
+/**
+ * Silence the chip: receive and transmit configuration cleared, the receive
+ * gate closed, interrupts masked, DMA revoked.
+ *
+ * The gate is closed as well as the enables cleared because that is the
+ * mechanism this chip has for stopping data at the receiver, and the
+ * bring-up already uses it for the same purpose. Bus mastering goes last, for
+ * the reason it goes last everywhere: it is the one that ends DMA whatever
+ * the chip believes it is doing, and the descriptor rings it holds addresses
+ * for are kernel memory.
+ *
+ * Safe on a chip that never finished starting, which is how the probe calls
+ * it after a failed bring-up. `rtl8168_init` enables bus mastering and can
+ * still fail afterwards in the PHY sequence or the hardware start, so this
+ * runs against a half-configured chip and must not assume any of it. The
+ * window pointer is what says a register may be written at all.
+ */
+static void rtl8168_stop(void)
+{
+    if (r8168_mmio != 0) {
+        io->w8(R8168_CHIPCMD, 0);
+        io->w32(R8168_RXCONFIG,
+                io->r32(R8168_RXCONFIG) & ~(uint32_t)R8168_RXCFG_ACCEPT_OK_MASK);
+        (void)r8168_enable_rxdvgate();
+        r8168_irq_mask_and_ack();
+    }
+    if (r8168_pci.vendor_id == 0x10EC && r8168_pci.device_id == 0x8168) {
+        pci_disable_bus_master(&r8168_pci);
+    }
+    r8168_up = 0;
+}
+
+const struct netdev_ops rtl8168_netdev = {"RTL8168GU",  rtl8168_init,  rtl8168_tx, rtl8168_poll,
+                                          rtl8168_stop, rtl8168_error, rtl8168_print_info};

@@ -639,6 +639,38 @@ static const char *e1000_error(void)
 }
 
 /**
+ * Silence the card: receiver and transmitter off, interrupts masked, DMA
+ * revoked.
+ *
+ * The order is what makes it safe rather than merely tidy. The enables go
+ * first, so the card stops fetching descriptors while it still has a window
+ * to be told through; the mask follows, so nothing raises a line whose
+ * handler is about to be irrelevant; bus mastering goes last, because it is
+ * the one that ends DMA whatever the card believes, and clearing it before
+ * the card was told to stop would leave a device still trying.
+ *
+ * Safe on a card that never finished starting. `e1000_init` enables bus
+ * mastering before it enables the receiver, and can still fail after that, so
+ * the probe calls this on a driver that reported `NETDEV_FAILED` and the
+ * window may hold a half-configured card. The PCI record is written only when
+ * a device was found, which `e1000_up` does not tell us; the window pointer
+ * does, because nothing is written to a card whose window never mapped.
+ */
+static void e1000_stop(void)
+{
+    if (e1000_mmio != 0) {
+        io->w32(E1000_RCTL, 0);
+        io->w32(E1000_TCTL, 0);
+        io->w32(E1000_IMC, 0xffffffffu);
+        (void)io->r32(E1000_ICR);
+    }
+    if (e1000_pci.vendor_id == E1000_VENDOR && e1000_pci.device_id == E1000_DEVICE) {
+        pci_disable_bus_master(&e1000_pci);
+    }
+    e1000_up = 0;
+}
+
+/**
  * The card's detail lines under the boot summary.
  *
  * `serial_printf` has no field width, so the station address is printed a
@@ -672,5 +704,5 @@ static void e1000_print_info(void)
 
 /* The card's entry in the driver table. `poll` is NULL: this one
  * interrupts. */
-const struct netdev_ops e1000_netdev = {"e1000",      e1000_init,  e1000_tx_frame,
-                                        0,            e1000_error, e1000_print_info};
+const struct netdev_ops e1000_netdev = {"e1000",     e1000_init,  e1000_tx_frame, 0,
+                                        e1000_stop,  e1000_error, e1000_print_info};

@@ -1684,6 +1684,10 @@ static int krffs_disk_mark_clean(void)
  * other one: reporting a clean unmount the data did not earn. What a failure
  * costs is the flag, which stays set, so the next boot invites `fsck.krffs`.
  *
+ * The network card is silenced last, after the flush and after the goodbye
+ * line, so that a machine being read over netconsole sees the shutdown it is
+ * watching for. See the note at the call.
+ *
  * A second concurrent caller cannot exist, which is the first thing a reader
  * of a function that never returns wants to know. Preemption is already off
  * inside a syscall, since the timer skips `schedule()` while `in_syscall` is
@@ -1705,7 +1709,21 @@ void kernel_shutdown(int how)
     } else {
         serial_printf("shutdown: no disk mount; nothing to unmount\n");
     }
+    /* Said on both, as every other line a person is meant to see is: k_puts
+     * reaches the screen and serial_printf reaches the serial line, and a
+     * machine being read over netconsole has no screen. This is the last
+     * thing such a machine says. */
     k_puts("Stopping the system. Goodbye!");
+    serial_printf("Stopping the system. Goodbye!\n");
+    /* Silence the network card, which until here has been free to write into
+     * its receive ring whenever a frame arrives. Nothing after this reaches
+     * the wire, and that is a contract rather than an oversight: netconsole
+     * sends the serial stream through this card, so the line above is the
+     * last message a remote log receives, and the three lines `power_stop`
+     * prints after it reach serial only. The alternative, stopping the card
+     * inside `power_stop`, would put subsystem knowledge in the one file
+     * whose whole claim is that it has none. */
+    netdev_stop();
     power_stop(how);
 }
 

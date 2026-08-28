@@ -175,9 +175,33 @@ static void rtl8139_print_info(void)
                   (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
 }
 
+/**
+ * Silence the card: receiver and transmitter off, interrupts masked, DMA
+ * revoked.
+ *
+ * The receive ring is the card's to write into for as long as it is enabled
+ * and mastering the bus, and that ring is kernel memory that outlives this
+ * driver's interest in it. The order is enables, then mask, then bus
+ * mastering: the card is told to stop while it still has a register interface
+ * to be told through, and the ability to write memory is taken away last.
+ *
+ * Safe on a card that never finished starting, which is how the probe calls
+ * it after a failed bring-up: `iobase` is zero until a card was found, and
+ * nothing here writes to port zero.
+ */
+static void rtl8139_stop(void)
+{
+    if (iobase != 0) {
+        outb(iobase + RTL_CHIPCMD, 0);
+        outw(iobase + RTL_IMR, 0);
+        outw(iobase + RTL_ISR, 0xFFFF);
+        pci_disable_bus_master(&rtl_pci);
+    }
+}
+
 /* The card's entry in the driver table. `poll` is NULL: this one interrupts. */
-const struct netdev_ops rtl8139_netdev = {
-    "RTL8139", rtl8139_init, rtl8139_tx, 0, rtl8139_error, rtl8139_print_info};
+const struct netdev_ops rtl8139_netdev = {"RTL8139",     rtl8139_init,  rtl8139_tx, 0,
+                                          rtl8139_stop,  rtl8139_error, rtl8139_print_info};
 
 /**
  * Copy a frame into the next TX descriptor and start its DMA.
