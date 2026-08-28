@@ -2,6 +2,7 @@
 
 # Start QEMU with GDB server (-s) paused at first instruction (-S).
 # Audio and networking devices are attached so their drivers can be debugged.
+# NIC=e1000 selects the other card; see qemu_devices.sh.
 #
 # Usage: ./debug.sh [audio_device]
 #   audio_device: sb16, hda, or speaker (default: speaker)

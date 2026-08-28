@@ -5,9 +5,10 @@
 # default speaker) before sourcing; this sets AUDIO_OPTS and NET_OPTS for the
 # qemu-system-i386 command line.
 #
-# Networking (RTL8139 on QEMU's SLIRP user network) is enabled by default:
+# Networking (on QEMU's SLIRP user network) is enabled by default:
 #   NET=off                     disable networking
 #   NET_HOSTFWD="hostfwd=..."   override the host port forwards
+#   NIC=rtl8139|e1000           choose the card (default rtl8139)
 
 AUDIO_DEVICE="${AUDIO_DEVICE:-speaker}"
 
@@ -51,13 +52,21 @@ case "$AUDIO_DEVICE" in
         ;;
 esac
 
-# Networking: RTL8139 NIC on the SLIRP user network, enabled by default.
-# Guest IP 10.0.2.15; the host is reachable from the guest at 10.0.2.2.
-# Host port 8080 is forwarded to the guest's httpd on port 80.
+# Networking on the SLIRP user network, enabled by default. Guest IP
+# 10.0.2.15; the host is reachable from the guest at 10.0.2.2. Host port 8080
+# is forwarded to the guest's httpd on port 80.
+#
+# The kernel drives two of QEMU's cards, so the card is a choice. The RTL8139
+# is the default because it is what every test boots against. The e1000 is the
+# 82540EM, which is what QEMU attaches when nothing asks for a card, so it is
+# what a plain qemu-system-i386 command line gets; a boot with NET=off, which
+# passes no network options at all, therefore still finds a card this kernel
+# can drive.
 NET="${NET:-on}"
+NIC="${NIC:-rtl8139}"
 NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::8080-:80}"
 if [ "$NET" = "off" ]; then
     NET_OPTS=""
 else
-    NET_OPTS="-netdev user,id=net0,$NET_HOSTFWD -device rtl8139,netdev=net0"
+    NET_OPTS="-netdev user,id=net0,$NET_HOSTFWD -device $NIC,netdev=net0"
 fi

@@ -12,11 +12,13 @@ A driver that finds its device but cannot start it stops the probe and supplies 
 
 Every driver publishes a `link`, which reports whether the link is up and at what speed and duplex, and a `stop`, which turns the receiver and transmitter off, masks the interrupts, and clears PCI bus mastering, in that order. The last of those is what ends DMA whatever the device believes it is doing. `kernel_shutdown` calls it after the page cache is flushed and after the goodbye line, so a machine read over netconsole sees that line and nothing `power_stop` prints after it. `stop` must be safe on a device that never finished starting and safe to call twice.
 
-The storage drivers have the same exposure and no equivalent; that is not this milestone's work.
+The storage drivers have no equivalent and are not quiesced at shutdown.
 
 `link` returns 1 with its answer filled or 0 when the card cannot report a link at all, and the two are not the same: a card saying the link is down is different from a card that cannot say. Each driver's boot detail line reports what it read.
 
 The RTL8139 driver is for QEMU's PCI device `10ec:8139`. It uses BAR0 I/O ports, an 8 KiB receive ring with a contiguous overhang, four round-robin transmit buffers, and IRQ-driven receive. It accepts frames promiscuously, pads short transmit frames to 60 bytes, drops received frames larger than 1518 bytes, and drops transmit frames larger than 1536 bytes. Its transmit path assumes QEMU completes a descriptor before the four-slot rotation reuses it. It does not wait for ownership as a real RTL8139 driver would.
+
+The e1000 driver is for PCI device `8086:100e`, the Intel 82540EM, which is what QEMU's `e1000` device is and what QEMU attaches when nothing asks for a card. It maps BAR0, reads its station address from `RAL0` and `RAH0` when the valid bit is set and from EEPROM words 0 through 2 otherwise, and uses 32-entry receive and transmit descriptor rings with 2048-byte receive buffers. `RCTL.SECRC` is set, so a descriptor's length is the frame's length. Receive is interrupt-driven and takes only whole single-descriptor frames whose error byte is clear and whose length lies between 14 bytes and the buffer size; anything else is dropped and counted. Transmit waits at most ten 100 microsecond intervals for a full ring, then drops the frame and counts a stall. Short frames are padded to 60 bytes in software as well as by `TCTL.PSP`. The port omits jumbo frames, every offload, MSI and MSI-X, multiple queues, VLAN handling, interrupt throttling, and runtime power management. The related `e1000e` device is the 82574L and is refused by device id.
 
 The RTL8168 driver accepts PCI device `10ec:8168` only when the `TxConfig` revision matches the RTL8168GU family. It uses MMIO and separate 64-entry receive and transmit descriptor rings. Receive buffers are 16,383 bytes, the programmed receive maximum is 16,384, and the largest transmit frame is 1514 bytes. Device interrupts remain masked; the 100 Hz timer polls receive and transmit completion. A full transmit ring waits at most ten 100 microsecond intervals before dropping the frame and counting a stall. Receive accepts only complete single-descriptor frames and removes the four-byte frame check sequence.
 
@@ -105,7 +107,7 @@ Each broadcast Ethernet frame uses EtherType `0x88b5`. Its payload starts with a
 
 ## Concurrency
 
-Protocol transmit buffers, driver descriptors, ARP state, and the socket and TCP pools are shared. IRQ handlers already run with interrupts disabled. Syscall paths use `net_lock` to save the interrupt flag and disable interrupts across shared-state operations. The RTL8139 and RTL8168 transmit paths also protect their descriptor handoff. The timer runs `netdev_poll`, `tcp_tick`, and `ip_loop_drain` in that order at 100 Hz.
+Protocol transmit buffers, driver descriptors, ARP state, and the socket and TCP pools are shared. IRQ handlers already run with interrupts disabled. Syscall paths use `net_lock` to save the interrupt flag and disable interrupts across shared-state operations. All three transmit paths also protect their descriptor handoff. The timer runs `netdev_poll`, `tcp_tick`, and `ip_loop_drain` in that order at 100 Hz.
 
 ## Verification
 

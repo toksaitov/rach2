@@ -59,7 +59,7 @@ RESCUE=1 ./run.sh               # kernel with no root, kernel debug shell
 ./run.sh test                   # init-less test image, kernel debug shell
 ```
 
-`run.sh` defaults to `-cpu max`, the PC speaker, an RTL8139 device, and QEMU's SLIRP network. Its second argument selects `speaker`, `sb16`, or `hda`. `CPU` overrides the CPU model, and `NET_HOSTFWD` replaces the default `8080` to guest port `80` forwarding rule. `NET=off` omits the script's explicit network options; QEMU 11.1.0 then supplies its default e1000 and SLIRP network, which this kernel does not support.
+`run.sh` defaults to `-cpu max`, the PC speaker, an RTL8139 device, and QEMU's SLIRP network. Its second argument selects `speaker`, `sb16`, or `hda`. `CPU` overrides the CPU model, `NIC` selects `rtl8139` or `e1000`, and `NET_HOSTFWD` replaces the default `8080` to guest port `80` forwarding rule. `NET=off` omits the script's explicit network options; QEMU then supplies its default e1000 and SLIRP network, which the kernel drives.
 
 For a persistent disk root:
 
@@ -138,7 +138,7 @@ The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` m
 | `sys/fs/` | KRFFS, descriptors, `/dev`, and `/proc`. |
 | `sys/ipc/`, `sys/io/`, `sys/tty/` | Pipes, readiness APIs, line discipline, job control, and pseudo-terminals. |
 | `sys/block/` | ATA, AHCI, MBR discovery, disk policy, and raw disk windows. |
-| `sys/network/` | RTL8139 and RTL8168 drivers, IPv4 protocols, sockets, and netconsole. |
+| `sys/network/` | RTL8139, e1000, and RTL8168 drivers, IPv4 protocols, sockets, and netconsole. |
 | `sys/display/`, `sys/audio/`, `sys/kbd*`, `sys/mouse*`, `sys/speaker*` | VGA, audio, and PS/2 input drivers. |
 | `sys/board*`, `sys/power*`, `sys/pci*`, `sys/rtc*`, `sys/serial*` | Platform discovery, shutdown, PCI, clock, and COM1. |
 | `sys/lib/` | Freestanding integer, string, character, signal, user-ABI, and random support. |
@@ -163,7 +163,7 @@ The kernel currently supports:
 * PS/2 keyboard and mouse input.
 * COM1 serial input and output.
 * Polled ATA PIO and AHCI disk access with MBR partition discovery.
-* RTL8139 and RTL8168 Ethernet devices.
+* RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
 It does not implement UEFI, Multiboot2, USB, SMP, threads, swap, dynamic linking, IPv6, VESA graphics, or a file system other than KRFFS. The ordinary process and descriptor limits are the fixed 16-slot tables described above. The direct physical-memory limit is 32 MiB.

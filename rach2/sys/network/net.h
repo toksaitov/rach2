@@ -7,13 +7,13 @@
  * Network subsystem entry point and static configuration.
  *
  * The stack defaults to QEMU's SLIRP user network; a real LAN is configured
- * through netconf.h (the RTL8168 on the Lenovo, the boot line's address). All
+ * through netconf.h (the RTL8168GU on the Lenovo, the boot line's address). All
  * addresses below are in host byte order; the protocol layers convert to
  * network byte order as they build packets.
  *
  * Concurrency invariant (transmit path and shared state) Every layer assembles
  * outgoing packets in a file-static buffer (eth_tx_frame, ip_tx_buf,
- * tcp_tx_buf, the ARP/ICMP/UDP buffers), the driver shares four TX descriptors,
+ * tcp_tx_buf, the ARP/ICMP/UDP buffers), each driver shares one transmit ring,
  * and the TCB pool, socket pool and ARP cache are all shared. None of it is
  * locked, so it is only safe when no two accesses interleave:
  *
@@ -29,7 +29,7 @@
  *     and disable interrupts for the duration. (IRQ-context callers already run
  *     with IF=0, so the same bracketing is a harmless no-op there.)
  *
- * The driver's descriptor handoff additionally guards itself (see
+ * Every driver's descriptor handoff additionally guards itself (see
  * rtl8139_tx). Do not transmit, allocate a TCB or socket, or touch the ARP
  * cache from syscall context without holding net_lock().
  */

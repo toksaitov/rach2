@@ -6,4 +6,4 @@ Read `Readme.md` first for the project overview, build and run instructions, and
 
 The most frequently broken agent rule is repeated here: never tell the user that a delegated job is running without reading its state in the same turn. Three reviews reported as "still running" in one session had already died. `CLAUDE.md` defines the review size limit.
 
-For a new machine, `dev-log/26-portable/arrival.md` lists what a clone does not provide: credentials, the machine's SSH host key, the Doom WAD, the build tree, and GitHub authentication. `Readme.md` has the fresh Mac bootstrap instructions.
+For a new machine, `dev-log/26-portable/arrival.md` lists what a clone does not provide: credentials, the machine's SSH host key, the Doom WAD, the build tree, and GitHub authentication. `tools/Readme.md` has the machine setup instructions for macOS and for Debian and Ubuntu.

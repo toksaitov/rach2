@@ -6,18 +6,26 @@
 /*
  * netdev: the one interface every network driver publishes.
  *
- * Until this existed the stack named its driver directly: `init_network` called
- * `rtl8139_init`, `ethernet_tx` called `rtl8139_tx`, and the status line held
- * the card's name as a literal. That works with one card and stops working
- * with two, and the machine this kernel is being carried to has a different
- * one. So a driver is now a vtable and the layers above hold a pointer to it.
+ * Until this existed the stack named its driver directly: `init_network`
+ * called `rtl8139_init`, `ethernet_tx` called `rtl8139_tx`, and the status
+ * line held the card's name as a literal. That works with one card and stops
+ * working with two. So a driver is a vtable and the layers above hold a
+ * pointer to it.
  *
- * The two drivers differ in how packets arrive, and the interface says so
- * instead of hiding it: the RTL8139 takes an interrupt and delivers from its
- * handler, so its `poll` is NULL; the RTL8168GU runs with its interrupts
- * masked and is driven from the timer tick, so its `poll` does the work. A
- * caller polls through `netdev_poll`, which does nothing for a device that
- * does not need it. The 100 Hz timer handler is what calls it.
+ * There are three drivers, and where they differ the interface says so rather
+ * than hiding it. They differ in how packets arrive: the RTL8139 and the
+ * e1000 take an interrupt and deliver from the handler, so their `poll` is
+ * NULL; the RTL8168GU runs with its interrupts masked and is driven from the
+ * 100 Hz timer tick, so its `poll` does the work. A caller polls through
+ * `netdev_poll`, which does nothing for a device that does not need it.
+ *
+ * Every member here has a consumer. `tx` reports a verdict because all three
+ * drivers drop frames under conditions they cannot avoid, and `/proc/net/dev`
+ * has a column for that. `stop` exists because a card that masters the bus
+ * keeps writing into its rings until something takes the ability away, and
+ * the machine has a shutdown path that must do it. `link` exists because
+ * `IFF_RUNNING` should mean the link is up, and every one of these cards can
+ * be asked. A member with no consumer does not belong here.
  */
 
 /* The machine has one network interface, and these are the two things a user

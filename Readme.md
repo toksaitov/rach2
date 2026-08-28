@@ -40,7 +40,7 @@ The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 pro
 
 [KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache. The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
 
-The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139 and RTL8168 devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
+The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
 Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
 

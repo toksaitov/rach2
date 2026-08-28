@@ -11,9 +11,10 @@
 #   ./run_from_iso.sh os-real        # the busybox/dropbear environment
 #   ./run_from_iso.sh os-simple sb16 # our shell + tools, Sound Blaster 16
 #
-# Networking (RTL8139 on QEMU's SLIRP user network) is enabled by default:
+# Networking (on QEMU's SLIRP user network) is enabled by default:
 #   NET=off ./run_from_iso.sh os-real                              # disable it
 #   NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run_from_iso.sh os-real  # forward SSH
+#   NIC=e1000 ./run_from_iso.sh os-real                 # the other card
 
 IMAGE="$1"
 AUDIO_DEVICE="${2:-speaker}"

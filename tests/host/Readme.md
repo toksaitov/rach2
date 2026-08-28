@@ -80,6 +80,8 @@ The suite contains 36 native test programs.
 * `netconsole_hosttest.c` checks frame fields and checksums, buffering, sequence numbers, ring overflow, complete draining, and reentrant transmit diagnostics.
 * `rcvwnd_hosttest.c` checks TCP receive-window update thresholds, silly-window avoidance, 16-bit clamping, and invalid geometry.
 * `rtl8168_hosttest.c` runs the RTL8168GU driver against a register model. It checks supported identity, initialization order and values, indirect register protocols, bounded handshakes, transmit and receive descriptors, ring wrap, and lost-doorbell recovery.
+* `e1000_hosttest.c` runs the Intel 82540EM driver against a register model. It checks the bring-up sequence and its order, the EEPROM read protocol and the station-address registers preferred over it, refusal of an unusable address, each of the four receive checks failing on its own, ring wrap, the transmit descriptor contract, the bounded stall, the stop sequence, the link report, and that a card that is not in the machine costs no register access.
+* `netdev_hosttest.c` runs the driver table against three models whose verdicts it sets. It checks the probe order, that an absent card is stepped over and a failed one stops the walk and is silenced, which reason is kept, and what the interface answers with nothing bound.
 
 ### Boot and host utilities
 

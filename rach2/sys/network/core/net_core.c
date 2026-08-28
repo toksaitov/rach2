@@ -1,9 +1,10 @@
 /*
  * net_core.c - Network stack bring-up and byte order helpers.
  *
- * init_network() brings each layer up from the bottom: RTL8139 driver,
- * Ethernet, ARP, IP/ICMP, UDP, TCP, sockets. Most layers keep their state in
- * zero-initialized statics and need no explicit init.
+ * init_network() brings each layer up from the bottom: the network device,
+ * Ethernet, ARP, IP/ICMP, UDP, TCP, sockets. Which device that is belongs to
+ * the driver table (driver/netdev.c), not to this layer. Most layers keep
+ * their state in zero-initialized statics and need no explicit init.
  */
 
 #include "../net.h"

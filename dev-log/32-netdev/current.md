@@ -19,4 +19,4 @@ netconsole reader was never told the machine was stopping; and the card really
 was transmitting through `power_stop`, which a capture now shows it no longer
 does.
 
-Next: commit item 3, then phase 5, the scripts and documents.
+Next: phase 5, the scripts and documents.

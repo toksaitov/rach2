@@ -14,9 +14,10 @@
 #   ./run.sh os-real sb16     # the busybox/dropbear environment, Sound Blaster
 #   ./run.sh test             # the automated test image (kernel debug shell)
 #
-# Networking (RTL8139 on QEMU's SLIRP user network) is enabled by default:
+# Networking (on QEMU's SLIRP user network) is enabled by default:
 #   NET=off ./run.sh os-real                              # disable it
 #   NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real  # forward SSH to :2222
+#   NIC=e1000 ./run.sh os-real                            # the other card
 #
 # Both os-simple and os-real ask who is there. `make` mints the demo passwords
 # when they are absent: krffs/rach2_demo_password is root's, and
