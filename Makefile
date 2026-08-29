@@ -460,6 +460,19 @@ test-image: $(TEST_IMAGE)
 os-simple-image: $(OS_SIMPLE_IMAGE)
 os-real-image: $(OS_REAL_IMAGE)
 
+# The demo credentials, as file targets. Both generators are idempotent and do
+# nothing when their output is there, which was enough while one thing ran at a
+# time: with `make -j` and a pool of suites, two of them mint a key at once and
+# race on the temporary file, which is `mv: authorized_keys.tmp: No such file
+# or directory`. Make builds each once, and everything that needs them says so.
+krffs/authorized_keys:
+	sh krffs/gen_demo_key.sh
+
+krffs/shadow:
+	sh krffs/gen_demo_password.sh
+
+DEMO_CREDS = krffs/authorized_keys krffs/shadow
+
 IMAGE_TOOLS = krffs/mkimage.sh $(SETIDCHECK) tools/inspect/setid.allow \
               build/krffs/mkfs.krffs build/krffs/stageimage.krffs
 
@@ -472,7 +485,7 @@ musl-programs: $(LIBC_STAMP)
 
 # The test image: the freestanding syscall probes plus the musl integration
 # programs. `make test` boots it and asserts every probe's success token.
-$(TEST_IMAGE): krffs/manifests/test.manifest $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
+$(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 10
 
 # The os-simple image: a small Unix built out of this project's own code. init
@@ -480,8 +493,7 @@ $(TEST_IMAGE): krffs/manifests/test.manifest $(IMAGE_TOOLS) | preflight krffs ra
 # gen_demo_password.sh mints them when krffs/shadow is absent and does nothing
 # when it is there, and it is the same file os-real stages, so one password
 # opens either image.
-$(OS_SIMPLE_IMAGE): krffs/manifests/os-simple.manifest $(IMAGE_TOOLS) | preflight krffs rach2 ish utils
-	sh krffs/gen_demo_password.sh
+$(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(IMAGE_TOOLS) | preflight krffs rach2 ish utils
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $@ 10
 
 # The os-real image: a real Unix-like environment (busybox shell + coreutils,
@@ -492,9 +504,7 @@ $(OS_SIMPLE_IMAGE): krffs/manifests/os-simple.manifest $(IMAGE_TOOLS) | prefligh
 # login keys and gen_demo_password.sh the account passwords and /etc/shadow,
 # each when absent; the check targets ensure the busybox/dropbear binaries are
 # real.
-$(OS_REAL_IMAGE): krffs/manifests/os-real.manifest $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
+$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 16
 
 # The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
@@ -533,9 +543,7 @@ rach2-recovery: krffs rach2
 # $(TEST_IMAGE) above already uses. As a phony target this rebuilt the image on
 # every invocation, so three suites that merely boot it each restaged it, and
 # two of them running at once restaged it under each other.
-$(METAL_IMAGE): krffs/manifests/rach2-metal.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
+$(METAL_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 4
 
 rach2-metal-image: $(METAL_IMAGE)
@@ -544,9 +552,7 @@ rach2-metal-image: $(METAL_IMAGE)
 # metal profile plus the two programs that repair a disk, and it mounts nothing
 # from the disk it is repairing, which is what lets it rewrite that disk's root.
 RECOVERY_IMAGE = $(IMAGES_DIR)/rach2-recovery.krffs
-$(RECOVERY_IMAGE): krffs/manifests/rach2-recovery.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
+$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
 
 rach2-recovery-image: $(RECOVERY_IMAGE)
@@ -556,8 +562,6 @@ rach2-recovery-image: $(RECOVERY_IMAGE)
 # partition is larger than the 32 MB resident page-cache cap on purpose, so it
 # can later prove an on-disk file system bigger than what fits in RAM at once.
 os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
 
 # A BIOS-bootable disk: GRUB in the MBR and a FAT boot partition holding the
@@ -565,8 +569,6 @@ os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-seti
 # (or QEMU with no -kernel/-initrd) BIOS -> MBR -> GRUB -> kernel -> KRFFS on
 # the disk. Assembled natively with mtools and the pinned GRUB artifacts.
 os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
 	sh tools/image/mkdisk_grub.sh
 
 # `make rach2-metal-grub-disk`: the disk that goes INTO the laptop, imaged over
@@ -579,8 +581,6 @@ os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check
 # Windows disk is physically out.
 METAL_GRUB_DISK = build/images/rach2-metal-grub.disk
 rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
 	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
 	RACH2_DISK_KRFFS_MB=500 \
 	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole" \
@@ -619,8 +619,6 @@ SEALED_GATEWAY ?= 192.168.0.1
 SEALED_IP = $(SEALED_ADDRESS)/$(SEALED_PREFIX)
 SEALED_DISK = build/images/rach2-sealed.disk
 rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(CFGCHECK)
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
 	@$(CFGCHECK) sealednet $(SEALED_ADDRESS) $(SEALED_PREFIX) \
 	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
 	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
@@ -652,13 +650,24 @@ run-default: test-image $(RUNTESTS)
 	$(RUNTESTS) $(NIC_DEV) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60
 
+# The demo credentials, as file targets. Both generators are idempotent and do
+# nothing when their output is there, which was enough while one thing ran at a
+# time: with `make -j` and a pool of suites, two of them mint a key at once and
+# race on the temporary file, which is `mv: authorized_keys.tmp: No such file
+# or directory`. Make builds each once, and everything that needs them says so.
+krffs/authorized_keys:
+
+krffs/shadow:
+
+DEMO_CREDS = krffs/authorized_keys krffs/shadow
+
 # Everything every suite needs, in one target, so `tests/run all` can build once
 # through one Make and then run the suites at the same time. Two suites each
 # invoking their own build would be two Makes against one `build/` tree; with
 # this built first, each suite's own target finds its work done and only boots
 # machines. The list is the union of what the `run-*` targets depend on, and
 # `tests/run` checks that it stays the union.
-prepare-all: $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOLDPORT) \
+prepare-all: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOLDPORT) \
              $(MKFIXTURE) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
              busybox check-busybox check-dropbearmulti check-libc \
              check-pdpmake check-setid check-tcc ish krffs musl-programs \
@@ -766,7 +775,7 @@ run-bootpart: rach2 tests krffs $(MKFIXTURE) $(HARNESS)
 # from inside the running core, because reading the pointer back would prove
 # only bytes at rest.
 GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
-run-grub: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-grub: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
 	sh tools/image/mkgrubcore.sh A $(IMAGES_DIR)/core-a.img
 	sh tools/image/mkgrubcore.sh B $(IMAGES_DIR)/core-b.img
@@ -774,8 +783,6 @@ run-grub: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
 	sed -e '/^#/d' -e '/^$$/d' krffs/manifests/os-real.manifest \
 	    | diff - $(IMAGES_DIR)/grub-test.manifest.stripped
-	sh krffs/gen_demo_password.sh
-	sh krffs/gen_demo_key.sh
 	RACH2_DISK_MANIFEST=krffs/manifests/grub-test.manifest \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(GRUB_TEST_DISK)
 	sh tests/system/suites/grub.sh $(GRUB_TEST_DISK) \
@@ -790,10 +797,8 @@ run-grub: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # stub with GRUB's parse error in the log; and the slot's extent read back to
 # prove bootctl overwrote bytes in place rather than rewriting a file.
 MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
-run-menu: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
+run-menu: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
 	@mkdir -p $(IMAGES_DIR)
-	sh krffs/gen_demo_password.sh
-	sh krffs/gen_demo_key.sh
 	sh tools/image/mkdisk_grub.sh build/rach2/kernel $(MENU_TEST_DISK)
 	sh tests/system/suites/menu.sh $(MENU_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
@@ -835,10 +840,8 @@ run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE) $(HARNES
 # inside. The interruption matrix's determinate states are then booted from
 # host-crafted environment blocks.
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
-run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
+run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
 	@mkdir -p $(IMAGES_DIR)
-	sh krffs/gen_demo_password.sh
-	sh krffs/gen_demo_key.sh
 	sh tools/image/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
 	sh tests/system/suites/install.sh $(INSTALL_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
@@ -852,7 +855,7 @@ run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid
 # from recovery), and a control run that injects nothing and asserts that no
 # fallback and no recovery appears anywhere. The disk is assembled natively; the
 # runs are QEMU and ssh.
-run-sealed: rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND)
+run-sealed: $(DEMO_CREDS) rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
 
@@ -873,10 +876,8 @@ run-sealed: rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND)
 # such flag, so there the everyday entries have no whole-disk node at all, and
 # the recovery build publishes its own whatever the command line says.
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-run-drill: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(HARNESS)
+run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(HARNESS)
 	@mkdir -p $(IMAGES_DIR)
-	sh krffs/gen_demo_password.sh
-	sh krffs/gen_demo_key.sh
 	RACH2_DISK_MANIFEST=krffs/manifests/os-simple.manifest \
 	RACH2_DISK_KRFFS_MB=16 \
 	RACH2_DISK_RECOVERY_MB=8 \
@@ -982,7 +983,7 @@ run-bootline: rach2 tests krffs
 # `traceroute` itself on the image that has it. The capture is read by the
 # capture checker for the two things a program inside the machine cannot see:
 # the hop limit each datagram left with, and the caller's own checksum.
-run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
+run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(RAW_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1068,7 +1069,7 @@ SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple$(NIC_TAG).log
 STATIC_PCAP = $(IMAGES_DIR)/static-simple$(NIC_TAG).pcap
 RSTATIC_PCAP = $(IMAGES_DIR)/static-real$(NIC_TAG).pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
-run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-image $(PCAPCHECK) $(HARNESS)
+run-dhcp: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DHCP_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1459,9 +1460,7 @@ run-metal: rach2-metal rach2-metal-image
 # alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 
-run-account: rach2 utils krffs busybox ish check-tcc check-pdpmake os-simple-image
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
+run-account: $(DEMO_CREDS) rach2 utils krffs busybox ish check-tcc check-pdpmake os-simple-image
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
 	sh tests/system/suites/account.sh build/rach2/kernel $(ACCOUNT_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" real
@@ -1477,9 +1476,7 @@ run-account: rach2 utils krffs busybox ish check-tcc check-pdpmake os-simple-ima
 # turning into a mysterious failure.
 TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
 
-run-tcc: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
+run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tests/system/suites/tcc.sh build/rach2/kernel $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
@@ -1490,9 +1487,8 @@ run-tcc: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid che
 # boots of one disk, since the reboot is half the point.
 MAKE_TEST_DISK = $(IMAGES_DIR)/make-test.disk
 
-run-make: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+run-make: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
-	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(MAKE_TEST_DISK) 64 48
 	sh tests/system/suites/make.sh build/rach2/kernel $(MAKE_TEST_DISK) \
 	    "`cat krffs/rach2_test_password`"
@@ -1504,9 +1500,8 @@ run-make: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid ch
 # whole run carries one deadline over the per-step ones.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
 
-run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS)
+run-selfbuild: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS)
 	@mkdir -p $(IMAGES_DIR)
-	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
 	sh tests/system/suites/selfbuild.sh build/rach2/kernel $(SELFBUILD_DISK) \
 	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
@@ -1518,9 +1513,7 @@ run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmak
 # Every wait is bounded, so a hang fails instead of sitting there.
 SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test$(NIC_TAG).disk
 
-run-ssh: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(PTYDRIVE)
-	sh krffs/gen_demo_key.sh
-	sh krffs/gen_demo_password.sh
+run-ssh: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(PTYDRIVE)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
 	sh tests/system/suites/ssh.sh build/rach2/kernel $(SSH_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`" \
@@ -1531,8 +1524,7 @@ run-ssh: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid che
 # token, and every image checked by offline fsck afterwards.
 SHUTDOWN_TEST_DISK = $(IMAGES_DIR)/shutdown-test.disk
 
-run-shutdown: rach2 utils krffs busybox
-	sh krffs/gen_demo_password.sh
+run-shutdown: $(DEMO_CREDS) rach2 utils krffs busybox
 	$(MKDISK) krffs/manifests/shutdown-test.manifest $(SHUTDOWN_TEST_DISK) 64 48
 	sh tests/system/suites/shutdown.sh build/rach2/kernel $(SHUTDOWN_TEST_DISK) \
 	    build/krffs/fsck.krffs "`cat krffs/rach2_demo_password`"
@@ -1544,7 +1536,7 @@ run-shutdown: rach2 utils krffs busybox
 LOGIN_TEST_STRICT = $(IMAGES_DIR)/login-test-strict.krffs
 LOGIN_TEST_SHELL  = $(IMAGES_DIR)/login-test-shell.krffs
 
-run-login: rach2 utils krffs busybox os-real-image
+run-login: $(DEMO_CREDS) rach2 utils krffs busybox os-real-image
 	$(MKIMAGE) krffs/manifests/login-test-strict.manifest $(LOGIN_TEST_STRICT) 10
 	$(MKIMAGE) krffs/manifests/login-test-shell.manifest $(LOGIN_TEST_SHELL) 10
 	sh tests/system/suites/login.sh build/rach2/kernel $(LOGIN_TEST_STRICT) \
@@ -1555,7 +1547,7 @@ run-login: rach2 utils krffs busybox os-real-image
 # per mount source, each of which must name its own; then `ps`, `df`, `free` and
 # `uptime` on the real image, each of which failed on a missing /proc file.
 PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
-run-procfiles: rach2 tests utils krffs busybox os-real-image test-image $(HOLDPORT)
+run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HOLDPORT)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
 	sh tests/system/suites/procfiles.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 16 \
@@ -1568,7 +1560,7 @@ run-procfiles: rach2 tests utils krffs busybox os-real-image test-image $(HOLDPO
 # run with no token, which has only the plain line to read.
 HARNESS_KERNEL = build/rach2-harness/kernel
 
-run-exitline: rach2 tests utils krffs busybox os-real-image test-image $(HARNESS)
+run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HARNESS)
 	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
 	sh tests/system/suites/exitline.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \

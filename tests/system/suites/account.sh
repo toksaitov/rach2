@@ -175,9 +175,45 @@ wait_count() {
     return 1
 }
 
+# Wait until the console has said nothing for $1 tenths of a second, giving up
+# after $2 seconds and going on anyway.
+#
+# Used for the wait before the first line and nowhere else. The delays between
+# fed lines cannot become this: the lines are typed AHEAD of the prompts that
+# read them, and the console's line discipline queues them until each prompt
+# arrives, which is what lets a password answer a prompt no shell printed. A
+# feeder that waited for quiet would be waiting for the prompt, and `passwd`
+# reads its prompts back to back with nothing printed between them, so the
+# queue would be empty when it asked and the passwords would land at the shell
+# instead. That failure is what this comment is made of.
+#
+# An empty log is not quiet, only unstarted, so stillness is counted only once
+# something has been printed.
+feed_settle() {
+    quiet=$1
+    cap=$2
+    last=-1
+    still=0
+    i=0
+    while [ "$i" -lt "$((cap * 10))" ]; do
+        size=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+        size=$(printf '%s' "$size" | tr -d ' ')
+        if [ "$size" != "0" ] && [ "$size" = "$last" ]; then
+            still=$((still + 1))
+            [ "$still" -ge "$quiet" ] && return 0
+        else
+            still=0
+            last=$size
+        fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    return 0
+}
+
 # Boot the working image and feed it the script on standard input, one line per
-# argument, spaced. The image logs in at the console first, since os-real's
-# console is behind a login.
+# argument. The image logs in at the console first, since os-real's console is
+# behind a login.
 #
 # A password answers a prompt no shell printed, so it is fed as a line of its
 # own like any other: the console's line discipline queues what is typed ahead
@@ -187,11 +223,16 @@ boot_lines() {
     rm -f "$LOG" "$FEED"
     mkfifo "$FEED"
     (
-        sleep 12
+        # The machine is ready when its console stops changing, not after a
+        # fixed twelve seconds. The cap is far above what a boot takes, so a
+        # slow host degrades to the old behaviour instead of racing.
+        feed_settle 12 90
         for line in "$@"; do
             printf '%s\n' "$line"
             sleep 6
         done
+        # Not a delay: this holds the console open while the checks read the
+        # log, and the machine is killed as soon as they are done.
         sleep 240
     ) > "$FEED" &
     FPID=$!

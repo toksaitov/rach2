@@ -161,3 +161,42 @@ it is right on a machine that is not this one. Here that computes to twenty and
 the run takes 499s, matching the sweep.
 
 The floor is `account` at 434s. Nothing but phase 6 can go below it.
+
+## Phase 6: the waits, and what they uncovered
+
+The whole run is 464s, repeated at 465s and 465s, 44 of 44. From the 4877s
+baseline that is a factor of ten and a half.
+
+Three changes, one of them not in the plan.
+
+* `account`, the critical path, went from 434s to 398s by waiting for the
+  console to go quiet before the first line instead of counting to twelve.
+  Only the first line: the per-line pacing cannot become a condition wait,
+  and finding out why cost a failed run. The suite types AHEAD of the prompts
+  that read it, and the line discipline queues what is typed until each prompt
+  arrives, which is what lets a password answer a prompt no shell has printed.
+  A feeder that waits for quiet is waiting for the prompt, and `passwd` reads
+  three prompts back to back with nothing printed between them, so the queue
+  was empty when it asked and all three passwords landed at the shell as
+  `-sh: testeepw1: not found`. That is written above `feed_settle` now.
+
+* The pool starts the longest suite first, from what each took last time,
+  recorded under `build/`. The three longest sat at registry positions 20, 32
+  and 40 of 44, so they began late and became a tail nothing overlapped: a
+  pool finishes when its longest member does. A suite with no record sorts
+  first, since an unknown cost is safest treated as a large one. This was
+  worth about 30 seconds and, more usefully, it made the next defect appear.
+
+* The credential generators raced, which is what the scheduling change
+  exposed. Thirty-two recipe lines called `gen_demo_key.sh` and
+  `gen_demo_password.sh`. Both are idempotent and do nothing when their output
+  is present, which is enough while one thing runs at a time; with `make -j`
+  and a pool, two mint a key at once and collide on the temporary file, which
+  reads as `mv: authorized_keys.tmp: No such file or directory`. They are file
+  targets now, built once, and the sixteen run targets that read a credential
+  depend on them. This was the cause of both failures seen under scheduling,
+  `selfbuild`'s included: it passed alone in 230s and failed in 52s under
+  load, which was a password file read while another suite was replacing it.
+
+Both defects predate this milestone. Serial execution and registry order hid
+them, as they hid the `crash` suite's leaked machines.

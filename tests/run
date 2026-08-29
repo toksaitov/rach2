@@ -38,6 +38,14 @@ default_workers() {
 }
 WORKERS="${RACH2_WORKERS:-$(default_workers)}"
 
+# What each suite took last time, one "seconds name" per line. The pool starts
+# the longest first, because a pool finishes when its longest-running member
+# does and a long suite started last is a tail nothing overlaps: the three
+# longest sit at positions 20, 32 and 40 of the registry, and in registry order
+# they ended the run rather than filling it. A suite with no record yet is
+# started first, since an unknown cost is safest treated as a large one.
+DURATIONS="$REPO/build/tests/system/durations"
+
 # A scratch directory for this run: the machine ledgers, and the shim that
 # writes them. Removed on every way out including an interruption.
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
@@ -126,6 +134,16 @@ check_machines() {
     return 1
 }
 
+# The given suites, longest first by what they took last time. A suite with no
+# record sorts first.
+by_cost() {
+    for suite in $1; do
+        cost=$(awk -v s="$suite" '$2 == s { c = $1 } END { print (c == "" ? 999999 : c) }' \
+               "$DURATIONS" 2>/dev/null || echo 999999)
+        echo "$cost $suite"
+    done | sort -rn | awk '{ print $2 }' | tr '\n' ' '
+}
+
 # How many of the given pids are still alive.
 count_running() {
     n=0
@@ -199,7 +217,10 @@ run_one() {
             echo "run: $1: FAIL in $(($(date +%s) - start))s" >&2
             return 1
         fi
-        echo "run: $1: PASS in $(($(date +%s) - start))s"
+        elapsed=$(($(date +%s) - start))
+        mkdir -p "$(dirname "$DURATIONS")" 2>/dev/null
+        echo "$elapsed $1" >> "$DURATIONS"
+        echo "run: $1: PASS in ${elapsed}s"
         return 0
     fi
     check_machines "$1" "$RACH2_QEMU_LEDGER" || true
@@ -244,6 +265,7 @@ case "${1-}" in
         for suite in $serial_suites; do
             run_one "$suite" || failed="$failed $suite"
         done
+        pooled_suites=$(by_cost "$pooled_suites")
         run_pool "$pooled_suites"
         failed="$failed$POOL_FAILED"
 
