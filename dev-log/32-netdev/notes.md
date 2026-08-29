@@ -129,3 +129,17 @@ first. Two named behaviour that had been implemented but never asserted, and
 one did not actually violate the order it claimed to. All three were the
 mutation's fault rather than the code's, and finding that is what the exercise
 is for.
+
+## Found while finishing, not this milestone's work
+
+* The `crash` suite leaks its machines. After a run that reports `PASS in 12s`
+  it leaves three orphaned `qemu-system-i386` processes with `crash-test.disk`,
+  parented to init and burning about one percent of a processor each,
+  indefinitely. Fifteen were alive on this machine when the milestone
+  finished: five runs' worth, the oldest nearly three days old and predating
+  this work. `crash.sh` has a cleanup trap and kills `$QPID`, but that holds
+  one pid while the suite starts a machine per phase, so the earlier ones are
+  forgotten. Nothing in milestone 32 touched that suite; the leak was found
+  because a check for stray processes at the end of the run turned up more
+  than it expected. The orphans were killed. Fixing the suite is separate
+  work and needs the owner's decision.
