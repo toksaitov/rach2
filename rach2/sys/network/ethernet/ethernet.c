@@ -43,6 +43,7 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
     uint16_t etype;
 
     if (len < ETH_HDR_SIZE) {
+        counts.rx_dropped++;
         return;
     }
     /* An interface an administrator took down receives nothing either. The
@@ -50,6 +51,7 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
        while it was down would be a machine whose sockets saw traffic it could
        not reply to, since transmission is gated below. */
     if (!netif_is_up()) {
+        counts.rx_dropped++;
         return;
     }
 

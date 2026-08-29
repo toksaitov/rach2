@@ -1686,7 +1686,8 @@ static int krffs_disk_mark_clean(void)
  *
  * The network card is silenced last, after the flush and after the goodbye
  * line, so that a machine being read over netconsole sees the shutdown it is
- * watching for. See the note at the call.
+ * watching for; silencing drains the card first, so that line is sent and not
+ * merely handed over. See the note at the call.
  *
  * A second concurrent caller cannot exist, which is the first thing a reader
  * of a function that never returns wants to know. Preemption is already off
@@ -1716,13 +1717,14 @@ void kernel_shutdown(int how)
     k_puts("Stopping the system. Goodbye!");
     serial_printf("Stopping the system. Goodbye!\n");
     /* Silence the network card, which until here has been free to write into
-     * its receive ring whenever a frame arrives. Nothing after this reaches
+     * its receive ring whenever a frame arrives. Nothing after this is put on
      * the wire, and that is a contract rather than an oversight: netconsole
      * sends the serial stream through this card, so the line above is the
-     * last message a remote log receives, and the three lines `power_stop`
-     * prints after it reach serial only. The alternative, stopping the card
-     * inside `power_stop`, would put subsystem knowledge in the one file
-     * whose whole claim is that it has none. */
+     * last message submitted to it, and the three lines `power_stop` prints
+     * after it reach serial only. `stop` drains what it was given before it
+     * silences the card, so a submitted frame is a sent one. The
+     * alternative, stopping the card inside `power_stop`, would put subsystem
+     * knowledge in the one file whose whole claim is that it has none. */
     netdev_stop();
     power_stop(how);
 }

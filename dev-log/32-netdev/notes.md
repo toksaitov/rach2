@@ -57,3 +57,75 @@ found them. Each entry says what and why.
   from the type rather than from a flag. Making the other two match would be a
   change to drivers this milestone was not asked to alter, and neither is
   wrong as built.
+
+## The independent reviews
+
+Two reviewers, six files each, stated as a fixed total before either started:
+the drivers and the interface, and the consumers and the proofs. Both returned
+findings; the most serious was found by both independently.
+
+* The transmit ring could publish itself as empty. All 32 descriptors were
+  initialised with `DD` set and all 32 could be submitted, so the 32nd wrapped
+  `TDT` onto a `TDH` the card had not moved. A card reads head equal to tail
+  as nothing to do, so 32 frames it had not sent would have become invisible
+  to it and the link would have stopped for good. The host test blessed it,
+  asserting `e1000_tx_packets <= E1000_RING_SIZE`. Now the driver counts
+  submissions and reclaims and keeps one descriptor unsubmitted, as
+  `rtl8168.c` does.
+
+* The reset used the memory window. Intel's specification update records that
+  on this part a memory write of `CTRL.RST` can draw a bridge padding write
+  that takes a master abort during the reset, which some bridges promote to a
+  machine check; the reference driver uses the I/O window on every member
+  before the 82545 revision 3. QEMU exposes the I/O BAR, so the correct path
+  is both taken and exercised on every boot.
+
+* The reset did not quiesce a card that arrived running. The comment claimed
+  no transfer could be in flight because this driver had not enabled bus
+  mastering, which is false: a global reset preserves PCI configuration, so a
+  card left running by firmware or a network boot arrives still fetching
+  descriptors.
+
+* `rtl8139_stop` skipped revoking DMA in the one case it existed for. `init`
+  enabled bus mastering before validating BAR0, and the revoke sat inside the
+  `iobase != 0` guard, so a card whose window was unusable kept the bus with
+  no way to be told to stop. BAR0 is now checked before the bus is given, and
+  the revoke is guarded on the PCI record instead.
+
+* `rtl8168_stop` ran GU-specific sequences on revisions the probe had
+  rejected, a hazard introduced by calling `stop` after `NETDEV_FAILED`.
+  `MISC` at 0xf0 is the receive gate on this member and something else on
+  older ones, so a rejected chip now gets only the interrupt mask and the bus.
+
+* An interrupt line above 15 was accepted. The vector is `32 + irq` in a byte,
+  so a large enough line wraps onto an exception vector and installs a network
+  handler there.
+
+* A split frame's tail was delivered as though it were a whole frame, and the
+  test that claimed otherwise supplied only one fragment.
+
+* `ethernet_rx` returned without counting for a short frame and for a
+  downed interface, so `/proc/net/dev` understated receive drops.
+
+* `FRCSPD` and `FRCDPLX` were left as the EEPROM set them while auto-speed
+  detection was requested, which is only permitted while both are clear.
+  `TCTL.RTLC` was unset, so a late collision on a half-duplex link was
+  reported as a success rather than retried.
+
+* The shutdown contract was not true as written. `NETDEV_TX_OK` means the
+  descriptor was posted, not that the frame left, so the goodbye line could be
+  discarded in the ring it had just been placed in. `stop` now drains what the
+  card accepted before silencing it, and the host model has a transmit engine
+  that finishes late so the drain has something to wait for.
+
+* Three test defects beyond those already named: the receive model wrote into
+  the ring without consulting `RDT`, so it would feed a driver that had
+  stopped returning descriptors; the stop-order check read a flag rather than
+  the write order, so revoking DMA first would have passed; and "no driver is
+  called at all" checked three of the eight things it could have.
+
+Three of the mutations written to prove the fixes failed to prove anything at
+first. Two named behaviour that had been implemented but never asserted, and
+one did not actually violate the order it claimed to. All three were the
+mutation's fault rather than the code's, and finding that is what the exercise
+is for.

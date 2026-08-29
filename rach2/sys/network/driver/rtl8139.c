@@ -76,12 +76,22 @@ int rtl8139_init(void)
         return NETDEV_ABSENT;
     }
 
-    /* Reject an unrouted interrupt line, not register a bogus vector. */
-    if (rtl_pci.irq == 0xFF) {
+    /* Reject a line this PIC-only kernel cannot deliver, not register a bogus
+     * vector: the vector is `32 + irq` in a byte, so a large enough line wraps
+     * onto an exception vector. */
+    if (rtl_pci.irq > 15) {
         rtl_err = "RTL8139 has no usable IRQ line";
         return NETDEV_FAILED;
     }
 
+    /* BAR0 must be an assigned I/O window. An unassigned BAR reads zero and
+     * a memory BAR is not a port number; using either as one would drive
+     * writes at unrelated legacy ports. Checked before bus mastering is
+     * enabled, so a card refused here was never given the bus. */
+    if ((rtl_pci.bar[0] & 1u) == 0 || pci_bar_address(rtl_pci.bar[0]) == 0) {
+        rtl_err = "RTL8139 has no I/O window";
+        return NETDEV_FAILED;
+    }
     pci_enable_bus_master(&rtl_pci);
     iobase = (uint16_t)pci_bar_address(rtl_pci.bar[0]);
 
@@ -188,6 +198,11 @@ static void rtl8139_print_info(void)
  * Silence the card: receiver and transmitter off, interrupts masked, DMA
  * revoked.
  *
+ * There is nothing to drain first, unlike the other two: this driver does not
+ * track transmit completion at all, because the machine it runs on finishes a
+ * descriptor as the length is written (see the note on rtl8139_tx). A frame
+ * handed to it has already gone.
+ *
  * The receive ring is the card's to write into for as long as it is enabled
  * and mastering the bus, and that ring is kernel memory that outlives this
  * driver's interest in it. The order is enables, then mask, then bus
@@ -195,8 +210,12 @@ static void rtl8139_print_info(void)
  * to be told through, and the ability to write memory is taken away last.
  *
  * Safe on a card that never finished starting, which is how the probe calls
- * it after a failed bring-up: `iobase` is zero until a card was found, and
- * nothing here writes to port zero.
+ * it after a failed bring-up. The register writes are guarded on `iobase`,
+ * which is zero until a usable port window was found, so nothing here writes
+ * to port zero. Bus mastering is revoked outside that guard, because `init`
+ * enables it before it has the window and a card whose window turned out to
+ * be unusable is exactly the one still able to write memory with no way to be
+ * told to stop.
  */
 static void rtl8139_stop(void)
 {
@@ -204,6 +223,8 @@ static void rtl8139_stop(void)
         outb(iobase + RTL_CHIPCMD, 0);
         outw(iobase + RTL_IMR, 0);
         outw(iobase + RTL_ISR, 0xFFFF);
+    }
+    if (rtl_pci.vendor_id == 0x10EC && rtl_pci.device_id == 0x8139) {
         pci_disable_bus_master(&rtl_pci);
     }
 }
@@ -398,6 +419,7 @@ static void rtl8139_irq(isr_params_t *params)
         if (isr_val & RTL_ISR_TER) {
             serial_printf("RTL8139: TX error interrupt\n");
         }
-        /* TOK needs no work here; TX completion is polled in rtl8139_tx. */
+        /* TOK needs no work here. This driver does not wait for a transmit
+         * to complete at all; see the note on rtl8139_tx. */
     }
 }

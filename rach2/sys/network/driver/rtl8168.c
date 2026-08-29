@@ -916,10 +916,12 @@ static uint32_t r8168_link_speed(void)
  *
  * The order is the reference's three stages: identify and quiesce, then the
  * rings and the PHY, then the start sequence. A failure at any point leaves
- * `r8168_err` naming it and the device unbound, so the probe of the next
- * driver in the table runs on a machine this one did not configure.
+ * `r8168_err` naming it and the device unbound. A chip that is simply not
+ * here reports `NETDEV_ABSENT` and the next driver is tried; a chip that is
+ * here and would not start reports `NETDEV_FAILED`, which stops the probe, so
+ * no later driver configures a machine whose card already failed.
  *
- * @return 1 when the chip is up, 0 when it is absent or refused.
+ * @return `NETDEV_UP`, `NETDEV_ABSENT`, or `NETDEV_FAILED`.
  */
 static int rtl8168_init(void)
 {
@@ -1264,17 +1266,39 @@ static void rtl8168_print_info(void)
  * Safe on a chip that never finished starting, which is how the probe calls
  * it after a failed bring-up. `rtl8168_init` enables bus mastering and can
  * still fail afterwards in the PHY sequence or the hardware start, so this
- * runs against a half-configured chip and must not assume any of it. The
- * window pointer is what says a register may be written at all.
+ * runs against a half-configured chip and must not assume any of it.
+ *
+ * What it may touch depends on how far the probe got, and the revision check
+ * is the line. One PCI device id covers the whole 8168 family, and the
+ * registers this driver uses are the GU's: `MISC` at 0xf0 is the receive gate
+ * on this member and something else on older ones. A chip whose revision this
+ * driver refused therefore gets only what is safe on any of them, the
+ * interrupt mask and the bus, and none of the sequence written for the GU.
  */
 static void rtl8168_stop(void)
 {
+    uint32_t i;
+
     if (r8168_mmio != 0) {
-        io->w8(R8168_CHIPCMD, 0);
-        io->w32(R8168_RXCONFIG,
-                io->r32(R8168_RXCONFIG) & ~(uint32_t)R8168_RXCFG_ACCEPT_OK_MASK);
-        (void)r8168_enable_rxdvgate();
+        /* What the chip already accepted, given a bounded moment to leave.
+         * The shutdown path submits its last log line and then stops the
+         * device; a transmit returns once the descriptor is handed over, not
+         * once the frame has gone. */
+        for (i = 0; i < R8168_DRAIN_STEPS; i++) {
+            r8168_tx_reclaim();
+            if (r8168_tx_tail == r8168_tx_head) {
+                break;
+            }
+            io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
+            io->udelay(R8168_DRAIN_USEC);
+        }
         r8168_irq_mask_and_ack();
+        if ((r8168_xid & R8168_XID_FAMILY_MASK) == R8168_XID_8168GU) {
+            io->w8(R8168_CHIPCMD, 0);
+            io->w32(R8168_RXCONFIG,
+                    io->r32(R8168_RXCONFIG) & ~(uint32_t)R8168_RXCFG_ACCEPT_OK_MASK);
+            (void)r8168_enable_rxdvgate();
+        }
     }
     if (r8168_pci.vendor_id == 0x10EC && r8168_pci.device_id == 0x8168) {
         pci_disable_bus_master(&r8168_pci);

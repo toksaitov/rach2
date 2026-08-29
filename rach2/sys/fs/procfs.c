@@ -651,13 +651,13 @@ uint32_t procfs_ino_pid(int pid)
  * lists it only when a device was found: an interface that is not there is not
  * one a program should be told about.
  *
- * Six of the sixteen are kept: bytes and packets each way, receive errors and
- * receive drops, and transmit drops. The other ten are zero because this
- * machine has nothing to put in them. The drop and error columns were zero
- * too until the driver interface gained a transmit verdict, which was wrong
- * whenever a driver refused a frame, and every driver here refuses one under
- * some condition. Collisions and carrier remain zero: no driver reports
- * either.
+ * Seven of the sixteen are kept: bytes and packets each way, receive errors,
+ * receive drops, and transmit drops. The other nine are zero because this
+ * machine has nothing to put in them. The three refusal columns were zero too
+ * until the drivers could report a refusal: a transmit verdict for the last
+ * of them, and two receive-note calls for the first two. Every driver here
+ * refuses a frame under some condition, so zero was never the truth.
+ * Collisions and carrier remain zero: no driver reports either.
  */
 static int procfs_gen_netdev(struct procfs_text *t)
 {

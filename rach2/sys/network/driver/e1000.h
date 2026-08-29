@@ -30,6 +30,17 @@
 #define E1000_VENDOR 0x8086
 #define E1000_DEVICE 0x100e
 
+/* The card decodes its registers through a memory window and an I/O window,
+   and this driver needs both. The reset is issued through the I/O window
+   because Intel's specification update records that on this part a memory
+   write of `CTRL.RST` can be followed by a bridge padding write that takes a
+   master abort while the controller is resetting, which some bridges promote
+   to a fatal machine check. The reference driver uses the I/O path on every
+   member before the 82545 revision 3 for that reason. The I/O window is a
+   pair: an address register at offset 0 and a data register at offset 4. */
+#define E1000_IO_ADDR 0
+#define E1000_IO_DATA 4
+
 /* The register window the 82540EM declares in BAR0. The driver reads and
    writes nothing above RAH0; the whole window is mapped anyway, because that
    is what the card decodes and a partial mapping would fault on a read this
@@ -61,12 +72,17 @@
 #define E1000_RAL0   0x5400 /* station address, low 32 bits */
 #define E1000_RAH0   0x5404 /* station address, high 16 bits and flags */
 
-/* Device control bits. */
-#define E1000_CTRL_FD   0x00000001u /* full duplex */
-#define E1000_CTRL_ASDE 0x00000020u /* auto speed detection */
-#define E1000_CTRL_SLU  0x00000040u /* set link up */
-#define E1000_CTRL_RST  0x04000000u /* device reset, self-clearing */
-#define E1000_CTRL_VME  0x40000000u /* VLAN mode */
+/* Device control bits. FRCSPD and FRCDPLX force the speed and duplex the MAC
+   uses; auto-speed detection is only permitted while both are clear, and
+   their power-on values come from the EEPROM, so a driver that asks for
+   detection must clear them rather than assume. */
+#define E1000_CTRL_FD      0x00000001u /* full duplex */
+#define E1000_CTRL_ASDE    0x00000020u /* auto speed detection */
+#define E1000_CTRL_SLU     0x00000040u /* set link up */
+#define E1000_CTRL_FRCSPD  0x00000800u /* force speed */
+#define E1000_CTRL_FRCDPLX 0x00001000u /* force duplex */
+#define E1000_CTRL_RST     0x04000000u /* device reset, self-clearing */
+#define E1000_CTRL_VME     0x40000000u /* VLAN mode */
 #define E1000_CTRL_PHY_RST 0x80000000u
 
 /* Device status bits. The speed field is two bits: 0 is 10, 1 is 100, and
@@ -76,10 +92,9 @@
 #define E1000_STATUS_SPEED_MASK  0x000000c0u
 #define E1000_STATUS_SPEED_SHIFT 6
 
-/* EEPROM read protocol, in the 82540EM's field layout. The 82544 and later
-   parts moved the address field and the done bit, so a chip that answers a
-   read with DONE never set is refused rather than read with the wrong
-   layout. */
+/* EEPROM read protocol, in the 82540EM's field layout. The 82541 and 82547
+   moved the address field and the done bit, so a chip that answers a read
+   with DONE never set is refused rather than read with the wrong layout. */
 #define E1000_EERD_START      0x00000001u
 #define E1000_EERD_DONE       0x00000010u
 #define E1000_EERD_ADDR_SHIFT 8
@@ -110,6 +125,10 @@
    and a runt on the wire is the failure that would follow. */
 #define E1000_TCTL_EN         0x00000002u
 #define E1000_TCTL_PSP        0x00000008u /* pad short packets */
+/* Retransmit on late collision. With this clear a late collision on a
+   half-duplex link is reported as a successful transmission rather than
+   retried, which is a frame lost with nothing to show for it. */
+#define E1000_TCTL_RTLC       0x01000000u
 #define E1000_TCTL_CT_SHIFT   4           /* collision threshold */
 #define E1000_TCTL_COLD_SHIFT 12          /* collision distance */
 #define E1000_TCTL_CT_DEFAULT 0x0fu
@@ -168,11 +187,23 @@
 #define E1000_TX_WAIT_STEPS 10u
 #define E1000_TX_WAIT_USEC  100u
 
+/* How long `stop` waits for what the card already accepted to reach the wire
+   before it silences the card. The shutdown path submits a last log line and
+   then stops the device, so without this the message a remote reader is
+   waiting for would be discarded in the ring it was just placed in. */
+#define E1000_DRAIN_STEPS 20u
+#define E1000_DRAIN_USEC  500u
+
 /* How long the reset handshake is given to clear CTRL.RST. The manual asks
    for a wait of microseconds; this is far longer, because a budget that is
    too short is a bring-up that fails on one machine only. */
 #define E1000_RESET_STEPS 100u
 #define E1000_RESET_USEC  100u
+
+/* How long a card that arrived running is given to finish a transfer already
+   begun, before it is reset out from under itself. The reference driver waits
+   10 ms here. */
+#define E1000_QUIESCE_USEC 10000u
 
 /**
  * One legacy receive descriptor: 16 bytes, little-endian, as the card reads

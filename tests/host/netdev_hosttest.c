@@ -161,8 +161,13 @@ static const char *third_error(void)
     return m_third.reason;
 }
 
+/* Recorded, so a check that says no driver was called can mean it. */
+static int info_calls;
+
 static void nothing(void)
-{}
+{
+    info_calls++;
+}
 
 /* The names netdev.c links against. The real ones live in the three driver
    files; here they are these models, which is what puts the walk under test
@@ -200,6 +205,7 @@ static void reset(int a, int b, int c)
     m_first.reason = "the first card would not start";
     m_second.reason = "the second card would not start";
     m_third.reason = "the third card would not start";
+    info_calls = 0;
     trace_len = 0;
     trace[0] = '\0';
 }
@@ -271,7 +277,8 @@ int main(void)
     netdev_poll();
     netdev_stop();
     netdev_print_info();
-    CHECK(m_first.txs == 0 && m_second.polls == 0 && m_first.stops == 0,
+    CHECK(m_first.txs == 0 && m_second.txs == 0 && m_third.txs == 0 && m_second.polls == 0 &&
+              m_first.stops == 0 && m_second.stops == 0 && m_third.stops == 0 && info_calls == 0,
           "and no driver is called at all");
 
     /* ---- and with one bound ---- */

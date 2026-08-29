@@ -139,6 +139,11 @@
 #define R8168_TX_WAIT_STEPS 10u
 #define R8168_TX_WAIT_USEC  100u
 
+/* How long `stop` waits for what the chip already accepted to reach the wire
+   before it silences the chip. */
+#define R8168_DRAIN_STEPS 20u
+#define R8168_DRAIN_USEC  500u
+
 /** One C+ descriptor: 16 bytes, little-endian, as the chip reads them. */
 struct r8168_desc {
     uint32_t opts1;
