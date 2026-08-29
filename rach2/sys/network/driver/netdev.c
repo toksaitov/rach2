@@ -114,3 +114,16 @@ int netdev_link(struct netdev_link *out)
     }
     return 0;
 }
+
+int netdev_running(void)
+{
+    struct netdev_link link;
+
+    if (!netdev) {
+        return 0;
+    }
+    if (netdev_link(&link)) {
+        return link.up ? 1 : 0;
+    }
+    return 1;
+}

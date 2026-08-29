@@ -148,4 +148,17 @@ void netdev_stop(void);
  */
 int netdev_link(struct netdev_link *out);
 
+/**
+ * Whether the interface is running, in the sense `IFF_RUNNING` reports.
+ *
+ * The link is the answer where a card can give one. Where it cannot, a bound
+ * device is the most that can honestly be said, and that is what this
+ * returns, which is what the flag meant before any card could be asked. The
+ * rule lives here rather than at the ioctl because "cannot say" is this
+ * interface's own distinction.
+ *
+ * @return 1 when the interface should be reported running, 0 otherwise.
+ */
+int netdev_running(void);
+
 #endif /* _NETDEV_H_ */

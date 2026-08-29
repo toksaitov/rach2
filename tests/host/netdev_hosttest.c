@@ -324,6 +324,36 @@ int main(void)
         CHECK(link.up == 42, "and leaves the caller's answer untouched");
     }
 
+    /* ---- what IFF_RUNNING is derived from ---- */
+    reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
+    CHECK(netdev_probe() == 1, "a card is bound before the running checks");
+    m_first.state.up = 1;
+    CHECK(netdev_running() == 1, "a card reporting a live link is running");
+    m_first.state.up = 0;
+    CHECK(netdev_running() == 0,
+          "a card reporting a dead link is not running, which is the whole point: "
+          "a bound card and a working one are different things");
+
+    /* The card that cannot say. Nothing in this tree returns 0 from `link`,
+       so this branch exists for a driver that has no way to read one, and the
+       third model is that driver. Without a check here it would be reachable
+       through the interface and proved by nothing. */
+    reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_UP);
+    CHECK(netdev_probe() == 1, "the driver with no link report is bound");
+    CHECK(netdev_running() == 1,
+          "a card that cannot report a link is reported running, which is the most "
+          "that can be said of it and what the flag meant before");
+
+    /* And a card that could report one but declines to. */
+    reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
+    CHECK(netdev_probe() == 1, "a card is bound");
+    m_first.can_say = 0;
+    CHECK(netdev_running() == 1, "a card that declines to answer is treated the same way");
+
+    reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_ABSENT);
+    CHECK(netdev_probe() == 0, "nothing is bound");
+    CHECK(netdev_running() == 0, "a machine with no card is not running");
+
     /* A driver whose transmit refuses: the refusal reaches the caller
        unchanged, which is what lets the interface count it. */
     reset(NETDEV_ABSENT, NETDEV_UP, NETDEV_UP);
