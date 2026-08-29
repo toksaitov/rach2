@@ -1,18 +1,15 @@
 # Milestone 33: resume state
 
-Phase: 3, the pool. Complete.
+Phase: 5, the e1000 members. Complete, and taken before phase 4 for the reason
+in `notes.md`.
 
-Done: `prepare-all` builds the union of every suite's prerequisites in one
-Make; `tests/run all` runs one such build and then pools the suites eight at a
-time, with `style` and `host` outside; per-suite leak attribution survives
-through a `PATH` shim that records each machine against the suite that started
-it; `tests/run NAME NAME...` pools a named list.
+Done: the card picks the forwarded ports and tags every file a run writes, so
+the second-card runs are ordinary neighbours of their twins; `run-e1000` runs
+its nine members together at -j4.
 
-Evidence: 4877s to 1205s, 44 of 44, repeated at 1203s, 1202s, 1205s with no
-stray machines. Attribution proved by restoring the `crash` defect: the run
-names `crash` and blames no neighbour.
+Evidence: `e1000` 917s to 336s; the whole run 1205s to 727s, 44 of 44, no
+stray machines; both cards' network suites concurrently, 10 of 10.
 
-Next: phase 4, the worker count. Measure the finished pool at 4, 8, 12 and 16
-workers, three runs each, and set the default to what was measured. Note that
-`e1000` at 917s dominates a 1205s run, so the sweep will show little until
-phase 5 breaks that block up; consider doing phase 5 first and then sweeping.
+Next: phase 4, the worker count. Measure 4, 8, 12 and 16 workers on the
+finished pool, three runs each, and set the default to what was measured.
+`account` at 434s is the critical path, so the sweep is bounded by it.

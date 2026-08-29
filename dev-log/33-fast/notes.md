@@ -117,3 +117,22 @@ Two things worth keeping:
 `tests/run` also takes several names, which is how that proof was run cheaply
 and is worth having on its own: the suites a change touches, at the cost of the
 slowest rather than the sum.
+
+## Phase 5, taken before phase 4
+
+The plan puts the worker sweep first, but with `e1000` at 917s of a 1205s run
+the sweep would have measured that one suite rather than the workers. The
+plan's own rule is to measure rather than estimate, so the order was swapped.
+
+`e1000` alone: 917s to 336s. The whole run: 1205s to 727s, 44 of 44. The
+critical path is now `account` at 434s.
+
+Coverage is unchanged. All nine members still run on the second card; they run
+together instead of one after another. What stopped them being schedulable was
+that each wrote the same files and forwarded the same ports as its first-card
+twin, so the card now picks the ports and tags every file a run writes. Both
+cards' full network suites were then run at once: 10 of 10, in 340s, which is
+`e1000`'s own 339s, so the first-card suites cost nothing beside it.
+
+The inner job count is fixed at 4 rather than inherited. This suite is already
+one worker of an outer pool, and an unbounded `-j` would multiply the two.

@@ -80,14 +80,31 @@ MUSL_CRYPT_SRC = $(LIBC_TARBALL:.tar.gz=)/src/crypt/crypt_sha512.c
 # The host ports the suites forward. They are named here because two suites
 # sharing one cannot both run, and a number buried in a recipe is a collision
 # nobody sees until the two are scheduled together.
-DHCP_SSH_PORT    = 2224
+#
+# The network suites run twice, once per card, and the two runs are ordinary
+# neighbours rather than one waiting for the other. So the card picks the
+# ports and tags the files each run writes: without that, the second-card ping
+# and the first-card ping forward the same port and capture into the same
+# file, and neither can say which of them wrote what.
 DISKDIAG_PORT    = 2225
 METAL_PORT       = 2223
 SEALED_PORT      = 2297
 DRILL_PORT       = 2298
 PROCFILES_PORT   = 2299
+
+ifeq ($(NIC),e1000)
+NIC_TAG          = -e1000
+SSH_TEST_PORT   ?= 2322
+DHCP_SSH_PORT    = 2324
+DGRAM_PORT       = 15898
+NETIF_PORT       = 15899
+else
+NIC_TAG          =
+SSH_TEST_PORT   ?= 2222
+DHCP_SSH_PORT    = 2224
 DGRAM_PORT       = 15998
 NETIF_PORT       = 15999
+endif
 
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
@@ -922,7 +939,7 @@ run-cred-persist: rach2 musl-programs krffs $(HARNESS)
 # `tests/run disk` on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 # The capture `tests/run raw` reads the hop limits and the checksum out of.
-RAW_PCAP = $(IMAGES_DIR)/raw.pcap
+RAW_PCAP = $(IMAGES_DIR)/raw$(NIC_TAG).pcap
 # Its own disk image, so `make -j` cannot have this target and `test-disk`
 # rewriting one file while the other boots it.
 BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
@@ -1024,7 +1041,7 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 # broadcast, which is how a DHCP client renews a lease and how it asks for one.
 # Its own target because it broadcasts, and a probe in the suite must not put a
 # frame on the wire that the other probes did not ask for.
-DGRAM_PCAP = $(IMAGES_DIR)/dgram.pcap
+DGRAM_PCAP = $(IMAGES_DIR)/dgram$(NIC_TAG).pcap
 run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DGRAM_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
@@ -1043,13 +1060,13 @@ run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # a network of its own so the address that arrives cannot be the one the machine
 # would have had anyway.
 DHCP_NET = user,id=net0,net=192.168.90.0/24,host=192.168.90.2,dhcpstart=192.168.90.20,dns=192.168.90.3
-DHCP_PCAP = $(IMAGES_DIR)/dhcp.pcap
-DHCP_DISK = $(IMAGES_DIR)/dhcp-test.disk
-METAL_PCAP = $(IMAGES_DIR)/dhcp-metal.pcap
-SIMPLE_PCAP = $(IMAGES_DIR)/dhcp-simple.pcap
-SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple.log
-STATIC_PCAP = $(IMAGES_DIR)/static-simple.pcap
-RSTATIC_PCAP = $(IMAGES_DIR)/static-real.pcap
+DHCP_PCAP = $(IMAGES_DIR)/dhcp$(NIC_TAG).pcap
+DHCP_DISK = $(IMAGES_DIR)/dhcp-test$(NIC_TAG).disk
+METAL_PCAP = $(IMAGES_DIR)/dhcp-metal$(NIC_TAG).pcap
+SIMPLE_PCAP = $(IMAGES_DIR)/dhcp-simple$(NIC_TAG).pcap
+SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple$(NIC_TAG).log
+STATIC_PCAP = $(IMAGES_DIR)/static-simple$(NIC_TAG).pcap
+RSTATIC_PCAP = $(IMAGES_DIR)/static-real$(NIC_TAG).pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
 run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DHCP_PCAP)
@@ -1059,7 +1076,7 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-im
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=dh0,netdev=net0,file=$(DHCP_PCAP) \
 	    --append "rach2.ip=none" \
-	    --timeout 240 --steptmo 60 --ok "DHCPOK" --log $(IMAGES_DIR)/dhcp.log \
+	    --timeout 240 --steptmo 60 --ok "DHCPOK" --log $(IMAGES_DIR)/dhcp$(NIC_TAG).log \
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " "send=ifconfig eth0 | grep -q 'addr:0.0.0.0' && echo UNSET\"\"OK" \
@@ -1299,8 +1316,8 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-im
 # holds the frames to the header's contract and requires a line printed BEFORE
 # the network device came up, which is what proves the pre-transmit buffer was
 # carried rather than dropped.
-NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole.pcap
-NETCONSOLE_STOP_PCAP = $(IMAGES_DIR)/netconsole-stop.pcap
+NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole$(NIC_TAG).pcap
+NETCONSOLE_STOP_PCAP = $(IMAGES_DIR)/netconsole-stop$(NIC_TAG).pcap
 run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(NETCONSOLE_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
@@ -1341,7 +1358,13 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # other suites are about disks, accounts, and building, and running them again
 # on a second card would cost minutes and show nothing.
 run-e1000: rach2 tests krffs test-image $(HARNESS)
-	$(MAKE) --no-print-directory NIC=e1000 run-default run-ping run-packet \
+# The nine members run together rather than one after another. Each writes
+# files tagged with the card and forwards ports the first-card runs do not, so
+# they neither collide with each other nor with their twins, and this suite
+# stops being the one thing the whole run waits for. The job count is fixed
+# rather than inherited: this is already one worker of an outer pool, and an
+# unbounded -j here would multiply the two.
+	$(MAKE) --no-print-directory -j4 NIC=e1000 run-default run-ping run-packet \
 	    run-netif run-dgram run-netconsole run-raw run-dhcp run-ssh
 # The probe order, which only a machine holding more than one card can show.
 # The table tries the RTL8139 first, so a machine with both must bind that one;
@@ -1493,8 +1516,7 @@ run-selfbuild: rach2 utils krffs test-image check-busybox check-tcc check-pdpmak
 # the way the Readme's recipe does, then logs in twice: root by key, and the
 # unprivileged account by password, which is the half that reaches /etc/shadow.
 # Every wait is bounded, so a hang fails instead of sitting there.
-SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test.disk
-SSH_TEST_PORT ?= 2222
+SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test$(NIC_TAG).disk
 
 run-ssh: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(PTYDRIVE)
 	sh krffs/gen_demo_key.sh
