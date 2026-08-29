@@ -45,11 +45,11 @@ if [ ! -x "$ASCIISCAN" ] || [ "$REPO/tools/verify/asciiscan.c" -nt "$ASCIISCAN" 
     mkdir -p "${ASCIISCAN%/*}"
     cc -O2 -o "$ASCIISCAN" "$REPO/tools/verify/asciiscan.c" || exit 1
 fi
+# The probe runner is a test tool, and tests/system/suites.mk owns how the test
+# tools are built. Asked for rather than compiled here, so there is one recipe
+# for it and this check cannot disagree with the one the suites use.
 RUNTESTS="$REPO/build/tests/system/runtests"
-if [ ! -x "$RUNTESTS" ] || [ "$REPO/tests/system/runner/runtests.c" -nt "$RUNTESTS" ]; then
-    mkdir -p "${RUNTESTS%/*}"
-    cc -O2 -o "$RUNTESTS" "$REPO/tests/system/runner/runtests.c" || exit 1
-fi
+make -C "$REPO" --no-print-directory build/tests/system/runtests >/dev/null || exit 1
 GUESTCHECK="$REPO/build/tools/verify/guestcheck"
 if [ ! -x "$GUESTCHECK" ] || [ "$REPO/tools/verify/guestcheck.c" -nt "$GUESTCHECK" ]; then
     mkdir -p "${GUESTCHECK%/*}"
