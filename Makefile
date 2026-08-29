@@ -103,7 +103,7 @@ MKDISK          = krffs/mkdisk.sh
 # minutes; a later `make` rebuilds only what changed. Each image is its own file
 # under build/images/, so they coexist instead of overwriting one shared image.
 # `make` builds the product: the kernel, the userland, the three bootable
-# images and the validators that judge them. It builds no test tool. The tools
+# images, and the validators that judge them. It builds no test tool. The tools
 # are the means of checking the product, they live in tests/system/suites.mk,
 # and each suite target builds the ones it invokes.
 all: images $(BINFIND) $(ELFCHECK) $(SHA256TOOL)
@@ -589,58 +589,7 @@ test:
 
 
 
-# And the other end of a netconsole session: the machine stopping. The card is
-# silenced on the way out, so where that happens decides what a remote reader
-# is told. The contract is that the goodbye line reaches the wire and nothing
-# `power_stop` prints after it does, which only a capture can show: a line that
-# was never sent and a line that was sent and missed look the same from inside.
-	@rm -f $(NETCONSOLE_STOP_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=nc1,netdev=net0,file=$(NETCONSOLE_STOP_PCAP) \
-	    --append "rach2.netconsole" \
-	    --timeout 90 --ok "Stopping the system" \
-	    "expect=Type 'help'" "send=poweroff" wait=5
-	$(PCAPCHECK) netconsole $(NETCONSOLE_STOP_PCAP) --min-frames 4 \
-	    --expect "Stopping the system. Goodbye!" \
-	    --reject "powering off"
 
-# The nine members run together rather than one after another. Each writes
-# files tagged with the card and forwards ports the first-card runs do not, so
-# they neither collide with each other nor with their twins, and this suite
-# stops being the one thing the whole run waits for. The job count is fixed
-# rather than inherited: this is already one worker of an outer pool, and an
-# unbounded -j here would multiply the two.
-	$(MAKE) --no-print-directory -j4 NIC=e1000 run-default run-ping run-packet \
-	    run-netif run-dgram run-netconsole run-raw run-dhcp run-ssh
-# The probe order, which only a machine holding more than one card can show.
-# The table tries the RTL8139 first, so a machine with both must bind that one;
-# a machine with only the e1000 must bind the e1000; and a machine whose card no
-# driver claims must say so and still reach its shell, which is what proves each
-# driver reports ABSENT for a device that is not its own rather than starting on
-# it. The 82574L is that card: Intel, gigabit, and a different register
-# interface, so the e1000 driver must refuse it by device id.
-#
-# Each boot is asserted on the bound driver's own detail line rather than on the
-# summary, because the summary names the card in parentheses and the harness
-# matcher takes no parenthesis. Only the bound driver prints a detail line, so
-# the line is the binding.
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
-	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
-	    --timeout 90 --ok "Type 'help'" \
-	    "expect=RTL8139: IRQ" "expect=Type 'help'" wait=2
-	$(HARNESS) --device e1000,netdev=net0 --kernel build/rach2/kernel \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 90 --ok "Type 'help'" \
-	    "expect=e1000: 82540EM" "expect=Type 'help'" wait=2
-	$(HARNESS) --device e1000e,netdev=net0 --kernel build/rach2/kernel \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 90 --ok "Type 'help'" \
-	    "expect=no supported network card" \
-	    "expect=Type 'help'" wait=2
 
 
 
@@ -770,8 +719,8 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 # is missing from C_SRC (so a new kernel source cannot be silently dropped from
 # the build). Also run inside the gate.
 # The test suites: every `run-NAME` target, the fixtures they write, the seven
-# test tools, and `prepare-all`. Included rather than kept separate so that one
-# dependency graph covers the product and the things only a suite needs.
+# test tools, and `prepare-all`. Included rather than kept apart so that one
+# dependency graph covers the product and the variants only a suite needs.
 include tests/system/suites.mk
 
 check-sources:

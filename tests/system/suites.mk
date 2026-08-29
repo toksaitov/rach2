@@ -11,11 +11,11 @@
 # runner builds once before it starts any suite.
 #
 # What does not: anything the machine itself ships. The kernel, the userland,
-# the three bootable images, the guest probe programs staged into them, and
-# the validators that judge a published artifact all stay in the root, because
-# they are the product rather than the means of checking it.
+# the three bootable images, the guest probe programs staged into them, and the
+# validators that judge a published artifact all stay in the root, because they
+# are the product rather than the means of checking it.
 #
-# A suite target may assume the product is built. `tests/run` builds it, and
+# A suite target may assume the product is built: `tests/run` builds it and
 # `prepare-all` names it. A suite target names only its own fixtures and the
 # tools it invokes.
 
@@ -759,6 +759,22 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --expect "Initializing system components" \
 	    --expect "Network... OK" \
 	    --expect "netconsole: broadcast"
+# And the other end of a netconsole session: the machine stopping. The card is
+# silenced on the way out, so where that happens decides what a remote reader
+# is told. The contract is that the goodbye line reaches the wire and nothing
+# `power_stop` prints after it does, which only a capture can show: a line that
+# was never sent and a line that was sent and missed look the same from inside.
+	@rm -f $(NETCONSOLE_STOP_PCAP)
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=nc1,netdev=net0,file=$(NETCONSOLE_STOP_PCAP) \
+	    --append "rach2.netconsole" \
+	    --timeout 90 --ok "Stopping the system" \
+	    "expect=Type 'help'" "send=poweroff" wait=5
+	$(PCAPCHECK) netconsole $(NETCONSOLE_STOP_PCAP) --min-frames 4 \
+	    --expect "Stopping the system. Goodbye!" \
+	    --reject "powering off"
 # `tests/run e1000`: the network path on the other emulated card, and the probe
 # order that decides which card a machine with more than one of them gets.
 #
@@ -770,6 +786,41 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # other suites are about disks, accounts, and building, and running them again
 # on a second card would cost minutes and show nothing.
 run-e1000: rach2 tests krffs test-image $(HARNESS)
+# The nine members run together rather than one after another. Each writes
+# files tagged with the card and forwards ports the first-card runs do not, so
+# they neither collide with each other nor with their twins, and this suite
+# stops being the one thing the whole run waits for. The job count is fixed
+# rather than inherited: this is already one worker of an outer pool, and an
+# unbounded -j here would multiply the two.
+	$(MAKE) --no-print-directory -j4 NIC=e1000 run-default run-ping run-packet \
+	    run-netif run-dgram run-netconsole run-raw run-dhcp run-ssh
+# The probe order, which only a machine holding more than one card can show.
+# The table tries the RTL8139 first, so a machine with both must bind that one;
+# a machine with only the e1000 must bind the e1000; and a machine whose card no
+# driver claims must say so and still reach its shell, which is what proves each
+# driver reports ABSENT for a device that is not its own rather than starting on
+# it. The 82574L is that card: Intel, gigabit, and a different register
+# interface, so the e1000 driver must refuse it by device id.
+#
+# Each boot is asserted on the bound driver's own detail line rather than on the
+# summary, because the summary names the card in parentheses and the harness
+# matcher takes no parenthesis. Only the bound driver prints a detail line, so
+# the line is the binding.
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
+	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
+	    --timeout 90 --ok "Type 'help'" \
+	    "expect=RTL8139: IRQ" "expect=Type 'help'" wait=2
+	$(HARNESS) --device e1000,netdev=net0 --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 90 --ok "Type 'help'" \
+	    "expect=e1000: 82540EM" "expect=Type 'help'" wait=2
+	$(HARNESS) --device e1000e,netdev=net0 --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 90 --ok "Type 'help'" \
+	    "expect=no supported network card" \
+	    "expect=Type 'help'" wait=2
 # `tests/run reset`: each reset mechanism on its own. The kernel tries three,
 # most of the machine first, and the order was chosen for a laptop whose chipset
 # register may not act; the risk in that choice is that only the first one is
