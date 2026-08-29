@@ -2,103 +2,104 @@
 
 ## The goal
 
-Bring `tests/run all` from 81 minutes to under 20 without weakening a single check. At the end, a developer runs the whole suite while making a cup of tea instead of while making other plans, and every check that could fail before can still fail, for the same reason, on the same input.
+Bring `tests/run all` from 81 minutes to a small fraction of that without weakening a single check. At the end, every check that could fail before can still fail, for the same reason, on the same input, and a developer runs the whole suite while making a cup of tea instead of while making other plans.
+
+Nothing in this plan trades coverage for time. Where the two conflict, coverage wins and the time stays.
 
 This plan is the authority for the run. A conflict between this plan and the current tree is resolved by the decisions here; a conflict between this plan and `CLAUDE.md` is resolved by `CLAUDE.md`.
 
 ## Why
 
-The suite is not slow. It is asleep.
+The suite is not slow. It is asleep, and it is serial.
 
 A full boot to the kernel debug shell takes 4.76 seconds and one fifth of one core. The machine has ten cores and 24 GB, and one emulated machine costs 71 MB. During a complete run, one QEMU process sits at about three percent of one processor and the other nine cores do nothing.
 
-The time goes into waiting for things that have already happened. The harness step `wait=SECS` is `pump(now() + SECS)`, an unconditional drain that never looks at whether the success pattern has arrived; the `--ok` test happens once, after every step. The root `Makefile` has 45 such steps totalling 988 seconds, and the suite scripts have 112 `sleep` calls totalling 1384 seconds. Measured on one suite: `tests/run ping` sees `PINGTEST OK` at 11 seconds and exits at 66. Fifty-five seconds of nothing, in a suite whose whole job took eleven.
+Two measurements settle what to do about it. Six network suites take 462 seconds in series and 143 in parallel. Sixteen mixed suites take 760 in series and 98 in parallel. In both, the parallel time is the slowest member's, which is what independence looks like. The sixteen-suite run also produced the first real conflict: `disk-ahci` and `disk-q35` both create and boot `build/images/disk-test-ahci.disk`, so one renamed it into place while the other was checking it.
 
-The second cost is that all 44 suites run one after another. They need not. Two measurements settle it: six network suites take 462 seconds in series and 143 in parallel, and sixteen mixed suites take 760 in series and 98 in parallel. In both, the parallel time is the slowest member's, which is what independence looks like.
+There is a second, smaller cost. The harness step `wait=SECS` is `pump(now() + SECS)`, an unconditional drain that never consults the success pattern; `tests/run ping` sees `PINGTEST OK` at 11 seconds and exits at 66. That idle time is worth removing, but only where it is on a worker's critical path once the suites run together. Removing it everywhere first would spend the highest-risk work before knowing which of it matters.
 
 ## The decided end state
 
-### The two rules about waiting
+### Parallel execution
 
-These are mechanical and they are the whole of the first phase's judgement:
+`tests/run all` builds everything once and then runs the suites through a bounded pool. `tests/run NAME` behaves exactly as it does today.
 
-* `wait=SECS` means timed observation. It never consults `--ok`. It stays wherever the interval itself is the assertion, or wherever work follows the token.
-* `expect=TOKEN` means positive completion. The harness already returns the moment the pattern matches (`expect_pattern` in `tests/system/runner/harness.c`), so this needs no new machinery and no change to the harness. It replaces a trailing `wait=` only where the token is the last required event and no host checker needs output produced after it.
+The preparation is one `make -j` over the union of every suite's reusable prerequisites, so GNU Make sees one dependency graph and no two component sub-makes overlap. A full split of all 44 targets into `prepare-NAME` and `run-NAME` is not done: concurrent no-op component sub-makes are not a race once everything is current, because the component make runs no compile or link recipe when nothing has changed and `mk/fingerprint.mk` rewrites its tree only when the fingerprint is missing or changed. Suite-private fixture creation stays in the run recipes, where a suite writes only its own paths.
 
-The failure allowance that the old `wait=` provided is preserved by `--steptmo`, so a token that never arrives still fails in the same time it used to.
+What must change for that to be true:
 
-The two steps do not match alike, and a conversion that ignores this weakens what it converts. `--ok` is a literal substring test (`contains`), while `expect=` compiles a regular expression, and the matcher refuses a pattern containing a parenthesis outright. Six success tokens contain parentheses. Three of them are `cred-persist`'s and stay for their own reason; two more sit on invocations with no `wait=` to convert; the sixth, `PASSWDMUSL OK (fail-closed)`, keeps its wait because no shorter substring of it is both metacharacter-free and unambiguous. Elsewhere a token's dots stop being literal, which loosens the match without breaking it, and that is accepted. No conversion invents a pattern: it uses a substring of the token the invocation already declares.
+* `run-disk-ahci` and `run-disk-q35` both create and boot the same disk. The q35 suite gets its own path.
+* `run-dhcp` rebuilds `rach2-metal.krffs`, which `diskdiag` and `metal` also boot, and `run-account` rebuilds `os-simple.krffs`, which `dhcp` also boots. Both writes move into preparation.
+* The shared image builders that are phony targets rebuild on every invocation despite the up-front build. They become real file targets, or their consumers are serialised.
+* Two host ports are used by two suites each: 2224 by `dhcp` and `diskdiag`, 2298 by `procfiles` and `drill`. The second of each pair gets its own port through a Makefile variable. No dynamic port broker is built; the suite list is fixed and short.
+* `style` and `host` both use `/tmp/rach2_verify`, and `style` invokes a kernel build directly. They run outside the pool.
+* `run-disk-q35` invokes `$(HARNESS)` without depending on it, which happens to work only because another suite built it first. It gets the dependency it uses.
 
-`pump` is not changed. A global early exit on `--ok` was considered and rejected: `expect_pattern` calls `pump` to read later output, so a check there would stop a recipe whose `--ok` token appears early from ever receiving the input its later steps need.
+### The e1000 suite joins the pool rather than shrinking
 
-### The waits that stay
+`tests/run e1000` re-runs nine suites on the second card and then makes three boots of its own, taking 914 seconds. Run as one serial block it would be the pool's critical path and would set the floor for the whole run.
 
-Each of these is a case where the token is not the end of the work. They keep their timed `wait=` and the plan names them so that a later reader does not mistake them for oversights:
+Trimming it was considered and rejected. The host model proves the driver in isolation; it does not run the stack through the device, so dropping the second-card `netif`, `raw`, and `dhcp` runs would drop live interface reconfiguration, the raw socket with its hop limits and capture, and packet-socket address reconfiguration on that card. That is a coverage loss, and this milestone does not buy time with coverage.
 
-* `cred-persist`, first boot: `CREDDISK OK (wrote)` is printed and flushed before `_exit(0)`. The drain is what proves the program took that path.
-* `dhcp`, the two lease boots: the token is followed by `poweroff -f`, and the wait is the machine stopping.
-* `dhcp`, the unattended boot: the lease line is the `--ok`, and init and the SSH server come after it.
-* `dhcp`, the static-address boot and the renewal boot: a capture checker reads packets sent after the token, and the renewal case asserts that exactly one address request appears, which is an absence assertion over the interval.
-* `netconsole`, the shutdown boot: `--ok` matches the goodbye line and the interval exists to see whether `powering off` also reaches the wire, which `pcapcheck --reject` then denies.
-* `bootline`: the suite waits after a refusal diagnostic and then rejects any debug shell or login prompt. The interval is the assertion.
-
-A conversion that cannot be shown to be outside this set is not made.
-
-### The pacing in the shell suites
-
-Four suites pace a console feed with fixed sleeps rather than waiting for the machine: `account` (twelve seconds before the first line and six between each), `tcc` (the same shape), `procfiles` (sixteen sleeps between commands that already print status markers), and `ssh` (twenty-five seconds before a connection that could be retried until it answers). They are converted to wait on the marker each step already produces. Seven suites already have such a helper under the names `wait_serial`, `wait_token`, or `wait_count`; the conversions use the one their file already has rather than introducing another.
-
-The long sleep that holds a FIFO open is not a delay and is not converted. `account`'s 240-second tail is one of those: it keeps the console writable while the test polls, and the suite kills the machine when its condition is met.
-
-### The e1000 suite
-
-`tests/run e1000` re-runs nine complete suites on the second card and then makes three boots of its own. At 914 seconds it is the most expensive suite in the tree, and most of that is a second copy of work the first card already proved.
-
-It keeps ping, packet, dgram, netconsole, and ssh, plus the three card-selection boots. It drops the second-card repeats of default, netif, raw, and dhcp. What remains covers card selection, ordinary receive and transmit, unsolicited input, broadcast, the shutdown path, and one complete TCP session; the descriptor contract, ring wrap, transmit stalls, stop, and link reporting are covered by the host model, which does not need a boot.
-
-This trade is coverage for time and it is the only item in this plan that is. It is accepted only if four mutations still fail the retained set: one in the e1000 receive path, one in its transmit path, one in its stop, and one in the driver-table selection. If any survives, the dropped suite that would have caught it goes back.
-
-### Preparation and execution
-
-Every `run-NAME` target today carries its build prerequisites and creates its own fixtures, so running two of them at once runs two builds against one `build/` tree. The end state separates the two:
-
-* `prepare-NAME` builds everything the suite needs: components, tools, images, kernels, and fresh fixtures. It is the only thing that writes under `build/`.
-* `run-NAME` boots machines and reads results. It has no build prerequisites and creates no artifact.
-* `tests/registry` gains the preparation target in its third field, which has held `-` for every suite since the field was introduced.
-* `tests/run NAME` runs the suite's preparation and then its run. `tests/run all` collects every preparation target into one `make -j` invocation, so GNU Make sees one dependency graph and no two component sub-makes overlap, and then runs the suites through a bounded pool.
-
-### The collisions
-
-Found by running suites together and reading what broke, not by reading alone:
-
-* `run-disk-ahci` and `run-disk-q35` both create and boot `build/images/disk-test-ahci.disk`. Under parallelism one renames it into place while the other is checking it, which is the failure `check-setid: FAIL: disk-test-ahci.disk.new: No such file or directory` reports. The q35 suite gets its own path.
-* `run-dhcp` restages `rach2-metal.krffs`, which `diskdiag` and `metal` also boot, and `run-account` restages `os-simple.krffs`, which `dhcp` also boots. Both moves go into preparation.
-* Two host ports are used by two suites each: 2224 by `dhcp` and `diskdiag`, and 2298 by `procfiles` and `drill`. The second of each pair is given its own port through a Makefile variable. A dynamic port broker is not built; the suite list is fixed and short.
-* `style` and `host` both use `/tmp/rach2_verify`, and `style` invokes a kernel build directly. They run outside the parallel pool.
-* `e1000` invokes other run targets recursively and reuses their captures and disks. It runs alone, after the ordinary network suites.
+Instead the second-card runs become ordinary pool members. Each needs the card selection and the private paths and ports its first-card twin has, so the two can run at once. The suite name stays; what changes is that its members are scheduled rather than sequenced.
 
 ### The worker count
 
-Four. Three is the reasonable interactive setting and four is the measured ceiling for a machine whose guests are emulated rather than virtualised; beyond that the workers compete for the same four performance cores and add memory and scheduling pressure without finishing sooner. The count is a variable with four as its default, not a constant.
+Unknown until measured. Four guests at the measured cost would use about eight tenths of a core and 284 MB, which is nowhere near this machine, and the sixteen-suite run showed useful overlap well past four. But `selfbuild` compiles inside its guest and is far heavier than an idle boot, and the mix changes as idle time is removed.
 
-### The machine census
+The count is a variable. The run measures 4, 8, 12, and 16 workers on the finished pool and takes the best, with 8 as the starting default. A number is not written into this plan as though it had been measured.
 
-`tests/run` currently lists the QEMU processes before and after each suite and fails one that leaves a new machine behind. Under parallelism each worker would see every other worker's machines and report them as its own leak.
+### Attribution of a leaked machine
 
-For `tests/run NAME` the present per-suite census is kept, since it attributes a leak to the suite that caused it. For `tests/run all` the census is taken once before any worker starts and once after all workers have been waited for, and a new machine fails the run as a whole. Attribution is lost in that mode and the report says so. Per-suite attribution under parallelism would need every invocation to name its machine, which is a change to the harness and to every shell suite, and it is not worth it to say which of four suites leaked when the run has already failed and `tests/run NAME` will name it.
+The census added in milestone 32 lists QEMU processes before and after each suite. Under a pool, each worker would see every other worker's machines.
+
+Attribution is kept rather than abandoned, through one mechanism at the runner level. `tests/run` resolves the real `qemu-system-i386` once, gives each worker a private ledger file, and puts a shim first on `PATH` that records its own pid and then execs the real binary. The harness reaches QEMU through `execvp` and the shell suites resolve it through `PATH`, so both are covered without touching either. After a suite finishes, any pid in its ledger that is still alive is that suite's leak, even after the process was re-parented.
+
+### The two rules about waiting
+
+For the phase that removes idle time, and only where a suite is on the critical path:
+
+* `wait=SECS` means timed observation. It never consults `--ok`. It stays wherever the interval itself is the assertion, or wherever work follows the token.
+* `expect=TOKEN` means positive completion. The harness already returns the moment the pattern matches, so this needs no change to the harness and none to `pump`. A global early exit on `--ok` was considered and rejected: `expect_pattern` calls `pump` to read later output, so a check there would stop a recipe whose token appears early from ever receiving the input its later steps need.
+
+The failure allowance the old `wait=` provided is preserved by `--steptmo`.
+
+A conversion reproduces the token exactly. `--ok` is a literal substring test and `expect=` compiles a regular expression, so every metacharacter in the token is escaped: the matcher takes a backslash-escaped literal, and `expect=CREDDISK OK \(wrote\)` matches what `--ok "CREDDISK OK (wrote)"` matches. Unescaped dots in an address would match any byte, which is a looser check than the one being replaced, and looser is not acceptable here.
+
+### The waits that stay
+
+Each is a case where the token is not the end of the work. A conversion that cannot be shown to be outside this set is not made.
+
+* `reset`: the token `reboot: restarting` is printed before the reset is attempted, and the six-second wait is what lets the forbidden `the platform did not reset` fallback reach the log, which the suite then rejects. Converting this would kill the machine before the fallback could appear and pass a broken reset silently. Better still, this one waits for the machine to exit and keeps the rejection.
+* `dhcp`, the two lease boots: the token is followed by `poweroff -f`, and the wait is the machine stopping.
+* `dhcp`, the unattended boot: the lease line is the token, and init and the SSH server come after it.
+* `dhcp`, the static-address and renewal boots: a capture checker reads packets sent after the token, and the renewal case requires exactly one address request over the interval, which is an absence assertion.
+* `netconsole`, the shutdown boot: the token is the goodbye line and the interval exists to see whether `powering off` also reaches the wire, which `pcapcheck --reject` then denies.
+* `bootline`: the suite waits after a refusal diagnostic and then rejects any debug shell or login prompt. The interval is the assertion.
+* `drill`, the recovery no-DHCP case: it waits 45 seconds after the login prompt before checking that the fixed address was kept and the client stopped. Not a trailing wait, so no phase touches it, but it belongs on this list.
+
+`cred-persist` is not on this list, and the reason it was once given is wrong. `wait=15` only drains, and the verdict only searches for the token, so replacing `_exit(0)` with an endless loop would still pass. The drain proves nothing about the exit path. Only its first boot uses `_exit` at all; the other two return normally. If the exit path is worth proving, it is proved by expecting the diagnostic that follows it, not by waiting.
+
+### The pacing in the shell suites
+
+Four suites pace a console feed with fixed sleeps rather than waiting for the machine: `account`, `tcc`, `procfiles`, and `ssh`. They are converted only if they are on the critical path after pooling, and they wait on the marker each step already prints, using the helper their own file already has.
+
+Two cautions. A long sleep that holds a FIFO open is not a delay: `account`'s 240-second tail and `shutdown`'s 180 keep a console writable while the test polls, and the machine is killed when the condition is met. And `procfiles` has an independent 42-second timer that opens the host connection `netstat` and `arp` later read; speeding the console commands without tying that peer to the `SSHD-UP` marker would let `netstat` run before the connection exists.
+
+The count of 112 sleeps totalling 1384 seconds is a count of the text, not of elapsed time, and no saving is estimated from it.
 
 ### What is not done
 
-No change to `pump`. No dynamic port allocation. No per-worker copy of the repository, no container, and no new language runtime. No reduction in the number of boots: a 4.76-second boot is small beside the waits, and boots that look alike often differ in kernel, disk, or command line. No attempt to run the guests under hardware acceleration; the host is ARM and the guest is x86, so there is none to be had.
+No change to `pump`. No dynamic port allocation. No per-worker copy of the repository, no container, and no new language runtime. No reduction in coverage anywhere. No reduction in the number of boots: a 4.76-second boot is small beside the waits, and boots that look alike often differ in kernel, disk, or command line. No attempt to run the guests under hardware acceleration; the host is ARM and the guest is x86, so there is none to be had.
 
 ## Standing rules for the run
 
 * Work directly. Delegation is only for an independent review, one reviewer per diff, with the limits in `CLAUDE.md`.
 * Commit in scoped units in the house style, directly on the branch, no attribution, never push.
 * Every commit passes `tests/run style` and `tests/run host`.
-* A suite that gets faster must still fail for its own reasons. Every phase that changes how a suite waits proves at least one of that suite's checks by making it fail, and the conversion is reverted if the check cannot be made to fail.
-* Measure, do not estimate. Each phase records the wall time of `tests/run all` before and after it, on a warm tree, and `notes.md` keeps the numbers. A phase that does not pay for itself is reverted rather than kept for tidiness.
-* A timing measurement is taken with nothing else running on the machine, and the census confirms no machine survived it.
+* A suite that gets faster must still fail for its own reasons. Every change to how a suite waits is proved by making that suite's own check fail, and where the check is an absence assertion the proof introduces the thing that must be rejected, not merely a missing token.
+* Measure, do not estimate. Each phase records the wall time of `tests/run all` before and after it, and `notes.md` keeps the numbers. A phase that does not pay for itself is reverted rather than kept for tidiness.
+* A timing measurement is taken with nothing else running, and the census confirms no machine survived it.
 
 ## The phases
 
@@ -106,39 +107,39 @@ Do the phases in order. Within a phase, land the smallest self-contained commits
 
 ### Phase 1: arrival and the baseline
 
-Read `AGENTS.md`, `CLAUDE.md`, and this plan in full. Require a clean tree, record `git log --oneline -12`, and run `tests/run all` on a warm tree with nothing else running, recording the total and every per-suite time as the baseline every later phase is measured against. Create `notes.md` and `current.md` beside this plan in the first commit.
+Read `AGENTS.md`, `CLAUDE.md`, and this plan in full. Require a clean tree, record `git log --oneline -12`, and run `tests/run all` warm with nothing else running, recording the total and every per-suite time. Create `notes.md` and `current.md` in the first commit.
 
-### Phase 2: the waits that are already over
+### Phase 2: the collisions
 
-Convert each trailing `wait=` whose token is the last required event into `expect=`, keeping the old interval as `--steptmo` so a token that never comes still fails in the same time. Leave every wait named under "the waits that stay". Work one suite per commit, and for each, record the suite's time before and after.
+Give the q35 suite its own disk and `$(HARNESS)` as a dependency; give the second suite of each port pair its own port; move the two cross-suite restagings into preparation; make the shared phony image builders real file targets. Nothing runs in parallel yet.
 
-Proof: for each converted suite, mutate the token the suite waits for and confirm the suite still fails, in the step timeout rather than instantly.
+Proof: every suite still passes singly, and the sixteen-suite batch that previously failed on the shared disk now passes when run together.
 
-### Phase 3: the pacing in the shell suites
+### Phase 3: the pool
 
-Convert `account`, `tcc`, `procfiles`, and `ssh` from fixed pacing to waiting on the marker each step already prints, using the helper each file already has. Leave the sleeps that hold a pipe open.
+`tests/run all` runs one `make -j` over the union of prerequisites, then the suites through a pool, with `style` and `host` outside it. Add the `PATH` shim ledger and use it for per-suite attribution in both modes.
 
-Proof: for each converted suite, mutate one marker and confirm the suite fails on the missing marker rather than passing on a lucky interval.
+Proof: the leak guard still names the suite that leaked, shown by putting the `crash` suite's defect back and requiring the run to fail with that suite named; a failing suite still fails the run and is named; and the run is repeated three times to show the result does not depend on timing.
 
-### Phase 4: the e1000 repeat set
+### Phase 4: the worker count
 
-Reduce the suite to ping, packet, dgram, netconsole, ssh, and the three selection boots. Then prove the retained set: one mutation in the e1000 receive path, one in its transmit path, one in its stop, and one in the driver-table selection must each fail it. Any mutation that survives puts its dropped suite back, and `notes.md` records which and why.
+Measure the finished pool at 4, 8, 12, and 16 workers, three runs each, and take the best. Record every number. Set the default to what was measured, not to what was expected.
 
-### Phase 5: preparation and execution
+### Phase 5: the e1000 members
 
-Split every suite into `prepare-NAME` and `run-NAME`, fill the registry's third field, and move every artifact write into preparation, including the two cross-suite restagings. Give the q35 suite its own disk and the second suite of each port pair its own port. `tests/run NAME` runs preparation then execution, and the behavior of a single named suite does not change.
+Give the second-card runs the private paths and ports their first-card twins have, so they schedule alongside everything else instead of running as one serial block. Coverage is unchanged: the same nine suites still run on that card.
 
-Proof: with the tree already built, `make run-NAME` writes nothing under `build/`, checked by comparing a listing of the tree before and after. Every suite still passes when run singly.
+Proof: the e1000 members pass when run concurrently with their first-card twins, and the whole-run time drops by roughly the block's former length.
 
-### Phase 6: the pool
+### Phase 6: the waits, where they still matter
 
-`tests/run all` runs one `make -j` over every preparation target, then the suites through a pool of four workers, with `style`, `host`, and `e1000` outside it. Replace the per-suite census with the batch census for this mode, keeping the per-suite one for a named suite.
+With the pool in place, identify which suites are on the critical path and convert only those. Apply the two rules and the exact-token escaping. Leave every wait named under "the waits that stay".
 
-Proof: the leak guard still works, shown by putting the `crash` suite's defect back and requiring the run to fail; a suite that fails still fails the run and is named; and the run is repeated three times to show the result does not depend on timing.
+Proof: for each converted suite, mutate the token and confirm the suite fails in the step timeout rather than instantly; and where the suite also has an absence assertion, introduce the thing that must be rejected and confirm it is still rejected.
 
 ### Phase 7: completion
 
-Run `make distclean`, then `make`, then `tests/run all`, and record the cold and warm numbers against the phase 1 baseline. Confirm no machine survives. Write `dev-log/33-fast/Readme.md` and add `33-fast` to `dev-log/Readme.md` in the same commit. The tree is clean and nothing is pushed.
+Measure cold and warm properly: `make distclean`, then `tests/run all` (cold, since it builds what it needs), then `tests/run all` again (warm). Record both against the phase 1 baseline. Confirm no machine survives. Write `dev-log/33-fast/Readme.md` and add `33-fast` to `dev-log/Readme.md` in the same commit. The tree is clean and nothing is pushed.
 
 ## Recovery after a compaction
 
