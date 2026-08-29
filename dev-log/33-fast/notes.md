@@ -54,3 +54,33 @@ minutes reproducing a number already in hand. Per suite, slowest first:
 * netconsole     10s
 * metal          10s
 * reset          6s
+
+## Phase 2: the collisions
+
+Measured rather than run whole: the touched suites, then two batches.
+
+* Eight suites that share images or ports (`dhcp`, `account`, `diskdiag`,
+  `metal`, `drill`, `procfiles`, `login`, `sealed`): 1461s in series, 435s
+  together, 8 of 8 passing. The parallel figure is `account`'s own 436s, so
+  those eight now cost what the longest of them costs.
+* The sixteen-suite batch that failed before: 99s, 16 of 16, where it was 98s
+  with `disk-ahci` and `disk-q35` failing on the shared disk.
+
+What changed:
+
+* `run-disk-q35` staged and booted `disk-test-ahci.disk`, the same path
+  `run-disk-ahci` stages. It has its own now. It also invoked `$(HARNESS)`
+  without depending on it, which worked only because another suite had built
+  it first.
+* `rach2-metal-image` and `rach2-recovery-image` were phony, so they restaged
+  their image on every invocation. Three suites that only boot the metal image
+  each restaged it. Both are real file targets now, with the components as
+  order-only prerequisites, which is the shape `$(TEST_IMAGE)` already used.
+* `run-dhcp` restaged the metal image and `run-account` restaged the os-simple
+  image, each of which another suite boots. Both now depend on the image
+  instead of writing it.
+* Every forwarded port is named in one place in the Makefile. Two pairs
+  collided: 2224 for `dhcp` and `diskdiag`, 2298 for `procfiles` and `drill`.
+  `procfiles` also hardcoded its port rather than taking it as an argument, so
+  the number lived in two files; it takes it as an argument now, as every other
+  suite does.

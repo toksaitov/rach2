@@ -37,8 +37,10 @@ PASSWORD="$6"
 # The megabytes the real image was built at, which is what df must report.
 IMAGE_MB="$7"
 # A host port forwarded to the guest's SSH server, so a connection can be opened
-# from outside while netstat runs.
-FWD_PORT=2298
+# from outside while netstat runs. Taken as an argument, as every other suite
+# takes its port, so that the one place the ports are listed is the Makefile:
+# two suites forwarding one port cannot both run.
+FWD_PORT="${8:-2299}"
 PEER_PID=""
 
 if [ -z "$KERNEL" ] || [ -z "$TEST_IMAGE" ] || [ -z "$DISK" ] || [ -z "$REAL" ] ||

@@ -77,6 +77,18 @@ MUSL_CRYPT_SRC = $(LIBC_TARBALL:.tar.gz=)/src/crypt/crypt_sha512.c
 # re-enters these same targets with the other emulated card. The runner and
 # the harness both take --device, and ssh.sh takes the card as an argument,
 # because it builds its own QEMU command line.
+# The host ports the suites forward. They are named here because two suites
+# sharing one cannot both run, and a number buried in a recipe is a collision
+# nobody sees until the two are scheduled together.
+DHCP_SSH_PORT    = 2224
+DISKDIAG_PORT    = 2225
+METAL_PORT       = 2223
+SEALED_PORT      = 2297
+DRILL_PORT       = 2298
+PROCFILES_PORT   = 2299
+DGRAM_PORT       = 15998
+NETIF_PORT       = 15999
+
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
 
@@ -500,19 +512,27 @@ rach2-recovery: krffs rach2
 	sh tools/inspect/check_recovery.sh build/rach2/kernel ordinary
 	sh tools/inspect/check_diskpolicy.sh $(RECOVERY_KERNEL) read-write
 
-rach2-metal-image: krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
+# A real file target with the components as order-only prerequisites, the shape
+# $(TEST_IMAGE) above already uses. As a phony target this rebuilt the image on
+# every invocation, so three suites that merely boot it each restaged it, and
+# two of them running at once restaged it under each other.
+$(METAL_IMAGE): krffs/manifests/rach2-metal.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
-	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $(METAL_IMAGE) 4
+	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 4
+
+rach2-metal-image: $(METAL_IMAGE)
 
 # The recovery RAM image: what the recovery kernel loads as its root. It is the
 # metal profile plus the two programs that repair a disk, and it mounts nothing
 # from the disk it is repairing, which is what lets it rewrite that disk's root.
 RECOVERY_IMAGE = $(IMAGES_DIR)/rach2-recovery.krffs
-rach2-recovery-image: krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti
+$(RECOVERY_IMAGE): krffs/manifests/rach2-recovery.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
-	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $(RECOVERY_IMAGE) 4
+	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
+
+rach2-recovery-image: $(RECOVERY_IMAGE)
 
 # The os-real disk: the same os-real tree, but on a real disk image instead of a
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
@@ -803,7 +823,7 @@ run-install: rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid
 # runs are QEMU and ssh.
 run-sealed: rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
-	    "`cat krffs/rach2_demo_password`" 2297
+	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
 
 # `tests/run drill`: the recovery drill, boots of one disk that carries the same
 # three partitions the sealed disk has. The everyday kernel must refuse to write
@@ -835,7 +855,7 @@ run-drill: rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(B
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
 	sh tests/system/suites/drill.sh $(DRILL_DISK) \
-	    "`cat krffs/rach2_demo_password`" 2298
+	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT)
 
 # `tests/run persist`: fsync durability across a reboot. Builds a disk holding
 # persistprobe, boots it twice against the SAME image: the first boot writes and
@@ -975,11 +995,11 @@ run-raw: rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 run-netif: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "user,id=net0,hostfwd=udp::15999-:9999" \
+	    --net "user,id=net0,hostfwd=udp::$(NETIF_PORT)-:9999" \
 	    --timeout 180 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /netifprobe" \
-	    "expect=NETIFPROBE DOWN" "udp=15999:down" \
-	    "expect=NETIFPROBE UP" "udp=15999:up" wait=60
+	    "expect=NETIFPROBE DOWN" "udp=$(NETIF_PORT):down" \
+	    "expect=NETIFPROBE UP" "udp=$(NETIF_PORT):up" wait=60
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=none" \
@@ -995,12 +1015,12 @@ run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DGRAM_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "user,id=net0,hostfwd=udp::15998-:7502" \
+	    --net "user,id=net0,hostfwd=udp::$(DGRAM_PORT)-:7502" \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=dg0,netdev=net0,file=$(DGRAM_PCAP) \
 	    --timeout 180 --ok "DGRAMPROBE OK" \
 	    "expect=Type 'help'" "send=exec /dgramprobe" \
-	    "expect=DGRAMPROBE OUTSIDE" "udp=15998:outsider" wait=30
+	    "expect=DGRAMPROBE OUTSIDE" "udp=$(DGRAM_PORT):outsider" wait=30
 	$(PCAPCHECK) bcast $(DGRAM_PCAP) --port 7500 --dst-ip 255.255.255.255
 
 # `tests/run dhcp`: the machine taking an address it was not told, with the
@@ -1017,7 +1037,7 @@ SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple.log
 STATIC_PCAP = $(IMAGES_DIR)/static-simple.pcap
 RSTATIC_PCAP = $(IMAGES_DIR)/static-real.pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
-run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $(HARNESS)
+run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DHCP_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1077,17 +1097,16 @@ run-dhcp: rach2 utils busybox krffs os-real-image os-simple-image $(PCAPCHECK) $
 	# And unattended, which is how the sealed machine comes up: nothing is typed at
 	# all. The metal init runs `ifup -a` itself, after the console login and before
 	# the SSH server, so the lease must arrive with no console session in it.
-	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $(METAL_IMAGE) 4
 	@rm -f $(METAL_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(DHCP_NET),hostfwd=tcp::2224-:22" \
+	    --net "$(DHCP_NET),hostfwd=tcp::$(DHCP_SSH_PORT)-:22" \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=mt0,netdev=net0,file=$(METAL_PCAP) \
 	    --append "rach2.ip=none" \
 	    --timeout 180 --steptmo 60 --ok "lease of 192.168.90.20 obtained" \
 	    "expect=lease of 192.168.90.20 obtained" wait=8 \
-	    "tcp=2224" wait=5
+	    "tcp=$(DHCP_SSH_PORT)" wait=5
 	# The lease line is printed before the script runs, so on its own it proves
 	# only that a lease arrived. What proves the machine was configured is the
 	# wire: the step above knocks on the SSH port through the address the lease
@@ -1354,7 +1373,8 @@ run-reset: rach2 tests krffs test-image $(HARNESS)
 # every sector hashed on the machine must equal the same offset hashed here; and
 # the same kernel with no drive at all.
 run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
-	sh tests/system/suites/diskdiag.sh build/rach2/kernel $(METAL_KERNEL) $(METAL_IMAGE) 2224
+	sh tests/system/suites/diskdiag.sh build/rach2/kernel $(METAL_KERNEL) $(METAL_IMAGE) \
+	    $(DISKDIAG_PORT)
 
 # `tests/run subset`: the kernel reaches a shell with any subset of its optional
 # devices switched off. On a machine with no serial port, a boot that stops has
@@ -1390,7 +1410,7 @@ run-diskpolicy: rach2 rach2-metal $(HARNESS)
 # test. It kills the server once as well, because a supervisor that starts a
 # daemon and does not restart it has not been tested.
 run-metal: rach2-metal rach2-metal-image
-	sh tests/system/suites/metal.sh $(METAL_KERNEL) $(METAL_IMAGE) 2223
+	sh tests/system/suites/metal.sh $(METAL_KERNEL) $(METAL_IMAGE) $(METAL_PORT)
 
 # `tests/run account`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools now and they are different code.
@@ -1402,13 +1422,12 @@ run-metal: rach2-metal rach2-metal-image
 # alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 
-run-account: rach2 utils krffs busybox ish check-tcc check-pdpmake
+run-account: rach2 utils krffs busybox ish check-tcc check-pdpmake os-simple-image
 	sh krffs/gen_demo_key.sh
 	sh krffs/gen_demo_password.sh
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
 	sh tests/system/suites/account.sh build/rach2/kernel $(ACCOUNT_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" real
-	$(MKIMAGE) krffs/manifests/os-simple.manifest $(OS_SIMPLE_IMAGE) 10
 	sh tests/system/suites/account.sh build/rach2/kernel $(OS_SIMPLE_IMAGE) \
 	    "`cat krffs/rach2_demo_password`" simple
 
@@ -1503,7 +1522,8 @@ PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
 run-procfiles: rach2 tests utils krffs busybox os-real-image test-image $(HOLDPORT)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
 	sh tests/system/suites/procfiles.sh build/rach2/kernel $(TEST_IMAGE) \
-	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 16
+	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 16 \
+	    $(PROCFILES_PORT)
 
 # `tests/run exitline`: the plain process-exit line is printed under the debug
 # shell and nowhere else. Four boots: an init image that must stay quiet while a
@@ -1546,6 +1566,10 @@ AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
 # Per-bus image names so an ATA target and its AHCI twin can run under `make -j`
 # without racing on a shared file (each recipe re-stages its image first).
 DISK_TEST_AHCI_IMAGE = $(IMAGES_DIR)/disk-test-ahci.disk
+# The q35 run boots the same fixture as the AHCI one but must not share the
+# file: each recipe stages its own copy, and two suites staging one path at the
+# same time leaves one of them checking a file the other has just renamed away.
+DISK_TEST_Q35_IMAGE = $(IMAGES_DIR)/disk-test-q35.disk
 PERSIST_AHCI_DISK    = $(IMAGES_DIR)/persist-test-ahci.disk
 STRESS_AHCI_DISK     = $(IMAGES_DIR)/stress-test-ahci.disk
 
@@ -1563,11 +1587,11 @@ run-disk-ahci: rach2 tests krffs $(HARNESS)
 # other AHCI test attaches a separate controller that lands at function 0, so a
 # scan that never walked past function 0 would pass all of them and fail on the
 # real machine.
-run-disk-q35: rach2 tests krffs
-	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
+run-disk-q35: rach2 tests krffs $(HARNESS)
+	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_Q35_IMAGE) 64 48
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
+	    --drive "file=$(DISK_TEST_Q35_IMAGE),format=raw,if=none,id=drv0" \
 	    --qemu-arg=-machine --qemu-arg=q35 --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ide.0 \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
