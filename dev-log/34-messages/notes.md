@@ -121,3 +121,20 @@ accepts an unknown goal only by failing, on the day someone asks for that
 suite, and a target no row names is silent forever. `tests/run style` now
 checks the registry against the `run-` targets in both directions, and refuses
 a name written twice.
+
+## Two suites that were paying for nothing, 2026-08-30
+
+`procfiles` booted three times to read one line out of each boot, and ran the
+whole 1130-line `procprobe` on each. `procprobe mount` now reads the root's
+line from `/proc/mounts`, prints it, and stops; the rest of the probe runs once,
+in the shared probe boot, where it already ran. 152s to 125s. Proved by making
+the probe read a line that is not the root's: the ram boot's comparison fails.
+
+`addressed` re-ran every probe with `rach2.ip=10.0.2.15/24` on the boot line,
+which is the address SLIRP hands out anyway, so a kernel that ignored the boot
+line passed. It is now one boot at 10.0.2.77 (not .99, which pingtest requires
+to stay unreachable), and the capture is read from outside: three packets sent
+from .77, and an ARP request sent as .77. Nothing on that network ever asks the
+machine for its address, so `--owns` cannot be used and `pcapcheck` gained
+`--arp-from`, which reads the sender of a request instead. Proved by making
+`netconf.c` ignore `rach2.ip`: no packet leaves from .77 and the suite fails.

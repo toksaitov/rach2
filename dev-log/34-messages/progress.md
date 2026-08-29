@@ -23,8 +23,8 @@ a decision recorded in `notes.md`. Updated in the commit that completes an item.
 * [x] `tests/system/Readme.md` names every runner mechanism with its reason
 * [x] Three stale document references fixed; `tests/echoprobe.c` deleted
 * [x] Every orphaned probe read, then given a suite or deleted (`notes.md` records which)
-* [ ] `procfiles` mount-source probe replaces three full `procprobe` boots
-* [ ] `addressed` becomes a single-probe address boot
+* [x] `procfiles` mount-source probe replaces three full `procprobe` boots
+* [x] `addressed` becomes a single-probe address boot
 
 Proof items:
 

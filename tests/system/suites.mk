@@ -128,15 +128,27 @@ prepare-all: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTP
              os-real-image os-simple-image ports/doom rach2 rach2-metal \
              rach2-metal-image rach2-recovery rach2-recovery-image \
              rach2-sealed-disk test-image tests utils
-# `tests/run addressed`: the same suite, with the network named on the boot line
-# instead of compiled in. The address given is the one SLIRP already provides,
-# so every probe must pass exactly as it does without it; what is under test is
-# that `rach2.ip=` and `rach2.gateway=` reach ARP, IP, TCP, the sockets and the
-# boot line, and that naming the current network changes nothing.
-run-addressed: test-image $(RUNTESTS)
-	$(RUNTESTS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
-	    --timeout 300 --steptmo 60 \
-	    --append "rach2.ip=10.0.2.15/24 rach2.gateway=10.0.2.2"
+# `tests/run addressed`: the address named on the boot line, and the proof that
+# it is the one in force. The address is deliberately not the one SLIRP hands
+# out: a kernel that ignored `rach2.ip=` entirely would still hold 10.0.2.15 and
+# still pass every probe, which is what this suite used to do with all of them.
+# It is not .99 either, which pingtest requires to stay unreachable.
+# So the machine is given .77, pings the gateway, and the capture is read from
+# outside: the echo request must leave from .99, which only the IP layer can put
+# there, and the ARP request for the gateway must be sent as .77, which is
+# where the address reached ARP. Nothing on this network ever asks the machine
+# for its address, so what it answers cannot be read; what it asks as can.
+ADDRESSED_PCAP = $(IMAGES_DIR)/addressed$(NIC_TAG).pcap
+run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
+	@rm -f $(ADDRESSED_PCAP)
+	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --append "rach2.ip=10.0.2.77/24 rach2.gateway=10.0.2.2" \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=ad0,netdev=net0,file=$(ADDRESSED_PCAP) \
+	    --timeout 120 --ok "PINGTEST OK" \
+	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	$(PCAPCHECK) bcast $(ADDRESSED_PCAP) --source 10.0.2.77 --arp-from 10.0.2.77
 # `tests/run noentropy`: the salt policy's negative half, which no other target
 # can reach. `make test` always boots -cpu max, so the CPU has RDSEED and RDRAND
 # and the kernel's pool is trusted; a minter that quietly fell back to the

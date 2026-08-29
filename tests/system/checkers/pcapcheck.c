@@ -9,7 +9,8 @@
  * `pcapcheck bcast CAPTURE ...` finds evidence of datagram behavior. Its
  * options compose: `--source A.B.C.D` requires a packet sent from the
  * address (only a machine holding it can), `--owns A.B.C.D` requires an ARP
- * reply claiming it, `--routed-via GW --routed-dst D` requires every packet
+ * reply claiming it, `--arp-from A.B.C.D` requires an ARP request sent as
+ * it, `--routed-via GW --routed-dst D` requires every packet
  * for D to leave for the hardware address GW answers ARP at (which is what
  * a default route means), and `--port N [--dst-ip A.B.C.D]` requires a
  * broadcast UDP datagram for that port.
@@ -146,16 +147,51 @@ static int parse_ip4(const char *s, unsigned char out[4])
 /* ---- bcast ---- */
 
 /* An Ethernet/IPv4 ARP reply, or NULL. */
-static const unsigned char *arp_reply(const unsigned char *f, uint32_t n)
+/* An Ethernet-over-IPv4 ARP frame with operation `op`, 1 for a request and
+   2 for a reply, or NULL. */
+static const unsigned char *arp_op(const unsigned char *f, uint32_t n, int op)
 {
     const unsigned char *arp = f + 14;
 
     if (n < 14 + 28 || r16be(f + 12) != ETHERTYPE_ARP)
         return NULL;
     if (arp[0] != 0 || arp[1] != 1 || arp[2] != 8 || arp[3] != 0 ||
-        arp[4] != 6 || arp[5] != 4 || arp[6] != 0 || arp[7] != 2)
+        arp[4] != 6 || arp[5] != 4 || arp[6] != 0 || arp[7] != op)
         return NULL;
     return arp;
+}
+
+static const unsigned char *arp_reply(const unsigned char *f, uint32_t n)
+{
+    return arp_op(f, n, 2);
+}
+
+/* An ARP request the machine sent for someone else carries its own address
+   as the sender, so this is where an address reached ARP. It is what can be
+   checked when nothing on the network asks for the machine's address, and
+   so nothing makes it answer. */
+static int check_arp_from(struct pcap *pc, const char *capture,
+                          const char *address)
+{
+    unsigned char want[4];
+    const unsigned char *f;
+    uint32_t n;
+
+    parse_ip4(address, want);
+    pcap_rewind(pc);
+    while ((f = pcap_next(pc, &n)) != NULL) {
+        const unsigned char *arp = arp_op(f, n, 1);
+
+        if (arp != NULL && memcmp(arp + 14, want, 4) == 0) {
+            printf("bcast_check: ok: the machine asked ARP as %s, so that "
+                   "is the address its ARP layer holds\n", address);
+            return 0;
+        }
+    }
+    fprintf(stderr, "bcast_check: no ARP request in %s was sent as %s, so "
+            "that address never reached the machine's ARP layer\n",
+            capture, address);
+    return 1;
 }
 
 static int check_source(struct pcap *pc, const char *capture,
@@ -334,6 +370,7 @@ static int cmd_bcast(int argc, char **argv)
 {
     const char *capture = NULL, *dst_ip = NULL, *routed_via = NULL;
     const char *routed_dst = NULL, *source = NULL, *owns = NULL;
+    const char *arp_from = NULL;
     long port = -1;
     struct pcap pc;
     int i, rc;
@@ -352,6 +389,8 @@ static int cmd_bcast(int argc, char **argv)
             source = argv[++i];
         else if (strcmp(argv[i], "--owns") == 0 && i + 1 < argc)
             owns = argv[++i];
+        else if (strcmp(argv[i], "--arp-from") == 0 && i + 1 < argc)
+            arp_from = argv[++i];
         else if (argv[i][0] != '-' && capture == NULL)
             capture = argv[i];
         else {
@@ -362,17 +401,19 @@ static int cmd_bcast(int argc, char **argv)
     if (capture == NULL) {
         fprintf(stderr, "usage: pcapcheck bcast CAPTURE [--port N] "
                 "[--dst-ip A.B.C.D] [--routed-via GW --routed-dst A.B.C.D] "
-                "[--source A.B.C.D] [--owns A.B.C.D]\n");
+                "[--source A.B.C.D] [--owns A.B.C.D] "
+                "[--arp-from A.B.C.D]\n");
         return 2;
     }
     if (port < 0 && routed_via == NULL && routed_dst == NULL &&
-        owns == NULL && source == NULL) {
+        owns == NULL && source == NULL && arp_from == NULL) {
         fprintf(stderr, "bcast_check: nothing to check: give --port, or "
                 "--routed-via with --routed-dst\n");
         return 2;
     }
     if ((source && !parse_ip4(source, scratch)) ||
         (owns && !parse_ip4(owns, scratch)) ||
+        (arp_from && !parse_ip4(arp_from, scratch)) ||
         (routed_via && !parse_ip4(routed_via, scratch)) ||
         (routed_dst && !parse_ip4(routed_dst, scratch)) ||
         (dst_ip && !parse_ip4(dst_ip, scratch))) {
@@ -383,6 +424,9 @@ static int cmd_bcast(int argc, char **argv)
     if (source != NULL && (rc = check_source(&pc, capture, source)) != 0)
         return rc;
     if (owns != NULL && (rc = check_owns(&pc, capture, owns)) != 0)
+        return rc;
+    if (arp_from != NULL &&
+        (rc = check_arp_from(&pc, capture, arp_from)) != 0)
         return rc;
     if (routed_via != NULL || routed_dst != NULL) {
         if (routed_via == NULL || routed_dst == NULL) {

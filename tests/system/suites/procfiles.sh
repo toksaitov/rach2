@@ -88,14 +88,14 @@ wait_serial() {
     return 1
 }
 
-# One boot of the test image under `$2` of boot options, running the probe and
-# leaving its ROOTMOUNT line in `$1`. The command is re-sent because the debug
-# shell drops anything typed before it is listening.
+# One boot of the test image under `$2` of boot options, running the probe in
+# its mount-only mode and leaving its ROOTMOUNT line in `$1`. The command is
+# re-sent because the debug shell drops anything typed before it is listening.
 mount_boot() {
     log="$1"
     append="$2"
     shift 2
-    ( sleep 8; i=0; while [ "$i" -lt 3 ]; do printf 'exec /procprobe\n'; sleep 9; i=$((i + 1)); done ) \
+    ( sleep 8; i=0; while [ "$i" -lt 3 ]; do printf 'exec /procprobe mount\n'; sleep 9; i=$((i + 1)); done ) \
         | qemu-system-i386 -cpu max -display none -kernel "$KERNEL" -initrd "$TEST_IMAGE" \
         -append "$append" "$@" -serial stdio >"$log" 2>&1 &
     QPID=$!

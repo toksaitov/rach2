@@ -19,6 +19,11 @@
  * newline their last line has, and `/proc/self/stat` ends in one after a
  * closing parenthesis it must also carry, which a truncated line would lack.
  *
+ * `procprobe mount` reads the root's line out of /proc/mounts, prints it, and
+ * stops there. That line is the one thing here that depends on how the machine
+ * came up, so the suite boots three ways for it; the rest of this probe does
+ * not differ between those boots and runs once, in the shared probe boot.
+ *
  * Prints "PROCPROBE OK" and exits 0. Freestanding; direct int 0x80.
  */
 
@@ -666,9 +671,56 @@ static int listen_on(int fd, int port, unsigned char *sa, unsigned int *args)
 static char buf[4096];
 static char path[32];
 
-void _start(void)
+/* The one verdict, so the mount-only run and the whole run report alike. */
+static void done(void)
 {
+    if (fails == 0) {
+        puts("PROCPROBE OK");
+    } else {
+        puts("PROCPROBE FAIL");
+    }
+    sys_exit(fails);
+}
+
+void probe_main(unsigned int *sp);
+
+__asm__(".global _start\n"
+        "_start:\n"
+        "   mov %esp, %eax\n"
+        "   push %eax\n"
+        "   call probe_main\n");
+
+/* Print the root's line from /proc/mounts, which is the one thing in this
+   file that differs per boot: a root mounted from a disk, from the module
+   through the page-cache window, or from the module in place. The suite
+   outside boots three times and reads this line from each. */
+static void print_rootmount(const char *b, int n)
+{
+    int i;
+
+    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"PROCPROBE ROOTMOUNT ", 20);
+    for (i = 0; i < n && b[i] != '\n'; i++) {
+    }
+    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)b, i);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
+}
+
+void probe_main(unsigned int *sp)
+{
+    int argc = (int)sp[0];
+    char **argv = (char **)(sp + 1);
     int pid, status, fd, n;
+
+    /* `procprobe mount` reads the mount line and nothing else. The three
+       boots that differ are booted for that line alone, and the rest of
+       this probe would have them repeat, on each of them, work the shared
+       probe boot already does once. */
+    if (argc > 1 && argv[1][0] == 'm') {
+        n = slurp("/proc/mounts", buf, (int)sizeof(buf));
+        check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
+        print_rootmount(buf, n);
+        done();
+    }
 
     /* The snapshot. The child exists when the file is opened and does not when
      * it is read, so what comes back can only have been taken at open. */
@@ -773,18 +825,7 @@ void _start(void)
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
     check(lines_in(buf, n) == 3, "/proc/mounts names the root and the two synthetic mounts");
     check(ends_with(buf, n, " 0 0\n"), "/proc/mounts's last line is a whole fstab row");
-    /* Printed, not only checked: which source and options the root got is the
-     * one thing about this file that differs per boot, and the three-boot test
-     * outside reads it from here rather than guessing. */
-    {
-        int i;
-
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"PROCPROBE ROOTMOUNT ", 20);
-        for (i = 0; i < n && buf[i] != '\n'; i++) {
-        }
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)buf, i);
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
-    }
+    print_rootmount(buf, n);
 
     /* btime names one moment and must not move between two reads: a value
      * taken afresh from the clock each time would drift by whatever the read
@@ -1121,10 +1162,5 @@ void _start(void)
         syscall3(SYS_WAITPID, listener_pid, (int)(size_t)&child_status, 0);
     }
 
-    if (fails == 0) {
-        puts("PROCPROBE OK");
-    } else {
-        puts("PROCPROBE FAIL");
-    }
-    sys_exit(fails);
+    done();
 }
