@@ -20,8 +20,14 @@ found them. Each entry says what and why.
   interceptor breaks the recursion, so no suite run has ever shown this. It
   appeared here only because a mutation script compiled a host test without
   those flags. The e1000 driver therefore keeps to plain byte loops and lists
-  no `host-deps:`, as `rtl8168.c` and its model already do. Any future host
-  test that names `kstring.c` as a dependency inherits the same constraint.
+  no `host-deps:`. Fixed later in the milestone: the host runner compiles with
+  `-ffreestanding`, which is what these sources are and what stops the
+  rewrite. The per-function `-fno-builtin-memset` is not enough on clang,
+  whose loop-idiom pass is gated on the whole of `-fno-builtin`; that was
+  found by disassembling `k_memset` and seeing it still tail-jump to
+  `memset`. The cross compiler makes no such transformation at any
+  optimization level, checked by disassembly, so the kernel was never at
+  risk.
 
 ## Phase 4
 
@@ -50,13 +56,13 @@ found them. Each entry says what and why.
 
 ## Phase 6
 
-* The e1000 driver's rings are `volatile` and the other two drivers' are not.
-  The kernel builds every driver without optimization, so none of them can
-  lose a descriptor read to a register. The e1000 is different only because its
-  host model compiles the same file at -O1 and -O2, where the guarantee comes
-  from the type rather than from a flag. Making the other two match would be a
-  change to drivers this milestone was not asked to alter, and neither is
-  wrong as built.
+* The e1000 driver's rings were `volatile` and the other two drivers' were
+  not. The reason recorded here at first was wrong: it said the e1000 was
+  different because its host model compiles the file optimized, but
+  `rtl8168_hosttest.c` compiles `rtl8168.c` the same way, so that driver had
+  the same exposure. Its rings are volatile now too. The RTL8139 keeps plain
+  buffers: it has no descriptor the card writes ownership back into, and its
+  receive loop is ordered by a port read in another translation unit.
 
 ## The independent reviews
 
@@ -141,5 +147,10 @@ is for.
   one pid while the suite starts a machine per phase, so the earlier ones are
   forgotten. Nothing in milestone 32 touched that suite; the leak was found
   because a check for stray processes at the end of the run turned up more
-  than it expected. The orphans were killed. Fixing the suite is separate
-  work and needs the owner's decision.
+  than it expected. Fixed: `qemu_disk` backgrounds a shell function, so `$!`
+  held the subshell's pid and never QEMU's; killing the subshell left QEMU to
+  init. The function now `exec`s, so the backgrounded shell is the machine.
+  `tests/run` also censuses the running machines either side of every suite
+  and fails one that leaves a new machine behind, which turns this class of
+  defect from a silent leak into a failing run. Both directions are proved:
+  putting the defect back makes the runner report three leaked machines.
