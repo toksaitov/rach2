@@ -200,3 +200,14 @@ Three changes, one of them not in the plan.
 
 Both defects predate this milestone. Serial execution and registry order hid
 them, as they hid the `crash` suite's leaked machines.
+
+## Phase 7: completion
+
+Cold from `make distclean`, which compiles the five vendored projects and Doom
+before a machine boots: 618s. Warm: 465s. Both 44 of 44, no machine surviving.
+
+The plan's first draft asked for `distclean`, then `make`, then one
+`tests/run all`, and called the result cold and warm. That sequence produces
+two warm numbers: the standalone `make` does the building, so the run that
+follows it has nothing left to build. The cold number is the run that builds
+what it needs, so the standalone `make` is left out.

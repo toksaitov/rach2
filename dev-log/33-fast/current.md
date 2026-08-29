@@ -1,15 +1,13 @@
-# Milestone 33: resume state
+# Milestone 33: complete
 
-Phase: 5, the e1000 members. Complete, and taken before phase 4 for the reason
-in `notes.md`.
+All seven phases are done. The record is in `Readme.md` beside this file, the
+measurements and the defects in `notes.md`, and `33-fast` is in the dev-log
+index.
 
-Done: the card picks the forwarded ports and tags every file a run writes, so
-the second-card runs are ordinary neighbours of their twins; `run-e1000` runs
-its nine members together at -j4.
+Final: cold from `make distclean` 618s, warm 465s, repeated at 464s and 465s.
+All 44 suites pass in every run and no machine survives one. The baseline was
+4877s, so the warm run is a factor of ten and a half faster.
 
-Evidence: `e1000` 917s to 336s; the whole run 1205s to 727s, 44 of 44, no
-stray machines; both cards' network suites concurrently, 10 of 10.
-
-Next: phase 4, the worker count. Measure 4, 8, 12 and 16 workers on the
-finished pool, three runs each, and set the default to what was measured.
-`account` at 434s is the critical path, so the sweep is bounded by it.
+Phases 4 and 5 were taken in the other order, for the reason in `notes.md`:
+sweeping worker counts while one suite was 917s of a 1205s run would have
+measured that suite rather than the workers.
