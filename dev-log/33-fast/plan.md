@@ -98,7 +98,9 @@ No change to `pump`. No dynamic port allocation. No per-worker copy of the repos
 * Commit in scoped units in the house style, directly on the branch, no attribution, never push.
 * Every commit passes `tests/run style` and `tests/run host`.
 * A suite that gets faster must still fail for its own reasons. Every change to how a suite waits is proved by making that suite's own check fail, and where the check is an absence assertion the proof introduces the thing that must be rejected, not merely a missing token.
-* Measure, do not estimate. Each phase records the wall time of `tests/run all` before and after it, and `notes.md` keeps the numbers. A phase that does not pay for itself is reverted rather than kept for tidiness.
+* Measure, do not estimate, but do not pay 81 minutes to learn a number that a single suite can tell you. A phase measures only the suites it touched, and `notes.md` keeps those numbers. A phase that does not pay for itself is reverted rather than kept for tidiness.
+* The whole suite is timed four times in this milestone and no more: the baseline, once after the pool exists, during the worker sweep, and at completion. Everything before the pool is measured per suite, because a full serial run costs more than the change it would be measuring.
+* Correctness is checked more often than speed and by cheaper means: `tests/run style` and `tests/run host` on every commit, the touched suites singly, and the whole set only where the rule above says.
 * A timing measurement is taken with nothing else running, and the census confirms no machine survived it.
 
 ## The phases
@@ -107,19 +109,21 @@ Do the phases in order. Within a phase, land the smallest self-contained commits
 
 ### Phase 1: arrival and the baseline
 
-Read `AGENTS.md`, `CLAUDE.md`, and this plan in full. Require a clean tree, record `git log --oneline -12`, and run `tests/run all` warm with nothing else running, recording the total and every per-suite time. Create `notes.md` and `current.md` in the first commit.
+Read `AGENTS.md`, `CLAUDE.md`, and this plan in full. Require a clean tree and record `git log --oneline -12`.
+
+The baseline is the last complete run of the current tree rather than a fresh one: 4877 seconds across 44 suites, with per-suite times, taken when the only commits since were this plan. Re-running it would cost 81 minutes to reproduce a number already in hand. Create `notes.md` and `current.md` in the first commit, with the baseline table in `notes.md`.
 
 ### Phase 2: the collisions
 
 Give the q35 suite its own disk and `$(HARNESS)` as a dependency; give the second suite of each port pair its own port; move the two cross-suite restagings into preparation; make the shared phony image builders real file targets. Nothing runs in parallel yet.
 
-Proof: every suite still passes singly, and the sixteen-suite batch that previously failed on the shared disk now passes when run together.
+Proof: the suites this phase touches pass singly, and the sixteen-suite batch that previously failed on the shared disk now passes when run together. No full run: the batch is the evidence, and it costs 98 seconds rather than 81 minutes.
 
 ### Phase 3: the pool
 
 `tests/run all` runs one `make -j` over the union of prerequisites, then the suites through a pool, with `style` and `host` outside it. Add the `PATH` shim ledger and use it for per-suite attribution in both modes.
 
-Proof: the leak guard still names the suite that leaked, shown by putting the `crash` suite's defect back and requiring the run to fail with that suite named; a failing suite still fails the run and is named; and the run is repeated three times to show the result does not depend on timing.
+Proof: the leak guard still names the suite that leaked, shown by putting the `crash` suite's defect back and requiring the run to fail with that suite named; a failing suite still fails the run and is named; and the run is repeated three times to show the result does not depend on timing. This is the first full run since the baseline, and by now it is cheap enough to repeat.
 
 ### Phase 4: the worker count
 
@@ -129,11 +133,11 @@ Measure the finished pool at 4, 8, 12, and 16 workers, three runs each, and take
 
 Give the second-card runs the private paths and ports their first-card twins have, so they schedule alongside everything else instead of running as one serial block. Coverage is unchanged: the same nine suites still run on that card.
 
-Proof: the e1000 members pass when run concurrently with their first-card twins, and the whole-run time drops by roughly the block's former length.
+Proof: the e1000 members pass when run concurrently with their first-card twins. The saving is read from the pooled run the next phase already makes, not from a run of its own.
 
 ### Phase 6: the waits, where they still matter
 
-With the pool in place, identify which suites are on the critical path and convert only those. Apply the two rules and the exact-token escaping. Leave every wait named under "the waits that stay".
+With the pool in place, identify which suites are on the critical path from the timings the pooled run already produced, and convert only those. A suite that is not the longest in its worker's queue is left alone however much it idles, because shortening it buys nothing. Apply the two rules and the exact-token escaping. Leave every wait named under "the waits that stay".
 
 Proof: for each converted suite, mutate the token and confirm the suite fails in the step timeout rather than instantly; and where the suite also has an absence assertion, introduce the thing that must be rejected and confirm it is still rejected.
 
