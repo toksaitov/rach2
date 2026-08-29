@@ -1,0 +1,184 @@
+/**
+ * hostpeer: the host side of a connection a guest test needs.
+ *
+ * Two jobs, one program, because both are the same thing: something real
+ * on the host end of QEMU's user network, which otherwise accepts and
+ * discards whatever the guest sends.
+ *
+ *   hostpeer hold PORT SECONDS
+ *       Connect to 127.0.0.1:PORT and keep the connection for SECONDS.
+ *       The procfiles suite needs a connection that exists while the
+ *       machine reads its own `/proc/net/tcp`, so the row it looks for is
+ *       a live one. QEMU accepts the host side of a forwarded connection
+ *       whether or not anything inside the guest is listening, so without
+ *       a real peer the row would never appear and the check would fail
+ *       for a reason that has nothing to do with netstat.
+ *
+ *   hostpeer echo PORT SECONDS
+ *       Listen on 127.0.0.1:PORT for both TCP and UDP and send back
+ *       whatever arrives, for SECONDS. The socket suite needs it: the
+ *       guest reaches the host at the user network's gateway address
+ *       (10.0.2.2), and the probes there send a string and require the
+ *       same bytes back, which proves the guest's own transmit and
+ *       receive paths rather than QEMU's willingness to accept.
+ *
+ * Exits nonzero when it could not do the job at all; the caller decides
+ * whether that is fatal. In echo mode the run ends when the time is up,
+ * which is a success: a server has no work of its own to finish.
+ */
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+static void fill_local(struct sockaddr_in *addr, long port)
+{
+    memset(addr, 0, sizeof(*addr));
+    addr->sin_family = AF_INET;
+    addr->sin_port = htons((unsigned short) port);
+    addr->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+}
+
+static int hold(long port, long seconds)
+{
+    struct sockaddr_in addr;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (fd < 0) {
+        perror("hostpeer: socket");
+        return 1;
+    }
+    fill_local(&addr, port);
+    if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
+        perror("hostpeer: connect");
+        close(fd);
+        return 1;
+    }
+    sleep((unsigned) seconds);
+    close(fd);
+    return 0;
+}
+
+static double now(void)
+{
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec + tv.tv_usec / 1e6;
+}
+
+/* Both transports on one descriptor set, because the two probes that need
+   this run one after the other in the same boot and the suite starts one
+   server for both. One TCP connection is served at a time; the probes make
+   one each, and a second would only queue. */
+static int echo(long port, long seconds)
+{
+    struct sockaddr_in addr, from;
+    int listener, dgram, conn = -1;
+    int one = 1;
+    double deadline = now() + seconds;
+
+    listener = socket(AF_INET, SOCK_STREAM, 0);
+    dgram = socket(AF_INET, SOCK_DGRAM, 0);
+    if (listener < 0 || dgram < 0) {
+        perror("hostpeer: socket");
+        return 1;
+    }
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    fill_local(&addr, port);
+    if (bind(listener, (struct sockaddr *) &addr, sizeof(addr)) != 0 ||
+        listen(listener, 4) != 0) {
+        perror("hostpeer: tcp bind");
+        return 1;
+    }
+    fill_local(&addr, port);
+    if (bind(dgram, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
+        perror("hostpeer: udp bind");
+        return 1;
+    }
+    printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld for %lds\n",
+           port, seconds);
+    fflush(stdout);
+
+    while (now() < deadline) {
+        char buf[2048];
+        struct timeval tv;
+        fd_set rfds;
+        int max = listener > dgram ? listener : dgram;
+        ssize_t n;
+
+        FD_ZERO(&rfds);
+        FD_SET(listener, &rfds);
+        FD_SET(dgram, &rfds);
+        if (conn >= 0) {
+            FD_SET(conn, &rfds);
+            if (conn > max)
+                max = conn;
+        }
+        tv.tv_sec = 0;
+        tv.tv_usec = 200000;
+        if (select(max + 1, &rfds, NULL, NULL, &tv) < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("hostpeer: select");
+            return 1;
+        }
+        if (FD_ISSET(dgram, &rfds)) {
+            socklen_t flen = sizeof(from);
+
+            n = recvfrom(dgram, buf, sizeof(buf), 0,
+                         (struct sockaddr *) &from, &flen);
+            if (n > 0)
+                sendto(dgram, buf, (size_t) n, 0,
+                       (struct sockaddr *) &from, flen);
+        }
+        if (FD_ISSET(listener, &rfds) && conn < 0)
+            conn = accept(listener, NULL, NULL);
+        if (conn >= 0 && FD_ISSET(conn, &rfds)) {
+            n = read(conn, buf, sizeof(buf));
+            if (n > 0) {
+                if (write(conn, buf, (size_t) n) < 0) {
+                    close(conn);
+                    conn = -1;
+                }
+            } else {
+                close(conn);
+                conn = -1;
+            }
+        }
+    }
+    if (conn >= 0)
+        close(conn);
+    close(listener);
+    close(dgram);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    long port, seconds;
+
+    if (argc != 4) {
+        fprintf(stderr, "usage: hostpeer hold|echo PORT SECONDS\n");
+        return 2;
+    }
+    port = strtol(argv[2], NULL, 10);
+    seconds = strtol(argv[3], NULL, 10);
+    if (port <= 0 || port > 65535 || seconds < 0) {
+        fprintf(stderr, "hostpeer: a port in 1..65535 and a whole number "
+                "of seconds\n");
+        return 2;
+    }
+    if (strcmp(argv[1], "hold") == 0)
+        return hold(port, seconds);
+    if (strcmp(argv[1], "echo") == 0)
+        return echo(port, seconds);
+    fprintf(stderr, "hostpeer: unknown job '%s'; hold or echo\n", argv[1]);
+    return 2;
+}

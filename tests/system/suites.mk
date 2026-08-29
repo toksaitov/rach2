@@ -61,7 +61,7 @@ NIC_DEV          = --device $(NIC),netdev=net0
 DEADLINE        = build/tests/system/deadline
 PCAPCHECK       = build/tests/system/pcapcheck
 MKFIXTURE       = build/tests/system/mkfixture
-HOLDPORT        = build/tests/system/holdport
+HOSTPEER        = build/tests/system/hostpeer
 HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
@@ -81,9 +81,10 @@ $(PCAPCHECK): tests/system/checkers/pcapcheck.c
 $(MKFIXTURE): tests/system/fixtures/mkfixture.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
-# The TCP peer (tests/system/runner/holdport.c) the procfiles suite needs so the
-# connection it looks for in /proc/net/tcp is a live one.
-$(HOLDPORT): tests/system/runner/holdport.c
+# The host end of a connection (tests/system/runner/hostpeer.c): the live TCP
+# connection procfiles looks for in /proc/net/tcp, and the echo server the
+# socket suite sends to.
+$(HOSTPEER): tests/system/runner/hostpeer.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 # The three runners (tests/system/runner/): the serial harness every suite
@@ -120,7 +121,7 @@ run-default: test-image $(RUNTESTS)
 # this built first, each suite's own target finds its work done and only boots
 # machines. The list is the union of what the `run-*` targets depend on, and
 # `tests/run` checks that it stays the union.
-prepare-all: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOLDPORT) \
+prepare-all: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
              $(MKFIXTURE) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
              busybox check-busybox check-dropbearmulti check-libc \
              check-pdpmake check-setid check-tcc ish krffs musl-programs \
@@ -155,6 +156,65 @@ run-noentropy: test-image $(HARNESS)
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 180 --ok "PASSWDMUSL OK (fail-closed)" \
 	    "expect=Type 'help'" "send=exec /musl/passwdmusl" wait=60
+# `tests/run fault`: the three probes whose whole claim is that the kernel
+# killed them. vmfault writes through a pointer in no mapping, vmro writes a
+# page it mapped read-only, and winprobe reads the page-cache window, which
+# belongs to the kernel. Each must die on signal 11 and leave the machine
+# running, so the boot ends by executing a program that prints a token: a
+# kernel that took any of the three faults with it cannot print it. The
+# `--never` text is the line each probe prints when it was not killed. These
+# cannot join
+# the shared probe boot, which scores a probe by its exit status; a probe that
+# is killed has none.
+run-fault: rach2 tests krffs test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 120 --ok "Hello from ELF!" --never "ERROR still alive" \
+	    "expect=Type 'help'" \
+	    "send=exec /vmfault" \
+	    "expect=vmfault: about to dereference a wild pointer" \
+	    "expect=killed by signal 11" \
+	    "send=exec /vmro" \
+	    "expect=vmro: about to write a read-only page" \
+	    "expect=killed by signal 11" \
+	    "send=exec /winprobe" \
+	    "expect=winprobe: about to read the page-cache window" \
+	    "expect=killed by signal 11" \
+	    "send=exec /hello"
+# `tests/run console`: the two probes that read from the console, which the
+# shared probe boot cannot run because they block until something is typed.
+# stdintest reads three lines and prints what it read, so the steps assert the
+# text as well as the count: a read that returns the right number of the wrong
+# bytes passes the probe and fails here. The third read asks for five bytes of a
+# longer line, which is where a kernel that ignored the buffer size would be
+# caught. ttyprobe is driven the way a terminal drives: a line with two erases
+# in it while the console is cooked, then one byte with no newline once the
+# probe has switched the console to raw. `sendraw` is what delivers both.
+# `tests/run socket`: the guest opening connections of its own, checked by a
+# host that answers (see tests/system/suites/socket.sh).
+run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER)
+	sh tests/system/suites/socket.sh build/rach2/kernel $(TEST_IMAGE) \
+	    $(HARNESS) $(HOSTPEER)
+run-console: rach2 tests krffs test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 120 --ok "All stdin syscalls passed!" \
+	    "expect=Type 'help'" "send=exec /stdintest" \
+	    "expect=Test 1: read from stdin" "send=alpha" \
+	    'expect=Read 5 bytes: "alpha"' \
+	    "expect=Test 2: second read" "send=bravo line" \
+	    'expect=Read 10 bytes: "bravo line"' \
+	    "expect=Test 3: small buffer read" "send=charlie-delta" \
+	    'expect=Read 5 bytes: "charl"'
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 120 --ok "TTYPROBE OK" --never "TTYPROBE FAIL" \
+	    "expect=Type 'help'" "send=exec /ttyprobe" \
+	    "expect=TTYPROBE START" \
+	    'sendraw=ab\x7f\x7fcd\n' \
+	    "expect=COOKED:" wait=2 \
+	    'sendraw=X' \
+	    "expect=RAW:"
 # `tests/run disk`: the disk-backed page-cache integrity check. Builds a disk
 # image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
 # through the cache (rach2.fsdisk), and runs blockprobe from the debug shell,
@@ -951,7 +1011,7 @@ run-login: $(DEMO_CREDS) rach2 utils krffs busybox os-real-image
 # per mount source, each of which must name its own; then `ps`, `df`, `free` and
 # `uptime` on the real image, each of which failed on a missing /proc file.
 PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
-run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HOLDPORT)
+run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HOSTPEER)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
 	sh tests/system/suites/procfiles.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 16 \

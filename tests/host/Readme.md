@@ -41,7 +41,7 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 ## Tests
 
-The suite contains 36 native test programs.
+The suite contains 38 native test programs.
 
 ### Kernel foundations and memory
 

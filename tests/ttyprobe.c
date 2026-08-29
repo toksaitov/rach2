@@ -14,8 +14,8 @@
  *       and no echo. The driver sends "X", read() returns it.
  *
  * Prints "TTYPROBE OK" or "TTYPROBE FAIL". Freestanding; direct int 0x80.
- * Driven by drive_tty.py, which sends the cooked line, then (after the raw
- * switch) the raw byte.
+ * Driven by `tests/run console`, whose harness steps send the cooked line and
+ * then, after the raw switch, the single byte with no newline after it.
  */
 
 typedef unsigned int size_t;

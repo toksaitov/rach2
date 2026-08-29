@@ -25,15 +25,14 @@
  * fails closed without RDSEED and RDRAND. Exit code: 0 if every probe
  * exited 0, else 1.
  *
- * This is the automated end-to-end pass over the test image. A handful of
- * probes are exercised by hand under the harness instead, because each
- * needs a contract a single shared boot does not set up: forktest and
- * cowprobe exit with the child's own status (not 0); stdintest and
- * ttyprobe block on real terminal input; vmfault, vmro, and winprobe fault
- * on purpose (the harness runs each in its own boot, where the kernel
- * kills the faulting process and the shell returns); and pingtest,
- * udptest, tcptest, sockettest, and dnstest need a host echo server or
- * live DNS.
+ * This is the automated end-to-end pass over the test image. Every probe
+ * that reports its result as an exit status runs here; the rest have a
+ * suite of their own, because each needs something this shared boot does
+ * not set up. `tests/run console` types at the console for stdintest and
+ * ttyprobe, which block until something is typed. `tests/run fault` runs
+ * vmfault, vmro and winprobe, which are killed on purpose and so have no
+ * status to report. `tests/run socket` starts a host echo server for
+ * udptest and tcptest, and `tests/run ping` answers pingtest.
  *
  * Usage: runtests --kernel K --initrd I [--cpu max] [--timeout S]
  */
@@ -49,15 +48,20 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* One boot runs all of these, in order. See the header for the probes
-   that are run by hand under the harness instead. */
+/* One boot runs all of these, in order. See the header for the probes that
+   have a suite of their own. */
 static const char *const PROBES[] = {
-    "hello", "filetest", "shelltest", "dirtest", "stattest", "touchtest",
+    "hello", "filetest", "forktest", "shelltest", "dirtest", "stattest",
+    "touchtest",
     "rmtest", "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe",
-    "errnoprobe", "vmprobe", "forkro", "cowregrant", "usercopyfault",
+    "errnoprobe", "vmprobe", "forkro", "cowprobe", "cowregrant",
+    "usercopyfault",
     "forkleak", "fdstale", "dirgrow", "dirprobe", "unlinkdirprobe",
     "pathcanon", "timeprobe",
-    "sigprobe", "credprobe", "ownprobe", "permprobe",
+    "sigprobe", "credprobe", "ownprobe", "permprobe", "sockettest",
+    /* Hermetic without `--live`, which this does not pass: the resolver's
+       pure helpers and the crafted wire data, not the real internet. */
+    "dnstest",
     "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe",
     "devprobe", "jobprobe", "miscprobe", "ptyprobe", "rngprobe",
     "orphanprobe", "loopprobe", "procprobe",

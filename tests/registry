@@ -62,4 +62,7 @@ metal|qemu-system-i386,ssh|full
 netconsole-e1000|qemu-system-i386|full
 crash|qemu-system-i386|full
 reset|qemu-system-i386|full
+socket|qemu-system-i386|full
+fault|qemu-system-i386|full
+console|qemu-system-i386|full
 runner|-|full

@@ -1,15 +1,15 @@
 #!/usr/bin/env sh
 
 #
-# check.sh: Rach2 lightweight quality gate (`tests/run style`).
+# check.sh: the Rach2 source checks (`tests/run style`).
 #
 # Over IN-HOUSE code only (the kernel, the krffs host tools, the utils, the ish
 # shell, the tests, and the build scripts; never the vendored musl/ports trees),
 # runs:
 #
 #   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent
-#   skip) 1. the kernel build with -Werror (the zero-warning policy as a hard
-#   gate) 2. cppcheck (c89, warning+style) with tools/verify/cppcheck.suppress
+#   skip) 1. the kernel build with -Werror (the zero-warning policy, enforced)
+#   2. cppcheck (c89, warning+style) with tools/verify/cppcheck.suppress
 #   (--error-exitcode) 3. shellcheck on the in-house shell scripts
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
 #   5. clang-format: HARD on new-code dirs (tools/ libc/ tests/host, *probe.c)
@@ -26,6 +26,7 @@
 #      the compile-commands generator)
 #  13. the dev-log index (prosecheck devlog): it names every finished
 #      milestone, and names the newest last
+#  14. the test registry against the run- targets in tests/system/suites.mk
 #
 # Usage:
 #     ./check.sh [file.c ...]      # extra files to hard clang-format check
@@ -92,11 +93,11 @@ inhouse_ch()
 # tree, which we never reformat).
 #
 # The globs do not reach tests/musl/ or utils/, and must not be widened to:
-# those are legacy trees the gate deliberately leaves unformatted, and a
+# those are legacy trees this check deliberately leaves unformatted, and a
 # wholesale extension fails today on files nobody is asking to reformat. So a
 # new source under either is listed here BY NAME, in the commit that creates it.
-# Adding the file without adding it here leaves it ungated, which is the failure
-# this comment exists to prevent.
+# A file added without being listed here is never format-checked, which is the
+# failure this comment exists to prevent.
 newcode_ch()
 {
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
@@ -134,7 +135,7 @@ done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
 
 # 1. kernel build (-Werror)
-hr "1/13 kernel build (-Werror)"
+hr "1/14 kernel build (-Werror)"
 if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
     echo "  PASS (0 warnings/errors)"
 else
@@ -143,7 +144,7 @@ fi
 
 # 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
 #    crash or a finding both fail (a silent 0-count cannot mask either).
-hr "2/13 cppcheck (c89, warning+style)"
+hr "2/14 cppcheck (c89, warning+style)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
@@ -174,7 +175,7 @@ fi
 #    legacy QEMU run/build scripts waive SC2086 (option word-splitting is
 #    intentional) and SC2034 (vars shared across sourced fragments); SC1091
 #    covers the dynamic source path in both.
-hr "3/13 shellcheck"
+hr "3/14 shellcheck"
 sc=0
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 $(ls tests/run tests/system/suites/*.sh tests/system/accept/*.sh tools/*/*.sh vendor/musl/*.sh vendor/*/build_*.sh 2>/dev/null) \
@@ -186,7 +187,7 @@ shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
 if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
-hr "4/13 conventions (no //, ASCII, header guards, marked idle wait)"
+hr "4/14 conventions (no //, ASCII, header guards, marked idle wait)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
@@ -217,7 +218,7 @@ if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 
 # 5. clang-format. HARD on new-code dirs + named args; advisory on the legacy
 # tree. Uses --Werror so a real run failure is a real failure (not a 0 count).
-hr "5/13 clang-format"
+hr "5/14 clang-format"
 strict_fail=0
 # shellcheck disable=SC2046
 for f in $(newcode_ch) "$@"; do
@@ -235,7 +236,7 @@ done
 echo "  advisory: $drift in-house files differ from .clang-format (legacy not reformatted)"
 
 # 6. readelf ABI on a freshly linked musl binary (no stale-artifact dependency).
-hr "6/13 readelf ABI (fresh musl link)"
+hr "6/14 readelf ABI (fresh musl link)"
 if [ -f "$LIBC/lib/libc.a" ]; then
     printf 'int main(void){return 0;}\n' >"$VDIR/_abi.c"
     if i686-elf-gcc -static -nostdlib -nostartfiles -isystem "$LIBC/include" \
@@ -259,14 +260,14 @@ if [ -f "$LIBC/lib/libc.a" ]; then
         echo "  FAIL: musl link failed; see $VDIR/_abi.log"; fail=1
     fi
 else
-    echo "  FAIL: libc not built; run vendor/musl/build_libc.sh first (the ABI gate"
-    echo "          cannot verify the musl ABI without it, so it does not pass)"
+    echo "  FAIL: libc not built; run vendor/musl/build_libc.sh first (this"
+    echo "          check cannot verify the musl ABI without it)"
     fail=1
 fi
 
 # 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC,
 #    so a newly added kernel source cannot be silently dropped from the build.
-hr "7/13 kernel source list (C_SRC vs disk) and the guest build lists"
+hr "7/14 kernel source list (C_SRC vs disk) and the guest build lists"
 if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
    "$GUESTCHECK" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
@@ -277,7 +278,7 @@ fi
 # Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
 # catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
 # tree.
-hr "8/13 text style"
+hr "8/14 text style"
 if "$REPO/tools/verify/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS (textcheck)"
 else
@@ -312,7 +313,7 @@ fi
 # The probe runner's scoring rule, checked against recorded serial shapes rather
 # than a boot: it decides every probe's PASS or FAIL, so a regression in it is
 # invisible in the one place that would otherwise catch it.
-hr "9/13 probe scoring rule (runtests selftest)"
+hr "9/14 probe scoring rule (runtests selftest)"
 if "$RUNTESTS" --selftest >"$VDIR/verify_score.log" 2>&1; then
     echo "  PASS"
 else
@@ -320,14 +321,14 @@ else
 fi
 
 # Every set-id line in every image manifest, against the per-image allowlist.
-# This half reads sources only, so it belongs in the source gate; the image
+# This half reads sources only, so it belongs with the source checks; the image
 # inventory that reads a built artifact runs from mkimage.sh and mkdisk.sh
 # instead.
-hr "10/13 set-id guard (selftest + manifest sweep)"
+hr "10/14 set-id guard (selftest + manifest sweep)"
 setid=0
 # The self-test first: it covers the failure cases no current manifest
 # exercises, so without it a regression in, say, the image walk or the path
-# decoding would leave every real manifest passing and the gate green.
+# decoding would leave every real manifest passing and this check silent.
 SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
 if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
     mkdir -p "${SETIDCHECK%/*}"
@@ -345,9 +346,9 @@ fi
 
 # 11. image reproducibility: one tree, one image. It stages a scratch manifest
 #     twice with the real host tools, so those are BUILT here first, the way
-#     step 1 builds the kernel it checks: a gate that tested whatever binary
-#     happened to be lying in build/ would be reporting on another day's source.
-hr "11/13 image reproducibility (one tree, one image)"
+#     step 1 builds the kernel it checks: a check that tested whatever binary
+#     happened to be lying in build/ would report on another day's source.
+hr "11/14 image reproducibility (one tree, one image)"
 if ! make -C "$REPO/krffs" >"$VDIR/verify_repro_build.log" 2>&1; then
     echo "  FAIL: the krffs host tools did not build; see $VDIR/verify_repro_build.log"
     fail=1
@@ -368,7 +369,7 @@ fi
 #     can come to describe two different machines, and the compilation-database
 #     generator must join wrapped recipes, select only compile commands, and
 #     refuse to publish an invalid database.
-hr "12/13 checker selftests"
+hr "12/14 checker selftests"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 if [ ! -x "$ELFCHECK" ] || [ "$REPO/tools/inspect/elfcheck.c" -nt "$ELFCHECK" ]; then
     mkdir -p "${ELFCHECK%/*}"
@@ -391,12 +392,48 @@ fi
 #     so every finished milestone must have an entry, the entries must be in the
 #     directories' numeric order, and a directory holding only a plan must have
 #     none. The selftest proves the rules reject; the run proves this index.
-hr "13/13 dev-log index"
+hr "13/14 dev-log index"
 if "$PROSECHECK" devlog >"$VDIR/verify_devlog.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_devlog.log"; fail=1
 fi
+# 14. the test registry against the suites it names. tests/run reads the
+#     registry and calls make with `run-` and the name, so a row whose target
+#     does not exist is a suite that cannot run, and a target with no row is a
+#     suite nothing runs. Neither shows up anywhere else: make accepts an
+#     unknown goal only by failing, which happens on the day someone asks for
+#     that suite, and a target no one names is silent forever.
+hr "14/14 test registry against tests/system/suites.mk"
+{
+    awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REPO/tests/registry" | sort > "$VDIR/_reg.txt"
+    grep -o '^run-[a-z0-9-]*' "$REPO/tests/system/suites.mk" | sed 's/^run-//' \
+        | sort -u > "$VDIR/_tgt.txt"
+} 2>"$VDIR/verify_registry.log"
+regfail=0
+if [ "$(wc -l < "$VDIR/_reg.txt")" != "$(sort -u "$VDIR/_reg.txt" | wc -l)" ]; then
+    echo "  FAIL: a suite is named twice in tests/registry"
+    sort "$VDIR/_reg.txt" | uniq -d | sed 's/^/    /'
+    regfail=1
+fi
+missing=$(comm -23 "$VDIR/_reg.txt" "$VDIR/_tgt.txt")
+extra=$(comm -13 "$VDIR/_reg.txt" "$VDIR/_tgt.txt")
+if [ -n "$missing" ]; then
+    echo "  FAIL: in tests/registry with no run- target:"
+    echo "$missing" | sed 's/^/    /'
+    regfail=1
+fi
+if [ -n "$extra" ]; then
+    echo "  FAIL: a run- target no row in tests/registry names:"
+    echo "$extra" | sed 's/^/    /'
+    regfail=1
+fi
+if [ "$regfail" -eq 0 ]; then
+    echo "  PASS ($(wc -l < "$VDIR/_reg.txt" | tr -d ' ') suites, each with its target)"
+else
+    fail=1
+fi
+
 hr "result"
 if [ "$fail" -eq 0 ]; then echo "verify-style: PASS"; else echo "verify-style: FAIL"; fi
 exit "$fail"

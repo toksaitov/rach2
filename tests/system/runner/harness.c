@@ -10,11 +10,21 @@
  * as a missing serial marker.
  *
  * Usage:
- *   harness --kernel K --initrd I [--net NETVAL] [--timeout S] [STEP ...]
+ *   harness --kernel K --initrd I [--net NETVAL] [--timeout S]
+ *           [--never TEXT ...] [STEP ...]
+ *
+ *   --never TEXT fails the run if TEXT ever appears on the serial console,
+ *   however the run ends. It is how a probe that must be killed is checked:
+ *   the line it prints when it was not killed is forbidden. It may be given
+ *   more than once.
  *
  *   STEP forms:
  *     expect=REGEX   wait until REGEX appears (per-step cap = --steptmo)
  *     send=TEXT      write TEXT and a newline to the guest serial
+ *     sendraw=TEXT   write TEXT with no newline, for a guest terminal in
+ *                    raw mode, where the newline would be read as the
+ *                    byte. `\\`, `\n`, `\r`, `\t` and `\xNN` in TEXT stand
+ *                    for the bytes they name
  *     wait=SECS      sleep SECS, draining serial
  *     tcp=PORT       open a TCP connection to 127.0.0.1:PORT and close it,
  *                    which a `hostfwd=tcp::PORT-:GUESTPORT` in --net
@@ -431,15 +441,85 @@ static int expect_pattern(const char *pattern)
     return 0;
 }
 
-static void send_line(const char *text)
+/* `newline` is what separates `send=` from `sendraw=`. A terminal in raw
+   mode delivers each byte as it arrives, so a probe reading one byte in
+   that mode is handed the newline of a `send=` as its byte, and the byte
+   the test meant to deliver arrives after the read it was written for. */
+static int hexval(int c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+
+static void send_text(const char *text, int newline)
 {
     size_t n = strlen(text);
 
     if (child_in < 0)
         return;
-    if (write(child_in, text, n) < 0 || write(child_in, "\n", 1) < 0) {
+    if (write(child_in, text, n) < 0) {
         /* A closed pipe means the guest is gone; the caller notices. */
+        return;
     }
+    if (newline && write(child_in, "\n", 1) < 0) {
+        /* Same. */
+    }
+}
+
+static void send_line(const char *text)
+{
+    send_text(text, 1);
+}
+
+/* Decode `\\`, `\n`, `\r`, `\t` and `\xNN` in place of the bytes they name,
+   so a step can deliver a control byte the shell would not carry. Only
+   `sendraw=` is decoded: `send=` has always written its text as typed, and
+   a step that contains a backslash today means the backslash.
+
+   An escape this does not know is an error rather than the letter after
+   the backslash: a step that meant a byte and got a letter sends the wrong
+   input and reads as a kernel fault. Returns the length, or -1. */
+static int unescape(const char *in, char *out, size_t cap)
+{
+    size_t n = 0;
+
+    while (*in != '\0') {
+        int c = (unsigned char) *in++;
+
+        if (c == '\\') {
+            int h, l;
+
+            switch (*in) {
+            case '\\': c = '\\'; in++; break;
+            case 'n':  c = '\n'; in++; break;
+            case 'r':  c = '\r'; in++; break;
+            case 't':  c = '\t'; in++; break;
+            case 'x':
+                h = hexval(in[1]);
+                l = h < 0 ? -1 : hexval(in[2]);
+                if (l < 0) {
+                    fprintf(stderr, "harness: \\x must be followed by two "
+                            "hexadecimal digits\n");
+                    return -1;
+                }
+                c = h * 16 + l;
+                in += 3;
+                break;
+            default:
+                fprintf(stderr, "harness: unknown escape \\%c\n", *in);
+                return -1;
+            }
+        }
+        if (n + 1 > cap)
+            return -1;
+        out[n++] = (char) c;
+    }
+    return (int) n;
 }
 
 /* ---- main ---- */
@@ -485,6 +565,8 @@ int main(int argc, char **argv)
     const char *kernel = NULL, *initrd = NULL, *append = NULL;
     const char *net = "user,id=net0", *device = "rtl8139,netdev=net0";
     const char *log = NULL, *ok = NULL;
+    const char *nevers[MAX_ARGS];
+    int n_never = 0;
     const char *drives[MAX_ARGS];
     const char *qemu_args[MAX_ARGS];
     const char *steps[MAX_STEPS];
@@ -516,7 +598,11 @@ int main(int argc, char **argv)
         OPT("--log", log)
         OPT("--ok", ok)
 #undef OPT
-        if (strcmp(arg, "--drive") == 0 && i + 1 < argc) {
+        if (strcmp(arg, "--never") == 0 && i + 1 < argc) {
+            if (n_never >= MAX_ARGS)
+                return too_many("--never", MAX_ARGS);
+            nevers[n_never++] = argv[++i];
+        } else if (strcmp(arg, "--drive") == 0 && i + 1 < argc) {
             if (n_drives >= MAX_ARGS)
                 return too_many("--drive", MAX_ARGS);
             drives[n_drives++] = argv[++i];
@@ -667,6 +753,18 @@ int main(int argc, char **argv)
                   (unsigned long) consumed);
         } else if (strncmp(step, "send=", 5) == 0) {
             send_line(step + 5);
+        } else if (strncmp(step, "sendraw=", 8) == 0) {
+            char raw[256];
+            int n = unescape(step + 8, raw, sizeof(raw) - 1);
+
+            if (n < 0) {
+                step_failures++;
+            } else {
+                raw[n] = '\0';
+                if (child_in >= 0 && write(child_in, raw, (size_t) n) < 0) {
+                    /* A closed pipe means the guest is gone. */
+                }
+            }
         } else if (strncmp(step, "wait=", 5) == 0) {
             pump(now() + atof(step + 5));
         } else if (strncmp(step, "tcp=", 4) == 0) {
@@ -787,6 +885,20 @@ int main(int argc, char **argv)
     pump(now() + 0.5);
     if (logf != NULL)
         fclose(logf);
+
+    /* A forbidden text fails the run whatever else happened. A probe whose
+       whole claim is that the kernel killed it prints one line if it was
+       not killed, and that line is the failure: the probe's own status
+       cannot report it, because a probe that was not killed goes on to
+       exit however it likes. */
+    for (i = 0; i < n_never; i++) {
+        if (contains(buf, buf_len, nevers[i])) {
+            trace("decide forbidden=%s", nevers[i]);
+            fprintf(stderr, "HARNESS: saw '%s', which must not appear\n",
+                    nevers[i]);
+            return 1;
+        }
+    }
 
     /* A serial-token check passes on the printed token alone, for a probe
        run in the debug shell that never stops QEMU itself. */

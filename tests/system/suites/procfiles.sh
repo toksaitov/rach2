@@ -182,7 +182,7 @@ QPID=$!
 # connection whether or not anything inside is listening: without a real
 # listener the row would simply never appear and the check would fail for a
 # reason that has nothing to do with netstat.
-( sleep 42; "$REPO/build/tests/system/holdport" "$FWD_PORT" 40 ) \
+( sleep 42; "$REPO/build/tests/system/hostpeer" hold "$FWD_PORT" 40 ) \
     >/dev/null 2>&1 &
 PEER_PID=$!
 if ! wait_serial "$REAL.applets.log" "ND-STATUS:" 240; then

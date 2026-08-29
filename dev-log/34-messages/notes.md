@@ -73,3 +73,51 @@ Open: `prepare-all` rebuilds `build/images/rach2-sealed.disk` on every run,
 about 25 seconds, whether or not anything it stages has changed. It is a
 product rule rather than a test rule, so it stays out of this phase; recorded
 here for phase 8.
+
+## The orphaned probes, 2026-08-30
+
+Ten guest probes were built, staged in the test image, and run by nothing:
+cowprobe, forktest, sockettest, dnstest, stdintest, ttyprobe, vmfault, vmro,
+winprobe, udptest and tcptest. Nine had never been run by any target in the
+history of the tree; vmfault appeared in `exitline` only as material for
+checking the line the kernel prints, not as a probe with a result. The header
+of `runtests.c` said they were "run by hand under the harness instead", and
+that was not true of any of them.
+
+Each was read and given a suite:
+
+* cowprobe, forktest, sockettest and dnstest now run in the shared probe boot.
+  All four exit 0 on success, which is all that boot requires; the header's
+  claim that cowprobe and forktest carry the child's status was wrong. dnstest
+  had one block that resolves real names through SLIRP, so the live block now
+  runs only with `--live`, which the suite does not pass. 63 probes to 67.
+* `tests/run fault`: vmfault, vmro and winprobe in one boot. They are killed on
+  purpose, so they have no status; the harness gained `--never TEXT`, which
+  fails a run if a text ever appears, and the text is the line each probe
+  prints when it was not killed.
+* `tests/run console`: stdintest and ttyprobe. Both block until something is
+  typed. The harness gained `sendraw=TEXT`, which writes with no newline after
+  it and reads `\xNN`, because a terminal in raw mode would otherwise read the
+  newline of a `send=` as the byte under test.
+* `tests/run socket`: udptest and tcptest against a host echo server. This is
+  the guest opening a connection of its own and being answered, which nothing
+  else in the suite does: the SSH suites have the guest listening, and the
+  capture suites read what it sent with no one answering.
+
+`holdport` became `hostpeer`, with `hold` and `echo` jobs. The tool count stays
+at seven.
+
+Proved by mutation, each restored from a trap: a read-only page made writable
+(fault), a read that ignores the buffer size and a `sendraw` that stops
+decoding a byte (console), and an echo server that drops a byte or answers with
+other bytes (socket). All caught.
+
+## The registry check, 2026-08-30
+
+A one-line edit to `tests/registry` replaced `default` with two rows, because
+`fault|qemu-system-i386|full` is a substring of `default|qemu-system-i386|full`.
+Nothing noticed until `tests/run default` said the name was unknown: make
+accepts an unknown goal only by failing, on the day someone asks for that
+suite, and a target no row names is silent forever. `tests/run style` now
+checks the registry against the `run-` targets in both directions, and refuses
+a name written twice.

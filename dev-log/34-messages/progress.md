@@ -20,9 +20,9 @@ a decision recorded in `notes.md`. Updated in the commit that completes an item.
 * [x] `-e1000` registry entries added; `e1000` keeps the three selection boots
 * [x] Runner rewritten: pool, PATH shim, several names, tool check before build, `RACH2_WORKERS` validated
 * [x] Runner self-test: registry parser, pool failure reporting, leak attribution
-* [ ] `tests/system/Readme.md` names every runner mechanism with its reason
-* [ ] Three stale document references fixed; `tests/echoprobe.c` deleted
-* [ ] Every orphaned probe read, then given a suite or deleted (`notes.md` records which)
+* [x] `tests/system/Readme.md` names every runner mechanism with its reason
+* [x] Three stale document references fixed; `tests/echoprobe.c` deleted
+* [x] Every orphaned probe read, then given a suite or deleted (`notes.md` records which)
 * [ ] `procfiles` mount-source probe replaces three full `procprobe` boots
 * [ ] `addressed` becomes a single-probe address boot
 

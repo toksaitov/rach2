@@ -102,7 +102,7 @@ cd rach2
 ./run.sh test
 ```
 
-At the debug shell, `exec hello` runs a root program and `exec musl/hello` runs a musl program. The run script supplies `-cpu max` by default. A deliberate-fault program returns to the shell only if the kernel contains the fault to that process. Programs that need a disk, host traffic, input timing, or a different CPU should be run through their dedicated target or through `tests/system/runner/harness.py` with the setup in the root `Makefile`.
+At the debug shell, `exec hello` runs a root program and `exec musl/hello` runs a musl program. The run script supplies `-cpu max` by default. A deliberate-fault program returns to the shell only if the kernel contains the fault to that process. Programs that need a disk, host traffic, input timing, or a different CPU should be run through their dedicated target or through `build/tests/system/harness` with the setup in `tests/system/suites.mk`.
 
 ## Adding a guest test
 

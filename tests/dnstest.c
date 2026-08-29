@@ -81,8 +81,9 @@ static const unsigned char v_badname[] = {
     0x40, 0x00,0x01
 };
 
-int main(void)
+int main(int argc, char **argv)
 {
+    int live = (argc > 1 && strcmp(argv[1], "--live") == 0);
     uint32_t ip = 0;
     unsigned char qb[64];
     int ql, r;
@@ -149,18 +150,23 @@ int main(void)
     check("reject leadingdot", dns_build_query(qb, (int)sizeof(qb), ".com", 0x1) < 0);
     check("reject small cap",  dns_build_query(qb, 5, "example.com", 0x1) < 0);
 
-    puts("live DNS (via SLIRP 10.0.2.3, needs host internet):");
-    r = resolve_host("one.one.one.one", &ip);
-    check("one.one.one.one resolves", r == 0);
-    if (r == 0) {
-        print_ip("one.one.one.one", ip);
+    if (live) {
+        puts("live DNS (via SLIRP 10.0.2.3, needs host internet):");
+        r = resolve_host("one.one.one.one", &ip);
+        check("one.one.one.one resolves", r == 0);
+        if (r == 0) {
+            print_ip("one.one.one.one", ip);
+        }
+        r = resolve_host("dns.google", &ip);
+        check("dns.google resolves", r == 0);
+        if (r == 0) {
+            print_ip("dns.google", ip);
+        }
+        check("nxdomain.invalid fails cleanly",
+              resolve_host("nxdomain.invalid", &ip) != 0);
+    } else {
+        puts("live DNS: skipped; pass --live to resolve real names");
     }
-    r = resolve_host("dns.google", &ip);
-    check("dns.google resolves", r == 0);
-    if (r == 0) {
-        print_ip("dns.google", ip);
-    }
-    check("nxdomain.invalid fails cleanly", resolve_host("nxdomain.invalid", &ip) != 0);
 
     puts("");
     printf("Results: %d passed, %d failed\n", passed, failed);
