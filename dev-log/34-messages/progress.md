@@ -12,10 +12,10 @@ a decision recorded in `notes.md`. Updated in the commit that completes an item.
 
 ## Phase 2: the test system (12 items)
 
-* [ ] Suite recipes, test-only variables and tool rules moved to `tests/system/suites.mk`
-* [ ] Root `Makefile` includes it with one line
-* [ ] Test tools dropped from the root `all` target
-* [ ] `tools/verify/check.sh` asks make for `runtests` instead of compiling it
+* [x] Suite recipes, test-only variables and tool rules moved to `tests/system/suites.mk`
+* [x] Root `Makefile` includes it with one line
+* [x] Test tools dropped from the root `all` target
+* [x] `tools/verify/check.sh` asks make for `runtests` instead of compiling it
 * [ ] Registry reduced to `name|tools|tier`
 * [ ] `-e1000` registry entries added; `e1000` keeps the three selection boots
 * [ ] Runner rewritten: pool, PATH shim, several names, tool check before build, `RACH2_WORKERS` validated
@@ -31,8 +31,8 @@ Proof items:
 * [ ] Every suite passes singly
 * [ ] `make distclean` then `tests/run authority` builds from nothing
 * [ ] A touched kernel source rebuilds the kernel before the next suite runs it
-* [ ] `make` at the root builds no test tool
-* [ ] Root `Makefile` diff is removals and one `include`
+* [x] `make` at the root builds no test tool
+* [x] Root `Makefile` diff is removals and one `include`
 * [ ] The sixteen-suite batch passes together
 * [ ] Runner self-test passes
 * [ ] Leak attribution names `crash` when its defect is restored

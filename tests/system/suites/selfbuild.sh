@@ -181,7 +181,7 @@ fi
 step "COPYONE" "rm -rf /home/test/kbuild; mkdir /home/test/kbuild && cd /home/test/kbuild && cp -r /src/rach2 . && echo COPY\"\"ONE"
 step "BUILDONE" "cd /home/test/kbuild/rach2 && make -f guest.mk > /tmp/kb1.out 2>&1; echo BUILD\"\"ONE=\$?"
 step "TAILONE" "busybox tail -4 /tmp/kb1.out; echo TAIL\"\"ONE"
-step "HASHONE" "cd /home/test/kbuild/rach2 && busybox sha256sum kernel > /tmp/k1.sha; K1=\$(busybox cat /tmp/k1.sha); echo HASH\"\"ONE=\$K1 SIZE\"\"ONE=\$(busybox stat -c %s kernel)"
+step "HASHONE" "cd /home/test/kbuild/rach2 && busybox sha256sum kernel > /tmp/k1.sha; K1=\$(busybox cat /tmp/k1.sha); echo HASH\"\"ONE=\$K1 SIZE\"\"ONE=\$(busybox stat -c %s kernel) SIZE\"\"END"
 step "KEEPONE" "cp /home/test/kbuild/rach2/kernel /home/test/kernel.selfbuilt && echo KEEP\"\"ONE"
 step "COPYTWO" "cd /home/test/kbuild && rm -rf rach2 && cp -r /src/rach2 . && echo COPY\"\"TWO"
 step "BUILDTWO" "cd /home/test/kbuild/rach2 && make -f guest.mk > /tmp/kb2.out 2>&1; echo BUILD\"\"TWO=\$?"
@@ -230,7 +230,11 @@ if ! grep -q "BUILDONE=0" "$LOG"; then
     wait_token "TAILONE" 60 || true
     fail "the first kernel build failed; its last lines are in the kept log"
 fi
-if ! wait_token "HASHONE=[0-9a-f]" 240; then
+# The size is the last field of the hash line, so waiting for `HASHONE=` and
+# reading the size at once reads a number the machine is still typing: under a
+# loaded pool this returned 3979 for a kernel of 397980 bytes and called it no
+# kernel. The wait is for the marker that follows the value.
+if ! wait_token "SIZEEND" 240; then
     fail "the first build's kernel was never hashed"
 fi
 # A sanity floor, not a structure check (the kernel checker is that): the
