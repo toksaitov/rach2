@@ -138,3 +138,18 @@ from .77, and an ARP request sent as .77. Nothing on that network ever asks the
 machine for its address, so `--owns` cannot be used and `pcapcheck` gained
 `--arp-from`, which reads the sender of a request instead. Proved by making
 `netconf.c` ignore `rach2.ip`: no packet leaves from .77 and the suite fails.
+
+## Phase 2 proofs, 2026-08-30
+
+`tests/run all`: 57 suites, all passed, 465s, no machine left running. The 44
+suites of milestone 33 took the same 465s, so the thirteen added here cost no
+wall-clock time: they fill slots the pool was leaving idle around the four long
+suites.
+
+A touched kernel source is rebuilt before the next suite: `touch
+rach2/sys/serial.c` then `tests/run fault` rebuilt `serial.o` and the kernel
+one second after the touch, and the suite ran on the new kernel.
+
+Leak attribution names the suite: with `crash.sh` stopped from killing its
+machines, `tests/run crash` failed with "run: crash: left 76756 76763 76792
+running", which is the defect milestone 33 fixed, restored and caught.
