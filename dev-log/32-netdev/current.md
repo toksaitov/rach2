@@ -1,22 +1,10 @@
-# Milestone 32: resume state
+# Milestone 32: complete
 
-Phase: 4, the interface. Items 1 and 2 committed; item 3 ready to commit.
+All six phases are done and committed. The record is in `Readme.md` beside this
+file, the deviations and findings in `notes.md`, and `32-netdev` is in the
+dev-log index.
 
-Done: `tx` returns a verdict and the interface counts what each layer refused,
-so `/proc/net/dev` prints six real counters instead of two. `stop` silences a
-card at shutdown and after a bring-up that failed with DMA already enabled.
-`link` reports the link, and `IFF_RUNNING` now means the link is up rather
-than a device being bound.
-
-Evidence: 43 mutations proved across five scripts; new `tests/host/netdev_hosttest.c`
-covers the probe walk; `procfiles` asserts the sixteen `/proc/net/dev` fields
-and `ifconfig` reporting RUNNING; `netconsole` asserts the shutdown wire
-contract with a new `pcapcheck --reject`. Suites passing: style, host, netif,
-procfiles, default, shutdown, reset, netconsole.
-
-Two defects found and fixed along the way: `k_puts` never reached serial, so a
-netconsole reader was never told the machine was stopping; and the card really
-was transmitting through `power_stop`, which a capture now shows it no longer
-does.
-
-Next: phase 5, the scripts and documents.
+Final evidence: a cold build from `distclean` in 35s at `-j8`; `tests/run all`
+reporting all 44 suites passed; and `tests/run e1000` (915s), `tests/run dhcp`
+(316s), and `tests/run ssh` (29s) run again on their own. The tree is clean and
+nothing was pushed.
