@@ -56,7 +56,7 @@ There are two classes of output and two calls. A message whose text is a test co
 <3>[12.34] ahci: command: timed out on port 0
 ```
 
-The `<priority>` prefix is the level with the kernel facility implied. It is the form BusyBox's `klogd` parses, so a later userland logger needs no kernel change. The bracket is uptime in seconds and hundredths from the counter the kernel already keeps without the 497-day wrap; before the timer starts it reads `0.00`. Calendar time is not the kernel's business.
+The `<priority>` prefix is the level with the kernel facility implied. It is the form BusyBox's `klogd` parses, so a later userland logger needs no kernel change. The bracket is uptime in seconds and hundredths from the counter the kernel already keeps without the 497-day wrap; before the timer starts it reads `0.00`. Calendar time is added by whatever stores or forwards the record later, not by the kernel.
 
 No facilities: a kernel is one facility and the subsystem string is the classification that matters. No RFC 3164 or 5424 framing in the kernel. No writable `/dev/kmsg`. No runtime filters, rate limiting, duplicate suppression or binary format.
 
@@ -65,7 +65,7 @@ No facilities: a kernel is one facility and the subsystem string is the classifi
 The order matters because a destination can fail.
 
 1. The ring. 16 KiB, always on, every level. Whole records are evicted oldest first, so the ring never begins mid-line. `/dev/bootlog` hands it out unchanged and `/bin/dmesg` stays its reader; the content becomes kernel records instead of every byte that crossed the serial port. The ring is written first, before any other destination, so a failed serial port or Ethernet path cannot lose the machine's own copy.
-2. The screen, `INFO` and above, coloured by level, without the prefix and timestamp, which are noise to a person in front of the machine. The boot narrative stays on the screen: for a teaching kernel it is part of the explanation, and a quiet screen would remove the one place a failed network probe's diagnostic can appear when the network is what failed. Register dumps and probe detail become `DEBUG` and leave the screen.
+2. The screen, `INFO` and above, coloured by level, without the prefix and timestamp, which a person in front of the machine does not need. The boot narrative stays on the screen: for a teaching kernel it is part of the explanation, and a quiet screen would remove the one place a failed network probe's diagnostic can appear when the network is what failed. Register dumps and probe detail become `DEBUG` and leave the screen.
 3. The serial port, every level, when a UART exists, through a transmit wait bounded at a fixed count of polls so a wedged UART costs a bounded delay per record and never a hang.
 4. Netconsole, every level, when `rach2.netconsole` was requested. It keeps its EtherType, header, boot id, sequence, checksum, broadcast destination, early buffer and recursion guard, all of which `netconsole_hosttest.c` and `pcapcheck` hold it to. It takes whole records from the logger instead of bytes from the serial tap. It stays because it works below IP and can therefore report a broken address configuration, which nothing addressed can do; syslog over UDP is a possible later addition, not a replacement.
 
