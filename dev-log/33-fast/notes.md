@@ -136,3 +136,28 @@ cards' full network suites were then run at once: 10 of 10, in 340s, which is
 
 The inner job count is fixed at 4 rather than inherited. This suite is already
 one worker of an outer pool, and an unbounded `-j` would multiply the two.
+
+## Phase 4: the worker count
+
+Measured on this ten-core machine, one run per count. Three runs each was not
+worth 2.4 hours: the variance was already measured in phase 3 at three seconds
+across three runs.
+
+* 4 workers: 1286s
+* 8 workers: 728s
+* 12 workers: 587s
+* 16 workers: 527s
+* 20 workers: 499s
+* 24 workers: 500s
+
+It stops improving at twenty. Four, which the first draft of the plan called a
+measured ceiling without having measured it, is two and a half times slower
+than the knee. The reason is plain in the earlier numbers: a guest costs about
+a fifth of a processor, so ten cores are nowhere near busy at four machines,
+which is why the old serial suite used three percent of one.
+
+The default is twice the processor count rather than the constant twenty, so
+it is right on a machine that is not this one. Here that computes to twenty and
+the run takes 499s, matching the sweep.
+
+The floor is `account` at 434s. Nothing but phase 6 can go below it.

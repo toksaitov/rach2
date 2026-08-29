@@ -20,7 +20,23 @@ REGISTRY="$REPO/tests/registry"
 # How many suites run at once under `tests/run all`. One is the old serial
 # behaviour, which is what a machine with little memory or a person wanting
 # readable output should ask for.
-WORKERS="${RACH2_WORKERS:-8}"
+#
+# The default is twice the processors, because a suite spends most of its life
+# waiting for an emulated machine rather than computing: one guest costs about
+# a fifth of a processor and 71 MB, so the count that keeps the host busy is
+# well above the core count. Measured on a ten-core machine, the whole run
+# takes 1286s at four workers, 728s at eight, 587s at twelve, 527s at sixteen,
+# and 499s at twenty, after which it stops improving; twenty is twice ten.
+default_workers() {
+    n=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+    case "$n" in
+        ''|*[!0-9]*) n=4 ;;
+    esac
+    n=$((n * 2))
+    [ "$n" -lt 4 ] && n=4
+    echo "$n"
+}
+WORKERS="${RACH2_WORKERS:-$(default_workers)}"
 
 # A scratch directory for this run: the machine ledgers, and the shim that
 # writes them. Removed on every way out including an interruption.
