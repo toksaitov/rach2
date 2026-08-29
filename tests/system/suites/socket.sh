@@ -29,27 +29,32 @@ if [ ! -x "$HARNESS" ] || [ ! -x "$HOSTPEER" ]; then
 fi
 
 PEER=""
+PEER_LOG="$IMAGE.peer.log"
 stop() {
     [ -n "$PEER" ] && kill "$PEER" 2>/dev/null
+    [ -n "$PEER" ] && wait "$PEER" 2>/dev/null
     PEER=""
 }
 trap 'stop' EXIT INT TERM HUP
+rm -f "$PEER_LOG"
 
-"$HOSTPEER" echo "$PORT" 200 &
+"$HOSTPEER" echo "$PORT" 200 >"$PEER_LOG" 2>&1 &
 PEER=$!
 # The server must be listening before the machine boots: a datagram that
-# arrives at a closed port is discarded, and the probe would spend its
-# retries on an empty room.
+# arrives at a closed port is discarded, and the probe would spend its retries
+# on nothing. What is waited for is a connection that succeeds, not a process
+# that exists: the shell has a pid for the child before the child has run
+# `hostpeer`, let alone bound anything.
 i=0
 while [ "$i" -lt 50 ]; do
-    if kill -0 "$PEER" 2>/dev/null; then
+    if "$HOSTPEER" hold "$PORT" 0 >/dev/null 2>&1; then
         break
     fi
     i=$((i + 1))
     sleep 0.1
 done
-if ! kill -0 "$PEER" 2>/dev/null; then
-    echo "socket-test: FAIL: no echo server on port $PORT" >&2
+if ! "$HOSTPEER" hold "$PORT" 0 >/dev/null 2>&1; then
+    echo "socket-test: FAIL: nothing is listening on port $PORT" >&2
     exit 1
 fi
 
@@ -66,4 +71,15 @@ run_probe() {
 
 run_probe udptest "All UDP tests passed!" || exit 1
 run_probe tcptest "All TCP tests passed!" || exit 1
+
+# The graceful close, which the probe cannot prove from inside: a `close` that
+# returned zero without sending anything looks the same to it. The server saw
+# the end of the stream or it did not.
+stop
+if ! grep -q "the peer closed its end" "$PEER_LOG"; then
+    echo "socket-test: FAIL: the machine's close did not reach the server," >&2
+    echo "socket-test: so the connection was dropped rather than closed" >&2
+    exit 1
+fi
+echo "socket-test: tcptest closed its connection: OK"
 echo "socket-test: PASS"

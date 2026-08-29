@@ -134,10 +134,12 @@ prepare-all: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTP
 # still pass every probe, which is what this suite used to do with all of them.
 # It is not .99 either, which pingtest requires to stay unreachable.
 # So the machine is given .77, pings the gateway, and the capture is read from
-# outside: the echo request must leave from .99, which only the IP layer can put
-# there, and the ARP request for the gateway must be sent as .77, which is
-# where the address reached ARP. Nothing on this network ever asks the machine
-# for its address, so what it answers cannot be read; what it asks as can.
+# outside: the echo request must leave from .77, which only the IP layer can put
+# there, and the ARP request for the gateway must be sent as .77, which is where
+# the address reached ARP. Nothing on this network ever asks the machine for its
+# address, so what it answers cannot be read; what it asks as can. The gateway
+# half of the boot line is not checked here: every destination in reach is on
+# the subnet, so nothing has to be routed. `dhcp` and `netif` check routing.
 ADDRESSED_PCAP = $(IMAGES_DIR)/addressed$(NIC_TAG).pcap
 run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(ADDRESSED_PCAP)
@@ -202,11 +204,6 @@ run-fault: rach2 tests krffs test-image $(HARNESS)
 # caught. ttyprobe is driven the way a terminal drives: a line with two erases
 # in it while the console is cooked, then one byte with no newline once the
 # probe has switched the console to raw. `sendraw` is what delivers both.
-# `tests/run socket`: the guest opening connections of its own, checked by a
-# host that answers (see tests/system/suites/socket.sh).
-run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER)
-	sh tests/system/suites/socket.sh build/rach2/kernel $(TEST_IMAGE) \
-	    $(HARNESS) $(HOSTPEER)
 run-console: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
@@ -227,6 +224,11 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 	    "expect=COOKED:" wait=2 \
 	    'sendraw=X' \
 	    "expect=RAW:"
+# `tests/run socket`: the guest opening connections of its own, checked by a
+# host that answers (see tests/system/suites/socket.sh).
+run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER)
+	sh tests/system/suites/socket.sh build/rach2/kernel $(TEST_IMAGE) \
+	    $(HARNESS) $(HOSTPEER)
 # `tests/run disk`: the disk-backed page-cache integrity check. Builds a disk
 # image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
 # through the cache (rach2.fsdisk), and runs blockprobe from the debug shell,

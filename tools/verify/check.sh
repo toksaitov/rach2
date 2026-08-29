@@ -310,11 +310,16 @@ else
     echo "  FAIL: $pc banned term use(s); see $VDIR/verify_prose.log"; fail=1
 fi
 
-# The probe runner's scoring rule, checked against recorded serial shapes rather
-# than a boot: it decides every probe's PASS or FAIL, so a regression in it is
-# invisible in the one place that would otherwise catch it.
-hr "9/14 probe scoring rule (runtests selftest)"
-if "$RUNTESTS" --selftest >"$VDIR/verify_score.log" 2>&1; then
+# The two runner rules that decide a result without a boot: the scoring rule,
+# which turns serial text into every probe's PASS or FAIL, and the harness's
+# escape decoder, which turns a step's text into the bytes a guest is given. A
+# regression in either is invisible in the place that would otherwise catch it,
+# because both are what that place reads its answer from.
+hr "9/14 runner rules (runtests and harness selftests)"
+HARNESSBIN="$REPO/build/tests/system/harness"
+make -C "$REPO" --no-print-directory build/tests/system/harness >/dev/null || exit 1
+if "$RUNTESTS" --selftest >"$VDIR/verify_score.log" 2>&1 &&
+   "$HARNESSBIN" --selftest >>"$VDIR/verify_score.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_score.log"; fail=1

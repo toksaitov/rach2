@@ -99,10 +99,14 @@ static void print_num(int n)
     }
 }
 
+/* Neither a character a line would hold nor zero, so a copy that ran past the
+ * count it was given shows up whatever it copied. */
+#define FILL_BYTE '\xA5'
+
 void _start(void)
 {
     char buf[128];
-    int n;
+    int n, i;
     int passed = 0;
     int failed = 0;
 
@@ -164,24 +168,41 @@ void _start(void)
         failed++;
     }
 
-    /* Test 3: Small buffer read */
+    /* Test 3: Small buffer read. The count the kernel returns is not the
+     * whole claim: a kernel that copied the rest of the line past the fifth
+     * byte and still returned 5 would be caught by nothing the count can
+     * say, so the rest of the buffer is filled with a byte of our own first
+     * and required to still be there afterwards. */
     puts("");
     print("Test 3: small buffer read (5 bytes max, type a longer line)...\n");
     print("> ");
+    for (i = 0; i < (int)sizeof(buf); i++) {
+        buf[i] = FILL_BYTE;
+    }
     n = sys_read(STDIN_FILENO, buf, 5);
     if (n > 0) {
+        int spilled = 0;
+
+        for (i = n; i < (int)sizeof(buf); i++) {
+            if (buf[i] != FILL_BYTE) {
+                spilled = 1;
+            }
+        }
         buf[n] = '\0';
         print("Read ");
         print_num(n);
         print(" bytes: \"");
         print(buf);
         puts("\"");
-        if (n <= 5) {
-            puts("Test 3: OK (correctly limited to buffer size)");
-            passed++;
-        } else {
+        if (n > 5) {
             puts("Test 3: FAILED (read more than buffer size)");
             failed++;
+        } else if (spilled) {
+            puts("Test 3: FAILED (wrote past the size it was given)");
+            failed++;
+        } else {
+            puts("Test 3: OK (correctly limited to buffer size)");
+            passed++;
         }
     } else {
         puts("Read returned 0 or error");

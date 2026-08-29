@@ -29,14 +29,14 @@ a decision recorded in `notes.md`. Updated in the commit that completes an item.
 Proof items:
 
 * [x] Every suite passes singly
-* [ ] `make distclean` then `tests/run authority` builds from nothing
+* [x] `make distclean` then `tests/run authority` builds from nothing
 * [x] A touched kernel source rebuilds the kernel before the next suite runs it
 * [x] `make` at the root builds no test tool
 * [x] Root `Makefile` diff is removals and one `include`
 * [x] The sixteen-suite batch passes together
 * [x] Runner self-test passes
 * [x] Leak attribution names `crash` when its defect is restored
-* [ ] Review 1 of 12
+* [x] Review 1 of 12
 
 ## Phase 3: the logger (10 items)
 

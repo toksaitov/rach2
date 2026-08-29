@@ -16,7 +16,14 @@ set -u
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-selftest.XXXXXX")
-trap 'rm -rf "$WORK"' EXIT INT TERM HUP
+[ -d "$WORK" ] || { echo "selftest: no scratch directory" >&2; exit 1; }
+# The stand-in machines are stopped here rather than at the end of the script,
+# so an interrupted run does not leave one of them waiting out its sleep.
+stop_machines() {
+    [ -f "$WORK/machines" ] || return 0
+    while read -r pid; do kill "$pid" 2>/dev/null; done < "$WORK/machines"
+}
+trap 'stop_machines; rm -rf "$WORK"' EXIT INT TERM HUP
 
 fails=0
 total=0
@@ -40,10 +47,12 @@ passing|-|core
 failing|-|full
 leaky|-|full
 needy|a-command-that-does-not-exist|full
+slow1|-|full
+slow2|-|full
 REG
 cat > "$WORK/Makefile" <<'MK'
 prepare-all:
-	@:
+	@echo prepared >> prepared.count
 run-passing:
 	@echo "passing ran"
 run-failing:
@@ -53,6 +62,10 @@ run-leaky:
 	 i=0; while [ ! -s "$$RACH2_QEMU_LEDGER" ] && [ $$i -lt 100 ]; do sleep 0.1; i=$$((i+1)); done
 run-needy:
 	@echo "needy ran"
+run-slow1:
+	@sleep 2
+run-slow2:
+	@sleep 2
 MK
 # A stand-in for QEMU that outlives its suite, so the leak check has something
 # to find. It is on PATH ahead of any real one, and it records its pid where
@@ -93,6 +106,7 @@ check "the failure is named in the result" 1 "$(printf '%s\n' "$out" | grep -c '
 check "the passing member is still reported" 1 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
 
 out=$(run core); rc=$?
+check "the core tier exits zero" 0 "$rc"
 check "the core tier runs its members" 1 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
 check "and not the others" 0 "$(printf '%s\n' "$out" | grep -c 'run: failing:')"
 
@@ -102,9 +116,33 @@ check "and is named as the owner" 1 "$(printf '%s\n' "$out" | grep -c 'run: leak
 
 out=$(W=0 run passing); rc=$?
 check "a worker count of zero is refused" 2 "$rc"
+out=$(W=00 run passing); rc=$?
+check "a worker count of zero written with two digits is refused" 2 "$rc"
 out=$(W=nine run passing); rc=$?
 check "a worker count that is not a number is refused" 2 "$rc"
 
-while read -r pid; do kill "$pid" 2>/dev/null; done < "$WORK/machines"
+out=$(run core passing); rc=$?
+check "a set and a name together are refused" 2 "$rc"
+out=$(run passing passing); rc=$?
+check "the same name twice is refused" 2 "$rc"
+
+# The product and the tools are built once for the whole run, not once per
+# suite: twenty suites each running make on one tree would build the same
+# object twenty times, or race over it.
+rm -f "$WORK/prepared.count"
+out=$(run passing failing)
+check "a run of two suites prepares once" 1 \
+    "$(wc -l < "$WORK/prepared.count" | tr -d ' ')"
+
+# The worker count is a limit, not a suggestion. Two suites that each take two
+# seconds take four one at a time and two together, so the wall clock says
+# whether the pool honoured it.
+t0=$(date +%s); out=$(W=1 run slow1 slow2); one=$(($(date +%s) - t0))
+t0=$(date +%s); out=$(W=2 run slow1 slow2); two=$(($(date +%s) - t0))
+check "one worker runs two suites one after the other" 1 \
+    "$([ "$one" -ge 4 ] && echo 1 || echo 0)"
+check "two workers run them together" 1 \
+    "$([ "$two" -lt 4 ] && echo 1 || echo 0)"
+
 echo "selftest: $((total - fails)) of $total checks passed"
 [ "$fails" -eq 0 ] || exit 1

@@ -54,6 +54,8 @@
  * is the supervisor. That is every image this harness boots; an image
  * running /sbin/init prints no such line, so drive one of those with --ok.
  *
+ * `harness --selftest` checks the escape decoder without QEMU.
+ *
  * `RACH2_TRACE=FILE` records each step's outcome and the final decision,
  * which is how this was proved equal to the Python harness it replaces.
  */
@@ -536,6 +538,70 @@ static int contains(const unsigned char *hay, size_t len, const char *needle)
     return 0;
 }
 
+/* The escape decoder, against the cases the suites depend on and the ones
+   they do not: a decoder that quietly passed a bad escape through would send
+   the letter after the backslash, and a probe reading one byte would be given
+   the wrong one and read as a kernel fault. */
+static int unescape_selftest(void)
+{
+    static const struct {
+        const char *in;
+        const char *want;   /* NULL for "must be refused" */
+        int len;
+    } cases[] = {
+        { "abc",            "abc",        3 },
+        { "a\\x7fb",        "a\x7f" "b",  3 },
+        { "\\x00",          "\0",         1 },
+        { "\\xff",          "\xff",       1 },
+        { "\\n",            "\n",         1 },
+        { "\\r\\t",         "\r\t",       2 },
+        { "\\\\",           "\\",         1 },
+        { "a\\x4A",         "aJ",         2 },
+        { "\\x",            NULL,         0 },
+        { "\\x4",           NULL,         0 },
+        { "\\xg0",          NULL,         0 },
+        { "\\q",            NULL,         0 }
+    };
+    int n = (int) (sizeof(cases) / sizeof(cases[0])), i, bad = 0;
+
+    printf("harness: selftest: the refused cases print their own reason\n");
+    for (i = 0; i < n; i++) {
+        char out[64];
+        int got = unescape(cases[i].in, out, sizeof(out));
+
+        if (cases[i].want == NULL) {
+            if (got >= 0) {
+                printf("harness: selftest: '%s' was accepted and must not "
+                       "be\n", cases[i].in);
+                bad++;
+            }
+            continue;
+        }
+        if (got != cases[i].len ||
+            memcmp(out, cases[i].want, (size_t) cases[i].len) != 0) {
+            printf("harness: selftest: '%s' decoded to %d byte(s), wanted "
+                   "%d\n", cases[i].in, got, cases[i].len);
+            bad++;
+        }
+    }
+    /* A text longer than the buffer is refused rather than cut: a step that
+       sent half of what it was given would be checked against the whole. */
+    {
+        char out[4];
+
+        if (unescape("abcdef", out, sizeof(out)) >= 0) {
+            printf("harness: selftest: a text past the buffer was accepted\n");
+            bad++;
+        }
+    }
+    if (bad != 0) {
+        printf("harness: selftest: %d case(s) failed\n", bad);
+        return 1;
+    }
+    printf("harness: selftest: %d escape cases PASS\n", n + 1);
+    return 0;
+}
+
 /* `--match PATTERN` prints the end offset of the first match in the text
    on standard input, or -1. The matcher is proved against Python's `re`
    through this. */
@@ -582,6 +648,8 @@ int main(int argc, char **argv)
     int qemu_rc;
     const char *trace_path;
 
+    if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
+        return unescape_selftest();
     if (argc == 3 && strcmp(argv[1], "--match") == 0)
         return match_mode(argv[2]);
 
@@ -601,6 +669,13 @@ int main(int argc, char **argv)
         if (strcmp(arg, "--never") == 0 && i + 1 < argc) {
             if (n_never >= MAX_ARGS)
                 return too_many("--never", MAX_ARGS);
+            /* An empty text is in every stream and in none, depending on how
+               you read it; either way the run could not fail on it, and a
+               check that cannot fail is worse than no check. */
+            if (argv[i + 1][0] == '\0') {
+                fprintf(stderr, "harness: --never needs a text\n");
+                return 2;
+            }
             nevers[n_never++] = argv[++i];
         } else if (strcmp(arg, "--drive") == 0 && i + 1 < argc) {
             if (n_drives >= MAX_ARGS)
@@ -755,15 +830,13 @@ int main(int argc, char **argv)
             send_line(step + 5);
         } else if (strncmp(step, "sendraw=", 8) == 0) {
             char raw[256];
-            int n = unescape(step + 8, raw, sizeof(raw) - 1);
+            int n = unescape(step + 8, raw, sizeof(raw));
 
-            if (n < 0) {
+            if (n < 0 || child_in < 0 ||
+                write(child_in, raw, (size_t) n) != n) {
+                fprintf(stderr, "HARNESS: step '%s' did not reach the "
+                        "guest\n", step);
                 step_failures++;
-            } else {
-                raw[n] = '\0';
-                if (child_in >= 0 && write(child_in, raw, (size_t) n) < 0) {
-                    /* A closed pipe means the guest is gone. */
-                }
             }
         } else if (strncmp(step, "wait=", 5) == 0) {
             pump(now() + atof(step + 5));

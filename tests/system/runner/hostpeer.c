@@ -28,6 +28,7 @@
  */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <signal.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +85,10 @@ static int echo(long port, long seconds)
     int one = 1;
     double deadline = now() + seconds;
 
+    /* A guest that resets its connection would otherwise end this process
+       with SIGPIPE, and the suite would read a dead server as a guest that
+       never answered. */
+    signal(SIGPIPE, SIG_IGN);
     listener = socket(AF_INET, SOCK_STREAM, 0);
     dgram = socket(AF_INET, SOCK_DGRAM, 0);
     if (listener < 0 || dgram < 0) {
@@ -97,7 +102,6 @@ static int echo(long port, long seconds)
         perror("hostpeer: tcp bind");
         return 1;
     }
-    fill_local(&addr, port);
     if (bind(dgram, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
         perror("hostpeer: udp bind");
         return 1;
@@ -143,11 +147,30 @@ static int echo(long port, long seconds)
         if (conn >= 0 && FD_ISSET(conn, &rfds)) {
             n = read(conn, buf, sizeof(buf));
             if (n > 0) {
-                if (write(conn, buf, (size_t) n) < 0) {
+                /* Written to the end rather than once: a short write would
+                   echo a prefix, and the probe comparing what came back
+                   would fail for a reason on this side of the wire. */
+                ssize_t off = 0;
+
+                while (off < n) {
+                    ssize_t w = write(conn, buf + off, (size_t) (n - off));
+
+                    if (w <= 0)
+                        break;
+                    off += w;
+                }
+                if (off < n) {
                     close(conn);
                     conn = -1;
                 }
             } else {
+                /* Printed, because a graceful close is a thing the guest has
+                   to do and nothing inside it can prove it did: a `close`
+                   that returned zero without sending a FIN looks the same
+                   from in there. */
+                if (n == 0)
+                    printf("hostpeer: tcp: the peer closed its end\n");
+                fflush(stdout);
                 close(conn);
                 conn = -1;
             }
@@ -160,6 +183,19 @@ static int echo(long port, long seconds)
     return 0;
 }
 
+/* A whole number and nothing else. `strtol` alone would read `10junk` as 10
+   and `junk` as 0, so a mistyped argument would become a run of no seconds
+   against a port nobody meant. */
+static int whole_number(const char *text, long *out)
+{
+    char *end;
+
+    if (text[0] == '\0')
+        return 0;
+    *out = strtol(text, &end, 10);
+    return *end == '\0';
+}
+
 int main(int argc, char **argv)
 {
     long port, seconds;
@@ -168,9 +204,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: hostpeer hold|echo PORT SECONDS\n");
         return 2;
     }
-    port = strtol(argv[2], NULL, 10);
-    seconds = strtol(argv[3], NULL, 10);
-    if (port <= 0 || port > 65535 || seconds < 0) {
+    if (!whole_number(argv[2], &port) || !whole_number(argv[3], &seconds) ||
+        port <= 0 || port > 65535 || seconds < 0) {
         fprintf(stderr, "hostpeer: a port in 1..65535 and a whole number "
                 "of seconds\n");
         return 2;

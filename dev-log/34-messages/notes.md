@@ -153,3 +153,58 @@ one second after the touch, and the suite ran on the new kernel.
 Leak attribution names the suite: with `crash.sh` stopped from killing its
 machines, `tests/run crash` failed with "run: crash: left 76756 76763 76792
 running", which is the defect milestone 33 fixed, restored and caught.
+
+## Review 1 of 12, 2026-08-30
+
+Codex read `tests/run`, `selftest.sh`, the two harness additions, `hostpeer.c`,
+`socket.sh` and the four new suite targets. Twelve findings, all fixed:
+
+* `mktemp` was unchecked in both scripts. An empty value would have put the
+  QEMU shim at `/bin/qemu-system-i386` and removed `/` on the way out.
+* A leaked machine was named and left running. It is now stopped as well.
+* `RACH2_WORKERS=00` passed the digit test and hung the pool, which waits for a
+  worker that a limit of zero never frees. The value is made a number and
+  required to be at least one.
+* `tests/run core socket` ran core and dropped `socket` without a word. A set
+  and a name together are now refused.
+* The same name twice shared one ledger and one held output, so the second
+  result overwrote the first. Refused.
+* The shim's path to the real QEMU was unquoted.
+* `socket.sh` waited for the server by asking whether the process existed,
+  which is true before it has run `hostpeer` at all. It now waits for a
+  connection to succeed, which `hostpeer hold PORT 0` is.
+* `--never ""` was accepted and could never fail, because the matcher returns
+  false for an empty text. Refused.
+* A `sendraw=` whose write failed was counted as a step that ran.
+* The TCP echo assumed one `write` took the whole buffer and died on SIGPIPE if
+  the guest reset. It writes to the end and ignores the signal.
+* `hostpeer echo 7777 junk` was a valid run of zero seconds. Both numbers are
+  now whole or refused.
+* The `addressed` comment still said .99 in one sentence after the address
+  moved to .77.
+
+Three oracle weaknesses it found, and what was done:
+
+* The runner self-test never checked that `prepare-all` runs once for a whole
+  run, nor that the worker limit is a limit. Both are checked now: the fixture
+  counts preparations, and two suites that take two seconds each take four
+  seconds at one worker and under four at two. 18 checks to 25.
+* `sendraw`'s decoding was exercised only for `\xNN` and `\n`. `harness
+  --selftest` now checks thirteen cases including every escape and four that
+  must be refused, and `tests/run style` runs it beside the probe scorer.
+* `stdintest` believed the count the kernel returned. It now fills the buffer
+  first and requires the bytes past the count to be untouched. Proved: a
+  `copy_to_user` of `n + 8` in the console read fails the suite. A mutation
+  inside `n_tty_read` does not, because the syscall copies out exactly the
+  count it returns from a kernel buffer; the check is on the copy-out length,
+  which is the reachable half.
+
+Two it raised that are recorded rather than changed:
+
+* `run-fault` cannot tell a fault handler that kills only the faulting process
+  from one that kills others as well. The debug shell is the only other process
+  on that boot, and the suite ends by having the shell exec a program that
+  prints a token, so a handler that took the shell with it fails here.
+* `run-addressed` does not check `rach2.gateway=`. Every destination in reach
+  is on the subnet, so nothing is routed and a wrong gateway would not show.
+  Routing through a gateway is what `dhcp` and `netif` check.
