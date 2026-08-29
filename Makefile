@@ -116,7 +116,7 @@ PTYDRIVE        = build/tests/system/ptydrive
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
-.PHONY: all clean distclean images musl-programs test preflight check-sources \
+.PHONY: all clean distclean images musl-programs test preflight check-sources prepare-all \
         test-image os-simple-image os-real-image os-real-disk os-real-grub-disk \
         rach2-metal rach2-metal-image rach2-metal-grub-disk \
         rach2-sealed-disk rach2-recovery rach2-recovery-image \
@@ -634,6 +634,20 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 run-default: test-image $(RUNTESTS)
 	$(RUNTESTS) $(NIC_DEV) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60
+
+# Everything every suite needs, in one target, so `tests/run all` can build once
+# through one Make and then run the suites at the same time. Two suites each
+# invoking their own build would be two Makes against one `build/` tree; with
+# this built first, each suite's own target finds its work done and only boots
+# machines. The list is the union of what the `run-*` targets depend on, and
+# `tests/run` checks that it stays the union.
+prepare-all: $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOLDPORT) \
+             $(MKFIXTURE) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
+             busybox check-busybox check-dropbearmulti check-libc \
+             check-pdpmake check-setid check-tcc ish krffs musl-programs \
+             os-real-image os-simple-image ports/doom rach2 rach2-metal \
+             rach2-metal-image rach2-recovery rach2-recovery-image \
+             rach2-sealed-disk test-image tests utils
 
 # The public test entry: the runner owns the suite registry, so this is a
 # shortcut for `tests/run default` and holds no suite knowledge of its own.

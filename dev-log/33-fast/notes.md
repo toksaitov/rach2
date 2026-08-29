@@ -84,3 +84,36 @@ What changed:
   `procfiles` also hardcoded its port rather than taking it as an argument, so
   the number lived in two files; it takes it as an argument now, as every other
   suite does.
+
+## Phase 3: the pool
+
+4877s to 1205s, all 44 passing. Repeated three times at 1203s, 1202s and
+1205s, so the result does not depend on how the workers happened to interleave.
+Eight workers, `style` and `host` outside the pool, one `make -j prepare-all`
+first, which costs 1.3s warm.
+
+`e1000` is now the critical path on its own: 917s of a 1205s run. Phase 5 is
+about that.
+
+Two things worth keeping:
+
+* The leak census had to change shape. Listing every QEMU on the host works
+  only while one suite runs at a time; with eight running, each would see the
+  other seven and call them its own. Instead a shim named `qemu-system-i386`
+  goes first on `PATH`, writes its own pid to the ledger the current suite
+  owns, and execs the real binary, so the pid it recorded is the machine. The
+  harness reaches QEMU through `execvp` and the shell suites through their own
+  `PATH` lookup, so both are covered without either knowing about it.
+  Attribution is proved by putting the `crash` defect back and requiring the
+  run to name `crash` and no neighbour.
+
+* `run_pool` first returned its failed list through a command substitution,
+  which runs the function in a subshell, so a failing suite's replayed output
+  went to that subshell rather than to the person reading it: a leaking `crash`
+  reported `failed: crash` and nothing else. Found by the attribution proof,
+  which could not see the message it was looking for. The result is a variable
+  now.
+
+`tests/run` also takes several names, which is how that proof was run cheaply
+and is worth having on its own: the suites a change touches, at the cost of the
+slowest rather than the sum.

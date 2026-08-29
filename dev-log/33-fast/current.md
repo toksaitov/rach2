@@ -1,14 +1,18 @@
 # Milestone 33: resume state
 
-Phase: 1, arrival and the baseline. Complete.
+Phase: 3, the pool. Complete.
 
-Done: tree clean at 115e793, nothing else running, build current. The baseline
-is the last complete run of this tree, 4877s across 44 suites, recorded per
-suite in `notes.md`. A fresh baseline run was started and then stopped once it
-was clear the existing one was still valid.
+Done: `prepare-all` builds the union of every suite's prerequisites in one
+Make; `tests/run all` runs one such build and then pools the suites eight at a
+time, with `style` and `host` outside; per-suite leak attribution survives
+through a `PATH` shim that records each machine against the suite that started
+it; `tests/run NAME NAME...` pools a named list.
 
-Next: phase 2, the collisions. Give the q35 suite its own disk and the
-`$(HARNESS)` dependency it uses without declaring; give the second suite of
-each port pair its own port; move the two cross-suite restagings into
-preparation; make the shared phony image builders real file targets. Suites
-stay serial. The proof is the sixteen-suite batch that previously failed.
+Evidence: 4877s to 1205s, 44 of 44, repeated at 1203s, 1202s, 1205s with no
+stray machines. Attribution proved by restoring the `crash` defect: the run
+names `crash` and blames no neighbour.
+
+Next: phase 4, the worker count. Measure the finished pool at 4, 8, 12 and 16
+workers, three runs each, and set the default to what was measured. Note that
+`e1000` at 917s dominates a 1205s run, so the sweep will show little until
+phase 5 breaks that block up; consider doing phase 5 first and then sweeping.
