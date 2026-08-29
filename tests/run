@@ -16,6 +16,12 @@ REGISTRY="$REPO/tests/registry"
     exit 1
 }
 
+# Scratch for the machine census either side of a suite, removed on every way
+# out including an interruption.
+TMP_BEFORE=$(mktemp "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
+TMP_AFTER=$(mktemp "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
+trap 'rm -f "$TMP_BEFORE" "$TMP_AFTER"' EXIT INT TERM HUP
+
 # Print the suite names, one per line, in registry order.
 names() {
     sed -e '/^#/d' -e '/^$/d' -e 's/|.*//' "$REGISTRY"
@@ -44,6 +50,31 @@ check_tools() {
     return 0
 }
 
+# The machines running right now, one pid per line. Used either side of a
+# suite to catch one that leaves a machine behind.
+machines() {
+    pgrep -f qemu-system-i386 2>/dev/null | sort
+}
+
+# Fail a suite that left a machine running.
+#
+# A leaked machine costs a processor and a few hundred megabytes for as long as
+# the host stays up, and nothing else notices: the suite passed, so its own
+# checks are satisfied and the pid belongs to init. The crash suite leaked one
+# per phase for as long as it had existed, and fifteen were found alive on one
+# development machine, the oldest three days old. Only the pids that appeared
+# while the suite ran are counted, so a machine the developer started stays
+# their business.
+check_machines() {
+    suite=$1
+    before=$2
+    leaked=$(comm -13 "$before" "$TMP_AFTER" | tr '\n' ' ' | sed 's/ $//')
+    [ -z "$leaked" ] && return 0
+    echo "run: $suite: left $(printf '%s' "$leaked" | wc -w | tr -d ' ') machine(s) running: $leaked" >&2
+    echo "run: a suite must stop every machine it starts; these are now init's" >&2
+    return 1
+}
+
 # Build and run one suite through its make target. The target carries the
 # suite's artifact prerequisites.
 run_one() {
@@ -59,10 +90,18 @@ run_one() {
     check_tools "$1" "$tools" || return 1
     "$REPO/tools/setup/preflight.sh" || return 1
     start=$(date +%s)
+    machines > "$TMP_BEFORE"
     if make -C "$REPO" --no-print-directory "$target"; then
+        machines > "$TMP_AFTER"
+        if ! check_machines "$1" "$TMP_BEFORE"; then
+            echo "run: $1: FAIL in $(($(date +%s) - start))s" >&2
+            return 1
+        fi
         echo "run: $1: PASS in $(($(date +%s) - start))s"
         return 0
     fi
+    machines > "$TMP_AFTER"
+    check_machines "$1" "$TMP_BEFORE" || true
     echo "run: $1: FAIL in $(($(date +%s) - start))s" >&2
     return 1
 }

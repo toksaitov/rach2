@@ -123,8 +123,13 @@ fsck_says_clean() {
     return 0
 }
 
+# `exec`, so that a backgrounded call to this function IS the machine rather
+# than its parent. Without it the shell forks a subshell, runs QEMU as the
+# subshell's child, and reports the subshell's pid in `$!`; `stop` then kills
+# the subshell and QEMU is re-parented to init and runs until the host is
+# rebooted. Each of the three phases below leaked one machine that way.
 qemu_disk() {
-    qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    exec qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
         -append "rach2.fsdisk rach2.rescue" \
         -drive "file=$1,format=raw,if=ide,index=0,media=disk" -serial stdio
 }
