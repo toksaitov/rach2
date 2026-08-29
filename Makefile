@@ -119,7 +119,13 @@ MKDISK          = krffs/mkdisk.sh
 # own prerequisites. The first build compiles five vendor projects and takes
 # minutes; a later `make` rebuilds only what changed. Each image is its own file
 # under build/images/, so they coexist instead of overwriting one shared image.
-all: images $(DEADLINE) $(BINFIND) $(ELFCHECK) $(SHA256TOOL)
+# The test tools are built here as well as by the suites that need them.
+# They are small C programs of this tree, so `make` building everything
+# reusable means building them; leaving them to the suites meant that editing
+# a checker and running `make` left the old binary in place, and the next
+# suite run silently used it.
+all: images $(DEADLINE) $(BINFIND) $(ELFCHECK) $(SHA256TOOL) \
+     $(PCAPCHECK) $(HOLDPORT) $(HARNESS) $(RUNTESTS) $(PTYDRIVE)
 
 # The cached tool check (tools/setup/preflight.sh): a missing or changed build
 # tool fails here, named, before any compilation. It is an order-only
