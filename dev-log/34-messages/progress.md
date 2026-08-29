@@ -16,10 +16,10 @@ a decision recorded in `notes.md`. Updated in the commit that completes an item.
 * [x] Root `Makefile` includes it with one line
 * [x] Test tools dropped from the root `all` target
 * [x] `tools/verify/check.sh` asks make for `runtests` instead of compiling it
-* [ ] Registry reduced to `name|tools|tier`
-* [ ] `-e1000` registry entries added; `e1000` keeps the three selection boots
-* [ ] Runner rewritten: pool, PATH shim, several names, tool check before build, `RACH2_WORKERS` validated
-* [ ] Runner self-test: registry parser, pool failure reporting, leak attribution
+* [x] Registry reduced to `name|tools|tier`
+* [x] `-e1000` registry entries added; `e1000` keeps the three selection boots
+* [x] Runner rewritten: pool, PATH shim, several names, tool check before build, `RACH2_WORKERS` validated
+* [x] Runner self-test: registry parser, pool failure reporting, leak attribution
 * [ ] `tests/system/Readme.md` names every runner mechanism with its reason
 * [ ] Three stale document references fixed; `tests/echoprobe.c` deleted
 * [ ] Every orphaned probe read, then given a suite or deleted (`notes.md` records which)
@@ -34,7 +34,7 @@ Proof items:
 * [x] `make` at the root builds no test tool
 * [x] Root `Makefile` diff is removals and one `include`
 * [ ] The sixteen-suite batch passes together
-* [ ] Runner self-test passes
+* [x] Runner self-test passes
 * [ ] Leak attribution names `crash` when its defect is restored
 * [ ] Review 1 of 12
 

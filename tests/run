@@ -1,305 +1,198 @@
 #!/usr/bin/env sh
 #
-# tests/run: the one entry point for the test suites. `tests/run NAME` checks
-# the suite's runtime tools, builds what it needs through Make, and runs it;
-# `tests/run all` runs every suite the registry marks as a member and reports
-# a summary. `tests/run NAME NAME...` runs the named ones together. An unknown
-# name fails and prints the valid ones. The registry format is documented at
-# the top of tests/registry.
+# tests/run: the one way to run a test suite.
+#
+#   tests/run NAME              one suite
+#   tests/run NAME NAME...      those suites, at the same time
+#   tests/run core              the tier `make test` runs
+#   tests/run all               every suite
+#
+# The suites themselves live in tests/system/suites.mk, one `run-NAME` target
+# each; tests/registry lists their names, the external commands they need, and
+# which tier they belong to. This file decides only what runs, when, and how a
+# failure is reported.
 #
 set -u
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 REGISTRY="$REPO/tests/registry"
+[ -f "$REGISTRY" ] || { echo "run: missing $REGISTRY" >&2; exit 1; }
 
-[ -f "$REGISTRY" ] || {
-    echo "run: missing $REGISTRY" >&2
-    exit 1
-}
-
-# How many suites run at once under `tests/run all`. One is the old serial
-# behaviour, which is what a machine with little memory or a person wanting
-# readable output should ask for.
-#
-# The default is twice the processors, because a suite spends most of its life
-# waiting for an emulated machine rather than computing: one guest costs about
-# a fifth of a processor and 71 MB, so the count that keeps the host busy is
-# well above the core count. Measured on a ten-core machine, the whole run
-# takes 1286s at four workers, 728s at eight, 587s at twelve, 527s at sixteen,
-# and 499s at twenty, after which it stops improving; twenty is twice ten.
-default_workers() {
+# How many suites run at once. A suite spends most of its life waiting for an
+# emulated machine rather than computing, so the useful count is above the
+# core count: on a ten-core machine the full run takes 1286s at four workers,
+# 728 at eight, 587 at twelve, 527 at sixteen and 499 at twenty, and stops
+# improving there. Twice the processors lands on that knee.
+workers_default() {
     n=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
-    case "$n" in
-        ''|*[!0-9]*) n=4 ;;
-    esac
+    case "$n" in ''|*[!0-9]*) n=4 ;; esac
     n=$((n * 2))
     [ "$n" -lt 4 ] && n=4
     echo "$n"
 }
-WORKERS="${RACH2_WORKERS:-$(default_workers)}"
+WORKERS="${RACH2_WORKERS:-$(workers_default)}"
+case "$WORKERS" in
+    ''|*[!0-9]*|0) echo "run: RACH2_WORKERS must be a positive whole number" >&2; exit 2 ;;
+esac
 
-# What each suite took last time, one "seconds name" per line. The pool starts
-# the longest first, because a pool finishes when its longest-running member
-# does and a long suite started last is a tail nothing overlaps: the three
-# longest sit at positions 20, 32 and 40 of the registry, and in registry order
-# they ended the run rather than filling it. A suite with no record yet is
-# started first, since an unknown cost is safest treated as a large one.
-DURATIONS="$REPO/build/tests/system/durations"
-
-# A scratch directory for this run: the machine ledgers, and the shim that
-# writes them. Removed on every way out including an interruption.
+# Scratch for this run: one ledger per suite, the held output of each pooled
+# suite, and the shim that writes the ledgers.
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT INT TERM HUP
 
-# Every machine a suite starts, recorded by the suite that started it.
-#
-# A suite leaks a machine when it leaves QEMU running after it finishes, and
-# the census that catches it has to know whose machine it is. Listing every
-# QEMU on the host works only while one suite runs at a time; with eight
-# running, each would see the other seven and call them its own.
-#
-# So each suite names its machines. A shim called `qemu-system-i386` goes first
-# on PATH, writes its own pid to the ledger the current suite owns, and then
-# replaces itself with the real QEMU, so the pid it wrote is the machine's.
-# The harness reaches QEMU through `execvp` and the shell suites through their
-# own PATH lookup, so this covers both without either knowing about it.
+# Each suite names the machines it starts, so a leaked one can be blamed on the
+# suite that left it. Listing every QEMU on the host works only while one suite
+# runs at a time; with twenty running, each would see the other nineteen. So a
+# shim named `qemu-system-i386` goes first on PATH, writes its own pid to the
+# ledger of the suite that is running, and then becomes the real QEMU. The
+# harness reaches QEMU through execvp and the shell suites through their own
+# PATH lookup, so this covers both without either knowing about it.
 QEMU_REAL=$(command -v qemu-system-i386 2>/dev/null || true)
 if [ -n "$QEMU_REAL" ]; then
     mkdir -p "$WORK/bin"
     {
         echo "#!/bin/sh"
-        echo "# Written by tests/run. Records this machine against the suite that"
-        echo "# started it, then becomes the machine."
         # shellcheck disable=SC2016 # the shim expands these, not this script
         echo 'test -n "${RACH2_QEMU_LEDGER:-}" && echo $$ >> "$RACH2_QEMU_LEDGER"'
         echo "exec $QEMU_REAL \"\$@\""
     } > "$WORK/bin/qemu-system-i386"
     chmod +x "$WORK/bin/qemu-system-i386"
-    PATH="$WORK/bin:$PATH"
-    export PATH
+    PATH="$WORK/bin:$PATH"; export PATH
 fi
 
-# Print the suite names, one per line, in registry order.
-names() {
-    sed -e '/^#/d' -e '/^$/d' -e 's/|.*//' "$REGISTRY"
+# The registry, one field at a time. Order in the file is the schedule order.
+suite_names()  { awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REGISTRY"; }
+suite_tools()  { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $2 }' "$REGISTRY"; }
+suite_tier()   { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $3 }' "$REGISTRY"; }
+suite_known()  { [ -n "$(suite_tools "$1")" ]; }
+tier_names()   { awk -F'|' -v t="$1" '!/^#/ && $3 == t { print $1 }' "$REGISTRY"; }
+
+usage_names() {
+    suite_names | tr '\n' ' ' | sed 's/^/  /;s/ $//' >&2
+    echo >&2
 }
 
-# Look one suite up; print its registry line or nothing.
-lookup() {
-    awk -F'|' -v want="$1" '/^#/ { next } $1 == want { print; exit }' "$REGISTRY"
-}
-
-# Require every runtime tool of one suite before spending a build on it.
+# Every external command a suite needs, before anything is built for it.
 check_tools() {
-    suite=$1
-    tools=$2
+    tools=$(suite_tools "$1")
     [ "$tools" = "-" ] && return 0
-    oldifs=$IFS
-    IFS=,
+    oldifs=$IFS; IFS=,
     for tool in $tools; do
         IFS=$oldifs
         command -v "$tool" >/dev/null 2>&1 || {
-            echo "run: $suite needs $tool and it is not installed" >&2
+            echo "run: $1 needs $tool and it is not installed" >&2
             return 1
         }
     done
     IFS=$oldifs
-    return 0
 }
 
-# Fail a suite that left one of its own machines running.
-#
-# A leaked machine costs a processor and a few hundred megabytes for as long as
-# the host stays up, and nothing else notices: the suite passed, so its own
-# checks are satisfied and the pid belongs to init. The crash suite leaked one
-# per phase for as long as it had existed, and fifteen were found alive on one
-# development machine, the oldest three days old.
-#
-# The ledger holds only the machines this suite started, so this is right
-# whether it ran alone or beside seven others, and a machine the developer
-# started is never anyone's business but theirs.
+# A suite must stop every machine it starts. One left running costs a
+# processor and a few hundred megabytes until the host reboots, and nothing
+# else notices: the suite passed, and the pid now belongs to init.
 check_machines() {
-    suite=$1
-    ledger=$2
+    ledger="$WORK/$1.machines"
     [ -f "$ledger" ] || return 0
     leaked=""
     while read -r pid; do
-        [ -n "$pid" ] || continue
-        kill -0 "$pid" 2>/dev/null && leaked="$leaked $pid"
+        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && leaked="$leaked $pid"
     done < "$ledger"
-    leaked=$(printf '%s' "$leaked" | sed 's/^ //')
     [ -z "$leaked" ] && return 0
-    echo "run: $suite: left $(printf '%s' "$leaked" | wc -w | tr -d ' ') machine(s) running: $leaked" >&2
-    echo "run: a suite must stop every machine it starts; these are now init's" >&2
+    echo "run: $1: left$leaked running; a suite must stop every machine it starts" >&2
     return 1
 }
 
-# The given suites, longest first by what they took last time. A suite with no
-# record sorts first.
-by_cost() {
-    for suite in $1; do
-        cost=$(awk -v s="$suite" '$2 == s { c = $1 } END { print (c == "" ? 999999 : c) }' \
-               "$DURATIONS" 2>/dev/null || echo 999999)
-        echo "$cost $suite"
-    done | sort -rn | awk '{ print $2 }' | tr '\n' ' '
+# One suite: run its target, then check what it left behind. The name and the
+# tools were checked before anything was built, so this does not repeat them.
+run_one() {
+    start=$(date +%s)
+    RACH2_QEMU_LEDGER="$WORK/$1.machines"; export RACH2_QEMU_LEDGER
+    : > "$RACH2_QEMU_LEDGER"
+    rc=0
+    make -C "$REPO" --no-print-directory "run-$1" || rc=1
+    check_machines "$1" || rc=1
+    if [ "$rc" = 0 ]; then
+        echo "run: $1: PASS in $(($(date +%s) - start))s"
+    else
+        echo "run: $1: FAIL in $(($(date +%s) - start))s" >&2
+    fi
+    return "$rc"
 }
 
-# How many of the given pids are still alive.
-count_running() {
-    n=0
-    for p in $1; do
-        kill -0 "$p" 2>/dev/null && n=$((n + 1))
-    done
-    echo "$n"
-}
-
-# One suite inside the pool. Its output is held and printed when the run is
-# over, because eight suites writing to one terminal at once is not a report.
-run_pooled() {
-    run_one "$1" > "$WORK/$1.out" 2>&1
-    echo $? > "$WORK/$1.rc"
-}
-
-# Run the given suites through the pool, replay what each one said, and leave
-# the names that failed in POOL_FAILED.
-#
-# At most $WORKERS run at once, and the next starts as soon as one finishes.
-# `wait -n` would say that directly and is not in POSIX sh, so the live ones
-# are counted instead.
-#
-# The result is a variable rather than something printed, because a caller that
-# read it through a command substitution would run this in a subshell, and the
-# replayed output of a failing suite would go to that subshell rather than to
-# the person waiting to read it.
+# The given suites, at most $WORKERS at a time, each one's output held and
+# replayed in order at the end: twenty suites writing to one terminal is not a
+# report. The failures are left in POOL_FAILED rather than printed, because a
+# caller reading this through a command substitution would run it in a subshell
+# and the replayed output would go there instead of to the person waiting.
 POOL_FAILED=""
 run_pool() {
-    POOL_FAILED=""
-    running=""
+    POOL_FAILED=""; running=""
     for suite in $1; do
-        while [ "$(count_running "$running")" -ge "$WORKERS" ]; do
-            sleep 0.2
-        done
-        run_pooled "$suite" &
+        while [ "$(alive "$running")" -ge "$WORKERS" ]; do sleep 0.2; done
+        ( run_one "$suite" > "$WORK/$suite.out" 2>&1; echo $? > "$WORK/$suite.rc" ) &
         running="$running $!"
     done
     wait
     for suite in $1; do
         cat "$WORK/$suite.out" 2>/dev/null
-        if [ -f "$WORK/$suite.rc" ]; then
-            read -r rc < "$WORK/$suite.rc"
-            [ "$rc" = "0" ] || POOL_FAILED="$POOL_FAILED $suite"
-        else
-            POOL_FAILED="$POOL_FAILED $suite"
-        fi
+        rc=1; [ -f "$WORK/$suite.rc" ] && read -r rc < "$WORK/$suite.rc"
+        [ "$rc" = 0 ] || POOL_FAILED="$POOL_FAILED $suite"
     done
 }
 
-# Build and run one suite through its make target. The target carries the
-# suite's artifact prerequisites.
-run_one() {
-    line=$(lookup "$1")
-    if [ -z "$line" ]; then
-        echo "run: unknown suite '$1'; valid suites are:" >&2
-        names | tr '\n' ' ' | sed 's/^/  /;s/ $//' >&2
-        echo >&2
-        return 2
-    fi
-    target=$(printf '%s' "$line" | cut -d'|' -f2)
-    tools=$(printf '%s' "$line" | cut -d'|' -f4)
-    check_tools "$1" "$tools" || return 1
-    "$REPO/tools/setup/preflight.sh" || return 1
-    start=$(date +%s)
-    RACH2_QEMU_LEDGER="$WORK/$1.machines"
-    export RACH2_QEMU_LEDGER
-    : > "$RACH2_QEMU_LEDGER"
-    if make -C "$REPO" --no-print-directory "$target"; then
-        if ! check_machines "$1" "$RACH2_QEMU_LEDGER"; then
-            echo "run: $1: FAIL in $(($(date +%s) - start))s" >&2
-            return 1
-        fi
-        elapsed=$(($(date +%s) - start))
-        mkdir -p "$(dirname "$DURATIONS")" 2>/dev/null
-        echo "$elapsed $1" >> "$DURATIONS"
-        echo "run: $1: PASS in ${elapsed}s"
-        return 0
-    fi
-    check_machines "$1" "$RACH2_QEMU_LEDGER" || true
-    echo "run: $1: FAIL in $(($(date +%s) - start))s" >&2
+alive() { n=0; for p in $1; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
+
+# Build the product and the test tools once, so no two suites build at once.
+prepare() {
+    echo "run: preparing"
+    make -C "$REPO" --no-print-directory -j prepare-all || {
+        echo "run: result: preparation failed" >&2; exit 1
+    }
+}
+
+# `style` rebuilds the kernel with its own flags and shares a scratch directory
+# with `host`, so those two run alone, before the pool.
+run_set() {
+    failed=""; serial=""; pooled=""
+    for suite in $1; do
+        case "$suite" in
+            style|host) serial="$serial $suite" ;;
+            *)          pooled="$pooled $suite" ;;
+        esac
+    done
+    for suite in $serial; do run_one "$suite" || failed="$failed $suite"; done
+    [ -n "$pooled" ] && { run_pool "$pooled"; failed="$failed$POOL_FAILED"; }
+    [ -z "$failed" ] && return 0
+    echo "run: result: failed:$failed" >&2
     return 1
 }
 
 case "${1-}" in
     '')
-        echo "usage: tests/run NAME" >&2
-        echo "run: valid suites are:" >&2
-        names | tr '\n' ' ' | sed 's/^/  /;s/ $//' >&2
-        echo >&2
-        exit 2
-        ;;
+        echo "usage: tests/run NAME [NAME...] | core | all" >&2
+        echo "run: valid suites are:" >&2; usage_names; exit 2 ;;
     all)
-        # One build, before anything runs. Two suites building at once would be
-        # two Makes against one tree; with this done first, each suite's own
-        # target finds its work complete and only boots machines.
-        echo "run: preparing"
-        if ! make -C "$REPO" --no-print-directory -j prepare-all; then
-            echo "run: result: preparation failed" >&2
-            exit 1
-        fi
-
-        # Style and host stay out of the pool. They share /tmp/rach2_verify
-        # with each other, and style builds the kernel with its own flags,
-        # which is the one thing that must not happen while suites are booting.
-        serial_suites=""
-        pooled_suites=""
-        count=0
-        # shellcheck disable=SC2013 # suite names are single tokens by format
-        for suite in $(awk -F'|' '/^#/ { next } $5 == "yes" { print $1 }' "$REGISTRY"); do
-            count=$((count + 1))
-            case "$suite" in
-                style|host) serial_suites="$serial_suites $suite" ;;
-                *)          pooled_suites="$pooled_suites $suite" ;;
-            esac
-        done
-
-        failed=''
-        for suite in $serial_suites; do
-            run_one "$suite" || failed="$failed $suite"
-        done
-        pooled_suites=$(by_cost "$pooled_suites")
-        run_pool "$pooled_suites"
-        failed="$failed$POOL_FAILED"
-
-        if [ -n "$failed" ]; then
-            echo "run: result: $count suites, failed:$failed" >&2
-            exit 1
-        fi
-        echo "run: result: all $count suites passed"
-        ;;
-    *)
-        if [ "$#" -eq 1 ]; then
-            run_one "$1"
-        else
-            # Several names: the same pool `all` uses, so a person can run the
-            # handful of suites their change touches at the speed of the
-            # slowest one rather than the sum.
-            for suite in "$@"; do
-                [ -n "$(lookup "$suite")" ] || {
-                    echo "run: unknown suite '$suite'; valid suites are:" >&2
-                    names | tr '\n' ' ' | sed 's/^/  /;s/ $//' >&2
-                    echo >&2
-                    exit 2
-                }
-            done
-            if ! make -C "$REPO" --no-print-directory -j prepare-all; then
-                echo "run: result: preparation failed" >&2
-                exit 1
-            fi
-            run_pool "$*"
-            if [ -n "$POOL_FAILED" ]; then
-                echo "run: result: failed:$POOL_FAILED" >&2
-                exit 1
-            fi
-            echo "run: result: $# suites passed"
-        fi
-        ;;
+        # shellcheck disable=SC2046 # a suite name is one word by format
+        set -- $(suite_names) ;;
+    core)
+        # shellcheck disable=SC2046 # a suite name is one word by format
+        set -- $(tier_names core) ;;
 esac
+
+# Every name and every tool, before a single object is built: a run that is
+# going to refuse the last suite should refuse it now rather than in an hour.
+[ "$#" -gt 0 ] || { echo "run: no suites in that set" >&2; exit 2; }
+for suite in "$@"; do
+    suite_known "$suite" || {
+        echo "run: unknown suite '$suite'; valid suites are:" >&2; usage_names; exit 2
+    }
+    check_tools "$suite" || exit 1
+done
+
+prepare
+if [ "$#" -eq 1 ]; then
+    run_one "$1" || exit 1
+else
+    run_set "$*" || exit 1
+    echo "run: result: all $# suites passed"
+fi

@@ -1,53 +1,65 @@
-# tests/registry: the suite registry tests/run reads. One suite per line:
+# tests/registry: the suites tests/run reads. One per line:
 #
-#   name|make target|artifact prerequisites|runtime tools|member of all
+#   name|runtime tools|tier
 #
-# The make target both builds the suite's artifacts and runs it; until the
-# suite bodies move out of the root Makefile, the prerequisites field is `-`
-# because the target carries its own. The runtime tools are the external
-# commands the suite needs beyond the build toolchain; `-` means none. The
-# last field marks membership in `tests/run all`.
-default|run-default|-|qemu-system-i386|yes
-addressed|run-addressed|-|qemu-system-i386|yes
-noentropy|run-noentropy|-|qemu-system-i386|yes
-disk|run-disk|-|qemu-system-i386|yes
-disk-ahci|run-disk-ahci|-|qemu-system-i386|yes
-disk-q35|run-disk-q35|-|qemu-system-i386|yes
-bootpart|run-bootpart|-|qemu-system-i386|yes
-subset|run-subset|-|qemu-system-i386|yes
-stress|run-stress|-|qemu-system-i386|yes
-stress-ahci|run-stress-ahci|-|qemu-system-i386|yes
-persist|run-persist|-|qemu-system-i386|yes
-persist-ahci|run-persist-ahci|-|qemu-system-i386|yes
-cred-persist|run-cred-persist|-|qemu-system-i386|yes
-crash|run-crash|-|qemu-system-i386|yes
-authority|run-authority|-|qemu-system-i386|yes
-bootline|run-bootline|-|qemu-system-i386|yes
-exitline|run-exitline|-|qemu-system-i386|yes
-login|run-login|-|qemu-system-i386|yes
-procfiles|run-procfiles|-|qemu-system-i386|yes
-account|run-account|-|qemu-system-i386|yes
-shutdown|run-shutdown|-|qemu-system-i386|yes
-reset|run-reset|-|qemu-system-i386|yes
-diskpolicy|run-diskpolicy|-|qemu-system-i386|yes
-diskdiag|run-diskdiag|-|qemu-system-i386,ssh|yes
-ping|run-ping|-|qemu-system-i386|yes
-packet|run-packet|-|qemu-system-i386|yes
-raw|run-raw|-|qemu-system-i386|yes
-netif|run-netif|-|qemu-system-i386|yes
-dgram|run-dgram|-|qemu-system-i386|yes
-dhcp|run-dhcp|-|qemu-system-i386|yes
-netconsole|run-netconsole|-|qemu-system-i386|yes
-e1000|run-e1000|-|qemu-system-i386,ssh|yes
-tcc|run-tcc|-|qemu-system-i386|yes
-make|run-make|-|qemu-system-i386|yes
-selfbuild|run-selfbuild|-|qemu-system-i386,mformat,mmd,mcopy,mshowfat|yes
-ssh|run-ssh|-|qemu-system-i386,ssh|yes
-grub|run-grub|-|qemu-system-i386,mformat,mmd,mcopy,mshowfat|yes
-menu|run-menu|-|qemu-system-i386,mformat,mmd,mcopy,mshowfat|yes
-install|run-install|-|qemu-system-i386,mformat,mmd,mcopy,mshowfat|yes
-sealed|run-sealed|-|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|yes
-drill|run-drill|-|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|yes
-metal|run-metal|-|qemu-system-i386,ssh|yes
-style|run-style|-|cppcheck,shellcheck,clang-format|yes
-host|run-host|-|-|yes
+# The make target is `run-` and the name, so it is not written here. The
+# runtime tools are the external commands the suite needs beyond the build
+# toolchain; `-` means none. The tier is `core` for the set `make test` runs
+# and `full` for the rest; `tests/run all` runs both.
+#
+# Order is the schedule order: the pool starts at the top, and a pool finishes
+# when its longest member does, so the long suites are listed first.
+account|qemu-system-i386|full
+sealed|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
+dhcp|qemu-system-i386|full
+dhcp-e1000|qemu-system-i386|full
+selfbuild|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
+menu|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
+install|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
+procfiles|qemu-system-i386|full
+drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
+raw|qemu-system-i386|full
+raw-e1000|qemu-system-i386|full
+netif|qemu-system-i386|full
+netif-e1000|qemu-system-i386|full
+stress|qemu-system-i386|full
+stress-ahci|qemu-system-i386|full
+tcc|qemu-system-i386|full
+addressed|qemu-system-i386|full
+default|qemu-system-i386|full
+default-e1000|qemu-system-i386|full
+bootpart|qemu-system-i386|full
+noentropy|qemu-system-i386|full
+shutdown|qemu-system-i386|full
+make|qemu-system-i386|full
+ping|qemu-system-i386|full
+packet|qemu-system-i386|full
+ping-e1000|qemu-system-i386|full
+packet-e1000|qemu-system-i386|full
+cred-persist|qemu-system-i386|full
+exitline|qemu-system-i386|full
+bootline|qemu-system-i386|full
+login|qemu-system-i386|full
+persist|qemu-system-i386|full
+persist-ahci|qemu-system-i386|full
+authority|qemu-system-i386|full
+subset|qemu-system-i386|full
+host|-|full
+dgram|qemu-system-i386|full
+dgram-e1000|qemu-system-i386|full
+ssh|qemu-system-i386,ssh|full
+ssh-e1000|qemu-system-i386,ssh|full
+disk|qemu-system-i386|full
+disk-ahci|qemu-system-i386|full
+disk-q35|qemu-system-i386|full
+grub|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
+style|cppcheck,shellcheck,clang-format|full
+diskdiag|qemu-system-i386,ssh|full
+e1000|qemu-system-i386,ssh|full
+diskpolicy|qemu-system-i386|full
+netconsole|qemu-system-i386|full
+metal|qemu-system-i386,ssh|full
+netconsole-e1000|qemu-system-i386|full
+crash|qemu-system-i386|full
+reset|qemu-system-i386|full
+runner|-|full

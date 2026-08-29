@@ -785,15 +785,12 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # DHCP, and the SSH capstone, which is the deepest use the TCP path gets. The
 # other suites are about disks, accounts, and building, and running them again
 # on a second card would cost minutes and show nothing.
+# `tests/run e1000`: the card selection itself. The nine network suites that
+# run on this card as well are separate registry entries, `NAME-e1000`, so the
+# pool schedules them beside their first-card twins and can see what each
+# costs. This suite ran them itself with an inner `-j4`, which hid nine jobs
+# from the pool that was accounting for one.
 run-e1000: rach2 tests krffs test-image $(HARNESS)
-# The nine members run together rather than one after another. Each writes
-# files tagged with the card and forwards ports the first-card runs do not, so
-# they neither collide with each other nor with their twins, and this suite
-# stops being the one thing the whole run waits for. The job count is fixed
-# rather than inherited: this is already one worker of an outer pool, and an
-# unbounded -j here would multiply the two.
-	$(MAKE) --no-print-directory -j4 NIC=e1000 run-default run-ping run-packet \
-	    run-netif run-dgram run-netconsole run-raw run-dhcp run-ssh
 # The probe order, which only a machine holding more than one card can show.
 # The table tries the RTL8139 first, so a machine with both must bind that one;
 # a machine with only the e1000 must bind the e1000; and a machine whose card no
@@ -1042,10 +1039,9 @@ run-stress-ahci: rach2 tests krffs $(HARNESS)
 	    $(AHCI_ATTACH) \
 	    --timeout 150 --ok "STRESSPROBE OK" \
 	    "expect=Type 'help'" "send=exec /stressprobe" wait=130
-# --- toolchain preflight + quality gates --- The style suite (see
-# tools/verify/check.sh): -Werror build, scoped cppcheck, shellcheck, the
-# convention grep, clang-format, and a readelf ABI check. `tests/run style`
-# names this target.
+# The style suite (see tools/verify/check.sh): -Werror build, scoped cppcheck,
+# shellcheck, the convention grep, clang-format, and a readelf ABI check.
+# `tests/run style` names this target.
 run-style:
 	@./tools/verify/check.sh
 # The host suite (see tests/system/suites/host.sh): pure kernel logic compiled
@@ -1055,3 +1051,41 @@ run-style:
 # extracted. `tests/run host` names this target.
 run-host: check-libc $(DEADLINE)
 	@./tests/system/suites/host.sh
+
+# The runner suite (see tests/system/selftest.sh): tests/run driven against a
+# registry and a makefile of its own, in a temporary directory. It boots no
+# machine and reads nothing from the product, so it needs no prerequisites.
+run-runner:
+	@./tests/system/selftest.sh
+
+# The nine network suites again on the second card. Each is the first-card
+# target with `NIC=e1000`, which picks the tagged files and the second set of
+# forwarded ports, so a pair can run at the same time.
+
+run-default-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-default
+
+run-ping-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-ping
+
+run-packet-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-packet
+
+run-netif-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-netif
+
+run-dgram-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-dgram
+
+run-netconsole-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-netconsole
+
+run-raw-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-raw
+
+run-dhcp-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-dhcp
+
+run-ssh-e1000:
+	$(MAKE) --no-print-directory NIC=e1000 run-ssh
+

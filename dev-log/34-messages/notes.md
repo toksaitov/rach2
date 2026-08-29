@@ -49,3 +49,27 @@ this milestone's plan and findings, which change no code.
   after the value and the suite waits for that marker. Proved twice: a kernel
   reported as 1234 bytes is still rejected, and with the old wait restored a
   guest that pauses mid-number reproduces the truncation.
+
+## The runner self-test, 2026-08-30
+
+`tests/system/selftest.sh` drives `tests/run` against a registry and a makefile
+of its own in a temporary directory: a passing suite, a failing one, one that
+needs a command that does not exist, one that leaks a machine, an unknown name,
+a tier, and two bad worker counts. Eighteen checks, about two seconds, no
+machine booted and nothing read from the product. `tests/run runner` runs it,
+and `sh tests/system/selftest.sh` runs it on a tree that does not build.
+
+Proved by six mutations of `tests/run`, each restored from a trap: skipping the
+tool check (3 checks fail), dropping the machine check (2), inverting the tier
+filter (1), accepting an unknown name (2), turning a suite failure into a pass
+(4), and dropping the worker-count validation (2).
+
+The first attempt at the mutation run reported two mutations caught by nothing.
+They were not: `tests/run` checked the name and the tools twice, once before
+the build and once inside `run_one`, so breaking one copy left the other. The
+duplicate is now gone. Every name and tool is checked once, before `prepare`.
+
+Open: `prepare-all` rebuilds `build/images/rach2-sealed.disk` on every run,
+about 25 seconds, whether or not anything it stages has changed. It is a
+product rule rather than a test rule, so it stays out of this phase; recorded
+here for phase 8.

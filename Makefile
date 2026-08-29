@@ -753,4 +753,5 @@ distclean: clean
 	rm -rf build
 
 
-.PHONY: run-addressed run-noentropy run-disk run-disk-ahci run-disk-q35 run-bootpart run-subset run-stress run-stress-ahci run-persist run-persist-ahci run-cred-persist run-crash run-authority run-bootline run-exitline run-login run-procfiles run-account run-shutdown run-reset run-diskpolicy run-diskdiag run-ping run-packet run-raw run-netif run-dgram run-dhcp run-netconsole run-e1000 run-tcc run-make run-selfbuild run-ssh run-grub run-menu run-install run-sealed run-drill run-metal
+.PHONY: run-addressed run-noentropy run-disk run-disk-ahci run-disk-q35 run-bootpart run-subset run-stress run-stress-ahci run-persist run-persist-ahci run-cred-persist run-crash run-authority run-bootline run-exitline run-login run-procfiles run-account run-shutdown run-reset run-diskpolicy run-diskdiag run-ping run-packet run-raw run-netif run-dgram run-dhcp run-netconsole run-e1000 run-tcc run-make run-selfbuild run-ssh run-grub run-menu run-install run-sealed run-drill run-metal \
+        run-default-e1000 run-ping-e1000 run-packet-e1000 run-netif-e1000 run-dgram-e1000 run-netconsole-e1000 run-raw-e1000 run-dhcp-e1000 run-ssh-e1000
