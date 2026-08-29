@@ -23,6 +23,9 @@ mkdir -p "$VDIR"
 
 CC="${CC:-cc}"
 SAN="-fsanitize=address,undefined -fno-sanitize-recover=all"
+# These are freestanding kernel sources, and saying so is what stops the
+# compiler assuming the standard library. See the note at the compile.
+FREESTANDING="-ffreestanding"
 # tests/host/compat has stand-ins for the three musl headers a util source
 # includes that a native host need not have (<crypt.h>, <shadow.h>,
 # <sys/random.h>). Any -I precedes the system directories, so on a host that
@@ -107,8 +110,19 @@ for t in tests/host/*_hosttest.c; do
     fi
     # -Wno-empty-body tolerates the kernel's `for(...);` idiom in linked
     # sources.
+    #
+    # -ffreestanding stops the compiler recognising the loops in k_memset,
+    # k_memcpy, and k_memmove as the standard routines they implement.
+    # Without it, it rewrites k_memset's loop into a call to memset, which
+    # rach2/sys/lib/kstring.c defines as a wrapper around k_memset: the pair
+    # becomes an infinite loop. The sanitizers below hide that by interposing
+    # their own memset, so a test compiled the way this runner compiles it has
+    # never shown the fault, and one compiled any other way hangs. The
+    # per-function -fno-builtin-memset is not enough on clang, whose
+    # loop-idiom pass is gated on the whole of -fno-builtin. The cross
+    # compiler makes no such transformation, so the kernel is unaffected.
     # shellcheck disable=SC2086
-    if $CC -std=c99 $SAN -g -O1 -Wno-empty-body $INC -o "$out" "$t" $deps \
+    if $CC -std=c99 $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC -o "$out" "$t" $deps \
          >"$VDIR/$base.clog" 2>&1; then
         # shellcheck disable=SC2086
         $WATCHDOG "$out" >"$VDIR/$base.rlog" 2>&1
