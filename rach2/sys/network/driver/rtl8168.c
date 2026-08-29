@@ -126,9 +126,18 @@ static uint32_t r8168_tx_stalls;
  * 32 MiB identity-mapped limit: the virtual address is the physical one, so
  * what goes into the descriptor is the address of the array. The rings are
  * 256-byte aligned as the reference requires.
+ *
+ * The rings are volatile and the buffers are not, the same distinction
+ * e1000.c draws: the chip writes ownership back into a descriptor while this
+ * driver is reading it, and an ownership bit the compiler kept in a register
+ * would be a wait that never ends. The kernel builds this file without
+ * optimization, where that cannot happen, but the host model builds the same
+ * file optimized, so the type says what is true rather than resting on a
+ * flag. A buffer is read only after its descriptor changed hands, so making a
+ * megabyte of buffer volatile would slow every copy to no purpose.
  */
-static struct r8168_desc r8168_tx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
-static struct r8168_desc r8168_rx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
+static volatile struct r8168_desc r8168_tx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
+static volatile struct r8168_desc r8168_rx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
 static uint8_t r8168_rx_buf[R8168_RING_SIZE][R8168_RX_BUF_SIZE + 1] __attribute__((aligned(8)));
 static uint8_t r8168_tx_buf[R8168_RING_SIZE][R8168_FRAME_MAX] __attribute__((aligned(8)));
 
