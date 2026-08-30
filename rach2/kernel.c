@@ -32,6 +32,7 @@
 #include "sys/fs/krffs.h"
 #include "sys/pit.h"
 #include "sys/kbd.h"
+#include "sys/input.h"
 #include "sys/mouse.h"
 #include "sys/usb/usb.h"
 #include "sys/block/block.h"
@@ -187,12 +188,6 @@ static void timer_handler(isr_params_t *params)
     }
 }
 
-/* Keyboard handler key state: shift, ctrl, and the 0xE0 extended-scancode
- * prefix seen on the previous byte. */
-static bool _kbd_shift = false;
-static bool _kbd_ctrl = false;
-static bool _kbd_e0 = false;
-
 /**
  * Terminate the current user process by signal and give up its CPU.
  *
@@ -341,84 +336,36 @@ static void kill_foreground_process(void)
 }
 
 /**
- * Handle the PS/2 keyboard IRQ: decode a scancode and route the keystroke.
+ * Handle the PS/2 keyboard interrupt: read the port and hand on the code.
  *
- * Reads the scancode from port 0x60 and pushes the raw byte to the games
- * scancode ring before any early return. Tracks the 0xE0 extended prefix and
- * the shift/ctrl modifier keys, swallows key-release events, and intercepts
- * Ctrl+C to signal the foreground group. A live keystroke routes one of
- * three ways: to the tty line discipline when a user process waits on the
- * console or a session owns it, to the shell's command buffer when the debug
- * shell is active, or to scrollback navigation for the extended arrow/page
- * keys. Runs in interrupt context with an arbitrary process's page directory
- * loaded, so it switches to the kernel directory around any access to kernel
- * data and restores CR3 on exit.
+ * Reads the scancode from port 0x60, pushes the raw byte to the ring that
+ * graphics-mode readers use, and gives it to the input layer, which decides
+ * where the keystroke goes. Everything that is not about the 8042 lives there,
+ * because a USB keyboard's codes arrive by another road and are treated the
+ * same.
+ *
+ * Runs in interrupt context with an arbitrary process's page directory loaded,
+ * so it switches to the kernel directory around the work and restores CR3 on
+ * the way out.
  */
 static void keyboard_handler(isr_params_t *params)
 {
     uint8_t scancode;
-    char c;
     uint32_t saved_cr3;
     bool switched_cr3 = false;
-    bool was_e0;
 
     (void) params;
 
     scancode = inb(0x60);
-    was_e0 = _kbd_e0;
-    _kbd_e0 = false;
 
-    /* Push every scancode, including the ones the branches below consume, so a
+    /* Push every scancode, including the ones the input layer consumes, so a
      * game reading the raw ring sees modifiers and releases too. */
     kbd_push_scancode(scancode);
 
-    if (scancode == 0xE0) {
-        _kbd_e0 = true;
-        return;
-    }
-
-    /* Left and right shift. */
-    if (scancode == 0x2A || scancode == 0x36) {
-        _kbd_shift = true;
-        return;
-    }
-    if (scancode == 0xAA || scancode == 0xB6) {
-        _kbd_shift = false;
-        return;
-    }
-
-    /* Left and right Ctrl both report 0x1D press / 0x9D release. */
-    if (scancode == 0x1D) {
-        _kbd_ctrl = true;
-        return;
-    }
-    if (scancode == 0x9D) {
-        _kbd_ctrl = false;
-        return;
-    }
-
-    /* High bit set marks a key release. */
-    if (scancode & 0x80) {
-        return;
-    }
-
-    /* 'C' is scancode 0x2E. When a session owns the console (a reader is parked
-     * or a session has it), let ^C flow through the line discipline below
-     * like every other key: n_tty's ISIG path posts SIGINT to the foreground
-     * group AND flushes pending input, matching a serial ^C, so the two console
-     * input sources agree. Only with no session (the kernel debug shell, which
-     * reads through its own buffer, not the discipline) is the signal delivered
-     * out of band. */
-    if (_kbd_ctrl && scancode == 0x2E &&
-        !(wq_active(&console_tty.input_wq) || console_tty.sid != 0)) {
-        kill_foreground_process();
-        return;
-    }
-
-    /* The running process's page directory may not map the kernel data this
-     * handler touches (EN_us, stdin_buffer). Set CR3 directly rather than
-     * switch_page_directory(), whose _curr_dir check may be out of sync here.
-     */
+    /* The running process's page directory may not map the kernel data the
+     * input layer touches. Set CR3 directly rather than
+     * switch_page_directory(), whose own record of the current directory may
+     * be out of sync here. */
     __asm__ __volatile__("mov %%cr3, %0" : "=r"(saved_cr3));
     {
         uint32_t kernel_cr3 = get_page_dir_phys(_kernel_dir);
@@ -428,88 +375,60 @@ static void keyboard_handler(isr_params_t *params)
         }
     }
 
-    if (was_e0 && kernel_shell_active && stdin_waiting_proc == NULL) {
-        if (scancode == 0x49) {
-            k_scrollback_page_up();
-            goto restore_cr3;
-        }
-        if (scancode == 0x51) {
-            k_scrollback_page_down();
-            goto restore_cr3;
-        }
-        if (scancode == 0x47) {
-            k_scrollback_home();
-            goto restore_cr3;
-        }
-        if (scancode == 0x4F) {
-            k_scrollback_end();
-            goto restore_cr3;
-        }
-    }
+    input_key(scancode);
 
-    c = _kbd_shift ? EN_us_shift[scancode & 0x7F] : EN_us[scancode & 0x7F];
-
-    if (wq_active(&console_tty.input_wq) || console_tty.sid != 0) {
-        /*
-         * A session owns the console: feed the keystroke to the line
-         * discipline whether or not a reader is parked. tty_input_char
-         * queues the byte, echoes it, and wakes any waiter; with nobody
-         * parked the wake is a no-op and the byte waits as type-ahead for
-         * the next read, the way the serial drain (console_pump_irq) queues
-         * input that arrives un-parked. Unlike that drain, which suppresses
-         * echo (null_sink) to keep serial_out's busy-wait out of the serial
-         * RX IRQ, this echoes through the sink here: a keypress is one byte
-         * (a single line edit at worst, ^U erasing a line), not a
-         * UART-driven burst, so the in-IRQ wait is bounded. Without the sid
-         * arm a keystroke is lost whenever no reader sits on the console, as
-         * when busybox ash waits at its prompt, so the QEMU-window keyboard
-         * goes dead while the serial console still works. The PS/2 keyboard
-         * sends '\b' for Backspace; map it to the discipline's ERASE (DEL),
-         * and turn Ctrl+letter into its control byte so line editing (^U/^W)
-         * and EOF (^D) reach the discipline like a real terminal. Ctrl+C is
-         * intercepted earlier.
-         */
-        if (c != 0) {
-            unsigned char tc = (unsigned char)c;
-            if (_kbd_ctrl && c >= 'a' && c <= 'z') {
-                tc = (unsigned char)(c - 'a' + 1);
-            } else if (_kbd_ctrl && c >= 'A' && c <= 'Z') {
-                tc = (unsigned char)(c - 'A' + 1);
-            } else if (c == '\b') {
-                tc = 0x7F;
-            }
-            tty_input_char(&console_tty, tc);
-        }
-    } else if (kernel_shell_active) {
-        if (c == '\n') {
-            if (k_scrollback_is_active()) {
-                k_scrollback_end();
-            }
-            cmd_buffer[cmd_pos] = '\0';
-            cmd_ready = true;
-            console_putc('\n');
-        } else if (c == '\b') {
-            if (k_scrollback_is_active()) {
-                k_scrollback_end();
-            }
-            if (cmd_pos > 0) {
-                --cmd_pos;
-                console_putc('\b');
-                console_putc(' ');
-                console_putc('\b');
-            }
-        } else if (c != 0 && cmd_pos < CMD_BUFFER_SIZE - 1) {
-            if (k_scrollback_is_active()) {
-                k_scrollback_end();
-            }
-            cmd_buffer[cmd_pos++] = c;
-            console_putc(c);
-        }
-    }
-
-restore_cr3:
     if (switched_cr3) {
         __asm__ __volatile__("mov %0, %%cr3" : : "r"(saved_cr3) : "memory");
+    }
+}
+
+/*
+ * What the input layer needs from the debug shell: whether the shell is the
+ * one reading, a character for its buffer, and the out-of-band interrupt it
+ * takes where there is no session to take it through the line discipline.
+ */
+int shell_reads_input(void)
+{
+    return kernel_shell_active && stdin_waiting_proc == NULL;
+}
+
+void shell_interrupt(void)
+{
+    kill_foreground_process();
+}
+
+void shell_input_char(char c)
+{
+    if (!kernel_shell_active) {
+        return;
+    }
+    if (c == '\n') {
+        if (k_scrollback_is_active()) {
+            k_scrollback_end();
+        }
+        cmd_buffer[cmd_pos] = '\0';
+        cmd_ready = true;
+        console_putc('\n');
+        return;
+    }
+    if (c == '\b') {
+        if (k_scrollback_is_active()) {
+            k_scrollback_end();
+        }
+        if (cmd_pos > 0) {
+            --cmd_pos;
+            console_putc('\b');
+            console_putc(' ');
+            console_putc('\b');
+        }
+        return;
+    }
+    if (cmd_pos < CMD_BUFFER_SIZE - 1) {
+        if (k_scrollback_is_active()) {
+            k_scrollback_end();
+        }
+        cmd_buffer[cmd_pos++] = c;
+        console_putc(c);
     }
 }
 
@@ -2859,6 +2778,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     } else {
         klog(KLOG_INFO, "mouse", "started");
         if (init_mouse() == 0) {
+            input_mouse_found();
             klog(KLOG_INFO, "mouse", "ready");
         } else {
             klog(KLOG_WARN, "mouse", "absent: nothing answered the probe");

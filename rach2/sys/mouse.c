@@ -167,7 +167,7 @@ static int mouse_send_command(uint8_t cmd)
  * Runs in IRQ context (the producer); the consumer is mouse_read_packets.
  * Deltas are clamped to the int8_t range the packet struct has.
  */
-static void mouse_push_packet(uint8_t buttons, int dx, int dy)
+void mouse_push_packet(uint8_t buttons, int dx, int dy)
 {
     int next = (mouse_tail + 1) % MOUSE_BUF_SIZE;
     if (next != mouse_head) {

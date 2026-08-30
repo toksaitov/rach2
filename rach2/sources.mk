@@ -20,6 +20,7 @@ C_SRC = kernel.c \
         sys/isr.c \
         sys/pic.c \
         sys/board.c \
+        sys/input.c \
         sys/pit.c \
         sys/rtc.c \
         sys/kbd.c \

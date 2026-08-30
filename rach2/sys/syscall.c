@@ -5,6 +5,7 @@
 #include "panic.h"
 #include "kio.h"
 #include "kbd.h"
+#include "input.h"
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
@@ -1555,8 +1556,8 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
 
     if (name[0] == 'm' && name[1] == 'o' && name[2] == 'u' &&
         name[3] == 's' && name[4] == 'e' && name[5] == '\0') {
-        if (!mouse_is_available()) {
-            return -ENODEV;  /* Mouse not initialized */
+        if (!mouse_is_available() && !input_mouse_present()) {
+            return -ENODEV;  /* no mouse of any kind was found */
         }
 
         fd = fd_alloc(&current_proc->fds);

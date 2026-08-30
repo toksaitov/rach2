@@ -23,6 +23,15 @@ struct mouse_packet {
 /** Bring up the PS/2 mouse; 0 on success, -1 on failure. */
 int init_mouse(void);
 
+/**
+ * Put one packet in the queue, from whichever mouse produced it.
+ *
+ * The PS/2 driver calls this when it has assembled three bytes; the USB class
+ * driver calls it with a report it decoded. One queue, because a program
+ * reading `/dev/mouse` is reading movement rather than a particular device.
+ */
+void mouse_push_packet(uint8_t buttons, int dx, int dy);
+
 /** Drain up to max_count packets into buf; returns the count copied. */
 int mouse_read_packets(struct mouse_packet *buf, int max_count);
 
