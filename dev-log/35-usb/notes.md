@@ -185,3 +185,44 @@ The suites that touch what changed all pass: `default`, `console`, `reset`,
 `shutdown`, `subset` and `metal`, beside `style` and `host`. `usb_stop` sits
 beside `netdev_stop` in `kernel_shutdown`, which is why `reset` and `shutdown`
 are in that list.
+
+### Review 2 of 6
+
+Seven findings against phase 3, all of them right, all fixed.
+
+* The command abort was not the state change the specification describes. The
+  driver wrote the abort bit, called the command finished and let the next one
+  be issued as soon as that bit read clear. The bit is write-only and reads
+  zero, so the guard never fired. An abort is a request: the controller stops
+  the ring and says so by clearing the running bit, and only then is there a
+  ring to use. The driver waits for that and then points the ring at the block
+  it will use next.
+* A completion event was accepted whatever it named. A late answer to a command
+  already abandoned would have completed the next one. The event names the
+  block its command was in, and that is matched now.
+* A controller with more than sixteen root ports would have written past the
+  per-port tables. The count is capped at what this kernel has state for, with
+  a record naming both numbers.
+* The debounce interval was defined and never used, and the port-change flags
+  were set and never read. There is a per-port connect time now, and
+  `xhci_port_settled` is what the layer above asks before it resets a port.
+* Nothing separated filling a block from ringing the doorbell, or reading a
+  cycle bit from reading the rest of the event. There are compiler barriers at
+  both points and before the controller is started. x86 gives the ordering; the
+  barrier is against the compiler, which cannot see the other party.
+* The command-wrap rows passed for the wrong reason. The model took the block
+  before the driver's enqueue pointer to be the command just written, which
+  after a wrap is the link block. It follows a dequeue pointer of its own now,
+  through the link block and the cycle change, the way a controller does.
+* Deadlines were compared with `>=` against a clock that wraps after seven
+  weeks. They are signed differences now.
+
+The model also gained: a command ring register whose abort and stop bits are
+write-only and whose running bit is the controller's, an abort that can be made
+not to complete, and rows for the event ring segment table's contents, the
+dequeue pointer's address rather than only its handler bit, the port count cap
+and the debounce.
+
+Four further mutations, all caught: answer the command in flight with any
+completion, call the abort finished the moment it is asked for, let a connect
+be acted on at once, and trust the controller's port count.

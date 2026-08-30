@@ -155,6 +155,16 @@ int xhci_ports(void);
 /** What a root port reports now. */
 int xhci_port_status(int port, struct usb_port_status *out);
 
+/**
+ * Whether a port's connect has been steady long enough to act on.
+ *
+ * A contact bounces, and the specification asks for a hundred milliseconds of
+ * quiet between a connect and a reset. The layer above asks this before it
+ * resets a port, so a device pushed in slowly is enumerated once rather than
+ * three times.
+ */
+int xhci_port_settled(int port);
+
 /** Begin resetting a port. Returns -1 if the port has no device. */
 int xhci_port_reset_begin(int port);
 

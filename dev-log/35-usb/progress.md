@@ -41,7 +41,7 @@ the commit that completes it.
 * [x] QEMU's capability values in `hardware.md`
 * [x] proof: a device on a root port is recorded with its speed; nothing is
       recorded with no device attached
-* [ ] review 2 of 6
+* [x] review 2 of 6
 
 ## Phase 4: enumeration
 

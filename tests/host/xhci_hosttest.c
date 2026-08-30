@@ -78,11 +78,20 @@ static uint32_t reg[REGS];
 #define M_PORTSC_CHANGES 0x00FE0000u
 #define M_PORTSC_CSC     0x00020000u
 #define M_PORTSC_PRC     0x00200000u
-#define LEGCTL_EVENTS    0xE0000000u
+
+/* The command ring control register's bits. Two are write-only and one is the
+   controller's own. */
+#define M_CRCR_CS     0x2u
+#define M_CRCR_CA     0x4u
+#define M_CRCR_CRR    0x8u
+#define LEGCTL_EVENTS 0xE0000000u
 
 /* What the controller does when a doorbell is rung, set after `xhci.c` is
    included because it reaches into the driver's own rings. */
 static void (*on_doorbell)(uint32_t target);
+/* Called when the driver points the command ring somewhere, which is how this
+   model follows it after an abort. */
+static void (*on_ring_moved)(void);
 
 /* What this run's controller does, set before each row. */
 static int halts;
@@ -92,6 +101,8 @@ static int command_completes;
 static int starts;
 /* Whether a port reset the driver asks for ever finishes. */
 static int port_reset_completes;
+/* Whether the controller stops its command ring when it is asked to. */
+static int abort_completes;
 /* How many waits the firmware takes before it gives the controller up, so a
    row can have a driver that asks once and reads once fail where a driver
    that waits passes. */
@@ -214,6 +225,27 @@ static void model_w32(uint32_t off, uint32_t v)
         reg[off] = v;
         if (on_doorbell) {
             on_doorbell(v);
+        }
+        return;
+    }
+
+    if (off == OP(0x18u)) {
+        /* The command ring register. The abort and stop bits are written by
+           software and read as zero; the running bit belongs to the
+           controller. A model that stored what was written would let a driver
+           read back its own abort request and call it an answer. */
+        uint32_t running = reg[off] & M_CRCR_CRR;
+
+        if (v & M_CRCR_CA) {
+            if (abort_completes) {
+                running = 0;
+            }
+            reg[off] = running;
+            return;
+        }
+        reg[off] = (v & ~(M_CRCR_CA | M_CRCR_CS | M_CRCR_CRR)) | running;
+        if (on_ring_moved) {
+            on_ring_moved();
         }
         return;
     }
@@ -411,24 +443,60 @@ static uint32_t last_command_type;
 static uint32_t last_command_slot;
 static uint32_t commands_seen;
 
+/* Where the controller has read up to on the command ring, and the cycle value
+   it expects there. Following the ring rather than guessing which block the
+   driver just wrote is what makes the wrap rows mean anything: a model that
+   assumed the block before the enqueue pointer would read the link block as a
+   command every time the ring wrapped. */
+static uint32_t model_cmd_dequeue;
+static uint32_t model_cmd_cycle;
+
 static void doorbell_rung(uint32_t target)
 {
-    uint32_t index;
-    const uint32_t *t;
-
     if (target != 0) {
         return; /* an endpoint doorbell; nothing rings one yet */
     }
-    /* The block the driver just wrote is the one before its enqueue pointer,
-       and the ring wraps. */
-    index = (cmd_enqueue + XHCI_RING_TRBS - 1) % XHCI_RING_TRBS;
-    t = &cmd_ring[index * TRB_WORDS];
-    last_command_type = (t[3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK;
-    last_command_slot = (t[3] >> TRB_SLOT_SHIFT) & 0xFFu;
-    commands_seen++;
-    if (command_completes) {
-        post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, last_command_slot, 0);
+
+    for (;;) {
+        const uint32_t *t = &cmd_ring[model_cmd_dequeue * TRB_WORDS];
+        uint32_t type;
+
+        if ((t[3] & TRB_CYCLE) != model_cmd_cycle) {
+            break;
+        }
+        type = (t[3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK;
+        if (type == TRB_TYPE_LINK) {
+            model_cmd_dequeue = 0;
+            if (t[3] & TRB_TOGGLE) {
+                model_cmd_cycle ^= TRB_CYCLE;
+            }
+            continue;
+        }
+
+        last_command_type = type;
+        last_command_slot = (t[3] >> TRB_SLOT_SHIFT) & 0xFFu;
+        commands_seen++;
+        reg[OP(0x18u)] |= M_CRCR_CRR;
+        if (command_completes) {
+            post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, last_command_slot,
+                       (uint32_t)(uintptr_t)t);
+            reg[OP(0x18u)] &= ~M_CRCR_CRR;
+        }
+        model_cmd_dequeue++;
+        if (model_cmd_dequeue == XHCI_RING_TRBS) {
+            model_cmd_dequeue = 0;
+            model_cmd_cycle ^= TRB_CYCLE;
+        }
     }
+}
+
+/* The driver points the ring somewhere after an abort; the controller reads
+   from where it is told. The address written is truncated on this host, so the
+   model takes the driver's own position rather than decoding it. */
+static void ring_moved(void)
+{
+    model_cmd_dequeue = cmd_enqueue;
+    model_cmd_cycle = cmd_cycle;
 }
 
 /* ---- the rows ---- */
@@ -469,6 +537,10 @@ static void model_reset(void)
     command_completes = 1;
     port_reset_completes = 1;
     on_doorbell = doorbell_rung;
+    on_ring_moved = ring_moved;
+    abort_completes = 1;
+    model_cmd_dequeue = 0;
+    model_cmd_cycle = TRB_CYCLE;
     model_event_write = 0;
     model_event_cycle = TRB_CYCLE;
     last_command_type = 0;
@@ -731,6 +803,10 @@ int main(void)
     CHECK("its command ring programmed, running from the first block",
           (reg[OP(0x18u)] & ~0xFu) != 0 && (reg[OP(0x18u)] & 1u) != 0);
     CHECK("one segment in its event ring table", reg[RTSOFF + 0x20u + 0x08u] == 1);
+    CHECK("the table naming the ring it built", erst[0] == (uint32_t)(uintptr_t)event_ring);
+    CHECK("with the ring's length", erst[2] == XHCI_RING_TRBS);
+    CHECK("and nothing in the halves this kernel cannot address",
+          erst[1] == 0 && reg[RTSOFF + 0x20u + 0x14u] == 0 && reg[OP(0x34u)] == 0);
     CHECK("that table programmed", reg[RTSOFF + 0x20u + 0x10u] != 0);
     CHECK("and a dequeue pointer to start from", reg[RTSOFF + 0x20u + 0x18u] != 0);
     CHECK("it is running", (reg[OP(O_USBSTS)] & M_USBSTS_HCH) == 0);
@@ -768,7 +844,38 @@ int main(void)
     CHECK("one that is never answered is still running", xhci_command_done(&result) == 0);
     xhci_advance(2000);
     CHECK("until its deadline passes", xhci_command_done(&result) == -1);
-    CHECK("and then the ring is taken back", (reg[OP(0x18u)] & 0x4u) != 0);
+    /* The abort is a request, and the controller answers it by stopping the
+       ring. Once it has, the driver may use the ring again. */
+    command_completes = 1;
+    CHECK("and once the controller has stopped the ring it is used again",
+          xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+    xhci_events();
+    CHECK("with the next command answered", xhci_command_done(&result) == 1);
+
+    model_reset();
+    command_completes = 0;
+    abort_completes = 0;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("a command is issued", xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+    xhci_advance(2000);
+    CHECK("a command that is never answered is given up on", xhci_command_done(&result) == -1);
+    CHECK("and while the controller still holds the ring nothing is issued on it",
+          xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) != 0);
+
+    /* A completion that names a block the driver is not waiting on belongs to
+       a command already abandoned, and must not answer the one in flight. */
+    model_reset();
+    command_completes = 0;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("a command is issued", xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+    post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, 0, 0xDEADBEEFu);
+    xhci_events();
+    CHECK("a completion for another command does not finish this one",
+          xhci_command_done(&result) == 0);
 
     /* The command ring wraps through the link block at its end, and both
        sides change cycle there. */
@@ -809,6 +916,9 @@ int main(void)
     CHECK("and the driver's cycle follows the controller's", event_cycle == model_event_cycle);
     CHECK("with the dequeue pointer written back", (reg[RTSOFF + 0x20u + 0x18u] & 0x8u) != 0);
     CHECK("and the port it named remembered", port_changed[0] == 1);
+    CHECK("with the dequeue pointer at the block it stopped on",
+          (reg[RTSOFF + 0x20u + 0x18u] & ~0xFu) ==
+              ((uint32_t)(uintptr_t)&event_ring[event_index * TRB_WORDS] & ~0xFu));
 
     /* Ports. */
     model_reset();
@@ -827,6 +937,28 @@ int main(void)
     CHECK("and the reset finished", xhci_port_reset_done(0) == 1);
     CHECK("with its change bit cleared afterwards", (reg[M_PORTSC(0)] & M_PORTSC_PRC) == 0);
     CHECK("a port with nothing on it is not reset", xhci_port_reset_begin(1) != 0);
+
+    /* A contact bounces, so a connect is not acted on the moment it appears. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS;
+    xhci_events();
+    CHECK("a connect is not settled the moment it appears", xhci_port_settled(0) == 0);
+    xhci_advance(50);
+    CHECK("nor half way through the interval", xhci_port_settled(0) == 0);
+    xhci_advance(60);
+    CHECK("and is settled once the interval has passed", xhci_port_settled(0) == 1);
+    reg[M_PORTSC(0)] &= ~M_PORTSC_CCS;
+    xhci_events();
+    CHECK("a port with nothing on it is never settled", xhci_port_settled(0) == 0);
+
+    /* A controller with more ports than this kernel has state for. */
+    model_reset();
+    reg[R_HCSPARAMS1] = 16u | (1u << 8) | (40u << 24);
+    CHECK("a controller with more ports than this kernel reaches is read", xhci_read_caps() == 0);
+    CHECK("and reaches as many as it has state for", xhci_capabilities()->max_ports == 16);
 
     model_reset();
     port_reset_completes = 0;

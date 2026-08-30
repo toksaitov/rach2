@@ -102,6 +102,22 @@
 #define PCI_PM_CONTROL 0x04
 
 #define XHCI_PCI_PROGIF 0x30
+/*
+ * How many root ports this driver keeps state for. A controller may advertise
+ * as many as 255; the two machines here have eight and fewer, and the state
+ * below is a fixed table like every other in this kernel. A controller with
+ * more ports than this is used as far as this many and says so, which is
+ * better than refusing it and better than writing past the table.
+ */
+#define XHCI_MAX_PORTS 16
+
+/*
+ * A compiler barrier. The controller reads what this driver writes and writes
+ * what it reads, so the order of a fill and the doorbell that publishes it
+ * matters. x86 gives the store ordering; this stops the compiler from
+ * reordering or eliding what it cannot see another party doing.
+ */
+#define xhci_barrier() __asm__ __volatile__("" : : : "memory")
 
 static volatile uint8_t *xhci_base;
 static struct xhci_caps caps;
@@ -424,6 +440,12 @@ int xhci_read_caps(void)
         return -1;
     }
 
+    if (caps.max_ports > XHCI_MAX_PORTS) {
+        klog(KLOG_WARN, "usb", "ports: the controller has %d and this kernel reaches %d",
+             (int)caps.max_ports, (int)XHCI_MAX_PORTS);
+        caps.max_ports = XHCI_MAX_PORTS;
+    }
+
     caps.pagesize = op_r32(XHCI_PAGESIZE) & 0xFFFFu;
     if (!(caps.pagesize & 0x1u)) {
         xhci_err = "the controller does not take 4 KiB pages";
@@ -520,6 +542,7 @@ int xhci_scratchpads(void)
 #define PORT_DEBOUNCE_MS 100u
 #define PORT_RESET_MS    500u
 
+
 /* How long a command may take before the ring is taken back from the
  * controller. Nothing this driver issues is slow; a command still running
  * after this is a controller that has stopped answering. */
@@ -543,14 +566,31 @@ static uint32_t event_cycle;  /* the cycle value it expects there */
 /* The command in flight, if any, and what it ended as. */
 static int command_running;
 static int command_finished;
+static int command_aborting;
 static struct usb_command_result command_result;
 static uint32_t command_deadline;
+static uint32_t command_trb;
 
 /* This driver's own clock, in milliseconds, and the per-port state that is
  * counted against it. */
 static uint32_t now_ms;
-static uint32_t port_deadline[16];
-static uint8_t port_changed[16];
+static uint32_t port_deadline[XHCI_MAX_PORTS];
+static uint32_t port_connect_at[XHCI_MAX_PORTS];
+static uint8_t port_connected[XHCI_MAX_PORTS];
+static uint8_t port_changed[XHCI_MAX_PORTS];
+
+/**
+ * Whether a moment has passed, in a way that survives the clock wrapping.
+ *
+ * The clock is milliseconds in 32 bits, which wraps after seven weeks. A plain
+ * comparison against a deadline computed before the wrap says the deadline has
+ * not arrived for another seven weeks; the difference, read as signed, says
+ * what it should.
+ */
+static int past(uint32_t deadline)
+{
+    return (int32_t)(now_ms - deadline) >= 0;
+}
 
 void xhci_advance(uint32_t milliseconds)
 {
@@ -641,7 +681,7 @@ int xhci_port_reset_done(int port)
         w32(portsc_offset(port), (value & ~(PORTSC_CHANGES | PORTSC_PED)) | PORTSC_PRC);
         return (value & PORTSC_PED) ? 1 : -1;
     }
-    if (now_ms >= port_deadline[port]) {
+    if (past(port_deadline[port])) {
         return -1;
     }
     return 0;
@@ -654,11 +694,21 @@ int xhci_command_issue(uint32_t type, uint64_t parameter, uint32_t slot)
     if (command_running) {
         return -1;
     }
-    if (op_r32(XHCI_CRCR) & CRCR_CA) {
-        return -1; /* an abort of the last one is still in progress */
+    if (command_aborting) {
+        /* An abort is not finished when it is asked for. The controller stops
+         * the ring and clears the running bit, and only then is there a ring
+         * to put anything on. Where it stopped is not this driver's to know,
+         * so the ring is pointed at the block it would have used next. */
+        if (op_r32(XHCI_CRCR) & CRCR_CRR) {
+            return -1;
+        }
+        command_aborting = 0;
+        op_w32(XHCI_CRCR, (uint32_t)(uintptr_t)trb_at(cmd_ring, cmd_enqueue) | cmd_cycle);
+        op_w32(XHCI_CRCR + 4, 0);
     }
 
     trb = trb_at(cmd_ring, cmd_enqueue);
+    command_trb = (uint32_t)(uintptr_t)trb;
     trb[0] = (uint32_t)(parameter & 0xFFFFFFFFu);
     trb[1] = (uint32_t)(parameter >> 32);
     trb[2] = 0;
@@ -682,6 +732,7 @@ int xhci_command_issue(uint32_t type, uint64_t parameter, uint32_t slot)
     command_running = 1;
     command_finished = 0;
     command_deadline = now_ms + COMMAND_MS;
+    xhci_barrier(); /* the block is written before the controller is told */
     w32(caps.dboff, 0); /* doorbell zero: the command ring */
     return 0;
 }
@@ -698,12 +749,15 @@ int xhci_command_done(struct usb_command_result *out)
         }
         return command_result.status == USB_XFER_OK ? 1 : -1;
     }
-    if (now_ms >= command_deadline) {
-        /* Take the ring back. A controller that never answers keeps the ring
-         * for ever otherwise, and nothing else can be issued on it. */
-        op_w32(XHCI_CRCR, (op_r32(XHCI_CRCR) & ~CRCR_RCS) | CRCR_CA);
+    if (past(command_deadline)) {
+        /* Ask for the ring back. The controller stops it and says so by
+         * clearing the running bit; until then nothing may be issued, and any
+         * completion that arrives belongs to the command being abandoned. */
+        op_w32(XHCI_CRCR, CRCR_CA);
+        op_w32(XHCI_CRCR + 4, 0);
         command_running = 0;
-        klog(KLOG_ERR, "usb", "command: no answer; the ring was taken back");
+        command_aborting = 1;
+        klog(KLOG_ERR, "usb", "command: no answer; the ring was asked back");
         return -1;
     }
     return 0;
@@ -722,6 +776,13 @@ static void event_dispatch(const uint32_t *trb)
     uint32_t code = (trb[2] >> TRB_COMPLETION_SHIFT) & 0xFFu;
 
     if (type == TRB_TYPE_COMMAND_COMPLETE) {
+        /* The event names the block whose command it belongs to. A completion
+         * for anything else is the answer to a command already given up on,
+         * and completing the one in flight with it would be answering the
+         * wrong question. */
+        if (!command_running || trb[0] != command_trb) {
+            return;
+        }
         command_running = 0;
         command_finished = 1;
         command_result.status = (code == TRB_COMPLETION_SUCCESS) ? USB_XFER_OK : USB_XFER_FAILED;
@@ -742,6 +803,41 @@ static void event_dispatch(const uint32_t *trb)
     }
 }
 
+/**
+ * Watch the ports for a connect settling.
+ *
+ * A contact bounces, and the specification asks for a hundred milliseconds of
+ * quiet between a connect and anything done about it. This records when each
+ * port last became connected, and `xhci_port_settled` is what the layer above
+ * asks before it resets one.
+ */
+static void port_scan(void)
+{
+    uint32_t i;
+    uint32_t limit = caps.max_ports < XHCI_MAX_PORTS ? caps.max_ports : XHCI_MAX_PORTS;
+
+    for (i = 0; i < limit; i++) {
+        int now_connected = (r32(portsc_offset((int)i)) & PORTSC_CCS) ? 1 : 0;
+
+        if (now_connected != port_connected[i]) {
+            port_connected[i] = (uint8_t)now_connected;
+            port_connect_at[i] = now_ms;
+            port_changed[i] = 1;
+        }
+    }
+}
+
+int xhci_port_settled(int port)
+{
+    if (port < 0 || (uint32_t)port >= caps.max_ports) {
+        return 0;
+    }
+    if (!port_connected[port]) {
+        return 0;
+    }
+    return past(port_connect_at[port] + PORT_DEBOUNCE_MS) ? 1 : 0;
+}
+
 void xhci_events(void)
 {
     uint32_t taken = 0;
@@ -752,6 +848,10 @@ void xhci_events(void)
         if ((trb[3] & TRB_CYCLE) != event_cycle) {
             break;
         }
+        /* The cycle bit is the controller's promise that the rest of the block
+         * is written. Read it first, then the rest, and let nothing move
+         * across that point. */
+        xhci_barrier();
         event_dispatch(trb);
         taken++;
         event_index++;
@@ -763,6 +863,8 @@ void xhci_events(void)
             break; /* a whole ring in one drain is enough for one turn */
         }
     }
+
+    port_scan();
 
     if (taken != 0) {
         /* Tell the controller how far this driver has read, and that it may
@@ -792,10 +894,13 @@ int xhci_start(void)
     event_cycle = TRB_CYCLE;
     command_running = 0;
     command_finished = 0;
-    for (i = 0; i < 16; i++) {
+    for (i = 0; i < XHCI_MAX_PORTS; i++) {
         port_changed[i] = 0;
         port_deadline[i] = 0;
+        port_connect_at[i] = 0;
+        port_connected[i] = 0;
     }
+    command_aborting = 0;
 
     /* The scratchpad array is the controller's own memory, and the first entry
      * of the context array is where it looks for it. */
@@ -822,6 +927,7 @@ int xhci_start(void)
     w32(caps.rtsoff + XHCI_IR0 + IR_ERSTBA, (uint32_t)(uintptr_t)erst);
     w32(caps.rtsoff + XHCI_IR0 + IR_ERSTBA + 4, 0);
 
+    xhci_barrier(); /* every table is written before the controller runs */
     op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) | USBCMD_RS);
     for (polls = 0; polls < XHCI_HALT_POLLS; polls++) {
         if (!(op_r32(XHCI_USBSTS) & USBSTS_HCH)) {
