@@ -91,7 +91,7 @@ the commit that completes it.
 * [ ] proof: a person types and moves on the laptop; the internal keyboard is
       untouched; `rach2.nousb` still reaches a shell; poweroff and reboot both
       complete with the controller halted and the routing as it was found
-* [ ] review 5 of 6
+* [x] review 5 of 6, run against the hardware path rather than the machine
 
 ## Phase 7: the record
 

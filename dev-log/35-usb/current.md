@@ -1,27 +1,26 @@
 # Resume state
 
-Phase: 5 of 7 complete with its review. Phase 7's documents are written. Phase 6
-needs the notebook and is the only thing blocking the milestone.
+Phase 6 is the only phase not finished, and it needs the notebook.
 
-In progress: nothing. What is left needs the owner and the machine:
+Everything that can be done for it from here is done:
 
-* Phase 1's last item: the laptop's column of `hardware.md`.
-* The whole of phase 6: the firmware handoff, the real capability values, the
-  routing decision, and a person typing on a USB keyboard at the laptop's
-  console.
+* `dev-log/35-usb/checklist.md` is the session, step by step, with what each
+  answer means and what to record.
+* The kernel logs the raw register words the session needs: the legacy-support
+  pair before and after the handoff, the three capability words, the scratchpad
+  count, the context size, and the Intel routing registers.
+* The acceptance script prints every `usb:` line and fails on a refusal.
+* `tests/run metal` boots the metal image with a USB keyboard attached, so the
+  image that will go to the notebook enumerates one in the rehearsal.
+* The controller is given back to the firmware when this kernel cannot use it,
+  so a failed bring-up leaves the machine as it found it.
+* Review 5 was run against the hardware path rather than the machine.
 
-Everything phase 6 needs is ready. The kernel reports its USB inventory from
-configuration space at boot, including the Intel routing registers;
-`tests/system/accept/metal_accept.sh` reads those lines back over SSH; and
-`rach2.nousb` switches the stack off if a boot with it goes wrong.
+What is left needs a person at the Lenovo: the firmware settings, a boot with
+`rach2.nousb` to see what the firmware does on its own, a boot with the stack,
+the `usb:` lines into `hardware.md`, and the routing decision.
 
-Next action for a session with the machine: boot the notebook with the current
-kernel and an external USB keyboard and mouse, read the `usb:` records, fill
-`hardware.md`, and put the routing question to the owner with the values in
-front of them.
+The plan says the owner closes this, not the milestone. With the record as it
+stands they can close it with QEMU alone; nothing has been recorded either way.
 
-Next action without it: phase 7's remaining items, which are the measurements,
-the tier decision, the milestone record and the dev-log entry. They can all be
-written except the half of the trust statement that only the laptop can settle.
-
-Last file read: `tests/system/Readme.md`.
+Last file read: `tests/system/accept/metal_accept.sh`.

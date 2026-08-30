@@ -532,3 +532,51 @@ rather than as a cause nobody established. Six known limits that were in
 
 Four phrases went for the register rule: a fragment, an effect sentence, an
 invented shorthand, and a controller given the intention to lie.
+
+### Review 5 of 6
+
+The plan gave this review to phase 6. The machine is not available, so it was
+run against what phase 6 will meet: the hardware path in the driver, the
+acceptance script, and the checklist for the session. Eight findings.
+
+Three were code and are fixed.
+
+* The handoff had no way back. The driver took the controller from the
+  firmware, turned the firmware's own interrupts off, and if anything after
+  that failed it kept both. On a notebook whose firmware is emulating a PS/2
+  keyboard out of a USB one, what it kept was the keyboard. `xhci_release`
+  restores the legacy-support registers to what they held, and it is called
+  when bring-up fails and when the machine stops.
+* `xhci_stop` wrote the command register whenever a controller had been found,
+  including one that refused its own reset or was never started. It writes
+  nothing now unless the controller is running, and it says so when a halt does
+  not take.
+* A function taken out of D3 was read immediately. It gets the ten milliseconds
+  the specification allows and its power state is read back.
+
+The raw register words a session needs are recorded now: the two
+legacy-support registers before and after the handoff, and the three capability
+words with the scratchpad count and context size beside them. A person at that
+machine takes the log away, and reading numbers out of prose is not the same as
+having them.
+
+The acceptance script could report `PASS` on a machine whose controller was
+refused. It fails on a refusal now, says which of the four things happened, and
+keeps `usb: controller: none` as an ordinary answer rather than a fault.
+
+The checklist gained three corrections. The step that asks whether the firmware
+already types for you booted the kernel with the stack running, so a key that
+appeared might have come through it; it boots with `rach2.nousb` now. VT-d is a
+stop rather than a note: this kernel gives the controller physical addresses and
+installs no mappings, so with translation on it hangs rather than explains. And
+the routing step said the owner decides whether the driver may write the
+register, which implied there is a writer; there is none, and building one is a
+code change with its own review, so the step is a decision about whether to
+build it.
+
+Two findings are recorded rather than closed. The BAR's decoded size is never
+established: the driver maps 64 KiB and refuses a controller whose registers do
+not fit, which is not the same as knowing the aperture is that large, and
+sizing a BAR the firmware may still be driving is not something to do during a
+first session. And with VT-d enabled the driver has no answer at all; the
+checklist stops the session instead.
