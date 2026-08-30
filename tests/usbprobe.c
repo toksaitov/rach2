@@ -84,6 +84,34 @@ static int contains(const char *needle, int len)
     return 0;
 }
 
+/** Whether the boot line switched USB off. */
+static int switched_off(void)
+{
+    static char line[256];
+    int fd;
+    int n;
+    int i;
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/cmdline", O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, fd, (int)(size_t)line, (int)sizeof(line) - 1);
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    for (i = 0; i + 11 <= n; i++) {
+        if (line[i] == 'r' && line[i + 1] == 'a' && line[i + 2] == 'c' && line[i + 3] == 'h' &&
+            line[i + 4] == '2' && line[i + 5] == '.' && line[i + 6] == 'n' && line[i + 7] == 'o' &&
+            line[i + 8] == 'u' && line[i + 9] == 's' && line[i + 10] == 'b') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Where the line beginning at `from` ends. */
 static int line_end(int from, int len)
 {
@@ -128,10 +156,25 @@ void _start(void)
     }
     len = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
     syscall3(SYS_CLOSE, fd, 0, 0);
-    if (len <= 0) {
-        fail("/proc/usb read nothing");
+    if (len < 0) {
+        fail("/proc/usb did not read");
     }
     text[len] = '\0';
+
+    /* A machine booted without USB has this file and it is empty, which is a
+       different answer from the file not being there and the one a program
+       that opens it can act on. Which of the two is expected is decided by the
+       boot line, which is the only thing here that knows. */
+    if (switched_off()) {
+        if (len != 0) {
+            fail("USB was switched off and devices are listed");
+        }
+        puts("USBPROBE OK\n");
+        sys_exit(0);
+    }
+    if (len == 0) {
+        fail("/proc/usb is empty and USB was not switched off");
+    }
 
     for (i = 0; i < len; i++) {
         if (text[i] == '\n') {

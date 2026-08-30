@@ -19,13 +19,19 @@
 
 #include "core.h"
 
+#include "../input.h"
 #include "../klog.h"
+#include "hid.h"
 #include "xhci.h"
 
 /* The standard requests this kernel sends, and the descriptor types it asks
  * for. Everything else a device offers is left alone. */
 #define REQ_GET_DESCRIPTOR   6
 #define REQ_SET_CONFIGURATION 9
+/* The class request that puts a human-interface device in boot protocol,
+ * whose two report layouts are fixed and need no describing. */
+#define REQ_SET_PROTOCOL 11
+#define TYPE_TO_INTERFACE 0x21
 #define DESC_DEVICE 1
 #define DESC_CONFIG 2
 
@@ -60,9 +66,11 @@
 #define ST_CONFIGALL 9
 #define ST_OPEN_EP   10
 #define ST_SET_CONFIG 11
+#define ST_PROTOCOL  15
 #define ST_RUNNING   12
 #define ST_FAILED    13
 #define ST_CLOSING   14
+#define ST_HALTED    16
 
 struct usb_device_state {
     int state;
@@ -72,6 +80,17 @@ struct usb_device_state {
     uint32_t deadline;
     int closing_asked;
     uint32_t short_by;
+    int reporting;
+    int dequeue_asked;
+    /* The completions waiting for this device, one for its control endpoint
+     * and one for the endpoint it reports on. They are put here by the one
+     * drain in `usb_core_step`: a device that polled the controller itself
+     * would take the completions of every other device and drop them. */
+    int have_control;
+    int have_report;
+    struct usb_completion control;
+    struct usb_completion report_done;
+    uint8_t report[8];
     uint8_t setup[8];
     uint8_t buffer[USB_DESC_MAX];
     uint32_t config_length;
@@ -189,11 +208,11 @@ static int control_in(struct usb_device_state *d, int request, int value, int in
 }
 
 /** Tell a device something on its control endpoint. */
-static int control_out(struct usb_device_state *d, int request, int value)
+static int control_out(struct usb_device_state *d, int type, int request, int value, int index)
 {
     struct usb_transfer transfer;
 
-    setup_fill(d->setup, 0x00, request, value, 0, 0);
+    setup_fill(d->setup, type, request, value, index, 0);
     transfer.setup = d->setup;
     transfer.buffer = 0;
     transfer.length = 0;
@@ -219,6 +238,7 @@ static void fail(struct usb_device_state *d, const char *why)
     if (enumerating == (int)(d - devices)) {
         enumerating = -1;
     }
+    hid_gone(d->slot);
     if (d->slot > 0) {
         d->state = ST_CLOSING;
         d->deadline = core_ms + STEP_MS;
@@ -276,10 +296,9 @@ static int transfer_result(struct usb_device_state *d)
 {
     struct usb_completion completion;
 
-    while (xhci_poll(&completion)) {
-        if (completion.device != d->slot || completion.endpoint != 1) {
-            continue;
-        }
+    if (d->have_control) {
+        completion = d->control;
+        d->have_control = 0;
         if (completion.status == USB_XFER_OK) {
             d->short_by = 0;
             return 1;
@@ -311,6 +330,55 @@ static int command_result(struct usb_device_state *d, struct usb_command_result 
     return expired(d) ? -1 : 0;
 }
 
+/**
+ * A device that is configured and reporting.
+ *
+ * One transfer is outstanding at a time: it is queued, and when the controller
+ * says it finished the report is handed to the class driver and another is
+ * queued. A device that says nothing leaves its transfer outstanding for as
+ * long as nobody touches it, which is what an interrupt endpoint is for.
+ */
+static void step_running(struct usb_device_state *d)
+{
+    int kind = d->interface.protocol == USB_PROTOCOL_KBD ? HID_KEYBOARD : HID_MOUSE;
+    int length = d->interface.ep_max_packet;
+
+    if (length > (int)sizeof(d->report)) {
+        length = (int)sizeof(d->report);
+    }
+
+    if (d->have_report) {
+        struct usb_completion completion = d->report_done;
+
+        d->have_report = 0;
+        d->reporting = 0;
+        if (completion.status == USB_XFER_STALLED) {
+            /* A halted endpoint keeps its ring until it is reset, and nothing
+             * queued on it moves. Both halves of the recovery are commands,
+             * and the second is issued when the first has answered. */
+            if (xhci_endpoint_reset(d->slot, d->ep_dci) == 0) {
+                d->state = ST_HALTED;
+                arm(d);
+                return;
+            }
+        } else if (completion.status == USB_XFER_OK || completion.status == USB_XFER_SHORT) {
+            hid_report(d->slot, kind, d->report, (int)(completion.length - completion.residual));
+        }
+    }
+
+    if (!d->reporting) {
+        struct usb_transfer transfer;
+
+        transfer.setup = 0;
+        transfer.buffer = d->report;
+        transfer.length = (uint32_t)length;
+        transfer.direction = USB_DIR_IN;
+        if (xhci_submit(d->slot, d->ep_dci, &transfer) == 0) {
+            d->reporting = 1;
+        }
+    }
+}
+
 /** One step of one device. */
 static void step_device(struct usb_device_state *d)
 {
@@ -321,6 +389,29 @@ static void step_device(struct usb_device_state *d)
     switch (d->state) {
     case ST_CLOSING:
         step_closing(d);
+        return;
+
+    case ST_HALTED:
+        answer = command_result(d, &result);
+        if (answer == 0) {
+            return;
+        }
+        if (answer < 0) {
+            fail(d, "its halted endpoint would not reset");
+            return;
+        }
+        if (d->dequeue_asked) {
+            d->dequeue_asked = 0;
+            d->state = ST_RUNNING;
+            d->reporting = 0;
+            return;
+        }
+        if (xhci_endpoint_dequeue(d->slot, d->ep_dci) != 0) {
+            fail(d, "its endpoint's ring could not be pointed anywhere");
+            return;
+        }
+        d->dequeue_asked = 1;
+        arm(d);
         return;
 
     case ST_SETTLING:
@@ -550,7 +641,7 @@ static void step_device(struct usb_device_state *d)
         /* The endpoint exists and has bandwidth before the device is told to
          * use the configuration it belongs to, which is the order the
          * controller requires. */
-        if (control_out(d, REQ_SET_CONFIGURATION, d->interface.config_value) != 0) {
+        if (control_out(d, 0x00, REQ_SET_CONFIGURATION, d->interface.config_value, 0) != 0) {
             fail(d, "it could not be told its configuration");
             return;
         }
@@ -567,8 +658,35 @@ static void step_device(struct usb_device_state *d)
             fail(d, "it refused its configuration");
             return;
         }
+        /* The device is configured; now it is told to report in the protocol
+         * this kernel reads. A device that refuses is left configured and
+         * unread rather than driven in a language nothing here parses. */
+        if (control_out(d, TYPE_TO_INTERFACE, REQ_SET_PROTOCOL, 0, d->interface.number) != 0) {
+            fail(d, "it could not be put in boot protocol");
+            return;
+        }
+        d->state = ST_PROTOCOL;
+        arm(d);
+        return;
+
+    case ST_PROTOCOL:
+        answer = transfer_result(d);
+        if (answer == 0) {
+            return;
+        }
+        if (answer < 0) {
+            fail(d, "it refused the boot protocol");
+            return;
+        }
         d->state = ST_RUNNING;
+        d->reporting = 0;
         enumerating = -1;
+        if (d->interface.protocol == USB_PROTOCOL_MOUSE) {
+            /* `/dev/mouse` opens when a mouse exists, of either kind. Without
+             * this a machine whose only mouse is on USB has a device node that
+             * refuses to open. */
+            input_mouse_found();
+        }
         klog(KLOG_INFO, "usb", "device: port %d: %x:%x, class %d protocol %d, endpoint %d",
              d->port + 1, (int)d->vendor, (int)d->product, d->interface.class_code,
              d->interface.protocol, d->interface.ep_number);
@@ -587,6 +705,32 @@ void usb_core_step(uint32_t elapsed_ms)
 
     core_ms += elapsed_ms;
 
+    /*
+     * One drain, and every completion goes to the device it names. A device
+     * that drained the controller itself would take the completions of the
+     * others and throw them away, which is a device enumerated beside a
+     * running one never being answered.
+     */
+    {
+        struct usb_completion completion;
+
+        while (xhci_poll(&completion)) {
+            for (i = 0; i < USB_MAX_DEVICES; i++) {
+                if (devices[i].state == ST_FREE || devices[i].slot != completion.device) {
+                    continue;
+                }
+                if (completion.endpoint == 1) {
+                    devices[i].control = completion;
+                    devices[i].have_control = 1;
+                } else if (completion.endpoint == devices[i].ep_dci) {
+                    devices[i].report_done = completion;
+                    devices[i].have_report = 1;
+                }
+                break;
+            }
+        }
+    }
+
     /* A device that has left. Its port says so; the controller still holds
      * everything it was given, and the slot is asked back before the entry is
      * reused. */
@@ -599,6 +743,7 @@ void usb_core_step(uint32_t elapsed_ms)
         if (xhci_port_status(devices[i].port, &status) != 0 || !status.connected) {
             if (devices[i].state == ST_RUNNING) {
                 klog(KLOG_INFO, "usb", "device: port %d: gone", devices[i].port + 1);
+                hid_gone(devices[i].slot);
             }
             if (enumerating == i) {
                 enumerating = -1;
@@ -640,8 +785,9 @@ void usb_core_step(uint32_t elapsed_ms)
     }
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
-        if (devices[i].state != ST_FREE && devices[i].state != ST_RUNNING &&
-            devices[i].state != ST_FAILED) {
+        if (devices[i].state == ST_RUNNING) {
+            step_running(&devices[i]);
+        } else if (devices[i].state != ST_FREE && devices[i].state != ST_FAILED) {
             step_device(&devices[i]);
         }
     }

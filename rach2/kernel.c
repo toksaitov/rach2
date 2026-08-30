@@ -2785,8 +2785,13 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    usb_report_controllers();
-    usb_init();
+    if (kcmdline_has("rach2.nousb")) {
+        klog(KLOG_INFO, "usb", "skipped: rach2.nousb");
+    } else {
+        klog(KLOG_INFO, "usb", "started");
+        usb_report_controllers();
+        usb_init();
+    }
 
     init_syscall();
     klog(KLOG_INFO, "boot", "syscall: ready");

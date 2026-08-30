@@ -62,10 +62,10 @@ the commit that completes it.
 
 ## Phase 5: input and HID
 
-* [ ] `sys/input.c`: `input_key` and `input_mouse`, the PS/2 handler reduced to
+* [x] `sys/input.c`: `input_key` and `input_mouse`, the PS/2 handler reduced to
       reading the port
-* [ ] `/dev/mouse` opens when any mouse exists
-* [ ] the refactor proved: `ttyprobe`, `stdintest`, `jobprobe`, `console`, Doom
+* [x] `/dev/mouse` opens when any mouse exists
+* [x] the refactor proved: `ttyprobe`, `stdintest`, `jobprobe`, `console`, Doom
 * [ ] `sys/usb/hid.c`: boot protocol, the report diff, the scancode table with
       modifiers and `0xE0` sequences, the mouse packets
 * [ ] the held-key release on teardown

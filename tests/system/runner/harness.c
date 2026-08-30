@@ -76,13 +76,122 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define MAX_ARGS 128
+#define MAX_ARGS  128
 #define MAX_STEPS 128
-#define BUF_GROW (1 << 16)
+#define BUF_GROW  (1 << 16)
+
+/* ---- the monitor ---- */
+
+/*
+ * QEMU's own command channel, on a unix socket beside the serial line. The
+ * serial line is where the guest talks; this is where the machine is told what
+ * a person at it would have done: a key pressed, the mouse moved, a device
+ * plugged in or pulled out. Nothing else can produce those events, because
+ * they come from the emulated hardware rather than from anything the guest
+ * could be asked to do.
+ *
+ * The socket is opened only for a run whose steps need it, so every other
+ * suite's command line is unchanged.
+ */
+static char monitor_path[128];
+static int monitor_fd = -1;
+
+/**
+ * Read a `mouse=` step's three numbers.
+ *
+ * Returns 0 when all three were there and -1 otherwise. Separate from the step
+ * that uses it so `--selftest` can check the parsing without a machine.
+ */
+static int parse_mouse(const char *text, int *dx, int *dy, int *buttons)
+{
+    if (text == NULL) {
+        return -1;
+    }
+    if (sscanf(text, "%d,%d,%d", dx, dy, buttons) != 3) {
+        return -1;
+    }
+    if (*buttons < 0 || *buttons > 7) {
+        return -1; /* three buttons, and nothing else is one */
+    }
+    return 0;
+}
+
+/** Whether any step needs the monitor. */
+static int steps_need_monitor(int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "key=", 4) == 0 || strncmp(argv[i], "mouse=", 6) == 0 ||
+            strncmp(argv[i], "usb=", 4) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Connect to the monitor, once, and read past its greeting. */
+static int monitor_open(void)
+{
+    struct sockaddr_un addr;
+    char drain[512];
+    int tries;
+
+    if (monitor_fd >= 0) {
+        return 0;
+    }
+    for (tries = 0; tries < 100; tries++) {
+        monitor_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (monitor_fd < 0) {
+            return -1;
+        }
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, monitor_path, sizeof(addr.sun_path) - 1);
+        if (connect(monitor_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+            break;
+        }
+        close(monitor_fd);
+        monitor_fd = -1;
+        usleep(50000); /* QEMU may not have made the socket yet */
+    }
+    if (monitor_fd < 0) {
+        printf("HARNESS: no monitor at %s\n", monitor_path);
+        return -1;
+    }
+    /* The greeting and the first prompt, which are not answers to anything. */
+    usleep(100000);
+    (void)recv(monitor_fd, drain, sizeof(drain), MSG_DONTWAIT);
+    return 0;
+}
+
+/** Send one monitor command and let it be acted on. */
+static int monitor_send(const char *command)
+{
+    char line[256];
+    char drain[512];
+    size_t len;
+
+    if (monitor_open() != 0) {
+        return -1;
+    }
+    len = (size_t)snprintf(line, sizeof(line), "%s\n", command);
+    if (write(monitor_fd, line, len) != (ssize_t)len) {
+        printf("HARNESS: the monitor would not take '%s'\n", command);
+        return -1;
+    }
+    /* The monitor acts on a command before it answers, and what it answers is
+     * an echo and a prompt. Draining keeps the socket from filling; the reply
+     * itself is not read for meaning. */
+    usleep(50000);
+    (void)recv(monitor_fd, drain, sizeof(drain), MSG_DONTWAIT);
+    return 0;
+}
 
 /* ---- the serial buffer ---- */
 
@@ -112,7 +221,7 @@ static double now(void)
     struct timeval tv;
 
     gettimeofday(&tv, NULL);
-    return (double) tv.tv_sec + (double) tv.tv_usec / 1e6;
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
 /* ---- the trace ---- */
@@ -156,7 +265,7 @@ struct item {
     char literal;
     unsigned char set[32]; /* a bitmap for CLASS */
     int negate;
-    char repeat;           /* 0, '*', '+' or '?' */
+    char repeat; /* 0, '*', '+' or '?' */
 };
 
 struct regex {
@@ -167,7 +276,7 @@ struct regex {
 
 static void class_add(struct item *it, unsigned char c)
 {
-    it->set[c >> 3] |= (unsigned char) (1 << (c & 7));
+    it->set[c >> 3] |= (unsigned char)(1 << (c & 7));
 }
 
 static int class_has(const struct item *it, unsigned char c)
@@ -188,9 +297,11 @@ static int regex_compile(struct regex *re, const char *pattern)
             continue;
         }
         if (strchr("(){}|", *p) != NULL) {
-            fprintf(stderr, "harness: the pattern '%s' uses '%c', which "
+            fprintf(stderr,
+                    "harness: the pattern '%s' uses '%c', which "
                     "this matcher does not support; write it as literal "
-                    "text or extend the matcher\n", pattern, *p);
+                    "text or extend the matcher\n",
+                    pattern, *p);
             exit(2);
         }
     }
@@ -202,12 +313,12 @@ static int regex_compile(struct regex *re, const char *pattern)
     while (*p != '\0') {
         struct item *it = &re->item[re->n];
 
-        if (re->n >= (int) (sizeof(re->item) / sizeof(re->item[0]))) {
-            fprintf(stderr, "harness: the pattern '%s' has more than %lu "
+        if (re->n >= (int)(sizeof(re->item) / sizeof(re->item[0]))) {
+            fprintf(stderr,
+                    "harness: the pattern '%s' has more than %lu "
                     "items; a matcher holding a prefix of it would match "
-                    "text the pattern does not\n", pattern,
-                    (unsigned long) (sizeof(re->item) /
-                                     sizeof(re->item[0])));
+                    "text the pattern does not\n",
+                    pattern, (unsigned long)(sizeof(re->item) / sizeof(re->item[0])));
             exit(2);
         }
 
@@ -234,25 +345,25 @@ static int regex_compile(struct regex *re, const char *pattern)
                 p++;
             }
             if (*p == ']') {
-                class_add(it, (unsigned char) *p);
-                prev = (unsigned char) *p;
+                class_add(it, (unsigned char)*p);
+                prev = (unsigned char)*p;
                 p++;
             }
             while (*p != '\0' && *p != ']') {
                 if (*p == '-' && p[1] != '\0' && p[1] != ']' && prev != 0) {
-                    unsigned char hi = (unsigned char) p[1];
+                    unsigned char hi = (unsigned char)p[1];
                     unsigned c;
 
                     for (c = prev; c <= hi; c++)
-                        class_add(it, (unsigned char) c);
+                        class_add(it, (unsigned char)c);
                     p += 2;
                     prev = 0;
                     continue;
                 }
                 if (*p == '\\' && p[1] != '\0')
                     p++;
-                class_add(it, (unsigned char) *p);
-                prev = (unsigned char) *p;
+                class_add(it, (unsigned char)*p);
+                prev = (unsigned char)*p;
                 p++;
             }
             if (*p == ']')
@@ -275,7 +386,7 @@ static int item_matches(const struct item *it, unsigned char c)
 {
     switch (it->kind) {
     case LITERAL:
-        return (unsigned char) it->literal == c;
+        return (unsigned char)it->literal == c;
     case ANY:
         return c != '\n';
     case CLASS:
@@ -285,11 +396,11 @@ static int item_matches(const struct item *it, unsigned char c)
 }
 
 /* Match `re->item[k..]` at `text[at]`; returns the end offset or -1. */
-static long match_here(const struct regex *re, int k, const unsigned char *text,
-                       size_t len, size_t at)
+static long match_here(const struct regex *re, int k, const unsigned char *text, size_t len,
+                       size_t at)
 {
     if (k == re->n)
-        return (re->anchor_end && at != len) ? -1 : (long) at;
+        return (re->anchor_end && at != len) ? -1 : (long)at;
     {
         const struct item *it = &re->item[k];
 
@@ -331,8 +442,7 @@ static long match_here(const struct regex *re, int k, const unsigned char *text,
 }
 
 /* The end offset of the first match at or after `from`, or -1. */
-static long regex_search(const struct regex *re, const unsigned char *text,
-                         size_t len, size_t from)
+static long regex_search(const struct regex *re, const unsigned char *text, size_t len, size_t from)
 {
     size_t at;
 
@@ -371,8 +481,8 @@ static int child_poll(void)
     if (got == child_pid) {
         child_reaped = 1;
         child_by_signal = !WIFEXITED(child_status);
-        child_status = WIFEXITED(child_status) ? WEXITSTATUS(child_status)
-                                               : 128 + WTERMSIG(child_status);
+        child_status =
+            WIFEXITED(child_status) ? WEXITSTATUS(child_status) : 128 + WTERMSIG(child_status);
         return child_status;
     }
     return -1;
@@ -394,9 +504,9 @@ static void pump(double until)
         if (select(child_out + 1, &r, NULL, NULL, &tv) > 0) {
             n = read(child_out, chunk, sizeof(chunk));
             if (n > 0) {
-                buf_add(chunk, (size_t) n);
+                buf_add(chunk, (size_t)n);
                 if (logf != NULL) {
-                    fwrite(chunk, 1, (size_t) n, logf);
+                    fwrite(chunk, 1, (size_t)n, logf);
                     fflush(logf);
                 }
             } else if (n == 0) {
@@ -409,9 +519,9 @@ static void pump(double until)
                 n = read(child_out, chunk, sizeof(chunk));
                 if (n <= 0)
                     break;
-                buf_add(chunk, (size_t) n);
+                buf_add(chunk, (size_t)n);
                 if (logf != NULL) {
-                    fwrite(chunk, 1, (size_t) n, logf);
+                    fwrite(chunk, 1, (size_t)n, logf);
                     fflush(logf);
                 }
             }
@@ -435,7 +545,7 @@ static int expect_pattern(const char *pattern)
         long end = regex_search(&re, buf, buf_len, consumed);
 
         if (end >= 0) {
-            consumed = (size_t) end;
+            consumed = (size_t)end;
             return 1;
         }
         pump(now() + 0.3);
@@ -445,7 +555,7 @@ static int expect_pattern(const char *pattern)
         long end = regex_search(&re, buf, buf_len, consumed);
 
         if (end >= 0) {
-            consumed = (size_t) end;
+            consumed = (size_t)end;
             return 1;
         }
     }
@@ -500,22 +610,34 @@ static int unescape(const char *in, char *out, size_t cap)
     size_t n = 0;
 
     while (*in != '\0') {
-        int c = (unsigned char) *in++;
+        int c = (unsigned char)*in++;
 
         if (c == '\\') {
             int h, l;
 
             switch (*in) {
-            case '\\': c = '\\'; in++; break;
-            case 'n':  c = '\n'; in++; break;
-            case 'r':  c = '\r'; in++; break;
-            case 't':  c = '\t'; in++; break;
+            case '\\':
+                c = '\\';
+                in++;
+                break;
+            case 'n':
+                c = '\n';
+                in++;
+                break;
+            case 'r':
+                c = '\r';
+                in++;
+                break;
+            case 't':
+                c = '\t';
+                in++;
+                break;
             case 'x':
                 h = hexval(in[1]);
                 l = h < 0 ? -1 : hexval(in[2]);
                 if (l < 0) {
                     fprintf(stderr, "harness: \\x must be followed by two "
-                            "hexadecimal digits\n");
+                                    "hexadecimal digits\n");
                     return -1;
                 }
                 c = h * 16 + l;
@@ -528,9 +650,9 @@ static int unescape(const char *in, char *out, size_t cap)
         }
         if (n + 1 > cap)
             return -1;
-        out[n++] = (char) c;
+        out[n++] = (char)c;
     }
-    return (int) n;
+    return (int)n;
 }
 
 /* ---- main ---- */
@@ -555,23 +677,24 @@ static int unescape_selftest(void)
 {
     static const struct {
         const char *in;
-        const char *want;   /* NULL for "must be refused" */
+        const char *want; /* NULL for "must be refused" */
         int len;
-    } cases[] = {
-        { "abc",            "abc",        3 },
-        { "a\\x7fb",        "a\x7f" "b",  3 },
-        { "\\x00",          "\0",         1 },
-        { "\\xff",          "\xff",       1 },
-        { "\\n",            "\n",         1 },
-        { "\\r\\t",         "\r\t",       2 },
-        { "\\\\",           "\\",         1 },
-        { "a\\x4A",         "aJ",         2 },
-        { "\\x",            NULL,         0 },
-        { "\\x4",           NULL,         0 },
-        { "\\xg0",          NULL,         0 },
-        { "\\q",            NULL,         0 }
-    };
-    int n = (int) (sizeof(cases) / sizeof(cases[0])), i, bad = 0;
+    } cases[] = {{"abc", "abc", 3},
+                 {"a\\x7fb",
+                  "a\x7f"
+                  "b",
+                  3},
+                 {"\\x00", "\0", 1},
+                 {"\\xff", "\xff", 1},
+                 {"\\n", "\n", 1},
+                 {"\\r\\t", "\r\t", 2},
+                 {"\\\\", "\\", 1},
+                 {"a\\x4A", "aJ", 2},
+                 {"\\x", NULL, 0},
+                 {"\\x4", NULL, 0},
+                 {"\\xg0", NULL, 0},
+                 {"\\q", NULL, 0}};
+    int n = (int)(sizeof(cases) / sizeof(cases[0])), i, bad = 0;
 
     printf("harness: selftest: the refused cases print their own reason\n");
     for (i = 0; i < n; i++) {
@@ -581,15 +704,16 @@ static int unescape_selftest(void)
         if (cases[i].want == NULL) {
             if (got >= 0) {
                 printf("harness: selftest: '%s' was accepted and must not "
-                       "be\n", cases[i].in);
+                       "be\n",
+                       cases[i].in);
                 bad++;
             }
             continue;
         }
-        if (got != cases[i].len ||
-            memcmp(out, cases[i].want, (size_t) cases[i].len) != 0) {
+        if (got != cases[i].len || memcmp(out, cases[i].want, (size_t)cases[i].len) != 0) {
             printf("harness: selftest: '%s' decoded to %d byte(s), wanted "
-                   "%d\n", cases[i].in, got, cases[i].len);
+                   "%d\n",
+                   cases[i].in, got, cases[i].len);
             bad++;
         }
     }
@@ -603,11 +727,37 @@ static int unescape_selftest(void)
             bad++;
         }
     }
+
+    /* The mouse step's three numbers. A step whose numbers were misread would
+       move the mouse somewhere else and the check that follows would fail for
+       a reason nobody could see. */
+    {
+        int dx = 0;
+        int dy = 0;
+        int buttons = 0;
+
+        if (parse_mouse("5,-7,1", &dx, &dy, &buttons) != 0 || dx != 5 || dy != -7 || buttons != 1) {
+            printf("harness: selftest: a mouse step was misread\n");
+            bad++;
+        }
+        if (parse_mouse("5,-7", &dx, &dy, &buttons) == 0) {
+            printf("harness: selftest: a mouse step with two numbers was taken\n");
+            bad++;
+        }
+        if (parse_mouse("5,-7,9", &dx, &dy, &buttons) == 0) {
+            printf("harness: selftest: a mouse step with a ninth button was taken\n");
+            bad++;
+        }
+        if (parse_mouse("", &dx, &dy, &buttons) == 0) {
+            printf("harness: selftest: an empty mouse step was taken\n");
+            bad++;
+        }
+    }
     if (bad != 0) {
         printf("harness: selftest: %d case(s) failed\n", bad);
         return 1;
     }
-    printf("harness: selftest: %d escape cases PASS\n", n + 1);
+    printf("harness: selftest: %d escape cases and the mouse step PASS\n", n + 1);
     return 0;
 }
 
@@ -630,8 +780,10 @@ static int match_mode(const char *pattern)
    says the run passed. */
 static int too_many(const char *what, int limit)
 {
-    fprintf(stderr, "harness: more than %d %s arguments; this harness "
-            "would run only the first %d\n", limit, what, limit);
+    fprintf(stderr,
+            "harness: more than %d %s arguments; this harness "
+            "would run only the first %d\n",
+            limit, what, limit);
     return 2;
 }
 
@@ -666,8 +818,11 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
-#define OPT(name, target) \
-    if (strcmp(arg, name) == 0 && i + 1 < argc) { target = argv[++i]; continue; }
+#define OPT(name, target)                         \
+    if (strcmp(arg, name) == 0 && i + 1 < argc) { \
+        target = argv[++i];                       \
+        continue;                                 \
+    }
         OPT("--kernel", kernel)
         OPT("--initrd", initrd)
         OPT("--append", append)
@@ -723,13 +878,13 @@ int main(int argc, char **argv)
 
                 if (n_steps + 2 > MAX_STEPS)
                     return too_many("step", MAX_STEPS);
-                if ((size_t) snprintf(execq[n_execq], sizeof(execq[0]),
-                                      "execq=%s", arg + 6) >=
+                if ((size_t)snprintf(execq[n_execq], sizeof(execq[0]), "execq=%s", arg + 6) >=
                     sizeof(execq[0])) {
-                    fprintf(stderr, "harness: the probe name in %s is "
+                    fprintf(stderr,
+                            "harness: the probe name in %s is "
                             "longer than %lu bytes; a shortened name runs "
-                            "a different program\n", arg,
-                            (unsigned long) sizeof(execq[0]) - 7);
+                            "a different program\n",
+                            arg, (unsigned long)sizeof(execq[0]) - 7);
                     return 2;
                 }
                 steps[n_steps++] = "expect=Type 'help'";
@@ -749,35 +904,47 @@ int main(int argc, char **argv)
     /* -no-reboot so a triple fault exits QEMU (read here as a failure)
        instead of looping; NOT -no-shutdown, which would stop the
        isa-debug-exit device from stopping the machine. */
-    qemu[nq++] = (char *) "qemu-system-i386";
-    qemu[nq++] = (char *) "-kernel";
-    qemu[nq++] = (char *) kernel;
-    qemu[nq++] = (char *) "-serial";
-    qemu[nq++] = (char *) "stdio";
-    qemu[nq++] = (char *) "-display";
-    qemu[nq++] = (char *) "none";
-    qemu[nq++] = (char *) "-no-reboot";
-    qemu[nq++] = (char *) "-netdev";
-    qemu[nq++] = (char *) net;
-    qemu[nq++] = (char *) "-device";
-    qemu[nq++] = (char *) device;
+    if (steps_need_monitor(argc, argv)) {
+        snprintf(monitor_path, sizeof(monitor_path), "/tmp/rach2-monitor-%d", (int)getpid());
+        unlink(monitor_path);
+    }
+
+    qemu[nq++] = (char *)"qemu-system-i386";
+    qemu[nq++] = (char *)"-kernel";
+    qemu[nq++] = (char *)kernel;
+    qemu[nq++] = (char *)"-serial";
+    qemu[nq++] = (char *)"stdio";
+    qemu[nq++] = (char *)"-display";
+    qemu[nq++] = (char *)"none";
+    qemu[nq++] = (char *)"-no-reboot";
+    if (monitor_path[0] != '\0') {
+        static char monitor_arg[192];
+
+        snprintf(monitor_arg, sizeof(monitor_arg), "unix:%s,server,nowait", monitor_path);
+        qemu[nq++] = (char *)"-monitor";
+        qemu[nq++] = monitor_arg;
+    }
+    qemu[nq++] = (char *)"-netdev";
+    qemu[nq++] = (char *)net;
+    qemu[nq++] = (char *)"-device";
+    qemu[nq++] = (char *)device;
     if (initrd != NULL) {
-        qemu[nq++] = (char *) "-initrd";
-        qemu[nq++] = (char *) initrd;
+        qemu[nq++] = (char *)"-initrd";
+        qemu[nq++] = (char *)initrd;
     }
     if (append != NULL) {
-        qemu[nq++] = (char *) "-append";
-        qemu[nq++] = (char *) append;
+        qemu[nq++] = (char *)"-append";
+        qemu[nq++] = (char *)append;
     }
     for (i = 0; i < n_drives; i++) {
-        qemu[nq++] = (char *) "-drive";
-        qemu[nq++] = (char *) drives[i];
+        qemu[nq++] = (char *)"-drive";
+        qemu[nq++] = (char *)drives[i];
     }
     for (i = 0; i < n_qemu; i++)
-        qemu[nq++] = (char *) qemu_args[i];
+        qemu[nq++] = (char *)qemu_args[i];
     if (!no_debug_exit) {
-        qemu[nq++] = (char *) "-device";
-        qemu[nq++] = (char *) "isa-debug-exit,iobase=0xf4,iosize=0x04";
+        qemu[nq++] = (char *)"-device";
+        qemu[nq++] = (char *)"isa-debug-exit,iobase=0xf4,iosize=0x04";
     }
     qemu[nq] = NULL;
 
@@ -812,7 +979,7 @@ int main(int argc, char **argv)
     if (log != NULL)
         logf = fopen(log, "wb");
     deadline = now() + timeout;
-    buf_add((const unsigned char *) "", 0);
+    buf_add((const unsigned char *)"", 0);
 
     for (i = 0; i < n_steps; i++) {
         const char *step = steps[i];
@@ -825,8 +992,10 @@ int main(int argc, char **argv)
             int left;
 
             for (left = i; left < n_steps; left++) {
-                fprintf(stderr, "HARNESS: step '%s' never ran: qemu had "
-                        "already exited\n", steps[left]);
+                fprintf(stderr,
+                        "HARNESS: step '%s' never ran: qemu had "
+                        "already exited\n",
+                        steps[left]);
                 step_failures++;
             }
             break;
@@ -836,18 +1005,64 @@ int main(int argc, char **argv)
 
             if (!got)
                 step_failures++;
-            trace("step %s %s consumed=%lu", step, got ? "ok" : "fail",
-                  (unsigned long) consumed);
+            trace("step %s %s consumed=%lu", step, got ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "send=", 5) == 0) {
             send_line(step + 5);
         } else if (strncmp(step, "sendraw=", 8) == 0) {
             char raw[256];
             int n = unescape(step + 8, raw, sizeof(raw));
 
-            if (n < 0 || child_in < 0 ||
-                write(child_in, raw, (size_t) n) != n) {
-                fprintf(stderr, "HARNESS: step '%s' did not reach the "
-                        "guest\n", step);
+            if (n < 0 || child_in < 0 || write(child_in, raw, (size_t)n) != n) {
+                fprintf(stderr,
+                        "HARNESS: step '%s' did not reach the "
+                        "guest\n",
+                        step);
+                step_failures++;
+            }
+        } else if (strncmp(step, "key=", 4) == 0) {
+            char command[128];
+
+            snprintf(command, sizeof(command), "sendkey %s", step + 4);
+            if (monitor_send(command) != 0) {
+                step_failures++;
+            }
+        } else if (strncmp(step, "mouse=", 6) == 0) {
+            char command[128];
+            int dx = 0;
+            int dy = 0;
+            int buttons = 0;
+
+            if (parse_mouse(step + 6, &dx, &dy, &buttons) != 0) {
+                fprintf(stderr, "HARNESS: mouse= wants DX,DY,BUTTONS\n");
+                step_failures++;
+                continue;
+            }
+            snprintf(command, sizeof(command), "mouse_move %d %d", dx, dy);
+            if (monitor_send(command) != 0) {
+                step_failures++;
+            }
+            if (buttons != 0) {
+                /* Only when a button is asked for: pressing none is not a
+                 * thing that happens, and a machine that has already exited
+                 * would refuse the command and fail a step that had nothing
+                 * to do. */
+                snprintf(command, sizeof(command), "mouse_button %d", buttons);
+                if (monitor_send(command) != 0) {
+                    step_failures++;
+                }
+            }
+        } else if (strncmp(step, "usb=add:", 8) == 0) {
+            char command[192];
+
+            snprintf(command, sizeof(command), "device_add %s", step + 8);
+            if (monitor_send(command) != 0) {
+                step_failures++;
+            }
+        } else if (strncmp(step, "usb=del:", 8) == 0) {
+            char command[192];
+
+            snprintf(command, sizeof(command), "device_del %s", step + 8);
+            if (monitor_send(command) != 0) {
                 step_failures++;
             }
         } else if (strncmp(step, "wait=", 5) == 0) {
@@ -860,17 +1075,15 @@ int main(int argc, char **argv)
 
             memset(&addr, 0, sizeof(addr));
             addr.sin_family = AF_INET;
-            addr.sin_port = htons((unsigned short) port);
+            addr.sin_port = htons((unsigned short)port);
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             tv.tv_sec = 15;
             tv.tv_usec = 0;
             setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-            if (sk >= 0 &&
-                connect(sk, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
+            if (sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
                 printf("HARNESS: knocked on port %d\n", port);
             } else {
-                printf("HARNESS: nothing answered on port %d (%s)\n", port,
-                       strerror(errno));
+                printf("HARNESS: nothing answered on port %d (%s)\n", port, strerror(errno));
                 step_failures++;
             }
             if (sk >= 0)
@@ -884,17 +1097,14 @@ int main(int argc, char **argv)
 
             memset(&addr, 0, sizeof(addr));
             addr.sin_family = AF_INET;
-            addr.sin_port = htons((unsigned short) port);
+            addr.sin_port = htons((unsigned short)port);
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             if (sk < 0) {
-                printf("HARNESS: no socket for port %d (%s)\n", port,
-                       strerror(errno));
+                printf("HARNESS: no socket for port %d (%s)\n", port, strerror(errno));
                 step_failures++;
             } else {
-                if (sendto(sk, text, strlen(text), 0,
-                           (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-                    printf("HARNESS: nothing sent to port %d (%s)\n", port,
-                           strerror(errno));
+                if (sendto(sk, text, strlen(text), 0, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+                    printf("HARNESS: nothing sent to port %d (%s)\n", port, strerror(errno));
                     step_failures++;
                 }
                 close(sk);
@@ -905,20 +1115,19 @@ int main(int argc, char **argv)
             int tries = 0, seen = 0, cut;
 
             if (bar != NULL) {
-                cut = snprintf(name, sizeof(name), "%.*s",
-                               (int) (bar - step - 5), step + 5) >=
-                      (int) sizeof(name);
-                cut |= snprintf(marker, sizeof(marker), "%s", bar + 1) >=
-                       (int) sizeof(marker);
+                cut = snprintf(name, sizeof(name), "%.*s", (int)(bar - step - 5), step + 5) >=
+                      (int)sizeof(name);
+                cut |= snprintf(marker, sizeof(marker), "%s", bar + 1) >= (int)sizeof(marker);
             } else {
-                cut = snprintf(name, sizeof(name), "%s", step + 5) >=
-                      (int) sizeof(name);
+                cut = snprintf(name, sizeof(name), "%s", step + 5) >= (int)sizeof(name);
                 marker[0] = '\0';
             }
             if (cut) {
-                fprintf(stderr, "harness: the step '%s' is longer than "
+                fprintf(stderr,
+                        "harness: the step '%s' is longer than "
                         "this harness holds; a shortened name runs a "
-                        "different program\n", step);
+                        "different program\n",
+                        step);
                 step_failures++;
                 continue;
             }
@@ -935,8 +1144,7 @@ int main(int argc, char **argv)
             }
             if (!seen)
                 step_failures++;
-            trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail",
-                  (unsigned long) consumed);
+            trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "execq=", 6) == 0) {
             /* Run a probe, re-sending if the kernel shell drops the
                command, and stop as soon as harness_exit stops QEMU. */
@@ -1004,8 +1212,7 @@ int main(int argc, char **argv)
     for (i = 0; i < n_never; i++) {
         if (contains(buf, buf_len, nevers[i])) {
             trace("decide forbidden=%s", nevers[i]);
-            fprintf(stderr, "HARNESS: saw '%s', which must not appear\n",
-                    nevers[i]);
+            fprintf(stderr, "HARNESS: saw '%s', which must not appear\n", nevers[i]);
             return 1;
         }
     }
@@ -1014,10 +1221,10 @@ int main(int argc, char **argv)
         trace("decide must_exit self_exited=0 by_signal=%d", child_by_signal);
         if (child_by_signal) {
             fprintf(stderr, "HARNESS: the machine was ended by a signal, "
-                    "not by exiting\n");
+                            "not by exiting\n");
         } else {
             fprintf(stderr, "HARNESS: the machine was still running at the "
-                    "deadline and had to be killed\n");
+                            "deadline and had to be killed\n");
         }
         return 1;
     }
@@ -1084,8 +1291,10 @@ int main(int argc, char **argv)
                    read as the prefix that fit. Python compared the whole
                    value; a prefix would be a different status. */
                 if (over) {
-                    fprintf(stderr, "HARNESS: a guest status of %d digits "
-                            "is past what this host reads\n", digits);
+                    fprintf(stderr,
+                            "HARNESS: a guest status of %d digits "
+                            "is past what this host reads\n",
+                            digits);
                     have_status = 0;
                 } else if (digits > 0) {
                     status = sign * n;
@@ -1094,17 +1303,19 @@ int main(int argc, char **argv)
             }
         }
         trace("decide qemu_rc=%d via_debug_exit=%d status=%s "
-              "step_failures=%d", qemu_rc, via_debug_exit,
-              have_status ? "set" : "none", step_failures);
-        fprintf(stderr, "HARNESS: qemu_exit=%d via_debug_exit=%s "
-                "guest_status=", qemu_rc, via_debug_exit ? "True" : "False");
+              "step_failures=%d",
+              qemu_rc, via_debug_exit, have_status ? "set" : "none", step_failures);
+        fprintf(stderr,
+                "HARNESS: qemu_exit=%d via_debug_exit=%s "
+                "guest_status=",
+                qemu_rc, via_debug_exit ? "True" : "False");
         if (have_status)
             fprintf(stderr, "%ld\n", status);
         else
             fprintf(stderr, "?\n");
         if (!have_status || !via_debug_exit) {
             fprintf(stderr, "HARNESS: no clean guest exit reported, "
-                    "failing\n");
+                            "failing\n");
             return 1;
         }
         /* A step that failed fails the run even when the guest went on to

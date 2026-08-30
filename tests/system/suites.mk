@@ -958,6 +958,13 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
 	sh tests/system/suites/diskdiag.sh build/rach2/kernel $(METAL_KERNEL) $(METAL_IMAGE) \
 	    $(DISKDIAG_PORT)
 # `tests/run subset`: each optional device probe left out, and proved left out
+# `tests/run usb`: the USB stack, in five boots. Three of them take the 8042
+# away, because a key typed or a mouse moved on a machine that still has a PS/2
+# keyboard could have arrived by either road, and a check that passes either
+# way says nothing about the stack this milestone built.
+run-usb: rach2 tests krffs test-image $(HARNESS)
+	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
+	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # (see tests/system/suites/subset.sh).
 run-subset: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/subset.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS)

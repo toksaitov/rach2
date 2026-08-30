@@ -11,7 +11,7 @@
 # kernel that ignored every one of these options would still reach one. So each
 # probe says `started` when it begins and `skipped: rach2.noX` when it is told
 # not to, and a boot with the option requires the second record and forbids the
-# first. The last boot leaves out all four at once, which is the case the
+# first. The last boot leaves out all five at once, which is the case the
 # option exists for.
 #
 # Usage: subset.sh <kernel> <image> <harness>
@@ -22,9 +22,9 @@ KERNEL="$1"
 IMAGE="$2"
 HARNESS="$3"
 
-# Each option, the subsystem whose records it decides, and the three that must
-# still run. Without that last part every check here would pass on a kernel
-# where any one of these options switched all four probes off.
+# Each option, the subsystem whose records it decides, and three others that
+# must still run. Without that last part every check here would pass on a
+# kernel where any one of these options switched every probe off.
 run_one() {
     opt="$1"
     subsystem="$2"
@@ -50,6 +50,8 @@ run_one "rach2.nonet" net \
     "expect=mouse: started" "expect=audio: started" "expect=block: started" || exit 1
 run_one "rach2.nodisk" block \
     "expect=mouse: started" "expect=audio: started" "expect=net: started" || exit 1
+run_one "rach2.nousb" usb \
+    "expect=mouse: started" "expect=audio: started" "expect=net: started" || exit 1
 
 # All four at once, which is what a person types when the boot stops and they
 # do not yet know which probe did it. Every probe must be skipped and the
@@ -57,20 +59,21 @@ run_one "rach2.nodisk" block \
 # prints them, because each `expect` reads on from where the last one matched.
 if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
-        --append "rach2.noaudio rach2.nomouse rach2.nonet rach2.nodisk" \
+        --append "rach2.noaudio rach2.nomouse rach2.nonet rach2.nodisk rach2.nousb" \
         --timeout 90 --ok "Type 'help'" \
         --never "audio: started" --never "mouse: started" \
-        --never "net: started" --never "block: started" \
+        --never "net: started" --never "block: started" --never "usb: started" \
         "expect=mouse: skipped: rach2.nomouse" \
+        "expect=usb: skipped: rach2.nousb" \
         "expect=audio: skipped: rach2.noaudio" \
         "expect=block: skipped: rach2.nodisk" \
         "expect=net: skipped: rach2.nonet" \
         "expect=Type 'help'" >/dev/null 2>&1; then
     echo "subset-test: FAIL: with every device switched off the machine did" >&2
-    echo "subset-test: not skip all four and reach a shell" >&2
+    echo "subset-test: not skip all five and reach a shell" >&2
     exit 1
 fi
-echo "subset-test: all four at once: OK"
+echo "subset-test: all five at once: OK"
 
 # And with none of them named, every probe runs. Without this the checks above
 # would pass on a kernel that skipped every device whatever it was told.
@@ -78,11 +81,11 @@ if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
         --timeout 90 --ok "Type 'help'" \
         --never "skipped: rach2.no" \
-        "expect=mouse: started" "expect=audio: started" \
+        "expect=mouse: started" "expect=usb: started" "expect=audio: started" \
         "expect=block: started" "expect=net: started" \
         "expect=Type 'help'" >/dev/null 2>&1; then
-    echo "subset-test: FAIL: an ordinary boot did not run all four probes" >&2
+    echo "subset-test: FAIL: an ordinary boot did not run all five probes" >&2
     exit 1
 fi
-echo "subset-test: an ordinary boot runs all four: OK"
+echo "subset-test: an ordinary boot runs all five: OK"
 echo "subset-test: PASS"

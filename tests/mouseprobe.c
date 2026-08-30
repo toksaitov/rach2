@@ -1,0 +1,106 @@
+/**
+ * Reads the mouse device and requires a movement to arrive.
+ *
+ * The device is the one Doom opens, by the bare name `mouse` rather than a
+ * path under `/dev`, and it is the same queue the PS/2 mouse fills. That is
+ * the point: a program reading movement does not learn which kind of mouse
+ * produced it.
+ * The suite moves a USB mouse through the emulator's own monitor before
+ * running this, so what arrives here came in over USB and out of the shared
+ * queue.
+ *
+ * Prints "MOUSEPROBE OK" and exits 0. Freestanding; direct int 0x80.
+ */
+
+typedef unsigned int size_t;
+
+#define STDOUT_FILENO 1
+
+#define SYS_EXIT  1
+#define SYS_READ  3
+#define SYS_WRITE 4
+#define SYS_OPEN  5
+#define SYS_CLOSE 6
+
+#define O_RDONLY 0
+
+/* One packet as the kernel hands it out: buttons, then two signed movements. */
+static unsigned char packet[3 * 32];
+
+static int syscall3(int n, int a, int b, int c)
+{
+    int r;
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
+
+static void sys_exit(int status)
+{
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    __builtin_unreachable();
+}
+
+static size_t strlen(const char *s)
+{
+    size_t n = 0;
+
+    while (s[n]) {
+        n++;
+    }
+    return n;
+}
+
+static void puts(const char *s)
+{
+    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
+}
+
+static void fail(const char *why)
+{
+    puts("MOUSEPROBE FAIL: ");
+    puts(why);
+    puts("\n");
+    sys_exit(1);
+}
+
+void _start(void)
+{
+    int fd;
+    int n;
+    int tries;
+    int moved = 0;
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"mouse", O_RDONLY, 0);
+    if (fd < 0) {
+        fail("the mouse device did not open");
+    }
+
+    /* Opening the device empties the queue, so the movement has to arrive
+       after this point rather than before it: the suite moves the mouse while
+       this is already reading. The count is a bound on waiting, not a
+       measure of anything; each turn is a system call, so the machine is not
+       held. */
+    for (tries = 0; tries < 2000000 && !moved; tries++) {
+        n = syscall3(SYS_READ, fd, (int)(size_t)packet, (int)sizeof(packet));
+        if (n < 0) {
+            syscall3(SYS_CLOSE, fd, 0, 0);
+            fail("the mouse device did not read");
+        }
+        if (n >= 3) {
+            int i;
+
+            for (i = 0; i + 2 < n; i += 3) {
+                if (packet[i + 1] != 0 || packet[i + 2] != 0) {
+                    moved = 1;
+                }
+            }
+        }
+    }
+    syscall3(SYS_CLOSE, fd, 0, 0);
+
+    if (!moved) {
+        fail("no movement arrived");
+    }
+    puts("MOUSEPROBE OK\n");
+    sys_exit(0);
+}

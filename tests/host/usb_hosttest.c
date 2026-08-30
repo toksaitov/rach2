@@ -123,6 +123,38 @@ int xhci_poll(struct usb_completion *out)
     return 0;
 }
 
+int xhci_endpoint_reset(int device, int endpoint)
+{
+    (void)device;
+    (void)endpoint;
+    return -1;
+}
+
+int xhci_endpoint_dequeue(int device, int endpoint)
+{
+    (void)device;
+    (void)endpoint;
+    return -1;
+}
+
+/* The class driver, which this test does not exercise: what it does with a
+   report is its own file's business, and this one is about the walk. */
+void hid_report(int slot, int kind, const uint8_t *report, int length)
+{
+    (void)slot;
+    (void)kind;
+    (void)report;
+    (void)length;
+}
+
+void hid_gone(int slot)
+{
+    (void)slot;
+}
+
+void input_mouse_found(void)
+{}
+
 #include "../../rach2/sys/usb/core.c"
 
 /* ---- the rows ---- */

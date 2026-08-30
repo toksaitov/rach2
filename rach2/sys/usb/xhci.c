@@ -659,6 +659,10 @@ struct xhci_slot {
     uint32_t enqueue[XHCI_MAX_DCI];
     uint32_t cycle[XHCI_MAX_DCI];
     uint8_t open[XHCI_MAX_DCI];
+    /* What the last transfer on each endpoint asked for. The event says what
+     * was not moved; what was is the difference, and only this side knows the
+     * number it started from. */
+    uint32_t asked[XHCI_MAX_DCI];
 };
 
 static struct xhci_slot slots[XHCI_SLOTS];
@@ -910,7 +914,9 @@ static void event_dispatch(const uint32_t *trb)
         }
         /* What the controller did not move is what it reports; what it did is
          * the difference. */
-        c->length = 0;
+        c->length = (c->endpoint > 0 && c->endpoint < XHCI_MAX_DCI)
+                        ? slots[c->device].asked[c->endpoint]
+                        : 0;
         if (code == TRB_COMPLETION_SUCCESS) {
             c->status = USB_XFER_OK;
         } else if (code == TRB_COMPLETION_SHORT) {
@@ -1460,6 +1466,8 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
     if (!s->used || !s->open[dci]) {
         return -1;
     }
+
+    s->asked[dci] = transfer->length;
 
     if (transfer->setup != 0) {
         uint32_t setup_lo;
