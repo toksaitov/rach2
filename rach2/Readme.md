@@ -20,7 +20,7 @@ tests/run selfbuild    # build the kernel twice on Rach2 and compare the results
 
 By default, the host Makefile compiles the kernel as freestanding C89 with `i686-elf-gcc` and links it at 1 MiB with `i686-elf-ld`. It links no C library or libgcc. The kernel-only build can also use the corresponding `x86_64-elf` cross tools. Every host link runs the project ELF validator (`tools/inspect/elfcheck.c`, `--kernel`) before replacing the previous kernel.
 
-`C_SRC` and `ASM_SRC` in `sources.mk` are explicit source lists, included by both the host `Makefile` and `guest.mk`, the POSIX makefile that pdpmake and TinyCC use on Rach2, so one file describes both builds. `make check-sources` checks the C list against the tree, and `tools/verify/check_guest.py` checks the guest derivation and limits. Host objects and dependency files are under `build/rach2/`; the guest build writes into its writable copy of the source tree.
+`C_SRC` and `ASM_SRC` in `sources.mk` are explicit source lists, included by both the host `Makefile` and `guest.mk`, the POSIX makefile that pdpmake and TinyCC use on Rach2, so one file describes both builds. `make check-sources` checks the C list against the tree, and `tools/verify/guestcheck.c` checks the guest derivation and limits. Host objects and dependency files are under `build/rach2/`; the guest build writes into its writable copy of the source tree.
 
 The metal and recovery kernels use separate component names and object trees. A configuration fingerprint under each tree rebuilds it automatically when the resolved compiler options change, so one tree never mixes objects from two option sets.
 
@@ -212,8 +212,10 @@ The kernel currently supports:
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
-It does not implement UEFI, Multiboot2, USB, SMP, threads, swap, dynamic linking, IPv6, VESA graphics, or a file system other than KRFFS. The ordinary process and descriptor limits are the fixed 16-slot tables described above. The direct physical-memory limit is 32 MiB.
+It does not implement UEFI, Multiboot2, USB, SMP, threads, swap, dynamic linking, IPv6, VESA graphics, or a file system other than KRFFS. The direct physical-memory limit is 32 MiB.
+
+The ordinary process and descriptor limits are the fixed 16-slot tables described above, and what a program reaches is that size less what is already taken. A fork past the process table returns `EAGAIN`. An open past the sixteen descriptors, of which three are stdio, returns `EMFILE` at the fourteenth. A socket past the pool of sixteen returns `ENOMEM`, which takes two processes to reach because one runs out of descriptors first. A connection past the sixteen TCP control blocks, which a listener and seven connections to this machine fill, is refused with `ECONNREFUSED` rather than left to retransmit. `tests/run default` fills all four and requires the refusal, and for the first three the resource coming back.
 
 ## Verification
 
-`make test` boots the test image and checks the default guest suite. `tests/run host` compiles selected kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer. `tests/run style` builds the kernel with warnings as errors, runs the static and text checks, compares source lists, and validates the linked ELF. `tests/run NAME` runs the specialized boot, disk, network, shutdown, and self-build suites; `tests/registry` lists them.
+`make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`, which is the 21 system suites that between them exercise every subsystem. `tests/run host` compiles selected kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer. `tests/run style` builds the kernel with warnings as errors, runs the static and text checks, compares source lists, and validates the linked ELF. `tests/run NAME` runs the specialized boot, disk, network, shutdown, and self-build suites; `tests/registry` lists them.
