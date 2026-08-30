@@ -3,6 +3,12 @@
 #
 # metal_test.sh: the metal image, reached over SSH with nobody at its console.
 #
+# A USB controller and a keyboard are attached to the rehearsal because the
+# notebook has both and this image is the one that will boot there. What can be
+# rehearsed here is that the metal kernel brings the stack up and enumerates a
+# device without disturbing anything else it does; what cannot is the firmware
+# handoff and the chipset's port routing, which have no emulation.
+#
 # This is the rehearsal for the machine across the room. `ssh_test.sh` proves
 # the SSH capstone works, but it gets there by typing at the console: log in,
 # start dropbear, then connect. On the Lenovo nobody is going to do that, so
@@ -114,6 +120,7 @@ qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole rach2.diskdiag" \
     -netdev "user,id=n0,net=$GUEST_NET,host=$GUEST_GW,hostfwd=tcp::$PORT-$GUEST_IP:22" \
     -device rtl8139,netdev=n0 \
+    -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 \
     -serial stdio < /dev/null > "$LOG" 2>&1 &
 QPID=$!
 

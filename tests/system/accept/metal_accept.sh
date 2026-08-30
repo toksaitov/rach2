@@ -170,12 +170,24 @@ fi
 #      pins belong to the xHCI or to the companion EHCI, and a controller with
 #      no pins looks exactly like a machine with nothing plugged in. ----
 if grep -q 'usb: controller:' "$BOOTLOG_OUT" 2>/dev/null; then
-    grep 'usb: controller:' "$BOOTLOG_OUT" | sed 's/^.*usb: /usb: /' | while read -r line; do
-        note "$line"
+    for pattern in 'usb: controller:' 'usb: routing:' 'usb: ready:' 'usb: port:' \
+                   'usb: device:' 'usb: absent:' 'usb: refused:'; do
+        grep "$pattern" "$BOOTLOG_OUT" | sed 's/^.*usb: /usb: /' | while read -r line; do
+            note "$line"
+        done
     done
-    grep 'usb: routing:' "$BOOTLOG_OUT" | sed 's/^.*usb: /usb: /' | while read -r line; do
-        note "$line"
-    done
+    # Whether the stack got as far as a device is the question this machine
+    # exists to answer, so it is asked here rather than left to a reader of the
+    # lines above. It is a note and not a failure: a machine with nothing
+    # plugged into it is not broken, and which it was is for the person who
+    # plugged something in.
+    if grep -q 'usb: device: port' "$BOOTLOG_OUT"; then
+        note "usb: a device was enumerated on this machine"
+    elif grep -q 'usb: ready:' "$BOOTLOG_OUT"; then
+        note "usb: the controller came up and nothing was enumerated on it"
+    else
+        note "usb: no controller came up; the lines above say why"
+    fi
 else
     bad "the boot log has no usb inventory; this kernel predates it"
 fi
