@@ -6,7 +6,7 @@
 # make would have to rebuild every one of them or silently use a stale one.
 #
 # What belongs here: the `run-NAME` target of every suite in tests/registry,
-# the disks, captures, logs and ports those suites write, the seven test tools
+# the disks, captures, logs and ports those suites write, the eight test tools
 # under build/tests/system/, and `prepare-all`, which is the union the pooled
 # runner builds once before it starts any suite.
 #
@@ -18,6 +18,13 @@
 # A suite target may assume the product is built: `tests/run` builds it and
 # `prepare-all` names it. A suite target names only its own fixtures and the
 # tools it invokes.
+
+# No file is named `run-<suite>`, so every suite target is phony. The names are
+# read from the registry rather than written out again: `tests/run style`
+# already requires the registry and the targets in this file to name the same
+# suites, so a list derived from one cannot fall behind the other.
+.PHONY: prepare-all \
+        $(addprefix run-,$(shell awk -F'|' '!/^#/ && NF > 1 { print $$1 }' tests/registry))
 
 # --- RAM-disk images. Each is built out of tree from a checked-in manifest
 #     by the manifest-driven stageimage.krffs (see krffs/mkimage.sh and

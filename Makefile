@@ -68,9 +68,6 @@ PDPMAKE_PATCHES  = vendor/pdpmake/patches/0001-platform-macros.patch
 LIBC_A         = vendor/musl/install/lib/libc.a
 MUSL_CRYPT_SRC = $(LIBC_TARBALL:.tar.gz=)/src/crypt/crypt_sha512.c
 
-
-
-
 IMAGES_DIR      = build/images
 TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
 OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
@@ -259,13 +256,6 @@ build/ish/ish:
 	@$(MAKE) --no-print-directory -C ish
 build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs: | check-libc
 	@$(MAKE) --no-print-directory -C krffs
-
-
-
-
-
-
-
 
 # The binary byte searcher (tools/inspect/binfind.c), replacing strings(1) piped
 # to grep in the TinyCC policy check.
@@ -585,57 +575,6 @@ test:
 	@./tests/run host
 	@./tests/run core
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # Bootable ISO images for real hardware: each embeds the kernel and one RAM-disk
 # image as GRUB multiboot modules, assembled natively with xorriso and the
 # pinned GRUB El Torito images (see tools/image/mkiso.sh). Output:
@@ -728,16 +667,14 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 	@test -s $(LIBC_A) || { echo "libc: $(LIBC_A) missing or empty; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
 	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
 
-
-
-# --- source-list guard --- Kernel source-list guard: fail if a rach2 .c on disk
-# is missing from C_SRC (so a new kernel source cannot be silently dropped from
-# the build). Also run inside the gate.
-# The test suites: every `run-NAME` target, the fixtures they write, the seven
+# The test suites: every `run-NAME` target, the fixtures they write, the eight
 # test tools, and `prepare-all`. Included rather than kept apart so that one
 # dependency graph covers the product and the variants only a suite needs.
 include tests/system/suites.mk
 
+# Fail if a rach2 .c on disk is missing from C_SRC, so a new kernel source
+# cannot be dropped from the build without anybody noticing. `tests/run style`
+# runs this.
 check-sources:
 	@./tools/verify/check_sources.sh
 
@@ -768,5 +705,3 @@ distclean: clean
 	rm -rf build
 
 
-.PHONY: run-addressed run-noentropy run-disk run-disk-ahci run-disk-q35 run-bootpart run-subset run-stress run-stress-ahci run-persist run-persist-ahci run-cred-persist run-crash run-authority run-bootline run-exitline run-login run-procfiles run-account run-shutdown run-reset run-diskpolicy run-diskdiag run-ping run-packet run-raw run-netif run-dgram run-dhcp run-netconsole run-e1000 run-tcc run-make run-selfbuild run-ssh run-grub run-menu run-install run-sealed run-drill run-metal \
-        run-default-e1000 run-ping-e1000 run-packet-e1000 run-netif-e1000 run-dgram-e1000 run-netconsole-e1000 run-raw-e1000 run-dhcp-e1000 run-ssh-e1000
