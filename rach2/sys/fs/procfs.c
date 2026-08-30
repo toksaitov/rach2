@@ -15,6 +15,7 @@
 #include "file.h"
 #include "devfs.h"
 #include "krffs.h"
+#include "../usb/core.h"
 #include "../tty/pty.h"
 #include "../io/poll.h"
 #include "../cmdline.h"
@@ -48,6 +49,7 @@
 #define PROCFS_INO_STATSYS 0x106u
 #define PROCFS_INO_MEMINFO 0x107u
 #define PROCFS_INO_MOUNTS  0x108u
+#define PROCFS_INO_USB     0x10Cu
 #define PROCFS_INO_NETROUTE 0x109u
 #define PROCFS_INO_NETARP  0x10Au
 #define PROCFS_INO_NETTCP  0x10Bu
@@ -79,6 +81,7 @@
 #define PROCFS_MAX_STATSYS  256  /* the cpu lines, btime, and the counters */
 #define PROCFS_MAX_MEMINFO  256  /* seven sized lines */
 #define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
+#define PROCFS_MAX_USB      256  /* four devices, one line each */
 #define PROCFS_MAX_NETROUTE 512  /* a header and at most two routes */
 #define PROCFS_MAX_NETARP  1024  /* a header and the eight-entry cache */
 #define PROCFS_MAX_NETTCP  3072  /* a header and the sixteen-block pool */
@@ -114,6 +117,7 @@ typedef char procfs_bounds_fit[(PROCFS_MAX_BOOTLINE <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_STATSYS <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_MEMINFO <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_MOUNTS <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_USB <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_NETROUTE <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_NETARP <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_NETTCP <= PROCFS_TEXT_MAX &&
@@ -152,6 +156,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_MOUNTS) {
         return "/proc/mounts";
+    }
+    if (vp->kind == VNODE_PROC_USB) {
+        return "/proc/usb";
     }
     if (vp->kind == VNODE_PROC_NET_ROUTE) {
         return "/proc/net/route";
@@ -576,6 +583,11 @@ uint32_t procfs_ino_mounts(void)
     return PROCFS_INO_MOUNTS;
 }
 
+uint32_t procfs_ino_usb(void)
+{
+    return PROCFS_INO_USB;
+}
+
 uint32_t procfs_ino_netroute(void)
 {
     return PROCFS_INO_NETROUTE;
@@ -633,6 +645,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_MOUNTS) {
         return PROCFS_INO_MOUNTS;
+    }
+    if (pf->origin_file == SYNTH_PROC_USB) {
+        return PROCFS_INO_USB;
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -834,6 +849,31 @@ static int procfs_gen_meminfo(struct procfs_text *t)
  * two boots out of three. The two synthetic mounts are named as well, since
  * they are real mounts to every program that walks this file.
  */
+/**
+ * Render /proc/usb.
+ *
+ * One line per device the USB stack has configured: the root port it is on,
+ * its speed, what it says it is, and the class it was driven as. A machine
+ * with no controller, or one booted without USB, has this file and it is
+ * empty, which is a different answer from the file not being there and is the
+ * one a program that opens it can act on.
+ */
+static int procfs_gen_usb(struct procfs_text *t)
+{
+    int i;
+    char line[96];
+
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        int n = usb_core_describe(i, line, (int)sizeof(line));
+        int j;
+
+        for (j = 0; j < n; j++) {
+            ap_ch(t, line[j]);
+        }
+    }
+    return t->over ? -1 : t->len;
+}
+
 static int procfs_gen_mounts(struct procfs_text *t)
 {
     ap_str(t, krffs_mount_source());
@@ -1086,7 +1126,8 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind != VNODE_PROC_CMDLINE && vp->kind != VNODE_PROC_DISK &&
         vp->kind != VNODE_PROC_NET_DEV && vp->kind != VNODE_PROC_UPTIME &&
         vp->kind != VNODE_PROC_STAT_SYS && vp->kind != VNODE_PROC_MEMINFO &&
-        vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_NET_ROUTE &&
+        vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_USB &&
+        vp->kind != VNODE_PROC_NET_ROUTE &&
         vp->kind != VNODE_PROC_NET_ARP && vp->kind != VNODE_PROC_NET_TCP) {
         pid = procfs_resolve_pid(vp->pid);
         if (pid < 0) {
@@ -1141,6 +1182,9 @@ int procfs_open(const struct vpath *vp, int flags)
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         procfs_text_init(&text, f->data, PROCFS_MAX_MOUNTS);
         len = procfs_gen_mounts(&text);
+    } else if (vp->kind == VNODE_PROC_USB) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_USB);
+        len = procfs_gen_usb(&text);
     } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
         procfs_text_init(&text, f->data, PROCFS_MAX_NETROUTE);
         len = procfs_gen_netroute(&text);
@@ -1182,6 +1226,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_MEMINFO;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         f->origin_file = SYNTH_PROC_MOUNTS;
+    } else if (vp->kind == VNODE_PROC_USB) {
+        f->origin_file = SYNTH_PROC_USB;
     } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
         f->origin_file = SYNTH_PROC_NETROUTE;
     } else if (vp->kind == VNODE_PROC_NET_ARP) {

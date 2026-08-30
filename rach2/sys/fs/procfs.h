@@ -41,6 +41,7 @@ uint32_t procfs_ino_uptime(void);
 uint32_t procfs_ino_statsys(void);
 uint32_t procfs_ino_meminfo(void);
 uint32_t procfs_ino_mounts(void);
+uint32_t procfs_ino_usb(void);
 uint32_t procfs_ino_netroute(void);
 uint32_t procfs_ino_netarp(void);
 uint32_t procfs_ino_nettcp(void);

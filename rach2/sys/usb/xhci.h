@@ -202,6 +202,50 @@ void xhci_events(void);
 /** Advance the driver's own clock, in milliseconds. */
 void xhci_advance(uint32_t milliseconds);
 
+/**
+ * Ask the controller for a slot for a device on a reset port.
+ *
+ * Issues one command; `xhci_command_done` reports the slot, which is the
+ * device handle everything below uses. The port and speed are remembered
+ * against the command, because which slot it will be is the controller's to
+ * decide and it does not say until the command answers.
+ */
+int xhci_device_open(int port, int speed);
+
+/** Address a device and give it its default control endpoint. */
+int xhci_device_address(int device);
+
+/**
+ * Tell the controller the real size of a device's control endpoint.
+ *
+ * A full-speed device does not say what its control endpoint takes until it
+ * has been read, and reading it needs a control endpoint. Eight bytes is the
+ * size every device answers to; this corrects it once the descriptor has
+ * arrived.
+ */
+int xhci_device_packet_size(int device, int max_packet);
+
+/** Give a device's slot back to the controller. */
+void xhci_device_close(int device);
+
+/** Open an endpoint on a device. Returns its handle, which is its index. */
+int xhci_endpoint_open(int device, const struct usb_endpoint *endpoint);
+
+/** Forget an endpoint. */
+void xhci_endpoint_close(int device, int endpoint);
+
+/** Clear a halted endpoint. `xhci_endpoint_dequeue` follows it. */
+int xhci_endpoint_reset(int device, int endpoint);
+
+/** Point a reset endpoint's ring at the block this driver will write next. */
+int xhci_endpoint_dequeue(int device, int endpoint);
+
+/** Queue one transfer on an endpoint. */
+int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer);
+
+/** 1 when a completion was waiting, 0 when none was. */
+int xhci_poll(struct usb_completion *out);
+
 /** What was read from the controller, valid after `xhci_read_caps`. */
 const struct xhci_caps *xhci_capabilities(void);
 

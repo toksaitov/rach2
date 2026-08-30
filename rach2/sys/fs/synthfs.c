@@ -272,6 +272,10 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = (n == 2) ? VNODE_PROC_MOUNTS : VNODE_ENOTDIR;
             return vp->kind;
         }
+        if (comp_eq(c[1], "usb")) {
+            vp->kind = (n == 2) ? VNODE_PROC_USB : VNODE_ENOTDIR;
+            return vp->kind;
+        }
         /* /proc/net/dev: the one file in the one directory `ifconfig` reads to
            learn that an interface exists and what it has carried. */
         if (comp_eq(c[1], "net")) {

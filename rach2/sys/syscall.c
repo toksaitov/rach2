@@ -1403,6 +1403,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_STAT_SYS:
         case VNODE_PROC_MEMINFO:
         case VNODE_PROC_MOUNTS:
+        case VNODE_PROC_USB:
         case VNODE_PROC_NET_ROUTE:
         case VNODE_PROC_NET_ARP:
         case VNODE_PROC_NET_TCP:
@@ -3057,6 +3058,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_mounts();
+            return 0;
+        case VNODE_PROC_USB:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_usb();
             return 0;
         case VNODE_PROC_NET_ROUTE:
             kst->st_dev = PROCFS_FSID;
@@ -6663,7 +6669,8 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
          * a line here and not another index in a chain; the pid directories
          * follow, numbered from where the table ends. */
         static const char *const globals[] = {"cmdline", "disk",    "uptime", "stat",
-                                              "meminfo", "mounts",  "net",    "self"};
+                                              "meminfo", "mounts",  "net",    "self",
+                                              "usb"};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));
 
         if (n < count) {

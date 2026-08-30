@@ -94,16 +94,19 @@ struct usb_transfer {
 
 /** What `command_done` reports about the command in flight. */
 struct usb_command_result {
-    int status;  /* `USB_XFER_OK`, or a failure from the same set */
-    int device;  /* the new device handle, when the command took one */
+    int status; /* `USB_XFER_OK`, or a failure from the same set */
+    int code;   /* the controller's own completion code, for the record */
+    int device; /* the new device handle, when the command took one */
 };
 
 /** What `poll` reports about a transfer that finished. */
 struct usb_completion {
     int device;      /* the device handle the transfer was submitted for */
     int endpoint;    /* the endpoint handle */
-    int status;      /* one of the `USB_XFER_` values */
-    uint32_t length; /* bytes actually moved, from the controller */
+    int status;        /* one of the `USB_XFER_` values */
+    uint32_t length;   /* bytes the transfer asked for */
+    uint32_t residual; /* what the controller did not move, so length less this
+                        * is what arrived */
 };
 
 /*

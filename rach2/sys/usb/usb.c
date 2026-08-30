@@ -20,6 +20,7 @@
 #include "../klog.h"
 #include "../pci.h"
 #include "../udelay.h"
+#include "core.h"
 #include "hcd.h"
 #include "xhci.h"
 
@@ -114,6 +115,12 @@ void usb_report_controllers(void)
  */
 #define USB_SETTLE_MS 100u
 
+/* How long the boot waits for what is already plugged in to be enumerated.
+ * Each turn is one step of the state machine and one millisecond, and a device
+ * takes a dozen steps, so this is generous for the four devices this kernel
+ * holds and short enough not to be noticed. */
+#define USB_ENUMERATE_MS 400u
+
 /** The name of a speed, for the record. */
 static const char *speed_name(int speed)
 {
@@ -131,18 +138,27 @@ static const char *speed_name(int speed)
     }
 }
 
+/*
+ * Whether the stack is up. The timer calls `usb_poll` from the first tick of
+ * the boot, and there is nothing to poll until a controller has been found and
+ * started.
+ */
+static int usb_up;
+
 /**
  * Let time pass at boot, which is the one place in this stack where that is
- * allowed, and keep the controller drained while it does.
+ * allowed.
+ *
+ * It waits and nothing more. The timer is already draining the controller and
+ * stepping the devices, and a second party doing the same from here would be
+ * two drains of one ring, one of them inside an interrupt of the other.
  */
-static void usb_settle(void)
+static void usb_wait(uint32_t milliseconds)
 {
     uint32_t ms;
 
-    for (ms = 0; ms < USB_SETTLE_MS; ms++) {
+    for (ms = 0; ms < milliseconds; ms++) {
         k_udelay(1000);
-        xhci_advance(1);
-        xhci_events();
     }
 }
 
@@ -188,18 +204,41 @@ int usb_init(void)
          (int)caps->hciversion, (int)caps->max_ports, (int)caps->max_slots,
          (int)caps->context_size);
 
-    usb_settle();
+    usb_core_reset();
+    usb_up = 1;
+
+    /* From here the timer drains the controller and steps the devices. This
+     * waits for the ports to settle and then for what is plugged in to be
+     * enumerated, and does none of the work itself. */
+    usb_wait(USB_SETTLE_MS);
     report_ports();
+    /* Enumerate what is already plugged in before the first process runs, so
+     * a machine that boots with a keyboard has one. Each turn is a step and a
+     * millisecond; a device that takes longer than this many is finished by
+     * the timer afterwards. */
+    {
+        uint32_t turn;
+
+        for (turn = 0; turn < USB_ENUMERATE_MS && !usb_core_idle(); turn++) {
+            k_udelay(1000);
+        }
+    }
+    klog(KLOG_INFO, "usb", "devices: %d configured", usb_core_count());
     return 0;
 }
 
 void usb_poll(void)
 {
+    if (!usb_up) {
+        return;
+    }
     xhci_advance(10);
     xhci_events();
+    usb_core_step(10);
 }
 
 void usb_stop(void)
 {
+    usb_up = 0;
     xhci_stop();
 }

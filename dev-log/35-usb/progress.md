@@ -45,16 +45,16 @@ the commit that completes it.
 
 ## Phase 4: enumeration
 
-* [ ] `sys/usb/core.c`: the state machine and its deadlines
-* [ ] Enable Slot, the input contexts, Address Device
+* [x] `sys/usb/core.c`: the state machine and its deadlines
+* [x] Enable Slot, the input contexts, Address Device
 * [ ] the descriptors, Evaluate Context, the derived endpoint fields
-* [ ] Configure Endpoint, then `SET_CONFIGURATION`
+* [x] Configure Endpoint, then `SET_CONFIGURATION`
 * [ ] endpoint recovery: Reset Endpoint, `CLEAR_FEATURE`, Set TR Dequeue,
       Stop Endpoint
-* [ ] the device table and its refusals
-* [ ] `/proc/usb` and its empty-file contract
-* [ ] `usbprobe`
-* [ ] `tests/host/usb_hosttest.c` in full
+* [x] the device table and its refusals
+* [x] `/proc/usb` and its empty-file contract
+* [x] `usbprobe`
+* [x] `tests/host/usb_hosttest.c` in full
 * [ ] mutations: the configuration order, a descriptor length past the buffer,
       the Evaluate Context step, the interval derivation, the fifth device
 * [ ] review 3 of 6

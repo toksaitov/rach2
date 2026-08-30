@@ -984,6 +984,47 @@ int main(void)
           (reg[M_PORTSC(0)] & M_PORTSC_CSC) != 0);
     CHECK("and without disabling the port it is resetting", (reg[M_PORTSC(0)] & M_PORTSC_PED) != 0);
 
+    /* The interval the controller schedules from is derived from the one the
+       device asked for, and the two are neither the same unit nor the same
+       scale. A driver that copied the number would poll a keyboard sixty-four
+       times too often or too seldom. */
+    CHECK("a full-speed device asking for one millisecond", interval_for(USB_SPEED_FULL, 1) == 3);
+    CHECK("a full-speed device asking for ten", interval_for(USB_SPEED_FULL, 10) == 6);
+    CHECK("a low-speed device asking for ten", interval_for(USB_SPEED_LOW, 10) == 6);
+    CHECK("a high-speed device asking for one", interval_for(USB_SPEED_HIGH, 1) == 0);
+    CHECK("a high-speed device asking for eight", interval_for(USB_SPEED_HIGH, 8) == 7);
+    CHECK("a device asking for nothing is given the smallest interval",
+          interval_for(USB_SPEED_FULL, 0) == 3);
+    CHECK("and one asking for more than the field holds is clamped",
+          interval_for(USB_SPEED_HIGH, 200) == 15);
+
+    /* The size of a control endpoint before the device has been read. */
+    CHECK("a low-speed device's control endpoint", default_packet_size(USB_SPEED_LOW) == 8);
+    CHECK("a full-speed device's, until it says otherwise",
+          default_packet_size(USB_SPEED_FULL) == 8);
+    CHECK("a high-speed device's", default_packet_size(USB_SPEED_HIGH) == 64);
+    CHECK("a SuperSpeed device's", default_packet_size(USB_SPEED_SUPER) == 512);
+
+    /* The device context index of an endpoint, which is what a doorbell
+       names. */
+    {
+        struct usb_endpoint ep;
+
+        ep.number = 0;
+        ep.direction = USB_DIR_IN;
+        ep.type = USB_EP_CONTROL;
+        ep.max_packet = 8;
+        ep.interval = 0;
+        CHECK("endpoint zero is index one", dci_of(&ep) == 1);
+        ep.number = 1;
+        ep.direction = USB_DIR_IN;
+        CHECK("an in endpoint is odd", dci_of(&ep) == 3);
+        ep.direction = USB_DIR_OUT;
+        CHECK("an out endpoint is even", dci_of(&ep) == 2);
+        ep.number = 9;
+        CHECK("an endpoint beyond this kernel's table is refused", dci_of(&ep) == 0);
+    }
+
     if (fails == 0) {
         printf("xhci_hosttest: OK\n");
         return 0;

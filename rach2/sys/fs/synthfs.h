@@ -37,6 +37,7 @@ enum vnode_kind {
     VNODE_PROC_STAT_SYS,/* /proc/stat: the machine's tick counters and btime */
     VNODE_PROC_MEMINFO, /* /proc/meminfo: the physical frame pool */
     VNODE_PROC_MOUNTS,  /* /proc/mounts: what was mounted, and how */
+    VNODE_PROC_USB,     /* /proc/usb: the USB devices this kernel enumerated */
     VNODE_PROC_NET_ROUTE, /* /proc/net/route: the on-link subnet and gateway */
     VNODE_PROC_NET_ARP, /* /proc/net/arp: the address cache */
     VNODE_PROC_NET_TCP, /* /proc/net/tcp: the connection pool */
@@ -57,6 +58,7 @@ enum vnode_kind {
 #define SYNTH_PROC_NETROUTE 10
 #define SYNTH_PROC_NETARP   11
 #define SYNTH_PROC_NETTCP   12
+#define SYNTH_PROC_USB      13
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

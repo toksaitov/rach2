@@ -226,3 +226,53 @@ and the debounce.
 Four further mutations, all caught: answer the command in flight with any
 completion, call the abort finished the moment it is asked for, let a connect
 be acted on at once, and trust the controller's port count.
+
+## Phase 4
+
+Enumeration. `core.c` is the state machine and knows no register; `xhci.c`
+gained the device, endpoint and transfer half it drives. A device goes from a
+connected port to a configured one in twelve steps, none of which waits: settle,
+reset, Enable Slot, Address Device, the first eight bytes of the device
+descriptor, Evaluate Context where the control endpoint turns out to be a
+different size, the whole device descriptor, nine bytes of the configuration,
+the whole of it, Configure Endpoint, `SET_CONFIGURATION`, running.
+
+Two decisions the plan left open:
+
+* One device is enumerated at a time. The controller takes one command at a
+  time and this driver keeps one command in flight, so a second device waits at
+  its port. That costs a hundred milliseconds and no complexity.
+* The core is given the time that passed rather than reading a clock, so its
+  deadlines are the caller's units: one millisecond from the boot loop and ten
+  from the timer.
+
+The defect this phase found, and it was mine: the boot loop and the timer were
+both draining the event ring and both stepping the state machine. The timer
+interrupts the boot loop, so two drains of one ring ran inside each other and
+two devices were enumerated over the top of one another. One device was
+addressed with the other's input context; which one failed changed from boot to
+boot. The boot loop now waits and nothing more, and the timer does all of it.
+The same class of fault was waiting one line further on: `usb_poll` runs from
+the first tick of the boot, long before there is a controller, and the event
+ring it would have read is a zeroed array whose cycle bits look like the
+controller's. There is a flag for that now.
+
+`/proc/usb` is one line per configured device: port, speed, identifiers, class
+and protocol. A machine with no controller has the file and it is empty.
+`usbprobe` reads it and requires a keyboard and a mouse. Adding the file
+touched five places, which is what a synthetic file costs here: the classifier,
+the vnode kind, the inode, the renderer and the directory listing.
+
+Proof in QEMU, at both speeds QEMU can produce: a keyboard on port 5 and a
+mouse on port 6 are recorded with their identifiers, class and protocol; the
+count is two; `usbprobe` exits zero from the guest.
+
+`tests/host/usb_hosttest.c` is the pure half: the descriptor walk over
+truncated, overlong, zero-length and self-shortened descriptors, in buffers
+allocated to the exact length under AddressSanitizer. The interval and packet
+derivations are rows in `xhci_hosttest` instead, because that is the file the
+code is in.
+
+Mutations, all caught: read a descriptor past the end of what arrived (by the
+sanitizer), take any interface that says HID, take an endpoint whatever
+direction it is.
