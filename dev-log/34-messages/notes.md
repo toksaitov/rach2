@@ -300,3 +300,56 @@ blocks, and the reasoning that was in function bodies has moved into those
 blocks. The third, the `/* ---- section ---- */` markers, is left: the tree
 uses that form in `harness.c` and `runtests.c`, and `textcheck.sh`, which
 decides the dash rule, passes them.
+
+## The oracles, 2026-08-30
+
+Four suites that could not fail, three of them fixed here and one in phase 2.
+
+`default` now reads the kernel's own checks. The boot self-tests were 227
+lines of near-duplicate printing to two outputs, ending in `[PASS]` or
+`[FAIL]`; nothing in the tree looked for the word, so a boot whose checks all
+failed passed the suite. They are records now, one per check, ending in
+`selftest: result: passed: N` or `failed: K of N`. The probe runner requires
+the summary and refuses any error record between the group's first record and
+it, which is the interval that makes the rule usable at all: the fault probes
+later in the same run print error records on purpose.
+
+That check found a real fault the moment it could see one. `test_udelay`
+required 190 to 230 ms for a 200 ms wait, and under the pool's own load that
+is not what an emulated 8254 gives: of sixteen machines booted at once here,
+nine measured outside the band, between 180 and 280 ms. The band is now 100 to
+400 ms, which catches a delay wrong by a factor (what a device bring-up would
+notice) and not one wrong by a fraction on a loaded host. Sixteen at once pass
+now. The check had been failing on and off for as long as it has existed, and
+the boot said so every time.
+
+`subset` booted with each `rach2.no*` option and asserted only that a shell
+appeared, which a kernel ignoring every option would also do. Each device
+probe now says `started` when it begins and `skipped: rach2.noX` when it is
+told not to, and the suite requires the second and forbids the first, one
+option at a time, then all four at once, then a boot with none of them where
+every probe must run. Proved by two mutations: a probe that ignores its
+option, and a kernel that skips everything whatever it is told.
+
+`reset` announced the restart and could then hang, because the harness killed
+the machine itself and passed on the token. The harness now reports whether
+QEMU ended by itself, `--must-exit` requires that, and the suite forbids a
+`CRIT` record so a crash that also ends the machine is not read as a reset.
+Proved by a kernel that announces the restart and halts.
+
+Fixing the harness for that found a second defect in it: `pump` returns the
+moment the serial pipe ends, which is before the machine that closed it has
+finished going away, so the first attempt read "still running" on every clean
+restart. The exit is now waited for, bounded by the same grace period.
+
+Three suites read boot text that these conversions changed: `netconsole` and
+`metal` wanted `Network... OK`, and `diskdiag` wanted `Disk diagnostic...
+none`. The last one is the interesting one: the text was still printed, but
+`block: started` now landed in the middle of that half-finished line, because
+a console print and a record cannot share a line. The disk diagnostic became a
+record too. That is the argument for phase 5 in one line of output.
+
+`serial_out` skips the boot-log copy that `serial_putc` makes, so records were
+missing from `/dev/bootlog`, which `tests/run metal` fetches over SSH. The
+serial destination feeds the boot log itself until phase 6 gives `/dev/bootlog`
+the ring.

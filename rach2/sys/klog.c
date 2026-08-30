@@ -23,6 +23,7 @@
 
 #include "klog.h"
 
+#include "bootlog.h"
 #include "kio.h"
 #include "serial.h"
 #include "display/vga_text.h"
@@ -303,14 +304,27 @@ static void dest_screen(const struct klog_record *r)
 
 /* ---- destination 3: the serial port ---- */
 
+/**
+ * Write the record to the port, and to the machine's own copy of what it
+ * printed.
+ *
+ * `bootlog_putc` is called here rather than left to `serial_putc`, which is
+ * where every other printer reaches it: this path deliberately does not go
+ * through `serial_putc`, because that one also feeds the netconsole tap and
+ * the record has its own destination for that. Until `/dev/bootlog` serves
+ * the ring instead, a record that skipped this would be missing from the log
+ * the machine hands out.
+ */
 static void dest_serial(const struct klog_record *r)
 {
     uint32_t i;
 
     for (i = 0; i < r->len; i++) {
         if (r->text[i] == '\n') {
+            bootlog_putc('\r');
             serial_out('\r');
         }
+        bootlog_putc(r->text[i]);
         serial_out(r->text[i]);
     }
 }

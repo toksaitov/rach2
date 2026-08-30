@@ -54,11 +54,11 @@ Proof items:
 ## Phase 4: the oracles (10 items)
 
 * [x] Boot self-tests emit one record each plus the summary
-* [ ] Device probes emit unique `started` and `skipped` records
+* [x] Device probes emit unique `started` and `skipped` records
 * [x] `k_panic` converted
 * [x] Harness: exit-or-killed report
-* [ ] Harness: bounded-interval level rejection
-* [ ] `subset` fixed, mutation proves it
+* [x] Harness: bounded-interval level rejection
+* [x] `subset` fixed, mutation proves it
 * [x] `reset` fixed, mutation proves it
 * [x] `addressed` fixed, mutation proves it
 * [x] Self-test oracle fixed, mutation proves it

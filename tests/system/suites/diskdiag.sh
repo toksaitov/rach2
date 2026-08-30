@@ -202,9 +202,9 @@ echo "diskdiag-test: the whole session left the disk byte for byte: OK"
 "$REPO/build/tests/system/harness" --kernel "$RO_KERNEL" \
     --initrd "$IMG" --qemu-arg=-cpu --qemu-arg=max \
     --append "rach2.diskdiag rach2.rescue" \
-    --timeout 90 --log "$NOLOG" --ok "Disk diagnostic" \
+    --timeout 90 --log "$NOLOG" --ok "diskdiag: " \
     "expect=Type 'help'" wait=3 >/dev/null 2>&1 || true
-grep -q "Disk diagnostic... none" "$NOLOG" \
+grep -q "diskdiag: absent: no disk answered" "$NOLOG" \
     || fail "with no drive the diagnostic did not report an absent disk"
 echo "diskdiag-test: with no drive at all it says so instead of pretending: OK"
 

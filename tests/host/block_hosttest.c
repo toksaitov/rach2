@@ -28,6 +28,14 @@ int kcmdline_has(const char *token)
     (void)token;
     return 0;
 }
+/* The probe says what it is doing through the kernel log, which is a whole
+   subsystem this test has no use for; the records are dropped. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
 
 #include "block/block.c"
 

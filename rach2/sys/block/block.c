@@ -1,4 +1,6 @@
 #include "block.h"
+
+#include "../klog.h"
 #include "ata.h"
 #include "ahci.h"
 #include "../serial.h"
@@ -98,9 +100,10 @@ int block_probe(void)
        machine with no serial port the way to find out whether that is what
        stopped the boot is to leave the disk alone and see. */
     if (kcmdline_has("rach2.nodisk")) {
-        serial_printf("block: skipped (rach2.nodisk)\n");
+        klog(KLOG_INFO, "block", "skipped: rach2.nodisk");
         return -1;
     }
+    klog(KLOG_INFO, "block", "started");
     /* With rach2.disk=ahci, prefer the AHCI HBA and fall back to ATA if none
        answered; otherwise use ATA, so every existing IDE image boots exactly as
        before. kcmdline_has matches whole tokens, so the flag never collides

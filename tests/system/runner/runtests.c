@@ -756,11 +756,28 @@ int main(int argc, char **argv)
         long bad = -1;
 
         if (start >= 0) {
+            long said = find_text(buf, buf_len, "] selftest: result: ",
+                                  (const char *) 0);
+
             summary = find_text(buf, buf_len, "] selftest: result: passed: ",
                                 (const char *) 0);
             if (summary < 0) {
-                snprintf(selftest_detail, sizeof(selftest_detail),
-                         "no summary record");
+                /* The summary the kernel printed, if it printed one: "failed:
+                   2 of 12" says which run this was, and "no summary record"
+                   says the group did not finish. */
+                if (said >= 0) {
+                    const char *from = (const char *) buf + said + 12;
+                    size_t n = 0;
+
+                    while (from[n] != '\0' && from[n] != '\n' && from[n] != '\r' &&
+                           n + 1 < sizeof(selftest_detail))
+                        n++;
+                    snprintf(selftest_detail, sizeof(selftest_detail),
+                             "%.*s", (int) n, from);
+                } else {
+                    snprintf(selftest_detail, sizeof(selftest_detail),
+                             "no summary record");
+                }
             } else {
                 bad = find_level_between(buf, (size_t) start,
                                          (size_t) summary);

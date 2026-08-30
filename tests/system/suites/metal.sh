@@ -233,7 +233,7 @@ BOOTLOG="$(ssh_run 'cat /dev/bootlog' | tr -d '\r')"
 if [ -z "$BOOTLOG" ]; then
     fail "/dev/bootlog gave nothing, so the machine cannot be asked what it printed"
 fi
-for want in "Rach2 Booting" "Initializing system components" "Network..."; do
+for want in "Rach2 Booting" "Initializing system components" "net: ready"; do
     echo "$BOOTLOG" | grep -q "$want" || fail "the fetched boot log does not contain '$want'"
 done
 echo "metal-test: the machine handed over its own boot log, from the first line: OK"

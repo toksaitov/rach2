@@ -831,7 +831,7 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --timeout 90 --ok "Type 'help'" "expect=Type 'help'" wait=3
 	$(PCAPCHECK) netconsole $(NETCONSOLE_PCAP) --min-frames 4 \
 	    --expect "Initializing system components" \
-	    --expect "Network... OK" \
+	    --expect "net: ready:" \
 	    --expect "netconsole: broadcast"
 # And the other end of a netconsole session: the machine stopping. The card is
 # silenced on the way out, so where that happens decides what a remote reader
@@ -909,22 +909,10 @@ run-reset: rach2 tests krffs test-image $(HARNESS)
 run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
 	sh tests/system/suites/diskdiag.sh build/rach2/kernel $(METAL_KERNEL) $(METAL_IMAGE) \
 	    $(DISKDIAG_PORT)
-# `tests/run subset`: the kernel reaches a shell with any subset of its optional
-# devices switched off. On a machine with no serial port, a boot that stops has
-# no diagnostic but the screen, and the only way to find which probe stopped it
-# is to switch them off one at a time from the GRUB command line. That is only
-# useful if each switch actually works, so each is booted here.
+# `tests/run subset`: each optional device probe left out, and proved left out
+# (see tests/system/suites/subset.sh).
 run-subset: rach2 tests krffs test-image $(HARNESS)
-	@for opt in "" "rach2.noaudio" "rach2.nomouse" "rach2.nonet" "rach2.nodisk" \
-	            "rach2.noaudio rach2.nomouse rach2.nonet rach2.nodisk"; do \
-	    echo "  subset-test: booting with [$$opt]"; \
-	    $(HARNESS) --kernel build/rach2/kernel \
-	        --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	        --append "$$opt" --timeout 90 --ok "Type 'help'" \
-	        "expect=Type 'help'" wait=2 >/dev/null 2>&1 \
-	        || { echo "subset-test: FAIL: no shell with [$$opt]" >&2; exit 1; }; \
-	done
-	@echo "subset-test: PASS"
+	sh tests/system/suites/subset.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS)
 # `tests/run diskpolicy`: the read-only kernel does not write the disk, shown on
 # the bytes rather than on a return value. The same disk is booted with each
 # kernel; the ordinary one must change it, which is what makes the other half
