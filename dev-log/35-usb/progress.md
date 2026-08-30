@@ -107,4 +107,4 @@ the commit that completes it.
 * [x] the full suite set twice, no machine left running, `make test` measured
 * [x] `dev-log/35-usb/Readme.md` with the trust statement
 * [x] `dev-log/Readme.md` gains the entry
-* [ ] review 6 of 6
+* [x] review 6 of 6

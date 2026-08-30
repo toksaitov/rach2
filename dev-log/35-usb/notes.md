@@ -500,3 +500,35 @@ ready and is listed in `current.md`.
 The plan says this is the owner's to close, not the milestone's: with the
 evidence in front of them they decide whether it closes with USB working in
 QEMU alone or stays open for another attempt.
+
+### Review 6 of 6
+
+Ten findings against the milestone record, and two of them were about the code
+rather than the prose.
+
+The slot tables were a slot short. `CONFIG.MaxSlotsEn` asked the controller for
+four, and every bound in the driver read `device >= XHCI_SLOTS`, so slot 4, which
+the controller is entitled to hand out, would have been refused as if it did not
+exist. Slots are numbered from one; the tables have one more entry than the
+count now, and a row proves that the last slot is addressed like any other.
+
+The model never drove a transfer. It answered commands and posted port changes,
+and `xhci_submit` and `xhci_poll` were exercised only by QEMU, while the record
+claimed the control transfer, the short packet and the stall were proved
+against it. The model has endpoint rings now: it walks them on a doorbell the
+way a controller does, finds the block that asked for an event, and answers
+with a completion code and a residual of the row's choosing. Twelve rows and
+three mutations followed, including the one that matters most: asking for the
+event on the status block rather than the data block, which is what a driver
+does when it does not care how much arrived.
+
+The rest were the record claiming more than the tests give, and are corrected in
+it: low speed is not enumerated anywhere, only derived from; the port routing is
+read and reported and has never been written or tested; `endpoint_open` does not
+take a control endpoint; bring-up does wait, and it is the timer's path that
+does not; and the two full-run failures are described as what was observed
+rather than as a cause nobody established. Six known limits that were in
+`notes.md` and not in the record are now in the record.
+
+Four phrases went for the register rule: a fragment, an effect sentence, an
+invented shorthand, and a controller given the intention to lie.
