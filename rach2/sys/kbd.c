@@ -1,9 +1,10 @@
 #include "kbd.h"
 
 /*
- * Raw scancode ring buffer. The IRQ handler is the sole producer (tail) and
- * graphics-mode readers are the sole consumer (head); a full ring drops the
- * new code, not overwrite an unread one.
+ * Raw scancode ring buffer. The input layer is the sole producer (tail), from
+ * whichever keyboard interrupt it was called by, and graphics-mode readers are
+ * the sole consumer (head); a full ring drops the new code rather than
+ * overwrite an unread one.
  */
 #define SCANCODE_BUF_SIZE 64
 static uint8_t scancode_buf[SCANCODE_BUF_SIZE];

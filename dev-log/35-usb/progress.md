@@ -47,7 +47,7 @@ the commit that completes it.
 
 * [x] `sys/usb/core.c`: the state machine and its deadlines
 * [x] Enable Slot, the input contexts, Address Device
-* [ ] the descriptors, Evaluate Context, the derived endpoint fields
+* [x] the descriptors, Evaluate Context, the derived endpoint fields
 * [x] Configure Endpoint, then `SET_CONFIGURATION`
 * [x] endpoint recovery: Reset Endpoint, Set TR Dequeue (`CLEAR_FEATURE` and
       Stop Endpoint are phase 5, where a transfer can stall)
@@ -85,7 +85,9 @@ the commit that completes it.
 * [ ] the firmware's VT-d setting recorded
 * [ ] the laptop booted with a USB keyboard and mouse
 * [ ] the real capability values in `hardware.md` beside QEMU's
-* [ ] `tests/run metal` and the acceptance script gain the USB lines
+* [x] the acceptance script reports the USB inventory, proved against the
+      QEMU rehearsal machine by `tests/run metal`; the laptop half waits for the
+      machine
 * [ ] proof: a person types and moves on the laptop; the internal keyboard is
       untouched; `rach2.nousb` still reaches a shell; poweroff and reboot both
       complete with the controller halted and the routing as it was found

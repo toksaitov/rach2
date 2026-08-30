@@ -12,7 +12,8 @@ extern uint8_t EN_us[128];
 extern uint8_t EN_us_shift[128];
 
 /*
- * Raw scancode ring for graphics-mode readers, filled by the IRQ handler.
+ * Raw scancode ring for graphics-mode readers, filled by the input layer with
+ * every code from either keyboard: the one on the 8042 and the one on USB.
  */
 
 /** Push a scancode to the ring; dropped if the ring is full. */
