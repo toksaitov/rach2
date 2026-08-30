@@ -63,10 +63,35 @@ static uint32_t reg[REGS];
 #define LEGSUP_BIOS_OWNED 0x00010000u
 #define LEGSUP_OS_OWNED   0x01000000u
 #define LEGCTL            (XECP + 4)
-#define LEGCTL_EVENTS     0xE0000000u
+/* Doorbell zero, which is the command ring's. */
+#define M_DOORBELL0       DBOFF
+
+/* A port's status and control register, and the bits of it this model answers
+   on. The change bits and the enable bit are write-one-to-clear, which is what
+   makes a careless read-modify-write throw away a connect and disable the
+   port. */
+#define M_PORTSC(port)   (OP(0x400u) + (port) * 0x10u)
+#define M_PORTSC_CCS     0x00000001u
+#define M_PORTSC_PED     0x00000002u
+#define M_PORTSC_PR      0x00000010u
+#define M_PORTSC_PP      0x00000200u
+#define M_PORTSC_CHANGES 0x00FE0000u
+#define M_PORTSC_CSC     0x00020000u
+#define M_PORTSC_PRC     0x00200000u
+#define LEGCTL_EVENTS    0xE0000000u
+
+/* What the controller does when a doorbell is rung, set after `xhci.c` is
+   included because it reaches into the driver's own rings. */
+static void (*on_doorbell)(uint32_t target);
 
 /* What this run's controller does, set before each row. */
 static int halts;
+/* Whether a command the driver issues is answered at all. */
+static int command_completes;
+/* Whether the controller starts when it is told to. */
+static int starts;
+/* Whether a port reset the driver asks for ever finishes. */
+static int port_reset_completes;
 /* How many waits the firmware takes before it gives the controller up, so a
    row can have a driver that asks once and reads once fail where a driver
    that waits passes. */
@@ -146,7 +171,7 @@ static void model_w32(uint32_t off, uint32_t v)
         if (!(v & M_USBCMD_RS) && halts) {
             reg[OP(O_USBSTS)] |= M_USBSTS_HCH;
         }
-        if (v & M_USBCMD_RS) {
+        if ((v & M_USBCMD_RS) && starts) {
             reg[OP(O_USBSTS)] &= ~M_USBSTS_HCH;
         }
         reg[off] = v;
@@ -167,6 +192,29 @@ static void model_w32(uint32_t off, uint32_t v)
             v &= ~LEGSUP_OS_OWNED;
         }
         reg[off] = v;
+        return;
+    }
+
+    if (off >= M_PORTSC(0) && off < M_PORTSC(16) && ((off - M_PORTSC(0)) % 0x10u) == 0) {
+        uint32_t old = reg[off];
+        uint32_t kept_changes = old & M_PORTSC_CHANGES & ~(v & M_PORTSC_CHANGES);
+        uint32_t kept_enable = (v & M_PORTSC_PED) ? 0u : (old & M_PORTSC_PED);
+
+        reg[off] = (v & ~(M_PORTSC_CHANGES | M_PORTSC_PED)) | kept_changes | kept_enable;
+        if ((v & M_PORTSC_PR) && port_reset_completes) {
+            /* A port whose reset finishes enables itself and says so. One
+               whose reset never finishes leaves the reset bit standing. */
+            reg[off] &= ~M_PORTSC_PR;
+            reg[off] |= M_PORTSC_PED | M_PORTSC_PRC;
+        }
+        return;
+    }
+
+    if (off == M_DOORBELL0) {
+        reg[off] = v;
+        if (on_doorbell) {
+            on_doorbell(v);
+        }
         return;
     }
 
@@ -333,6 +381,56 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 #include "../../rach2/sys/usb/xhci.c"
 
+/* ---- what the controller does with what the driver gave it ---- */
+
+/* Where the model writes its next event, and with which cycle value. It writes
+   into the driver's own event ring, which is the memory the driver handed the
+   controller, reached here by name rather than through the truncated address
+   the driver wrote into `ERSTBA`. */
+static uint32_t model_event_write;
+static uint32_t model_event_cycle;
+
+static void post_event(uint32_t type, uint32_t code, uint32_t slot, uint32_t param0)
+{
+    uint32_t *t = &event_ring[model_event_write * TRB_WORDS];
+
+    t[0] = param0;
+    t[1] = 0;
+    t[2] = code << TRB_COMPLETION_SHIFT;
+    t[3] = (type << TRB_TYPE_SHIFT) | (slot << TRB_SLOT_SHIFT) | model_event_cycle;
+    model_event_write++;
+    if (model_event_write == XHCI_RING_TRBS) {
+        model_event_write = 0;
+        model_event_cycle ^= TRB_CYCLE;
+    }
+}
+
+/* The command the driver last wrote, so a row can require the right one was
+   issued rather than merely that something was. */
+static uint32_t last_command_type;
+static uint32_t last_command_slot;
+static uint32_t commands_seen;
+
+static void doorbell_rung(uint32_t target)
+{
+    uint32_t index;
+    const uint32_t *t;
+
+    if (target != 0) {
+        return; /* an endpoint doorbell; nothing rings one yet */
+    }
+    /* The block the driver just wrote is the one before its enqueue pointer,
+       and the ring wraps. */
+    index = (cmd_enqueue + XHCI_RING_TRBS - 1) % XHCI_RING_TRBS;
+    t = &cmd_ring[index * TRB_WORDS];
+    last_command_type = (t[3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK;
+    last_command_slot = (t[3] >> TRB_SLOT_SHIFT) & 0xFFu;
+    commands_seen++;
+    if (command_completes) {
+        post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, last_command_slot, 0);
+    }
+}
+
 /* ---- the rows ---- */
 
 static int fails;
@@ -367,6 +465,15 @@ static void model_reset(void)
     reg[LEGCTL] = 0u;
 
     halts = 1;
+    starts = 1;
+    command_completes = 1;
+    port_reset_completes = 1;
+    on_doorbell = doorbell_rung;
+    model_event_write = 0;
+    model_event_cycle = TRB_CYCLE;
+    last_command_type = 0;
+    last_command_slot = 0;
+    commands_seen = 0;
     handoff_delay = 0;
     accepts_os_claim = 1;
     cnr_delay = 0;
@@ -391,6 +498,8 @@ static void model_reset(void)
 int main(void)
 {
     const struct xhci_caps *c;
+    struct usb_port_status status;
+    struct usb_command_result result;
     unsigned i;
 
     /* Finding the controller. */
@@ -608,6 +717,140 @@ int main(void)
     reg[R_HCSPARAMS2] = (1u << 21) | (3u << 27); /* 35 pages */
     CHECK("a controller that wants more pages than this kernel has is read", xhci_read_caps() == 0);
     CHECK("and refused", xhci_scratchpads() != 0);
+
+    /* Starting it: the rings, the slots, and the ports powered. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("the controller is taken", xhci_own() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("given its scratchpads", xhci_scratchpads() == 0);
+    CHECK("a controller that starts is started", xhci_start() == 0);
+    CHECK("with the slots this kernel can use, not every slot it offers",
+          reg[OP(0x38u)] == XHCI_SLOTS);
+    CHECK("its context array programmed", reg[OP(0x30u)] != 0);
+    CHECK("its command ring programmed, running from the first block",
+          (reg[OP(0x18u)] & ~0xFu) != 0 && (reg[OP(0x18u)] & 1u) != 0);
+    CHECK("one segment in its event ring table", reg[RTSOFF + 0x20u + 0x08u] == 1);
+    CHECK("that table programmed", reg[RTSOFF + 0x20u + 0x10u] != 0);
+    CHECK("and a dequeue pointer to start from", reg[RTSOFF + 0x20u + 0x18u] != 0);
+    CHECK("it is running", (reg[OP(O_USBSTS)] & M_USBSTS_HCH) == 0);
+    CHECK("and every port has power",
+          (reg[M_PORTSC(0)] & M_PORTSC_PP) != 0 && (reg[M_PORTSC(3)] & M_PORTSC_PP) != 0);
+
+    model_reset();
+    starts = 0;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("a controller that will not start is refused", xhci_start() != 0);
+
+    /* Commands. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("a command is issued", xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+    CHECK("and reaches the controller as the command it was",
+          commands_seen == 1 && last_command_type == TRB_TYPE_NOOP_COMMAND);
+    CHECK("it is not finished until its event has been read", xhci_command_done(&result) == 0);
+    CHECK("and no second command may be issued meanwhile",
+          xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) != 0);
+    xhci_events();
+    CHECK("once the event is read the command is finished", xhci_command_done(&result) == 1);
+    CHECK("and it succeeded", result.status == USB_XFER_OK);
+    CHECK("so another may be issued", xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+
+    model_reset();
+    command_completes = 0;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("a command is issued", xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+    CHECK("one that is never answered is still running", xhci_command_done(&result) == 0);
+    xhci_advance(2000);
+    CHECK("until its deadline passes", xhci_command_done(&result) == -1);
+    CHECK("and then the ring is taken back", (reg[OP(0x18u)] & 0x4u) != 0);
+
+    /* The command ring wraps through the link block at its end, and both
+       sides change cycle there. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    for (i = 0; i < XHCI_RING_TRBS - 1; i++) {
+        xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0);
+        xhci_events();
+        xhci_command_done(&result);
+    }
+    CHECK("the ring's last block is a link back to its start",
+          ((cmd_ring[(XHCI_RING_TRBS - 1) * TRB_WORDS + 3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) ==
+              TRB_TYPE_LINK);
+    CHECK("with the bit that changes the cycle there",
+          (cmd_ring[(XHCI_RING_TRBS - 1) * TRB_WORDS + 3] & TRB_TOGGLE) != 0);
+    CHECK("and the driver's own cycle changed with it", cmd_cycle == 0);
+    CHECK("so the next command goes to the first block", cmd_enqueue == 0);
+    CHECK("a command after the wrap is issued",
+          xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+    CHECK("with the new cycle", (cmd_ring[3] & TRB_CYCLE) == 0);
+
+    /* The event ring wraps too, and the driver has to follow the controller
+       through it rather than stopping at the end. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    for (i = 0; i < XHCI_RING_TRBS + 40; i++) {
+        post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
+        if ((i % 64) == 0) {
+            xhci_events();
+        }
+    }
+    xhci_events();
+    CHECK("every event is taken, wrap and all", event_index == model_event_write);
+    CHECK("and the driver's cycle follows the controller's", event_cycle == model_event_cycle);
+    CHECK("with the dequeue pointer written back", (reg[RTSOFF + 0x20u + 0x18u] & 0x8u) != 0);
+    CHECK("and the port it named remembered", port_changed[0] == 1);
+
+    /* Ports. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
+    CHECK("a port with a device says so", xhci_port_status(0, &status) == 0);
+    CHECK("with the speed the controller reports", status.connected == 1 && status.speed == 3);
+    CHECK("a port with nothing on it says that", xhci_port_status(1, &status) == 0);
+    CHECK("and is not connected", status.connected == 0);
+    CHECK("a port outside the controller's own count is refused",
+          xhci_port_status(99, &status) != 0);
+
+    CHECK("a port with a device is reset", xhci_port_reset_begin(0) == 0);
+    CHECK("and the reset finished", xhci_port_reset_done(0) == 1);
+    CHECK("with its change bit cleared afterwards", (reg[M_PORTSC(0)] & M_PORTSC_PRC) == 0);
+    CHECK("a port with nothing on it is not reset", xhci_port_reset_begin(1) != 0);
+
+    model_reset();
+    port_reset_completes = 0;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS;
+    CHECK("a reset is begun", xhci_port_reset_begin(0) == 0);
+    CHECK("and is not finished", xhci_port_reset_done(0) == 0);
+    xhci_advance(1000);
+    CHECK("a reset that never finishes is given up on", xhci_port_reset_done(0) == -1);
+
+    /* The write discipline this register needs, which is the easiest thing in
+       the driver to get wrong: half its bits are cleared by writing them. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    port_reset_completes = 0;
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS | M_PORTSC_PED | M_PORTSC_CSC;
+    CHECK("a reset is begun", xhci_port_reset_begin(0) == 0);
+    CHECK("without throwing away a connect nobody has handled yet",
+          (reg[M_PORTSC(0)] & M_PORTSC_CSC) != 0);
+    CHECK("and without disabling the port it is resetting", (reg[M_PORTSC(0)] & M_PORTSC_PED) != 0);
 
     if (fails == 0) {
         printf("xhci_hosttest: OK\n");

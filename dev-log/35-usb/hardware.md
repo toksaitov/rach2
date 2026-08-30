@@ -39,17 +39,21 @@ nothing in this milestone drives a UHCI.
 
 ## Capability registers
 
+Read from `qemu-xhci` by a boot of the driver in phase 3. The laptop column
+needs the machine.
+
 | Register | QEMU | Laptop |
 |----------|------|--------|
-| `CAPLENGTH` | | |
-| `HCIVERSION` | | |
-| `HCSPARAMS1` slots, interrupters, ports | | |
-| `HCSPARAMS2` ERST max, scratchpad count | | |
-| `HCCPARAMS1` AC64, CSZ, xECP | | |
-| `DBOFF` | | |
-| `RTSOFF` | | |
-| `PAGESIZE` | | |
-| legacy support capability present | | |
+| `HCIVERSION` | 0x0100 | to be read |
+| slots, interrupters, ports | 64, 1, 8 | to be read |
+| scratchpad pages wanted | 0 | to be read |
+| context size | 32 bytes | to be read |
+| legacy support capability present | no | to be read |
+
+The controller has eight root ports, four of them USB2 and four USB3, and a
+device attached with `usb-kbd` lands on port 5. It asks for no scratchpad
+pages, so the pages this kernel compiles in are exercised by the host model
+alone until the notebook is read.
 
 ## Firmware
 

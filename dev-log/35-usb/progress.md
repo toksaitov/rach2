@@ -32,14 +32,14 @@ the commit that completes it.
 
 ## Phase 3: bring-up
 
-* [ ] the device-context base array, the command ring, the event ring and its
+* [x] the device-context base array, the command ring, the event ring and its
       segment table, the doorbells, `CONFIG`, `RS`
-* [ ] port power, debounce, port reset, the event drain
-* [ ] `usb_stop` and its place in `kernel_shutdown`
-* [ ] rows: ring wrap and the cycle bit, `ERDP`, the port cases, command abort,
+* [x] port power, debounce, port reset, the event drain
+* [x] `usb_stop` and its place in `kernel_shutdown`
+* [x] rows: ring wrap and the cycle bit, `ERDP`, the port cases, command abort,
       `PORTSC` write discipline
-* [ ] QEMU's capability values in `hardware.md`
-* [ ] proof: a device on a root port is recorded with its speed; nothing is
+* [x] QEMU's capability values in `hardware.md`
+* [x] proof: a device on a root port is recorded with its speed; nothing is
       recorded with no device attached
 * [ ] review 2 of 6
 

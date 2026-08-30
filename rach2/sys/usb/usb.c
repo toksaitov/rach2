@@ -19,6 +19,9 @@
 
 #include "../klog.h"
 #include "../pci.h"
+#include "../udelay.h"
+#include "hcd.h"
+#include "xhci.h"
 
 /* The interface byte of a USB controller says which register interface it
  * presents. These are the four the standard defines, plus the value a USB
@@ -99,4 +102,104 @@ void usb_report_controllers(void)
     if (found == 0) {
         klog(KLOG_INFO, "usb", "controller: none");
     }
+}
+
+/* ---- bringing the stack up ---- */
+
+/*
+ * How long the ports are given to settle before they are read, and how often
+ * the driver's clock is advanced while that happens. The USB specification
+ * asks for a hundred milliseconds between a connect and anything done about
+ * it, and a machine that has just started has every device already connected.
+ */
+#define USB_SETTLE_MS 100u
+
+/** The name of a speed, for the record. */
+static const char *speed_name(int speed)
+{
+    switch (speed) {
+    case USB_SPEED_FULL:
+        return "full";
+    case USB_SPEED_LOW:
+        return "low";
+    case USB_SPEED_HIGH:
+        return "high";
+    case USB_SPEED_SUPER:
+        return "super";
+    default:
+        return "unknown";
+    }
+}
+
+/**
+ * Let time pass at boot, which is the one place in this stack where that is
+ * allowed, and keep the controller drained while it does.
+ */
+static void usb_settle(void)
+{
+    uint32_t ms;
+
+    for (ms = 0; ms < USB_SETTLE_MS; ms++) {
+        k_udelay(1000);
+        xhci_advance(1);
+        xhci_events();
+    }
+}
+
+/** Record what is on each root port. */
+static void report_ports(void)
+{
+    struct usb_port_status status;
+    int ports = xhci_ports();
+    int found = 0;
+    int port;
+
+    for (port = 0; port < ports; port++) {
+        if (xhci_port_status(port, &status) != 0) {
+            continue;
+        }
+        if (status.connected) {
+            klog(KLOG_INFO, "usb", "port: %d: a %s-speed device", port + 1,
+                 speed_name(status.speed));
+            found++;
+        }
+    }
+    if (found == 0) {
+        klog(KLOG_INFO, "usb", "port: nothing connected");
+    }
+}
+
+int usb_init(void)
+{
+    const struct xhci_caps *caps;
+
+    if (xhci_discover() != 0) {
+        klog(KLOG_INFO, "usb", "absent: %s", xhci_error());
+        return -1;
+    }
+    if (xhci_read_caps() != 0 || xhci_own() != 0 || xhci_halt_reset() != 0 ||
+        xhci_scratchpads() != 0 || xhci_start() != 0) {
+        klog(KLOG_WARN, "usb", "refused: %s", xhci_error());
+        return -1;
+    }
+
+    caps = xhci_capabilities();
+    klog(KLOG_INFO, "usb", "ready: version %x, %d ports, %d slots, %d-byte contexts",
+         (int)caps->hciversion, (int)caps->max_ports, (int)caps->max_slots,
+         (int)caps->context_size);
+
+    usb_settle();
+    report_ports();
+    return 0;
+}
+
+void usb_poll(void)
+{
+    xhci_advance(10);
+    xhci_events();
+}
+
+void usb_stop(void)
+{
+    xhci_stop();
 }

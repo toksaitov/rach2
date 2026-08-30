@@ -2,6 +2,7 @@
 #define _XHCI_H_
 
 #include "../lib/kint.h"
+#include "hcd.h"
 
 /**
  * The xHCI host controller driver: the only USB controller this kernel drives.
@@ -24,6 +25,17 @@
  * badly. No controller met so far asks for anything near this.
  */
 #define XHCI_MAX_SCRATCHPADS 32
+
+/*
+ * How many device slots this kernel asks the controller to enable, and how
+ * many transfer request blocks each of its two rings holds. A controller may
+ * offer 64 slots or more; four is what the fixed tables above this driver
+ * hold, and asking for more would have the controller reserve memory for
+ * devices that could never be opened. Each ring is one page, which is 256
+ * blocks of sixteen bytes.
+ */
+#define XHCI_SLOTS     4
+#define XHCI_RING_TRBS 256
 
 /*
  * The controller as this driver reaches it: the two register accessors and the
@@ -117,6 +129,68 @@ int xhci_read_caps(void);
  * than `XHCI_MAX_SCRATCHPADS` is refused with both numbers recorded.
  */
 int xhci_scratchpads(void);
+
+/**
+ * Program the controller's rings and start it.
+ *
+ * Points the controller at the device-context base address array, the command
+ * ring and the first interrupter's event ring, tells it how many slots this
+ * kernel will use, and sets it running. Returns -1 if it does not leave the
+ * halted state.
+ */
+int xhci_start(void);
+
+/**
+ * Stop the controller.
+ *
+ * Called before the machine halts or restarts. A controller left running can
+ * wake or reset the machine it was in, which is what other operating systems
+ * carry a quirk for on this exact Intel part.
+ */
+void xhci_stop(void);
+
+/** How many root ports the controller has. */
+int xhci_ports(void);
+
+/** What a root port reports now. */
+int xhci_port_status(int port, struct usb_port_status *out);
+
+/** Begin resetting a port. Returns -1 if the port has no device. */
+int xhci_port_reset_begin(int port);
+
+/** 1 when the reset finished, 0 while it has not, -1 when it gave up. */
+int xhci_port_reset_done(int port);
+
+/**
+ * Issue one command.
+ *
+ * `type` is the command's transfer-block type and `slot` the slot it acts on,
+ * zero where the command names none. Returns 0 when the command was queued,
+ * -1 when one is already in flight or the ring is not usable. One command is
+ * in flight at a time, which is what lets this driver hold one ring and no
+ * queue of its own.
+ */
+int xhci_command_issue(uint32_t type, uint64_t parameter, uint32_t slot);
+
+/**
+ * Report the command in flight: 1 finished, 0 still running, -1 given up on.
+ *
+ * A command that passes its deadline is aborted, which is the only way to get
+ * a command ring back from a controller that stopped answering.
+ */
+int xhci_command_done(struct usb_command_result *out);
+
+/**
+ * Drain the event ring.
+ *
+ * Called from the timer, so it takes what is there and returns. Command
+ * completions and port changes are recorded for the pollers above; transfer
+ * events belong to the next phase of this work.
+ */
+void xhci_events(void);
+
+/** Advance the driver's own clock, in milliseconds. */
+void xhci_advance(uint32_t milliseconds);
 
 /** What was read from the controller, valid after `xhci_read_caps`. */
 const struct xhci_caps *xhci_capabilities(void);

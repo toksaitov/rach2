@@ -176,6 +176,10 @@ static void timer_handler(isr_params_t *params)
     netdev_poll();
     tcp_tick();
     ip_loop_drain();
+    /* The USB controller's turn, for the same reason and under the same rule:
+     * this takes what the controller has left in its event ring and returns.
+     * Nothing on this path waits on hardware. */
+    usb_poll();
     tty_console_poll();
 
     if (!current_proc || !current_proc->in_syscall) {
@@ -1730,6 +1734,7 @@ void kernel_shutdown(int how)
      * silences the card, so a submitted frame is a sent one. The
      * alternative, stopping the card inside `power_stop`, would put subsystem
      * knowledge in the one file whose whole claim is that it has none. */
+    usb_stop();
     netdev_stop();
     power_stop(how);
 }
@@ -2861,6 +2866,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     }
 
     usb_report_controllers();
+    usb_init();
 
     init_syscall();
     klog(KLOG_INFO, "boot", "syscall: ready");

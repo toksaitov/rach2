@@ -140,3 +140,48 @@ Six further mutations, all caught: skip the power-up, check only the firmware's
 own ownership bit, write the command register before the controller is ready,
 check the head of the capability list and no step after it, check only the
 start of each register set, and assume the interface version.
+
+## Phase 3
+
+The rings, the ports and the commands. `xhci_start` programs the context array,
+the command ring, the event ring and its one-entry segment table, tells the
+controller how many slots this kernel will use, starts it, and powers any port
+the controller does not power itself. `xhci_events` drains the event ring from
+the timer, `xhci_command_issue` and `xhci_command_done` are one command at a
+time with a deadline, and `xhci_port_status`, `xhci_port_reset_begin` and
+`xhci_port_reset_done` are the ports.
+
+Decisions the plan left open:
+
+* The driver keeps its own clock in milliseconds, advanced by `xhci_advance`:
+  one from the boot pump, ten from the timer. Deadlines are counted against it.
+  The alternative was to read `kernel_ticks`, which would have made the driver
+  untestable off a machine.
+* `XHCI_SLOTS` is four and `CONFIG.MaxSlotsEn` is the smaller of that and what
+  the controller offers. QEMU offers 64. Asking for all of them would have the
+  controller reserve context memory for devices this kernel has no table for.
+* The boot path waits, once, for the hundred milliseconds the USB
+  specification asks for between a connect and a reset. It is the only wait,
+  and it is in bring-up where the plan allows one.
+
+What QEMU reports, now in `hardware.md`: version 1.0.0, eight ports, 64 slots,
+32-byte contexts, no scratchpad pages, and no legacy-support capability, which
+is why the firmware handoff can only be proved in the model.
+
+Proof from four boots: a high-speed keyboard and mouse are recorded on ports 5
+and 6; the same keyboard attached with `usb_version=1` is recorded as
+full-speed, which is what says the speed is read rather than assumed; a
+controller with nothing plugged in records `port: nothing connected`; and a
+machine with no controller records `absent`.
+
+Ten mutations, each caught: enable every slot the controller offers, write the
+command and not ring the doorbell, link back without the toggle bit, keep one
+cycle value on the command ring, keep one cycle value on the event ring, read
+the events and not say how far, write the port register back as it was read,
+leave the ports unpowered, let a command run for ever, and let a port reset run
+for ever.
+
+The suites that touch what changed all pass: `default`, `console`, `reset`,
+`shutdown`, `subset` and `metal`, beside `style` and `host`. `usb_stop` sits
+beside `netdev_stop` in `kernel_shutdown`, which is why `reset` and `shutdown`
+are in that list.
