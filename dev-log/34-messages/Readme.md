@@ -67,3 +67,37 @@ Cold from `make distclean`: 124 seconds to build everything. `make test`, which 
 The core tier is 21 system suites chosen by two rules, that between them every subsystem is exercised and that the tier finishes in under two minutes: 107 seconds.
 
 Every check added here was proved by a mutation that makes it fail, driven from a script that restores the source under a trap: sixty-two of them, each caught by the check it was aimed at. Twelve reviews were planned and five were run, each of at most six files; between them they returned 58 findings. The most serious in each: an unchecked `mktemp` that would have put the QEMU shim at `/bin/qemu-system-i386`; a worker count of `00` that hung the pool; a format ending in `%` reading past its string; the terminal's double carriage return; and nine rows of the new coverage that could pass while the thing they name was broken, including a disk-policy check that could not fail at all.
+
+## What a passing run now means
+
+`tests/run all` passing says the following, and each of these has a check that
+was made to fail before it was believed:
+
+* Every kernel self-test passed on the boot the suite scored, and the number of
+  checks in the summary matches the records the group emitted. Before this
+  milestone a boot whose checks all failed passed the suite.
+* Every one of the 72 guest probes exited 0, and each of the four that carries
+  a special contract (a fault, typed input, a host peer) ran under a suite
+  built for it rather than being staged and forgotten.
+* Each fixed limit was reached and refused with the error the kernel
+  documents, and the resource came back.
+* Each optional device probe honoured the option that switches it off, and ran
+  when nothing switched it off.
+* The machine restarted rather than announcing a restart, took the address its
+  boot line named rather than the one the network hands out, mounted from each
+  of the three roots, and wrote its disk only where the policy allows.
+* What reached the wire and what reached the machine's own log are what the
+  records say, read from a capture and from `/dev/bootlog` rather than from the
+  code that wrote them.
+* The three drivers, the TCP state machine and the receive parsers were driven
+  through the cases a working QEMU never produces.
+
+What it does not say. The suite runs on QEMU: the hardware paths for the
+laptop's RTL8168GU, its AHCI controller and its HDA codec are exercised against
+models and against QEMU's devices, not against that machine, and the hardware
+procedure under `dev-log/24-metal/` is still what covers it. A triple fault
+that prints nothing is indistinguishable from a reset the kernel asked for.
+`tests/run addressed` does not check the gateway half of a boot line, which
+`dhcp` and `netif` cover instead. And a passing run says nothing about the
+parts of the kernel no probe reaches: the suite now names what it checks, which
+is the change, but naming is not the same as covering everything.
