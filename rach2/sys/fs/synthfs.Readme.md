@@ -26,14 +26,14 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations belo
 | `/dev/ptmx` | 5:2 | 0666 | Allocates a pty pair and returns its master. |
 | `/dev/bootpart` | 240:0 | 0600 | Exposes a validated FAT boot partition as a raw sector window when one exists. |
 | `/dev/disk0` | 240:1 | 0400 | Exposes the diagnostic whole-disk window after a diagnostic probe. |
-| `/dev/bootlog` | 240:2 | 0400 | Reads the kernel's 16 KiB serial-log ring from its oldest retained byte. |
+| `/dev/bootlog` | 240:2 | 0400 | Reads the kernel log's 16 KiB ring from its oldest retained record. |
 | `/dev/grubcore` | 240:3 | 0600 | Exposes LBA 1 through 2047 when the MBR leaves that range unused. |
 
 `null`, `zero`, and `full` seek to offset zero. Random devices, terminals, and pty endpoints are streams and return `ESPIPE`. `/dev/bootlog` uses an ordinary offset and supports seeks relative to the current ring length. All synthetic nodes use stable timestamps from the RTC reading taken during startup, or zero when no RTC reading was accepted.
 
 The pty pool has 16 pairs. Opening `/dev/ptmx` allocates a locked pair; `TIOCSPTLCK` must unlock it before `/dev/pts/N` can open. An allocated slave appears in `/dev/pts`, has device number 136:N, and starts with the opener's effective uid and gid and mode 0620. `chmod` and `chown` may change that slave for a login session. The slave uses the normal terminal discipline. Master writes become slave input, while slave output and echo enter a 4096-byte master ring. The pair is released after both endpoints close.
 
-`/dev/bootlog` is always present. The serial path records each byte in a fixed ring; after 16384 bytes, new output replaces the oldest bytes. The os-real `dmesg` script reads this device because Rach2 has no `klogctl` interface.
+`/dev/bootlog` is always present. It hands out the kernel log's ring, which holds records and not console text: whole records are dropped from the oldest end to make room, so what comes back never begins mid-line. The os-real `dmesg` script reads this device because Rach2 has no `klogctl` interface.
 
 The framebuffer and mouse use the root paths `/fb` and `/mouse`. They are not devfs entries.
 

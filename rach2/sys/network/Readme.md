@@ -101,7 +101,7 @@ At most four raw ICMP sockets may be registered. Each has an eight-entry queue o
 
 ## Netconsole
 
-`rach2.netconsole` installs a serial tap early in boot. Characters collect before the network device starts, then `netconsole_enable` drains them. The ring is 8192 bytes with 8191 usable slots; new characters are dropped when it is full. After enable, a newline or 512 buffered bytes starts a transmission.
+Netconsole is the last destination of the kernel log (see [the kernel Readme](../../Readme.md)), so it is offered every record from the first one, before there is a device to send through. Records collect until `netconsole_enable`, which `rach2.netconsole` asks for once a network device is up, and it then drains them. The ring is 8192 bytes with 8191 usable slots; new characters are dropped when it is full. After enable, a newline or 512 buffered bytes starts a transmission. The debug shell's own output is not a record and never reaches the wire.
 
 Each broadcast Ethernet frame uses EtherType `0x88b5`. Its payload starts with a 16-byte big-endian header containing `RCH2`, a nonzero per-boot id, a sequence number, the payload length, and a one's-complement checksum. Frames have no acknowledgement or retry. Fixed buffers, the network interrupt lock, and a recursion guard permit calls from interrupt and error paths.
 

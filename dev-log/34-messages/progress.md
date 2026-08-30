@@ -74,7 +74,7 @@ Proof items:
 * [x] Group 5: audio (review 8)
 * [x] Group 6: network (review 9)
 * [x] Debug shell converted to `console_*`
-* [ ] Each component's Readme updated in the converting commit
+* [x] Each component's Readme updated in the converting commit
 
 ## Phase 6: the cutover (9 items)
 

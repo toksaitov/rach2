@@ -18,7 +18,7 @@ The running kernel calls `krandom_seed` once and has no later entropy accumulati
 2. If `RDSEED` is unavailable or any of its eight words fails, discard that attempt. If leaf 1 is available and ECX bit 30 reports `RDRAND`, collect a new eight-word key under the same per-word retry limit. All eight must succeed.
 3. If neither instruction supplies a complete key, read the timestamp counter once, read the CMOS seconds field, and include the current PIT tick. Four values derived from those readings go through `krandom_reseed`.
 
-The recorded source is `KRANDOM_SRC_RDSEED`, `KRANDOM_SRC_RDRAND`, or `KRANDOM_SRC_JITTER`. The project treats the two hardware results as trusted. The fallback is best-effort boot variation and remains untrusted. The boot log prints the selected source; the diagnostic summary reports whether it is trusted.
+The recorded source is `KRANDOM_SRC_RDSEED`, `KRANDOM_SRC_RDRAND`, or `KRANDOM_SRC_JITTER`. The project treats the two hardware results as trusted. The fallback is best-effort boot variation and remains untrusted. The boot records the selected source, at `WARN` when it is the untrusted fallback; the diagnostic summary reports whether it is trusted.
 
 `rach2/run.sh`, `rach2/run_from_disk.sh`, and the default test runner use QEMU's `-cpu max`, which exposes a hardware random instruction and normally produces a trusted seed. `CPU` can select another QEMU model. Dropbear host-key generation needs the trusted interfaces described below.
 
