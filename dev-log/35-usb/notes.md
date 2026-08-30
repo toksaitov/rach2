@@ -93,3 +93,50 @@ trap and rebuilds before the verdict:
   row. The mutation writes past the compiled array, which is what the refusal
   exists to prevent, so the sanitizer reaching it first is the check working
   through a different door. The row `and refused` fails in the same run.
+
+### Review 1 of 6
+
+Seven findings against `hcd.h`, `xhci.h`, `xhci.c` and the host test. Six were
+right and are fixed; one was right about this kernel and wrong about the
+defect.
+
+* The interface could not express an asynchronous command. `device_open`,
+  `device_address`, `endpoint_open` and `endpoint_reset` each need a command
+  the controller executes, and each returned a value as if the work were done.
+  `hcd.h` now says one command may be in flight and adds `command_done` beside
+  `poll`, which is what lets the core in phase 4 be the state machine the plan
+  requires. This was the most serious finding: the interface is this phase's
+  deliverable and the shape was wrong.
+* The controller may not be written to while it says it is not ready. A
+  controller coming out of D3, or out of a reset the firmware began, can report
+  `CNR` for milliseconds, and the driver wrote `USBCMD` at once. There is a
+  bounded wait before the halt now.
+* Ownership is two bits. The driver waited for the firmware's claim to clear
+  and never checked that its own had been taken. A controller that drops the
+  request would have been driven by a kernel that did not own it.
+* The capability list was walked without a bound. A next-pointer only moves
+  forward, so the mapped window is the bound: each step is now checked against
+  it and a list that reaches the end is refused. The first version of this fix
+  also counted steps, which is unreachable given a forward-only list, so the
+  counter went.
+* The aperture check checked where each register set began and not where it
+  ended. The doorbell array is a word per slot and the interrupters are 32
+  bytes each; both ends are checked now.
+* Several rows could not fail for the reason they named: the PCI stub ignored
+  the class it was asked for, nothing recorded that the driver enabled memory
+  space and bus mastering, and the model answered registers normally for a
+  function still in D3. The model does all three now, and a controller in D3
+  returns all ones as the hardware does.
+* The interface version and the event-ring segment limit were read and never
+  checked. They are checked.
+
+The finding that was wrong about the defect: `map_mmio`'s result was said to be
+discarded in favour of the physical address. It is, and in this kernel that is
+correct, because `map_mmio` identity-maps and `ahci.c` does the same. The
+driver now uses the returned address anyway: it costs nothing and it stops the
+driver depending on a promise made in another file.
+
+Six further mutations, all caught: skip the power-up, check only the firmware's
+own ownership bit, write the command register before the controller is ready,
+check the head of the capability list and no step after it, check only the
+start of each register set, and assume the interface version.

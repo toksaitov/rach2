@@ -195,6 +195,7 @@ int xhci_discover(void)
     pci_device_t *skip_dev = 0;
     int found = 0;
     uint32_t base;
+    uintptr_t mapped;
 
     while (pci_find_device_skip(PCI_CLASS_SERIAL_BUS, PCI_SUBCLASS_USB, skip_dev, &dev)) {
         if (dev.prog_if == XHCI_PCI_PROGIF) {
@@ -230,11 +231,15 @@ int xhci_discover(void)
     pci_enable_memory_space(&dev);
     pci_enable_bus_master(&dev);
 
-    if (map_mmio(base, XHCI_MAP_SIZE) == 0) {
+    /* `map_mmio` identity-maps and hands back the address to use. Taking what
+     * it returned rather than the physical address again costs nothing and
+     * leaves this driver correct if that ever stops being an identity map. */
+    mapped = map_mmio(base, XHCI_MAP_SIZE);
+    if (mapped == 0) {
         xhci_err = "the controller's aperture could not be mapped";
         return -1;
     }
-    xhci_base = (volatile uint8_t *)(uintptr_t)base;
+    xhci_base = (volatile uint8_t *)mapped;
 
     klog(KLOG_DEBUG, "usb", "found: %x:%x at %d:%d.%d, aperture 0x%X",
          (int)dev.vendor_id, (int)dev.device_id, (int)dev.bus, (int)dev.device,
@@ -248,9 +253,21 @@ int xhci_own(void)
     uint32_t offset = caps.xecp;
     uint32_t polls;
 
+    /* The list is the controller's, so where it leads is checked rather than
+     * trusted. A next-pointer only ever moves forward, and every step that
+     * continues moves at least four bytes, so the mapped window is what ends
+     * the walk: a list that reaches the end of it is refused rather than
+     * followed into whatever the aperture is next to. */
     while (offset != 0) {
-        uint32_t entry = r32(offset);
-        uint32_t next = (entry >> 8) & 0xFFu;
+        uint32_t entry;
+        uint32_t next;
+
+        if (offset + 8u > XHCI_MAP_SIZE) {
+            xhci_err = "the controller's capability list leaves its aperture";
+            return -1;
+        }
+        entry = r32(offset);
+        next = (entry >> 8) & 0xFFu;
 
         if ((entry & 0xFFu) == XECP_ID_LEGACY) {
             uint32_t control;
@@ -272,6 +289,14 @@ int xhci_own(void)
                     xhci_err = "the firmware never gave up the controller";
                     return -1;
                 }
+            }
+            /* Ownership is both bits: the firmware's claim gone and this
+             * kernel's in place. A controller that dropped the request keeps
+             * the second one clear, and a driver that looked only at the first
+             * would drive a controller it does not own. */
+            if (!(r32(offset) & LEGSUP_OS_OWNED)) {
+                xhci_err = "the controller did not take this kernel's claim";
+                return -1;
             }
 
             control = r32(offset + LEGCTLSTS);
@@ -297,6 +322,22 @@ int xhci_halt_reset(void)
 {
     uint32_t polls;
     uint32_t cmd;
+
+    /* A controller that says it is not ready may have no register written but
+     * its own status, and a controller coming out of D3 or out of a reset the
+     * firmware started can say so for milliseconds. Waiting here is what keeps
+     * the first write below from landing in a controller that is still
+     * starting. */
+    for (polls = 0; polls < XHCI_RESET_POLLS; polls++) {
+        if (!(op_r32(XHCI_USBSTS) & USBSTS_CNR)) {
+            break;
+        }
+        xhci_io->udelay(XHCI_POLL_US);
+    }
+    if (op_r32(XHCI_USBSTS) & USBSTS_CNR) {
+        xhci_err = "the controller was not ready to be halted";
+        return -1;
+    }
 
     cmd = op_r32(XHCI_USBCMD);
     op_w32(XHCI_USBCMD, cmd & ~(USBCMD_RS | USBCMD_INTE));
@@ -336,6 +377,8 @@ int xhci_read_caps(void)
 {
     uint32_t word;
     uint32_t ports_end;
+    uint32_t doorbells_end;
+    uint32_t runtime_end;
 
     word = r32(XHCI_CAPLENGTH);
     caps.caplength = word & 0xFFu;
@@ -370,8 +413,13 @@ int xhci_read_caps(void)
      * each; the doorbells and the runtime registers are wherever the
      * controller put them. */
     ports_end = caps.caplength + XHCI_PORTSC + caps.max_ports * 0x10u;
-    if (ports_end > XHCI_MAP_SIZE || caps.dboff >= XHCI_MAP_SIZE ||
-        caps.rtsoff >= XHCI_MAP_SIZE || caps.dboff == 0 || caps.rtsoff == 0) {
+    /* Each doorbell is a word, one per slot and one for the commands; each
+     * interrupter is 32 bytes, and the first is 32 bytes into the runtime
+     * registers. What must fit is the end of each set, not its start. */
+    doorbells_end = caps.dboff + (caps.max_slots + 1u) * 4u;
+    runtime_end = caps.rtsoff + 0x20u + caps.max_intrs * 0x20u;
+    if (ports_end > XHCI_MAP_SIZE || doorbells_end > XHCI_MAP_SIZE ||
+        runtime_end > XHCI_MAP_SIZE || caps.dboff == 0 || caps.rtsoff == 0) {
         xhci_err = "the controller's registers do not fit the mapped aperture";
         return -1;
     }

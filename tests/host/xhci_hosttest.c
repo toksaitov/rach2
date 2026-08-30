@@ -25,7 +25,10 @@ extern int printf(const char *fmt, ...);
 
 /* ---- the model ---- */
 
-#define REGS 0x2000
+/* Big enough to hold a register at the far end of the 64 KiB aperture the
+   driver maps, so a row can put a capability list where its next step leaves
+   the window. */
+#define REGS 0x10010
 
 static uint32_t reg[REGS];
 
@@ -79,13 +82,38 @@ static int handoff_answers;
 static int awaiting_pause;
 static int read_too_early;
 
-/* The power state the model's function is in, and what the driver wrote. */
+/* The power state the model's function is in. A function the firmware parked
+   in D3 answers its configuration space and returns all ones from its
+   registers, which is what makes reading them before waking it useless. */
 static unsigned pm_state;
+
+/* What the driver asked the bus for, so a row can require it. */
+static int memory_space_enabled;
+static int bus_master_enabled;
+/* The class and subclass it searched for. */
+static uint8_t searched_class;
+static uint8_t searched_subclass;
+/* Whether the firmware lets this kernel's claim stand at all. */
+static int accepts_os_claim;
+/* How many waits the controller takes to become ready, and whether it ever
+   does. */
+static int cnr_delay;
+static int becomes_ready;
+
+/* How many times the capability list's head was read: a walk that never ends
+   reads it without limit, and one that gives up reads it a few times. */
+static unsigned xecp_reads;
 
 static uint32_t model_r32(uint32_t off)
 {
     if (awaiting_pause) {
         read_too_early = 1;
+    }
+    if (off == XECP || off == XECP + 8) {
+        xecp_reads++;
+    }
+    if (pm_state != 0) {
+        return 0xFFFFFFFFu; /* a function in D3, answering nothing useful */
     }
     if (off >= REGS) {
         return 0;
@@ -133,6 +161,11 @@ static void model_w32(uint32_t off, uint32_t v)
         } else if (v & LEGSUP_OS_OWNED) {
             v |= (reg[off] & LEGSUP_BIOS_OWNED);
         }
+        if (!accepts_os_claim) {
+            /* A controller that drops the claim rather than taking it: the
+               firmware's bit may clear and this kernel still does not own it. */
+            v &= ~LEGSUP_OS_OWNED;
+        }
         reg[off] = v;
         return;
     }
@@ -155,6 +188,12 @@ static void model_udelay(uint32_t us)
     if (awaiting_pause && us >= 1000u) {
         awaiting_pause = 0;
     }
+    if (cnr_delay > 0) {
+        cnr_delay--;
+        if (cnr_delay == 0 && becomes_ready) {
+            reg[OP(O_USBSTS)] &= ~M_USBSTS_CNR;
+        }
+    }
     if (handoff_delay > 0) {
         handoff_delay--;
         if (handoff_delay == 0 && handoff_answers) {
@@ -176,8 +215,11 @@ static int model_present;
 
 bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_device_t *out)
 {
-    (void)cls;
-    (void)sub;
+    searched_class = cls;
+    searched_subclass = sub;
+    if (cls != PCI_CLASS_SERIAL_BUS || sub != PCI_SUBCLASS_USB) {
+        return 0; /* this bus has nothing else on it */
+    }
     if (skip || !model_present) {
         return 0; /* one controller on this bus */
     }
@@ -257,11 +299,13 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
 void pci_enable_bus_master(pci_device_t *dev)
 {
     (void)dev;
+    bus_master_enabled = 1;
 }
 
 void pci_enable_memory_space(pci_device_t *dev)
 {
     (void)dev;
+    memory_space_enabled = 1;
 }
 
 /* The window the driver would map. Its address is never dereferenced here:
@@ -324,6 +368,13 @@ static void model_reset(void)
 
     halts = 1;
     handoff_delay = 0;
+    accepts_os_claim = 1;
+    cnr_delay = 0;
+    becomes_ready = 1;
+    memory_space_enabled = 0;
+    bus_master_enabled = 0;
+    searched_class = 0;
+    searched_subclass = 0;
     reset_completes = 1;
     cnr_clears = 1;
     handoff_answers = 1;
@@ -345,6 +396,10 @@ int main(void)
     /* Finding the controller. */
     model_reset();
     CHECK("a controller with a memory aperture is taken", xhci_discover() == 0);
+    CHECK("found by the class the standard gives USB",
+          searched_class == PCI_CLASS_SERIAL_BUS && searched_subclass == PCI_SUBCLASS_USB);
+    CHECK("with its registers decoded", memory_space_enabled == 1);
+    CHECK("and allowed to reach memory itself", bus_master_enabled == 1);
 
     model_reset();
     model_present = 0;
@@ -370,6 +425,7 @@ int main(void)
     pm_state = 3;
     CHECK("a controller parked in D3 is taken", xhci_discover() == 0);
     CHECK("and put back in D0, where its registers answer", pm_state == 0);
+    CHECK("so its capability registers can be read at all", xhci_read_caps() == 0);
 
     /* What the controller says about itself. */
     model_reset();
@@ -384,6 +440,13 @@ int main(void)
     CHECK("the capability list is found", c->xecp == XECP);
     CHECK("the doorbells are found", c->dboff == DBOFF);
     CHECK("the runtime registers are found", c->rtsoff == RTSOFF);
+    CHECK("the interface version is read", c->hciversion == 0x0110u);
+    CHECK("the event-ring segment table limit is read", c->erst_max == 0);
+
+    model_reset();
+    reg[R_HCSPARAMS2] = (4u << 4); /* ERST Max 4 */
+    CHECK("a controller with a larger segment table is read", xhci_read_caps() == 0);
+    CHECK("and its limit is the field, not a guess", xhci_capabilities()->erst_max == 4);
 
     model_reset();
     reg[R_HCCPARAMS1] = 0x1u | ((XECP / 4u) << 16); /* CSZ clear */
@@ -410,6 +473,17 @@ int main(void)
     model_reset();
     reg[R_CAPLENGTH] = 0x10u;
     CHECK("a capability register set too short to be one is refused", xhci_read_caps() != 0);
+
+    /* What must fit is the end of each register set, not its first byte. */
+    model_reset();
+    reg[R_DBOFF] = 0xFFF0u;
+    reg[R_HCSPARAMS1] = 64u | (1u << 8) | (4u << 24);
+    CHECK("a doorbell array that runs off the end is refused", xhci_read_caps() != 0);
+
+    model_reset();
+    reg[R_RTSOFF] = 0xFFE0u;
+    reg[R_HCSPARAMS1] = 16u | (8u << 8) | (4u << 24);
+    CHECK("interrupters that run off the end are refused", xhci_read_caps() != 0);
 
     /* Taking the controller from the firmware. */
     model_reset();
@@ -441,6 +515,35 @@ int main(void)
     CHECK("and is already this kernel's", xhci_own() == 0);
 
     model_reset();
+    reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
+    accepts_os_claim = 0;
+    CHECK("the capability list is read", xhci_read_caps() == 0);
+    CHECK("a controller that will not take this kernel's claim is refused", xhci_own() != 0);
+
+    /* The list belongs to the controller, so a driver may not trust it. A
+       head outside the mapped window is the one malformed value a single
+       entry can produce: a next pointer is a byte, so no one hop can leave a
+       64 KiB aperture, and the case a walk has to survive is the circle
+       below. */
+    model_reset();
+    reg[R_HCCPARAMS1] = 0x1u | 0x4u | (0x4000u << 16); /* a head at 64 KiB */
+    CHECK("the capability list is read", xhci_read_caps() == 0);
+    CHECK("a list whose head is outside the aperture is refused", xhci_own() != 0);
+
+    model_reset();
+    reg[XECP] = 3u; /* one entry, not the legacy one, ending the list */
+    CHECK("the capability list is read", xhci_read_caps() == 0);
+    CHECK("a list with no legacy capability leaves the controller ours", xhci_own() == 0);
+
+    /* And a list whose first entry is inside the window but whose next step
+       is not: the check has to be made on every step, not only on the head. */
+    model_reset();
+    reg[R_HCCPARAMS1] = 0x1u | 0x4u | ((0xFFF8u / 4u) << 16);
+    reg[0xFFF8] = 3u | (0x2u << 8);
+    CHECK("the capability list is read", xhci_read_caps() == 0);
+    CHECK("a list whose next step leaves the aperture is refused", xhci_own() != 0);
+
+    model_reset();
     reg[XECP] = 2u | (2u << 8); /* a supported-protocol capability first */
     reg[XECP + 8] = 1u;         /* then the legacy one */
     reg[LEGCTL + 8] = 0u;
@@ -460,6 +563,22 @@ int main(void)
     CHECK("the capability registers are read", xhci_read_caps() == 0);
     reg[OP(O_USBSTS)] &= ~M_USBSTS_HCH;
     CHECK("a controller that never halts is refused", xhci_halt_reset() != 0);
+
+    /* A controller that is not ready yet may have nothing but its own status
+       written, so the driver waits before it touches the command register. */
+    model_reset();
+    reg[OP(O_USBSTS)] |= M_USBSTS_CNR;
+    cnr_delay = 5;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("a controller still starting is waited for", xhci_halt_reset() == 0);
+
+    model_reset();
+    reg[OP(O_USBSTS)] |= M_USBSTS_CNR;
+    becomes_ready = 0;
+    cnr_delay = 5;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("a controller that is never ready is refused rather than written to",
+          xhci_halt_reset() != 0);
 
     model_reset();
     reset_completes = 0;

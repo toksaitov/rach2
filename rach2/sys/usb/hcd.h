@@ -20,6 +20,14 @@
  * split the same way, and the caller is a state machine rather than a
  * straight line.
  *
+ * Four of these operations are commands the controller executes rather than
+ * register writes the caller can see the effect of: taking a device handle,
+ * addressing a device, opening an endpoint, and resetting a halted one. Each
+ * of those issues one command and returns; `command_done` reports the one in
+ * flight. A caller may have one command outstanding at a time, which is what
+ * lets the whole stack hold a single command ring and no queue of its own,
+ * and is enough for a machine whose devices are a keyboard and a mouse.
+ *
  * Handles are small integers into fixed tables. There is no allocation
  * anywhere in the stack, so a handle is an index and its lifetime is the
  * caller's business.
@@ -84,6 +92,12 @@ struct usb_transfer {
 #define USB_XFER_STALLED 2
 #define USB_XFER_FAILED  3
 
+/** What `command_done` reports about the command in flight. */
+struct usb_command_result {
+    int status;  /* `USB_XFER_OK`, or a failure from the same set */
+    int device;  /* the new device handle, when the command took one */
+};
+
 /** What `poll` reports about a transfer that finished. */
 struct usb_completion {
     int device;      /* the device handle the transfer was submitted for */
@@ -115,8 +129,12 @@ struct usb_hcd {
     /** 1 when the reset finished, 0 while it has not, negative on refusal. */
     int (*port_reset_done)(int port);
 
-    /** Take a device handle for a device on a reset port; negative if
-     *  none is free. */
+    /*
+     * Ask the controller for a device handle for a device on a reset port.
+     * Issues one command; `command_done` reports the handle. Returns 0 when
+     * the command was issued, negative when no slot or no command ring was
+     * free.
+     */
     int (*device_open)(int port, int speed);
 
     /** Give the device an address and its default control endpoint. */
@@ -127,6 +145,9 @@ struct usb_hcd {
 
     /** Take an endpoint handle on a device; negative on refusal. */
     int (*endpoint_open)(int device, const struct usb_endpoint *endpoint);
+
+    /** 1 when the command in flight finished, 0 while it has not. */
+    int (*command_done)(struct usb_command_result *out);
 
     /** Release an endpoint handle. */
     void (*endpoint_close)(int device, int endpoint);

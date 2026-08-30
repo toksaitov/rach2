@@ -28,7 +28,7 @@ the commit that completes it.
 * [x] rows: scratchpad request of zero, of several, above the maximum
 * [x] mutations: ownership wait, `CNR`, the pause, context size, the scratchpad
       array, the scratchpad maximum
-* [ ] review 1 of 6
+* [x] review 1 of 6
 
 ## Phase 3: bring-up
 
