@@ -2101,52 +2101,49 @@ static void run_self_tests(void)
 static void process_command(const char *cmd)
 {
     if (str_equal(cmd, "help")) {
-        k_puts("Available commands:");
-        serial_puts("Available commands:\n");
-        k_puts("  help                - Show this help message");
-        serial_puts("  help                - Show this help message\n");
-        k_puts("  info                - Display system information");
-        serial_puts("  info                - Display system information\n");
-        k_puts("  modules             - List loaded multiboot modules");
-        k_puts("  disk                - Probe the boot disk and dump sector 0");
+        console_puts("Available commands:");
+        console_puts("  help                - Show this help message");
+        console_puts("  info                - Display system information");
+        console_puts("  modules             - List loaded multiboot modules");
+        console_puts("  disk                - Probe the boot disk and dump sector 0");
 #ifdef RACH2_RECOVERY
-        k_puts("  disk write          - Round-trip the last sector (destructive)");
+        console_puts("  disk write          - Round-trip the last sector (destructive)");
 #endif
-        k_puts("  ls                  - List files in the mounted file system");
-        k_puts("  cat <file>          - Display file contents");
-        k_puts("  elf <file>          - Display ELF header info");
-        k_puts("  exec <file>         - Execute ELF program");
-        k_puts("  touch <file>        - Create an empty file");
-        k_puts("  rm <file>           - Delete a file");
-        k_puts("  mv <old> <new>      - Rename a file");
-        k_puts("  write <file> <data> - Write data to file");
-        k_puts("  test                - Run self-tests again");
-        k_puts("  clear               - Clear the screen");
-        k_puts("  switch              - Test context switching");
-        k_puts("  preempt             - Test preemptive scheduling");
-        k_puts("  isolate             - Test memory isolation");
-        k_puts("  usermode            - Test ring 3 execution");
-        k_puts("  audio ...           - Audio tests, routing, and HDA diagnostics");
-        k_puts("  ahci                - Probe the AHCI/SATA HBA, dump registers, read LBA 0");
-        k_puts("  netping             - Ping the gateway (10.0.2.2)");
-        k_puts("  netbad              - Ping an unreachable host (timeout demo)");
-        k_puts("  fault               - Trigger page fault (panic)");
-        k_puts("  halt                - Halt the CPU");
-        serial_puts("  ...and more (see VGA display)\n");
+        console_puts("  ls                  - List files in the mounted file system");
+        console_puts("  cat <file>          - Display file contents");
+        console_puts("  elf <file>          - Display ELF header info");
+        console_puts("  exec <file>         - Execute ELF program");
+        console_puts("  touch <file>        - Create an empty file");
+        console_puts("  rm <file>           - Delete a file");
+        console_puts("  mv <old> <new>      - Rename a file");
+        console_puts("  write <file> <data> - Write data to file");
+        console_puts("  test                - Run self-tests again");
+        console_puts("  clear               - Clear the screen");
+        console_puts("  switch              - Test context switching");
+        console_puts("  preempt             - Test preemptive scheduling");
+        console_puts("  isolate             - Test memory isolation");
+        console_puts("  usermode            - Test ring 3 execution");
+        console_puts("  audio ...           - Audio tests, routing, and HDA diagnostics");
+        console_puts("  ahci                - Probe the AHCI/SATA HBA, dump registers, read LBA 0");
+        console_puts("  netping             - Ping the gateway (10.0.2.2)");
+        console_puts("  netbad              - Ping an unreachable host (timeout demo)");
+        console_puts("  fault               - Trigger page fault (panic)");
+        console_puts("  halt                - Halt the CPU");
+        console_printf("  ...and more (see VGA display)\n");
     } else if (str_equal(cmd, "info")) {
-        k_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
-        k_printf("Timer ticks:     %d\n", kernel_ticks);
-        k_printf("Kernel end:      0x%X\n", (uintptr_t) &_end);
-        k_printf("Modules loaded:  %d\n", module_count);
+        console_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
+        console_printf("Timer ticks:     %d\n", kernel_ticks);
+        console_printf("Kernel end:      0x%X\n", (uintptr_t) &_end);
+        console_printf("Modules loaded:  %d\n", module_count);
     } else if (str_equal(cmd, "modules")) {
         uint32_t i;
         if (module_count == 0) {
-            k_puts("No modules loaded.");
+            console_puts("No modules loaded.");
         } else {
-            k_printf("Loaded modules: %d\n", module_count);
+            console_printf("Loaded modules: %d\n", module_count);
             for (i = 0; i < module_count; i++) {
                 module_info_t *m = get_module(i);
-                k_printf("  [%d] 0x%X - 0x%X (%d bytes)\n",
+                console_printf("  [%d] 0x%X - 0x%X (%d bytes)\n",
                          i, m->start, m->end, m->size);
             }
         }
@@ -2154,32 +2151,32 @@ static void process_command(const char *cmd)
         static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
 
         if (_krffs_on_disk) {
-            serial_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
+            console_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
         } else if (block_ready() != 0 || !block0) {
-            serial_printf("disk: no boot disk\n");
+            console_printf("disk: no boot disk\n");
         } else {
-            serial_printf("disk: block0: %d sectors, %d MiB\n",
+            console_printf("disk: block0: %d sectors, %d MiB\n",
                           (uint32_t) block0->sector_count,
                           (uint32_t) (block0->sector_count / 2048));
 
             if (block0->read(block0, 0, 1, disk_sector) != 0) {
-                serial_printf("disk: read of sector 0 failed\n");
+                console_printf("disk: read of sector 0 failed\n");
             } else {
                 uint32_t i;
                 for (i = 0; i < BLOCK_SECTOR_SIZE; i += 16) {
                     uint32_t j;
-                    serial_printf("%X:", i);
+                    console_printf("%X:", i);
                     for (j = 0; j < 16; ++j) {
                         uint8_t b = disk_sector[i + j];
-                        serial_putc(' ');
+                        console_putc(' ');
                         if (b < 0x10) {
-                            serial_putc('0');
+                            console_putc('0');
                         }
-                        serial_printf("%X", b);
+                        console_printf("%X", b);
                     }
-                    serial_putc('\n');
+                    console_putc('\n');
                 }
-                serial_printf("disk: MBR signature %X%X (expect 55AA)\n",
+                console_printf("disk: MBR signature %X%X (expect 55AA)\n",
                               disk_sector[510], disk_sector[511]);
             }
         }
@@ -2189,9 +2186,9 @@ static void process_command(const char *cmd)
         static uint8_t disk_scratch[BLOCK_SECTOR_SIZE];
 
         if (_krffs_on_disk) {
-            serial_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
+            console_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
         } else if (block_ready() != 0 || !block0) {
-            serial_printf("disk: no boot disk\n");
+            console_printf("disk: no boot disk\n");
         } else {
             /* The last sector lies past the partition and the boot gap, so the
                round-trip that proves WRITE + FLUSH + READ disturbs neither a
@@ -2203,9 +2200,9 @@ static void process_command(const char *cmd)
                 disk_scratch[i] = (uint8_t) (i ^ 0x5A);
             }
             if (block0->write(block0, lba, 1, disk_scratch) != 0) {
-                serial_printf("disk: write of the last sector failed\n");
+                console_printf("disk: write of the last sector failed\n");
             } else if (block0->read(block0, lba, 1, disk_sector) != 0) {
-                serial_printf("disk: read-back of the last sector failed\n");
+                console_printf("disk: read-back of the last sector failed\n");
             } else {
                 int ok = 1;
                 for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
@@ -2214,16 +2211,16 @@ static void process_command(const char *cmd)
                         break;
                     }
                 }
-                serial_printf("disk: last-sector round-trip %s\n",
+                console_printf("disk: last-sector round-trip %s\n",
                               ok ? "OK" : "MISMATCH");
             }
         }
 #else
-        serial_printf("disk: writing the whole disk needs a recovery kernel\n");
+        console_printf("disk: writing the whole disk needs a recovery kernel\n");
 #endif
     } else if (str_equal(cmd, "ahci")) {
         if (_krffs_on_disk) {
-            serial_printf("ahci: re-probe refused while KRFFS is mounted from disk\n");
+            console_printf("ahci: re-probe refused while KRFFS is mounted from disk\n");
         } else {
             /* ahci_init clears block0 and the HBA globals before resetting, so
                the raw devices published over the old block0 would be pointing
@@ -2236,7 +2233,7 @@ static void process_command(const char *cmd)
             devfs_disk_withdraw();
             disc_table_ok = 0;
             if (ahci_init() != 0) {
-                serial_printf("ahci: no AHCI HBA on the PCI bus\n");
+                console_printf("ahci: no AHCI HBA on the PCI bus\n");
             } else {
                 ahci_dump();
                 ahci_selftest();
@@ -2248,26 +2245,26 @@ static void process_command(const char *cmd)
         }
     } else if (str_equal(cmd, "ls")) {
         if (!krffs_fs) {
-            k_puts("No file system mounted.");
+            console_puts("No file system mounted.");
         } else {
             krffs_node_t *node;
             uint32_t count = 0;
 
-            k_puts("Files in the file system:");
+            console_puts("Files in the file system:");
             node = krffs_fs->node;
             do {
                 /* Skip an orphan: a node whose name was cleared when it was
                    taken out of the namespace while a descriptor still held it.
                    No path reaches it, so no listing shows it either. */
                 if (node->type == KRFFS_RESERVED_NODE && node->name[0] != '\0') {
-                    k_printf("  %s  (%d bytes)\n",
+                    console_printf("  %s  (%d bytes)\n",
                              node->name, (uint32_t)node->data_size);
                     count++;
                 }
             } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
 
             if (count == 0) {
-                k_puts("  (no files)");
+                console_puts("  (no files)");
             }
         }
     } else if (str_starts_with(cmd, "cat ")) {
@@ -2277,26 +2274,26 @@ static void process_command(const char *cmd)
         uint32_t offset = 0;
 
         if (!krffs_fs) {
-            k_puts("No file system mounted.");
+            console_puts("No file system mounted.");
         } else if (filename[0] == '\0') {
-            k_puts("Usage: cat <filename>");
+            console_puts("Usage: cat <filename>");
         } else {
             if (krffs_open(filename) != 0) {
-                k_printf("File not found: %s\n", filename);
+                console_printf("File not found: %s\n", filename);
             } else {
                 uint32_t file_size = krffs_get_file_size(filename);
-                k_printf("--- %s (%d bytes) ---\n", filename, file_size);
+                console_printf("--- %s (%d bytes) ---\n", filename, file_size);
 
                 while ((bytes_read = krffs_read(filename, buffer, 511, offset)) > 0) {
                     buffer[bytes_read] = '\0';
-                    k_printf("%s", buffer);
+                    console_printf("%s", buffer);
                     offset += (uint32_t)bytes_read;
                 }
 
                 if (file_size > 0 && buffer[bytes_read > 0 ? bytes_read - 1 : 0] != '\n') {
-                    k_puts("");  /* terminate the last line if the file lacked one */
+                    console_puts("");  /* terminate the last line if the file lacked one */
                 }
-                k_puts("--- EOF ---");
+                console_puts("--- EOF ---");
             }
         }
     } else if (str_starts_with(cmd, "elf ")) {
@@ -2310,36 +2307,36 @@ static void process_command(const char *cmd)
         uint16_t i;
 
         if (!krffs_fs) {
-            k_puts("No file system mounted.");
+            console_puts("No file system mounted.");
         } else if (filename[0] == '\0') {
-            k_puts("Usage: elf <filename>");
+            console_puts("Usage: elf <filename>");
         } else if (krffs_open(filename) != 0) {
-            k_printf("File not found: %s\n", filename);
+            console_printf("File not found: %s\n", filename);
         } else {
             file_size = krffs_get_file_size(filename);
             if (file_size > sizeof(buffer)) {
-                k_printf("File too large: %d bytes\n", file_size);
+                console_printf("File too large: %d bytes\n", file_size);
             } else {
                 bytes_read = krffs_read(filename, buffer, file_size, 0);
                 if (bytes_read != (int)file_size) {
-                    k_printf("Read error: %d/%d bytes\n", bytes_read, file_size);
+                    console_printf("Read error: %d/%d bytes\n", bytes_read, file_size);
                 } else if (!elf_check(buffer, file_size)) {
-                    k_printf("Not a valid ELF32 executable\n");
+                    console_printf("Not a valid ELF32 executable\n");
                 } else {
                     entry_point = elf_entry_point(buffer);
                     phdrs = elf_program_headers(buffer);
                     phdr_count = elf_program_header_count(buffer);
 
-                    k_printf("ELF Header:\n");
-                    k_printf("  Entry point:       0x%X\n", entry_point);
-                    k_printf("  Program headers:   %d\n", phdr_count);
+                    console_printf("ELF Header:\n");
+                    console_printf("  Entry point:       0x%X\n", entry_point);
+                    console_printf("  Program headers:   %d\n", phdr_count);
                     for (i = 0; i < phdr_count; i++) {
                         if (phdrs[i].p_type == PT_LOAD) {
-                            k_printf("  LOAD segment:\n");
-                            k_printf("    Virtual addr:  0x%X\n", phdrs[i].p_vaddr);
-                            k_printf("    File size:     %d bytes\n", phdrs[i].p_filesz);
-                            k_printf("    Memory size:   %d bytes\n", phdrs[i].p_memsz);
-                            k_printf("    Flags:         %s%s%s\n",
+                            console_printf("  LOAD segment:\n");
+                            console_printf("    Virtual addr:  0x%X\n", phdrs[i].p_vaddr);
+                            console_printf("    File size:     %d bytes\n", phdrs[i].p_filesz);
+                            console_printf("    Memory size:   %d bytes\n", phdrs[i].p_memsz);
+                            console_printf("    Flags:         %s%s%s\n",
                                      (phdrs[i].p_flags & PF_R) ? "R" : "-",
                                      (phdrs[i].p_flags & PF_W) ? "W" : "-",
                                      (phdrs[i].p_flags & PF_X) ? "X" : "-");
@@ -2352,7 +2349,7 @@ static void process_command(const char *cmd)
         const char *args = cmd + 5;
 
         if (args[0] == '\0') {
-            k_puts("Usage: exec <filename> [args...]");
+            console_puts("Usage: exec <filename> [args...]");
         } else {
             static char exec_cmd_buf[256];
             static char *exec_argv[16];
@@ -2383,30 +2380,30 @@ static void process_command(const char *cmd)
             if (exec_argc > 0) {
                 exec_program(exec_argc, exec_argv);
             } else {
-                k_puts("Usage: exec <filename> [args...]");
+                console_puts("Usage: exec <filename> [args...]");
             }
         }
     } else if (str_starts_with(cmd, "touch ")) {
         const char *filename = cmd + 6;
 
         if (!krffs_fs) {
-            k_puts("No file system mounted.");
+            console_puts("No file system mounted.");
         } else if (filename[0] == '\0') {
-            k_puts("Usage: touch <filename>");
+            console_puts("Usage: touch <filename>");
         } else {
             if (krffs_create(filename) == 0) {
-                k_printf("Created file: %s\n", filename);
+                console_printf("Created file: %s\n", filename);
             } else {
-                k_printf("Failed to create file: %s\n", filename);
+                console_printf("Failed to create file: %s\n", filename);
             }
         }
     } else if (str_starts_with(cmd, "rm ")) {
         const char *filename = cmd + 3;
 
         if (!krffs_fs) {
-            k_puts("No file system mounted.");
+            console_puts("No file system mounted.");
         } else if (filename[0] == '\0') {
-            k_puts("Usage: rm <filename>");
+            console_puts("Usage: rm <filename>");
         } else {
             /* Orphan a node some descriptor still has, not free it,
                the same rule the unlink syscall follows. The rescue shell runs
@@ -2418,11 +2415,11 @@ static void process_command(const char *cmd)
 
             if (victim && fs_node_is_held(victim)) {
                 krffs_unlink_held(victim);
-                k_printf("Deleted file (still open elsewhere): %s\n", filename);
+                console_printf("Deleted file (still open elsewhere): %s\n", filename);
             } else if (krffs_unlink(filename) == 0) {
-                k_printf("Deleted file: %s\n", filename);
+                console_printf("Deleted file: %s\n", filename);
             } else {
-                k_printf("Failed to delete file: %s\n", filename);
+                console_printf("Failed to delete file: %s\n", filename);
             }
         }
     } else if (str_starts_with(cmd, "mv ")) {
@@ -2442,9 +2439,9 @@ static void process_command(const char *cmd)
         }
 
         if (!krffs_fs) {
-            k_puts("No file system mounted.");
+            console_puts("No file system mounted.");
         } else if (old_buf[0] == '\0' || !new_name || new_name[0] == '\0') {
-            k_puts("Usage: mv <oldname> <newname>");
+            console_puts("Usage: mv <oldname> <newname>");
         } else {
             /* Same rule at the destination: renaming over a name some
                descriptor still has orphans the node it replaces instead of
@@ -2461,9 +2458,9 @@ static void process_command(const char *cmd)
                 krffs_orphan_node(victim);
             }
             if (source && krffs_rename(old_buf, new_name) == 0) {
-                k_printf("Renamed '%s' to '%s'\n", old_buf, new_name);
+                console_printf("Renamed '%s' to '%s'\n", old_buf, new_name);
             } else {
-                k_printf("Failed to rename file\n");
+                console_printf("Failed to rename file\n");
             }
         }
     } else if (str_starts_with(cmd, "write ")) {
@@ -2483,9 +2480,9 @@ static void process_command(const char *cmd)
         }
 
         if (!krffs_fs) {
-            k_puts("No file system mounted.");
+            console_puts("No file system mounted.");
         } else if (file_buf[0] == '\0' || !data) {
-            k_puts("Usage: write <filename> <data>");
+            console_puts("Usage: write <filename> <data>");
         } else {
             if (krffs_open(file_buf) != 0) {
                 krffs_create(file_buf);
@@ -2508,9 +2505,9 @@ static void process_command(const char *cmd)
                     fs_node_moved(before, after);
                 }
                 if (written > 0) {
-                    k_printf("Wrote %d bytes to %s\n", written, file_buf);
+                    console_printf("Wrote %d bytes to %s\n", written, file_buf);
                 } else {
-                    k_printf("Failed to write to %s\n", file_buf);
+                    console_printf("Failed to write to %s\n", file_buf);
                 }
             }
         }
@@ -2523,14 +2520,14 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "preempt")) {
         test_preempt();
     } else if (str_equal(cmd, "isolate")) {
-        k_puts("Testing memory isolation between processes...");
-        k_puts("Two processes will write different values to same virtual address.");
+        console_puts("Testing memory isolation between processes...");
+        console_puts("Two processes will write different values to same virtual address.");
         if (test_isolation()) {
             set_fore_color(light_green);
-            k_puts("Memory isolation test passed!");
+            console_puts("Memory isolation test passed!");
         } else {
             set_fore_color(light_red);
-            k_puts("Memory isolation test FAILED!");
+            console_puts("Memory isolation test FAILED!");
         }
         set_fore_color(light_grey);
     } else if (audio_debug_handle_command(cmd)) {
@@ -2538,13 +2535,12 @@ static void process_command(const char *cmd)
         int rtt = icmp_ping(net_ip_gateway);
         if (rtt >= 0) {
             set_fore_color(light_green);
-            k_printf("ping 10.0.2.2: reply in %d ticks (%d ms)\n",
+            console_printf("ping 10.0.2.2: reply in %d ticks (%d ms)\n",
                      rtt, rtt * 10);
-            serial_printf("ping 10.0.2.2: reply in %d ticks\n", rtt);
+            console_printf("ping 10.0.2.2: reply in %d ticks\n", rtt);
         } else {
             set_fore_color(light_red);
-            k_puts("ping 10.0.2.2: timeout");
-            serial_printf("ping 10.0.2.2: timeout\n");
+            console_puts("ping 10.0.2.2: timeout");
         }
         set_fore_color(light_grey);
     } else if (str_equal(cmd, "netbad")) {
@@ -2552,17 +2548,16 @@ static void process_command(const char *cmd)
         int rtt = icmp_ping(0x0A000263UL);   /* 10.0.2.99 */
         if (rtt >= 0) {
             set_fore_color(light_red);
-            k_printf("ping 10.0.2.99: unexpected reply (%d ticks)\n", rtt);
-            serial_printf("ping 10.0.2.99: unexpected reply\n");
+            console_printf("ping 10.0.2.99: unexpected reply (%d ticks)\n", rtt);
+            console_printf("ping 10.0.2.99: unexpected reply\n");
         } else {
             set_fore_color(light_green);
-            k_puts("ping 10.0.2.99: timeout (expected)");
-            serial_printf("ping 10.0.2.99: timeout (expected)\n");
+            console_puts("ping 10.0.2.99: timeout (expected)");
         }
         set_fore_color(light_grey);
     } else if (str_equal(cmd, "fault")) {
         volatile uint32_t *bad_ptr = (volatile uint32_t *) 0xA0000000;
-        k_puts("Triggering page fault at 0xA0000000...");
+        console_puts("Triggering page fault at 0xA0000000...");
         *bad_ptr = 0xDEADBEEF;
     } else if (str_equal(cmd, "halt")) {
         kernel_shutdown(POWER_HALT);
@@ -2571,12 +2566,12 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "reboot")) {
         kernel_shutdown(POWER_RESTART);
     } else if (str_equal(cmd, "usermode")) {
-        k_puts("Testing user mode (ring 3) transition...");
-        k_puts("Expected: 'Hello from ring 3!' followed by infinite loop.");
+        console_puts("Testing user mode (ring 3) transition...");
+        console_puts("Expected: 'Hello from ring 3!' followed by infinite loop.");
         test_usermode();
     } else if (cmd[0] != '\0') {
-        k_printf("Unknown command: '%s'\n", cmd);
-        k_puts("Type 'help' for available commands.");
+        console_printf("Unknown command: '%s'\n", cmd);
+        console_puts("Type 'help' for available commands.");
     }
 }
 
@@ -2621,19 +2616,16 @@ void shell_loop(void)
     shell_reset_input();
 
     kernel_shell_active = true;
-    k_puts("Type 'help' for available commands.");
-    serial_puts("Type 'help' for available commands.\n");
-    k_puts("");
-    k_printf("> ");
-    serial_puts("> ");
+    console_puts("Type 'help' for available commands.");
+    console_puts("");
+    console_printf("> ");
 
     while (1) {
         if (cmd_ready) {
             cmd_ready = false;
             process_command(cmd_buffer);
             cmd_pos = 0;
-            k_printf("> ");
-            serial_puts("> ");
+            console_printf("> ");
         }
 
         while (serial_data_available()) {
@@ -2649,9 +2641,9 @@ void shell_loop(void)
                 }
                 cmd_buffer[cmd_pos] = '\0';
                 cmd_ready = true;
-                k_putc('\n');
-                serial_putc('\r');
-                serial_putc('\n');
+                console_putc('\n');
+                console_putc('\r');
+                console_putc('\n');
                 break;
             } else if (ch == '\b' || ch == 0x7F) {
                 if (k_scrollback_is_active()) {
@@ -2659,12 +2651,11 @@ void shell_loop(void)
                 }
                 if (cmd_pos > 0) {
                     --cmd_pos;
-                    k_putc('\b');
-                    k_putc(' ');
-                    k_putc('\b');
-                    serial_putc('\b');
-                    serial_putc(' ');
-                    serial_putc('\b');
+                    console_putc('\b');
+                    console_putc(' ');
+                    console_putc('\b');
+                    console_putc(' ');
+                    console_putc('\b');
                 }
             } else if (ch >= 0x20 && ch < 0x7F) {
                 if (k_scrollback_is_active()) {
@@ -2672,8 +2663,7 @@ void shell_loop(void)
                 }
                 if (cmd_pos < CMD_BUFFER_SIZE - 1) {
                     cmd_buffer[cmd_pos++] = (char)ch;
-                    k_putc((char)ch);
-                    serial_putc((char)ch);
+                    console_putc((char)ch);
                 }
             }
         }
