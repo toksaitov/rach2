@@ -196,6 +196,10 @@ int usb_init(void)
     if (xhci_read_caps() != 0 || xhci_own() != 0 || xhci_halt_reset() != 0 ||
         xhci_scratchpads() != 0 || xhci_start() != 0) {
         klog(KLOG_WARN, "usb", "refused: %s", xhci_error());
+        /* Whatever was taken from the firmware goes back. A machine that has
+         * no USB driver is a machine that should still have whatever its
+         * firmware was doing for it. */
+        xhci_release();
         return -1;
     }
 

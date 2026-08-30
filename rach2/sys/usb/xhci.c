@@ -119,6 +119,16 @@
  */
 #define xhci_barrier() __asm__ __volatile__("" : : : "memory")
 
+/* Where the legacy-support capability is, and what it held before this kernel
+ * touched it. Taking a controller from the firmware and then failing would
+ * otherwise leave the firmware's interrupts off and its claim gone, with no
+ * driver: on a machine whose firmware is emulating a PS/2 keyboard out of a
+ * USB one, that is the keyboard. */
+static uint32_t legacy_offset;
+static uint32_t legacy_saved_sup;
+static uint32_t legacy_saved_ctl;
+static int legacy_taken;
+
 static volatile uint8_t *xhci_base;
 static struct xhci_caps caps;
 static const char *xhci_err = "not tried";
@@ -200,6 +210,16 @@ static void power_up(const pci_device_t *dev)
         if ((pmcsr & 0x3u) != 0) {
             pci_write_config16(dev->bus, dev->device, dev->function,
                                (uint8_t)(cap + PCI_PM_CONTROL), (uint16_t)(pmcsr & ~0x3u));
+            /* A function coming out of D3 is allowed ten milliseconds before
+             * anything is asked of it, and a controller read during them
+             * answers with ones. */
+            k_udelay(10000);
+            pmcsr = pci_read_config16(dev->bus, dev->device, dev->function,
+                                      (uint8_t)(cap + PCI_PM_CONTROL));
+            if ((pmcsr & 0x3u) != 0) {
+                klog(KLOG_WARN, "usb", "power: the controller stayed in state %d",
+                     (int)(pmcsr & 0x3u));
+            }
         }
     }
 }
@@ -288,6 +308,12 @@ int xhci_own(void)
         if ((entry & 0xFFu) == XECP_ID_LEGACY) {
             uint32_t control;
 
+            legacy_offset = offset;
+            legacy_saved_sup = entry;
+            legacy_saved_ctl = r32(offset + LEGCTLSTS);
+            klog(KLOG_DEBUG, "usb", "handoff: legsup 0x%X legctl 0x%X before",
+                 legacy_saved_sup, legacy_saved_ctl);
+
             if (!(entry & LEGSUP_BIOS_OWNED)) {
                 /* Nobody else holds it. Say so and take the interrupts off
                  * anyway, because a firmware that released ownership may still
@@ -319,6 +345,9 @@ int xhci_own(void)
             control &= ~LEGCTLSTS_SMI_ENABLES;
             control |= LEGCTLSTS_SMI_EVENTS;
             w32(offset + LEGCTLSTS, control);
+            legacy_taken = 1;
+            klog(KLOG_DEBUG, "usb", "handoff: legsup 0x%X legctl 0x%X after", r32(offset),
+                 r32(offset + LEGCTLSTS));
             xhci_err = "none";
             return 0;
         }
@@ -447,6 +476,13 @@ int xhci_read_caps(void)
     }
 
     caps.pagesize = op_r32(XHCI_PAGESIZE) & 0xFFFFu;
+    /* The words themselves, not only what was read out of them: a session at a
+     * machine this kernel has never met takes the log away and needs the raw
+     * values to compare with the datasheet. */
+    klog(KLOG_DEBUG, "usb", "caps: hcs1 0x%X hcs2 0x%X hcc1 0x%X pagesize 0x%X",
+         r32(XHCI_HCSPARAMS1), r32(XHCI_HCSPARAMS2), r32(XHCI_HCCPARAMS1), caps.pagesize);
+    klog(KLOG_DEBUG, "usb", "caps: scratchpads %d, contexts %d bytes, 64-bit %d",
+         (int)caps.scratchpads, (int)caps.context_size, caps.ac64);
     if (!(caps.pagesize & 0x1u)) {
         xhci_err = "the controller does not take 4 KiB pages";
         return -1;
@@ -568,6 +604,7 @@ static uint32_t event_cycle;  /* the cycle value it expects there */
  * before it is, and the timer calls into this driver from the first tick of
  * the boot, long before there is a controller to ask. */
 static int xhci_running;
+
 
 static int command_running;
 static int command_finished;
@@ -1098,12 +1135,30 @@ int xhci_start(void)
     return 0;
 }
 
+void xhci_release(void)
+{
+    if (!legacy_taken) {
+        return;
+    }
+    /* Give the firmware back what it had: its own interrupts as they were, and
+     * its claim on the controller. A kernel that took a controller and then
+     * could not drive it must not also keep it. */
+    w32(legacy_offset + LEGCTLSTS, legacy_saved_ctl);
+    w32(legacy_offset, r32(legacy_offset) & ~LEGSUP_OS_OWNED);
+    legacy_taken = 0;
+    klog(KLOG_INFO, "usb", "handoff: the controller was given back to the firmware");
+}
+
 void xhci_stop(void)
 {
     uint32_t polls;
 
-    if (xhci_base == 0 && xhci_io == &xhci_mmio_io) {
-        return; /* nothing was ever brought up */
+    if (!xhci_running) {
+        /* Nothing was started, so there is nothing to halt and no register
+         * here may be written: a controller that refused its own reset, or
+         * that was never found, is not this kernel's to touch. */
+        xhci_release();
+        return;
     }
     xhci_running = 0;
     op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) & ~(USBCMD_RS | USBCMD_INTE));
@@ -1113,6 +1168,13 @@ void xhci_stop(void)
         }
         xhci_io->udelay(XHCI_POLL_US);
     }
+    if (!(op_r32(XHCI_USBSTS) & USBSTS_HCH)) {
+        /* A controller still running as the machine restarts is what other
+         * operating systems carry a quirk for on this exact part. Saying so is
+         * all this kernel can do about it. */
+        klog(KLOG_WARN, "usb", "stop: the controller would not halt");
+    }
+    xhci_release();
 }
 
 

@@ -26,15 +26,19 @@ Boot the notebook to its firmware setup and record, without changing anything:
 
 Those three decide what the driver meets. Write them into `dev-log/35-usb/hardware.md` under the notebook's column.
 
+If VT-d is enabled, stop here and disable it before going on. This kernel gives the controller physical addresses and installs no mappings, so with translation active its registers answer and its transfers do not, and what that looks like is a machine that hangs in bring-up rather than one that says why. The network card has the same constraint and the same answer.
+
 ## 2. Whether the firmware already types for you
 
-With the external USB keyboard plugged in, boot Rach2 from the stick as usual and, at the debug shell or the login prompt, type on the USB keyboard.
+With the external USB keyboard plugged in, boot Rach2 from the stick **with `rach2.nousb` on the boot line** and, at the login prompt, type on the USB keyboard. The switch matters: with the stack running, a key that appears may have come through it, and the question here is what the firmware does on its own.
 
 If characters appear, the firmware is emulating a PS/2 keyboard out of the USB one through system management mode, and it is doing so while Rach2 runs. Record that. It changes nothing about the driver, and it tells the reader of the record what the driver is for: the same keyboard working when no firmware is emulating anything.
 
 Then type on the notebook's own keyboard and confirm that it also works. It should; it is the recovery path for every step after this.
 
 ## 3. What the machine reports
+
+This is the first boot with the stack running on that machine, so watch the screen while it happens rather than waiting for SSH: a machine that stops in bring-up stops before it has a network, and the last line on the screen is then the only evidence there is.
 
 Boot with the ordinary metal entry and read the log over SSH:
 
@@ -74,11 +78,13 @@ Only if step 4 left the ports on the EHCI.
 
 The chipset can move each USB2 pin between the two controllers, and the register that does it is `XUSB2PR` at configuration offset `0xD0` of the xHCI, masked by `XUSB2PRM` at `0xD4`. Writing it changes the running machine until its next power cycle. It writes nothing to disk and survives no reboot.
 
-Present to the owner: the two values as read, which bits are movable, and which ports they correspond to. The owner decides whether the driver may write that register. Record the decision, whichever way it goes, in `notes.md`. Do not write it without one.
+This kernel has no writer for it. Nothing in the tree writes `XUSB2PR` or any other chipset register, and adding one is a code change with its own review and its own host-test rows: it would have to check the vendor and device identifiers and the function it is writing to, change only the bits `XUSB2PRM` says may move, read the register back, and reset the ports it moved.
+
+So this step is a decision and not an action. Present to the owner: the two values as read, which bits are movable, and which ports they correspond to. The owner decides whether such a writer is worth building. Record the decision, whichever way it goes, in `notes.md`. If it is built, the recovery from a bad write is a cold power cycle, because the routing survives a warm reboot.
 
 ## 6. What to record either way
 
-In `hardware.md`: the notebook's controllers, its routing registers, its capability values, its scratchpad count, its context size, and the firmware settings from step 1.
+In `hardware.md`: the notebook's controllers, its routing registers, its capability values, its scratchpad count, its context size, and the firmware settings from step 1. The `usb: caps:` and `usb: handoff:` lines in the log carry the raw register words for all of them, including the legacy-support registers before and after the handoff.
 
 In `notes.md`: what the machine did that QEMU did not, and the owner's decision from step 5 if it was needed.
 

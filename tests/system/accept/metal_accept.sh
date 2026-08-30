@@ -181,12 +181,16 @@ if grep -q 'usb: controller:' "$BOOTLOG_OUT" 2>/dev/null; then
     # lines above. It is a note and not a failure: a machine with nothing
     # plugged into it is not broken, and which it was is for the person who
     # plugged something in.
-    if grep -q 'usb: device: port' "$BOOTLOG_OUT"; then
+    if grep -q 'usb: refused:' "$BOOTLOG_OUT"; then
+        bad "the USB controller was refused; the line above says why"
+    elif grep -q 'usb: device: port' "$BOOTLOG_OUT"; then
         note "usb: a device was enumerated on this machine"
     elif grep -q 'usb: ready:' "$BOOTLOG_OUT"; then
         note "usb: the controller came up and nothing was enumerated on it"
+    elif grep -q 'usb: controller: none' "$BOOTLOG_OUT"; then
+        note "usb: this machine has no USB controller"
     else
-        note "usb: no controller came up; the lines above say why"
+        bad "a USB controller was found and the stack did not come up on it"
     fi
 else
     bad "the boot log has no usb inventory; this kernel predates it"

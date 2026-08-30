@@ -787,6 +787,29 @@ int main(void)
     CHECK("a controller with no capability list is read", xhci_read_caps() == 0);
     CHECK("and is already this kernel's", xhci_own() == 0);
 
+    /* What was taken from the firmware is given back, whether the driver is
+       finished with it or could not use it at all. A machine whose firmware
+       emulates a PS/2 keyboard out of a USB one would otherwise lose that
+       keyboard to a kernel that had already given up. */
+    model_reset();
+    reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
+    reg[LEGCTL] = 0x0000E1FEu;
+    CHECK("the capability list is read", xhci_read_caps() == 0);
+    CHECK("the controller is taken", xhci_own() == 0);
+    CHECK("its interrupts are off", (reg[LEGCTL] & 0x0000E1FEu) == 0);
+    xhci_release();
+    CHECK("and given back, the firmware's claim restored", (reg[XECP] & LEGSUP_OS_OWNED) == 0);
+    CHECK("with its own interrupts as they were", (reg[LEGCTL] & 0x0000E1FEu) == 0x0000E1FEu);
+    xhci_release();
+    CHECK("giving back twice does nothing the second time", (reg[XECP] & LEGSUP_OS_OWNED) == 0);
+
+    /* One that was never started is never written to on the way out. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    reg[OP(O_USBCMD)] = 0xABCDu;
+    xhci_stop();
+    CHECK("a controller that never started is not halted", reg[OP(O_USBCMD)] == 0xABCDu);
+
     model_reset();
     reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
     accepts_os_claim = 0;

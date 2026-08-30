@@ -151,6 +151,17 @@ int xhci_start(void);
  */
 void xhci_stop(void);
 
+/**
+ * Give the controller back to the firmware.
+ *
+ * Restores the legacy-support registers to what they held before this kernel
+ * asked for the controller. Called when bring-up fails after the handoff and
+ * when the machine stops: a kernel that took a controller and cannot drive it
+ * must not keep it, because on a machine whose firmware emulates a PS/2
+ * keyboard out of a USB one, what it kept is the keyboard.
+ */
+void xhci_release(void);
+
 /** How many root ports the controller has. */
 int xhci_ports(void);
 
