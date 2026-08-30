@@ -1,6 +1,8 @@
 #ifndef _AHCI_H_
 #define _AHCI_H_
 
+#include "../lib/kint.h"
+
 /**
  * AHCI (SATA) disk driver, the modern sibling of the polled-PIO ATA driver
  * behind the block layer.
@@ -44,5 +46,20 @@ void ahci_dump(void);
  * IDENTIFY.
  */
 void ahci_selftest(void);
+
+/*
+ * The controller as this driver reaches it: the two register accessors and the
+ * delay. A machine uses the mapped ABAR and `k_udelay`; a host test supplies a
+ * model of the controller instead, which is the only way to make a reset that
+ * never completes or a command that times out happen on demand.
+ */
+struct ahci_io {
+    uint32_t (*r32)(uint32_t offset);
+    void (*w32)(uint32_t offset, uint32_t value);
+    void (*udelay)(uint32_t microseconds);
+};
+
+/** Use `ops` instead of the mapped controller; NULL restores the machine's. */
+void ahci_set_io(const struct ahci_io *ops);
 
 #endif

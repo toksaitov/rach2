@@ -548,3 +548,46 @@ smaller faults, all fixed:
 * `serial_port_exists` and `serial_getc` had no callers left, and the header
   described a blocking read this kernel must not have. Both are gone.
 * Four comments described the arrangement that this milestone replaced.
+
+## The three host tests, 2026-08-30
+
+`packet_hosttest` hands the receive parsers frames no peer would send: an
+Ethernet header cut short, a version that is not 4, a header length below the
+minimum and past the end, a total length past the frame and below the header,
+a checksum that does not sum, a fragment, and a datagram for another machine.
+Each frame is copied into an allocation of exactly its length, so a read one
+byte past it is a read past the allocation and the sanitizer says so. Proved
+by five mutations, all caught, one of them by the sanitizer rather than by a
+check.
+
+Writing it found that three of the first five mutations were caught by the
+wrong check: the case changed a header field after the checksum was computed,
+so every one of them was being dropped for the checksum. The header is
+restamped per case now.
+
+`tcp_hosttest` drives the state machine segment by segment against a recorder
+in place of IP, with the clock a variable. It covers what no guest probe can:
+the control-block pool filling and refusing (which is where `tcbfull` was
+meant to go), a reset for a closed port and the absence of one for a reset,
+data in order, the same data twice, a segment past a hole, the hole filled, a
+window closing and reopening, a FIN, and a peer that stops answering until the
+retransmission gives up. Proved by four mutations.
+
+`ahci_hosttest` needed a change to the driver first: `ahci.c` reached the
+controller through two static functions, and now reaches it through a table of
+three, so a test can supply a model. The rows are the ones no boot produces: a
+reset that never completes, firmware that never answers the handoff, a port
+with nothing on the link, a port whose device is not a disk, a command that
+never completes, and a device that reports a fatal status.
+
+The first version of that test passed every row for the wrong reason. Each row
+called `ahci_init` and asserted it refused, and on a model that cannot answer
+an IDENTIFY it always refuses; three mutations of the driver changed nothing.
+Each row now drives the step it is about and the positive case is checked
+first, which is what made the mutations fail. The model also had to learn that
+a status register clears on a write of one rather than storing it, and that a
+controller reports the bytes it moved.
+
+Two smaller things fell out of it: the driver's cache instructions are x86's
+and are now compiled only where they exist, and `net_core.c` had a third copy
+of the interrupt bracket, which is the shared one now.

@@ -213,16 +213,45 @@ static pci_device_t ahci_pci;
 static volatile uint8_t *ahci_base;
 static int ahci_port = -1;
 
+/*
+ * Everything this driver does to the outside world, in one table.
+ *
+ * On a machine it is the four lines below: two memory reads and writes through
+ * the mapped ABAR, the delay, and the PCI configuration accessors. A test on
+ * another architecture cannot map an ABAR or answer a PCI read, so it supplies
+ * its own table and the driver runs against a model of the controller. That is
+ * the only reason the indirection exists, and it is the same arrangement the
+ * e1000 driver has.
+ */
+static uint32_t ahci_mmio_r32(uint32_t offset)
+{
+    return *(volatile uint32_t *)(ahci_base + offset);
+}
+
+static void ahci_mmio_w32(uint32_t offset, uint32_t value)
+{
+    *(volatile uint32_t *)(ahci_base + offset) = value;
+}
+
+static const struct ahci_io ahci_mmio_io = {ahci_mmio_r32, ahci_mmio_w32, k_udelay};
+
+static const struct ahci_io *ahci_io = &ahci_mmio_io;
+
+void ahci_set_io(const struct ahci_io *ops)
+{
+    ahci_io = ops ? ops : &ahci_mmio_io;
+}
+
 /** Read the 32-bit ABAR register at `offset`. */
 static uint32_t ahci_read32(uint32_t offset)
 {
-    return *(volatile uint32_t *)(ahci_base + offset);
+    return ahci_io->r32(offset);
 }
 
 /** Write `value` to the 32-bit ABAR register at `offset`. */
 static void ahci_write32(uint32_t offset, uint32_t value)
 {
-    *(volatile uint32_t *)(ahci_base + offset) = value;
+    ahci_io->w32(offset, value);
 }
 
 /** The register offset of port `port`'s register `reg`. */
@@ -237,9 +266,19 @@ static uint32_t ahci_port_off(int port, uint32_t reg)
 static bool ahci_have_clflush = false;
 static uint32_t ahci_clflush_size = 64;
 
-/** Record whether CLFLUSH is available and its line size (CPUID leaf 1). */
+/**
+ * Record whether CLFLUSH is available and its line size (CPUID leaf 1).
+ *
+ * The two instructions this needs are x86's, so a test compiled for another
+ * architecture cannot run it. There is nothing to model either: what it
+ * decides is whether the flush below does anything, and on a machine whose
+ * DMA snoops the caches the answer costs nothing. It is left out where the
+ * instructions do not exist, and the flush is then the no-op it already is on
+ * every emulator this project runs on.
+ */
 static void ahci_detect_cache(void)
 {
+#if defined(__i386__) || defined(__x86_64__)
     uint32_t eax, ebx, ecx, edx;
     uint32_t sz;
 
@@ -252,21 +291,25 @@ static void ahci_detect_cache(void)
         sz = 64;
     }
     ahci_clflush_size = sz;
+#else
+    ahci_have_clflush = false;
+    ahci_clflush_size = 64;
+#endif
 }
 
 /** Evict [addr, addr+size) so a DMA write the CPU is about to read, or a
    descriptor the HBA is about to read, crosses the cache a line at a time. */
 static void ahci_dma_sync(const volatile void *addr, uint32_t size)
 {
-    uintptr_t p, end, line;
-
     if (!addr || size == 0) {
         return;
     }
+#if defined(__i386__) || defined(__x86_64__)
     if (ahci_have_clflush && ahci_clflush_size != 0) {
-        line = (uintptr_t)ahci_clflush_size;
-        p = (uintptr_t)addr & ~(line - 1u);
-        end = (uintptr_t)addr + (uintptr_t)size;
+        uintptr_t line = (uintptr_t)ahci_clflush_size;
+        uintptr_t p = (uintptr_t)addr & ~(line - 1u);
+        uintptr_t end = (uintptr_t)addr + (uintptr_t)size;
+
         while (p < end) {
             /* clflush (%eax) as bytes 0f ae 38: tcc has no mnemonic for it. */
             __asm__ __volatile__(".byte 0x0f, 0xae, 0x38" ::"a"(p) : "memory");
@@ -276,6 +319,12 @@ static void ahci_dma_sync(const volatile void *addr, uint32_t size)
     } else {
         __asm__ __volatile__("wbinvd" ::: "memory");
     }
+#else
+    /* The instructions above are x86's, and where they do not exist there is
+       no controller either: what runs there is a model of one. */
+    (void)addr;
+    (void)size;
+#endif
 }
 
 /** Poll until every bit of `mask` at `offset` reads 0. Returns 0 on success, -1
@@ -288,7 +337,7 @@ static int ahci_wait_clear(uint32_t offset, uint32_t mask)
         if ((ahci_read32(offset) & mask) == 0) {
             return 0;
         }
-        k_udelay(AHCI_WAIT_POLL_US);
+        ahci_io->udelay(AHCI_WAIT_POLL_US);
     }
     return -1;
 }

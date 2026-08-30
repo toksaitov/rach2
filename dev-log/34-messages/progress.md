@@ -97,10 +97,10 @@ Proof items:
 * [-] `tcbfull` + mutation (dropped; `notes.md` and `plan.md` say why)
 * [x] `oomprobe` (touch pages, child dies, parent recovers) + mutation
 * [x] `diskfull` + the `EIO` to `ENOSPC` fix + mutation
-* [ ] `ahci.c` gains an injectable register interface
-* [ ] `ahci_hosttest`: every matrix row a checklist line
-* [ ] `tcp_hosttest`: every matrix row a checklist line
-* [ ] `packet_hosttest`: malformed Ethernet, IPv4, UDP, TCP
+* [x] `ahci.c` gains an injectable register interface
+* [x] `ahci_hosttest`: every matrix row a checklist line
+* [x] `tcp_hosttest`: every matrix row a checklist line
+* [x] `packet_hosttest`: malformed Ethernet, IPv4, UDP, TCP
 * [ ] `wavcheck` + the audio boot + two mutations
 * [ ] Review 11 of 12
 
