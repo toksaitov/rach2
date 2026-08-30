@@ -9,211 +9,61 @@
 <6>[0.00] boot: paging: ready
 <6>[0.00] boot: page cache: ready
 <6>[0.01] boot: timer: ready
-<6>[0.01] rtc: 2026-08-31 01:20:55 UTC
+<6>[0.01] rtc: 2026-08-31 01:35:31 UTC
 <6>[0.02] clock: ready
 <6>[0.03] entropy: ready: RDRAND, trusted
-<6>[0.04] board: lynxpoint-lp: ACPI enabled
+<6>[0.05] board: lynxpoint-lp: ACPI enabled
 <6>[0.06] board: lynxpoint-lp: masked the SCI on IRQ 9
-<6>[0.07] board: ready: lynxpoint-lp
-<6>[0.08] boot: keyboard: ready
-<6>[0.09] mouse: started
-<6>[0.11] mouse: ready
+<6>[0.08] board: ready: lynxpoint-lp
+<6>[0.09] boot: keyboard: ready
+<6>[0.10] mouse: started
+<6>[0.10] mouse: ready
 <6>[0.11] usb: started
-<6>[0.12] usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+<6>[0.11] usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
 <6>[0.14] usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF
 <6>[0.16] usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
-<7>[0.20] usb: found: 8086:9c31 at 0:20.0, aperture 0xC0600000
-<7>[0.20] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
-<7>[0.20] usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
-<7>[0.20] usb: handoff: legsup 0x10801 legctl 0x40002000 before
-<7>[0.20] usb: handoff: legsup 0x1000801 legctl 0x0 after
-<6>[0.20] usb: ready: version 100, 13 ports, 32 slots, 32-byte contexts
+<7>[0.19] usb: found: 8086:9c31 at 0:20.0, aperture 0xC0600000
+<7>[0.19] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
+<7>[0.19] usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
+<7>[0.19] usb: handoff: legsup 0x10801 legctl 0x40002000 before
+<7>[0.19] usb: handoff: legsup 0x1000801 legctl 0x0 after
+<6>[0.19] usb: ready: version 100, 13 ports, 32 slots, 32-byte contexts
 <6>[0.32] usb: port: 2: a low-speed device
-<6>[0.34] usb: port: 4: a full-speed device
-<6>[0.48] usb: device: port 2: 2a7a:939f, class 3 protocol 1, endpoint 1
+<6>[0.33] usb: port: 4: a full-speed device
+<6>[0.48] usb: device: port 2: 18f8:f97, class 3 protocol 2, endpoint 1
 <4>[0.61] usb: device: port 4: it offers no interface this kernel can drive
 <6>[0.63] usb: devices: 1 configured
 <6>[0.64] boot: syscall: ready
 <6>[0.65] boot: process: ready
 <6>[0.65] boot: scheduler: ready
 <6>[0.66] audio: started
-<4>[0.76] usb: device: port 4: it offers no interface this kernel can drive
 <6>[0.81] audio: ready: Intel HD Audio, codec 0x14f1510f
-<6>[0.83] disk: policy: read-write
-<6>[0.84] modules: none
-<6>[0.85] block: started
+<6>[0.82] disk: policy: read-write
+<6>[0.83] modules: none
+<6>[0.84] block: started
 <7>[0.85] ahci: found: 8086:9C03 at 0:31.2, prog-if 1, BAR5 C061B000
 <6>[0.86] ahci: port 0: 488397168 sectors, 238475 MiB
 <6>[0.89] krffs: mounted: 586 files (disk)
-<4>[0.91] usb: device: port 4: it offers no interface this kernel can drive
-<6>[0.91] net: started
+<6>[0.90] net: started
 <6>[0.93] net: ready: RTL8168GU
 <6>[0.94] rtl8168: RTL8168GU: xid 0x509, MMIO 0xC0504000, MAC 28:D2:44:7E:E0:AF
-<6>[0.97] rtl8168: no link yet
-<6>[0.98] rtl8168: rx 0 (0 error, 0 dropped), tx 7 (0 stalled)
-<6>[1.00] net: IPv4 0.0.0.0/0, no gateway: this subnet only
-<6>[1.02] netconsole: broadcast, ethertype 0x88b5, boot id 0x3aab886d, 9 frames, 0 characters dropped
-<4>[1.06] usb: device: port 4: it offers no interface this kernel can drive
-<6>[1.06] selftest: started
+<6>[0.96] rtl8168: no link yet
+<6>[0.97] rtl8168: rx 0 (0 error, 0 dropped), tx 7 (0 stalled)
+<6>[0.99] net: IPv4 0.0.0.0/0, no gateway: this subnet only
+<6>[1.01] netconsole: broadcast, ethertype 0x88b5, boot id 0x5ac9b30d, 9 frames, 0 characters dropped
+<6>[1.05] selftest: started
 <6>[1.06] selftest: memory: passed
 <6>[1.07] selftest: strings: passed
 <6>[1.13] selftest: timer: passed
-<4>[1.21] usb: device: port 4: it offers no interface this kernel can drive
 <6>[1.34] selftest: udelay: passed: 200 ms asked, 210 ms seen
-<4>[1.36] usb: device: port 4: it offers no interface this kernel can drive
 <6>[1.36] selftest: paging: passed
 <6>[1.37] selftest: syscall: passed
 <6>[1.38] selftest: context switch: passed
-<4>[1.51] usb: device: port 4: it offers no interface this kernel can drive
-<4>[1.66] usb: device: port 4: it offers no interface this kernel can drive
-<4>[1.81] usb: device: port 4: it offers no interface this kernel can drive
-<6>[1.94] selftest: round robin: passed: a ran 11 times, b 9
-<4>[1.96] usb: device: port 4: it offers no interface this kernel can drive
-<6>[1.96] selftest: memory isolation: passed
-<6>[1.97] selftest: krffs write: passed
-<6>[1.99] selftest: elf load: passed
-<7>[2.00] pagecache: VMPROBE PAGECACHE OK n=0 evict=0 wb=0 (skipped)
-<6>[2.00] selftest: page cache: passed
-<6>[2.03] selftest: result: passed: 12
-<6>[2.04] boot: starting /sbin/init
-<4>[2.11] usb: device: port 4: it offers no interface this kernel can drive
-<4>[2.26] usb: device: port 4: it offers no interface this kernel can drive
-<4>[2.41] usb: device: port 4: it offers no interface this kernel can drive
-<4>[2.56] usb: device: port 4: it offers no interface this kernel can drive
-<4>[2.71] usb: device: port 4: it offers no interface this kernel can drive
-<4>[2.86] usb: device: port 4: it offers no interface this kernel can drive
-<4>[3.01] usb: device: port 4: it offers no interface this kernel can drive
-<4>[3.16] usb: device: port 4: it offers no interface this kernel can drive
-<4>[3.31] usb: device: port 4: it offers no interface this kernel can drive
-<4>[3.46] usb: device: port 4: it offers no interface this kernel can drive
-<4>[3.61] usb: device: port 4: it offers no interface this kernel can drive
-<4>[3.76] usb: device: port 4: it offers no interface this kernel can drive
-<4>[3.91] usb: device: port 4: it offers no interface this kernel can drive
-<4>[4.06] usb: device: port 4: it offers no interface this kernel can drive
-<4>[4.21] usb: device: port 4: it offers no interface this kernel can drive
-<4>[4.36] usb: device: port 4: it offers no interface this kernel can drive
-<4>[4.51] usb: device: port 4: it offers no interface this kernel can drive
-<4>[4.66] usb: device: port 4: it offers no interface this kernel can drive
-<4>[4.81] usb: device: port 4: it offers no interface this kernel can drive
-<4>[4.96] usb: device: port 4: it offers no interface this kernel can drive
-<4>[5.11] usb: device: port 4: it offers no interface this kernel can drive
-<4>[5.26] usb: device: port 4: it offers no interface this kernel can drive
-<4>[5.41] usb: device: port 4: it offers no interface this kernel can drive
-<4>[5.56] usb: device: port 4: it offers no interface this kernel can drive
-<4>[5.71] usb: device: port 4: it offers no interface this kernel can drive
-<4>[5.86] usb: device: port 4: it offers no interface this kernel can drive
-<4>[6.01] usb: device: port 4: it offers no interface this kernel can drive
-<4>[6.16] usb: device: port 4: it offers no interface this kernel can drive
-<4>[6.31] usb: device: port 4: it offers no interface this kernel can drive
-<4>[6.46] usb: device: port 4: it offers no interface this kernel can drive
-<4>[6.61] usb: device: port 4: it offers no interface this kernel can drive
-<4>[6.76] usb: device: port 4: it offers no interface this kernel can drive
-<4>[6.91] usb: device: port 4: it offers no interface this kernel can drive
-<4>[7.06] usb: device: port 4: it offers no interface this kernel can drive
-<4>[7.21] usb: device: port 4: it offers no interface this kernel can drive
-<4>[7.36] usb: device: port 4: it offers no interface this kernel can drive
-<4>[7.51] usb: device: port 4: it offers no interface this kernel can drive
-<4>[7.66] usb: device: port 4: it offers no interface this kernel can drive
-<4>[7.81] usb: device: port 4: it offers no interface this kernel can drive
-<4>[7.96] usb: device: port 4: it offers no interface this kernel can drive
-<4>[8.11] usb: device: port 4: it offers no interface this kernel can drive
-<4>[8.26] usb: device: port 4: it offers no interface this kernel can drive
-<4>[8.41] usb: device: port 4: it offers no interface this kernel can drive
-<4>[8.56] usb: device: port 4: it offers no interface this kernel can drive
-<4>[8.71] usb: device: port 4: it offers no interface this kernel can drive
-<4>[8.86] usb: device: port 4: it offers no interface this kernel can drive
-<4>[9.01] usb: device: port 4: it offers no interface this kernel can drive
-<4>[9.16] usb: device: port 4: it offers no interface this kernel can drive
-<4>[9.31] usb: device: port 4: it offers no interface this kernel can drive
-<4>[9.46] usb: device: port 4: it offers no interface this kernel can drive
-<4>[9.61] usb: device: port 4: it offers no interface this kernel can drive
-<4>[9.76] usb: device: port 4: it offers no interface this kernel can drive
-<4>[9.91] usb: device: port 4: it offers no interface this kernel can drive
-<4>[10.06] usb: device: port 4: it offers no interface this kernel can drive
-<4>[10.21] usb: device: port 4: it offers no interface this kernel can drive
-<4>[10.36] usb: device: port 4: it offers no interface this kernel can drive
-<4>[10.51] usb: device: port 4: it offers no interface this kernel can drive
-<4>[10.66] usb: device: port 4: it offers no interface this kernel can drive
-<4>[10.81] usb: device: port 4: it offers no interface this kernel can drive
-<4>[10.96] usb: device: port 4: it offers no interface this kernel can drive
-<4>[11.11] usb: device: port 4: it offers no interface this kernel can drive
-<4>[11.26] usb: device: port 4: it offers no interface this kernel can drive
-<4>[11.41] usb: device: port 4: it offers no interface this kernel can drive
-<4>[11.56] usb: device: port 4: it offers no interface this kernel can drive
-<4>[11.71] usb: device: port 4: it offers no interface this kernel can drive
-<4>[11.86] usb: device: port 4: it offers no interface this kernel can drive
-<4>[12.01] usb: device: port 4: it offers no interface this kernel can drive
-<4>[12.16] usb: device: port 4: it offers no interface this kernel can drive
-<4>[12.31] usb: device: port 4: it offers no interface this kernel can drive
-<4>[12.46] usb: device: port 4: it offers no interface this kernel can drive
-<4>[12.61] usb: device: port 4: it offers no interface this kernel can drive
-<4>[12.76] usb: device: port 4: it offers no interface this kernel can drive
-<4>[12.91] usb: device: port 4: it offers no interface this kernel can drive
-<4>[13.06] usb: device: port 4: it offers no interface this kernel can drive
-<4>[13.21] usb: device: port 4: it offers no interface this kernel can drive
-<4>[13.36] usb: device: port 4: it offers no interface this kernel can drive
-<4>[13.51] usb: device: port 4: it offers no interface this kernel can drive
-<4>[13.66] usb: device: port 4: it offers no interface this kernel can drive
-<4>[13.81] usb: device: port 4: it offers no interface this kernel can drive
-<4>[13.96] usb: device: port 4: it offers no interface this kernel can drive
-<4>[14.11] usb: device: port 4: it offers no interface this kernel can drive
-<4>[14.26] usb: device: port 4: it offers no interface this kernel can drive
-<4>[14.41] usb: device: port 4: it offers no interface this kernel can drive
-<4>[14.56] usb: device: port 4: it offers no interface this kernel can drive
-<4>[14.71] usb: device: port 4: it offers no interface this kernel can drive
-<4>[14.86] usb: device: port 4: it offers no interface this kernel can drive
-<4>[15.01] usb: device: port 4: it offers no interface this kernel can drive
-<4>[15.16] usb: device: port 4: it offers no interface this kernel can drive
-<4>[15.31] usb: device: port 4: it offers no interface this kernel can drive
-<4>[15.46] usb: device: port 4: it offers no interface this kernel can drive
-<4>[15.61] usb: device: port 4: it offers no interface this kernel can drive
-<4>[15.76] usb: device: port 4: it offers no interface this kernel can drive
-<4>[15.91] usb: device: port 4: it offers no interface this kernel can drive
-<4>[16.06] usb: device: port 4: it offers no interface this kernel can drive
-<4>[16.21] usb: device: port 4: it offers no interface this kernel can drive
-<4>[16.36] usb: device: port 4: it offers no interface this kernel can drive
-<4>[16.51] usb: device: port 4: it offers no interface this kernel can drive
-<4>[16.66] usb: device: port 4: it offers no interface this kernel can drive
-<4>[16.81] usb: device: port 4: it offers no interface this kernel can drive
-<4>[16.96] usb: device: port 4: it offers no interface this kernel can drive
-<4>[17.11] usb: device: port 4: it offers no interface this kernel can drive
-<4>[17.26] usb: device: port 4: it offers no interface this kernel can drive
-<4>[17.41] usb: device: port 4: it offers no interface this kernel can drive
-<4>[17.56] usb: device: port 4: it offers no interface this kernel can drive
-<4>[17.71] usb: device: port 4: it offers no interface this kernel can drive
-<4>[17.86] usb: device: port 4: it offers no interface this kernel can drive
-<4>[18.01] usb: device: port 4: it offers no interface this kernel can drive
-<4>[18.16] usb: device: port 4: it offers no interface this kernel can drive
-<4>[18.31] usb: device: port 4: it offers no interface this kernel can drive
-<4>[18.46] usb: device: port 4: it offers no interface this kernel can drive
-<4>[18.61] usb: device: port 4: it offers no interface this kernel can drive
-<4>[18.76] usb: device: port 4: it offers no interface this kernel can drive
-<4>[18.91] usb: device: port 4: it offers no interface this kernel can drive
-<4>[19.06] usb: device: port 4: it offers no interface this kernel can drive
-<4>[19.21] usb: device: port 4: it offers no interface this kernel can drive
-<4>[19.36] usb: device: port 4: it offers no interface this kernel can drive
-<4>[19.51] usb: device: port 4: it offers no interface this kernel can drive
-<4>[19.66] usb: device: port 4: it offers no interface this kernel can drive
-<4>[19.81] usb: device: port 4: it offers no interface this kernel can drive
-<4>[19.96] usb: device: port 4: it offers no interface this kernel can drive
-<4>[20.11] usb: device: port 4: it offers no interface this kernel can drive
-<4>[20.26] usb: device: port 4: it offers no interface this kernel can drive
-<4>[20.41] usb: device: port 4: it offers no interface this kernel can drive
-<4>[20.56] usb: device: port 4: it offers no interface this kernel can drive
-<4>[20.71] usb: device: port 4: it offers no interface this kernel can drive
-<4>[20.86] usb: device: port 4: it offers no interface this kernel can drive
-<4>[21.01] usb: device: port 4: it offers no interface this kernel can drive
-<4>[21.16] usb: device: port 4: it offers no interface this kernel can drive
-<4>[21.31] usb: device: port 4: it offers no interface this kernel can drive
-<4>[21.46] usb: device: port 4: it offers no interface this kernel can drive
-<4>[21.61] usb: device: port 4: it offers no interface this kernel can drive
-<4>[21.76] usb: device: port 4: it offers no interface this kernel can drive
-<4>[21.91] usb: device: port 4: it offers no interface this kernel can drive
-<4>[22.06] usb: device: port 4: it offers no interface this kernel can drive
-<4>[22.21] usb: device: port 4: it offers no interface this kernel can drive
-<4>[22.36] usb: device: port 4: it offers no interface this kernel can drive
-<4>[22.51] usb: device: port 4: it offers no interface this kernel can drive
-<4>[22.66] usb: device: port 4: it offers no interface this kernel can drive
-<6>[22.75] usb: device: port 2: gone
-<4>[22.75] usb: device: port 4: no slot could be asked for
-<6>[31.39] usb: device: port 2: 18f8:f97, class 3 protocol 2, endpoint 1
+<6>[1.93] selftest: round robin: passed: a ran 10 times, b 10
+<6>[1.95] selftest: memory isolation: passed
+<6>[1.96] selftest: krffs write: passed
+<6>[1.98] selftest: elf load: passed
+<7>[1.99] pagecache: VMPROBE PAGECACHE OK n=0 evict=0 wb=0 (skipped)
+<6>[1.99] selftest: page cache: passed
+<6>[2.02] selftest: result: passed: 12
+<6>[2.03] boot: starting /sbin/init
