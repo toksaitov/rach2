@@ -426,7 +426,7 @@ cleanup_boot
 # Boot 4: the ordinary entry again. The disk is whole.
 LOG="$DISK.log.repaired"
 boot_watch "rach2 login:"
-grep -aq "File system... OK (KRFFS" "$LOG" || \
+grep -aq "krffs: mounted:" "$LOG" || \
     fail "the repaired machine did not mount its root"
 
 # A recovery payload that will not load must not stop the machine. GRUB does not
@@ -480,7 +480,7 @@ fi
 wipe_partition "$WORK" 1 $((2 * 1024 * 1024))
 LOG="$DISK.log.p1dead"
 boot_watch "rach2 login:"
-grep -aq "Modules... OK (1 found)" "$LOG" || \
+grep -aq "modules: found 1" "$LOG" || \
     fail "the boot with partition 1 destroyed did not load a RAM image, so it was not recovery"
 
 echo "drill-test: the everyday kernel refused to write its disk and wrote nothing, a destroyed root stopped the boot, recovery came up on partition 3 and answered SSH, the whole root arrived through one pipe and hashed identically on the platter, and the machine booted from it, a recovery entry that would not load fell back to a kernel on partition 1, a machine stopped with recovery saved as its default came back to recovery, and a disk whose boot partition was destroyed still reached recovery through the core image's own configuration: OK"

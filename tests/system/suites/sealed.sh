@@ -275,12 +275,14 @@ dd if="$WORK" of="$ROOTIMG" bs=512 skip="$ROOT_LBA" count="$ROOT_SECTORS" status
 ROOT_SHA="$(sha256_of "$ROOTIMG")"
 
 # A kernel that can be told from the one on the disk. It is the same build with
-# its banner rewritten in place, which is the smallest edit that makes a boot
-# say which kernel booted it; the structural checker still accepts it, and a
-# machine that installs it prints the marker in its own boot and nowhere else.
+# the text of its first boot record rewritten in place, which is the smallest
+# edit that makes a boot say which kernel booted it; the mark is the same
+# length as what it replaces, so nothing in the artifact moves. The structural
+# checker still accepts it, and a machine that installs it prints the marker in
+# its own boot and nowhere else.
 cp "$REPO/build/rach2/kernel" "$MARKED"
 "$REPO/build/tools/inspect/binfind" --replace \
-    '======= Rach2 Booting... =======' '======= Rach2 SEALEDMARK =======' \
+    'Rach2 Booting' 'Rach2 SEALED!' \
     "$MARKED" || fail "the kernel has no banner to mark"
 "$REPO/build/tools/inspect/elfcheck" --kernel "$MARKED" > /dev/null || \
     fail "the marked kernel does not pass the structural checker"
@@ -341,7 +343,7 @@ case "$OUT" in
 esac
 
 reboot_machine 2
-grep -aq "Rach2 SEALEDMARK" "$LOG" || fail "the trial boot did not run the installed kernel"
+grep -aq "Rach2 SEALED!" "$LOG" || fail "the trial boot did not run the installed kernel"
 OUT="$(machine 'bootctl status' || true)"
 case "$OUT" in
     *"booted: candidate"*) ;;
@@ -512,7 +514,7 @@ dd if="$WORK.env" of="$WORK" bs=1 seek="$ENV_AT" conv=notrunc status=none
 rm -f "$WORK.env"
 
 cold_boot recovery
-grep -aq "Modules... OK" "$LOG" || fail "the armed entry did not load the recovery image"
+grep -aq "modules: found" "$LOG" || fail "the armed entry did not load the recovery image"
 OUT="$(machine 'test -c /dev/disk0 && echo RECOVERY""HERE' || true)"
 case "$OUT" in
     *RECOVERYHERE*) ;;
@@ -563,7 +565,7 @@ fi
 # What says a boot was recovery is that it loaded a RAM image: the ordinary
 # entries mount their root from the disk and load no module. The word itself is
 # no use, since the menu draws every entry's title on the console.
-if grep -aq "Modules... OK" "$LOG"; then
+if grep -aq "modules: found" "$LOG"; then
     fail "the control run reached recovery with nothing injected"
 fi
 grep -aq "lease of" "$LOG" || fail "the control run took no lease"

@@ -88,7 +88,7 @@ boot() {
 # The read-write kernel: it mounts, and mounting stamps the dirty flag, so the
 # image must differ afterwards. This is the control.
 boot "$RW_KERNEL" "$RW" "$RWLOG"
-if ! grep -q "OK (KRFFS" "$RWLOG"; then
+if ! grep -q "krffs: mounted:" "$RWLOG"; then
     fail "the read-write kernel did not mount the disk, so the comparison would prove nothing"
 fi
 if cmp -s "$BASE" "$RW"; then
@@ -98,15 +98,15 @@ echo "diskpolicy-test: the ordinary kernel mounted the disk and wrote to it: OK"
 
 # The read-only kernel: the same boot, the same disk, and not one byte.
 boot "$RO_KERNEL" "$RO" "$ROLOG"
-if ! grep -q "disk policy: read-only" "$ROLOG"; then
+if ! grep -q "disk: policy: read-only" "$ROLOG"; then
     fail "the read-only kernel did not report its policy"
 fi
-if ! grep -q "refused command" "$ROLOG"; then
+if ! grep -q "refused: command" "$ROLOG"; then
     fail "the read-only kernel refused nothing, so it never reached the write it should have refused"
 fi
 if ! cmp -s "$BASE" "$RO"; then
     fail "the read-only kernel changed the disk image"
 fi
 echo "diskpolicy-test: the read-only kernel refused the write and left the disk byte for byte: OK"
-echo "diskpolicy-test: $(grep -m1 'refused command' "$ROLOG")"
+echo "diskpolicy-test: $(grep -m1 'refused: command' "$ROLOG")"
 echo "diskpolicy-test: PASS"

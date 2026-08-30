@@ -115,7 +115,7 @@ cp "$BASE" "$RW"
     --append "rach2.fsdisk rach2.rescue" \
     --timeout 90 --log "$RWLOG" --ok "Type 'help'" \
     "expect=Type 'help'" wait=3 >/dev/null 2>&1 || true
-if ! grep -q "OK (KRFFS" "$RWLOG"; then
+if ! grep -q "krffs: mounted:" "$RWLOG"; then
     fail "the control boot did not mount the disk, so the comparisons prove nothing"
 fi
 if cmp -s "$BASE" "$RW"; then
@@ -189,7 +189,7 @@ echo "diskdiag-test: sectors 0, 2048 and $((IMG_SECTORS - 1)) hash the same on t
 
 # A write to the window is refused, and the node is root-only.
 ssh_run 'dd if=/dev/zero of=/dev/disk0 bs=512 count=1 2>&1 | head -1' >/dev/null 2>&1 || true
-if grep -q "refused command" "$ROLOG"; then
+if grep -q "refused: command" "$ROLOG"; then
     fail "the diagnostic path issued a command the allowlist refused; it strayed off the read path"
 fi
 cleanup_boot

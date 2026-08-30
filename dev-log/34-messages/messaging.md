@@ -128,6 +128,57 @@ the record's own prefix is what marks them now. A frame the card refused, a
 queue that filled and a checksum that failed are WARN; a link report, an
 address report and a connection closing are INFO; a retransmit is DEBUG.
 
+## Group 5: audio (read 2026-08-30)
+
+`audio_debug.c` is the shell's `audio` command from end to end: 38 calls, all
+console. `hda.c` has two private printers of its own, which is what a
+subsystem does when the kernel has no one call: `hda_log` printed the codec
+dump to the screen and the port and is a console call now, and
+`hda_probe_log` is a bring-up trace that composes each line from fragments,
+gated behind a flag. That one cannot be a record call site by call site
+without rewriting all 55 of them, so it gathers the fragments and emits one
+record per line, which converts them all at once and keeps the text. `dma.c`
+and `sb16.c` are eleven ordinary diagnostics.
+
+## Group 4: the platform (read 2026-08-30)
+
+`board.c`, `module.c`, `mouse.c`, `power.c`, `rtc.c`, `diag.c`. 55 calls,
+three contracts, all kept: `tests/run shutdown` requires `poweroff: powering
+off` and `reboot: restarting`, `tests/run crash` and `shutdown` require `halt:
+system halted`, and `tests/run reset` requires `reboot: restarting (skipping
+N)` and the fallback line. Each is a record whose subsystem and text together
+spell what the old line said.
+
+`diag.c` is the file this milestone was written for: every line in it was
+printed twice, once to the screen and once to the port, because there was no
+one call that did both. It is one record per line now and half the file is
+gone.
+
+## Group 1: the kernel itself (read 2026-08-30)
+
+345 calls, the largest group, and two kinds of output in one file. The debug
+shell's 134 calls are console: prompts, menus, command output, and the
+demonstrations a person asks for (`test_display`, `test_switch`,
+`test_preempt`, `test_usermode`). The boot sequence's are records: twelve
+components that printed a label and then ` OK` in four calls across two
+outputs are one record each, and the conditional ones (clock, entropy, board,
+modules, file system, address, disk policy) are one record per outcome.
+
+Ten test contracts were in this file and every one is kept, though six suites
+had to learn where the text moved:
+
+* `tests/run metal` reads `Rach2 Booting` and `Initializing system components`
+  out of `/dev/bootlog` over SSH.
+* `tests/run sealed` and `install` rewrite the banner in the artifact to mark a
+  kernel. The banner is a record's text now and shorter, so the marks are too;
+  `binfind --replace` requires the same length.
+* `tests/run drill`, `diskpolicy`, `diskdiag` and `sealed` read the mount, the
+  module count and the refusal from the boot log.
+* `tests/run exitline` matches the two process-exit lines whole; they carry the
+  record prefix now.
+* The probe runner scores every probe from one of those two lines. It reads
+  past the prefix.
+
 ## Status
 
 Group 2 is read and converted: 28 calls became records and 15 became
@@ -135,6 +186,7 @@ Group 2 is read and converted: 28 calls became records and 15 became
 `disk-ahci`, `persist`, `persist-ahci`, `stress`, `stress-ahci`, `diskdiag` and
 `default` pass on it.
 
-Groups 3 and 6 are read and converted, and their suites pass. Group 1
-(`kernel.c`), group 4 (`board.c`, `diag.c`, `module.c`, `mouse.c`, `power.c`,
-`rtc.c`, `serial.c`, `tty.c`) and group 5 (audio) are still to read.
+Every group is read and converted. No `k_printf`, `k_puts`, `k_putc`,
+`serial_printf`, `serial_puts` or `serial_putc` call remains anywhere in
+`rach2/` outside `kio.c`, which defines the screen writers, and `klog.c`,
+which uses them.

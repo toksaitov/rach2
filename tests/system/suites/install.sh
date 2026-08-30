@@ -211,7 +211,7 @@ run_pass() {
     step "Password:" 1 "$ROOTPASSWORD"
     step "Password:" 1 "busybox grep -o 'rach2.slot=[a-z]*' /proc/cmdline | busybox sed s/slot/slotA${P}/"
     step "rach2.slotA${P}=candidate" 1 "cd /src/rach2 && busybox sed -i 's/${OLDMARK}/${MARK}/' kernel.c && busybox grep -c '${MARK}' kernel.c | busybox sed s/^/SED${P}N/"
-    step "SED${P}N2" 1 "make -f guest.mk > /tmp/ik.out 2>&1; echo BUILD${P}RC=\$?"
+    step "SED${P}N1" 1 "make -f guest.mk > /tmp/ik.out 2>&1; echo BUILD${P}RC=\$?"
     step "BUILD${P}RC=0" 1 "bootctl kernel kernel && echo INST\"\"${P}A"
     step "INST${P}A" 1 "bootctl commit > /dev/null 2>&1; echo ARMED${P}RC=\$?"
     step "ARMED${P}RC=1" 1 "echo PRERB${P}A; reboot -f"
@@ -244,7 +244,7 @@ run_pass() {
        [ "$SLOT2_AT" -lt "$RB_AT" ] || [ "$ARMED_AT" -gt "$RB_AT" ]; then
         fail "pass $P: the session tokens are missing or out of order"
     fi
-    token_between "$RB_AT" "$SLOT2_AT" "Booting... ${TOKEN}" "$LOG" || \
+    token_between "$RB_AT" "$SLOT2_AT" "${TOKEN}" "$LOG" || \
         fail "pass $P: the installed kernel did not print its marker"
     token_between "$SLOT2_AT" "$LOGEND" "bootctl: committed" "$LOG" || \
         fail "pass $P: the trial commit did not report success"
@@ -280,7 +280,7 @@ run_pass() {
     done
     cleanup_boot
 
-    COLD_AT="$(token_at "$LOG" "Booting... ${TOKEN}")"
+    COLD_AT="$(token_at "$LOG" "${TOKEN}")"
     RB_B="$(token_at "$LOG" "PRERB${P}B")"
     SLOT_D="$(token_at "$LOG" "rach2.slotD${P}=fallback")"
     RB_C="$(token_at "$LOG" "PRERB${P}C")"
@@ -294,20 +294,20 @@ run_pass() {
        [ "$SLOT_D" -ge "$RB_C" ] || [ "$RB_C" -ge "$SLOT_E" ]; then
         fail "pass $P: the recovery tokens are out of order"
     fi
-    if token_between "$RB_B" "$SLOT_D" "Booting... ${TOKEN}" "$LOG"; then
+    if token_between "$RB_B" "$SLOT_D" "${TOKEN}" "$LOG"; then
         fail "pass $P: the fallback boot has the marker"
     fi
-    token_between "$RB_C" "$SLOT_E" "Booting... ${TOKEN}" "$LOG" || \
+    token_between "$RB_C" "$SLOT_E" "${TOKEN}" "$LOG" || \
         fail "pass $P: the repaired candidate did not print its marker"
     token_between "$SLOT_E" "$LOGEND" "bootctl: committed" "$LOG" || \
         fail "pass $P: the repair commit did not report success"
 }
 
-run_pass 1 "Rach2 Booting\\.\\.\\." "Rach2 Booting... IKMARKA" "IKMARKA"
-run_pass 2 "IKMARKA" "IKMARKB" "IKMARKB"
+run_pass 1 "Rach2 Booting" "Rach2 Bt IKMA" "IKMA"
+run_pass 2 "IKMA" "IKMB" "IKMB"
 
 # The matrix's determinate states, crafted on the block and booted with no
-# login: the marked candidate prints IKMARKB before any prompt, so presence
+# login: the marked candidate prints IKMB before any prompt, so presence
 # tells the entries apart. A destroyed header and a complete old value select
 # the fallback; a complete new value selects the candidate once.
 # The block is built whole and written in place at the recorded offset:
@@ -337,7 +337,7 @@ smash_env() {
 LOG="$DISK.log.m1"
 smash_env
 boot_watch "rach2 login:"
-if grep -aq "Booting... IKMARKB" "$LOG"; then
+if grep -aq "IKMB" "$LOG"; then
     fail "a destroyed environment header still booted the candidate"
 fi
 
@@ -347,7 +347,7 @@ craft_env "# GRUB Environment Block
 saved_entry=fallback
 "
 boot_watch "rach2 login:"
-if grep -aq "Booting... IKMARKB" "$LOG"; then
+if grep -aq "IKMB" "$LOG"; then
     fail "a complete old value still booted the candidate"
 fi
 
@@ -357,7 +357,7 @@ craft_env "# GRUB Environment Block
 saved_entry=fallback
 next_entry=candidate
 "
-boot_watch "Booting... IKMARKB"
+boot_watch "IKMB"
 
 echo "install-test: two passes installed, trialed, committed, recovered and re-committed a machine-built kernel on the booted disk, and the matrix states each booted the kernel the plan predicts: OK"
 echo "install-test: PASS"
