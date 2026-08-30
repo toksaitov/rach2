@@ -1,3 +1,4 @@
+#include "../klog.h"
 #include "heap.h"
 #include "paging.h"
 #include "../serial.h"
@@ -50,7 +51,8 @@ retry:
     new_ptr = mem_reserved_ptr + size;
 
     if (new_ptr > HARD_MEMORY_LIMIT) {
-        serial_printf("mem_reserve: OUT OF MEMORY! ptr=0x%X size=0x%X limit=0x%X\n",
+        klog(KLOG_ERR, "mem",
+             "reserve: out of memory: at 0x%X, %d bytes, limit 0x%X",
                       mem_reserved_ptr, size, HARD_MEMORY_LIMIT);
         return 0;
     }

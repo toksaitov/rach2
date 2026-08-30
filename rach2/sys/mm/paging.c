@@ -1,3 +1,4 @@
+#include "../klog.h"
 #include "paging.h"
 #include "pagecache.h"
 #include "frame.h"
@@ -517,9 +518,9 @@ static void _page_fault_handler(isr_params_t *params)
      * just that process and survive; terminate_current_process schedules the
      * parent to collect the zombie, or panics if the dier was a real init. */
     if (user_mode && have_user_proc) {
-        serial_printf("Page fault: killing pid %d: bad %s at 0x%x (err 0x%x)\n",
-                      current_proc->pid, write ? "write" : "read", fault_address,
-                      params->error_code);
+        klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%x (err 0x%x)",
+             current_proc->pid, write ? "write" : "read", fault_address,
+             params->error_code);
         terminate_current_process(SIGSEGV);
         return; /* child case: the parent was scheduled; nothing to retry */
     }
@@ -527,8 +528,8 @@ static void _page_fault_handler(isr_params_t *params)
     /* A fault in kernel mode (or with no user context) is a kernel bug. The
      * fault-aware usercopy path returns -EFAULT before the kernel ever touches
      * a bad user pointer, so reaching here means the kernel itself faulted. */
-    k_printf("Kernel message: page fault at 0x%X with error code 0x%X\n",
-             fault_address, params->error_code);
+    klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X)",
+         fault_address, params->error_code);
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
@@ -554,7 +555,8 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
      * would leave end_addr below start_page, map nothing, and falsely succeed.
      */
     if (size == 0 || end_addr < phys_addr) {
-        serial_printf("map_mmio: bad region 0x%x size 0x%x\n", phys_addr, size);
+        klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x, %d bytes", phys_addr,
+             size);
         return 0;
     }
 
@@ -565,7 +567,7 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
         page_table_t *table;
 
         if (table_index >= 1024) {
-            serial_printf("map_mmio: address 0x%x out of range\n", addr);
+            klog(KLOG_ERR, "vm", "map_mmio: address 0x%x out of range", addr);
             return 0;
         }
 
@@ -577,13 +579,13 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
         table = _kernel_dir->logical_page_tables[table_index];
         if (!table) {
             if (_kernel_pdes_cloned) {
-                serial_printf("map_mmio: refusing a new kernel PDE after fork "
+                klog(KLOG_ERR, "vm", "map_mmio: refusing a new kernel PDE after fork "
                               "(0x%x)\n", addr);
                 return 0;
             }
             table = alloc_page_table();
             if (!table) {
-                serial_printf("map_mmio: failed to allocate page table\n");
+                klog(KLOG_ERR, "vm", "map_mmio: no page table could be allocated");
                 return 0;
             }
             _kernel_dir->logical_page_tables[table_index] = table;
@@ -892,7 +894,7 @@ static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
         uint32_t i;
 
         if (!new_table) {
-            serial_printf("ensure_user_table: failed to copy kernel page table\n");
+            klog(KLOG_ERR, "vm", "user table: the kernel page table did not copy");
             return NULL;
         }
         for (i = 0; i < 1024; i++) {
@@ -904,7 +906,7 @@ static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
     } else if (!table) {
         table = alloc_page_table();
         if (!table) {
-            serial_printf("ensure_user_table: failed to alloc table for idx %d\n",
+            klog(KLOG_ERR, "vm", "user table: no table could be allocated for index %d",
                           (int)table_index);
             return NULL;
         }
@@ -961,7 +963,8 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     page_index = page_num % 1024;
 
     if (table_index >= 1024) {
-        serial_printf("alloc_user_page: table_index %d >= 1024\n", (int)table_index);
+        klog(KLOG_ERR, "vm", "user page: table index %d is past the directory",
+             (int)table_index);
         return 0;
     }
 
@@ -990,7 +993,8 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     }
 
     if (frame >= _frames_number) {
-        serial_printf("alloc_user_page: no free frames! checked %d frames\n", (int)_frames_number);
+        klog(KLOG_ERR, "vm", "user page: no free frames in %d",
+             (int)_frames_number);
         return 0;  /* No free frames */
     }
 

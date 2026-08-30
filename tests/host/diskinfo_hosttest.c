@@ -67,6 +67,15 @@ void serial_printf(const char *fmt, ...)
     (void)fmt;
 }
 
+/* The probe says what disk answered through the kernel log, which this test
+   has no use for; the records are dropped. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 /* The build policy diskinfo_format prints; both values are exercised. */
 static int policy_now = DISKCMD_READ_WRITE;
 

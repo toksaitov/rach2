@@ -1,3 +1,4 @@
+#include "klog.h"
 #include "isr.h"
 #include "panic.h"
 #include "serial.h"
@@ -85,14 +86,14 @@ static void _exception_handler(isr_params_t *params)
                            : "unknown";
 
     if ((params->cs & 3) == 3) {
-        serial_printf("isr: user exception: %s (vector %d, err 0x%x, "
+        klog(KLOG_WARN, "isr", "user exception: %s (vector %d, err 0x%x, "
                       "eip 0x%x): killing process\n",
                       name, params->vector, params->error_code, params->eip);
         terminate_current_process(_exception_signal(params->vector));
         return;
     }
 
-    serial_printf("isr: kernel exception: %s (vector %d, err 0x%x, "
+    klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, "
                   "eip 0x%x)\n",
                   name, params->vector, params->error_code, params->eip);
     k_panic("unrecoverable CPU exception in kernel mode");
@@ -143,7 +144,7 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler)
             return;
         }
     }
-    serial_printf("register_isr_handler: vector %d chain full\n", vector);
+    klog(KLOG_ERR, "isr", "handler: vector %d chain full", vector);
 }
 
 /**
@@ -190,7 +191,7 @@ static void _dispatch(isr_params_t *params)
 void _isr_router(isr_params_t *params)
 {
 #ifdef DEBUG
-    k_printf("Kernel message: interrupt - 0x%X\n", params->vector);
+    klog(KLOG_DEBUG, "isr", "interrupt: vector 0x%X", params->vector);
 #endif
 
     _dispatch(params);
@@ -208,7 +209,7 @@ void _irq_router(isr_params_t *params)
     irq_count++;
 
 #ifdef DEBUG
-    k_printf("Kernel message: IRQ - 0x%X\n", params->vector);
+    klog(KLOG_DEBUG, "isr", "irq: vector 0x%X", params->vector);
 #endif
 
     if (params->vector >= 40) {

@@ -1,3 +1,4 @@
+#include "klog.h"
 #include "syscall.h"
 #include "power.h"
 #include "serial.h"
@@ -10699,7 +10700,7 @@ static void vma_exhausted(const char *what)
         return;
     }
     current_proc->vma_reported = 1;
-    serial_printf("vm: %s: pid %d (%s) has used all %d of its mappings\n", what,
+    klog(KLOG_WARN, "vm", "%s: pid %d (%s) has used all %d of its mappings", what,
                   (int)current_proc->pid, current_proc->comm, VMA_MAX);
 }
 
@@ -10864,12 +10865,13 @@ static void _syscall_handler(isr_params_t *params)
         const char *who = current_proc ? current_proc->comm : "?";
 
         if (syscall_num >= SYSCALL_TABLE_SIZE) {
-            serial_printf("syscall: %d: not implemented, and past the table "
-                          "(asked for by %s)\n", (int)syscall_num, who);
+            klog(KLOG_WARN, "syscall",
+                 "%d: not implemented, and past the table (asked for by %s)",
+                 (int)syscall_num, who);
         } else if (_enosys_last_pid[syscall_num] != pid) {
             _enosys_last_pid[syscall_num] = pid;
-            serial_printf("syscall: %d: not implemented (asked for by %s)\n",
-                          (int)syscall_num, who);
+            klog(KLOG_WARN, "syscall",
+                 "%d: not implemented (asked for by %s)", (int)syscall_num, who);
         }
     }
 
