@@ -1,72 +1,98 @@
 # Milestone 34: the kernel log and the test system
 
-The kernel said things in places nothing read, and the suite that was supposed to catch that had four checks which could not fail. Both halves are fixed, and each was proved by making it fail.
+The kernel printed diagnostics where nothing read them, and four suites asserted less than their names claimed. Both are fixed. Every check added here was then made to fail by a mutation of the code it watches, which is the only evidence that it watches anything.
 
 ## Why the two together
 
-They are one problem seen from two sides. A test can only check what a machine says, and this machine said the same thing in two places or in none: 695 calls across 39 files, split between a screen writer and a serial writer that no caller could reach in one call, so `diag.c` named both printers on every line and `kernel.c` printed each boot component's name twice and its outcome twice again. A test written against that reads a fragment of a line and hopes. Fixing the test system first would have written those hopes down; fixing the messages first would have broken every suite that reads them, with no measurement of what broke. So the test system was made trustworthy first, then the log was built, then the four suites that could not fail were fixed against the records the log now emits, and only then were the callers converted.
+A suite can only read what the machine prints, and this machine printed the same line twice or in one place only: 695 calls across 39 files through a screen writer and a serial writer that no caller could reach in one call. `diag.c` named both printers on every line; the boot printed each component's label twice and its outcome twice again, in four calls. A suite written against that matches a fragment of a line.
+
+The order was: the test system first, then the log, then the four suites, then the callers. Converting the callers first would have changed the text fourteen suites match on, with no measured suite to say what broke.
 
 ## The kernel log
 
-One call for a diagnostic and one for the console. `klog(level, subsystem, format, ...)` builds a whole record and offers it to four destinations in a fixed order:
+There is one call for a diagnostic and one for the console. `klog(level, subsystem, format, ...)` builds a whole record and writes it to four destinations in a fixed order:
 
 ```text
 <3>[12.34] ahci: command: timed out on port 0
 ```
 
-The ring is first and always takes it, because a serial port that stopped draining or an Ethernet controller that never came up must not cost the machine its own copy. The screen takes `INFO` and above, without the prefix a person does not need. The serial port takes every level through a transmit wait that gives up rather than spinning. Netconsole takes every record from the first one, before there is a device to send through, because it holds what it cannot send yet and the records worth having on the wire are the early ones.
+The 16 KiB ring is written first and accepts every level, so a serial port that stopped draining or an Ethernet controller that never came up cannot cost the machine its own copy. The screen is written next, at `INFO` and above, without the prefix and timestamp. The serial port is written at every level, through a transmit wait bounded at a fixed number of polls. Netconsole is written last, also at every level, including the records raised before a network device exists: it buffers what it cannot yet send. `rach2/Readme.md` states the record format, the five levels and the ring's eviction rule.
 
-`console_putc`, `console_puts` and `console_printf` are the other half. The debug shell's prompts and command output are a user interface, not a diagnostic: they are not in the machine's log and they are not broadcast to whoever is on the segment. That is checked, not asserted: `tests/run netconsole` refuses the shell's prompt in the capture, and `tests/run procfiles` counts what `/dev/bootlog` holds on the machine.
+`console_putc`, `console_puts` and `console_printf` carry the debug shell's prompts and command output. Those reach the screen and the serial port and nothing else: they are absent from the machine's log and from the wire, where netconsole broadcasts to whoever is on the segment. Two suites check it. `tests/run netconsole` fails if the shell's prompt appears in the capture, and `tests/run procfiles` counts the records and the console lines in `/dev/bootlog` on the machine: fifty records and no console text.
 
 The parallel paths are gone. `serial_putc`, `serial_puts`, `serial_printf` and the netconsole serial tap are deleted; `sys/bootlog.c` and its second copy of everything printed are deleted; `/dev/bootlog` hands out the log's own ring. `serial_out` is the only way to the port and does nothing but write a byte.
 
 ## The four suites that could not fail
 
-The kernel ran a dozen self-tests at every boot and printed `[FAIL]` when one failed, in 23 places; nothing in the tree looked for the word. They are records now, and the probe runner requires the summary and refuses any error record between the group's first record and it. That check found a real fault the moment it could see one: `test_udelay` required 190 to 230 ms for a 200 ms wait, and of sixteen machines booted at once here, nine measured outside it. The band is 150 to 350 ms now, a quarter wider than the measurement at each end and no wider.
+`default` is the first. The kernel runs a dozen self-tests at every boot and printed `[FAIL]` when one failed, in 23 places; nothing in the tree matched the word. They are records now, and the probe runner requires the summary, requires its count to equal the records in the group, and fails on any error record between the group's first record and the summary.
 
-`subset` booted with each `rach2.no*` option and asserted only that a shell appeared. Each probe now says `started` or `skipped: rach2.noX`, and each boot requires the one and forbids the other, and requires the other three probes to run.
+That check failed on the run that introduced it. `test_udelay` required 190 to 230 ms for a 200 ms wait; sixteen machines booted at once here measured between 180 and 280 ms, and nine of them were outside the band. It is 150 to 350 ms now, which is a quarter beyond the measured range at each end.
 
-`reset` announced the restart and could then hang, because the harness killed the machine itself. `--must-exit` fails a run whose machine had to be killed, and the suite forbids a `CRIT` record so a crash is not read as a reset.
+`subset` booted with each `rach2.no*` option and asserted only that a shell appeared. Each device probe now emits `started` or `skipped: rach2.noX`, and each boot requires the skipped record, fails on that probe's started record, and requires the other three probes to start.
 
-`addressed` re-ran every probe at the address SLIRP hands out anyway, which a kernel ignoring the boot line would also pass. It is one boot at an address nothing else would produce, checked from the capture: three packets from it, and an ARP request sent as it.
+`reset` accepted a machine that announced the restart and then hung, because the harness killed the machine itself and passed on the printed token. The harness option `--must-exit` fails a run whose machine had to be killed, and the suite fails on a `CRIT` record, so a crash that also ends the machine is not read as a reset.
+
+`addressed` re-ran every probe with `rach2.ip=10.0.2.15/24`, which is the address SLIRP hands out anyway, so a kernel that ignored the boot line passed it. It is one boot at 10.0.2.77, checked from the packet capture rather than from inside the machine: three packets sent from that address, and an ARP request sent as it.
 
 ## The test system
 
-The 44 suite recipes left the root `Makefile` for `tests/system/suites.mk`. The root file went from 1789 lines to 756 and holds no `run-` target; it has grown back to 772 since, none of it a test rule. `make` builds no test tool. The runner is 200 lines of shell over a three-field registry, and it has a test of its own that boots nothing: 25 checks, two seconds. `tests/run style` checks the registry against the targets in both directions, which is how a one-line edit that silently deleted the `default` suite would have been caught.
+The 44 suite recipes moved from the root `Makefile` to `tests/system/suites.mk`, which the root file includes with one line. The root file is 772 lines against 1789 and holds no `run-` target, and `make` builds no test tool. The runner is 200 lines of shell over a registry of three fields, described in `tests/system/Readme.md` with the reason for each of its six mechanisms. It has a test of its own that boots nothing: 25 checks in two seconds.
 
-Ten guest probes were compiled, staged and run by nothing; nine had never been run by any target in the tree's history. Four joined the shared boot, and three suites were written for the rest: `fault` for the probes that must be killed, `console` for the two that block on typed input, `socket` for the guest opening a connection of its own and being answered, which nothing covered.
+`tests/run style` compares the registry with the `run-` targets in both directions. A registry line that names no target is a suite nobody can run, and a target no line names is a suite nobody does run; neither shows up otherwise, and a one-line edit here deleted the `default` suite for an hour before that check existed.
+
+Ten guest probes were compiled and staged in the test image, and no target ran them: `cowprobe`, `forktest`, `sockettest`, `dnstest`, `stdintest`, `ttyprobe`, `vmfault`, `vmro`, `winprobe`, `udptest` and `tcptest`. A search of the history found no target that ever had. Four now run in the shared probe boot, which needed only that they exit 0. Three suites cover the rest: `fault` runs `vmfault`, `vmro` and `winprobe`, which are killed on purpose and so report no status; `console` types at the terminal for `stdintest` and `ttyprobe`, which block until something is typed; and `socket` runs `udptest` and `tcptest` against a host echo server, which is the only place the guest opens a connection of its own and is answered.
 
 ## What is new to check
 
-The kernel's fixed limits are reached and their refusals required: the process table (`EAGAIN`), a process's descriptors (`EMFILE`), the socket pool (`ENOMEM`, which needs two processes), the TCP control blocks, and the physical frames, where a child is killed with `SIGSEGV` and the parent's next allocation must succeed. A full file system returned `EIO` for both a full disk and a bad argument; it returns `ENOSPC` now, and `diskfull` is what proves it.
+Five probes fill a fixed limit and require the refusal the kernel documents, then require the resource to come back. The process table holds 16 and refuses the 15th fork with `EAGAIN`; a process holds 16 descriptors and refuses the 14th open with `EMFILE`; the socket pool holds 16 and refuses with `ENOMEM`, which takes two processes because one runs out of descriptors first; the TCP control blocks hold 16 and a connection takes two, so the eighth loopback connection is refused; and a child that touches more pages than there are frames is killed with `SIGSEGV`, after which the parent's own allocation and touch must succeed.
 
-Three host tests reach what no boot produces. `ahci_hosttest` runs the driver against a model of a controller, through a register interface `ahci.c` gained for it: a reset that never completes, firmware that never answers the handoff, a port whose link comes up only on reset, a command that never completes, a device that reports a fatal status. `tcp_hosttest` drives the state machine segment by segment with the clock a variable. `packet_hosttest` hands the receive parsers frames no peer would send, each in an allocation of exactly its length so a read past one is a read past the allocation.
+A full file system returned `EIO`, which is what a bad argument returns, so a program could not tell a full disk from a failed write. `krffs_write_node` reports the two separately now and the write syscall returns `ENOSPC`; `tests/run diskfull` fills the image and requires it.
 
-`tests/run audio` measures what the machine played rather than what it was asked to play, from the recording QEMU's wav backend writes.
+Three host tests reach cases a working QEMU does not produce.
+
+`ahci_hosttest` drives the AHCI driver against a model of a controller, through a register interface `ahci.c` gained for it. Its rows: a controller reset that completes and one that never does, a BIOS handoff answered and one left unanswered, a port with a disk, a port with nothing on the link, a port whose link comes up only when reset, a port whose device is not a disk, a controller with no implemented port, the port engines starting, a command that completes, one that never completes, one that returns a fatal task-file status, and a command the disk policy refuses.
+
+`tcp_hosttest` drives the state machine with the IP layer replaced by a recorder and the clock a variable: the control-block pool filling and refusing, a reset for a closed port and no reset for a reset, a handshake, data in order, the same data twice, a segment past a hole, the hole filled, a window closing and reopening, a peer's FIN, and a peer that stops answering until the retransmission gives up, where each wait must be longer than the one before.
+
+`packet_hosttest` hands the receive parsers malformed frames: a short Ethernet header, a version that is not 4, a header length below the minimum and past the end of the frame, a total length past the frame and below the header, a checksum that does not sum, a fragment, and a datagram for another machine. Each frame is copied into an allocation of exactly its length, so a read one byte past the frame is a read past the allocation and AddressSanitizer reports it.
+
+`tests/run audio` reads the recording QEMU's wav backend writes. The debug shell plays five notes at 262, 294, 330, 349 and 392 Hz; `wavcheck` sweeps the recording in fifty-millisecond windows, labels each with whichever of those frequencies has the most energy in it, and requires the labels to visit all five in that order. The driver's own report says what it was asked to play, and only the recording says what came out.
 
 ## What running it found
 
-The kernel dropped a SYN it had no control block for, in silence, leaving the caller to retransmit for six seconds and report a timeout, which is what a machine that is not there looks like. It answers with a reset now.
+A SYN arriving with no control block left was dropped without a reply, so the caller retransmitted for six seconds and reported a timeout, the same result it gets from a machine that is not running. `tcp_rx` sends a reset there now, and the caller is refused at once with `ECONNREFUSED`. Removing the reset again makes `tcbfull` hang and the suite report it.
 
-`krffs_write_node` returned a bare -1 whether the file system was full or the caller passed a bad argument, and the write syscall turned both into `EIO`.
+`krffs_write_node` returned -1 both when the file system was full and when the caller passed a bad argument, and the write syscall turned both into `EIO`. It returns `KRFFS_ENOSPACE` and `KRFFS_EBAD` now, and the syscall returns `ENOSPC` and `EIO`.
 
-The self-build suite read a kernel size while the machine was still typing it, which is the 51-second failure milestone 33 recorded and attributed to something else.
+The self-build suite read a kernel size out of a line the machine had not finished writing, and got 3979 for 397980 bytes. That is the 51-second failure milestone 33 recorded and attributed to the credential race it fixed in the same run. The step emits a marker after the number and the wait matches the marker.
 
-`k_vprintf` read past the end of a format string ending in its own `%`.
+`k_vprintf` read past the end of a format string that ended in its own `%`: it consumed the terminator looking for a conversion character and the loop read the byte after it. It writes the sign out and stops now, and `harness --selftest` covers the decoder beside it.
 
-Every newline the terminal wrote reached the serial port as carriage return, carriage return, newline, for as long as the discipline and the console call both expanded it. That one was introduced here and found by the review of the change that introduced it.
+Every newline the terminal wrote reached the serial port as carriage return, carriage return, newline, because the line discipline expands the newline and `console_putc`, which it now writes through, expanded it again. There is a raw console call for a writer that has already done the expansion, and the discipline uses that one. This defect was introduced in this milestone and found by the review of the change that introduced it.
 
 ## What was refused
 
-`procfiles` is not in the core tier: it is 125 seconds and the tier is under two minutes. The `e1000` suites were not trimmed, for the reason milestone 33 gave. `hda_probe_log`'s 55 call sites were not rewritten one at a time; the trace gathers its fragments and emits one record per line instead. A guest probe for the control-block pool cannot check a block coming back, because a closed connection holds its two through TIME_WAIT; the host test checks that directly.
+`procfiles` is not in the core tier: it takes 125 seconds on its own and the tier's whole budget is two minutes.
+
+The nine `e1000` suites were not trimmed. Milestone 33's reason still holds: the host model proves the driver in isolation and does not run the stack through the device, so dropping the second card's `netif`, `raw` and `dhcp` would drop live interface reconfiguration, the raw socket, and packet-socket address reconfiguration on that card.
+
+`hda_probe_log`'s 55 call sites were not rewritten. The trace composes each line from fragments, so it gathers them and emits one record per line, which converts every site at once and keeps the text.
+
+`tcbfull` does not check a control block coming back. A closed connection holds its two through the teardown and TIME_WAIT, which is the protocol, and a probe that waited it out would spend a minute doing so. `tcp_hosttest` frees a block and requires the next allocation to return one.
 
 ## Verification
 
-Cold from `make distclean`: 124 seconds to build everything. `make test`, which is the source checks, the native tests and the core tier: 172 seconds warm, 178 after a cold build. `tests/run all`: 471 seconds, 59 suites, no machine left running.
+All measurements are from the development machine: ten cores, 24 GB, macOS, QEMU 10, twenty pool workers.
 
-The core tier is 21 system suites chosen by two rules, that between them every subsystem is exercised and that the tier finishes in under two minutes: 107 seconds.
+Cold from `make distclean`, which compiles the five vendored projects and Doom: 124 seconds. `make test`, which is `tests/run style`, then `host`, then the core tier: 172 seconds warm and 178 after a cold build. `tests/run all`: 471 seconds for 59 suites, with no machine left running, repeated.
 
-Every check added here was proved by a mutation that makes it fail, driven from a script that restores the source under a trap: sixty-two of them, each caught by the check it was aimed at. Twelve reviews were planned and five were run, each of at most six files; between them they returned 58 findings. The most serious in each: an unchecked `mktemp` that would have put the QEMU shim at `/bin/qemu-system-i386`; a worker count of `00` that hung the pool; a format ending in `%` reading past its string; the terminal's double carriage return; and nine rows of the new coverage that could pass while the thing they name was broken, including a disk-policy check that could not fail at all.
+The core tier is 21 system suites and takes 107 seconds. They are `default`, `console`, `fault`, `socket`, `dgram`, `netconsole`, `e1000`, `disk`, `disk-ahci`, `persist`, `diskfull`, `subset`, `crash`, `reset`, `authority`, `grub`, `metal`, `audio`, `ssh`, `login` and `runner`. Between them they exercise processes, memory, the page cache, the file system, descriptors, pipes, signals, the terminal, `/proc`, both disk controllers, the network stack and two of the three cards, audio, the boot path, shutdown, restart, recovery, the log itself, and the userland. The third card is the laptop's and has no emulator.
+
+Sixty-two mutations were applied, one at a time, each from a script that restores the source under a trap. Every one made the check it was aimed at fail, and no other. A mutation shows that a check is sensitive to one defect; it is not proof that the check is correct, and it is the strongest evidence available without a second implementation.
+
+Five independent reviews were run against a planned twelve, each reading at most six files: the plan allotted one per migration group, and the six migration groups were reviewed together in the cutover review instead, because the groups are one change and a reviewer reading a sixth of it cannot see what the conversion moved. One further review returned nothing when the process ended before answering, and was rerun. Between them the reviews returned 58 findings. All are fixed except three, each recorded in `notes.md` with the reason: `fault` cannot distinguish a handler that kills only the faulting process from one that kills others as well, `addressed` does not check the gateway half of the boot line, and `reset` cannot separate a reset the kernel asked for from a triple fault that printed nothing.
+
+The most serious finding in each review: an unchecked `mktemp` that would have put the QEMU shim at `/bin/qemu-system-i386`; a worker count of `00` that passed validation and hung the pool; a format string ending in `%` read past its terminator; the terminal's doubled carriage return; and nine rows of the new coverage that could pass while what they name was broken, one of which could not fail at all.
 
 ## What a passing run now means
 
