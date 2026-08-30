@@ -101,6 +101,33 @@ they keep their exact text.
 | krffs.c | 1208-1404 | a file an operation could not find | DEBUG |
 | krffs.c | 1664-1681 | an image that cannot be mounted | ERR |
 
+## Group 3: memory, interrupts and syscalls (read 2026-08-30)
+
+`sys/mm/heap.c`, `sys/mm/paging.c`, `sys/isr.c` and the diagnostics in
+`sys/syscall.c` that are not the process-exit contract. 19 calls, no
+contracts. A page fault that kills a process is WARN and one taken in kernel
+mode is CRIT, which is the record `k_panic` follows. The two `#ifdef DEBUG`
+interrupt traces became DEBUG records, which is the level they were asking
+for.
+
+Left for the cutover: `sys_exit`'s two lines, which the probe runner scores
+and `tests/run exitline` matches whole. They are records with a required
+substring, and the matcher has to learn the prefix before they can move.
+
+## Group 6: network (read 2026-08-30)
+
+The three drivers, Ethernet, IP, ICMP, UDP, TCP, the three socket families,
+netconsole and the address report. 39 calls. Two are contracts and both keep
+their text: `tests/run netconsole` requires `netconsole: broadcast` inside a
+captured frame, and `tests/run e1000` requires `e1000: 82540EM` on the boot
+line of the card-selection boot. The third selection boot wanted `RTL8139:
+IRQ` and now wants `rtl8139: IRQ`, since a record's subsystem is lowercase.
+
+The indented `    ` that made these the boot banner's detail lines is gone;
+the record's own prefix is what marks them now. A frame the card refused, a
+queue that filled and a checksum that failed are WARN; a link report, an
+address report and a connection closing are INFO; a retransmit is DEBUG.
+
 ## Status
 
 Group 2 is read and converted: 28 calls became records and 15 became
@@ -108,4 +135,6 @@ Group 2 is read and converted: 28 calls became records and 15 became
 `disk-ahci`, `persist`, `persist-ahci`, `stress`, `stress-ahci`, `diskdiag` and
 `default` pass on it.
 
-Groups 1 and 3 to 6 are still to read.
+Groups 3 and 6 are read and converted, and their suites pass. Group 1
+(`kernel.c`), group 4 (`board.c`, `diag.c`, `module.c`, `mouse.c`, `power.c`,
+`rtc.c`, `serial.c`, `tty.c`) and group 5 (audio) are still to read.

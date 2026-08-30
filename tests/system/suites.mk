@@ -882,7 +882,7 @@ run-e1000: rach2 tests krffs test-image $(HARNESS)
 	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
 	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
 	    --timeout 90 --ok "Type 'help'" \
-	    "expect=RTL8139: IRQ" "expect=Type 'help'" wait=2
+	    "expect=rtl8139: IRQ" "expect=Type 'help'" wait=2
 	$(HARNESS) --device e1000,netdev=net0 --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 90 --ok "Type 'help'" \

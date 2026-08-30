@@ -11,6 +11,7 @@
  * socket down and returning it to the pool at zero.
  */
 
+#include "../../klog.h"
 #include "socket.h"
 #include "packet.h"
 #include "raw.h"
@@ -151,7 +152,7 @@ struct socket *socket_alloc(int type)
     }
 
     net_unlock(flags);
-    serial_printf("socket: pool exhausted (%d slots)\n", MAX_SOCKETS);
+    klog(KLOG_WARN, "socket", "open: the pool of %d is exhausted", MAX_SOCKETS);
     return NULL;
 }
 
@@ -497,7 +498,7 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
     if (next_tail == listen_sock->accept_head) {
         /* Queue full: tear the new connection down (it sends a FIN and frees
          * the socket and TCB) instead of orphaning it in the pool. */
-        serial_printf("socket: accept queue full, connection refused\n");
+        klog(KLOG_WARN, "socket", "accept: the queue is full, refused");
         socket_unref(conn_sock);
         return;
     }

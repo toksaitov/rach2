@@ -6,6 +6,7 @@
  * hands the payload to socket_udp_deliver.
  */
 
+#include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "udp.h"
 #include "../../proc/process.h"
@@ -80,7 +81,7 @@ int udp_bind(uint16_t port, struct socket *sock)
         }
         if (!shared) {
             net_unlock(flags);
-            serial_printf("UDP: port %d already bound\n", (int)port);
+            klog(KLOG_DEBUG, "udp", "bind: port %d is already bound", (int)port);
             return -1;
         }
     }
@@ -97,7 +98,8 @@ int udp_bind(uint16_t port, struct socket *sock)
     }
 
     net_unlock(flags);
-    serial_printf("UDP: port table full, cannot bind port %d\n", (int)port);
+    klog(KLOG_WARN, "udp", "bind: the port table is full, port %d refused",
+         (int)port);
     return -1;
 }
 
@@ -252,7 +254,8 @@ int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
     int r;
 
     if (plen > 1500) {
-        serial_printf("udp: payload too large (%d bytes), refused\n", (int)plen);
+        klog(KLOG_WARN, "udp", "tx: payload of %d bytes is too large, refused",
+             (int)plen);
         return -EMSGSIZE;
     }
 

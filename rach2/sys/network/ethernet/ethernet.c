@@ -7,6 +7,7 @@
  * ethernet_tx prepends the 14-byte header and hands the frame to the driver.
  */
 
+#include "../../klog.h"
 #include "ethernet.h"
 #include "../net.h"
 #include "../driver/netdev.h"
@@ -92,7 +93,7 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
     uint16_t total;
 
     if (plen > 1500) {
-        serial_printf("ETH: TX payload too large (%d bytes), dropped\n",
+        klog(KLOG_WARN, "eth", "tx: payload of %d bytes is too large, dropped",
                       (int)plen);
         counts.tx_dropped++;
         return;

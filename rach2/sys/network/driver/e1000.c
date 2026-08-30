@@ -21,6 +21,7 @@
  * reach the failures QEMU does not produce.
  */
 
+#include "../../klog.h"
 #include "e1000.h"
 #include "../net.h"
 #include "../ethernet/ethernet.h"
@@ -558,7 +559,8 @@ static int e1000_tx_frame(const uint8_t *data, uint16_t len)
 
     if (!e1000_up || len == 0 || len > E1000_FRAME_MAX) {
         if (len > E1000_FRAME_MAX) {
-            serial_printf("e1000: tx: frame of %d bytes is too large, dropped\n", (int)len);
+            klog(KLOG_WARN, "e1000", "tx: frame of %d bytes is too large, dropped",
+                 (int)len);
         }
         return NETDEV_TX_DROPPED;
     }
@@ -823,15 +825,15 @@ static void e1000_stop(void)
 /**
  * The card's detail lines under the boot summary.
  *
- * `serial_printf` has no field width, so the station address is printed a
+ * The kernel formatter has no field width, so the station address is printed a
  * nibble at a time, as the other two drivers print theirs.
  */
 static void e1000_print_info(void)
 {
     struct netdev_link link;
 
-    serial_printf("    e1000: 82540EM, MMIO 0x%X, IRQ %d, "
-                  "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
+    klog(KLOG_INFO, "e1000",
+         "82540EM, MMIO 0x%X, IRQ %d, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
                   (unsigned)(uintptr_t)e1000_mmio, (int)e1000_pci.irq,
                   (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
                   (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
@@ -840,12 +842,12 @@ static void e1000_print_info(void)
                   (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
                   (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
     if (e1000_link(&link) && link.up) {
-        serial_printf("    e1000: link %d Mb/s, %s duplex\n", (int)link.mbps,
-                      link.full_duplex ? "full" : "half");
+        klog(KLOG_INFO, "e1000", "link %d Mb/s, %s duplex", (int)link.mbps,
+             link.full_duplex ? "full" : "half");
     } else {
-        serial_printf("    e1000: no link yet\n");
+        klog(KLOG_INFO, "e1000", "no link yet");
     }
-    serial_printf("    e1000: rx %d (%d error, %d dropped), tx %d (%d stalled)\n",
+    klog(KLOG_INFO, "e1000", "rx %d (%d error, %d dropped), tx %d (%d stalled)",
                   e1000_rx_packets, e1000_rx_errors, e1000_rx_dropped, e1000_tx_packets,
                   e1000_tx_stalls);
 }

@@ -33,6 +33,7 @@
  * the early attempt warms the cache and a later one gets through.
  */
 
+#include "../../klog.h"
 #include "icmp.h"
 #include "ip.h"
 #include "../net.h"
@@ -249,7 +250,7 @@ int icmp_ping(uint32_t dst_ip)
     }
 
     ping_release();
-    serial_printf("ICMP: ping timeout\n");
+    klog(KLOG_INFO, "icmp", "ping: no reply before the timeout");
 
     return rc;
 }

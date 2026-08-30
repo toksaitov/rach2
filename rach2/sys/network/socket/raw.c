@@ -5,6 +5,7 @@
  * registered sockets and the two directions.
  */
 
+#include "../../klog.h"
 #include "raw.h"
 #include "socket.h"
 #include "../net.h"
@@ -127,7 +128,8 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
             q->dropped++;
             if (!q->reported) {
                 q->reported = 1;
-                serial_printf("raw: queue full: dropping datagrams on a raw socket\n");
+                klog(KLOG_WARN, "raw",
+                     "rx: the queue is full, dropping datagrams");
             }
             continue;
         }

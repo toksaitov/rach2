@@ -18,6 +18,7 @@
  * service-loop note in rtl8139_irq for the shared-line handling.
  */
 
+#include "../../klog.h"
 #include "rtl8139.h"
 #include "../net.h"
 #include "../ethernet/ethernet.h"
@@ -170,15 +171,16 @@ const char *rtl8139_error(void) { return rtl_err; }
 /**
  * Write this card's detail line under the boot summary.
  *
- * serial_printf has no field width, so the MAC is printed a nibble at a time.
+ * The kernel formatter has no field width, so the MAC is printed a nibble at
+ * a time.
  * The console keeps only the one-line summary; this is the serial detail.
  */
 static void rtl8139_print_info(void)
 {
     struct netdev_link link;
 
-    serial_printf("    RTL8139: IRQ %d, I/O 0x%X, "
-                  "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
+    klog(KLOG_INFO, "rtl8139",
+         "IRQ %d, I/O 0x%X, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
                   (int)rtl_pci.irq, (unsigned)iobase,
                   (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
                   (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
@@ -187,10 +189,10 @@ static void rtl8139_print_info(void)
                   (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
                   (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
     if (rtl8139_link(&link) && link.up) {
-        serial_printf("    RTL8139: link %d Mb/s, %s duplex\n", (int)link.mbps,
-                      link.full_duplex ? "full" : "half");
+        klog(KLOG_INFO, "rtl8139", "link %d Mb/s, %s duplex", (int)link.mbps,
+             link.full_duplex ? "full" : "half");
     } else {
-        serial_printf("    RTL8139: no link yet\n");
+        klog(KLOG_INFO, "rtl8139", "no link yet");
     }
 }
 
@@ -283,7 +285,7 @@ int rtl8139_tx(const uint8_t *data, uint16_t len)
     uint32_t eflags;
 
     if (len > RTL_TX_BUF_SIZE) {
-        serial_printf("RTL8139: TX frame too large (%d bytes), dropped\n",
+        klog(KLOG_WARN, "rtl8139", "tx: frame of %d bytes is too large, dropped",
                       (int)len);
         return NETDEV_TX_DROPPED;
     }
@@ -354,7 +356,8 @@ static void rtl8139_rx(void)
          * advance rx_ptr by garbage, so resync the receiver instead. */
         if (!(status & RTL_ISR_ROK) ||
             pkt_len < RTL_RX_PKT_MIN || pkt_len > RTL_RX_PKT_MAX) {
-            serial_printf("RTL8139: bad RX header status=0x%X len=%d, resync\n",
+            klog(KLOG_WARN, "rtl8139",
+                 "rx: bad header status 0x%X len %d, resynchronising",
                           (unsigned)status, (int)pkt_len);
             ethernet_note_rx_error();
             rtl8139_rx_reset();
@@ -406,18 +409,18 @@ static void rtl8139_irq(isr_params_t *params)
             rtl8139_rx();
         }
         if (isr_val & RTL_ISR_RER) {
-            serial_printf("RTL8139: RX error interrupt\n");
+            klog(KLOG_WARN, "rtl8139", "rx: the card reported an error");
             ethernet_note_rx_error();
         }
         if (isr_val & (RTL_ISR_RXOVW | RTL_ISR_FOVW)) {
-            serial_printf("RTL8139: RX overflow, resync\n");
+            klog(KLOG_WARN, "rtl8139", "rx: overflow, resynchronising");
             /* The ring filled while the machine was elsewhere; what it held
              * is gone, and the resync is the recovery. */
             ethernet_note_rx_drop();
             rtl8139_rx_reset();
         }
         if (isr_val & RTL_ISR_TER) {
-            serial_printf("RTL8139: TX error interrupt\n");
+            klog(KLOG_WARN, "rtl8139", "tx: the card reported an error");
         }
         /* TOK needs no work here. This driver does not wait for a transmit
          * to complete at all; see the note on rtl8139_tx. */

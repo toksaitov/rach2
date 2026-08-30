@@ -7,6 +7,7 @@
  * their state in zero-initialized statics and need no explicit init.
  */
 
+#include "../../klog.h"
 #include "../net.h"
 #include "byteorder.h"
 #include "../driver/netdev.h"
@@ -89,9 +90,10 @@ void net_print_info(void)
     netconf_format(net_ip_addr, addr);
     if (net_ip_gateway != 0) {
         netconf_format(net_ip_gateway, gw);
-        serial_printf("    IPv4 %s/%d, gateway %s\n", addr, netconf_prefix_of(net_ip_mask), gw);
+        klog(KLOG_INFO, "net", "IPv4 %s/%d, gateway %s", addr,
+             netconf_prefix_of(net_ip_mask), gw);
     } else {
-        serial_printf("    IPv4 %s/%d, no gateway: this subnet only\n", addr,
+        klog(KLOG_INFO, "net", "IPv4 %s/%d, no gateway: this subnet only", addr,
                       netconf_prefix_of(net_ip_mask));
     }
     netconsole_print_info();

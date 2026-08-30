@@ -11,6 +11,7 @@
  * nonzero fragment offset) is dropped.
  */
 
+#include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "ip.h"
 #include "icmp.h"
@@ -202,7 +203,8 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
     uint32_t route_ip;
 
     if (plen > 1500) {
-        serial_printf("ip: payload too large (%d), refused\n", (int)plen);
+        klog(KLOG_WARN, "ip", "tx: payload of %d bytes is too large, refused",
+             (int)plen);
         return -EMSGSIZE;
     }
 
@@ -226,7 +228,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
         uint32_t slot;
 
         if (loop_head - loop_tail == LOOP_RING_SLOTS) {
-            serial_printf("ip: loopback ring full, dropped\n");
+            klog(KLOG_WARN, "ip", "loopback: the ring is full, dropped");
             return -ENOBUFS;
         }
         slot = loop_head % LOOP_RING_SLOTS;
@@ -250,7 +252,8 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
            claimed. Whether a datagram may be broadcast at all is the socket's
            permission, checked before it gets here. */
         if (proto != IP_PROTO_UDP) {
-            serial_printf("ip: refused to broadcast a datagram that is not UDP\n");
+            klog(KLOG_WARN, "ip",
+                 "tx: refused to broadcast a datagram that is not UDP");
             return -EOPNOTSUPP;
         }
         ethernet_tx(all_ones, ETH_TYPE_IP, ip_tx_buf, total_len);
@@ -266,7 +269,8 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
     } else if (net_ip_gateway != 0) {
         route_ip = net_ip_gateway;
     } else {
-        serial_printf("ip: no gateway: refused a datagram for another subnet\n");
+        klog(KLOG_WARN, "ip",
+             "tx: no gateway: refused a datagram for another subnet");
         return -ENETUNREACH;
     }
 

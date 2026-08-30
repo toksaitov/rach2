@@ -5,6 +5,7 @@
  * bound sockets and the two directions.
  */
 
+#include "../../klog.h"
 #include "packet.h"
 #include "socket.h"
 #include "../net.h"
@@ -184,7 +185,8 @@ void packet_rx(uint16_t ethertype, const uint8_t *frame, uint16_t frame_len)
             q->dropped++;
             if (!q->reported) {
                 q->reported = 1;
-                serial_printf("packet: queue full: dropping frames on a bound socket\n");
+                klog(KLOG_WARN, "packet",
+                     "rx: the queue is full, dropping frames on a bound socket");
             }
             continue;
         }

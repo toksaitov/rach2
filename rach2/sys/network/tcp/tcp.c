@@ -18,6 +18,7 @@
  * any connected state tears the connection down.
  */
 
+#include "../../klog.h"
 #include "tcp.h"
 #include "rcvwnd.h"
 #include "../socket/socket.h"
@@ -141,7 +142,7 @@ struct tcb *tcb_alloc(void)
         return recycle;
     }
 
-    serial_printf("TCP: TCB pool exhausted\n");
+    klog(KLOG_WARN, "tcp", "open: the control block pool is exhausted");
     return NULL;
 }
 
@@ -608,7 +609,8 @@ void tcp_local_addr_changed(uint32_t new_ip)
             tcb->local_ip = new_ip;
             continue;
         }
-        serial_printf("tcp: address changed: aborting a connection opened from the old one\n");
+        klog(KLOG_INFO, "tcp",
+             "address changed: aborting a connection opened from the old one");
         /* A half-open passive block owns a socket nobody has accepted yet and
            no descriptor refers to, so waking it would leave both to be reclaimed
            by nothing. It is released the way a reset releases it. */
@@ -641,7 +643,7 @@ void tcp_local_addr_changed(uint32_t new_ip)
  * syscall. */
 static void tcp_giveup(struct tcb *tcb)
 {
-    serial_printf("TCP: connection timed out, giving up\n");
+    klog(KLOG_INFO, "tcp", "connect: timed out, giving up");
     tcb->state      = TCP_CLOSED;
     tcb->so_error   = ETIMEDOUT; /* surfaced by SO_ERROR and POLLERR */
     tcb->retx_flags = 0;
@@ -708,7 +710,7 @@ void tcp_tick(void)
                 tcb->rto <<= 1;
                 if (tcb->rto > TCP_RTO_MAX) tcb->rto = TCP_RTO_MAX;
 
-                serial_printf("TCP: retransmit (RTO %d, try %d)\n",
+                klog(KLOG_DEBUG, "tcp", "retransmit: rto %d, try %d",
                               (unsigned)tcb->rto, (int)tcb->rto_backoff);
 
                 if (tcb->send_head != tcb->send_ack) {
@@ -1079,7 +1081,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
     /* Verify the checksum before trusting any field. */
     if (tcp_checksum(src_ip, net_ip_addr, data, len) != 0) {
-        serial_printf("TCP: bad checksum, dropped\n");
+        klog(KLOG_WARN, "tcp", "rx: bad checksum, dropped");
         return;
     }
 
@@ -1139,7 +1141,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             return;
         }
         default:
-            serial_printf("TCP: reset, connection closed\n");
+            klog(KLOG_INFO, "tcp", "rx: reset, the connection is closed");
             /* A reset during the active open is a refused connect; later it is
              * a reset connection. Either is surfaced by SO_ERROR and POLLERR.
              */

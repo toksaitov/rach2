@@ -27,6 +27,7 @@
  * default binding is plain MMIO on the mapped window.
  */
 
+#include "../../klog.h"
 #include "rtl8168.h"
 #include "../net.h"
 #include "../ethernet/ethernet.h"
@@ -1242,21 +1243,21 @@ static void rtl8168_print_info(void)
 {
     struct netdev_link link;
 
-    serial_printf(
-        "    RTL8168GU: xid 0x%X, MMIO 0x%X, "
-        "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n",
+    klog(KLOG_INFO, "rtl8168",
+         "RTL8168GU: xid 0x%X, MMIO 0x%X, "
+         "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
         r8168_xid, (unsigned)(uintptr_t)r8168_mmio, (unsigned)(net_mac[0] >> 4),
         (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
         (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF), (unsigned)(net_mac[3] >> 4),
         (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
         (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
     if (rtl8168_link(&link) && link.up) {
-        serial_printf("    RTL8168GU: link %d Mb/s, %s duplex\n", (int)link.mbps,
-                      link.full_duplex ? "full" : "half");
+        klog(KLOG_INFO, "rtl8168", "link %d Mb/s, %s duplex", (int)link.mbps,
+             link.full_duplex ? "full" : "half");
     } else {
-        serial_printf("    RTL8168GU: no link yet\n");
+        klog(KLOG_INFO, "rtl8168", "no link yet");
     }
-    serial_printf("    RTL8168GU: rx %d (%d error, %d dropped), tx %d (%d stalled)\n",
+    klog(KLOG_INFO, "rtl8168", "rx %d (%d error, %d dropped), tx %d (%d stalled)",
                   r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_tx_packets,
                   r8168_tx_stalls);
 }
