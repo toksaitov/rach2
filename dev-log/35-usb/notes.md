@@ -580,3 +580,77 @@ not fit, which is not the same as knowing the aperture is that large, and
 sizing a BAR the firmware may still be driving is not something to do during a
 first session. And with VT-d enabled the driver has no answer at all; the
 checklist stops the session instead.
+
+## Phase 6: the notebook, 2026-08-31
+
+The machine was booted by its owner with an external USB keyboard and mouse. The
+kernel of this milestone was put on it over SSH with `bootctl kernel`, tried
+once, and committed after it worked. The whole session was remote apart from the
+plugging and the typing.
+
+What the machine reported is in `hardware.md` and `lenovo-bootlog.txt`. The
+things that matter:
+
+* The firmware held the controller and gave it up on the first request.
+  `USBLEGSUP` went from `0x00010801` to `0x01000801` and `USBLEGCTLSTS` from
+  `0x40002000` to zero. That path has no emulation anywhere and had never run.
+* The controller asked for 16 scratchpad pages. The compiled limit of 32 was
+  enough, and the refusal above it stayed a model row.
+* Thirteen ports, 32 slots, 32-byte contexts, version 1.0.0.
+* A low-speed device enumerated: the speed a real keyboard uses and the one
+  QEMU cannot produce.
+* A device unplugged was noticed and another enumerated in its place without a
+  reboot.
+
+Two defects came out of the first boot on that machine, both fixed before the
+kernel was committed:
+
+* A device this kernel cannot drive was enumerated again every 150 milliseconds
+  until the slots ran out, which cost the keyboard that had already worked. The
+  notebook has such a device permanently: a full-speed one on port 4, offering
+  no interface this kernel drives, which on this model is the internal
+  Bluetooth radio. A refused device now keeps its table entry until its port
+  says the device has gone.
+* Closing a device ran outside the turn that enumerates one. There is one
+  command in flight and one answer to it, so a device waiting for its slot could
+  be handed the answer to another device's Disable Slot and take a slot being
+  given back as the slot it had just been given. Closing takes the same turn
+  now.
+
+Both have suite rows, with a `usb-hub` standing in for the device that cannot be
+driven, and both mutations fail those rows.
+
+### The ports, which is the routing question
+
+`XUSB2PR` reads `0x00A` of a possible `0x1FF`: the firmware gave the xHCI two of
+the nine routable USB2 pins. They are the ports this kernel numbers 2 and 4.
+Port 2 is the blue socket, the USB 3.0 one; the two black sockets are USB 2.0
+and their pins are on the companion EHCI, where this kernel cannot see them. A
+device plugged into a black socket raises no event at all, which is what a
+person at the machine sees as nothing happening.
+
+So the routing decision was put to the owner and answered by the machine
+instead: with the keyboard or the mouse in the blue socket, everything works,
+and no register write is needed. This kernel keeps no writer for `XUSB2PR`.
+Reaching the other seven pins would be a change of its own, with its own review
+and its own rows, and it is not needed for a keyboard and a mouse.
+
+### What a person did with it
+
+The mouse was used in Doom: movement and firing with the left button. The
+keyboard was used to edit `hello.c`, compile it with the machine's own compiler,
+and run the commands around that. The notebook's own keyboard and touchpad, on
+the 8042, were untouched throughout.
+
+That closes two limits this record carried. The raw scancode ring, which no test
+reads and which Doom is the only reader of, is exercised. And the terminal path
+was driven by a person rather than by a monitor command.
+
+### What was not measured
+
+The firmware's VT-d setting was not read from its setup screen. The stack works,
+so translation is not on for this controller, but that is an inference and the
+setting itself is unrecorded. A boot with `rach2.nousb` to see whether the
+firmware emulates a PS/2 keyboard out of a USB one on its own was not made
+either: the machine had an older kernel with no stack when the session began,
+and its console was not tried before the update.

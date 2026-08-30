@@ -1,6 +1,6 @@
 # Milestone 35: USB
 
-The kernel drives USB keyboards and mice. It has a host-controller driver, a device core, one class driver, and an input layer that the PS/2 keyboard and the USB one share. It works in QEMU at the two device speeds QEMU can produce. The notebook half is not done, and why is at the end.
+The kernel drives USB keyboards and mice. It has a host-controller driver, a device core, one class driver, and an input layer that the PS/2 keyboard and the USB one share. It works in QEMU at the two device speeds QEMU can produce, and on the notebook, where a person played Doom with a USB mouse and edited and compiled a program with a USB keyboard.
 
 ## What was built
 
@@ -12,7 +12,7 @@ Nothing on the timer's path waits. The event ring is drained from the 100 Hz tim
 
 ## What running it found
 
-Four defects in what this milestone built, and one older one in the test system.
+Six defects in what this milestone built, and one older one in the test system. The last two came from the notebook and from nothing else.
 
 The boot loop and the timer both drained the event ring and both stepped the state machine. The timer interrupts the boot loop, so two drains of one ring ran inside each other and two devices were enumerated over the top of one another, one addressed with the other's input context. Which device failed changed from boot to boot. The boot path now waits and the timer does the work.
 
@@ -21,6 +21,10 @@ A device that was configured drained the controller for its own completions and 
 A report of all zeros, which is a keyboard saying nothing is down, was dropped as if it were the rollover report. Every key held would have stayed held for ever. The host test found it the same day it was written.
 
 `usb_poll` ran from the first tick of the boot, long before there was a controller, and the event ring it would have read is a zeroed array whose cycle bits look exactly like a controller's. There is a flag for that now.
+
+The notebook has a device on a port that this kernel cannot drive, permanently: a full-speed one which on that model is the internal Bluetooth radio. The stack refused it and then forgot the refusal, saw the port still connected, and enumerated it again every 150 milliseconds until the slots ran out, taking the keyboard that had already worked with them. A refused device now keeps its table entry until its port says the device has gone.
+
+Closing a device ran outside the turn that enumerates one. There is one command in flight and one answer to it, so a device waiting for its slot could be handed the answer to another device's Disable Slot and take a slot being given back as the slot it had just been given. That is why the keyboard went silent rather than simply being refused. Closing takes the same turn now.
 
 The older one is in the test system rather than the kernel. Two suites built the harness kernel in their own recipes, so the pool ran two `make`s in `rach2/` at once and they wrote over each other's link response file. It failed `selfbuild` and, through a half-built image, two `dhcp` suites. That kernel is built by `prepare-all` now, before the pool starts.
 
@@ -52,16 +56,27 @@ It means the stack enumerates a keyboard and a mouse on an emulated controller a
 
 Low speed is not enumerated anywhere. QEMU offers full and high speed and no lower, so what the stack does with a low-speed device is exercised only where the interval and the default packet size are derived from it. A real keyboard is a low-speed device, which is one more reason the notebook matters.
 
-It does not mean the stack works on the notebook. Nothing in QEMU exercises the firmware handoff, because QEMU's controller implements no legacy-support capability at all; nothing exercises the scratchpad pages or 64-byte contexts, because QEMU's controller wants none and uses neither. Those three are written from the specification and exercised in the model, which is weaker than exercising them on hardware. The Intel port routing has neither: it is four configuration registers this kernel reads and reports and has never written, and no test touches it at all.
+What a passing run does not say is what the notebook says. Three things QEMU cannot exercise at all ran there for the first time: the firmware handoff, which QEMU's controller has no capability for; the sixteen scratchpad pages that controller asked for, which QEMU's wants none of; and a low-speed device, which is what a real keyboard is and what QEMU does not offer. A person then used the mouse in Doom and the keyboard to edit and compile a program, which is the raw scancode ring and the terminal path driven by hand rather than by a test.
 
-Six other things are known and not closed. The core's table of four devices is never filled by a test. The Evaluate Context step, which corrects a full-speed device's control endpoint, is exercised in the model and by no machine, because QEMU's devices report the size that is assumed. A completion is matched to a device and an endpoint rather than to the exact block that was submitted. The modifier state is shared between keyboards. A key held while its keyboard is unplugged is released in the host test and nowhere else, because QEMU's `sendkey` cannot hold a key. And nothing reads the raw scancode ring, so the path a USB keyboard takes into Doom is right by construction and unproved.
+Four things are known and not closed. The core's table of four devices is never filled by a test. The Evaluate Context step, which corrects a full-speed device's control endpoint, is exercised in the model and by no machine, because the devices met so far report the size that is assumed. A completion is matched to a device and an endpoint rather than to the exact block that was submitted. And the modifier state is shared between keyboards, which is the cost of one input path and is correct for the one keyboard this kernel drives at a time.
+
+Two measurements were not made at the notebook. Its firmware's VT-d setting was not read from the setup screen: the stack works, so translation is not on for that controller, but the setting itself is unrecorded. And no boot with `rach2.nousb` was made to see whether the firmware emulates a PS/2 keyboard out of a USB one on its own, because the machine had an older kernel when the session began.
 
 ## The notebook
 
-Phase 6 is not done, and neither is the last item of phase 1 nor reviews 5 and 6 of the plan's six. They need the machine, a USB keyboard and mouse plugged into it, and a decision from the owner about the chipset's port routing with the real register values in front of them.
+The kernel went on over SSH with `bootctl kernel`, was tried once, and was committed after it worked. `hardware.md` holds what the machine reported, beside what QEMU reports, and `lenovo-bootlog.txt` is its own log.
 
-What is ready for that session: the kernel reports its USB inventory from configuration space at boot, including `XUSB2PR` and `XUSB2PRM`; `tests/system/accept/metal_accept.sh` prints those lines back over SSH, though it requires only that they exist and not that a device was enumerated; `rach2.nousb` switches the stack off if a boot with it goes wrong; and the notebook's own keyboard is on the 8042 and is untouched by any of this, so USB cannot lock anyone out of it.
+```
+usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF
+usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
+usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
+usb: handoff: legsup 0x10801 legctl 0x40002000 before
+usb: handoff: legsup 0x1000801 legctl 0x0 after
+usb: ready: version 100, 13 ports, 32 slots, 32-byte contexts
+usb: device: port 2: 2a7a:939f, class 3 protocol 1, endpoint 1
+```
 
-`hardware.md` holds what QEMU reports. The notebook's column is empty: its controllers, its routing registers, its capability values, its scratchpad count, its context size and its firmware's VT-d setting are all unread.
+The routing line is the shape of that machine. `XUSB2PR` reads `0x00A` of a possible `0x1FF`: the firmware gave the xHCI two of the nine routable USB2 pins, and they are the ports this kernel numbers 2 and 4. Port 2 is the blue socket, the USB 3.0 one. The two black sockets are USB 2.0, their pins are on the companion EHCI, and a device in either raises no event this kernel can see, which is what a person at the machine experiences as nothing happening.
 
-The plan says this is the owner's to close rather than the milestone's. With the evidence above, they decide whether it closes with QEMU alone or stays open for another attempt. No such decision has been recorded, so it is open.
+That is the routing decision the plan reserved for the owner, and the machine answered it: with a device in the blue socket everything works, so no register is written. This kernel keeps no writer for `XUSB2PR`. Reaching the other seven pins is a change of its own, with its own review and rows, and a keyboard and a mouse do not need it.

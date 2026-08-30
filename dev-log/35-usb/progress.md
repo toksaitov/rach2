@@ -12,7 +12,7 @@ the commit that completes it.
 * [x] the Intel xHCI routing registers recorded beside it
 * [x] `metal_accept.sh` reports the same over SSH
 * [x] QEMU's configuration-space facts in `hardware.md`
-* [ ] the laptop's facts in `hardware.md`, including whether the firmware's
+* [x] the laptop's facts in `hardware.md`, including whether the firmware's
       legacy emulation already types at the console
 * [x] proof: the records appear with a controller attached and not without one
 
@@ -81,14 +81,16 @@ the commit that completes it.
 
 ## Phase 6: the machine
 
-* [ ] the phase 1 readings presented to the owner; the routing decided
-* [ ] the firmware's VT-d setting recorded
-* [ ] the laptop booted with a USB keyboard and mouse
-* [ ] the real capability values in `hardware.md` beside QEMU's
+* [x] the phase 1 readings presented to the owner; the routing decided: no
+      write, because the blue socket's pins are the xHCI's and that is enough
+* [x] the firmware's VT-d setting: not read from the setup screen, which is
+      recorded as not measured rather than inferred
+* [x] the laptop booted with a USB keyboard and mouse
+* [x] the real capability values in `hardware.md` beside QEMU's
 * [x] the acceptance script reports the USB inventory, proved against the
       QEMU rehearsal machine by `tests/run metal`; the laptop half waits for the
       machine
-* [ ] proof: a person types and moves on the laptop; the internal keyboard is
+* [x] proof: a person types and moves on the laptop; the internal keyboard is
       untouched; `rach2.nousb` still reaches a shell; poweroff and reboot both
       complete with the controller halted and the routing as it was found
 * [x] review 5 of 6, run against the hardware path rather than the machine
