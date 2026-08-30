@@ -4,13 +4,15 @@
 #include "../lib/kint.h"
 
 /*
- * netconsole: the kernel's serial output, repeated onto the wire.
+ * netconsole: the kernel's log, repeated onto the wire.
  *
  * The machine this kernel is being carried to has no serial port, so on the
  * first boots there is nothing to read but the screen, and a screen cannot be
- * scrolled back or diffed. This copies the same byte stream into broadcast
+ * scrolled back or diffed. This copies the log's records into broadcast
  * Ethernet frames that any host on the segment can capture, which turns the
- * boot log into a file on the development machine.
+ * boot log into a file on the development machine. The records and nothing
+ * else: what the debug shell prints goes to the screen and the port alone and
+ * is never broadcast.
  *
  * It sits below IP on purpose. There is no address to configure, no ARP to
  * answer and no peer to be reachable, so it works on the first boot on an
@@ -26,7 +28,8 @@
  *     8   4  sequence number, from 0, so a gap in a capture is visible
  *    12   2  payload length in bytes
  *    14   2  checksum over this header and the payload, with the field zero
- *    16   n  the bytes as they went to the serial port, CR LF and all
+ *    16   n  the record text, which ends in one newline and carries no
+ *            carriage return; the serial port adds those, this does not
  *
  * A receiver verifies by summing the whole payload including the checksum
  * field and checking for zero, the same convention as the IP header.
@@ -40,13 +43,13 @@
 #define NETCONSOLE_PAYLOAD_MAX 512
 
 /**
- * Take one character of the serial stream.
+ * Take one character of a log record.
  *
- * Called from `serial_putc` before it checks whether a port exists, so a
- * machine with no COM1 still feeds this. Until `netconsole_enable`, characters
- * only accumulate in a bounded buffer; after it, a completed line is sent.
- * This never transmits while a transmit is already in progress, so a driver
- * that reports an error through the serial port cannot recurse.
+ * Called from the log's fourth destination, which consults nothing serial, so
+ * a machine with no COM1 still feeds this. Until `netconsole_enable`,
+ * characters only accumulate in a bounded buffer; after it, a completed line
+ * is sent. This never transmits while a transmit is already in progress, so a
+ * driver that reports an error from inside a flush cannot recurse.
  */
 void netconsole_putc(char c);
 
@@ -65,7 +68,7 @@ void netconsole_flush(void);
 /** Whether the log is going out on the wire. */
 int netconsole_is_enabled(void);
 
-/** The indented detail line under the boot banner. */
+/** Record the ethertype, the boot id, and the frame and drop counts. */
 void netconsole_print_info(void);
 
 #endif /* _NETCONSOLE_H_ */

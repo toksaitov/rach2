@@ -32,7 +32,7 @@
 #include "lib/kirq.h"
 #include "network/netconsole.h"
 
-/* The tick counter the scheduler keeps, at 100 Hz. Read for the timestamp and
+/* The timer's tick counter, at 100 Hz. Read for the timestamp and
    for nothing else; before the timer starts it is zero and a record reads
    `[0.00]`, which is the truth about a machine that has no clock yet. */
 extern volatile uint32_t kernel_ticks;
@@ -450,14 +450,6 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 /* ---- the console ---- */
 
-/**
- * Write one byte to the screen and the serial port, and nowhere else.
- *
- * This is the shell's terminal, so the bytes are passed through unchanged: an
- * escape sequence a line editor sent has to arrive as the sequence. The
- * newline is expanded to carriage return and newline for the serial side
- * alone, which is what a terminal on the other end of a wire expects.
- */
 /**
  * Write one byte to the screen and the port, expanding the newline.
  *

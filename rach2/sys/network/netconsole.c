@@ -1,9 +1,9 @@
 /*
  * netconsole.c: the kernel log, repeated onto the wire as broadcast frames.
  *
- * The whole of this file runs from inside `serial_putc`, which is called from
- * anywhere in the kernel including interrupt handlers and the panic path, so
- * it does three things and no others: it appends a byte to a fixed ring, it
+ * The whole of this file runs from inside `klog`'s delivery, which is entered
+ * from anywhere in the kernel including interrupt handlers and the panic path,
+ * so it does three things and no others: it appends a byte to a fixed ring, it
  * fills a fixed frame buffer, and it calls the Ethernet layer. It allocates
  * nothing and blocks on nothing.
  *
@@ -25,9 +25,12 @@
  * full ring is sixteen frames and the timer should not be held off across all
  * of them.
  *
- * Recursion. A driver reports a transmit error through the serial port, which
+ * Recursion. A driver reports a transmit error with a record of its own, which
  * arrives back here in the SAME context, where disabling interrupts protects
- * nothing. `nc_sending` is what stops that: while a frame is being sent, a
+ * nothing. A record raised on the delivery path cannot do it: `klog` sends a
+ * nested record to the ring alone. One raised inside `netconsole_flush` can,
+ * because the flush is entered from `netconsole_enable` and not from a
+ * delivery. `nc_sending` is what stops that: while a frame is being sent, a
  * character only joins the ring. That alone is not enough, because the
  * characters it adds would extend the drain that is running; so a drain also
  * fixes its end at the ring's head when it starts, and a chip that fails every
@@ -41,7 +44,6 @@
 #include "ethernet/ethernet.h"
 #include "ip/ip.h"
 #include "../lib/krandom.h"
-#include "../serial.h"
 
 /* What is held before transmitting starts, and while a frame is in flight.
  * Sized to carry a boot log's worth of output ahead of the device probe. */
@@ -105,12 +107,11 @@ void netconsole_flush(void)
         return;
     }
     nc_sending = 1;
-    /* Drain what is here NOW and stop. A driver that reports an error through
-     * the serial port on every transmit adds to the ring from inside this
-     * loop, and draining to a moving end would never finish: the machine would
-     * sit inside one printf with interrupts disabled, transmitting the report
-     * of its own failure to transmit. Whatever arrives during the drain goes
-     * out on the next one. */
+    /* Drain what is here NOW and stop. A driver that reports an error on every
+     * transmit adds to the ring from inside this loop, and draining to a moving
+     * end would never finish: the machine would sit inside one record with
+     * interrupts disabled, transmitting the report of its own failure to
+     * transmit. Whatever arrives during the drain goes out on the next one. */
     end = nc_head;
     net_unlock(flags);
 

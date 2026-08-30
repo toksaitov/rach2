@@ -452,7 +452,7 @@ static void keyboard_handler(isr_params_t *params)
          * parked the wake is a no-op and the byte waits as type-ahead for
          * the next read, the way the serial drain (console_pump_irq) queues
          * input that arrives un-parked. Unlike that drain, which suppresses
-         * echo (null_sink) to keep serial_putc's busy-wait out of the serial
+         * echo (null_sink) to keep serial_out's busy-wait out of the serial
          * RX IRQ, this echoes through the sink here: a keypress is one byte
          * (a single line edit at worst, ^U erasing a line), not a
          * UART-driven burst, so the in-IRQ wait is bounded. Without the sid
@@ -1716,10 +1716,9 @@ void kernel_shutdown(int how)
     } else {
         klog(KLOG_INFO, "shutdown", "no disk mount; nothing to unmount");
     }
-    /* Said on both, as every other line a person is meant to see is: k_puts
-     * reaches the screen and serial_printf reaches the serial line, and a
-     * machine being read over netconsole has no screen. This is the last
-     * thing such a machine says. */
+    /* A record rather than a console line, so it reaches the screen, the
+     * port, the ring and the wire alike: a machine being read over netconsole
+     * has no screen, and this is the last thing it says. */
     klog(KLOG_INFO, "shutdown", "Stopping the system. Goodbye!");
     /* Silence the network card, which until here has been free to write into
      * its receive ring whenever a frame arrives. Nothing after this is put on

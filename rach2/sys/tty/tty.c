@@ -350,7 +350,8 @@ static void console_pump(struct tty *t)
 }
 
 /* The timer-IRQ drain: like console_pump but with echo SUPPRESSED. Echo runs
- * through serial_putc, which busy-waits on the UART transmit-holding register:
+ * through console_sink to serial_out, which busy-waits on the UART
+ * transmit-holding register:
  * unacceptable in interrupt context, where a 64-byte burst could mask
  * interrupts for milliseconds. n_tty_receive still recognizes ISIG chars and
  * queues type-ahead independent of the (here null) sink, so a serial ^C/^Z
