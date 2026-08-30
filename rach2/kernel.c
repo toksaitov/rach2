@@ -243,7 +243,7 @@ void terminate_current_process(int32_t signo)
         signal_post(parent, SIGCHLD);
         if (parent->state == PROC_BLOCKED) {
             parent->state = PROC_READY;
-            serial_printf("terminate: woke parent process %d\n", parent->pid);
+            klog(KLOG_INFO, "terminate", "woke parent process %d", parent->pid);
         }
     }
 
@@ -326,7 +326,7 @@ void terminate_current_process(int32_t signo)
  */
 static void kill_foreground_process(void)
 {
-    k_puts("^C");
+    console_puts("^C");
     if (console_tty.fg_pgid != 0) {
         tty_signal_group(console_tty.fg_pgid, SIGINT);
     } else if (current_proc && current_proc->cr3 != 0 &&
@@ -482,23 +482,23 @@ static void keyboard_handler(isr_params_t *params)
             }
             cmd_buffer[cmd_pos] = '\0';
             cmd_ready = true;
-            k_putc('\n');
+            console_putc('\n');
         } else if (c == '\b') {
             if (k_scrollback_is_active()) {
                 k_scrollback_end();
             }
             if (cmd_pos > 0) {
                 --cmd_pos;
-                k_putc('\b');
-                k_putc(' ');
-                k_putc('\b');
+                console_putc('\b');
+                console_putc(' ');
+                console_putc('\b');
             }
         } else if (c != 0 && cmd_pos < CMD_BUFFER_SIZE - 1) {
             if (k_scrollback_is_active()) {
                 k_scrollback_end();
             }
             cmd_buffer[cmd_pos++] = c;
-            k_putc(c);
+            console_putc(c);
         }
     }
 
@@ -570,21 +570,21 @@ static bool test_strings(void)
 
 static void test_display(void)
 {
-    k_printf("  Display colors:     ");
+    console_printf("  Display colors:     ");
     set_fore_color(red);
-    k_printf("Red ");
+    console_printf("Red ");
     set_fore_color(green);
-    k_printf("Green ");
+    console_printf("Green ");
     set_fore_color(cyan);
-    k_printf("Cyan ");
+    console_printf("Cyan ");
     set_fore_color(light_magenta);
-    k_printf("Magenta ");
+    console_printf("Magenta ");
     set_fore_color(light_brown);
-    k_printf("Yellow ");
+    console_printf("Yellow ");
     set_fore_color(white);
-    k_printf("White");
+    console_printf("White");
     set_fore_color(light_grey);
-    k_puts("");
+    console_puts("");
 }
 
 static bool test_timer(void)
@@ -691,10 +691,10 @@ static bool test_usermode(void)
     uintptr_t page;
     uint32_t i;
 
-    serial_printf("  Usermode test: func=0x%X msg=0x%X\n", func_addr, msg_addr);
+    console_printf("  Usermode test: func=0x%X msg=0x%X\n", func_addr, msg_addr);
 
     user_stack_addr = mem_reserve(USER_STACK_SIZE, true);
-    serial_printf("  Usermode test: stack=0x%X\n", user_stack_addr);
+    console_printf("  Usermode test: stack=0x%X\n", user_stack_addr);
 
     /* The function code may span two pages. */
     for (page = func_addr & ~0xFFF; page <= ((func_addr + 256) & ~0xFFF); page += PAGE_SIZE) {
@@ -707,13 +707,13 @@ static bool test_usermode(void)
         paging_set_user(page, true);
     }
 
-    serial_printf("  Usermode test: pages marked user-accessible\n");
+    console_printf("  Usermode test: pages marked user-accessible\n");
 
     for (i = 0; i < 3; i++) {
         __asm__ __volatile__("hlt");
     }
 
-    serial_printf("  Usermode test: entering ring 3...\n");
+    console_printf("  Usermode test: entering ring 3...\n");
 
     enter_usermode(func_addr, user_stack_addr + USER_STACK_SIZE);
 
@@ -745,15 +745,15 @@ static void test_switch(void)
 {
     uintptr_t stack_b;
 
-    k_puts("Testing context switch between two processes...");
-    k_puts("Expected output: ABABABABAB done");
-    k_printf("Result:          ");
+    console_puts("Testing context switch between two processes...");
+    console_puts("Expected output: ABABABABAB done");
+    console_printf("Result:          ");
 
     switch_proc_a = current_proc;
 
     switch_proc_b = alloc_process();
     if (!switch_proc_b) {
-        k_puts("Failed to allocate process B");
+        console_puts("Failed to allocate process B");
         return;
     }
 
@@ -764,7 +764,7 @@ static void test_switch(void)
 
     setup_process_stack(switch_proc_b, proc_b_entry);
 
-    serial_printf("Process B created: pid=%d stack=0x%X\n",
+    console_printf("Process B created: pid=%d stack=0x%X\n",
                   switch_proc_b->pid, switch_proc_b->kernel_stack);
 
     switch_count = 0;
@@ -775,13 +775,13 @@ static void test_switch(void)
         switch_context(switch_proc_a, switch_proc_b);
     }
 
-    k_puts("");
+    console_puts("");
 
     free_process(switch_proc_b);
     switch_proc_b = NULL;
 
     set_fore_color(light_green);
-    k_puts("Context switch test passed!");
+    console_puts("Context switch test passed!");
     set_fore_color(light_grey);
 }
 
@@ -851,11 +851,11 @@ static void test_preempt(void)
     process_t *proc_b;
     uintptr_t stack_a, stack_b;
 
-    k_puts("Testing preemptive round-robin scheduling...");
-    k_puts("Two processes will print A and B, preempted by timer.");
-    k_puts("Expected: interleaved As and Bs (e.g., AABBABAB...)");
-    k_printf("Result:   ");
-    serial_printf("Result:   ");
+    console_puts("Testing preemptive round-robin scheduling...");
+    console_puts("Two processes will print A and B, preempted by timer.");
+    console_puts("Expected: interleaved As and Bs (e.g., AABBABAB...)");
+    console_printf("Result:   ");
+    console_printf("Result:   ");
 
     preempt_done = 0;
     preempt_count_a = 0;
@@ -863,7 +863,7 @@ static void test_preempt(void)
 
     proc_a = alloc_process();
     if (!proc_a) {
-        k_puts("Failed to allocate process A");
+        console_puts("Failed to allocate process A");
         return;
     }
     stack_a = mem_reserve(KERNEL_STACK_SIZE, true);
@@ -875,7 +875,7 @@ static void test_preempt(void)
     proc_b = alloc_process();
     if (!proc_b) {
         free_process(proc_a);
-        k_puts("Failed to allocate process B");
+        console_puts("Failed to allocate process B");
         return;
     }
     stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
@@ -892,22 +892,22 @@ static void test_preempt(void)
 
     sched_disable();
 
-    k_puts("");
-    serial_printf("\n");
-    k_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
-    serial_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
+    console_puts("");
+    console_printf("\n");
+    console_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
+    console_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
 
     free_process(proc_a);
     free_process(proc_b);
 
     if (preempt_count_a > 0 && preempt_count_b > 0) {
         set_fore_color(light_green);
-        k_puts("Preemptive scheduling test passed!");
-        serial_printf("Preemptive scheduling test passed!\n");
+        console_puts("Preemptive scheduling test passed!");
+        console_printf("Preemptive scheduling test passed!\n");
     } else {
         set_fore_color(light_red);
-        k_puts("Preemptive scheduling test FAILED - one process didn't run!");
-        serial_printf("Preemptive scheduling test FAILED!\n");
+        console_puts("Preemptive scheduling test FAILED - one process didn't run!");
+        console_printf("Preemptive scheduling test FAILED!\n");
     }
     set_fore_color(light_grey);
 }
@@ -1040,13 +1040,13 @@ static bool test_krffs_write(void)
     }
 
     if (krffs_create(test_filename) != 0) {
-        serial_printf("KRFFS write test: create failed\n");
+        console_printf("KRFFS write test: create failed\n");
         return false;
     }
 
     bytes_written = krffs_write(test_filename, test_data, k_strlen(test_data), 0);
     if (bytes_written != (int)k_strlen(test_data)) {
-        serial_printf("KRFFS write test: write failed (%d)\n", bytes_written);
+        console_printf("KRFFS write test: write failed (%d)\n", bytes_written);
         krffs_unlink(test_filename);
         return false;
     }
@@ -1054,13 +1054,13 @@ static bool test_krffs_write(void)
     bytes_read = krffs_read(test_filename, read_buffer, 63, 0);
     read_buffer[bytes_read > 0 ? bytes_read : 0] = '\0';
     if (bytes_read != (int)k_strlen(test_data) || !str_equal(read_buffer, test_data)) {
-        serial_printf("KRFFS write test: read verify failed\n");
+        console_printf("KRFFS write test: read verify failed\n");
         krffs_unlink(test_filename);
         return false;
     }
 
     if (krffs_rename(test_filename, renamed_filename) != 0) {
-        serial_printf("KRFFS write test: rename failed\n");
+        console_printf("KRFFS write test: rename failed\n");
         krffs_unlink(test_filename);
         return false;
     }
@@ -1068,18 +1068,18 @@ static bool test_krffs_write(void)
     bytes_read = krffs_read(renamed_filename, read_buffer, 63, 0);
     read_buffer[bytes_read > 0 ? bytes_read : 0] = '\0';
     if (!str_equal(read_buffer, test_data)) {
-        serial_printf("KRFFS write test: rename verify failed\n");
+        console_printf("KRFFS write test: rename verify failed\n");
         krffs_unlink(renamed_filename);
         return false;
     }
 
     if (krffs_unlink(renamed_filename) != 0) {
-        serial_printf("KRFFS write test: unlink failed\n");
+        console_printf("KRFFS write test: unlink failed\n");
         return false;
     }
 
     if (krffs_open(renamed_filename) == 0) {
-        serial_printf("KRFFS write test: file still exists after unlink\n");
+        console_printf("KRFFS write test: file still exists after unlink\n");
         return false;
     }
 
@@ -1192,32 +1192,32 @@ static void exec_program(int argc, char *argv[])
     static char *default_envp[] = {"PATH=/bin:/usr/bin:/", "HOME=/", "TERM=rach2", 0};
 
     if (argc < 1 || !argv || !argv[0]) {
-        k_puts("exec: No program specified");
+        console_puts("exec: No program specified");
         return;
     }
 
     path = argv[0];
 
     if (!krffs_fs) {
-        k_puts("exec: No file system mounted");
+        console_puts("exec: No file system mounted");
         return;
     }
 
     if (krffs_open(path) != 0) {
-        k_printf("exec: File not found: %s\n", path);
+        console_printf("exec: File not found: %s\n", path);
         return;
     }
 
     user_dir = clone_page_directory();
     if (!user_dir) {
-        k_puts("exec: Failed to clone page directory");
+        console_puts("exec: Failed to clone page directory");
         return;
     }
 
     /* Stream the segments straight from KRFFS (no whole-file buffer, so the
      * binary size is unbounded); img records entry and auxv metadata. */
     if (elf_load_image(exec_krffs_read, (void *)path, user_dir, &img) != 0) {
-        k_puts("exec: Failed to load ELF segments");
+        console_puts("exec: Failed to load ELF segments");
         return;
     }
     entry_point = img.entry;
@@ -1225,7 +1225,7 @@ static void exec_program(int argc, char *argv[])
     user_stack_vaddr = USER_STACK_BASE;
     user_stack_phys = alloc_user_page(user_dir, user_stack_vaddr);
     if (user_stack_phys == 0) {
-        k_puts("exec: Failed to allocate user stack");
+        console_puts("exec: Failed to allocate user stack");
         return;
     }
 
@@ -1238,13 +1238,13 @@ static void exec_program(int argc, char *argv[])
     user_esp = build_user_stack((void *)user_stack_phys, user_stack_vaddr, PAGE_SIZE,
                                 argc, argv, default_envp, &img, random16, 0);
     if (user_esp == 0) {
-        k_puts("exec: argv/env too large for the initial stack");
+        console_puts("exec: argv/env too large for the initial stack");
         return;
     }
 
     user_proc = alloc_process();
     if (!user_proc) {
-        k_puts("exec: Failed to allocate process");
+        console_puts("exec: Failed to allocate process");
         return;
     }
 
@@ -1304,7 +1304,7 @@ static void exec_program(int argc, char *argv[])
 
     enter_usermode(entry_point, user_esp);
 
-    k_puts("exec: returned from user mode");
+    console_puts("exec: returned from user mode");
 }
 
 /**
@@ -1328,14 +1328,15 @@ static void refuse_unmounted_root(void)
     }
 
     set_fore_color(light_red);
-    k_puts("");
-    k_puts("boot: refused: no file system mounted");
+    klog(KLOG_WARN, "boot", "refused: no file system mounted");
     set_fore_color(light_grey);
-    k_puts("  Nothing mounted, so /sbin/init cannot be reached and this");
-    k_puts("  machine would fall to a shell that authenticates nobody.");
-    k_puts("  Check the root this boot line asks for, or add rach2.rescue");
-    k_puts("  to ask for that shell deliberately.");
-    serial_printf("boot: refused: no file system mounted and no rach2.rescue: "
+    klog(KLOG_WARN, "boot",
+         "nothing mounted, so /sbin/init cannot be reached and this machine "
+         "would fall to a shell that authenticates nobody");
+    klog(KLOG_WARN, "boot",
+         "check the root this boot line asks for, or add rach2.rescue to ask "
+         "for that shell deliberately");
+    klog(KLOG_WARN, "boot", "refused: no file system mounted and no rach2.rescue: "
                   "the debug shell authenticates nobody\n");
     for (;;) {
         __asm__ __volatile__("cli; hlt");
@@ -1368,14 +1369,16 @@ static void refuse_contradictory_boot_line(void)
     }
 
     set_fore_color(light_red);
-    k_puts("");
-    k_puts("boot: refused: rach2.nodisk with a root on the disk");
+    klog(KLOG_WARN, "boot", "refused: rach2.nodisk with a root on the disk");
     set_fore_color(light_grey);
-    k_puts("  rach2.nodisk skips the disk this boot line asks to mount, so");
-    k_puts("  nothing would mount and the machine would fall to a shell that");
-    k_puts("  authenticates nobody. Drop one of the two, or add rach2.rescue");
-    k_puts("  to ask for that shell deliberately.");
-    serial_printf("boot: refused: rach2.nodisk with rach2.fsdisk or "
+    klog(KLOG_WARN, "boot",
+         "rach2.nodisk skips the disk this boot line asks to mount, so nothing "
+         "would mount and the machine would fall to a shell that "
+         "authenticates nobody");
+    klog(KLOG_WARN, "boot",
+         "drop one of the two, or add rach2.rescue to ask for that shell "
+         "deliberately");
+    klog(KLOG_WARN, "boot", "refused: rach2.nodisk with rach2.fsdisk or "
                   "rach2.root=disk and no rach2.rescue: nothing would mount "
                   "and the debug shell authenticates nobody\n");
     for (;;) {
@@ -1395,9 +1398,8 @@ static void refuse_contradictory_boot_line(void)
  */
 void panic_init_died(uint32_t pid)
 {
-    k_puts("");
-    k_puts("kernel panic: init died");
-    serial_printf("panic: init (pid %d) exited; halting "
+
+    klog(KLOG_CRIT, "panic", "init (pid %d) exited; halting "
                   "(boot rach2.rescue for the debug shell)\n", (int)pid);
     sched_disable();
     for (;;) {
@@ -1421,18 +1423,18 @@ static void boot_init_process(void)
     char *init_argv[2];
 
     if (!krffs_fs) {
-        k_puts("boot: no RAM disk; falling back to kernel debug shell");
+        klog(KLOG_WARN, "boot", "no RAM disk; falling back to the debug shell");
         return;
     }
 
     if (krffs_open(init_path) != 0) {
-        k_puts("boot: no /sbin/init in RAM disk; falling back to kernel debug shell");
+        klog(KLOG_WARN, "boot",
+             "no /sbin/init in the RAM disk; falling back to the debug shell");
         return;
     }
 
     k_cls();
-    k_puts("boot: starting /sbin/init");
-    k_puts("");
+    klog(KLOG_INFO, "boot", "starting /sbin/init");
 
     /* Only now, past the point where this boot is certainly starting init, so
      * the rescue and init-less boots keep the numbering every probe and the
@@ -1448,9 +1450,8 @@ static void boot_init_process(void)
      * to an unauthenticated debug shell would hide the failure, so halt. A
      * genuinely init-less image (the test one) took the early return above
      * instead. */
-    k_puts("");
-    k_puts("kernel panic: init failed to start");
-    serial_printf("panic: %s present but failed to load; halting "
+
+    klog(KLOG_CRIT, "panic", "%s present but failed to load; halting "
                   "(boot rach2.rescue for the debug shell)\n", init_path);
     sched_disable();
     for (;;) {
@@ -1500,7 +1501,8 @@ static bool test_pagecache(void)
     /* Skip when the window is too small for the probe, or already backs a live
        file system (driving the stub through it would clobber that mount). */
     if (pc_window_size() < PC_TEST_PAGES * PAGE_SIZE || pc_has_backing()) {
-        serial_printf("VMPROBE PAGECACHE OK n=0 evict=0 wb=0 (skipped)\n");
+        klog(KLOG_DEBUG, "pagecache",
+             "VMPROBE PAGECACHE OK n=0 evict=0 wb=0 (skipped)");
         return true;
     }
 
@@ -1536,7 +1538,7 @@ static bool test_pagecache(void)
         ok = false;
     }
 
-    serial_printf("VMPROBE PAGECACHE %s n=%d evict=%d wb=%d\n",
+    klog(KLOG_DEBUG, "pagecache", "VMPROBE PAGECACHE %s n=%d evict=%d wb=%d",
                   ok ? "OK" : "FAIL", (int) pc_stat_reads(),
                   (int) pc_stat_evictions(), (int) pc_stat_writebacks());
 
@@ -1585,7 +1587,7 @@ static int krffs_stub_write(uint32_t off, const void *page)
 static int init_krffs_window(uint8_t *disk_base, uint32_t disk_size)
 {
     if (disk_size > pc_window_size()) {
-        serial_printf("KRFFS: disk size %d exceeds window %d\n",
+        klog(KLOG_WARN, "krffs", "disk size %d exceeds window %d",
                       disk_size, pc_window_size());
         return -1;
     }
@@ -1659,12 +1661,12 @@ static int krffs_disk_mark_clean(void)
     mode = root->mode;
 
     if (pc_sync() != 0) {
-        serial_printf("KRFFS: flush failed before the clear; image stays dirty\n");
+        klog(KLOG_WARN, "krffs", "flush failed before the clear; image stays dirty");
         return -1;
     }
     root->mode = (uint16_t) (mode & ~KRFFS_MODE_DIRTY);
     if (pc_sync() != 0) {
-        serial_printf("KRFFS: flush failed after the clear; image stays dirty\n");
+        klog(KLOG_WARN, "krffs", "flush failed after the clear; image stays dirty");
         return -1;
     }
 
@@ -1707,19 +1709,18 @@ void kernel_shutdown(int how)
 
     if (_krffs_on_disk) {
         if (krffs_disk_mark_clean() == 0) {
-            serial_printf("shutdown: clean unmount: dirty-mount flag cleared\n");
+            klog(KLOG_INFO, "shutdown", "clean unmount: dirty-mount flag cleared");
         }
     } else if (pc_sync() != 0) {
-        serial_printf("shutdown: page cache flush failed\n");
+        klog(KLOG_WARN, "shutdown", "page cache flush failed");
     } else {
-        serial_printf("shutdown: no disk mount; nothing to unmount\n");
+        klog(KLOG_INFO, "shutdown", "no disk mount; nothing to unmount");
     }
     /* Said on both, as every other line a person is meant to see is: k_puts
      * reaches the screen and serial_printf reaches the serial line, and a
      * machine being read over netconsole has no screen. This is the last
      * thing such a machine says. */
-    k_puts("Stopping the system. Goodbye!");
-    serial_printf("Stopping the system. Goodbye!\n");
+    klog(KLOG_INFO, "shutdown", "Stopping the system. Goodbye!");
     /* Silence the network card, which until here has been free to write into
      * its receive ring whenever a frame arrives. Nothing after this is put on
      * the wire, and that is a contract rather than an oversight: netconsole
@@ -1786,24 +1787,24 @@ static void discover_boot_devices(void)
         return;
     }
     if (block0->read(block0, 0, 1, mbr) != 0) {
-        serial_printf("block: MBR read failed; no boot devices\n");
+        klog(KLOG_WARN, "block", "MBR read failed; no boot devices");
         return;
     }
     if (mbr_parse(mbr, disc_parts) != 0) {
-        serial_printf("block: no MBR signature; no boot devices\n");
+        klog(KLOG_WARN, "block", "no MBR signature; no boot devices");
         return;
     }
     disc_table_ok = 1;
 
     if (mbr_gap_clear(disc_parts) != 0) {
-        serial_printf("block: a partition occupies the boot loader's gap; "
+        klog(KLOG_INFO, "block", "a partition occupies the boot loader's gap; "
                       "/dev/grubcore absent\n");
     } else {
         devfs_grubcore_publish(block0);
     }
 
     if (mbr_bootpart_ok(disc_parts, block0->sector_count) != 0) {
-        serial_printf("block: entry 0 is not a boot partition; /dev/bootpart absent\n");
+        klog(KLOG_WARN, "block", "entry 0 is not a boot partition; /dev/bootpart absent");
         return;
     }
     devfs_bootpart_publish(block0, disc_parts[0].start_lba, disc_parts[0].sector_count);
@@ -1829,11 +1830,11 @@ static int init_krffs_disk(void)
     int found = -1;
 
     if (block_ready() != 0 || !block0) {
-        serial_printf("KRFFS: no boot disk\n");
+        klog(KLOG_WARN, "krffs", "no boot disk");
         return -1;
     }
     if (!disc_table_ok) {
-        serial_printf("KRFFS: no usable partition table\n");
+        klog(KLOG_WARN, "krffs", "no usable partition table");
         return -1;
     }
 
@@ -1863,7 +1864,7 @@ static int init_krffs_disk(void)
         }
     }
     if (found < 0) {
-        serial_printf("KRFFS: no KRFFS partition on the disk\n");
+        klog(KLOG_WARN, "krffs", "no KRFFS partition on the disk");
         return -1;
     }
 
@@ -1873,17 +1874,17 @@ static int init_krffs_disk(void)
        inside 32 bits, since the window is capped well below). */
     if (sector_count == 0 ||
         sector_count % (PAGE_SIZE / BLOCK_SECTOR_SIZE) != 0) {
-        serial_printf("KRFFS: partition is empty or not page-aligned (%d sectors)\n",
+        klog(KLOG_WARN, "krffs", "partition is empty or not page-aligned (%d sectors)",
                       sector_count);
         return -1;
     }
     if (start_lba > block0->sector_count ||
         sector_count > block0->sector_count - start_lba) {
-        serial_printf("KRFFS: partition runs past the disk\n");
+        klog(KLOG_WARN, "krffs", "partition runs past the disk");
         return -1;
     }
     if (sector_count > pc_window_size() / BLOCK_SECTOR_SIZE) {
-        serial_printf("KRFFS: partition %d sectors exceeds the window\n",
+        klog(KLOG_WARN, "krffs", "partition %d sectors exceeds the window",
                       sector_count);
         return -1;
     }
@@ -1904,7 +1905,7 @@ static int init_krffs_disk(void)
         uint32_t reaped;
 
         if (root->mode & KRFFS_MODE_DIRTY) {
-            serial_printf("KRFFS: not cleanly unmounted last time; run fsck.krffs\n");
+            klog(KLOG_WARN, "krffs", "not cleanly unmounted last time; run fsck.krffs");
         }
         root->mode |= KRFFS_MODE_DIRTY;
         if (pc_sync() != 0) {
@@ -1913,7 +1914,7 @@ static int init_krffs_disk(void)
                init_krffs already published krffs_fs at the window, so unpublish
                it before dropping the backing or a later path would dereference
                the now-unbacked window. */
-            serial_printf("KRFFS: dirty flag did not reach the disk; mount aborted\n");
+            klog(KLOG_WARN, "krffs", "dirty flag did not reach the disk; mount aborted");
             krffs_fs = 0;
             pc_set_backing(0, 0, 0);
             return -1;
@@ -1935,10 +1936,10 @@ static int init_krffs_disk(void)
            and gating would strand it the moment fsck.krffs cleared the flag. */
         reaped = krffs_reap_orphans();
         if (reaped != 0) {
-            serial_printf("KRFFS: reaped %d orphan(s) with no descriptor left\n",
+            klog(KLOG_INFO, "krffs", "reaped %d orphan(s) with no descriptor left",
                           (int) reaped);
             if (pc_sync() != 0) {
-                serial_printf("KRFFS: the orphan repair did not reach the disk\n");
+                klog(KLOG_WARN, "krffs", "the orphan repair did not reach the disk");
             }
         }
     }
@@ -2687,7 +2688,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     uint32_t num_modules;
 
     serial_init();
-    serial_printf("======= Rach2 Booting... =======\n\n");
+    klog(KLOG_INFO, "boot", "Rach2 Booting");
 
     /* Parse multiboot modules BEFORE paging: reading module info needs direct
      * physical access. */
@@ -2760,7 +2761,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_cls();
 
-    klog(KLOG_INFO, "boot", "Rach2 Booting");
     klog(KLOG_INFO, "boot", "Initializing system components");
 
     init_gdt();
@@ -2817,12 +2817,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
          * /dev/[u]random work; jitter is best-effort only, and the crypto
          * sources then fail closed. */
         int src = krandom_source();
-        const char *desc = (src == KRANDOM_SRC_RDSEED)   ? " OK (RDSEED, trusted)"
-                           : (src == KRANDOM_SRC_RDRAND) ? " OK (RDRAND, trusted)"
-                                                         : " OK (jitter, best-effort; "
-                                                           "crypto RNG fails closed)";
-        set_fore_color(src == KRANDOM_SRC_JITTER ? light_brown : light_green);
-        klog(KLOG_INFO, "entropy", "%s", desc);
+        const char *desc = (src == KRANDOM_SRC_RDSEED)   ? "RDSEED, trusted"
+                           : (src == KRANDOM_SRC_RDRAND) ? "RDRAND, trusted"
+                                                         : "jitter, best-effort; "
+                                                           "the crypto RNG fails closed";
+        klog(src == KRANDOM_SRC_JITTER ? KLOG_WARN : KLOG_INFO, "entropy",
+             "ready: %s", desc);
     }
     set_fore_color(light_grey);
 
@@ -2899,7 +2899,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * touched one, and the same string is what check_diskpolicy.sh reads
      * out of the artifact. */
     klog(diskcmd_policy() == DISKCMD_READ_WRITE ? KLOG_INFO : KLOG_WARN, "disk",
-         "%s", diskcmd_policy_banner);
+         "policy: %s",
+         diskcmd_policy() == DISKCMD_READ_WRITE ? "read-write" : "read-only");
 
 
     if (num_modules > 0) {

@@ -204,7 +204,8 @@ static void diag_summary(void)
         (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4),
         (unsigned)(net_mac[4] & 0xF), (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
 
-    klog(KLOG_INFO, "diag", "%s", diskcmd_policy_banner);
+    klog(KLOG_INFO, "diag", "disk policy: %s",
+         diskcmd_policy() == DISKCMD_READ_WRITE ? "read-write" : "read-only");
 
     klog(KLOG_INFO, "diag", "entropy: %s",
          krandom_is_trusted() ? "trusted" : "not trusted");
