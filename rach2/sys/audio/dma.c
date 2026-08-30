@@ -2,6 +2,7 @@
  * ISA DMA controller (8237A) driver for Sound Blaster 16 audio transfers.
  */
 
+#include "../klog.h"
 #include "dma.h"
 #include "../kio.h"
 #include "../serial.h"
@@ -133,7 +134,7 @@ int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode)
     }
 
     if (!dma_address_valid(buffer, length, channel >= 4)) {
-        serial_printf("DMA: Invalid address 0x%x length %d\n", buffer, length);
+        klog(KLOG_ERR, "dma", "refused: address 0x%x, %d bytes", buffer, length);
         return -1;
     }
 

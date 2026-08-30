@@ -3,6 +3,7 @@
  * double-buffered for continuous output.
  */
 
+#include "../klog.h"
 #include "sb16.h"
 #include "dma.h"
 #include "../kio.h"
@@ -199,7 +200,7 @@ static bool dsp_read_ready(void)
 static bool dsp_write(uint8_t value)
 {
     if (!dsp_write_ready()) {
-        serial_printf("SB16: DSP write timeout\n");
+        klog(KLOG_WARN, "sb16", "dsp: write timed out");
         return false;
     }
     outb(sb16_base + SB16_WRITE_DATA, value);
@@ -212,7 +213,7 @@ static bool dsp_write(uint8_t value)
 static uint8_t dsp_read(void)
 {
     if (!dsp_read_ready()) {
-        serial_printf("SB16: DSP read timeout\n");
+        klog(KLOG_WARN, "sb16", "dsp: read timed out");
         return 0;
     }
     return inb(sb16_base + SB16_READ_DATA);
@@ -382,7 +383,7 @@ bool sb16_probe(uint16_t base)
     dsp_version |= dsp_read();
 
     if ((dsp_version >> 8) < 4) {
-        serial_printf("SB16: Found SB (version %d.%d), need SB16\n",
+        klog(KLOG_INFO, "sb16", "found version %d.%d, which is not an SB16",
                       dsp_version >> 8, dsp_version & 0xFF);
         return false;
     }
@@ -473,7 +474,7 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
     is_16bit = (format == AUDIO_S16LE);
 
     if (sample_rate < 5000 || sample_rate > 44100) {
-        serial_printf("SB16: Invalid sample rate %d\n", sample_rate);
+        klog(KLOG_WARN, "sb16", "refused: sample rate %d", sample_rate);
         return -1;
     }
 

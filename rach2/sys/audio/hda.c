@@ -6,6 +6,7 @@
  * and PCM frames stream out of a cyclic BDL via the controller's DMA engine.
  */
 
+#include "../klog.h"
 #include "hda.h"
 #include "../kio.h"
 #include "../serial.h"
@@ -110,7 +111,6 @@ static volatile int16_t out_max_s16 = 0;
 static char hda_boot_status[48] = "Intel HD Audio";
 static bool hda_probe_log_enabled = false;
 
-static void hda_serial_putc_crlf(char c);
 static void hda_probe_log(const char *format, ...);
 static void hda_build_boot_status(void);
 
@@ -311,6 +311,39 @@ void hda_set_output_mode(int mode)
     hda_output_mode = mode;
 }
 
+/*
+ * The bring-up trace, which composes its lines from fragments: a step prints
+ * its name, then the reason, then "OK" or "FAIL" and the newline. A record is
+ * a whole line, so the fragments are gathered here and one record is emitted
+ * when the line ends. A line longer than the buffer is emitted at the length
+ * that fits, which is the same thing the record builder does.
+ */
+static char hda_trace_line[192];
+static unsigned hda_trace_len;
+
+static void hda_trace_putc(char c)
+{
+    if (c == '\n') {
+        const char *text = hda_trace_line;
+
+        hda_trace_line[hda_trace_len] = '\0';
+        /* Some fragments name the subsystem themselves, from when this went
+           to the serial port unprefixed; the record already says it. */
+        if (hda_trace_len >= 5 && text[0] == 'H' && text[1] == 'D' &&
+            text[2] == 'A' && text[3] == ':' && text[4] == ' ') {
+            text += 5;
+        }
+        if (hda_trace_len > 0) {
+            klog(KLOG_DEBUG, "hda", "%s", text);
+        }
+        hda_trace_len = 0;
+        return;
+    }
+    if (hda_trace_len + 1 < sizeof(hda_trace_line)) {
+        hda_trace_line[hda_trace_len++] = c;
+    }
+}
+
 static void hda_probe_log(const char *format, ...)
 {
     char **args = (char **)&format;
@@ -320,7 +353,7 @@ static void hda_probe_log(const char *format, ...)
     }
 
     ++args;
-    k_vprintf(hda_serial_putc_crlf, format, args);
+    k_vprintf(hda_trace_putc, format, args);
 }
 
 /**
@@ -671,7 +704,7 @@ static bool hda_stream_reset(int stream)
         hda_delay(1);
     }
     if (timeout <= 0) {
-        serial_printf("HDA: Stream reset timeout (set)\n");
+        klog(KLOG_WARN, "hda", "stream reset: the set never took");
         return false;
     }
 
@@ -681,7 +714,7 @@ static bool hda_stream_reset(int stream)
         hda_delay(1);
     }
     if (timeout <= 0) {
-        serial_printf("HDA: Stream reset timeout (clear)\n");
+        klog(KLOG_WARN, "hda", "stream reset: the clear never took");
         return false;
     }
 
@@ -805,7 +838,7 @@ static bool hda_reset(void)
         hda_delay(10);
     }
     if (timeout <= 0) {
-        serial_printf("HDA: Reset timeout (enter)\n");
+        klog(KLOG_WARN, "hda", "reset: the controller never entered it");
         return false;
     }
 
@@ -819,7 +852,7 @@ static bool hda_reset(void)
         hda_delay(10);
     }
     if (timeout <= 0) {
-        serial_printf("HDA: Reset timeout (exit)\n");
+        klog(KLOG_WARN, "hda", "reset: the controller never left it");
         return false;
     }
 
@@ -948,7 +981,9 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
         hda_delay(1);
     }
     if (timeout <= 0) {
-        if (debug) serial_printf("HDA: ICI busy\n");
+        if (debug) {
+            klog(KLOG_DEBUG, "hda", "verb: the command interface is busy");
+        }
         return 0;
     }
 
@@ -972,7 +1007,7 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
         if (!(ics & HDA_ICS_ICB)) {
             /* ICB cleared without IRV: command done, no response. */
             if (debug) {
-                serial_printf("HDA: no IRV, ics=0x%x\n", ics);
+                klog(KLOG_DEBUG, "hda", "verb: no response valid, ics 0x%x", ics);
                 verb_debug_count--;
             }
             return 0;
@@ -981,7 +1016,7 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
     }
 
     if (debug) {
-        serial_printf("HDA: verb timeout, ics=0x%x\n", hda_read16(HDA_ICS));
+        klog(KLOG_WARN, "hda", "verb: timed out, ics 0x%x", hda_read16(HDA_ICS));
         verb_debug_count--;
     }
     return 0;
@@ -1679,25 +1714,14 @@ static void hda_shutdown(void)
     hda_base = NULL;
 }
 
-static void hda_serial_putc_crlf(char c)
-{
-    if (c == '\n') {
-        serial_putc('\r');
-    }
-    serial_putc(c);
-}
-
-static void hda_putc_both(char c)
-{
-    k_putc(c);
-    hda_serial_putc_crlf(c);
-}
-
+/* The codec dump, which the `audio` shell command prints for a person who
+   asked for it: the screen and the port, and neither the log nor the wire. */
 static void hda_log(const char *format, ...)
 {
     char **args = (char **)&format;
+
     ++args;
-    k_vprintf(hda_putc_both, format, args);
+    k_vprintf(console_putc, format, args);
 }
 
 static const char *hda_widget_type_name(uint8_t type)

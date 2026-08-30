@@ -1,10 +1,14 @@
 /*
- * audio_debug.c - Kernel shell audio debug helpers
+ * audio_debug.c: the shell's `audio` command.
+ *
+ * Everything here is printed because a person asked for it at the prompt, so
+ * it goes through the console calls: the screen and the serial port, and
+ * neither the machine's log nor the wire.
  */
 
 #include "audio_debug.h"
 #include "hda.h"
-#include "../kio.h"
+#include "../klog.h"
 #include "../lib/kstring.h"
 
 extern volatile uint32_t kernel_ticks;
@@ -192,7 +196,7 @@ static void audio_run_scale_test(uint32_t duration_ms)
     const size_t num_notes = sizeof(freqs) / sizeof(freqs[0]);
 
     if (!audio) {
-        k_puts("No audio driver.");
+        console_puts("No audio driver.");
         return;
     }
 
@@ -222,7 +226,7 @@ static void audio_run_scale_test(uint32_t duration_ms)
     }
 
     if (audio->start(sample_rate, AUDIO_S16LE, channels) != 0) {
-        k_puts("AUDIO_START failed.");
+        console_puts("AUDIO_START failed.");
         audio_stop_playback();
         return;
     }
@@ -231,7 +235,7 @@ static void audio_run_scale_test(uint32_t duration_ms)
         audio->set_volume(80);
     }
 
-    k_printf("Playing scale test (%d ms) using %s...\n", duration_ms, audio_get_driver_name());
+    console_printf("Playing scale test (%d ms) using %s...\n", duration_ms, audio_get_driver_name());
 
     start_ticks = kernel_ticks;
     total_ticks = duration_ms / 10;
@@ -258,7 +262,7 @@ static void audio_run_scale_test(uint32_t duration_ms)
     }
 
     audio_stop_playback();
-    k_puts("Done.");
+    console_puts("Done.");
 }
 
 /**
@@ -288,7 +292,7 @@ static void audio_run_write_test(uint32_t duration_ms)
     const size_t num_notes = sizeof(freqs) / sizeof(freqs[0]);
 
     if (!audio) {
-        k_puts("No audio driver.");
+        console_puts("No audio driver.");
         return;
     }
 
@@ -299,7 +303,7 @@ static void audio_run_write_test(uint32_t duration_ms)
     audio_stop_playback();
 
     if (audio->start(sample_rate, AUDIO_U8, 1) != 0) {
-        k_puts("AUDIO_START failed.");
+        console_puts("AUDIO_START failed.");
         return;
     }
 
@@ -307,7 +311,7 @@ static void audio_run_write_test(uint32_t duration_ms)
         audio->set_volume(80);
     }
 
-    k_printf("Playing write-based scale test (%d ms) using %s...\n", duration_ms, audio_get_driver_name());
+    console_printf("Playing write-based scale test (%d ms) using %s...\n", duration_ms, audio_get_driver_name());
 
     start_ticks = kernel_ticks;
     total_ticks = duration_ms / 10;
@@ -362,7 +366,7 @@ static void audio_run_write_test(uint32_t duration_ms)
                     int written = audio->write(buf + off, (size_t)(chunk - off));
 
                     if (written < 0) {
-                        k_puts("AUDIO_WRITE failed.");
+                        console_puts("AUDIO_WRITE failed.");
                         audio_stop_playback();
                         return;
                     }
@@ -380,7 +384,7 @@ static void audio_run_write_test(uint32_t duration_ms)
     }
 
     audio_stop_playback();
-    k_puts("Done.");
+    console_puts("Done.");
 }
 
 /**
@@ -405,11 +409,11 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
     int channels = 2;
 
     if (!audio) {
-        k_puts("No audio driver.");
+        console_puts("No audio driver.");
         return;
     }
     if (audio->type != AUDIO_DRIVER_HDA) {
-        k_puts("HDA not active.");
+        console_puts("HDA not active.");
         return;
     }
     if (freq_hz == 0) {
@@ -439,7 +443,7 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
     }
 
     if (audio->start(sample_rate, AUDIO_S16LE, channels) != 0) {
-        k_puts("AUDIO_START failed.");
+        console_puts("AUDIO_START failed.");
         audio_stop_playback();
         return;
     }
@@ -449,14 +453,14 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
     }
 
     if (!hda_debug_get_stream_snapshot(&snapshot)) {
-        k_puts("HDA snapshot unavailable.");
+        console_puts("HDA snapshot unavailable.");
         audio_stop_playback();
         return;
     }
 
     last_lpib = snapshot.lpib;
 
-    k_printf("HDA watch: %d Hz, %d ms, interval %d ms\n", freq_hz, duration_ms, interval_ms);
+    console_printf("HDA watch: %d Hz, %d ms, interval %d ms\n", freq_hz, duration_ms, interval_ms);
 
     start_ticks = kernel_ticks;
     end_ticks = start_ticks + (duration_ms / 10u);
@@ -469,7 +473,7 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
                     uint32_t delta = (snapshot.lpib >= last_lpib)
                                    ? (snapshot.lpib - last_lpib)
                                    : (snapshot.lpib + snapshot.cbl - last_lpib);
-                    k_printf("t=%dms lpib=%d (+%d) ctl=0x%x sts=0x%x fmt=0x%x\n",
+                    console_printf("t=%dms lpib=%d (+%d) ctl=0x%x sts=0x%x fmt=0x%x\n",
                              (kernel_ticks - start_ticks) * 10u,
                              snapshot.lpib,
                              delta,
@@ -477,7 +481,7 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
                              (uint32_t)snapshot.sts,
                              (uint32_t)snapshot.fmt);
                 } else {
-                    k_printf("t=%dms lpib=%d ctl=0x%x sts=0x%x fmt=0x%x\n",
+                    console_printf("t=%dms lpib=%d ctl=0x%x sts=0x%x fmt=0x%x\n",
                              (kernel_ticks - start_ticks) * 10u,
                              snapshot.lpib,
                              snapshot.ctl,
@@ -497,28 +501,28 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
     }
 
     audio_stop_playback();
-    k_puts("Done.");
+    console_puts("Done.");
 }
 
 void audio_debug_print_help(void)
 {
-    k_puts("Audio commands:");
-    k_puts("  audio info");
-    k_puts("  audio test scale [duration_ms]");
-    k_puts("  audio test write [duration_ms]");
-    k_puts("  audio test watch [freq_hz] [duration_ms] [interval_ms]");
-    k_puts("  audio hda dump");
-    k_puts("  audio hda codec");
-    k_puts("  audio hda pins");
-    k_puts("  audio hda stats");
-    k_puts("  audio hda out [auto|primary|hp|both]");
+    console_puts("Audio commands:");
+    console_puts("  audio info");
+    console_puts("  audio test scale [duration_ms]");
+    console_puts("  audio test write [duration_ms]");
+    console_puts("  audio test watch [freq_hz] [duration_ms] [interval_ms]");
+    console_puts("  audio hda dump");
+    console_puts("  audio hda codec");
+    console_puts("  audio hda pins");
+    console_puts("  audio hda stats");
+    console_puts("  audio hda out [auto|primary|hp|both]");
 }
 
 static void audio_print_summary(void)
 {
-    k_printf("Audio driver: %s\n", audio_get_driver_name());
-    k_printf("Real output:  %s\n", audio_has_real_output() ? "yes" : "no");
-    k_puts("Use 'audio help' for commands.");
+    console_printf("Audio driver: %s\n", audio_get_driver_name());
+    console_printf("Real output:  %s\n", audio_has_real_output() ? "yes" : "no");
+    console_puts("Use 'audio help' for commands.");
 }
 
 /**
@@ -573,7 +577,7 @@ bool audio_debug_handle_command(const char *cmd)
 
         if (audio_str_equal(argv[2], "scale")) {
             if (argc >= 4 && !audio_parse_uint(argv[3], &duration_ms)) {
-                k_puts("Usage: audio test scale [duration_ms]");
+                console_puts("Usage: audio test scale [duration_ms]");
                 return true;
             }
             audio_run_scale_test(duration_ms);
@@ -582,7 +586,7 @@ bool audio_debug_handle_command(const char *cmd)
 
         if (audio_str_equal(argv[2], "write")) {
             if (argc >= 4 && !audio_parse_uint(argv[3], &duration_ms)) {
-                k_puts("Usage: audio test write [duration_ms]");
+                console_puts("Usage: audio test write [duration_ms]");
                 return true;
             }
             audio_run_write_test(duration_ms);
@@ -594,15 +598,15 @@ bool audio_debug_handle_command(const char *cmd)
             uint32_t interval_ms = 100;
 
             if (argc >= 4 && !audio_parse_uint(argv[3], &freq_hz)) {
-                k_puts("Usage: audio test watch [freq_hz] [duration_ms] [interval_ms]");
+                console_puts("Usage: audio test watch [freq_hz] [duration_ms] [interval_ms]");
                 return true;
             }
             if (argc >= 5 && !audio_parse_uint(argv[4], &duration_ms)) {
-                k_puts("Usage: audio test watch [freq_hz] [duration_ms] [interval_ms]");
+                console_puts("Usage: audio test watch [freq_hz] [duration_ms] [interval_ms]");
                 return true;
             }
             if (argc >= 6 && !audio_parse_uint(argv[5], &interval_ms)) {
-                k_puts("Usage: audio test watch [freq_hz] [duration_ms] [interval_ms]");
+                console_puts("Usage: audio test watch [freq_hz] [duration_ms] [interval_ms]");
                 return true;
             }
 
@@ -638,8 +642,8 @@ bool audio_debug_handle_command(const char *cmd)
         }
         if (audio_str_equal(argv[2], "out")) {
             if (argc < 4) {
-                k_printf("HDA out mode=%d\n", hda_get_output_mode());
-                k_puts("Usage: audio hda out [auto|primary|hp|both]");
+                console_printf("HDA out mode=%d\n", hda_get_output_mode());
+                console_puts("Usage: audio hda out [auto|primary|hp|both]");
                 return true;
             }
 
@@ -652,7 +656,7 @@ bool audio_debug_handle_command(const char *cmd)
             } else if (audio_str_equal(argv[3], "both")) {
                 hda_set_output_mode(3);
             } else {
-                k_puts("Usage: audio hda out [auto|primary|hp|both]");
+                console_puts("Usage: audio hda out [auto|primary|hp|both]");
                 return true;
             }
 
