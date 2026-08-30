@@ -32,7 +32,7 @@ The kernel ran a dozen self-tests at every boot and printed `[FAIL]` when one fa
 
 ## The test system
 
-The 44 suite recipes left the root `Makefile`, which went from 1789 lines to 756 and holds no test rule; `make` builds no test tool. The runner is 200 lines of shell over a three-field registry, and it has a test of its own that boots nothing: 25 checks, two seconds. `tests/run style` checks the registry against the targets in both directions, which is how a one-line edit that silently deleted the `default` suite would have been caught.
+The 44 suite recipes left the root `Makefile` for `tests/system/suites.mk`. The root file went from 1789 lines to 756 and holds no `run-` target; it has grown back to 772 since, none of it a test rule. `make` builds no test tool. The runner is 200 lines of shell over a three-field registry, and it has a test of its own that boots nothing: 25 checks, two seconds. `tests/run style` checks the registry against the targets in both directions, which is how a one-line edit that silently deleted the `default` suite would have been caught.
 
 Ten guest probes were compiled, staged and run by nothing; nine had never been run by any target in the tree's history. Four joined the shared boot, and three suites were written for the rest: `fault` for the probes that must be killed, `console` for the two that block on typed input, `socket` for the guest opening a connection of its own and being answered, which nothing covered.
 
