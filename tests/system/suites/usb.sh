@@ -2,14 +2,15 @@
 #
 # usb.sh: the USB stack, from a port to a keystroke.
 #
-# Four boots, because what has to be proved differs in each.
+# Nine boots, because what has to be proved differs in each.
 #
-# The machine has no 8042 in the first three. That is the whole point of the
-# option: with a PS/2 keyboard and mouse present, a typed key or a moved mouse
-# could have arrived by either road, and a check that passes either way says
-# nothing about the one this milestone built. QEMU's `sendkey` and `mouse_move`
-# go to whatever input device the machine has, so taking the other one away is
-# what makes the answer mean something.
+# The machine has no 8042 in the three boots that type a key or move a mouse.
+# That is the whole point of the option: with a PS/2 keyboard and mouse
+# present, a typed key or a moved mouse could have arrived by either road, and
+# a check that passes either way says nothing about the one this milestone
+# built. QEMU's `sendkey` and `mouse_move` go to whatever input device the
+# machine has, so taking the other one away is what makes the answer mean
+# something.
 #
 # The devices are bound to the controller by name rather than left to QEMU's
 # automatic placement, for the same reason.
