@@ -102,6 +102,19 @@
 #define PCI_PM_CONTROL 0x04
 
 #define XHCI_PCI_PROGIF 0x30
+
+/*
+ * Intel routes each USB2 pin to either this controller or the companion EHCI,
+ * and each SuperSpeed pin to either the SuperSpeed side of a port or nothing.
+ * The two mask registers say which pins may be moved; the two others say where
+ * each movable pin currently goes. 8 Series PCH datasheet, xHCI configuration
+ * registers.
+ */
+#define PCI_VENDOR_INTEL 0x8086
+#define INTEL_XUSB2PR    0xD0
+#define INTEL_XUSB2PRM   0xD4
+#define INTEL_USB3PSSEN  0xD8
+#define INTEL_USB3PRM    0xDC
 /*
  * How many root ports this driver keeps state for. A controller may advertise
  * as many as 255; the two machines here have eight and fewer, and the state
@@ -224,6 +237,52 @@ static void power_up(const pci_device_t *dev)
     }
 }
 
+/**
+ * Take the pins the chipset will give.
+ *
+ * A firmware leaves some USB2 pins on the companion EHCI so that an operating
+ * system with no xHCI driver still has working ports. This kernel has no EHCI
+ * driver, so a pin left there is a socket nothing can reach: on the notebook
+ * this milestone was written for, the firmware gave this controller two of nine
+ * and the other seven were the two sockets a person actually plugs into.
+ *
+ * So the movable pins are moved, which is what every other operating system on
+ * this hardware does at the same point. Only the pins the mask allows, and the
+ * mask is read rather than assumed: a pin the chipset will not move is one the
+ * write would drop on the floor. The routing is the firmware's again after the
+ * next power cycle, so this runs on every boot and a machine that dislikes it
+ * is one power cycle from the way it was.
+ */
+static void take_ports(const pci_device_t *dev)
+{
+    uint32_t usb2_mask;
+    uint32_t usb2_before;
+    uint32_t usb3_mask;
+    uint32_t usb3_before;
+
+    if (dev->vendor_id != PCI_VENDOR_INTEL) {
+        return; /* another maker's controller routes its pins another way */
+    }
+
+    usb2_before = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_XUSB2PR);
+    usb2_mask = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_XUSB2PRM);
+    usb3_before = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_USB3PSSEN);
+    usb3_mask = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_USB3PRM);
+
+    if ((usb2_before & usb2_mask) != usb2_mask) {
+        pci_write_config32(dev->bus, dev->device, dev->function, INTEL_XUSB2PR,
+                           usb2_before | usb2_mask);
+    }
+    if ((usb3_before & usb3_mask) != usb3_mask) {
+        pci_write_config32(dev->bus, dev->device, dev->function, INTEL_USB3PSSEN,
+                           usb3_before | usb3_mask);
+    }
+
+    klog(KLOG_INFO, "usb", "routing: usb2 0x%X of 0x%X, usb3 0x%X of 0x%X, taken",
+         pci_read_config32(dev->bus, dev->device, dev->function, INTEL_XUSB2PR), usb2_mask,
+         pci_read_config32(dev->bus, dev->device, dev->function, INTEL_USB3PSSEN), usb3_mask);
+}
+
 int xhci_discover(void)
 {
     pci_device_t dev;
@@ -264,6 +323,7 @@ int xhci_discover(void)
     }
 
     power_up(&dev);
+    take_ports(&dev);
     pci_enable_memory_space(&dev);
     pci_enable_bus_master(&dev);
 

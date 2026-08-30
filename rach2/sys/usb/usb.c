@@ -81,7 +81,7 @@ static void report_one(const pci_device_t *dev)
         prm = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_XUSB2PRM);
         ss = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_USB3PSSEN);
         ssm = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_USB3PRM);
-        klog(KLOG_INFO, "usb", "routing: usb2 0x%X of 0x%X, usb3 0x%X of 0x%X",
+        klog(KLOG_INFO, "usb", "routing: usb2 0x%X of 0x%X, usb3 0x%X of 0x%X, as the firmware left it",
              pr, prm, ss, ssm);
     }
 }

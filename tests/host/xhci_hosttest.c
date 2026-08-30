@@ -303,6 +303,10 @@ static const struct xhci_io model_io = {model_r32, model_w32, model_udelay};
 
 static uint32_t model_bar0;
 static uint32_t model_bar1;
+/* The controller's configuration space, which is where a chipset keeps the
+   routing of its USB pins, and the maker it says it is. */
+static uint32_t pci_cfg[256];
+static uint16_t model_vendor;
 static uint8_t model_progif;
 static int model_present;
 
@@ -316,7 +320,7 @@ bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_devi
     if (skip || !model_present) {
         return 0; /* one controller on this bus */
     }
-    out->vendor_id = 0x8086;
+    out->vendor_id = model_vendor;
     out->device_id = 0x9c31;
     out->bus = 0;
     out->device = 20;
@@ -385,8 +389,15 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     (void)bus;
     (void)dev;
     (void)fn;
-    (void)off;
-    return 0;
+    return pci_cfg[off];
+}
+
+void pci_write_config32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint32_t v)
+{
+    (void)bus;
+    (void)dev;
+    (void)fn;
+    pci_cfg[off] = v;
 }
 
 void pci_enable_bus_master(pci_device_t *dev)
@@ -654,6 +665,21 @@ static void model_reset(void)
     pm_state = 0;
     model_present = 1;
     model_progif = 0x30;
+    model_vendor = 0x8086;
+    {
+        unsigned c;
+
+        for (c = 0; c < 256; c++) {
+            pci_cfg[c] = 0;
+        }
+        /* The notebook this was written for: two of nine USB2 pins on this
+           controller, the rest on the companion, and one SuperSpeed pin
+           enabled of four. */
+        pci_cfg[0xD0] = 0x00A;
+        pci_cfg[0xD4] = 0x1FF;
+        pci_cfg[0xD8] = 0x1;
+        pci_cfg[0xDC] = 0xF;
+    }
     model_bar0 = 0xFEBF0004u; /* a 64-bit memory aperture */
     model_bar1 = 0;
     xhci_set_io(&model_io);
@@ -1163,6 +1189,35 @@ int main(void)
     xhci_events();
     CHECK("the controller answers", xhci_command_done(&result) == 1);
     CHECK("and so is an endpoint on one", xhci_endpoint_reset(3, 3) != 0);
+
+    /* The pins the chipset will give. A firmware leaves some on the companion
+       controller for an operating system that cannot drive this one; this
+       kernel has no driver for the companion, so a pin left there is a socket
+       nothing can reach. */
+    model_reset();
+    CHECK("a controller with pins on the companion is taken", xhci_discover() == 0);
+    CHECK("and every pin the chipset allows is moved to it", pci_cfg[0xD0] == 0x1FF);
+    CHECK("with the SuperSpeed pins as well", pci_cfg[0xD8] == 0xF);
+
+    /* Only the pins the mask allows: one the chipset will not move is one the
+       write would drop on the floor, and writing it anyway would say something
+       untrue in the record. */
+    model_reset();
+    pci_cfg[0xD0] = 0x001;
+    pci_cfg[0xD4] = 0x00F;
+    CHECK("a controller with fewer movable pins is taken", xhci_discover() == 0);
+    CHECK("and takes those and no more", pci_cfg[0xD0] == 0x00F);
+
+    model_reset();
+    pci_cfg[0xD0] = 0x1FF;
+    CHECK("a controller that already has them all is taken", xhci_discover() == 0);
+    CHECK("and is left alone", pci_cfg[0xD0] == 0x1FF);
+
+    model_reset();
+    model_vendor = 0x1B36;
+    CHECK("another maker's controller is taken", xhci_discover() == 0);
+    CHECK("and its configuration space is not written",
+          pci_cfg[0xD0] == 0x00A && pci_cfg[0xD8] == 0x1);
 
     /* Transfers. The control transfer is three blocks and one event, and the
        event is asked for on the block that says how much arrived. */
