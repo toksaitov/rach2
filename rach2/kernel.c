@@ -2730,12 +2730,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             /* The detail travels INTO the panic, not ahead of it: the
              * machine this check was written for has no serial port, and
              * k_panic clears the screen, so anything printed here first would
-             * be gone before a camera could read it. */
+             * be gone before a camera could read it. The panic's own record
+             * carries the text to the port and the wire. */
             static char verdict_msg[128];
 
             modlayout_describe(verdict, bad, ranges[bad].start, ranges[bad].end,
                                verdict_msg, (uint32_t) sizeof(verdict_msg));
-            serial_printf("module: %s\n", verdict_msg);
             k_panic(verdict_msg);
         }
         if (modules_end > mem_reserved_ptr) {
@@ -2760,74 +2760,33 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_cls();
 
-    set_fore_color(light_cyan);
-    k_puts("======= Rach2 Booting... =======");
-    set_fore_color(light_grey);
-    k_puts("");
+    klog(KLOG_INFO, "boot", "Rach2 Booting");
+    klog(KLOG_INFO, "boot", "Initializing system components");
 
-    k_puts("Initializing system components...");
-    k_puts("");
-    serial_printf("\nInitializing system components...\n");
-
-    k_printf("  GDT...");
-    serial_printf("  GDT...");
     init_gdt();
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "gdt: ready");
 
-    k_printf("  TSS...");
-    serial_printf("  TSS...");
     init_tss((uint32_t)stack + KERNEL_STACK_SIZE);
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "tss: ready");
 
-    k_printf("  IDT...");
-    serial_printf("  IDT...");
     init_idt();
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "idt: ready");
 
-    k_printf("  ISR...");
-    serial_printf("  ISR...");
     init_isr();
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "isr: ready");
 
-    k_printf("  Memory manager...");
-    serial_printf("  Memory manager...");
     init_mm();
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "memory manager: ready");
 
-    k_printf("  Paging...");
-    serial_printf("  Paging...");
     /* Size the physical frame pool from the multiboot memory map, capped to the
      * direct-mapped window (frame_usable_count). */
     init_paging(frame_usable_count(info));
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "paging: ready");
 
-    k_printf("  Page cache...");
-    serial_printf("  Page cache...");
     /* Reserve the cache frames and pre-map the disk window in the kernel
      * directory, before the first fork copies the kernel PDEs. */
     init_pagecache();
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "page cache: ready");
 
     /* The boot report, after every boot-time reservation and before any driver
      * has configured a device. After, because the page cache reserves frames
@@ -2837,33 +2796,21 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         boot_diag_report();
     }
 
-    k_printf("  Timer (100 Hz)...");
-    serial_printf("  Timer (100 Hz)...");
     __asm__ __volatile__("cli");
     init_pit(100);
     set_isr_handler(32, &timer_handler); /* install the timer handler on IRQ0 */
     __asm__ __volatile__("sti");
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "timer: ready");
 
-    k_printf("  Clock...");
-    serial_printf("  Clock...");
+
     rtc_init();
     if (rtc_is_anchored()) {
-        set_fore_color(light_green);
-        k_puts(" OK");
-        serial_printf(" OK\n");
+        klog(KLOG_INFO, "clock", "ready");
     } else {
-        set_fore_color(light_brown);
-        k_puts(" none (times run from the epoch)");
-        serial_printf(" none (times run from the epoch)\n");
+        klog(KLOG_WARN, "clock", "none: times run from the epoch");
     }
-    set_fore_color(light_grey);
 
-    k_printf("  Entropy...");
-    serial_printf("  Entropy...");
+
     krandom_seed();
     {
         /* RDSEED/RDRAND are trusted hardware entropy, so getrandom and
@@ -2875,8 +2822,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
                                                          : " OK (jitter, best-effort; "
                                                            "crypto RNG fails closed)";
         set_fore_color(src == KRANDOM_SRC_JITTER ? light_brown : light_green);
-        k_puts(desc);
-        serial_printf("%s\n", desc);
+        klog(KLOG_INFO, "entropy", "%s", desc);
     }
     set_fore_color(light_grey);
 
@@ -2888,33 +2834,21 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         const char *why = "";
         int verdict = board_init(&why);
 
-        k_printf("  Board...");
-        serial_printf("  Board...");
+
         if (verdict == BOARD_FOUND) {
-            set_fore_color(light_green);
-            k_printf(" OK (%s)\n", board_name());
-            serial_printf(" OK (%s)\n", board_name());
+            klog(KLOG_INFO, "board", "ready: %s", board_name());
         } else if (verdict == BOARD_REFUSED) {
-            set_fore_color(light_brown);
-            k_printf(" refused (%s)\n", why);
-            serial_printf(" refused (%s)\n", why);
+            klog(KLOG_WARN, "board", "refused: %s", why);
         } else {
-            set_fore_color(light_brown);
-            k_puts(" none (no profile matched; poweroff will halt)");
-            serial_printf(" none (no profile matched; poweroff will halt)\n");
+            klog(KLOG_WARN, "board",
+                 "none: no profile matched; poweroff will halt");
         }
-        set_fore_color(light_grey);
     }
 
-    k_printf("  Keyboard...");
-    serial_printf("  Keyboard...");
     set_isr_handler(33, &keyboard_handler); /* install the IRQ 1 keyboard handler */
     pic_unmask_irq(1); /* now safe to take keyboard interrupts (masked since init_pic) */
     tty_console_init(); /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "keyboard: ready");
 
     if (kcmdline_has("rach2.nomouse")) {
         klog(KLOG_INFO, "mouse", "skipped: rach2.nomouse");
@@ -2927,16 +2861,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    k_printf("  Syscall...");
-    serial_printf("  Syscall...");
     init_syscall();
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "syscall: ready");
 
-    k_printf("  Process...");
-    serial_printf("  Process...");
     init_proc();
     {
         /* Process 0 is the kernel idle process. */
@@ -2949,18 +2876,10 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             current_proc = proc0;
         }
     }
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "process: ready");
 
-    k_printf("  Scheduler...");
-    serial_printf("  Scheduler...");
     init_sched();
-    set_fore_color(light_green);
-    k_puts(" OK");
-    serial_printf(" OK\n");
-    set_fore_color(light_grey);
+    klog(KLOG_INFO, "boot", "scheduler: ready");
 
     if (kcmdline_has("rach2.noaudio")) {
         klog(KLOG_INFO, "audio", "skipped: rach2.noaudio");
@@ -2979,29 +2898,22 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * log. A machine whose disk must not be written says so before it has
      * touched one, and the same string is what check_diskpolicy.sh reads
      * out of the artifact. */
-    if (diskcmd_policy() != DISKCMD_READ_WRITE) {
-        set_fore_color(light_brown);
-        k_printf("  %s\n", diskcmd_policy_banner);
-        set_fore_color(light_grey);
-    }
-    serial_printf("  %s\n", diskcmd_policy_banner);
+    klog(diskcmd_policy() == DISKCMD_READ_WRITE ? KLOG_INFO : KLOG_WARN, "disk",
+         "%s", diskcmd_policy_banner);
 
-    k_printf("  Modules...");
-    serial_printf("  Modules...");
+
     if (num_modules > 0) {
         module_info_t *ramdisk = get_ramdisk();
         set_fore_color(light_green);
-        k_printf(" OK (%d found)\n", num_modules);
-        serial_printf(" OK (%d found)\n", num_modules);
+        klog(KLOG_INFO, "modules", "found %d", num_modules);
         set_fore_color(light_grey);
         if (ramdisk) {
-            k_printf("    RAM disk: 0x%X, size: %d bytes\n",
+            klog(KLOG_INFO, "modules", "ram disk: 0x%X, %d bytes",
                      ramdisk->start, ramdisk->size);
         }
     } else {
         set_fore_color(light_brown);
-        k_puts(" None");
-        serial_printf(" None\n");
+        klog(KLOG_INFO, "modules", "none");
         set_fore_color(light_grey);
     }
 
@@ -3009,8 +2921,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     discover_boot_devices();
 
-    k_printf("  File system...");
-    serial_printf("  File system...");
+
     {
         int mounted = -1;
         const char *via = "";
@@ -3048,18 +2959,16 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         if (mounted == 0) {
             krffs_set_mount(source, options);
             set_fore_color(light_green);
-            k_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
-            serial_printf(" OK (KRFFS, %d files)%s\n", krffs_count_files(), via);
+            klog(KLOG_INFO, "krffs", "mounted: %d files%s", krffs_count_files(),
+                 via);
             set_fore_color(light_grey);
         } else if (kcmdline_has("rach2.fsdisk") ||
                    kcmdline_has("rach2.root=disk") || num_modules > 0) {
             set_fore_color(light_red);
-            k_puts(" FAIL (invalid KRFFS)");
-            serial_printf(" FAIL (invalid KRFFS)\n");
+            klog(KLOG_ERR, "krffs", "refused: the image is not a KRFFS");
         } else {
             set_fore_color(light_brown);
-            k_puts(" None (no ramdisk)");
-            serial_printf(" None (no ramdisk)\n");
+            klog(KLOG_INFO, "krffs", "none: no ramdisk");
         }
     }
     set_fore_color(light_grey);
@@ -3093,8 +3002,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
         if (verdict == NETCONF_REFUSED) {
             set_fore_color(light_brown);
-            k_printf("  Address... refused (%s)\n", why);
-            serial_printf("  Address... refused (%s)\n", why);
+            klog(KLOG_WARN, "net", "address refused: %s", why);
             set_fore_color(light_grey);
         }
     }
@@ -3114,21 +3022,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    k_puts("");
-    set_fore_color(light_cyan);
-    k_puts("================================");
-    set_fore_color(light_grey);
-    k_puts("");
-    k_puts("---");
-    k_puts("");
-    serial_printf("\n================================\n\n---\n");
-
     run_self_tests();
-
-    k_puts("");
-    k_puts("---");
-    k_puts("");
-    serial_printf("\n---\n\n");
 
     /*
      * Decide the boot home. A normal boot runs the persistent /sbin/init as
@@ -3160,13 +3054,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         const char *banner = rescue_mode ? "Kernel debug shell active (rescue mode)."
                                          : "Kernel debug shell active.";
 
-        k_puts("");
-        k_puts(banner);
-        /* And on the wire, the way shell_loop announces itself below: this box
-         * is driven over the serial line, and a rescue banner that reached the
-         * VGA text buffer alone would be invisible to whoever booted it. */
-        serial_puts(banner);
-        serial_puts("\n");
+        console_puts("");
+        console_puts(banner);
         shell_loop();
     }
 }
