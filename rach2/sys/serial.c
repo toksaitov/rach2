@@ -90,6 +90,33 @@ void serial_set_tap(void (*tap)(char c))
     _serial_tap = tap;
 }
 
+/*
+ * How many times a transmit is polled before the byte is dropped.
+ *
+ * A UART that is not draining makes the wait below never end, and a kernel
+ * that hangs while reporting a fault reports nothing. At 115200 baud a byte
+ * leaves in about 87 microseconds and this loop is far faster than that, so
+ * the count is high enough that a working port never reaches it and low
+ * enough that a wedged one costs a bounded delay per byte rather than the
+ * machine.
+ */
+#define SERIAL_TX_POLLS 100000
+
+void serial_out(char c)
+{
+    unsigned long spins = 0;
+
+    if (!_serial_port_exists) {
+        return;
+    }
+    while (!_serial_is_transmit_empty()) {
+        if (++spins >= SERIAL_TX_POLLS) {
+            return;
+        }
+    }
+    outb(SERIAL_COM1 + SERIAL_DATA, c);
+}
+
 void serial_putc(char c)
 {
     /* Kept whatever else is or is not there: a machine with no serial port and
@@ -98,12 +125,7 @@ void serial_putc(char c)
     if (_serial_tap != NULL) {
         _serial_tap(c);
     }
-    if (!_serial_port_exists) {
-        return;
-    }
-    while (!_serial_is_transmit_empty())
-        ;
-    outb(SERIAL_COM1 + SERIAL_DATA, c);
+    serial_out(c);
 }
 
 /*

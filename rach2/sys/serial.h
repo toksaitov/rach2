@@ -15,6 +15,16 @@ void serial_init(void);
  */
 void serial_putc(char c);
 
+/**
+ * Write one byte to the port and nothing else.
+ *
+ * No boot-log copy, no tap, and a transmit wait that gives up rather than
+ * spinning for ever. It is what the log and the console write through: both
+ * have their own copy of what they sent and neither may hang the machine on a
+ * port that stopped draining. A machine with no COM1 discards the byte.
+ */
+void serial_out(char c);
+
 /*
  * Repeat every character written here to `tap` as well, or stop repeating when
  * `tap` is NULL. The tap is offered the character before the port is checked,

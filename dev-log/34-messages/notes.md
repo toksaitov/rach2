@@ -208,3 +208,45 @@ Two it raised that are recorded rather than changed:
 * `run-addressed` does not check `rach2.gateway=`. Every destination in reach
   is on the subnet, so nothing is routed and a wrong gateway would not show.
   Routing through a gateway is what `dhcp` and `netif` check.
+
+## The logger, 2026-08-30
+
+`rach2/sys/klog.c` and `klog.h`, with three supporting changes:
+
+* `k_vprintf` moved out of `kio.c` into `sys/lib/kfmt.c`. It is the one
+  formatter and it has no screen in it; leaving it in the file that holds the
+  VGA console meant a caller that formats but does not draw pulled the console
+  in behind it, and it could not be compiled for a host test without the
+  terminal interpreter coming too.
+* `sys/lib/kirq.c` holds the interrupt bracket, which `tty.c` had a private
+  copy of. Both use the shared one now.
+* `serial.c` gained `serial_out`, a write with no boot-log copy, no tap, and a
+  transmit wait that gives up after a fixed number of polls. `serial_putc`
+  calls it, so the old unbounded wait is gone from every path. A kernel that
+  hangs while reporting a fault reports nothing.
+
+Two decisions differ from the plan, both recorded here rather than quietly:
+
+* The plan gave the panic path its own two-step delivery, ring first and the
+  screen in between. `k_panic` draws its picture and then raises one `CRIT`
+  record, because drawing clears the screen and a record printed before it
+  would be wiped. The property the two-step existed for still holds: the
+  record reaches the ring before the serial port and the wire, and both of
+  those are bounded now.
+* `klog` is a thin variadic wrapper over `klog_v`, which takes the argument
+  words. Reaching a variadic function's arguments by walking the stack from
+  the last named one is an i386 fact, and the host test does not run on i386.
+  The split is the same one `k_printf` and `k_vprintf` already have.
+
+The host test drives the logger against recorders in place of its four
+destinations, which is how the cases a boot will not produce on demand get
+checked: a ring that wraps mid-record, a port that never becomes ready, a
+record longer than its buffer, and a record raised from inside the delivery of
+another. Proved by nine mutations of `klog.c`, all caught: a dropped priority
+prefix, a broken timestamp digit, an unmarked truncation, a record allowed to
+end in two newlines, a screen filter that takes every level, the serial port
+written before the ring, a ring that drops bytes instead of records, a console
+that writes to the wire, and a ring append with no interrupt bracket.
+
+No caller is converted yet beyond `k_panic`. That is phase 5, and the ledger
+for it is `messaging.md`.

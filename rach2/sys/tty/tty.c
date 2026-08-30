@@ -14,6 +14,7 @@
 #include "../io/poll.h"
 #include "../serial.h"
 #include "../kio.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 
@@ -32,18 +33,6 @@ struct tty console_tty;
 /* Save EFLAGS and disable interrupts; restore puts IF back. On this single CPU
  * this is the whole lock between a reader and an input IRQ (same idea as
  * wait_queue.c's). */
-static uint32_t tty_irq_save(void)
-{
-    uint32_t flags;
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
-}
-
-static void tty_irq_restore(uint32_t flags)
-{
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
-}
-
 /* A sink that discards: a tty initialized without one still has a valid (never
  * NULL) sink, so the discipline's echo/output never jumps through NULL. */
 static void null_sink(void *ctx, unsigned char c)
@@ -121,10 +110,10 @@ void tty_set_session(struct tty *t, int sid, int pgid)
 {
     uint32_t flags;
 
-    flags = tty_irq_save();
+    flags = kirq_save();
     t->sid = sid;
     t->fg_pgid = pgid;
-    tty_irq_restore(flags);
+    kirq_restore(flags);
 }
 
 /**
@@ -192,13 +181,13 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         return 0;
     }
     if (nonblock) {
-        flags = tty_irq_save();
+        flags = kirq_save();
         if (tty_ready_cond(t)) {
             n = n_tty_read(&t->ldisc, kbuf, count);
-            tty_irq_restore(flags);
+            kirq_restore(flags);
             return n;
         }
-        tty_irq_restore(flags);
+        kirq_restore(flags);
         return -EAGAIN;
     }
     for (;;) {
@@ -213,13 +202,13 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
          * would leave us seeing an empty queue and wrongly returning 0 ==
          * EOF). If the line was taken, loop back and wait again.
          */
-        flags = tty_irq_save();
+        flags = kirq_save();
         if (n_tty_readable(&t->ldisc)) {
             n = n_tty_read(&t->ldisc, kbuf, count);
-            tty_irq_restore(flags);
+            kirq_restore(flags);
             return n;
         }
-        tty_irq_restore(flags);
+        kirq_restore(flags);
     }
 }
 
@@ -268,12 +257,12 @@ int tty_inq(struct tty *t)
     /* Drain a polled source and read the count in one interrupts-off step: the
      * drain (echo, queue updates) cannot then race an input IRQ, and the count
      * is a consistent snapshot. */
-    flags = tty_irq_save();
+    flags = kirq_save();
     if (t->pump) {
         t->pump(t);
     }
     n = n_tty_inq(&t->ldisc);
-    tty_irq_restore(flags);
+    kirq_restore(flags);
     return n;
 }
 
@@ -283,14 +272,14 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
 
     /* Interrupts off so an input IRQ feeding the discipline never reads a
      * half-written termios (the 36-byte copy is several stores). */
-    flags = tty_irq_save();
+    flags = kirq_save();
     k_memcpy(&t->ldisc.tio, kt, sizeof(struct ktermios));
     if (flush_input) {
         t->ldisc.line_len = 0;
         t->ldisc.rq_head = t->ldisc.rq_tail;
         t->ldisc.eof = 0;
     }
-    tty_irq_restore(flags);
+    kirq_restore(flags);
 }
 
 void tty_flush_input(struct tty *t)
@@ -299,11 +288,11 @@ void tty_flush_input(struct tty *t)
 
     /* Interrupts off so the reset is not split by an input IRQ pushing onto the
      * queue (which would desync head/tail). */
-    flags = tty_irq_save();
+    flags = kirq_save();
     t->ldisc.line_len = 0;
     t->ldisc.rq_head = t->ldisc.rq_tail;
     t->ldisc.eof = 0;
-    tty_irq_restore(flags);
+    kirq_restore(flags);
 }
 
 void tty_hangup(struct tty *t)
@@ -314,10 +303,10 @@ void tty_hangup(struct tty *t)
      * is still read first, then reads return 0) and wake every parked
      * reader/poller. A pty slave whose master has closed uses this so its
      * blocked readers return EOF instead of hanging forever. */
-    flags = tty_irq_save();
+    flags = kirq_save();
     t->ldisc.eof = 1;
     t->ldisc.eof_pos = t->ldisc.rq_tail;
-    tty_irq_restore(flags);
+    kirq_restore(flags);
     wq_wake_all(&t->input_wq);
 }
 

@@ -41,12 +41,13 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 ## Tests
 
-The suite contains 38 native test programs.
+The suite contains 39 native test programs.
 
 ### Kernel foundations and memory
 
 * `board_hosttest.c` checks power-controller profiles, PCI identities, PM bases, decode bits, SCI routing, sleep words, ACPI enable decisions, and the uninitialized board state.
 * `frame_hosttest.c` checks the available-memory ceiling computed from crafted Multiboot memory maps, including reserved and truncated entries.
+* `klog_hosttest.c` drives the kernel log against recorders in place of its four destinations. It checks the record's shape and every conversion, one newline however the format ended, the truncation mark, the level each destination takes, the order they are written in with a serial port that never drains, whole-record eviction when the ring wraps, that console output reaches the screen and the port and neither the ring nor the wire, and that a record raised from inside the delivery of another leaves both whole.
 * `krandom_hosttest.c` checks deterministic reseeding, seed separation, byte filling, the all-zero seed, and a fixed monobit sanity case for the ChaCha20 stream.
 * `kstd_hosttest.c` checks kernel integer formatting across bases, signed limits, buffer limits, return counts, and invalid radices.
 * `kstring_hosttest.c` checks the kernel string, memory, case-conversion, reverse, and overlapping `memmove` routines.

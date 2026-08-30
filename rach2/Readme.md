@@ -111,6 +111,45 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 
 With no address options, the network keeps its QEMU SLIRP defaults. See [networking](sys/network/Readme.md) for address validation, interfaces, protocols, and sockets. `rach2.diskdiag` is read-only on ordinary kernels; only the recovery build may write through the whole-disk window.
 
+## Messages
+
+The kernel has two ways of saying something, and which one a message uses is a
+decision about who it is for.
+
+A diagnostic is a record. `klog(level, subsystem, format, ...)` builds one whole
+line and offers it to four destinations in a fixed order:
+
+```text
+<3>[12.34] ahci: command: timed out on port 0
+```
+
+The angle brackets hold the level, the brackets hold uptime in seconds and
+hundredths, and the rest is the `subsystem: event: detail` shape every message
+in this tree uses. The prefix is the form BusyBox's `klogd` reads, so a userland
+log reader can be added later without the kernel changing what it writes.
+
+The five levels are syslog's numbers: `KLOG_CRIT` 2, `KLOG_ERR` 3, `KLOG_WARN`
+4, `KLOG_INFO` 6 and `KLOG_DEBUG` 7. The destinations, in the order a record
+reaches them:
+
+| Order | Destination | Takes | Notes |
+|-------|-------------|-------|-------|
+| 1 | The 16 KiB ring | every level | Written first, so a failing port or wire cannot cost the machine its own copy. Whole records are evicted, so it never begins mid-line. |
+| 2 | The screen | `INFO` and above | Without the prefix and the timestamp, which a person in front of the machine does not need. Coloured by level. |
+| 3 | COM1 | every level | Through a transmit wait that gives up, so a wedged UART costs a bounded delay and not the machine. |
+| 4 | Netconsole | every level | Only when `rach2.netconsole` asked for it. |
+
+A record is built whole before any destination sees it, so a reader never meets
+half a line and a record raised by an interrupt handler cannot appear inside
+one. A record too long for its 256-byte buffer ends in `...` before its
+newline.
+
+The debug shell's prompts, menus and command output are not diagnostics.
+`console_putc`, `console_puts` and `console_printf` write to the screen and
+COM1 and nowhere else: they are not in the machine's log, and they are not
+broadcast, because netconsole carries the log to whoever is on the segment and
+a person typing at a prompt did not agree to that.
+
 ## Debug shell
 
 The debug shell is the supervisor for rescue boots and mounted images without `/sbin/init`. It is not authenticated. A normal os-simple or os-real boot runs init and login instead.
@@ -141,7 +180,8 @@ The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` m
 | `sys/network/` | RTL8139, e1000, and RTL8168 drivers, IPv4 protocols, sockets, and netconsole. |
 | `sys/display/`, `sys/audio/`, `sys/kbd*`, `sys/mouse*`, `sys/speaker*` | VGA, audio, and PS/2 input drivers. |
 | `sys/board*`, `sys/power*`, `sys/pci*`, `sys/rtc*`, `sys/serial*` | Platform discovery, shutdown, PCI, clock, and COM1. |
-| `sys/lib/` | Freestanding integer, string, character, signal, user-ABI, and random support. |
+| `sys/klog*` | The kernel log: one record, four destinations, and the debug shell's own console calls. |
+| `sys/lib/` | Freestanding integer, string, character, signal, user-ABI, text formatting, interrupt bracket, and random support. |
 
 Subsystem references:
 

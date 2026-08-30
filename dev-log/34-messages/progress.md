@@ -40,22 +40,22 @@ Proof items:
 
 ## Phase 3: the logger (10 items)
 
-* [ ] `klog.h`: levels, call signature, `console_*`
-* [ ] Record formatter: conversions, 256 bytes, truncation mark, one newline
-* [ ] Ring with whole-record eviction, 16 KiB
-* [ ] Interrupt bracket around the ring append
-* [ ] Destination table in order: ring, screen, serial, netconsole
-* [ ] Bounded serial transmit wait
-* [ ] `console_*` with its private raw UART path
-* [ ] Panic sequence: ring, screen, then bounded delivery
-* [ ] Host test: formatter, truncation, prefix, timestamp, eviction at wrap, each filter, destination order under a wedged UART, `console_*` absent from the ring, no torn record from interrupt context
+* [x] `klog.h`: levels, call signature, `console_*`
+* [x] Record formatter: conversions, 256 bytes, truncation mark, one newline
+* [x] Ring with whole-record eviction, 16 KiB
+* [x] Interrupt bracket around the ring append
+* [x] Destination table in order: ring, screen, serial, netconsole
+* [x] Bounded serial transmit wait
+* [x] `console_*` with its private raw UART path
+* [x] Panic sequence: ring, screen, then bounded delivery
+* [x] Host test: formatter, truncation, prefix, timestamp, eviction at wrap, each filter, destination order under a wedged UART, `console_*` absent from the ring, no torn record from interrupt context
 * [ ] Review 2 of 12
 
 ## Phase 4: the oracles (10 items)
 
 * [ ] Boot self-tests emit one record each plus the summary
 * [ ] Device probes emit unique `started` and `skipped` records
-* [ ] `k_panic` converted
+* [x] `k_panic` converted
 * [ ] Harness: exit-or-killed report
 * [ ] Harness: bounded-interval level rejection
 * [ ] `subset` fixed, mutation proves it

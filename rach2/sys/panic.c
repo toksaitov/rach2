@@ -1,5 +1,7 @@
 #include "panic.h"
 
+#include "klog.h"
+
 display_color_t _fail_image[] = {
      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -30,6 +32,16 @@ display_color_t _fail_image[] = {
 
 extern void k_stop(void);
 
+/**
+ * Report what stopped the machine, then stop it.
+ *
+ * The picture is drawn before the record because drawing clears the screen,
+ * and a record printed first would be wiped by it. Everything that can fail
+ * comes after: the record reaches the ring before it is offered to the serial
+ * port and the wire, so a port that never drains or a controller that never
+ * came up cannot take the machine's last words with it. Both of those paths
+ * are bounded, which is why a panic can afford to use them at all.
+ */
 void k_panic(const char *str)
 {
     int i;
@@ -44,8 +56,7 @@ void k_panic(const char *str)
     set_back_color(black);
     set_fore_color(white);
 
-    k_puts("KERNEL PANIC");
-    k_puts(str);
+    klog(KLOG_CRIT, "panic", "stopped: %s", str);
 
     k_stop();
 }

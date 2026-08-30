@@ -95,7 +95,7 @@ static void _exception_handler(isr_params_t *params)
     serial_printf("isr: kernel exception: %s (vector %d, err 0x%x, "
                   "eip 0x%x)\n",
                   name, params->vector, params->error_code, params->eip);
-    k_panic("isr: unrecoverable CPU exception in kernel mode");
+    k_panic("unrecoverable CPU exception in kernel mode");
 }
 
 /**

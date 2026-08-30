@@ -12,6 +12,7 @@ ASM_SRC = loader.s \
 
 C_SRC = kernel.c \
         sys/kio.c \
+        sys/klog.c \
         sys/serial.c \
         sys/syscall.c \
         sys/module.c \
@@ -91,6 +92,8 @@ C_SRC = kernel.c \
         sys/network/socket/packet.c \
         sys/network/socket/raw.c \
         sys/lib/kctypes.c \
+        sys/lib/kfmt.c \
+        sys/lib/kirq.c \
         sys/lib/kstd.c \
         sys/lib/kstring.c \
         sys/lib/krandom.c

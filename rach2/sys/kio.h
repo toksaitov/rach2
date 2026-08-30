@@ -4,6 +4,7 @@
 #include "display/vga_text.h"
 
 #include "lib/kdef.h"
+#include "lib/kfmt.h"
 #include "lib/kstd.h"
 #include "lib/kint.h"
 
@@ -39,15 +40,6 @@ void k_putc(char c);
  * A NULL pointer is ignored.
  */
 void k_puts(const char *str);
-
-/** Buffer size for argument interpolation in `k_vprintf`. */
-#define _K_PRINTF_BUFFER_SIZE_ 128
-
-/** A character-output sink. */
-typedef void (*putc_fn_t)(char);
-
-/** Format `format` against `args`, emitting each byte through `putc_fn`. */
-void k_vprintf(putc_fn_t putc_fn, const char *format, char **args);
 
 /**
  * Format according to `format` and write the result to the screen.
