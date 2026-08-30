@@ -111,11 +111,11 @@ Protocol transmit buffers, driver descriptors, ARP state, and the socket and TCP
 
 ## Verification
 
-`make test` runs 63 guest probes and includes `loopprobe`, which covers UDP and TCP against the local address without using the wire. Live-network probes are excluded from that shared run.
+The default suite runs 72 guest probes over the emulated card and SLIRP. It includes `loopprobe`, which covers UDP and TCP against the local address without touching the wire, `sockettest` and `dnstest`, which reach SLIRP's own services, and `sockfull` and `tcbfull`, which fill the socket table and the control-block pool and require the refusals this stack documents. A probe that needs a peer on the host has a suite of its own.
 
 The specialized network targets are:
 
-* `tests/run addressed` runs the default suite with the SLIRP address supplied on the boot line.
+* `tests/run addressed` boots with an address on the command line, runs `pingtest`, and requires the capture to show that address as the source of the machine's packets and of its ARP requests.
 * `tests/run ping` checks replies, timeout, serialization, process progress, and slot release.
 * `tests/run netif` checks interface queries, runtime reconfiguration, interface-down behavior, connection reset, and listener survival.
 * `tests/run dgram` checks connected UDP, broadcast permission, shared binds, service-port permission, and socket options.
@@ -124,4 +124,4 @@ The specialized network targets are:
 * `tests/run dhcp` checks the BusyBox and in-house DHCP clients, renewal, fixed configuration, routing, and unattended startup.
 * `tests/run netconsole` validates captured frame headers, sequence numbers, checksums, and early buffered output.
 
-`tests/run host` drives ARP replacement, address parsing and transitions, netconsole buffering and recursion, receive-window updates, and the RTL8168GU software model. `pingtest`, `udptest`, `tcptest`, `sockettest`, and `dnstest` are staged but excluded from the default runner. All except `sockettest` require a live peer or DNS service.
+`tests/run host` drives ARP replacement, address parsing and transitions, netconsole buffering and recursion, the receive parsers against malformed frames under AddressSanitizer, the TCP state machine segment by segment, and the RTL8168GU software model. `pingtest`, `udptest` and `tcptest` are excluded from the default runner because each needs a peer: `ping` answers the first and `socket` starts a host peer for the other two.

@@ -22,6 +22,8 @@ Allocation scans for the first free extent large enough for the header and reque
 
 Growth first consumes an adjacent free extent. Otherwise it allocates a new extent, copies the node and its data, and frees the old extent. The write path then repoints every regular-file descriptor in every process from the old node to the new one. Sparse growth through write or truncate zero-fills the gap. A short remainder that cannot hold a header stays in the allocated extent.
 
+A write that cannot grow the file separates its two reasons. No free extent large enough returns `KRFFS_ENOSPACE`, which the write syscall reports as `ENOSPC`; a rejected argument returns `KRFFS_EBAD` and `EIO`. A caller can therefore tell a full file system from a failed write, which one shared -1 did not allow.
+
 ## Paths and directories
 
 The syscall layer converts every pathname to an absolute canonical form before it selects KRFFS or a synthetic namespace. It removes repeated slashes, `.` components, and lexical `..` components; `..` at the root remains at the root. This prevents an alternate spelling such as `/x/../proc` from bypassing the synthetic namespace.
@@ -79,5 +81,7 @@ The default `make test` run includes the basic file, directory, metadata, rename
 `ownprobe`, `permprobe`, `modeprobe`, `searchprobe`, and `stickyprobe` cover ownership, umask, permission checks, set-ID changes, ancestor search, and sticky directories. The default run also uses the ported musl for its stat, timestamp, identity, and permission cases.
 
 `tests/musl/catfile.c` and `tests/musl/ofdmusl.c` are built as `/musl/catfile` and `/musl/ofdmusl` in the test image but are not in the default runner. They provide manual end-to-end checks of musl stdio and directory calls, and of a duplicated stdio descriptor's shared offset.
+
+`tests/run diskfull` writes into a disk-backed root until the write is refused, requires `ENOSPC` and requires the file to hold what was written before the refusal, then unlinks it and writes again to require the space back.
 
 `tests/run persist` and `tests/run persist-ahci` boot the same disk image twice and require a file written through `fsync` and `sync` on the first boot to be read back on the second. `tests/run host` includes `readfile_hosttest`, which checks the host extractor's bounded path walk and malformed-image refusals; it does not exercise the kernel allocator or namespace implementation.
