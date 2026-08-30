@@ -113,4 +113,4 @@ Proof items:
 * [x] Cold from `make distclean` and warm measured
 * [x] `dev-log/34-messages/Readme.md` with the trust statement
 * [x] `34-messages` added to `dev-log/Readme.md` in the same commit
-* [ ] Review 12 of 12
+* [x] Review 12 of 12

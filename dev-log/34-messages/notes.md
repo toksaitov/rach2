@@ -683,3 +683,33 @@ it, which the pool depends on: `account` at 407 seconds is first and `runner`
 at 7 is last.
 
 Cold from `make distclean`: 124 seconds. Warm: nothing to do.
+
+## Review 12 of 12, 2026-08-30
+
+The first attempt read four files and was killed by a time limit before it
+answered. The second read the milestone record alone and answered.
+
+It found no mechanical violation: no non-ASCII byte, no em-dash, no banned
+term. What it found was register. Twenty-odd sentences gave the machine or the
+code an intention (the kernel "said things", a test "hopes", the ring "takes",
+the machine "was still typing"), several were built toward a phrase rather
+than toward a fact, one was a fragment, and one was the "not X, it's Y"
+reversal `CLAUDE.md` rejects by name. Those are rewritten.
+
+It also asked for what a reader who was not there cannot look up, and it was
+right about six things. The record now names the fourth suite, lists the ten
+probes that nothing ran and where each went, lists the rows of the three host
+tests, gives the numbers behind each limit, repeats milestone 33's reason for
+keeping the `e1000` suites rather than pointing at it, names the machine the
+measurements were taken on, lists the core tier's members, and says what
+happened to all 58 findings and why seven of the planned twelve reviews were
+not run.
+
+One of its points is refused. It asked the record to state the log's levels,
+record format, ring capacity and interrupt rules. Those are the contract, and
+the contract lives in `rach2/Readme.md`, which the record points at; a copy
+here would be a second contract to keep in step. The same for the registry's
+three fields, which `tests/system/Readme.md` states.
+
+It also read "proved by a mutation" as a claim that a check is correct. The
+record now says what a mutation shows and what it does not.
