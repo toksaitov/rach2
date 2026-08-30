@@ -29,6 +29,7 @@ Six mechanisms, and the reason for each:
 
 ## Capture checkers and fixtures
 
+* `checkers/wavcheck.c` reads the recording QEMU's `wav` audio backend writes and says whether the machine played the scale it was asked for: each named frequency the loudest in its turn, in the order named. The notes are not equal parts of the recording, so it sweeps rather than dividing. It is the only test tool that links the maths library.
 * `checkers/pcapcheck.c` reads Ethernet pcap files produced by QEMU, one subcommand per question. `bcast` checks a broadcast UDP datagram, a packet source address, an ARP ownership reply, or use of a gateway for an off-subnet destination. `netconsole` validates and reassembles Rach2 netconsole frames, including their broadcast address, boot id, sequence, payload length, checksum, and required log text. `rawwire` checks the hop limits and caller-supplied ICMP checksum emitted by the raw-socket probe.
 * `fixtures/mkfixture.c` builds both disk fixtures. `boot` rewrites a small MBR disk into the `/dev/bootpart` fixture and fills its FAT-typed partition with the probe's byte pattern; `wide` creates a sparse 260 GB disk with known sectors at 5 GiB and 258 GiB for 64-bit disk-offset tests.
 

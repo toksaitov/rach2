@@ -591,3 +591,23 @@ controller reports the bytes it moved.
 Two smaller things fell out of it: the driver's cache instructions are x86's
 and are now compiled only where they exist, and `net_core.c` had a third copy
 of the interrupt bracket, which is the shared one now.
+
+## The audio path, 2026-08-30
+
+`tests/run audio` boots with an Intel HDA controller and a codec, plays the
+five-note scale the debug shell has, and measures the recording QEMU's wav
+backend writes. The driver's own report says what it was asked to play; the
+recording says what came out, and only the second can be checked from outside.
+
+`wavcheck` is the eighth test tool and the only one that links the maths
+library. It sweeps the recording in fifty-millisecond windows, labels each with
+whichever named frequency is loudest in it, and requires those labels to visit
+every note in the order named. The first attempt divided the recording into
+equal fifths, which is wrong: the device opens during the first note and the
+machine is stopped during the last, so the notes' shares differ by three to
+one. That version failed two of five notes on a machine that played the scale
+correctly.
+
+Proved by two mutations: a sample generator that returns silence (caught: four
+notes are never the loudest) and a scale whose five notes are all the same
+(caught: the second note sounds where the second was asked for).

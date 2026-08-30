@@ -62,6 +62,7 @@ DEADLINE        = build/tests/system/deadline
 PCAPCHECK       = build/tests/system/pcapcheck
 MKFIXTURE       = build/tests/system/mkfixture
 HOSTPEER        = build/tests/system/hostpeer
+WAVCHECK        = build/tests/system/wavcheck
 HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
@@ -87,6 +88,12 @@ $(MKFIXTURE): tests/system/fixtures/mkfixture.c
 $(HOSTPEER): tests/system/runner/hostpeer.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
+# What a machine played, measured off the recording QEMU's wav backend writes
+# (tests/system/checkers/wavcheck.c). The maths library is the only one any
+# test tool here links.
+$(WAVCHECK): tests/system/checkers/wavcheck.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $< -lm
 # The three runners (tests/system/runner/): the serial harness every suite
 # drives, the probe runner one boot scores, and the pty driver the SSH suites
 # answer their password prompts through.
@@ -122,7 +129,7 @@ run-default: test-image $(RUNTESTS)
 # machines. The list is the union of what the `run-*` targets depend on, and
 # `tests/run` checks that it stays the union.
 prepare-all: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
-             $(MKFIXTURE) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
+             $(MKFIXTURE) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(WAVCHECK) \
              busybox check-busybox check-dropbearmulti check-libc \
              check-pdpmake check-setid check-tcc ish krffs musl-programs \
              os-real-image os-simple-image ports/doom rach2 rach2-metal \
@@ -224,6 +231,23 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 	    "expect=COOKED:" wait=2 \
 	    'sendraw=X' \
 	    "expect=RAW:"
+# `tests/run audio`: what the machine actually played. The debug shell's
+# `audio test scale` plays five notes, and the driver's own report says what it
+# was asked to play, not what came out; QEMU's wav backend writes every sample
+# the guest produced, so the notes can be measured afterwards from outside.
+# The PC-speaker fallback cannot play samples, so the boot names an Intel HDA
+# controller and a codec for it to find.
+AUDIO_WAV = $(IMAGES_DIR)/audio-scale.wav
+run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
+	@rm -f $(AUDIO_WAV)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-device --qemu-arg=intel-hda \
+	    --qemu-arg=-device --qemu-arg=hda-duplex,audiodev=au0 \
+	    --qemu-arg=-audiodev --qemu-arg=wav,id=au0,path=$(AUDIO_WAV) \
+	    --timeout 120 --ok "Done." \
+	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done." wait=3
+	$(WAVCHECK) scale $(AUDIO_WAV) 262 294 330 349 392
 # `tests/run diskfull`: a file system with no room left. The probe writes until
 # the write is refused, requires `ENOSPC` rather than the `EIO` this kernel used
 # to return for a full disk, removes the file and writes again. It has a boot of

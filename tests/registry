@@ -63,6 +63,7 @@ netconsole-e1000|qemu-system-i386|full
 crash|qemu-system-i386|full
 reset|qemu-system-i386|full
 socket|qemu-system-i386|full
+audio|qemu-system-i386|full
 diskfull|qemu-system-i386|full
 fault|qemu-system-i386|full
 console|qemu-system-i386|full
