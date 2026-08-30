@@ -84,6 +84,53 @@ static int contains(const char *needle, int len)
     return 0;
 }
 
+/**
+ * How many times `needle` appears in the kernel's log.
+ *
+ * The log is root-only and this probe runs as the transient init the debug
+ * shell starts, which is root. A machine where it cannot be opened answers
+ * zero, because a check that cannot be made is not a check that failed.
+ */
+static int count_in_log(const char *needle)
+{
+    static char chunk[1024];
+    int fd;
+    int n;
+    int found = 0;
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootlog", O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    /* Read a piece at a time, and take the overlap into account by counting
+       only whole matches inside each piece: the log's lines are far shorter
+       than a piece, so a match split across two reads would have to be a line
+       longer than this buffer. */
+    for (;;) {
+        int i;
+        int m = (int)strlen(needle);
+
+        n = syscall3(SYS_READ, fd, (int)(size_t)chunk, (int)sizeof(chunk));
+        if (n <= 0) {
+            break;
+        }
+        for (i = 0; i + m <= n; i++) {
+            int j;
+
+            for (j = 0; j < m; j++) {
+                if (chunk[i + j] != needle[j]) {
+                    break;
+                }
+            }
+            if (j == m) {
+                found++;
+            }
+        }
+    }
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    return found;
+}
+
 /** Whether the boot line switched USB off. */
 static int switched_off(void)
 {
@@ -212,6 +259,20 @@ void _start(void)
     }
     if (!contains("class 3 protocol 2", len)) {
         fail("no mouse is listed");
+    }
+
+    /*
+     * And the log does not repeat itself. A device this kernel cannot drive is
+     * refused once and then left alone; the notebook found one that was
+     * enumerated again every tick until the slots ran out, which cost the
+     * keyboard that was already working. One line is the contract.
+     */
+    {
+        int refusals = count_in_log("no interface this kernel can drive");
+
+        if (refusals > 1) {
+            fail("a device that cannot be driven was refused more than once");
+        }
     }
 
     puts("USBPROBE OK\n");

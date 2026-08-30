@@ -79,6 +79,9 @@ struct usb_device_state {
     int slot;
     uint32_t deadline;
     int closing_asked;
+    /* Whether this entry is held because the device on its port was refused,
+     * rather than being on its way to running. */
+    int refused;
     uint32_t short_by;
     int reporting;
     int dequeue_asked;
@@ -235,6 +238,7 @@ static int expired(const struct usb_device_state *d)
 static void fail(struct usb_device_state *d, const char *why)
 {
     klog(KLOG_WARN, "usb", "device: port %d: %s", d->port + 1, why);
+    d->refused = 1;
     if (enumerating == (int)(d - devices)) {
         enumerating = -1;
     }
@@ -259,9 +263,23 @@ static void fail(struct usb_device_state *d, const char *why)
 static void step_closing(struct usb_device_state *d)
 {
     struct usb_command_result result;
+    int index = (int)(d - devices);
+
+    /*
+     * Closing takes the same turn enumeration does. There is one command in
+     * flight and one answer to it, and whichever device asks first takes that
+     * answer: a device waiting for its slot would otherwise be handed the
+     * answer to another device's Disable Slot, and would take the slot being
+     * given back as the slot it had just been given.
+     */
+    if (enumerating >= 0 && enumerating != index) {
+        return;
+    }
+    enumerating = index;
 
     if (d->slot <= 0) {
-        d->state = ST_FREE;
+        d->state = d->refused ? ST_FAILED : ST_FREE;
+        enumerating = -1;
         return;
     }
     if (d->closing_asked) {
@@ -279,7 +297,15 @@ static void step_closing(struct usb_device_state *d)
         }
         xhci_device_closed(d->slot);
         d->slot = 0;
-        d->state = ST_FREE;
+        enumerating = -1;
+        /*
+         * A device this kernel could not drive keeps its entry, which keeps
+         * its port: the scan below adds a device only for a port no entry
+         * holds, so this is what stops a device being enumerated again every
+         * time the machine looks. It is let go when the port says the device
+         * has gone, which is where a person unplugging it arrives.
+         */
+        d->state = d->refused ? ST_FAILED : ST_FREE;
         return;
     }
     if (xhci_device_close(d->slot) == 0) {
@@ -455,6 +481,13 @@ static void step_device(struct usb_device_state *d)
             d->speed = status.speed;
         }
         if (xhci_device_open(d->port, d->speed) != 0) {
+            /* The controller takes one command at a time, and another device
+             * may have one in flight; this is a turn to wait, not a refusal.
+             * The deadline armed when the reset began is what ends the
+             * waiting. */
+            if (!expired(d)) {
+                return;
+            }
             fail(d, "no slot could be asked for");
             return;
         }
@@ -473,6 +506,9 @@ static void step_device(struct usb_device_state *d)
         }
         d->slot = result.device;
         if (xhci_device_address(d->slot) != 0) {
+            if (!expired(d)) {
+                return;
+            }
             fail(d, "the device could not be addressed");
             return;
         }
@@ -515,6 +551,9 @@ static void step_device(struct usb_device_state *d)
         d->ep0_packet = d->buffer[7];
         if (d->ep0_packet != 8 && d->speed != USB_SPEED_HIGH && d->speed != USB_SPEED_SUPER) {
             if (xhci_device_packet_size(d->slot, d->ep0_packet) != 0) {
+                if (!expired(d)) {
+                    return;
+                }
                 fail(d, "its control endpoint could not be corrected");
                 return;
             }
@@ -621,6 +660,9 @@ static void step_device(struct usb_device_state *d)
             endpoint.interval = d->interface.ep_interval;
             d->ep_dci = d->interface.ep_number * 2 + 1;
             if (xhci_endpoint_open(d->slot, &endpoint) != 0) {
+                if (!expired(d)) {
+                    return;
+                }
                 fail(d, "its endpoint could not be opened");
                 return;
             }
@@ -749,6 +791,7 @@ void usb_core_step(uint32_t elapsed_ms)
                 enumerating = -1;
             }
             devices[i].closing_asked = 0;
+            devices[i].refused = 0;
             devices[i].state = devices[i].slot > 0 ? ST_CLOSING : ST_FREE;
             devices[i].deadline = core_ms + STEP_MS;
         }
@@ -777,6 +820,7 @@ void usb_core_step(uint32_t elapsed_ms)
                 devices[i].slot = 0;
                 devices[i].ep_dci = 0;
                 devices[i].closing_asked = 0;
+                devices[i].refused = 0;
                 devices[i].interface.found = 0;
                 devices[i].deadline = core_ms + SETTLE_LIMIT_MS;
                 break;

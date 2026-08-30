@@ -128,6 +128,22 @@ else
     bad "with USB switched off the file was not there, or was not empty"
 fi
 
+# ---- 7: a device this kernel cannot drive is refused once and left alone,
+#         and the devices beside it are still enumerated. Both halves matter:
+#         the notebook found a device of this kind and the stack enumerated it
+#         again every 150 ms until it ran out of slots, which cost the keyboard
+#         that was already working. ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0 \
+    --timeout 90 "probe=usbprobe" > /dev/null 2>&1; then
+    note "a device that cannot be driven does not stop the ones that can: OK"
+else
+    bad "a device that cannot be driven stopped the ones that can"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "usb-test: FAIL" >&2
     exit 1
