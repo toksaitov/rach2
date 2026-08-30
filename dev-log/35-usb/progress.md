@@ -66,15 +66,15 @@ the commit that completes it.
       reading the port
 * [x] `/dev/mouse` opens when any mouse exists
 * [x] the refactor proved: `ttyprobe`, `stdintest`, `jobprobe`, `console`, Doom
-* [ ] `sys/usb/hid.c`: boot protocol, the report diff, the scancode table with
+* [x] `sys/usb/hid.c`: boot protocol, the report diff, the scancode table with
       modifiers and `0xE0` sequences, the mouse packets
-* [ ] the held-key release on teardown
-* [ ] the harness monitor connection and its four steps
-* [ ] `harness --selftest` covers the new steps
-* [ ] `tests/run usb` at both `usb_version` settings
-* [ ] `rach2.nousb` and the `subset` boot
+* [x] the held-key release on teardown
+* [x] the harness monitor connection and its four steps
+* [x] `harness --selftest` covers the new steps
+* [x] `tests/run usb` at both `usb_version` settings
+* [x] `rach2.nousb` and the `subset` boot
 * [ ] `procfiles` gains the `/proc/usb` case
-* [ ] mutations: break codes, rollover, the report diff, the disconnect event,
+* [x] mutations: break codes, rollover, the report diff, the disconnect event,
       the held-key release, the USB path into `input_key`
 * [ ] review 4 of 6
 

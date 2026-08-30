@@ -359,3 +359,57 @@ guards against is closed by dropping completions for slots the controller no
 longer holds. And the endpoint recovery is still two primitives rather than the
 whole sequence: `CLEAR_FEATURE(ENDPOINT_HALT)` and Stop Endpoint belong with
 the first transfer that can stall, which is phase 5.
+
+## Phase 5
+
+The input layer first, with no USB in it. What was inside the PS/2 interrupt
+handler is now `sys/input.c`: the modifier state, the Ctrl+C interception, the
+scrollback keys, the translation and the choice between the line discipline and
+the debug shell. The handler keeps what is particular to the 8042, which is
+reading the port. The shell's own three pieces stayed in `kernel.c` behind
+`shell_reads_input`, `shell_input_char` and `shell_interrupt`, because the
+buffer they touch is the shell's. `ttyprobe`, `stdintest`, `jobprobe`, the
+`console` suite, `exitline` and the default boot all passed unchanged, which is
+what says the move changed nothing.
+
+Then `hid.c`. A report is a state and a scancode is an event, so each report is
+compared with the one before it and the difference is what the input layer is
+given, in the set-1 codes the PS/2 keyboard already produces. The mouse's
+vertical movement is turned over, because a USB mouse's Y grows downward and
+the queue it joins grows upward.
+
+The host test found a defect the moment it existed: a report of all zeros, which
+is a keyboard saying nothing is down, was being dropped as if it were the
+rollover report. Every key held would have stayed held for ever. The rollover
+report is the one whose slots are filled with 0x01, and that is what is checked
+now.
+
+The mouse device is opened by the bare name `mouse` rather than a path under
+`/dev`, which is how Doom opens it and the only way the kernel offers. The
+probe does the same, and the Readme says so.
+
+The suite is six boots. Three of them take the 8042 away with QEMU's
+`i8042=off`, which is what makes the answers mean anything: with a PS/2
+keyboard present, a typed key could have arrived by either road.
+
+* a high-speed keyboard and mouse enumerate and are listed
+* the same at full speed, which is the speed a real keyboard uses
+* a key typed through the emulator's monitor reaches the shell, on a machine
+  with no other keyboard: `sendkey h e l p` and the shell prints its help
+* a mouse moved through the monitor arrives at the mouse device
+* a keyboard plugged in after the boot is enumerated, and pulled out is taken
+  down
+* with `rach2.nousb` the file is there and empty
+
+The harness gained the monitor connection this needs: a unix socket beside the
+serial line, and the steps `key=`, `mouse=`, `usb=add:` and `usb=del:`. Nothing
+else can produce those events, because they come from the emulated hardware
+rather than from anything the guest can be asked to do. The socket is opened
+only for a run whose steps need it, so every other suite's command line is
+unchanged. `harness --selftest` covers the mouse step's parsing.
+
+Mutations, all caught: send make codes and no break codes; translate the
+rollover report; forget the previous report; keep the vertical movement as the
+device sends it; let a device go without releasing what it held; and cut the
+USB path out of `input_key` entirely, which fails the typing boot and is what
+says that boot measures the path this milestone built.
