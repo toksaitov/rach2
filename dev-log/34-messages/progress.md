@@ -102,7 +102,7 @@ Proof items:
 * [x] `tcp_hosttest`: every matrix row a checklist line
 * [x] `packet_hosttest`: malformed Ethernet, IPv4, UDP, TCP
 * [x] `wavcheck` + the audio boot + two mutations
-* [ ] Review 11 of 12
+* [x] Review 11 of 12
 
 ## Phase 8: the tier and the record (8 items)
 

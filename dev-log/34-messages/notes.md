@@ -611,3 +611,43 @@ correctly.
 Proved by two mutations: a sample generator that returns silence (caught: four
 notes are never the loudest) and a scale whose five notes are all the same
 (caught: the second note sounds where the second was asked for).
+
+## Review 11 of 12, 2026-08-30
+
+Codex read the new coverage and asked of each row whether it could pass while
+the thing it names is broken. Nine of the twelve findings were that it could.
+All fixed:
+
+* The AHCI disk-policy row was `refused || policy_allows` with the policy
+  always allowing, so it could not fail. It refuses now, and the port must see
+  no command.
+* The AHCI model kept `GHC.AE` across a host reset. A real reset clears it,
+  which is why the driver sets it again; a driver that forgot would have
+  passed. Proved by removing that write: caught.
+* The model answered `SSTS.DET 3` whatever the driver did, so a driver that
+  never reset the link would have passed. `SCTL.DET` now takes the link down
+  and releasing it brings the link up, and there is a row for a port whose
+  link comes up only on reset.
+* The TCP zero-window row read the stored window and sent nothing. It offers
+  data while the window is closed, requires none of it to go out, and requires
+  it to go out when the window reopens.
+* The retransmission row counted attempts, which a stack retrying every tick
+  would also pass. The gaps between attempts are recorded and each must be
+  longer than the first.
+* `sockfull` required "at least eight" and `procfull` "between two and
+  thirty-one", so a pool of another size passed. Both pin the number: thirteen
+  descriptors and fourteen slots, which is what sixteen of each leaves. Proved
+  by shrinking the socket pool to fourteen: caught.
+* `procfull` ignored every reap after the first and could report success while
+  leaving a zombie, which would take a slot from the next probe in the same
+  boot. A failed reap is now a failure.
+* `packet_hosttest` checked the raw layer on one row of three, and its
+  Ethernet-header-only row omitted the packet sockets, which are deliberately
+  offered that frame.
+* `wavcheck` labelled every window with a frequency however quiet it was, so a
+  machine playing almost nothing kept the same labels. A window below a
+  threshold now belongs to no note. It also read `2 * channels` bytes into a
+  sixteen-byte buffer and accepted any channel count; more than eight is
+  refused.
+
+Its four simplifications are taken: the model state no row used is gone.

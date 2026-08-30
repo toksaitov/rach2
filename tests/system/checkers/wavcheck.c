@@ -42,8 +42,8 @@ static unsigned rd16(const unsigned char *p)
 
 static unsigned long rd32(const unsigned char *p)
 {
-    return (unsigned long)p[0] | ((unsigned long)p[1] << 8) |
-           ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24);
+    return (unsigned long)p[0] | ((unsigned long)p[1] << 8) | ((unsigned long)p[2] << 16) |
+           ((unsigned long)p[3] << 24);
 }
 
 static int wav_open(const char *path, FILE **out, struct wav *w)
@@ -95,7 +95,10 @@ static int wav_open(const char *path, FILE **out, struct wav *w)
             fseek(f, (long)len, SEEK_CUR);
         }
     }
-    if (w->data_at == 0 || w->bits != 16 || w->channels == 0 || w->rate == 0) {
+    /* The frame buffer below holds eight channels of 16-bit samples, which is
+       more than any recording this reads and is the bound a header cannot be
+       allowed to exceed. */
+    if (w->data_at == 0 || w->bits != 16 || w->channels == 0 || w->channels > 8 || w->rate == 0) {
         fprintf(stderr, "wavcheck: %s: not 16-bit PCM with a data chunk\n", path);
         fclose(f);
         return 2;
@@ -161,8 +164,7 @@ int main(int argc, char **argv)
     fseek(f, w.data_at, SEEK_SET);
     frames = w.data_len / (long)(2 * w.channels);
     if (frames < (long)w.rate / 10) {
-        fprintf(stderr, "wavcheck: %s holds %ld frames, too few to measure\n",
-                argv[2], frames);
+        fprintf(stderr, "wavcheck: %s holds %ld frames, too few to measure\n", argv[2], frames);
         fclose(f);
         return 1;
     }
@@ -203,8 +205,7 @@ int main(int argc, char **argv)
     }
     per_note = frames / n_notes;
     if (per_note < (long)w.rate / 20) {
-        fprintf(stderr, "wavcheck: %ld frames for %d notes is too few\n", frames,
-                n_notes);
+        fprintf(stderr, "wavcheck: %ld frames for %d notes is too few\n", frames, n_notes);
         free(samples);
         return 1;
     }
@@ -221,6 +222,9 @@ int main(int argc, char **argv)
         long at;
         int want = 0;
         int seen[MAX_NOTES];
+        /* A note this stack plays at its ordinary volume measures in the
+           thousands here; a hundredth of that is silence with noise in it. */
+        double quiet = 1.0;
 
         for (i = 0; i < n_notes; i++) {
             seen[i] = 0;
@@ -237,12 +241,18 @@ int main(int argc, char **argv)
                     loudest = i;
                 }
             }
+            /* A window with no sound in it belongs to no note: without this
+               a machine playing almost nothing would still have every window
+               labelled, and the labels would still be in order. */
+            if (best < quiet) {
+                continue;
+            }
             seen[loudest] = 1;
             if (loudest == want + 1) {
                 want++;
             } else if (loudest > want + 1 || loudest < want) {
-                printf("wavcheck: %.0f Hz sounds where %.0f Hz was asked for\n",
-                       freqs[loudest], freqs[want]);
+                printf("wavcheck: %.0f Hz sounds where %.0f Hz was asked for\n", freqs[loudest],
+                       freqs[want]);
                 bad++;
                 break;
             }
@@ -261,6 +271,7 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("wavcheck: ok: %d notes over %ld frames, each the loudest in its "
-           "turn and in the order asked for\n", n_notes, frames);
+           "turn and in the order asked for\n",
+           n_notes, frames);
     return 0;
 }

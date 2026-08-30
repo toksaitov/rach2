@@ -42,9 +42,7 @@ static struct {
 static unsigned n_segs;
 
 static unsigned cb_connected, cb_fin, cb_writable, cb_deliver, cb_accept;
-static unsigned cb_connected_ok;
 static unsigned delivered_bytes;
-static int tx_refuse;
 
 int ip_tx(uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len, uint8_t ttl)
 {
@@ -52,9 +50,6 @@ int ip_tx(uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len, uin
 
     (void)ttl;
 
-    if (tx_refuse) {
-        return -1;
-    }
     if (n_segs < MAX_SEGS) {
         segs[n_segs].dst = dst;
         segs[n_segs].proto = proto;
@@ -71,7 +66,6 @@ void socket_tcp_connected(struct socket *sock)
 {
     (void)sock;
     cb_connected++;
-    cb_connected_ok++;
 }
 
 void socket_tcp_fin(struct socket *sock)
@@ -217,9 +211,7 @@ static void reset_all(void)
 
     n_segs = 0;
     cb_connected = cb_fin = cb_writable = cb_deliver = cb_accept = 0;
-    cb_connected_ok = 0;
     delivered_bytes = 0;
-    tx_refuse = 0;
     kernel_ticks = 1000;
     for (i = 0; i < MAX_TCP_CONNS; i++) {
         tcp_table[i].in_use = 0;
@@ -319,7 +311,8 @@ int main(void)
         /* The peer answers. The connection opens and the socket is told. */
         rx((uint16_t)80, lport, peer_seq, iss + 1, (uint8_t)(F_SYN | F_ACK), 4096, (const char *)0,
            0);
-        CHECK("the handshake completes", cb_connected_ok == 1);
+        CHECK("the handshake completes", cb_connected == 1);
+        CHECK("and the connection is established", conn->state == TCP_ESTABLISHED);
         CHECK("and is acknowledged", (last_flags() & F_ACK) != 0);
         peer_seq++;
 
@@ -357,12 +350,20 @@ int main(void)
         CHECK("the segment that fills the hole is delivered", delivered_bytes == 4);
         peer_seq += 4;
 
-        /* A window of zero stops the sender; reopening it starts it again. */
-        n_segs = 0;
+        /* A window of zero stops the sender: data offered while it is closed
+           must not go out, and must go out when it reopens. Checking the
+           stored window alone would pass a stack that ignored it. */
         rx((uint16_t)80, lport, peer_seq, iss + 1, F_ACK, 0, (const char *)0, 0);
         CHECK("a zero window is taken", conn->snd_wnd == 0);
+        n_segs = 0;
+        CHECK("data can be offered while the window is closed",
+              tcp_send(&sock, (const uint8_t *)"payload!", 8) == 8);
+        CHECK("and none of it goes out", n_segs == 0);
         rx((uint16_t)80, lport, peer_seq, iss + 1, F_ACK, 2048, (const char *)0, 0);
-        CHECK("and a reopened one is taken too", conn->snd_wnd == 2048);
+        CHECK("a reopened window is taken", conn->snd_wnd == 2048);
+        CHECK("and the waiting data goes out", n_segs > 0);
+        CHECK("carrying what was offered",
+              n_segs > 0 && segs[n_segs - 1].len > 20 && segs[n_segs - 1].data[20] == 'p');
 
         /* The peer's FIN closes the reading half and is acknowledged. */
         n_segs = 0;
@@ -386,12 +387,28 @@ int main(void)
         n_segs = 0;
         /* The retransmission timer counts ticks and `tcp_tick` is one tick,
            so this is the timer running rather than the clock jumping: the
-           five backoffs together are about six thousand of them. */
-        for (tries = 0; tries < 20000 && conn->state != TCP_CLOSED; tries++) {
-            kernel_ticks++;
-            tcp_tick();
+           five backoffs together are about six thousand of them. The gaps
+           between the attempts are recorded, because a stack that retried
+           every tick would also eventually give up and pass a check that only
+           counted the attempts. */
+        {
+            unsigned last_at = 0, gaps[8], n_gaps = 0, before = 0;
+
+            for (tries = 0; tries < 20000 && conn->state != TCP_CLOSED; tries++) {
+                kernel_ticks++;
+                tcp_tick();
+                if (n_segs != before) {
+                    if (last_at != 0 && n_gaps < 8) {
+                        gaps[n_gaps++] = tries - last_at;
+                    }
+                    last_at = tries;
+                    before = n_segs;
+                }
+            }
+            CHECK("the connection was retransmitted more than once", n_gaps >= 2);
+            CHECK("and each wait was longer than the one before",
+                  n_gaps < 2 || (gaps[1] > gaps[0] && gaps[n_gaps - 1] > gaps[0]));
         }
-        CHECK("the connection was retransmitted", n_segs > 0);
         CHECK("and given up on", conn->state == TCP_CLOSED);
         /* The block stays until the socket lets go of it, which is what a
            program still holding the descriptor expects; what the socket is

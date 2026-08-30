@@ -122,6 +122,7 @@ static int n_fds;
 #define CHILD_NOT_REFUSED 3
 #define CHILD_WRONG_ERRNO 4
 #define CHILD_NO_REUSE    5
+#define CHILD_WRONG_COUNT 6
 
 static void child(void)
 {
@@ -152,6 +153,12 @@ static void child(void)
     }
     if (refused != -ENOMEM) {
         sys_exit(CHILD_WRONG_ERRNO);
+    }
+    /* Exactly the three the parent's thirteen left of a sixteen-entry pool. A
+       range would pass a pool of another size, which is the number this probe
+       exists to pin. */
+    if (n_mine != 3) {
+        sys_exit(CHILD_WRONG_COUNT);
     }
 
     /* One back makes room for one more. */
@@ -185,8 +192,12 @@ void _start(void)
         puts(", not -EMFILE");
         sys_exit(1);
     }
-    if (n_fds < 8) {
-        puts("SOCKFULL FAIL: the parent holds too few sockets to fill the pool");
+    /* Sixteen descriptors less the three stdio holds. A range would pass a
+       table of another size. */
+    if (n_fds != 13) {
+        print("SOCKFULL FAIL: the parent opened ");
+        print_num(n_fds);
+        puts(" sockets, not the 13 a 16-descriptor table leaves");
         sys_exit(1);
     }
 
@@ -205,7 +216,7 @@ void _start(void)
     if (!WIFEXITED(status) || WEXITSTATUS(status) != CHILD_OK) {
         print("SOCKFULL FAIL: the second process reported ");
         print_num((int)WEXITSTATUS(status));
-        puts(" (2 no room, 3 never refused, 4 wrong errno, 5 no reuse)");
+        puts(" (2 no room, 3 never refused, 4 wrong errno, 5 no reuse, 6 wrong count)");
         sys_exit(1);
     }
 

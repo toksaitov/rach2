@@ -30,15 +30,12 @@ extern int printf(const char *fmt, ...);
 #define REGS 0x400
 
 static uint32_t reg[REGS];
-static unsigned delays;
-
 /* What this run's controller does, set before each case. */
 static int reset_completes;
 static int handoff_answers;
 static int link_comes_up;
 static int command_completes;
 static int fatal_status;
-static int has_handoff;
 /* What the model says it moved, which the driver compares with what it
    asked for. */
 static uint32_t moved_bytes;
@@ -95,10 +92,15 @@ static void model_w32(uint32_t off, uint32_t v)
         return;
     }
     if (off == R_GHC) {
-        /* The reset bit clears itself when the controller has finished, and
-           a controller that never finishes is one that never clears it. */
-        if ((v & GHC_HR) && reset_completes) {
-            v &= ~GHC_HR;
+        /* The reset bit clears itself when the controller has finished, and a
+           controller that never finishes never clears it. A reset also clears
+           AHCI enable, which is why the driver sets it again afterwards: a
+           model that kept the bit would let a driver that forgot to pass. */
+        if (v & GHC_HR) {
+            if (reset_completes) {
+                v &= ~GHC_HR;
+                v &= ~GHC_AE;
+            }
         }
         reg[off] = v;
         return;
@@ -109,6 +111,19 @@ static void model_w32(uint32_t off, uint32_t v)
             v &= ~BOHC_BOS;
         }
         reg[off] = v;
+        return;
+    }
+    if (off == P0 + P_SCTL) {
+        /* COMRESET: while DET is 1 the link is down, and releasing it brings
+           the link up on a port that has a device. A model that answered DET
+           3 whatever the driver did would pass a driver that never reset the
+           link at all. */
+        reg[off] = v;
+        if ((v & 0xFu) == 1u) {
+            reg[P0 + P_SSTS] = 0x000u;
+        } else if ((v & 0xFu) == 0u && link_comes_up) {
+            reg[P0 + P_SSTS] = 0x123u;
+        }
         return;
     }
     if (off == P0 + P_CMD) {
@@ -158,7 +173,6 @@ static void model_w32(uint32_t off, uint32_t v)
 static void model_udelay(uint32_t us)
 {
     (void)us;
-    delays++;
 }
 
 static const struct ahci_io model_io = {model_r32, model_w32, model_udelay};
@@ -335,7 +349,6 @@ static void model_reset(void)
     reg[P0 + P_SSTS] = 0x123u;     /* DET 3, IPM 1, SPD 2: a live link */
     reg[P0 + P_SIG] = 0x00000101u; /* a disk, not an ATAPI device */
     reg[P0 + P_TFD] = 0;
-    delays = 0;
     ci_reads = 0;
     moved_bytes = 512;
     on_command_issued = complete_command;
@@ -344,8 +357,7 @@ static void model_reset(void)
     link_comes_up = 1;
     command_completes = 1;
     fatal_status = 0;
-    has_handoff = 0;
-    reg[R_CAP2] = has_handoff ? 0x1u : 0u;
+    reg[R_CAP2] = 0u; /* no handoff, unless a row asks for one */
     block0 = 0;
     ahci_set_io(&model_io);
 }
@@ -391,7 +403,14 @@ int main(void)
 
     model_reset();
     reg[P0 + P_SSTS] = 0x000u; /* DET 0: nothing on the link */
+    link_comes_up = 0;         /* and a reset does not bring one up */
     CHECK("a port with no device is refused", ahci_select_port() != 0);
+
+    model_reset();
+    reg[P0 + P_SSTS] = 0x000u;
+    link_comes_up = 1; /* nothing yet, but the link comes up when reset */
+    CHECK("a port whose link comes up on reset is taken", ahci_select_port() == 0);
+    CHECK("and the reset was released", (reg[P0 + P_SCTL] & 0xFu) != 1u);
 
     model_reset();
     reg[P0 + P_SSTS] = 0x113u;     /* DET 3 with IPM 1 but no speed: not ready */
@@ -438,8 +457,12 @@ int main(void)
         model_reset();
         (void)ahci_select_port();
         (void)ahci_port_start();
-        CHECK("a command the disk policy refuses never reaches the port",
-              ahci_run_command(0xF0, 0, 0, buf, sizeof(buf), 0) != 0 || policy_allows);
+        policy_allows = 0;
+        ci_reads = 0;
+        CHECK("a command the disk policy refuses is refused",
+              ahci_run_command(ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
+        CHECK("and never reaches the port", ci_reads == 0);
+        policy_allows = 1;
     }
 
     if (fails == 0) {

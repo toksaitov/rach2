@@ -281,6 +281,7 @@ int main(void)
     deliver(f, n + 8);
     CHECK("a whole UDP datagram reaches the port layer", to_udp == 1);
     CHECK("and the packet sockets", to_packet == 1);
+    CHECK("and the raw layer", to_raw == 1);
     CHECK("and nothing else", to_tcp == 0 && to_icmp == 0);
 
     /* Ethernet: shorter than its own header, and exactly it. */
@@ -288,9 +289,13 @@ int main(void)
     deliver(f, 13);
     CHECK("a frame shorter than an Ethernet header is dropped", to_packet == 0 && to_udp == 0);
     reset();
-    deliver(f, 14);
-    CHECK("a frame that is only an Ethernet header reaches no parser",
-          to_udp == 0 && to_tcp == 0 && to_icmp == 0);
+    n = build_eth(f, 0x0800);
+    deliver(f, n);
+    CHECK("a frame that is only an Ethernet header reaches no IP parser",
+          to_udp == 0 && to_tcp == 0 && to_icmp == 0 && to_raw == 0);
+    /* Packet sockets are offered it, deliberately: they exist to see what the
+       IP layer drops, which is every reply a DHCP client is waiting for. */
+    CHECK("but the packet sockets are still offered it", to_packet == 1);
 
     /* An interface that is down receives nothing. */
     reset();
@@ -377,6 +382,7 @@ int main(void)
     n += build_ip(f + n, 1, 8);
     deliver(f, n + 8);
     CHECK("ICMP reaches the ICMP parser", to_icmp == 1 && to_udp == 0);
+    CHECK("and the raw layer sees it", to_raw == 1);
     reset();
     n = build_eth(f, 0x0800);
     n += build_ip(f + n, 6, 8);

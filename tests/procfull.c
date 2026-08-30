@@ -109,19 +109,25 @@ static void print_num(int v)
 static int kids[TRIES];
 static int n_kids;
 
-static void reap_all(void)
+/* Returns the number that could not be reaped, which the caller reports: a
+   probe that left a zombie behind would take a slot from the next probe in
+   the same boot. */
+static int reap_all(void)
 {
-    int i, status;
+    int i, status, missed = 0;
 
     for (i = 0; i < n_kids; i++) {
-        sys_waitpid(kids[i], &status, 0);
+        if (sys_waitpid(kids[i], &status, 0) != kids[i]) {
+            missed++;
+        }
     }
     n_kids = 0;
+    return missed;
 }
 
 static void fail(const char *why)
 {
-    reap_all();
+    (void)reap_all();
     print("PROCFULL FAIL: ");
     puts(why);
     sys_exit(1);
@@ -153,12 +159,19 @@ void _start(void)
         print("PROCFULL FAIL: the refusal was ");
         print_num(refused);
         puts(", not -EAGAIN");
-        reap_all();
+        (void)reap_all();
         sys_exit(1);
     }
+    /* The table holds sixteen and two of them are taken: the debug shell and
+       this probe. A range would pass a table of another size, which is the
+       one number this probe exists to pin. */
     slots = n_kids;
-    if (slots < 2 || slots >= TRIES) {
-        fail("the count of slots is not one this machine could have");
+    if (slots != 14) {
+        print("PROCFULL FAIL: forked ");
+        print_num(slots);
+        puts(" children, not the 14 a 16-slot table leaves");
+        (void)reap_all();
+        sys_exit(1);
     }
 
     /* A reaped child gives its slot back, so the next fork must succeed. This
@@ -175,7 +188,10 @@ void _start(void)
     }
     kids[0] = pid;
 
-    reap_all();
+    if (reap_all() != 0) {
+        puts("PROCFULL FAIL: a child could not be reaped, so a slot is still taken");
+        sys_exit(1);
+    }
     print("PROCFULL OK (");
     print_num(slots);
     puts(" slots, refused with EAGAIN, a reaped slot reused)");
