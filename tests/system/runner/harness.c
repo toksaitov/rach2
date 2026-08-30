@@ -135,11 +135,44 @@ static int steps_need_monitor(int argc, char **argv)
     return 0;
 }
 
+/**
+ * Read from the monitor until its prompt arrives, or the deadline passes.
+ *
+ * The prompt is what says the monitor has finished with what it was given.
+ * Sleeping a fixed time instead is a race: under load a command sent before
+ * the monitor was listening is taken by nobody, and the step that depended on
+ * it waits out its whole limit for something that never happened.
+ */
+static int monitor_wait_prompt(int seconds)
+{
+    time_t deadline = time(NULL) + seconds;
+    char buf[512];
+
+    while (time(NULL) <= deadline) {
+        ssize_t n = recv(monitor_fd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+
+        if (n > 0) {
+            buf[n] = '\0';
+            if (strstr(buf, "(qemu)") != NULL) {
+                return 0;
+            }
+            continue;
+        }
+        if (n == 0) {
+            return -1; /* the monitor closed: the machine has gone */
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            return -1;
+        }
+        usleep(10000);
+    }
+    return -1;
+}
+
 /** Connect to the monitor, once, and read past its greeting. */
 static int monitor_open(void)
 {
     struct sockaddr_un addr;
-    char drain[512];
     int tries;
 
     if (monitor_fd >= 0) {
@@ -164,9 +197,14 @@ static int monitor_open(void)
         printf("HARNESS: no monitor at %s\n", monitor_path);
         return -1;
     }
-    /* The greeting and the first prompt, which are not answers to anything. */
-    usleep(100000);
-    (void)recv(monitor_fd, drain, sizeof(drain), MSG_DONTWAIT);
+    /* Its greeting ends in a prompt, and until that arrives it is not
+     * listening. */
+    if (monitor_wait_prompt(10) != 0) {
+        printf("HARNESS: the monitor never gave a prompt\n");
+        close(monitor_fd);
+        monitor_fd = -1;
+        return -1;
+    }
     return 0;
 }
 
@@ -174,7 +212,6 @@ static int monitor_open(void)
 static int monitor_send(const char *command)
 {
     char line[256];
-    char drain[512];
     size_t len;
 
     if (monitor_open() != 0) {
@@ -185,11 +222,13 @@ static int monitor_send(const char *command)
         printf("HARNESS: the monitor would not take '%s'\n", command);
         return -1;
     }
-    /* The monitor acts on a command before it answers, and what it answers is
-     * an echo and a prompt. Draining keeps the socket from filling; the reply
-     * itself is not read for meaning. */
-    usleep(50000);
-    (void)recv(monitor_fd, drain, sizeof(drain), MSG_DONTWAIT);
+    /* The monitor acts on a command and then prompts again. Waiting for that
+     * prompt is what makes the step ordered with respect to the machine: the
+     * device is plugged in before the next step looks for it. */
+    if (monitor_wait_prompt(10) != 0) {
+        printf("HARNESS: the monitor did not answer '%s'\n", command);
+        return -1;
+    }
     return 0;
 }
 

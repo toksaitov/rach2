@@ -159,6 +159,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,id=themouse \
+    --log "$IMAGE.replug.log" \
     --timeout 120 --steptmo 45 --ok "class 3 protocol 2, endpoint 1" \
     "expect=usb: devices: 2 configured" \
     "usb=del:themouse" "expect=: gone" \

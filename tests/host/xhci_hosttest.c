@@ -829,6 +829,23 @@ int main(void)
     xhci_release();
     CHECK("giving back twice does nothing the second time", (reg[XECP] & LEGSUP_OS_OWNED) == 0);
 
+    /* A controller that was started is halted on the way out, and its claim
+       is not given back: restoring the firmware's interrupt sources wakes its
+       system-management handler, which on a real machine took twenty seconds
+       in the middle of a reboot. A bring-up that failed is the other case, and
+       it does give the controller back, which the rows above check. */
+    model_reset();
+    reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
+    reg[LEGCTL] = 0x0000E1FEu;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("the controller is taken", xhci_own() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    xhci_stop();
+    CHECK("a controller that was started is halted", (reg[OP(O_USBSTS)] & M_USBSTS_HCH) != 0);
+    CHECK("and its claim is kept rather than handed back", (reg[XECP] & LEGSUP_OS_OWNED) != 0);
+    CHECK("with the firmware's interrupts still off", (reg[LEGCTL] & 0x0000E1FEu) == 0);
+
     /* One that was never started is never written to on the way out. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps() == 0);

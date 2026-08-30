@@ -1234,7 +1234,19 @@ void xhci_stop(void)
          * all this kernel can do about it. */
         klog(KLOG_WARN, "usb", "stop: the controller would not halt");
     }
-    xhci_release();
+
+    /*
+     * The controller is halted and it is not given back. Restoring the
+     * firmware's interrupt sources and its claim wakes its system-management
+     * handler, which re-initialises USB legacy support before this kernel's
+     * next instruction runs: on the notebook this milestone was written for
+     * that took twenty seconds, in the middle of a reboot, every time. The
+     * firmware initialises USB again on the next boot whatever this kernel
+     * leaves behind, so the wait bought nothing. A bring-up that fails is the
+     * other case and still gives it back, because a machine with no USB driver
+     * should keep whatever its firmware was doing for it.
+     */
+    klog(KLOG_INFO, "usb", "stop: the controller is halted");
 }
 
 
