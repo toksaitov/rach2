@@ -225,8 +225,21 @@ int xhci_device_address(int device);
  */
 int xhci_device_packet_size(int device, int max_packet);
 
-/** Give a device's slot back to the controller. */
-void xhci_device_close(int device);
+/**
+ * Ask the controller for a device's slot back.
+ *
+ * The endpoints stop taking work at once; the slot and its context stay the
+ * controller's until the command completes, which is what `xhci_device_closed`
+ * is called for. Returns -1 when the command could not be issued, and the
+ * caller may try again.
+ */
+int xhci_device_close(int device);
+
+/** Finish a close: the controller has given the slot back. */
+void xhci_device_closed(int device);
+
+/** Whether a command is in flight or being taken back. */
+int xhci_command_busy(void);
 
 /** Open an endpoint on a device. Returns its handle, which is its index. */
 int xhci_endpoint_open(int device, const struct usb_endpoint *endpoint);

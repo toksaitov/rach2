@@ -58,7 +58,7 @@ the commit that completes it.
 * [x] mutations: the configuration order, a descriptor length past the buffer,
       the Evaluate Context step, the interval derivation (the fifth device is a
       recorded limit)
-* [ ] review 3 of 6
+* [x] review 3 of 6
 
 ## Phase 5: input and HID
 

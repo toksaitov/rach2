@@ -307,3 +307,55 @@ Two limits recorded rather than closed:
   QEMU's HID devices report a control endpoint of eight bytes at every speed,
   which is the size assumed before asking, so nothing needs correcting. A
   device that reports otherwise would take that path on the notebook.
+
+### Review 3 of 6
+
+Eight findings. Six were right and are fixed; two are recorded with what was
+done about them.
+
+* A slot was forgotten before the controller gave it back. `xhci_device_close`
+  cleared the slot and its context pointer and then asked for a Disable Slot,
+  so a controller that still held the slot was pointed at a context this kernel
+  had let go. Closing is now two halves: the endpoints stop taking work at
+  once, and the slot and its context stay the controller's until the command
+  completes. `core.c` has a closing state that waits for it.
+* A ring reused by a second device still held the first device's blocks, with
+  the cycle value the controller was looking for and addresses belonging to
+  nobody. Rings and device contexts are cleared before they are handed over.
+* A device that was unplugged stayed in the table, kept its slot and blocked
+  the port. Every step now notices a port that has gone and takes the device
+  down. A connect that never settles gives its entry back after five seconds
+  rather than holding it for ever.
+* The shared input context was filled before the command ring was known to be
+  free, so a refusal could rewrite what a command in flight had given the
+  controller. Every filler asks `xhci_command_busy` first. The command in
+  flight also remembers what it was, so a completion is read as the answer to
+  that command rather than by what it happens to carry: a Disable Slot
+  completion could otherwise have been taken for an Enable Slot's answer and
+  resurrected a slot.
+* A control transfer reported nothing about how much arrived, because the
+  event was asked for on the status stage. It is asked for on the data stage
+  now, which is the stage whose event carries the residual, and every step that
+  reads a descriptor refuses one that came back short. The configuration is
+  walked only as far as it actually arrived.
+* A completion for a slot the controller no longer holds is dropped rather than
+  reported, so a slot handed to the next device cannot be advanced by the last
+  one's transfer.
+* The endpoint's packet size took all sixteen bits of a field whose low eleven
+  are the size. An interface on an alternate setting, a boot protocol that is
+  neither keyboard nor mouse, a configuration numbered zero and an endpoint
+  numbered zero are all refused now, each with a row.
+* The pure test had a row that changed a byte to the value it already had, so
+  it tested nothing. It steps over an unknown descriptor by its length now, and
+  there are rows for each of the refusals above.
+* `usbprobe` searched the whole file for the words it wanted, so a file whose
+  first line held all of them and whose second was empty would have passed. It
+  reads line by line now.
+
+Two findings are recorded rather than closed. Matching a completion to the
+exact block that was submitted, rather than to the device and endpoint, needs a
+per-transfer tag this driver has nowhere to put yet; the slot-reuse case it
+guards against is closed by dropping completions for slots the controller no
+longer holds. And the endpoint recovery is still two primitives rather than the
+whole sequence: `CLEAR_FEATURE(ENDPOINT_HALT)` and Stop Endpoint belong with
+the first transfer that can stall, which is phase 5.

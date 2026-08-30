@@ -84,6 +84,37 @@ static int contains(const char *needle, int len)
     return 0;
 }
 
+/** Where the line beginning at `from` ends. */
+static int line_end(int from, int len)
+{
+    int i = from;
+
+    while (i < len && text[i] != '\n') {
+        i++;
+    }
+    return i;
+}
+
+/** Whether `needle` appears between `from` and `to`. */
+static int within(const char *needle, int from, int to)
+{
+    int n = (int)strlen(needle);
+    int i;
+    int j;
+
+    for (i = from; i + n <= to; i++) {
+        for (j = 0; j < n; j++) {
+            if (text[i + j] != needle[j]) {
+                break;
+            }
+        }
+        if (j == n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void _start(void)
 {
     int fd;
@@ -110,17 +141,34 @@ void _start(void)
     if (lines < 2) {
         fail("fewer than two devices are listed");
     }
-    if (!contains("port ", len)) {
-        fail("no line names a port");
+    /* Every line, not the file as a whole: a file whose first line held every
+       word this looks for and whose second was empty would pass a search over
+       the whole of it. */
+    for (i = 0; i < len; i = line_end(i, len) + 1) {
+        int end = line_end(i, len);
+
+        if (end == i) {
+            continue;
+        }
+        if (!within("port ", i, end)) {
+            fail("a line names no port");
+        }
+        if (!within("low", i, end) && !within("full", i, end) && !within("high", i, end) &&
+            !within("super", i, end)) {
+            fail("a line names no speed");
+        }
+        if (!within(":", i, end)) {
+            fail("a line names no device");
+        }
+        if (!within(" class ", i, end)) {
+            fail("a line names no class");
+        }
     }
     if (!contains("class 3 protocol 1", len)) {
         fail("no keyboard is listed");
     }
     if (!contains("class 3 protocol 2", len)) {
         fail("no mouse is listed");
-    }
-    if (!contains("low", len) && !contains("full", len) && !contains("high", len)) {
-        fail("no line names a speed");
     }
 
     puts("USBPROBE OK\n");

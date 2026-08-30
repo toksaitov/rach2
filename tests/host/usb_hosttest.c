@@ -80,9 +80,20 @@ int xhci_device_packet_size(int device, int max_packet)
     return -1;
 }
 
-void xhci_device_close(int device)
+int xhci_device_close(int device)
 {
     (void)device;
+    return -1;
+}
+
+void xhci_device_closed(int device)
+{
+    (void)device;
+}
+
+int xhci_command_busy(void)
+{
+    return 0;
 }
 
 int xhci_endpoint_open(int device, const struct usb_endpoint *endpoint)
@@ -173,9 +184,40 @@ int main(void)
     for (i = 0; i < sizeof(broken); i++) {
         broken[i] = keyboard_config[i];
     }
-    broken[18] = 9; /* the HID descriptor's length, unchanged */
+    broken[19] = 0x22; /* the HID descriptor, with a type this kernel has no
+                          case for at all */
     walk(broken, (int)sizeof(broken), &info);
-    CHECK("a descriptor this kernel does not know is stepped over", info.found == 1);
+    CHECK("a descriptor this kernel does not know is stepped over by its length", info.found == 1);
+
+    for (i = 0; i < sizeof(broken); i++) {
+        broken[i] = keyboard_config[i];
+    }
+    broken[14] = 3;
+    broken[15] = 1;
+    broken[16] = 5; /* HID, boot, but a protocol with no report layout */
+    walk(broken, (int)sizeof(broken), &info);
+    CHECK("a boot interface of neither kind is not taken", info.found == 0);
+
+    for (i = 0; i < sizeof(broken); i++) {
+        broken[i] = keyboard_config[i];
+    }
+    broken[12] = 1; /* an alternate setting, which this kernel never selects */
+    walk(broken, (int)sizeof(broken), &info);
+    CHECK("an interface on an alternate setting is not taken", info.found == 0);
+
+    for (i = 0; i < sizeof(broken); i++) {
+        broken[i] = keyboard_config[i];
+    }
+    broken[5] = 0; /* a configuration numbered zero, which selects none */
+    walk(broken, (int)sizeof(broken), &info);
+    CHECK("a configuration numbered zero is not taken", info.found == 0);
+
+    for (i = 0; i < sizeof(broken); i++) {
+        broken[i] = keyboard_config[i];
+    }
+    broken[29] = 0x80; /* endpoint zero, which is the control endpoint */
+    walk(broken, (int)sizeof(broken), &info);
+    CHECK("the control endpoint is not taken as a reporting one", info.found == 0);
 
     /* A device that is not one this kernel drives. */
     for (i = 0; i < sizeof(broken); i++) {

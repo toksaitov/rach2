@@ -42,6 +42,11 @@
  * answered by then is not going to. */
 #define STEP_MS 500u
 
+/* How long a connect is given to settle before the entry holding it is let go.
+ * A contact that is still bouncing after this is a device being pushed in and
+ * out, and the next scan will pick it up again. */
+#define SETTLE_LIMIT_MS 5000u
+
 /* Where a device is in its enumeration. */
 #define ST_FREE      0
 #define ST_SETTLING  1
@@ -57,6 +62,7 @@
 #define ST_SET_CONFIG 11
 #define ST_RUNNING   12
 #define ST_FAILED    13
+#define ST_CLOSING   14
 
 struct usb_device_state {
     int state;
@@ -64,6 +70,8 @@ struct usb_device_state {
     int speed;
     int slot;
     uint32_t deadline;
+    int closing_asked;
+    uint32_t short_by;
     uint8_t setup[8];
     uint8_t buffer[USB_DESC_MAX];
     uint32_t config_length;
@@ -102,8 +110,12 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
         return;
     }
     /* The configuration descriptor's own value, which SET_CONFIGURATION
-     * names. */
+     * names. Zero is the value that means no configuration, so a device
+     * offering it is offering nothing to select. */
     out->config_value = buffer[5];
+    if (out->config_value == 0) {
+        return;
+    }
 
     while (offset + 2 <= length) {
         int size = buffer[offset];
@@ -117,8 +129,16 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
         }
 
         if (type == DESC_INTERFACE && size >= 9) {
-            in_boot_interface = (buffer[offset + 5] == USB_CLASS_HID &&
-                                 buffer[offset + 6] == USB_SUBCLASS_BOOT);
+            /* The alternate setting has to be zero: this kernel sends no
+             * SET_INTERFACE, so a device is left on setting zero whatever
+             * else it offers, and taking an endpoint from another setting
+             * would be taking one that is not there. The protocol has to be
+             * one of the two the boot report layouts are defined for. */
+            in_boot_interface = (buffer[offset + 3] == 0 &&
+                                 buffer[offset + 5] == USB_CLASS_HID &&
+                                 buffer[offset + 6] == USB_SUBCLASS_BOOT &&
+                                 (buffer[offset + 7] == USB_PROTOCOL_KBD ||
+                                  buffer[offset + 7] == USB_PROTOCOL_MOUSE));
             if (in_boot_interface && !out->found) {
                 out->number = buffer[offset + 2];
                 out->class_code = buffer[offset + 5];
@@ -129,7 +149,8 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
             int address = buffer[offset + 2];
             int attributes = buffer[offset + 3];
 
-            if ((address & EP_ADDR_IN) && (attributes & EP_ATTR_TYPE_MASK) == EP_ATTR_INTERRUPT) {
+            if ((address & EP_ADDR_IN) && (attributes & EP_ATTR_TYPE_MASK) == EP_ATTR_INTERRUPT &&
+                (address & 0xF) != 0) {
                 out->ep_number = address & 0xF;
                 out->ep_max_packet = buffer[offset + 4] | (buffer[offset + 5] << 8);
                 out->ep_interval = buffer[offset + 6];
@@ -180,19 +201,6 @@ static int control_out(struct usb_device_state *d, int request, int value)
     return xhci_submit(d->slot, 1, &transfer);
 }
 
-/** Give up on a device, with the reason. */
-static void fail(struct usb_device_state *d, const char *why)
-{
-    klog(KLOG_WARN, "usb", "device: port %d: %s", d->port + 1, why);
-    if (d->slot > 0) {
-        xhci_device_close(d->slot);
-    }
-    d->state = ST_FAILED;
-    if (enumerating == (int)(d - devices)) {
-        enumerating = -1;
-    }
-}
-
 /** Where the next step's deadline falls. */
 static void arm(struct usb_device_state *d)
 {
@@ -204,6 +212,62 @@ static int expired(const struct usb_device_state *d)
     return (int32_t)(core_ms - d->deadline) >= 0;
 }
 
+/** Give up on a device, with the reason. */
+static void fail(struct usb_device_state *d, const char *why)
+{
+    klog(KLOG_WARN, "usb", "device: port %d: %s", d->port + 1, why);
+    if (enumerating == (int)(d - devices)) {
+        enumerating = -1;
+    }
+    if (d->slot > 0) {
+        d->state = ST_CLOSING;
+        d->deadline = core_ms + STEP_MS;
+        return;
+    }
+    d->state = ST_FAILED;
+}
+
+/**
+ * Take a device down: ask for its slot back, and let the entry go when the
+ * controller has given it.
+ *
+ * A device that has been unplugged is gone from the bus and not from the
+ * controller: its slot, its context and its rings are still the controller's
+ * until it is told. Freeing the entry first is how a slot ends up doing work
+ * for two devices at once.
+ */
+static void step_closing(struct usb_device_state *d)
+{
+    struct usb_command_result result;
+
+    if (d->slot <= 0) {
+        d->state = ST_FREE;
+        return;
+    }
+    if (d->closing_asked) {
+        int done = xhci_command_done(&result);
+
+        if (done == 0 && !expired(d)) {
+            return;
+        }
+        /* Either the controller gave the slot back or it never answered. The
+         * second is recorded; the entry goes either way, because a slot this
+         * kernel cannot get back is one of four it has lost, and holding the
+         * entry as well would lose a device table row too. */
+        if (done != 1) {
+            klog(KLOG_WARN, "usb", "slot: %d was not given back", d->slot);
+        }
+        xhci_device_closed(d->slot);
+        d->slot = 0;
+        d->state = ST_FREE;
+        return;
+    }
+    if (xhci_device_close(d->slot) == 0) {
+        d->closing_asked = 1;
+        d->deadline = core_ms + STEP_MS;
+    }
+}
+
 /**
  * The transfer this device is waiting for: 1 when it finished well, 0 when it
  * has not finished, -1 when it failed.
@@ -213,10 +277,19 @@ static int transfer_result(struct usb_device_state *d)
     struct usb_completion completion;
 
     while (xhci_poll(&completion)) {
-        if (completion.device != d->slot) {
+        if (completion.device != d->slot || completion.endpoint != 1) {
             continue;
         }
-        if (completion.status == USB_XFER_OK || completion.status == USB_XFER_SHORT) {
+        if (completion.status == USB_XFER_OK) {
+            d->short_by = 0;
+            return 1;
+        }
+        if (completion.status == USB_XFER_SHORT) {
+            /* The device answered with less than was asked for. That is a
+             * legal thing for a device to do and a fatal thing for a reader
+             * that parses the buffer as if it were whole, so how much is
+             * missing is kept and each step decides. */
+            d->short_by = completion.residual;
             return 1;
         }
         return -1;
@@ -246,8 +319,18 @@ static void step_device(struct usb_device_state *d)
     int answer;
 
     switch (d->state) {
+    case ST_CLOSING:
+        step_closing(d);
+        return;
+
     case ST_SETTLING:
         if (!xhci_port_settled(d->port)) {
+            /* A connect that never settles is a port that keeps bouncing, or
+             * a device pulled out again. Either way this entry is not held for
+             * ever. */
+            if (expired(d)) {
+                d->state = ST_FREE;
+            }
             return;
         }
         if (enumerating >= 0 && enumerating != index) {
@@ -332,6 +415,10 @@ static void step_device(struct usb_device_state *d)
             fail(d, "it did not answer for its descriptor");
             return;
         }
+        if (d->short_by != 0) {
+            fail(d, "its first descriptor came back short");
+            return;
+        }
         /* The seventh byte is the size of its control endpoint, which is the
          * one thing that could not be known before asking. */
         d->ep0_packet = d->buffer[7];
@@ -378,6 +465,10 @@ static void step_device(struct usb_device_state *d)
             fail(d, "it did not answer for its descriptor");
             return;
         }
+        if (d->short_by != 0) {
+            fail(d, "its descriptor came back short");
+            return;
+        }
         d->vendor = (uint16_t)(d->buffer[8] | (d->buffer[9] << 8));
         d->product = (uint16_t)(d->buffer[10] | (d->buffer[11] << 8));
         if (control_in(d, REQ_GET_DESCRIPTOR, DESC_CONFIG << 8, 0, 9) != 0) {
@@ -395,6 +486,10 @@ static void step_device(struct usb_device_state *d)
         }
         if (answer < 0) {
             fail(d, "it did not answer for its configuration");
+            return;
+        }
+        if (d->short_by != 0) {
+            fail(d, "its configuration header came back short");
             return;
         }
         d->config_length = (uint32_t)(d->buffer[2] | (d->buffer[3] << 8));
@@ -418,7 +513,9 @@ static void step_device(struct usb_device_state *d)
             fail(d, "it did not answer for its configuration");
             return;
         }
-        usb_parse_config(d->buffer, (int)d->config_length, &d->interface);
+        /* What arrived, not what was asked for: a device that answered short
+         * is walked only as far as it answered. */
+        usb_parse_config(d->buffer, (int)(d->config_length - d->short_by), &d->interface);
         if (!d->interface.found) {
             fail(d, "it offers no interface this kernel can drive");
             return;
@@ -490,6 +587,28 @@ void usb_core_step(uint32_t elapsed_ms)
 
     core_ms += elapsed_ms;
 
+    /* A device that has left. Its port says so; the controller still holds
+     * everything it was given, and the slot is asked back before the entry is
+     * reused. */
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        struct usb_port_status status;
+
+        if (devices[i].state == ST_FREE || devices[i].state == ST_CLOSING) {
+            continue;
+        }
+        if (xhci_port_status(devices[i].port, &status) != 0 || !status.connected) {
+            if (devices[i].state == ST_RUNNING) {
+                klog(KLOG_INFO, "usb", "device: port %d: gone", devices[i].port + 1);
+            }
+            if (enumerating == i) {
+                enumerating = -1;
+            }
+            devices[i].closing_asked = 0;
+            devices[i].state = devices[i].slot > 0 ? ST_CLOSING : ST_FREE;
+            devices[i].deadline = core_ms + STEP_MS;
+        }
+    }
+
     /* A port that has a device and no state gets one. */
     for (port = 0; port < ports && port < USB_MAX_DEVICES * 4; port++) {
         struct usb_port_status status;
@@ -512,7 +631,9 @@ void usb_core_step(uint32_t elapsed_ms)
                 devices[i].port = port;
                 devices[i].slot = 0;
                 devices[i].ep_dci = 0;
+                devices[i].closing_asked = 0;
                 devices[i].interface.found = 0;
+                devices[i].deadline = core_ms + SETTLE_LIMIT_MS;
                 break;
             }
         }

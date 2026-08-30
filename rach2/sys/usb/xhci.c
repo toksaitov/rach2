@@ -575,6 +575,7 @@ static int command_aborting;
 static struct usb_command_result command_result;
 static uint32_t command_deadline;
 static uint32_t command_trb;
+static uint32_t command_type;
 
 /* This driver's own clock, in milliseconds, and the per-port state that is
  * counted against it. */
@@ -807,6 +808,7 @@ int xhci_command_issue(uint32_t type, uint64_t parameter, uint32_t slot)
 
     command_running = 1;
     command_finished = 0;
+    command_type = type;
     command_deadline = now_ms + COMMAND_MS;
     xhci_barrier(); /* the block is written before the controller is told */
     w32(caps.dboff, 0); /* doorbell zero: the command ring */
@@ -870,8 +872,9 @@ static void event_dispatch(const uint32_t *trb)
         }
         /* A slot the controller has just given out is recorded here, because
          * this is where its number arrives. */
-        if (command_result.status == USB_XFER_OK && command_result.device > 0 &&
-            command_result.device < XHCI_SLOTS && pending_port >= 0) {
+        if (command_type == TRB_TYPE_ENABLE_SLOT && command_result.status == USB_XFER_OK &&
+            command_result.device > 0 && command_result.device < XHCI_SLOTS &&
+            pending_port >= 0) {
             struct xhci_slot *s = &slots[command_result.device];
 
             s->used = 1;
@@ -899,6 +902,12 @@ static void event_dispatch(const uint32_t *trb)
         }
         c->device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
         c->endpoint = (int)((trb[3] >> 16) & 0x1Fu);
+        if (c->device <= 0 || c->device >= XHCI_SLOTS || !slots[c->device].used) {
+            /* A device that has gone, answering for a transfer nobody is
+             * waiting for. Reporting it would let a slot handed to the next
+             * device be advanced by the last one's transfer. */
+            return;
+        }
         /* What the controller did not move is what it reports; what it did is
          * the difference. */
         c->length = 0;
@@ -1203,6 +1212,13 @@ int xhci_device_address(int device)
     if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used) {
         return -1;
     }
+    /* The input context is one, shared by every command that takes one, so
+     * nothing is written into it until this command is certain of the ring.
+     * Filling it first and being refused would rewrite what a command already
+     * in flight had given the controller. */
+    if (xhci_command_busy()) {
+        return -1;
+    }
     s = &slots[device];
 
     for (i = 0; i <= XHCI_MAX_DCI; i++) {
@@ -1221,6 +1237,18 @@ int xhci_device_address(int device)
     ep0[3] = 0;
     ep0[4] = 8;
 
+    /* Both the ring and the context are cleared before the controller is
+     * given them. A slot reused for a second device would otherwise hand it
+     * the first device's blocks, which the controller would execute: they
+     * carry the cycle value it is looking for and addresses that are no longer
+     * anybody's. */
+    for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
+        ep_ring[device][1][i] = 0;
+    }
+    for (i = 0; i < XHCI_MAX_DCI; i++) {
+        context_clear(device_ctx[device], i);
+    }
+
     s->enqueue[1] = 0;
     s->cycle[1] = TRB_CYCLE;
     s->open[1] = 1;
@@ -1237,7 +1265,7 @@ int xhci_device_packet_size(int device, int max_packet)
     uint32_t *ep0;
     uint32_t i;
 
-    if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used) {
+    if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used || xhci_command_busy()) {
         return -1;
     }
     for (i = 0; i <= XHCI_MAX_DCI; i++) {
@@ -1252,23 +1280,36 @@ int xhci_device_packet_size(int device, int max_packet)
                               (uint32_t)device);
 }
 
-void xhci_device_close(int device)
+int xhci_device_close(int device)
 {
     uint32_t i;
 
     if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used) {
-        return;
+        return -1;
     }
+    /* The endpoints are closed to this driver at once, so nothing new is
+     * queued on them, but what the controller holds is its own until the
+     * command it is given says otherwise: the context stays where it is and
+     * the slot stays used until Disable Slot completes. `xhci_device_closed`
+     * is what finishes it. */
     for (i = 0; i < XHCI_MAX_DCI; i++) {
         slots[device].open[i] = 0;
     }
+    return xhci_command_issue(TRB_TYPE_DISABLE_SLOT, 0, (uint32_t)device);
+}
+
+void xhci_device_closed(int device)
+{
+    if (device <= 0 || device >= XHCI_SLOTS) {
+        return;
+    }
     slots[device].used = 0;
     dcbaa[device] = 0;
-    /* The slot is given back when the command can be issued; a controller that
-     * refuses it loses one of four, which the record says. */
-    if (xhci_command_issue(TRB_TYPE_DISABLE_SLOT, 0, (uint32_t)device) != 0) {
-        klog(KLOG_WARN, "usb", "slot: %d could not be given back", device);
-    }
+}
+
+int xhci_command_busy(void)
+{
+    return command_running || command_aborting;
 }
 
 /** The device context index of an endpoint, or zero when it is out of reach. */
@@ -1296,7 +1337,8 @@ int xhci_endpoint_open(int device, const struct usb_endpoint *ep)
     uint32_t i;
     struct xhci_slot *s;
 
-    if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used || dci == 0) {
+    if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used || dci == 0 ||
+        xhci_command_busy()) {
         return -1;
     }
     s = &slots[device];
@@ -1317,13 +1359,19 @@ int xhci_endpoint_open(int device, const struct usb_endpoint *ep)
                                           : (ep->direction == USB_DIR_IN ? 6u : 2u);
     entry = context_entry(input_ctx, dci + 1u);
     entry[0] = interval_for(s->speed, ep->interval) << 16;
-    entry[1] = (type << 3) | (3u << 1) | ((uint32_t)ep->max_packet << 16);
+    /* The endpoint descriptor's field is sixteen bits and the packet size is
+     * the low eleven of them; the rest say how many such packets a high-speed
+     * device may send in a microframe, which this kernel does not use. */
+    entry[1] = (type << 3) | (3u << 1) | (((uint32_t)ep->max_packet & 0x7FFu) << 16);
     entry[2] = (uint32_t)(uintptr_t)&ep_ring[device][dci][0] | TRB_CYCLE;
     entry[3] = 0;
     /* The average block length and the most this endpoint may move in one
      * service interval, which is what the controller reserves bandwidth by. */
     entry[4] = (uint32_t)ep->max_packet | ((uint32_t)ep->max_packet << 16);
 
+    for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
+        ep_ring[device][dci][i] = 0;
+    }
     s->enqueue[dci] = 0;
     s->cycle[dci] = TRB_CYCLE;
     s->open[dci] = 1;
@@ -1428,16 +1476,30 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
 
         ring_put(device, dci, setup_lo, setup_hi, 8,
                  (TRB_TYPE_SETUP << TRB_TYPE_SHIFT) | TRB_IDT | trt);
+        if (transfer->length == 0) {
+            /* With no data stage there is nothing to report but the end, so
+             * the status stage carries the event. */
+            ring_put(device, dci, 0, 0, 0,
+                     (TRB_TYPE_STATUS << TRB_TYPE_SHIFT) | TRB_IOC | TRB_DIR_IN);
+            xhci_barrier();
+            w32(caps.dboff + (uint32_t)device * 4u, dci);
+            return 0;
+        }
         if (transfer->length != 0) {
+            /* The event is asked for on the data stage rather than the status
+             * stage, because it is the data stage's event that says how much
+             * arrived. A transfer whose event came from the status stage
+             * reports nothing about the bytes, and a descriptor read short
+             * would be parsed as if it were whole. */
             ring_put(device, dci, (uint32_t)(uintptr_t)transfer->buffer, 0, transfer->length,
-                     (TRB_TYPE_DATA << TRB_TYPE_SHIFT) |
+                     (TRB_TYPE_DATA << TRB_TYPE_SHIFT) | TRB_IOC |
                          (transfer->direction == USB_DIR_IN ? TRB_DIR_IN : 0u));
         }
         /* The status stage goes the other way from the data, and carries the
          * event, so one transfer is one completion however many blocks it
          * took. */
         ring_put(device, dci, 0, 0, 0,
-                 (TRB_TYPE_STATUS << TRB_TYPE_SHIFT) | TRB_IOC |
+                 (TRB_TYPE_STATUS << TRB_TYPE_SHIFT) |
                      ((transfer->length != 0 && transfer->direction == USB_DIR_IN) ? 0u
                                                                                   : TRB_DIR_IN));
     } else {
