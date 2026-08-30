@@ -1,8 +1,8 @@
 /*
  * hid_hosttest.c: what a report means, with no controller and no keyboard.
  *
- * A report is a state and a scancode is an event, and turning one into the
- * other is the whole of this class driver. The interesting cases are the ones
+ * A report is a state and a scancode is an event. This class driver turns one
+ * into the other and does nothing else. The interesting cases are the ones
  * a person produces without noticing: a key held down across reports, two keys
  * down at once, a key released while another stays down, a keyboard unplugged
  * with a key still held, and the report a keyboard sends when it has lost

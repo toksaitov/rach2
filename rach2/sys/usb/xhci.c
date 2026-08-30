@@ -2,15 +2,14 @@
  * xhci.c: the USB host controller.
  *
  * The register interface every machine newer than about 2010 presents, and the
- * only one either of this project's two machines has. What it buys, beside
- * being present, is that one controller handles every speed: a low-speed
- * keyboard needs no companion controller, no transaction translator and no
- * split transactions, which is most of what a driver for the older interfaces
- * is made of.
+ * only one either of this project's two machines has. One controller also
+ * handles every speed, so a low-speed keyboard needs no companion controller,
+ * no transaction translator and no split transactions, which is most of what a
+ * driver for the older interfaces is made of.
  *
- * This file is bring-up and transport. It knows registers, rings, contexts and
- * commands, and knows nothing about descriptors, classes or what a keyboard
- * is. `core.c` above it knows those and no registers.
+ * This file is bring-up and transport: registers, rings, contexts and commands.
+ * Descriptors, classes and what a keyboard is belong to `core.c` above it,
+ * which touches no register.
  *
  * Bring-up is the only part that waits, and it runs once at boot in thread
  * context. Everything after it is queued and polled, because the completions
@@ -25,7 +24,7 @@
 #include "../udelay.h"
 
 /*
- * Capability registers, at the start of the aperture. The first word holds the
+ * Capability registers, at the start of the aperture. The first word gives the
  * length of this register set in its low byte, which is where the operational
  * registers begin, and the interface version in its high half.
  */
@@ -249,9 +248,9 @@ static void power_up(const pci_device_t *dev)
  * So the movable pins are moved, which is what every other operating system on
  * this hardware does at the same point. Only the pins the mask allows, and the
  * mask is read rather than assumed: a pin the chipset will not move is one the
- * write would drop on the floor. The routing is the firmware's again after the
- * next power cycle, so this runs on every boot and a machine that dislikes it
- * is one power cycle from the way it was.
+ * write has no effect on. The routing is the firmware's again after the
+ * next power cycle, so this runs on every boot and a machine on which it goes
+ * wrong is one power cycle from the way it was.
  */
 static void take_ports(const pci_device_t *dev)
 {
@@ -558,9 +557,9 @@ int xhci_scratchpads(void)
     uint32_t j;
 
     if (caps.scratchpads > XHCI_MAX_SCRATCHPADS) {
-        klog(KLOG_ERR, "usb", "scratchpad: the controller wants %d pages and this kernel has %d",
+        klog(KLOG_ERR, "usb", "scratchpad: the controller requires %d pages and this kernel has %d",
              (int)caps.scratchpads, (int)XHCI_MAX_SCRATCHPADS);
-        xhci_err = "the controller wants more scratchpad pages than this kernel has";
+        xhci_err = "the controller requires more scratchpad pages than this kernel has";
         return -1;
     }
 
@@ -1242,7 +1241,7 @@ void xhci_stop(void)
      * next instruction runs: on the notebook this milestone was written for
      * that took twenty seconds, in the middle of a reboot, every time. The
      * firmware initialises USB again on the next boot whatever this kernel
-     * leaves behind, so the wait bought nothing. A bring-up that fails is the
+     * leaves behind, so the wait gained nothing. A bring-up that fails is the
      * other case and still gives it back, because a machine with no USB driver
      * should keep whatever its firmware was doing for it.
      */

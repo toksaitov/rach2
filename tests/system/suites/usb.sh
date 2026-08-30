@@ -69,9 +69,9 @@ else
 fi
 
 # ---- 3b: and a program reading the terminal gets it too. The shell's own
-#          buffer is one road and the line discipline is another; a key that
-#          reached the first says nothing about the second, and it is the
-#          second that every program on the machine reads through. ----
+#          buffer and the line discipline are two different paths; a key that
+#          reached the first says nothing about the second, and every program
+#          on the machine reads through the second. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \

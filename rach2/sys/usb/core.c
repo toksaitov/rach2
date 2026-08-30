@@ -1,9 +1,10 @@
 /*
  * core.c: from a connected port to a configured device.
  *
- * The standard half of the stack. It knows the requests every device answers,
- * the shape of a descriptor, and which interface this kernel has a driver for.
- * It reaches the wire through `hcd.h` and names no register.
+ * The standard half of the stack. It implements the requests every device
+ * answers, the shape of a descriptor, and the choice of an interface this
+ * kernel has a driver for. It reaches the wire through `hcd.h` and touches no
+ * register.
  *
  * Everything here is a state machine, and the reason is in `hcd.h`: the
  * completions are drained from the timer handler, where a wait would stop the
@@ -14,7 +15,7 @@
  *
  * One device is enumerated at a time, because the controller has one command
  * ring and this driver keeps one command in flight. A second device waits at
- * its port, which costs a hundred milliseconds and no complexity at all.
+ * its port, which costs a hundred milliseconds.
  */
 
 #include "core.h"
@@ -737,8 +738,8 @@ static void step_device(struct usb_device_state *d)
         enumerating = -1;
         if (d->interface.protocol == USB_PROTOCOL_MOUSE) {
             /* `/dev/mouse` opens when a mouse exists, of either kind. Without
-             * this a machine whose only mouse is on USB has a device node that
-             * refuses to open. */
+             * this an open of that node fails on a machine whose only mouse is
+             * on USB. */
             input_mouse_found();
         }
         klog(KLOG_INFO, "usb", "device: port %d: %x:%x, class %d protocol %d, endpoint %d",

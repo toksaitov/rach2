@@ -153,7 +153,7 @@ record in the log only is better than two shredded into each other.
 
 ## Input
 
-Two kinds of keyboard produce keystrokes: the PS/2 one on the 8042, and a USB one through the HID class driver. They agree on a set-1 scancode, because that is what the PS/2 hardware sends and what a program reading the raw ring expects, so the USB side translates its own usage codes rather than the rest of the kernel learning a second alphabet. `sys/input.c` is where a code goes after that: the modifier state, the interception of Ctrl+C where the debug shell is the supervisor, the scrollback keys, and the choice between the terminal's line discipline and the shell's own buffer. Each driver keeps only what is particular to its hardware.
+Two kinds of keyboard produce keystrokes: the PS/2 one on the 8042, and a USB one through the HID class driver. They agree on a set-1 scancode, because that is what the PS/2 hardware sends and what a program reading the raw ring expects, so the USB side translates its own usage codes instead of the rest of the kernel handling a second code set. `sys/input.c` is where a code goes after that: the modifier state, the interception of Ctrl+C where the debug shell is the supervisor, the scrollback keys, and the choice between the terminal's line discipline and the shell's own buffer. Each driver keeps only what is particular to its hardware.
 
 The same is true of the two mice: one queue, which a program reads through the `mouse` device, and no way for it to learn which kind of mouse moved.
 

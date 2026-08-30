@@ -931,12 +931,12 @@ int main(void)
 
     /* The scratchpad pages. */
     model_reset();
-    CHECK("a controller that wants no scratchpads is served", xhci_read_caps() == 0);
+    CHECK("a controller that requires no scratchpads is served", xhci_read_caps() == 0);
     CHECK("with nothing to do", xhci_scratchpads() == 0);
 
     model_reset();
     reg[R_HCSPARAMS2] = (0u << 21) | (3u << 27);
-    CHECK("a controller that wants three pages is read", xhci_read_caps() == 0);
+    CHECK("a controller that requires three pages is read", xhci_read_caps() == 0);
     CHECK("and served", xhci_scratchpads() == 0);
     CHECK("with three pages", scratchpad_array[2] != 0 && scratchpad_array[3] == 0);
     for (i = 0; i < 3; i++) {
@@ -945,7 +945,8 @@ int main(void)
 
     model_reset();
     reg[R_HCSPARAMS2] = (1u << 21) | (3u << 27); /* 35 pages */
-    CHECK("a controller that wants more pages than this kernel has is read", xhci_read_caps() == 0);
+    CHECK("a controller that requires more pages than this kernel has is read",
+          xhci_read_caps() == 0);
     CHECK("and refused", xhci_scratchpads() != 0);
 
     /* Starting it: the rings, the slots, and the ports powered. */
@@ -1217,8 +1218,8 @@ int main(void)
     CHECK("with the SuperSpeed pins as well", pci_cfg[0xD8] == 0xF);
 
     /* Only the pins the mask allows: one the chipset will not move is one the
-       write would drop on the floor, and writing it anyway would say something
-       untrue in the record. */
+       write has no effect on, and writing it anyway would put a pin in the
+       record that was never routed. */
     model_reset();
     pci_cfg[0xD0] = 0x001;
     pci_cfg[0xD4] = 0x00F;

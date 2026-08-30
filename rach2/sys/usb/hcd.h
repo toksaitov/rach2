@@ -17,8 +17,7 @@
  * would stop the clock and the scheduler with it. `submit` queues work and
  * returns; `poll` reports what finished. A port reset is two calls, one to
  * begin it and one to ask whether it finished. Everything that takes time is
- * split the same way, and the caller is a state machine rather than a
- * straight line.
+ * split the same way, and the caller advances as a state machine.
  *
  * Four of these operations are commands the controller executes rather than
  * register writes the caller can see the effect of: taking a device handle,

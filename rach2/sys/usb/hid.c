@@ -9,8 +9,8 @@
  * already has. A HID report is a state: these keys are down now. A scancode is
  * an event: this key went down, that one came up. So each report is compared
  * with the one before it, and the difference is what the input layer is given,
- * in the set-1 codes the PS/2 keyboard produces. Nothing downstream learns
- * that a second kind of keyboard exists.
+ * in the set-1 codes the PS/2 keyboard produces. No code downstream has to
+ * tell the two kinds of keyboard apart.
  */
 
 #include "hid.h"

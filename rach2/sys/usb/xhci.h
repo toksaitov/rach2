@@ -71,7 +71,7 @@ struct xhci_caps {
     uint32_t max_intrs;    /* interrupters; this driver uses the first alone */
     uint32_t max_ports;    /* root ports */
     uint32_t erst_max;     /* event-ring segment table entries, as a power of two */
-    uint32_t scratchpads;  /* pages the controller wants for its own use */
+    uint32_t scratchpads;  /* pages the controller requires for its own use */
     uint32_t context_size; /* 32 or 64 bytes, from `HCCPARAMS1.CSZ` */
     int ac64;              /* whether the controller takes 64-bit addresses */
     uint32_t xecp;         /* byte offset of the extended capability list, 0 if none */
@@ -127,7 +127,7 @@ int xhci_read_caps(void);
  *
  * Fills the scratchpad pointer array with zeroed, page-aligned pages. The
  * array is pointed at by the first entry of the device-context base address
- * array, which bring-up programs later. A controller that wants more pages
+ * array, which bring-up programs later. A controller that requires more pages
  * than `XHCI_MAX_SCRATCHPADS` is refused with both numbers recorded.
  */
 int xhci_scratchpads(void);
