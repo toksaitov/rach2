@@ -2,7 +2,7 @@
 
 ![List of Rach2 Test Programs](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/tests.png)
 
-This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains 76 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
+This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains 78 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ## The suite runner
 
@@ -82,8 +82,9 @@ Programs that need another boot, disk, network exchange, or result contract have
 * `tests/run fault` runs `vmfault`, `vmro` and `winprobe`, which must be killed rather than served, and then runs a program that prints a token, which a kernel that took the fault with them could not do.
 * `tests/run socket` starts a host peer and runs `tcptest` and `udptest` against it.
 * `tests/run diskfull` fills a disk-backed root and requires `ENOSPC` rather than `EIO`.
+* `tests/run usb` runs `usbprobe` and `mouseprobe` against an xHCI controller with a keyboard and a mouse on it, at both device speeds, on machines with the PS/2 controller switched off so that a typed key or a moved mouse can only have come over USB.
 
-Every root program is now run by some suite. The two exceptions are `idreport` and `suidhelper`, which exist to be invoked by another test.
+Every root program is run by some suite. The two exceptions are `idreport` and `suidhelper`, which exist to be invoked by another test.
 
 These musl programs are likewise built and staged but absent from the default list and the dedicated mappings above:
 

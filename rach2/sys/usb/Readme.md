@@ -1,0 +1,99 @@
+# `usb/`: the USB stack
+
+Rach2 drives USB keyboards and mice. The stack is a host-controller driver, a device core, and one class driver, and only the first of the three knows what a register is.
+
+## Why xHCI, and only xHCI
+
+There are four host-controller interfaces in the world and this kernel implements the newest. UHCI, OHCI and EHCI are on no machine this project runs on except QEMU, and xHCI is on both: QEMU offers `qemu-xhci`, and the notebook has an Intel Lynx Point-LP xHCI at `00:14.0`.
+
+It is also the only one that reaches a low-speed keyboard without a second mechanism. On xHCI the controller handles low, full, high and SuperSpeed alike. On the notebook's EHCI a low-speed device is reachable only through the chipset's integrated rate-matching hub, which would cost a hub class driver and split transactions to arrive where xHCI arrives directly.
+
+## The layers
+
+| File | What it owns |
+|------|--------------|
+| `hcd.h` | What a host controller provides, and all the layers above it may assume. |
+| `xhci.c` | The controller: registers, rings, contexts, commands, transfers. |
+| `core.c` | Devices, descriptors, the enumeration state machine, class matching. |
+| `hid.c` | The boot-protocol keyboard and mouse. |
+| `usb.c` | The inventory, the bring-up, and the stack's turn from the timer. |
+
+Addressing belongs to the controller rather than the core: xHCI's Address Device command replaces the `SET_ADDRESS` request, so the core asks the driver to address a device and never sends that request itself. A second controller whose bus really takes the request would send it inside its own `device_address`.
+
+## Nothing waits
+
+The event ring is drained from the 100 Hz timer handler, which runs with interrupts off. Nothing on that path may wait: not a port reset, not a control transfer, not a command completion, not a millisecond delay. So `submit` queues work and returns, `poll` reports what finished, and enumeration is a state machine that advances at most one step per call. Each device carries its state and a deadline counted in milliseconds; a step that does not complete by its deadline fails the device and gives the slot back.
+
+At boot the kernel waits while the timer drives that machine, so the devices present at reset are enumerated before the first process starts. The boot path does not drive it itself: two parties draining one event ring, one of them inside an interrupt of the other, is the defect this arrangement exists to prevent.
+
+One command is in flight at a time, and one device is enumerated at a time. The controller has one command ring; a second device waits at its port, which costs a hundred milliseconds and no complexity.
+
+The only waits in the driver are in bring-up, which runs once: the reset, the firmware handoff, and the fixed millisecond an Intel controller needs after its reset is asserted before its registers may be read again.
+
+## What the controller is asked for
+
+`CAPLENGTH`, the interface version, the slot, interrupter and port counts, the scratchpad count, the context size, the addressing width, the register offsets and the supported page sizes are all read rather than assumed: the two machines this kernel runs on differ in several of them, and a driver that guessed any one would work on one machine and corrupt memory on the other.
+
+A controller is refused, with a record saying which, when its aperture is a 64-bit window above 4 GiB, when its registers do not fit the 64 KiB this driver maps, when it does not offer 4 KiB pages, when its capability list leaves the aperture, when it never halts or never resets or never says it is ready, when the firmware never gives it up, or when it asks for more scratchpad pages than this kernel compiles in.
+
+## The fixed limits
+
+| Limit | Value |
+|-------|-------|
+| Devices at once | 4 |
+| Endpoints per device | 4, of which the reporting one is an interrupt endpoint |
+| Root ports reached | 16 |
+| Scratchpad pages given | 32 |
+| Keyboards and mice driven | one of each |
+
+Each is a table in the kernel image. A controller with more root ports than this is used as far as sixteen and says so; one that wants more scratchpad pages is refused with both numbers in the record.
+
+## Boot protocol, and no report descriptors
+
+A human-interface device describes its reports in a language of its own, and reading that language is the largest part of a USB HID stack. Every firmware skips it the same way this does: a keyboard and a mouse must offer a boot protocol, whose two report layouts are fixed. A device that offers no boot protocol is refused.
+
+The cost is stated rather than hidden: a device whose interface is not class 3, subclass 1, protocol 1 or 2 is not driven, whatever else it can do.
+
+## From a report to a keystroke
+
+A HID report is a state and a scancode is an event. Each report is compared with the one before it: a usage that appeared is a make code, one that went away is a break code, and one in both sends nothing. The codes are set-1, which is what the PS/2 keyboard produces, so nothing downstream learns that a second kind of keyboard exists. The modifier byte is turned the same way, with the right-hand modifiers in their two-byte extended form.
+
+A report whose key slots hold an error usage is the keyboard saying it has lost count of its own keys. Its modifier byte is still good and is read; its key array is dropped, so what is really held stays held.
+
+A device that goes releases everything it was holding. The release that would have lifted a held key is on a device that is no longer there, so this driver sends it.
+
+A mouse report becomes a packet in the queue the PS/2 mouse fills, with the vertical movement turned over: a USB mouse's Y grows downward and that queue's grows upward.
+
+## What is absent, and why
+
+* **Mass storage.** The next milestone. The interface is shaped for it: `endpoint_open` is generic over control, interrupt and bulk, so a class driver adds no controller code.
+* **Hubs.** A device plugged into a hub is not seen. Both machines have enough root ports for a keyboard and a mouse.
+* **Report descriptors.** Above.
+* **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
+* **Typematic repeat.** A held key on a USB keyboard does not repeat. The PS/2 keyboard's repeat comes from its hardware; a USB host is supposed to make its own, and this one does not.
+* **Interrupts.** The controller is polled from the timer. A keystroke is up to ten milliseconds late, which is correct for a console and noticeable in a game.
+* **Booting from a USB disk.** The firmware loads the kernel; this stack starts afterwards.
+
+## The guest's view
+
+`/proc/usb` has one line per configured device: the port, the speed, the identifiers, the class and the protocol. A machine with no controller, or one booted with `rach2.nousb`, has the file and it is empty, which is a different answer from the file not being there.
+
+The mouse is read through the device Doom opens, by the bare name `mouse`. It opens when a mouse of either kind exists.
+
+`rach2.nousb` switches the stack off, and the probe says `usb: skipped: rach2.nousb` rather than going quiet.
+
+## Verification
+
+`tests/run host` runs three of the four host tests that matter here. `xhci_hosttest` drives the driver against a model of a controller through `struct xhci_io`: the discovery, the D3 wake, the aperture and register-set bounds, the firmware handoff at once and slowly and never, the halt and reset with its ready wait and its Intel pause, the scratchpad request and its refusal, both context sizes, the rings and their wrap, the command ring and its abort, the ports, the debounce, and the device and endpoint commands. `usb_hosttest` walks descriptors no device would send, in buffers allocated to the exact length under AddressSanitizer. `hid_hosttest` hands the class driver reports and reads back what it gave the input layer: a key held, two keys at once, a modifier, an arrow, a rollover, a short report, and an unplug with a key still down.
+
+`tests/run usb` is seven boots against QEMU. Three of them take the 8042 away, because a key typed or a mouse moved on a machine that still has a PS/2 keyboard could have arrived by either road.
+
+* a high-speed keyboard and mouse are enumerated and listed in `/proc/usb`
+* the same at full speed, which is the speed a real keyboard uses
+* a key typed through the emulator's monitor reaches the debug shell
+* and is read by a program through the terminal
+* a mouse moved through the monitor arrives at the mouse device, on both axes and in the right direction
+* a keyboard plugged in after the boot is enumerated, and one pulled out is taken down
+* with `rach2.nousb` the file is there and empty
+
+`tests/run subset` boots with `rach2.nousb` and requires the probe to record that it was skipped. Every check added here was proved by a mutation that makes it fail.

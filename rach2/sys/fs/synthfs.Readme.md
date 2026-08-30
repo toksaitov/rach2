@@ -33,6 +33,8 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations belo
 
 The pty pool has 16 pairs. Opening `/dev/ptmx` allocates a locked pair; `TIOCSPTLCK` must unlock it before `/dev/pts/N` can open. An allocated slave appears in `/dev/pts`, has device number 136:N, and starts with the opener's effective uid and gid and mode 0620. `chmod` and `chown` may change that slave for a login session. The slave uses the normal terminal discipline. Master writes become slave input, while slave output and echo enter a 4096-byte master ring. The pair is released after both endpoints close.
 
+`/proc/usb` has one line per USB device the kernel has configured: the root port, the speed, the vendor and product identifiers, and the class and protocol it was driven as. A machine with no USB controller, or one booted with `rach2.nousb`, has the file and it is empty. That is a different answer from the file not being there, and it is the one a program that opens it can act on.
+
 `/dev/bootlog` is always present. It hands out the kernel log's ring, which holds records and not console text: whole records are dropped from the oldest end to make room, so what comes back never begins mid-line. The os-real `dmesg` script reads this device because Rach2 has no `klogctl` interface.
 
 The framebuffer and mouse use the root paths `/fb` and `/mouse`. They are not devfs entries.

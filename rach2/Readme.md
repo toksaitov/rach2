@@ -104,6 +104,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.nomouse` | Skip the PS/2 mouse probe. |
 | `rach2.nonet` | Skip network-device discovery. |
 | `rach2.diag` | Print the boot diagnostic report again at the end and wait for input. |
+| `rach2.nousb` | Skip the USB stack: no controller is taken, and nothing is enumerated. |
 | `rach2.trace=enosys` | Log each missing system-call number once per process. |
 | `rach2.board=name` | Select a named board power profile instead of automatic matching. |
 | `rach2.nosci` | Leave the matched board profile's system-control interrupt unmasked. |
@@ -150,6 +151,14 @@ one being written out would put its bytes inside the other's line. Such a
 record goes to the ring, which is exact either way, and is not printed: one
 record in the log only is better than two shredded into each other.
 
+## Input
+
+Two kinds of keyboard produce keystrokes: the PS/2 one on the 8042, and a USB one through the HID class driver. They agree on a set-1 scancode, because that is what the PS/2 hardware sends and what a program reading the raw ring expects, so the USB side translates its own usage codes rather than the rest of the kernel learning a second alphabet. `sys/input.c` is where a code goes after that: the modifier state, the interception of Ctrl+C where the debug shell is the supervisor, the scrollback keys, and the choice between the terminal's line discipline and the shell's own buffer. Each driver keeps only what is particular to its hardware.
+
+The same is true of the two mice: one queue, which a program reads through the `mouse` device, and no way for it to learn which kind of mouse moved.
+
+A scancode that did not come from a scancode-producing device is still a scancode. What that costs is the modifier state, which is one rather than one per keyboard: this kernel holds one keyboard at a time, and two would share a shift.
+
 The debug shell's prompts, menus and command output are not diagnostics.
 `console_putc`, `console_puts` and `console_printf` write to the screen and
 COM1 and nowhere else: they are not in the machine's log, and they are not
@@ -187,6 +196,8 @@ The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` m
 | `sys/display/`, `sys/audio/`, `sys/kbd*`, `sys/mouse*`, `sys/speaker*` | VGA, audio, and PS/2 input drivers. |
 | `sys/board*`, `sys/power*`, `sys/pci*`, `sys/rtc*`, `sys/serial*` | Platform discovery, shutdown, PCI, clock, and COM1. |
 | `sys/klog*` | The kernel log: one record, four destinations, and the debug shell's own console calls. |
+| `sys/input.c` | Where a keystroke goes, whichever keyboard produced it. |
+| `sys/usb/` | The xHCI controller, the device core, and the boot-protocol keyboard and mouse. |
 | `sys/lib/` | Freestanding integer, string, character, signal, user-ABI, text formatting, interrupt bracket, and random support. |
 
 Subsystem references:
@@ -199,6 +210,7 @@ Subsystem references:
 * [Pipes](sys/ipc/Readme.md) and [I/O multiplexing](sys/io/Readme.md)
 * [Block storage](sys/block/Readme.md)
 * [Networking](sys/network/Readme.md)
+* [USB](sys/usb/Readme.md)
 
 ## Hardware and limits
 
@@ -206,7 +218,7 @@ The kernel currently supports:
 
 * Multiboot1 through QEMU's direct kernel loader or GRUB BIOS boot.
 * VGA text mode and Mode 13h graphics.
-* PS/2 keyboard and mouse input.
+* PS/2 keyboard and mouse input, and USB keyboards and mice through xHCI.
 * COM1 serial input and output.
 * Polled ATA PIO and AHCI disk access with MBR partition discovery.
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
