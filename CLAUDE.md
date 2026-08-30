@@ -62,6 +62,8 @@ Any operation on real hardware that cannot be undone by rebuilding requires the 
 
 For a disk write, what is presented is the node, its size in bytes, its bus, whether it is internal or external, whether it is a whole disk, and the partition table it currently has. Other hardware has other properties; the rule is that the owner is shown enough to recognise the thing, not that these particular fields exist everywhere.
 
+Updating the installed Lenovo is done over SSH and is written down: a kernel through `bootctl` from the running system, a root through the recovery system and `reflash`. The Readme section "Updating the installed machine" has the commands, the disk offsets they depend on, and the credential check that comes before a root write. Read it rather than deriving a path; taking that disk out and putting it back is an hour of physical work.
+
 The system does not depend on a host device path. The kernel probes its supported ATA or AHCI controller and scans the MBR entries for a KRFFS root. Device identity protects the host's destructive commands; it is not an operating requirement. A person must confirm the physical drive before such a command runs.
 
 ## Agents

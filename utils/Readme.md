@@ -102,7 +102,7 @@ Boot-partition commands require `/proc/cmdline` and `/dev/bootpart`. A kernel in
 
 `bootctl grub FILE` replaces an i386-pc GRUB core image through `/dev/grubcore`. It accepts 2 through 1024 sectors, writes and verifies the inactive 1023-sector gap tail, then switches LBA 1. It never writes sector 0. A torn final write to LBA 1 can still make GRUB unreachable, and a transfer cut within the final sector cannot be detected from GRUB's sector count.
 
-`reflash DEVICE OFFSET BYTES` measures the opened device, rejects zero or non-sector-aligned bounds, and copies exactly the declared stdin length in 64-sector chunks. It fails when the stream ends early, has data past the declared length, or cannot establish its end. Whole-disk writes require the recovery kernel; the [block-device Readme](../rach2/sys/block/Readme.md) defines the device windows and write authority.
+`reflash DEVICE OFFSET BYTES` measures the opened device, rejects zero or non-sector-aligned bounds, and copies exactly the declared stdin length in 64-sector chunks. It fails when the stream ends early, has data past the declared length, or cannot establish its end. Whole-disk writes require the recovery kernel; the [block-device Readme](../rach2/sys/block/Readme.md) defines the device windows and write authority. The [project Readme](../Readme.md#updating-the-installed-machine) gives the procedure these two programs exist for: updating the installed laptop over SSH, a kernel through the boot slots and a root through recovery.
 
 ## Credential transactions
 

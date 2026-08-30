@@ -67,6 +67,46 @@ The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 pro
 
 QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. The laptop boots the complete `os-real` system from an AHCI-backed KRFFS root. RTL8168GU networking and keyed SSH work, file system changes persist across reboots, and both an in-system update and a recovery reflash have completed successfully. A USB keyboard and a USB mouse work in any of the laptop's three sockets, in the shell and in Doom, once the kernel routes the chipset's USB2 pins to the single xHCI controller this machine has. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) record the hardware results.
 
+## Updating the installed machine
+
+The laptop is maintained over SSH from a host that has built the artifacts; nothing here needs the disk out of the bay. There are two paths and they are not interchangeable. A kernel goes into a boot slot from the running system. A root goes in from the recovery system, because only the recovery kernel may write a whole disk.
+
+A kernel, from the ordinary system:
+
+```sh
+KEY=krffs/rach2_demo_ed25519
+scp -i $KEY build/rach2/kernel root@ADDRESS:/tmp/kernel
+ssh -i $KEY root@ADDRESS 'bootctl kernel /tmp/kernel'
+ssh -i $KEY root@ADDRESS reboot
+ssh -i $KEY root@ADDRESS 'bootctl status && bootctl commit'
+```
+
+`bootctl kernel` writes the candidate slot and arms one trial. The machine that comes back is either the new kernel, which `commit` then makes the default, or the fallback, which needs nothing done to it. A kernel that does not boot costs a reboot, not a disk.
+
+A root, from recovery:
+
+```sh
+dd if=build/images/rach2-sealed.disk of=root.img bs=512 skip=133120 count=1024000
+ssh -i $KEY root@ADDRESS 'bootctl env saved_entry recovery' && ssh -i $KEY root@ADDRESS reboot
+# recovery boots a RAM root, takes a DHCP address, and answers SSH on it
+gzip -c root.img | ssh -i $KEY root@ADDRESS 'gunzip | reflash /dev/disk0 68157440 524288000'
+ssh -i $KEY root@ADDRESS 'dd if=/dev/disk0 bs=512 skip=133120 count=1024000 | sha256sum'
+ssh -i $KEY root@ADDRESS 'bootctl env saved_entry candidate' && ssh -i $KEY root@ADDRESS reboot
+```
+
+Recovery is made the saved default before the write and put back after it, so a write cut in half returns to the system that can finish it rather than to the half-written root. The offsets are the sealed layout that `make rach2-sealed-disk` fixes: a 1 MiB gap, a 64 MiB FAT boot partition, the 500 MiB KRFFS root at byte 68157440, and a 64 MiB recovery partition. Compare the hash the machine reports with `shasum -a 256 root.img` on the host before rebooting.
+
+Check the credentials before flashing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra` belonging to whoever works on the machine. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:
+
+```sh
+ssh-keygen -y -f krffs/rach2_demo_ed25519 | cut -d' ' -f2
+cut -d' ' -f2 krffs/authorized_keys
+```
+
+A root flashed with keys whose private halves are on another machine leaves recovery as the only way back in.
+
+Recovery can also be selected at the GRUB menu by a person at the machine. It mounts nothing from the disk it repairs. [Milestone 25](dev-log/25-sealed/Readme.md#phase-g-recovery-and-whole-disk-reflash) designed both paths, and `make sealed-test` rehearses them in emulation.
+
 ## Repository map
 
 System sources:
