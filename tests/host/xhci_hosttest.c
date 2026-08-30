@@ -92,6 +92,8 @@ static void (*on_doorbell)(uint32_t target);
 /* Called when the driver points the command ring somewhere, which is how this
    model follows it after an abort. */
 static void (*on_ring_moved)(void);
+/* Called when a slot's endpoint doorbell is rung. */
+static void (*on_endpoint_doorbell)(uint32_t slot, uint32_t dci);
 
 /* What this run's controller does, set before each row. */
 static int halts;
@@ -225,6 +227,17 @@ static void model_w32(uint32_t off, uint32_t v)
         reg[off] = v;
         if (on_doorbell) {
             on_doorbell(v);
+        }
+        return;
+    }
+
+    if (off > M_DOORBELL0 && off < M_DOORBELL0 + (XHCI_SLOTS + 1) * 4u &&
+        ((off - M_DOORBELL0) % 4u) == 0) {
+        /* A doorbell for a slot's endpoint, which is how a transfer is
+           published. Its number is the register's distance from the first. */
+        reg[off] = v;
+        if (on_endpoint_doorbell) {
+            on_endpoint_doorbell((off - M_DOORBELL0) / 4u, v);
         }
         return;
     }
@@ -458,7 +471,7 @@ static uint32_t model_next_slot;
 static void doorbell_rung(uint32_t target)
 {
     if (target != 0) {
-        return; /* an endpoint doorbell; nothing rings one yet */
+        return;
     }
 
     for (;;) {
@@ -496,6 +509,59 @@ static void doorbell_rung(uint32_t target)
         if (model_cmd_dequeue == XHCI_RING_TRBS) {
             model_cmd_dequeue = 0;
             model_cmd_cycle ^= TRB_CYCLE;
+        }
+    }
+}
+
+/* Where the controller has read up to on each endpoint ring, and what it
+   answers a transfer with. A transfer is finished by the block that asks for an
+   event; the model finds that block by walking the ring the way a controller
+   does, rather than by knowing where the driver put it. */
+static uint32_t model_ep_dequeue[XHCI_SLOTS + 1][XHCI_MAX_DCI];
+static uint32_t model_ep_cycle[XHCI_SLOTS + 1][XHCI_MAX_DCI];
+static int transfer_code;
+static uint32_t transfer_residual;
+static int transfer_answers;
+
+static void endpoint_doorbell(uint32_t slot, uint32_t dci)
+{
+    if (slot == 0 || slot > XHCI_SLOTS || dci == 0 || dci >= XHCI_MAX_DCI) {
+        return;
+    }
+    for (;;) {
+        uint32_t at = model_ep_dequeue[slot][dci];
+        const uint32_t *t = &ep_ring[slot][dci][at * TRB_WORDS];
+        uint32_t type;
+
+        if ((t[3] & TRB_CYCLE) != model_ep_cycle[slot][dci]) {
+            break;
+        }
+        type = (t[3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK;
+        if (type == TRB_TYPE_LINK) {
+            model_ep_dequeue[slot][dci] = 0;
+            if (t[3] & TRB_TOGGLE) {
+                model_ep_cycle[slot][dci] ^= TRB_CYCLE;
+            }
+            continue;
+        }
+        if ((t[3] & TRB_IOC) && transfer_answers) {
+            uint32_t *event = &event_ring[model_event_write * TRB_WORDS];
+
+            event[0] = (uint32_t)(uintptr_t)t;
+            event[1] = 0;
+            event[2] = transfer_residual | ((uint32_t)transfer_code << TRB_COMPLETION_SHIFT);
+            event[3] = (TRB_TYPE_TRANSFER_EVENT << TRB_TYPE_SHIFT) | (slot << TRB_SLOT_SHIFT) |
+                       (dci << 16) | model_event_cycle;
+            model_event_write++;
+            if (model_event_write == XHCI_RING_TRBS) {
+                model_event_write = 0;
+                model_event_cycle ^= TRB_CYCLE;
+            }
+        }
+        model_ep_dequeue[slot][dci]++;
+        if (model_ep_dequeue[slot][dci] == XHCI_EP_RING_TRBS) {
+            model_ep_dequeue[slot][dci] = 0;
+            model_ep_cycle[slot][dci] ^= TRB_CYCLE;
         }
     }
 }
@@ -548,6 +614,21 @@ static void model_reset(void)
     port_reset_completes = 1;
     on_doorbell = doorbell_rung;
     on_ring_moved = ring_moved;
+    on_endpoint_doorbell = endpoint_doorbell;
+    transfer_code = TRB_COMPLETION_SUCCESS;
+    transfer_residual = 0;
+    transfer_answers = 1;
+    {
+        unsigned si;
+        unsigned di;
+
+        for (si = 0; si <= XHCI_SLOTS; si++) {
+            for (di = 0; di < XHCI_MAX_DCI; di++) {
+                model_ep_dequeue[si][di] = 0;
+                model_ep_cycle[si][di] = TRB_CYCLE;
+            }
+        }
+    }
     abort_completes = 1;
     model_cmd_dequeue = 0;
     model_cmd_cycle = TRB_CYCLE;
@@ -1047,7 +1128,120 @@ int main(void)
     CHECK("the controller answers", xhci_command_done(&result) == 1);
 
     CHECK("a device the controller never gave out is refused", xhci_device_address(3) != 0);
+    /* Slots are numbered from one, so the last one this kernel asked for is
+       `XHCI_SLOTS` and not one less. A driver whose tables were a slot short
+       would refuse the last slot the controller is entitled to hand out. */
+    CHECK("the last slot the controller may give out is not refused for being last",
+          xhci_device_address(XHCI_SLOTS) != 0 && slots[XHCI_SLOTS].used == 0);
+    slots[XHCI_SLOTS].used = 1;
+    slots[XHCI_SLOTS].port = 0;
+    slots[XHCI_SLOTS].speed = USB_SPEED_HIGH;
+    CHECK("and is addressed like any other", xhci_device_address(XHCI_SLOTS) == 0);
+    xhci_events();
+    CHECK("the controller answers", xhci_command_done(&result) == 1);
     CHECK("and so is an endpoint on one", xhci_endpoint_reset(3, 3) != 0);
+
+    /* Transfers. The control transfer is three blocks and one event, and the
+       event is asked for on the block that says how much arrived. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        static uint8_t setup[8];
+        static uint8_t buffer[64];
+        const uint32_t *ring = &ep_ring[1][1][0];
+
+        model_reset();
+        CHECK("the capability registers are read", xhci_read_caps() == 0);
+        CHECK("halted and reset", xhci_halt_reset() == 0);
+        CHECK("started", xhci_start() == 0);
+        reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
+        CHECK("a slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+        xhci_events();
+        CHECK("the controller gives one", xhci_command_done(&result) == 1);
+        CHECK("the device is addressed", xhci_device_address(1) == 0);
+        xhci_events();
+        CHECK("the controller answers", xhci_command_done(&result) == 1);
+
+        setup[0] = 0x80;
+        setup[1] = 6;
+        transfer.setup = setup;
+        transfer.buffer = buffer;
+        transfer.length = 18;
+        transfer.direction = USB_DIR_IN;
+        CHECK("a control transfer is queued", xhci_submit(1, 1, &transfer) == 0);
+        CHECK("as a setup block", ((ring[3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_SETUP);
+        CHECK("carrying the eight bytes itself", (ring[3] & TRB_IDT) != 0);
+        CHECK("saying which way the data goes", (ring[3] & (3u << 16)) == TRB_TRT_IN);
+        CHECK("then a data block",
+              ((ring[TRB_WORDS + 3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_DATA);
+        CHECK("which asks for the event, because it is the one that says how much came",
+              (ring[TRB_WORDS + 3] & TRB_IOC) != 0);
+        CHECK("and a status block the other way",
+              ((ring[2 * TRB_WORDS + 3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_STATUS);
+        xhci_events();
+        CHECK("the transfer is reported", xhci_poll(&completion) == 1);
+        CHECK("for the device and endpoint it was on",
+              completion.device == 1 && completion.endpoint == 1);
+        CHECK("as having moved everything", completion.status == USB_XFER_OK);
+        CHECK("with the length it asked for", completion.length == 18);
+        CHECK("and nothing missing", completion.residual == 0);
+        CHECK("and there is nothing else waiting", xhci_poll(&completion) == 0);
+
+        /* A device that answers with less than was asked for. */
+        transfer_code = TRB_COMPLETION_SHORT;
+        transfer_residual = 6;
+        CHECK("a second transfer is queued", xhci_submit(1, 1, &transfer) == 0);
+        xhci_events();
+        CHECK("a short answer is reported", xhci_poll(&completion) == 1);
+        CHECK("as short", completion.status == USB_XFER_SHORT);
+        CHECK("with what did not arrive", completion.residual == 6);
+        CHECK("against what was asked for", completion.length == 18);
+
+        /* A halted endpoint. */
+        transfer_code = TRB_COMPLETION_STALL;
+        transfer_residual = 0;
+        CHECK("a third transfer is queued", xhci_submit(1, 1, &transfer) == 0);
+        xhci_events();
+        CHECK("a stall is reported", xhci_poll(&completion) == 1);
+        CHECK("as a stall, which is the one a caller recovers from",
+              completion.status == USB_XFER_STALLED);
+
+        /* A transfer the controller never answers. */
+        transfer_answers = 0;
+        CHECK("a fourth transfer is queued", xhci_submit(1, 1, &transfer) == 0);
+        xhci_events();
+        CHECK("and nothing is reported for it", xhci_poll(&completion) == 0);
+        transfer_answers = 1;
+
+        /* An interrupt endpoint, which carries one block and no setup. */
+        {
+            struct usb_endpoint ep;
+
+            ep.number = 1;
+            ep.direction = USB_DIR_IN;
+            ep.type = USB_EP_INTERRUPT;
+            ep.max_packet = 8;
+            ep.interval = 10;
+            CHECK("an endpoint is opened", xhci_endpoint_open(1, &ep) == 0);
+            xhci_events();
+            CHECK("the controller answers", xhci_command_done(&result) == 1);
+        }
+        transfer.setup = 0;
+        transfer.length = 8;
+        CHECK("a report is queued on it", xhci_submit(1, 3, &transfer) == 0);
+        CHECK("as one ordinary block",
+              ((ep_ring[1][3][3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_NORMAL);
+        xhci_events();
+        CHECK("and is reported", xhci_poll(&completion) == 1);
+        CHECK("on the endpoint it was queued on", completion.endpoint == 3);
+
+        /* A device that has gone, answering for a transfer nobody waits for. */
+        CHECK("a report is queued", xhci_submit(1, 3, &transfer) == 0);
+        slots[1].used = 0;
+        xhci_events();
+        CHECK("a completion for a slot the controller no longer holds is dropped",
+              xhci_poll(&completion) == 0);
+    }
 
     /* The interval the controller schedules from is derived from the one the
        device asked for, and the two are neither the same unit nor the same

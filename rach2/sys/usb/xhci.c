@@ -648,9 +648,9 @@ static uint32_t completion_tail;
  * context and a ring for each endpoint it opens.
  */
 static uint8_t input_ctx[(XHCI_MAX_DCI + 1) * 64] __attribute__((aligned(64)));
-static uint8_t device_ctx[XHCI_SLOTS][XHCI_MAX_DCI * 64] __attribute__((aligned(64)));
-static uint32_t
-    ep_ring[XHCI_SLOTS][XHCI_MAX_DCI][XHCI_EP_RING_TRBS * TRB_WORDS] __attribute__((aligned(256)));
+static uint8_t device_ctx[XHCI_SLOTS + 1][XHCI_MAX_DCI * 64] __attribute__((aligned(64)));
+static uint32_t ep_ring[XHCI_SLOTS + 1][XHCI_MAX_DCI][XHCI_EP_RING_TRBS * TRB_WORDS]
+    __attribute__((aligned(256)));
 
 struct xhci_slot {
     int used;
@@ -665,7 +665,7 @@ struct xhci_slot {
     uint32_t asked[XHCI_MAX_DCI];
 };
 
-static struct xhci_slot slots[XHCI_SLOTS];
+static struct xhci_slot slots[XHCI_SLOTS + 1];
 
 /* The port and speed a slot is being taken for. The controller decides which
  * slot that will be and does not say so until the command answers, so what the
@@ -877,7 +877,7 @@ static void event_dispatch(const uint32_t *trb)
         /* A slot the controller has just given out is recorded here, because
          * this is where its number arrives. */
         if (command_type == TRB_TYPE_ENABLE_SLOT && command_result.status == USB_XFER_OK &&
-            command_result.device > 0 && command_result.device < XHCI_SLOTS &&
+            command_result.device > 0 && command_result.device <= XHCI_SLOTS &&
             pending_port >= 0) {
             struct xhci_slot *s = &slots[command_result.device];
 
@@ -906,7 +906,7 @@ static void event_dispatch(const uint32_t *trb)
         }
         c->device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
         c->endpoint = (int)((trb[3] >> 16) & 0x1Fu);
-        if (c->device <= 0 || c->device >= XHCI_SLOTS || !slots[c->device].used) {
+        if (c->device <= 0 || c->device > XHCI_SLOTS || !slots[c->device].used) {
             /* A device that has gone, answering for a transfer nobody is
              * waiting for. Reporting it would let a slot handed to the next
              * device be advanced by the last one's transfer. */
@@ -1032,7 +1032,7 @@ int xhci_start(void)
     pending_port = -1;
     completion_head = 0;
     completion_tail = 0;
-    for (i = 0; i < XHCI_SLOTS; i++) {
+    for (i = 0; i <= XHCI_SLOTS; i++) {
         uint32_t j;
 
         slots[i].used = 0;
@@ -1215,7 +1215,7 @@ int xhci_device_address(int device)
     struct xhci_slot *s;
     uint32_t i;
 
-    if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used) {
+    if (device <= 0 || device > XHCI_SLOTS || !slots[device].used) {
         return -1;
     }
     /* The input context is one, shared by every command that takes one, so
@@ -1271,7 +1271,7 @@ int xhci_device_packet_size(int device, int max_packet)
     uint32_t *ep0;
     uint32_t i;
 
-    if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used || xhci_command_busy()) {
+    if (device <= 0 || device > XHCI_SLOTS || !slots[device].used || xhci_command_busy()) {
         return -1;
     }
     for (i = 0; i <= XHCI_MAX_DCI; i++) {
@@ -1290,7 +1290,7 @@ int xhci_device_close(int device)
 {
     uint32_t i;
 
-    if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used) {
+    if (device <= 0 || device > XHCI_SLOTS || !slots[device].used) {
         return -1;
     }
     /* The endpoints are closed to this driver at once, so nothing new is
@@ -1306,7 +1306,7 @@ int xhci_device_close(int device)
 
 void xhci_device_closed(int device)
 {
-    if (device <= 0 || device >= XHCI_SLOTS) {
+    if (device <= 0 || device > XHCI_SLOTS) {
         return;
     }
     slots[device].used = 0;
@@ -1343,7 +1343,7 @@ int xhci_endpoint_open(int device, const struct usb_endpoint *ep)
     uint32_t i;
     struct xhci_slot *s;
 
-    if (device <= 0 || device >= XHCI_SLOTS || !slots[device].used || dci == 0 ||
+    if (device <= 0 || device > XHCI_SLOTS || !slots[device].used || dci == 0 ||
         xhci_command_busy()) {
         return -1;
     }
@@ -1395,7 +1395,7 @@ void xhci_endpoint_close(int device, int endpoint)
 
 int xhci_endpoint_reset(int device, int endpoint)
 {
-    if (device <= 0 || device >= XHCI_SLOTS || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
+    if (device <= 0 || device > XHCI_SLOTS || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
         return -1;
     }
     if (!slots[device].used) {
@@ -1413,7 +1413,7 @@ int xhci_endpoint_dequeue(int device, int endpoint)
 {
     struct xhci_slot *s;
 
-    if (device <= 0 || device >= XHCI_SLOTS || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
+    if (device <= 0 || device > XHCI_SLOTS || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
         return -1;
     }
     if (!slots[device].used) {
@@ -1459,7 +1459,7 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
     struct xhci_slot *s;
     uint32_t dci = (uint32_t)endpoint;
 
-    if (device <= 0 || device >= XHCI_SLOTS || dci == 0 || dci >= XHCI_MAX_DCI) {
+    if (device <= 0 || device > XHCI_SLOTS || dci == 0 || dci >= XHCI_MAX_DCI) {
         return -1;
     }
     s = &slots[device];

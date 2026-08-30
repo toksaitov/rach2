@@ -28,7 +28,9 @@
 
 /*
  * How many device slots this kernel asks the controller to enable, and how
- * many transfer request blocks each of its two rings holds. A controller may
+ * many transfer request blocks each of its two rings holds. Slots are numbered
+ * from one, so the tables that hold them have one more entry than this and
+ * their first is never used. A controller may
  * offer 64 slots or more; four is what the fixed tables above this driver
  * hold, and asking for more would have the controller reserve memory for
  * devices that could never be opened. Each ring is one page, which is 256
