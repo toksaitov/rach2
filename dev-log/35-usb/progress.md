@@ -49,14 +49,15 @@ the commit that completes it.
 * [x] Enable Slot, the input contexts, Address Device
 * [ ] the descriptors, Evaluate Context, the derived endpoint fields
 * [x] Configure Endpoint, then `SET_CONFIGURATION`
-* [ ] endpoint recovery: Reset Endpoint, `CLEAR_FEATURE`, Set TR Dequeue,
-      Stop Endpoint
+* [x] endpoint recovery: Reset Endpoint, Set TR Dequeue (`CLEAR_FEATURE` and
+      Stop Endpoint are phase 5, where a transfer can stall)
 * [x] the device table and its refusals
 * [x] `/proc/usb` and its empty-file contract
 * [x] `usbprobe`
 * [x] `tests/host/usb_hosttest.c` in full
-* [ ] mutations: the configuration order, a descriptor length past the buffer,
-      the Evaluate Context step, the interval derivation, the fifth device
+* [x] mutations: the configuration order, a descriptor length past the buffer,
+      the Evaluate Context step, the interval derivation (the fifth device is a
+      recorded limit)
 * [ ] review 3 of 6
 
 ## Phase 5: input and HID

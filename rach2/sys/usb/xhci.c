@@ -1344,6 +1344,9 @@ int xhci_endpoint_reset(int device, int endpoint)
     if (device <= 0 || device >= XHCI_SLOTS || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
         return -1;
     }
+    if (!slots[device].used) {
+        return -1;
+    }
     /* A halted endpoint keeps its ring until it is reset, and the ring is
      * then pointed at where this driver will write next. Both are commands;
      * this issues the first and the caller issues the second when it
@@ -1357,6 +1360,9 @@ int xhci_endpoint_dequeue(int device, int endpoint)
     struct xhci_slot *s;
 
     if (device <= 0 || device >= XHCI_SLOTS || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
+        return -1;
+    }
+    if (!slots[device].used) {
         return -1;
     }
     s = &slots[device];

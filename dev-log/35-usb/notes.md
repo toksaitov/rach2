@@ -276,3 +276,34 @@ code is in.
 Mutations, all caught: read a descriptor past the end of what arrived (by the
 sanitizer), take any interface that says HID, take an endpoint whatever
 direction it is.
+
+### Phase 4's mutations
+
+Nine, each caught by the check it was aimed at:
+
+* read a descriptor past the end of what arrived: by AddressSanitizer
+* take any interface that says HID
+* take an endpoint whatever direction it is
+* take the slot the command named rather than the one the controller answered
+* point a device's context nowhere
+* reset an endpoint on a device the controller never gave out
+* derive every interval as if the device were high-speed
+* change the whole context instead of the one field
+* send `SET_CONFIGURATION` before Configure Endpoint: caught in QEMU rather
+  than in the model. `usbprobe` fails, and the log says the device offers no
+  interface this kernel can drive, because the endpoint was never configured.
+  The order is not visible to the controller model, which sees commands and
+  not the transfers between them; phase 5 gives the model transfer rings and
+  the row can be written there.
+
+Two limits recorded rather than closed:
+
+* The core's table of four devices is not filled by any test. The controller
+  refuses a device beyond its own table, which has a row, but the core's own
+  refusal needs five devices on one controller and QEMU's has eight ports;
+  phase 5's suite runs two. A row for it needs a driven state machine with a
+  model host controller, which is more machinery than the limit is worth here.
+* The Evaluate Context step is exercised in the model but not on a machine:
+  QEMU's HID devices report a control endpoint of eight bytes at every speed,
+  which is the size assumed before asking, so nothing needs correcting. A
+  device that reports otherwise would take that path on the notebook.

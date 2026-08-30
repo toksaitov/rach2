@@ -450,6 +450,10 @@ static uint32_t commands_seen;
    command every time the ring wrapped. */
 static uint32_t model_cmd_dequeue;
 static uint32_t model_cmd_cycle;
+/* The next slot this controller will give out. A real one chooses, and says
+   which in the completion; a model that answered zero would let a driver that
+   ignored the answer pass. */
+static uint32_t model_next_slot;
 
 static void doorbell_rung(uint32_t target)
 {
@@ -478,7 +482,13 @@ static void doorbell_rung(uint32_t target)
         commands_seen++;
         reg[OP(0x18u)] |= M_CRCR_CRR;
         if (command_completes) {
-            post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, last_command_slot,
+            uint32_t answered = last_command_slot;
+
+            if (last_command_type == TRB_TYPE_ENABLE_SLOT) {
+                answered = model_next_slot;
+                model_next_slot++;
+            }
+            post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, answered,
                        (uint32_t)(uintptr_t)t);
             reg[OP(0x18u)] &= ~M_CRCR_CRR;
         }
@@ -541,6 +551,7 @@ static void model_reset(void)
     abort_completes = 1;
     model_cmd_dequeue = 0;
     model_cmd_cycle = TRB_CYCLE;
+    model_next_slot = 1;
     model_event_write = 0;
     model_event_cycle = TRB_CYCLE;
     last_command_type = 0;
@@ -983,6 +994,60 @@ int main(void)
     CHECK("without throwing away a connect nobody has handled yet",
           (reg[M_PORTSC(0)] & M_PORTSC_CSC) != 0);
     CHECK("and without disabling the port it is resetting", (reg[M_PORTSC(0)] & M_PORTSC_PED) != 0);
+
+    /* Devices, endpoints and the recovery a halted one needs. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
+    CHECK("a slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+    CHECK("with the command that asks", last_command_type == TRB_TYPE_ENABLE_SLOT);
+    xhci_events();
+    CHECK("and the controller answers with one", xhci_command_done(&result) == 1);
+    CHECK("which is the device handle", result.device == 1);
+    CHECK("the device is addressed", xhci_device_address(1) == 0);
+    CHECK("with the command that addresses it", last_command_type == TRB_TYPE_ADDRESS_DEVICE);
+    CHECK("naming the slot", last_command_slot == 1);
+    CHECK("its context is where the controller will look", dcbaa[1] != 0);
+    xhci_events();
+    CHECK("the controller answers", xhci_command_done(&result) == 1);
+
+    {
+        struct usb_endpoint ep;
+
+        ep.number = 1;
+        ep.direction = USB_DIR_IN;
+        ep.type = USB_EP_INTERRUPT;
+        ep.max_packet = 8;
+        ep.interval = 10;
+        CHECK("an endpoint is opened", xhci_endpoint_open(1, &ep) == 0);
+        CHECK("with the command that configures one", last_command_type == TRB_TYPE_CONFIG_EP);
+        xhci_events();
+        CHECK("the controller answers", xhci_command_done(&result) == 1);
+    }
+
+    /* A halted endpoint is reset and its ring pointed at the block the driver
+       will write next. Returning an error and leaving the ring alone would
+       leave the endpoint unusable for the rest of the boot. */
+    CHECK("a halted endpoint is reset", xhci_endpoint_reset(1, 3) == 0);
+    CHECK("with the command that resets one", last_command_type == TRB_TYPE_RESET_EP);
+    xhci_events();
+    CHECK("the controller answers", xhci_command_done(&result) == 1);
+    CHECK("and its ring is pointed somewhere again", xhci_endpoint_dequeue(1, 3) == 0);
+    CHECK("with the command that points it", last_command_type == TRB_TYPE_SET_TR_DEQUEUE);
+    xhci_events();
+    CHECK("the controller answers", xhci_command_done(&result) == 1);
+
+    CHECK("a full-speed device's control endpoint is corrected once it is known",
+          xhci_device_packet_size(1, 64) == 0);
+    CHECK("with the command that changes one field of a context",
+          last_command_type == TRB_TYPE_EVALUATE_CTX);
+    xhci_events();
+    CHECK("the controller answers", xhci_command_done(&result) == 1);
+
+    CHECK("a device the controller never gave out is refused", xhci_device_address(3) != 0);
+    CHECK("and so is an endpoint on one", xhci_endpoint_reset(3, 3) != 0);
 
     /* The interval the controller schedules from is derived from the one the
        device asked for, and the two are neither the same unit nor the same
