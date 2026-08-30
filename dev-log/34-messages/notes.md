@@ -453,3 +453,98 @@ built artifact to mark a kernel, and `binfind --replace` requires the mark to
 be the same length as what it replaces, so both marks were re-cut for the
 shorter text. `install` also counts the lines its `sed` changed on the machine,
 and there is one line to change now where there were two.
+
+## What each limit refuses with, 2026-08-30
+
+Read from the code before any probe was written, so the probes assert what the
+kernel does and not what the plan guessed.
+
+* The process table: `alloc_process` returns NULL and `sys_fork` returns
+  `-EAGAIN` (`syscall.c`). 16 slots, one of them the debug shell's.
+* A process's descriptors: `fd_alloc` fails and every caller returns `-EMFILE`
+  (`syscall.c`, `devfs.c`). 16 per process, three of them stdio.
+* The socket pool: `socket_alloc` returns NULL and `do_socket` returns
+  `-ENOMEM`, not `-ENFILE` (`socket.c`, `syscall.c`). 16 sockets for the
+  machine.
+* The TCP control blocks: `tcp_connect` and `tcp_listen` return `-ENOBUFS`
+  (`tcp.c`). A loopback connection takes two.
+* Physical frames: a process that touches a page with none left takes a page
+  fault the handler cannot serve, and `terminate_current_process(SIGSEGV)`
+  kills it. The parent survives and its frames come back.
+* A full file system: `krffs_write_node` returned a bare -1 whether the file
+  system was full or the caller passed a bad argument, and the write syscall
+  turned both into `-EIO`. A full disk is what a program writing a large file
+  meets and it has to be able to tell that apart, so the two are now
+  `KRFFS_ENOSPACE` and `KRFFS_EBAD`, and the syscall returns `-ENOSPC` and
+  `-EIO`.
+
+## The control-block probe, and why there is not one, 2026-08-30
+
+The plan called for `tcbfull`, a guest probe that fills the TCP control-block
+pool over loopback connections, each of which takes two blocks. It was written
+and it does not work, for two reasons found by running it.
+
+The first is arithmetic. Every control block is owned by a socket, and both
+pools hold sixteen. A process holds thirteen descriptors, so reaching sixteen
+of anything needs two processes, and at sixteen sockets the socket pool
+refuses with `ENOMEM` before the control-block pool can refuse with `ENOBUFS`.
+The only shape that reaches the second limit first is a connection that takes
+two blocks, which is a connection to this machine's own listener.
+
+The second is that such a connection does not complete. A loopback `connect`
+sends its SYN, nothing answers, and the stack retransmits at 200, 400, 800,
+1600 and 3200 ms before giving up: `tcp: retransmit: rto 3200, try 5` with a
+listener bound and listening on the same port. So the probe blocks rather than
+being refused, and the pool it did fill stays full behind it.
+
+The probe is not in the tree. Control-block exhaustion belongs in
+`tcp_hosttest`, where `tcb_alloc` is driven directly and no handshake is
+needed, and that is where phase 7 puts it. The loopback handshake is a kernel
+defect this milestone found and did not fix; it is written down here and in
+`plan.md` rather than left in a probe that cannot pass.
+
+## The limits, 2026-08-30
+
+Five probes, each filling a fixed pool and requiring the refusal the kernel
+documents, then requiring the resource back:
+
+* `procfull`: 14 of the 16 process slots (the shell and the probe hold two),
+  refused with `EAGAIN`, and a reaped slot reused.
+* `fdfull`: 13 of a process's 16 descriptors (stdio holds three), refused with
+  `EMFILE`, and a closed one reused.
+* `sockfull`: two processes, because one runs out of descriptors at thirteen
+  before the sixteen-socket pool is full. The parent fills its table, the child
+  closes three of the inherited descriptors and opens three more, and the next
+  open is refused with `ENOMEM`.
+* `oomprobe`: a child maps and touches until the frames run out, is killed with
+  `SIGSEGV`, and the parent then maps and touches successfully, which is the
+  frames coming back.
+* `diskfull`: 7 MiB written into the test image, refused with `ENOSPC`, the
+  file removed and the write repeated. It has a boot of its own because it
+  fills the image every other probe is staged in.
+
+Proved by six mutations, all caught: fork refusing with `ENOMEM` instead of
+`EAGAIN`, `close` not freeing the descriptor, the socket pool refusing with
+`ENFILE`, a full file system reporting `EIO` again, and a dead process keeping
+its frames.
+
+## Review 10 of 12, 2026-08-30
+
+Codex read the cutover. It found a regression I had introduced and four
+smaller faults, all fixed:
+
+* Every newline the terminal wrote reached the port as carriage return,
+  carriage return, newline. The line discipline expands the newline itself,
+  and `console_putc`, which the discipline now writes through, expanded it
+  again. There is a raw console call for a writer that has already done it,
+  and the discipline uses that one.
+* One flag said whether the console had left a line open, and both the screen
+  and the port cleared it. A `DEBUG` record reaches the port and not the
+  screen, so it closed the screen's line without writing to the screen, and
+  the next record on screen continued the prompt. There are two flags now,
+  each cleared by the destination that wrote.
+* `/dev/bootlog` reported bytes copied before a fault without advancing its
+  cursor, so the next read repeated them.
+* `serial_port_exists` and `serial_getc` had no callers left, and the header
+  described a blocking read this kernel must not have. Both are gone.
+* Four comments described the arrangement that this milestone replaced.

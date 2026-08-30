@@ -748,8 +748,11 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 
             written = krffs_write_node(&entry->node, (const char __force *)buf,
                                        count, entry->ofd->offset);
+            if (written == KRFFS_ENOSPACE) {
+                return -ENOSPC;
+            }
             if (written < 0) {
-                return -EIO;  /* krffs reports failure with a bare -1 */
+                return -EIO;
             }
             /* A grow relocates the file, and krffs_write_node updates only the
              * writer's own descriptor; every other holder would be left on the

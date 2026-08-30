@@ -17,34 +17,25 @@ void serial_init(void);
  * per byte and not the machine. A machine with no COM1 discards the byte.
  *
  * This is the only way out of the port, and it has no formatting, no copy of
- * what it sent, and no tap: what reaches the port is decided by `klog` and by
- * the console calls beside it, which keep the machine's own copy in the log's
- * ring. Nothing else writes here.
+ * what it sent, and no tap: what reaches the port is decided by `klog`, which
+ * keeps the machine's own copy in the log's ring, and by the console calls
+ * beside it, whose output is not part of that log. Nothing else writes here.
  */
 void serial_out(char c);
 
-/*
- * Non-blocking check for received data. Returns non-zero if a byte is ready,
- * 0 otherwise or if no COM1 was detected.
+/**
+ * Whether a received byte is waiting.
+ *
+ * Returns zero when none is, and when no COM1 was detected.
  */
 int serial_data_available(void);
 
-/*
- * Report whether a COM1 UART was detected during init. Returns 1 if it
- * exists, 0 otherwise (such as real hardware without a serial port). Callers
- * use this to avoid spinning on a non-existent port.
- */
-int serial_port_exists(void);
-
-/*
- * Read a single character from the serial port, blocking until data is
- * available.
- */
-char serial_getc(void);
-
-/*
- * Read a character from the serial port without blocking. Returns the byte
- * if one is ready, or -1 if none is.
+/**
+ * Read a byte from the port without waiting.
+ *
+ * Returns the byte, or -1 when none is ready and when no COM1 was detected.
+ * There is no blocking read: a kernel that waits on a port nobody is typing at
+ * is a kernel that has stopped.
  */
 int serial_try_getc(void);
 

@@ -113,19 +113,6 @@ void serial_out(char c)
     }
 }
 
-/* The machine's own copy of what it printed. Until the ring serves it, the
-   serial destination feeds it too, and this records what it was given so the
-   two can be compared. */
-static char boot[CAP];
-static unsigned boot_len;
-
-void bootlog_putc(char c)
-{
-    if (boot_len < CAP) {
-        boot[boot_len++] = c;
-    }
-}
-
 int netconsole_is_enabled(void)
 {
     return net_on;
@@ -186,7 +173,6 @@ static void reset(void)
     screen_calls = serial_calls = net_calls = 0;
     serial_offered = 0;
     ring_at_screen = 0;
-    boot_len = 0;
     klog_delivering = 0;
     serial_wedged = 0;
     net_on = 0;
@@ -414,8 +400,6 @@ int main(void)
     serial[serial_len] = '\0';
     CHECK("debug detail reaches the serial port whole",
           streq(serial, "<7>[0.00] d: detail: for the log\r\n"));
-    boot[boot_len] = '\0';
-    CHECK("and the machine's own copy of it", streq(boot, "<7>[0.00] d: detail: for the log\r\n"));
     CHECK("and not the wire while netconsole is off", net_len == 0);
     reset();
     net_on = 1;
@@ -521,7 +505,6 @@ int main(void)
     CHECK("console output reaches the screen", screen_len > 0);
     CHECK("and the serial port", serial_len > 0);
     CHECK("and never the ring", klog_len() == 0);
-    CHECK("nor the boot log the machine hands out", boot_len == 0);
     reset();
     net_on = 1;
     console_puts("shell> ls");

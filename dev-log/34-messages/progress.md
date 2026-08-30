@@ -86,17 +86,17 @@ Proof items:
 * [x] `pcapcheck` reassembles one complete record from a capture
 * [x] Console keystrokes absent from a netconsole capture
 * [x] `/dev/bootlog` holds records and no console text
-* [ ] Review 10 of 12
+* [x] Review 10 of 12
 
 ## Phase 7: the coverage (13 items)
 
-* [ ] Refusal errors read from the code and recorded in `notes.md`
-* [ ] `procfull` + mutation
-* [ ] `fdfull` + mutation
-* [ ] `sockfull` (two processes) + mutation
-* [ ] `tcbfull` + mutation
-* [ ] `oomprobe` (touch pages, child dies, parent recovers) + mutation
-* [ ] `diskfull` + the `EIO` to `ENOSPC` fix + mutation
+* [x] Refusal errors read from the code and recorded in `notes.md`
+* [x] `procfull` + mutation
+* [x] `fdfull` + mutation
+* [x] `sockfull` (two processes) + mutation
+* [-] `tcbfull` + mutation (dropped; `notes.md` and `plan.md` say why)
+* [x] `oomprobe` (touch pages, child dies, parent recovers) + mutation
+* [x] `diskfull` + the `EIO` to `ENOSPC` fix + mutation
 * [ ] `ahci.c` gains an injectable register interface
 * [ ] `ahci_hosttest`: every matrix row a checklist line
 * [ ] `tcp_hosttest`: every matrix row a checklist line

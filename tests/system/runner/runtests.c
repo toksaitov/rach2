@@ -59,6 +59,10 @@ static const char *const PROBES[] = {
     "forkleak", "fdstale", "dirgrow", "dirprobe", "unlinkdirprobe",
     "pathcanon", "timeprobe",
     "sigprobe", "credprobe", "ownprobe", "permprobe", "sockettest",
+    /* The four limits: the process table, a process's descriptors, the
+       socket pool and the frames. Each fills the thing, requires the refusal
+       the kernel documents, and then requires the resource back. */
+    "procfull", "fdfull", "sockfull", "oomprobe",
     /* Hermetic without `--live`, which this does not pass: the resolver's
        pure helpers and the crafted wire data, not the real internet. */
     "dnstest",

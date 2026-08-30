@@ -1139,7 +1139,12 @@ int krffs_create(const char *path)
  *
  * A write past the node's capacity grows it, which may relocate the node, so
  * *nodep is updated in place. The fd layer must store the result so its
- * descriptor keeps pointing at the file. Returns bytes written, or -1 on error.
+ * descriptor keeps pointing at the file.
+ *
+ * Returns the bytes written, `KRFFS_ENOSPACE` when the grow found no room, or
+ * `KRFFS_EBAD` for an argument this cannot use. A full file system is what a
+ * program writing a large file meets, and it reaches the caller as `ENOSPC`;
+ * a bad argument is the caller's own fault and reaches it as `EIO`.
  */
 int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
                      uint32_t offset)
@@ -1151,7 +1156,7 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
     uint64_t old_data_size;
 
     if (!krffs_fs || !nodep || !*nodep || !buffer) {
-        return -1;
+        return KRFFS_EBAD;
     }
     node = *nodep;
     base = node + 1;
@@ -1173,7 +1178,7 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
     if (new_size > available_space) {
         node = krffs_resize_reserved_node(krffs_fs, node, new_size);
         if (!node) {
-            return -1;
+            return KRFFS_ENOSPACE;
         }
         *nodep = node;
         base = node + 1;

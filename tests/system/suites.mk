@@ -224,6 +224,15 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 	    "expect=COOKED:" wait=2 \
 	    'sendraw=X' \
 	    "expect=RAW:"
+# `tests/run diskfull`: a file system with no room left. The probe writes until
+# the write is refused, requires `ENOSPC` rather than the `EIO` this kernel used
+# to return for a full disk, removes the file and writes again. It has a boot of
+# its own because it fills the image every other probe is staged in.
+run-diskfull: rach2 tests krffs test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --timeout 180 --ok "DISKFULL OK" --never "DISKFULL FAIL" \
+	    "expect=Type 'help'" "send=exec /diskfull" "expect=DISKFULL"
 # `tests/run socket`: the guest opening connections of its own, checked by a
 # host that answers (see tests/system/suites/socket.sh).
 run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER)

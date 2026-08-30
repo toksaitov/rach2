@@ -15,10 +15,12 @@
  * thing here that two callers cannot share, so the formatting and the ring
  * append each run with interrupts off. Both are short and neither sleeps.
  *
- * The console calls are the other half of this file and deliberately do not
- * touch any of the above. The debug shell's prompts and command output are a
- * user interface, not a diagnostic: they are not the machine's log, and they
- * are not broadcast to whoever is listening on the segment.
+ * The console calls are the other half of this file. The debug shell's
+ * prompts and command output are a user interface, not a diagnostic: they are
+ * not the machine's log, and they are not broadcast to whoever is listening on
+ * the segment. They share the screen and the port with the records, and that
+ * is the one thing the two halves have between them: each console byte says
+ * whether it left a line open, so a record never begins in the middle of one.
  */
 
 #include "klog.h"
@@ -107,7 +109,7 @@ static void build_u32(uint32_t v)
     }
 }
 
-/*
+/**
  * Build `<level>[seconds.hundredths] subsystem: text` and one newline.
  *
  * The prefix is what BusyBox's klogd reads, so a userland log reader can be
@@ -264,15 +266,21 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
 }
 
 /*
- * Whether the last byte the console wrote was not a newline.
+ * Whether the console has left a line open on the screen and on the port.
  *
  * A record is a whole line and must begin one: a shell prompt, or a program
  * writing to the terminal without a newline at the end, would otherwise have
  * the next record continue its line, and a reader looking for records at a
  * line start would not find them. The console and the record destinations
  * write to the same screen and the same port, so this is where the two meet.
+ *
+ * One flag each, because the two destinations do not take the same records: a
+ * DEBUG record closes the port's line and never reaches the screen, and a
+ * single flag cleared for both would let the next screen record continue the
+ * prompt.
  */
-static int console_line_open;
+static int screen_line_open;
+static int serial_line_open;
 
 /* ---- destination 2: the screen ---- */
 
@@ -305,8 +313,9 @@ static void dest_screen(const struct klog_record *r)
 {
     uint32_t i;
 
-    if (console_line_open) {
+    if (screen_line_open) {
         k_putc('\n');
+        screen_line_open = 0;
     }
     set_fore_color(screen_color(r->level));
     for (i = r->body; i < r->len; i++) {
@@ -327,9 +336,10 @@ static void dest_serial(const struct klog_record *r)
 {
     uint32_t i;
 
-    if (console_line_open) {
+    if (serial_line_open) {
         serial_out('\r');
         serial_out('\n');
+        serial_line_open = 0;
     }
     for (i = 0; i < r->len; i++) {
         if (r->text[i] == '\n') {
@@ -342,11 +352,11 @@ static void dest_serial(const struct klog_record *r)
 /* ---- destination 4: netconsole ---- */
 
 /**
- * Offer the record to netconsole, enabled or not.
+ * Offer the record to netconsole, whether or not it has a device yet.
  *
- * Not conditional on `netconsole_is_enabled`, deliberately: netconsole holds
- * what it is given before a device exists and sends it when one does, and the
- * records worth having on the wire are exactly the early ones, from a boot
+ * This deliberately does not ask `netconsole_is_enabled`. Netconsole holds
+ * what it is given before a device exists and sends it when one arrives, and
+ * the records worth having on the wire are exactly the early ones, from a boot
  * that may not reach a shell. Skipping it until enabled would throw those
  * away. A machine that was never asked for netconsole fills that bounded
  * buffer once and drops the rest, which is what it did before.
@@ -426,9 +436,6 @@ void klog_v(int level, const char *subsystem, const char *format, char **args)
         }
     }
     if (!nested) {
-        /* The record ended with its own newline, so whatever line the console
-           had open is closed now. */
-        console_line_open = 0;
         klog_delivering = 0;
     }
 }
@@ -451,13 +458,41 @@ void klog(int level, const char *subsystem, const char *format, ...)
  * newline is expanded to carriage return and newline for the serial side
  * alone, which is what a terminal on the other end of a wire expects.
  */
+/**
+ * Write one byte to the screen and the port, expanding the newline.
+ *
+ * A terminal on the other end of a wire returns to column zero on a carriage
+ * return, so a newline written here becomes carriage return and newline on the
+ * port. The line discipline has already done that expansion for what it
+ * passes on, which is why it writes through `console_putc_raw` instead.
+ *
+ * The flags are set before the bytes go out, not after: a record raised by an
+ * interrupt in the middle of this then knows a line is open and begins its own
+ * with a newline. The other order would let it continue the line.
+ */
 void console_putc(char c)
 {
-    console_line_open = c != '\n';
+    screen_line_open = c != '\n';
+    serial_line_open = c != '\n';
     k_putc(c);
     if (c == '\n') {
         serial_out('\r');
     }
+    serial_out(c);
+}
+
+/**
+ * As `console_putc`, for a writer that has expanded the newline itself.
+ *
+ * The line discipline expands a newline to carriage return and newline before
+ * it reaches here, so this must pass every byte through unchanged; expanding
+ * again would put two carriage returns on the wire for every line.
+ */
+void console_putc_raw(char c)
+{
+    screen_line_open = c != '\n';
+    serial_line_open = c != '\n';
+    k_putc(c);
     serial_out(c);
 }
 

@@ -91,6 +91,9 @@ uint32_t klog_len(void);
 void console_putc(char c);
 void console_printf(const char *format, ...);
 
+/** As `console_putc`, for a writer that has expanded the newline itself. */
+void console_putc_raw(char c);
+
 /** As `k_puts`: the string and then a newline. */
 void console_puts(const char *str);
 

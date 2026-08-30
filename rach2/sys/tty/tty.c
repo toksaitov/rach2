@@ -313,16 +313,20 @@ void tty_hangup(struct tty *t)
 
 /* the system console: VGA screen + COM1 serial */
 
-/* Echo and output bytes go to both the screen and the serial line, so a serial
- * terminal mirrors what is on the VGA console. OPOST/ONLCR in the discipline
- * has already expanded '\n' to CR LF, which the console call emits verbatim.
- * It goes through that call and not through the two printers under it so the
- * kernel log knows whether a program has left a line open on the terminal,
- * and does not begin a record in the middle of it. */
+/**
+ * The console's output: the screen and the serial line together.
+ *
+ * A serial terminal mirrors what is on the VGA console. OPOST and ONLCR in the
+ * discipline have already expanded '\n' to CR LF, so the raw console call is
+ * the one to use: `console_putc` would expand it again. It goes through a
+ * console call and not through the writers under it so the kernel log knows
+ * whether a program has left a line open on the terminal, and does not begin a
+ * record in the middle of it.
+ */
 static void console_sink(void *ctx, unsigned char c)
 {
     (void)ctx;
-    console_putc((char)c);
+    console_putc_raw((char)c);
 }
 
 /* The console's polled input source: COM1 is not wired to an IRQ here, so drain

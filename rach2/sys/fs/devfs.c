@@ -566,6 +566,19 @@ static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t c
  * demand foresight: the screen scrolls the log past in under a second, the
  * netconsole reaches only a capture that was already running when the power
  * came on, and holding the screen helps only a person standing at the machine.
+ *
+ * What it holds is the kernel's records, from the boot and from whatever the
+ * machine has said since, and not the debug shell's own output. The name is
+ * older than that distinction.
+ */
+/**
+ * Copy from the log's ring into a reader's buffer.
+ *
+ * The descriptor's offset counts from the oldest record the ring still holds,
+ * which is what `klog_read` takes. A machine printing hard while a reader
+ * walks the log can evict records between two reads, and the reader then sees
+ * a later part of the log than it asked for; there is no cursor that survives
+ * that, and a reader that cannot accept it asks for the whole ring at once.
  */
 static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -584,6 +597,10 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
             break; /* the end of the log, the regular-file convention */
         }
         if (copy_to_user((void __user *)(buf + done), chunk, n) != 0) {
+            /* The bytes already copied are the caller's, so they are
+               reported and the cursor moves past them; a fault after some of
+               a read is a short read, not a repeat of what was delivered. */
+            e->ofd->offset += done;
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         done += n;
@@ -959,6 +976,13 @@ void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors)
     disk0.present = 1;
 }
 
+/**
+ * The size a seek on `/dev/bootlog` measures against.
+ *
+ * The log seeks like a file whose size is what it currently holds, so SEEK_END
+ * and a plain `cat` both behave. It is not a raw window: it reads through the
+ * ordinary 32-bit offset, and a ring of kilobytes has no use for a wider one.
+ */
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 {
     const struct devfs_entry *dev;
@@ -967,10 +991,6 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    /* The log seeks like a file whose size is what it currently has, so
-     * SEEK_END and a plain `cat` both behave. It is not a raw window: it reads
-     * through the ordinary 32-bit offset, and a ring of kilobytes has no use
-     * for a wider one. */
     if (dev->ops == &bootlog_ops) {
         if (size) {
             *size = klog_len();

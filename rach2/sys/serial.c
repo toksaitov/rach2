@@ -19,8 +19,8 @@
 
 /*
  * Set once a real COM1 UART is found. On hardware without COM1, port reads
- * float to 0xFF, so the polling loops below would spin forever; this flag
- * makes every entry point a no-op instead.
+ * float to 0xFF, so a wait for the port would never end; this flag makes the
+ * write a no-op and the read report nothing instead.
  */
 static int _serial_port_exists = 0;
 
@@ -114,18 +114,6 @@ int serial_data_available(void)
         return 0;
     }
     return inb(SERIAL_COM1 + SERIAL_LINE_STATUS) & SERIAL_LSR_DR;
-}
-
-int serial_port_exists(void)
-{
-    return _serial_port_exists;
-}
-
-char serial_getc(void)
-{
-    while (!serial_data_available())
-        ;
-    return inb(SERIAL_COM1 + SERIAL_DATA);
 }
 
 int serial_try_getc(void)

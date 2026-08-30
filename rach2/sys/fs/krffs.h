@@ -169,7 +169,14 @@ void krffs_unlink_held(krffs_node_t *node);
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
 
 /* Read and write through a resolved node pointer, for the fd layer.
- * krffs_write_node updates *nodep if a grow relocates the node. */
+ * krffs_write_node updates *nodep if a grow relocates the node.
+ *
+ * It returns the bytes written, `KRFFS_EBAD` for an argument it cannot use, or
+ * `KRFFS_ENOSPACE` when the file had to grow and the file system had no room.
+ * The two are separate because the second is an ordinary full disk, which a
+ * program is expected to handle, and the first is a fault in the caller. */
+#define KRFFS_EBAD     (-1)
+#define KRFFS_ENOSPACE (-2)
 int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
                     uint32_t offset);
 int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
