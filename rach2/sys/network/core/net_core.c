@@ -7,6 +7,7 @@
  * their state in zero-initialized statics and need no explicit init.
  */
 
+#include "../../lib/kirq.h"
 #include "../../klog.h"
 #include "../net.h"
 #include "byteorder.h"
@@ -99,14 +100,20 @@ void net_print_info(void)
     netconsole_print_info();
 }
 
+/**
+ * Hold the network state still, and let it go again.
+ *
+ * The stack is reached from a driver's interrupt and from a syscall, and the
+ * two must not be inside the same table at once. These are the shared
+ * interrupt bracket under the network's own names, which is what the hundred
+ * and fifty call sites read.
+ */
 uint32_t net_lock(void)
 {
-    uint32_t flags;
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
+    return kirq_save();
 }
 
 void net_unlock(uint32_t flags)
 {
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
+    kirq_restore(flags);
 }
