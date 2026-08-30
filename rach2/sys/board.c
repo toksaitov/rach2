@@ -7,6 +7,7 @@
  * pure functions with a host test, not code that is only read.
  */
 
+#include "klog.h"
 #include "board.h"
 #include "pci.h"
 #include "pic.h"
@@ -259,9 +260,10 @@ int board_init(const char **why)
 
         if (board_needs_acpi_enable(p, pm1)) {
             if (board_acpi_enable(p, board_port)) {
-                serial_printf("board: %s: ACPI enabled\n", p->name);
+                klog(KLOG_INFO, "board", "%s: ACPI enabled", p->name);
             } else {
-                serial_printf("board: %s: the firmware did not answer the ACPI enable\n", p->name);
+                klog(KLOG_WARN, "board",
+                     "%s: the firmware did not answer the ACPI enable", p->name);
             }
             pm1 = inw(board_port);
         }
@@ -280,7 +282,8 @@ int board_init(const char **why)
                 board_sci_irq(p, pci_read_config8(p->bus, p->device, p->function, p->sci_reg));
             if (board_sci >= 0) {
                 pic_mask_irq((uint8_t)board_sci);
-                serial_printf("board: %s: masked the SCI on IRQ %d\n", p->name, board_sci);
+                klog(KLOG_INFO, "board", "%s: masked the SCI on IRQ %d", p->name,
+                     board_sci);
             }
         }
 
@@ -302,10 +305,8 @@ int board_init(const char **why)
         unsigned c = (unsigned)pci_read_config8(0, 31, 0, PCI_CLASS);
         unsigned sc = (unsigned)pci_read_config8(0, 31, 0, PCI_SUBCLASS);
 
-        /* On the screen as well as the log: the machine this matters for has
-         * no serial port, so a serial-only diagnostic is no diagnostic. */
-        k_printf("  board: 0:31.0 is %X:%X class %X:%X\n", v, d, c, sc);
-        serial_printf("board: no profile matched: 0:31.0 is %X:%X class %X:%X\n", v, d, c, sc);
+        klog(KLOG_WARN, "board",
+             "no profile matched: 0:31.0 is %X:%X class %X:%X", v, d, c, sc);
     }
     if (forced) {
         *why = "the named board profile's chipset is not in this machine";

@@ -1,3 +1,4 @@
+#include "klog.h"
 #include "rtc.h"
 
 #define RTC_SECONDS_PER_DAY    86400
@@ -300,7 +301,6 @@ extern void outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 extern volatile uint32_t kernel_uptime_seconds;
 extern volatile uint32_t kernel_second_ticks;
-extern int serial_printf(const char *format, ...);
 
 #define RTC_ADDRESS_PORT 0x70
 #define RTC_DATA_PORT    0x71
@@ -456,12 +456,12 @@ void rtc_init(void)
         text[16] = ':';
         rtc_two(text + 17, when.second);
         text[19] = '\0';
-        serial_printf("rtc: %s UTC\n", text);
+        klog(KLOG_INFO, "rtc", "%s UTC", text);
 
         return;
     }
 
-    serial_printf("rtc: no clock: times run from the epoch\n");
+    klog(KLOG_WARN, "rtc", "no clock: times run from the epoch");
 }
 
 /** Whether the clock was read at boot. */

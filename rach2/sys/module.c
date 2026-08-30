@@ -1,3 +1,4 @@
+#include "klog.h"
 #include "module.h"
 #include "serial.h"
 #include "lib/kstring.h"
@@ -28,21 +29,21 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
     module_count = 0;
 
     if (magic != MULTIBOOT_BOOTLOADER_MAGIC) {
-        serial_printf("Module: Invalid multiboot magic: 0x%X\n", magic);
+        klog(KLOG_ERR, "module", "refused: multiboot magic 0x%X", magic);
         return 0;
     }
 
     if (!(info->flags & MULTIBOOT_INFO_MODS)) {
-        serial_printf("Module: No module info flag set\n");
+        klog(KLOG_INFO, "module", "none: the loader set no module flag");
         return 0;
     }
 
     if (info->mods_count == 0) {
-        serial_printf("Module: No modules loaded\n");
+        klog(KLOG_INFO, "module", "none: the loader carried no module");
         return 0;
     }
 
-    serial_printf("Module: Found %d module(s)\n", info->mods_count);
+    klog(KLOG_INFO, "module", "found %d", info->mods_count);
 
     mods = (multiboot_module_t *)info->mods_addr;
 
@@ -53,21 +54,16 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
         module_table[i].cmdline = (mods[i].cmdline != 0) ?
                                   (const char *)mods[i].cmdline : NULL;
 
-        serial_printf("  Module %d: 0x%X - 0x%X (%d bytes)",
-                      i, module_table[i].start, module_table[i].end,
-                      module_table[i].size);
-
-        if (module_table[i].cmdline) {
-            serial_printf(" [%s]", module_table[i].cmdline);
-        }
-        serial_printf("\n");
+        klog(KLOG_INFO, "module", "%d: 0x%X to 0x%X, %d bytes [%s]", i,
+             module_table[i].start, module_table[i].end, module_table[i].size,
+             module_table[i].cmdline ? module_table[i].cmdline : "");
 
         module_count++;
     }
 
     if (info->mods_count > MAX_MODULES) {
-        serial_printf("Module: %d modules ignored (max %d)\n",
-                      info->mods_count - MAX_MODULES, MAX_MODULES);
+        klog(KLOG_WARN, "module", "%d ignored: the table holds %d",
+             info->mods_count - MAX_MODULES, MAX_MODULES);
     }
 
     return module_count;

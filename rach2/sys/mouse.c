@@ -1,3 +1,4 @@
+#include "klog.h"
 #include "mouse.h"
 #include "isr.h"
 #include "kio.h"
@@ -275,7 +276,7 @@ int init_mouse(void)
         while ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0) {
             inb(PS2_DATA_PORT);
             if (--drained <= 0) {
-                serial_printf("mouse: the 8042 buffer never drained\n");
+                klog(KLOG_WARN, "mouse", "the 8042 buffer never drained");
                 __asm__ __volatile__("sti");
                 return -1;
             }
@@ -283,18 +284,18 @@ int init_mouse(void)
     }
 
     if (ps2_send_command(PS2_CMD_ENABLE_MOUSE) < 0) {
-        serial_printf("Mouse: failed to enable aux port\n");
+        klog(KLOG_WARN, "mouse", "the aux port would not enable");
         __asm__ __volatile__("sti");
         return -1;
     }
 
     if (ps2_send_command(PS2_CMD_READ_CONFIG) < 0) {
-        serial_printf("Mouse: failed to read config\n");
+        klog(KLOG_WARN, "mouse", "the configuration byte would not read");
         __asm__ __volatile__("sti");
         return -1;
     }
     if (ps2_wait_output() < 0) {
-        serial_printf("Mouse: timeout reading config\n");
+        klog(KLOG_WARN, "mouse", "reading the configuration byte timed out");
         __asm__ __volatile__("sti");
         return -1;
     }
@@ -304,12 +305,12 @@ int init_mouse(void)
     config &= ~PS2_CONFIG_MOUSE_CLK;  /* clear the clock-disable bit */
 
     if (ps2_send_command(PS2_CMD_WRITE_CONFIG) < 0) {
-        serial_printf("Mouse: failed to write config cmd\n");
+        klog(KLOG_WARN, "mouse", "the configuration byte would not write");
         __asm__ __volatile__("sti");
         return -1;
     }
     if (ps2_wait_input() < 0) {
-        serial_printf("Mouse: timeout writing config\n");
+        klog(KLOG_WARN, "mouse", "writing the configuration byte timed out");
         __asm__ __volatile__("sti");
         return -1;
     }
@@ -317,7 +318,7 @@ int init_mouse(void)
 
     response = mouse_send_command(MOUSE_CMD_RESET);
     if (response < 0) {
-        serial_printf("Mouse: reset failed\n");
+        klog(KLOG_WARN, "mouse", "the device did not answer its reset");
     } else {
         /* Reset emits 0xAA (self-test pass) then 0x00 (device ID). */
         if (ps2_wait_output() == 0) {
@@ -330,12 +331,12 @@ int init_mouse(void)
 
     response = mouse_send_command(MOUSE_CMD_SET_DEFAULTS);
     if (response < 0) {
-        serial_printf("Mouse: set defaults failed\n");
+        klog(KLOG_WARN, "mouse", "the device refused the default settings");
     }
 
     response = mouse_send_command(MOUSE_CMD_ENABLE);
     if (response < 0) {
-        serial_printf("Mouse: enable failed\n");
+        klog(KLOG_WARN, "mouse", "the device did not enable reporting");
         __asm__ __volatile__("sti");
         return -1;
     }

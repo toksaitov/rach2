@@ -14,6 +14,7 @@
  * it is parking the CPU instead.
  */
 
+#include "klog.h"
 #include "power.h"
 #include "board.h"
 #include "cmdline.h"
@@ -147,11 +148,12 @@ static void power_acpi_off(void)
         /* The token stays exactly what it was: the shutdown suite watches
          * for it, so the board's name goes on its own line, not into
          * the middle of a string another program reads. */
-        serial_printf("poweroff: board %s\n", board_name());
-        serial_printf("poweroff: powering off\n");
+        klog(KLOG_INFO, "poweroff", "board %s", board_name());
+        klog(KLOG_INFO, "poweroff", "powering off");
         outw(port, board_sleep_word(p));
         power_settle();
-        serial_printf("poweroff: the platform did not power off; halting instead\n");
+        klog(KLOG_ERR, "poweroff",
+             "the platform did not power off; halting instead");
         return;
     }
     {
@@ -164,21 +166,24 @@ static void power_acpi_off(void)
         uint16_t base;
 
         if (vendor != PIIX4_VENDOR || device != PIIX4_DEVICE_ID) {
-            serial_printf("poweroff: no PIIX4 power management; halting instead\n");
+            klog(KLOG_ERR, "poweroff",
+                 "no PIIX4 power management; halting instead");
             return;
         }
         misc = pci_read_config8(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION, PIIX4_CFG_PMREGMISC);
         pmba = pci_read_config32(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION, PIIX4_CFG_PMBA);
         base = (uint16_t)(pmba & 0xFFC0u);
         if ((misc & PIIX4_PMIOSE) == 0 || base == 0) {
-            serial_printf("poweroff: no PIIX4 power management; halting instead\n");
+            klog(KLOG_ERR, "poweroff",
+                 "no PIIX4 power management; halting instead");
             return;
         }
 
-        serial_printf("poweroff: powering off\n");
+        klog(KLOG_INFO, "poweroff", "powering off");
         outw((uint16_t)(base + PM1A_CNT_OFFSET), PM1A_CNT_SLP_EN);
         power_settle();
-        serial_printf("poweroff: the platform did not power off; halting instead\n");
+        klog(KLOG_ERR, "poweroff",
+             "the platform did not power off; halting instead");
     }
 }
 
@@ -225,7 +230,7 @@ static void power_reset(void)
             skip = value[0] - '0';
         }
     }
-    serial_printf("reboot: restarting (skipping %d)\n", skip);
+    klog(KLOG_INFO, "reboot", "restarting (skipping %d)", skip);
 
     /* `rach2.resetskip=N` leaves out the first N mechanisms. It exists so the
      * later ones can be shown to work on their own, which is the only way to
@@ -248,7 +253,7 @@ static void power_reset(void)
         outb(KBC_COMMAND_PORT, KBC_PULSE_RESET);
     }
     power_settle();
-    serial_printf("reboot: the platform did not reset; halting instead\n");
+    klog(KLOG_ERR, "reboot", "the platform did not reset; halting instead");
 }
 
 /**
@@ -261,6 +266,6 @@ void power_stop(int how)
     } else if (how == POWER_RESTART) {
         power_reset();
     }
-    serial_printf("halt: system halted\n");
+    klog(KLOG_INFO, "halt", "system halted");
     power_halt_forever();
 }

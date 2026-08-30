@@ -14,13 +14,16 @@
  * the boot allocator, and a memory figure printed before that is not the
  * memory the machine has left.
  *
- * Every line goes to both outputs, because between them they are the only
- * answer two different machines give: the VGA text buffer is what a camera or
- * a capture card reads on a laptop with no serial header, and the serial line
- * is what a harness reads under QEMU. The kernel has no vprintf and C89 has no
- * variadic macro, so each line names both printers, as the boot path does.
+ * Every line is a record, so it reaches the screen and the serial port and
+ * the machine's own log from one call. Between the first two they are the
+ * only answer two different machines give: the VGA text buffer is what a
+ * camera or a capture card reads on a laptop with no serial header, and the
+ * serial line is what a harness reads under QEMU. Before the kernel log this
+ * file named both printers on every line, which is half of what the log was
+ * written for.
  */
 
+#include "klog.h"
 #include "diag.h"
 #include "kio.h"
 #include "serial.h"
@@ -68,11 +71,10 @@ struct diag_eth {
     uint32_t xid;
 };
 
-/** Print one already-formatted line to both outputs. */
+/** Report one already-formatted line. */
 static void diag_say(const char *line)
 {
-    k_puts(line);
-    serial_printf("%s\n", line);
+    klog(KLOG_INFO, "diag", "%s", line);
 }
 
 /**
@@ -150,10 +152,9 @@ static void diag_eth_report(const struct diag_eth *e)
         return;
     }
 
-    k_printf("  ethernet: 10ec:8168 at %d:%d.%d\n", (uint32_t)e->bus, (uint32_t)e->device,
+    klog(KLOG_INFO, "diag", "ethernet: 10ec:8168 at %d:%d.%d", (uint32_t)e->bus,
+         (uint32_t)e->device,
              (uint32_t)e->function);
-    serial_printf("  ethernet: 10ec:8168 at %d:%d.%d\n", (uint32_t)e->bus, (uint32_t)e->device,
-                  (uint32_t)e->function);
 
     if (e->state == DIAG_ETH_NO_DECODE) {
         diag_say("  ethernet: memory decoding is off; the chip id is not read");
@@ -168,8 +169,8 @@ static void diag_eth_report(const struct diag_eth *e)
         return;
     }
 
-    k_printf("  ethernet: mmio 0x%X txconfig 0x%X xid 0x%X\n", e->mmio, e->txconfig, e->xid);
-    serial_printf("  ethernet: mmio 0x%X txconfig 0x%X xid 0x%X\n", e->mmio, e->txconfig, e->xid);
+    klog(KLOG_INFO, "diag", "ethernet: mmio 0x%X txconfig 0x%X xid 0x%X",
+         e->mmio, e->txconfig, e->xid);
     if ((e->xid & DIAG_XID_FAMILY_MASK) == DIAG_XID_RTL8168GU) {
         diag_say("  ethernet: RTL8168GU, the chip this port targets");
     } else {
@@ -194,30 +195,22 @@ static void diag_summary(void)
 {
     diag_say("======= What this boot found =======");
 
-    k_printf("  board: %s\n", board_name());
-    serial_printf("  board: %s\n", board_name());
+    klog(KLOG_INFO, "diag", "board: %s", board_name());
 
-    k_printf(
-        "  network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n", netdev_name(),
-        (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4),
-        (unsigned)(net_mac[1] & 0xF), (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
-        (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4),
-        (unsigned)(net_mac[4] & 0xF), (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
-    serial_printf(
-        "  network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X\n", netdev_name(),
+    klog(KLOG_INFO, "diag",
+         "network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X", netdev_name(),
         (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4),
         (unsigned)(net_mac[1] & 0xF), (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
         (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4),
         (unsigned)(net_mac[4] & 0xF), (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
 
-    k_printf("  %s\n", diskcmd_policy_banner);
-    serial_printf("  %s\n", diskcmd_policy_banner);
+    klog(KLOG_INFO, "diag", "%s", diskcmd_policy_banner);
 
-    k_printf("  entropy: %s\n", krandom_is_trusted() ? "trusted" : "NOT trusted");
-    serial_printf("  entropy: %s\n", krandom_is_trusted() ? "trusted" : "NOT trusted");
+    klog(KLOG_INFO, "diag", "entropy: %s",
+         krandom_is_trusted() ? "trusted" : "not trusted");
 
-    k_printf("  file system: %d files\n", (uint32_t)krffs_count_files());
-    serial_printf("  file system: %d files\n", (uint32_t)krffs_count_files());
+    klog(KLOG_INFO, "diag", "file system: %d files",
+         (uint32_t)krffs_count_files());
 
     diag_say("===================================");
 }
@@ -240,11 +233,9 @@ static void diag_summary(void)
  */
 void boot_diag_hold(void)
 {
-    k_puts("");
     boot_diag_report();
     diag_summary();
-    k_puts("  press any key to continue booting");
-    serial_printf("diag: holding for a keypress\n");
+    klog(KLOG_INFO, "diag", "holding for a keypress");
 
     /* Drain whatever is already buffered, so a keystroke from earlier in the
      * boot does not consume the hold before anyone has read the screen. */
@@ -283,14 +274,12 @@ void boot_diag_report(void)
     diag_say("");
     diag_say("======= Boot diagnostics (rach2.diag) =======");
 
-    k_printf("  kernel ends 0x%X, reservation break 0x%X\n", (uint32_t)(uintptr_t)&_end,
+    klog(KLOG_INFO, "diag", "kernel ends 0x%X, reservation break 0x%X",
+         (uint32_t)(uintptr_t)&_end,
              (uint32_t)mem_reserved_ptr);
-    serial_printf("  kernel ends 0x%X, reservation break 0x%X\n", (uint32_t)(uintptr_t)&_end,
-                  (uint32_t)mem_reserved_ptr);
-    k_printf("  direct map ends 0x%X, %d frames free after all reservations\n",
+    klog(KLOG_INFO, "diag",
+         "direct map ends 0x%X, %d frames free after all reservations",
              (uint32_t)HARD_MEMORY_LIMIT, frame_free_count());
-    serial_printf("  direct map ends 0x%X, %d frames free after all reservations\n",
-                  (uint32_t)HARD_MEMORY_LIMIT, frame_free_count());
 
     if (module_count == 0) {
         diag_say("  modules: none (the kernel booted alone)");
@@ -301,8 +290,8 @@ void boot_diag_report(void)
         if (!mod) {
             continue;
         }
-        k_printf("  module %d: 0x%X - 0x%X (%d bytes)\n", i, mod->start, mod->end, mod->size);
-        serial_printf("  module %d: 0x%X - 0x%X (%d bytes)\n", i, mod->start, mod->end, mod->size);
+        klog(KLOG_INFO, "diag", "module %d: 0x%X to 0x%X, %d bytes", i,
+             mod->start, mod->end, mod->size);
     }
 
     diag_eth_report(&eth);
