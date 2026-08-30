@@ -1,10 +1,10 @@
 # tests/system/: the behavioral test machinery
 
-This directory holds everything that runs Rach2 to test it: the QEMU runners under `runner/`, one entry script per suite under `suites/`, the capture checkers under `checkers/`, the fixture builders under `fixtures/`, and the real-machine acceptance procedure under `accept/`. The suites themselves are Make targets in `suites.mk`, which the root `Makefile` includes with one line so no test rule sits among the product rules. The guest probe sources stay in [`tests/`](../Readme.md) and the native sanitizer tests in [`tests/host/`](../host/Readme.md).
+This directory holds everything that runs Rach2 to test it: the QEMU runners under `runner/`, the suite scripts under `suites/`, the capture checkers under `checkers/`, the fixture builders under `fixtures/`, and the real-machine acceptance procedure under `accept/`. The suites themselves are Make targets in `suites.mk`, which the root `Makefile` includes with one line so no test rule sits among the product rules. The guest probe sources stay in [`tests/`](../Readme.md) and the native sanitizer tests in [`tests/host/`](../host/Readme.md).
 
 ## The runner
 
-`tests/run NAME [NAME...]`, `tests/run core` and `tests/run all` are the entry points. The runner is a 200-line shell script beside `tests/registry`, and the registry is three fields: the suite's name, the external commands it needs, and its tier. The make target is the name with `run-` in front, so it is not written down; `tests/run style` checks that every name has a target and every target has a name.
+`tests/run NAME [NAME...]`, `tests/run core` and `tests/run all` are the entry points. The runner is a 223-line shell script beside `tests/registry`, and the registry is three fields: the suite's name, the external commands it needs, and its tier. The make target is the name with `run-` in front, so it is not written down; `tests/run style` checks that every name has a target and every target has a name.
 
 Six mechanisms, and the reason for each:
 
@@ -22,7 +22,7 @@ Six mechanisms, and the reason for each:
 ## QEMU runners
 
 * `runner/harness.c` starts `qemu-system-i386` headless, accepts optional initrd, disk, network, device, and extra QEMU arguments, and executes ordered serial steps. Step forms include `expect=`, `send=`, `sendraw=`, `wait=`, `tcp=`, `udp=`, `exec=`, and `probe=`. `sendraw=` writes its text with no newline after it, and reads `\xNN` and the usual escapes, which is how a guest terminal in raw mode is given one byte. It enforces a run deadline and per-step deadlines. With a harness kernel it can decode the guest process status through QEMU's `isa-debug-exit` device; `--ok` instead requires a serial token, and `--never` fails the run if a text ever appears, which is how a probe that must be killed is checked.
-* `runner/runtests.c` implements the shared boot used by `make test`. It runs the ordered probe list and scores each probe from the kernel line that returns its transient init process to the debug shell. Every probe that reports its result as an exit status runs here; the ones that need typed input, a host peer, or a deliberate fault have a suite of their own. `--selftest` checks the scorer without QEMU.
+* `runner/runtests.c` implements the shared boot of the `default` suite, which is the first entry in the core tier. It runs the ordered probe list and scores each probe from the kernel line that returns its transient init process to the debug shell. Every probe the shared boot can set up runs here; the ones that need typed input, a host peer, a disk, or a deliberate fault have a suite of their own, most of them through the harness, which decodes an exit status the same way. `--selftest` checks the scorer without QEMU.
 * `runner/hostpeer.c` is the host end of a connection a guest test needs. `hold` keeps a TCP connection open while the machine reads its own `/proc/net/tcp`; `echo` serves TCP and UDP on a port and sends back what arrives, which is what makes the socket probes prove a round trip rather than QEMU's willingness to accept.
 * `runner/ptydrive.c` runs a command on a pseudo-terminal of a known size and answers its password prompts from the environment. The SSH suites need a client that reads a password from a terminal.
 * `runner/deadline.c` runs one program with a time limit and kills its whole process group. The host suite gives each native test 60 seconds through it.
@@ -60,8 +60,9 @@ The behavioral suites receive built artifacts and credentials from their Make ta
 * `suites/install.sh` (`tests/run install`) checks kernel trial, commit, fallback, repair, and determinate interrupted environment states on a GRUB disk.
 * `suites/sealed.sh` (`tests/run sealed`) runs the finished sealed disk through an injected-fault sequence over SSH and a separate control run that must use neither fallback nor recovery.
 * `suites/socket.sh` (`tests/run socket`) starts one `hostpeer echo` and runs the UDP and TCP probes against it, which is the only place the guest opens a connection of its own and is answered.
+* `suites/subset.sh` (`tests/run subset`) boots the kernel with each optional device switched off, and requires the probe to record that it was skipped rather than merely requiring a shell.
 
-The remaining suites run through `runner/harness.c` and `runner/runtests.c` directly from their Make recipes without a suite script: `default` and the disk, network, persistence and stress families, and three that exist to run probes the shared boot cannot. `tests/run fault` runs the three probes that must be killed rather than served, and ends by running a program that prints a token, which a kernel that took a fault with it could not do. `tests/run console` types at the console for the two probes that block until something is typed, and asserts the text they read back, not only the count.
+The remaining suites run through `runner/harness.c` and `runner/runtests.c` directly from their Make recipes, with no script of their own: `default` and the disk, network, persistence and stress families, and three that exist to run probes the shared boot cannot. `tests/run fault` runs the three probes that must be killed rather than served, and ends by running a program that prints a token, which a kernel that took a fault with it could not do. `tests/run console` types at the console for the two probes that block until something is typed, and asserts the text they read back, not only the count.
 
 ## Real-machine acceptance
 

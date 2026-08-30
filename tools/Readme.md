@@ -96,7 +96,7 @@ prefix works; one built for another target does not.
 
 ## `tests/run style`
 
-`verify/check.sh` runs a preflight followed by thirteen numbered checks:
+`verify/check.sh` runs a preflight followed by fourteen numbered checks:
 
 * Build the kernel with warnings treated as errors.
 * Run scoped cppcheck with `verify/cppcheck.suppress`.
@@ -111,6 +111,7 @@ prefix works; one built for another target does not.
 * Build the KRFFS host tools and test deterministic image staging.
 * Run the ELF, configuration, and compilation-database checker self-tests.
 * Check the dev-log index against the finished milestone directories.
+* Check `tests/registry` against `tests/system/suites.mk`: every suite has a target and every target is a suite.
 
 The supporting files under `verify/` have narrower jobs:
 

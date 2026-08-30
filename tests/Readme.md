@@ -2,11 +2,13 @@
 
 ![List of Rach2 Test Programs](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/tests.png)
 
-This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains 70 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
+This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains 76 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ## The suite runner
 
-`tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with the suite's make target, artifact prerequisites, runtime tools, and `all` membership. The runner checks the suite's runtime tools first, then builds and runs it through Make; an unknown name fails and prints the valid names. `tests/run all` runs every suite the registry marks as a member and reports a summary. `make test` is a shortcut for `tests/run default`, and `tests/run style` and `tests/run host` are the two verification suites every change must pass.
+`tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with three fields: the name, the external commands the suite needs at run time, and its tier. The make target is the name with `run-` in front, and the recipes are in [`tests/system/suites.mk`](system/Readme.md). Every name and every tool is checked before anything is built; an unknown name fails and prints the valid names. The runner then builds the product once and runs the named suites in a pool, holding each one's output and replaying it in registry order.
+
+`tests/run NAME NAME...` runs those suites at the same time. `tests/run all` runs all 59, and `tests/run core` runs the 21 in the core tier. `make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`; `style` and `host` are the two verification suites every change must pass.
 
 ## Build and image layout
 
@@ -27,20 +29,21 @@ make test-image     # build both sets and stage build/images/test.krffs
 ## The default guest suite
 
 ```sh
-make test
+tests/run default
 ```
 
-This target builds the test image and runs `tests/system/runner/runtests.c` with a 300-second run limit and a 60-second limit for each program. The runner boots one headless QEMU machine with `-cpu max`, waits for the debug shell, and runs the 63 entries in its `PROBES` list in order.
+This suite builds the test image and runs `tests/system/runner/runtests.c` with a 300-second run limit and a 60-second limit for each program. The runner boots one headless QEMU machine with `-cpu max`, waits for the debug shell, and runs the 72 entries in its `PROBES` list in order. It is the first suite in the core tier, so `make test` runs it too.
 
 The runner scores the kernel diagnostic that returns control to the debug shell. Exit status 0 passes. A nonzero status, signal, absent return diagnostic, timeout, early QEMU exit, or program skipped after an earlier hang fails. A program's own success text is not the verdict. After `musl/clockmusl`, the runner also compares the guest epoch with the host clock and permits a 30-second difference.
 
-The 47 root programs in the default suite are:
+The 56 root programs in the default suite are:
 
 ```text
-hello filetest shelltest dirtest stattest touchtest rmtest mvtest lstest
-dup2test auxvprobe tlsprobe errnoprobe vmprobe forkro cowregrant
-usercopyfault forkleak fdstale dirgrow dirprobe unlinkdirprobe pathcanon
-timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe waitprobe
+hello filetest forktest shelltest dirtest stattest touchtest rmtest mvtest
+lstest dup2test auxvprobe tlsprobe errnoprobe vmprobe forkro cowprobe
+cowregrant usercopyfault forkleak fdstale dirgrow dirprobe unlinkdirprobe
+pathcanon timeprobe sigprobe credprobe ownprobe permprobe sockettest procfull
+fdfull sockfull tcbfull oomprobe dnstest trapprobe ofdprobe waitprobe
 pipeprobe pollprobe devprobe jobprobe miscprobe ptyprobe rngprobe orphanprobe
 loopprobe procprobe suidprobe sudoprobe modeprobe rebootprobe searchprobe
 stickyprobe
@@ -54,7 +57,7 @@ readvmusl timemusl clockmusl statmusl stampmusl execargmusl spawnmusl
 vmamusl ishmusl
 ```
 
-`tests/run addressed` runs the same list with `rach2.ip=10.0.2.15/24` and `rach2.gateway=10.0.2.2` on the kernel command line.
+`tests/run addressed` does not repeat this list. It boots with `rach2.ip=10.0.2.77/24 rach2.gateway=10.0.2.2`, runs `pingtest` alone, and requires the capture to show that address as the source of the machine's packets and of its ARP requests.
 
 ## Other guest programs and targets
 
@@ -75,13 +78,12 @@ Programs that need another boot, disk, network exchange, or result contract have
 * `tests/run cred-persist` runs `musl/creddisk` across three boots of one disk image.
 * `tests/run crash` runs `dirtyprobe`, stops QEMU without a clean unmount, and checks the image with `fsck.krffs`.
 * `tests/run exitline` uses `vmfault` while checking which process-exit diagnostics are visible.
+* `tests/run console` types at the console for `stdintest` and `ttyprobe`, which block until something is typed, and checks the text they read back.
+* `tests/run fault` runs `vmfault`, `vmro` and `winprobe`, which must be killed rather than served, and then runs a program that prints a token, which a kernel that took the fault with them could not do.
+* `tests/run socket` starts a host peer and runs `tcptest` and `udptest` against it.
+* `tests/run diskfull` fills a disk-backed root and requires `ENOSPC` rather than `EIO`.
 
-These root programs are staged for manual or supplementary runs and are not direct entries in the targets above:
-
-```text
-cowprobe dnstest forktest sockettest stdintest tcptest ttyprobe udptest
-vmro winprobe
-```
+Every root program is now run by some suite. The two exceptions are `idreport` and `suidhelper`, which exist to be invoked by another test.
 
 These musl programs are likewise built and staged but absent from the default list and the dedicated mappings above:
 
@@ -90,7 +92,7 @@ budgetmusl catfile cowfork ctrlcmusl devtest hello mallocqsort ofdmusl
 pipemusl pollmusl ptymusl rngmusl sigmusl sockfillmusl tcpsendrecv ttymusl
 ```
 
-Use `tests/registry` and the root `Makefile` for the complete specialized suite list. Several suites use the test image without running a program from these two lists.
+`tests/registry` lists every suite and `tests/system/suites.mk` holds their recipes. Several suites use the test image without running a program from these two lists.
 
 ## Manual runs
 
@@ -102,7 +104,7 @@ cd rach2
 ./run.sh test
 ```
 
-At the debug shell, `exec hello` runs a root program and `exec musl/hello` runs a musl program. The run script supplies `-cpu max` by default. A deliberate-fault program returns to the shell only if the kernel contains the fault to that process. Programs that need a disk, host traffic, input timing, or a different CPU should be run through their dedicated target or through `build/tests/system/harness` with the setup in `tests/system/suites.mk`.
+At the debug shell, `exec hello` runs a root program and `exec musl/hello` runs a musl program. The run script supplies `-cpu max` by default. A deliberate-fault program returns to the shell only if the kernel contains the fault to that process. Programs that need a disk, host traffic, input timing, or a different CPU should be run through their own suite, or through `build/tests/system/harness` with the setup in `tests/system/suites.mk`.
 
 ## Adding a guest test
 

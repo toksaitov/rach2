@@ -19,7 +19,7 @@ Both `os-simple` and `os-real` start `/bin/login`. If the credential files do no
 
 Other useful targets are:
 
-* `make test` boots the test image and runs the default guest suite.
+* `make test` runs the source checks, the native tests, and the core tier of system suites.
 * `tests/run NAME` runs one named suite; `tests/run selfbuild` builds the kernel, shell, and utilities on Rach2.
 * `tests/run style` and `tests/run host` run the required project checks.
 * `make clean` removes build output; `make distclean` also removes the vendor builds.
