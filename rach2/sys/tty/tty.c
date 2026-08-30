@@ -14,6 +14,7 @@
 #include "../io/poll.h"
 #include "../serial.h"
 #include "../kio.h"
+#include "../klog.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
@@ -314,13 +315,14 @@ void tty_hangup(struct tty *t)
 
 /* Echo and output bytes go to both the screen and the serial line, so a serial
  * terminal mirrors what is on the VGA console. OPOST/ONLCR in the discipline
- * has already expanded '\n' to CR LF, which k_putc and serial_putc emit
- * verbatim. */
+ * has already expanded '\n' to CR LF, which the console call emits verbatim.
+ * It goes through that call and not through the two printers under it so the
+ * kernel log knows whether a program has left a line open on the terminal,
+ * and does not begin a record in the middle of it. */
 static void console_sink(void *ctx, unsigned char c)
 {
     (void)ctx;
-    k_putc((char)c);
-    serial_putc((char)c);
+    console_putc((char)c);
 }
 
 /* The console's polled input source: COM1 is not wired to an IRQ here, so drain

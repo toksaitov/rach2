@@ -470,8 +470,7 @@ static int32_t sys_exit(isr_params_t *params)
     }
 
     if (debug_shell_is_home) {
-        k_printf("\nProcess exited with status %d\n", status);
-        serial_printf("\nProcess exited with status %d\n", status);
+        klog(KLOG_INFO, "process", "exited with status %d", status);
     }
 
     if (!current_proc) {
@@ -544,10 +543,10 @@ static int32_t sys_exit(isr_params_t *params)
     /* No other process is READY. The init that exited ran under the debug shell
      * (a real init would have panicked above), so return to it. */
     if (is_init) {
-        serial_printf("sys_exit: init process %d exited with status %d, returning to kernel shell\n",
+        klog(KLOG_INFO, "sys_exit",
+             "init process %d exited with status %d, returning to kernel shell",
                       exiting_pid, status);
-        k_puts("");
-        k_puts("Init process exited. Returning to kernel debug shell.");
+        console_puts("Init process exited. Returning to kernel debug shell.");
 
         /* Clean up the init process resources. Switch off its address space
          * BEFORE freeing the page directory: free_page_directory refuses to

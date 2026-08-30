@@ -278,10 +278,10 @@ void terminate_current_process(int32_t signo)
             panic_init_died(pid);   /* never returns */
         }
         /* Same resume path as when init exits normally; see sys_exit. */
-        serial_printf("terminate: init process %d killed by signal %d, "
-                      "returning to kernel shell\n", pid, signo);
-        k_puts("");
-        k_puts("Init process exited. Returning to kernel debug shell.");
+        klog(KLOG_INFO, "terminate",
+             "init process %d killed by signal %d, returning to kernel shell",
+             pid, signo);
+        console_puts("Init process exited. Returning to kernel debug shell.");
 
         free_process(current_proc);
 

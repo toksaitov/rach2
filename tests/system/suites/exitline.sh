@@ -52,7 +52,7 @@ if [ -z "$KERNEL" ] || [ -z "$TEST_IMAGE" ] || [ -z "$REAL" ] ||
     exit 2
 fi
 
-PLAIN="Process exited with status"
+PLAIN="process: exited with status"
 LOGS="$REAL.exitline.log $TEST_IMAGE.fork.log $TEST_IMAGE.signal.log"
 # Removed here and not only in the trap: an uncatchable kill leaves a previous
 # run's logs, and each holds the token its phase waits for.
@@ -149,7 +149,7 @@ if ! wait_serial "$TEST_IMAGE.fork.log" "$PLAIN 0" 30; then
     exit 1
 fi
 stop
-if ! grep -qE "^sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell" \
+if ! grep -qE "^<[0-9]>\[[0-9]+\.[0-9][0-9]\] sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell" \
         "$TEST_IMAGE.fork.log"; then
     echo "exitline-test: FAIL: the line that hands the shell back is not the" >&2
     echo "exitline-test: one the probe runner scores a probe from" >&2
@@ -172,7 +172,7 @@ if ! wait_serial "$TEST_IMAGE.signal.log" "killed by signal" 90; then
     exit 1
 fi
 stop
-if ! grep -qE "^terminate: init process [0-9]+ killed by signal 11, returning to kernel shell" \
+if ! grep -qE "^<[0-9]>\[[0-9]+\.[0-9][0-9]\] terminate: init process [0-9]+ killed by signal 11, returning to kernel shell" \
         "$TEST_IMAGE.signal.log"; then
     echo "exitline-test: FAIL: the signal marker is not the whole line" >&2
     echo "exitline-test: the probe runner matches, so a probe killed on purpose" >&2

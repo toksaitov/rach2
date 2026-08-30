@@ -54,8 +54,8 @@
  * launch; 3 on a timeout or hang (QEMU never self-exited), an unambiguous
  * failure.
  *
- * With no --ok token the status is read off the kernel's "Process exited
- * with status N" line, which `sys_exit` prints only where the debug shell
+ * With no --ok token the status is read off the kernel's "process: exited
+ * with status N" record, which `sys_exit` emits only where the debug shell
  * is the supervisor. That is every image this harness boots; an image
  * running /sbin/init prints no such line, so drive one of those with --ok.
  *
@@ -1052,7 +1052,7 @@ int main(int argc, char **argv)
        guest ran. The exit code is used only to confirm that QEMU stopped
        through isa-debug-exit (an odd code) instead of hanging. */
     {
-        const char *marker = "Process exited with status ";
+        const char *marker = "process: exited with status ";
         size_t mlen = strlen(marker);
         long status = -1;
         int have_status = 0;

@@ -165,9 +165,30 @@ static long marker_at(const unsigned char *text, size_t len, size_t at,
     return (long) (i + tlen);
 }
 
+/* Past a record's `<N>[seconds.hundredths] ` prefix, or `at` if there is no
+   prefix there. The two markers below are records now, so what begins the
+   line is the prefix and the marker follows it. */
+static size_t past_prefix(const unsigned char *text, size_t len, size_t at)
+{
+    size_t i = at;
+
+    if (i + 4 > len || text[i] != '<' || text[i + 2] != '>')
+        return at;
+    i += 3;
+    if (i >= len || text[i] != '[')
+        return at;
+    i++;
+    while (i < len && ((text[i] >= '0' && text[i] <= '9') || text[i] == '.'))
+        i++;
+    if (i + 2 > len || text[i] != ']' || text[i + 1] != ' ')
+        return at;
+    return i + 2;
+}
+
 /* The first marker at or after `from`. `line_start` requires it to begin a
-   line, which is what makes the verdict the kernel's. Returns the end
-   offset, or -1; `which` is 'e' for an exit and 'k' for a kill. */
+   line, or to follow the record prefix that does, which is what makes the
+   verdict the kernel's. Returns the end offset, or -1; `which` is 'e' for an
+   exit and 'k' for a kill. */
 static long find_marker(const unsigned char *text, size_t len, size_t from,
                         int line_start, char *which, long *value)
 {
@@ -175,16 +196,20 @@ static long find_marker(const unsigned char *text, size_t len, size_t from,
 
     for (at = from; at < len; at++) {
         long end;
+        size_t start = at;
 
-        if (line_start && at != 0 && text[at - 1] != '\n')
-            continue;
-        end = marker_at(text, len, at, KILL_HEAD, KILL_MID, KILL_TAIL, 0,
+        if (line_start) {
+            if (at != 0 && text[at - 1] != '\n')
+                continue;
+            start = past_prefix(text, len, at);
+        }
+        end = marker_at(text, len, start, KILL_HEAD, KILL_MID, KILL_TAIL, 0,
                         value);
         if (end >= 0) {
             *which = 'k';
             return end;
         }
-        end = marker_at(text, len, at, EXIT_HEAD, EXIT_MID, EXIT_TAIL, 1,
+        end = marker_at(text, len, start, EXIT_HEAD, EXIT_MID, EXIT_TAIL, 1,
                         value);
         if (end >= 0) {
             *which = 'e';
@@ -213,8 +238,8 @@ static int score_window(const unsigned char *window, size_t len, char *detail,
     for (at = 0; at < len; at++) {
         if (at != 0 && window[at - 1] != '\n')
             continue;
-        if (marker_at(window, len, at, KILL_HEAD, KILL_MID, KILL_TAIL, 0,
-                      &value) >= 0) {
+        if (marker_at(window, len, past_prefix(window, len, at), KILL_HEAD,
+                      KILL_MID, KILL_TAIL, 0, &value) >= 0) {
             snprintf(detail, detail_len, "killed by signal %ld", value);
             return 0;
         }
@@ -222,8 +247,8 @@ static int score_window(const unsigned char *window, size_t len, char *detail,
     for (at = 0; at < len; at++) {
         if (at != 0 && window[at - 1] != '\n')
             continue;
-        if (marker_at(window, len, at, EXIT_HEAD, EXIT_MID, EXIT_TAIL, 1,
-                      &value) >= 0) {
+        if (marker_at(window, len, past_prefix(window, len, at), EXIT_HEAD,
+                      EXIT_MID, EXIT_TAIL, 1, &value) >= 0) {
             snprintf(detail, detail_len, "status=%ld", value);
             return value == 0;
         }
@@ -321,9 +346,18 @@ static int selftest(void)
         int want_ok;
     } cases[] = {
         { "clean",
+          "<6>[1.20] process: exited with status 0\n"
+          "<6>[1.21] sys_exit: init process 4 exited with status 0, "
+          "returning to kernel shell\n", "status=0", 1 },
+        /* The same markers as the kernel wrote them before they were
+           records, which is what a capture from an older boot holds. */
+        { "clean, unprefixed",
           "\nProcess exited with status 0\n"
           "sys_exit: init process 4 exited with status 0, "
           "returning to kernel shell\n", "status=0", 1 },
+        { "a probe forges the prefix as well",
+          "<6>[1.20] probe: sys_exit: init process 4 exited with status 0, "
+          "returning to kernel shell\n", "no exit reported", 0 },
         { "clean child then signal death",
           "\nProcess exited with status 0\n"
           "terminate: init process 4 killed by signal 11, "

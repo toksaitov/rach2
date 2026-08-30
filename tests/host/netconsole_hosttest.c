@@ -42,6 +42,15 @@ static unsigned tx_max_depth;
 
 void serial_putc(char c);
 
+/* The driver reports what it found through the kernel log, which this test
+   has no use for; the records are dropped. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 void ethernet_tx(const unsigned char *dst, unsigned short type, const unsigned char *payload,
                  unsigned short plen)
 {

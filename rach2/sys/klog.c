@@ -264,6 +264,17 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
     return n;
 }
 
+/*
+ * Whether the last byte the console wrote was not a newline.
+ *
+ * A record is a whole line and must begin one: a shell prompt, or a program
+ * writing to the terminal without a newline at the end, would otherwise have
+ * the next record continue its line, and a reader looking for records at a
+ * line start would not find them. The console and the record destinations
+ * write to the same screen and the same port, so this is where the two meet.
+ */
+static int console_line_open;
+
 /* ---- destination 2: the screen ---- */
 
 /**
@@ -295,6 +306,9 @@ static void dest_screen(const struct klog_record *r)
 {
     uint32_t i;
 
+    if (console_line_open) {
+        k_putc('\n');
+    }
     set_fore_color(screen_color(r->level));
     for (i = r->body; i < r->len; i++) {
         k_putc(r->text[i]);
@@ -319,6 +333,12 @@ static void dest_serial(const struct klog_record *r)
 {
     uint32_t i;
 
+    if (console_line_open) {
+        bootlog_putc('\r');
+        bootlog_putc('\n');
+        serial_out('\r');
+        serial_out('\n');
+    }
     for (i = 0; i < r->len; i++) {
         if (r->text[i] == '\n') {
             bootlog_putc('\r');
@@ -375,6 +395,7 @@ static const struct klog_dest DESTS[] = {
 /* Set while a record is being written out; see `klog_v`. */
 static int klog_delivering;
 
+
 /**
  * Build one record and offer it to the destinations that take its level.
  *
@@ -415,6 +436,9 @@ void klog_v(int level, const char *subsystem, const char *format, char **args)
         }
     }
     if (!nested) {
+        /* The record ended with its own newline, so whatever line the console
+           had open is closed now. */
+        console_line_open = 0;
         klog_delivering = 0;
     }
 }
@@ -439,6 +463,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
  */
 void console_putc(char c)
 {
+    console_line_open = c != '\n';
     k_putc(c);
     if (c == '\n') {
         serial_out('\r');

@@ -21,6 +21,15 @@ extern int printf(const char *fmt, ...);
    serial log. None of it is exercised here; the judgements are pure. */
 #include "../../rach2/sys/board.h"
 
+/* The driver reports what it found through the kernel log, which this test
+   has no use for; the records are dropped. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 unsigned short pci_read_config16(unsigned char b, unsigned char d, unsigned char f, unsigned char o)
 {
     (void)b;

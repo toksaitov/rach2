@@ -126,6 +126,15 @@ static unsigned char pci_irq_line = 11;
 #include "pci.h"
 #include "network/driver/e1000.h"
 
+/* The driver reports what it found through the kernel log, which this test
+   has no use for; the records are dropped. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 /* The port instructions the kernel headers declare. Nothing here uses a port,
    so these exist only to satisfy the link. */
 uint8_t inb(uint16_t port)

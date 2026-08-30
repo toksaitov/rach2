@@ -135,6 +135,15 @@ static int pci_present = 1;
 #include "pci.h"
 #include "network/driver/rtl8168.h"
 
+/* The driver reports what it found through the kernel log, which this test
+   has no use for; the records are dropped. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 int pci_find_device_by_id(unsigned short vendor, unsigned short device, pci_device_t *out)
 {
     int i;
