@@ -93,12 +93,12 @@ the commit that completes it.
 
 ## Phase 7: the record
 
-* [ ] `rach2/sys/usb/Readme.md`
-* [ ] the input layer's section in `rach2/Readme.md`
-* [ ] `rach2/Readme.md`: subsystem table, hardware list, boot options, limits
-* [ ] `Readme.md`: the system and hardware-status paragraphs
-* [ ] `synthfs.Readme.md`: the `/proc/usb` row
-* [ ] `tests/Readme.md` and `tests/system/Readme.md`
+* [x] `rach2/sys/usb/Readme.md`
+* [x] the input layer's section in `rach2/Readme.md`
+* [x] `rach2/Readme.md`: subsystem table, hardware list, boot options, limits
+* [x] `Readme.md`: the system and hardware-status paragraphs
+* [x] `synthfs.Readme.md`: the `/proc/usb` row
+* [x] `tests/Readme.md` and `tests/system/Readme.md`
 * [ ] the documentation and comment pass, with the Codex read
 * [ ] the tier decision for `usb`, measured
 * [ ] `notes.md` read from the top and every line closed
