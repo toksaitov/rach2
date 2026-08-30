@@ -62,11 +62,6 @@ void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors)
     (void)window_sectors;
 }
 
-void serial_printf(const char *fmt, ...)
-{
-    (void)fmt;
-}
-
 /* The probe says what disk answered through the kernel log, which this test
    has no use for; the records are dropped. */
 void klog(int level, const char *subsystem, const char *format, ...)

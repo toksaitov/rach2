@@ -58,11 +58,6 @@ void ethernet_tx(const unsigned char *dst, unsigned short type, const unsigned c
     (void)plen;
 }
 
-void serial_printf(const char *fmt, ...)
-{
-    (void)fmt;
-}
-
 /* The refusal counters the drivers report to. The interface owns them; here
    they are counted so a check can say which one the driver reached. */
 static unsigned note_rx_errors;

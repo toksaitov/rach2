@@ -76,11 +76,6 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen)
     return 0;
 }
 
-void serial_printf(const char *fmt, ...)
-{
-    (void)fmt;
-}
-
 void k_printf(const char *fmt, ...)
 {
     (void)fmt;

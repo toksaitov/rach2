@@ -40,7 +40,7 @@ static int tx_prints;
 static unsigned tx_depth;
 static unsigned tx_max_depth;
 
-void serial_putc(char c);
+static void log_putc(char c);
 
 /* The driver reports what it found through the kernel log, which this test
    has no use for; the records are dropped. */
@@ -72,8 +72,8 @@ void ethernet_tx(const unsigned char *dst, unsigned short type, const unsigned c
     }
     frame_count++;
     if (tx_prints) {
-        serial_putc('!');
-        serial_putc('\n');
+        log_putc('!');
+        log_putc('\n');
     }
     tx_depth--;
 }
@@ -99,15 +99,11 @@ void net_unlock(unsigned int flags)
     }
 }
 
-/* The driver's own serial path, which is how a transmit error gets back in. */
-void serial_putc(char c)
+/* The log's fourth destination, which is how a driver's report of a failed
+   transmit gets back in. */
+static void log_putc(char c)
 {
     netconsole_putc(c);
-}
-
-void serial_printf(const char *fmt, ...)
-{
-    (void)fmt;
 }
 
 static unsigned krandom_value = 0x1234abcdu;
