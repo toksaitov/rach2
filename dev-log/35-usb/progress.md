@@ -73,10 +73,11 @@ the commit that completes it.
 * [x] `harness --selftest` covers the new steps
 * [x] `tests/run usb` at both `usb_version` settings
 * [x] `rach2.nousb` and the `subset` boot
-* [ ] `procfiles` gains the `/proc/usb` case
+* [x] the `/proc/usb` empty-file case, in the `usb` suite rather than
+      `procfiles`: that suite's machine is the one that can boot without USB
 * [x] mutations: break codes, rollover, the report diff, the disconnect event,
       the held-key release, the USB path into `input_key`
-* [ ] review 4 of 6
+* [x] review 4 of 6
 
 ## Phase 6: the machine
 

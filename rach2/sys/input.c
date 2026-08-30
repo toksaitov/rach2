@@ -56,6 +56,11 @@ void input_key(uint8_t scancode)
     char c;
     int was_e0 = saw_e0;
 
+    /* Every code, including the ones consumed below, goes to the ring a
+     * graphics-mode reader drains: a game wants the modifiers and the releases
+     * too, and it wants them from whichever keyboard the person is using. */
+    kbd_push_scancode(scancode);
+
     saw_e0 = 0;
 
     if (scancode == 0xE0) {

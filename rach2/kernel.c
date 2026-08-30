@@ -338,9 +338,9 @@ static void kill_foreground_process(void)
 /**
  * Handle the PS/2 keyboard interrupt: read the port and hand on the code.
  *
- * Reads the scancode from port 0x60, pushes the raw byte to the ring that
- * graphics-mode readers use, and gives it to the input layer, which decides
- * where the keystroke goes. Everything that is not about the 8042 lives there,
+ * Reads the scancode from port 0x60 and gives it to the input layer, which
+ * puts it in the ring graphics-mode readers drain and decides where the
+ * keystroke goes. Everything that is not about the 8042 lives there,
  * because a USB keyboard's codes arrive by another road and are treated the
  * same.
  *
@@ -357,10 +357,6 @@ static void keyboard_handler(isr_params_t *params)
     (void) params;
 
     scancode = inb(0x60);
-
-    /* Push every scancode, including the ones the input layer consumes, so a
-     * game reading the raw ring sees modifiers and releases too. */
-    kbd_push_scancode(scancode);
 
     /* The running process's page directory may not map the kernel data the
      * input layer touches. Set CR3 directly rather than

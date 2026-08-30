@@ -69,6 +69,8 @@ void _start(void)
     int n;
     int tries;
     int moved = 0;
+    int total_x = 0;
+    int total_y = 0;
 
     fd = syscall3(SYS_OPEN, (int)(size_t)"mouse", O_RDONLY, 0);
     if (fd < 0) {
@@ -90,6 +92,8 @@ void _start(void)
             int i;
 
             for (i = 0; i + 2 < n; i += 3) {
+                total_x += (int)(signed char)packet[i + 1];
+                total_y += (int)(signed char)packet[i + 2];
                 if (packet[i + 1] != 0 || packet[i + 2] != 0) {
                     moved = 1;
                 }
@@ -100,6 +104,19 @@ void _start(void)
 
     if (!moved) {
         fail("no movement arrived");
+    }
+    /* The suite moves the mouse right and up, by different amounts, so that
+       axes swapped for each other or a sign turned the wrong way is a failure
+       rather than a movement that still looks like one. Up is positive here
+       and negative on the wire, which is the turn the class driver makes. */
+    if (total_x <= 0) {
+        fail("the movement did not go right");
+    }
+    if (total_y <= 0) {
+        fail("the movement did not go up");
+    }
+    if (total_x == total_y) {
+        fail("the two axes moved by the same amount, so neither is proved");
     }
     puts("MOUSEPROBE OK\n");
     sys_exit(0);

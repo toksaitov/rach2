@@ -413,3 +413,42 @@ rollover report; forget the previous report; keep the vertical movement as the
 device sends it; let a device go without releasing what it held; and cut the
 USB path out of `input_key` entirely, which fails the typing boot and is what
 says that boot measures the path this milestone built.
+
+### Review 4 of 6
+
+Seven findings. Four are fixed, three are recorded.
+
+* A USB keystroke never reached the ring a graphics-mode reader drains, so a
+  USB keyboard could not have played Doom. The push moved into `input_key`,
+  where both keyboards pass, and out of the PS/2 handler.
+* The rollover report threw away the modifier byte with the keys. A shift
+  pressed as the keyboard lost count stayed pressed for ever. The modifiers are
+  read first and the key array alone is dropped.
+* It recognised only the first of the three error usages. All three mean the
+  same thing and all three are recognised.
+* The suite proved the debug shell's road and not the terminal's, which is the
+  one every program on the machine reads through. There is a boot for it now:
+  `stdintest` reads three lines typed through the emulator's monitor.
+* The mouse check accepted any movement on either axis, and the suite moved the
+  mouse by the same amount on both, so swapped axes or a turned sign would have
+  passed. The movement is now different on each axis and the probe requires the
+  direction of both.
+* The host test counted codes where it should have named them. It names them.
+
+Three recorded rather than closed:
+
+* The modifier state is one, not one per keyboard. Two keyboards would share a
+  shift: releasing it on either would release it for both. This kernel holds
+  one keyboard, which is one of its stated limits, and the header says so.
+* A key held while the keyboard is unplugged is released by `hid_gone`, and
+  that is proved in the host test rather than on a machine. QEMU's `sendkey`
+  presses and releases in one command, so no boot can hold a key across an
+  unplug.
+* A held USB key does not repeat. The PS/2 keyboard's repeat comes from the
+  hardware; a USB host is supposed to make its own, and this one does not. It
+  is a real gap and it is named in the Readme.
+
+Two further mutations, both caught: drop the modifiers with the rollover, and
+notice only the first error usage. A third, keeping the raw ring for the port
+keyboard alone, is not caught by anything: no test reads that ring, and the
+only reader is Doom. Recorded rather than left implied.

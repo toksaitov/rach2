@@ -140,7 +140,7 @@ int main(void)
     keys(1, 0x02, 0x04, 0, 0);
     CHECK("a key under a held modifier sends only the key", sent(1, 0x1E, 0, 0, 0));
     keys(1, 0, 0, 0, 0);
-    CHECK("and releasing both sends both breaks", n_codes == 2);
+    CHECK("and releasing both sends both breaks, the modifier first", sent(2, 0xAA, 0x9E, 0, 0));
 
     /* A right-hand modifier is the extended form. */
     keys(1, 0x10, 0, 0, 0); /* right control */
@@ -167,7 +167,26 @@ int main(void)
         keys(1, 0, 0x04, 0, 0); /* 'a' down */
         n_codes = 0;
         hid_report(1, HID_KEYBOARD, rollover, 8);
-        CHECK("a rollover report is dropped", n_codes == 0);
+        CHECK("a rollover report's keys are dropped", n_codes == 0);
+
+        /* Its modifier byte is not part of what the keyboard lost count of,
+           and a shift pressed as the rollover happened is still pressed. */
+        rollover[0] = 0x02;
+        n_codes = 0;
+        hid_report(1, HID_KEYBOARD, rollover, 8);
+        CHECK("but its modifiers are read", sent(1, 0x2A, 0, 0, 0));
+        rollover[0] = 0;
+        n_codes = 0;
+        hid_report(1, HID_KEYBOARD, rollover, 8);
+        CHECK("and released", sent(1, 0xAA, 0, 0, 0));
+
+        /* The other two error usages mean the same thing. */
+        for (i = 2; i < 8; i++) {
+            rollover[i] = 2;
+        }
+        n_codes = 0;
+        hid_report(1, HID_KEYBOARD, rollover, 8);
+        CHECK("a post-fail report is dropped as well", n_codes == 0);
         /* And it leaves the keyboard's state alone. A driver that stored the
            rollover as if it were six keys would forget what was really down,
            and press it again on the next report. */
@@ -188,7 +207,7 @@ int main(void)
     keys(1, 0x01, 0x04, 0x05, 0);
     n_codes = 0;
     hid_gone(1);
-    CHECK("everything held is released when the device goes", n_codes == 3);
+    CHECK("everything held is released when the device goes", sent(3, 0x9D, 0x9E, 0xB0, 0));
     n_codes = 0;
     hid_gone(1);
     CHECK("and a device that has already gone releases nothing", n_codes == 0);

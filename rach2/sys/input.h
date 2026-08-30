@@ -26,8 +26,13 @@
 /**
  * Take one set-1 scancode from whichever keyboard produced it.
  *
- * Runs in interrupt context, from the PS/2 handler or the timer. The caller
- * has already put the raw code in the ring that graphics-mode readers use.
+ * Runs in interrupt context, from the PS/2 handler or the timer, and puts the
+ * code in the ring graphics-mode readers drain before anything else, so a game
+ * sees the same stream whichever keyboard produced it.
+ *
+ * The modifier state is one, not one per keyboard, because this kernel holds
+ * one keyboard at a time. Two keyboards would need one state each: releasing a
+ * shift on either would otherwise release it for both.
  */
 void input_key(uint8_t scancode);
 

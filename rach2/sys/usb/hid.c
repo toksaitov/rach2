@@ -107,9 +107,6 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
      * nothing is down, and the releases it implies are exactly what the diff
      * below produces.
      */
-    if (keys[0] == 0x01u) {
-        return;
-    }
 
     for (i = 0; i < 8; i++) {
         uint8_t bit = (uint8_t)(1u << i);
@@ -118,6 +115,20 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
             send_code(modifier_scancode[i], 0);
         } else if (!(modifiers & bit) && (state->modifiers & bit)) {
             send_code(modifier_scancode[i], 1);
+        }
+    }
+    state->modifiers = modifiers;
+
+    /*
+     * A report whose key slots hold an error usage is the keyboard saying it
+     * cannot tell which keys are down: too many at once, or a fault in its own
+     * scanning. The modifier byte above is still good and has been read; the
+     * key array is not, and taking it would release everything that is really
+     * held and then press it again when the keyboard recovers.
+     */
+    for (i = 0; i < KEYS_IN_REPORT; i++) {
+        if (keys[i] >= 0x01u && keys[i] <= 0x03u) {
+            return;
         }
     }
 
@@ -139,7 +150,6 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
         }
     }
 
-    state->modifiers = modifiers;
     for (i = 0; i < KEYS_IN_REPORT; i++) {
         state->keys[i] = keys[i];
     }

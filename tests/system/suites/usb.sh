@@ -67,6 +67,23 @@ else
     bad "a key typed on the USB keyboard did not reach the shell"
 fi
 
+# ---- 3b: and a program reading the terminal gets it too. The shell's own
+#          buffer is one road and the line discipline is another; a key that
+#          reached the first says nothing about the second, and it is the
+#          second that every program on the machine reads through. ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --timeout 120 --steptmo 45 --ok "All stdin syscalls passed" \
+    "expect=Type 'help'" wait=2 "send=exec /stdintest" wait=2 \
+    key=a key=b key=ret key=c key=d key=ret key=e key=f key=ret \
+    > /dev/null 2>&1; then
+    note "a key typed on the USB keyboard is read by a program: OK"
+else
+    bad "a key typed on the USB keyboard was not read by a program"
+fi
+
 # ---- 4: a mouse moved on the wire arrives at the mouse device, again with no
 #         other mouse on the machine. The probe is started first and reads
 #         until something arrives, because opening the device empties the
@@ -79,7 +96,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0 \
     --timeout 90 --ok "MOUSEPROBE OK" \
     "expect=Type 'help'" wait=2 "send=exec /mouseprobe" wait=1 \
-    mouse=20,20,0 > /dev/null 2>&1; then
+    mouse=20,-8,0 > /dev/null 2>&1; then
     note "a mouse moved over USB arrives at /dev/mouse: OK"
 else
     bad "a mouse moved over USB did not arrive at /dev/mouse"
