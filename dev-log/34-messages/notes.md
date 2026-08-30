@@ -713,3 +713,40 @@ three fields, which `tests/system/Readme.md` states.
 
 It also read "proved by a mutation" as a claim that a check is correct. The
 record now says what a mutation shows and what it does not.
+
+## The documentation pass afterwards, 2026-08-30
+
+A read of the docs and comments against the tree, one Codex run over the
+reader-facing documents and one reviewer over the six messaging files. What it
+found, in the order it matters:
+
+* `tools/verify/check_guest.py` is named by `CLAUDE.md`, `rach2/Readme.md`,
+  `utils/Readme.md` and `rach2/Makefile`. Milestone 30 replaced it with
+  `tools/verify/guestcheck.c`. Four documents had named a file that does not
+  exist for four milestones.
+* Five host tests defined a `serial_printf` stub for a function this milestone
+  deleted, and `netconsole_hosttest.c` modelled the re-entry path under the
+  name `serial_putc`. The stubs were dead: the suite links and passes without
+  them, which is what proves it.
+* `netconsole.c` and `netconsole.h` still described their own entry as
+  `serial_putc`, the payload as the bytes that went to the serial port ("CR LF
+  and all"), and the stream as the serial stream. The payload is the record
+  text, LF only; `dest_serial` inserts the carriage returns and `dest_net` does
+  not. A receiver decoding those frames would have been told the wrong format.
+* `klog.c` carried two Doxygen blocks stacked on `console_putc`, the older of
+  which claimed bytes pass through unchanged. That is `console_putc_raw`.
+* The root `Makefile` kept a `.PHONY` list of fifty `run-` targets whose
+  recipes moved to `tests/system/suites.mk`, nine suites out of date, and 67
+  blank lines where the recipes had been. The list is now derived in
+  `suites.mk` from the registry, which `tests/run style` already holds to the
+  targets.
+* `tests/Readme.md` described the old registry (make target, prerequisites,
+  `all` membership), `make test` as a shortcut for `tests/run default`, 63
+  probes, 47 root programs and 70 in the tree. The numbers are 72, 56 and 76.
+* `rach2/sys/fs/Readme.md` did not state the `ENOSPC` contract this milestone
+  added, and `rach2/sys/block/Readme.md` did not mention `ahci_hosttest`. Both
+  are contract changes whose owning Readme should have been rewritten in the
+  same commit.
+
+Proof: `tests/run style`, `tests/run host`, and `default`, `netconsole` and
+`runner` together, all passing, after the changes.
