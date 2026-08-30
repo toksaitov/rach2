@@ -61,11 +61,11 @@ Rach2 has no dynamic linker, so guest executables are static. [TinyCC](vendor/tc
 
 ## Limits
 
-The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 processes and 16 descriptors per process. Programs are static, KRFFS is the only native file system, and the network stack implements IPv4 only. Rach2 does not implement UEFI, USB, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
+The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 processes and 16 descriptors per process. Programs are static, KRFFS is the only native file system, and the network stack implements IPv4 only. USB is a keyboard and a mouse through xHCI and nothing else: no hubs, no mass storage, and no booting from a USB disk. Rach2 does not implement UEFI, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
 
 ## Hardware status
 
-QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. The laptop boots the complete `os-real` system from an AHCI-backed KRFFS root. RTL8168GU networking and keyed SSH work, file system changes persist across reboots, and both an in-system update and a recovery reflash have completed successfully. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) records the hardware result.
+QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. The laptop boots the complete `os-real` system from an AHCI-backed KRFFS root. RTL8168GU networking and keyed SSH work, file system changes persist across reboots, and both an in-system update and a recovery reflash have completed successfully. A USB keyboard and a USB mouse work in any of the laptop's three sockets, in the shell and in Doom, once the kernel routes the chipset's USB2 pins to the single xHCI controller this machine has. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) record the hardware results.
 
 ## Repository map
 
