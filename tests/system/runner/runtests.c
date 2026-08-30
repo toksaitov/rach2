@@ -232,19 +232,23 @@ static int score_window(const unsigned char *window, size_t len, char *detail,
     return 0;
 }
 
-/* The offset of the first `head` in the buffer that is also followed by
-   `tail` on the same line, or -1. `tail` may be null, which asks for `head`
-   alone. Records are matched this way rather than whole because the level and
-   the timestamp between the two halves are not fixed text. */
-static long find_text(const unsigned char *hay, size_t len, const char *head,
-                      const char *tail)
+/* The offset of the first line that begins with `head` and carries `tail`
+   later on that same line, at or after `from`, or -1. `tail` may be null,
+   which asks for `head` alone. Records are matched in two halves because the
+   timestamp between them is not fixed text, and only at a line start, because
+   a probe that printed the text of a record inside its own output must not
+   count as one. */
+static long find_text(const unsigned char *hay, size_t len, size_t from,
+                      const char *head, const char *tail)
 {
     size_t hlen = strlen(head), at;
 
-    for (at = 0; at + hlen <= len; at++) {
+    for (at = from; at + hlen <= len; at++) {
+        if (at != 0 && hay[at - 1] != '\n')
+            continue;
         if (memcmp(hay + at, head, hlen) != 0)
             continue;
-        if (tail == (const char *) 0)
+        if (tail == (const char *) 0 || tail[0] == '\0')
             return (long) at;
         {
             size_t tlen = strlen(tail), p = at + hlen;
@@ -259,6 +263,35 @@ static long find_text(const unsigned char *hay, size_t len, const char *head,
     return -1;
 }
 
+/* How many records between `from` and `to` carry `what` after their prefix.
+   Counted at a line start, so a probe that printed the text of a record
+   inside its own output does not add to the count. */
+static long count_records(const unsigned char *hay, size_t from, size_t to,
+                          const char *what)
+{
+    size_t wlen = strlen(what), at;
+    long n = 0;
+
+    for (at = from; at < to; at++) {
+        if (at != 0 && hay[at - 1] != '\n')
+            continue;
+        if (hay[at] != '<')
+            continue;
+        {
+            size_t p = at;
+
+            while (p + wlen <= to && hay[p] != '\n') {
+                if (memcmp(hay + p, what, wlen) == 0) {
+                    n++;
+                    break;
+                }
+                p++;
+            }
+        }
+    }
+    return n;
+}
+
 /* The offset of the first error or worse record between `from` and `to`, or
    -1. A record's level is the digit its line begins with, so only a line
    start counts: a probe that printed the text of a record inside its own
@@ -267,7 +300,7 @@ static long find_level_between(const unsigned char *hay, size_t from, size_t to)
 {
     size_t at;
 
-    for (at = from; at + 3 < to; at++) {
+    for (at = from; at + 2 < to; at++) {
         if (at != 0 && hay[at - 1] != '\n')
             continue;
         if (hay[at] == '<' && hay[at + 2] == '>' &&
@@ -751,22 +784,23 @@ int main(int argc, char **argv)
     snprintf(selftest_detail, sizeof(selftest_detail),
              "the kernel ran none");
     {
-        long start = find_text(buf, buf_len, "<6>[", "] selftest: started");
+        long start = find_text(buf, buf_len, 0, "<6>[", "] selftest: started");
         long summary = -1;
         long bad = -1;
 
         if (start >= 0) {
-            long said = find_text(buf, buf_len, "] selftest: result: ",
-                                  (const char *) 0);
+            long said = find_text(buf, buf_len, (size_t) start, "<6>[",
+                                  "] selftest: result: ");
 
-            summary = find_text(buf, buf_len, "] selftest: result: passed: ",
-                                (const char *) 0);
+            summary = find_text(buf, buf_len, (size_t) start, "<6>[",
+                                "] selftest: result: passed: ");
             if (summary < 0) {
                 /* The summary the kernel printed, if it printed one: "failed:
                    2 of 12" says which run this was, and "no summary record"
                    says the group did not finish. */
                 if (said >= 0) {
-                    const char *from = (const char *) buf + said + 12;
+                    const char *from = (const char *) buf + said +
+                                       strlen("<6>[0.00] selftest: ");
                     size_t n = 0;
 
                     while (from[n] != '\0' && from[n] != '\n' && from[n] != '\r' &&
@@ -779,15 +813,34 @@ int main(int argc, char **argv)
                              "no summary record");
                 }
             } else {
+                const char *count_at = (const char *) buf + summary;
+                long said;
+
+                /* The count is the last field of the summary, so it is read
+                   from the text rather than counted from the offset: the
+                   timestamp between the two halves is not a fixed width. */
+                while (*count_at != '\n' &&
+                       memcmp(count_at, "passed: ", 8) != 0)
+                    count_at++;
+                said = strtol(count_at + 8, (char **) 0, 10);
+                long held = count_records(buf, (size_t) start,
+                                          (size_t) summary, "] selftest: ");
+
                 bad = find_level_between(buf, (size_t) start,
                                          (size_t) summary);
                 if (bad >= 0) {
                     snprintf(selftest_detail, sizeof(selftest_detail),
                              "a check reported an error");
+                } else if (said + 1 != held) {
+                    /* One record per check, and one for the group's start.
+                       A kernel that printed the summary without running the
+                       checks, or that lost some of them, disagrees here. */
+                    snprintf(selftest_detail, sizeof(selftest_detail),
+                             "%ld checks said, %ld records", said, held - 1);
                 } else {
                     selftest_ok = 1;
                     snprintf(selftest_detail, sizeof(selftest_detail),
-                             "the kernel's own checks");
+                             "%ld of the kernel's own", said);
                 }
             }
         }

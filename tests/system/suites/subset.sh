@@ -22,26 +22,34 @@ KERNEL="$1"
 IMAGE="$2"
 HARNESS="$3"
 
-# Each option, and the subsystem whose records it decides.
+# Each option, the subsystem whose records it decides, and the three that must
+# still run. Without that last part every check here would pass on a kernel
+# where any one of these options switched all four probes off.
 run_one() {
     opt="$1"
     subsystem="$2"
+    shift 2
 
-    if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
-            --qemu-arg=-cpu --qemu-arg=max --append "$opt" \
-            --timeout 90 --ok "$subsystem: skipped: $opt" \
-            --never "$subsystem: started" \
-            "expect=Type 'help'" >/dev/null 2>&1; then
-        echo "subset-test: FAIL: with [$opt] the machine did not skip $subsystem" >&2
+    set -- "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+        --qemu-arg=-cpu --qemu-arg=max --append "$opt" \
+        --timeout 90 --ok "$subsystem: skipped: $opt" \
+        --never "$subsystem: started" "$@" "expect=Type 'help'"
+    if ! "$@" >/dev/null 2>&1; then
+        echo "subset-test: FAIL: with [$opt] the machine did not skip" >&2
+        echo "subset-test: $subsystem and run the other three" >&2
         return 1
     fi
-    echo "subset-test: $opt: $subsystem was skipped: OK"
+    echo "subset-test: $opt: $subsystem skipped, the rest ran: OK"
 }
 
-run_one "rach2.noaudio" audio || exit 1
-run_one "rach2.nomouse" mouse || exit 1
-run_one "rach2.nonet" net || exit 1
-run_one "rach2.nodisk" block || exit 1
+run_one "rach2.noaudio" audio \
+    "expect=mouse: started" "expect=block: started" "expect=net: started" || exit 1
+run_one "rach2.nomouse" mouse \
+    "expect=audio: started" "expect=block: started" "expect=net: started" || exit 1
+run_one "rach2.nonet" net \
+    "expect=mouse: started" "expect=audio: started" "expect=block: started" || exit 1
+run_one "rach2.nodisk" block \
+    "expect=mouse: started" "expect=audio: started" "expect=net: started" || exit 1
 
 # All four at once, which is what a person types when the boot stops and they
 # do not yet know which probe did it. Every probe must be skipped and the
@@ -53,8 +61,10 @@ if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --timeout 90 --ok "Type 'help'" \
         --never "audio: started" --never "mouse: started" \
         --never "net: started" --never "block: started" \
-        "expect=mouse: skipped" "expect=audio: skipped" \
-        "expect=block: skipped" "expect=net: skipped" \
+        "expect=mouse: skipped: rach2.nomouse" \
+        "expect=audio: skipped: rach2.noaudio" \
+        "expect=block: skipped: rach2.nodisk" \
+        "expect=net: skipped: rach2.nonet" \
         "expect=Type 'help'" >/dev/null 2>&1; then
     echo "subset-test: FAIL: with every device switched off the machine did" >&2
     echo "subset-test: not skip all four and reach a shell" >&2

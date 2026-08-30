@@ -26,6 +26,12 @@
 # checks alone accept. A panic that also ends the machine is refused by
 # `--never`, since a crash is not a reset.
 #
+# What is left uncheckable from here: a triple fault also resets the machine,
+# and with `-no-reboot` QEMU exits for it exactly as it does for a reset the
+# kernel asked for. The kernel prints a `CRIT` record for a kernel exception,
+# which `--never` refuses, so the case this cannot separate is a triple fault
+# that printed nothing at all.
+#
 # Usage: reset_test.sh <kernel> <image>
 #
 

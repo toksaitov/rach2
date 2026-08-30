@@ -612,13 +612,12 @@ static bool test_timer(void)
  * lengthening the boot noticeably. `*measured_ms` reports what was seen, since
  * a wrong figure says more than a failed comparison.
  *
- * The band is wide because both counters are on an emulated chip whose rate
- * the host's own load changes: sixteen machines booted at once here measured
- * between 180 and 280 ms, and nine of them would have failed a band of ten
- * percent. What is being caught is a delay wrong by a factor, which is what a
- * bring-up sequence would notice; a delay wrong by a fraction on a loaded host
- * is the host, and a check that fails for that reason teaches its readers to
- * ignore it.
+ * The band is 150 to 350 ms because both counters are on an emulated chip
+ * whose rate the host's own load changes: sixteen machines booted at once here
+ * measured between 180 and 280 ms, and nine of them would have failed a band
+ * of ten percent. Wider than the measurement by a quarter at each end, and no
+ * wider: a delay off by half or double is what a bring-up sequence would
+ * notice, and it still fails here.
  */
 static bool test_udelay(uint32_t *measured_ms)
 {
@@ -628,7 +627,7 @@ static bool test_udelay(uint32_t *measured_ms)
     k_udelay(200000);
     elapsed = kernel_ticks - start;
     *measured_ms = elapsed * 10;
-    return elapsed >= 10 && elapsed <= 40;
+    return elapsed >= 15 && elapsed <= 35;
 }
 
 static bool test_syscall(void)
@@ -730,8 +729,7 @@ static volatile int switch_count = 0;
 static void proc_b_entry(void)
 {
     while (switch_count < 10) {
-        k_putc('B');
-        serial_printf("B");
+        console_putc('B');
         ++switch_count;
         switch_context(switch_proc_b, switch_proc_a);
     }
@@ -772,8 +770,7 @@ static void test_switch(void)
     switch_count = 0;
 
     while (switch_count < 10) {
-        k_putc('A');
-        serial_printf("A");
+        console_putc('A');
         ++switch_count;
         switch_context(switch_proc_a, switch_proc_b);
     }
@@ -802,8 +799,7 @@ static void preempt_proc_a(void)
     __asm__ __volatile__("sti");
 
     while (!preempt_done) {
-        k_putc('A');
-        serial_printf("A");
+        console_putc('A');
         ++preempt_count_a;
 
         {
@@ -829,8 +825,7 @@ static void preempt_proc_b(void)
     __asm__ __volatile__("sti");
 
     while (!preempt_done) {
-        k_putc('B');
-        serial_printf("B");
+        console_putc('B');
         ++preempt_count_b;
 
         {
@@ -2070,6 +2065,10 @@ static void run_self_tests(void)
             free_process(pa);
             free_process(pb);
             passed = preempt_count_a > 0 && preempt_count_b > 0;
+            /* The two processes wrote their letters with no newline, so the
+               record below would begin in the middle of that line and a
+               reader looking for records at a line start would not see it. */
+            console_putc('\n');
         }
         selftest_count(passed);
         klog(passed ? KLOG_INFO : KLOG_ERR, "selftest",

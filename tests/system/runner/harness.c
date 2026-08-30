@@ -13,9 +13,10 @@
  *   harness --kernel K --initrd I [--net NETVAL] [--timeout S]
  *           [--never TEXT ...] [STEP ...]
  *
- *   --must-exit fails the run unless QEMU ended by itself before the
- *   deadline. It is what tells a machine that restarted or halted from one
- *   that printed the line for it and then sat there.
+ *   --must-exit fails the run unless QEMU ended by itself, by exiting,
+ *   before the deadline. It is what tells a machine that restarted or halted
+ *   from one that printed the line for it and then sat there; a machine that
+ *   was killed, by this harness or by anything else, does not pass it.
  *
  *   --never TEXT fails the run if TEXT ever appears on the serial console,
  *   however the run ends. It is how a probe that must be killed is checked:
@@ -353,6 +354,9 @@ static int child_out = -1;
 static int child_in = -1;
 static int child_status;
 static int child_reaped;
+/* Whether the machine was ended by a signal rather than by exiting. A run
+   that requires an exit does not accept one. */
+static int child_by_signal;
 static FILE *logf;
 static double deadline;
 
@@ -366,6 +370,7 @@ static int child_poll(void)
     got = waitpid(child_pid, &child_status, WNOHANG);
     if (got == child_pid) {
         child_reaped = 1;
+        child_by_signal = !WIFEXITED(child_status);
         child_status = WIFEXITED(child_status) ? WEXITSTATUS(child_status)
                                                : 128 + WTERMSIG(child_status);
         return child_status;
@@ -957,7 +962,15 @@ int main(int argc, char **argv)
        is waited for here rather than read off that instant. Bounded by the
        same grace period, so a machine that is not leaving still costs only
        that. */
-    {
+    if (must_exit) {
+        /* To the deadline, which is what the caller asked to wait: a machine
+           that is on its way out has as long as the run has. Only where an
+           exit is required, because a run whose machine is meant to stay up
+           would otherwise wait out its whole timeout. */
+        while (child_poll() < 0 && now() < deadline) {
+            usleep(20000);
+        }
+    } else {
         double until = now() + grace;
 
         while (child_poll() < 0 && now() < until && now() < deadline) {
@@ -969,7 +982,7 @@ int main(int argc, char **argv)
        it restart or halt has no other way to tell that from a machine that
        printed the right line and then sat there: both leave the same log, and
        the harness kills the second one at the deadline. */
-    self_exited = qemu_rc >= 0;
+    self_exited = qemu_rc >= 0 && !child_by_signal;
     if (qemu_rc < 0) {
         kill(child_pid, SIGTERM);
         usleep(400000);
@@ -998,9 +1011,14 @@ int main(int argc, char **argv)
     }
 
     if (must_exit && !self_exited) {
-        trace("decide must_exit self_exited=0");
-        fprintf(stderr, "HARNESS: the machine was still running at the "
-                "deadline and had to be killed\n");
+        trace("decide must_exit self_exited=0 by_signal=%d", child_by_signal);
+        if (child_by_signal) {
+            fprintf(stderr, "HARNESS: the machine was ended by a signal, "
+                    "not by exiting\n");
+        } else {
+            fprintf(stderr, "HARNESS: the machine was still running at the "
+                    "deadline and had to be killed\n");
+        }
         return 1;
     }
 

@@ -373,3 +373,52 @@ One of them was `%p`, which the kernel formatter has no conversion for: it
 printed the letter `p` and left the address unread, so every argument after it
 was read from the wrong stack slot. It is `%x` on the address now. Nothing
 noticed because the line only appears when a mount is refused.
+
+## Review 3 of 12, 2026-08-30
+
+The first attempt died without a result: the delegated process ended after
+reading the files and before answering. A second, narrower run answered, and
+the first one's answer arrived later as well, so there are two reviews of the
+same change. Between them, nine findings, all fixed:
+
+* The self-test check accepted any summary, so a kernel that printed
+  `result: passed: 0` without running a check passed. The number in the
+  summary must now equal the records in the group: one per check and one for
+  the group's start.
+* That check failed the moment it was added, and the reason was the same fault
+  the `diskdiag` line showed: the round-robin test's two processes print `A`
+  and `B` with no newline, so the record after them began in the middle of
+  that line and a reader looking at line starts could not see it. The letters
+  go through `console_putc` now and the line is closed before the record.
+* The summary was searched for from the start of the log rather than from the
+  group, so an older summary could pair with a newer group and leave the
+  interval reversed, in which case nothing between them was ever read.
+* Neither record was required to be at a line start, so a probe printing the
+  text of one inside its own output would have counted.
+* `find_level_between` required four bytes where three are read, missing a
+  `<2>` at the very end of the interval.
+* `find_text` could read one byte past the buffer if a caller passed an empty
+  tail. No caller does; it is refused now.
+* Each `subset` boot checked only that its own probe was skipped, so a kernel
+  where any one option switched all four off would have passed every boot.
+  Each boot now requires the other three to start. Proved by that exact
+  mutation.
+* The all-four boot checked `mouse: skipped` and not the reason, so a probe
+  skipped for another reason would have satisfied it.
+* `--must-exit` accepted a machine ended by a signal. It requires an exit now,
+  and says which of the two happened.
+* The wait for that exit ran for the grace period rather than the run's own
+  timeout, so a slow halt could be cut short. It runs to the deadline, and
+  only where an exit is required, so a run whose machine is meant to stay up
+  does not wait out its timeout.
+
+The band on `test_udelay` is 150 to 350 ms rather than 100 to 400: still a
+quarter wider at each end than sixteen machines at once measured, and no
+wider, because half or double is what a bring-up sequence would notice.
+
+One finding is recorded rather than fixed. A triple fault also resets the
+machine, and with `-no-reboot` QEMU exits for it exactly as it does for a
+reset the kernel asked for, so `tests/run reset` cannot tell those apart from
+outside. The kernel prints a `CRIT` record for a kernel exception and the
+suite refuses that, so what is left is a triple fault that printed nothing.
+The suite says so where it is checked.

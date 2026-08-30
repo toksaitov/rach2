@@ -62,7 +62,7 @@ Proof items:
 * [x] `reset` fixed, mutation proves it
 * [x] `addressed` fixed, mutation proves it
 * [x] Self-test oracle fixed, mutation proves it
-* [ ] Review 3 of 12
+* [x] Review 3 of 12
 
 ## Phase 5: the migration (9 items)
 
