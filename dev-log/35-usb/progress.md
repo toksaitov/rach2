@@ -8,13 +8,13 @@ the commit that completes it.
 * [x] `AGENTS.md`, `CLAUDE.md` and `plan.md` read in full
 * [x] clean tree, `git log --oneline -12` recorded in `notes.md`
 * [x] `progress.md`, `current.md`, `notes.md`, `hardware.md` created
-* [ ] the kernel records every USB controller from configuration space
-* [ ] the Intel xHCI routing registers recorded beside it
-* [ ] `metal_accept.sh` reports the same over SSH
-* [ ] QEMU's configuration-space facts in `hardware.md`
+* [x] the kernel records every USB controller from configuration space
+* [x] the Intel xHCI routing registers recorded beside it
+* [x] `metal_accept.sh` reports the same over SSH
+* [x] QEMU's configuration-space facts in `hardware.md`
 * [ ] the laptop's facts in `hardware.md`, including whether the firmware's
       legacy emulation already types at the console
-* [ ] proof: the records appear with a controller attached and not without one
+* [x] proof: the records appear with a controller attached and not without one
 
 ## Phase 2: the interface and the model
 

@@ -33,6 +33,7 @@
 #include "sys/pit.h"
 #include "sys/kbd.h"
 #include "sys/mouse.h"
+#include "sys/usb/usb.h"
 #include "sys/block/block.h"
 #include "sys/block/ahci.h"
 #include "sys/display/vga_text.h"
@@ -2858,6 +2859,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             klog(KLOG_WARN, "mouse", "absent: nothing answered the probe");
         }
     }
+
+    usb_report_controllers();
 
     init_syscall();
     klog(KLOG_INFO, "boot", "syscall: ready");

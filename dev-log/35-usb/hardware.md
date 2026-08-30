@@ -21,12 +21,21 @@ them for measurements.
 
 | Fact | QEMU | Laptop |
 |------|------|--------|
-| controllers at class 0x0C subclass 0x03 | | |
-| interface byte of each | | |
-| vendor and device identifiers | | |
-| BAR0 | | |
-| `XUSB2PR` (0xD0) | | |
-| `XUSB2PRM` (0xD4) | | |
+| controllers at class 0x0C subclass 0x03 | one per `-device`, at the slot QEMU assigns | to be read |
+| `qemu-xhci` | `0:4.0`, interface 0x30, `1b36:000d`, BAR0 `0xFEBF0004` | not present |
+| `usb-ehci` | `0:4.0`, interface 0x20, `8086:24cd`, BAR0 `0xFEBF1000` | to be read |
+| `piix3-usb-uhci` | `0:5.0`, interface 0x00, `8086:7020`, BAR0 `0x0` | not present |
+| `pci-ohci` | `0:6.0`, interface 0x10, `106b:003f`, BAR0 `0xFEBF2000` | not present |
+| `XUSB2PR` (0xD0) | not read: no Intel xHCI | to be read |
+| `XUSB2PRM` (0xD4) | not read: no Intel xHCI | to be read |
+| `USB3PSSEN` (0xD8) | not read: no Intel xHCI | to be read |
+| `USB3PRM` (0xDC) | not read: no Intel xHCI | to be read |
+
+The `qemu-xhci` BAR0 reads `0xFEBF0004`: the low bits are the memory-space
+flags, and bit 2 says the BAR is 64-bit, so the aperture begins at
+`0xFEBF0000` and the next register is its upper half. A UHCI's BAR0 reads zero
+because its registers are in an I/O BAR, which this inventory does not report;
+nothing in this milestone drives a UHCI.
 
 ## Capability registers
 

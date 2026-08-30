@@ -163,6 +163,23 @@ else
     bad "/dev/bootlog gave nothing; this kernel predates it, or the log is empty"
 fi
 
+# ---- the USB hardware, read out of the log this machine already wrote. The
+#      kernel takes the inventory from configuration space at boot, so there is
+#      nothing to ask for here that is not already saved above. What matters on
+#      this notebook is the routing line: its firmware decides whether the USB2
+#      pins belong to the xHCI or to the companion EHCI, and a controller with
+#      no pins looks exactly like a machine with nothing plugged in. ----
+if grep -q 'usb: controller:' "$BOOTLOG_OUT" 2>/dev/null; then
+    grep 'usb: controller:' "$BOOTLOG_OUT" | sed 's/^.*usb: /usb: /' | while read -r line; do
+        note "$line"
+    done
+    grep 'usb: routing:' "$BOOTLOG_OUT" | sed 's/^.*usb: /usb: /' | while read -r line; do
+        note "$line"
+    done
+else
+    bad "the boot log has no usb inventory; this kernel predates it"
+fi
+
 # ---- and that nothing on this machine has been refused a command ----
 note "(the saved boot log above is the whole of what this machine printed)"
 
