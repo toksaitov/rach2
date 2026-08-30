@@ -1164,13 +1164,26 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     case TCP_LISTEN:
         if (!(flags & TCP_SYN)) return;
 
+        /* A machine with no room says so. Dropping the SYN would leave the
+           peer retransmitting for six seconds and then reporting a timeout,
+           which is what a machine that is not there looks like; a reset is
+           the answer that says the port is there and cannot serve it now. */
         conn_tcb = tcb_alloc();
         if (!conn_tcb) {
+            klog(KLOG_WARN, "tcp",
+                 "accept: no control block for a connection to port %d",
+                 (int)dst_port);
+            tcp_send_rst_unmatched(src_ip, dst_port, src_port, flags, seq,
+                                   ack_num, 1);
             return;
         }
         conn_sock = socket_alloc(SOCK_STREAM);
         if (!conn_sock) {
             tcb_free(conn_tcb);
+            klog(KLOG_WARN, "tcp",
+                 "accept: no socket for a connection to port %d", (int)dst_port);
+            tcp_send_rst_unmatched(src_ip, dst_port, src_port, flags, seq,
+                                   ack_num, 1);
             return;
         }
 

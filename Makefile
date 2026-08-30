@@ -537,7 +537,16 @@ SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
 SEALED_IP = $(SEALED_ADDRESS)/$(SEALED_PREFIX)
 SEALED_DISK = build/images/rach2-sealed.disk
+# The alias builds everything the disk is made of, then asks for the disk
+# itself. The two are separate because the components are phony targets, which
+# are always out of date, and a disk that named them directly was rebuilt on
+# every invocation: half a minute, on a machine that had not changed.
 rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(CFGCHECK)
+	@$(MAKE) --no-print-directory $(SEALED_DISK)
+
+$(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) \
+                krffs/manifests/rach2-metal-disk.manifest krffs/rescue-static.script \
+                tools/image/mkdisk_grub.sh $(CFGCHECK)
 	@$(CFGCHECK) sealednet $(SEALED_ADDRESS) $(SEALED_PREFIX) \
 	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
 	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
@@ -565,10 +574,16 @@ krffs/shadow:
 DEMO_CREDS = krffs/authorized_keys krffs/shadow
 
 
-# The public test entry: the runner owns the suite registry, so this is a
-# shortcut for `tests/run default` and holds no suite knowledge of its own.
+# The public test entry: the source checks, the native tests, and the core
+# tier, in that order. The first two rebuild the kernel with their own flags
+# and share a scratch directory, so they run alone and before the pool; the
+# tier is the system suites that between them exercise every subsystem, chosen
+# to finish in under two minutes. The runner owns the registry, so this holds
+# no suite knowledge of its own.
 test:
-	@./tests/run default
+	@./tests/run style
+	@./tests/run host
+	@./tests/run core
 
 
 

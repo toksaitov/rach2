@@ -94,7 +94,7 @@ Proof items:
 * [x] `procfull` + mutation
 * [x] `fdfull` + mutation
 * [x] `sockfull` (two processes) + mutation
-* [-] `tcbfull` + mutation (dropped; `notes.md` and `plan.md` say why)
+* [x] `tcbfull` + mutation
 * [x] `oomprobe` (touch pages, child dies, parent recovers) + mutation
 * [x] `diskfull` + the `EIO` to `ENOSPC` fix + mutation
 * [x] `ahci.c` gains an injectable register interface

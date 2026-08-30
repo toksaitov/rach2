@@ -5,18 +5,20 @@
 # The make target is `run-` and the name, so it is not written here. The
 # runtime tools are the external commands the suite needs beyond the build
 # toolchain; `-` means none. The tier is `core` for the set `make test` runs
-# and `full` for the rest; `tests/run all` runs both.
+# and `full` for the rest; `tests/run all` runs both. The core tier is chosen
+# by two rules: every subsystem of the kernel is exercised at least once, and
+# the tier finishes in under two minutes through the pool, which means no
+# member may take longer than that on its own.
 #
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.
 account|qemu-system-i386|full
-sealed|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
-dhcp|qemu-system-i386|full
 dhcp-e1000|qemu-system-i386|full
+dhcp|qemu-system-i386|full
+sealed|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
 selfbuild|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
-menu|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 install|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
-procfiles|qemu-system-i386|full
+menu|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
 raw|qemu-system-i386|full
 raw-e1000|qemu-system-i386|full
@@ -24,47 +26,48 @@ netif|qemu-system-i386|full
 netif-e1000|qemu-system-i386|full
 stress|qemu-system-i386|full
 stress-ahci|qemu-system-i386|full
+procfiles|qemu-system-i386|full
 tcc|qemu-system-i386|full
-addressed|qemu-system-i386|full
-default|qemu-system-i386|full
-default-e1000|qemu-system-i386|full
 bootpart|qemu-system-i386|full
+default-e1000|qemu-system-i386|full
+default|qemu-system-i386|core
 noentropy|qemu-system-i386|full
 shutdown|qemu-system-i386|full
 make|qemu-system-i386|full
+addressed|qemu-system-i386|full
+cred-persist|qemu-system-i386|full
 ping|qemu-system-i386|full
 packet|qemu-system-i386|full
 ping-e1000|qemu-system-i386|full
 packet-e1000|qemu-system-i386|full
-cred-persist|qemu-system-i386|full
 exitline|qemu-system-i386|full
-bootline|qemu-system-i386|full
-login|qemu-system-i386|full
-persist|qemu-system-i386|full
 persist-ahci|qemu-system-i386|full
-authority|qemu-system-i386|full
-subset|qemu-system-i386|full
+login|qemu-system-i386|core
+persist|qemu-system-i386|core
+authority|qemu-system-i386|core
+bootline|qemu-system-i386|full
+subset|qemu-system-i386|core
 host|-|full
-dgram|qemu-system-i386|full
+dgram|qemu-system-i386|core
 dgram-e1000|qemu-system-i386|full
-ssh|qemu-system-i386,ssh|full
-ssh-e1000|qemu-system-i386,ssh|full
-disk|qemu-system-i386|full
-disk-ahci|qemu-system-i386|full
-disk-q35|qemu-system-i386|full
-grub|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
-style|cppcheck,shellcheck,clang-format|full
+e1000|qemu-system-i386,ssh|core
+ssh|qemu-system-i386,ssh|core
 diskdiag|qemu-system-i386,ssh|full
-e1000|qemu-system-i386,ssh|full
+ssh-e1000|qemu-system-i386,ssh|full
+grub|qemu-system-i386,mformat,mmd,mcopy,mshowfat|core
+disk|qemu-system-i386|core
+disk-ahci|qemu-system-i386|core
+disk-q35|qemu-system-i386|full
 diskpolicy|qemu-system-i386|full
-netconsole|qemu-system-i386|full
-metal|qemu-system-i386,ssh|full
+console|qemu-system-i386|core
+style|cppcheck,shellcheck,clang-format|full
+socket|qemu-system-i386|core
+audio|qemu-system-i386|core
+netconsole|qemu-system-i386|core
 netconsole-e1000|qemu-system-i386|full
-crash|qemu-system-i386|full
-reset|qemu-system-i386|full
-socket|qemu-system-i386|full
-audio|qemu-system-i386|full
-diskfull|qemu-system-i386|full
-fault|qemu-system-i386|full
-console|qemu-system-i386|full
-runner|-|full
+crash|qemu-system-i386|core
+metal|qemu-system-i386,ssh|core
+diskfull|qemu-system-i386|core
+fault|qemu-system-i386|core
+reset|qemu-system-i386|core
+runner|-|core

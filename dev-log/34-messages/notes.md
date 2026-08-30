@@ -69,10 +69,12 @@ They were not: `tests/run` checked the name and the tools twice, once before
 the build and once inside `run_one`, so breaking one copy left the other. The
 duplicate is now gone. Every name and tool is checked once, before `prepare`.
 
-Open: `prepare-all` rebuilds `build/images/rach2-sealed.disk` on every run,
-about 25 seconds, whether or not anything it stages has changed. It is a
-product rule rather than a test rule, so it stays out of this phase; recorded
-here for phase 8.
+`prepare-all` rebuilt `build/images/rach2-sealed.disk` on every run, about 25
+seconds, whether or not anything it stages had changed. Closed in phase 8: the
+disk was a phony target whose prerequisites are phony too, so it was always
+out of date. The name is now an alias that builds the components and then asks
+for the disk, and the disk is a file target naming the files it is made of. A
+second build takes no time at all.
 
 ## The orphaned probes, 2026-08-30
 
@@ -478,30 +480,37 @@ kernel does and not what the plan guessed.
   `KRFFS_ENOSPACE` and `KRFFS_EBAD`, and the syscall returns `-ENOSPC` and
   `-EIO`.
 
-## The control-block probe, and why there is not one, 2026-08-30
+## The control-block probe, twice, 2026-08-30
 
 The plan called for `tcbfull`, a guest probe that fills the TCP control-block
-pool over loopback connections, each of which takes two blocks. It was written
-and it does not work, for two reasons found by running it.
+pool over loopback connections, each of which takes two blocks. The first
+attempt did not work and I recorded two reasons for it. One of them was wrong,
+and finding that out fixed a defect in the kernel.
 
-The first is arithmetic. Every control block is owned by a socket, and both
-pools hold sixteen. A process holds thirteen descriptors, so reaching sixteen
-of anything needs two processes, and at sixteen sockets the socket pool
-refuses with `ENOMEM` before the control-block pool can refuse with `ENOBUFS`.
-The only shape that reaches the second limit first is a connection that takes
-two blocks, which is a connection to this machine's own listener.
+The arithmetic reason was right: every block is owned by a socket and both
+pools hold sixteen, so a process filling either one alone meets the socket
+pool first. Only a connection to this machine's own listener takes two blocks
+for one socket pair.
 
-The second is that such a connection does not complete. A loopback `connect`
-sends its SYN, nothing answers, and the stack retransmits at 200, 400, 800,
-1600 and 3200 ms before giving up: `tcp: retransmit: rto 3200, try 5` with a
-listener bound and listening on the same port. So the probe blocks rather than
-being refused, and the pool it did fill stays full behind it.
+The second reason I gave was that a loopback handshake does not complete on
+this kernel, because the probe's connections retransmitted and timed out. That
+was wrong, and a five-line probe that makes one loopback connection settled
+it: `bind` to no address, `connect` to 127.0.0.1, and the handshake completes
+in the tick it is delivered. What actually happened is that the eighth
+connection is the one that cannot be served: the connecting side takes the
+fifteenth block, the side being connected to finds none left, and `tcp_rx`
+dropped that SYN in silence. The caller then retransmitted for six seconds and
+reported a timeout, which is what a machine that is not there looks like.
 
-The probe is not in the tree. Control-block exhaustion belongs in
-`tcp_hosttest`, where `tcb_alloc` is driven directly and no handshake is
-needed, and that is where phase 7 puts it. The loopback handshake is a kernel
-defect this milestone found and did not fix; it is written down here and in
-`plan.md` rather than left in a probe that cannot pass.
+A machine with no room should say so, and there was already a reset for a port
+nobody listens on. That path now answers with one, so the caller is refused at
+once with `ECONNREFUSED`. `tcbfull` is in the tree and checks exactly that: a
+listener and seven connections, and the eighth refused rather than ignored.
+Proved by removing the reset again: the probe hangs and the suite says so.
+
+What the probe does not check is a block coming back, because a closed
+connection holds its two through the teardown and TIME_WAIT, which is the
+protocol. `tests/host/tcp_hosttest.c` checks that directly.
 
 ## The limits, 2026-08-30
 
