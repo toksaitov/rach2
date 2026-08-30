@@ -713,3 +713,30 @@ fixed fifty milliseconds after each command instead of waiting for QEMU to
 answer, so under load a command could be sent before the monitor was listening
 and be taken by nobody. It waits for the prompt now, with a limit, and three
 consecutive suite runs passed at the same duration.
+
+## The machine brought up to date
+
+The evening after the milestone closed, the notebook was updated the rest of the
+way: the kernel through the boot slots, then the 500 MiB root through recovery
+and `reflash`, so the machine runs the userland this tree builds rather than the
+one sealed into it in milestone 25. Two writes of that partition were needed.
+
+The first root would not accept a login. Its `/root/.ssh/authorized_keys` came
+from `krffs/authorized_keys`, which had been given the public key of another
+development host by hand; the private key on this host was the demo pair, older
+than that file and no longer its match. The image was correct and the write was
+byte-identical both times; the credentials in it were simply not the ones the
+host held. Recovery was still reachable, because it is a separate partition
+sealed with the older key, and it was the only way back in.
+
+The repair is the mechanism the generator already has. The hand-placed key moved
+to `krffs/authorized_keys.extra`, `krffs/gen_demo_key.sh` recomposed
+`krffs/authorized_keys` from the demo public key plus that file, and the rebuilt
+root trusts both. The check that would have caught it before the write is two
+commands, and it is written down with the procedure in the project Readme:
+compare `ssh-keygen -y -f krffs/rach2_demo_ed25519` with `krffs/authorized_keys`.
+
+The updated machine reports `port 1 low 18f8:f97 class 3 protocol 2` and
+`port 3 low 2a7a:939f class 3 protocol 1` at the same time, a mouse and a
+keyboard in two different sockets, and compiles and runs a program with the
+staged TinyCC.

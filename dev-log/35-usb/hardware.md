@@ -94,3 +94,7 @@ into view on ports 4, 6 and 7, each refused once.
 | a device unplugged was noticed | yes: `port 2: gone` |
 | another enumerated in its place | yes, without a reboot |
 | `/proc/usb` from the guest | `port 2 low 2a7a:939f class 3 protocol 1` |
+
+After the milestone closed the machine was updated to this tree's kernel and userland. It now
+enumerates a mouse and a keyboard at the same time, in two different sockets, and reports both in
+`/proc/usb`. [The notes](notes.md#the-machine-brought-up-to-date) record what that update cost.
