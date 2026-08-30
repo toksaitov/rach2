@@ -60,7 +60,7 @@ disk-ahci|qemu-system-i386|core
 disk-q35|qemu-system-i386|full
 diskpolicy|qemu-system-i386|full
 console|qemu-system-i386|core
-usb|qemu-system-i386|full
+usb|qemu-system-i386|core
 style|cppcheck,shellcheck,clang-format|full
 socket|qemu-system-i386|core
 audio|qemu-system-i386|core

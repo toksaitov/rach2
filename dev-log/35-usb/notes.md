@@ -452,3 +452,51 @@ Two further mutations, both caught: drop the modifiers with the rollover, and
 notice only the first error usage. A third, keeping the raw ring for the port
 keyboard alone, is not caught by anything: no test reads that ring, and the
 only reader is Doom. Recorded rather than left implied.
+
+## Phase 7
+
+The documents, the measurements and the record.
+
+A defect in the test system came out of the full run rather than out of a
+review: `run-usb` built the harness kernel in its own recipe, the way
+`run-exitline` already did, and with two suites doing it the pool ran two
+`make`s in `rach2/` at once. They wrote over each other's link response file
+and the kernel failed to link with `EN_us` and `kbd_push_scancode` undefined,
+which failed `selfbuild` and, through a half-built image, two `dhcp` suites.
+The harness kernel is built by `prepare-all` now, before the pool starts, and
+neither suite builds anything.
+
+The `usb` suite joined the core tier. The tier's rule is that every subsystem is
+exercised at least once, and nothing else in it touches USB; the suite is 39
+seconds and runs beside the others, so `make test` is 172 seconds either way.
+
+The documentation pass, with a Codex read of the five reader-facing documents,
+returned ten findings. Seven were mine and are fixed: the kernel Readme still
+said USB was not implemented; the limits table said four devices where the
+controller's slot zero is its own, so three; it said one keyboard and one mouse
+where the real limit is the slots and the shared modifier state; it said
+`endpoint_open` is generic over control as well, where the control endpoint is
+made while the device is addressed; the root-program count and the suite count
+were both a milestone behind; and the tests Readme said the `usb` suite runs
+both probes at both speeds with the 8042 off, where only three of its boots
+switch it off. One finding was about `rach2.resetskip`, which claims to skip the
+first N reset methods when the last of the three always runs; that is older than
+this milestone and the line is corrected. The comments on the scancode ring said
+the IRQ handler fills it, which is the input layer now.
+
+Two full runs each had one failure that did not reproduce alone, and the third
+was clean. Both are timing failures under twenty workers: `musl/pwauthmusl`
+inside `selfbuild`, and a sixty-second wait in `raw-e1000`. Recorded in the
+milestone record rather than left out.
+
+## What is still open
+
+Phase 6, the notebook, and with it phase 1's last item and reviews 5 and 6 of
+6. Nothing about it can be done from here: it needs the machine, a USB keyboard
+and mouse plugged into it, and the owner's decision about the chipset's port
+routing with the real register values in front of them. Everything it needs is
+ready and is listed in `current.md`.
+
+The plan says this is the owner's to close, not the milestone's: with the
+evidence in front of them they decide whether it closes with USB working in
+QEMU alone or stays open for another attempt.

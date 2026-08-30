@@ -101,10 +101,10 @@ the commit that completes it.
 * [x] `Readme.md`: the system and hardware-status paragraphs
 * [x] `synthfs.Readme.md`: the `/proc/usb` row
 * [x] `tests/Readme.md` and `tests/system/Readme.md`
-* [ ] the documentation and comment pass, with the Codex read
-* [ ] the tier decision for `usb`, measured
-* [ ] `notes.md` read from the top and every line closed
-* [ ] the full suite set twice, no machine left running, `make test` measured
-* [ ] `dev-log/35-usb/Readme.md` with the trust statement
-* [ ] `dev-log/Readme.md` gains the entry
+* [x] the documentation and comment pass, with the Codex read
+* [x] the tier decision for `usb`, measured
+* [x] `notes.md` read from the top and every line closed
+* [x] the full suite set twice, no machine left running, `make test` measured
+* [x] `dev-log/35-usb/Readme.md` with the trust statement
+* [x] `dev-log/Readme.md` gains the entry
 * [ ] review 6 of 6

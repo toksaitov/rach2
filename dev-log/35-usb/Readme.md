@@ -36,6 +36,14 @@ Three host tests. `xhci_hosttest` drives the driver against a model of a control
 
 Every check added here was proved by a mutation that makes it fail, driven from a script that restores the source under a trap and rebuilds before the verdict is believed.
 
+## Measurements
+
+All from the development machine: ten cores, 24 GB, macOS, QEMU 11, twenty pool workers.
+
+`make test` is 172 seconds, unchanged: the `usb` suite joined the core tier, which is 22 suites now, and a suite that runs beside the others in the pool costs nothing on the clock. `tests/run usb` is 39 seconds on its own. `tests/run all` is 471 seconds for 60 suites, also unchanged, with no machine left running.
+
+Three full runs were made. The third was clean, 470 seconds and 60 suites with nothing left running. The first two had one failure each and neither reproduced: `selfbuild` failed on `musl/pwauthmusl` in one and `raw-e1000` timed out on a sixty-second wait in the other, and both suites pass alone, in 243 and 156 seconds. They are timing failures under twenty workers rather than defects in what this milestone built, and they are recorded here rather than left out because a suite set that fails one suite in sixty on two runs in three is a fact about it that a reader should have.
+
 ## What a passing run means
 
 It means the stack enumerates a keyboard and a mouse on an emulated controller at low, full and high speed; that a key typed on the emulated keyboard reaches both the debug shell and a program reading the terminal, on a machine with no other keyboard; that a mouse moved on both axes arrives the right way up in the queue Doom reads; that a device plugged in after the boot is enumerated and one pulled out is taken down; and that the driver refuses a controller which lies to it, in each of the ways the model can lie.
