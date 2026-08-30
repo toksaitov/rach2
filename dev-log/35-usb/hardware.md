@@ -75,9 +75,12 @@ this kernel and raises no event at all. Port 4 has a full-speed device that is
 there at every boot and offers no interface this kernel can drive: on this model
 that is the internal Bluetooth radio.
 
-Reaching the black sockets would mean writing `XUSB2PR` to move the other seven
-pins, which is what other operating systems do at boot. This kernel has no
-writer for that register.
+Reaching the black sockets meant writing `XUSB2PR` to move the other seven
+pins, which is what other operating systems do at boot. The driver does it now:
+the machine reports `usb2 0xA of 0x1FF, as the firmware left it` and then
+`usb2 0x1FF of 0x1FF, taken`. With that, all three sockets work, a keyboard and
+a mouse can be plugged into any of them, and three more soldered devices come
+into view on ports 4, 6 and 7, each refused once.
 
 ## What the machine did
 

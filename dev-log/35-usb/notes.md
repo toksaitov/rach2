@@ -654,3 +654,62 @@ setting itself is unrecorded. A boot with `rach2.nousb` to see whether the
 firmware emulates a PS/2 keyboard out of a USB one on its own was not made
 either: the machine had an older kernel with no stack when the session began,
 and its console was not tried before the update.
+
+## After the notebook, the same evening
+
+The record was written as though the milestone were finished. Four things came
+out of using the machine afterwards, and each is a defect this project's tests
+did not have a case for until it happened.
+
+### One socket
+
+The firmware gave the controller two of nine USB2 pins. One of them holds a
+soldered device and the other is the blue USB 3.0 socket, so exactly one socket
+worked, and a keyboard and a mouse could not both be plugged in. The two black
+sockets are USB 2.0 and their pins were on the companion EHCI, where nothing
+this kernel has can see them: a device plugged into one raises no event at all,
+which a person experiences as nothing happening.
+
+The answer was not an EHCI driver. On this chipset a low-speed keyboard is
+behind the companion's rate-matching hub, so that driver would need a hub driver
+and split transactions with it, which is the size of the xHCI driver again for
+an interface no machine made after about 2014 has. `XUSB2PR` moves the pins
+instead, masked by `XUSB2PRM`, which is what every other operating system does
+at the same point in bring-up. Four rows and three mutations cover it: the pins
+are taken, only the ones the mask allows are taken, a controller that already
+has them is left alone, and another maker's controller is not written to.
+
+### The table
+
+Taking the pins revealed the next fault. The notebook has three soldered devices
+this kernel cannot drive, and a refusal was being remembered by keeping the
+device's table entry. Three of the four entries went to them, the fourth to the
+keyboard, and the first unplug handed the freed entry to another soldered
+device. After that nothing plugged in was ever enumerated again until the
+machine rebooted, which is exactly what the owner reported: plug in before
+booting and it works, unplug and replug and it does not.
+
+A refusal is remembered by port now, in a word of bits, and the table is for
+devices this kernel drives. The suite has the scenario: a device that cannot be
+driven, a keyboard, a mouse, and the mouse unplugged and plugged back in.
+
+### The pause on the way out
+
+Every reboot stopped for twenty seconds between `Stopping the system` and the
+next record. The line after the pause was the controller being given back to the
+firmware, and that was the cause: restoring the firmware's system-management
+interrupt sources and its claim wakes its handler, which re-initialises USB
+legacy support before this kernel's next instruction runs.
+
+The controller is halted on the way out and not given back. A bring-up that
+fails still gives it back, which is the case that matters: a machine with no USB
+driver should keep whatever its firmware was doing for it.
+
+### The harness
+
+The replug row failed about one run in four, and the failing runs were exactly
+one step limit longer than the passing ones. The monitor connection slept a
+fixed fifty milliseconds after each command instead of waiting for QEMU to
+answer, so under load a command could be sent before the monitor was listening
+and be taken by nobody. It waits for the prompt now, with a limit, and three
+consecutive suite runs passed at the same duration.

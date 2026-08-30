@@ -36,6 +36,18 @@ The only waits in the driver are in bring-up, which runs once: the reset, the fi
 
 A controller is refused, with a record saying which, when its aperture is a 64-bit window above 4 GiB, when its registers do not fit the 64 KiB this driver maps, when it does not offer 4 KiB pages, when its capability list leaves the aperture, when it never halts or never resets or never says it is ready, when the firmware never gives it up, or when it asks for more scratchpad pages than this kernel compiles in.
 
+## The ports the chipset will give
+
+An Intel chipset routes each USB2 pin to either this controller or the companion EHCI, and the firmware decides at power-on. It leaves some on the companion so that an operating system with no xHCI driver still has working sockets. This kernel has no EHCI driver, so a pin left there is a socket nothing can reach: on the notebook this milestone was written for, the firmware gave this controller two of nine, and the seven it kept were the two sockets a person plugs into.
+
+So bring-up moves them. `XUSB2PR` at configuration offset `0xD0` takes the pins `XUSB2PRM` at `0xD4` says may move, and the SuperSpeed pair at `0xD8` and `0xDC` works the same way. The mask is read rather than assumed, and only an Intel controller is written to at all. The routing is the firmware's again after the next power cycle, so this runs on every boot, and a machine that dislikes it is one power cycle from the way it was. It is what every other operating system on this hardware does at the same point.
+
+## A device this kernel cannot drive
+
+A machine has USB devices soldered into it: a Bluetooth radio, a card reader, a camera. None of them offers a boot-protocol keyboard or mouse, so each is refused, and the refusal has to be remembered or the device is enumerated again the moment its port is looked at.
+
+It is remembered by port, in a word of bits, and not by holding an entry in the device table. A notebook with three such devices would otherwise spend three of its four entries on them, leaving one for everything a person plugs in: unplug once and the freed entry goes to another soldered device, after which nothing plugged in is enumerated again until the machine reboots. A bit is cleared when its port says the device has gone, so a device refused once is tried again when it is plugged in again.
+
 ## The fixed limits
 
 | Limit | Value |
@@ -74,6 +86,7 @@ A mouse report becomes a packet in the queue the PS/2 mouse fills, with the vert
 * **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
 * **Typematic repeat.** A held key on a USB keyboard does not repeat. The PS/2 keyboard's repeat comes from its hardware; a USB host is supposed to make its own, and this one does not.
 * **Interrupts.** The controller is polled from the timer. A keystroke is up to ten milliseconds late, which is correct for a console and noticeable in a game.
+* **EHCI.** The companion controller is not driven and will not be. Its pins are taken instead, which is one register write against a driver, a hub driver and split transactions, for an interface no machine made after about 2014 has.
 * **Booting from a USB disk.** The firmware loads the kernel; this stack starts afterwards.
 
 ## The guest's view
@@ -83,6 +96,12 @@ A mouse report becomes a packet in the queue the PS/2 mouse fills, with the vert
 The mouse is read through the device Doom opens, by the bare name `mouse`. It opens when a mouse of either kind exists.
 
 `rach2.nousb` switches the stack off, and the probe says `usb: skipped: rach2.nousb` rather than going quiet.
+
+## Stopping
+
+The controller is halted when the machine stops, because one left running is what other operating systems carry a quirk for on this exact part.
+
+It is not given back. Restoring the firmware's interrupt sources and its claim wakes its system-management handler, which re-initialises USB legacy support before this kernel's next instruction runs: on the notebook that took twenty seconds, in the middle of every reboot. The firmware initialises USB again on the next boot whatever this kernel leaves behind. A bring-up that fails is the other case, and it does give the controller back, because a machine with no USB driver should keep whatever its firmware was doing for it.
 
 ## Verification
 
